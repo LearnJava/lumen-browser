@@ -1,70 +1,61 @@
-# BUG-421 — Члены `HTMLCanvasElement` установлены на каждом элементе DOM; `getContext` нарушает контракт аргумента
+# BUG-421 — движковый `#view-settings` не изменяет ни одной настройки
 
 **Статус:** OPEN
-**Компонент:** js (`crates/js/src/dom.rs:5954-6060` — фабрика обёрток `_lumen_build_element`
-ставит `getContext`/`toDataURL`/`toBlob`/`transferControlToOffscreen`/`width`/`height`
-безусловно, а не по тегу)
-**Найден:** 2026-07-28 (P2), WPT-VENDOR-html-canvas, проба `--dump-layout`
+**Компонент:** chrome (`assets/chrome/chrome.html` `#view-settings`,
+`ChromeSettingsModel`, `ChromeAction::ToggleSwitch`), shell
+(`crates/shell/src/panels/settings_panel.rs`, `panels/themes.rs`,
+`dispatch_chrome_action`)
+**Найден:** P1, CC-15-6 (2026-07-28), при удалении легаси-хит-теста настроек
 
-## Симптом 1: canvas-члены на любом элементе
+## Симптом
 
-Проба на обычном `<div id=d></div>`:
+Движковый `#view-settings` (CC-9) отображает состояние (секции переключаются
+`ChromeAction::SetSettingsSection`, `bind_settings` рефлектит две настройки с
+реальным backing-состоянием), но **записать** ничего не может:
 
-```
-canvasMembersOnDiv=getContext,toDataURL,toBlob,transferControlToOffscreen,width,height
-div.width=0/number          div.height=0
-div.toDataURL=data:image/png;base64, len=118
-div.toBlob=null
-div.transferControlToOffscreen!THROW:InvalidStateError: not a canvas element
-div.setWidth=42/42          # div.width = 42  →  <div width="42">
-p.width=0
-```
+* `ChromeAction::ToggleSwitch` — no-op с самого CC-9: все шесть `.toggle` в
+  эталоне несут один и тот же `data-action` без различающего атрибута, резолвер
+  (аналог `chrome_permission_kind_for_node`) не написан;
+* выбор темы/акцента, поле homepage, путь загрузок, сброс раскладки панелей,
+  переключатель HTTP/3, включение/выключение подписок ад-блока и ручной refresh
+  — в ассете отдельных действий нет вовсе.
 
-То есть **`div.toDataURL()` отдаёт настоящий PNG-data-URL**, а присваивание `div.width`
-создаёт на `<div>` атрибут `width`, которого в HTML LS у него нет. По спеке `width`,
-`height`, `getContext`, `toDataURL`, `toBlob`, `transferControlToOffscreen` живут на
-`HTMLCanvasElement`, и `'toDataURL' in document.createElement('div')` обязано быть
-`false`.
+Следствия, вскрытые удалением легаси-хит-теста (`settings_panel::hit_test` и
+`ht_*` — единственные писатели этих полей):
 
-Комментарий в коде считает это безобидным («Only meaningful on `<canvas>`; harmless on
-other elements (creates an unused buffer at most)», `dom.rs:5956-5957`) — на деле это
-web-видимая разница: скрипты определяют поддержку canvas именно через
-`'getContext' in el`, а `element.width` теперь молча пишет атрибут в разметку.
+* `SettingsPanel::draft` больше **никто не изменяет** — `open_settings_panel`
+  заполняет черновик из стора, `close_settings_panel` пишет его обратно
+  неизменным. Тема (`draft.theme` → `ShellTheme::parse`), раскладка вкладок,
+  DoH/щиты, размер шрифта — все read-only;
+* `SettingInput::{Homepage, DownloadPath}` никогда не конструируются →
+  `focused_input` всегда `None` → клавиатурное редактирование текстовых полей
+  (`append_char`/`backspace`) мертво;
+* `panels::themes::ThemeChoice::to_settings_str` и `AccentPreset::{ALL, key}`
+  остались без читателей (были нужны только сериализации выбора темы).
 
-Причина структурная: у Lumen нет per-tag прототипов (см. [BUG-420](BUG-420-OPEN.md) —
-интерфейсов Canvas 2D нет вовсе, [BUG-367](BUG-367-OPEN.md) — все члены `Element`
-собственные свойства экземпляра), поэтому «члены HTMLCanvasElement» физически негде
-разместить, кроме общей фабрики.
+Всё перечисленное помечено `#[allow(dead_code, reason = "BUG-421: …")]` —
+удалять до реализации нельзя, это и есть точки подключения.
 
-## Симптом 2: контракт аргумента `getContext`
+Регрессия флипа CC-14 (не CC-15-6): легаси-панель настроек перестала
+рисоваться уже тогда, CC-15-4 удалила её покраску, CC-15-6 — хит-тест.
 
-```
-getContext.case = c.getContext('2D') !== null  →  true      (спека: null)
-getContext.noarg = String(c.getContext())      →  null      (спека: TypeError)
-```
+## Что нужно сделать
 
-Шим приводит аргумент к нижнему регистру (`('' + (contextType || '')).toLowerCase()`,
-`dom.rs:5960`), а HTML LS §4.12.5 требует сравнения **по точному** значению: `'2D'`,
-`'WebGL'`, `'BitmapRenderer'` обязаны давать `null`. Отсутствующий аргумент по WebIDL
-(`required DOMString contextId`) обязан бросать `TypeError`, а не отдавать `null`.
-Оба отклонения проверяются в `element/canvas-context/*` и
-`element/conformance-requirements/2d.conformance.requirements.missingargs.html`.
+1. Разметить контролы `#view-settings` различающими атрибутами
+   (`data-setting="homepage"`/`"shields"`/`"doh"`/`"http3"`/`"theme"`/…),
+   регенерировать ассет через `scripts/gen_chrome_assets.py`.
+2. Резолвер `chrome_setting_for_node` по образцу
+   `chrome_permission_kind_for_node`, и обработка `ToggleSwitch`/новых действий
+   в `dispatch_chrome_action` с записью в `SettingsPanel::draft`.
+3. Расширить `ChromeSettingsModel` до полного снапшота и связать в
+   `bind_settings`.
+4. Снять `#[allow(dead_code)]` с `SettingInput`, `ThemeChoice::to_settings_str`,
+   `AccentPreset::{ALL, key}`.
 
-Отдельно: `|| ''` в той же строке превращает `getContext(0)`/`getContext(false)` в
-`getContext('')` вместо строковой конверсии `'0'`/`'false'` — расхождение того же корня.
+## Связанные
 
-## Данные WPT
-
-Срез `html/canvas` (`run_report.py --all --root html/canvas --recursive`; числа — в
-строке `WPT-VENDOR-html-canvas` ROADMAP.md). Прицельные файлы:
-`element/canvas-context/*` (11 id), `element/canvas-host/*` (52 id),
-`element/conformance-requirements/2d.conformance.requirements.missingargs.html`.
-
-## Направление починки
-
-1. Гейт членов canvas по тегу в `_lumen_build_element` (тег уже известен —
-   `_lumen_get_tag_name(nid)` вызывается внутри самих методов, проверку нужно поднять
-   на уровень установки члена). Радикальнее и правильнее — per-tag прототипы
-   (общий фикс с [BUG-420](BUG-420-OPEN.md)/[BUG-367](BUG-367-OPEN.md)).
-2. Убрать `toLowerCase()` и `|| ''` из `getContext`, добавить проверку
-   `arguments.length === 0 → TypeError`.
+* [BUG-420](BUG-420-OPEN.md) — тот же пробел в `#printOverlay`.
+* [BUG-411](BUG-411-OPEN.md) — тот же класс в `#permPopover` (недостижимые
+  строки разрешений).
+* CC-9/CC-10 (`docs/tasks/p1-css-chrome.md`) — срезы, где `#view-settings`
+  получил отображение, но не запись.

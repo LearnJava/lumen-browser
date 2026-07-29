@@ -16,6 +16,7 @@ pub use lumen_core::ColorSpace;
 
 pub mod anchor;
 pub mod animation;
+pub mod bidi;
 pub mod box_tree;
 pub mod color_mix;
 pub mod incremental;
@@ -26,6 +27,7 @@ pub mod counters;
 pub mod font_palette;
 pub mod image_gating;
 pub mod image_set;
+pub mod line_break;
 pub mod mathml;
 pub mod motion_path;
 pub mod page;
@@ -131,8 +133,8 @@ pub use style::{
     BackfaceVisibility, ClearSide, ContainFlags, ComputedStyle, Content, CustomProps,
     ContentItem, CssColor, CssWideKeyword, Cursor, Direction, Display, EmptyCells, FilterFn, FloatSide, FontOpticalSizing, FontStretch,
     FontStyle,
-    FontVariant, FontVariationSetting, FontWeight, GradientStop, GridAutoFlow, GridLine, GridTrackSize, Hyphens, ImageRendering,
-    MaskClip, MaskMode, MasonryAutoFlow,
+    FontVariantCaps, FontVariationSetting, FontWeight, GradientStop, GridAutoFlow, GridLine, GridTrackSize, Hyphens, ImageRendering,
+    MaskClip, MaskComposite, MaskLayer, MaskMode, MasonryAutoFlow,
     Isolation, IterationCount, Length,
     LengthOrAuto, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition,
     OutlineColor, OutlineStyle, Overflow, OverflowWrap, OverscrollBehavior, ParsedGradient, Resize,
@@ -1231,9 +1233,44 @@ fn collect_computed_styles_rec(
     b: &LayoutBox,
     out: &mut std::collections::HashMap<u32, std::collections::HashMap<String, String>>,
 ) {
-    out.insert(b.node.index() as u32, computed_style_to_map(&b.style));
+    // First box in tree order wins — see `collect_layout_rects_rec` for why
+    // several boxes can carry the same `NodeId`.
+    out.entry(b.node.index() as u32)
+        .or_insert_with(|| computed_style_to_map(&b.style));
     for child in &b.children {
         collect_computed_styles_rec(child, out);
+    }
+}
+
+// ──────────────── collect_layout_rects ────────────────
+
+/// Walks the layout tree and returns a map of `NodeId index → [x, y, width, height]`
+/// (border-box, viewport-relative CSS px).
+///
+/// The geometry counterpart of [`collect_computed_styles`]: embedders push the
+/// result into the JS runtime so that `getBoundingClientRect`, `ResizeObserver`
+/// and `IntersectionObserver` can answer without a round-trip to the layout
+/// engine. Both maps must be published together and from every path that
+/// produces a layout tree — publishing from the relayout path alone left a
+/// freshly loaded page answering `""` / all-zeros (BUG-382).
+pub fn collect_layout_rects(root: &LayoutBox) -> std::collections::HashMap<u32, [f32; 4]> {
+    let mut out = std::collections::HashMap::new();
+    collect_layout_rects_rec(root, &mut out);
+    out
+}
+
+fn collect_layout_rects_rec(b: &LayoutBox, out: &mut std::collections::HashMap<u32, [f32; 4]>) {
+    // A single `NodeId` can own more than one box: an element with inline content
+    // gets an anonymous block/line box for that content, and the box tree keeps the
+    // element's own `NodeId` on it. The recursion visits the principal box before
+    // its descendants, so `or_insert` keeps the element's own border box; plain
+    // `insert` used to hand JS the last (inner) box instead — `getBoundingClientRect`
+    // on `<div style="height:20px">x</div>` answered the 19.2px line box (BUG-382).
+    let r = &b.rect;
+    out.entry(b.node.index() as u32)
+        .or_insert([r.x, r.y, r.width, r.height]);
+    for child in &b.children {
+        collect_layout_rects_rec(child, out);
     }
 }
 
@@ -1440,6 +1477,59 @@ mod tests {
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(css);
         layout(&doc, &sheet, Size::new(800.0, 600.0))
+    }
+
+    /// BUG-382: an element with inline content owns two boxes with the same
+    /// `NodeId` — its principal block box and the anonymous run holding the text.
+    /// Both snapshot collectors must answer with the principal one; the earlier
+    /// `insert` handed JS the inner run, so `getBoundingClientRect().height` was
+    /// the line height and `getComputedStyle().width` was `auto`.
+    #[test]
+    fn snapshot_collectors_keep_the_principal_box() {
+        let root = lay_full(
+            "<html><body><div id=a>x</div></body></html>",
+            "body{margin:0} #a{width:50px;height:20px}",
+        );
+        // Walk in the same order the collectors do, recording every box per node.
+        fn walk<'a>(b: &'a LayoutBox, out: &mut Vec<(u32, &'a LayoutBox)>) {
+            out.push((b.node.index() as u32, b));
+            for c in &b.children {
+                walk(c, out);
+            }
+        }
+        let mut boxes = Vec::new();
+        walk(&root, &mut boxes);
+
+        let div_nid = boxes
+            .iter()
+            .find(|(nid, _)| boxes.iter().filter(|(n, _)| n == nid).count() > 1)
+            .map(|(nid, _)| *nid)
+            .expect("expected a NodeId owning more than one box");
+        let principal = boxes
+            .iter()
+            .find(|(nid, _)| *nid == div_nid)
+            .map(|(_, b)| *b)
+            .expect("principal box");
+        assert_eq!(principal.rect.height, 20.0, "specified height must win");
+
+        let rects = collect_layout_rects(&root);
+        assert_eq!(
+            rects[&div_nid],
+            [
+                principal.rect.x,
+                principal.rect.y,
+                principal.rect.width,
+                principal.rect.height
+            ],
+            "rect snapshot must describe the element's own box"
+        );
+
+        let styles = collect_computed_styles(&root);
+        assert_eq!(
+            styles[&div_nid].get("width").map(String::as_str),
+            Some("50px"),
+            "style snapshot must describe the element's own box"
+        );
     }
 
     fn first_element_child(b: &LayoutBox) -> &LayoutBox {
@@ -6906,29 +6996,73 @@ mod tests {
         None
     }
 
-    // ── font-variant (CSS Fonts L4 §6, упрощённый) ──────────────────────────
+    // ── font-variant-caps (CSS Fonts L4 §6.2) ───────────────────────────────
 
     #[test]
     fn font_variant_default_normal() {
         let root = lay("<p>x</p>", "");
         let p = first_element_child(&root);
-        assert_eq!(p.style.font_variant, FontVariant::Normal);
+        assert_eq!(p.style.font_variant_caps, FontVariantCaps::Normal);
     }
 
     #[test]
     fn font_variant_small_caps_parsed() {
         let root = lay("<p>x</p>", "p { font-variant: small-caps; }");
         let p = first_element_child(&root);
-        assert_eq!(p.style.font_variant, FontVariant::SmallCaps);
+        assert_eq!(p.style.font_variant_caps, FontVariantCaps::SmallCaps);
     }
 
     #[test]
-    fn font_variant_caps_alias() {
-        // CSS Fonts L4 §6.4: font-variant-caps — отдельное property,
-        // парсится тем же кодом для small-caps значения.
-        let root = lay("<p>x</p>", "p { font-variant-caps: small-caps; }");
+    fn font_variant_caps_full_value_set_parsed() {
+        // CSS Fonts L4 §6.2 — longhand принимает все шесть не-initial значений.
+        for (css, want) in [
+            ("small-caps", FontVariantCaps::SmallCaps),
+            ("all-small-caps", FontVariantCaps::AllSmallCaps),
+            ("petite-caps", FontVariantCaps::PetiteCaps),
+            ("all-petite-caps", FontVariantCaps::AllPetiteCaps),
+            ("unicase", FontVariantCaps::Unicase),
+            ("titling-caps", FontVariantCaps::TitlingCaps),
+            ("normal", FontVariantCaps::Normal),
+        ] {
+            let root = lay("<p>x</p>", &format!("p {{ font-variant-caps: {css}; }}"));
+            let p = first_element_child(&root);
+            assert_eq!(p.style.font_variant_caps, want, "font-variant-caps: {css}");
+        }
+    }
+
+    #[test]
+    fn font_variant_caps_invalid_keyword_ignored() {
+        // Невалидное значение longhand-а не отменяет унаследованное
+        // (CSS Cascade L4 §4.4 — declaration отбрасывается).
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { font-variant-caps: small-caps; } p { font-variant-caps: nope; }",
+        );
+        let p = first_element_child(first_element_child(&root));
+        assert_eq!(p.style.font_variant_caps, FontVariantCaps::SmallCaps);
+    }
+
+    #[test]
+    fn font_variant_shorthand_picks_caps_component() {
+        let root = lay("<p>x</p>", "p { font-variant: all-small-caps; }");
         let p = first_element_child(&root);
-        assert_eq!(p.style.font_variant, FontVariant::SmallCaps);
+        assert_eq!(p.style.font_variant_caps, FontVariantCaps::AllSmallCaps);
+    }
+
+    #[test]
+    fn font_variant_shorthand_resets_caps_to_initial() {
+        // CSS Cascade L4 §3.1: shorthand выставляет ВСЕ свои longhand-ы.
+        // `font-variant: common-ligatures` (лигатурная компонента, у нас не
+        // реализована) обязан вернуть caps в initial, а не сохранить
+        // унаследованное small-caps.
+        for css in ["common-ligatures", "none"] {
+            let root = lay(
+                "<div><p>x</p></div>",
+                &format!("div {{ font-variant: small-caps; }} p {{ font-variant: {css}; }}"),
+            );
+            let p = first_element_child(first_element_child(&root));
+            assert_eq!(p.style.font_variant_caps, FontVariantCaps::Normal, "font-variant: {css}");
+        }
     }
 
     #[test]
@@ -6939,8 +7073,8 @@ mod tests {
         );
         let div = first_element_child(&root);
         let p = first_element_child(div);
-        assert_eq!(div.style.font_variant, FontVariant::SmallCaps);
-        assert_eq!(p.style.font_variant, FontVariant::Normal);
+        assert_eq!(div.style.font_variant_caps, FontVariantCaps::SmallCaps);
+        assert_eq!(p.style.font_variant_caps, FontVariantCaps::Normal);
     }
 
     #[test]
@@ -6951,7 +7085,37 @@ mod tests {
         );
         let div = first_element_child(&root);
         let p = first_element_child(div);
-        assert_eq!(p.style.font_variant, FontVariant::SmallCaps);
+        assert_eq!(p.style.font_variant_caps, FontVariantCaps::SmallCaps);
+    }
+
+    #[test]
+    fn font_variant_caps_synthesized_into_frags() {
+        // End-to-end: small-caps доезжает до фрагментов — строчные подняты в
+        // верхний регистр и нарисованы уменьшенным кеглем.
+        let root = lay_measured("<p>Hi</p>", "p { font-variant-caps: small-caps; font-size: 20px; }", 400.0);
+        let run = first_inline_run(first_element_child(&root));
+        let BoxKind::InlineRun { lines, .. } = &run.kind else { panic!("expected InlineRun") };
+        let frags: Vec<(&str, f32)> = lines
+            .iter()
+            .flatten()
+            .map(|f| (f.text.as_str(), f.style.font_size))
+            .collect();
+        assert_eq!(frags, vec![("H", 20.0), ("I", 16.0)]);
+    }
+
+    #[test]
+    fn font_variant_caps_does_not_break_word_at_case_boundary() {
+        // Разрез «H|ELLO» проходит внутри слова: перенос по нему запрещён,
+        // иначе узкий контейнер разорвал бы слово пополам.
+        let root = lay_measured(
+            "<p>Hello</p>",
+            "p { font-variant-caps: small-caps; font-size: 20px; }",
+            24.0,
+        );
+        let run = first_inline_run(first_element_child(&root));
+        let BoxKind::InlineRun { lines, .. } = &run.kind else { panic!("expected InlineRun") };
+        let non_empty = lines.iter().filter(|l| !l.is_empty()).count();
+        assert_eq!(non_empty, 1, "слово разорвано на {non_empty} строк: {lines:?}");
     }
 
     // ── font-stretch (CSS Fonts L4 §2.5) ────────────────────────────────────
@@ -7020,6 +7184,34 @@ mod tests {
         let p = first_element_child(div);
         assert_eq!(div.style.font_stretch.0, 750);
         assert_eq!(p.style.font_stretch, FontStretch::NORMAL);
+    }
+
+    #[test]
+    fn font_stretch_as_percent_matches_os2_width_class_scale() {
+        // `as_percent` — единицы matcher-а (`FaceRecord::stretch`,
+        // `usWidthClass`). Дробные keyword-ы округляются к ближайшему целому:
+        // шкала usWidthClass целочисленная, полуступеней у неё нет.
+        assert_eq!(FontStretch::NORMAL.as_percent(), 100);
+        assert_eq!(FontStretch(500).as_percent(), 50); // ultra-condensed
+        assert_eq!(FontStretch(750).as_percent(), 75); // condensed
+        assert_eq!(FontStretch(875).as_percent(), 88); // semi-condensed 87.5%
+        assert_eq!(FontStretch(1125).as_percent(), 113); // semi-expanded 112.5%
+        assert_eq!(FontStretch(2000).as_percent(), 200); // ultra-expanded
+        // Округление к ближайшему, а не вверх: 80.4% → 80.
+        assert_eq!(FontStretch(804).as_percent(), 80);
+    }
+
+    #[test]
+    fn font_stretch_parse_keyword_and_percentage() {
+        assert_eq!(FontStretch::parse("condensed"), Some(FontStretch(750)));
+        assert_eq!(FontStretch::parse("80%"), Some(FontStretch(800)));
+        // Диапазон из двух значений (синтаксис @font-face) → первое значение.
+        assert_eq!(FontStretch::parse("75% 125%"), Some(FontStretch(750)));
+        // Кламп в [50%, 200%] — держит значение в u16 без переполнения.
+        assert_eq!(FontStretch::parse("10%"), Some(FontStretch(500)));
+        assert_eq!(FontStretch::parse("300%"), Some(FontStretch(2000)));
+        assert_eq!(FontStretch::parse("nonsense"), None);
+        assert_eq!(FontStretch::parse(""), None);
     }
 
     // ── accent-color (CSS UI L4 §6.1) ──────────────────────────────────────
@@ -10541,11 +10733,21 @@ mod tests {
 
     // ──────── mask-* + scrollbar-* ────────
 
+    /// Топовый (первый) слой маски `<p>` — все mask-longhand-ы теперь живут
+    /// в `mask_layers` (CSS Masking L1 §4.9).
+    fn first_p_mask(root: &LayoutBox) -> MaskLayer {
+        first_p_style(root)
+            .mask_layers
+            .first()
+            .cloned()
+            .expect("mask layer")
+    }
+
     #[test]
     fn mask_image_url() {
         let root = lay("<p>x</p>", "p { mask-image: url(\"mask.png\"); }");
         assert_eq!(
-            first_p_style(&root).mask_image,
+            first_p_mask(&root).image,
             BackgroundImage::Url("mask.png".into())
         );
     }
@@ -10553,49 +10755,49 @@ mod tests {
     #[test]
     fn mask_image_none_clears() {
         let root = lay("<p>x</p>", "p { mask-image: url(m.png); mask-image: none; }");
-        assert_eq!(first_p_style(&root).mask_image, BackgroundImage::None);
+        assert_eq!(first_p_mask(&root).image, BackgroundImage::None);
     }
 
     #[test]
     fn mask_repeat_no_repeat() {
         let root = lay("<p>x</p>", "p { mask-repeat: no-repeat; }");
-        assert_eq!(first_p_style(&root).mask_repeat, BackgroundRepeat::NoRepeat);
+        assert_eq!(first_p_mask(&root).repeat, BackgroundRepeat::NoRepeat);
     }
 
     #[test]
     fn mask_size_cover() {
         let root = lay("<p>x</p>", "p { mask-size: cover; }");
-        assert_eq!(first_p_style(&root).mask_size, BackgroundSize::Cover);
+        assert_eq!(first_p_mask(&root).size, BackgroundSize::Cover);
     }
 
     #[test]
     fn mask_mode_default_is_alpha() {
         let root = lay("<p>x</p>", "p { mask-image: linear-gradient(black, white); }");
-        assert_eq!(first_p_style(&root).mask_mode, MaskMode::Alpha);
+        assert_eq!(first_p_mask(&root).mode, MaskMode::Alpha);
     }
 
     #[test]
     fn mask_mode_luminance() {
         let root = lay("<p>x</p>", "p { mask-mode: luminance; }");
-        assert_eq!(first_p_style(&root).mask_mode, MaskMode::Luminance);
+        assert_eq!(first_p_mask(&root).mode, MaskMode::Luminance);
     }
 
     #[test]
     fn mask_mode_alpha_keyword() {
         let root = lay("<p>x</p>", "p { mask-mode: luminance; mask-mode: alpha; }");
-        assert_eq!(first_p_style(&root).mask_mode, MaskMode::Alpha);
+        assert_eq!(first_p_mask(&root).mode, MaskMode::Alpha);
     }
 
     #[test]
     fn mask_mode_match_source_resolves_to_alpha() {
         let root = lay("<p>x</p>", "p { mask-mode: luminance; mask-mode: match-source; }");
-        assert_eq!(first_p_style(&root).mask_mode, MaskMode::Alpha);
+        assert_eq!(first_p_mask(&root).mode, MaskMode::Alpha);
     }
 
     #[test]
     fn mask_mode_invalid_keeps_previous() {
         let root = lay("<p>x</p>", "p { mask-mode: luminance; mask-mode: bogus; }");
-        assert_eq!(first_p_style(&root).mask_mode, MaskMode::Luminance);
+        assert_eq!(first_p_mask(&root).mode, MaskMode::Luminance);
     }
 
     #[test]
@@ -10607,13 +10809,171 @@ mod tests {
             .iter()
             .find(|c| matches!(&c.kind, BoxKind::Block))
             .expect("div block");
-        assert_eq!(div.style.mask_mode, MaskMode::Luminance, "div carries the rule");
+        assert_eq!(
+            div.style.mask_layers.first().expect("div mask layer").mode,
+            MaskMode::Luminance,
+            "div carries the rule"
+        );
         let p = div
             .children
             .iter()
             .find(|c| matches!(&c.kind, BoxKind::Block))
             .expect("p block");
-        assert_eq!(p.style.mask_mode, MaskMode::Alpha, "child does not inherit");
+        assert!(
+            p.style.mask_layers.is_empty(),
+            "child does not inherit the mask"
+        );
+    }
+
+    // ──────── CSS Masking L1 §4.9 — multi-layer masks + `mask` shorthand ────────
+
+    #[test]
+    fn mask_image_list_creates_one_layer_per_image() {
+        let root = lay(
+            "<p>x</p>",
+            "p { mask-image: url(a.png), linear-gradient(black, white), none; }",
+        );
+        let layers = &first_p_style(&root).mask_layers;
+        assert_eq!(layers.len(), 3);
+        assert_eq!(layers[0].image, BackgroundImage::Url("a.png".into()));
+        assert!(matches!(layers[1].image, BackgroundImage::Gradient(_)));
+        assert_eq!(layers[2].image, BackgroundImage::None);
+    }
+
+    #[test]
+    fn mask_longhands_cycle_over_layers() {
+        // 3 слоя, 2 значения repeat → cycling: no-repeat, repeat-x, no-repeat.
+        let root = lay(
+            "<p>x</p>",
+            "p { mask-image: url(a.png), url(b.png), url(c.png);
+                 mask-repeat: no-repeat, repeat-x; }",
+        );
+        let layers = &first_p_style(&root).mask_layers;
+        assert_eq!(layers.len(), 3);
+        assert_eq!(layers[0].repeat, BackgroundRepeat::NoRepeat);
+        assert_eq!(layers[1].repeat, BackgroundRepeat::RepeatX);
+        assert_eq!(layers[2].repeat, BackgroundRepeat::NoRepeat);
+    }
+
+    #[test]
+    fn mask_composite_list_per_layer() {
+        let root = lay(
+            "<p>x</p>",
+            "p { mask-image: url(a.png), url(b.png);
+                 mask-composite: intersect, subtract; }",
+        );
+        let layers = &first_p_style(&root).mask_layers;
+        assert_eq!(layers[0].composite, MaskComposite::Intersect);
+        assert_eq!(layers[1].composite, MaskComposite::Subtract);
+    }
+
+    #[test]
+    fn mask_composite_default_is_add() {
+        let root = lay("<p>x</p>", "p { mask-image: url(a.png); }");
+        assert_eq!(first_p_mask(&root).composite, MaskComposite::Add);
+    }
+
+    #[test]
+    fn mask_clip_and_origin_lists() {
+        let root = lay(
+            "<p>x</p>",
+            "p { mask-image: url(a.png), url(b.png);
+                 mask-origin: content-box, padding-box;
+                 mask-clip: no-clip, fill-box; }",
+        );
+        let layers = &first_p_style(&root).mask_layers;
+        assert_eq!(layers[0].origin, BackgroundOrigin::ContentBox);
+        assert_eq!(layers[1].origin, BackgroundOrigin::PaddingBox);
+        assert_eq!(layers[0].clip, MaskClip::NoClip);
+        assert_eq!(layers[1].clip, MaskClip::FillBox);
+    }
+
+    #[test]
+    fn mask_longhand_without_image_creates_a_layer() {
+        // Longhand без `mask-image` не должен теряться: создаётся один слой
+        // с initial-значениями и применённым longhand-ом.
+        let root = lay("<p>x</p>", "p { mask-repeat: no-repeat; }");
+        let layers = &first_p_style(&root).mask_layers;
+        assert_eq!(layers.len(), 1);
+        assert_eq!(layers[0].image, BackgroundImage::None);
+        assert_eq!(layers[0].repeat, BackgroundRepeat::NoRepeat);
+    }
+
+    #[test]
+    fn mask_shorthand_single_layer() {
+        let root = lay(
+            "<p>x</p>",
+            "p { mask: url(m.png) center / cover no-repeat content-box luminance intersect; }",
+        );
+        let m = first_p_mask(&root);
+        assert_eq!(m.image, BackgroundImage::Url("m.png".into()));
+        assert_eq!(m.size, BackgroundSize::Cover);
+        assert_eq!(m.repeat, BackgroundRepeat::NoRepeat);
+        assert_eq!(m.origin, BackgroundOrigin::ContentBox);
+        // Один <geometry-box> задаёт и origin, и clip.
+        assert_eq!(m.clip, MaskClip::ContentBox);
+        assert_eq!(m.mode, MaskMode::Luminance);
+        assert_eq!(m.composite, MaskComposite::Intersect);
+    }
+
+    #[test]
+    fn mask_shorthand_two_geometry_boxes() {
+        let root = lay("<p>x</p>", "p { mask: url(m.png) padding-box no-clip; }");
+        let m = first_p_mask(&root);
+        assert_eq!(m.origin, BackgroundOrigin::PaddingBox);
+        assert_eq!(m.clip, MaskClip::NoClip);
+    }
+
+    #[test]
+    fn mask_shorthand_no_clip_before_geometry_box() {
+        // `||` — порядок свободный: `no-clip` занимает слот clip, поэтому
+        // следующий <geometry-box> обязан попасть в origin, а не затереть clip.
+        let root = lay("<p>x</p>", "p { mask: url(m.png) no-clip padding-box; }");
+        let m = first_p_mask(&root);
+        assert_eq!(m.origin, BackgroundOrigin::PaddingBox);
+        assert_eq!(m.clip, MaskClip::NoClip);
+    }
+
+    #[test]
+    fn mask_shorthand_two_geometry_boxes_fill_origin_then_clip() {
+        let root = lay("<p>x</p>", "p { mask: url(m.png) padding-box content-box; }");
+        let m = first_p_mask(&root);
+        assert_eq!(m.origin, BackgroundOrigin::PaddingBox);
+        assert_eq!(m.clip, MaskClip::ContentBox);
+    }
+
+    #[test]
+    fn mask_shorthand_resets_unspecified_longhands() {
+        let root = lay(
+            "<p>x</p>",
+            "p { mask-repeat: no-repeat; mask-mode: luminance; mask: url(m.png); }",
+        );
+        let m = first_p_mask(&root);
+        assert_eq!(m.repeat, BackgroundRepeat::Repeat, "reset to initial");
+        assert_eq!(m.mode, MaskMode::Alpha, "reset to initial");
+    }
+
+    #[test]
+    fn mask_shorthand_multi_layer() {
+        let root = lay(
+            "<p>x</p>",
+            "p { mask: url(a.png) no-repeat, linear-gradient(black, white) subtract; }",
+        );
+        let layers = &first_p_style(&root).mask_layers;
+        assert_eq!(layers.len(), 2);
+        assert_eq!(layers[0].image, BackgroundImage::Url("a.png".into()));
+        assert_eq!(layers[0].repeat, BackgroundRepeat::NoRepeat);
+        assert_eq!(layers[0].composite, MaskComposite::Add);
+        assert!(matches!(layers[1].image, BackgroundImage::Gradient(_)));
+        assert_eq!(layers[1].composite, MaskComposite::Subtract);
+    }
+
+    #[test]
+    fn mask_shorthand_none_clears_the_image() {
+        let root = lay("<p>x</p>", "p { mask-image: url(a.png); mask: none; }");
+        let layers = &first_p_style(&root).mask_layers;
+        assert_eq!(layers.len(), 1);
+        assert_eq!(layers[0].image, BackgroundImage::None);
     }
 
     #[test]
@@ -14048,6 +14408,191 @@ mod tests {
             "gap: x diff should be 120, got {}", items[1].rect.x - items[0].rect.x);
     }
 
+    // ──── grid content distribution: align-content / justify-content / place-content
+    //      (CSS Box Alignment L3 §5, CSS Grid L1 §12.3) ────
+
+    /// Grid items of the container, in source order, excluding `Skip` boxes.
+    fn grid_items(div: &LayoutBox) -> Vec<&LayoutBox> {
+        div.children.iter().filter(|c| !matches!(c.kind, BoxKind::Skip)).collect()
+    }
+
+    /// `justify-content: center` centres the fixed column tracks in the inline axis.
+    #[test]
+    fn grid_justify_content_center_offsets_columns() {
+        let root = lay(
+            "<body><div><a></a><a></a></div></body>",
+            "div { display: grid; grid-template-columns: 100px 100px; width: 400px; \
+                   justify-content: center; } \
+             a { height: 30px; }",
+        );
+        let div = first_element_child(&root);
+        let items = grid_items(div);
+        assert_eq!(items.len(), 2);
+        // Free space 400 - 200 = 200 → first track pushed by 100.
+        assert!((items[0].rect.x - div.rect.x - 100.0).abs() < 1.0,
+            "first column offset by half the free space, got {}", items[0].rect.x - div.rect.x);
+        assert!((items[1].rect.x - items[0].rect.x - 100.0).abs() < 1.0,
+            "tracks stay adjacent, got {}", items[1].rect.x - items[0].rect.x);
+    }
+
+    /// `justify-content: end` flushes the column tracks to the inline end edge.
+    #[test]
+    fn grid_justify_content_end_flushes_columns() {
+        let root = lay(
+            "<body><div><a></a><a></a></div></body>",
+            "div { display: grid; grid-template-columns: 100px 100px; width: 400px; \
+                   justify-content: end; } \
+             a { height: 30px; }",
+        );
+        let div = first_element_child(&root);
+        let items = grid_items(div);
+        assert!((items[0].rect.x - div.rect.x - 200.0).abs() < 1.0,
+            "first column offset by the whole free space, got {}", items[0].rect.x - div.rect.x);
+    }
+
+    /// `justify-content: space-between` widens the gap between the column tracks.
+    #[test]
+    fn grid_justify_content_space_between_widens_gap() {
+        let root = lay(
+            "<body><div><a></a><a></a></div></body>",
+            "div { display: grid; grid-template-columns: 100px 100px; width: 400px; \
+                   justify-content: space-between; } \
+             a { height: 30px; }",
+        );
+        let div = first_element_child(&root);
+        let items = grid_items(div);
+        assert!((items[0].rect.x - div.rect.x).abs() < 1.0,
+            "first column at the start edge, got {}", items[0].rect.x - div.rect.x);
+        // 200px of free space becomes the single in-between gap.
+        assert!((items[1].rect.x - items[0].rect.x - 300.0).abs() < 1.0,
+            "second column pushed by track + free space, got {}", items[1].rect.x - items[0].rect.x);
+    }
+
+    /// A column-spanning item's cell absorbs the spacing `justify-content` injected.
+    #[test]
+    fn grid_justify_content_space_between_widens_spanning_cell() {
+        let root = lay(
+            "<body><div><a></a></div></body>",
+            "div { display: grid; grid-template-columns: 100px 100px; width: 400px; \
+                   justify-content: space-between; } \
+             a { grid-column: 1 / 3; height: 30px; }",
+        );
+        let div = first_element_child(&root);
+        let items = grid_items(div);
+        // Cell spans track 1 (100) + injected gap (200) + track 2 (100) = 400.
+        assert!((items[0].rect.width - 400.0).abs() < 1.0,
+            "spanning cell covers the widened gap, got {}", items[0].rect.width);
+    }
+
+    /// `align-content: center` centres the row tracks inside a definite height.
+    #[test]
+    fn grid_align_content_center_offsets_rows() {
+        let root = lay(
+            "<body><div><a></a><a></a></div></body>",
+            "div { display: grid; grid-template-columns: 100px; \
+                   grid-template-rows: 50px 50px; height: 300px; \
+                   align-content: center; }",
+        );
+        let div = first_element_child(&root);
+        let items = grid_items(div);
+        assert_eq!(items.len(), 2);
+        // Free space 300 - 100 = 200 → first row pushed by 100.
+        assert!((items[0].rect.y - div.rect.y - 100.0).abs() < 1.0,
+            "first row offset by half the free space, got {}", items[0].rect.y - div.rect.y);
+        assert!((items[1].rect.y - items[0].rect.y - 50.0).abs() < 1.0,
+            "rows stay adjacent, got {}", items[1].rect.y - items[0].rect.y);
+    }
+
+    /// `align-content: space-evenly` spaces the row tracks including both edges.
+    #[test]
+    fn grid_align_content_space_evenly_spaces_rows() {
+        let root = lay(
+            "<body><div><a></a><a></a></div></body>",
+            "div { display: grid; grid-template-columns: 100px; \
+                   grid-template-rows: 50px 50px; height: 350px; \
+                   align-content: space-evenly; }",
+        );
+        let div = first_element_child(&root);
+        let items = grid_items(div);
+        // Free 350 - 100 = 250, three equal gaps of 250/3 ≈ 83.33.
+        let per = 250.0 / 3.0;
+        assert!((items[0].rect.y - div.rect.y - per).abs() < 1.0,
+            "first row offset by one share, got {}", items[0].rect.y - div.rect.y);
+        assert!((items[1].rect.y - items[0].rect.y - (50.0 + per)).abs() < 1.0,
+            "rows separated by track + one share, got {}", items[1].rect.y - items[0].rect.y);
+    }
+
+    /// `align-content: center` on an overflowing grid resolves *unsafely* (CSS Box
+    /// Alignment L3 §5.3): the tracks shift back past the start edge, like Edge.
+    #[test]
+    fn grid_align_content_center_overflow_shifts_past_start_edge() {
+        let root = lay(
+            "<body><div><a></a><a></a></div></body>",
+            "div { display: grid; grid-template-columns: 100px; \
+                   grid-template-rows: 100px 100px; height: 50px; \
+                   align-content: center; }",
+        );
+        let div = first_element_child(&root);
+        let items = grid_items(div);
+        // Free space 50 - 200 = -150 → the first row starts 75px above the edge.
+        assert!((items[0].rect.y - div.rect.y + 75.0).abs() < 1.0,
+            "overflowing tracks centre unsafely, got {}", items[0].rect.y - div.rect.y);
+    }
+
+    /// `align-content: space-between` on an overflowing grid falls back to `start`
+    /// (CSS Box Alignment L3 §5.3) instead of producing negative spacing.
+    #[test]
+    fn grid_align_content_space_between_overflow_falls_back_to_start() {
+        let root = lay(
+            "<body><div><a></a><a></a></div></body>",
+            "div { display: grid; grid-template-columns: 100px; \
+                   grid-template-rows: 100px 100px; height: 50px; \
+                   align-content: space-between; }",
+        );
+        let div = first_element_child(&root);
+        let items = grid_items(div);
+        assert!((items[0].rect.y - div.rect.y).abs() < 1.0,
+            "first row at the start edge, got {}", items[0].rect.y - div.rect.y);
+        assert!((items[1].rect.y - items[0].rect.y - 100.0).abs() < 1.0,
+            "rows stay adjacent, no negative spacing, got {}", items[1].rect.y - items[0].rect.y);
+    }
+
+    /// `place-content: <align-content> <justify-content>` reaches both grid axes.
+    #[test]
+    fn grid_place_content_shorthand_applies_to_both_axes() {
+        let root = lay(
+            "<body><div><a></a></div></body>",
+            "div { display: grid; grid-template-columns: 100px; \
+                   grid-template-rows: 100px; width: 400px; height: 300px; \
+                   place-content: end center; }",
+        );
+        let div = first_element_child(&root);
+        let items = grid_items(div);
+        // align-content: end → y offset by the whole 200px of block free space.
+        assert!((items[0].rect.y - div.rect.y - 200.0).abs() < 1.0,
+            "align-content: end flushes the row, got {}", items[0].rect.y - div.rect.y);
+        // justify-content: center → x offset by half the 300px of inline free space.
+        assert!((items[0].rect.x - div.rect.x - 150.0).abs() < 1.0,
+            "justify-content: center centres the column, got {}", items[0].rect.x - div.rect.x);
+    }
+
+    /// Default `align-content: normal` behaves as `stretch`: auto rows share the
+    /// leftover block space of a definitely-sized container.
+    #[test]
+    fn grid_align_content_normal_stretches_auto_rows() {
+        let root = lay(
+            "<body><div><a></a><a></a></div></body>",
+            "div { display: grid; grid-template-columns: 100px; \
+                   grid-template-rows: auto auto; height: 200px; }",
+        );
+        let div = first_element_child(&root);
+        let items = grid_items(div);
+        assert_eq!(items.len(), 2);
+        // Both auto rows grow to 100px each → the second row starts halfway down.
+        assert!((items[1].rect.y - items[0].rect.y - 100.0).abs() < 1.0,
+            "auto rows share the free space, got {}", items[1].rect.y - items[0].rect.y);
+    }
+
     /// `grid-auto-flow: column` places items vertically first.
     #[test]
     fn grid_auto_flow_column() {
@@ -14697,7 +15242,7 @@ mod tests {
             "<body><div></div></body>",
             "div { width: 50px; height: 50px; background-image: url(bg.png); }",
         );
-        let urls = collect_background_image_requests(&root);
+        let urls = collect_background_image_requests(&root, 1.0);
         assert_eq!(urls, vec!["bg.png".to_string()]);
     }
 
@@ -14708,7 +15253,7 @@ mod tests {
             "<body><div></div></body>",
             "div { width: 50px; height: 50px; background-image: none; }",
         );
-        assert!(collect_background_image_requests(&root).is_empty());
+        assert!(collect_background_image_requests(&root, 1.0).is_empty());
     }
 
     /// Gradient-вариант не учитывается (Phase 0 не растрит).
@@ -14719,7 +15264,7 @@ mod tests {
             "div { width: 50px; height: 50px; \
              background-image: linear-gradient(red, blue); }",
         );
-        assert!(collect_background_image_requests(&root).is_empty());
+        assert!(collect_background_image_requests(&root, 1.0).is_empty());
     }
 
     /// Дубликаты URL фильтруются.
@@ -14729,7 +15274,7 @@ mod tests {
             "<body><div></div><div></div><div></div></body>",
             "div { width: 10px; height: 10px; background-image: url(same.png); }",
         );
-        let urls = collect_background_image_requests(&root);
+        let urls = collect_background_image_requests(&root, 1.0);
         assert_eq!(urls.len(), 1, "three divs same URL → один запрос, got {urls:?}");
         assert_eq!(urls[0], "same.png");
     }
@@ -14742,10 +15287,175 @@ mod tests {
             ".a { width: 10px; height: 10px; background-image: url(a.png); } \
              .b { width: 10px; height: 10px; background-image: url(b.png); }",
         );
-        let urls = collect_background_image_requests(&root);
+        let urls = collect_background_image_requests(&root, 1.0);
         assert_eq!(urls.len(), 2);
         assert!(urls.contains(&"a.png".to_string()));
         assert!(urls.contains(&"b.png".to_string()));
+    }
+
+    // ── BUG-101: image-set() / cross-fade() как источники запросов ────────────
+
+    /// BUG-101: `image-set()` хранится в слое дословно, а эмиттер кладёт в
+    /// `DrawBackgroundImage.src` уже выбранного кандидата. Коллектор обязан
+    /// вернуть тот же URL, иначе shell качает текст функции как имя файла
+    /// (os error 123) и картинка не рисуется.
+    #[test]
+    fn collect_bg_image_resolves_image_set_candidate() {
+        let root = layout_with(
+            "<body><div></div></body>",
+            "div { width: 50px; height: 50px; background-image: \
+             image-set(url(one.png) 1x, url(two.png) 2x); }",
+        );
+        let urls = collect_background_image_requests(&root, 1.0);
+        assert_eq!(urls, vec!["one.png".to_string()], "DPR 1 → 1x-кандидат, got {urls:?}");
+    }
+
+    /// Тот же слой при DPR 2 даёт 2x-кандидата — коллектор и эмиттер должны
+    /// разрешать `image-set()` по одному и тому же DPR.
+    #[test]
+    fn collect_bg_image_image_set_follows_dpr() {
+        let root = layout_with(
+            "<body><div></div></body>",
+            "div { width: 50px; height: 50px; background-image: \
+             image-set(url(one.png) 1x, url(two.png) 2x); }",
+        );
+        let urls = collect_background_image_requests(&root, 2.0);
+        assert_eq!(urls, vec!["two.png".to_string()], "DPR 2 → 2x-кандидат, got {urls:?}");
+    }
+
+    /// `-webkit-image-set()` разворачивается так же, как беспрефиксная форма.
+    #[test]
+    fn collect_bg_image_resolves_webkit_image_set() {
+        let root = layout_with(
+            "<body><div></div></body>",
+            "div { width: 50px; height: 50px; background-image: \
+             -webkit-image-set(url(low.png) 1x, url(high.png) 2x); }",
+        );
+        let urls = collect_background_image_requests(&root, 1.0);
+        assert_eq!(urls, vec!["low.png".to_string()]);
+    }
+
+    /// BUG-101: `cross-fade()` рисуется одной командой из двух источников —
+    /// раньше не собиралась ни одна сторона, и ячейка оставалась пустой.
+    #[test]
+    fn collect_bg_image_cross_fade_both_sides() {
+        let root = layout_with(
+            "<body><div></div></body>",
+            "div { width: 50px; height: 50px; background-image: \
+             -webkit-cross-fade(url(from.png), url(to.png), 50%); }",
+        );
+        let urls = collect_background_image_requests(&root, 1.0);
+        assert_eq!(urls.len(), 2, "обе стороны cross-fade, got {urls:?}");
+        assert!(urls.contains(&"from.png".to_string()));
+        assert!(urls.contains(&"to.png".to_string()));
+    }
+
+    /// Сторона `cross-fade()` сама может быть `image-set()` — разворачивается
+    /// рекурсивно, тем же DPR.
+    #[test]
+    fn collect_bg_image_cross_fade_side_image_set() {
+        let root = layout_with(
+            "<body><div></div></body>",
+            "div { width: 50px; height: 50px; background-image: \
+             -webkit-cross-fade(image-set(url(a1.png) 1x, url(a2.png) 2x), url(b.png), 50%); }",
+        );
+        let urls = collect_background_image_requests(&root, 1.0);
+        assert_eq!(urls.len(), 2, "got {urls:?}");
+        assert!(urls.contains(&"a1.png".to_string()), "1x-сторона image-set, got {urls:?}");
+        assert!(urls.contains(&"b.png".to_string()));
+    }
+
+    /// Беспрефиксная 3-аргументная `cross-fade()` невалидна (CSS Images L4 §4),
+    /// декларация отбрасывается — собирать нечего.
+    #[test]
+    fn collect_bg_image_unprefixed_legacy_cross_fade_collects_nothing() {
+        let root = layout_with(
+            "<body><div></div></body>",
+            "div { width: 50px; height: 50px; background-image: \
+             cross-fade(url(from.png), url(to.png), 30%); }",
+        );
+        assert!(
+            collect_background_image_requests(&root, 1.0).is_empty(),
+            "невалидная декларация не должна порождать запросов"
+        );
+    }
+
+    // ── CSS Generated Content L3 §2.1 — content: url() ────────────────────────
+
+    /// Собирает пары `(text, img_src)` из всех `InlineRun`-сегментов дерева.
+    fn inline_segments_of(b: &LayoutBox) -> Vec<(String, Option<String>)> {
+        let mut out = Vec::new();
+        fn walk(b: &LayoutBox, out: &mut Vec<(String, Option<String>)>) {
+            if let crate::box_tree::BoxKind::InlineRun { segments, .. } = &b.kind {
+                for s in segments {
+                    out.push((s.text.clone(), s.img_src.clone()));
+                }
+            }
+            for c in &b.children {
+                walk(c, out);
+            }
+        }
+        walk(b, &mut out);
+        out
+    }
+
+    /// `content: url(...)` на `::before` → генерирует inline-replaced image-сегмент.
+    #[test]
+    fn content_url_before_emits_image_segment() {
+        let root = layout_with(
+            "<body><p>x</p></body>",
+            "p::before { content: url(icon.png); }",
+        );
+        let segs = inline_segments_of(&root);
+        assert!(
+            segs.iter().any(|(t, img)| img.as_deref() == Some("icon.png") && t.is_empty()),
+            "expected a generated image segment for icon.png, got {segs:?}"
+        );
+    }
+
+    /// Сгенерированная `content: url(...)` картинка попадает в фетч-запросы: у неё
+    /// нет DOM-элемента, поэтому обычный `collect_image_requests` её не видит —
+    /// её подбирает post-layout background-проход.
+    #[test]
+    fn collect_bg_image_generated_content_url() {
+        let root = layout_with(
+            "<body><p>x</p></body>",
+            "p::before { content: url(icon.png); }",
+        );
+        let urls = collect_background_image_requests(&root, 1.0);
+        assert_eq!(urls, vec!["icon.png".to_string()]);
+    }
+
+    /// Реальный inline `<img>` НЕ попадает в background-проход: у него есть DOM-узел,
+    /// его грузит `collect_image_requests`. Двойной фетч (и поломка `loading=lazy`)
+    /// недопустимы — сегменты `<img>` несут собственный `NodeId`, а не sentinel-0.
+    #[test]
+    fn collect_bg_image_ignores_real_img() {
+        let root = layout_with(
+            r#"<body><p><img src="real.png"></p></body>"#,
+            "",
+        );
+        assert!(
+            collect_background_image_requests(&root, 1.0).is_empty(),
+            "real <img> must not be collected by the background pass"
+        );
+    }
+
+    /// Смешанный `content: "A" url(i.png) "B"` → текст «A», картинка i.png, текст «B»
+    /// как отдельные сегменты (url() разрывает текстовый run).
+    #[test]
+    fn content_url_mixed_with_text_splits_segments() {
+        let root = layout_with(
+            "<body><p>x</p></body>",
+            r#"p::before { content: "A" url(i.png) "B"; }"#,
+        );
+        let segs = inline_segments_of(&root);
+        assert!(segs.iter().any(|(t, img)| t == "A" && img.is_none()), "text A missing: {segs:?}");
+        assert!(
+            segs.iter().any(|(t, img)| img.as_deref() == Some("i.png") && t.is_empty()),
+            "image i.png missing: {segs:?}"
+        );
+        assert!(segs.iter().any(|(t, img)| t == "B" && img.is_none()), "text B missing: {segs:?}");
     }
 
     // ── CSS Positioned Layout L3 — position: relative / absolute / fixed ──
@@ -15703,7 +16413,7 @@ mod tests {
         } else {
             panic!("expected Marker box");
         }
-        let urls = collect_background_image_requests(&root);
+        let urls = collect_background_image_requests(&root, 1.0);
         assert!(urls.iter().any(|u| u == "bullet.png"), "marker image must be fetched");
     }
 

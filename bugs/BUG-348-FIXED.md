@@ -1,6 +1,6 @@
 # BUG-348 — `canvas.getContext('2d')` returns `null` unconditionally under the V8 default build: WebGL shim clobbers the 2D context accessor
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-07-29 (P3)
 **Компонент:** js (`crates/js/src/webgl_canvas.rs`, `crates/js/src/v8_runtime.rs`)
 **Найден:** P2, WPT-VENDOR-density-size-correction (2026-07-26), while triaging a `TypeError: Cannot set properties of null (setting 'fillColor')` and a TIMEOUT in the vendored `density-size-correction` category — both tests do nothing more exotic than `document.createElement('canvas').getContext('2d')`.
 
@@ -99,52 +99,52 @@ path/strokeRect boxes actually render again.
 
 ## Масштаб
 
-Breaks `<canvas>` 2D entirely for the current default engine build — not just this WPT
-category. Every graphic test, sample page, or real site that uses `CanvasRenderingContext2D`
-is affected. `graphic_tests/57-canvas-2d.html`'s CPU-screenshot snapshot renders blank
-placeholders instead of its fillRect/arc/path/strokeRect boxes (visually confirmed
-2026-07-26, `.tmp/canvas2d-check.png`, not committed).
+Breaks `<canvas>` 2D for every canvas built with `document.createElement` on the current
+default engine build — not just this WPT category. Canvases that reach JS by any other
+route (`getElementById`/`querySelector` over parsed markup) were never affected: the WebGL
+wrapper only runs inside `document.createElement`.
 
-## Уточнение охвата (P2, 2026-07-28, WPT-VENDOR-html-canvas) — сломан один путь создания из четырёх
+## Фикс (2026-07-29, P3)
 
-Заголовок «unconditionally / for **every** canvas» **неверен**, и это меняет и приоритет,
-и способ проверки фикса. Патчится не `HTMLCanvasElement`, а один метод `document`,
-поэтому шим `_addCanvasStubs` достаётся ровно тем элементам, что прошли через
-`document.createElement`. Проба (`--dump-layout`, один и тот же `fillRect` во все четыре
-канваса):
+`_addCanvasStubs` now captures the element factory's own `getContext` before overwriting
+it and **delegates** to it (`_origGetContext.apply(this || el, arguments)`) for every
+`contextType` the WebGL branch does not handle, instead of returning `null`. Two
+neighbouring clobbers of the same kind were closed with it:
 
-```
-parsed.2d=true     # <canvas> из разметки          — рисует, getImageData даёт 18,52,86,255
-made.2d=false      # document.createElement        — null (этот баг)
-madeNS.2d=true     # document.createElementNS(xhtml)— рисует
-cloned.2d=true     # made.cloneNode(false)         — рисует (клон «сломанного» элемента цел)
-```
+- `toDataURL`/`toBlob` are installed **only if absent** — `dom.rs`'s `toDataURL` returns
+  a blank 1×1 PNG (ADR-007), a valid image, whereas the WebGL stub's `'data:,'` is not a
+  decodable image URL and was winning on every created canvas.
+- One context per canvas (HTML LS §4.12.4) is preserved explicitly: once a WebGL context
+  has been handed out for an element, other types answer `null` rather than falling
+  through. Without this line the delegation would have *added* a new deviation (2D after
+  WebGL on the same canvas), since the old blanket `return null` happened to satisfy the
+  rule by accident.
 
-Зеркальное следствие: `webgl` доступен **только** на `createElement`-канвасе
-(`parsed.webgl=null`), то есть два шима не сосуществуют, а делят элементы по пути
-создания. Оба факта воспроизводятся одной страницей без автоматизации.
+Verified end-to-end on the default (V8) `dev-release` build with an instrumented probe
+page (`--screenshot`, probe prints its findings into the DOM), before → after:
 
-Пункт 3 исходного описания (blank-снимок `57-canvas-2d.html`) **не является
-свидетельством этого бага**: страница берёт канвасы через `getElementById`, то есть
-рабочим путём, а headless-путь `--screenshot`/`render_source_to_png` выполняется с
-выключенным интерактивным JS (`crates/shell/src/main.rs:1437` — `false, // headless: no
-interactive JS`) и без регистрации пиксельных источников, поэтому там любой `<canvas>`
-рисуется серым плейсхолдером `DrawImage` по построению (это же зафиксировано в
-шапке `crates/driver/tests/cases/snapshot_cpu.rs`). Blank-снимок и коммиченный эталон
-`graphic_tests/snapshots/cpu/57-canvas-2d.png` — ожидаемое поведение headless-режима, а
-не признак поломки Canvas 2D. Живой прогон TEST-57 идёт по разметочному пути и потому
-этим багом не затронут ([BUG-099](BUG-099-OPEN.md), долг 2.96 % — параметры шрифта и AA).
+| probe | before | after |
+|---|---|---|
+| `createElement('canvas').getContext('2d')` | `NULL` | `object`, `fillRect` present, stable identity, `.canvas` back-ref |
+| `createElement('canvas').toDataURL()` | `data:,` | `data:image/p…` (blank PNG) |
+| `getContext('webgl')` | `object` | `object` (unchanged: `drawArrays`, `.canvas`, same object on repeat, `webgl2` alias) |
+| `getContext('nosuch')`, `<div>.getContext('webgl')` | `null` | `null` |
 
-Проверять фикс, соответственно, надо не снимком, а страницей с обоими путями создания
-(и `webgl` на разметочном канвасе), либо прогоном `html/canvas`.
+Regression tests in `webgl_canvas.rs`: `get_context_2d_delegates_to_element_factory`,
+`get_context_2d_is_null_after_webgl`, `get_context_unknown_type_returns_null`,
+`canvas_privacy_stubs_do_not_clobber_element_factory`. The test helper
+`install_minimal_dom` now models `dom.rs`'s factory (its element carries a `getContext`
+and a `toDataURL`) — the old helper handed back an element with neither, so the previous
+`get_context_2d_returns_null` test asserted the buggy policy *and* would have passed
+either way. `non_canvas_has_no_get_context` became `non_canvas_gets_no_webgl_stub` for the
+same reason: in production every element has a `getContext`, so the discriminator is the
+WebGL context, not the method's presence.
 
-Практическая цена по WPT (срез `html/canvas`, 2026-07-28): канонические
-сгенерированные тесты берут `<canvas id="c">` из разметки (`canvas-tests.js::_addTest`)
-и потому исполняются, а на `document.createElement` завязаны более новые файлы —
-88 из 1730 в `element/` — и вся серия `the-canvas-state` (23 id, 62 из 68 сабтестов
-падают `Cannot read/set properties of null`). Точные числа — в строке
-`WPT-VENDOR-html-canvas` ROADMAP.md.
+### Не входит в этот фикс
 
-Та же строка `_addCanvasStubs` порождает [BUG-419](BUG-419-OPEN.md): анти-fingerprint
-заглушка `toDataURL`/`toBlob` живёт в этом же патче и потому закрывает ровно один путь
-создания элемента из четырёх.
+Evidence item 3 of the report (blank `--screenshot` of `graphic_tests/57-canvas-2d.html`)
+is **not** this bug: that page reaches its canvases via `getElementById`, which was always
+served by the working `dom.rs` accessor. Its blankness is a separate, pre-existing gap in
+the headless CPU render path — filed as [BUG-428](BUG-428-OPEN.md). The committed
+reference `graphic_tests/snapshots/cpu/57-canvas-2d.png` is blank for the same reason, so
+this fix does not change any CPU snapshot.

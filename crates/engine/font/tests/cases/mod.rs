@@ -9,6 +9,7 @@
 //! empties them when the feature is off.
 #![allow(dead_code)]
 
+mod composite_bbox;
 mod inter_real_font;
 mod inter_shaping;
 mod real_system_fonts;

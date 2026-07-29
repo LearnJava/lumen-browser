@@ -115,6 +115,21 @@ pub enum NavigateRequest {
     Replace(String),
     /// Reload the current page.
     Reload,
+    /// Run the form-submission algorithm for a `<form>` the page submitted from
+    /// script (`form.submit()` / `form.requestSubmit()`, BUG-383).
+    ///
+    /// Encoding, enctype and the navigation itself live in the shell, so the JS
+    /// side only names the nodes: `form` is the `<form>`'s node index and
+    /// `submitter` the activated control's, or `-1` when there is none.
+    /// Travels on the same single-slot channel as the other navigations because
+    /// a form submission *is* one — a second request in the same JS pump
+    /// supersedes the first, exactly as two `location.href =` do.
+    SubmitForm {
+        /// Node index of the `<form>` element.
+        form: u32,
+        /// Node index of the submitter control, or `-1` for none.
+        submitter: i32,
+    },
 }
 
 // ─── history URL update ───────────────────────────────────────────────────────
@@ -1496,6 +1511,14 @@ fn install_primitives(
         let nav = Arc::clone(&nav_out);
         reg!("_lumen_reload", move || {
             *nav.lock().unwrap() = Some(NavigateRequest::Reload);
+        });
+
+        // BUG-383: `form.submit()` / `form.requestSubmit()`. The shell owns
+        // encoding and the navigation, so the page only hands over the node
+        // ids; `submitter` is -1 when the form was submitted with no control.
+        let nav = Arc::clone(&nav_out);
+        reg!("_lumen_request_form_submit", move |form: u32, submitter: i32| {
+            *nav.lock().unwrap() = Some(NavigateRequest::SubmitForm { form, submitter });
         });
     }
 
@@ -3300,6 +3323,15 @@ fn remove_attribute(doc: &mut Document, id: NodeId, name: &str) {
 pub(crate) const WEB_API_SHIM: &str = "
 function _lumen_u2n(v) { return v !== undefined ? v : null; }
 
+// Engine-agnostic «is this content attribute present?». A missing attribute
+// comes back as `undefined` from the QuickJS bindings but as `null` from the V8
+// ones (BUG-442), so the bare `_lumen_get_attr(...) !== undefined` test used
+// elsewhere in this shim reports «present» for every name on the default engine.
+// Normalise through `_lumen_u2n` and compare against `null` instead.
+function _lumen_has_attr(nid, name) {
+    return _lumen_u2n(_lumen_get_attr(nid, name)) !== null;
+}
+
 // DOM LS §4.5/§4.9: getElementsByClassName(names) matches elements carrying
 // EVERY whitespace-separated class token. Build a compound CSS class selector
 // ('.a.b') and reuse the native query the CSS engine already runs — same
@@ -3916,6 +3948,22 @@ function _lumen_dispatch_mouse_event(start_nid, type, clientX, clientY, button, 
     return _lumen_dispatch_rich(start_nid, ev);
 }
 
+// Called from the shell right before it runs the form submission algorithm for
+// an activated submit button (HTML LS 4.10.21.4 step 11: fire a cancelable
+// event named 'submit' at the form). Returns false when a page handler called
+// preventDefault(), in which case the shell must not navigate — that is how an
+// SPA takes submission over (BUG-437: the shell used to submit natively without
+// ever telling JS, so the page's own submit handler never ran).
+// submitter_nid < 0 means 'no submitter' (form.requestSubmit() with no button).
+function _lumen_dispatch_submit_event(form_nid, submitter_nid) {
+    var submitter = (submitter_nid === null || submitter_nid === undefined || submitter_nid < 0)
+        ? null : _lumen_make_element(submitter_nid);
+    var ev = new SubmitEvent('submit', {
+        bubbles: true, cancelable: true, isTrusted: true, submitter: submitter
+    });
+    return _lumen_dispatch_rich(form_nid, ev);
+}
+
 // Called from shell when pointer is locked and DeviceEvent::MouseMotion fires.
 // Dispatches mousemove + pointermove with movementX/Y reflecting raw OS delta.
 // (W3C Pointer Lock L2 §6.3 — clientX/Y reflect last position; movement deltas are raw.)
@@ -4109,6 +4157,19 @@ function _lumen_dispatch_capture_event(nid, type) {
 
 // Called from shell for keydown / keyup / keypress events.
 // mod: same bit-mask as _lumen_dispatch_mouse_event
+// Engine → shim: sync the JS-side value shadow of a form control after the
+// engine performed its own native text-editing default action (BUG-436).
+//
+// `el.value` reads `_input_values[nid]` first and only falls back to the
+// `value` content attribute, so a field the page had ever assigned through
+// script would keep reporting the stale script value after the user typed
+// into it. The shell calls this right after it writes the new value into the
+// DOM and before it dispatches `input`, so a listener reading `this.value`
+// sees exactly what the field now renders.
+function _lumen_set_field_value(nid, value) {
+    _input_values[nid] = String(value);
+}
+
 function _lumen_dispatch_key_event(start_nid, type, key, code, keyCode, location, mod, repeat, isComposing) {
     var ev = new KeyboardEvent(type, {
         bubbles: true, cancelable: true, isTrusted: true,
@@ -5426,8 +5487,19 @@ function _lumen_html_collection_own_names(ids) {
 // append/remove without being rebuilt. Consumers may index it (`coll[0]`),
 // call `.item(i)`/`.namedItem(name)` or read `.length`.
 function _lumen_make_html_collection(owner_nid) {
-    var proto = Object.create(HTMLCollection.prototype);
-    function ids() { return _lumen_element_child_nids(owner_nid); }
+    return _lumen_make_nid_collection(
+        function() { return _lumen_element_child_nids(owner_nid); },
+        HTMLCollection.prototype);
+}
+
+// The Proxy machinery behind every collection Lumen hands out: `idsFn` returns
+// the current member node ids, `protoObj` decides which interface the result
+// claims to implement. Split out of `_lumen_make_html_collection` so
+// `HTMLFormControlsCollection` (BUG-383) shares it instead of re-implementing
+// indexed and named access.
+function _lumen_make_nid_collection(idsFn, protoObj) {
+    var proto = Object.create(protoObj);
+    function ids() { return idsFn(); }
     return new Proxy(proto, {
         get: function(target, prop) {
             if (prop === 'length') return ids().length;
@@ -5755,8 +5827,21 @@ function _lumen_build_element(nid) {
             return c;
         },
         // ── ChildNode mixin (DOM LS §4.2.6) ─────────────────────────────────────
-        // Removes this element from its parent.
-        remove: function() {
+        // Removes this element from its parent — except on a <select>, where
+        // `remove(index)` is HTMLSelectElement's option remover (HTML LS §4.10.7)
+        // and only the argument-less call is `ChildNode.remove()`. The two have to
+        // be distinguished here rather than on `HTMLSelectElement.prototype`,
+        // because this own property would shadow any prototype method (BUG-383).
+        remove: function(index) {
+            if (index !== undefined
+                && (_lumen_get_tag_name(nid) || '').toUpperCase() === 'SELECT') {
+                var opts = _lumen_select_options(nid);
+                var oi = Math.trunc(Number(index));
+                if (!isFinite(oi) || oi < 0 || oi >= opts.length) return;
+                var op_parent = _lumen_u2n(_lumen_get_parent(opts[oi]));
+                if (op_parent !== null) _lumen_remove_child(op_parent, opts[oi]);
+                return;
+            }
             var pid = _lumen_u2n(_lumen_get_parent(nid));
             if (pid !== null) {
                 _lumen_remove_child(pid, nid);
@@ -6077,13 +6162,13 @@ function _lumen_build_element(nid) {
                 var d = _lumen_canvas_dims(nid); _lumen_canvas2d_resize(nid, d[0], d[1]);
             }
         },
-        // Reflected `src` URL attribute — shared by <img>/<script>/<iframe>/<source>/…
-        // (HTML LS: each element's `src` IDL attribute reflects the content attribute).
-        // Returns the raw attribute string (same simplification as `getAttribute`; full
-        // URL resolution to an absolute URL is deferred). Empty string when unset, per
-        // the reflect-a-URL steps. Enables `new Image().src = …` to reach layout (BUG-305).
-        get src()  { var v = _lumen_u2n(_lumen_get_attr(nid, 'src')); return v !== null ? v : ''; },
-        set src(v) { _lumen_set_attr(nid, 'src', String(v)); },
+        // `src` used to live here as an own property on EVERY element (BUG-305).
+        // It is now one row of the reflection table (BUG-383) installed on the
+        // interfaces that actually have the attribute — `<img>`/`<script>`/
+        // `<iframe>`/`<source>`/`<track>`/`<video>`/`<input type=image>` — so
+        // `document.createElement('div').src` is `undefined` again, as it is in
+        // every browser. `<audio>` keeps its own `src` accessor (`audio_element.rs`),
+        // which shadows the prototype one and drives the media loader.
         get offsetWidth()  { var r = _lumen_get_bounding_rect(nid); return r ? r[2] : 0; },
         get offsetHeight() { var r = _lumen_get_bounding_rect(nid); return r ? r[3] : 0; },
         get offsetLeft()   { var r = _lumen_get_bounding_rect(nid); return r ? r[0] : 0; },
@@ -6124,20 +6209,71 @@ function _lumen_build_element(nid) {
                 parent = _lumen_u2n(_lumen_get_parent(parent));
             }
         },
+        // ── Focus-related IDL reflection (HTML LS §6.6, BUG-381) ─────────────
+        // `tabIndex` reflects the `tabindex` content attribute; with the
+        // attribute absent or unparseable the default is 0 for elements that
+        // are focusable anyway and −1 for everything else. `<body>`/`<html>`
+        // report −1 even though a script may focus them, matching browsers.
+        get tabIndex() {
+            var parsed = _lumen_parse_integer(_lumen_u2n(_lumen_get_attr(nid, 'tabindex')));
+            if (parsed !== null) return parsed;
+            var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
+            if (tag === 'BODY' || tag === 'HTML') return -1;
+            return _lumen_is_focusable(nid) ? 0 : -1;
+        },
+        set tabIndex(v) {
+            var n = _lumen_parse_integer(v);
+            _lumen_set_attr(nid, 'tabindex', String(n !== null ? n : 0));
+        },
+        // Boolean `autofocus` content attribute (HTML LS §6.6.6).
+        get autofocus() { return _lumen_has_attr(nid, 'autofocus'); },
+        set autofocus(v) {
+            if (v) { _lumen_set_attr(nid, 'autofocus', ''); }
+            else { _lumen_remove_attr(nid, 'autofocus'); }
+        },
         // ── HTMLInputElement / HTMLTextAreaElement / HTMLSelectElement properties ──
-        // Reflected HTML attributes (HTML LS §4.10.x).
-        get type()  { var v = _lumen_u2n(_lumen_get_attr(nid, 'type')); return v !== null ? v.toLowerCase() : 'text'; },
-        get name()  { var v = _lumen_u2n(_lumen_get_attr(nid, 'name')); return v !== null ? v : ''; },
-        set name(v) { _lumen_set_attr(nid, 'name', String(v)); },
-        // Current value — stored in _input_values map so it survives re-calls to _lumen_make_element.
+        // `type` and `name` used to be own properties here, reflected for every
+        // element alike; they are now table rows per interface (BUG-383), which
+        // is what gives `<button>` its `submit` default and `<textarea>`/`<select>`
+        // their fixed `type` strings.
+        //
+        // `value` and `checked`, by contrast, are NOT plain reflection: they are
+        // the *current* value/checkedness, which the content attribute only seeds
+        // (HTML LS §4.10.5.4 «dirty value flag»). They stay here, keyed by nid in
+        // `_input_values` so they survive wrapper re-creation. The content
+        // attribute behind each one is reachable as `defaultValue`/`defaultChecked`
+        // from the reflection table.
         get value() {
             if (_input_values[nid] !== undefined) return _input_values[nid];
+            var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
+            // HTML LS §4.10.10: an <option> with no `value` attribute takes its
+            // value from its text; §4.10.7: a <select>'s value is that of its
+            // first selected option. Both are needed for `select.value` and
+            // `select.options[i].value` to agree.
+            if (tag === 'OPTION') {
+                var ov = _lumen_u2n(_lumen_get_attr(nid, 'value'));
+                if (ov !== null) return String(ov);
+                return _lumen_option_text(nid);
+            }
+            if (tag === 'SELECT') {
+                var _si = _lumen_select_selected_index(nid);
+                if (_si === -1) return '';
+                return _lumen_make_element(_lumen_select_options(nid)[_si]).value;
+            }
+            if (tag === 'TEXTAREA') return _lumen_get_text_content(nid);
             var av = _lumen_u2n(_lumen_get_attr(nid, 'value'));
             return av !== null ? av : '';
         },
-        set value(v) { _input_values[nid] = String(v); },
-        get checked() { return _lumen_get_attr(nid, 'checked') !== undefined; },
+        set value(v) {
+            var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
+            if (tag === 'SELECT') { _lumen_select_set_value(nid, String(v)); return; }
+            _input_values[nid] = String(v);
+        },
+        // BUG-442: presence must go through `_lumen_has_attr` — on the default (V8)
+        // engine a missing attribute comes back as `null`, not `undefined`.
+        get checked() { return _lumen_has_attr(nid, 'checked'); },
         set checked(v) {
+            _lumen_capture_default_checked(nid);
             if (v) _lumen_set_attr(nid, 'checked', '');
             else _lumen_remove_attr(nid, 'checked');
         },
@@ -6209,25 +6345,10 @@ function _lumen_build_element(nid) {
             // Fire a click event; shell / test code can listen to open a native picker.
             this.dispatchEvent(new Event('click', { bubbles: true, cancelable: true }));
         },
-        // HTMLFormElement.elements — live collection of associated form controls.
-        // Phase 0: selector engine handles only single-tag selectors, so query
-        // each tag separately and merge (avoids comma-selector limitation).
-        get elements() {
-            var self = this;
-            var tags = ['input', 'select', 'textarea', 'button'];
-            var out = [];
-            for (var _ti = 0; _ti < tags.length; _ti++) {
-                var found = self.querySelectorAll(tags[_ti]);
-                for (var _fi = 0; _fi < found.length; _fi++) out.push(found[_fi]);
-            }
-            return out;
-        },
-        // Reflects the novalidate content attribute (disables constraint validation on submit).
-        get noValidate() { return this.hasAttribute('novalidate'); },
-        set noValidate(v) {
-            if (v) this.setAttribute('novalidate', '');
-            else this.removeAttribute('novalidate');
-        },
+        // `elements` (was a plain `Array` on every element) and `noValidate` moved
+        // to `HTMLFormElement.prototype`/`HTMLFieldSetElement.prototype` — the
+        // former is now a real `HTMLFormControlsCollection`, the latter a row of
+        // the reflection table (BUG-383).
         // DOM LS §4.2.4: insertBefore(newNode, refNode) — inserts before refNode (or appends if null).
         insertBefore: function(newNode, refNode) {
             if (!newNode || newNode.__nid__ === undefined) return newNode;
@@ -7031,6 +7152,21 @@ var document = {
         var hid = _lumen_u2n(_lumen_get_html_element());
         return hid !== null ? _lumen_make_element(hid) : null;
     },
+    // HTML LS §6.6.3 (BUG-381): the element that currently holds focus. Falls
+    // back to `<body>` — not `null` — while nothing is focused, per spec; the
+    // underlying state is `_lumen_last_focused_nid`, kept in step with the
+    // shell's `focused_node` by `_lumen_focus_update`.
+    get activeElement() {
+        var n = _lumen_last_focused_nid;
+        if (n === null || n === undefined || n === -1) {
+            var bid = _lumen_u2n(_lumen_get_body());
+            return bid !== null ? _lumen_make_element(bid) : null;
+        }
+        return _lumen_make_element(n);
+    },
+    // HTML LS §6.6.3: true while this document's window is the active one.
+    // Reuses the shell signal that already drives `document.visibilityState`.
+    hasFocus: function() { return !_doc_hidden; },
     getElementById:    function(id)  {
         var n = _lumen_u2n(_lumen_get_element_by_id(String(id)));
         return n !== null ? _lumen_make_element(n) : null;
@@ -10499,6 +10635,7 @@ var window = {
     _lumen_dispatch_pointer_move_coalesced: _lumen_dispatch_pointer_move_coalesced,
     _lumen_dispatch_capture_event:      _lumen_dispatch_capture_event,
     _lumen_dispatch_key_event:     _lumen_dispatch_key_event,
+    _lumen_set_field_value:        _lumen_set_field_value,
     _lumen_dispatch_rich:          _lumen_dispatch_rich,
     _lumen_set_ime_target: _lumen_set_ime_target,
     _lumen_fire_page_lifecycle: _lumen_fire_page_lifecycle,
@@ -13082,6 +13219,16 @@ function _lumen_apply_ready_state(state) {
         for (var i = 0; i < winArr.length; i++) {
             try { winArr[i].call(window, dcl); } catch(e) {}
         }
+        // HTML LS §6.6.6 «flush autofocus candidates» (BUG-381): once parsing is
+        // done, focus the first `[autofocus]` element in the document — unless a
+        // DOMContentLoaded handler already moved focus itself.
+        if (_lumen_last_focused_nid === -1) {
+            var afNid = _lumen_find_autofocus_in(_lumen_root_nid);
+            if (afNid !== -1 && _lumen_is_focusable(afNid)) {
+                var afEl = _lumen_make_element(afNid);
+                if (afEl && typeof afEl.focus === 'function') { try { afEl.focus(); } catch(e) {} }
+            }
+        }
     } else if (state === 'complete') {
         // load fires on window (does not bubble)
         var loadEv = new Event('load', { bubbles: false, cancelable: false });
@@ -13127,16 +13274,1564 @@ var _lumen_dialog_prev_focus = {};
 
 // DFS search for the first descendant of `container_nid` that has an
 // `autofocus` attribute. Returns its nid, or -1 if none found.
+// Presence is tested through `_lumen_has_attr`, not `!== undefined`: on the V8
+// bindings a missing attribute reads as `null` (BUG-442), which made this
+// return the container's first child on every call.
 function _lumen_find_autofocus_in(container_nid) {
     var queue = _lumen_get_children(container_nid).slice();
     while (queue.length > 0) {
         var cur = queue.shift();
-        if (_lumen_get_attr(cur, 'autofocus') !== undefined) return cur;
+        if (_lumen_has_attr(cur, 'autofocus')) return cur;
         var ch = _lumen_get_children(cur);
         for (var i = 0; i < ch.length; i++) queue.push(ch[i]);
     }
     return -1;
 }
+
+// ── Focus management (HTML LS §6.6) ──────────────────────────────────────────
+// BUG-381. The shell owns the real focus state (`Shell.focused_node` — it feeds
+// `:focus` matching, keyboard/IME routing and the platform a11y bridge) and
+// reports every change here through `_lumen_focus_update`. The page moves focus
+// the other way: `element.focus()` updates this side synchronously (the spec
+// requires `document.activeElement` to be current on the very next statement)
+// and queues `_lumen_request_focus` for the shell to apply on its next pump.
+// Both directions funnel through `_lumen_focus_update`, so the event sequence is
+// emitted exactly once and `_lumen_last_focused_nid` keeps a single writer.
+
+// Tags whose `disabled` content attribute takes them out of the focus order.
+var _LUMEN_DISABLEABLE_TAGS = {
+    INPUT: 1, SELECT: 1, TEXTAREA: 1, BUTTON: 1, OPTGROUP: 1, OPTION: 1, FIELDSET: 1,
+};
+
+// Tags that are focusable without a `tabindex` attribute (HTML LS §6.6.1).
+// `A`/`AREA` (need `href`), `INPUT` (any type but `hidden`) and `AUDIO`/`VIDEO`
+// (need `controls`) are conditional, so they are handled separately below.
+var _LUMEN_FOCUSABLE_TAGS = {
+    SELECT: 1, TEXTAREA: 1, BUTTON: 1, IFRAME: 1, EMBED: 1, OBJECT: 1, SUMMARY: 1,
+};
+
+// HTML LS §2.4.4.1 «rules for parsing integers», the subset `tabindex` needs:
+// optional sign followed by ASCII digits only. Returns null when the value is
+// absent or does not parse — deliberately stricter than `parseInt`, which would
+// accept '12px'.
+function _lumen_parse_integer(v) {
+    if (v === null || v === undefined) return null;
+    var s = String(v).trim();
+    if (s === '') return null;
+    var i = 0;
+    var sign = 1;
+    if (s.charAt(0) === '-') { sign = -1; i = 1; }
+    else if (s.charAt(0) === '+') { i = 1; }
+    if (i >= s.length) return null;
+    var n = 0;
+    for (; i < s.length; i++) {
+        var c = s.charCodeAt(i);
+        if (c < 48 || c > 57) return null;
+        n = n * 10 + (c - 48);
+    }
+    return sign * n;
+}
+
+// Nearest inclusive ancestor of `nid` that is an element, or -1. The shell
+// tracks focus by layout box and a box's node can be a text node, while the
+// spec-level focus surface only ever exposes elements.
+function _lumen_nearest_element_nid(nid) {
+    var cur = nid;
+    for (var guard = 0; guard < 512; guard++) {
+        if (cur === null || cur === undefined || cur === -1) return -1;
+        if (!_lumen_is_text_node(cur) && !_lumen_is_comment_node(cur)) return cur;
+        cur = _lumen_u2n(_lumen_get_parent(cur));
+    }
+    return -1;
+}
+
+// HTML LS §6.6.1 — can `nid` become a focusable area? `<body>`/`<html>` answer
+// yes because scripts legitimately focus them to drop focus back to the
+// viewport, even though they carry no tab index of their own.
+function _lumen_is_focusable(nid) {
+    if (nid === null || nid === undefined || nid === -1) return false;
+    if (_lumen_is_text_node(nid) || _lumen_is_comment_node(nid)) return false;
+    // HTML LS §6.7: nothing inside an inert subtree is focusable.
+    var anc = nid;
+    for (var guard = 0; guard < 512 && anc !== null && anc !== undefined; guard++) {
+        if (_lumen_has_attr(anc, 'inert')) return false;
+        anc = _lumen_u2n(_lumen_get_parent(anc));
+    }
+    var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
+    if (_LUMEN_DISABLEABLE_TAGS[tag] === 1 && _lumen_has_attr(nid, 'disabled')) {
+        return false;
+    }
+    // An explicit, parseable `tabindex` makes any element focusable.
+    if (_lumen_parse_integer(_lumen_u2n(_lumen_get_attr(nid, 'tabindex'))) !== null) return true;
+    var ce = _lumen_u2n(_lumen_get_attr(nid, 'contenteditable'));
+    if (ce !== null && String(ce).toLowerCase() !== 'false') return true;
+    if (tag === 'INPUT') {
+        return (_lumen_u2n(_lumen_get_attr(nid, 'type')) || '').toLowerCase() !== 'hidden';
+    }
+    if (tag === 'A' || tag === 'AREA') return _lumen_has_attr(nid, 'href');
+    if (tag === 'AUDIO' || tag === 'VIDEO') return _lumen_has_attr(nid, 'controls');
+    if (tag === 'BODY' || tag === 'HTML') return true;
+    return _LUMEN_FOCUSABLE_TAGS[tag] === 1;
+}
+
+// Dispatch one focus-family event. `focus`/`blur` do not bubble and must not
+// reach document-level listeners either, which is why this cannot reuse
+// `_lumen_dispatch_rich` (that one runs the document listeners even for a
+// non-bubbling event). `on<type>` properties are honoured at every hop, so
+// `el.onfocus = fn` works next to `addEventListener('focus', fn)`.
+function _lumen_dispatch_focus_event(nid, type, bubbles, related) {
+    var ev = new FocusEvent(type, {
+        bubbles: bubbles, cancelable: false, isTrusted: true, relatedTarget: related,
+    });
+    ev.target = _lumen_make_element(nid);
+    var cur = nid;
+    for (var guard = 0; guard < 512 && cur !== null && cur !== undefined; guard++) {
+        var el = _lumen_make_element(cur);
+        ev.currentTarget = el;
+        var arr = _lumen_listeners[String(cur) + ':' + type];
+        if (arr) {
+            var copy = arr.slice();
+            for (var i = 0; i < copy.length; i++) {
+                if (ev.cancelBubble) break;
+                try { copy[i].call(el, ev); } catch (e) {}
+                if (ev._stopImmediate) break;
+            }
+        }
+        if (el && typeof el['on' + type] === 'function') {
+            try { el['on' + type].call(el, ev); } catch (e) {}
+        }
+        if (!bubbles || ev.cancelBubble || ev._stopImmediate) break;
+        cur = _lumen_u2n(_lumen_get_parent(cur));
+    }
+    if (bubbles && !ev.cancelBubble && !ev._stopImmediate) {
+        var darr = _lumen_listeners[String(_LUMEN_DOC_LISTENER_NID) + ':' + type];
+        if (darr) {
+            var dcopy = darr.slice();
+            ev.currentTarget = document;
+            for (var j = 0; j < dcopy.length; j++) {
+                if (ev.cancelBubble) break;
+                try { dcopy[j].call(document, ev); } catch (e) {}
+                if (ev._stopImmediate) break;
+            }
+        }
+    }
+    ev.currentTarget = null;
+}
+
+// HTML LS §6.6.4/§6.6.5 — record a focus change and fire the event sequence
+// `blur` (old) → `focusout` (old) → `focus` (new) → `focusin` (new).
+// `newNid` is a node id, or -1/null for «nothing focused». Idempotent: focusing
+// the already-focused node fires nothing, which is exactly what stops the
+// shell's echo of a page-initiated `focus()` from dispatching a second round.
+function _lumen_focus_update(newNid) {
+    if (newNid === null || newNid === undefined) newNid = -1;
+    newNid = (newNid === -1) ? -1 : _lumen_nearest_element_nid(newNid);
+    var oldNid = _lumen_last_focused_nid;
+    if (oldNid === null || oldNid === undefined) oldNid = -1;
+    if (oldNid === newNid) return;
+    _lumen_last_focused_nid = newNid;
+    var oldEl = (oldNid !== -1) ? _lumen_make_element(oldNid) : null;
+    var newEl = (newNid !== -1) ? _lumen_make_element(newNid) : null;
+    if (oldEl !== null) {
+        _lumen_dispatch_focus_event(oldNid, 'blur', false, newEl);
+        _lumen_dispatch_focus_event(oldNid, 'focusout', true, newEl);
+    }
+    if (newEl !== null) {
+        _lumen_dispatch_focus_event(newNid, 'focus', false, oldEl);
+        _lumen_dispatch_focus_event(newNid, 'focusin', true, oldEl);
+    }
+}
+window._lumen_focus_update = _lumen_focus_update;
+
+// HTML LS §6.6.3 — `HTMLElement.focus(options)` / `HTMLElement.blur()`. The
+// shell is notified through the very `_lumen_request_focus`/`_lumen_request_blur`
+// pair `<dialog>.showModal()` already used, so `:focus`, keyboard routing and
+// the a11y bridge follow on its next pump.
+HTMLElement.prototype.focus = function(options) {
+    var nid = this.__nid__;
+    if (nid === null || nid === undefined) return;
+    if (!_lumen_is_focusable(nid)) return;
+    _lumen_request_focus(nid);
+    _lumen_focus_update(nid);
+    // HTML LS §6.6.3 «scroll into view» step, unless the caller opted out.
+    if (!(options && options.preventScroll) && typeof this.scrollIntoView === 'function') {
+        try { this.scrollIntoView(); } catch (e) {}
+    }
+};
+HTMLElement.prototype.blur = function() {
+    var nid = this.__nid__;
+    if (nid === null || nid === undefined) return;
+    // Blurring an element that is not focused is a no-op (HTML LS §6.6.3).
+    if (_lumen_last_focused_nid !== _lumen_nearest_element_nid(nid)) return;
+    _lumen_request_blur();
+    _lumen_focus_update(-1);
+};
+
+// HTML LS §7.2.2 — `window.focus()` / `window.blur()`. Lumen never lets a page
+// raise or lower its own OS window (that stays a user action), so both are
+// no-ops; they exist because feature detection and focus-trap code call them
+// unconditionally and used to die on `is not a function`.
+window.focus = function() {};
+window.blur  = function() {};
+
+// ── Declarative IDL attribute reflection (HTML LS §2.6.1, BUG-383) ───────────
+// Until this block the live-element factory hand-listed the few reflected
+// attributes some earlier fix happened to need (`value`, `name`, `type`,
+// `checked`, `src`) — so `a.href`, `input.disabled`, `textarea.rows` and forty
+// more were plain `undefined`, and every new one meant editing the factory
+// again. Reflection is a mechanical mapping «IDL name ↔ content attribute ↔
+// type», so it is written here once as a table and installed through one
+// generic accessor pair per kind, onto the *interface prototypes* rather than
+// onto every instance: adding an attribute is now a single table row, and the
+// properties cost nothing per element (which is also why they no longer show up
+// in `Object.getOwnPropertyNames(el)` — BUG-367's complaint).
+//
+// Kinds, per HTML LS §2.6.1 «reflecting content attributes in IDL attributes»:
+//   string — DOMString; absent → ''
+//   bool   — boolean; presence of the attribute
+//   long   — long; absent or unparseable → `extra` (the default)
+//   ulong  — unsigned long; absent, negative or unparseable → `extra`
+//   url    — DOMString reflecting a URL; the getter returns the value resolved
+//            against the document base URL, the setter stores it verbatim
+//   enum   — limited to known values; `extra` = { def: <default>, keys: [...] }.
+//            The spec distinguishes a missing-value default from an
+//            invalid-value default; the two coincide for every attribute in the
+//            table below, so one `def` covers both.
+
+// HTML LS §4.2.3 «document base URL»: the `href` of the first <base> element
+// resolved against the document URL, falling back to the document URL itself.
+// Deliberately internal — exposing it to script as `Node.baseURI` is BUG-377.
+function _lumen_document_base_url() {
+    var docUrl = '';
+    try {
+        if (typeof location !== 'undefined' && location.href) docUrl = String(location.href);
+    } catch (e) {}
+    var baseEl = null;
+    try { baseEl = document.querySelector('base'); } catch (e) {}
+    if (baseEl) {
+        var h = baseEl.getAttribute('href');
+        if (h !== null && h !== undefined && String(h) !== '') {
+            return _url_resolve(String(h), docUrl);
+        }
+    }
+    return docUrl;
+}
+
+// «Reflect a URL» steps: an absent or empty attribute reflects as '' (NOT as the
+// document URL), anything else is resolved against the document base URL.
+function _lumen_reflect_url(nid, attr) {
+    var v = _lumen_u2n(_lumen_get_attr(nid, attr));
+    if (v === null || String(v) === '') return '';
+    return _url_resolve(String(v), _lumen_document_base_url());
+}
+
+// The node id behind a reflection receiver, or -1 when the accessor was called
+// on something that is not a live element (`HTMLInputElement.prototype.disabled`
+// read directly off the prototype, a detached literal, …).
+function _lumen_reflect_nid(self) {
+    var n = (self === null || self === undefined) ? undefined : self.__nid__;
+    return (n === null || n === undefined) ? -1 : n;
+}
+
+function _lumen_define_reflection(proto, entry) {
+    var idl = entry[0], attr = entry[1], kind = entry[2], extra = entry[3];
+    var get, set;
+    if (kind === 'bool') {
+        get = function() {
+            var n = _lumen_reflect_nid(this);
+            return n === -1 ? false : _lumen_has_attr(n, attr);
+        };
+        set = function(v) {
+            var n = _lumen_reflect_nid(this);
+            if (n === -1) return;
+            if (v) _lumen_set_attr(n, attr, ''); else _lumen_remove_attr(n, attr);
+        };
+    } else if (kind === 'long' || kind === 'ulong') {
+        get = function() {
+            var n = _lumen_reflect_nid(this);
+            if (n === -1) return extra;
+            var p = _lumen_parse_integer(_lumen_u2n(_lumen_get_attr(n, attr)));
+            if (p === null) return extra;
+            if (kind === 'ulong' && p < 0) return extra;
+            return p;
+        };
+        set = function(v) {
+            var n = _lumen_reflect_nid(this);
+            if (n === -1) return;
+            var p = Number(v);
+            p = isFinite(p) ? Math.trunc(p) : 0;
+            if (kind === 'ulong' && p < 0) p = extra;
+            _lumen_set_attr(n, attr, String(p));
+        };
+    } else if (kind === 'url') {
+        get = function() {
+            var n = _lumen_reflect_nid(this);
+            return n === -1 ? '' : _lumen_reflect_url(n, attr);
+        };
+        set = function(v) {
+            var n = _lumen_reflect_nid(this);
+            if (n !== -1) _lumen_set_attr(n, attr, String(v));
+        };
+    } else if (kind === 'enum') {
+        get = function() {
+            var n = _lumen_reflect_nid(this);
+            if (n === -1) return extra.def;
+            var v = _lumen_u2n(_lumen_get_attr(n, attr));
+            if (v === null) return extra.def;
+            v = String(v).toLowerCase();
+            for (var i = 0; i < extra.keys.length; i++) if (extra.keys[i] === v) return v;
+            return extra.def;
+        };
+        set = function(v) {
+            var n = _lumen_reflect_nid(this);
+            if (n !== -1) _lumen_set_attr(n, attr, String(v));
+        };
+    } else {
+        get = function() {
+            var n = _lumen_reflect_nid(this);
+            if (n === -1) return '';
+            var v = _lumen_u2n(_lumen_get_attr(n, attr));
+            return v !== null ? String(v) : '';
+        };
+        set = function(v) {
+            var n = _lumen_reflect_nid(this);
+            if (n !== -1) _lumen_set_attr(n, attr, String(v));
+        };
+    }
+    Object.defineProperty(proto, idl, { get: get, set: set, enumerable: true, configurable: true });
+}
+
+function _lumen_install_reflection(proto, entries) {
+    if (!proto) return;
+    for (var i = 0; i < entries.length; i++) _lumen_define_reflection(proto, entries[i]);
+}
+
+// Interfaces the tag→prototype table (BUG-322) did not carry yet. Without them
+// `<area>`/`<optgroup>`/`<fieldset>`/… would fall back to `HTMLElement.prototype`
+// and their reflected attributes would land on every element instead. Same shape
+// as the generated block next to `HTMLElement` further up.
+['HTMLAreaElement','HTMLOptGroupElement','HTMLFieldSetElement','HTMLLegendElement',
+ 'HTMLSourceElement','HTMLTrackElement','HTMLTimeElement','HTMLBaseElement',
+ 'HTMLOutputElement','HTMLDetailsElement','HTMLEmbedElement','HTMLObjectElement',
+ 'HTMLSlotElement','HTMLDataElement','HTMLQuoteElement','HTMLModElement',
+ 'HTMLProgressElement','HTMLMeterElement','HTMLMapElement','HTMLPictureElement',
+ 'HTMLTableColElement','HTMLTableCaptionElement','HTMLDListElement','HTMLMenuElement'
+].forEach(function(_name) {
+    if (_name in globalThis) return;
+    var _ctor = function() { throw new TypeError('Illegal constructor'); };
+    Object.defineProperty(_ctor, 'name', { value: _name, configurable: true });
+    _ctor.prototype = Object.create(HTMLElement.prototype);
+    _ctor.prototype.constructor = _ctor;
+    globalThis[_name] = _ctor;
+});
+_lumen_html_tag_prototypes['AREA']      = HTMLAreaElement;
+_lumen_html_tag_prototypes['OPTGROUP']  = HTMLOptGroupElement;
+_lumen_html_tag_prototypes['FIELDSET']  = HTMLFieldSetElement;
+_lumen_html_tag_prototypes['LEGEND']    = HTMLLegendElement;
+_lumen_html_tag_prototypes['SOURCE']    = HTMLSourceElement;
+_lumen_html_tag_prototypes['TRACK']     = HTMLTrackElement;
+_lumen_html_tag_prototypes['TIME']      = HTMLTimeElement;
+_lumen_html_tag_prototypes['BASE']      = HTMLBaseElement;
+_lumen_html_tag_prototypes['OUTPUT']    = HTMLOutputElement;
+_lumen_html_tag_prototypes['DETAILS']   = HTMLDetailsElement;
+_lumen_html_tag_prototypes['EMBED']     = HTMLEmbedElement;
+_lumen_html_tag_prototypes['OBJECT']    = HTMLObjectElement;
+_lumen_html_tag_prototypes['SLOT']      = HTMLSlotElement;
+_lumen_html_tag_prototypes['DATA']      = HTMLDataElement;
+_lumen_html_tag_prototypes['Q']          = HTMLQuoteElement;
+_lumen_html_tag_prototypes['BLOCKQUOTE'] = HTMLQuoteElement;
+_lumen_html_tag_prototypes['INS']       = HTMLModElement;
+_lumen_html_tag_prototypes['DEL']       = HTMLModElement;
+_lumen_html_tag_prototypes['PROGRESS']  = HTMLProgressElement;
+_lumen_html_tag_prototypes['METER']     = HTMLMeterElement;
+_lumen_html_tag_prototypes['MAP']       = HTMLMapElement;
+_lumen_html_tag_prototypes['PICTURE']   = HTMLPictureElement;
+_lumen_html_tag_prototypes['COL']       = HTMLTableColElement;
+_lumen_html_tag_prototypes['COLGROUP']  = HTMLTableColElement;
+_lumen_html_tag_prototypes['CAPTION']   = HTMLTableCaptionElement;
+_lumen_html_tag_prototypes['DL']        = HTMLDListElement;
+_lumen_html_tag_prototypes['MENU']      = HTMLMenuElement;
+
+// `referrerpolicy` shares one keyword set across <a>/<area>/<img>/<iframe>/…
+var _LUMEN_REFERRER_POLICY = { def: '', keys: [
+    'no-referrer', 'no-referrer-when-downgrade', 'same-origin', 'origin',
+    'strict-origin', 'origin-when-cross-origin', 'strict-origin-when-cross-origin',
+    'unsafe-url'] };
+
+// Global attributes (HTML LS §3.2.6) — every HTML element has them.
+// `id`, `className`, `slot` and `draggable` stay own properties on the wrapper
+// (they predate this table and carry extra behaviour), so they are not repeated.
+_lumen_install_reflection(HTMLElement.prototype, [
+    ['title',          'title',          'string'],
+    ['lang',           'lang',           'string'],
+    ['dir',            'dir',            'enum',   { def: '', keys: ['ltr', 'rtl', 'auto'] }],
+    ['hidden',         'hidden',         'bool'],
+    ['inert',          'inert',          'bool'],
+    ['accessKey',      'accesskey',      'string'],
+    ['autocapitalize', 'autocapitalize', 'string'],
+    ['enterKeyHint',   'enterkeyhint',   'string'],
+    ['inputMode',      'inputmode',      'string'],
+    ['nonce',          'nonce',          'string'],
+]);
+
+_lumen_install_reflection(HTMLAnchorElement.prototype, [
+    ['href',           'href',           'url'],
+    ['target',         'target',         'string'],
+    ['download',       'download',       'string'],
+    ['rel',            'rel',            'string'],
+    ['hreflang',       'hreflang',       'string'],
+    ['type',           'type',           'string'],
+    ['ping',           'ping',           'string'],
+    ['referrerPolicy', 'referrerpolicy', 'enum',   _LUMEN_REFERRER_POLICY],
+]);
+
+_lumen_install_reflection(HTMLAreaElement.prototype, [
+    ['href',           'href',           'url'],
+    ['alt',            'alt',            'string'],
+    ['coords',         'coords',         'string'],
+    ['shape',          'shape',          'string'],
+    ['target',         'target',         'string'],
+    ['download',       'download',       'string'],
+    ['rel',            'rel',            'string'],
+    ['ping',           'ping',           'string'],
+    ['referrerPolicy', 'referrerpolicy', 'enum',   _LUMEN_REFERRER_POLICY],
+]);
+
+_lumen_install_reflection(HTMLInputElement.prototype, [
+    ['type',           'type',           'enum',   { def: 'text', keys: [
+        'button', 'checkbox', 'color', 'date', 'datetime-local', 'email', 'file',
+        'hidden', 'image', 'month', 'number', 'password', 'radio', 'range',
+        'reset', 'search', 'submit', 'tel', 'text', 'time', 'url', 'week'] }],
+    ['name',           'name',           'string'],
+    ['disabled',       'disabled',       'bool'],
+    ['readOnly',       'readonly',       'bool'],
+    ['required',       'required',       'bool'],
+    ['multiple',       'multiple',       'bool'],
+    ['placeholder',    'placeholder',    'string'],
+    ['pattern',        'pattern',        'string'],
+    ['accept',         'accept',         'string'],
+    ['alt',            'alt',            'string'],
+    ['autocomplete',   'autocomplete',   'string'],
+    ['capture',        'capture',        'string'],
+    ['min',            'min',            'string'],
+    ['max',            'max',            'string'],
+    ['step',           'step',           'string'],
+    ['src',            'src',            'url'],
+    ['dirName',        'dirname',        'string'],
+    ['maxLength',      'maxlength',      'long',   -1],
+    ['minLength',      'minlength',      'long',   -1],
+    ['size',           'size',           'ulong',  20],
+    ['defaultValue',   'value',          'string'],
+    ['formAction',     'formaction',     'url'],
+    ['formEnctype',    'formenctype',    'string'],
+    ['formMethod',     'formmethod',     'enum',   { def: '', keys: ['get', 'post', 'dialog'] }],
+    ['formTarget',     'formtarget',     'string'],
+    ['formNoValidate', 'formnovalidate', 'bool'],
+]);
+
+_lumen_install_reflection(HTMLTextAreaElement.prototype, [
+    ['name',           'name',           'string'],
+    ['disabled',       'disabled',       'bool'],
+    ['readOnly',       'readonly',       'bool'],
+    ['required',       'required',       'bool'],
+    ['placeholder',    'placeholder',    'string'],
+    ['autocomplete',   'autocomplete',   'string'],
+    ['dirName',        'dirname',        'string'],
+    ['wrap',           'wrap',           'string'],
+    ['rows',           'rows',           'ulong',  2],
+    ['cols',           'cols',           'ulong',  20],
+    ['maxLength',      'maxlength',      'long',   -1],
+    ['minLength',      'minlength',      'long',   -1],
+]);
+
+_lumen_install_reflection(HTMLSelectElement.prototype, [
+    ['name',           'name',           'string'],
+    ['disabled',       'disabled',       'bool'],
+    ['required',       'required',       'bool'],
+    ['multiple',       'multiple',       'bool'],
+    ['autocomplete',   'autocomplete',   'string'],
+    ['size',           'size',           'ulong',  0],
+]);
+
+_lumen_install_reflection(HTMLOptionElement.prototype, [
+    ['disabled',        'disabled',      'bool'],
+    ['defaultSelected', 'selected',      'bool'],
+]);
+
+_lumen_install_reflection(HTMLOptGroupElement.prototype, [
+    ['disabled',       'disabled',       'bool'],
+    ['label',          'label',          'string'],
+]);
+
+_lumen_install_reflection(HTMLButtonElement.prototype, [
+    ['name',           'name',           'string'],
+    ['disabled',       'disabled',       'bool'],
+    ['type',           'type',           'enum',   { def: 'submit', keys: ['submit', 'reset', 'button'] }],
+    ['formAction',     'formaction',     'url'],
+    ['formEnctype',    'formenctype',    'string'],
+    ['formMethod',     'formmethod',     'enum',   { def: '', keys: ['get', 'post', 'dialog'] }],
+    ['formTarget',     'formtarget',     'string'],
+    ['formNoValidate', 'formnovalidate', 'bool'],
+]);
+
+_lumen_install_reflection(HTMLFormElement.prototype, [
+    ['name',           'name',           'string'],
+    ['action',         'action',         'url'],
+    ['method',         'method',         'enum',   { def: 'get', keys: ['get', 'post', 'dialog'] }],
+    ['enctype',        'enctype',        'string'],
+    ['encoding',       'enctype',        'string'],
+    ['target',         'target',         'string'],
+    ['acceptCharset',  'accept-charset', 'string'],
+    ['autocomplete',   'autocomplete',   'string'],
+    ['rel',            'rel',            'string'],
+    ['noValidate',     'novalidate',     'bool'],
+]);
+
+_lumen_install_reflection(HTMLFieldSetElement.prototype, [
+    ['name',           'name',           'string'],
+    ['disabled',       'disabled',       'bool'],
+]);
+
+_lumen_install_reflection(HTMLLabelElement.prototype, [
+    ['htmlFor',        'for',            'string'],
+]);
+
+_lumen_install_reflection(HTMLOutputElement.prototype, [
+    ['name',           'name',           'string'],
+    ['htmlFor',        'for',            'string'],
+]);
+
+_lumen_install_reflection(HTMLImageElement.prototype, [
+    ['src',            'src',            'url'],
+    ['alt',            'alt',            'string'],
+    ['srcset',         'srcset',         'string'],
+    ['sizes',          'sizes',          'string'],
+    ['useMap',         'usemap',         'string'],
+    ['isMap',          'ismap',          'bool'],
+    ['crossOrigin',    'crossorigin',    'string'],
+    ['decoding',       'decoding',       'string'],
+    ['loading',        'loading',        'string'],
+    ['referrerPolicy', 'referrerpolicy', 'enum',   _LUMEN_REFERRER_POLICY],
+]);
+
+_lumen_install_reflection(HTMLScriptElement.prototype, [
+    ['src',            'src',            'url'],
+    ['type',           'type',           'string'],
+    ['async',          'async',          'bool'],
+    ['defer',          'defer',          'bool'],
+    ['noModule',       'nomodule',       'bool'],
+    ['crossOrigin',    'crossorigin',    'string'],
+    ['integrity',      'integrity',      'string'],
+    ['referrerPolicy', 'referrerpolicy', 'enum',   _LUMEN_REFERRER_POLICY],
+]);
+
+_lumen_install_reflection(HTMLLinkElement.prototype, [
+    ['href',           'href',           'url'],
+    ['rel',            'rel',            'string'],
+    ['media',          'media',          'string'],
+    ['hreflang',       'hreflang',       'string'],
+    ['type',           'type',           'string'],
+    ['as',             'as',             'string'],
+    ['sizes',          'sizes',          'string'],
+    ['imageSrcset',    'imagesrcset',    'string'],
+    ['imageSizes',     'imagesizes',     'string'],
+    ['crossOrigin',    'crossorigin',    'string'],
+    ['integrity',      'integrity',      'string'],
+    ['referrerPolicy', 'referrerpolicy', 'enum',   _LUMEN_REFERRER_POLICY],
+]);
+
+_lumen_install_reflection(HTMLStyleElement.prototype, [
+    ['media',          'media',          'string'],
+    ['type',           'type',           'string'],
+]);
+
+_lumen_install_reflection(HTMLIFrameElement.prototype, [
+    ['src',            'src',            'url'],
+    ['srcdoc',         'srcdoc',         'string'],
+    ['name',           'name',           'string'],
+    ['allow',          'allow',          'string'],
+    ['allowFullscreen','allowfullscreen','bool'],
+    ['loading',        'loading',        'string'],
+    ['referrerPolicy', 'referrerpolicy', 'enum',   _LUMEN_REFERRER_POLICY],
+]);
+
+_lumen_install_reflection(HTMLMetaElement.prototype, [
+    ['name',           'name',           'string'],
+    ['content',        'content',        'string'],
+    ['httpEquiv',      'http-equiv',     'string'],
+    ['media',          'media',          'string'],
+]);
+
+_lumen_install_reflection(HTMLTableCellElement.prototype, [
+    ['colSpan',        'colspan',        'ulong',  1],
+    ['rowSpan',        'rowspan',        'ulong',  1],
+    ['headers',        'headers',        'string'],
+    ['abbr',           'abbr',           'string'],
+    ['scope',          'scope',          'string'],
+]);
+
+_lumen_install_reflection(HTMLTableColElement.prototype, [
+    ['span',           'span',           'ulong',  1],
+]);
+
+_lumen_install_reflection(HTMLOListElement.prototype, [
+    ['reversed',       'reversed',       'bool'],
+    ['start',          'start',          'long',   1],
+    ['type',           'type',           'string'],
+]);
+
+_lumen_install_reflection(HTMLTimeElement.prototype, [
+    ['dateTime',       'datetime',       'string'],
+]);
+
+_lumen_install_reflection(HTMLQuoteElement.prototype, [
+    ['cite',           'cite',           'url'],
+]);
+
+_lumen_install_reflection(HTMLModElement.prototype, [
+    ['cite',           'cite',           'url'],
+    ['dateTime',       'datetime',       'string'],
+]);
+
+_lumen_install_reflection(HTMLTrackElement.prototype, [
+    ['kind',           'kind',           'enum',   { def: 'subtitles', keys: [
+        'subtitles', 'captions', 'descriptions', 'chapters', 'metadata'] }],
+    ['src',            'src',            'url'],
+    ['srclang',        'srclang',        'string'],
+    ['label',          'label',          'string'],
+    ['default',        'default',        'bool'],
+]);
+
+_lumen_install_reflection(HTMLSourceElement.prototype, [
+    ['src',            'src',            'url'],
+    ['type',           'type',           'string'],
+    ['srcset',         'srcset',         'string'],
+    ['sizes',          'sizes',          'string'],
+    ['media',          'media',          'string'],
+]);
+
+// <video>/<audio> share HTMLMediaElement's attributes; Lumen has no
+// HTMLMediaElement interface yet, so the rows are installed on both. <audio>
+// additionally carries its own `src` accessor (`audio_element.rs`) that drives
+// the media loader — an own property, so it keeps shadowing the row below.
+[HTMLVideoElement.prototype, HTMLAudioElement.prototype].forEach(function(_p) {
+    _lumen_install_reflection(_p, [
+        ['src',          'src',          'url'],
+        ['preload',      'preload',      'string'],
+        ['crossOrigin',  'crossorigin',  'string'],
+        ['autoplay',     'autoplay',     'bool'],
+        ['loop',         'loop',         'bool'],
+        ['controls',     'controls',     'bool'],
+        ['defaultMuted', 'muted',        'bool'],
+        ['playsInline',  'playsinline',  'bool'],
+    ]);
+});
+_lumen_install_reflection(HTMLVideoElement.prototype, [
+    ['poster',         'poster',         'url'],
+]);
+
+_lumen_install_reflection(HTMLObjectElement.prototype, [
+    ['data',           'data',           'url'],
+    ['type',           'type',           'string'],
+    ['name',           'name',           'string'],
+    ['useMap',         'usemap',         'string'],
+]);
+
+_lumen_install_reflection(HTMLEmbedElement.prototype, [
+    ['src',            'src',            'url'],
+    ['type',           'type',           'string'],
+]);
+
+_lumen_install_reflection(HTMLMapElement.prototype,     [['name', 'name', 'string']]);
+_lumen_install_reflection(HTMLSlotElement.prototype,    [['name', 'name', 'string']]);
+_lumen_install_reflection(HTMLDetailsElement.prototype, [['name', 'name', 'string']]);
+
+// HTML LS §4.2.3: `base.href` resolves against the *document* URL, never against
+// the base URL it is itself defining — so it cannot be an ordinary `url` row.
+Object.defineProperty(HTMLBaseElement.prototype, 'href', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        var docUrl = '';
+        try {
+            if (typeof location !== 'undefined' && location.href) docUrl = String(location.href);
+        } catch (e) {}
+        if (n === -1) return docUrl;
+        var v = _lumen_u2n(_lumen_get_attr(n, 'href'));
+        if (v === null || String(v) === '') return docUrl;
+        return _url_resolve(String(v), docUrl);
+    },
+    set: function(v) {
+        var n = _lumen_reflect_nid(this);
+        if (n !== -1) _lumen_set_attr(n, 'href', String(v));
+    },
+    enumerable: true, configurable: true,
+});
+_lumen_install_reflection(HTMLBaseElement.prototype, [['target', 'target', 'string']]);
+
+// `text` is a child-text alias rather than an attribute reflection, so it is
+// defined by hand: HTML LS §4.5.1 (`a.text`), §4.12.1 (`script.text`).
+[HTMLAnchorElement.prototype, HTMLScriptElement.prototype].forEach(function(_p) {
+    Object.defineProperty(_p, 'text', {
+        get: function() {
+            var n = _lumen_reflect_nid(this);
+            return n === -1 ? '' : _lumen_get_text_content(n);
+        },
+        set: function(v) {
+            var n = _lumen_reflect_nid(this);
+            if (n !== -1) _lumen_set_text_content(n, String(v));
+        },
+        enumerable: true, configurable: true,
+    });
+});
+
+// `type` is fixed for these two interfaces (HTML LS §4.10.7/§4.10.11) — they
+// have no `type` content attribute at all, so it is a read-only getter.
+Object.defineProperty(HTMLTextAreaElement.prototype, 'type', {
+    get: function() { return 'textarea'; }, enumerable: true, configurable: true,
+});
+Object.defineProperty(HTMLSelectElement.prototype, 'type', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        return (n !== -1 && _lumen_has_attr(n, 'multiple')) ? 'select-multiple' : 'select-one';
+    },
+    enumerable: true, configurable: true,
+});
+Object.defineProperty(HTMLFieldSetElement.prototype, 'type', {
+    get: function() { return 'fieldset'; }, enumerable: true, configurable: true,
+});
+
+// ── Form-control associations, collections and activation (BUG-383) ──────────
+// Everything below is the non-reflection half of the same gap: `form.elements`
+// was a plain `Array` (so `namedItem`/named access silently did nothing),
+// `select.options`/`selectedIndex` did not exist, and no element had `click()`,
+// `select()` or `setSelectionRange()` — the standard ways to drive a form from
+// script and the ones every polyfill and e2e helper reaches for first.
+
+// Tags that are «listed elements» for the purposes of `form.elements`
+// (HTML LS §4.10.3). `<option>` is deliberately absent: it belongs to
+// `select.options`, not to the form's control list.
+var _LUMEN_LISTED_TAGS = {
+    INPUT: 1, SELECT: 1, TEXTAREA: 1, BUTTON: 1, FIELDSET: 1, OBJECT: 1, OUTPUT: 1,
+};
+// Controls a <label> can label (HTML LS §4.10.4 «labelable elements»).
+var _LUMEN_LABELABLE_TAGS = {
+    INPUT: 1, SELECT: 1, TEXTAREA: 1, BUTTON: 1, METER: 1, OUTPUT: 1, PROGRESS: 1,
+};
+// `<input>` types with a text-entry cursor, i.e. the ones whose selection API
+// is defined (HTML LS §4.10.5.4). Everything else answers `null`.
+var _LUMEN_SELECTABLE_INPUT_TYPES = {
+    text: 1, search: 1, url: 1, tel: 1, password: 1,
+};
+
+// nid → true/false override of an <option>'s selectedness, set by
+// `option.selected = …` / `select.selectedIndex = …`. Absent means «follow the
+// `selected` content attribute», which is the markup default.
+var _lumen_option_selected = {};
+// nid → { start, end, direction } for text-entry controls.
+var _lumen_selection_state = {};
+// nid → indeterminate flag for checkboxes (never reflected as an attribute).
+var _lumen_indeterminate = {};
+// nid → the control's *default* checkedness, captured the first time a script
+// changes the current one. Lumen keeps checkedness in the `checked` content
+// attribute itself — that is what the shell paints and submits from — so the
+// element has no separate storage for the default and the first write would
+// otherwise destroy it, taking `defaultChecked` and `form.reset()` with it.
+// A real dirty-checkedness flag independent of the attribute is BUG-444.
+var _lumen_default_checked = {};
+function _lumen_capture_default_checked(nid) {
+    if (_lumen_default_checked[nid] === undefined) {
+        _lumen_default_checked[nid] = _lumen_has_attr(nid, 'checked');
+    }
+}
+// nid → true while an activation behaviour is running on that node, so a
+// `click()` inside a click handler for the same element cannot recurse forever
+// (label → control → label is the usual cycle).
+var _lumen_click_in_progress = {};
+
+// Depth-first element descendants of `nid`, in tree order.
+function _lumen_descendant_elements(nid, out) {
+    var kids = _lumen_get_children(nid);
+    for (var i = 0; i < kids.length; i++) {
+        if (_lumen_is_text_node(kids[i]) || _lumen_is_comment_node(kids[i])) continue;
+        out.push(kids[i]);
+        _lumen_descendant_elements(kids[i], out);
+    }
+    return out;
+}
+
+// HTML LS §4.10.18.6 «form owner»: the form named by the control's `form`
+// content attribute, else the nearest ancestor <form>.
+function _lumen_form_owner(nid) {
+    var formId = _lumen_u2n(_lumen_get_attr(nid, 'form'));
+    if (formId !== null && String(formId) !== '') {
+        var byId = _lumen_u2n(_lumen_get_element_by_id(String(formId)));
+        if (byId !== null && (_lumen_get_tag_name(byId) || '').toUpperCase() === 'FORM') return byId;
+        return -1;
+    }
+    var cur = _lumen_u2n(_lumen_get_parent(nid));
+    for (var guard = 0; guard < 512 && cur !== null; guard++) {
+        if ((_lumen_get_tag_name(cur) || '').toUpperCase() === 'FORM') return cur;
+        cur = _lumen_u2n(_lumen_get_parent(cur));
+    }
+    return -1;
+}
+
+// The controls a <form> or <fieldset> owns, in tree order.
+function _lumen_listed_controls(owner_nid) {
+    var all = _lumen_descendant_elements(owner_nid, []);
+    var out = [];
+    var ownerIsForm = (_lumen_get_tag_name(owner_nid) || '').toUpperCase() === 'FORM';
+    for (var i = 0; i < all.length; i++) {
+        var tag = (_lumen_get_tag_name(all[i]) || '').toUpperCase();
+        if (_LUMEN_LISTED_TAGS[tag] !== 1) continue;
+        // A control inside the subtree but re-parented by a `form` attribute
+        // belongs to that other form, not to this one.
+        if (ownerIsForm && _lumen_form_owner(all[i]) !== owner_nid) continue;
+        out.push(all[i]);
+    }
+    return out;
+}
+
+// HTML LS §4.10.3 — `HTMLFormControlsCollection`, the interface `form.elements`
+// is supposed to return. It was a plain `Array` before, which silently lacked
+// `namedItem()` and named access while `Array` methods made it look complete.
+function HTMLFormControlsCollection() { throw new TypeError('Illegal constructor'); }
+HTMLFormControlsCollection.prototype = Object.create(HTMLCollection.prototype);
+HTMLFormControlsCollection.prototype.constructor = HTMLFormControlsCollection;
+window.HTMLFormControlsCollection = HTMLFormControlsCollection;
+
+// HTML LS §4.10.7 — `HTMLOptionsCollection`, returned by `select.options`.
+function HTMLOptionsCollection() { throw new TypeError('Illegal constructor'); }
+HTMLOptionsCollection.prototype = Object.create(HTMLCollection.prototype);
+HTMLOptionsCollection.prototype.constructor = HTMLOptionsCollection;
+window.HTMLOptionsCollection = HTMLOptionsCollection;
+
+// `for (var c of form.elements)` / `[...select.options]` — the indexed getter
+// alone does not make a legacy platform object iterable. `Symbol.toStringTag`
+// goes on at the same time so `Object.prototype.toString.call(...)` names the
+// interface instead of answering the `[object Object]` that made the old
+// `Array` masquerade so hard to spot.
+[['HTMLCollection', HTMLCollection.prototype],
+ ['HTMLFormControlsCollection', HTMLFormControlsCollection.prototype],
+ ['HTMLOptionsCollection', HTMLOptionsCollection.prototype]].forEach(function(_e) {
+    if (typeof Symbol === 'undefined' || !Symbol.iterator) return;
+    var _p = _e[1];
+    if (!_p[Symbol.iterator]) {
+        Object.defineProperty(_p, Symbol.iterator, {
+            value: function() {
+                var self = this, i = 0;
+                return { next: function() {
+                    return i < self.length ? { value: self[i++], done: false }
+                                           : { value: undefined, done: true };
+                } };
+            },
+            writable: true, configurable: true, enumerable: false,
+        });
+    }
+    if (Symbol.toStringTag) {
+        Object.defineProperty(_p, Symbol.toStringTag, {
+            value: _e[0], writable: false, configurable: true, enumerable: false,
+        });
+    }
+});
+
+[HTMLFormElement.prototype, HTMLFieldSetElement.prototype].forEach(function(_p) {
+    Object.defineProperty(_p, 'elements', {
+        get: function() {
+            var n = _lumen_reflect_nid(this);
+            if (n === -1) return _lumen_make_nid_collection(function() { return []; },
+                                                            HTMLFormControlsCollection.prototype);
+            return _lumen_make_nid_collection(function() { return _lumen_listed_controls(n); },
+                                              HTMLFormControlsCollection.prototype);
+        },
+        enumerable: true, configurable: true,
+    });
+});
+Object.defineProperty(HTMLFormElement.prototype, 'length', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        return n === -1 ? 0 : _lumen_listed_controls(n).length;
+    },
+    enumerable: true, configurable: true,
+});
+
+// Form-owner back-references on the controls themselves (HTML LS §4.10.18.6).
+['HTMLInputElement', 'HTMLSelectElement', 'HTMLTextAreaElement', 'HTMLButtonElement',
+ 'HTMLFieldSetElement', 'HTMLObjectElement', 'HTMLOutputElement', 'HTMLLabelElement',
+ 'HTMLLegendElement'].forEach(function(_iface) {
+    Object.defineProperty(globalThis[_iface].prototype, 'form', {
+        get: function() {
+            var n = _lumen_reflect_nid(this);
+            if (n === -1) return null;
+            var f = _lumen_form_owner(n);
+            return f === -1 ? null : _lumen_make_element(f);
+        },
+        enumerable: true, configurable: true,
+    });
+});
+// `<option>.form` is the form of its owning <select>, not its own ancestor form.
+Object.defineProperty(HTMLOptionElement.prototype, 'form', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return null;
+        var sel = _lumen_option_owner_select(n);
+        if (sel === -1) return null;
+        var f = _lumen_form_owner(sel);
+        return f === -1 ? null : _lumen_make_element(f);
+    },
+    enumerable: true, configurable: true,
+});
+
+// HTML LS §4.10.4 — the <label>s associated with a control: every ancestor
+// <label>, plus every `<label for=id>` pointing at it.
+function _lumen_labels_for(nid) {
+    var out = [];
+    var id = _lumen_u2n(_lumen_get_attr(nid, 'id'));
+    var cur = _lumen_u2n(_lumen_get_parent(nid));
+    for (var guard = 0; guard < 512 && cur !== null; guard++) {
+        if ((_lumen_get_tag_name(cur) || '').toUpperCase() === 'LABEL') out.push(cur);
+        cur = _lumen_u2n(_lumen_get_parent(cur));
+    }
+    if (id !== null && String(id) !== '') {
+        var all = _lumen_descendant_elements(_lumen_root_nid, []);
+        for (var i = 0; i < all.length; i++) {
+            if ((_lumen_get_tag_name(all[i]) || '').toUpperCase() !== 'LABEL') continue;
+            if (_lumen_u2n(_lumen_get_attr(all[i], 'for')) === String(id)) {
+                if (out.indexOf(all[i]) === -1) out.push(all[i]);
+            }
+        }
+    }
+    return out;
+}
+['HTMLInputElement', 'HTMLSelectElement', 'HTMLTextAreaElement', 'HTMLButtonElement',
+ 'HTMLOutputElement', 'HTMLProgressElement', 'HTMLMeterElement'].forEach(function(_iface) {
+    Object.defineProperty(globalThis[_iface].prototype, 'labels', {
+        get: function() {
+            var n = _lumen_reflect_nid(this);
+            if (n === -1) return null;
+            return _lumen_make_nid_collection(function() { return _lumen_labels_for(n); },
+                                              HTMLCollection.prototype);
+        },
+        enumerable: true, configurable: true,
+    });
+});
+
+// HTML LS §4.10.4 — `label.control`: the element named by `for`, else the first
+// labelable descendant.
+Object.defineProperty(HTMLLabelElement.prototype, 'control', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return null;
+        var target = _lumen_u2n(_lumen_get_attr(n, 'for'));
+        if (target !== null && String(target) !== '') {
+            var byId = _lumen_u2n(_lumen_get_element_by_id(String(target)));
+            if (byId === null) return null;
+            var t = (_lumen_get_tag_name(byId) || '').toUpperCase();
+            return _LUMEN_LABELABLE_TAGS[t] === 1 ? _lumen_make_element(byId) : null;
+        }
+        var desc = _lumen_descendant_elements(n, []);
+        for (var i = 0; i < desc.length; i++) {
+            if (_LUMEN_LABELABLE_TAGS[(_lumen_get_tag_name(desc[i]) || '').toUpperCase()] === 1) {
+                return _lumen_make_element(desc[i]);
+            }
+        }
+        return null;
+    },
+    enumerable: true, configurable: true,
+});
+
+// ── <select> / <option> (HTML LS §4.10.7, §4.10.10) ──────────────────────────
+
+// The flattened list of options of a <select>: direct <option> children plus
+// the ones nested in <optgroup>.
+function _lumen_select_options(select_nid) {
+    var out = [];
+    var kids = _lumen_get_children(select_nid);
+    for (var i = 0; i < kids.length; i++) {
+        var tag = (_lumen_get_tag_name(kids[i]) || '').toUpperCase();
+        if (tag === 'OPTION') out.push(kids[i]);
+        else if (tag === 'OPTGROUP') {
+            var sub = _lumen_get_children(kids[i]);
+            for (var j = 0; j < sub.length; j++) {
+                if ((_lumen_get_tag_name(sub[j]) || '').toUpperCase() === 'OPTION') out.push(sub[j]);
+            }
+        }
+    }
+    return out;
+}
+function _lumen_option_owner_select(option_nid) {
+    var cur = _lumen_u2n(_lumen_get_parent(option_nid));
+    for (var guard = 0; guard < 8 && cur !== null; guard++) {
+        var tag = (_lumen_get_tag_name(cur) || '').toUpperCase();
+        if (tag === 'SELECT') return cur;
+        if (tag !== 'OPTGROUP') return -1;
+        cur = _lumen_u2n(_lumen_get_parent(cur));
+    }
+    return -1;
+}
+function _lumen_option_text(nid) {
+    var t = _lumen_get_text_content(nid);
+    return (t === null || t === undefined) ? '' : String(t).trim();
+}
+function _lumen_option_is_selected(option_nid) {
+    if (_lumen_option_selected[option_nid] !== undefined) return _lumen_option_selected[option_nid];
+    return _lumen_has_attr(option_nid, 'selected');
+}
+// HTML LS §4.10.7 «ask for a reset»: a single-selection <select> always has a
+// selected option — the first non-disabled one when the markup names none.
+function _lumen_select_selected_index(select_nid) {
+    var opts = _lumen_select_options(select_nid);
+    for (var i = 0; i < opts.length; i++) if (_lumen_option_is_selected(opts[i])) return i;
+    if (!_lumen_has_attr(select_nid, 'multiple')) {
+        for (var j = 0; j < opts.length; j++) {
+            if (!_lumen_has_attr(opts[j], 'disabled')) return j;
+        }
+    }
+    return -1;
+}
+function _lumen_select_set_index(select_nid, index) {
+    var opts = _lumen_select_options(select_nid);
+    for (var i = 0; i < opts.length; i++) _lumen_option_selected[opts[i]] = (i === index);
+    // The shell's own copy of the value is now stale; recompute on next read.
+    delete _input_values[select_nid];
+}
+function _lumen_select_set_value(select_nid, value) {
+    var opts = _lumen_select_options(select_nid);
+    var match = -1;
+    for (var i = 0; i < opts.length; i++) {
+        if (_lumen_make_element(opts[i]).value === value) { match = i; break; }
+    }
+    _lumen_select_set_index(select_nid, match);
+    if (match === -1) _input_values[select_nid] = '';
+}
+
+Object.defineProperty(HTMLSelectElement.prototype, 'options', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return null;
+        return _lumen_make_nid_collection(function() { return _lumen_select_options(n); },
+                                          HTMLOptionsCollection.prototype);
+    },
+    enumerable: true, configurable: true,
+});
+Object.defineProperty(HTMLSelectElement.prototype, 'selectedOptions', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return null;
+        return _lumen_make_nid_collection(function() {
+            return _lumen_select_options(n).filter(_lumen_option_is_selected);
+        }, HTMLCollection.prototype);
+    },
+    enumerable: true, configurable: true,
+});
+Object.defineProperty(HTMLSelectElement.prototype, 'length', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        return n === -1 ? 0 : _lumen_select_options(n).length;
+    },
+    set: function(v) {
+        // Truncating via `select.length = N` removes trailing options; growing
+        // it is a no-op here (it would require minting bare <option>s).
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return;
+        var opts = _lumen_select_options(n);
+        var want = Number(v); if (!isFinite(want) || want < 0) want = 0;
+        for (var i = opts.length - 1; i >= want; i--) _lumen_make_element(opts[i]).remove();
+    },
+    enumerable: true, configurable: true,
+});
+Object.defineProperty(HTMLSelectElement.prototype, 'selectedIndex', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return -1;
+        // A shell-driven pick lands in `_input_values`; map it back to an index
+        // so `selectedIndex` and `value` cannot disagree.
+        if (_input_values[n] !== undefined) {
+            var opts = _lumen_select_options(n);
+            for (var i = 0; i < opts.length; i++) {
+                if (_lumen_make_element(opts[i]).value === _input_values[n]) return i;
+            }
+            return -1;
+        }
+        return _lumen_select_selected_index(n);
+    },
+    set: function(v) {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return;
+        var idx = Number(v); if (!isFinite(idx)) idx = -1;
+        _lumen_select_set_index(n, Math.trunc(idx));
+    },
+    enumerable: true, configurable: true,
+});
+HTMLSelectElement.prototype.item = function(i) {
+    var n = _lumen_reflect_nid(this);
+    if (n === -1) return null;
+    var opts = _lumen_select_options(n);
+    i = i >>> 0;
+    return i < opts.length ? _lumen_make_element(opts[i]) : null;
+};
+HTMLSelectElement.prototype.namedItem = function(name) {
+    var n = _lumen_reflect_nid(this);
+    if (n === -1) return null;
+    return _lumen_html_collection_named(_lumen_select_options(n), String(name));
+};
+// HTML LS §4.10.7: `add(element, before)` — `before` is an option or an index;
+// omitted/null appends.
+HTMLSelectElement.prototype.add = function(element, before) {
+    var n = _lumen_reflect_nid(this);
+    if (n === -1 || !element) return;
+    if (before === undefined || before === null) { this.appendChild(element); return; }
+    var refNid = -1;
+    if (typeof before === 'number') {
+        var opts = _lumen_select_options(n);
+        var bi = Math.trunc(before);
+        if (bi >= 0 && bi < opts.length) refNid = opts[bi];
+    } else if (before.__nid__ !== undefined) {
+        refNid = before.__nid__;
+    }
+    if (refNid === -1) { this.appendChild(element); return; }
+    var parent = _lumen_u2n(_lumen_get_parent(refNid));
+    if (parent === null) { this.appendChild(element); return; }
+    _lumen_make_element(parent).insertBefore(element, _lumen_make_element(refNid));
+};
+// `select.remove(index)` (HTML LS §4.10.7) lives in the wrapper's own `remove`,
+// next to `ChildNode.remove()` — an own property shadows the prototype, so an
+// override here would never run.
+
+Object.defineProperty(HTMLOptionElement.prototype, 'selected', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        return n === -1 ? false : _lumen_option_is_selected(n);
+    },
+    set: function(v) {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return;
+        var sel = _lumen_option_owner_select(n);
+        if (v && sel !== -1 && !_lumen_has_attr(sel, 'multiple')) {
+            var opts = _lumen_select_options(sel);
+            for (var i = 0; i < opts.length; i++) _lumen_option_selected[opts[i]] = (opts[i] === n);
+        } else {
+            _lumen_option_selected[n] = !!v;
+        }
+        if (sel !== -1) delete _input_values[sel];
+    },
+    enumerable: true, configurable: true,
+});
+Object.defineProperty(HTMLOptionElement.prototype, 'index', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return 0;
+        var sel = _lumen_option_owner_select(n);
+        if (sel === -1) return 0;
+        var idx = _lumen_select_options(sel).indexOf(n);
+        return idx === -1 ? 0 : idx;
+    },
+    enumerable: true, configurable: true,
+});
+Object.defineProperty(HTMLOptionElement.prototype, 'text', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        return n === -1 ? '' : _lumen_option_text(n);
+    },
+    set: function(v) {
+        var n = _lumen_reflect_nid(this);
+        if (n !== -1) _lumen_set_text_content(n, String(v));
+    },
+    enumerable: true, configurable: true,
+});
+// `label` reflects the content attribute but falls back to the option's text.
+Object.defineProperty(HTMLOptionElement.prototype, 'label', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return '';
+        var v = _lumen_u2n(_lumen_get_attr(n, 'label'));
+        return v !== null ? String(v) : _lumen_option_text(n);
+    },
+    set: function(v) {
+        var n = _lumen_reflect_nid(this);
+        if (n !== -1) _lumen_set_attr(n, 'label', String(v));
+    },
+    enumerable: true, configurable: true,
+});
+// HTML LS §4.10.10 — the legacy `Option(text, value, defaultSelected, selected)`
+// factory, the counterpart of `Image()`.
+function Option(text, value, defaultSelected, selected) {
+    var op = document.createElement('option');
+    if (text !== undefined && text !== null && String(text) !== '') op.text = String(text);
+    if (value !== undefined && value !== null) op.setAttribute('value', String(value));
+    if (defaultSelected) op.setAttribute('selected', '');
+    op.selected = !!selected;
+    return op;
+}
+window.Option = Option;
+
+// ── Text selection on <input>/<textarea> (HTML LS §4.10.5.4) ─────────────────
+function _lumen_selection_applies(nid) {
+    var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
+    if (tag === 'TEXTAREA') return true;
+    if (tag !== 'INPUT') return false;
+    var t = _lumen_u2n(_lumen_get_attr(nid, 'type'));
+    t = (t === null) ? 'text' : String(t).toLowerCase();
+    return _LUMEN_SELECTABLE_INPUT_TYPES[t] === 1;
+}
+function _lumen_selection_of(nid) {
+    var s = _lumen_selection_state[nid];
+    if (s === undefined) { s = { start: 0, end: 0, direction: 'none' }; _lumen_selection_state[nid] = s; }
+    return s;
+}
+// Named `_lumen_set_text_selection`, not `…_set_selection`: the latter is the
+// native that drives the *document* selection (`window.getSelection()`), and a
+// same-named shim function would shadow it for the whole page.
+function _lumen_set_text_selection(nid, start, end, direction) {
+    var len = String(_lumen_make_element(nid).value || '').length;
+    start = Math.trunc(Number(start)); if (!isFinite(start) || start < 0) start = 0;
+    end   = Math.trunc(Number(end));   if (!isFinite(end)   || end   < 0) end   = 0;
+    if (start > len) start = len;
+    if (end > len) end = len;
+    if (end < start) start = end;
+    var dir = (direction === 'forward' || direction === 'backward') ? direction : 'none';
+    _lumen_selection_state[nid] = { start: start, end: end, direction: dir };
+    // §4.10.5.4 step 4: queue a `select` event when the selection actually moves.
+    _lumen_dispatch_rich(nid, new Event('select', { bubbles: true, cancelable: false }));
+}
+[HTMLInputElement.prototype, HTMLTextAreaElement.prototype].forEach(function(_p) {
+    ['selectionStart', 'selectionEnd'].forEach(function(_prop) {
+        var key = (_prop === 'selectionStart') ? 'start' : 'end';
+        Object.defineProperty(_p, _prop, {
+            get: function() {
+                var n = _lumen_reflect_nid(this);
+                if (n === -1 || !_lumen_selection_applies(n)) return null;
+                return _lumen_selection_of(n)[key];
+            },
+            set: function(v) {
+                var n = _lumen_reflect_nid(this);
+                if (n === -1 || !_lumen_selection_applies(n)) return;
+                var s = _lumen_selection_of(n);
+                if (key === 'start') _lumen_set_text_selection(n, v, Math.max(Number(v) || 0, s.end), s.direction);
+                else _lumen_set_text_selection(n, s.start, v, s.direction);
+            },
+            enumerable: true, configurable: true,
+        });
+    });
+    Object.defineProperty(_p, 'selectionDirection', {
+        get: function() {
+            var n = _lumen_reflect_nid(this);
+            if (n === -1 || !_lumen_selection_applies(n)) return null;
+            return _lumen_selection_of(n).direction;
+        },
+        set: function(v) {
+            var n = _lumen_reflect_nid(this);
+            if (n === -1 || !_lumen_selection_applies(n)) return;
+            var s = _lumen_selection_of(n);
+            _lumen_set_text_selection(n, s.start, s.end, String(v));
+        },
+        enumerable: true, configurable: true,
+    });
+    _p.setSelectionRange = function(start, end, direction) {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return;
+        if (!_lumen_selection_applies(n)) {
+            throw new DOMException(
+                'setSelectionRange does not apply to this input type', 'InvalidStateError');
+        }
+        _lumen_set_text_selection(n, start, end, direction);
+    };
+    _p.select = function() {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return;
+        var len = String(this.value || '').length;
+        _lumen_set_text_selection(n, 0, len, 'none');
+    };
+    _p.setRangeText = function(replacement, start, end, mode) {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1 || !_lumen_selection_applies(n)) return;
+        var s = _lumen_selection_of(n);
+        var from = (start === undefined) ? s.start : Math.trunc(Number(start));
+        var to   = (end   === undefined) ? s.end   : Math.trunc(Number(end));
+        var val = String(this.value || '');
+        if (from > to) { var t = from; from = to; to = t; }
+        var repl = String(replacement);
+        this.value = val.slice(0, from) + repl + val.slice(to);
+        var newEnd = from + repl.length;
+        if (mode === 'start') _lumen_set_text_selection(n, from, from, 'none');
+        else if (mode === 'end') _lumen_set_text_selection(n, newEnd, newEnd, 'none');
+        else _lumen_set_text_selection(n, from, newEnd, 'none');
+    };
+});
+
+// ── Remaining HTMLInputElement bits that are state, not reflection ───────────
+// `defaultChecked` reflects the `checked` content attribute — but that same
+// attribute is where Lumen stores the *current* checkedness, so once a script
+// has written `checked` the attribute no longer answers for the default. Read
+// the snapshot taken at that first write instead (see `_lumen_default_checked`).
+Object.defineProperty(HTMLInputElement.prototype, 'defaultChecked', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return false;
+        return (_lumen_default_checked[n] !== undefined)
+            ? _lumen_default_checked[n] : _lumen_has_attr(n, 'checked');
+    },
+    set: function(v) {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return;
+        _lumen_default_checked[n] = !!v;
+        if (v) _lumen_set_attr(n, 'checked', '');
+        else _lumen_remove_attr(n, 'checked');
+    },
+    enumerable: true, configurable: true,
+});
+Object.defineProperty(HTMLInputElement.prototype, 'indeterminate', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        return n === -1 ? false : !!_lumen_indeterminate[n];
+    },
+    set: function(v) {
+        var n = _lumen_reflect_nid(this);
+        if (n !== -1) _lumen_indeterminate[n] = !!v;
+    },
+    enumerable: true, configurable: true,
+});
+// `files` is `null` for every type but `file`. Lumen has no file picker yet, so
+// a file input reports an empty FileList rather than a fabricated one.
+Object.defineProperty(HTMLInputElement.prototype, 'files', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return null;
+        var t = _lumen_u2n(_lumen_get_attr(n, 'type'));
+        if (t === null || String(t).toLowerCase() !== 'file') return null;
+        var empty = { length: 0, item: function() { return null; } };
+        return empty;
+    },
+    enumerable: true, configurable: true,
+});
+// `list` points at the <datalist> named by the `list` attribute (HTML LS §4.10.5).
+Object.defineProperty(HTMLInputElement.prototype, 'list', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return null;
+        var ref = _lumen_u2n(_lumen_get_attr(n, 'list'));
+        if (ref === null || String(ref) === '') return null;
+        var el = _lumen_u2n(_lumen_get_element_by_id(String(ref)));
+        if (el === null) return null;
+        return (_lumen_get_tag_name(el) || '').toUpperCase() === 'DATALIST'
+            ? _lumen_make_element(el) : null;
+    },
+    enumerable: true, configurable: true,
+});
+// `defaultValue` on <textarea> is its child text, not a content attribute
+// (HTML LS §4.10.11) — so it cannot be a reflection-table row.
+Object.defineProperty(HTMLTextAreaElement.prototype, 'defaultValue', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        return n === -1 ? '' : _lumen_get_text_content(n);
+    },
+    set: function(v) {
+        var n = _lumen_reflect_nid(this);
+        if (n !== -1) _lumen_set_text_content(n, String(v));
+    },
+    enumerable: true, configurable: true,
+});
+Object.defineProperty(HTMLTextAreaElement.prototype, 'textLength', {
+    get: function() { return String(this.value || '').length; },
+    enumerable: true, configurable: true,
+});
+// HTML LS §4.10.5.4 — stepUp/stepDown for the numeric input types.
+[['stepUp', 1], ['stepDown', -1]].forEach(function(_e) {
+    HTMLInputElement.prototype[_e[0]] = function(n) {
+        var nid = _lumen_reflect_nid(this);
+        if (nid === -1) return;
+        var stepAttr = _lumen_u2n(_lumen_get_attr(nid, 'step'));
+        var step = (stepAttr === null || String(stepAttr) === 'any') ? 1 : Number(stepAttr);
+        if (!isFinite(step) || step <= 0) step = 1;
+        var count = (n === undefined) ? 1 : Number(n);
+        if (!isFinite(count)) count = 1;
+        var cur = Number(this.value);
+        if (!isFinite(cur)) cur = 0;
+        var next = cur + _e[1] * step * count;
+        var minA = _lumen_u2n(_lumen_get_attr(nid, 'min'));
+        var maxA = _lumen_u2n(_lumen_get_attr(nid, 'max'));
+        if (minA !== null && isFinite(Number(minA)) && next < Number(minA)) next = Number(minA);
+        if (maxA !== null && isFinite(Number(maxA)) && next > Number(maxA)) next = Number(maxA);
+        // Trim binary-float noise (0.1 + 0.2) without pulling in a formatter.
+        this.value = String(Math.round(next * 1e9) / 1e9);
+    };
+});
+
+// ── Activation: HTMLElement.click() (HTML LS §4.10.19 / DOM §3.4) ────────────
+// The only standard way to press a control from script, and the only way to
+// start a download through a synthetic `<a download>`. Runs the full sequence:
+// pre-click activation (checkbox/radio flip) → dispatch a cancelable `click` →
+// activation behaviour, or undo the pre-click flip when a handler cancelled.
+function _lumen_pre_click_activation(nid) {
+    var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
+    if (tag !== 'INPUT') return null;
+    var t = _lumen_u2n(_lumen_get_attr(nid, 'type'));
+    t = (t === null) ? 'text' : String(t).toLowerCase();
+    var el = _lumen_make_element(nid);
+    if (t === 'checkbox') {
+        var was = el.checked;
+        _lumen_indeterminate[nid] = false;
+        el.checked = !was;
+        return { kind: 'checkbox', checked: was };
+    }
+    if (t === 'radio') {
+        var wasR = el.checked;
+        _lumen_radio_select(nid);
+        return { kind: 'radio', checked: wasR };
+    }
+    return null;
+}
+function _lumen_undo_pre_click_activation(nid, pre) {
+    if (!pre) return;
+    _lumen_make_element(nid).checked = pre.checked;
+}
+// HTML LS §4.10.5.1.13 «radio button group»: same form owner, same name.
+function _lumen_radio_select(nid) {
+    var name = _lumen_u2n(_lumen_get_attr(nid, 'name'));
+    var owner = _lumen_form_owner(nid);
+    var scope = (owner !== -1) ? owner : _lumen_root_nid;
+    var all = _lumen_descendant_elements(scope, []);
+    for (var i = 0; i < all.length; i++) {
+        if ((_lumen_get_tag_name(all[i]) || '').toUpperCase() !== 'INPUT') continue;
+        var t = _lumen_u2n(_lumen_get_attr(all[i], 'type'));
+        if (t === null || String(t).toLowerCase() !== 'radio') continue;
+        if (name !== null && _lumen_u2n(_lumen_get_attr(all[i], 'name')) !== name) continue;
+        if (all[i] !== nid) _lumen_remove_attr(all[i], 'checked');
+    }
+    _lumen_set_attr(nid, 'checked', '');
+}
+function _lumen_fire_input_and_change(nid) {
+    _lumen_dispatch_rich(nid, new Event('input',  { bubbles: true, cancelable: false }));
+    _lumen_dispatch_rich(nid, new Event('change', { bubbles: true, cancelable: false }));
+}
+function _lumen_run_activation_behavior(nid, el) {
+    var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
+    if (tag === 'INPUT') {
+        var t = _lumen_u2n(_lumen_get_attr(nid, 'type'));
+        t = (t === null) ? 'text' : String(t).toLowerCase();
+        if (t === 'checkbox' || t === 'radio') { _lumen_fire_input_and_change(nid); return; }
+        if (t === 'submit' || t === 'image') { _lumen_activate_submit(nid); return; }
+        if (t === 'reset') { _lumen_activate_reset(nid); return; }
+        return;
+    }
+    if (tag === 'BUTTON') {
+        var bt = _lumen_u2n(_lumen_get_attr(nid, 'type'));
+        bt = (bt === null) ? 'submit' : String(bt).toLowerCase();
+        if (bt === 'submit') { _lumen_activate_submit(nid); return; }
+        if (bt === 'reset') { _lumen_activate_reset(nid); return; }
+        return;
+    }
+    if (tag === 'A' || tag === 'AREA') {
+        var href = el.href;
+        if (href) _lumen_navigate(String(href), false);
+        return;
+    }
+    if (tag === 'SUMMARY') {
+        var parent = _lumen_u2n(_lumen_get_parent(nid));
+        if (parent !== null && (_lumen_get_tag_name(parent) || '').toUpperCase() === 'DETAILS') {
+            if (_lumen_has_attr(parent, 'open')) _lumen_remove_attr(parent, 'open');
+            else _lumen_set_attr(parent, 'open', '');
+        }
+        return;
+    }
+    if (tag === 'LABEL') {
+        var ctrl = el.control;
+        // The re-entrancy guard below keeps label → control → label finite.
+        if (ctrl && typeof ctrl.click === 'function') ctrl.click();
+    }
+}
+function _lumen_activate_submit(nid) {
+    var owner = _lumen_form_owner(nid);
+    if (owner === -1) return;
+    _lumen_make_element(owner).requestSubmit(_lumen_make_element(nid));
+}
+function _lumen_activate_reset(nid) {
+    var owner = _lumen_form_owner(nid);
+    if (owner !== -1) _lumen_make_element(owner).reset();
+}
+HTMLElement.prototype.click = function() {
+    var nid = _lumen_reflect_nid(this);
+    if (nid === -1) return;
+    var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
+    // HTML LS §4.10.19: a disabled form control is not activated at all — no
+    // event either.
+    if (_LUMEN_DISABLEABLE_TAGS[tag] === 1 && _lumen_has_attr(nid, 'disabled')) return;
+    if (_lumen_click_in_progress[nid]) return;
+    _lumen_click_in_progress[nid] = true;
+    try {
+        var pre = _lumen_pre_click_activation(nid);
+        var ev = new MouseEvent('click', {
+            bubbles: true, cancelable: true, composed: true, isTrusted: false,
+            clientX: 0, clientY: 0, screenX: 0, screenY: 0,
+            button: 0, buttons: 0, detail: 1,
+        });
+        var notCancelled = _lumen_dispatch_rich(nid, ev);
+        if (notCancelled) _lumen_run_activation_behavior(nid, this);
+        else _lumen_undo_pre_click_activation(nid, pre);
+    } finally {
+        delete _lumen_click_in_progress[nid];
+    }
+};
+
+// ── form.submit() / requestSubmit() / reset() (HTML LS §4.10.21) ─────────────
+// `reset()` is entirely a document-side operation and runs here. Submission is
+// not: encoding, enctype and the actual navigation live in the shell
+// (`forms.rs`), so the page-initiated form goes to it through the same
+// queue-and-drain shape `focus()` uses (`_lumen_request_form_submit`).
+HTMLFormElement.prototype.reset = function() {
+    var nid = _lumen_reflect_nid(this);
+    if (nid === -1) return;
+    var ev = new Event('reset', { bubbles: true, cancelable: true });
+    if (!_lumen_dispatch_rich(nid, ev)) return;
+    var controls = _lumen_listed_controls(nid);
+    for (var i = 0; i < controls.length; i++) {
+        var cn = controls[i];
+        var tag = (_lumen_get_tag_name(cn) || '').toUpperCase();
+        if (tag === 'SELECT') {
+            var opts = _lumen_select_options(cn);
+            for (var j = 0; j < opts.length; j++) delete _lumen_option_selected[opts[j]];
+            delete _input_values[cn];
+            continue;
+        }
+        if (tag !== 'INPUT' && tag !== 'TEXTAREA') continue;
+        // Dropping the dirty value restores `value` to its default, which the
+        // getter derives from the content attribute (or the child text).
+        delete _input_values[cn];
+        delete _lumen_selection_state[cn];
+        delete _lumen_indeterminate[cn];
+        if (tag === 'INPUT') {
+            var defChecked = (_lumen_default_checked[cn] !== undefined)
+                ? _lumen_default_checked[cn] : _lumen_has_attr(cn, 'checked');
+            delete _lumen_default_checked[cn];
+            if (defChecked) _lumen_set_attr(cn, 'checked', '');
+            else _lumen_remove_attr(cn, 'checked');
+        }
+    }
+};
+HTMLFormElement.prototype.requestSubmit = function(submitter) {
+    var nid = _lumen_reflect_nid(this);
+    if (nid === -1) return;
+    var submitterNid = -1;
+    if (submitter !== undefined && submitter !== null) {
+        if (submitter.__nid__ === undefined) {
+            throw new TypeError('requestSubmit: the submitter is not an element');
+        }
+        if (_lumen_form_owner(submitter.__nid__) !== nid) {
+            throw new DOMException(
+                'The submitter is not owned by this form', 'NotFoundError');
+        }
+        submitterNid = submitter.__nid__;
+    }
+    // §4.10.21.4 step 11: fire a cancelable `submit` before handing over.
+    if (!_lumen_dispatch_submit_event(nid, submitterNid)) return;
+    _lumen_request_form_submit(nid, submitterNid);
+};
+// §4.10.21.3: `submit()` skips both constraint validation and the `submit`
+// event — that is the whole difference from `requestSubmit()`.
+HTMLFormElement.prototype.submit = function() {
+    var nid = _lumen_reflect_nid(this);
+    if (nid !== -1) _lumen_request_form_submit(nid, -1);
+};
 
 // ── <selectlist> helpers (Open UI Customizable Select §3) ─────────────────────
 // Returns the <listbox> child nid of a <selectlist>, or null if absent.
@@ -14132,6 +15827,12 @@ function _lumen_gc_collect(nids) {
         delete _input_values[nid];
         delete _canvas2d_ctxs[nid];
         delete _lumen_element_wrappers[nid];
+        // BUG-383 per-nid form state.
+        delete _lumen_option_selected[nid];
+        delete _lumen_selection_state[nid];
+        delete _lumen_indeterminate[nid];
+        delete _lumen_default_checked[nid];
+        delete _lumen_click_in_progress[nid];
     }
 }
 
@@ -14318,2491 +16019,12 @@ mod tests {
         Arc::new(Mutex::new(doc))
     }
 
-    /// Wrap raw RGBA8 test pixels in a shared `Arc<Image>` for `register_img_bitmaps`
-    /// (BUG-272 срез 20: the store shares the decoded `Arc<Image>` rather than an
-    /// eager RGBA8 copy). `data` is a `width × height` RGBA8 buffer.
-    fn test_img_bitmap(width: u32, height: u32, data: Vec<u8>) -> Arc<lumen_image::Image> {
-        Arc::new(lumen_image::Image {
-            width,
-            height,
-            format: lumen_image::PixelFormat::Rgba8,
-            data,
-            icc_profile: None,
-        })
-    }
-
     fn runtime_with_dom(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
         // Enable extension API (chrome.runtime) for unit tests that verify its behaviour.
         rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
         rt.install_dom(doc, "", None, None, None, None, None, None, None, None, false).unwrap();
         rt
-    }
-
-    #[test]
-    fn console_log_does_not_crash() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval("console.log('hello from test')").unwrap();
-    }
-
-    // BUG-243: dynamic SVG built via document.createElementNS must produce NATIVE
-    // arena nodes (carrying __nid__) so that appendChild attaches them to the Rust
-    // document tree and layout/paint can see them. The previous svg.rs override
-    // returned detached `new Ctor()` objects without __nid__, which native
-    // appendChild silently dropped — leaving script-built SVG invisible.
-    #[test]
-    fn create_element_ns_builds_native_svg_tree() {
-        let rt = runtime_with_dom(make_doc());
-        let ok = rt
-            .eval(
-                "var NS = 'http://www.w3.org/2000/svg';\
-                 var svg = document.createElementNS(NS, 'svg');\
-                 var rect = document.createElementNS(NS, 'rect');\
-                 svg.appendChild(rect);\
-                 document.getElementById('main').appendChild(svg);\
-                 typeof svg.__nid__ === 'number' && typeof rect.__nid__ === 'number' \
-                   && document.querySelectorAll('svg').length === 1 \
-                   && document.querySelectorAll('rect').length === 1",
-            )
-            .unwrap();
-        assert_eq!(ok, lumen_core::JsValue::Bool(true));
-    }
-
-    // BUG-243: the repro page (docs/roadmap-svg-cleaves.html) builds its UI with
-    // ParentNode.append() (variadic, accepts strings) and clears the SVG via
-    // `while (svg.firstChild) svg.removeChild(svg.firstChild)`. Both were missing on
-    // native elements, so the page threw "not a function" before rendering. Verify
-    // append() attaches node+string children and firstChild/removeChild can clear them.
-    #[test]
-    fn element_append_and_first_child_round_trip() {
-        let rt = runtime_with_dom(make_doc());
-        let ok = rt
-            .eval(
-                "var box = document.createElement('div');\
-                 var a = document.createElement('span');\
-                 var b = document.createElement('b');\
-                 box.append(a, b);\
-                 var built = box.firstChild.__nid__ === a.__nid__ && box.lastChild.__nid__ === b.__nid__;\
-                 box.append('trailing text');\
-                 var n = 0; while (box.firstChild) { box.removeChild(box.firstChild); if (++n > 20) break; }\
-                 built && box.firstChild === null",
-            )
-            .unwrap();
-        assert_eq!(ok, lumen_core::JsValue::Bool(true));
-    }
-
-    // BUG-291: repeated wraps of the same underlying node (via .lastChild,
-    // .parentElement, .children, etc.) must return the SAME JS object, not a
-    // fresh wrapper each time. `testharness.js`'s `Output.show_results` relies
-    // on `tbody.lastChild.lastChild.appendChild(...)` reading back the very
-    // node it just appended two statements earlier — with fresh wrappers each
-    // access, `tbody.lastChild` after appending a child-of-a-child came back
-    // stale/inconsistent and the nested `.lastChild` was `null`, throwing
-    // `TypeError: Cannot read properties of null (reading 'appendChild')` and
-    // aborting `notify_complete()` before the WPT result callback ran.
-    #[test]
-    fn repeated_node_access_returns_identical_wrapper() {
-        let rt = runtime_with_dom(make_doc());
-        let ok = rt
-            .eval(
-                "var tbody = document.createElement('tbody');\
-                 var tr = document.createElement('tr');\
-                 var td = document.createElement('td');\
-                 tr.appendChild(td);\
-                 tbody.appendChild(tr);\
-                 var identityHolds = tbody.lastChild === tr && tr.lastChild === td;\
-                 var expando = tbody.lastChild;\
-                 expando._probe = 'kept';\
-                 var expandoSurvives = tbody.lastChild._probe === 'kept';\
-                 var nested = tbody.lastChild.lastChild;\
-                 var assertionsNode = document.createElement('div');\
-                 var appended = nested !== null && (nested.appendChild(assertionsNode), true);\
-                 identityHolds && expandoSurvives && appended",
-            )
-            .unwrap();
-        assert_eq!(ok, lumen_core::JsValue::Bool(true));
-    }
-
-    // BUG-243: installing the SVG shim must not abort. It previously threw at
-    // `class SVGElement extends Element` because no global `Element` class exists,
-    // which killed the whole shim (and silently disabled SVG typed interfaces).
-    #[test]
-    fn svg_shim_installs_and_exposes_svg_element() {
-        let rt = runtime_with_dom(make_doc());
-        let ok = rt
-            .eval("typeof window.SVGElement === 'function' && typeof window.SVGSVGElement === 'function'")
-            .unwrap();
-        assert_eq!(ok, lumen_core::JsValue::Bool(true));
-    }
-
-    // BUG-233: `self` must be defined as a global aliasing `window`
-    // (WindowOrWorkerGlobalScope). Webpack runtimes reference bare `self`;
-    // without this they throw `ReferenceError: self is not defined`.
-    #[test]
-    fn self_window_globalthis_are_the_same_object() {
-        let rt = runtime_with_dom(make_doc());
-        let ok = rt
-            .eval(
-                "typeof self !== 'undefined' \
-                 && self === window \
-                 && window.self === window \
-                 && window.window === window \
-                 && globalThis.self === window \
-                 && window.top === window \
-                 && window.parent === window \
-                 && window.frames === window",
-            )
-            .unwrap();
-        assert_eq!(ok, lumen_core::JsValue::Bool(true));
-    }
-
-    // BUG-233: a property stored on `self` must be visible through `window`
-    // and vice-versa, because webpack stores its chunk registry on `self`
-    // and later reads it back. They are the same object reference.
-    #[test]
-    fn self_and_window_share_property_storage() {
-        let rt = runtime_with_dom(make_doc());
-        let ok = rt
-            .eval(
-                "(self.webpackChunk = self.webpackChunk || []).push([1]); \
-                 Array.isArray(window.webpackChunk) && window.webpackChunk.length === 1",
-            )
-            .unwrap();
-        assert_eq!(ok, lumen_core::JsValue::Bool(true));
-    }
-
-    // BUG-280: `window` must literally BE the real QuickJS global object, not
-    // a plain object cross-referenced with `globalThis` via a fixed alias
-    // list. Any property assigned via `window.foo = ...` — including names
-    // not known in advance, e.g. testharness.js's dynamic `expose(fn, name)`
-    // (`window[name] = fn`) — must resolve as a bare, unqualified identifier.
-    #[test]
-    fn dynamic_window_property_is_bare_reachable() {
-        let rt = runtime_with_dom(make_doc());
-        let ok = rt
-            .eval(
-                "window.__bug280_probe = function() { return 42; }; \
-                 typeof __bug280_probe === 'function' && __bug280_probe() === 42",
-            )
-            .unwrap();
-        assert_eq!(ok, lumen_core::JsValue::Bool(true));
-    }
-
-    // BUG-280: same for a property assigned via bare `self`, matching the
-    // real-browser invariant `self === window === globalThis` (same object).
-    #[test]
-    fn dynamic_self_property_is_bare_reachable() {
-        let rt = runtime_with_dom(make_doc());
-        let ok = rt
-            .eval(
-                "self.__bug280_probe2 = 'hi'; \
-                 typeof __bug280_probe2 !== 'undefined' && __bug280_probe2 === 'hi' \
-                 && window === globalThis",
-            )
-            .unwrap();
-        assert_eq!(ok, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn canvas_get_context_2d_returns_object() {
-        let rt = runtime_with_dom(make_doc());
-        let ok = rt
-            .eval(
-                "var c = document.createElement('canvas');\
-                 var ctx = c.getContext('2d');\
-                 ctx !== null && typeof ctx.fillRect === 'function' \
-                   && typeof ctx.beginPath === 'function'",
-            )
-            .unwrap();
-        assert_eq!(ok, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn canvas_get_context_2d_caches_same_object() {
-        let rt = runtime_with_dom(make_doc());
-        let same = rt
-            .eval(
-                "var c = document.createElement('canvas');\
-                 c.getContext('2d') === c.getContext('2d')",
-            )
-            .unwrap();
-        assert_eq!(same, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn canvas_default_dimensions_are_300x150() {
-        let rt = runtime_with_dom(make_doc());
-        let w = rt
-            .eval("var c = document.createElement('canvas'); c.width")
-            .unwrap();
-        let h = rt
-            .eval("var c = document.createElement('canvas'); c.height")
-            .unwrap();
-        assert_eq!(w, lumen_core::JsValue::Number(300.0));
-        assert_eq!(h, lumen_core::JsValue::Number(150.0));
-    }
-
-    #[test]
-    fn canvas_draw_flushes_dirty_buffer() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(
-            "var c = document.createElement('canvas');\
-             c.setAttribute('width', '4'); c.setAttribute('height', '4');\
-             var ctx = c.getContext('2d');\
-             ctx.fillStyle = '#00ff00';\
-             ctx.fillRect(0, 0, 4, 4);",
-        )
-        .unwrap();
-        let updates = rt.flush_canvas_updates();
-        assert_eq!(updates.len(), 1, "one dirty canvas after fillRect");
-        let (_nid, w, h, rgba) = &updates[0];
-        assert_eq!((*w, *h), (4, 4));
-        assert_eq!(rgba[1], 255, "green channel painted");
-    }
-
-    #[test]
-    fn canvas_gradient_object_has_gid_and_add_color_stop() {
-        let rt = runtime_with_dom(make_doc());
-        let ok = rt
-            .eval(
-                "var c = document.createElement('canvas'); var ctx = c.getContext('2d');\
-                 var g = ctx.createLinearGradient(0, 0, 1, 1);\
-                 typeof g === 'object' && g.__gid__ !== undefined \
-                   && typeof g.addColorStop === 'function'",
-            )
-            .unwrap();
-        assert_eq!(ok, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn canvas_radial_and_conic_gradient_constructors_distinct() {
-        let rt = runtime_with_dom(make_doc());
-        let ok = rt
-            .eval(
-                "var c = document.createElement('canvas'); var ctx = c.getContext('2d');\
-                 var r = ctx.createRadialGradient(0, 0, 0, 0, 0, 5);\
-                 var k = ctx.createConicGradient(0, 5, 5);\
-                 r.__gid__ !== undefined && k.__gid__ !== undefined && r.__gid__ !== k.__gid__",
-            )
-            .unwrap();
-        assert_eq!(ok, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn canvas_gradient_fillstyle_paints_pixels() {
-        // A gradient with two identical green stops fills solid green regardless
-        // of interpolation — robustly exercises the fillStyle gradient dispatch.
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(
-            "var c = document.createElement('canvas');\
-             c.setAttribute('width', '4'); c.setAttribute('height', '4');\
-             var ctx = c.getContext('2d');\
-             var g = ctx.createLinearGradient(0, 0, 4, 0);\
-             g.addColorStop(0, '#00ff00'); g.addColorStop(1, '#00ff00');\
-             ctx.fillStyle = g;\
-             ctx.fillRect(0, 0, 4, 4);",
-        )
-        .unwrap();
-        let updates = rt.flush_canvas_updates();
-        assert_eq!(updates.len(), 1, "gradient fill marks the canvas dirty");
-        assert_eq!(updates[0].3[1], 255, "solid-green gradient painted");
-    }
-
-    #[test]
-    fn canvas_shadow_properties_are_wired() {
-        let rt = runtime_with_dom(make_doc());
-        let ok = rt
-            .eval(
-                "var c = document.createElement('canvas'); var ctx = c.getContext('2d');\
-                 ctx.shadowColor = '#ff0000'; ctx.shadowBlur = 4;\
-                 ctx.shadowOffsetX = 2; ctx.shadowOffsetY = 3;\
-                 ctx.shadowColor === '#ff0000' && ctx.shadowBlur === 4 \
-                   && ctx.shadowOffsetX === 2 && ctx.shadowOffsetY === 3",
-            )
-            .unwrap();
-        assert_eq!(ok, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn canvas_create_pattern_returns_pattern_id() {
-        let rt = runtime_with_dom(make_doc());
-        let ok = rt
-            .eval(
-                "var src = document.createElement('canvas');\
-                 src.setAttribute('width', '4'); src.setAttribute('height', '4');\
-                 var sctx = src.getContext('2d'); sctx.fillStyle = '#0000ff'; sctx.fillRect(0, 0, 4, 4);\
-                 var c = document.createElement('canvas'); var ctx = c.getContext('2d');\
-                 var p = ctx.createPattern(src, 'repeat');\
-                 p !== null && p.__patid__ !== undefined",
-            )
-            .unwrap();
-        assert_eq!(ok, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn canvas_create_pattern_null_for_invalid_source() {
-        let rt = runtime_with_dom(make_doc());
-        let ok = rt
-            .eval(
-                "var c = document.createElement('canvas'); var ctx = c.getContext('2d');\
-                 ctx.createPattern(null, 'repeat') === null \
-                   && ctx.createPattern({}, 'repeat') === null",
-            )
-            .unwrap();
-        assert_eq!(ok, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn canvas_draw_image_blits_canvas_source() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(
-            "var src = document.createElement('canvas');\
-             src.setAttribute('width', '4'); src.setAttribute('height', '4');\
-             var sctx = src.getContext('2d'); sctx.fillStyle = '#ff0000'; sctx.fillRect(0, 0, 4, 4);\
-             var c = document.createElement('canvas');\
-             c.setAttribute('width', '4'); c.setAttribute('height', '4');\
-             var ctx = c.getContext('2d');\
-             ctx.drawImage(src, 0, 0);",
-        )
-        .unwrap();
-        let updates = rt.flush_canvas_updates();
-        let any_red = updates
-            .iter()
-            .any(|(_n, _w, _h, rgba)| rgba[0] == 255 && rgba[2] == 0);
-        assert!(any_red, "drawImage blits the red source onto the destination");
-    }
-
-    #[test]
-    fn canvas_draw_image_9arg_crops_source_subrect() {
-        // Source 2×2: left column red, right column blue. The 9-arg form crops the
-        // right (blue) column and stretches it over the whole destination — the
-        // result must contain blue and no red, proving source-crop is honoured.
-        let rt = runtime_with_dom(make_doc());
-        let dest_nid = match rt
-            .eval(
-                "var src = document.createElement('canvas');\
-                 src.setAttribute('width', '2'); src.setAttribute('height', '2');\
-                 var sctx = src.getContext('2d');\
-                 sctx.fillStyle = '#ff0000'; sctx.fillRect(0, 0, 1, 2);\
-                 sctx.fillStyle = '#0000ff'; sctx.fillRect(1, 0, 1, 2);\
-                 var c = document.createElement('canvas');\
-                 c.setAttribute('width', '2'); c.setAttribute('height', '2');\
-                 var ctx = c.getContext('2d');\
-                 ctx.drawImage(src, 1, 0, 1, 2, 0, 0, 2, 2);\
-                 c.__nid__;",
-            )
-            .unwrap()
-        {
-            lumen_core::JsValue::Number(n) => n as u32,
-            other => panic!("expected dest nid number, got {other:?}"),
-        };
-        let updates = rt.flush_canvas_updates();
-        // Inspect the destination canvas pixel buffer (identified by its node id —
-        // the source canvas also contains red, so it must not be sampled here).
-        let dest = updates
-            .iter()
-            .find(|(n, _, _, _)| *n == dest_nid)
-            .expect("destination canvas update");
-        let rgba = &dest.3;
-        let mut any_blue = false;
-        let mut any_red = false;
-        for px in rgba.chunks_exact(4) {
-            if px[3] == 0 {
-                continue;
-            }
-            if px[2] == 255 && px[0] == 0 {
-                any_blue = true;
-            }
-            if px[0] == 255 && px[2] == 0 {
-                any_red = true;
-            }
-        }
-        assert!(any_blue, "cropped blue column must be drawn");
-        assert!(!any_red, "red column must be excluded by the source crop");
-    }
-
-    #[test]
-    fn canvas_draw_image_from_img_element_3arg() {
-        // 3-arg drawImage(img, dx, dy): the img element's registered RGBA8 bitmap is
-        // blitted at natural size onto the destination canvas.
-        let rt = runtime_with_dom(make_doc());
-        // Register a 2×2 fully-red bitmap for the img element (nid is arbitrary but
-        // must match the DOM node created below).
-        let img_nid: u32 = match rt
-            .eval(
-                "var img = document.createElement('img');\
-                 img.setAttribute('src', 'test.png');\
-                 img.setAttribute('width', '2');\
-                 img.setAttribute('height', '2');\
-                 document.body.appendChild(img);\
-                 img.__nid__;",
-            )
-            .unwrap()
-        {
-            lumen_core::JsValue::Number(n) => n as u32,
-            other => panic!("expected img nid, got {other:?}"),
-        };
-        // Inject decoded bitmap: 2×2 solid red RGBA8.
-        let rgba8 = vec![255u8, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255];
-        rt.register_img_bitmaps(vec![(img_nid, test_img_bitmap(2, 2, rgba8))]);
-
-        let dest_nid = match rt
-            .eval(
-                "var c = document.createElement('canvas');\
-                 c.setAttribute('width', '4'); c.setAttribute('height', '4');\
-                 var ctx = c.getContext('2d');\
-                 ctx.drawImage(img, 0, 0);\
-                 c.__nid__;",
-            )
-            .unwrap()
-        {
-            lumen_core::JsValue::Number(n) => n as u32,
-            other => panic!("expected dest nid, got {other:?}"),
-        };
-        let updates = rt.flush_canvas_updates();
-        let dest = updates.iter().find(|(n, _, _, _)| *n == dest_nid)
-            .expect("destination canvas must have an update");
-        // Top-left 2×2 region should be red; natural size is used (dw/dh=0 → native picks 2×2).
-        let rgba = &dest.3;
-        let any_red = rgba.chunks_exact(4).any(|px| px[0] == 255 && px[2] == 0 && px[3] == 255);
-        assert!(any_red, "drawImage(img, dx, dy) must blit the registered red bitmap");
-    }
-
-    #[test]
-    fn canvas_draw_image_from_img_element_5arg() {
-        // 5-arg drawImage(img, dx, dy, dw, dh): blits and scales the bitmap.
-        let rt = runtime_with_dom(make_doc());
-        let img_nid: u32 = match rt
-            .eval(
-                "var img = document.createElement('img');\
-                 img.setAttribute('src', 'blue.png');\
-                 document.body.appendChild(img);\
-                 img.__nid__;",
-            )
-            .unwrap()
-        {
-            lumen_core::JsValue::Number(n) => n as u32,
-            other => panic!("expected img nid, got {other:?}"),
-        };
-        // 1×1 solid blue.
-        let rgba8 = vec![0u8, 0, 255, 255];
-        rt.register_img_bitmaps(vec![(img_nid, test_img_bitmap(1, 1, rgba8))]);
-
-        let dest_nid = match rt
-            .eval(
-                "var c = document.createElement('canvas');\
-                 c.setAttribute('width', '4'); c.setAttribute('height', '4');\
-                 var ctx = c.getContext('2d');\
-                 ctx.drawImage(img, 0, 0, 4, 4);\
-                 c.__nid__;",
-            )
-            .unwrap()
-        {
-            lumen_core::JsValue::Number(n) => n as u32,
-            other => panic!("expected dest nid, got {other:?}"),
-        };
-        let updates = rt.flush_canvas_updates();
-        let dest = updates.iter().find(|(n, _, _, _)| *n == dest_nid)
-            .expect("destination canvas must have an update");
-        let any_blue = dest.3.chunks_exact(4).any(|px| px[2] == 255 && px[0] == 0 && px[3] == 255);
-        assert!(any_blue, "drawImage(img, dx, dy, dw, dh) must blit the registered blue bitmap");
-    }
-
-    #[test]
-    fn canvas_draw_image_from_img_element_9arg_crop() {
-        // 9-arg drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh): crops source sub-rect.
-        // Source: 2×1 bitmap — left pixel red, right pixel green.
-        // Crop right (green) half only: sx=1, sy=0, sw=1, sh=1.
-        let rt = runtime_with_dom(make_doc());
-        let img_nid: u32 = match rt
-            .eval(
-                "var img = document.createElement('img');\
-                 img.setAttribute('src', 'rg.png');\
-                 document.body.appendChild(img);\
-                 img.__nid__;",
-            )
-            .unwrap()
-        {
-            lumen_core::JsValue::Number(n) => n as u32,
-            other => panic!("expected img nid, got {other:?}"),
-        };
-        // 2×1 RGBA8: [R, G, B, A] × 2 pixels.
-        let rgba8 = vec![255u8, 0, 0, 255, 0, 255, 0, 255]; // red | green
-        rt.register_img_bitmaps(vec![(img_nid, test_img_bitmap(2, 1, rgba8))]);
-
-        let dest_nid = match rt
-            .eval(
-                "var c = document.createElement('canvas');\
-                 c.setAttribute('width', '2'); c.setAttribute('height', '2');\
-                 var ctx = c.getContext('2d');\
-                 ctx.drawImage(img, 1, 0, 1, 1, 0, 0, 2, 2);\
-                 c.__nid__;",
-            )
-            .unwrap()
-        {
-            lumen_core::JsValue::Number(n) => n as u32,
-            other => panic!("expected dest nid, got {other:?}"),
-        };
-        let updates = rt.flush_canvas_updates();
-        let dest = updates.iter().find(|(n, _, _, _)| *n == dest_nid)
-            .expect("destination canvas must have an update");
-        let rgba = &dest.3;
-        let any_green = rgba.chunks_exact(4).any(|px| px[1] == 255 && px[0] == 0 && px[3] == 255);
-        let any_red   = rgba.chunks_exact(4).any(|px| px[0] == 255 && px[2] == 0 && px[3] == 255);
-        assert!(any_green, "9-arg drawImage from <img> must blit the green crop");
-        assert!(!any_red, "red pixels from left half must be excluded by the crop");
-    }
-
-    #[test]
-    fn canvas_draw_image_from_img_unregistered_is_noop() {
-        // drawImage with an <img> that has no registered bitmap must be a silent no-op.
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(
-            "var img = document.createElement('img');\
-             img.setAttribute('src', 'missing.png');\
-             document.body.appendChild(img);\
-             var c = document.createElement('canvas');\
-             c.setAttribute('width', '2'); c.setAttribute('height', '2');\
-             var ctx = c.getContext('2d');\
-             ctx.drawImage(img, 0, 0);",
-        )
-        .unwrap();
-        // No bitmap registered → canvas remains transparent, no dirty update needed.
-        let updates = rt.flush_canvas_updates();
-        // The canvas was never dirtied so either has no entry or all-transparent pixels.
-        let all_transparent = updates.iter().all(|(_, _, _, rgba)| {
-            rgba.chunks_exact(4).all(|px| px[3] == 0)
-        });
-        assert!(all_transparent, "drawImage with unregistered <img> must be a no-op");
-    }
-
-    #[test]
-    fn canvas_put_image_data_paints_pixels() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(
-            "var c = document.createElement('canvas');\
-             c.setAttribute('width', '2'); c.setAttribute('height', '2');\
-             var ctx = c.getContext('2d');\
-             var img = ctx.createImageData(2, 2);\
-             for (var i = 0; i < img.data.length; i += 4) {\
-                 img.data[i] = 0; img.data[i + 1] = 255; img.data[i + 2] = 0; img.data[i + 3] = 255;\
-             }\
-             ctx.putImageData(img, 0, 0);",
-        )
-        .unwrap();
-        let updates = rt.flush_canvas_updates();
-        assert!(
-            updates.iter().any(|(_n, _w, _h, rgba)| rgba[1] == 255),
-            "putImageData paints the supplied green pixels"
-        );
-    }
-
-    #[test]
-    fn canvas_get_context_webgl_via_2d_shim_is_null() {
-        // The 2D shim's getContext returns null for non-2d types (the functional
-        // WebGL path is the separate webgl_canvas shim, not wired in these tests).
-        let rt = runtime_with_dom(make_doc());
-        let is_null = rt
-            .eval(
-                "var c = document.createElement('canvas');\
-                 c.getContext('webgl') === null",
-            )
-            .unwrap();
-        assert_eq!(is_null, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn non_canvas_get_context_2d_is_null() {
-        let rt = runtime_with_dom(make_doc());
-        let is_null = rt
-            .eval(
-                "var d = document.createElement('div');\
-                 d.getContext('2d') === null",
-            )
-            .unwrap();
-        assert_eq!(is_null, lumen_core::JsValue::Bool(true));
-    }
-
-    // ── Canvas CSS resize tests ───────────────────────────────────────────────
-
-    #[test]
-    fn canvas_css_resize_scales_pixels() {
-        // After a CSS-driven resize, scale_resize is called and pixels are preserved.
-        let rt = runtime_with_dom(make_doc());
-        // Create canvas, draw a red fill, then trigger CSS resize.
-        rt.eval(r#"
-            var c = document.createElement('canvas');
-            c.width = 4; c.height = 4;
-            var ctx = c.getContext('2d');
-            ctx.fillStyle = '#ff0000';
-            ctx.fillRect(0, 0, 4, 4);
-            window.__test_canvas_nid = c.__nid__;
-        "#).unwrap();
-        let nid_val = rt.eval("window.__test_canvas_nid").unwrap();
-        let nid = if let lumen_core::JsValue::Number(n) = nid_val { n as u32 } else { panic!("no nid") };
-        // First delivery at 4×4 — records baseline.
-        rt.update_layout_rects([(nid, [0.0, 0.0, 4.0, 4.0])].into_iter().collect());
-        rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
-        // Drain dirty list so next flush only sees scale_resize changes.
-        // Must go through the runtime so the drain runs on the JS thread where
-        // the canvas thread-local registry lives (B-1: runtime off the UI thread).
-        let _ = rt.flush_canvas_updates();
-        // Change CSS dims to 8×8 — triggers scale_resize + marks dirty.
-        rt.update_layout_rects([(nid, [0.0, 0.0, 8.0, 8.0])].into_iter().collect());
-        rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
-        // Canvas backing buffer should now be 8×8.
-        let dirty = rt.flush_canvas_updates();
-        let resized = dirty.iter().any(|(id, w, h, _)| *id == nid && *w == 8 && *h == 8);
-        assert!(resized, "canvas should have been scaled to 8×8");
-    }
-
-    #[test]
-    fn canvas_css_resize_fires_resize_event() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(r#"
-            var c2 = document.createElement('canvas');
-            c2.width = 10; c2.height = 10;
-            c2.getContext('2d');
-            var _css_resize_fired = false;
-            c2.addEventListener('resize', function() { _css_resize_fired = true; });
-            window.__test_c2_nid = c2.__nid__;
-        "#).unwrap();
-        let nid_val = rt.eval("window.__test_c2_nid").unwrap();
-        let nid = if let lumen_core::JsValue::Number(n) = nid_val { n as u32 } else { panic!("no nid") };
-        // First delivery at 10×10 — records baseline, no event.
-        rt.update_layout_rects([(nid, [0.0, 0.0, 10.0, 10.0])].into_iter().collect());
-        rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
-        let fired_before = rt.eval("_css_resize_fired").unwrap();
-        assert_eq!(fired_before, lumen_core::JsValue::Bool(false));
-        // Change CSS dims — event should fire.
-        rt.update_layout_rects([(nid, [0.0, 0.0, 20.0, 20.0])].into_iter().collect());
-        rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
-        let fired = rt.eval("_css_resize_fired").unwrap();
-        assert_eq!(fired, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn canvas_css_resize_no_event_when_size_unchanged() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(r#"
-            var c3 = document.createElement('canvas');
-            c3.width = 10; c3.height = 10;
-            c3.getContext('2d');
-            var _css_cnt = 0;
-            c3.addEventListener('resize', function() { _css_cnt++; });
-            window.__test_c3_nid = c3.__nid__;
-        "#).unwrap();
-        let nid_val = rt.eval("window.__test_c3_nid").unwrap();
-        let nid = if let lumen_core::JsValue::Number(n) = nid_val { n as u32 } else { panic!("no nid") };
-        let rect = [(nid, [0.0, 0.0, 10.0, 10.0])].into_iter().collect();
-        rt.update_layout_rects(rect);
-        // First delivery — baseline.
-        rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
-        // Second delivery — same size, no event.
-        rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
-        let cnt = rt.eval("_css_cnt").unwrap();
-        assert_eq!(cnt, lumen_core::JsValue::Number(0.0));
-    }
-
-    #[test]
-    fn canvas_css_resize_not_triggered_without_context() {
-        // A canvas without a 2D context is not tracked by _lumen_deliver_canvas_css_resize.
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(r#"
-            var c4 = document.createElement('canvas');
-            // intentionally no getContext('2d')
-            var _no_ctx_fired = false;
-            c4.addEventListener('resize', function() { _no_ctx_fired = true; });
-            window.__test_c4_nid = c4.__nid__;
-        "#).unwrap();
-        let nid_val = rt.eval("window.__test_c4_nid").unwrap();
-        let nid = if let lumen_core::JsValue::Number(n) = nid_val { n as u32 } else { panic!("no nid") };
-        rt.update_layout_rects([(nid, [0.0, 0.0, 50.0, 50.0])].into_iter().collect());
-        rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
-        rt.update_layout_rects([(nid, [0.0, 0.0, 100.0, 100.0])].into_iter().collect());
-        rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
-        let fired = rt.eval("_no_ctx_fired").unwrap();
-        assert_eq!(fired, lumen_core::JsValue::Bool(false));
-    }
-
-    #[test]
-    fn get_element_by_id_found() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.getElementById('main') !== null")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn get_element_by_id_not_found() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.getElementById('nonexistent') === null")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn get_element_by_id_tag_name() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.getElementById('main').tagName")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::String("DIV".into()));
-    }
-
-    #[test]
-    fn query_selector_by_id() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.querySelector('#main') !== null")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn query_selector_by_class() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.querySelector('.highlight') !== null")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn query_selector_by_tag() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt.eval("document.querySelector('span') !== null").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    // BUG-291: Element.querySelector(All) must be scoped to the calling
-    // element's descendants, and must therefore also work on a subtree that
-    // is not (yet) attached to the document — `document.querySelector` has no
-    // path to reach such nodes at all. Before the fix, `_lumen_query_selector`
-    // ignored `this` and always searched from `document.root()`, so this
-    // returned `null` and crashed `testharness.js`'s results renderer
-    // (`Output.show_results`) with `Cannot read properties of null`.
-    #[test]
-    fn element_query_selector_finds_descendant_in_detached_subtree() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval(
-                "var table = document.createElement('table'); \
-                 var tbody = document.createElement('tbody'); \
-                 table.appendChild(tbody); \
-                 table.querySelector('tbody') === tbody",
-            )
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn element_query_selector_all_finds_matches_in_detached_subtree() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval(
-                "var ul = document.createElement('ul'); \
-                 ul.appendChild(document.createElement('li')); \
-                 ul.appendChild(document.createElement('li')); \
-                 ul.querySelectorAll('li').length",
-            )
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Number(2.0));
-    }
-
-    // BUG-291: Element.querySelector must be scoped to *descendants* — it
-    // must not match the calling element itself, nor elements outside its
-    // subtree (the pre-fix implementation searched the whole document).
-    #[test]
-    fn element_query_selector_excludes_self_and_siblings() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval(
-                "var a = document.createElement('div'); a.id = 'scope'; \
-                 var b = document.createElement('div'); b.id = 'outside'; \
-                 document.body.appendChild(a); document.body.appendChild(b); \
-                 a.querySelector('#scope') === null && a.querySelector('#outside') === null",
-            )
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    // BUG-291: repeated access to the same DOM node must yield the same JS
-    // wrapper object (`===` identity), matching real engines and required by
-    // `testharness.js`'s results renderer (`tbody.lastChild === row`-style
-    // checks). Before the fix, `_lumen_make_element` minted a fresh object on
-    // every call.
-    #[test]
-    fn repeated_node_access_yields_stable_identity() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval(
-                "var parent = document.createElement('div'); \
-                 var child = document.createElement('span'); \
-                 parent.appendChild(child); \
-                 parent.lastChild === child && \
-                 parent.firstChild === parent.lastChild && \
-                 parent.children[0] === child && \
-                 document.getElementById('main') === document.getElementById('main')",
-            )
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn text_content_get() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.getElementById('main').textContent")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::String("Hello".into()));
-    }
-
-    #[test]
-    fn text_content_set_mutates_dom() {
-        let doc = make_doc();
-        let rt = runtime_with_dom(Arc::clone(&doc));
-        rt.eval("document.getElementById('main').textContent = 'World';")
-            .unwrap();
-        drop(rt);
-        let doc = Arc::try_unwrap(doc).unwrap().into_inner().unwrap();
-        // The div#main should now have a single text child "World".
-        let body_id = find_element_by_tag(&doc, "body").unwrap();
-        let div_id = doc.get(body_id).children[0];
-        let text = collect_text_content(&doc, div_id);
-        assert_eq!(text, "World");
-    }
-
-    #[test]
-    fn set_attribute_mutates_dom() {
-        let doc = make_doc();
-        let rt = runtime_with_dom(Arc::clone(&doc));
-        rt.eval("document.getElementById('main').setAttribute('data-x', '42');")
-            .unwrap();
-        drop(rt);
-        let doc = Arc::try_unwrap(doc).unwrap().into_inner().unwrap();
-        let body_id = find_element_by_tag(&doc, "body").unwrap();
-        let div_id = doc.get(body_id).children[0];
-        assert_eq!(doc.get(div_id).get_attr("data-x"), Some("42"));
-    }
-
-    #[test]
-    fn get_attribute_returns_value() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.getElementById('main').getAttribute('id')")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::String("main".into()));
-    }
-
-    #[test]
-    fn get_attribute_returns_null_for_missing() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.getElementById('main').getAttribute('data-missing') === null")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn document_title_get() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt.eval("document.title").unwrap();
-        assert_eq!(result, lumen_core::JsValue::String("Test Page".into()));
-    }
-
-    #[test]
-    fn document_title_set() {
-        let doc = make_doc();
-        let rt = runtime_with_dom(Arc::clone(&doc));
-        rt.eval("document.title = 'New Title';").unwrap();
-        drop(rt);
-        let doc = Arc::try_unwrap(doc).unwrap().into_inner().unwrap();
-        let title_text = find_element_by_tag(&doc, "title")
-            .map(|nid| collect_text_content(&doc, nid))
-            .unwrap_or_default();
-        assert_eq!(title_text, "New Title");
-    }
-
-    #[test]
-    fn document_body_not_null() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt.eval("document.body !== null").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn create_element_and_append() {
-        let doc = make_doc();
-        let rt = runtime_with_dom(Arc::clone(&doc));
-        rt.eval(
-            "var p = document.createElement('p'); \
-             p.textContent = 'new paragraph'; \
-             document.body.appendChild(p);",
-        )
-        .unwrap();
-        drop(rt);
-        let doc = Arc::try_unwrap(doc).unwrap().into_inner().unwrap();
-        let body_id = find_element_by_tag(&doc, "body").unwrap();
-        let body = doc.get(body_id);
-        // body should now have 2 children: the original div + the new <p>
-        assert_eq!(body.children.len(), 2);
-        let p_id = body.children[1];
-        assert_eq!(
-            doc.get(p_id)
-                .element_name()
-                .map(|n| n.local.as_str()),
-            Some("p")
-        );
-        assert_eq!(collect_text_content(&doc, p_id), "new paragraph");
-    }
-
-    #[test]
-    fn query_selector_all_returns_array() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.querySelectorAll('span').length")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Number(1.0));
-    }
-
-    #[test]
-    fn get_elements_by_class_name_document() {
-        // BUG-302: getElementsByClassName was missing from WEB_API_SHIM.
-        let rt = runtime_with_dom(make_doc());
-        let hit = rt
-            .eval("document.getElementsByClassName('highlight').length")
-            .unwrap();
-        assert_eq!(hit, lumen_core::JsValue::Number(1.0));
-        let miss = rt
-            .eval("document.getElementsByClassName('nope').length")
-            .unwrap();
-        assert_eq!(miss, lumen_core::JsValue::Number(0.0));
-        // Empty / whitespace-only token list yields an empty collection.
-        let empty = rt
-            .eval("document.getElementsByClassName('   ').length")
-            .unwrap();
-        assert_eq!(empty, lumen_core::JsValue::Number(0.0));
-    }
-
-    #[test]
-    fn get_elements_by_class_name_scoped_element() {
-        // BUG-302: the scoped variant lives on Element too, restricted to the
-        // element's own descendants.
-        let rt = runtime_with_dom(make_doc());
-        let inside = rt
-            .eval("document.body.getElementsByClassName('highlight').length")
-            .unwrap();
-        assert_eq!(inside, lumen_core::JsValue::Number(1.0));
-        // The <span.highlight> has no descendants, so scoping to it finds none.
-        let none = rt
-            .eval(
-                "document.getElementsByClassName('highlight')[0]\
-                 .getElementsByClassName('highlight').length",
-            )
-            .unwrap();
-        assert_eq!(none, lumen_core::JsValue::Number(0.0));
-    }
-
-    #[test]
-    fn image_constructor_creates_img_element() {
-        // BUG-305: `new Image()` must produce a native <img> wrapper.
-        let rt = runtime_with_dom(make_doc());
-        let tag = rt.eval("new Image().tagName").unwrap();
-        assert_eq!(tag, lumen_core::JsValue::String("IMG".into()));
-    }
-
-    #[test]
-    fn image_constructor_applies_width_height_args() {
-        // BUG-305: Image(width, height) sets the width/height content attributes.
-        let rt = runtime_with_dom(make_doc());
-        let dims = rt
-            .eval(
-                "var i = new Image(4, 6);\
-                 i.getAttribute('width') + 'x' + i.getAttribute('height')",
-            )
-            .unwrap();
-        assert_eq!(dims, lumen_core::JsValue::String("4x6".into()));
-    }
-
-    #[test]
-    fn image_src_reflects_content_attribute() {
-        // BUG-305: `img.src = …` reaches the underlying `src` attribute so layout
-        // can see the dynamically-assigned image, and reads back the same value.
-        let rt = runtime_with_dom(make_doc());
-        let via_attr = rt
-            .eval("var i = new Image(); i.src = 'test.png'; i.getAttribute('src')")
-            .unwrap();
-        assert_eq!(via_attr, lumen_core::JsValue::String("test.png".into()));
-        let via_prop = rt
-            .eval("var i = new Image(); i.src = 'blue.png'; i.src")
-            .unwrap();
-        assert_eq!(via_prop, lumen_core::JsValue::String("blue.png".into()));
-        // Unset `src` reflects as the empty string, per the reflect-a-URL steps.
-        let unset = rt.eval("new Image().src").unwrap();
-        assert_eq!(unset, lumen_core::JsValue::String("".into()));
-    }
-
-    #[test]
-    fn html_image_element_is_a_global() {
-        // BUG-305: `HTMLImageElement` is exposed as a bare interface global.
-        let rt = runtime_with_dom(make_doc());
-        let ty = rt.eval("typeof HTMLImageElement").unwrap();
-        assert_eq!(ty, lumen_core::JsValue::String("function".into()));
-    }
-
-    #[test]
-    fn query_selector_compound_tag_and_id() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.querySelector('div#main') !== null")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn query_selector_compound_wrong_tag_returns_null() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.querySelector('span#main') === null")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn query_selector_compound_tag_and_class() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.querySelector('span.highlight') !== null")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn query_selector_child_combinator() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.querySelector('div > span') !== null")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn query_selector_descendant_combinator() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.querySelector('body span') !== null")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn query_selector_id_child_class() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.querySelector('#main > .highlight') !== null")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn element_matches_compound() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.querySelector('span').matches('span.highlight')")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn element_matches_wrong_compound_returns_false() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.querySelector('span').matches('div.highlight')")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(false));
-    }
-
-    #[test]
-    fn element_closest_finds_ancestor() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.querySelector('span').closest('div') !== null")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn element_closest_id_selector() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.querySelector('span').closest('#main') !== null")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn query_selector_attribute_selector() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.querySelector('[id=\"main\"]') !== null")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn alert_does_not_crash() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval("alert('test')").unwrap();
-    }
-
-    #[test]
-    fn window_print_emits_request() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval("window.print()").unwrap();
-        let reqs = rt.take_print_requests();
-        assert_eq!(reqs.len(), 1);
-        assert_eq!(reqs[0].margin_top, 48.0);
-        assert_eq!(reqs[0].margin_bottom, 48.0);
-        assert_eq!(reqs[0].margin_left, 48.0);
-        assert_eq!(reqs[0].margin_right, 48.0);
-    }
-
-    #[test]
-    fn timeout_is_deferred_until_tick() {
-        let rt = runtime_with_dom(make_doc());
-        // Timer must NOT fire synchronously — deferred to _lumen_tick_timers().
-        let result = rt
-            .eval("var x = 0; setTimeout(function() { x = 1; }, 0); x")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Number(0.0));
-    }
-
-    #[test]
-    fn timeout_fires_after_tick() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval("var x = 0; setTimeout(function() { x = 1; }, 0);")
-            .unwrap();
-        let result = rt.eval("_lumen_tick_timers(); x").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Number(1.0));
-    }
-
-    #[test]
-    fn clear_timeout_prevents_fire() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval("var x = 0; var id = setTimeout(function() { x = 1; }, 0); clearTimeout(id);")
-            .unwrap();
-        let result = rt.eval("_lumen_tick_timers(); x").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Number(0.0));
-    }
-
-    #[test]
-    fn set_interval_fires_repeatedly() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval("var n = 0; setInterval(function() { n++; }, 0);")
-            .unwrap();
-        rt.eval("_lumen_tick_timers();").unwrap();
-        rt.eval("_lumen_tick_timers();").unwrap();
-        let result = rt.eval("n").unwrap();
-        // Fired at least twice (exact count depends on scheduling).
-        assert!(matches!(result, lumen_core::JsValue::Number(n) if n >= 2.0));
-    }
-
-    #[test]
-    fn clear_interval_stops_fire() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval("var n = 0; var id = setInterval(function() { n++; }, 0);")
-            .unwrap();
-        rt.eval("_lumen_tick_timers(); clearInterval(id);")
-            .unwrap();
-        rt.eval("_lumen_tick_timers();").unwrap();
-        let result = rt.eval("n").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Number(1.0));
-    }
-
-    #[test]
-    fn bug271_nested_timeout_clamped_to_4ms() {
-        // HTML LS §8.6: nesting level > 5 clamps timeout < 4 ms up to 4 ms.
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("_lumen_clamp_timeout(0, 6) === 4 && _lumen_clamp_timeout(0, 5) === 0 && _lumen_clamp_timeout(10, 7) === 10")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn bug271_timer_callback_inherits_nesting_level() {
-        // A timer scheduled from inside a timer callback records nesting+1,
-        // so deep setTimeout(fn,0) chains eventually hit the 4 ms clamp.
-        let rt = runtime_with_dom(make_doc());
-        rt.eval("setTimeout(function() { setTimeout(function() {}, 0); }, 0);")
-            .unwrap();
-        let before = rt
-            .eval("_lumen_timers.some(function(t) { return t.nesting === 2; })")
-            .unwrap();
-        assert_eq!(before, lumen_core::JsValue::Bool(false));
-        rt.eval("_lumen_tick_timers();").unwrap();
-        // The inner timer scheduled from inside the fired callback carries nesting 2.
-        let after = rt
-            .eval("_lumen_timers.some(function(t) { return t.nesting === 2; })")
-            .unwrap();
-        assert_eq!(after, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn scheduler_post_task_returns_promise() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("typeof scheduler.postTask(function() { return 42; })")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::String("object".into()));
-    }
-
-    #[test]
-    fn scheduler_post_task_rejects_non_function() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("var rejected = false; scheduler.postTask(42).catch(function() { rejected = true; }); rejected")
-            .unwrap();
-        // Promise rejection is async; we can only verify the call didn't throw synchronously.
-        assert_eq!(result, lumen_core::JsValue::Bool(false));
-    }
-
-    #[test]
-    fn history_initial_length_is_one() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt.eval("history.length").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Number(1.0));
-    }
-
-    #[test]
-    fn history_initial_state_is_null() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt.eval("history.state === null").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn history_push_state_increments_length() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval("history.pushState({page: 1}, '', '/page1');").unwrap();
-        rt.eval("history.pushState({page: 2}, '', '/page2');").unwrap();
-        let result = rt.eval("history.length").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Number(3.0));
-    }
-
-    #[test]
-    fn history_state_after_push_returns_state() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval("history.pushState({x: 42}, '', '/p');").unwrap();
-        let result = rt.eval("history.state.x").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Number(42.0));
-    }
-
-    #[test]
-    fn history_replace_state_keeps_length() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval("history.pushState({n: 1}, '', '/a');").unwrap();
-        rt.eval("history.replaceState({n: 99}, '', '/a2');").unwrap();
-        let len = rt.eval("history.length").unwrap();
-        assert_eq!(len, lumen_core::JsValue::Number(2.0));
-        let state = rt.eval("history.state.n").unwrap();
-        assert_eq!(state, lumen_core::JsValue::Number(99.0));
-    }
-
-    #[test]
-    fn history_back_fires_popstate_with_previous_state() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(
-            "var events = []; \
-             window.addEventListener('popstate', function(e) { events.push(e.state); }); \
-             history.pushState({page: 1}, '', '/p1'); \
-             history.pushState({page: 2}, '', '/p2'); \
-             history.back();",
-        )
-        .unwrap();
-        // Traversal is shell-authoritative: history.back() moved the read-cache
-        // cursor and queued a -1 delta, but the popstate is delivered by the shell.
-        // Simulate the shell handing the destination entry back to JS.
-        assert_eq!(rt.take_history_traversals(), vec![-1]);
-        rt.eval("_lumen_deliver_popstate(_lumen_history_state_json(), _lumen_history_url())")
-            .unwrap();
-        let len = rt.eval("events.length").unwrap();
-        assert_eq!(len, lumen_core::JsValue::Number(1.0));
-        let page = rt.eval("events[0].page").unwrap();
-        assert_eq!(page, lumen_core::JsValue::Number(1.0));
-    }
-
-    #[test]
-    fn history_forward_after_back() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(
-            "history.pushState({n: 1}, '', '/p1'); \
-             history.pushState({n: 2}, '', '/p2'); \
-             history.back();",
-        )
-        .unwrap();
-        let state_after_back = rt.eval("history.state.n").unwrap();
-        assert_eq!(state_after_back, lumen_core::JsValue::Number(1.0));
-
-        rt.eval("history.forward();").unwrap();
-        let state_after_fwd = rt.eval("history.state.n").unwrap();
-        assert_eq!(state_after_fwd, lumen_core::JsValue::Number(2.0));
-    }
-
-    #[test]
-    fn history_go_beyond_bounds_does_not_fire_popstate() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(
-            "var fired = false; \
-             window.addEventListener('popstate', function() { fired = true; }); \
-             history.go(-5);",
-        )
-        .unwrap();
-        let result = rt.eval("fired").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(false));
-    }
-
-    #[test]
-    fn window_onpopstate_fires_on_back() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(
-            "var captured = null; \
-             window.onpopstate = function(e) { captured = e.state; }; \
-             history.pushState({v: 7}, '', '/p'); \
-             history.back();",
-        )
-        .unwrap();
-        let result = rt.eval("captured === null").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true)); // initial state is null
-    }
-
-    #[test]
-    fn history_push_drops_forward_entries() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(
-            "history.pushState({n: 1}, '', '/p1'); \
-             history.pushState({n: 2}, '', '/p2'); \
-             history.back(); \
-             history.pushState({n: 3}, '', '/p3');",
-        )
-        .unwrap();
-        // After back + push, forward entries are dropped: entries = [init, {n:1}, {n:3}]
-        let len = rt.eval("history.length").unwrap();
-        assert_eq!(len, lumen_core::JsValue::Number(3.0));
-        let state = rt.eval("history.state.n").unwrap();
-        assert_eq!(state, lumen_core::JsValue::Number(3.0));
-    }
-
-    #[test]
-    fn history_go_zero_reloads() {
-        let rt = runtime_with_url("https://example.com/");
-        rt.eval("history.go(0)").unwrap();
-        let req = rt.take_navigate_request();
-        assert!(matches!(req, Some(NavigateRequest::Reload)));
-    }
-
-    #[test]
-    fn history_go_updates_location() {
-        let rt = runtime_with_url("https://example.com/start");
-        rt.eval(
-            "history.pushState({},'','https://example.com/p1'); \
-             history.pushState({},'','https://example.com/p2'); \
-             history.go(-1);",
-        )
-        .unwrap();
-        // go(-1) queued the traversal and moved the read-cache cursor; the shell
-        // delivers the popstate that syncs `location`. Simulate that delivery.
-        assert_eq!(rt.take_history_traversals(), vec![-1]);
-        rt.eval("_lumen_deliver_popstate(_lumen_history_state_json(), _lumen_history_url())")
-            .unwrap();
-        let path = rt.eval("location.pathname").unwrap();
-        assert_eq!(path, lumen_core::JsValue::String("/p1".into()));
-    }
-
-    #[test]
-    fn history_go_queues_single_step_traversal() {
-        let rt = runtime_with_url("https://example.com/start");
-        rt.eval(
-            "history.pushState({},'','/p1'); \
-             history.pushState({},'','/p2'); \
-             history.back();",
-        )
-        .unwrap();
-        // back() routes through history.go(-1): one shell traversal queued.
-        assert_eq!(rt.take_history_traversals(), vec![-1]);
-    }
-
-    #[test]
-    fn history_go_multistep_queues_full_delta_and_moves_cache() {
-        let rt = runtime_with_url("https://example.com/start");
-        rt.eval(
-            "history.pushState({n:1},'','/p1'); \
-             history.pushState({n:2},'','/p2'); \
-             history.pushState({n:3},'','/p3'); \
-             history.go(-2);",
-        )
-        .unwrap();
-        // The full multi-step delta is queued once (the shell fires a single
-        // destination popstate), and the read-cache cursor jumped two entries.
-        assert_eq!(rt.take_history_traversals(), vec![-2]);
-        assert_eq!(
-            rt.eval("history.state.n").unwrap(),
-            lumen_core::JsValue::Number(1.0)
-        );
-    }
-
-    #[test]
-    fn history_go_zero_does_not_queue_traversal() {
-        let rt = runtime_with_url("https://example.com/");
-        rt.eval("history.go(0)").unwrap();
-        assert!(rt.take_history_traversals().is_empty());
-        assert!(matches!(
-            rt.take_navigate_request(),
-            Some(NavigateRequest::Reload)
-        ));
-    }
-
-    #[test]
-    fn history_go_out_of_range_does_not_queue_traversal() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval("history.go(7)").unwrap();
-        // Out of range in the read-cache → no traversal handed to the shell.
-        assert!(rt.take_history_traversals().is_empty());
-    }
-
-    #[test]
-    fn history_go_out_of_bounds_no_popstate() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(
-            "var fired=false; \
-             window.addEventListener('popstate', function(){fired=true;}); \
-             history.go(7);",
-        )
-        .unwrap();
-        let fired = rt.eval("fired").unwrap();
-        assert_eq!(fired, lumen_core::JsValue::Bool(false));
-    }
-
-    #[test]
-    fn window_object_exposes_history() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt.eval("window.history === history").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn window_remove_event_listener_stops_popstate() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(
-            "var count = 0; \
-             function handler(e) { count++; } \
-             window.addEventListener('popstate', handler); \
-             history.pushState({}, '', '/p'); \
-             history.back();",
-        )
-        .unwrap();
-        // Traversal is shell-authoritative: history.back() queues a -1 delta and
-        // the shell delivers the popstate. While registered, the handler fires once.
-        assert_eq!(rt.take_history_traversals(), vec![-1]);
-        rt.eval("_lumen_deliver_popstate(_lumen_history_state_json(), _lumen_history_url())")
-            .unwrap();
-        // Remove the listener, then traverse again. The shell still delivers a
-        // popstate for each queued delta, but the removed handler must not fire.
-        rt.eval(
-            "window.removeEventListener('popstate', handler); \
-             history.forward(); \
-             history.back();",
-        )
-        .unwrap();
-        let _ = rt.take_history_traversals();
-        rt.eval("_lumen_deliver_popstate(_lumen_history_state_json(), _lumen_history_url())")
-            .unwrap();
-        rt.eval("_lumen_deliver_popstate(_lumen_history_state_json(), _lumen_history_url())")
-            .unwrap();
-        // handler fired once (before removal), then stayed silent.
-        let result = rt.eval("count").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Number(1.0));
-    }
-
-    // ── classList ────────────────────────────────────────────────────────────
-
-    #[test]
-    fn classlist_contains_true() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.querySelector('.highlight').classList.contains('highlight')")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn classlist_contains_false() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.querySelector('.highlight').classList.contains('missing')")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(false));
-    }
-
-    #[test]
-    fn classlist_add_and_contains() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval("document.getElementById('main').classList.add('active');").unwrap();
-        let result = rt
-            .eval("document.getElementById('main').classList.contains('active')")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn classlist_remove() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(
-            "document.querySelector('.highlight').classList.remove('highlight');",
-        )
-        .unwrap();
-        let result = rt
-            .eval("document.querySelector('.highlight') === null")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn classlist_toggle_adds_when_absent() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.getElementById('main').classList.toggle('open')")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-        let has = rt
-            .eval("document.getElementById('main').classList.contains('open')")
-            .unwrap();
-        assert_eq!(has, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn classlist_toggle_removes_when_present() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval("document.querySelector('.highlight').classList.toggle('highlight');").unwrap();
-        let has = rt
-            .eval("document.querySelector('.highlight') === null")
-            .unwrap();
-        assert_eq!(has, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn classlist_replace() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(
-            "document.querySelector('.highlight').classList.replace('highlight', 'selected');",
-        )
-        .unwrap();
-        let old = rt
-            .eval("document.querySelector('.highlight') === null")
-            .unwrap();
-        assert_eq!(old, lumen_core::JsValue::Bool(true));
-        let new = rt
-            .eval("document.querySelector('.selected') !== null")
-            .unwrap();
-        assert_eq!(new, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn classlist_length() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.querySelector('.highlight').classList.length")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Number(1.0));
-    }
-
-    #[test]
-    fn classlist_to_string() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.querySelector('.highlight').classList.toString()")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::String("highlight".into()));
-    }
-
-    // ── style / CSSStyleDeclaration ──────────────────────────────────────────
-
-    #[test]
-    fn style_set_and_get_property() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval("document.getElementById('main').style.setProperty('color', 'red');")
-            .unwrap();
-        let result = rt
-            .eval("document.getElementById('main').style.getPropertyValue('color')")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::String("red".into()));
-    }
-
-    #[test]
-    fn style_assignment_via_property_name() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval("document.getElementById('main').style.color = 'blue';")
-            .unwrap();
-        let result = rt
-            .eval("document.getElementById('main').style.color")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::String("blue".into()));
-    }
-
-    #[test]
-    fn style_camel_case_to_kebab() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval("document.getElementById('main').style.backgroundColor = 'green';")
-            .unwrap();
-        let result = rt
-            .eval("document.getElementById('main').style.getPropertyValue('background-color')")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::String("green".into()));
-    }
-
-    #[test]
-    fn style_remove_property() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(
-            "var el = document.getElementById('main'); \
-             el.style.color = 'red'; \
-             el.style.removeProperty('color');",
-        )
-        .unwrap();
-        let result = rt
-            .eval("document.getElementById('main').style.getPropertyValue('color')")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::String("".into()));
-    }
-
-    #[test]
-    fn style_css_text_roundtrip() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(
-            "document.getElementById('main').style.cssText = 'color: red; font-size: 12px';",
-        )
-        .unwrap();
-        let color = rt
-            .eval("document.getElementById('main').style.getPropertyValue('color')")
-            .unwrap();
-        assert_eq!(color, lumen_core::JsValue::String("red".into()));
-        let size = rt
-            .eval("document.getElementById('main').style.getPropertyValue('font-size')")
-            .unwrap();
-        assert_eq!(size, lumen_core::JsValue::String("12px".into()));
-    }
-
-    // ── addEventListener / dispatchEvent on elements ─────────────────────────
-
-    #[test]
-    fn element_add_event_listener_and_dispatch() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval(
-                "var received = null; \
-                 var el = document.getElementById('main'); \
-                 el.addEventListener('click', function(e) { received = e.type; }); \
-                 el.dispatchEvent(new Event('click')); \
-                 received",
-            )
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::String("click".into()));
-    }
-
-    #[test]
-    fn element_remove_event_listener_stops_dispatch() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval(
-                "var count = 0; \
-                 var el = document.getElementById('main'); \
-                 function h() { count++; } \
-                 el.addEventListener('click', h); \
-                 el.dispatchEvent(new Event('click')); \
-                 el.removeEventListener('click', h); \
-                 el.dispatchEvent(new Event('click')); \
-                 count",
-            )
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Number(1.0));
-    }
-
-    #[test]
-    fn custom_event_detail_accessible_in_handler() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval(
-                "var got = null; \
-                 var el = document.getElementById('main'); \
-                 el.addEventListener('myevent', function(e) { got = e.detail; }); \
-                 el.dispatchEvent(new CustomEvent('myevent', { detail: 42 })); \
-                 got",
-            )
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Number(42.0));
-    }
-
-    #[test]
-    fn event_prevent_default() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval(
-                "var el = document.getElementById('main'); \
-                 el.addEventListener('submit', function(e) { e.preventDefault(); }); \
-                 var ev = new Event('submit', { cancelable: true }); \
-                 var ret = el.dispatchEvent(ev); \
-                 ret",
-            )
-            .unwrap();
-        // dispatchEvent returns false when defaultPrevented
-        assert_eq!(result, lumen_core::JsValue::Bool(false));
-    }
-
-    #[test]
-    fn stop_immediate_propagation_stops_subsequent_listeners() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval(
-                "var calls = 0; \
-                 var el = document.getElementById('main'); \
-                 el.addEventListener('x', function(e) { calls++; e.stopImmediatePropagation(); }); \
-                 el.addEventListener('x', function(e) { calls++; }); \
-                 el.dispatchEvent(new Event('x')); \
-                 calls",
-            )
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Number(1.0));
-    }
-
-    // ── Event / CustomEvent constructors ─────────────────────────────────────
-
-    #[test]
-    fn event_constructor_sets_type() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt.eval("new Event('load').type").unwrap();
-        assert_eq!(result, lumen_core::JsValue::String("load".into()));
-    }
-
-    #[test]
-    fn event_bubbles_cancelable_defaults_false() {
-        let rt = runtime_with_dom(make_doc());
-        let bubbles = rt.eval("new Event('x').bubbles").unwrap();
-        assert_eq!(bubbles, lumen_core::JsValue::Bool(false));
-        let cancelable = rt.eval("new Event('x').cancelable").unwrap();
-        assert_eq!(cancelable, lumen_core::JsValue::Bool(false));
-    }
-
-    #[test]
-    fn custom_event_detail_null_by_default() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt.eval("new CustomEvent('x').detail === null").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn event_is_trusted_false_by_default() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt.eval("new Event('click').isTrusted").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(false));
-    }
-
-    #[test]
-    fn event_is_trusted_true_when_specified() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt.eval("new Event('click', { isTrusted: true }).isTrusted").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn custom_event_is_trusted_inherits_from_event() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt.eval("new CustomEvent('x', { isTrusted: true }).isTrusted").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn dispatchevent_creates_untrusted_event() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt.eval(
-            r#"
-            var evt = new Event('test');
-            var el = document.createElement('div');
-            var receivedEvent = null;
-            el.addEventListener('test', function(e) { receivedEvent = e; });
-            el.dispatchEvent(evt);
-            receivedEvent.isTrusted === false
-            "#
-        ).unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    // ── navigator.serviceWorker ───────────────────────────────────────────────
-
-    #[test]
-    fn navigator_has_service_worker() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("typeof navigator.serviceWorker === 'object'")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn sw_register_returns_promise() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval(
-                r#"
-                var p = navigator.serviceWorker.register('/sw.js', { scope: '/app/' });
-                typeof p.then === 'function'
-                "#,
-            )
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn sw_register_calls_lumen_primitive() {
-        // Pass a file URL so that _sw_origin = 'file://' (protocol + '//' + host).
-        let rt = runtime_with_url("file:///test.html");
-        rt.eval("navigator.serviceWorker.register('/sw.js', { scope: '/' });")
-            .unwrap();
-        let result = rt.eval("_lumen_sw_has_registration('file://')").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn sw_registration_has_installing_worker() {
-        let rt = runtime_with_url("https://example.com/");
-        let result = rt
-            .eval(
-                r#"
-                var reg = null;
-                navigator.serviceWorker.register('/sw.js', { scope: '/' })
-                    .then(function(r) { reg = r; });
-                _lumen_drain_microtasks();
-                reg !== null && reg.installing !== null
-                "#,
-            )
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn sw_worker_has_state_installing() {
-        let rt = runtime_with_url("https://example.com/");
-        let result = rt
-            .eval(
-                r#"
-                var reg = null;
-                navigator.serviceWorker.register('/sw.js')
-                    .then(function(r) { reg = r; });
-                _lumen_drain_microtasks();
-                reg.installing.state
-                "#,
-            )
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::String("installing".into()));
-    }
-
-    #[test]
-    fn sw_container_has_event_target() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval(
-                r#"
-                typeof navigator.serviceWorker.addEventListener === 'function' &&
-                typeof navigator.serviceWorker.removeEventListener === 'function'
-                "#,
-            )
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn sw_get_registration_returns_promise() {
-        let rt = runtime_with_url("https://example.com/");
-        rt.eval("navigator.serviceWorker.register('/sw.js', { scope: '/' });")
-            .unwrap();
-        let result = rt
-            .eval("typeof navigator.serviceWorker.getRegistration('/').then === 'function'")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn sw_get_registrations_returns_array() {
-        let rt = runtime_with_url("https://example.com/");
-        rt.eval("navigator.serviceWorker.register('/sw.js');").unwrap();
-        let result = rt
-            .eval(
-                r#"
-                var arr = null;
-                navigator.serviceWorker.getRegistrations()
-                    .then(function(regs) { arr = regs; });
-                _lumen_drain_microtasks();
-                Array.isArray(arr) && arr.length === 1
-                "#,
-            )
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn sw_ready_property_is_promise() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("typeof navigator.serviceWorker.ready.then === 'function'")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn sw_registration_has_event_target() {
-        let rt = runtime_with_url("https://example.com/");
-        let result = rt
-            .eval(
-                r#"
-                var reg = null;
-                navigator.serviceWorker.register('/sw.js')
-                    .then(function(r) { reg = r; });
-                _lumen_drain_microtasks();
-                typeof reg.addEventListener === 'function' &&
-                typeof reg.dispatchEvent === 'function'
-                "#,
-            )
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn sw_persist_and_load_no_throw() {
-        let rt = runtime_with_url("https://example.com/");
-        // Without a backend, persist/load are no-ops — must not throw.
-        rt.eval("_lumen_sw_persist('https://example.com', '[{\"scope\":\"/\"}]');")
-            .unwrap();
-        let result = rt.eval("_lumen_sw_load('https://example.com')").unwrap();
-        assert!(matches!(
-            result,
-            lumen_core::JsValue::Null | lumen_core::JsValue::Undefined
-        ));
-    }
-
-    #[test]
-    fn sw_unregister_removes_registration() {
-        let rt = runtime_with_url("https://example.com/");
-        rt.eval("navigator.serviceWorker.register('/sw.js', { scope: '/app/' });")
-            .unwrap();
-        rt.eval(
-            r#"
-            navigator.serviceWorker.getRegistration('/app/')
-                .then(function(reg) { if (reg) reg.unregister(); });
-            _lumen_drain_microtasks();
-            "#,
-        )
-        .unwrap();
-        let result = rt
-            .eval(
-                r#"
-                var arr = null;
-                navigator.serviceWorker.getRegistrations()
-                    .then(function(r) { arr = r; });
-                _lumen_drain_microtasks();
-                arr.length
-                "#,
-            )
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Number(0.0));
-    }
-
-    #[test]
-    fn sw_worker_post_message_does_not_throw() {
-        let rt = runtime_with_url("https://example.com/");
-        let result = rt
-            .eval(
-                r#"
-                var threw = false;
-                var reg = null;
-                navigator.serviceWorker.register('/sw.js')
-                    .then(function(r) { reg = r; });
-                _lumen_drain_microtasks();
-                try { reg.installing.postMessage('hello'); } catch(e) { threw = true; }
-                !threw
-                "#,
-            )
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    // ── caches API ────────────────────────────────────────────────────────────
-
-    #[test]
-    fn caches_object_exists() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt.eval("typeof caches === 'object'").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn caches_open_returns_promise() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("typeof caches.open('v1').then === 'function'")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn cache_has_returns_false_for_unknown() {
-        let rt = runtime_with_dom(make_doc());
-        // has() returns promise; we check the primitive directly.
-        let result = rt
-            .eval("_lumen_cache_has('', 'nonexistent')")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(false));
-    }
-
-    // helper: put a minimal GET 200 cache entry via the native binding
-    fn cache_put_test(rt: &QuickJsRuntime, origin: &str, name: &str, url: &str) {
-        rt.eval(&format!(
-            r#"_lumen_cache_put('{origin}', '{name}', '{url}', '{{"method":"GET","status":200,"statusText":"OK","headers":{{}}}}', [72, 101, 108, 108, 111]);"#
-        ))
-        .unwrap();
-    }
-
-    #[test]
-    fn cache_put_and_match_roundtrip() {
-        let rt = runtime_with_dom(make_doc());
-        cache_put_test(&rt, "", "v1", "https://x.com/a");
-        assert_eq!(
-            rt.eval("_lumen_cache_has('', 'v1')").unwrap(),
-            lumen_core::JsValue::Bool(true)
-        );
-        let keys = rt.eval("_lumen_cache_keys('', 'v1')").unwrap();
-        assert_eq!(
-            keys,
-            lumen_core::JsValue::Array(vec![lumen_core::JsValue::String("https://x.com/a".into())])
-        );
-    }
-
-    #[test]
-    fn cache_match_returns_body_bytes() {
-        let rt = runtime_with_dom(make_doc());
-        cache_put_test(&rt, "", "v1", "https://x.com/a");
-        // _lumen_cache_match returns a Uint8Array-like value (body bytes)
-        let len = rt
-            .eval("_lumen_cache_match('', 'v1', 'https://x.com/a').length")
-            .unwrap();
-        assert_eq!(len, lumen_core::JsValue::Number(5.0)); // "Hello" = 5 bytes
-    }
-
-    #[test]
-    fn cache_match_info_returns_json_metadata() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(r#"_lumen_cache_put('', 'v1', 'https://x.com/css', '{"method":"GET","status":304,"statusText":"Not Modified","headers":{"content-type":"text/css"}}', []);"#)
-            .unwrap();
-        let info_str = rt
-            .eval("_lumen_cache_match_info('', 'v1', 'https://x.com/css')")
-            .unwrap();
-        if let lumen_core::JsValue::String(s) = info_str {
-            assert!(s.contains("304"));
-            assert!(s.contains("Not Modified"));
-            assert!(s.contains("content-type"));
-        } else {
-            panic!("expected String from _lumen_cache_match_info");
-        }
-    }
-
-    #[test]
-    fn cache_match_info_returns_none_on_miss() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt
-            .eval("_lumen_cache_match_info('', 'v1', 'https://x.com/missing') === undefined")
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn cache_match_any_returns_none_on_miss() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("_lumen_cache_match_any('', 'https://x.com/missing') === undefined")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn cache_match_any_info_finds_across_caches() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(r#"_lumen_cache_put('', 'static', 'https://x.com/style.css', '{"method":"GET","status":200,"statusText":"OK","headers":{}}', []);"#)
-            .unwrap();
-        let r = rt
-            .eval("_lumen_cache_match_any_info('', 'https://x.com/style.css') !== undefined")
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn cache_delete_returns_true_when_found() {
-        let rt = runtime_with_dom(make_doc());
-        cache_put_test(&rt, "", "v1", "https://x.com/b");
-        let r = rt
-            .eval("_lumen_cache_delete('', 'v1', 'https://x.com/b')")
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-        let keys = rt.eval("_lumen_cache_keys('', 'v1')").unwrap();
-        assert_eq!(keys, lumen_core::JsValue::Array(vec![]));
-    }
-
-    #[test]
-    fn cache_delete_returns_false_on_miss() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt
-            .eval("_lumen_cache_delete('', 'v1', 'https://x.com/nonexistent')")
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(false));
-    }
-
-    #[test]
-    fn cache_keys_full_returns_method() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(r#"_lumen_cache_put('', 'v1', 'https://x.com/api', '{"method":"POST","status":201,"statusText":"Created","headers":{}}', []);"#)
-            .unwrap();
-        let r = rt
-            .eval("_lumen_cache_keys_full('', 'v1').indexOf('POST') >= 0")
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn cache_delete_cache_returns_true_when_found() {
-        let rt = runtime_with_dom(make_doc());
-        cache_put_test(&rt, "", "v1", "https://x.com/r");
-        let r = rt
-            .eval("_lumen_cache_delete_cache('', 'v1')")
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-        assert_eq!(
-            rt.eval("_lumen_cache_has('', 'v1')").unwrap(),
-            lumen_core::JsValue::Bool(false)
-        );
-    }
-
-    #[test]
-    fn cache_delete_cache_returns_false_when_missing() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt
-            .eval("_lumen_cache_delete_cache('', 'nonexistent')")
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(false));
-    }
-
-    #[test]
-    fn cache_names_lists_opened_caches() {
-        let rt = runtime_with_dom(make_doc());
-        cache_put_test(&rt, "", "alpha", "https://x.com/r");
-        cache_put_test(&rt, "", "beta", "https://x.com/s");
-        let mut names = match rt.eval("_lumen_cache_names('')").unwrap() {
-            lumen_core::JsValue::Array(a) => a
-                .into_iter()
-                .filter_map(|v| {
-                    if let lumen_core::JsValue::String(s) = v { Some(s) } else { None }
-                })
-                .collect::<Vec<_>>(),
-            _ => vec![],
-        };
-        names.sort();
-        assert_eq!(names, vec!["alpha".to_string(), "beta".to_string()]);
-    }
-
-    #[test]
-    fn caches_open_returns_cache_with_match() {
-        let rt = runtime_with_dom(make_doc());
-        // Open cache first to obtain handle, then put with same _sw_origin, then match.
-        let r = rt.eval(r#"
-            var _cache_oc = null;
-            caches.open('my-cache').then(function(c) { _cache_oc = c; });
-            _lumen_drain_microtasks();
-            _lumen_cache_put(_sw_origin, 'my-cache', 'https://x.com/data',
-                '{"method":"GET","status":200,"statusText":"OK","headers":{}}', [1,2,3]);
-            var _result_oc;
-            _cache_oc.match('https://x.com/data').then(function(r) { _result_oc = r !== undefined; });
-            _lumen_drain_microtasks();
-            _result_oc
-        "#).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn caches_has_returns_true_after_put() {
-        let rt = runtime_with_dom(make_doc());
-        cache_put_test(&rt, "", "my-cache", "https://x.com/x");
-        let r = rt
-            .eval("_lumen_cache_has('', 'my-cache')")
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn caches_delete_returns_true_when_found() {
-        let rt = runtime_with_dom(make_doc());
-        cache_put_test(&rt, "", "old-cache", "https://x.com/z");
-        // caches.delete returns a Promise<bool>; verify via native binding
-        let had = rt.eval("_lumen_cache_delete_cache('', 'old-cache')").unwrap();
-        assert_eq!(had, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn cache_matchall_returns_all_entries() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(r#"
-            var _cache_ma = null;
-            caches.open('v1-ma').then(function(c) { _cache_ma = c; });
-            _lumen_drain_microtasks();
-            _lumen_cache_put(_sw_origin, 'v1-ma', 'https://x.com/a', '{"method":"GET","status":200,"statusText":"OK","headers":{}}', [1]);
-            _lumen_cache_put(_sw_origin, 'v1-ma', 'https://x.com/b', '{"method":"GET","status":200,"statusText":"OK","headers":{}}', [2]);
-            var _all;
-            _cache_ma.matchAll().then(function(arr) { _all = arr.length; });
-            _lumen_drain_microtasks();
-            _all
-        "#).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Number(2.0));
-    }
-
-    #[test]
-    fn cache_keys_returns_request_objects() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(r#"
-            var _cache_kr = null;
-            caches.open('v1-kr').then(function(c) { _cache_kr = c; });
-            _lumen_drain_microtasks();
-            _lumen_cache_put(_sw_origin, 'v1-kr', 'https://x.com/page', '{"method":"GET","status":200,"statusText":"OK","headers":{}}', []);
-            var _url_kr;
-            _cache_kr.keys().then(function(reqs) { _url_kr = reqs[0] && reqs[0].url; });
-            _lumen_drain_microtasks();
-            _url_kr
-        "#).unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("https://x.com/page".into()));
-    }
-
-    #[test]
-    fn window_has_caches() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt.eval("typeof window.caches === 'object'").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    // ── Cache API — CacheBackend trait dispatch tests ─────────────────────────
-    //
-    // MockCacheBackend exercises the CacheBackend dispatch path in install_primitives
-    // without pulling in lumen-storage as a test dependency. The SQLite
-    // implementation is separately tested in lumen-storage::cache_storage.
-
-    type MockCacheEntry = (String, Vec<u8>);
-    type MockCacheMap = std::collections::HashMap<
-        String, // origin
-        std::collections::HashMap<
-            String, // cache_name
-            std::collections::HashMap<String, MockCacheEntry>, // url → (meta, body)
-        >,
-    >;
-
-    struct MockCacheBackend {
-        data: Mutex<MockCacheMap>,
-    }
-
-    impl MockCacheBackend {
-        fn new() -> Self {
-            Self { data: Mutex::new(std::collections::HashMap::new()) }
-        }
-    }
-
-    impl lumen_core::ext::CacheBackend for MockCacheBackend {
-        fn cache_put(&self, origin: &str, name: &str, url: &str, meta_json: &str, body: &[u8]) {
-            self.data.lock().unwrap()
-                .entry(origin.to_owned()).or_default()
-                .entry(name.to_owned()).or_default()
-                .insert(url.to_owned(), (meta_json.to_owned(), body.to_vec()));
-        }
-        fn cache_match(&self, origin: &str, name: &str, url: &str) -> Option<(String, Vec<u8>)> {
-            self.data.lock().unwrap()
-                .get(origin)?.get(name)?.get(url)
-                .map(|(m, b)| (m.clone(), b.clone()))
-        }
-        fn cache_match_any(&self, origin: &str, url: &str) -> Option<(String, Vec<u8>)> {
-            let g = self.data.lock().unwrap();
-            let caches = g.get(origin)?;
-            for c in caches.values() {
-                if let Some((m, b)) = c.get(url) { return Some((m.clone(), b.clone())); }
-            }
-            None
-        }
-        fn cache_delete(&self, origin: &str, name: &str, url: &str) -> bool {
-            self.data.lock().unwrap()
-                .get_mut(origin).and_then(|c| c.get_mut(name))
-                .and_then(|c| c.remove(url)).is_some()
-        }
-        fn cache_keys(&self, origin: &str, name: &str) -> Vec<(String, String)> {
-            self.data.lock().unwrap()
-                .get(origin).and_then(|c| c.get(name))
-                .map(|c| c.iter().map(|(u, (meta, _))| {
-                    let method = cache_meta_method(meta);
-                    (u.clone(), method)
-                }).collect())
-                .unwrap_or_default()
-        }
-        fn cache_has(&self, origin: &str, name: &str) -> bool {
-            self.data.lock().unwrap()
-                .get(origin).and_then(|c| c.get(name))
-                .map(|c| !c.is_empty()).unwrap_or(false)
-        }
-        fn cache_delete_cache(&self, origin: &str, name: &str) -> bool {
-            self.data.lock().unwrap()
-                .get_mut(origin).and_then(|c| c.remove(name)).is_some()
-        }
-        fn cache_names(&self, origin: &str) -> Vec<String> {
-            self.data.lock().unwrap()
-                .get(origin).map(|c| c.keys().cloned().collect()).unwrap_or_default()
-        }
-    }
-
-    fn runtime_with_cache_backend() -> QuickJsRuntime {
-        let be: Arc<dyn lumen_core::ext::CacheBackend> = Arc::new(MockCacheBackend::new());
-        let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(make_doc(), "https://example.com/", None, None, None, None, None, None, Some(be), None, false)
-            .unwrap();
-        rt
-    }
-
-    fn sqlite_cache_put(rt: &QuickJsRuntime, cache: &str, url: &str) {
-        rt.eval(&format!(
-            r#"_lumen_cache_put('https://example.com/', '{cache}', '{url}', '{{"method":"GET","status":200,"statusText":"OK","headers":{{}}}}', [72,101,108,108,111]);"#
-        ))
-        .unwrap();
-    }
-
-    #[test]
-    fn sqlite_backend_put_and_has() {
-        let rt = runtime_with_cache_backend();
-        sqlite_cache_put(&rt, "v1", "https://example.com/main.js");
-        let r = rt.eval("_lumen_cache_has('https://example.com/', 'v1')").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn sqlite_backend_match_returns_body() {
-        let rt = runtime_with_cache_backend();
-        sqlite_cache_put(&rt, "v1", "https://example.com/style.css");
-        let len = rt.eval("_lumen_cache_match('https://example.com/', 'v1', 'https://example.com/style.css').length").unwrap();
-        assert_eq!(len, lumen_core::JsValue::Number(5.0)); // "Hello" = 5 bytes
-    }
-
-    #[test]
-    fn sqlite_backend_match_info_roundtrip() {
-        let rt = runtime_with_cache_backend();
-        rt.eval(r#"_lumen_cache_put('https://example.com/', 'v1', 'https://example.com/api',
-            '{"method":"GET","status":304,"statusText":"Not Modified","headers":{"etag":"abc123"}}', []);"#)
-            .unwrap();
-        let meta = rt.eval("_lumen_cache_match_info('https://example.com/', 'v1', 'https://example.com/api')").unwrap();
-        if let lumen_core::JsValue::String(s) = meta {
-            assert!(s.contains("304"));
-            assert!(s.contains("etag"));
-        } else {
-            panic!("expected String from _lumen_cache_match_info (sqlite backend)");
-        }
-    }
-
-    #[test]
-    fn sqlite_backend_match_any_searches_all_caches() {
-        let rt = runtime_with_cache_backend();
-        sqlite_cache_put(&rt, "static", "https://example.com/logo.png");
-        let body = rt.eval("_lumen_cache_match_any('https://example.com/', 'https://example.com/logo.png') !== null && _lumen_cache_match_any('https://example.com/', 'https://example.com/logo.png') !== undefined").unwrap();
-        assert_eq!(body, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn sqlite_backend_delete_entry() {
-        let rt = runtime_with_cache_backend();
-        sqlite_cache_put(&rt, "v1", "https://example.com/old");
-        let deleted = rt.eval("_lumen_cache_delete('https://example.com/', 'v1', 'https://example.com/old')").unwrap();
-        assert_eq!(deleted, lumen_core::JsValue::Bool(true));
-        let after = rt.eval("_lumen_cache_match('https://example.com/', 'v1', 'https://example.com/old') === undefined").unwrap();
-        assert_eq!(after, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn sqlite_backend_keys_lists_urls() {
-        let rt = runtime_with_cache_backend();
-        sqlite_cache_put(&rt, "v1", "https://example.com/a");
-        sqlite_cache_put(&rt, "v1", "https://example.com/b");
-        let keys = rt.eval("_lumen_cache_keys('https://example.com/', 'v1')").unwrap();
-        if let lumen_core::JsValue::Array(arr) = keys {
-            assert_eq!(arr.len(), 2);
-        } else {
-            panic!("expected Array");
-        }
-    }
-
-    #[test]
-    fn sqlite_backend_delete_cache() {
-        let rt = runtime_with_cache_backend();
-        sqlite_cache_put(&rt, "tmp", "https://example.com/x");
-        let del = rt.eval("_lumen_cache_delete_cache('https://example.com/', 'tmp')").unwrap();
-        assert_eq!(del, lumen_core::JsValue::Bool(true));
-        let has = rt.eval("_lumen_cache_has('https://example.com/', 'tmp')").unwrap();
-        assert_eq!(has, lumen_core::JsValue::Bool(false));
-    }
-
-    #[test]
-    fn sqlite_backend_cache_names() {
-        let rt = runtime_with_cache_backend();
-        sqlite_cache_put(&rt, "alpha", "https://example.com/1");
-        sqlite_cache_put(&rt, "beta", "https://example.com/2");
-        let names = rt.eval("_lumen_cache_names('https://example.com/')").unwrap();
-        if let lumen_core::JsValue::Array(arr) = names {
-            let strs: Vec<String> = arr
-                .into_iter()
-                .filter_map(|v| if let lumen_core::JsValue::String(s) = v { Some(s) } else { None })
-                .collect();
-            assert!(strs.contains(&"alpha".to_string()));
-            assert!(strs.contains(&"beta".to_string()));
-        } else {
-            panic!("expected Array");
-        }
-    }
-
-    #[test]
-    fn sqlite_backend_match_miss_returns_none() {
-        let rt = runtime_with_cache_backend();
-        let r = rt.eval("_lumen_cache_match('https://example.com/', 'v1', 'https://example.com/missing') === undefined").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn sqlite_backend_keys_full_includes_method() {
-        let rt = runtime_with_cache_backend();
-        rt.eval(r#"_lumen_cache_put('https://example.com/', 'v1', 'https://example.com/post',
-            '{"method":"POST","status":201,"statusText":"Created","headers":{}}', []);"#)
-            .unwrap();
-        let r = rt.eval("_lumen_cache_keys_full('https://example.com/', 'v1').indexOf('POST') >= 0").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn sqlite_backend_has_false_when_empty() {
-        let rt = runtime_with_cache_backend();
-        let r = rt.eval("_lumen_cache_has('https://example.com/', 'nonexistent')").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(false));
-    }
-
-    #[test]
-    fn sqlite_backend_delete_returns_false_on_miss() {
-        let rt = runtime_with_cache_backend();
-        let r = rt.eval("_lumen_cache_delete('https://example.com/', 'v1', 'https://example.com/nosuchurl')").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(false));
     }
 
     // ── IME composition API ───────────────────────────────────────────────────
@@ -19655,7 +18877,7 @@ mod tests {
             var _p = document.createElement('ul');
             document.body.appendChild(_p);
             var _a = document.createElement('li'); _a.id = 'alpha'; _p.appendChild(_a);
-            var _b = document.createElement('li'); _b.name = 'beta'; _p.appendChild(_b);
+            var _b = document.createElement('li'); _b.setAttribute('name', 'beta'); _p.appendChild(_b);
             _p.appendChild(document.createElement('li'));
         "#).unwrap();
         // for-in yields only the enumerable indexed keys.
@@ -24330,6 +23552,39 @@ mod tests {
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
 
+    /// BUG-437: the shell asks the shim whether a form submission may proceed.
+    /// A page handler calling `preventDefault()` must come back as `false`, and
+    /// the event must reach listeners as a trusted, bubbling `SubmitEvent`.
+    #[test]
+    fn dispatch_submit_event_reports_prevent_default() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var form = document.getElementById('main'); \
+             var seen = null; \
+             form.addEventListener('submit', function(e) { seen = e; e.preventDefault(); }); \
+             var proceed = _lumen_dispatch_submit_event(form.__nid__, -1); \
+             proceed === false && seen !== null && seen.type === 'submit' && \
+             seen.isTrusted === true && seen.bubbles === true && seen.submitter === null"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    /// BUG-437: without `preventDefault()` the shell must still submit — the
+    /// dispatch reports `true` and exposes the submitter element.
+    #[test]
+    fn dispatch_submit_event_uncancelled_proceeds_with_submitter() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var form = document.getElementById('main'); \
+             var btn = form.querySelector('.highlight'); \
+             var got = null; \
+             form.addEventListener('submit', function(e) { got = e.submitter; }); \
+             var proceed = _lumen_dispatch_submit_event(form.__nid__, btn.__nid__); \
+             proceed === true && got !== null && got.__nid__ === btn.__nid__"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
     #[test]
     fn compositionevent_data() {
         let rt = runtime_with_dom(make_doc());
@@ -25789,6 +25044,23 @@ mod tests {
         let rt = runtime_with_dom(make_form_doc());
         assert!(bool_eval(&rt,
             "document.getElementById('inp').type === 'text'"));
+    }
+
+    // BUG-436: the shell performs the text-insertion default action itself
+    // (DOM `value` attribute) and then calls `_lumen_set_field_value` so the
+    // shim's value shadow agrees. Without the sync a field the page had ever
+    // assigned through script would keep reporting the stale script value to
+    // the `input` listener that fires right after.
+    #[test]
+    fn set_field_value_syncs_value_shadow() {
+        let rt = runtime_with_dom(make_form_doc());
+        assert!(bool_eval(&rt,
+            "(function() { \
+               var inp = document.getElementById('inp'); \
+               inp.value = 'stale'; \
+               _lumen_set_field_value(inp.__nid__, 'abc'); \
+               return inp.value === 'abc'; \
+             })()"));
     }
 
     // ── HTMLInputElement.showPicker() tests ────────────────────────────────────
@@ -29412,5 +28684,2597 @@ mod tests {
             )
             .unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    /// V8 port of the "Core DOM basics" test row (S12b-24-core), the first slice of
+    /// the `dom.rs` test-monolith migration described in
+    /// `docs/tasks/ph3-v8-migration.md`: console/SVG/node identity/`self`&`window`
+    /// aliasing, Canvas 2D, `getElementById`/`querySelector`/attributes/text content/
+    /// the `Image` constructor, `alert`/`print`, timers + `scheduler.postTask`, and
+    /// the History API.
+    ///
+    /// The 99 tests moved here verbatim from the QuickJS monolith above — their bodies
+    /// are `rt.eval(...)` plus a handful of `update_layout_rects`/`flush_canvas_updates`/
+    /// `register_img_bitmaps`/`take_*` calls that `V8JsRuntime` mirrors one-for-one — so
+    /// the only edit was which runtime the fixture builds. One assertion did change:
+    /// see `canvas_get_context_webgl_returns_functional_context`.
+    ///
+    /// Gated on `v8-backend` like every other ported module (see `csp.rs`,
+    /// `pointer_capture.rs`): the QuickJS copies are gone, V8 is the default engine
+    /// (ADR-018) and carries the coverage from here on.
+    #[cfg(feature = "v8-backend")]
+    mod v8_core {
+        use super::*;
+        use crate::v8_runtime::V8JsRuntime;
+
+        /// V8 twin of [`super::runtime_with_dom`]: same fixture document, same
+        /// `install_dom` argument list (the two signatures are identical), same
+        /// `_LUMEN_EXTENSION_ACTIVE` pre-eval so `chrome.runtime` is present.
+        fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
+            let rt = V8JsRuntime::new().unwrap();
+            rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+            rt.install_dom(doc, "", None, None, None, None, None, None, None, None, false)
+                .unwrap();
+            rt
+        }
+
+        /// Wrap raw RGBA8 test pixels in a shared `Arc<Image>` for `register_img_bitmaps`
+        /// (BUG-272 срез 20: the store shares the decoded `Arc<Image>` rather than an
+        /// eager RGBA8 copy). `data` is a `width × height` RGBA8 buffer. Moved down here
+        /// with the `drawImage(<img>)` tests — its only callers.
+        fn test_img_bitmap(width: u32, height: u32, data: Vec<u8>) -> Arc<lumen_image::Image> {
+            Arc::new(lumen_image::Image {
+                width,
+                height,
+                format: lumen_image::PixelFormat::Rgba8,
+                data,
+                icc_profile: None,
+            })
+        }
+
+        /// V8 twin of [`super::runtime_with_url`]: the fixture document installed
+        /// against a concrete page URL, which is what the History API tests need
+        /// (`pushState` resolves relative URLs against it).
+        fn v8_runtime_with_url(url: &str) -> V8JsRuntime {
+            let rt = V8JsRuntime::new().unwrap();
+            rt.install_dom(make_doc(), url, None, None, None, None, None, None, None, None, false)
+                .unwrap();
+            rt
+        }
+
+        #[test]
+        fn console_log_does_not_crash() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("console.log('hello from test')").unwrap();
+        }
+
+        // BUG-243: dynamic SVG built via document.createElementNS must produce NATIVE
+        // arena nodes (carrying __nid__) so that appendChild attaches them to the Rust
+        // document tree and layout/paint can see them. The previous svg.rs override
+        // returned detached `new Ctor()` objects without __nid__, which native
+        // appendChild silently dropped — leaving script-built SVG invisible.
+        #[test]
+        fn create_element_ns_builds_native_svg_tree() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "var NS = 'http://www.w3.org/2000/svg';\
+                     var svg = document.createElementNS(NS, 'svg');\
+                     var rect = document.createElementNS(NS, 'rect');\
+                     svg.appendChild(rect);\
+                     document.getElementById('main').appendChild(svg);\
+                     typeof svg.__nid__ === 'number' && typeof rect.__nid__ === 'number' \
+                       && document.querySelectorAll('svg').length === 1 \
+                       && document.querySelectorAll('rect').length === 1",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        // BUG-243: the repro page (docs/roadmap-svg-cleaves.html) builds its UI with
+        // ParentNode.append() (variadic, accepts strings) and clears the SVG via
+        // `while (svg.firstChild) svg.removeChild(svg.firstChild)`. Both were missing on
+        // native elements, so the page threw "not a function" before rendering. Verify
+        // append() attaches node+string children and firstChild/removeChild can clear them.
+        #[test]
+        fn element_append_and_first_child_round_trip() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "var box = document.createElement('div');\
+                     var a = document.createElement('span');\
+                     var b = document.createElement('b');\
+                     box.append(a, b);\
+                     var built = box.firstChild.__nid__ === a.__nid__ && box.lastChild.__nid__ === b.__nid__;\
+                     box.append('trailing text');\
+                     var n = 0; while (box.firstChild) { box.removeChild(box.firstChild); if (++n > 20) break; }\
+                     built && box.firstChild === null",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        // BUG-291: repeated wraps of the same underlying node (via .lastChild,
+        // .parentElement, .children, etc.) must return the SAME JS object, not a
+        // fresh wrapper each time. `testharness.js`'s `Output.show_results` relies
+        // on `tbody.lastChild.lastChild.appendChild(...)` reading back the very
+        // node it just appended two statements earlier — with fresh wrappers each
+        // access, `tbody.lastChild` after appending a child-of-a-child came back
+        // stale/inconsistent and the nested `.lastChild` was `null`, throwing
+        // `TypeError: Cannot read properties of null (reading 'appendChild')` and
+        // aborting `notify_complete()` before the WPT result callback ran.
+        #[test]
+        fn repeated_node_access_returns_identical_wrapper() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "var tbody = document.createElement('tbody');\
+                     var tr = document.createElement('tr');\
+                     var td = document.createElement('td');\
+                     tr.appendChild(td);\
+                     tbody.appendChild(tr);\
+                     var identityHolds = tbody.lastChild === tr && tr.lastChild === td;\
+                     var expando = tbody.lastChild;\
+                     expando._probe = 'kept';\
+                     var expandoSurvives = tbody.lastChild._probe === 'kept';\
+                     var nested = tbody.lastChild.lastChild;\
+                     var assertionsNode = document.createElement('div');\
+                     var appended = nested !== null && (nested.appendChild(assertionsNode), true);\
+                     identityHolds && expandoSurvives && appended",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        // BUG-243: installing the SVG shim must not abort. It previously threw at
+        // `class SVGElement extends Element` because no global `Element` class exists,
+        // which killed the whole shim (and silently disabled SVG typed interfaces).
+        #[test]
+        fn svg_shim_installs_and_exposes_svg_element() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval("typeof window.SVGElement === 'function' && typeof window.SVGSVGElement === 'function'")
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        // BUG-233: `self` must be defined as a global aliasing `window`
+        // (WindowOrWorkerGlobalScope). Webpack runtimes reference bare `self`;
+        // without this they throw `ReferenceError: self is not defined`.
+        #[test]
+        fn self_window_globalthis_are_the_same_object() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "typeof self !== 'undefined' \
+                     && self === window \
+                     && window.self === window \
+                     && window.window === window \
+                     && globalThis.self === window \
+                     && window.top === window \
+                     && window.parent === window \
+                     && window.frames === window",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        // BUG-233: a property stored on `self` must be visible through `window`
+        // and vice-versa, because webpack stores its chunk registry on `self`
+        // and later reads it back. They are the same object reference.
+        #[test]
+        fn self_and_window_share_property_storage() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "(self.webpackChunk = self.webpackChunk || []).push([1]); \
+                     Array.isArray(window.webpackChunk) && window.webpackChunk.length === 1",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        // BUG-280: `window` must literally BE the real QuickJS global object, not
+        // a plain object cross-referenced with `globalThis` via a fixed alias
+        // list. Any property assigned via `window.foo = ...` — including names
+        // not known in advance, e.g. testharness.js's dynamic `expose(fn, name)`
+        // (`window[name] = fn`) — must resolve as a bare, unqualified identifier.
+        #[test]
+        fn dynamic_window_property_is_bare_reachable() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "window.__bug280_probe = function() { return 42; }; \
+                     typeof __bug280_probe === 'function' && __bug280_probe() === 42",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        // BUG-280: same for a property assigned via bare `self`, matching the
+        // real-browser invariant `self === window === globalThis` (same object).
+        #[test]
+        fn dynamic_self_property_is_bare_reachable() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "self.__bug280_probe2 = 'hi'; \
+                     typeof __bug280_probe2 !== 'undefined' && __bug280_probe2 === 'hi' \
+                     && window === globalThis",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn get_element_by_id_found() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.getElementById('main') !== null")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn get_element_by_id_not_found() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.getElementById('nonexistent') === null")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn get_element_by_id_tag_name() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.getElementById('main').tagName")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("DIV".into()));
+        }
+
+        #[test]
+        fn query_selector_by_id() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.querySelector('#main') !== null")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn query_selector_by_class() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.querySelector('.highlight') !== null")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn query_selector_by_tag() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt.eval("document.querySelector('span') !== null").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        // BUG-291: Element.querySelector(All) must be scoped to the calling
+        // element's descendants, and must therefore also work on a subtree that
+        // is not (yet) attached to the document — `document.querySelector` has no
+        // path to reach such nodes at all. Before the fix, `_lumen_query_selector`
+        // ignored `this` and always searched from `document.root()`, so this
+        // returned `null` and crashed `testharness.js`'s results renderer
+        // (`Output.show_results`) with `Cannot read properties of null`.
+        #[test]
+        fn element_query_selector_finds_descendant_in_detached_subtree() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval(
+                    "var table = document.createElement('table'); \
+                     var tbody = document.createElement('tbody'); \
+                     table.appendChild(tbody); \
+                     table.querySelector('tbody') === tbody",
+                )
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn element_query_selector_all_finds_matches_in_detached_subtree() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval(
+                    "var ul = document.createElement('ul'); \
+                     ul.appendChild(document.createElement('li')); \
+                     ul.appendChild(document.createElement('li')); \
+                     ul.querySelectorAll('li').length",
+                )
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(2.0));
+        }
+
+        // BUG-291: Element.querySelector must be scoped to *descendants* — it
+        // must not match the calling element itself, nor elements outside its
+        // subtree (the pre-fix implementation searched the whole document).
+        #[test]
+        fn element_query_selector_excludes_self_and_siblings() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval(
+                    "var a = document.createElement('div'); a.id = 'scope'; \
+                     var b = document.createElement('div'); b.id = 'outside'; \
+                     document.body.appendChild(a); document.body.appendChild(b); \
+                     a.querySelector('#scope') === null && a.querySelector('#outside') === null",
+                )
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        // BUG-291: repeated access to the same DOM node must yield the same JS
+        // wrapper object (`===` identity), matching real engines and required by
+        // `testharness.js`'s results renderer (`tbody.lastChild === row`-style
+        // checks). Before the fix, `_lumen_make_element` minted a fresh object on
+        // every call.
+        #[test]
+        fn repeated_node_access_yields_stable_identity() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval(
+                    "var parent = document.createElement('div'); \
+                     var child = document.createElement('span'); \
+                     parent.appendChild(child); \
+                     parent.lastChild === child && \
+                     parent.firstChild === parent.lastChild && \
+                     parent.children[0] === child && \
+                     document.getElementById('main') === document.getElementById('main')",
+                )
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn text_content_get() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.getElementById('main').textContent")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("Hello".into()));
+        }
+
+        #[test]
+        fn text_content_set_mutates_dom() {
+            let doc = make_doc();
+            let rt = v8_runtime_with_dom(Arc::clone(&doc));
+            rt.eval("document.getElementById('main').textContent = 'World';")
+                .unwrap();
+            drop(rt);
+            let doc = Arc::try_unwrap(doc).unwrap().into_inner().unwrap();
+            // The div#main should now have a single text child "World".
+            let body_id = find_element_by_tag(&doc, "body").unwrap();
+            let div_id = doc.get(body_id).children[0];
+            let text = collect_text_content(&doc, div_id);
+            assert_eq!(text, "World");
+        }
+
+        #[test]
+        fn set_attribute_mutates_dom() {
+            let doc = make_doc();
+            let rt = v8_runtime_with_dom(Arc::clone(&doc));
+            rt.eval("document.getElementById('main').setAttribute('data-x', '42');")
+                .unwrap();
+            drop(rt);
+            let doc = Arc::try_unwrap(doc).unwrap().into_inner().unwrap();
+            let body_id = find_element_by_tag(&doc, "body").unwrap();
+            let div_id = doc.get(body_id).children[0];
+            assert_eq!(doc.get(div_id).get_attr("data-x"), Some("42"));
+        }
+
+        #[test]
+        fn get_attribute_returns_value() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.getElementById('main').getAttribute('id')")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("main".into()));
+        }
+
+        #[test]
+        fn get_attribute_returns_null_for_missing() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.getElementById('main').getAttribute('data-missing') === null")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn document_title_get() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt.eval("document.title").unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("Test Page".into()));
+        }
+
+        #[test]
+        fn document_title_set() {
+            let doc = make_doc();
+            let rt = v8_runtime_with_dom(Arc::clone(&doc));
+            rt.eval("document.title = 'New Title';").unwrap();
+            drop(rt);
+            let doc = Arc::try_unwrap(doc).unwrap().into_inner().unwrap();
+            let title_text = find_element_by_tag(&doc, "title")
+                .map(|nid| collect_text_content(&doc, nid))
+                .unwrap_or_default();
+            assert_eq!(title_text, "New Title");
+        }
+
+        #[test]
+        fn document_body_not_null() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt.eval("document.body !== null").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn create_element_and_append() {
+            let doc = make_doc();
+            let rt = v8_runtime_with_dom(Arc::clone(&doc));
+            rt.eval(
+                "var p = document.createElement('p'); \
+                 p.textContent = 'new paragraph'; \
+                 document.body.appendChild(p);",
+            )
+            .unwrap();
+            drop(rt);
+            let doc = Arc::try_unwrap(doc).unwrap().into_inner().unwrap();
+            let body_id = find_element_by_tag(&doc, "body").unwrap();
+            let body = doc.get(body_id);
+            // body should now have 2 children: the original div + the new <p>
+            assert_eq!(body.children.len(), 2);
+            let p_id = body.children[1];
+            assert_eq!(
+                doc.get(p_id)
+                    .element_name()
+                    .map(|n| n.local.as_str()),
+                Some("p")
+            );
+            assert_eq!(collect_text_content(&doc, p_id), "new paragraph");
+        }
+
+        #[test]
+        fn query_selector_all_returns_array() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.querySelectorAll('span').length")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(1.0));
+        }
+
+        #[test]
+        fn get_elements_by_class_name_document() {
+            // BUG-302: getElementsByClassName was missing from WEB_API_SHIM.
+            let rt = v8_runtime_with_dom(make_doc());
+            let hit = rt
+                .eval("document.getElementsByClassName('highlight').length")
+                .unwrap();
+            assert_eq!(hit, lumen_core::JsValue::Number(1.0));
+            let miss = rt
+                .eval("document.getElementsByClassName('nope').length")
+                .unwrap();
+            assert_eq!(miss, lumen_core::JsValue::Number(0.0));
+            // Empty / whitespace-only token list yields an empty collection.
+            let empty = rt
+                .eval("document.getElementsByClassName('   ').length")
+                .unwrap();
+            assert_eq!(empty, lumen_core::JsValue::Number(0.0));
+        }
+
+        #[test]
+        fn get_elements_by_class_name_scoped_element() {
+            // BUG-302: the scoped variant lives on Element too, restricted to the
+            // element's own descendants.
+            let rt = v8_runtime_with_dom(make_doc());
+            let inside = rt
+                .eval("document.body.getElementsByClassName('highlight').length")
+                .unwrap();
+            assert_eq!(inside, lumen_core::JsValue::Number(1.0));
+            // The <span.highlight> has no descendants, so scoping to it finds none.
+            let none = rt
+                .eval(
+                    "document.getElementsByClassName('highlight')[0]\
+                     .getElementsByClassName('highlight').length",
+                )
+                .unwrap();
+            assert_eq!(none, lumen_core::JsValue::Number(0.0));
+        }
+
+        #[test]
+        fn image_constructor_creates_img_element() {
+            // BUG-305: `new Image()` must produce a native <img> wrapper.
+            let rt = v8_runtime_with_dom(make_doc());
+            let tag = rt.eval("new Image().tagName").unwrap();
+            assert_eq!(tag, lumen_core::JsValue::String("IMG".into()));
+        }
+
+        #[test]
+        fn image_constructor_applies_width_height_args() {
+            // BUG-305: Image(width, height) sets the width/height content attributes.
+            let rt = v8_runtime_with_dom(make_doc());
+            let dims = rt
+                .eval(
+                    "var i = new Image(4, 6);\
+                     i.getAttribute('width') + 'x' + i.getAttribute('height')",
+                )
+                .unwrap();
+            assert_eq!(dims, lumen_core::JsValue::String("4x6".into()));
+        }
+
+        #[test]
+        fn image_src_reflects_content_attribute() {
+            // BUG-305: `img.src = …` reaches the underlying `src` attribute so layout
+            // can see the dynamically-assigned image, and reads back the same value.
+            let rt = v8_runtime_with_dom(make_doc());
+            let via_attr = rt
+                .eval("var i = new Image(); i.src = 'test.png'; i.getAttribute('src')")
+                .unwrap();
+            assert_eq!(via_attr, lumen_core::JsValue::String("test.png".into()));
+            let via_prop = rt
+                .eval("var i = new Image(); i.src = 'blue.png'; i.src")
+                .unwrap();
+            assert_eq!(via_prop, lumen_core::JsValue::String("blue.png".into()));
+            // Unset `src` reflects as the empty string, per the reflect-a-URL steps.
+            let unset = rt.eval("new Image().src").unwrap();
+            assert_eq!(unset, lumen_core::JsValue::String("".into()));
+        }
+
+        #[test]
+        fn html_image_element_is_a_global() {
+            // BUG-305: `HTMLImageElement` is exposed as a bare interface global.
+            let rt = v8_runtime_with_dom(make_doc());
+            let ty = rt.eval("typeof HTMLImageElement").unwrap();
+            assert_eq!(ty, lumen_core::JsValue::String("function".into()));
+        }
+
+        #[test]
+        fn query_selector_compound_tag_and_id() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.querySelector('div#main') !== null")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn query_selector_compound_wrong_tag_returns_null() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.querySelector('span#main') === null")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn query_selector_compound_tag_and_class() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.querySelector('span.highlight') !== null")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn query_selector_child_combinator() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.querySelector('div > span') !== null")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn query_selector_descendant_combinator() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.querySelector('body span') !== null")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn query_selector_id_child_class() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.querySelector('#main > .highlight') !== null")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn element_matches_compound() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.querySelector('span').matches('span.highlight')")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn element_matches_wrong_compound_returns_false() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.querySelector('span').matches('div.highlight')")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(false));
+        }
+
+        #[test]
+        fn element_closest_finds_ancestor() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.querySelector('span').closest('div') !== null")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn element_closest_id_selector() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.querySelector('span').closest('#main') !== null")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn query_selector_attribute_selector() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.querySelector('[id=\"main\"]') !== null")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn canvas_get_context_2d_returns_object() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "var c = document.createElement('canvas');\
+                     var ctx = c.getContext('2d');\
+                     ctx !== null && typeof ctx.fillRect === 'function' \
+                       && typeof ctx.beginPath === 'function'",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn canvas_get_context_2d_caches_same_object() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let same = rt
+                .eval(
+                    "var c = document.createElement('canvas');\
+                     c.getContext('2d') === c.getContext('2d')",
+                )
+                .unwrap();
+            assert_eq!(same, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn canvas_default_dimensions_are_300x150() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let w = rt
+                .eval("var c = document.createElement('canvas'); c.width")
+                .unwrap();
+            let h = rt
+                .eval("var c = document.createElement('canvas'); c.height")
+                .unwrap();
+            assert_eq!(w, lumen_core::JsValue::Number(300.0));
+            assert_eq!(h, lumen_core::JsValue::Number(150.0));
+        }
+
+        #[test]
+        fn canvas_draw_flushes_dirty_buffer() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var c = document.createElement('canvas');\
+                 c.setAttribute('width', '4'); c.setAttribute('height', '4');\
+                 var ctx = c.getContext('2d');\
+                 ctx.fillStyle = '#00ff00';\
+                 ctx.fillRect(0, 0, 4, 4);",
+            )
+            .unwrap();
+            let updates = rt.flush_canvas_updates();
+            assert_eq!(updates.len(), 1, "one dirty canvas after fillRect");
+            let (_nid, w, h, rgba) = &updates[0];
+            assert_eq!((*w, *h), (4, 4));
+            assert_eq!(rgba[1], 255, "green channel painted");
+        }
+
+        #[test]
+        fn canvas_gradient_object_has_gid_and_add_color_stop() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "var c = document.createElement('canvas'); var ctx = c.getContext('2d');\
+                     var g = ctx.createLinearGradient(0, 0, 1, 1);\
+                     typeof g === 'object' && g.__gid__ !== undefined \
+                       && typeof g.addColorStop === 'function'",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn canvas_radial_and_conic_gradient_constructors_distinct() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "var c = document.createElement('canvas'); var ctx = c.getContext('2d');\
+                     var r = ctx.createRadialGradient(0, 0, 0, 0, 0, 5);\
+                     var k = ctx.createConicGradient(0, 5, 5);\
+                     r.__gid__ !== undefined && k.__gid__ !== undefined && r.__gid__ !== k.__gid__",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn canvas_gradient_fillstyle_paints_pixels() {
+            // A gradient with two identical green stops fills solid green regardless
+            // of interpolation — robustly exercises the fillStyle gradient dispatch.
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var c = document.createElement('canvas');\
+                 c.setAttribute('width', '4'); c.setAttribute('height', '4');\
+                 var ctx = c.getContext('2d');\
+                 var g = ctx.createLinearGradient(0, 0, 4, 0);\
+                 g.addColorStop(0, '#00ff00'); g.addColorStop(1, '#00ff00');\
+                 ctx.fillStyle = g;\
+                 ctx.fillRect(0, 0, 4, 4);",
+            )
+            .unwrap();
+            let updates = rt.flush_canvas_updates();
+            assert_eq!(updates.len(), 1, "gradient fill marks the canvas dirty");
+            assert_eq!(updates[0].3[1], 255, "solid-green gradient painted");
+        }
+
+        #[test]
+        fn canvas_shadow_properties_are_wired() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "var c = document.createElement('canvas'); var ctx = c.getContext('2d');\
+                     ctx.shadowColor = '#ff0000'; ctx.shadowBlur = 4;\
+                     ctx.shadowOffsetX = 2; ctx.shadowOffsetY = 3;\
+                     ctx.shadowColor === '#ff0000' && ctx.shadowBlur === 4 \
+                       && ctx.shadowOffsetX === 2 && ctx.shadowOffsetY === 3",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn canvas_create_pattern_returns_pattern_id() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "var src = document.createElement('canvas');\
+                     src.setAttribute('width', '4'); src.setAttribute('height', '4');\
+                     var sctx = src.getContext('2d'); sctx.fillStyle = '#0000ff'; sctx.fillRect(0, 0, 4, 4);\
+                     var c = document.createElement('canvas'); var ctx = c.getContext('2d');\
+                     var p = ctx.createPattern(src, 'repeat');\
+                     p !== null && p.__patid__ !== undefined",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn canvas_create_pattern_null_for_invalid_source() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "var c = document.createElement('canvas'); var ctx = c.getContext('2d');\
+                     ctx.createPattern(null, 'repeat') === null \
+                       && ctx.createPattern({}, 'repeat') === null",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn canvas_draw_image_blits_canvas_source() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var src = document.createElement('canvas');\
+                 src.setAttribute('width', '4'); src.setAttribute('height', '4');\
+                 var sctx = src.getContext('2d'); sctx.fillStyle = '#ff0000'; sctx.fillRect(0, 0, 4, 4);\
+                 var c = document.createElement('canvas');\
+                 c.setAttribute('width', '4'); c.setAttribute('height', '4');\
+                 var ctx = c.getContext('2d');\
+                 ctx.drawImage(src, 0, 0);",
+            )
+            .unwrap();
+            let updates = rt.flush_canvas_updates();
+            let any_red = updates
+                .iter()
+                .any(|(_n, _w, _h, rgba)| rgba[0] == 255 && rgba[2] == 0);
+            assert!(any_red, "drawImage blits the red source onto the destination");
+        }
+
+        #[test]
+        fn canvas_draw_image_9arg_crops_source_subrect() {
+            // Source 2×2: left column red, right column blue. The 9-arg form crops the
+            // right (blue) column and stretches it over the whole destination — the
+            // result must contain blue and no red, proving source-crop is honoured.
+            let rt = v8_runtime_with_dom(make_doc());
+            let dest_nid = match rt
+                .eval(
+                    "var src = document.createElement('canvas');\
+                     src.setAttribute('width', '2'); src.setAttribute('height', '2');\
+                     var sctx = src.getContext('2d');\
+                     sctx.fillStyle = '#ff0000'; sctx.fillRect(0, 0, 1, 2);\
+                     sctx.fillStyle = '#0000ff'; sctx.fillRect(1, 0, 1, 2);\
+                     var c = document.createElement('canvas');\
+                     c.setAttribute('width', '2'); c.setAttribute('height', '2');\
+                     var ctx = c.getContext('2d');\
+                     ctx.drawImage(src, 1, 0, 1, 2, 0, 0, 2, 2);\
+                     c.__nid__;",
+                )
+                .unwrap()
+            {
+                lumen_core::JsValue::Number(n) => n as u32,
+                other => panic!("expected dest nid number, got {other:?}"),
+            };
+            let updates = rt.flush_canvas_updates();
+            // Inspect the destination canvas pixel buffer (identified by its node id —
+            // the source canvas also contains red, so it must not be sampled here).
+            let dest = updates
+                .iter()
+                .find(|(n, _, _, _)| *n == dest_nid)
+                .expect("destination canvas update");
+            let rgba = &dest.3;
+            let mut any_blue = false;
+            let mut any_red = false;
+            for px in rgba.chunks_exact(4) {
+                if px[3] == 0 {
+                    continue;
+                }
+                if px[2] == 255 && px[0] == 0 {
+                    any_blue = true;
+                }
+                if px[0] == 255 && px[2] == 0 {
+                    any_red = true;
+                }
+            }
+            assert!(any_blue, "cropped blue column must be drawn");
+            assert!(!any_red, "red column must be excluded by the source crop");
+        }
+
+        #[test]
+        fn canvas_draw_image_from_img_element_3arg() {
+            // 3-arg drawImage(img, dx, dy): the img element's registered RGBA8 bitmap is
+            // blitted at natural size onto the destination canvas.
+            let rt = v8_runtime_with_dom(make_doc());
+            // Register a 2×2 fully-red bitmap for the img element (nid is arbitrary but
+            // must match the DOM node created below).
+            let img_nid: u32 = match rt
+                .eval(
+                    "var img = document.createElement('img');\
+                     img.setAttribute('src', 'test.png');\
+                     img.setAttribute('width', '2');\
+                     img.setAttribute('height', '2');\
+                     document.body.appendChild(img);\
+                     img.__nid__;",
+                )
+                .unwrap()
+            {
+                lumen_core::JsValue::Number(n) => n as u32,
+                other => panic!("expected img nid, got {other:?}"),
+            };
+            // Inject decoded bitmap: 2×2 solid red RGBA8.
+            let rgba8 = vec![255u8, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255];
+            rt.register_img_bitmaps(vec![(img_nid, test_img_bitmap(2, 2, rgba8))]);
+
+            let dest_nid = match rt
+                .eval(
+                    "var c = document.createElement('canvas');\
+                     c.setAttribute('width', '4'); c.setAttribute('height', '4');\
+                     var ctx = c.getContext('2d');\
+                     ctx.drawImage(img, 0, 0);\
+                     c.__nid__;",
+                )
+                .unwrap()
+            {
+                lumen_core::JsValue::Number(n) => n as u32,
+                other => panic!("expected dest nid, got {other:?}"),
+            };
+            let updates = rt.flush_canvas_updates();
+            let dest = updates.iter().find(|(n, _, _, _)| *n == dest_nid)
+                .expect("destination canvas must have an update");
+            // Top-left 2×2 region should be red; natural size is used (dw/dh=0 → native picks 2×2).
+            let rgba = &dest.3;
+            let any_red = rgba.chunks_exact(4).any(|px| px[0] == 255 && px[2] == 0 && px[3] == 255);
+            assert!(any_red, "drawImage(img, dx, dy) must blit the registered red bitmap");
+        }
+
+        #[test]
+        fn canvas_draw_image_from_img_element_5arg() {
+            // 5-arg drawImage(img, dx, dy, dw, dh): blits and scales the bitmap.
+            let rt = v8_runtime_with_dom(make_doc());
+            let img_nid: u32 = match rt
+                .eval(
+                    "var img = document.createElement('img');\
+                     img.setAttribute('src', 'blue.png');\
+                     document.body.appendChild(img);\
+                     img.__nid__;",
+                )
+                .unwrap()
+            {
+                lumen_core::JsValue::Number(n) => n as u32,
+                other => panic!("expected img nid, got {other:?}"),
+            };
+            // 1×1 solid blue.
+            let rgba8 = vec![0u8, 0, 255, 255];
+            rt.register_img_bitmaps(vec![(img_nid, test_img_bitmap(1, 1, rgba8))]);
+
+            let dest_nid = match rt
+                .eval(
+                    "var c = document.createElement('canvas');\
+                     c.setAttribute('width', '4'); c.setAttribute('height', '4');\
+                     var ctx = c.getContext('2d');\
+                     ctx.drawImage(img, 0, 0, 4, 4);\
+                     c.__nid__;",
+                )
+                .unwrap()
+            {
+                lumen_core::JsValue::Number(n) => n as u32,
+                other => panic!("expected dest nid, got {other:?}"),
+            };
+            let updates = rt.flush_canvas_updates();
+            let dest = updates.iter().find(|(n, _, _, _)| *n == dest_nid)
+                .expect("destination canvas must have an update");
+            let any_blue = dest.3.chunks_exact(4).any(|px| px[2] == 255 && px[0] == 0 && px[3] == 255);
+            assert!(any_blue, "drawImage(img, dx, dy, dw, dh) must blit the registered blue bitmap");
+        }
+
+        #[test]
+        fn canvas_draw_image_from_img_element_9arg_crop() {
+            // 9-arg drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh): crops source sub-rect.
+            // Source: 2×1 bitmap — left pixel red, right pixel green.
+            // Crop right (green) half only: sx=1, sy=0, sw=1, sh=1.
+            let rt = v8_runtime_with_dom(make_doc());
+            let img_nid: u32 = match rt
+                .eval(
+                    "var img = document.createElement('img');\
+                     img.setAttribute('src', 'rg.png');\
+                     document.body.appendChild(img);\
+                     img.__nid__;",
+                )
+                .unwrap()
+            {
+                lumen_core::JsValue::Number(n) => n as u32,
+                other => panic!("expected img nid, got {other:?}"),
+            };
+            // 2×1 RGBA8: [R, G, B, A] × 2 pixels.
+            let rgba8 = vec![255u8, 0, 0, 255, 0, 255, 0, 255]; // red | green
+            rt.register_img_bitmaps(vec![(img_nid, test_img_bitmap(2, 1, rgba8))]);
+
+            let dest_nid = match rt
+                .eval(
+                    "var c = document.createElement('canvas');\
+                     c.setAttribute('width', '2'); c.setAttribute('height', '2');\
+                     var ctx = c.getContext('2d');\
+                     ctx.drawImage(img, 1, 0, 1, 1, 0, 0, 2, 2);\
+                     c.__nid__;",
+                )
+                .unwrap()
+            {
+                lumen_core::JsValue::Number(n) => n as u32,
+                other => panic!("expected dest nid, got {other:?}"),
+            };
+            let updates = rt.flush_canvas_updates();
+            let dest = updates.iter().find(|(n, _, _, _)| *n == dest_nid)
+                .expect("destination canvas must have an update");
+            let rgba = &dest.3;
+            let any_green = rgba.chunks_exact(4).any(|px| px[1] == 255 && px[0] == 0 && px[3] == 255);
+            let any_red   = rgba.chunks_exact(4).any(|px| px[0] == 255 && px[2] == 0 && px[3] == 255);
+            assert!(any_green, "9-arg drawImage from <img> must blit the green crop");
+            assert!(!any_red, "red pixels from left half must be excluded by the crop");
+        }
+
+        #[test]
+        fn canvas_draw_image_from_img_unregistered_is_noop() {
+            // drawImage with an <img> that has no registered bitmap must be a silent no-op.
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var img = document.createElement('img');\
+                 img.setAttribute('src', 'missing.png');\
+                 document.body.appendChild(img);\
+                 var c = document.createElement('canvas');\
+                 c.setAttribute('width', '2'); c.setAttribute('height', '2');\
+                 var ctx = c.getContext('2d');\
+                 ctx.drawImage(img, 0, 0);",
+            )
+            .unwrap();
+            // No bitmap registered → canvas remains transparent, no dirty update needed.
+            let updates = rt.flush_canvas_updates();
+            // The canvas was never dirtied so either has no entry or all-transparent pixels.
+            let all_transparent = updates.iter().all(|(_, _, _, rgba)| {
+                rgba.chunks_exact(4).all(|px| px[3] == 0)
+            });
+            assert!(all_transparent, "drawImage with unregistered <img> must be a no-op");
+        }
+
+        #[test]
+        fn canvas_put_image_data_paints_pixels() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var c = document.createElement('canvas');\
+                 c.setAttribute('width', '2'); c.setAttribute('height', '2');\
+                 var ctx = c.getContext('2d');\
+                 var img = ctx.createImageData(2, 2);\
+                 for (var i = 0; i < img.data.length; i += 4) {\
+                     img.data[i] = 0; img.data[i + 1] = 255; img.data[i + 2] = 0; img.data[i + 3] = 255;\
+                 }\
+                 ctx.putImageData(img, 0, 0);",
+            )
+            .unwrap();
+            let updates = rt.flush_canvas_updates();
+            assert!(
+                updates.iter().any(|(_n, _w, _h, rgba)| rgba[1] == 255),
+                "putImageData paints the supplied green pixels"
+            );
+        }
+
+        #[test]
+        fn canvas_get_context_webgl_returns_functional_context() {
+            // Tightened during the port (was `canvas_get_context_webgl_via_2d_shim_is_null`,
+            // asserting `getContext('webgl') === null`). That expectation encoded an
+            // install-ordering defect of the QuickJS path, not a shim boundary:
+            // `lib.rs::install_dom` evaluates `webgl_canvas::WEBGL_SHIM` *before*
+            // `dom::install_dom_api` defines `document`, so the shim's
+            // `if (typeof document !== 'undefined')` guard skipped its
+            // `document.createElement` hook and WebGL was silently dead there.
+            // `V8JsRuntime::install_dom` evals WEB_API_SHIM first, so the hook lands and
+            // `getContext('webgl')` hands out the real software-rasterizer context —
+            // the spec-correct answer (HTML LS §4.12.4). The 2D shim's own fall-through
+            // to `null` for unknown types is still covered by
+            // `webgl_canvas::tests::get_context_unknown_type_returns_null`.
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "var c = document.createElement('canvas');\
+                     var gl = c.getContext('webgl');\
+                     gl !== null && typeof gl.getParameter === 'function' \
+                       && gl.drawingBufferWidth === 300 && gl.canvas === c \
+                       && typeof gl.fillRect === 'undefined'",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn non_canvas_get_context_2d_is_null() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let is_null = rt
+                .eval(
+                    "var d = document.createElement('div');\
+                     d.getContext('2d') === null",
+                )
+                .unwrap();
+            assert_eq!(is_null, lumen_core::JsValue::Bool(true));
+        }
+
+        // ── Canvas CSS resize tests ───────────────────────────────────────────────
+
+        #[test]
+        fn canvas_css_resize_scales_pixels() {
+            // After a CSS-driven resize, scale_resize is called and pixels are preserved.
+            let rt = v8_runtime_with_dom(make_doc());
+            // Create canvas, draw a red fill, then trigger CSS resize.
+            rt.eval(r#"
+                var c = document.createElement('canvas');
+                c.width = 4; c.height = 4;
+                var ctx = c.getContext('2d');
+                ctx.fillStyle = '#ff0000';
+                ctx.fillRect(0, 0, 4, 4);
+                window.__test_canvas_nid = c.__nid__;
+            "#).unwrap();
+            let nid_val = rt.eval("window.__test_canvas_nid").unwrap();
+            let nid = if let lumen_core::JsValue::Number(n) = nid_val { n as u32 } else { panic!("no nid") };
+            // First delivery at 4×4 — records baseline.
+            rt.update_layout_rects([(nid, [0.0, 0.0, 4.0, 4.0])].into_iter().collect());
+            rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
+            // Drain dirty list so next flush only sees scale_resize changes.
+            // Must go through the runtime so the drain runs on the JS thread where
+            // the canvas thread-local registry lives (B-1: runtime off the UI thread).
+            let _ = rt.flush_canvas_updates();
+            // Change CSS dims to 8×8 — triggers scale_resize + marks dirty.
+            rt.update_layout_rects([(nid, [0.0, 0.0, 8.0, 8.0])].into_iter().collect());
+            rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
+            // Canvas backing buffer should now be 8×8.
+            let dirty = rt.flush_canvas_updates();
+            let resized = dirty.iter().any(|(id, w, h, _)| *id == nid && *w == 8 && *h == 8);
+            assert!(resized, "canvas should have been scaled to 8×8");
+        }
+
+        #[test]
+        fn canvas_css_resize_fires_resize_event() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(r#"
+                var c2 = document.createElement('canvas');
+                c2.width = 10; c2.height = 10;
+                c2.getContext('2d');
+                var _css_resize_fired = false;
+                c2.addEventListener('resize', function() { _css_resize_fired = true; });
+                window.__test_c2_nid = c2.__nid__;
+            "#).unwrap();
+            let nid_val = rt.eval("window.__test_c2_nid").unwrap();
+            let nid = if let lumen_core::JsValue::Number(n) = nid_val { n as u32 } else { panic!("no nid") };
+            // First delivery at 10×10 — records baseline, no event.
+            rt.update_layout_rects([(nid, [0.0, 0.0, 10.0, 10.0])].into_iter().collect());
+            rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
+            let fired_before = rt.eval("_css_resize_fired").unwrap();
+            assert_eq!(fired_before, lumen_core::JsValue::Bool(false));
+            // Change CSS dims — event should fire.
+            rt.update_layout_rects([(nid, [0.0, 0.0, 20.0, 20.0])].into_iter().collect());
+            rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
+            let fired = rt.eval("_css_resize_fired").unwrap();
+            assert_eq!(fired, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn canvas_css_resize_no_event_when_size_unchanged() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(r#"
+                var c3 = document.createElement('canvas');
+                c3.width = 10; c3.height = 10;
+                c3.getContext('2d');
+                var _css_cnt = 0;
+                c3.addEventListener('resize', function() { _css_cnt++; });
+                window.__test_c3_nid = c3.__nid__;
+            "#).unwrap();
+            let nid_val = rt.eval("window.__test_c3_nid").unwrap();
+            let nid = if let lumen_core::JsValue::Number(n) = nid_val { n as u32 } else { panic!("no nid") };
+            let rect = [(nid, [0.0, 0.0, 10.0, 10.0])].into_iter().collect();
+            rt.update_layout_rects(rect);
+            // First delivery — baseline.
+            rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
+            // Second delivery — same size, no event.
+            rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
+            let cnt = rt.eval("_css_cnt").unwrap();
+            assert_eq!(cnt, lumen_core::JsValue::Number(0.0));
+        }
+
+        #[test]
+        fn canvas_css_resize_not_triggered_without_context() {
+            // A canvas without a 2D context is not tracked by _lumen_deliver_canvas_css_resize.
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(r#"
+                var c4 = document.createElement('canvas');
+                // intentionally no getContext('2d')
+                var _no_ctx_fired = false;
+                c4.addEventListener('resize', function() { _no_ctx_fired = true; });
+                window.__test_c4_nid = c4.__nid__;
+            "#).unwrap();
+            let nid_val = rt.eval("window.__test_c4_nid").unwrap();
+            let nid = if let lumen_core::JsValue::Number(n) = nid_val { n as u32 } else { panic!("no nid") };
+            rt.update_layout_rects([(nid, [0.0, 0.0, 50.0, 50.0])].into_iter().collect());
+            rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
+            rt.update_layout_rects([(nid, [0.0, 0.0, 100.0, 100.0])].into_iter().collect());
+            rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
+            let fired = rt.eval("_no_ctx_fired").unwrap();
+            assert_eq!(fired, lumen_core::JsValue::Bool(false));
+        }
+
+        #[test]
+        fn alert_does_not_crash() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("alert('test')").unwrap();
+        }
+
+        #[test]
+        fn window_print_emits_request() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("window.print()").unwrap();
+            let reqs = rt.take_print_requests();
+            assert_eq!(reqs.len(), 1);
+            assert_eq!(reqs[0].margin_top, 48.0);
+            assert_eq!(reqs[0].margin_bottom, 48.0);
+            assert_eq!(reqs[0].margin_left, 48.0);
+            assert_eq!(reqs[0].margin_right, 48.0);
+        }
+
+        #[test]
+        fn timeout_is_deferred_until_tick() {
+            let rt = v8_runtime_with_dom(make_doc());
+            // Timer must NOT fire synchronously — deferred to _lumen_tick_timers().
+            let result = rt
+                .eval("var x = 0; setTimeout(function() { x = 1; }, 0); x")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(0.0));
+        }
+
+        #[test]
+        fn timeout_fires_after_tick() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("var x = 0; setTimeout(function() { x = 1; }, 0);")
+                .unwrap();
+            let result = rt.eval("_lumen_tick_timers(); x").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(1.0));
+        }
+
+        #[test]
+        fn clear_timeout_prevents_fire() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("var x = 0; var id = setTimeout(function() { x = 1; }, 0); clearTimeout(id);")
+                .unwrap();
+            let result = rt.eval("_lumen_tick_timers(); x").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(0.0));
+        }
+
+        #[test]
+        fn set_interval_fires_repeatedly() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("var n = 0; setInterval(function() { n++; }, 0);")
+                .unwrap();
+            rt.eval("_lumen_tick_timers();").unwrap();
+            rt.eval("_lumen_tick_timers();").unwrap();
+            let result = rt.eval("n").unwrap();
+            // Fired at least twice (exact count depends on scheduling).
+            assert!(matches!(result, lumen_core::JsValue::Number(n) if n >= 2.0));
+        }
+
+        #[test]
+        fn clear_interval_stops_fire() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("var n = 0; var id = setInterval(function() { n++; }, 0);")
+                .unwrap();
+            rt.eval("_lumen_tick_timers(); clearInterval(id);")
+                .unwrap();
+            rt.eval("_lumen_tick_timers();").unwrap();
+            let result = rt.eval("n").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(1.0));
+        }
+
+        #[test]
+        fn bug271_nested_timeout_clamped_to_4ms() {
+            // HTML LS §8.6: nesting level > 5 clamps timeout < 4 ms up to 4 ms.
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("_lumen_clamp_timeout(0, 6) === 4 && _lumen_clamp_timeout(0, 5) === 0 && _lumen_clamp_timeout(10, 7) === 10")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn bug271_timer_callback_inherits_nesting_level() {
+            // A timer scheduled from inside a timer callback records nesting+1,
+            // so deep setTimeout(fn,0) chains eventually hit the 4 ms clamp.
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("setTimeout(function() { setTimeout(function() {}, 0); }, 0);")
+                .unwrap();
+            let before = rt
+                .eval("_lumen_timers.some(function(t) { return t.nesting === 2; })")
+                .unwrap();
+            assert_eq!(before, lumen_core::JsValue::Bool(false));
+            rt.eval("_lumen_tick_timers();").unwrap();
+            // The inner timer scheduled from inside the fired callback carries nesting 2.
+            let after = rt
+                .eval("_lumen_timers.some(function(t) { return t.nesting === 2; })")
+                .unwrap();
+            assert_eq!(after, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn scheduler_post_task_returns_promise() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("typeof scheduler.postTask(function() { return 42; })")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("object".into()));
+        }
+
+        #[test]
+        fn scheduler_post_task_rejects_non_function() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("var rejected = false; scheduler.postTask(42).catch(function() { rejected = true; }); rejected")
+                .unwrap();
+            // Promise rejection is async; we can only verify the call didn't throw synchronously.
+            assert_eq!(result, lumen_core::JsValue::Bool(false));
+        }
+
+        #[test]
+        fn history_initial_length_is_one() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt.eval("history.length").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(1.0));
+        }
+
+        #[test]
+        fn history_initial_state_is_null() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt.eval("history.state === null").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn history_push_state_increments_length() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("history.pushState({page: 1}, '', '/page1');").unwrap();
+            rt.eval("history.pushState({page: 2}, '', '/page2');").unwrap();
+            let result = rt.eval("history.length").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(3.0));
+        }
+
+        #[test]
+        fn history_state_after_push_returns_state() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("history.pushState({x: 42}, '', '/p');").unwrap();
+            let result = rt.eval("history.state.x").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(42.0));
+        }
+
+        #[test]
+        fn history_replace_state_keeps_length() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("history.pushState({n: 1}, '', '/a');").unwrap();
+            rt.eval("history.replaceState({n: 99}, '', '/a2');").unwrap();
+            let len = rt.eval("history.length").unwrap();
+            assert_eq!(len, lumen_core::JsValue::Number(2.0));
+            let state = rt.eval("history.state.n").unwrap();
+            assert_eq!(state, lumen_core::JsValue::Number(99.0));
+        }
+
+        #[test]
+        fn history_back_fires_popstate_with_previous_state() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var events = []; \
+                 window.addEventListener('popstate', function(e) { events.push(e.state); }); \
+                 history.pushState({page: 1}, '', '/p1'); \
+                 history.pushState({page: 2}, '', '/p2'); \
+                 history.back();",
+            )
+            .unwrap();
+            // Traversal is shell-authoritative: history.back() moved the read-cache
+            // cursor and queued a -1 delta, but the popstate is delivered by the shell.
+            // Simulate the shell handing the destination entry back to JS.
+            assert_eq!(rt.take_history_traversals(), vec![-1]);
+            rt.eval("_lumen_deliver_popstate(_lumen_history_state_json(), _lumen_history_url())")
+                .unwrap();
+            let len = rt.eval("events.length").unwrap();
+            assert_eq!(len, lumen_core::JsValue::Number(1.0));
+            let page = rt.eval("events[0].page").unwrap();
+            assert_eq!(page, lumen_core::JsValue::Number(1.0));
+        }
+
+        #[test]
+        fn history_forward_after_back() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "history.pushState({n: 1}, '', '/p1'); \
+                 history.pushState({n: 2}, '', '/p2'); \
+                 history.back();",
+            )
+            .unwrap();
+            let state_after_back = rt.eval("history.state.n").unwrap();
+            assert_eq!(state_after_back, lumen_core::JsValue::Number(1.0));
+
+            rt.eval("history.forward();").unwrap();
+            let state_after_fwd = rt.eval("history.state.n").unwrap();
+            assert_eq!(state_after_fwd, lumen_core::JsValue::Number(2.0));
+        }
+
+        #[test]
+        fn history_go_beyond_bounds_does_not_fire_popstate() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var fired = false; \
+                 window.addEventListener('popstate', function() { fired = true; }); \
+                 history.go(-5);",
+            )
+            .unwrap();
+            let result = rt.eval("fired").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(false));
+        }
+
+        #[test]
+        fn window_onpopstate_fires_on_back() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var captured = null; \
+                 window.onpopstate = function(e) { captured = e.state; }; \
+                 history.pushState({v: 7}, '', '/p'); \
+                 history.back();",
+            )
+            .unwrap();
+            let result = rt.eval("captured === null").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true)); // initial state is null
+        }
+
+        #[test]
+        fn history_push_drops_forward_entries() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "history.pushState({n: 1}, '', '/p1'); \
+                 history.pushState({n: 2}, '', '/p2'); \
+                 history.back(); \
+                 history.pushState({n: 3}, '', '/p3');",
+            )
+            .unwrap();
+            // After back + push, forward entries are dropped: entries = [init, {n:1}, {n:3}]
+            let len = rt.eval("history.length").unwrap();
+            assert_eq!(len, lumen_core::JsValue::Number(3.0));
+            let state = rt.eval("history.state.n").unwrap();
+            assert_eq!(state, lumen_core::JsValue::Number(3.0));
+        }
+
+        #[test]
+        fn history_go_zero_reloads() {
+            let rt = v8_runtime_with_url("https://example.com/");
+            rt.eval("history.go(0)").unwrap();
+            let req = rt.take_navigate_request();
+            assert!(matches!(req, Some(NavigateRequest::Reload)));
+        }
+
+        #[test]
+        fn history_go_updates_location() {
+            let rt = v8_runtime_with_url("https://example.com/start");
+            rt.eval(
+                "history.pushState({},'','https://example.com/p1'); \
+                 history.pushState({},'','https://example.com/p2'); \
+                 history.go(-1);",
+            )
+            .unwrap();
+            // go(-1) queued the traversal and moved the read-cache cursor; the shell
+            // delivers the popstate that syncs `location`. Simulate that delivery.
+            assert_eq!(rt.take_history_traversals(), vec![-1]);
+            rt.eval("_lumen_deliver_popstate(_lumen_history_state_json(), _lumen_history_url())")
+                .unwrap();
+            let path = rt.eval("location.pathname").unwrap();
+            assert_eq!(path, lumen_core::JsValue::String("/p1".into()));
+        }
+
+        #[test]
+        fn history_go_queues_single_step_traversal() {
+            let rt = v8_runtime_with_url("https://example.com/start");
+            rt.eval(
+                "history.pushState({},'','/p1'); \
+                 history.pushState({},'','/p2'); \
+                 history.back();",
+            )
+            .unwrap();
+            // back() routes through history.go(-1): one shell traversal queued.
+            assert_eq!(rt.take_history_traversals(), vec![-1]);
+        }
+
+        #[test]
+        fn history_go_multistep_queues_full_delta_and_moves_cache() {
+            let rt = v8_runtime_with_url("https://example.com/start");
+            rt.eval(
+                "history.pushState({n:1},'','/p1'); \
+                 history.pushState({n:2},'','/p2'); \
+                 history.pushState({n:3},'','/p3'); \
+                 history.go(-2);",
+            )
+            .unwrap();
+            // The full multi-step delta is queued once (the shell fires a single
+            // destination popstate), and the read-cache cursor jumped two entries.
+            assert_eq!(rt.take_history_traversals(), vec![-2]);
+            assert_eq!(
+                rt.eval("history.state.n").unwrap(),
+                lumen_core::JsValue::Number(1.0)
+            );
+        }
+
+        #[test]
+        fn history_go_zero_does_not_queue_traversal() {
+            let rt = v8_runtime_with_url("https://example.com/");
+            rt.eval("history.go(0)").unwrap();
+            assert!(rt.take_history_traversals().is_empty());
+            assert!(matches!(
+                rt.take_navigate_request(),
+                Some(NavigateRequest::Reload)
+            ));
+        }
+
+        #[test]
+        fn history_go_out_of_range_does_not_queue_traversal() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("history.go(7)").unwrap();
+            // Out of range in the read-cache → no traversal handed to the shell.
+            assert!(rt.take_history_traversals().is_empty());
+        }
+
+        #[test]
+        fn history_go_out_of_bounds_no_popstate() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var fired=false; \
+                 window.addEventListener('popstate', function(){fired=true;}); \
+                 history.go(7);",
+            )
+            .unwrap();
+            let fired = rt.eval("fired").unwrap();
+            assert_eq!(fired, lumen_core::JsValue::Bool(false));
+        }
+
+        #[test]
+        fn window_object_exposes_history() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt.eval("window.history === history").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn window_remove_event_listener_stops_popstate() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var count = 0; \
+                 function handler(e) { count++; } \
+                 window.addEventListener('popstate', handler); \
+                 history.pushState({}, '', '/p'); \
+                 history.back();",
+            )
+            .unwrap();
+            // Traversal is shell-authoritative: history.back() queues a -1 delta and
+            // the shell delivers the popstate. While registered, the handler fires once.
+            assert_eq!(rt.take_history_traversals(), vec![-1]);
+            rt.eval("_lumen_deliver_popstate(_lumen_history_state_json(), _lumen_history_url())")
+                .unwrap();
+            // Remove the listener, then traverse again. The shell still delivers a
+            // popstate for each queued delta, but the removed handler must not fire.
+            rt.eval(
+                "window.removeEventListener('popstate', handler); \
+                 history.forward(); \
+                 history.back();",
+            )
+            .unwrap();
+            let _ = rt.take_history_traversals();
+            rt.eval("_lumen_deliver_popstate(_lumen_history_state_json(), _lumen_history_url())")
+                .unwrap();
+            rt.eval("_lumen_deliver_popstate(_lumen_history_state_json(), _lumen_history_url())")
+                .unwrap();
+            // handler fired once (before removal), then stayed silent.
+            let result = rt.eval("count").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(1.0));
+        }
+    }
+    /// V8 port of the "classList / CSSStyleDeclaration", "Element event dispatch +
+    /// Event/CustomEvent ctors", "Service Worker + Cache Storage" and "Cache API —
+    /// SQLite backend" rows (S12b-24-events-cache) from the scoping table in
+    /// `docs/tasks/ph3-v8-migration.md`: `classList`, `style`/`CSSStyleDeclaration`,
+    /// `addEventListener`/`dispatchEvent`, `Event`/`CustomEvent` constructors,
+    /// `navigator.serviceWorker`, the `caches` API (mock `CacheBackend` dispatch,
+    /// both the in-memory-map "SQLite" dispatch tests and the plain `_lumen_cache_*`
+    /// primitive tests).
+    ///
+    /// 72 tests moved here from the QuickJS monolith above. Most bodies are
+    /// `rt.eval(...)` verbatim (only the runtime constructor changed) — the
+    /// classList/style/event-dispatch/sqlite-backend-dispatch families never
+    /// touch Promises. The `navigator.serviceWorker` and `caches.open()` families
+    /// do: their QuickJS bodies called `_lumen_drain_microtasks()` (a manual
+    /// `ctx.execute_pending_job()` pump, dom.rs:3024) between scheduling a
+    /// `.then()` callback and reading its result, all inside one `rt.eval()`
+    /// string. `V8JsRuntime` registers `_lumen_drain_microtasks` as a no-op
+    /// (`v8_runtime.rs:3611`) because V8 auto-runs its microtask queue after each
+    /// *script*, not mid-script (confirmed by `sw_worker.rs`'s S10 port notes) — so
+    /// a promise scheduled and awaited inside the same `eval()` string never
+    /// resolves before the trailing check runs. Ported by splitting each such body
+    /// into two separate `rt.eval()` calls (schedule in the first, read the
+    /// already-resolved value in the second) and dropping the drain call, per the
+    /// S12b-24 scoping brief's general instruction for this pattern.
+    ///
+    /// Gated on `v8-backend` like every other ported module.
+    #[cfg(feature = "v8-backend")]
+    mod v8_events_cache {
+        use super::*;
+        use crate::v8_runtime::V8JsRuntime;
+
+        /// V8 twin of [`super::runtime_with_dom`].
+        fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
+            let rt = V8JsRuntime::new().unwrap();
+            rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+            rt.install_dom(doc, "", None, None, None, None, None, None, None, None, false)
+                .unwrap();
+            rt
+        }
+
+        /// V8 twin of [`super::runtime_with_url`].
+        fn v8_runtime_with_url(url: &str) -> V8JsRuntime {
+            let rt = V8JsRuntime::new().unwrap();
+            rt.install_dom(make_doc(), url, None, None, None, None, None, None, None, None, false)
+                .unwrap();
+            rt
+        }
+
+        // ── classList ────────────────────────────────────────────────────────────
+
+        #[test]
+        fn classlist_contains_true() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.querySelector('.highlight').classList.contains('highlight')")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn classlist_contains_false() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.querySelector('.highlight').classList.contains('missing')")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(false));
+        }
+
+        #[test]
+        fn classlist_add_and_contains() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("document.getElementById('main').classList.add('active');").unwrap();
+            let result = rt
+                .eval("document.getElementById('main').classList.contains('active')")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn classlist_remove() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "document.querySelector('.highlight').classList.remove('highlight');",
+            )
+            .unwrap();
+            let result = rt
+                .eval("document.querySelector('.highlight') === null")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn classlist_toggle_adds_when_absent() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.getElementById('main').classList.toggle('open')")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+            let has = rt
+                .eval("document.getElementById('main').classList.contains('open')")
+                .unwrap();
+            assert_eq!(has, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn classlist_toggle_removes_when_present() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("document.querySelector('.highlight').classList.toggle('highlight');").unwrap();
+            let has = rt
+                .eval("document.querySelector('.highlight') === null")
+                .unwrap();
+            assert_eq!(has, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn classlist_replace() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "document.querySelector('.highlight').classList.replace('highlight', 'selected');",
+            )
+            .unwrap();
+            let old = rt
+                .eval("document.querySelector('.highlight') === null")
+                .unwrap();
+            assert_eq!(old, lumen_core::JsValue::Bool(true));
+            let new = rt
+                .eval("document.querySelector('.selected') !== null")
+                .unwrap();
+            assert_eq!(new, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn classlist_length() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.querySelector('.highlight').classList.length")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(1.0));
+        }
+
+        #[test]
+        fn classlist_to_string() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.querySelector('.highlight').classList.toString()")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("highlight".into()));
+        }
+
+        // ── style / CSSStyleDeclaration ──────────────────────────────────────────
+
+        #[test]
+        fn style_set_and_get_property() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("document.getElementById('main').style.setProperty('color', 'red');")
+                .unwrap();
+            let result = rt
+                .eval("document.getElementById('main').style.getPropertyValue('color')")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("red".into()));
+        }
+
+        #[test]
+        fn style_assignment_via_property_name() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("document.getElementById('main').style.color = 'blue';")
+                .unwrap();
+            let result = rt
+                .eval("document.getElementById('main').style.color")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("blue".into()));
+        }
+
+        #[test]
+        fn style_camel_case_to_kebab() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("document.getElementById('main').style.backgroundColor = 'green';")
+                .unwrap();
+            let result = rt
+                .eval("document.getElementById('main').style.getPropertyValue('background-color')")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("green".into()));
+        }
+
+        #[test]
+        fn style_remove_property() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var el = document.getElementById('main'); \
+                 el.style.color = 'red'; \
+                 el.style.removeProperty('color');",
+            )
+            .unwrap();
+            let result = rt
+                .eval("document.getElementById('main').style.getPropertyValue('color')")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("".into()));
+        }
+
+        #[test]
+        fn style_css_text_roundtrip() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "document.getElementById('main').style.cssText = 'color: red; font-size: 12px';",
+            )
+            .unwrap();
+            let color = rt
+                .eval("document.getElementById('main').style.getPropertyValue('color')")
+                .unwrap();
+            assert_eq!(color, lumen_core::JsValue::String("red".into()));
+            let size = rt
+                .eval("document.getElementById('main').style.getPropertyValue('font-size')")
+                .unwrap();
+            assert_eq!(size, lumen_core::JsValue::String("12px".into()));
+        }
+
+        // ── addEventListener / dispatchEvent on elements ─────────────────────────
+
+        #[test]
+        fn element_add_event_listener_and_dispatch() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval(
+                    "var received = null; \
+                     var el = document.getElementById('main'); \
+                     el.addEventListener('click', function(e) { received = e.type; }); \
+                     el.dispatchEvent(new Event('click')); \
+                     received",
+                )
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("click".into()));
+        }
+
+        #[test]
+        fn element_remove_event_listener_stops_dispatch() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval(
+                    "var count = 0; \
+                     var el = document.getElementById('main'); \
+                     function h() { count++; } \
+                     el.addEventListener('click', h); \
+                     el.dispatchEvent(new Event('click')); \
+                     el.removeEventListener('click', h); \
+                     el.dispatchEvent(new Event('click')); \
+                     count",
+                )
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(1.0));
+        }
+
+        #[test]
+        fn custom_event_detail_accessible_in_handler() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval(
+                    "var got = null; \
+                     var el = document.getElementById('main'); \
+                     el.addEventListener('myevent', function(e) { got = e.detail; }); \
+                     el.dispatchEvent(new CustomEvent('myevent', { detail: 42 })); \
+                     got",
+                )
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(42.0));
+        }
+
+        #[test]
+        fn event_prevent_default() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval(
+                    "var el = document.getElementById('main'); \
+                     el.addEventListener('submit', function(e) { e.preventDefault(); }); \
+                     var ev = new Event('submit', { cancelable: true }); \
+                     var ret = el.dispatchEvent(ev); \
+                     ret",
+                )
+                .unwrap();
+            // dispatchEvent returns false when defaultPrevented
+            assert_eq!(result, lumen_core::JsValue::Bool(false));
+        }
+
+        #[test]
+        fn stop_immediate_propagation_stops_subsequent_listeners() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval(
+                    "var calls = 0; \
+                     var el = document.getElementById('main'); \
+                     el.addEventListener('x', function(e) { calls++; e.stopImmediatePropagation(); }); \
+                     el.addEventListener('x', function(e) { calls++; }); \
+                     el.dispatchEvent(new Event('x')); \
+                     calls",
+                )
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(1.0));
+        }
+
+        // ── Event / CustomEvent constructors ─────────────────────────────────────
+
+        #[test]
+        fn event_constructor_sets_type() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt.eval("new Event('load').type").unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("load".into()));
+        }
+
+        #[test]
+        fn event_bubbles_cancelable_defaults_false() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let bubbles = rt.eval("new Event('x').bubbles").unwrap();
+            assert_eq!(bubbles, lumen_core::JsValue::Bool(false));
+            let cancelable = rt.eval("new Event('x').cancelable").unwrap();
+            assert_eq!(cancelable, lumen_core::JsValue::Bool(false));
+        }
+
+        #[test]
+        fn custom_event_detail_null_by_default() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt.eval("new CustomEvent('x').detail === null").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn event_is_trusted_false_by_default() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt.eval("new Event('click').isTrusted").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(false));
+        }
+
+        #[test]
+        fn event_is_trusted_true_when_specified() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt.eval("new Event('click', { isTrusted: true }).isTrusted").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn custom_event_is_trusted_inherits_from_event() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt.eval("new CustomEvent('x', { isTrusted: true }).isTrusted").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn dispatchevent_creates_untrusted_event() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt.eval(
+                r#"
+                var evt = new Event('test');
+                var el = document.createElement('div');
+                var receivedEvent = null;
+                el.addEventListener('test', function(e) { receivedEvent = e; });
+                el.dispatchEvent(evt);
+                receivedEvent.isTrusted === false
+                "#
+            ).unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        // ── navigator.serviceWorker ───────────────────────────────────────────────
+
+        #[test]
+        fn navigator_has_service_worker() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("typeof navigator.serviceWorker === 'object'")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn sw_register_returns_promise() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval(
+                    r#"
+                    var p = navigator.serviceWorker.register('/sw.js', { scope: '/app/' });
+                    typeof p.then === 'function'
+                    "#,
+                )
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn sw_register_calls_lumen_primitive() {
+            // Pass a file URL so that _sw_origin = 'file://' (protocol + '//' + host).
+            let rt = v8_runtime_with_url("file:///test.html");
+            rt.eval("navigator.serviceWorker.register('/sw.js', { scope: '/' });")
+                .unwrap();
+            let result = rt.eval("_lumen_sw_has_registration('file://')").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn sw_registration_has_installing_worker() {
+            let rt = v8_runtime_with_url("https://example.com/");
+            rt.eval(
+                r#"
+                var reg = null;
+                navigator.serviceWorker.register('/sw.js', { scope: '/' })
+                    .then(function(r) { reg = r; });
+                "#,
+            )
+            .unwrap();
+            let result = rt.eval("reg !== null && reg.installing !== null").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn sw_worker_has_state_installing() {
+            let rt = v8_runtime_with_url("https://example.com/");
+            rt.eval(
+                r#"
+                var reg = null;
+                navigator.serviceWorker.register('/sw.js')
+                    .then(function(r) { reg = r; });
+                "#,
+            )
+            .unwrap();
+            let result = rt.eval("reg.installing.state").unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("installing".into()));
+        }
+
+        #[test]
+        fn sw_container_has_event_target() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval(
+                    r#"
+                    typeof navigator.serviceWorker.addEventListener === 'function' &&
+                    typeof navigator.serviceWorker.removeEventListener === 'function'
+                    "#,
+                )
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn sw_get_registration_returns_promise() {
+            let rt = v8_runtime_with_url("https://example.com/");
+            rt.eval("navigator.serviceWorker.register('/sw.js', { scope: '/' });")
+                .unwrap();
+            let result = rt
+                .eval("typeof navigator.serviceWorker.getRegistration('/').then === 'function'")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn sw_get_registrations_returns_array() {
+            let rt = v8_runtime_with_url("https://example.com/");
+            rt.eval("navigator.serviceWorker.register('/sw.js');").unwrap();
+            rt.eval(
+                r#"
+                var arr = null;
+                navigator.serviceWorker.getRegistrations()
+                    .then(function(regs) { arr = regs; });
+                "#,
+            )
+            .unwrap();
+            let result = rt.eval("Array.isArray(arr) && arr.length === 1").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn sw_ready_property_is_promise() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("typeof navigator.serviceWorker.ready.then === 'function'")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn sw_registration_has_event_target() {
+            let rt = v8_runtime_with_url("https://example.com/");
+            rt.eval(
+                r#"
+                var reg = null;
+                navigator.serviceWorker.register('/sw.js')
+                    .then(function(r) { reg = r; });
+                "#,
+            )
+            .unwrap();
+            let result = rt
+                .eval(
+                    r#"
+                    typeof reg.addEventListener === 'function' &&
+                    typeof reg.dispatchEvent === 'function'
+                    "#,
+                )
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn sw_persist_and_load_no_throw() {
+            let rt = v8_runtime_with_url("https://example.com/");
+            // Without a backend, persist/load are no-ops — must not throw.
+            rt.eval("_lumen_sw_persist('https://example.com', '[{\"scope\":\"/\"}]');")
+                .unwrap();
+            let result = rt.eval("_lumen_sw_load('https://example.com')").unwrap();
+            assert!(matches!(
+                result,
+                lumen_core::JsValue::Null | lumen_core::JsValue::Undefined
+            ));
+        }
+
+        #[test]
+        fn sw_unregister_removes_registration() {
+            let rt = v8_runtime_with_url("https://example.com/");
+            rt.eval("navigator.serviceWorker.register('/sw.js', { scope: '/app/' });")
+                .unwrap();
+            rt.eval(
+                r#"
+                navigator.serviceWorker.getRegistration('/app/')
+                    .then(function(reg) { if (reg) reg.unregister(); });
+                "#,
+            )
+            .unwrap();
+            rt.eval(
+                r#"
+                var arr = null;
+                navigator.serviceWorker.getRegistrations()
+                    .then(function(r) { arr = r; });
+                "#,
+            )
+            .unwrap();
+            let result = rt.eval("arr.length").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(0.0));
+        }
+
+        #[test]
+        fn sw_worker_post_message_does_not_throw() {
+            let rt = v8_runtime_with_url("https://example.com/");
+            rt.eval(
+                r#"
+                var reg = null;
+                navigator.serviceWorker.register('/sw.js')
+                    .then(function(r) { reg = r; });
+                "#,
+            )
+            .unwrap();
+            let result = rt
+                .eval(
+                    r#"
+                    var threw = false;
+                    try { reg.installing.postMessage('hello'); } catch(e) { threw = true; }
+                    !threw
+                    "#,
+                )
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        // ── caches API ────────────────────────────────────────────────────────────
+
+        #[test]
+        fn caches_object_exists() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt.eval("typeof caches === 'object'").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn caches_open_returns_promise() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("typeof caches.open('v1').then === 'function'")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn cache_has_returns_false_for_unknown() {
+            let rt = v8_runtime_with_dom(make_doc());
+            // has() returns promise; we check the primitive directly.
+            let result = rt
+                .eval("_lumen_cache_has('', 'nonexistent')")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(false));
+        }
+
+        // helper: put a minimal GET 200 cache entry via the native binding
+        fn cache_put_test(rt: &V8JsRuntime, origin: &str, name: &str, url: &str) {
+            rt.eval(&format!(
+                r#"_lumen_cache_put('{origin}', '{name}', '{url}', '{{"method":"GET","status":200,"statusText":"OK","headers":{{}}}}', [72, 101, 108, 108, 111]);"#
+            ))
+            .unwrap();
+        }
+
+        #[test]
+        fn cache_put_and_match_roundtrip() {
+            let rt = v8_runtime_with_dom(make_doc());
+            cache_put_test(&rt, "", "v1", "https://x.com/a");
+            assert_eq!(
+                rt.eval("_lumen_cache_has('', 'v1')").unwrap(),
+                lumen_core::JsValue::Bool(true)
+            );
+            let keys = rt.eval("_lumen_cache_keys('', 'v1')").unwrap();
+            assert_eq!(
+                keys,
+                lumen_core::JsValue::Array(vec![lumen_core::JsValue::String("https://x.com/a".into())])
+            );
+        }
+
+        #[test]
+        fn cache_match_returns_body_bytes() {
+            let rt = v8_runtime_with_dom(make_doc());
+            cache_put_test(&rt, "", "v1", "https://x.com/a");
+            // _lumen_cache_match returns a Uint8Array-like value (body bytes)
+            let len = rt
+                .eval("_lumen_cache_match('', 'v1', 'https://x.com/a').length")
+                .unwrap();
+            assert_eq!(len, lumen_core::JsValue::Number(5.0)); // "Hello" = 5 bytes
+        }
+
+        #[test]
+        fn cache_match_info_returns_json_metadata() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(r#"_lumen_cache_put('', 'v1', 'https://x.com/css', '{"method":"GET","status":304,"statusText":"Not Modified","headers":{"content-type":"text/css"}}', []);"#)
+                .unwrap();
+            let info_str = rt
+                .eval("_lumen_cache_match_info('', 'v1', 'https://x.com/css')")
+                .unwrap();
+            if let lumen_core::JsValue::String(s) = info_str {
+                assert!(s.contains("304"));
+                assert!(s.contains("Not Modified"));
+                assert!(s.contains("content-type"));
+            } else {
+                panic!("expected String from _lumen_cache_match_info");
+            }
+        }
+
+        #[test]
+        fn cache_match_info_returns_none_on_miss() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval("_lumen_cache_match_info('', 'v1', 'https://x.com/missing') === undefined")
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn cache_match_any_returns_none_on_miss() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("_lumen_cache_match_any('', 'https://x.com/missing') === undefined")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn cache_match_any_info_finds_across_caches() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(r#"_lumen_cache_put('', 'static', 'https://x.com/style.css', '{"method":"GET","status":200,"statusText":"OK","headers":{}}', []);"#)
+                .unwrap();
+            let r = rt
+                .eval("_lumen_cache_match_any_info('', 'https://x.com/style.css') !== undefined")
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn cache_delete_returns_true_when_found() {
+            let rt = v8_runtime_with_dom(make_doc());
+            cache_put_test(&rt, "", "v1", "https://x.com/b");
+            let r = rt
+                .eval("_lumen_cache_delete('', 'v1', 'https://x.com/b')")
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+            let keys = rt.eval("_lumen_cache_keys('', 'v1')").unwrap();
+            assert_eq!(keys, lumen_core::JsValue::Array(vec![]));
+        }
+
+        #[test]
+        fn cache_delete_returns_false_on_miss() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval("_lumen_cache_delete('', 'v1', 'https://x.com/nonexistent')")
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(false));
+        }
+
+        #[test]
+        fn cache_keys_full_returns_method() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(r#"_lumen_cache_put('', 'v1', 'https://x.com/api', '{"method":"POST","status":201,"statusText":"Created","headers":{}}', []);"#)
+                .unwrap();
+            let r = rt
+                .eval("_lumen_cache_keys_full('', 'v1').indexOf('POST') >= 0")
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn cache_delete_cache_returns_true_when_found() {
+            let rt = v8_runtime_with_dom(make_doc());
+            cache_put_test(&rt, "", "v1", "https://x.com/r");
+            let r = rt
+                .eval("_lumen_cache_delete_cache('', 'v1')")
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+            assert_eq!(
+                rt.eval("_lumen_cache_has('', 'v1')").unwrap(),
+                lumen_core::JsValue::Bool(false)
+            );
+        }
+
+        #[test]
+        fn cache_delete_cache_returns_false_when_missing() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval("_lumen_cache_delete_cache('', 'nonexistent')")
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(false));
+        }
+
+        #[test]
+        fn cache_names_lists_opened_caches() {
+            let rt = v8_runtime_with_dom(make_doc());
+            cache_put_test(&rt, "", "alpha", "https://x.com/r");
+            cache_put_test(&rt, "", "beta", "https://x.com/s");
+            let mut names = match rt.eval("_lumen_cache_names('')").unwrap() {
+                lumen_core::JsValue::Array(a) => a
+                    .into_iter()
+                    .filter_map(|v| {
+                        if let lumen_core::JsValue::String(s) = v { Some(s) } else { None }
+                    })
+                    .collect::<Vec<_>>(),
+                _ => vec![],
+            };
+            names.sort();
+            assert_eq!(names, vec!["alpha".to_string(), "beta".to_string()]);
+        }
+
+        #[test]
+        fn caches_open_returns_cache_with_match() {
+            let rt = v8_runtime_with_dom(make_doc());
+            // Open cache first to obtain handle, then put with same _sw_origin, then match.
+            rt.eval(
+                r#"
+                var _cache_oc = null;
+                caches.open('my-cache').then(function(c) { _cache_oc = c; });
+                "#,
+            )
+            .unwrap();
+            rt.eval(r#"
+                _lumen_cache_put(_sw_origin, 'my-cache', 'https://x.com/data',
+                    '{"method":"GET","status":200,"statusText":"OK","headers":{}}', [1,2,3]);
+                var _result_oc;
+                _cache_oc.match('https://x.com/data').then(function(r) { _result_oc = r !== undefined; });
+            "#).unwrap();
+            let r = rt.eval("_result_oc").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn caches_has_returns_true_after_put() {
+            let rt = v8_runtime_with_dom(make_doc());
+            cache_put_test(&rt, "", "my-cache", "https://x.com/x");
+            let r = rt
+                .eval("_lumen_cache_has('', 'my-cache')")
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn caches_delete_returns_true_when_found() {
+            let rt = v8_runtime_with_dom(make_doc());
+            cache_put_test(&rt, "", "old-cache", "https://x.com/z");
+            // caches.delete returns a Promise<bool>; verify via native binding
+            let had = rt.eval("_lumen_cache_delete_cache('', 'old-cache')").unwrap();
+            assert_eq!(had, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn cache_matchall_returns_all_entries() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                r#"
+                var _cache_ma = null;
+                caches.open('v1-ma').then(function(c) { _cache_ma = c; });
+                "#,
+            )
+            .unwrap();
+            rt.eval(r#"
+                _lumen_cache_put(_sw_origin, 'v1-ma', 'https://x.com/a', '{"method":"GET","status":200,"statusText":"OK","headers":{}}', [1]);
+                _lumen_cache_put(_sw_origin, 'v1-ma', 'https://x.com/b', '{"method":"GET","status":200,"statusText":"OK","headers":{}}', [2]);
+                var _all;
+                _cache_ma.matchAll().then(function(arr) { _all = arr.length; });
+            "#).unwrap();
+            let r = rt.eval("_all").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Number(2.0));
+        }
+
+        #[test]
+        fn cache_keys_returns_request_objects() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                r#"
+                var _cache_kr = null;
+                caches.open('v1-kr').then(function(c) { _cache_kr = c; });
+                "#,
+            )
+            .unwrap();
+            rt.eval(r#"
+                _lumen_cache_put(_sw_origin, 'v1-kr', 'https://x.com/page', '{"method":"GET","status":200,"statusText":"OK","headers":{}}', []);
+                var _url_kr;
+                _cache_kr.keys().then(function(reqs) { _url_kr = reqs[0] && reqs[0].url; });
+            "#).unwrap();
+            let r = rt.eval("_url_kr").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("https://x.com/page".into()));
+        }
+
+        #[test]
+        fn window_has_caches() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt.eval("typeof window.caches === 'object'").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        // ── Cache API — CacheBackend trait dispatch tests ─────────────────────────
+        //
+        // MockCacheBackend exercises the CacheBackend dispatch path in install_primitives
+        // without pulling in lumen-storage as a test dependency. The SQLite
+        // implementation is separately tested in lumen-storage::cache_storage.
+
+        type MockCacheEntry = (String, Vec<u8>);
+        type MockCacheMap = std::collections::HashMap<
+            String, // origin
+            std::collections::HashMap<
+                String, // cache_name
+                std::collections::HashMap<String, MockCacheEntry>, // url → (meta, body)
+            >,
+        >;
+
+        struct MockCacheBackend {
+            data: Mutex<MockCacheMap>,
+        }
+
+        impl MockCacheBackend {
+            fn new() -> Self {
+                Self { data: Mutex::new(std::collections::HashMap::new()) }
+            }
+        }
+
+        impl lumen_core::ext::CacheBackend for MockCacheBackend {
+            fn cache_put(&self, origin: &str, name: &str, url: &str, meta_json: &str, body: &[u8]) {
+                self.data.lock().unwrap()
+                    .entry(origin.to_owned()).or_default()
+                    .entry(name.to_owned()).or_default()
+                    .insert(url.to_owned(), (meta_json.to_owned(), body.to_vec()));
+            }
+            fn cache_match(&self, origin: &str, name: &str, url: &str) -> Option<(String, Vec<u8>)> {
+                self.data.lock().unwrap()
+                    .get(origin)?.get(name)?.get(url)
+                    .map(|(m, b)| (m.clone(), b.clone()))
+            }
+            fn cache_match_any(&self, origin: &str, url: &str) -> Option<(String, Vec<u8>)> {
+                let g = self.data.lock().unwrap();
+                let caches = g.get(origin)?;
+                for c in caches.values() {
+                    if let Some((m, b)) = c.get(url) { return Some((m.clone(), b.clone())); }
+                }
+                None
+            }
+            fn cache_delete(&self, origin: &str, name: &str, url: &str) -> bool {
+                self.data.lock().unwrap()
+                    .get_mut(origin).and_then(|c| c.get_mut(name))
+                    .and_then(|c| c.remove(url)).is_some()
+            }
+            fn cache_keys(&self, origin: &str, name: &str) -> Vec<(String, String)> {
+                self.data.lock().unwrap()
+                    .get(origin).and_then(|c| c.get(name))
+                    .map(|c| c.iter().map(|(u, (meta, _))| {
+                        let method = cache_meta_method(meta);
+                        (u.clone(), method)
+                    }).collect())
+                    .unwrap_or_default()
+            }
+            fn cache_has(&self, origin: &str, name: &str) -> bool {
+                self.data.lock().unwrap()
+                    .get(origin).and_then(|c| c.get(name))
+                    .map(|c| !c.is_empty()).unwrap_or(false)
+            }
+            fn cache_delete_cache(&self, origin: &str, name: &str) -> bool {
+                self.data.lock().unwrap()
+                    .get_mut(origin).and_then(|c| c.remove(name)).is_some()
+            }
+            fn cache_names(&self, origin: &str) -> Vec<String> {
+                self.data.lock().unwrap()
+                    .get(origin).map(|c| c.keys().cloned().collect()).unwrap_or_default()
+            }
+        }
+
+        fn v8_runtime_with_cache_backend() -> V8JsRuntime {
+            let be: Arc<dyn lumen_core::ext::CacheBackend> = Arc::new(MockCacheBackend::new());
+            let rt = V8JsRuntime::new().unwrap();
+            rt.install_dom(make_doc(), "https://example.com/", None, None, None, None, None, None, Some(be), None, false)
+                .unwrap();
+            rt
+        }
+
+        fn sqlite_cache_put(rt: &V8JsRuntime, cache: &str, url: &str) {
+            rt.eval(&format!(
+                r#"_lumen_cache_put('https://example.com/', '{cache}', '{url}', '{{"method":"GET","status":200,"statusText":"OK","headers":{{}}}}', [72,101,108,108,111]);"#
+            ))
+            .unwrap();
+        }
+
+        #[test]
+        fn sqlite_backend_put_and_has() {
+            let rt = v8_runtime_with_cache_backend();
+            sqlite_cache_put(&rt, "v1", "https://example.com/main.js");
+            let r = rt.eval("_lumen_cache_has('https://example.com/', 'v1')").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn sqlite_backend_match_returns_body() {
+            let rt = v8_runtime_with_cache_backend();
+            sqlite_cache_put(&rt, "v1", "https://example.com/style.css");
+            let len = rt.eval("_lumen_cache_match('https://example.com/', 'v1', 'https://example.com/style.css').length").unwrap();
+            assert_eq!(len, lumen_core::JsValue::Number(5.0)); // "Hello" = 5 bytes
+        }
+
+        #[test]
+        fn sqlite_backend_match_info_roundtrip() {
+            let rt = v8_runtime_with_cache_backend();
+            rt.eval(r#"_lumen_cache_put('https://example.com/', 'v1', 'https://example.com/api',
+                '{"method":"GET","status":304,"statusText":"Not Modified","headers":{"etag":"abc123"}}', []);"#)
+                .unwrap();
+            let meta = rt.eval("_lumen_cache_match_info('https://example.com/', 'v1', 'https://example.com/api')").unwrap();
+            if let lumen_core::JsValue::String(s) = meta {
+                assert!(s.contains("304"));
+                assert!(s.contains("etag"));
+            } else {
+                panic!("expected String from _lumen_cache_match_info (sqlite backend)");
+            }
+        }
+
+        #[test]
+        fn sqlite_backend_match_any_searches_all_caches() {
+            let rt = v8_runtime_with_cache_backend();
+            sqlite_cache_put(&rt, "static", "https://example.com/logo.png");
+            let body = rt.eval("_lumen_cache_match_any('https://example.com/', 'https://example.com/logo.png') !== null && _lumen_cache_match_any('https://example.com/', 'https://example.com/logo.png') !== undefined").unwrap();
+            assert_eq!(body, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn sqlite_backend_delete_entry() {
+            let rt = v8_runtime_with_cache_backend();
+            sqlite_cache_put(&rt, "v1", "https://example.com/old");
+            let deleted = rt.eval("_lumen_cache_delete('https://example.com/', 'v1', 'https://example.com/old')").unwrap();
+            assert_eq!(deleted, lumen_core::JsValue::Bool(true));
+            let after = rt.eval("_lumen_cache_match('https://example.com/', 'v1', 'https://example.com/old') === undefined").unwrap();
+            assert_eq!(after, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn sqlite_backend_keys_lists_urls() {
+            let rt = v8_runtime_with_cache_backend();
+            sqlite_cache_put(&rt, "v1", "https://example.com/a");
+            sqlite_cache_put(&rt, "v1", "https://example.com/b");
+            let keys = rt.eval("_lumen_cache_keys('https://example.com/', 'v1')").unwrap();
+            if let lumen_core::JsValue::Array(arr) = keys {
+                assert_eq!(arr.len(), 2);
+            } else {
+                panic!("expected Array");
+            }
+        }
+
+        #[test]
+        fn sqlite_backend_delete_cache() {
+            let rt = v8_runtime_with_cache_backend();
+            sqlite_cache_put(&rt, "tmp", "https://example.com/x");
+            let del = rt.eval("_lumen_cache_delete_cache('https://example.com/', 'tmp')").unwrap();
+            assert_eq!(del, lumen_core::JsValue::Bool(true));
+            let has = rt.eval("_lumen_cache_has('https://example.com/', 'tmp')").unwrap();
+            assert_eq!(has, lumen_core::JsValue::Bool(false));
+        }
+
+        #[test]
+        fn sqlite_backend_cache_names() {
+            let rt = v8_runtime_with_cache_backend();
+            sqlite_cache_put(&rt, "alpha", "https://example.com/1");
+            sqlite_cache_put(&rt, "beta", "https://example.com/2");
+            let names = rt.eval("_lumen_cache_names('https://example.com/')").unwrap();
+            if let lumen_core::JsValue::Array(arr) = names {
+                let strs: Vec<String> = arr
+                    .into_iter()
+                    .filter_map(|v| if let lumen_core::JsValue::String(s) = v { Some(s) } else { None })
+                    .collect();
+                assert!(strs.contains(&"alpha".to_string()));
+                assert!(strs.contains(&"beta".to_string()));
+            } else {
+                panic!("expected Array");
+            }
+        }
+
+        #[test]
+        fn sqlite_backend_match_miss_returns_none() {
+            let rt = v8_runtime_with_cache_backend();
+            let r = rt.eval("_lumen_cache_match('https://example.com/', 'v1', 'https://example.com/missing') === undefined").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn sqlite_backend_keys_full_includes_method() {
+            let rt = v8_runtime_with_cache_backend();
+            rt.eval(r#"_lumen_cache_put('https://example.com/', 'v1', 'https://example.com/post',
+                '{"method":"POST","status":201,"statusText":"Created","headers":{}}', []);"#)
+                .unwrap();
+            let r = rt.eval("_lumen_cache_keys_full('https://example.com/', 'v1').indexOf('POST') >= 0").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn sqlite_backend_has_false_when_empty() {
+            let rt = v8_runtime_with_cache_backend();
+            let r = rt.eval("_lumen_cache_has('https://example.com/', 'nonexistent')").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(false));
+        }
+
+        #[test]
+        fn sqlite_backend_delete_returns_false_on_miss() {
+            let rt = v8_runtime_with_cache_backend();
+            let r = rt.eval("_lumen_cache_delete('https://example.com/', 'v1', 'https://example.com/nosuchurl')").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(false));
+        }
     }
 }

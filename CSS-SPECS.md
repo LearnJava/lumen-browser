@@ -73,7 +73,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Fonts L4 | [css-fonts-4](https://www.w3.org/TR/css-fonts-4/) | 🟡 | @font-face actual loading ⬜; font-optical-sizing ✅ 2026-05-29 | **#20** |
 | CSS Intrinsic Sizing L3 | [css3-sizing](https://www.w3.org/TR/css3-sizing/) | ✅ | min-content/max-content/fit-content/fit-content(L) for width/height/min-max; 11 tests 2026-05-24 | **#21** |
 | CSS Overflow L3 (scroll) | [css-overflow-3](https://www.w3.org/TR/css-overflow-3/) | 🟡 | scrollable containers; overflow:scroll rendering | **#22** |
-| CSS Text L3/L4 | [css3-text](https://www.w3.org/TR/css3-text/) | 🟡 | text-align-last ✅ 2026-06-08; hyphens:auto ✅ (P1 2026-05-29, KnuthLiangHyphenation); white-space-collapse ✅ + break-spaces ✅ (p4-white-space-collapse 2026-07-04); line-break CJK / text-wrap-style ⬜ | **#23** |
+| CSS Text L3/L4 | [css3-text](https://www.w3.org/TR/css3-text/) | 🟡 | text-align-last ✅ 2026-06-08; hyphens:auto ✅ (P1 2026-05-29, KnuthLiangHyphenation); white-space-collapse ✅ + break-spaces ✅ (p4-white-space-collapse 2026-07-04); line-break CJK ✅ (p4-line-break-cjk 2026-07-29); text-wrap-style ✅ | **#23** |
 | CSS Transforms L2 | [css-transforms-2](https://www.w3.org/TR/css-transforms-2/) | 🟡 | individual translate/rotate/scale ✅ 2026-05-26; 3D matrix primitive + perspective-correct rendering ✅ 2026-05-29 (P2); 3D function parsing ✅ (translate3d/rotateX/matrix3d…, property_trees.rs:773); `backface-visibility` culling ✅ (p4-backface-culling); `perspective`/`perspective-origin` projection wiring 🟡 (P4) | **#24** |
 | CSS Values L4/L5 | [css-values-4](https://www.w3.org/TR/css-values-4/) | 🟡 | env(); attr() with type; cq* units | **#25** |
 
@@ -107,7 +107,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | Motion Path L1 | [motion-1](https://www.w3.org/TR/motion-1/) | 🟡 | `offset-path: path()` ✅ 2026-06-10 (P4: ComputedStyle fields + resolve_motion_transform wiring in property_trees); `offset-distance`/`offset-rotate` ✅; `ray(<angle>)` ✅ 2026-06-13 (p4-offset-ray: deg/grad/rad/turn, size/contain/at parsed-and-ignored for px distance); `offset-anchor` ⬜ Phase 3; `url()` paths ⬜ | **#44** |
 | CSS Fragmentation L3 | [css3-break](https://www.w3.org/TR/css3-break/) | ✅ | break-before/after/inside + orphans/widows in `ComputedStyle`; `pagination.rs` applies rules | **#45** |
 | CSS Color L5 | [css-color-5](https://www.w3.org/TR/css-color-5/) | ✅ | color-mix() ✅ (p4-color-mix-parsing 2026-06-08); relative color syntax ✅ (p4-relative-color 2026-06-13) | **#46** |
-| CSS Fonts L5 | [css-fonts-5](https://www.w3.org/TR/css-fonts-5/) | 🟡 | font-palette + @font-palette-values 🟡 2026-07-04 (p4-font-palette: parse → ComputedStyle → resolve → DrawText.font_palette; COLR/CPAL rasterization deferred in lumen-font) | **#47** |
+| CSS Fonts L5 | [css-fonts-5](https://www.w3.org/TR/css-fonts-5/) | 🟡 | font-palette + @font-palette-values ✅ 2026-07-29 (p4-font-palette-colr: parse → ComputedStyle → resolve → DrawText.font_palette → COLR v0 + CPAL в wgpu-рендере; COLR v1 paint graph отложен) | **#47** |
 | CSS Easing L2 | [css-easing-2](https://www.w3.org/TR/css-easing-2/) | ✅ | linear() easing TimingFunction::LinearStops 2026-05-24 | **#48** |
 | CSS Overscroll L1 | [css-overscroll-1](https://www.w3.org/TR/css-overscroll-1/) | 🟡 | gesture boundary handling | **#49** |
 | CSS Gap Decorations L1 | [css-gaps-1](https://www.w3.org/TR/css-gaps-1/) | ✅ | `gap-rule-width/style/color` shorthand+longhands; `collect_gap_segments()` in display_list.rs; flex + grid containers wired (p4-gap-rule, 2026-06-10) | **#50** |
@@ -216,15 +216,15 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | Property | Status | Notes |
 |----------|--------|-------|
 | `font` / `font-size` / `font-weight` / `font-style` / `font-family` | ✅ | |
-| `font-variant` / `font-variant-caps` | 🟡 | small-caps only; all-small-caps ⬜ |
-| `font-stretch` | 🟡 | % parsed; matcher ⬜ |
+| `font-variant` / `font-variant-caps` | 🟡 | `font-variant-caps` ✅ весь набор (normal/small-caps/all-small-caps/petite-caps/all-petite-caps/unicase/titling-caps): капитель синтезируется в layout-е (`caps_synthesis`, box_tree.rs — заглавные × 0.8 + компенсация baseline; bundled-Inter без smcp/c2sc/pcap), `titling-caps` — фичей `titl` через `text_font_features`; тест 150 (P4 2026-07-29). Остальные longhand-ы shorthand-а `font-variant` — `-ligatures`/`-numeric`/`-east-asian`/`-position`/`-alternates` — ⬜ (shorthand их только сбрасывает) |
+| `font-stretch` | ✅ | keyword + `<percentage>` (клампится в 50–200%); два независимых пути до рендера: ось `wdth` в `DrawText::font_variation_axes` для variable-шрифтов и статический подбор face-а по `usWidthClass` из OS/2 — `DrawText::font_stretch` → `FontProvider::pick_face` (CSS Fonts L4 §5.2, оба порядка обхода: ≤100% предпочитает более узкий, >100% — более широкий). Дескриптор `font-stretch` у `@font-face` участвует в резолве `local()`. Тест 74 (геометрия) + 9 layout / 13 paint / 17 core-matcher тестов (P4 2026-07-29) |
 | `font-variation-settings` | ✅ | fvar+avar normalization; applied on CPU/wgpu paths, femtovg window renders default instance (see CAPABILITIES) |
 | `font-feature-settings` | ✅ | parse + ComputedStyle (inherited) + DrawText.font_features; shaper overrides default GSUB/GPOS set (liga/clig/calt/rlig/ccmp + kern) on CPU path & femtovg varied-text path; native femtovg text shapes itself (class BUG-109) |
 | `font-size-adjust` | ✅ | real OS/2 x-height scaling (P4 2026-06-13); тест 95 |
 | `font-optical-sizing` | ✅ | auto injects opsz=font-size into variation axes; none skips |
-| `font-palette` | 🟡 | normal/light/dark/dashed-ident parsed (inherited); custom idents resolved against @font-palette-values in compute_style → DrawText.font_palette; renderer ignores it — no COLR/CPAL rasterization in lumen-font yet |
+| `font-palette` | ✅ | normal/light/dark/dashed-ident parsed (inherited); custom идент резолвится по @font-palette-values в compute_style → `DrawText.font_palette` → wgpu-рендер: COLR v0 layered-глиф рисуется по quad-у на слой, цвет слоя — запись выбранной CPAL-палитры (`0xFFFF` = текстовый цвет, альфа домножается на альфу текста). `light`/`dark` берут первую палитру с флагом `paletteType`, при отсутствии — палитра 0 (как `normal`). Парсеры `COLR`/`CPAL` — `lumen-font` (`colr.rs`/`cpal.rs`, 18 тестов), покраска — `renderer.rs` (11 тестов, включая end-to-end на синтетическом цветном шрифте). Отложено: COLR v1 paint graph (градиенты/трансформы) — v1-only глиф падает на монохромный outline; CPU-снапшот-путь и femtovg рисуют только bundled Inter (без COLR). Тестового HTML нет: цветной шрифт в репозитории отсутствует, а системный (Segoe UI Emoji) сделал бы эталон машинозависимым (P4 2026-07-29) |
 | `@font-face` | ✅ | all descriptors parsed; file loading done — `font-display: swap`, async fetch off the critical path (WQ#20) |
-| `@font-palette-values` | 🟡 | parsed + matched (name/family, base-palette, override-colors); rendering deferred with COLR |
+| `@font-palette-values` | ✅ | parsed + matched (name/family, base-palette, override-colors); `base-palette` выбирает CPAL-палитру, `override-colors` перекрашивает её записи в wgpu-рендере (P4 2026-07-29) |
 
 ### [T0] Text Styling
 
@@ -243,7 +243,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `text-align-last` | ✅ | parsed + wired in align_lines; last-line override (CSS Text L3 §7.2); 4 tests |
 | `hyphens` | ✅ | none/manual/auto; auto = KnuthLiangHyphenation (lumen-encoding, 11 locales) wired in shell via layout_measured_hyp (P1 2026-05-29) |
 | `tab-size` | ✅ | parsed; \t expanded in pre/pre-wrap; renderer advances cursor by tab_size |
-| `line-break` | 🟡 | parsed; CJK-aware breaking ⬜ |
+| `line-break` | ✅ | auto/loose/normal/strict/anywhere wired into `wrap_inline_run`; UAX #14 CJK break opportunities (`layout::line_break`) — `auto` = `normal`; `word-break: keep-all` suppresses CJK breaking, `anywhere` overrides it (p4-line-break-cjk 2026-07-29) |
 | `text-wrap-mode` / `text-wrap-style` | ✅ | text-wrap-mode → effective white-space (p4-white-space-collapse 2026-07-04); text-wrap-style balance/pretty in line-breaker (`balance_wrap`, box_tree.rs:9359) |
 | `text-underline-position` / `text-underline-offset` | ✅ | wired in push_text_decoration(); Under→fs*0.25; offset adds to base (p4-text-underline 2026-06-10) |
 | `text-emphasis` / `text-emphasis-*` | ✅ | per-char marks rendered (emit_text_emphasis_marks) |
@@ -427,12 +427,12 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 |----------|--------|-------|
 | `clip-path` | ✅ | inset/circle/ellipse/polygon/path() rendered; `<fill-rule>` (nonzero/evenodd) in path()/polygon() ✅ 2026-06-14 |
 | `clip-rule` | 🟡 | evenodd/nonzero parsed + inherited + cascaded (`svg_clip_rule`, SVG §14.3.4) 2026-07-12; rendering deferred to SVG `clip-path: url(#id)` refs. CSS clip-path uses path()/polygon() fill-rule ✅ 2026-06-14 |
-| `mask` (shorthand) | 🟡 | |
+| `mask` (shorthand) | 🟡 | full `<mask-layer>#` grammar parsed 2026-07-29 (`parse_single_mask_layer`): `<mask-reference> \|\| <position> [/ <bg-size>] \|\| <repeat-style> \|\| <geometry-box> \|\| [<geometry-box> \| no-clip] \|\| <compositing-operator> \|\| <masking-mode>`; один `<geometry-box>` задаёт origin+clip, второй — только clip; незаданные компоненты сбрасываются к initial. Render: только верхний слой (см. `mask-composite`) |
 | `mask-image` | 🟡 | GPU mask composite pipeline ✅ (PushMask/PopMask + PushMaskLayer/PopMaskLayer); alpha compositing ✅; luminance mode ✅ 2026-05-29 |
 | `mask-repeat` / `mask-size` / `mask-position` | 🟡 | parsed; `mask-position` wired into `PushMaskImage` (initial `center`, CSS Masking L1 §4.4) 2026-06-22; `mask-repeat` tile geometry: `repeat`/`no-repeat`/`repeat-x`/`repeat-y`/`round`/`space` ✅ (shared `bg_tile_geometry` + `space_axis_geometry`, §3.4 round rescale 2026-07-12, `space` gap distribution 2026-07-18); femtovg url image-mask **render** still deferred (backend, scissor no-op) — round/space are visible via the wgpu mask path + background-image |
 | `mask-mode` | ✅ | `alpha` / `luminance` / `match-source` (CSS Masking L1 §6.4); gradient masks bake `luminance(rgb)·alpha` into stop alpha (BUG-218, 2026-06-19) |
 | `mask-origin` | ✅ | sets the mask positioning area (border/padding/content box) via `background_origin_rect`, initial `border-box` (§4.5) 2026-06-22 |
-| `mask-clip` / `mask-composite` | 🟡 | `mask-clip` full `<coord-box> \| no-clip` grammar ✅: `padding-box`/`content-box`/`fill-box` wrap the mask group in `PushClipRect`/`PopClip` (scissor path; `fill-box` = content box for CSS boxes, CSS Box 4 §1); `border-box`/`stroke-box`/`view-box`/`no-clip` = no-op (border box or unclipped) 2026-07-18; `mask-composite` multi-layer ⬜ — blocked on multi-layer mask infrastructure: `mask_image` is a single value, not a list |
+| `mask-clip` / `mask-composite` | 🟡 | `mask-clip` full `<coord-box> \| no-clip` grammar ✅: `padding-box`/`content-box`/`fill-box` wrap the mask group in `PushClipRect`/`PopClip` (scissor path; `fill-box` = content box for CSS boxes, CSS Box 4 §1); `border-box`/`stroke-box`/`view-box`/`no-clip` = no-op (border box or unclipped) 2026-07-18; `mask-composite` parsed per-layer ✅ 2026-07-29 (multi-layer infra: `ComputedStyle::mask_layers: Vec<MaskLayer>`, все 8 longhand-ов — списки с cycling по §4.9); **render** 🟡 2026-07-29 — `intersect` ✅: цепочка слоёв эмитится вложенными mask-группами (`rendered_mask_layers`), вложение перемножает альфы = Porter-Duff source-in, бэкенды уже держат стек mask-уровней; `mask-clip` слоёв при этом пересекается в один rect (точно, т.к. умножение). `add`/`subtract`/`exclude` между слоями ⬜ — вложением не выражаются, нужна сборка маски в отдельный офскрин во всех трёх бэкендах (`// CSS: mask-composite` в `rendered_mask_layers`); fallback — рендерится только верхний слой. Вырожденный `intersect` на нижнем слое (оператор против прозрачного фона) тоже уходит в fallback: трактовка расходится между браузерами |
 
 ### [T2] Compositing
 
@@ -555,7 +555,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 
 | Property | Status | Notes |
 |----------|--------|-------|
-| `content` | 🟡 | string ✅; attr() ✅ 2026-05-25; counter()/counters() ✅ 2026-05-25; open-quote/close-quote ✅ 2026-06-14; url() ⬜ |
+| `content` | ✅ | string ✅; attr() ✅ 2026-05-25; counter()/counters() ✅ 2026-05-25; open-quote/close-quote ✅ 2026-06-14; url() ✅ 2026-07-29 (inline-replaced image segment; fetched via post-layout background pass) |
 | `quotes` | ✅ | CSS Generated Content L3 §3.2; auto/none/[<string> <string>]+; nesting depth tracked in document order via counters pre-pass; тест 117 2026-06-14 |
 
 ### [T3] Box Alignment (grid)
@@ -564,7 +564,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 |----------|--------|-------|
 | `justify-items` | ✅ | grid cells ✅; block-container default for block children ✅ 2026-07-18 |
 | `justify-self` | ✅ | grid items ✅; block-level start/center/end ✅ 2026-07-05; `justify-items` container default ✅ 2026-07-18 |
-| `place-items` / `place-self` / `place-content` | 🟡 | shorthands; grid ⬜ |
+| `place-items` / `place-self` / `place-content` | ✅ | shorthands (1–2 values, single value applies to both axes) → `align-*` + `justify-*` longhands; grid honours them end-to-end: `place-items`/`place-self` per cell, `place-content` distributes the container's free space between tracks (`start`/`center`/`end`/`space-between`/`space-around`/`space-evenly`, plus `normal`→`stretch` growing `auto` rows into a definite height) — CSS Box Alignment L3 §5, CSS Grid L1 §12.3, p4-place-shorthands 2026-07-29; тест 152. Overflow follows §5.3: `space-between`→`start`, `space-around`/`space-evenly`→`center`, then resolved unsafely (tracks shift past the start edge, like Edge). Deferred: `minmax(_, auto)` rows do not participate in stretch; the `safe`/`unsafe` keywords themselves are unparsed, so `safe` cannot be opted into |
 
 ### [T3] Inline / Line Box
 
@@ -607,7 +607,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `@layer` | ✅ | parsed; cascade ordering ✅ |
 | `@container` | ✅ | condition matching ✅; 2nd-pass re-layout ✅; cq* units ✅ 2026-05-25 |
 | `@color-profile` | 🟡 | CSS Color L5 §4; parsed+stored (`ColorProfileRule`, css-parser); `color(--name c1 c2 c3)` recognized in `parse_css_color_fn` (style.rs); real ICC transform + declared-name validation deferred (p4-color-profile 2026-07-15, test 142, KNOWN_DEBTOR BUG-282) |
-| `@font-palette-values` | 🟡 | parsed (name + font-family + base-palette + override-colors); matched by name/family in compute_style; rendering deferred with COLR |
+| `@font-palette-values` | ✅ | parsed (name + font-family + base-palette + override-colors); matched by name/family in compute_style; `base-palette` + `override-colors` применяются к CPAL-палитре при покраске COLR v0 глифов (P4 2026-07-29) |
 | `@counter-style` | ✅ | CSS Counter Styles L3; `parse_counter_style_rule` (parser.rs:2336) |
 | `@scope` | ✅ | `parse_scope_rule` (parser.rs) applied in cascade loop (style.rs); donut scoping via `node_in_scope` (root + `to (<limit>)` in one ancestor walk, nearest boundary wins) |
 | `@function` | 🟡 | CSS Functions and Mixins L1; `<name>(<params>) [returns <type>]?` parsed+stored (`FunctionRule`, css-parser); `<name>(<args>)` call sites in property values resolved end-to-end (positional args + defaults, local `--x:` decls, `result:` via `calc()`/`var()`) in layout (`expand_custom_functions`, style.rs); deferred: `returns` type-checking, conditional group rules in body, named args (p4-css-function 2026-07-15, test 143) |
@@ -641,10 +641,10 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 
 | Property | Status | Notes |
 |----------|--------|-------|
-| `direction` | 🟡 | ltr/rtl; fragment mirroring ✅; UBA ⬜ |
-| `writing-mode` | ✅ | vertical-rl/lr axis-swap layout + vertical inline flow; glyph rotation on CPU+wgpu (femtovg fallback ⬜) |
-| `text-orientation` | 🟡 | parsed; mixed/upright/sideways glyph rotation ✅ on CPU+wgpu (per-glyph CJK-upright/Latin-rotated split for `mixed`, Срезы 1–3), femtovg ⬜ |
-| `unicode-bidi` | 🟡 | parsed; full bidi ⬜ |
+| `direction` | ✅ | ltr/rtl; sets the UAX #9 paragraph embedding level (`lumen-layout` `bidi.rs`) and resolves logical `text-align: start/end` |
+| `writing-mode` | ✅ | vertical-rl/lr axis-swap layout + vertical inline flow; glyph rotation on all three backends (CPU, wgpu, femtovg) |
+| `text-orientation` | ✅ | mixed/upright/sideways glyph rotation on all three backends (per-glyph CJK-upright/Latin-rotated split for `mixed`, Срезы 1–3 + femtovg-срез); `upright`'s per-glyph (vs per-word) vertical advance → BUG-290 |
+| `unicode-bidi` | ✅ | all six values end-to-end (`normal`/`embed`/`isolate`/`bidi-override`/`isolate-override`/`plaintext`, incl. `-webkit-`/`-moz-` aliases); UAX #9 P2–I2 + L2 + L4 over the inline formatting context (`lumen-layout` `bidi.rs`), RTL runs reversed and bracket-mirrored at display-list emission. Residual: `unicode-bidi` groups per *segment run*, not per inline element (flat segment list — see `bidi.rs` module docs); vertical writing modes are not reordered; `plaintext` on a **block** does not re-resolve that block's `text-align: start/end` |
 
 ### [T4] Shapes & Motion Path
 

@@ -21,7 +21,7 @@
 //! - совпадения не пересекают границы TextFragment (одно слово / run).
 
 use lumen_core::geom::Rect;
-use lumen_layout::{Color, FontStyle, FontWeight, TextFragment, TextMeasurer};
+use lumen_layout::{Color, TextFragment, TextMeasurer};
 use lumen_paint::{DisplayCommand, DisplayList};
 
 /// Состояние find bar и текущего запроса.
@@ -310,23 +310,6 @@ fn quant_key(x: f32, y: f32, text: &str) -> (i32, i32, String) {
     ((x * 2.0).round() as i32, (y * 2.0).round() as i32, text.to_string())
 }
 
-/// Параметры overlay-бара.
-pub struct BarOverlay {
-    pub window_size: (u32, u32),
-}
-
-const BAR_BG: Color = Color { r: 40, g: 40, b: 45, a: 235 };
-const BAR_FG: Color = Color { r: 245, g: 245, b: 245, a: 255 };
-const BAR_DIM: Color = Color { r: 180, g: 180, b: 180, a: 255 };
-const BAR_INPUT_BG: Color = Color { r: 25, g: 25, b: 28, a: 255 };
-const BAR_REGEX_ON: Color = Color { r: 100, g: 200, b: 255, a: 255 };
-const BAR_ERR: Color = Color { r: 255, g: 80, b: 80, a: 255 };
-
-const BAR_WIDTH: f32 = 480.0;
-const BAR_HEIGHT: f32 = 40.0;
-const BAR_PAD: f32 = 12.0;
-const BAR_FONT_SIZE: f32 = 16.0;
-
 /// Собирает page-полосу display list-а: исходные команды + highlight-FillRect-ы
 /// перед каждой DrawText с матчем.
 pub fn build_page_with_highlights(
@@ -360,132 +343,10 @@ pub fn build_page_with_highlights(
     out
 }
 
-/// Собирает overlay-полосу: только find-bar (фон + label + input + counter +
-/// regex-индикатор). Рисуется поверх страницы без scroll-смещения.
-pub fn build_bar_overlay(
-    state: &FindState,
-    matches_count: usize,
-    bar: BarOverlay,
-) -> DisplayList {
-    let mut out: DisplayList = Vec::with_capacity(8);
-    append_bar(&mut out, state, matches_count, bar.window_size);
-    out
-}
-
-/// Совместимая сборка: page + bar в один list. Только для тестов и dump-режимов.
-#[cfg(test)]
-pub fn build_with_overlay(
-    base: &DisplayList,
-    state: &FindState,
-    matches: &[FindMatch],
-    bar: BarOverlay,
-) -> DisplayList {
-    let mut out = build_page_with_highlights(base, state, matches);
-    append_bar(&mut out, state, matches.len(), bar.window_size);
-    out
-}
-
-fn append_bar(out: &mut DisplayList, state: &FindState, total: usize, (ww, _wh): (u32, u32)) {
-    let x = (ww as f32 - BAR_WIDTH - BAR_PAD).max(BAR_PAD);
-    // DS-9: floats below the permanent toolbar row, not the raw window top.
-    let y = crate::toolbar::CHROME_H + BAR_PAD;
-
-    out.push(DisplayCommand::FillRect {
-        rect: Rect::new(x, y, BAR_WIDTH, BAR_HEIGHT),
-        color: BAR_BG,
-    });
-
-    // Regex-индикатор «.*» слева от лейбла.
-    let regex_label_w = 28.0;
-    let regex_color = if state.is_regex_mode() { BAR_REGEX_ON } else { BAR_DIM };
-    out.push(DisplayCommand::DrawText {
-        rect: Rect::new(x + 8.0, y + 10.0, regex_label_w, BAR_FONT_SIZE * 1.2),
-        text: ".*".to_string(),
-        font_size: BAR_FONT_SIZE - 2.0,
-        color: regex_color,
-        font_family: Vec::new(),
-        font_weight: FontWeight::NORMAL,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
-    });
-
-    let label = "Найти:";
-    let label_w = 60.0;
-    out.push(DisplayCommand::DrawText {
-        rect: Rect::new(x + 8.0 + regex_label_w + 4.0, y + 10.0, label_w, BAR_FONT_SIZE * 1.2),
-        text: label.to_string(),
-        font_size: BAR_FONT_SIZE,
-        color: BAR_FG,
-        font_family: Vec::new(),
-        font_weight: FontWeight::NORMAL,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
-    });
-
-    let input_x = x + 8.0 + regex_label_w + 4.0 + label_w + 8.0;
-    let input_w = 248.0;
-    let input_h = 26.0;
-    let input_y = y + (BAR_HEIGHT - input_h) / 2.0;
-    out.push(DisplayCommand::FillRect {
-        rect: Rect::new(input_x, input_y, input_w, input_h),
-        color: BAR_INPUT_BG,
-    });
-    out.push(DisplayCommand::DrawText {
-        rect: Rect::new(input_x + 6.0, input_y + 4.0, input_w - 12.0, input_h - 8.0),
-        text: state.query().to_string(),
-        font_size: BAR_FONT_SIZE,
-        color: BAR_FG,
-        font_family: Vec::new(),
-        font_weight: FontWeight::NORMAL,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
-    });
-
-    let status = if state.query().is_empty() {
-        "Esc / Ctrl+R".to_string()
-    } else if state.is_regex_mode() && !is_valid_regex_pattern(state.query()) {
-        "ERR".to_string()
-    } else if total == 0 {
-        "0/0".to_string()
-    } else {
-        format!("{}/{}", state.active_index() + 1, total)
-    };
-    let status_color = if status == "ERR" { BAR_ERR } else { BAR_DIM };
-    out.push(DisplayCommand::DrawText {
-        rect: Rect::new(input_x + input_w + 8.0, y + 10.0, 110.0, BAR_FONT_SIZE * 1.2),
-        text: status,
-        font_size: BAR_FONT_SIZE - 2.0,
-        color: status_color,
-        font_family: Vec::new(),
-        font_weight: FontWeight::NORMAL,
-        font_style: FontStyle::Normal,
-        font_variation_axes: Vec::new(),
-        font_features: Vec::new(),
-        font_palette: None,
-        tab_size: 0.0,
-        highlight_name: None,
-        text_orientation: None,
-    });
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lumen_layout::{FontStyle, FontWeight};
     use lumen_paint::DisplayCommand;
 
     struct Fixed8;
@@ -497,6 +358,7 @@ mod tests {
 
     fn draw_text(text: &str, x: f32, y: f32, w: f32, h: f32) -> DisplayCommand {
         DisplayCommand::DrawText {
+            font_stretch: lumen_layout::FontStretch::NORMAL,
             rect: Rect::new(x, y, w, h),
             text: text.to_string(),
             font_size: 16.0,
@@ -693,22 +555,17 @@ mod tests {
         assert_eq!(s.active_index(), 0);
     }
 
-    // ── build_with_overlay (highlights + bar) ─────────────────────────────────
+    // ── build_page_with_highlights ──────────────────────────────────
 
     #[test]
-    fn build_with_overlay_inserts_highlight_before_text() {
+    fn highlights_inserted_before_text() {
         let dl = vec![draw_text("hello", 0.0, 0.0, 50.0, 20.0)];
         let m = find_matches(&dl, "ell", &Fixed8);
         assert_eq!(m.len(), 1);
         let mut state = FindState::default();
         state.open();
         state.append_str("ell");
-        let final_dl = build_with_overlay(
-            &dl,
-            &state,
-            &m,
-            BarOverlay { window_size: (800, 600) },
-        );
+        let final_dl = build_page_with_highlights(&dl, &state, &m);
 
         match &final_dl[0] {
             DisplayCommand::FillRect { color, .. } => {
@@ -723,25 +580,7 @@ mod tests {
     }
 
     #[test]
-    fn build_with_overlay_appends_bar() {
-        let dl = vec![draw_text("hi", 0.0, 0.0, 50.0, 20.0)];
-        let m: Vec<FindMatch> = vec![];
-        let mut state = FindState::default();
-        state.open();
-        let out = build_with_overlay(
-            &dl,
-            &state,
-            &m,
-            BarOverlay { window_size: (800, 600) },
-        );
-        let has_label = out
-            .iter()
-            .any(|c| matches!(c, DisplayCommand::DrawText { text, .. } if text == "Найти:"));
-        assert!(has_label);
-    }
-
-    #[test]
-    fn build_with_overlay_active_highlight_brighter() {
+    fn active_highlight_brighter() {
         let dl = vec![draw_text("abab", 0.0, 0.0, 50.0, 20.0)];
         let m = find_matches(&dl, "ab", &Fixed8);
         assert_eq!(m.len(), 2);
@@ -749,12 +588,7 @@ mod tests {
         state.open();
         state.append_str("ab");
         state.next(2);
-        let final_dl = build_with_overlay(
-            &dl,
-            &state,
-            &m,
-            BarOverlay { window_size: (800, 600) },
-        );
+        let final_dl = build_page_with_highlights(&dl, &state, &m);
         let match_highlights: Vec<&Color> = final_dl
             .iter()
             .filter_map(|c| match c {
@@ -769,44 +603,6 @@ mod tests {
         assert_eq!(match_highlights[1].r, HIGHLIGHT_ACTIVE.r);
     }
 
-    #[test]
-    fn build_with_overlay_status_counter_present() {
-        let dl = vec![draw_text("ab ab ab", 0.0, 0.0, 200.0, 20.0)];
-        let m = find_matches(&dl, "ab", &Fixed8);
-        assert_eq!(m.len(), 3);
-        let mut state = FindState::default();
-        state.open();
-        state.append_str("ab");
-        let final_dl = build_with_overlay(
-            &dl,
-            &state,
-            &m,
-            BarOverlay { window_size: (800, 600) },
-        );
-        let has_counter = final_dl
-            .iter()
-            .any(|c| matches!(c, DisplayCommand::DrawText { text, .. } if text == "1/3"));
-        assert!(has_counter);
-    }
-
-    #[test]
-    fn build_with_overlay_no_matches_shows_zero_status() {
-        let dl = vec![draw_text("hello", 0.0, 0.0, 50.0, 20.0)];
-        let m: Vec<FindMatch> = vec![];
-        let mut state = FindState::default();
-        state.open();
-        state.append_str("xyz");
-        let final_dl = build_with_overlay(
-            &dl,
-            &state,
-            &m,
-            BarOverlay { window_size: (800, 600) },
-        );
-        let has_zero = final_dl
-            .iter()
-            .any(|c| matches!(c, DisplayCommand::DrawText { text, .. } if text == "0/0"));
-        assert!(has_zero);
-    }
 
     #[test]
     fn find_returns_empty_when_query_empty_even_with_text() {

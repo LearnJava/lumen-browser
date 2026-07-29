@@ -34,11 +34,6 @@ use lumen_paint::DisplayList;
 pub const PANEL_WIDTH: f32 = 300.0;
 /// Height of the sidebar title bar in CSS px.
 const HEADER_H: f32 = 32.0;
-/// Close button size in CSS px (square).
-const CLOSE_SIZE: f32 = 18.0;
-/// Right margin for the close button inside the header.
-const CLOSE_RIGHT: f32 = 7.0;
-
 // ── Data types ────────────────────────────────────────────────────────────────
 
 /// Right-docked sidebar web panel state (7D.3).
@@ -100,11 +95,6 @@ impl SidebarPanel {
         self.visible = true;
     }
 
-    /// Close the sidebar (hide; URL and content are preserved for re-open).
-    pub fn close(&mut self) {
-        self.visible = false;
-    }
-
     /// Store a freshly-rendered display list for the sidebar page.
     ///
     /// Called by `Lumen::open_sidebar_page` after the page pipeline completes.
@@ -142,63 +132,14 @@ impl Default for SidebarPanel {
 
 // ── Hit-testing ───────────────────────────────────────────────────────────────
 
-/// Result of a click inside the sidebar panel.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SidebarHit {
-    /// Clicked the "×" close button in the header.
-    Close,
-    /// Clicked in the page content area.
-    Content,
-    /// Clicked in the header (not on the close button).
-    Header,
-}
-
-/// Hit-test `(x, y)` in CSS px against the sidebar panel.
-///
-/// Returns `None` when the click is outside the panel or the panel is hidden.
-/// `tab_bar_h` is the height of the tab strip above the panel.
-pub fn hit_test(
-    panel: &SidebarPanel,
-    x: f32,
-    y: f32,
-    origin_x: f32,
-    tab_bar_h: f32,
-    window_h: f32,
-    width: f32,
-) -> Option<SidebarHit> {
-    if !panel.visible {
-        return None;
-    }
-    let px = origin_x;
-    if x < px || x >= px + width || y < tab_bar_h || y >= window_h {
-        return None;
-    }
-    let rel_y = y - tab_bar_h;
-
-    if rel_y < HEADER_H {
-        // Close button: right side of header.
-        let close_x = px + width - CLOSE_RIGHT - CLOSE_SIZE;
-        let close_y = tab_bar_h + (HEADER_H - CLOSE_SIZE) / 2.0;
-        if x >= close_x && x < close_x + CLOSE_SIZE && y >= close_y && y < close_y + CLOSE_SIZE {
-            return Some(SidebarHit::Close);
-        }
-        return Some(SidebarHit::Header);
-    }
-
-    Some(SidebarHit::Content)
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const WIN_W: f32 = 1024.0;
     const WIN_H: f32 = 720.0;
     const TAB_H: f32 = 36.0;
-    /// Left origin of the panel at its default right dock.
-    const PX: f32 = WIN_W - PANEL_WIDTH;
 
     fn hidden() -> SidebarPanel {
         SidebarPanel::new()
@@ -275,14 +216,6 @@ mod tests {
         assert_eq!(p.scroll_y, 300.0, "scroll clamped to new content height");
     }
 
-    #[test]
-    fn close_hides_preserves_url() {
-        let mut p = visible_no_page();
-        p.close();
-        assert!(!p.visible);
-        assert!(p.url.is_some());
-    }
-
     // ── max_scroll ────────────────────────────────────────────────────────────
 
     #[test]
@@ -298,71 +231,5 @@ mod tests {
         let mut p = visible_no_page();
         p.content_height = 10.0;
         assert_eq!(p.max_scroll(WIN_H - TAB_H), 0.0);
-    }
-
-    // ── hit_test ──────────────────────────────────────────────────────────────
-
-    #[test]
-    fn hit_test_hidden_returns_none() {
-        let p = hidden();
-        assert!(hit_test(&p, WIN_W - 10.0, 100.0, PX, TAB_H, WIN_H, PANEL_WIDTH).is_none());
-    }
-
-    #[test]
-    fn hit_test_outside_panel_returns_none() {
-        let p = visible_no_page();
-        // Click in main page area
-        assert!(hit_test(&p, WIN_W - PANEL_WIDTH - 1.0, 100.0, PX, TAB_H, WIN_H, PANEL_WIDTH).is_none());
-    }
-
-    #[test]
-    fn hit_test_in_tab_bar_area_returns_none() {
-        let p = visible_no_page();
-        assert!(hit_test(&p, WIN_W - 10.0, TAB_H - 1.0, PX, TAB_H, WIN_H, PANEL_WIDTH).is_none());
-    }
-
-    #[test]
-    fn hit_test_header_no_close() {
-        let p = visible_no_page();
-        let hit = hit_test(&p, WIN_W - PANEL_WIDTH + 50.0, TAB_H + 5.0, PX, TAB_H, WIN_H, PANEL_WIDTH);
-        assert_eq!(hit, Some(SidebarHit::Header));
-    }
-
-    #[test]
-    fn hit_test_close_button() {
-        let p = visible_no_page();
-        let close_x = WIN_W - CLOSE_RIGHT - CLOSE_SIZE + 2.0;
-        let close_y = TAB_H + (HEADER_H - CLOSE_SIZE) / 2.0 + 2.0;
-        let hit = hit_test(&p, close_x, close_y, PX, TAB_H, WIN_H, PANEL_WIDTH);
-        assert_eq!(hit, Some(SidebarHit::Close));
-    }
-
-    #[test]
-    fn hit_test_content_area() {
-        let p = visible_no_page();
-        let content_y = TAB_H + HEADER_H + 10.0;
-        let hit = hit_test(&p, WIN_W - PANEL_WIDTH + 10.0, content_y, PX, TAB_H, WIN_H, PANEL_WIDTH);
-        assert_eq!(hit, Some(SidebarHit::Content));
-    }
-
-    // ── cross-dock (origin_x at the left edge) ──────────────────────────────────
-
-    #[test]
-    fn hit_test_left_dock_inside_and_outside() {
-        let p = visible_no_page();
-        // origin_x = 0 → panel hugs the left edge, spanning [0, PANEL_WIDTH).
-        assert!(hit_test(&p, 10.0, TAB_H + HEADER_H + 10.0, 0.0, TAB_H, WIN_H, PANEL_WIDTH).is_some());
-        assert!(hit_test(&p, PANEL_WIDTH + 1.0, TAB_H + HEADER_H + 10.0, 0.0, TAB_H, WIN_H, PANEL_WIDTH).is_none());
-    }
-
-    #[test]
-    fn hit_test_left_dock_close_button() {
-        let p = visible_no_page();
-        let close_x = PANEL_WIDTH - CLOSE_RIGHT - CLOSE_SIZE + 2.0;
-        let close_y = TAB_H + (HEADER_H - CLOSE_SIZE) / 2.0 + 2.0;
-        assert_eq!(
-            hit_test(&p, close_x, close_y, 0.0, TAB_H, WIN_H, PANEL_WIDTH),
-            Some(SidebarHit::Close)
-        );
     }
 }

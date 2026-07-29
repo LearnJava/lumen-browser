@@ -2185,6 +2185,7 @@ dependencies = [
 name = "lumen-chrome"
 version = "0.5.0"
 dependencies = [
+ "bincode",
  "lumen-core",
  "lumen-css-parser",
  "lumen-dom",
@@ -2357,6 +2358,8 @@ dependencies = [
  "lumen-html-parser",
  "lumen-image",
  "rayon",
+ "unicode-bidi",
+ "unicode-bidi-mirroring",
  "workspace-hack",
 ]
 

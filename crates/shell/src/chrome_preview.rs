@@ -5,8 +5,8 @@
 //! `scripts/gen_chrome_assets.py` from the frozen design reference) as an
 //! ordinary page through the ordinary `PageSource::Static` path — no chrome
 //! wiring yet, this exists purely to compare the existing HTML/CSS/layout
-//! pipeline's rendering against the reference. Always available (not gated
-//! by `LUMEN_CSS_CHROME`, unlike the runtime chrome host added in CC-4).
+//! pipeline's rendering against the reference. Separate from the runtime
+//! chrome host added in CC-4, which renders the same asset as real chrome.
 
 /// Canonical `about:` URL for the chrome render-smoke page.
 pub const URL: &str = "about:chrome-preview";

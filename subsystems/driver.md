@@ -20,7 +20,8 @@ headless pipeline without winit/wgpu/ffmpeg.
   `navigate()`, `is_navigable_href` excludes `#`/`javascript:`/`mailto:`/`tel:`) or
   toggles `checked` on a checkbox/radio; `type_text` writes the `value` attribute
   (overwrite, not append — errors on non-input/textarea targets); `eval(js)` builds a
-  one-shot `QuickJsRuntime` (`--features quickjs`) bound via `install_dom` to a
+  one-shot `V8JsRuntime` (feature `v8`, on by default — S12b-22 ported this off
+  `QuickJsRuntime` and dropped the `quickjs` feature) bound via `install_dom` to a
   **clone** of the current DOM (mutations from `eval` do not feed back into the
   session's own layout/paint state — that bidirectional wiring is the larger 8A.8
   migration) and returns the result as a JSON string
@@ -92,8 +93,8 @@ headless pipeline without winit/wgpu/ffmpeg.
   `layout_snapshot`/`computed_style*`/`screenshot` don't reflect DOM mutations made via
   `click`/`type_text`/`eval` (matches `WinitSession`'s existing limitation; full
   interactive-JS-driven relayout is a separate, much larger slice). `crates/shell/Cargo.toml`:
-  `v8`/`quickjs` features now also enable `lumen-driver/v8-backend`/`lumen-driver/quickjs`
-  respectively, and `lumen-driver` always gets `cpu-render` — so a plain
+  `lumen-driver` is taken with its defaults plus an explicit `cpu-render`, and
+  `lumen-driver`'s own defaults are `["cpu-render", "v8"]` — so a plain
   `cargo build -p lumen-shell` (default features) ships a headless MCP that Just Works.
 
 
@@ -108,7 +109,12 @@ headless pipeline without winit/wgpu/ffmpeg.
 
 ## Deferred
 
-- `WinitSession::eval` without `--features quickjs` still errors.
+- `WinitSession::eval` built with `--no-default-features` (feature `v8` off) still errors —
+  the runtime it needs is not compiled in. Every workspace crate depending on `lumen-driver`
+  takes its defaults, so this only bites a deliberately stripped build.
+- `WinitSession::eval` stays one-shot: it spins up a fresh `V8JsRuntime` + `install_dom` per
+  call against a DOM **clone**, so DOM mutations are dropped and repeated calls pay full
+  runtime-init cost. The persistent alternative is `InProcessSession` (DEVX-5).
 - Native OS-level input dispatch (isTrusted mouse/keyboard events) for click/type — that's the live shell window's job (SDC-1b), not this headless session.
 - Full auto-wait (`WaitCondition::Visible/Stable/NetworkIdle/JsIdle`) beyond `WinitSession::wait`'s existing poll loop — task 8D refinements.
 - `LiveWindowSession`'s `layout_snapshot`/`computed_style(_snapshot)`/`layout_box_by_selector`/
@@ -127,10 +133,14 @@ headless pipeline without winit/wgpu/ffmpeg.
 - `InProcessSession` never opens a winit window or wgpu surface, and this crate has no winit/wgpu dependency — keeps it usable in CI without GPU (with `cpu-render` on; without it, `screenshot()` still needs a wgpu adapter, see above).
 - `navigate()` clears `net_log` and `con_log` — callers must read logs before next navigate.
 - `screenshot_cpu_rgba/png` (feature `cpu-render`): renders through the deterministic tiny-skia CPU path for cross-OS pixel-identical snapshots.
+- **`run_pipeline` runs the page's inline classic `<script>` before layout** (BUG-429), mirroring the shell's `parse_and_layout` → `run_scripts_with_dom` → layout order: the document is wrapped in `Arc<Mutex<Document>>`, the V8 runtime is installed against it, `run_page_scripts` evaluates each inline script in document order and advances `readyState` to `interactive` → `complete`, and only then are the box tree and display list built. Moving the V8 install to the end (as it was) makes script-built DOM invisible to layout. Since S12b-23 `run_page_scripts` also evaluates inline `<script type="module">` bodies through `eval_module`, after the classic ones (HTML LS §8.1.3.1 — modules are deferred); their `import`s resolve only against modules registered on the runtime, since this path still must not fetch ([BUG-446](../bugs/BUG-446-OPEN.md)). External `<script src>` stays deliberately skipped — a deterministic offline path must not fetch; the count of skipped externals goes to stderr rather than being swallowed.
+- **`flush_canvas_updates` is a *drain*, not a read** — it returns each dirty `<canvas>` buffer exactly once and clears the dirty set. The live shell gets away with calling it per frame; `InProcessSession` has no frame loop, so it accumulates the drains into `canvas_images: Mutex<HashMap<u32, Arc<Image>>>` and hands the whole set to `render_to_image_cpu` on every screenshot (key `canvas:{nid}` — the same string `display_list.rs` puts in `DrawImage.src`). Draining straight into a local would blank the canvas on the second screenshot (BUG-429).
+- **`run_pipeline` publishes the layout snapshot into the V8 runtime right after `layout_measured`** (BUG-382): `getComputedStyle()`/`getBoundingClientRect()` answer from the map the embedder pushes (`update_layout_rects`/`update_computed_styles`), never by querying the layout engine. This session has no relayout path to piggyback on, so before the fix every property read back as `""` and every rect as all-zeros for the whole session. Any future path that re-lays out (a relayout after `click`/`type_text`, a viewport change) must re-publish, or JS silently keeps the stale geometry. Gate: `tests/cases/layout_snapshot_to_js.rs`.
+- Decoded `<img>` pixels are still absent from that image set — the session fetches no subresources, so every image box paints the grey placeholder ([BUG-430](../bugs/BUG-430-OPEN.md)).
 - `SessionState.doc: Arc<Mutex<Document>>` (DEVX-5) — every read/write site locks it; the lock is never held across a `navigate()`/`self.` call that could re-enter (`resolve_target_node` and friends take `&Document` directly, not `&SessionState`, so they can run under an already-held lock without deadlocking).
 - `driver/tests/snapshot_cpu.rs` (feature `cpu-render`): pixel-compares all 57 graphic_tests pages against committed references in `graphic_tests/snapshots/cpu/`. Regenerate: `SAVE_CPU_SNAPSHOTS=1 cargo test -p lumen-driver --features cpu-render`.
 - `driver/tests/test_00..49.rs`: 50 structural-assert integration tests.
 
 ## Test counts
 
-12 unit tests in `crates/driver/src/session.rs`; 50 structural integration tests `test_00..49.rs`; 1 snapshot gate `snapshot_cpu` covering 57 pages; 5 (+2 under `--features quickjs`) `WinitSession` automation-command tests in `test_automation_commands.rs`; 6 (+3 under `--features v8`, +1 under its absence) `InProcessSession` automation-command tests in `test_devx5_headless_automation.rs`.
+12 unit tests in `crates/driver/src/session.rs`; 50 structural integration tests `test_00..49.rs`; 1 snapshot gate `snapshot_cpu` covering 57 pages; 7 (of which 2 under feature `v8`, on by default) `WinitSession` automation-command tests in `test_automation_commands.rs`; 6 (+3 under `--features v8`, +1 under its absence) `InProcessSession` automation-command tests in `test_devx5_headless_automation.rs`; 3 scripted-render regression tests in `scripted_render.rs` (feature `cpu-render` + `v8` — page scripts reaching layout, Canvas 2D pixels reaching the raster; BUG-429); 2 snapshot-delivery regression tests in `layout_snapshot_to_js.rs` (feature `v8` — `getComputedStyle`/`getBoundingClientRect` answering with real data after navigation, 4 fresh sessions each; BUG-382).

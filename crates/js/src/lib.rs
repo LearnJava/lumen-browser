@@ -134,6 +134,11 @@ pub(crate) mod v8_compat;
 #[cfg(feature = "v8-backend")]
 pub mod v8_runtime;
 
+/// V8 ES-module loader (slice S12b-23): `<script type=module>`, import maps,
+/// import attributes and dynamic `import()` on the V8 backend.
+#[cfg(feature = "v8-backend")]
+pub(crate) mod v8_esm;
+
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
 use rquickjs::{Array, Context, Ctx, FromJs, Function, IntoJs, Object, Runtime, Type, Value};
@@ -1821,15 +1826,19 @@ impl QuickJsRuntime {
 
     /// Notify the JS runtime that the shell moved keyboard focus to a new node.
     ///
-    /// Updates `_lumen_last_focused_nid` so that `showModal()` can save and restore
-    /// the previously focused element per HTML LS §6.6.3. `nid = None` means focus
-    /// was cleared (e.g. click on non-focusable area).
+    /// Runs the shim's focus-update steps (BUG-381): records the new
+    /// `document.activeElement`, fires `blur`/`focusout`/`focus`/`focusin` and
+    /// keeps `_lumen_last_focused_nid` current so `showModal()` can save and
+    /// restore the previously focused element per HTML LS §6.6.3. `nid = None`
+    /// means focus was cleared (e.g. click on a non-focusable area). No-op when
+    /// the change merely echoes a focus the page itself just requested.
     pub fn notify_focus_changed(&self, nid: Option<u32>) {
         let n = nid.map(|n| n as i64).unwrap_or(-1_i64);
         self.run(|inner| {
             inner.ctx.with(|ctx| {
                 let script = format!(
-                    "if(typeof _lumen_last_focused_nid!=='undefined')_lumen_last_focused_nid={n};"
+                    "if(typeof _lumen_focus_update==='function')_lumen_focus_update({n});\
+                     else if(typeof _lumen_last_focused_nid!=='undefined')_lumen_last_focused_nid={n};"
                 );
                 ctx.eval::<(), _>(script.as_str()).ok();
             });

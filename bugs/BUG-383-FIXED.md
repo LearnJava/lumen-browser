@@ -1,6 +1,6 @@
 # BUG-383 — IDL-рефлексия HTML-атрибутов почти отсутствует, а вместе с ней и методы активации: `a.href`, `input.disabled/readOnly/required/maxLength/placeholder`, `select.selectedIndex/options`, `textarea.rows` — `undefined`; `HTMLElement.prototype.click()`, `input.select()`, `form.submit()` не существуют
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-07-29
 **Компонент:** js (`crates/js/src/dom.rs` — фабрика живых элементов
 `_lumen_make_element`: набор рефлектируемых свойств подобран вручную и
 покрывает единицы атрибутов; `Element.prototype` при этом содержит одно имя —
@@ -115,3 +115,68 @@ Object.getOwnPropertyNames(div).length = 134,  "click" среди них нет
   URL-атрибуты.
 * [BUG-305](BUG-305-FIXED.md) — точечное добавление `src`: пример того, как
   список рос вручную.
+* [BUG-441](BUG-441-OPEN.md) — `element.value` из скрипта не доезжает до
+  рендера и сбора формы: та же болезнь у *текущего* значения, а не у рефлексии.
+* [BUG-444](BUG-444-OPEN.md) — заведён этой правкой: у checkedness нет
+  хранилища, отдельного от content-атрибута.
+
+## Как исправлено (2026-07-29)
+
+Рефлексия записана один раз таблицей `{idl, content-attr, kind, default}` и
+ставится циклом одной парой универсальных аксессоров на каждый вид
+(`string`/`bool`/`long`/`ulong`/`url`/`enum`) — и не на экземпляр, а на
+**прототипы интерфейсов**: новое свойство теперь одна строка таблицы и не стоит
+ничего на элемент (заодно снимает часть [BUG-367](BUG-367-OPEN.md) — члены
+больше не лежат own-свойствами). Вид `url` резолвится относительно base URL
+документа: внутренний `_lumen_document_base_url()` (первый `<base href>`,
+разрешённый относительно URL страницы, иначе сам URL страницы) поверх уже
+существовавшего `_url_resolve` — то есть ожидание «нельзя, пока открыт
+[BUG-377](BUG-377-OPEN.md)» не подтвердилось: публичный `Node.baseURI` для
+этого не нужен и остаётся за BUG-377.
+
+`type`/`name`/`src` перестали быть own-свойствами каждого элемента, поэтому
+`div.src` снова `undefined`, `button.type` — `submit`, `textarea.type` —
+`textarea`, `select.type` — `select-one`. Добавлены 24 недостающих интерфейса
+`HTML*Element` (AREA/OPTGROUP/FIELDSET/SOURCE/TRACK/TIME/BASE/OUTPUT/…), иначе
+их атрибуты сели бы на общий `HTMLElement.prototype`.
+
+Вторая половина заявки — не рефлексия, и сделана отдельно:
+
+* `HTMLFormControlsCollection`/`HTMLOptionsCollection` поверх того же
+  Proxy-механизма, что и `HTMLCollection` (`_lumen_make_nid_collection`
+  выделен из `_lumen_make_html_collection`), плюс `Symbol.iterator` и
+  `Symbol.toStringTag` — `form.elements` больше не «обычный Array, который
+  выглядит рабочим»;
+* `form.length`, `select.options/selectedOptions/selectedIndex/length/add/
+  remove/item/namedItem`, `<option>`.selected/index/text/label, конструктор
+  `Option()`;
+* граф связей `form` / `labels` / `label.control`;
+* выделение текста: `select()`, `setSelectionRange()`, `setRangeText()`,
+  `selectionStart/End/Direction` (для типов, где выделение применимо, иначе
+  `null`), `indeterminate`, `files`, `list`, `stepUp/stepDown`,
+  `textarea.defaultValue/textLength`;
+* `HTMLElement.prototype.click()` с полной последовательностью: pre-click
+  переключение checkbox/radio → отменяемый `click` → поведение активации
+  (`input`+`change`, сабмит, ресет, переход по `<a href>`, `<summary>`,
+  `<label>`), либо откат переключения, если обработчик отменил событие;
+  повторный вход защищён (цикл label → control → label);
+* `form.reset()` целиком на стороне документа; `form.submit()` /
+  `requestSubmit()` уходят в шелл новым `NavigateRequest::SubmitForm`, где тело
+  отправки вынесено из обработчика клика в `Lumen::run_form_submission` — то
+  есть скриптовая отправка идёт ровно тем же кодом кодирования/enctype/
+  навигации, что и нажатие кнопки.
+
+Найденное при проверке: `checked` в Lumen хранится самим content-атрибутом (по
+нему шелл рисует и собирает форму), поэтому первая же запись `el.checked = …`
+уничтожала значение по умолчанию — `defaultChecked` и `form.reset()` не имели
+что восстанавливать. Добавлен снимок `_lumen_default_checked`, снимаемый при
+первой записи; настоящий dirty-checkedness — [BUG-444](BUG-444-OPEN.md).
+
+**Гейт:** `crates/driver/tests/cases/idl_reflection.rs` — 13 тестов на
+**дефолтном (V8)** движке через `InProcessSession`. Это принципиально:
+внутрикрейтовые `dom::tests` гоняются на QuickJS, где отсутствующий атрибут
+приходит `undefined`, а не `null` ([BUG-442](BUG-442-FIXED.md)), поэтому неверно
+написанная проверка присутствия там зеленеет; и сами свойства живут на
+прототипах интерфейсов, которые поднимает только настоящая фабрика элементов.
+Дополнительно — живая проба `--dump-layout` по `.tmp/probe-383.html` (70
+замеров).

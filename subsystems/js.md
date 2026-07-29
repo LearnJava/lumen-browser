@@ -18,6 +18,44 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
 
 ## Done
 
+- **`dom.rs` test monolith, first porting slice ([P1] P3-v8-s12b-24-core, 2026-07-29).** The
+  "Core DOM basics" family (console/SVG/wrapper identity/`self`&`window`, Canvas 2D,
+  `getElementById`/`querySelector`/attributes/`textContent`/`Image`, `alert`/`print`, timers +
+  `scheduler.postTask`, History API) — 99 tests — now lives in `dom.rs::tests::v8_core`, a nested
+  module gated `#[cfg(feature = "v8-backend")]`; the QuickJS copies are deleted. **Where to look:**
+  everything still under `mod tests` directly is unported and runs against `QuickJsRuntime`;
+  everything under a `v8_*` nested module is ported. Twin constructors `v8_runtime_with_dom` /
+  `v8_runtime_with_url` mirror the outer helpers — `V8JsRuntime::install_dom`'s signature is
+  identical to `QuickJsRuntime::install_dom`. **Non-obvious:** a helper whose only callers move
+  into the V8 module must move with them, otherwise it is dead code in a build *without*
+  `v8-backend` and `clippy -D warnings` goes red only in that configuration — check both.
+  Slice log and the two behavioral divergences found (`register_img_bitmaps`,
+  `getContext('webgl')`) — `docs/tasks/ph3-v8-migration.md`.
+- **`V8JsRuntime::register_img_bitmaps` ([P1], 2026-07-29, [BUG-447](../bugs/BUG-447-FIXED.md)).**
+  Mirrors the QuickJS method: clears `img_bitmap_store` (navigation-scoped) and writes the
+  `(nid, Arc<Image>)` pairs **on the JS thread** via `run`, because the store is `thread_local!`.
+  It had no V8 counterpart at all, and the shell's `PersistentJs` trait default silently absorbed
+  the missing override — `drawImage(imgElement, …)` painted nothing on the default engine.
+- **ES modules on V8 — `<script type=module>` ([P1] P3-v8-s12b-23, 2026-07-29, closes
+  [BUG-350](../bugs/BUG-350-FIXED.md)).** New `v8_esm.rs`: `script_compiler::compile_module`
+  → `instantiate_module` → `evaluate` → `perform_microtask_checkpoint`; `V8JsRuntime` now
+  overrides `eval_module`/`register_module_source` (the `ext.rs` trait default ran module
+  source through classic `eval`, which rejects top-level `export`/`import` at parse time) and
+  gains `set_import_map`, which the shell calls on the V8 branch. **Non-obvious:** V8's
+  `ResolveModuleCallback` is a captureless `extern "C" fn` — there is no `data` pointer — so
+  the module registries (sources, compiled modules, `identity_hash → specifier`, page URL,
+  import map) live in a `thread_local!` on the isolate's JS thread, not in the `Arc<Mutex<…>>`
+  fields the rquickjs `Loader`/`Resolver` share with `QuickJsRuntime`. Specifier resolution is
+  *not* duplicated: `esm::resolve_specifier_with` is the shared core both engines call, so
+  import maps / relative URLs / the virtual `lumen://inline-N` base cannot drift. Import
+  attributes (`with { type: 'json' }`) and dynamic `import()` use V8's native machinery (the
+  callback's `FixedArray`; `set_host_import_module_dynamically_callback`), so the Phase 0
+  `import_attributes.rs` preprocessor is rquickjs-only; `import.meta` keeps the shared
+  `import_meta.rs` transformer because its `.url`/`.resolve()`/`.env` shape is Lumen policy.
+  19 tests in `v8_esm.rs`. **Gap:** the shell never calls `register_module_source`, so a
+  page's `import './x.js'` still fails "module not found" —
+  [BUG-446](../bugs/BUG-446-OPEN.md), engine-independent (rquickjs had it too).
+
 - **Document Picture-in-Picture reaches a real OS window ([P1] P3-pip, 2026-07-17).**
   `documentPictureInPicture.requestWindow({width,height})` (`document_pip.rs`) called
   `_lumen_pip_request_window(width,height)` — but that native was never registered, so the
@@ -408,7 +446,8 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
   - Forwards the full documented surface: `createBuffer`/`bindBuffer`/`bufferData`, `createShader`/`shaderSource`/`compileShader`, `createProgram`/`attachShader`/`linkProgram`/`useProgram`, `getAttribLocation`/`getUniformLocation`, `enableVertexAttribArray`/`vertexAttribPointer`, `uniform4f`/`uniform4fv`/`uniform3f`, `clearColor`/`clear`, `viewport`, `drawArrays`, `readPixels` (WebGL bottom-left origin, crops + Y-flips the backend's top-left framebuffer), `getParameter`/`getExtension`/`getSupportedExtensions`. Texture calls accepted as no-ops (flat-shaded path).
   - Per-thread `SoftwareWebGl` registry keyed by opaque context id (`thread_local`), giving correct per-runtime isolation across Web Worker threads. GL objects are opaque `{__wid}` / `{__loc}` wrappers; methods unwrap either a wrapper or a raw number.
   - Preserves ADR-007 Layer 4: `getParameter(UNMASKED_VENDOR/RENDERER_WEBGL)` + `getParameter(VENDOR/RENDERER)` return normalized `GpuFingerprint` strings; `toDataURL`/`toBlob` stay blank.
-  - 10 unit tests (functional object, 2d→null, context caching, fingerprint normalization, blank toDataURL, clear→readPixels roundtrip, full compile→buffer→draw→readback pipeline, attrib location, non-canvas, lose-context extension). The 19 `no_automation_markers.rs` integration tests still pass.
+  - 13 unit tests (functional object, 2d-delegation + 2d-after-webgl→null + unknown-type→null, context caching, fingerprint normalization, blank toDataURL fallback + no-clobber, clear→readPixels roundtrip, full compile→buffer→draw→readback pipeline, attrib location, non-canvas gets no WebGL stub, lose-context extension). The 19 `no_automation_markers.rs` integration tests still pass.
+  - **`WEBGL_SHIM`'s `createElement` wrapper must delegate, never overwrite (BUG-348, fixed 2026-07-29).** It is installed *after* the element factory of `dom.rs::WEB_API_SHIM`, so whatever it assigns to `el.getContext`/`toDataURL`/`toBlob` is the last write and permanently shadows the factory's version — there is nothing downstream to restore it. Between the V8 cutover (2026-07-14) and the fix, its blanket `return null` for non-WebGL context types therefore disabled Canvas 2D for every `document.createElement('canvas')` (canvases reached through `getElementById`/`querySelector` were unaffected — the wrapper never sees them, which is why the symptom looked selective). `_addCanvasStubs` now captures the factory's `getContext` and delegates to it for unhandled types (keeping HTML LS §4.12.4's one-context-per-canvas rule explicit), and installs its privacy stubs only where the factory left none.
 
 - **Functional Canvas 2D context** (`crates/js/src/canvas2d.rs` + `dom.rs`, HTML LS §4.12.4, task 5A.2). 2026-06-02.
   - `install_canvas2d_bindings(ctx)` registers `_lumen_canvas2d_*` natives backed by `lumen_canvas::Context2D` in a per-thread registry keyed by **DOM node index** (`__nid__`). Installed in `install_dom` right after WebGL.
@@ -615,6 +654,29 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
   recompute. The engine-thread relayout job is not wired (see BUG-341 "S7 (part 2)" for why —
   crossing the thread boundary with a `CounterMap`/dirty-roots is a separate design question).
 
+- **Focus API (HTML LS §6.6, BUG-381, 2026-07-29).** `HTMLElement.prototype.focus(options)`/`blur()`,
+  `document.activeElement`/`hasFocus()`, `window.focus()`/`blur()`, `tabIndex`/`autofocus` IDL
+  reflection, focusability per §6.6.1, and the `[autofocus]` flush at `readyState = 'interactive'`.
+  Both directions (page-initiated `focus()` and shell-reported focus change) funnel through the single
+  `_lumen_focus_update` entry point, which is idempotent — that is what lets the shell echo a focus the
+  page just requested without dispatching the event sequence twice. Page-side state moves
+  **synchronously** (`document.activeElement` must be current on the next statement) while the shell is
+  told through the pre-existing `_lumen_request_focus`/`_lumen_request_blur` queue and applies it on its
+  next pump.
+- **IDL attribute reflection, form-control collections and activation (HTML LS §2.6.1/§4.10, BUG-383,
+  2026-07-29).** Reflection is one declarative table `{idl, content-attr, kind, default}` plus one
+  generic accessor pair per kind (`string`/`bool`/`long`/`ulong`/`url`/`enum`), installed by
+  `_lumen_install_reflection` onto the **interface prototypes** — adding an attribute is a table row,
+  and the properties cost nothing per element. `url`-kind getters resolve through
+  `_lumen_document_base_url()` (first `<base href>` resolved against the page URL, else the page URL)
+  over the pre-existing `_url_resolve`. Non-reflection half: `HTMLFormControlsCollection` /
+  `HTMLOptionsCollection` over `_lumen_make_nid_collection` (extracted from
+  `_lumen_make_html_collection`), the `form`/`labels`/`label.control` association graph,
+  `select`/`option` APIs, the text-selection API, and `HTMLElement.prototype.click()` with the full
+  activation sequence. `form.reset()` runs entirely in the document; `form.submit()`/`requestSubmit()`
+  queue `NavigateRequest::SubmitForm`, which the shell answers with `Lumen::run_form_submission` — the
+  same code path a real submit-button press takes.
+
 ## Deferred
 
 - WebGL: GLSL execution (per-vertex colour / texture sampling — currently flat `uniform4f` fill), `drawElements` / indexed draws, real textures. Backend stub lives in `lumen_paint::webgl`.
@@ -774,6 +836,20 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
 - rquickjs 0.11 `Function::call` takes `IntoArgs` (fixed-size tuples). Dynamic calls must use the eval workaround until rquickjs adds `Function::apply` or `Rest<T>: IntoArgs`.
 - DOM shim: `parentElement` and `children` are defined with `enumerable: false` via `Object.defineProperty`. Prevents `from_rq`'s `obj.props()` loop from serializing these cyclic getters → infinite recursion / stack overflow.
 - DOM shim: `Option<T>` in rquickjs maps `None → undefined` (not `null`). All nullable-returning native functions are wrapped with `_lumen_u2n(v)` in the shim to convert `undefined → null` as Web API requires.
+- **DOM shim: the same `Option<T>` maps to `null` on the V8 bindings, not `undefined` (BUG-442).** `_lumen_u2n`-wrapped reads are therefore engine-agnostic, but the shim's other idiom — testing attribute *presence* with a bare `_lumen_get_attr(...) !== undefined` — is true for every name on the default engine. Use `_lumen_has_attr(nid, name)` (`dom.rs`, added with BUG-381) for presence; never compare a native's result with `undefined` directly.
+- **DOM shim: a shim-level `function` name shadows the same-named Rust native for the whole page.** Both
+  live as ordinary properties of the global object, and the shim's own top-level `function` declarations
+  are installed after the natives, so a helper called `_lumen_set_selection` silently replaced the native
+  that drives `window.getSelection()` (caught by `selection_collapse_to_start` while adding BUG-383; the
+  helper is now `_lumen_set_text_selection`). Grep the native registrations before naming a new
+  `_lumen_*` helper.
+- **DOM shim: reflected IDL attributes live on the interface prototypes, current `value`/`checked` do
+  not.** `_lumen_build_element` still owns `value` and `checked` because they are *state* seeded by a
+  content attribute (HTML LS §4.10.5.5 dirty-value flag), and an own property shadows the prototype —
+  so adding a `value`/`checked` row to the reflection table would be dead code. Everything else belongs
+  in the table (`_LUMEN_*` entries near `_lumen_install_reflection`), never as a new own property.
+- **DOM shim: `_lumen_dispatch_rich` runs the document-level listeners even for a non-bubbling event.** It stops the ancestor walk on `!event.bubbles` but not the document hop afterwards, so a non-bubbling event dispatched through it still reaches `document.addEventListener(type, …)`. The focus family (BUG-381) needed its own dispatcher for exactly this reason; anything else adding a non-bubbling shell-driven event must not reuse `_lumen_dispatch_rich` as-is.
+- **DOM shim: the shell tracks focus by layout box, whose node may be a text node.** Anything exposing `focused_node` to the page must normalise through `_lumen_nearest_element_nid` first — the spec-level focus surface only ever names elements.
 - `install_dom` must be called before `eval`. Drop the runtime before `Arc::try_unwrap(doc_arc)` — closures hold Arc clones until the runtime is dropped.
 - Web Storage closures capture `Arc<Mutex<WebStorage>>` clones — dropped with the runtime. The outer `Arc` in the shell's `ls_storage` map remains the authoritative store; JS mutations are immediately visible in Rust after the closure releases the lock.
 - IndexedDB requests defer their data operation to `_idb_dispatch_request` (run once via `req._action`), not to the calling site. Reading `request.result` before the `success` event is therefore always `undefined`; tests and the shell must call `_lumen_idb_flush()` to drain pending events. Synchronous validation (invalid key range → `DataError`, read-only transaction → `ReadOnlyError`) still throws at the call site, before the request is queued.

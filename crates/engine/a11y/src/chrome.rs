@@ -1,10 +1,11 @@
 //! Accessibility nodes for Lumen's own chrome — DS-17, CC-13.
 //!
-//! Off `LUMEN_CSS_CHROME` the tab strip/toolbar/omnibox are not DOM
-//! elements, so [`build_ax_tree`](crate::build_ax_tree) never sees them —
+//! Before the engine chrome (DS-17) the tab strip/toolbar/omnibox were not
+//! DOM elements, so [`build_ax_tree`](crate::build_ax_tree) never saw them —
 //! this module lets the shell describe their current state as a
 //! [`ChromeSnapshot`] and turn it into synthetic [`AXNode`]s (`chrome_nodes`,
-//! DS-17). Under the flag chrome IS a real, engine-rendered `Document`
+//! DS-17; unreachable since CC-15-6, kept as the `None`-arm of the shell's
+//! `chrome_doc`). Since CC-13 chrome IS a real, engine-rendered `Document`
 //! (`assets/chrome/chrome.html`, ARIA roles injected at generation time by
 //! `scripts/gen_chrome_assets.py`), so `chrome_root_from_document` (CC-13)
 //! runs the same [`build_ax_tree`](crate::build_ax_tree) pages use over it
@@ -139,7 +140,7 @@ pub fn chrome_nodes(snapshot: &ChromeSnapshot) -> Vec<AXNode> {
 }
 
 /// Build the chrome AX subtree straight from the engine-rendered `chrome_doc`
-/// — CC-13, supersedes [`chrome_nodes`] when `LUMEN_CSS_CHROME=1`.
+/// — CC-13, supersedes [`chrome_nodes`] (the sole path since CC-15-6).
 ///
 /// Reuses [`crate::build_ax_tree`], the same builder pages use, over the
 /// chrome `Document` — roles/names/states come from the `role=`/`aria-*`

@@ -20,6 +20,7 @@
 //! интерполяции fixed-size атласа (раньше всё рисовалось на 24 px и потом
 //! масштабировалось).
 
+use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::error::Error;
 use std::path::PathBuf;
@@ -29,11 +30,11 @@ use lumen_core::ColorSpace;
 use lumen_core::ext::{FontProvider, FontStyle as CssFontStyle};
 use lumen_core::geom::Rect;
 use lumen_font::{
-    Bitmap, Font, Head, Hmtx, Outline, OwnedCmap, Rasterizer,
+    Bitmap, Colr, Cpal, Font, Head, Hmtx, Outline, OwnedCmap, Rasterizer,
     SystemFontIndex, maybe_decode_font,
 };
 use lumen_image::{correct_rgba_pixels, Image, PixelFormat};
-use lumen_layout::{BackgroundRepeat, BackgroundSize, BorderStyle, Color, FilterFn, FontStyle, FontWeight, GradientStop, ImageRendering, Mat4, ObjectFit, ObjectPosition, OutlineStyle, PositionComponent, style::TextOrientation};
+use lumen_layout::{BackgroundRepeat, BackgroundSize, BorderStyle, Color, FilterFn, FontStretch, FontStyle, FontWeight, GradientStop, ImageRendering, Mat4, ObjectFit, ObjectPosition, OutlineStyle, PositionComponent, font_palette::FontPaletteSelection, style::TextOrientation};
 use winit::window::Window;
 
 use crate::atlas::{AtlasKey, GlyphAtlas, GlyphEntry};
@@ -1506,6 +1507,22 @@ struct FaceMetrics {
     /// hmtx advance per glyph id (хвост longHorMetric расширен по спеке).
     /// Индекс = glyph id; длина = num_glyphs.
     advances: Box<[u16]>,
+    /// `COLR`+`CPAL` цветного шрифта, разобранные один раз при загрузке.
+    /// `None` — монохромный face (нет одной из таблиц, или в `COLR` нет ни
+    /// одной v0-записи); тогда текстовый путь не меняется вовсе.
+    color: Option<ColorTables>,
+}
+
+/// Цветные таблицы face-а: layered-глифы (`COLR` v0) + палитры (`CPAL`).
+/// Хранятся вместе, потому что по отдельности бесполезны: `palette_index`
+/// слоя адресует запись палитры.
+#[derive(Debug)]
+struct ColorTables {
+    /// Слои цветных глифов — `layers_for(glyph_id)` даёт список
+    /// (glyph, palette entry).
+    colr: Colr,
+    /// Палитры, среди которых выбирает CSS `font-palette`.
+    cpal: Cpal,
 }
 
 /// Строит [`FaceMetrics`] по байтам шрифта. Возвращает `None`, если любая
@@ -1520,13 +1537,91 @@ fn build_face_metrics(bytes: &[u8]) -> Option<FaceMetrics> {
     let advances: Box<[u16]> = (0..num_glyphs)
         .map(|gid| hmtx.advance_width(gid).unwrap_or(0))
         .collect();
+    // Цветной путь включается только когда есть ОБЕ таблицы и в COLR есть
+    // v0-записи: COLR v1-only шрифт (paint graph, отложен) сюда не попадает
+    // и рисуется монохромным outline-ом, как раньше.
+    let color = match (font.colr(), font.cpal()) {
+        (Ok(colr), Ok(cpal)) if !colr.is_empty() => Some(ColorTables { colr, cpal }),
+        _ => None,
+    };
     Some(FaceMetrics {
         units_per_em: head.units_per_em,
         ascent: hhea.ascent,
         descent: hhea.descent,
         cmap: cmap.to_owned_cmap(),
         advances,
+        color,
     })
+}
+
+/// CSS Fonts L4 §11.3 — разворачивает выбор `font-palette` в плоский список
+/// RGBA-цветов записей палитры для конкретного face-а.
+///
+/// `selection` = `None` → `normal` → палитра 0. `Light`/`Dark` → первая
+/// палитра с соответствующим флагом `paletteType`; если такой нет (CPAL v0
+/// или флаг ни у кого не выставлен) — по спеке ведёт себя как `normal`.
+/// `Custom` → `base-palette` из `@font-palette-values` плюс
+/// `override-colors` поверх; неизвестный `base-palette` тоже падает на 0.
+///
+/// Возвращает `None`, если у шрифта нет ни одной валидной палитры — тогда
+/// вызывающая сторона рисует все слои текстовым цветом.
+fn resolve_palette(
+    tables: &ColorTables,
+    selection: Option<&FontPaletteSelection>,
+) -> Option<Vec<[f32; 4]>> {
+    let base_index = match selection {
+        None => 0,
+        Some(FontPaletteSelection::Light) => tables.cpal.first_light_palette().unwrap_or(0),
+        Some(FontPaletteSelection::Dark) => tables.cpal.first_dark_palette().unwrap_or(0),
+        Some(FontPaletteSelection::Custom { base_palette, .. }) => *base_palette,
+    };
+    // Битый/несуществующий base-palette → палитра 0 (спека: невалидный
+    // `base-palette` игнорируется, а не отключает цветной рендер).
+    let entries = tables
+        .cpal
+        .palette(base_index)
+        .or_else(|| tables.cpal.palette(0))?;
+    let mut colors: Vec<[f32; 4]> = entries
+        .iter()
+        .map(|c| {
+            [
+                c.r as f32 / 255.0,
+                c.g as f32 / 255.0,
+                c.b as f32 / 255.0,
+                c.a as f32 / 255.0,
+            ]
+        })
+        .collect();
+    if let Some(FontPaletteSelection::Custom { overrides, .. }) = selection {
+        for ov in overrides {
+            if let Some(slot) = colors.get_mut(ov.index as usize) {
+                *slot = [
+                    ov.color.r as f32 / 255.0,
+                    ov.color.g as f32 / 255.0,
+                    ov.color.b as f32 / 255.0,
+                    ov.color.a as f32 / 255.0,
+                ];
+            }
+        }
+    }
+    Some(colors)
+}
+
+/// Цвет одного COLR-слоя: запись палитры либо текстовый цвет для
+/// `paletteIndex == 0xFFFF`.
+///
+/// Альфа записи палитры домножается на альфу текстового цвета — прозрачность
+/// `color: rgba(…)` / унаследованная alpha должна гасить цветной глиф так же,
+/// как гасит монохромный, иначе полупрозрачный текст «проявляется» на
+/// эмодзи. Индекс за пределами палитры (битый шрифт) → текстовый цвет.
+fn layer_color(palette: Option<&[[f32; 4]]>, palette_index: u16, text: [f32; 4]) -> [f32; 4] {
+    if palette_index == lumen_font::PALETTE_INDEX_FOREGROUND {
+        return text;
+    }
+    match palette.and_then(|p| p.get(palette_index as usize)) {
+        Some(&[r, g, b, a]) => [r, g, b, a * text[3]],
+        None => text,
+    }
 }
 
 /// Распарсенный face: Font + таблицы для растеризации. Borrow от
@@ -1578,6 +1673,40 @@ impl<'a> LazyParsedFaces<'a> {
     }
 }
 
+// BUG-406: на DX12 суммарная компиляция шейдеров/пайплайнов стоит 3–7 с против
+// 0.28 с на Vulkan (то же железо), и до этих двух счётчиков известна была только
+// суммарная цифра. Обе обёртки — no-op без `LUMEN_FRAME_LOG`.
+/// Создаёт шейдерный модуль, печатая время его трансляции под `LUMEN_FRAME_LOG`
+/// (naga: парсинг + валидация WGSL).
+fn timed_shader(
+    device: &wgpu::Device,
+    desc: wgpu::ShaderModuleDescriptor<'_>,
+) -> wgpu::ShaderModule {
+    if !crate::frame_log_enabled() {
+        return device.create_shader_module(desc);
+    }
+    let label = desc.label.unwrap_or("<unlabeled>").to_string();
+    let t0 = std::time::Instant::now();
+    let module = device.create_shader_module(desc);
+    eprintln!("[wgpu]   shader {label}: {:.0}ms", t0.elapsed().as_secs_f64() * 1000.0);
+    module
+}
+/// Создаёт render-пайплайн, печатая время его компиляции под `LUMEN_FRAME_LOG`
+/// (на DX12 здесь идёт naga → HLSL → FXC/DXC).
+fn timed_pipeline(
+    device: &wgpu::Device,
+    desc: &wgpu::RenderPipelineDescriptor<'_>,
+) -> wgpu::RenderPipeline {
+    if !crate::frame_log_enabled() {
+        return device.create_render_pipeline(desc);
+    }
+    let label = desc.label.unwrap_or("<unlabeled>");
+    let t0 = std::time::Instant::now();
+    let pipeline = device.create_render_pipeline(desc);
+    eprintln!("[wgpu]   pipeline {label}: {:.0}ms", t0.elapsed().as_secs_f64() * 1000.0);
+    pipeline
+}
+
 pub struct Renderer {
     /// Windowed surface; `None` in headless mode (created with `new_headless()`).
     surface: Option<wgpu::Surface<'static>>,
@@ -1620,48 +1749,67 @@ pub struct Renderer {
     depth_view: Option<wgpu::TextureView>,
 
     fill_pipeline: wgpu::RenderPipeline,
-    circle_pipeline: wgpu::RenderPipeline,
+    /// BUG-406: ленивая компиляция — `OnceCell` заполняется при первом
+    /// использовании (`circle_pipeline()`), не при старте окна.
+    circle_pipeline: OnceCell<wgpu::RenderPipeline>,
     /// CSS border-radius SDF pipeline. Uses `RRectVertex` layout.
     rrect_pipeline: wgpu::RenderPipeline,
     text_pipeline: wgpu::RenderPipeline,
     image_pipeline: wgpu::RenderPipeline,
     /// Blit-каскад mip-цепочки картинок: пасс «mip N−1 → mip N» при
     /// `register_image` (fullscreen triangle, bilinear = 2×2 box).
-    mipgen_pipeline: wgpu::RenderPipeline,
+    /// BUG-406: ленивая компиляция — `OnceCell` заполняется при первом
+    /// использовании (`mipgen_pipeline()`), не при старте окна.
+    mipgen_pipeline: OnceCell<wgpu::RenderPipeline>,
     /// CSS Images L4 §4 — `cross-fade(A, B, p)` two-texture blend pipeline.
     /// Uses `CrossFadeVertex` layout (pos+uv). Bind group 0 = viewport uniform
     /// (shared with `image_pipeline`); bind group 1 = `cross_fade_bgl`
     /// (tex_a, tex_b, sampler, progress uniform). Blend state: `ALPHA_BLENDING`.
-    cross_fade_pipeline: wgpu::RenderPipeline,
+    /// BUG-406: ленивая компиляция — `OnceCell` заполняется при первом
+    /// использовании (`cross_fade_pipeline()`), не при старте окна.
+    cross_fade_pipeline: OnceCell<wgpu::RenderPipeline>,
     /// Bind group layout for the `cross_fade_pipeline` per-quad bindings
     /// (group 1): two textures + sampler + progress uniform.
     cross_fade_bgl: wgpu::BindGroupLayout,
-    composite_pipeline: wgpu::RenderPipeline,
+    /// BUG-406: ленивая компиляция — `OnceCell` заполняется при первом
+    /// использовании (`composite_pipeline()`), не при старте окна.
+    composite_pipeline: OnceCell<wgpu::RenderPipeline>,
     composite_bgl: wgpu::BindGroupLayout,
-    blend_pipeline: wgpu::RenderPipeline,
+    /// BUG-406: ленивая компиляция — `OnceCell` заполняется при первом
+    /// использовании (`blend_pipeline()`), не при старте окна.
+    blend_pipeline: OnceCell<wgpu::RenderPipeline>,
     blend_bgl: wgpu::BindGroupLayout,
     /// CSS Masking L1 §4 — mask composite pipeline + bind group layout.
     /// Used by PopMask to composite the offscreen layer using a mask image.
     mask_composite_bgl: wgpu::BindGroupLayout,
-    mask_composite_pipeline: wgpu::RenderPipeline,
+    /// BUG-406: ленивая компиляция — `OnceCell` заполняется при первом
+    /// использовании (`mask_composite_pipeline()`), не при старте окна.
+    mask_composite_pipeline: OnceCell<wgpu::RenderPipeline>,
     /// CSS Masking L1 §5 — mask-layer composite pipelines.
     /// Used by PopMaskLayer to apply an arbitrary rendered mask to the parent layer.
     /// `_alpha` samples mask.a; `_luma` converts RGB to luminance × alpha.
     /// Shared BGL with mask_composite (same binding layout: t_content, t_mask, s).
-    mask_layer_alpha_pipeline: wgpu::RenderPipeline,
-    mask_layer_luma_pipeline: wgpu::RenderPipeline,
+    /// BUG-406: ленивая компиляция пары (alpha, luminance) — общий шейдер,
+    /// поэтому один `OnceCell` на оба пайплайна.
+    mask_layer_pipelines: OnceCell<(wgpu::RenderPipeline, wgpu::RenderPipeline)>,
     /// CSS Filter Effects L1 — color filter pipeline (grayscale/sepia/brightness/etc.).
     filter_bgl: wgpu::BindGroupLayout,
-    filter_pipeline: wgpu::RenderPipeline,
+    /// BUG-406: ленивая компиляция — `OnceCell` заполняется при первом
+    /// использовании (`filter_pipeline()`), не при старте окна.
+    filter_pipeline: OnceCell<wgpu::RenderPipeline>,
     /// CSS Filter Effects L1 — separable Gaussian blur pipeline (one pass: H or V).
     blur_bgl: wgpu::BindGroupLayout,
-    blur_pipeline: wgpu::RenderPipeline,
+    /// BUG-406: ленивая компиляция — `OnceCell` заполняется при первом
+    /// использовании (`blur_pipeline()`), не при старте окна.
+    blur_pipeline: OnceCell<wgpu::RenderPipeline>,
     blur_uniform: wgpu::Buffer,
     /// CSS Filter Effects L1 §2 — backdrop-filter blit pipeline.
     /// Same shader as `filter_pipeline` but uses REPLACE blend so the filtered
     /// backdrop snapshot overwrites (not composites over) the parent layer at
     /// the bounded element rect.
-    backdrop_blit_pipeline: wgpu::RenderPipeline,
+    /// BUG-406: ленивая компиляция — `OnceCell` заполняется при первом
+    /// использовании (`backdrop_blit_pipeline()`), не при старте окна.
+    backdrop_blit_pipeline: OnceCell<wgpu::RenderPipeline>,
     /// Intermediate texture for backdrop-filter: ping-pong target for blur passes
     /// (H: scratch → backdrop_layer; V: backdrop_layer → scratch), and color-filter
     /// target when compositing filtered backdrop back onto parent.
@@ -1691,6 +1839,9 @@ pub struct Renderer {
     layer_textures: Vec<OffscreenLayer>,
     surface_format: wgpu::TextureFormat,
 
+    /// Layout viewport-униформы (bind group 0). Хранится, потому что ленивые
+    /// пайплайны (BUG-406) строят свой `PipelineLayout` уже после `init_pipelines`.
+    uniform_bgl: wgpu::BindGroupLayout,
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
 
@@ -1774,8 +1925,10 @@ pub struct Renderer {
     pending_readback: Option<wgpu::Texture>,
     /// GPU texture pool for layer recycling (ADR-008 Phase 2).
     /// Maintains free textures keyed by (width, height) for reuse instead of
-    /// allocating a new `wgpu::Texture` for each layer.
-    texture_pool: crate::texture_pool::TexturePool,
+    /// allocating a new `wgpu::Texture` for each layer. Свободный список
+    /// ограничен байтовым бюджетом (BUG-272 срез 21) — вытеснение в `trim()`
+    /// после сабмита кадра.
+    texture_pool: crate::texture_pool::TexturePool<crate::texture_pool::PooledTexture>,
     /// Normalized GPU fingerprint: prevents WebGL renderer/vendor fingerprinting (ADR-007).
     gpu_fingerprint: GpuFingerprint,
 }
@@ -2238,9 +2391,16 @@ impl Renderer {
         )
     }
 
-    /// Общий инициализатор пайплайнов: создаёт все GPU-ресурсы (шейдеры, pipeline-ы,
-    /// atlas, samplers). Вызывается как из windowed (`new_async`), так и из headless
-    /// (`new_headless_async`) путей.
+    /// Общий инициализатор GPU-ресурсов: bind group layouts, atlas, samplers,
+    /// буферы и **горячие** пайплайны. Вызывается как из windowed (`new_async`),
+    /// так и из headless (`new_headless_async`) путей.
+    ///
+    /// BUG-406: сразу компилируются только пять пайплайнов, нужные почти любой
+    /// странице (fill / rrect / text / image / gradient). Остальные одиннадцать
+    /// (circle, mipgen, cross-fade, composite, blend, mask-composite, две
+    /// mask-layer, filter, blur, backdrop-blit) компилируются лениво, при первом
+    /// использовании — на DX12 компиляция одного пайплайна стоит ~1 с wall-clock,
+    /// и страница без соответствующего эффекта не должна за неё платить.
     #[allow(clippy::too_many_arguments)]
     fn init_pipelines(
         device: wgpu::Device,
@@ -2255,6 +2415,15 @@ impl Renderer {
         target_color_space: ColorSpace,
         gpu_fingerprint: GpuFingerprint,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        let t_init = std::time::Instant::now();
+        /// Печатает время от входа в `init_pipelines` до контрольной точки
+        /// (только под `LUMEN_FRAME_LOG`).
+        fn mark(t0: &std::time::Instant, label: &str) {
+            if crate::frame_log_enabled() {
+                eprintln!("[wgpu]   @{label}: {:.0}ms", t0.elapsed().as_secs_f64() * 1000.0);
+            }
+        }
+
         // ── Uniform bind group (viewport) — общий для fill и text ──────────
         let uniform_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("uniform-bgl"),
@@ -2347,8 +2516,9 @@ impl Renderer {
             ],
         });
 
+        mark(&t_init, "pre-pipelines");
         // ── Fill pipeline ─────────────────────────────────────────────────
-        let fill_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        let fill_shader = timed_shader(&device, wgpu::ShaderModuleDescriptor {
             label: Some("fill-shader"),
             source: wgpu::ShaderSource::Wgsl(FILL_SHADER_SRC.into()),
         });
@@ -2357,7 +2527,7 @@ impl Renderer {
             bind_group_layouts: &[&uniform_bgl],
             push_constant_ranges: &[],
         });
-        let fill_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let fill_pipeline = timed_pipeline(&device, &wgpu::RenderPipelineDescriptor {
             label: Some("fill-pipeline"),
             layout: Some(&fill_layout),
             vertex: wgpu::VertexState {
@@ -2412,75 +2582,9 @@ impl Renderer {
             cache: None,
         });
 
-        // ── Circle pipeline ───────────────────────────────────────────────
-        let circle_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("circle-shader"),
-            source: wgpu::ShaderSource::Wgsl(CIRCLE_SHADER_SRC.into()),
-        });
-        let circle_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("circle-layout"),
-            bind_group_layouts: &[&uniform_bgl],
-            push_constant_ranges: &[],
-        });
-        let circle_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("circle-pipeline"),
-            layout: Some(&circle_layout),
-            vertex: wgpu::VertexState {
-                module: &circle_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<CircleVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x2,
-                            offset: 0,
-                            shader_location: 0,
-                        },
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x2,
-                            offset: 8,
-                            shader_location: 1,
-                        },
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x4,
-                            offset: 16,
-                            shader_location: 2,
-                        },
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32,
-                            offset: 32,
-                            shader_location: 3,
-                        },
-                    ],
-                }],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &circle_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::Always,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
 
         // ── RRect (SDF rounded-rect) pipeline ─────────────────────────────
-        let rrect_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        let rrect_shader = timed_shader(&device, wgpu::ShaderModuleDescriptor {
             label: Some("rrect-shader"),
             source: wgpu::ShaderSource::Wgsl(RRECT_SHADER_SRC.into()),
         });
@@ -2489,7 +2593,7 @@ impl Renderer {
             bind_group_layouts: &[&uniform_bgl],
             push_constant_ranges: &[],
         });
-        let rrect_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let rrect_pipeline = timed_pipeline(&device, &wgpu::RenderPipelineDescriptor {
             label: Some("rrect-pipeline"),
             layout: Some(&rrect_layout),
             vertex: wgpu::VertexState {
@@ -2572,7 +2676,7 @@ impl Renderer {
         });
 
         // ── Text pipeline ─────────────────────────────────────────────────
-        let text_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        let text_shader = timed_shader(&device, wgpu::ShaderModuleDescriptor {
             label: Some("text-shader"),
             source: wgpu::ShaderSource::Wgsl(TEXT_SHADER_SRC.into()),
         });
@@ -2581,7 +2685,7 @@ impl Renderer {
             bind_group_layouts: &[&uniform_bgl, &atlas_bgl],
             push_constant_ranges: &[],
         });
-        let text_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let text_pipeline = timed_pipeline(&device, &wgpu::RenderPipelineDescriptor {
             label: Some("text-pipeline"),
             layout: Some(&text_layout),
             vertex: wgpu::VertexState {
@@ -2691,7 +2795,7 @@ impl Renderer {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             ..Default::default()
         });
-        let image_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        let image_shader = timed_shader(&device, wgpu::ShaderModuleDescriptor {
             label: Some("image-shader"),
             source: wgpu::ShaderSource::Wgsl(IMAGE_SHADER_SRC.into()),
         });
@@ -2700,7 +2804,7 @@ impl Renderer {
             bind_group_layouts: &[&uniform_bgl, &image_bgl],
             push_constant_ranges: &[],
         });
-        let image_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let image_pipeline = timed_pipeline(&device, &wgpu::RenderPipelineDescriptor {
             label: Some("image-pipeline"),
             layout: Some(&image_layout),
             vertex: wgpu::VertexState {
@@ -2759,47 +2863,8 @@ impl Renderer {
             cache: None,
         });
 
-        // ── Mipgen pipeline (mip-цепочка картинок) ────────────────────────
-        // Пасс «mip N−1 → mip N» без depth и без блендинга: fullscreen
-        // triangle пишет bilinear-выборку источника (2×2 box-даунскейл).
-        let mipgen_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("mipgen-shader"),
-            source: wgpu::ShaderSource::Wgsl(MIPGEN_SHADER_SRC.into()),
-        });
-        let mipgen_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("mipgen-layout"),
-            bind_group_layouts: &[&image_bgl],
-            push_constant_ranges: &[],
-        });
-        let mipgen_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("mipgen-pipeline"),
-            layout: Some(&mipgen_layout),
-            vertex: wgpu::VertexState {
-                module: &mipgen_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &mipgen_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    // Картинки всегда Rgba8Unorm (см. make_gpu_image_entry),
-                    // не surface format.
-                    format: wgpu::TextureFormat::Rgba8Unorm,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
 
-        // ── Cross-fade pipeline (CSS Images L4 §4: mix(A, B, p)) ──────────
+        // ── Cross-fade BGL (CSS Images L4 §4; пайплайн ленив, BUG-406) ────
         // BGL group 1 — two textures + sampler + progress uniform.
         let cross_fade_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("cross-fade-bgl"),
@@ -2842,68 +2907,8 @@ impl Renderer {
                 },
             ],
         });
-        let cross_fade_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("cross-fade-shader"),
-            source: wgpu::ShaderSource::Wgsl(CROSS_FADE_SHADER_SRC.into()),
-        });
-        let cross_fade_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("cross-fade-layout"),
-            bind_group_layouts: &[&uniform_bgl, &cross_fade_bgl],
-            push_constant_ranges: &[],
-        });
-        let cross_fade_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("cross-fade-pipeline"),
-            layout: Some(&cross_fade_layout),
-            vertex: wgpu::VertexState {
-                module: &cross_fade_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<CrossFadeVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x2,
-                            offset: 0,
-                            shader_location: 0, // pos
-                        },
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x2,
-                            offset: 8,
-                            shader_location: 1, // uv
-                        },
-                    ],
-                }],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &cross_fade_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    // Same blend as image_pipeline — straight-alpha source,
-                    // SrcAlpha · src + (1-SrcAlpha) · dst.
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            // Cross-fade quads run at fixed mid-plane depth (z = 0.5 NDC in
-            // shader) — depth_write_enabled = false so they do not occlude
-            // 3D-transformed siblings under preserve-3d.
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::LessEqual,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
 
-        // ── Composite pipeline (opacity layer → parent target) ────────────
+        // ── Composite BGL + layer sampler (пайплайн ленив, BUG-406) ───────
         let composite_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("composite-bgl"),
             entries: &[
@@ -2935,70 +2940,8 @@ impl Renderer {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             ..Default::default()
         });
-        let composite_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("composite-shader"),
-            source: wgpu::ShaderSource::Wgsl(COMPOSITE_SHADER_SRC.into()),
-        });
-        let composite_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("composite-layout"),
-            bind_group_layouts: &[&composite_bgl],
-            push_constant_ranges: &[],
-        });
-        let composite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("composite-pipeline"),
-            layout: Some(&composite_layout),
-            vertex: wgpu::VertexState {
-                module: &composite_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<CompositeVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x2,
-                            offset: 0,
-                            shader_location: 0,
-                        },
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x2,
-                            offset: 8,
-                            shader_location: 1,
-                        },
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32,
-                            offset: 16,
-                            shader_location: 2,
-                        },
-                    ],
-                }],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &composite_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    // Premultiplied-alpha blend: off-screen layers store premultiplied content.
-                    // Shader multiplies rgb*opacity so "one * src + (1-src.a) * dst" is correct.
-                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::Always,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
 
-        // ── Blend pipeline (CSS Compositing L1 §8 — two-texture blend) ─────
+        // ── Blend BGL (CSS Compositing L1 §8; пайплайн ленив, BUG-406) ─────
         // 4 bindings: t_src(0), t_dst(1), sampler(2), blend_mode uniform(3).
         let blend_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("blend-bgl"),
@@ -3041,69 +2984,8 @@ impl Renderer {
                 },
             ],
         });
-        let blend_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("blend-shader"),
-            source: wgpu::ShaderSource::Wgsl(BLEND_SHADER_SRC.into()),
-        });
-        let blend_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("blend-layout"),
-            bind_group_layouts: &[&blend_bgl],
-            push_constant_ranges: &[],
-        });
-        // REPLACE blend state: shader implements full CSS compositing formula.
-        let blend_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("blend-pipeline"),
-            layout: Some(&blend_layout),
-            vertex: wgpu::VertexState {
-                module: &blend_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<CompositeVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x2,
-                            offset: 0,
-                            shader_location: 0,
-                        },
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x2,
-                            offset: 8,
-                            shader_location: 1,
-                        },
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32,
-                            offset: 16,
-                            shader_location: 2,
-                        },
-                    ],
-                }],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &blend_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::Always,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
 
-        // ── Mask composite pipeline ──────────────────────────────────────────
+        // ── Mask composite BGL (пайплайн ленив, BUG-406) ─────────────────────
         // CSS Masking L1 §4: two-texture composite (content layer + mask image).
         // Group 0 = viewport uniform (reuses uniform_bgl).
         // Group 1 = { t_layer, t_mask, s_layer }.
@@ -3138,155 +3020,9 @@ impl Renderer {
                 },
             ],
         });
-        let mask_composite_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("mask-composite-layout"),
-            bind_group_layouts: &[&uniform_bgl, &mask_composite_bgl],
-            push_constant_ranges: &[],
-        });
-        let mask_composite_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("mask-composite-shader"),
-            source: wgpu::ShaderSource::Wgsl(MASK_COMPOSITE_SHADER_SRC.into()),
-        });
-        let mask_composite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("mask-composite-pipeline"),
-            layout: Some(&mask_composite_layout),
-            vertex: wgpu::VertexState {
-                module: &mask_composite_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<MaskVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x2,
-                            offset: 0,
-                            shader_location: 0,
-                        },
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x2,
-                            offset: 8,
-                            shader_location: 1,
-                        },
-                    ],
-                }],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &mask_composite_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::Always,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
 
-        // ── Mask-layer composite pipelines ──────────────────────────────────
-        // CSS Masking L1 §5: apply a rendered mask layer to the parent layer.
-        // Reuses mask_composite_bgl (same binding layout: t_content, t_mask, s).
-        // Two pipelines sharing one shader module: alpha mode and luminance mode.
-        // Blend: REPLACE (src_factor=One, dst_factor=Zero) — overwrites parent at element rect.
-        let mask_layer_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("mask-layer-shader"),
-            source: wgpu::ShaderSource::Wgsl(MASK_LAYER_SHADER_SRC.into()),
-        });
-        let mask_layer_vtx_layout = wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<MaskVertex>() as u64,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &[
-                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
-                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 8, shader_location: 1 },
-            ],
-        };
-        let replace_blend = wgpu::BlendState {
-            color: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::One,
-                dst_factor: wgpu::BlendFactor::Zero,
-                operation: wgpu::BlendOperation::Add,
-            },
-            alpha: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::One,
-                dst_factor: wgpu::BlendFactor::Zero,
-                operation: wgpu::BlendOperation::Add,
-            },
-        };
-        let mask_layer_alpha_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("mask-layer-alpha-pipeline"),
-            layout: Some(&mask_composite_layout),
-            vertex: wgpu::VertexState {
-                module: &mask_layer_shader,
-                entry_point: Some("vs_main"),
-                buffers: std::slice::from_ref(&mask_layer_vtx_layout),
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &mask_layer_shader,
-                entry_point: Some("fs_alpha"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(replace_blend),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::Always,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
-        let mask_layer_luma_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("mask-layer-luma-pipeline"),
-            layout: Some(&mask_composite_layout),
-            vertex: wgpu::VertexState {
-                module: &mask_layer_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[mask_layer_vtx_layout],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &mask_layer_shader,
-                entry_point: Some("fs_luma"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(replace_blend),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::Always,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
 
-        // ── CSS Filter pipeline ──────────────────────────────────────────────
+        // ── CSS Filter BGL (пайплайн ленив, BUG-406) ─────────────────────────
         // Group 0: { t_src, s_src, FilterParams uniform }
         let filter_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("filter-bgl"),
@@ -3319,56 +3055,8 @@ impl Renderer {
                 },
             ],
         });
-        let filter_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("filter-shader"),
-            source: wgpu::ShaderSource::Wgsl(FILTER_SHADER_SRC.into()),
-        });
-        let filter_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("filter-layout"),
-            bind_group_layouts: &[&filter_bgl],
-            push_constant_ranges: &[],
-        });
-        let filter_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("filter-pipeline"),
-            layout: Some(&filter_layout),
-            vertex: wgpu::VertexState {
-                module: &filter_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<CompositeVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[
-                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
-                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 8, shader_location: 1 },
-                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32, offset: 16, shader_location: 2 },
-                    ],
-                }],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &filter_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::Always,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
 
-        // ── CSS Blur pipeline ────────────────────────────────────────────────
+        // ── CSS Blur BGL + uniform (пайплайн ленив, BUG-406) ─────────────────
         // Group 0: { t_src, s_src, BlurParams uniform }
         let blur_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("blur-bgl"),
@@ -3407,100 +3095,7 @@ impl Renderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let blur_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("blur-shader"),
-            source: wgpu::ShaderSource::Wgsl(BLUR_SHADER_SRC.into()),
-        });
-        let blur_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("blur-layout"),
-            bind_group_layouts: &[&blur_bgl],
-            push_constant_ranges: &[],
-        });
-        let blur_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("blur-pipeline"),
-            layout: Some(&blur_layout),
-            vertex: wgpu::VertexState {
-                module: &blur_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<CompositeVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[
-                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
-                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 8, shader_location: 1 },
-                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32, offset: 16, shader_location: 2 },
-                    ],
-                }],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &blur_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::Always,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
 
-        // ── Backdrop-filter blit pipeline ────────────────────────────────────
-        // Same shader + bind group layout as filter_pipeline, but REPLACE blend.
-        // Used to overwrite the parent layer's element-bounds region with the
-        // filtered backdrop snapshot (with optional color-matrix filter applied).
-        let backdrop_blit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("backdrop-blit-pipeline"),
-            layout: Some(&filter_layout),
-            vertex: wgpu::VertexState {
-                module: &filter_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<CompositeVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[
-                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
-                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 8, shader_location: 1 },
-                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32, offset: 16, shader_location: 2 },
-                    ],
-                }],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &filter_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    // Write only RGB — preserve destination alpha so the parent
-                    // layer's opacity isn't reduced by blur-edge transparency.
-                    write_mask: wgpu::ColorWrites::COLOR,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::Always,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
 
         // ── Gradient pipeline (linear + radial) ──────────────────────────────
         let gradient_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -3516,7 +3111,7 @@ impl Renderer {
                 count: None,
             }],
         });
-        let gradient_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        let gradient_shader = timed_shader(&device, wgpu::ShaderModuleDescriptor {
             label: Some("gradient-shader"),
             source: wgpu::ShaderSource::Wgsl(GRADIENT_SHADER_SRC.into()),
         });
@@ -3525,7 +3120,7 @@ impl Renderer {
             bind_group_layouts: &[&uniform_bgl, &gradient_bgl],
             push_constant_ranges: &[],
         });
-        let gradient_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let gradient_pipeline = timed_pipeline(&device, &wgpu::RenderPipelineDescriptor {
             label: Some("gradient-pipeline"),
             layout: Some(&gradient_layout),
             vertex: wgpu::VertexState {
@@ -3572,7 +3167,9 @@ impl Renderer {
             cache: None,
         });
 
+        mark(&t_init, "pipelines-done");
         let atlas = GlyphAtlas::new(ATLAS_DIM);
+        mark(&t_init, "glyph-atlas");
 
         // DS-4: bundled chrome UI faces (Golos Text + JetBrains Mono), loaded
         // eagerly right after the default (Inter) face at index 0 — mirrors
@@ -3598,12 +3195,14 @@ impl Renderer {
         let mono_face_id =
             push_chrome_face(&mut faces, crate::chrome_fonts::JETBRAINS_MONO_REGULAR);
 
+        mark(&t_init, "faces");
         let (depth_texture, depth_view) = {
             let (t, v) = create_depth_texture(&device, headless_w, headless_h);
             (Some(t), Some(v))
         };
 
-        Ok(Self {
+        mark(&t_init, "depth-texture");
+        let renderer = Self {
             surface,
             device,
             queue,
@@ -3614,13 +3213,14 @@ impl Renderer {
             depth_texture,
             depth_view,
             fill_pipeline,
-            circle_pipeline,
+            circle_pipeline: OnceCell::new(),
             rrect_pipeline,
             text_pipeline,
             image_pipeline,
-            mipgen_pipeline,
-            cross_fade_pipeline,
+            mipgen_pipeline: OnceCell::new(),
+            cross_fade_pipeline: OnceCell::new(),
             cross_fade_bgl,
+            uniform_bgl,
             uniform_buffer,
             uniform_bind_group,
             atlas_texture,
@@ -3637,20 +3237,19 @@ impl Renderer {
             pending_base_blit: None,
             last_content_key: None,
             layer_cache: crate::layer_cache::LayerCache::new(),
-            composite_pipeline,
+            composite_pipeline: OnceCell::new(),
             composite_bgl,
-            blend_pipeline,
+            blend_pipeline: OnceCell::new(),
             blend_bgl,
             mask_composite_bgl,
-            mask_composite_pipeline,
-            mask_layer_alpha_pipeline,
-            mask_layer_luma_pipeline,
+            mask_composite_pipeline: OnceCell::new(),
+            mask_layer_pipelines: OnceCell::new(),
             filter_bgl,
-            filter_pipeline,
+            filter_pipeline: OnceCell::new(),
             blur_bgl,
-            blur_pipeline,
+            blur_pipeline: OnceCell::new(),
             blur_uniform,
-            backdrop_blit_pipeline,
+            backdrop_blit_pipeline: OnceCell::new(),
             backdrop_layer: None,
             small_depth_cache: HashMap::new(),
             backdrop_cache: crate::backdrop_cache::BackdropCache::new(),
@@ -3675,7 +3274,755 @@ impl Renderer {
             pending_readback: None,
             texture_pool: crate::texture_pool::TexturePool::new(),
             gpu_fingerprint,
+        };
+        // BUG-406: `LUMEN_EAGER_PIPELINES=1` возвращает доленивое поведение —
+        // все 16 пайплайнов компилируются в `init_pipelines`. Нужен для A/B в
+        // одном бинарнике и как откат, если ленивая компиляция где-то мешает.
+        if std::env::var("LUMEN_EAGER_PIPELINES").is_ok_and(|v| v == "1" || v == "true") {
+            renderer.warm_all_pipelines();
+            mark(&t_init, "eager-warm");
+        }
+        Ok(renderer)
+    }
+
+    /// Компилирует все ленивые пайплайны (BUG-406) немедленно.
+    /// Используется только форс-режимом `LUMEN_EAGER_PIPELINES=1`.
+    fn warm_all_pipelines(&self) {
+        self.circle_pipeline();
+        self.mipgen_pipeline();
+        self.cross_fade_pipeline();
+        self.composite_pipeline();
+        self.blend_pipeline();
+        self.mask_composite_pipeline();
+        self.mask_layer_pipelines();
+        self.filter_pipeline();
+        self.blur_pipeline();
+        self.backdrop_blit_pipeline();
+    }
+
+    /// Пайплайн кружков (SDF): маркеры списков, radio-кнопки.
+    ///
+    /// BUG-406: компилируется лениво, при первом реальном использовании —
+    /// на DX12 компиляция одного пайплайна стоит ~1 с, и держать её в
+    /// старте окна ради эффекта, которого на странице может не быть, нельзя.
+    fn build_circle_pipeline(&self) -> wgpu::RenderPipeline {
+        // ── Circle pipeline ───────────────────────────────────────────────
+        let circle_shader = timed_shader(&self.device, wgpu::ShaderModuleDescriptor {
+            label: Some("circle-shader"),
+            source: wgpu::ShaderSource::Wgsl(CIRCLE_SHADER_SRC.into()),
+        });
+        let circle_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("circle-layout"),
+            bind_group_layouts: &[&self.uniform_bgl],
+            push_constant_ranges: &[],
+        });
+        timed_pipeline(&self.device, &wgpu::RenderPipelineDescriptor {
+            label: Some("circle-pipeline"),
+            layout: Some(&circle_layout),
+            vertex: wgpu::VertexState {
+                module: &circle_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<CircleVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 0,
+                            shader_location: 0,
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 8,
+                            shader_location: 1,
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x4,
+                            offset: 16,
+                            shader_location: 2,
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32,
+                            offset: 32,
+                            shader_location: 3,
+                        },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &circle_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: self.surface_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
         })
+    }
+
+    /// Пайплайн генерации mip-цепочки картинок (даунскейл 2×2 box).
+    ///
+    /// BUG-406: компилируется лениво, при первом реальном использовании —
+    /// на DX12 компиляция одного пайплайна стоит ~1 с, и держать её в
+    /// старте окна ради эффекта, которого на странице может не быть, нельзя.
+    fn build_mipgen_pipeline(&self) -> wgpu::RenderPipeline {
+        // ── Mipgen pipeline (mip-цепочка картинок) ────────────────────────
+        // Пасс «mip N−1 → mip N» без depth и без блендинга: fullscreen
+        // triangle пишет bilinear-выборку источника (2×2 box-даунскейл).
+        let mipgen_shader = timed_shader(&self.device, wgpu::ShaderModuleDescriptor {
+            label: Some("mipgen-shader"),
+            source: wgpu::ShaderSource::Wgsl(MIPGEN_SHADER_SRC.into()),
+        });
+        let mipgen_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("mipgen-layout"),
+            bind_group_layouts: &[&self.image_bgl],
+            push_constant_ranges: &[],
+        });
+        timed_pipeline(&self.device, &wgpu::RenderPipelineDescriptor {
+            label: Some("mipgen-pipeline"),
+            layout: Some(&mipgen_layout),
+            vertex: wgpu::VertexState {
+                module: &mipgen_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &mipgen_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    // Картинки всегда Rgba8Unorm (см. make_gpu_image_entry),
+                    // не surface format.
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        })
+    }
+
+    /// Пайплайн `cross-fade(A, B, p)` (CSS Images L4 §4).
+    ///
+    /// BUG-406: компилируется лениво, при первом реальном использовании —
+    /// на DX12 компиляция одного пайплайна стоит ~1 с, и держать её в
+    /// старте окна ради эффекта, которого на странице может не быть, нельзя.
+    fn build_cross_fade_pipeline(&self) -> wgpu::RenderPipeline {
+        let cross_fade_shader = timed_shader(&self.device, wgpu::ShaderModuleDescriptor {
+            label: Some("cross-fade-shader"),
+            source: wgpu::ShaderSource::Wgsl(CROSS_FADE_SHADER_SRC.into()),
+        });
+        let cross_fade_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("cross-fade-layout"),
+            bind_group_layouts: &[&self.uniform_bgl, &self.cross_fade_bgl],
+            push_constant_ranges: &[],
+        });
+        timed_pipeline(&self.device, &wgpu::RenderPipelineDescriptor {
+            label: Some("cross-fade-pipeline"),
+            layout: Some(&cross_fade_layout),
+            vertex: wgpu::VertexState {
+                module: &cross_fade_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<CrossFadeVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 0,
+                            shader_location: 0, // pos
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 8,
+                            shader_location: 1, // uv
+                        },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &cross_fade_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: self.surface_format,
+                    // Same blend as image_pipeline — straight-alpha source,
+                    // SrcAlpha · src + (1-SrcAlpha) · dst.
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            // Cross-fade quads run at fixed mid-plane depth (z = 0.5 NDC in
+            // shader) — depth_write_enabled = false so they do not occlude
+            // 3D-transformed siblings under preserve-3d.
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        })
+    }
+
+    /// Пайплайн композита offscreen-слоя в родителя (opacity/clip-группы).
+    ///
+    /// BUG-406: компилируется лениво, при первом реальном использовании —
+    /// на DX12 компиляция одного пайплайна стоит ~1 с, и держать её в
+    /// старте окна ради эффекта, которого на странице может не быть, нельзя.
+    fn build_composite_pipeline(&self) -> wgpu::RenderPipeline {
+        let composite_shader = timed_shader(&self.device, wgpu::ShaderModuleDescriptor {
+            label: Some("composite-shader"),
+            source: wgpu::ShaderSource::Wgsl(COMPOSITE_SHADER_SRC.into()),
+        });
+        let composite_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("composite-layout"),
+            bind_group_layouts: &[&self.composite_bgl],
+            push_constant_ranges: &[],
+        });
+        timed_pipeline(&self.device, &wgpu::RenderPipelineDescriptor {
+            label: Some("composite-pipeline"),
+            layout: Some(&composite_layout),
+            vertex: wgpu::VertexState {
+                module: &composite_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<CompositeVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 0,
+                            shader_location: 0,
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 8,
+                            shader_location: 1,
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32,
+                            offset: 16,
+                            shader_location: 2,
+                        },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &composite_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: self.surface_format,
+                    // Premultiplied-alpha blend: off-screen layers store premultiplied content.
+                    // Shader multiplies rgb*opacity so "one * src + (1-src.a) * dst" is correct.
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        })
+    }
+
+    /// Пайплайн CSS-блендинга двух текстур (CSS Compositing L1 §8).
+    ///
+    /// BUG-406: компилируется лениво, при первом реальном использовании —
+    /// на DX12 компиляция одного пайплайна стоит ~1 с, и держать её в
+    /// старте окна ради эффекта, которого на странице может не быть, нельзя.
+    fn build_blend_pipeline(&self) -> wgpu::RenderPipeline {
+        let blend_shader = timed_shader(&self.device, wgpu::ShaderModuleDescriptor {
+            label: Some("blend-shader"),
+            source: wgpu::ShaderSource::Wgsl(BLEND_SHADER_SRC.into()),
+        });
+        let blend_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("blend-layout"),
+            bind_group_layouts: &[&self.blend_bgl],
+            push_constant_ranges: &[],
+        });
+        // REPLACE blend state: shader implements full CSS compositing formula.
+        timed_pipeline(&self.device, &wgpu::RenderPipelineDescriptor {
+            label: Some("blend-pipeline"),
+            layout: Some(&blend_layout),
+            vertex: wgpu::VertexState {
+                module: &blend_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<CompositeVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 0,
+                            shader_location: 0,
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 8,
+                            shader_location: 1,
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32,
+                            offset: 16,
+                            shader_location: 2,
+                        },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &blend_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: self.surface_format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        })
+    }
+
+    /// Пайплайн композита слоя по маске-картинке (CSS Masking L1 §4).
+    ///
+    /// BUG-406: компилируется лениво, при первом реальном использовании —
+    /// на DX12 компиляция одного пайплайна стоит ~1 с, и держать её в
+    /// старте окна ради эффекта, которого на странице может не быть, нельзя.
+    fn build_mask_composite_pipeline(&self) -> wgpu::RenderPipeline {
+        let mask_composite_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("mask-composite-layout"),
+            bind_group_layouts: &[&self.uniform_bgl, &self.mask_composite_bgl],
+            push_constant_ranges: &[],
+        });
+        let mask_composite_shader = timed_shader(&self.device, wgpu::ShaderModuleDescriptor {
+            label: Some("mask-composite-shader"),
+            source: wgpu::ShaderSource::Wgsl(MASK_COMPOSITE_SHADER_SRC.into()),
+        });
+        timed_pipeline(&self.device, &wgpu::RenderPipelineDescriptor {
+            label: Some("mask-composite-pipeline"),
+            layout: Some(&mask_composite_layout),
+            vertex: wgpu::VertexState {
+                module: &mask_composite_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<MaskVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 0,
+                            shader_location: 0,
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 8,
+                            shader_location: 1,
+                        },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &mask_composite_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: self.surface_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        })
+    }
+
+    /// Пара пайплайнов композита по отрисованному mask-слою (CSS Masking L1 §5), alpha и luminance.
+    ///
+    /// BUG-406: компилируется лениво, при первом реальном использовании —
+    /// на DX12 компиляция одного пайплайна стоит ~1 с, и держать её в
+    /// старте окна ради эффекта, которого на странице может не быть, нельзя.
+    fn build_mask_layer_pipeline(&self) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
+        // ── Mask-layer composite pipelines ──────────────────────────────────
+        // CSS Masking L1 §5: apply a rendered mask layer to the parent layer.
+        // Reuses mask_composite_bgl (same binding layout: t_content, t_mask, s).
+        // Two pipelines sharing one shader module: alpha mode and luminance mode.
+        // Blend: REPLACE (src_factor=One, dst_factor=Zero) — overwrites parent at element rect.
+        // Свой `PipelineLayout` поверх общего `mask_composite_bgl`: билдер
+        // `mask_composite`-пайплайна тоже ленив (BUG-406), его локальный layout
+        // сюда не дотягивается.
+        let mask_composite_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("mask-layer-layout"),
+            bind_group_layouts: &[&self.uniform_bgl, &self.mask_composite_bgl],
+            push_constant_ranges: &[],
+        });
+        let mask_layer_shader = timed_shader(&self.device, wgpu::ShaderModuleDescriptor {
+            label: Some("mask-layer-shader"),
+            source: wgpu::ShaderSource::Wgsl(MASK_LAYER_SHADER_SRC.into()),
+        });
+        let mask_layer_vtx_layout = wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<MaskVertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
+                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 8, shader_location: 1 },
+            ],
+        };
+        let replace_blend = wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::Zero,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::Zero,
+                operation: wgpu::BlendOperation::Add,
+            },
+        };
+        let mask_layer_alpha_pipeline = timed_pipeline(&self.device, &wgpu::RenderPipelineDescriptor {
+            label: Some("mask-layer-alpha-pipeline"),
+            layout: Some(&mask_composite_layout),
+            vertex: wgpu::VertexState {
+                module: &mask_layer_shader,
+                entry_point: Some("vs_main"),
+                buffers: std::slice::from_ref(&mask_layer_vtx_layout),
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &mask_layer_shader,
+                entry_point: Some("fs_alpha"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: self.surface_format,
+                    blend: Some(replace_blend),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+        let mask_layer_luma_pipeline = timed_pipeline(&self.device, &wgpu::RenderPipelineDescriptor {
+            label: Some("mask-layer-luma-pipeline"),
+            layout: Some(&mask_composite_layout),
+            vertex: wgpu::VertexState {
+                module: &mask_layer_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[mask_layer_vtx_layout],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &mask_layer_shader,
+                entry_point: Some("fs_luma"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: self.surface_format,
+                    blend: Some(replace_blend),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+        (mask_layer_alpha_pipeline, mask_layer_luma_pipeline)
+    }
+
+    /// Пайплайн цветовых CSS-фильтров (CSS Filter Effects L1).
+    ///
+    /// BUG-406: компилируется лениво, при первом реальном использовании —
+    /// на DX12 компиляция одного пайплайна стоит ~1 с, и держать её в
+    /// старте окна ради эффекта, которого на странице может не быть, нельзя.
+    fn build_filter_pipeline(&self) -> wgpu::RenderPipeline {
+        let filter_shader = timed_shader(&self.device, wgpu::ShaderModuleDescriptor {
+            label: Some("filter-shader"),
+            source: wgpu::ShaderSource::Wgsl(FILTER_SHADER_SRC.into()),
+        });
+        let filter_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("filter-layout"),
+            bind_group_layouts: &[&self.filter_bgl],
+            push_constant_ranges: &[],
+        });
+        timed_pipeline(&self.device, &wgpu::RenderPipelineDescriptor {
+            label: Some("filter-pipeline"),
+            layout: Some(&filter_layout),
+            vertex: wgpu::VertexState {
+                module: &filter_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<CompositeVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 8, shader_location: 1 },
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32, offset: 16, shader_location: 2 },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &filter_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: self.surface_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        })
+    }
+
+    /// Пайплайн сепарабельного гауссова блюра (один проход, H или V).
+    ///
+    /// BUG-406: компилируется лениво, при первом реальном использовании —
+    /// на DX12 компиляция одного пайплайна стоит ~1 с, и держать её в
+    /// старте окна ради эффекта, которого на странице может не быть, нельзя.
+    fn build_blur_pipeline(&self) -> wgpu::RenderPipeline {
+        let blur_shader = timed_shader(&self.device, wgpu::ShaderModuleDescriptor {
+            label: Some("blur-shader"),
+            source: wgpu::ShaderSource::Wgsl(BLUR_SHADER_SRC.into()),
+        });
+        let blur_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("blur-layout"),
+            bind_group_layouts: &[&self.blur_bgl],
+            push_constant_ranges: &[],
+        });
+        timed_pipeline(&self.device, &wgpu::RenderPipelineDescriptor {
+            label: Some("blur-pipeline"),
+            layout: Some(&blur_layout),
+            vertex: wgpu::VertexState {
+                module: &blur_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<CompositeVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 8, shader_location: 1 },
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32, offset: 16, shader_location: 2 },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &blur_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: self.surface_format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        })
+    }
+
+    /// Пайплайн блита отфильтрованного backdrop-снимка (REPLACE-блендинг).
+    ///
+    /// BUG-406: компилируется лениво, при первом реальном использовании —
+    /// на DX12 компиляция одного пайплайна стоит ~1 с, и держать её в
+    /// старте окна ради эффекта, которого на странице может не быть, нельзя.
+    fn build_backdrop_blit_pipeline(&self) -> wgpu::RenderPipeline {
+        // ── Backdrop-filter blit pipeline ────────────────────────────────────
+        // Same shader + bind group layout as filter_pipeline, but REPLACE blend.
+        // Used to overwrite the parent layer's element-bounds region with the
+        // filtered backdrop snapshot (with optional color-matrix filter applied).
+        // Собственные shader/layout: `filter_pipeline` тоже ленив (BUG-406), и его
+        // локальные shader/layout не переживают своего билдера.
+        let filter_shader = timed_shader(&self.device, wgpu::ShaderModuleDescriptor {
+            label: Some("filter-shader"),
+            source: wgpu::ShaderSource::Wgsl(FILTER_SHADER_SRC.into()),
+        });
+        let filter_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("filter-layout"),
+            bind_group_layouts: &[&self.filter_bgl],
+            push_constant_ranges: &[],
+        });
+        timed_pipeline(&self.device, &wgpu::RenderPipelineDescriptor {
+            label: Some("backdrop-blit-pipeline"),
+            layout: Some(&filter_layout),
+            vertex: wgpu::VertexState {
+                module: &filter_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<CompositeVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 8, shader_location: 1 },
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32, offset: 16, shader_location: 2 },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &filter_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: self.surface_format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    // Write only RGB — preserve destination alpha so the parent
+                    // layer's opacity isn't reduced by blur-edge transparency.
+                    write_mask: wgpu::ColorWrites::COLOR,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        })
+    }
+
+    /// Ленивый доступ к `circle`-пайплайну (BUG-406): компилирует его при
+    /// первом обращении и кэширует на весь срок жизни рендера.
+    fn circle_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.circle_pipeline.get_or_init(|| self.build_circle_pipeline())
+    }
+    /// Ленивый доступ к `mipgen`-пайплайну (BUG-406): компилирует его при
+    /// первом обращении и кэширует на весь срок жизни рендера.
+    fn mipgen_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.mipgen_pipeline.get_or_init(|| self.build_mipgen_pipeline())
+    }
+    /// Ленивый доступ к `cross_fade`-пайплайну (BUG-406): компилирует его при
+    /// первом обращении и кэширует на весь срок жизни рендера.
+    fn cross_fade_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.cross_fade_pipeline.get_or_init(|| self.build_cross_fade_pipeline())
+    }
+    /// Ленивый доступ к `composite`-пайплайну (BUG-406): компилирует его при
+    /// первом обращении и кэширует на весь срок жизни рендера.
+    fn composite_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.composite_pipeline.get_or_init(|| self.build_composite_pipeline())
+    }
+    /// Ленивый доступ к `blend`-пайплайну (BUG-406): компилирует его при
+    /// первом обращении и кэширует на весь срок жизни рендера.
+    fn blend_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.blend_pipeline.get_or_init(|| self.build_blend_pipeline())
+    }
+    /// Ленивый доступ к `mask_composite`-пайплайну (BUG-406): компилирует его при
+    /// первом обращении и кэширует на весь срок жизни рендера.
+    fn mask_composite_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.mask_composite_pipeline.get_or_init(|| self.build_mask_composite_pipeline())
+    }
+    /// Ленивый доступ к `filter`-пайплайну (BUG-406): компилирует его при
+    /// первом обращении и кэширует на весь срок жизни рендера.
+    fn filter_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.filter_pipeline.get_or_init(|| self.build_filter_pipeline())
+    }
+    /// Ленивый доступ к `blur`-пайплайну (BUG-406): компилирует его при
+    /// первом обращении и кэширует на весь срок жизни рендера.
+    fn blur_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.blur_pipeline.get_or_init(|| self.build_blur_pipeline())
+    }
+    /// Ленивый доступ к `backdrop_blit`-пайплайну (BUG-406): компилирует его при
+    /// первом обращении и кэширует на весь срок жизни рендера.
+    fn backdrop_blit_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.backdrop_blit_pipeline.get_or_init(|| self.build_backdrop_blit_pipeline())
+    }
+    /// Ленивый доступ к паре mask-layer-пайплайнов (alpha, luminance) — BUG-406.
+    fn mask_layer_pipelines(&self) -> &(wgpu::RenderPipeline, wgpu::RenderPipeline) {
+        self.mask_layer_pipelines.get_or_init(|| self.build_mask_layer_pipeline())
     }
 
     /// Заменяет источник лукапа face-ов. Полезно для тестов (mock-provider) и
@@ -3713,6 +4060,7 @@ impl Renderer {
                 &[(*name).to_string()],
                 FontWeight::NORMAL,
                 FontStyle::Normal,
+                FontStretch::NORMAL,
             );
         }
     }
@@ -3752,6 +4100,7 @@ impl Renderer {
         families: &[String],
         weight: FontWeight,
         style: FontStyle,
+        stretch: FontStretch,
     ) -> usize {
         // DS-4: chrome never queries the CSS FontProvider — every chrome
         // `DrawText` passes an empty `font_family` (page content always has a
@@ -3777,19 +4126,25 @@ impl Renderer {
         };
         // Мемоизация: горячий путь (каждый DrawText каждого кадра) — один
         // hash-lookup без аллокаций вместо to_lowercase + pick_face.
-        let cache_key = Self::resolve_cache_key(families, weight, style);
+        let cache_key = Self::resolve_cache_key(families, weight, style, stretch);
         if let Some(&id) = self.resolve_cache.get(&cache_key) {
             return id;
         }
-        let resolved = self.resolve_face_id_uncached(families, weight, style, &provider);
+        let resolved =
+            self.resolve_face_id_uncached(families, weight, style, stretch, &provider);
         self.resolve_cache.insert(cache_key, resolved);
         resolved
     }
 
     /// Ключ мемо-кэша [`Self::resolve_face_id`]: хэш `(families, weight,
-    /// style)` без аллокаций. Вынесен, чтобы префетч и резолв считали ключ
-    /// одинаково.
-    fn resolve_cache_key(families: &[String], weight: FontWeight, style: FontStyle) -> u64 {
+    /// style, stretch)` без аллокаций. Вынесен, чтобы префетч и резолв
+    /// считали ключ одинаково.
+    fn resolve_cache_key(
+        families: &[String],
+        weight: FontWeight,
+        style: FontStyle,
+        stretch: FontStretch,
+    ) -> u64 {
         use std::hash::Hasher;
         let mut h = std::collections::hash_map::DefaultHasher::new();
         for fam in families {
@@ -3802,6 +4157,10 @@ impl Renderer {
             FontStyle::Italic => 1,
             FontStyle::Oblique => 2,
         });
+        // Часть ключа: `pick_face` выбирает по stretch-у отдельный
+        // condensed/expanded face, значит два stretch-а одного
+        // (family, weight, style) — это два разных face_id.
+        h.write_u16(stretch.0);
         h.finish()
     }
 
@@ -3854,11 +4213,14 @@ impl Renderer {
         let mut seen_keys: std::collections::HashSet<u64> = std::collections::HashSet::new();
         let mut scheduled: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
         for cmd in content.iter().chain(overlay.iter()) {
-            let DisplayCommand::DrawText { font_family, font_weight, font_style, .. } = cmd
+            let DisplayCommand::DrawText {
+                font_family, font_weight, font_style, font_stretch, ..
+            } = cmd
             else {
                 continue;
             };
-            let key = Self::resolve_cache_key(font_family, *font_weight, *font_style);
+            let key =
+                Self::resolve_cache_key(font_family, *font_weight, *font_style, *font_stretch);
             if self.resolve_cache.contains_key(&key) || !seen_keys.insert(key) {
                 continue;
             }
@@ -3875,9 +4237,12 @@ impl Renderer {
                 if Self::is_generic_family(&lc) {
                     continue;
                 }
-                let Some(rec) =
-                    provider.pick_face(fam, font_weight.0, Self::css_style_of(*font_style))
-                else {
+                let Some(rec) = provider.pick_face(
+                    fam,
+                    font_weight.0,
+                    Self::css_style_of(*font_style),
+                    font_stretch.as_percent(),
+                ) else {
                     continue;
                 };
                 if !self.face_id_by_path.contains_key(&rec.path)
@@ -3961,6 +4326,7 @@ impl Renderer {
         families: &[String],
         weight: FontWeight,
         style: FontStyle,
+        stretch: FontStretch,
         provider: &Arc<dyn FontProvider>,
     ) -> usize {
         for fam in families {
@@ -3968,7 +4334,12 @@ impl Renderer {
             if Self::is_generic_family(&lc) {
                 continue;
             }
-            let Some(rec) = provider.pick_face(fam, weight.0, Self::css_style_of(style)) else {
+            let Some(rec) = provider.pick_face(
+                fam,
+                weight.0,
+                Self::css_style_of(style),
+                stretch.as_percent(),
+            ) else {
                 continue;
             };
             if let Some(&id) = self.face_id_by_path.get(&rec.path) {
@@ -4361,7 +4732,7 @@ impl Renderer {
                     timestamp_writes: None,
                     occlusion_query_set: None,
                 });
-                pass.set_pipeline(&self.mipgen_pipeline);
+                pass.set_pipeline(self.mipgen_pipeline());
                 pass.set_bind_group(0, &bg, &[]);
                 pass.draw(0..3, 0..1);
                 drop(pass);
@@ -4635,6 +5006,27 @@ impl Renderer {
     /// Get the number of free textures of a specific size (for diagnostics).
     pub fn texture_pool_len_for_size(&self, width: u32, height: u32) -> usize {
         self.texture_pool.len_for_size(width, height)
+    }
+
+    /// Однострочная сводка по пулу offscreen-слоёв для `LUMEN_MEM_REPORT`
+    /// (BUG-272 срез 21): свободные текстуры, классы размеров, объём
+    /// свободного списка против бюджета и сколько вытеснено за сессию.
+    #[must_use]
+    pub fn texture_pool_report(&self) -> String {
+        use std::sync::atomic::Ordering::Relaxed;
+        let mib = |bytes: u64| bytes as f64 / (1024.0 * 1024.0);
+        let budget = self.texture_pool.budget_bytes();
+        format!(
+            "texture_pool: free {} tex / {} size-classes / {:.1} MiB (budget {}) \
+             | evicted {} | hits {} misses {}",
+            self.texture_pool.len(),
+            self.texture_pool.size_classes(),
+            mib(self.texture_pool.free_bytes()),
+            if budget == 0 { "off".to_string() } else { format!("{:.0} MiB", mib(budget)) },
+            self.texture_pool.evicted(),
+            TEXTURE_POOL_HITS.load(Relaxed),
+            TEXTURE_POOL_MISSES.load(Relaxed),
+        )
     }
 
     /// Clear all pooled textures (e.g., when resizing or memory pressure is high).
@@ -5400,10 +5792,16 @@ impl Renderer {
                 font_family,
                 font_weight,
                 font_style,
+                font_stretch,
                 ..
             } = cmd
             {
-                text_face_ids.push(self.resolve_face_id(font_family, *font_weight, *font_style));
+                text_face_ids.push(self.resolve_face_id(
+                    font_family,
+                    *font_weight,
+                    *font_style,
+                    *font_stretch,
+                ));
             }
         }
         let mut text_face_iter = text_face_ids.into_iter();
@@ -5962,9 +6360,12 @@ impl Renderer {
                     font_family: _,
                     font_weight: _,
                     font_style: _,
+                    // Уже учтён при резолве face_id в пре-проходе выше —
+                    // здесь берём готовый id из `text_face_iter`.
+                    font_stretch: _,
                     font_variation_axes,
                     font_features: _,
-                    font_palette: _,
+                    font_palette,
                     tab_size,
                     highlight_name: _,
                     text_orientation,
@@ -6009,6 +6410,7 @@ impl Renderer {
                                 &mut self.cached_glyphs,
                                 font_variation_axes,
                                 *tab_size,
+                                font_palette.as_ref(),
                             );
                             rotate_text_vertices_cw(&mut text_vertices[v_start as usize..], dest_rect);
                         }
@@ -6025,6 +6427,7 @@ impl Renderer {
                                 &mut self.cached_glyphs,
                                 font_variation_axes,
                                 *tab_size,
+                                font_palette.as_ref(),
                             );
                         }
                         _ => {
@@ -6040,6 +6443,7 @@ impl Renderer {
                                 &mut self.cached_glyphs,
                                 font_variation_axes,
                                 *tab_size,
+                                font_palette.as_ref(),
                             );
                         }
                     }
@@ -6221,6 +6625,7 @@ impl Renderer {
                                 &mut self.cached_glyphs,
                                 &[],
                                 0.0,
+                                None,
                             );
                             if let Some(m) = transform_stack.last() {
                                 apply_affine_to_verts(
@@ -7752,7 +8157,7 @@ impl Renderer {
                         }
                         DrawOp::Circle { v_start, v_count } => {
                             if let Some(vb) = &circle_vbuf {
-                                $pass.set_pipeline(&self.circle_pipeline);
+                                $pass.set_pipeline(self.circle_pipeline());
                                 $pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                                 $pass.set_vertex_buffer(0, vb.slice(..));
                                 $pass.draw(*v_start..*v_start + *v_count, 0..1);
@@ -7804,7 +8209,7 @@ impl Renderer {
                                 &cross_fade_vbuf,
                                 cross_fade_bind_groups.get(*cf_batch_idx as usize),
                             ) {
-                                $pass.set_pipeline(&self.cross_fade_pipeline);
+                                $pass.set_pipeline(self.cross_fade_pipeline());
                                 $pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                                 $pass.set_bind_group(1, bind_group, &[]);
                                 $pass.set_vertex_buffer(0, vb.slice(..));
@@ -7992,7 +8397,7 @@ impl Renderer {
                                 timestamp_writes: None,
                                 occlusion_query_set: None,
                             });
-                            pass.set_pipeline(&self.blend_pipeline);
+                            pass.set_pipeline(self.blend_pipeline());
                             pass.set_bind_group(0, &blend_bg, &[]);
                             pass.set_vertex_buffer(0, cvb.slice(..));
                             pass.draw(comp.comp_v_start..comp.comp_v_start + 6, 0..1);
@@ -8023,7 +8428,7 @@ impl Renderer {
                                 timestamp_writes: None,
                                 occlusion_query_set: None,
                             });
-                            pass.set_pipeline(&self.composite_pipeline);
+                            pass.set_pipeline(self.composite_pipeline());
                             pass.set_bind_group(0, src_bg, &[]);
                             pass.set_vertex_buffer(0, cvb.slice(..));
                             pass.draw(comp.comp_v_start..comp.comp_v_start + 6, 0..1);
@@ -8170,7 +8575,7 @@ impl Renderer {
                                 timestamp_writes: None,
                                 occlusion_query_set: None,
                             });
-                            pass.set_pipeline(&self.mask_composite_pipeline);
+                            pass.set_pipeline(self.mask_composite_pipeline());
                             pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                             pass.set_bind_group(1, &mask_bg, &[]);
                             pass.set_vertex_buffer(0, mvb.slice(..));
@@ -8213,7 +8618,7 @@ impl Renderer {
                             timestamp_writes: None,
                             occlusion_query_set: None,
                         });
-                        pass.set_pipeline(&self.composite_pipeline);
+                        pass.set_pipeline(self.composite_pipeline());
                         pass.set_bind_group(0, src_bg, &[]);
                         pass.set_vertex_buffer(0, fallback_buf.slice(..));
                         pass.draw(0..6, 0..1);
@@ -8269,7 +8674,7 @@ impl Renderer {
                                 timestamp_writes: None,
                                 occlusion_query_set: None,
                             });
-                            pass.set_pipeline(&self.blur_pipeline);
+                            pass.set_pipeline(self.blur_pipeline());
                             if let Some(s) = plan.scissor {
                                 pass.set_scissor_rect(s.x, s.y, s.width, s.height);
                             }
@@ -8309,7 +8714,7 @@ impl Renderer {
                                 timestamp_writes: None,
                                 occlusion_query_set: None,
                             });
-                            pass.set_pipeline(&self.blur_pipeline);
+                            pass.set_pipeline(self.blur_pipeline());
                             if let Some(s) = plan.scissor {
                                 pass.set_scissor_rect(s.x, s.y, s.width, s.height);
                             }
@@ -8368,7 +8773,7 @@ impl Renderer {
                             timestamp_writes: None,
                             occlusion_query_set: None,
                         });
-                        pass.set_pipeline(&self.filter_pipeline);
+                        pass.set_pipeline(self.filter_pipeline());
                         if let Some(s) = plan.scissor {
                             pass.set_scissor_rect(s.x, s.y, s.width, s.height);
                         }
@@ -8514,7 +8919,7 @@ impl Renderer {
                                     timestamp_writes: None,
                                     occlusion_query_set: None,
                                 });
-                                pass.set_pipeline(&self.blur_pipeline);
+                                pass.set_pipeline(self.blur_pipeline());
                                 pass.set_bind_group(0, &blur_bg_h, &[]);
                                 pass.set_vertex_buffer(0, cvb.slice(..));
                                 pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
@@ -8550,7 +8955,7 @@ impl Renderer {
                                     timestamp_writes: None,
                                     occlusion_query_set: None,
                                 });
-                                pass.set_pipeline(&self.blur_pipeline);
+                                pass.set_pipeline(self.blur_pipeline());
                                 pass.set_bind_group(0, &blur_bg_v, &[]);
                                 pass.set_vertex_buffer(0, cvb.slice(..));
                                 pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
@@ -8623,7 +9028,7 @@ impl Renderer {
                             timestamp_writes: None,
                             occlusion_query_set: None,
                         });
-                        pass.set_pipeline(&self.backdrop_blit_pipeline);
+                        pass.set_pipeline(self.backdrop_blit_pipeline());
                         pass.set_bind_group(0, &bd_blit_bg, &[]);
                         pass.set_vertex_buffer(0, cvb.slice(..));
                         pass.draw(plan.bounds_v_start..plan.bounds_v_start + 6, 0..1);
@@ -8686,7 +9091,7 @@ impl Renderer {
                             timestamp_writes: None,
                             occlusion_query_set: None,
                         });
-                        pass.set_pipeline(&self.filter_pipeline);
+                        pass.set_pipeline(self.filter_pipeline());
                         pass.set_bind_group(0, &elem_filter_bg, &[]);
                         pass.set_vertex_buffer(0, cvb.slice(..));
                         pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
@@ -8754,8 +9159,8 @@ impl Renderer {
                     });
                     let parent_view = &self.layer_textures[parent_idx].view;
                     let pipeline = match plan.mode {
-                        MaskMode::Alpha     => &self.mask_layer_alpha_pipeline,
-                        MaskMode::Luminance => &self.mask_layer_luma_pipeline,
+                        MaskMode::Alpha     => &self.mask_layer_pipelines().0,
+                        MaskMode::Luminance => &self.mask_layer_pipelines().1,
                     };
                     {
                         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -8800,6 +9205,11 @@ impl Renderer {
         for layer in temp_grad_layers.drain(..) {
             self.release_layer_to_pool(layer);
         }
+        // BUG-272 срез 21: привести свободный список пула к байтовому бюджету.
+        // Точка выбрана после `submit` намеренно — освобождаемые здесь текстуры
+        // могли быть использованы командами этого кадра, а удерживает их до
+        // исполнения сам wgpu (тот же довод, что у `temp_grad_layers` выше).
+        self.texture_pool.trim();
         if let Some(frame) = windowed_frame {
             frame.present();
         }
@@ -9816,6 +10226,40 @@ fn normalize_variation_axes(face: &ParsedFace<'_>, axes: &[([u8; 4], f32)]) -> V
     coords
 }
 
+/// Кладёт два треугольника одного глифа: позиция от пера `cursor_x` и
+/// baseline-а, UV — из atlas-записи. Вынесено, потому что монохромный путь и
+/// каждый слой COLR-глифа кладут один и тот же quad, различаясь только
+/// цветом и glyph-id.
+fn push_glyph_quad(
+    out: &mut Vec<TextVertex>,
+    g: &CachedGlyph,
+    cursor_x: f32,
+    baseline_y: f32,
+    display_scale: f32,
+    color: [f32; 4],
+) {
+    let bm_left = g.left * display_scale;
+    let bm_top = g.top * display_scale;
+    let bm_w = g.entry.width as f32 * display_scale;
+    let bm_h = g.entry.height as f32 * display_scale;
+    let x0 = cursor_x + bm_left;
+    let y0 = baseline_y - bm_top;
+    let x1 = x0 + bm_w;
+    let y1 = y0 + bm_h;
+    let u0 = g.entry.atlas_x as f32 / ATLAS_DIM as f32;
+    let v0 = g.entry.atlas_y as f32 / ATLAS_DIM as f32;
+    let u1 = (g.entry.atlas_x + g.entry.width) as f32 / ATLAS_DIM as f32;
+    let v1 = (g.entry.atlas_y + g.entry.height) as f32 / ATLAS_DIM as f32;
+    out.extend_from_slice(&[
+        TextVertex { pos: [x0, y0], z: 0.0, uv: [u0, v0], color },
+        TextVertex { pos: [x1, y0], z: 0.0, uv: [u1, v0], color },
+        TextVertex { pos: [x1, y1], z: 0.0, uv: [u1, v1], color },
+        TextVertex { pos: [x0, y0], z: 0.0, uv: [u0, v0], color },
+        TextVertex { pos: [x1, y1], z: 0.0, uv: [u1, v1], color },
+        TextVertex { pos: [x0, y1], z: 0.0, uv: [u0, v1], color },
+    ]);
+}
+
 /// Returns the final pen `x` (== `rect.x` + shaped advance) — used by
 /// [`push_text_glyphs_mixed`] to measure a segment's real width without a
 /// separate shaping pass.
@@ -9832,6 +10276,7 @@ fn push_text_glyphs(
     cached: &mut HashMap<AtlasKey, Option<CachedGlyph>>,
     font_variation_axes: &[([u8; 4], f32)],
     tab_size: f32,
+    font_palette: Option<&FontPaletteSelection>,
 ) -> f32 {
     // Multi-size atlas: подбираем bin под font_size, растеризируем глифы
     // на этом bin. Display масштаб = font_size / size_bin — если font_size
@@ -9858,6 +10303,10 @@ fn push_text_glyphs(
     // (единственный потребитель `ParsedFace` на пути без промахов атласа;
     // при пустых axes face не парсится вовсе).
     let mut norm_coords_cache: HashMap<usize, Vec<f32>> = HashMap::new();
+    // CSS Fonts L4 §11.3 — развёрнутая палитра per face_id. Считается лениво:
+    // у монохромного face-а (подавляющее большинство) `FaceMetrics.color` =
+    // None и сюда не заходим ни разу.
+    let mut palette_cache: HashMap<usize, Option<Vec<[f32; 4]>>> = HashMap::new();
 
     let mut cursor_x = rect.x;
     for ch in text.chars() {
@@ -9887,6 +10336,43 @@ fn push_text_glyphs(
                 v.insert(computed)
             }
         };
+        // CSS Fonts L4 §11.3 — COLR v0 цветной глиф: вместо одного quad-а
+        // текстовым цветом кладём по quad-у на каждый слой, снизу вверх, со
+        // своим цветом из выбранной палитры. Слой — обычный монохромный
+        // глиф, поэтому идёт через тот же атлас. Advance берём у базового
+        // глифа (сам он не растеризуется — слои его полностью замещают).
+        if let Some(layers) = metrics
+            .color
+            .as_ref()
+            .and_then(|c| c.colr.layers_for(glyph_id))
+        {
+            let palette = palette_cache
+                .entry(face_id)
+                .or_insert_with(|| {
+                    metrics.color.as_ref().and_then(|c| resolve_palette(c, font_palette))
+                })
+                .as_deref();
+            for layer in layers {
+                let Some(g) =
+                    ensure_glyph(cached, atlas, lazy, face_id, layer.glyph_id, size_bin, coords)
+                else {
+                    continue;
+                };
+                push_glyph_quad(
+                    out,
+                    &g,
+                    cursor_x,
+                    baseline_y,
+                    display_scale,
+                    layer_color(palette, layer.palette_index, color),
+                );
+            }
+            if let Some(&adv) = metrics.advances.get(glyph_id as usize) {
+                cursor_x += adv as f32 * advance_scale;
+            }
+            continue;
+        }
+
         let cached_glyph = ensure_glyph(
             cached,
             atlas,
@@ -9898,27 +10384,7 @@ fn push_text_glyphs(
         );
 
         if let Some(g) = cached_glyph {
-            let bm_left = g.left * display_scale;
-            let bm_top = g.top * display_scale;
-            let bm_w = g.entry.width as f32 * display_scale;
-            let bm_h = g.entry.height as f32 * display_scale;
-            let x0 = cursor_x + bm_left;
-            let y0 = baseline_y - bm_top;
-            let x1 = x0 + bm_w;
-            let y1 = y0 + bm_h;
-            let u0 = g.entry.atlas_x as f32 / ATLAS_DIM as f32;
-            let v0 = g.entry.atlas_y as f32 / ATLAS_DIM as f32;
-            let u1 = (g.entry.atlas_x + g.entry.width) as f32 / ATLAS_DIM as f32;
-            let v1 = (g.entry.atlas_y + g.entry.height) as f32 / ATLAS_DIM as f32;
-            out.extend_from_slice(&[
-                TextVertex { pos: [x0, y0], z: 0.0, uv: [u0, v0], color },
-                TextVertex { pos: [x1, y0], z: 0.0, uv: [u1, v0], color },
-                TextVertex { pos: [x1, y1], z: 0.0, uv: [u1, v1], color },
-                TextVertex { pos: [x0, y0], z: 0.0, uv: [u0, v0], color },
-                TextVertex { pos: [x1, y1], z: 0.0, uv: [u1, v1], color },
-                TextVertex { pos: [x0, y1], z: 0.0, uv: [u0, v1], color },
-            ]);
-
+            push_glyph_quad(out, &g, cursor_x, baseline_y, display_scale, color);
             cursor_x += g.advance_native as f32 * advance_scale;
         } else {
             // Глиф не отрисовался (composite-fallback, empty или нет места
@@ -9967,6 +10433,7 @@ fn push_text_glyphs_mixed(
     cached: &mut HashMap<AtlasKey, Option<CachedGlyph>>,
     font_variation_axes: &[([u8; 4], f32)],
     tab_size: f32,
+    font_palette: Option<&FontPaletteSelection>,
 ) {
     let mut y_cursor = 0.0_f32;
     for seg in crate::display_list::split_mixed_runs(text) {
@@ -9982,7 +10449,7 @@ fn push_text_glyphs_mixed(
             let seg_rect = Rect::new(dest.x, dest.y + y_cursor, dest.width, dest.height);
             let end_x = push_text_glyphs(
                 out, seg_rect, &seg_text, font_size, color, primary_face_id, lazy, atlas,
-                cached, font_variation_axes, tab_size,
+                cached, font_variation_axes, tab_size, font_palette,
             );
             y_cursor += end_x - dest.x;
         } else {
@@ -9990,7 +10457,7 @@ fn push_text_glyphs_mixed(
             let local_rect = Rect::new(y_cursor, 0.0, dest.width, dest.height);
             let end_x = push_text_glyphs(
                 out, local_rect, &seg_text, font_size, color, primary_face_id, lazy, atlas,
-                cached, font_variation_axes, tab_size,
+                cached, font_variation_axes, tab_size, font_palette,
             );
             rotate_text_vertices_cw(&mut out[v_start..], dest);
             y_cursor = end_x;
@@ -11338,5 +11805,393 @@ mod tests {
             (screen_y - 40.0).abs() < 0.01,
             "sticky header must pin at the panel's own scrollport top (40), got {screen_y}"
         );
+    }
+
+    // ─── font-palette: COLR/CPAL palette resolution (CSS Fonts L4 §11.3) ───
+
+    use lumen_font::PaletteColor;
+    use lumen_layout::font_palette::PaletteColorOverride;
+
+    /// Builds a `ColorTables` with the given palettes (each a list of RGBA
+    /// tuples, all the same length) and optional `paletteType` flags. The
+    /// `COLR` half stays empty — the palette resolver never looks at it.
+    fn tables(palettes: &[&[(u8, u8, u8, u8)]], types: &[u32]) -> ColorTables {
+        let entries = palettes.first().map_or(0, |p| p.len()) as u16;
+        let mut color_records = Vec::new();
+        let mut palette_record_indices = Vec::new();
+        for p in palettes {
+            palette_record_indices.push(color_records.len() as u16);
+            color_records.extend(
+                p.iter().map(|&(r, g, b, a)| PaletteColor { r, g, b, a }),
+            );
+        }
+        ColorTables {
+            colr: Colr { version: 0, base_glyphs: Vec::new(), layers: Vec::new() },
+            cpal: Cpal {
+                version: if types.is_empty() { 0 } else { 1 },
+                num_palette_entries: entries,
+                color_records,
+                palette_record_indices,
+                palette_types: types.to_vec(),
+            },
+        }
+    }
+
+    fn close(a: [f32; 4], b: [f32; 4]) -> bool {
+        a.iter().zip(b.iter()).all(|(x, y)| (x - y).abs() < 1e-6)
+    }
+
+    #[test]
+    fn resolve_palette_normal_takes_palette_zero() {
+        let t = tables(&[&[(255, 0, 0, 255)], &[(0, 255, 0, 255)]], &[]);
+        let p = resolve_palette(&t, None).unwrap();
+        assert!(close(p[0], [1.0, 0.0, 0.0, 1.0]));
+    }
+
+    #[test]
+    fn resolve_palette_light_and_dark_pick_the_flagged_palette() {
+        let t = tables(
+            &[&[(1, 1, 1, 255)], &[(0, 0, 0, 255)], &[(255, 255, 255, 255)]],
+            &[0, Cpal::USABLE_WITH_DARK_BACKGROUND, Cpal::USABLE_WITH_LIGHT_BACKGROUND],
+        );
+        let dark = resolve_palette(&t, Some(&FontPaletteSelection::Dark)).unwrap();
+        assert!(close(dark[0], [0.0, 0.0, 0.0, 1.0]));
+        let light = resolve_palette(&t, Some(&FontPaletteSelection::Light)).unwrap();
+        assert!(close(light[0], [1.0, 1.0, 1.0, 1.0]));
+    }
+
+    #[test]
+    fn resolve_palette_light_without_flags_behaves_as_normal() {
+        // CPAL v0 has no paletteType array — `light`/`dark` must fall back to
+        // palette 0 rather than disabling the color path.
+        let t = tables(&[&[(255, 0, 0, 255)], &[(0, 255, 0, 255)]], &[]);
+        let p = resolve_palette(&t, Some(&FontPaletteSelection::Light)).unwrap();
+        assert!(close(p[0], [1.0, 0.0, 0.0, 1.0]));
+    }
+
+    #[test]
+    fn resolve_palette_custom_starts_from_base_palette() {
+        let t = tables(&[&[(255, 0, 0, 255)], &[(0, 0, 255, 255)]], &[]);
+        let sel = FontPaletteSelection::Custom { base_palette: 1, overrides: Vec::new() };
+        let p = resolve_palette(&t, Some(&sel)).unwrap();
+        assert!(close(p[0], [0.0, 0.0, 1.0, 1.0]));
+    }
+
+    #[test]
+    fn resolve_palette_custom_applies_override_colors() {
+        let t = tables(&[&[(255, 0, 0, 255), (0, 255, 0, 255)]], &[]);
+        let sel = FontPaletteSelection::Custom {
+            base_palette: 0,
+            overrides: vec![PaletteColorOverride {
+                index: 1,
+                color: Color { r: 0, g: 0, b: 255, a: 128 },
+            }],
+        };
+        let p = resolve_palette(&t, Some(&sel)).unwrap();
+        // Slot 0 untouched, slot 1 replaced.
+        assert!(close(p[0], [1.0, 0.0, 0.0, 1.0]));
+        assert!(close(p[1], [0.0, 0.0, 1.0, 128.0 / 255.0]));
+    }
+
+    #[test]
+    fn resolve_palette_override_past_palette_end_is_ignored() {
+        let t = tables(&[&[(255, 0, 0, 255)]], &[]);
+        let sel = FontPaletteSelection::Custom {
+            base_palette: 0,
+            overrides: vec![PaletteColorOverride {
+                index: 9,
+                color: Color { r: 0, g: 0, b: 255, a: 255 },
+            }],
+        };
+        let p = resolve_palette(&t, Some(&sel)).unwrap();
+        assert_eq!(p.len(), 1);
+        assert!(close(p[0], [1.0, 0.0, 0.0, 1.0]));
+    }
+
+    #[test]
+    fn resolve_palette_unknown_base_palette_falls_back_to_zero() {
+        let t = tables(&[&[(255, 0, 0, 255)]], &[]);
+        let sel = FontPaletteSelection::Custom { base_palette: 7, overrides: Vec::new() };
+        let p = resolve_palette(&t, Some(&sel)).unwrap();
+        assert!(close(p[0], [1.0, 0.0, 0.0, 1.0]));
+    }
+
+    #[test]
+    fn resolve_palette_without_any_palette_is_none() {
+        let t = tables(&[], &[]);
+        assert!(resolve_palette(&t, None).is_none());
+    }
+
+    #[test]
+    fn layer_color_foreground_index_uses_text_color() {
+        let palette = [[1.0, 0.0, 0.0, 1.0]];
+        let text = [0.0, 0.5, 0.25, 1.0];
+        let c = layer_color(Some(&palette), lumen_font::PALETTE_INDEX_FOREGROUND, text);
+        assert!(close(c, text));
+    }
+
+    #[test]
+    fn layer_color_scales_palette_alpha_by_text_alpha() {
+        // A half-transparent text color must dim the color glyph the same way
+        // it dims a monochrome one — otherwise the emoji stays fully opaque.
+        let palette = [[1.0, 0.0, 0.0, 0.5]];
+        let c = layer_color(Some(&palette), 0, [0.0, 0.0, 0.0, 0.5]);
+        assert!(close(c, [1.0, 0.0, 0.0, 0.25]));
+    }
+
+    #[test]
+    fn layer_color_out_of_range_index_uses_text_color() {
+        let palette = [[1.0, 0.0, 0.0, 1.0]];
+        let text = [0.0, 1.0, 0.0, 1.0];
+        assert!(close(layer_color(Some(&palette), 5, text), text));
+        assert!(close(layer_color(None, 0, text), text));
+    }
+
+    // ─── COLR color glyph emission (end-to-end over a synthetic font) ─────
+
+    /// Minimal TTF with two color layers, built in memory so the whole
+    /// `build_face_metrics` → `push_text_glyphs` path can be exercised
+    /// without a GPU and without a real color font on disk:
+    /// glyph 1 (`A`) is a COLR base glyph whose layers are glyph 2 (palette
+    /// entry 0 = opaque red) and glyph 3 (`0xFFFF` = text color). All three
+    /// outlines are the same square, so every layer produces a real bitmap.
+    fn build_color_font() -> Vec<u8> {
+        fn table_record(out: &mut Vec<u8>, tag: &[u8; 4], offset: u32, length: u32) {
+            out.extend_from_slice(tag);
+            out.extend_from_slice(&0u32.to_be_bytes()); // checksum — не валидируется
+            out.extend_from_slice(&offset.to_be_bytes());
+            out.extend_from_slice(&length.to_be_bytes());
+        }
+
+        let mut head = Vec::new();
+        head.extend_from_slice(&0x00010000u32.to_be_bytes()); // version
+        head.extend_from_slice(&0u32.to_be_bytes()); // fontRevision
+        head.extend_from_slice(&0u32.to_be_bytes()); // checkSumAdjustment
+        head.extend_from_slice(&0x5F0F3CF5u32.to_be_bytes()); // magic
+        head.extend_from_slice(&0u16.to_be_bytes()); // flags
+        head.extend_from_slice(&1000u16.to_be_bytes()); // unitsPerEm
+        head.extend_from_slice(&[0u8; 16]); // created + modified
+        head.extend_from_slice(&0i16.to_be_bytes()); // xMin
+        head.extend_from_slice(&0i16.to_be_bytes()); // yMin
+        head.extend_from_slice(&500i16.to_be_bytes()); // xMax
+        head.extend_from_slice(&500i16.to_be_bytes()); // yMax
+        head.extend_from_slice(&[0u8; 6]); // macStyle + lowestRecPPEM + dirHint
+        head.extend_from_slice(&0i16.to_be_bytes()); // indexToLocFormat = short
+        head.extend_from_slice(&0i16.to_be_bytes()); // glyphDataFormat
+
+        const NUM_GLYPHS: u16 = 4;
+        let mut hhea = Vec::new();
+        hhea.extend_from_slice(&0x00010000u32.to_be_bytes()); // version
+        hhea.extend_from_slice(&800i16.to_be_bytes()); // ascender
+        hhea.extend_from_slice(&(-200i16).to_be_bytes()); // descender
+        hhea.extend_from_slice(&0i16.to_be_bytes()); // lineGap
+        hhea.extend_from_slice(&600u16.to_be_bytes()); // advanceWidthMax
+        hhea.extend_from_slice(&[0u8; 22]); // до numberOfHMetrics
+        hhea.extend_from_slice(&NUM_GLYPHS.to_be_bytes());
+
+        let mut maxp = Vec::new();
+        maxp.extend_from_slice(&0x00010000u32.to_be_bytes());
+        maxp.extend_from_slice(&NUM_GLYPHS.to_be_bytes());
+        maxp.extend_from_slice(&[0u8; 26]);
+
+        // hmtx: одна longHorMetric на глиф, advance 600.
+        let mut hmtx = Vec::new();
+        for _ in 0..NUM_GLYPHS {
+            hmtx.extend_from_slice(&600u16.to_be_bytes());
+            hmtx.extend_from_slice(&0i16.to_be_bytes()); // lsb
+        }
+
+        // cmap format 12: 'A' → glyph 1.
+        let a = u32::from('A');
+        let mut sub = Vec::new();
+        sub.extend_from_slice(&12u16.to_be_bytes()); // format
+        sub.extend_from_slice(&0u16.to_be_bytes()); // reserved
+        sub.extend_from_slice(&28u32.to_be_bytes()); // length = 16 + 1 group
+        sub.extend_from_slice(&0u32.to_be_bytes()); // language
+        sub.extend_from_slice(&1u32.to_be_bytes()); // numGroups
+        sub.extend_from_slice(&a.to_be_bytes()); // startCharCode
+        sub.extend_from_slice(&a.to_be_bytes()); // endCharCode
+        sub.extend_from_slice(&1u32.to_be_bytes()); // startGlyphID
+        let mut cmap = Vec::new();
+        cmap.extend_from_slice(&0u16.to_be_bytes()); // version
+        cmap.extend_from_slice(&1u16.to_be_bytes()); // numTables
+        cmap.extend_from_slice(&3u16.to_be_bytes()); // platformID = Windows
+        cmap.extend_from_slice(&10u16.to_be_bytes()); // encodingID = Unicode full
+        cmap.extend_from_slice(&12u32.to_be_bytes()); // subtable offset
+        cmap.extend_from_slice(&sub);
+
+        // glyf: глиф 0 пустой, глифы 1–3 — один и тот же квадрат
+        // 0,0 → 500,500 (4 точки, все on-curve, long-form дельты).
+        let mut square = Vec::new();
+        square.extend_from_slice(&1i16.to_be_bytes()); // numberOfContours
+        square.extend_from_slice(&0i16.to_be_bytes()); // xMin
+        square.extend_from_slice(&0i16.to_be_bytes()); // yMin
+        square.extend_from_slice(&500i16.to_be_bytes()); // xMax
+        square.extend_from_slice(&500i16.to_be_bytes()); // yMax
+        square.extend_from_slice(&3u16.to_be_bytes()); // endPtsOfContours[0]
+        square.extend_from_slice(&0u16.to_be_bytes()); // instructionLength
+        square.extend_from_slice(&[0x01, 0x01, 0x01, 0x01]); // flags: ON_CURVE only
+        for dx in [0i16, 500, 0, -500] {
+            square.extend_from_slice(&dx.to_be_bytes());
+        }
+        for dy in [0i16, 0, 500, 0] {
+            square.extend_from_slice(&dy.to_be_bytes());
+        }
+        let sq_len = square.len();
+        let mut glyf = Vec::new();
+        for _ in 0..3 {
+            glyf.extend_from_slice(&square);
+        }
+        // loca short: значения в словах (× 2 = байтовый offset).
+        let mut loca = Vec::new();
+        for i in 0..=NUM_GLYPHS {
+            // Глиф 0 пустой: loca[0] == loca[1] == 0.
+            let words = if i == 0 { 0 } else { (i as usize - 1) * sq_len / 2 };
+            loca.extend_from_slice(&(words as u16).to_be_bytes());
+        }
+
+        // COLR v0: база = глиф 1, слои = глифы 2 (палитра 0) и 3 (текст).
+        let mut colr = Vec::new();
+        colr.extend_from_slice(&0u16.to_be_bytes()); // version
+        colr.extend_from_slice(&1u16.to_be_bytes()); // numBaseGlyphRecords
+        colr.extend_from_slice(&14u32.to_be_bytes()); // baseGlyphRecordsOffset
+        colr.extend_from_slice(&20u32.to_be_bytes()); // layerRecordsOffset
+        colr.extend_from_slice(&2u16.to_be_bytes()); // numLayerRecords
+        colr.extend_from_slice(&1u16.to_be_bytes()); // baseGlyph.glyphID
+        colr.extend_from_slice(&0u16.to_be_bytes()); // firstLayerIndex
+        colr.extend_from_slice(&2u16.to_be_bytes()); // numLayers
+        colr.extend_from_slice(&2u16.to_be_bytes()); // layer 0 glyphID
+        colr.extend_from_slice(&0u16.to_be_bytes()); // layer 0 paletteIndex
+        colr.extend_from_slice(&3u16.to_be_bytes()); // layer 1 glyphID
+        colr.extend_from_slice(&0xFFFFu16.to_be_bytes()); // layer 1 = foreground
+
+        // CPAL v0: одна палитра, одна запись — непрозрачный красный.
+        let mut cpal = Vec::new();
+        cpal.extend_from_slice(&0u16.to_be_bytes()); // version
+        cpal.extend_from_slice(&1u16.to_be_bytes()); // numPaletteEntries
+        cpal.extend_from_slice(&1u16.to_be_bytes()); // numPalettes
+        cpal.extend_from_slice(&1u16.to_be_bytes()); // numColorRecords
+        cpal.extend_from_slice(&14u32.to_be_bytes()); // offsetFirstColorRecord
+        cpal.extend_from_slice(&0u16.to_be_bytes()); // colorRecordIndices[0]
+        cpal.extend_from_slice(&[0, 0, 255, 255]); // BGRA → красный
+
+        // Каталог таблиц по спеке отсортирован по тегу.
+        let tables: [(&[u8; 4], Vec<u8>); 9] = [
+            (b"COLR", colr),
+            (b"CPAL", cpal),
+            (b"cmap", cmap),
+            (b"glyf", glyf),
+            (b"head", head),
+            (b"hhea", hhea),
+            (b"hmtx", hmtx),
+            (b"loca", loca),
+            (b"maxp", maxp),
+        ];
+        let mut out = Vec::new();
+        out.extend_from_slice(&0x00010000u32.to_be_bytes()); // sfntVersion
+        out.extend_from_slice(&(tables.len() as u16).to_be_bytes());
+        out.extend_from_slice(&[0u8; 6]); // searchRange/entrySelector/rangeShift
+        let mut offset = 12u32 + tables.len() as u32 * 16;
+        let mut records = Vec::new();
+        let mut body = Vec::new();
+        for (tag, data) in &tables {
+            table_record(&mut records, tag, offset, data.len() as u32);
+            offset += data.len() as u32;
+            body.extend_from_slice(data);
+        }
+        out.extend_from_slice(&records);
+        out.extend_from_slice(&body);
+        out
+    }
+
+    #[test]
+    fn synthetic_color_font_is_detected_as_color() {
+        let bytes = build_color_font();
+        let m = build_face_metrics(&bytes).expect("face metrics");
+        let color = m.color.as_ref().expect("COLR+CPAL must enable the color path");
+        assert_eq!(color.colr.layers_for(1).map(<[_]>::len), Some(2));
+        assert_eq!(color.cpal.num_palettes(), 1);
+        assert_eq!(m.cmap.glyph_index(u32::from('A')), Some(1));
+    }
+
+    #[test]
+    fn color_glyph_emits_one_quad_per_layer_with_palette_colors() {
+        let bytes = build_color_font();
+        let metrics = build_face_metrics(&bytes);
+        let faces = vec![LoadedFace { bytes: Arc::from(bytes.as_slice()), metrics }];
+        let mut lazy = LazyParsedFaces::new(&faces);
+        let mut atlas = GlyphAtlas::new(ATLAS_DIM);
+        let mut cached: HashMap<AtlasKey, Option<CachedGlyph>> = HashMap::new();
+        let mut out: Vec<TextVertex> = Vec::new();
+        let text_color = [0.0, 0.0, 1.0, 1.0];
+
+        let end_x = push_text_glyphs(
+            &mut out,
+            Rect::new(0.0, 0.0, 100.0, 40.0),
+            "A",
+            32.0,
+            text_color,
+            0,
+            &mut lazy,
+            &mut atlas,
+            &mut cached,
+            &[],
+            0.0,
+            None,
+        );
+
+        // Два слоя → два quad-а → 12 вершин; монохромный фолбэк дал бы 6.
+        assert_eq!(out.len(), 12, "expected one quad per COLR layer");
+        // Слой 0 → запись палитры 0 (красный), слой 1 → 0xFFFF (текстовый).
+        for v in &out[..6] {
+            assert!(close(v.color, [1.0, 0.0, 0.0, 1.0]), "layer 0 color {:?}", v.color);
+        }
+        for v in &out[6..] {
+            assert!(close(v.color, text_color), "layer 1 color {:?}", v.color);
+        }
+        // Advance берётся у базового глифа (600/1000 em при 32px = 19.2px),
+        // а не суммой advance-ов слоёв.
+        assert!((end_x - 19.2).abs() < 0.01, "pen advanced to {end_x}");
+    }
+
+    #[test]
+    fn custom_palette_override_reaches_the_emitted_vertices() {
+        let bytes = build_color_font();
+        let metrics = build_face_metrics(&bytes);
+        let faces = vec![LoadedFace { bytes: Arc::from(bytes.as_slice()), metrics }];
+        let mut lazy = LazyParsedFaces::new(&faces);
+        let mut atlas = GlyphAtlas::new(ATLAS_DIM);
+        let mut cached: HashMap<AtlasKey, Option<CachedGlyph>> = HashMap::new();
+        let mut out: Vec<TextVertex> = Vec::new();
+        let selection = FontPaletteSelection::Custom {
+            base_palette: 0,
+            overrides: vec![PaletteColorOverride {
+                index: 0,
+                color: Color { r: 0, g: 255, b: 0, a: 255 },
+            }],
+        };
+
+        push_text_glyphs(
+            &mut out,
+            Rect::new(0.0, 0.0, 100.0, 40.0),
+            "A",
+            32.0,
+            [0.0, 0.0, 1.0, 1.0],
+            0,
+            &mut lazy,
+            &mut atlas,
+            &mut cached,
+            &[],
+            0.0,
+            Some(&selection),
+        );
+
+        assert_eq!(out.len(), 12);
+        // `@font-palette-values { override-colors: 0 green }` обязан
+        // перекрасить первый слой; красный здесь означал бы, что выбор
+        // палитры не доехал из `DrawText`.
+        assert!(close(out[0].color, [0.0, 1.0, 0.0, 1.0]), "layer 0 color {:?}", out[0].color);
+        // Слой `0xFFFF` остаётся текстового цвета независимо от override-ов.
+        assert!(close(out[6].color, [0.0, 0.0, 1.0, 1.0]));
     }
 }

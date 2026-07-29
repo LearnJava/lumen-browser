@@ -22,3 +22,7 @@ lumen-dom = { workspace = true }
 [dev-dependencies]
 lumen-layout = { workspace = true }
 lumen-core = { workspace = true }
+# CC-16 census only (`cc16_parse_cost_census`): prices the pre-parse proposal's
+# own restore step — `lumen-dom` already derives serde and depends on bincode
+# for T3 hibernation, so the measurement uses the exact mechanism CC-16 would.
+bincode = { workspace = true }

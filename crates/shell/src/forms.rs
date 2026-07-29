@@ -16,7 +16,7 @@ use lumen_core::form::{encode_form_multipart, encode_form_urlencoded, FormEntry,
 use lumen_core::geom::{Rect, Size};
 use lumen_dom::{
     check_validity_form, collect_dom_form_fields, element_validity, find_ancestor_form,
-    invalid_controls_in_form, submit_form, Attribute, Document, FormSubmitEvent, InputType,
+    invalid_controls_in_form, Attribute, Document, InputType,
     NodeData, NodeId, QualName,
 };
 use lumen_layout::{
@@ -485,6 +485,7 @@ pub fn build_validation_tooltip(
     });
     // Text
     out.push(DisplayCommand::DrawText {
+        font_stretch: lumen_layout::FontStretch::NORMAL,
         rect: Rect::new(vp_x + TOOLTIP_PADDING, vp_y + TOOLTIP_PADDING, w - TOOLTIP_PADDING * 2.0, TOOLTIP_FONT_SIZE),
         text: message.to_owned(),
         font_size: TOOLTIP_FONT_SIZE,
@@ -552,18 +553,6 @@ pub fn collect_form_entries(
 ///
 /// Для GET-форм вызывающий должен добавить `?body` к action-URL.
 /// Для POST-форм `body` — тело запроса, Content-Type: application/x-www-form-urlencoded.
-/// Execute HTML5 form submission algorithm on the form containing submit_node.
-/// Returns FormSubmitEvent::Valid with action, method, fields if validation passes,
-/// or FormSubmitEvent::Invalid with list of invalid controls if validation fails.
-/// Returns None if submit_node is not part of a form.
-pub fn build_form_submit_event(
-    doc: &Document,
-    submit_node: NodeId,
-) -> Option<FormSubmitEvent> {
-    let form_id = find_ancestor_form(doc, submit_node)?;
-    Some(submit_form(doc, form_id))
-}
-
 /// Encode form fields for submission. Wraps a FormSubmitEvent::Valid variant
 /// and encodes fields as application/x-www-form-urlencoded.
 pub fn encode_form_fields(fields: &[(String, String)]) -> String {
@@ -591,20 +580,34 @@ pub fn encode_form_fields_multipart(fields: &[(String, String)], boundary: &str)
 
 /// Return the `enctype` attribute of the `<form>` ancestor of `submit_node`,
 /// normalised to lower-case. Default: `"application/x-www-form-urlencoded"`.
+///
+/// Kept alongside [`enctype_of_form`] (which the live submission path uses since
+/// BUG-383) for callers that only hold a control inside the form; exercised by
+/// the `get_form_enctype_*` tests below.
+#[allow(dead_code)]
 pub fn get_form_enctype(doc: &Document, submit_node: NodeId) -> String {
-    if let Some(form_id) = find_ancestor_form(doc, submit_node) {
-        let enctype = doc
-            .get(form_id)
-            .get_attr("enctype")
-            .unwrap_or("application/x-www-form-urlencoded")
-            .to_ascii_lowercase();
-        // HTML LS §4.10.18.6: valid enctype values.
-        match enctype.as_str() {
-            "multipart/form-data" | "text/plain" => enctype,
-            _ => "application/x-www-form-urlencoded".to_string(),
-        }
-    } else {
-        "application/x-www-form-urlencoded".to_string()
+    match find_ancestor_form(doc, submit_node) {
+        Some(form_id) => enctype_of_form(doc, form_id),
+        None => "application/x-www-form-urlencoded".to_string(),
+    }
+}
+
+/// Normalised `enctype` of the `<form>` element `form_id` itself.
+///
+/// Same rules as [`get_form_enctype`], but taking the form directly instead of
+/// a control inside it — which is what a script-initiated `form.submit()` has
+/// (BUG-383); `find_ancestor_form` is strictly ancestor-walking and would miss
+/// the form when handed the form itself.
+pub fn enctype_of_form(doc: &Document, form_id: NodeId) -> String {
+    let enctype = doc
+        .get(form_id)
+        .get_attr("enctype")
+        .unwrap_or("application/x-www-form-urlencoded")
+        .to_ascii_lowercase();
+    // HTML LS §4.10.18.6: valid enctype values.
+    match enctype.as_str() {
+        "multipart/form-data" | "text/plain" => enctype,
+        _ => "application/x-www-form-urlencoded".to_string(),
     }
 }
 
@@ -870,6 +873,7 @@ pub fn build_select_dropdown(
         };
 
         out.push(DisplayCommand::DrawText {
+            font_stretch: lumen_layout::FontStretch::NORMAL,
             rect: Rect::new(
                 vp_x + DROPDOWN_PAD_X,
                 row_y + (DROPDOWN_ROW_H - DROPDOWN_FONT) * 0.5,
@@ -1023,6 +1027,7 @@ pub fn build_base_select_dropdown(
 
         let font_size = os.font_size.max(1.0);
         out.push(DisplayCommand::DrawText {
+            font_stretch: lumen_layout::FontStretch::NORMAL,
             rect: Rect::new(
                 vp_x + DROPDOWN_PAD_X,
                 row_y + (DROPDOWN_ROW_H - font_size) * 0.5,
@@ -1260,6 +1265,7 @@ pub fn build_date_picker(
         color: Color { r: 235, g: 235, b: 235, a: 255 },
     });
     out.push(DisplayCommand::DrawText {
+        font_stretch: lumen_layout::FontStretch::NORMAL,
         rect: Rect::new(content_x, header_y + 4.0, arrow_w, DATE_HEADER_H - 4.0),
         text: "<".to_owned(),
         font_size: 14.0,
@@ -1277,6 +1283,7 @@ pub fn build_date_picker(
     // Month/year label centered
     let label = format!("{} {}", month_name(month), year);
     out.push(DisplayCommand::DrawText {
+        font_stretch: lumen_layout::FontStretch::NORMAL,
         rect: Rect::new(content_x + arrow_w, header_y + 4.0, content_w - arrow_w * 2.0, DATE_HEADER_H - 4.0),
         text: label,
         font_size: 12.0,
@@ -1297,6 +1304,7 @@ pub fn build_date_picker(
         color: Color { r: 235, g: 235, b: 235, a: 255 },
     });
     out.push(DisplayCommand::DrawText {
+        font_stretch: lumen_layout::FontStretch::NORMAL,
         rect: Rect::new(content_x + content_w - arrow_w, header_y + 4.0, arrow_w, DATE_HEADER_H - 4.0),
         text: ">".to_owned(),
         font_size: 14.0,
@@ -1318,6 +1326,7 @@ pub fn build_date_picker(
     for (i, name) in daynames.iter().enumerate() {
         let cell_x = content_x + i as f32 * (DATE_CELL_W + DATE_CELL_GAP);
         out.push(DisplayCommand::DrawText {
+            font_stretch: lumen_layout::FontStretch::NORMAL,
             rect: Rect::new(cell_x, daynames_y, DATE_CELL_W, DATE_DAYNAME_H),
             text: (*name).to_owned(),
             font_size: 10.0,
@@ -1355,6 +1364,7 @@ pub fn build_date_picker(
             });
         }
         out.push(DisplayCommand::DrawText {
+            font_stretch: lumen_layout::FontStretch::NORMAL,
             rect: cell_rect,
             text: day.to_string(),
             font_size: 12.0,

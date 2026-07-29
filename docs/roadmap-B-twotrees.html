@@ -73,14 +73,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-07-28",
+ "generated": "2026-07-29",
  "counts": {
-  "open": 115,
-  "fixed": 273,
+  "open": 125,
+  "fixed": 292,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 388,
+ "total_bugs": 417,
  "phases": [
   {
    "id": "P0",
@@ -615,7 +615,7 @@
     {
      "id": "P3-v8",
      "title": "Переход на V8 (rusty_v8) + Tier 2 Web APIs",
-     "status": "done",
+     "status": "active",
      "size": "XL",
      "note": "Срезы S0–S12 — подзадачами ниже (истина в docs/tasks/ph3-v8-migration.md). Разблокирован (v0.5.0 вышел). Единственное лекарство для тяжёлых SPA: аудит 2026-07-02 — github.com не дорендерился за 280 с (ресурсы загружены к 6.6 с, затык в QuickJS-интерпретаторе без JIT). Рекомендация: делать ПОСЛЕ дешёвых RP-5…RP-9 (они закрывают бо́льшую часть «не как в Edge» и не зависят от JS-движка), затем V8 как флагман Phase 3. Опц. промежуточный митигейт — watchdog/бюджет исполнения JS, чтобы страницы падали graceful, а не висли. Бриф docs/tasks/ph3-v8-migration.md. Сюда же перенесён уровень 2 bfcache — JS-куча переживает заморозку через ValueSerializer (docs/tasks/ph3-bfcache.md, DoD Level 2)",
      "tasks": [
@@ -699,7 +699,7 @@
       {
        "id": "P3-v8-s12b",
        "title": "V8 S12b: rquickjs removal",
-       "status": "done",
+       "status": "active",
        "size": "XL",
        "note": "Удалить rquickjs целиком: QuickJsRuntime/QuickPersistentJs, install_* дубли в crates/js/src (119 файлов). Проскоуплено 2026-07-14 (ветка p1-v8-s12b, только доксинк, кода не менялось): 2336 #[test] завязаны на удаление (1047 в dom.rs::mod tests, ~1250 в bare-rquickjs::Context тестах уже портированных на v8 модулей S5-S10) — каждый файл требует портировать/обосновать свои тесты перед удалением. Реальный размер — десятки под-срезов, не один сеанс. План разбивки — docs/tasks/ph3-v8-migration.md, раздел Findings log 'S12b — scoping only'. __lum_args__ (lib.rs:2126), quickjs Cargo-фича из shell/Cargo.toml, rquickjs из crates/js/Cargo.toml; упростить `any(quickjs,v8)`-гейты обратно в безусловные. DoD: rquickjs отсутствует в Cargo.lock",
        "tasks": [
@@ -849,8 +849,69 @@
          "status": "done",
          "size": "S",
          "note": "Влит в main (branch p1-v8-s12b-21-webtransport): rquickjs-путь WebTransport (`webtransport.rs`, `install_webtransport_bindings`) удалён целиком — файл оказался мёртвым кодом (0 вызовов ни в `QuickJsRuntime::install_dom`, ни где-либо ещё), не портирован в V8 (нечего портировать — функциональности не было ни на одном движке); `pub mod webtransport;` убран из lib.rs, `webtransport_stub_exists`-тест удалён вместе с файлом; см. P3-webtransport"
+        },
+        {
+         "id": "P3-v8-s12b-22",
+         "title": "V8 S12b-22: WinitSession::eval → V8 (driver)",
+         "status": "done",
+         "size": "M",
+         "note": "ЗАКРЫТ 2026-07-29 (ветка p1-v8-s12b-22): `WinitSession::eval` переведён с `QuickJsRuntime` на `lumen_js::v8_runtime::V8JsRuntime`, гейт `#[cfg(feature=\"quickjs\")]` → `#[cfg(feature=\"v8\")]`. Семантика сохранена намеренно: one-shot рантайм на **клоне** DOM, мутации не возвращаются в layout/paint сессии (персистентный путь — `InProcessSession`, DEVX-5). Фича `quickjs` удалена из `crates/driver/Cargo.toml` целиком: после порта её не гейтил ни один `#[cfg]`, и её не включал ни один крейт воркспейса (shell/mcp/bidi-server берут `lumen-driver` с дефолтами `[\"cpu-render\",\"v8\"]`) — то есть `eval` до сих пор возвращал ошибку «требует пересборку с --features quickjs» во **всех** сборках. Два теста `test_automation_commands.rs`, годами не компилировавшиеся под мёртвым `#[cfg(feature=\"quickjs\")]`, перегейчены на `v8` и зелёные"
+        },
+        {
+         "id": "P3-v8-s12b-23",
+         "title": "V8 S12b-23: ESM (`type=\"module\"`) → V8, закрывает BUG-350",
+         "status": "done",
+         "size": "M",
+         "note": "ЗАКРЫТ 2026-07-29 (ветка p1-v8-s12b-23-esm): ESM портирован на V8, BUG-350 закрыт. Новый `crates/js/src/v8_esm.rs`: `script_compiler::compile_module` → `instantiate_module` → `evaluate` + `perform_microtask_checkpoint`; `impl JsRuntime for V8JsRuntime` переопределяет `eval_module`/`register_module_source`, добавлен `V8JsRuntime::set_import_map` (зовётся шеллом). Плумбинг отличается от rquickjs намеренно: `ResolveModuleCallback` у V8 — `extern \"C\" fn` без захвата, поэтому реестры (исходники, модули, `identity_hash→specifier`, page URL, import map) в `thread_local!` на JS-потоке, а не в `Arc<Mutex<…>>`; разрешение спецификаторов общее для обоих движков — вынесено в `esm::resolve_specifier_with`. Import attributes (`with { type: 'json' }`) и динамический `import()` — нативные V8 (FixedArray в callback / `set_host_import_module_dynamically_callback`), Phase-0 препроцессор `import_attributes.rs` на V8-пути не нужен; `import.meta` остался на общем `import_meta.rs` (форма `.url`/`.resolve()`/`.env` — политика Lumen). Inline-модули включены и в headless-путь драйвера (`session.rs::run_page_scripts`); ни одна страница graphic_tests не использует `type=module` — CPU-снапшоты не затронуты. 19 новых тестов в `v8_esm.rs` + живой прогон `--dump-layout`. rquickjs-путь ESM НЕ удалён (это S12b-24/25). Остаток: сетевая подгрузка импортируемых модулей — [BUG-446](bugs/BUG-446-OPEN.md)",
+         "bugs": [
+          "BUG-350"
+         ]
+        },
+        {
+         "id": "P3-v8-s12b-24",
+         "title": "V8 S12b-24: dom.rs тест-монолит — скоупинг сделан, портирование по слайсам",
+         "status": "done",
+         "size": "XL",
+         "note": "Крупнейший непортированный кусок: `dom.rs::mod tests` (строки 15982-31167, **1113** `#[test]` fn — числа из аудита 2026-07-14 устарели, файл вырос) — единственная regression-suite для DOM-поведения (события, формы, storage, IndexedDB, fetch/XHR, cache, websockets, history, scroll), эквивалента на V8 нет. Скоупинг сделан (ветка p1-v8-s12b-24, 2026-07-29, код не менялся): ~30 под-областей с диапазонами строк/числом тестов, 5 кластеров на mock-провайдерах (Cache/WS/SSE/IDB/Fetch), кластерный тест `event_target_dependent_apis_installed` (:29308, пришпиливает webxr/serial/hid/usb/bluetooth/navigation — разбить на 5-6 тестов при портировании), `_lumen_drain_microtasks` (:3024, QuickJS-only, 85 вызовов, гуще всего в SubtleCrypto/WHATWG Streams/MessagePort/Compression-Stream) — полный разбор в `docs/tasks/ph3-v8-migration.md` Findings log «S12b-24 — scoping only». Портировать по под-областям отдельными слайсами `S12b-24-<slug>` (не один сеанс), синхронно со сносом соответствующего rquickjs-кода — не удалять просто так, иначе теряется единственное покрытие; каждый слайс заводит свою строку ROADMAP при старте, не пре-файлить все заранее. ПРОГРЕСС: два слайса закрыты (P3-v8-s12b-24-core 99 тестов, P3-v8-s12b-24-events-cache 72 теста), остаётся ~942",
+         "tasks": [
+          {
+           "id": "P3-v8-s12b-24-core",
+           "title": "V8 S12b-24-core: Core DOM basics → V8 (99 тестов)",
+           "status": "done",
+           "size": "M",
+           "note": "ЗАКРЫТ 2026-07-29 (ветка p1-v8-s12b-24-core): первая под-область брифа («Core DOM basics», строки 16043-17530 нумерации на момент скоупинга) — **99** тестов перенесены из QuickJS-монолита `dom.rs::mod tests` во вложенный `mod v8_core` под `#[cfg(feature = \"v8-backend\")]`, QuickJS-копии удалены. Семейства: console/SVG/идентичность обёрток/`self`&`window`, Canvas 2D, getElementById/querySelector/атрибуты/textContent/`Image`, alert/print, таймеры + `scheduler.postTask`, History API. Порт механический (тела — `rt.eval` плюс `update_layout_rects`/`flush_canvas_updates`/`take_*`, которые `V8JsRuntime` зеркалит), добавлены двойники `v8_runtime_with_dom`/`v8_runtime_with_url`. Два расхождения: (1) [BUG-447](bugs/BUG-447-FIXED.md) — `register_img_bitmaps` отсутствовал и в `V8JsRuntime`, и в `impl PersistentJs for V8PersistentJs`, поэтому `drawImage(imgElement, …)` на дефолтном движке молча не рисовал; (2) тест `canvas_get_context_webgl_via_2d_shim_is_null` фиксировал дефект порядка установки на QuickJS-пути (WEBGL_SHIM выполнялся до появления `document`, перехват `createElement` пропускался, WebGL там был мёртв) — переписан под корректное V8-поведение как `canvas_get_context_webgl_returns_functional_context`. Тестовый факт для следующих слайсов: 98 из 99 тестов прошли на V8 без единой правки тела",
+           "bugs": [
+            "BUG-447"
+           ]
+          },
+          {
+           "id": "P3-v8-s12b-24-events-cache",
+           "title": "V8 S12b-24-events-cache: classList/события/Cache Storage/SW → V8 (72 теста) + BUG-442/BUG-342",
+           "status": "done",
+           "size": "M",
+           "note": "ЗАКРЫТ 2026-07-29 (ветка p1-v8-s12b-24-events-cache): четыре смежные под-области брифа — classList/CSSStyleDeclaration, диспетчеризация событий + Event/CustomEvent ctors, Service Worker + Cache Storage, Cache API SQLite backend — **72** теста перенесены во вложенный `mod v8_events_cache`, QuickJS-копии удалены. Механика та же, что в `v8_core` (не потребовалось ничего нового). Побочным эффектом закрыты два ранее диагностированных, но не исправленных бага, вскрытых первым же V8-прогоном этих тестов: [BUG-442](bugs/BUG-442-FIXED.md) (`Option::None` мапился в `JsValue::Null` вместо `Undefined` на границе V8-биндингов — `hasAttribute()`/`<details>.open`/`input.checked`/Popover API были сломаны на дефолтном движке; фикс — граница конвертации для всех нативов, безопасно благодаря повсеместному `_lumen_u2n` в шиме) и [BUG-342](bugs/BUG-342-FIXED.md) (`v8_to_jsvalue` схлопывал Array/Object-аргументы в `Null` — нативы с `Vec<u8>`-параметром получали пустые данные; фикс — рекурсивный разбор, зеркалящий уже корректный `from_v8`). Оба подтверждены точечными пробами. `cargo test -p lumen-js --features v8-backend` — 2569/2569",
+           "bugs": [
+            "BUG-442",
+            "BUG-342"
+           ]
+          }
+         ]
+        },
+        {
+         "id": "P3-v8-s12b-25",
+         "title": "V8 S12b-25: финальная чистка Cargo.toml/фич/доков",
+         "status": "planned",
+         "size": "M",
+         "note": "Финальный срез, строго после остальных S12b-* (включая S12b-22..24) и после того как все ~119 файлов `crates/js/src` без rquickjs. Убрать: `rquickjs`-зависимость из `crates/js/Cargo.toml` (сейчас жёсткая, не optional — в этом крейте нет даже фичи `quickjs`), фичу `quickjs` из `crates/shell/Cargo.toml` (в `crates/driver/Cargo.toml` её уже нет — снята в S12b-22), `QuickJsRuntime`/`QuickPersistentJs`/`__lum_args__` (`lib.rs:188,2098,2126`), конструирования `QuickPersistentJs` в `main.rs` (`:3035-3040`, `:7195`, `:18888`); упростить ~84 гейта `any(feature=\"quickjs\", feature=\"v8\")` в `main.rs` обратно в безусловный код. Доксинк: закрыть ADR-018/`docs/tasks/ph3-v8-migration.md`, обновить CLAUDE.md (убрать формулировку про rollback-путь и «Phase 2 delivered: QuickJS»), CAPABILITIES.md, `subsystems/js.md`/`shell.md`/`driver.md`, ROADMAP.md. DoD: `rquickjs` отсутствует в Cargo.lock"
         }
        ]
+      },
+      {
+       "id": "P3-v8-post-audit",
+       "title": "V8: пост-снос ревизия открытых багов на актуальность",
+       "status": "planned",
+       "size": "M",
+       "note": "Строго после S12b-25 (rquickjs отсутствует в Cargo.lock). Пройти все OPEN-строки `BUGS.md` на связь с QuickJS/rquickjs: (а) баги, чьё воспроизведение или диагноз опирался на расхождение QuickJS↔V8 (напр. тесты `dom::tests`, гонявшиеся на QuickJS и слепые к V8-специфичным дефектам — класс BUG-442) — актуализировать текст под пост-QuickJS реальность; (б) баги, описывающие поведение исключительно rquickjs-пути или временные заглушки «эпохи QuickJS» (напр. формулировка в BUG-357) — если функциональность к этому моменту уже портирована на V8 в рамках S12b, закрыть как устаревшие; (в) свериться, не остались ли ссылки на `--features quickjs` в текстах открытых багов. BUGS.md append-only (см. `docs/dev-roles.md`) — «удалить устаревший баг» технически значит флипнуть статус на закрытый/неактуальный с пояснением, а не стереть строку; если пользователь настаивает на физическом удалении строк — уточнить перед тем как ломать инвариант. Найдено аудитом перед S12b-final 2026-07-29"
       }
      ]
     },
@@ -3995,7 +4056,7 @@
        "title": "CC-15: Удаление legacy-хрома",
        "status": "active",
        "size": "M",
-       "note": "Проскоуплено 2026-07-28 (ветка p1-cc15-scoping, только доксинк, кода не менялось) — реальный масштаб шире одной строки (по образцу S12b M→XL): `toolbar.rs`/`tabs/strip.rs` — смешанные data+paint модули, файлы не удаляются целиком, нужно точечно вырезать функции покраски/hit-теста, сохранив геометрические константы (`CHROME_H`, `avatar_x()`, `TAB_BAR_HEIGHT` и т.п.), которые безусловно читают и `content_layout_viewport()`/`resumed()`, и легаси-навсегда-панели. Панельный список риска-5 при сверке с кодом оказался неполным в обе стороны: 9 доп. панелей (`note_viewer`/`focus_panel`/`read_later_panel`/`privacy_panel`/`workspace_panel`/`vertical_tabs`/`tree_tabs`/pip-группа) не гейтированы флагом и не были названы легаси-навсегда явно; `panels/profile_menu.rs`, наоборот, числился «движковым», но не мигрирован. Побочно найдены 2 живых бага флипа CC-14: BUG-403 (поповер профиля невидим под дефолтным движковым хромом — рендер остался в легаси-гейте, hit-test безусловен) и BUG-404 (`flush_pointer_moves`, живой обработчик движения мыши, использует захардкоженный `toolbar::CHROME_H`/`left_dock()` вместо `page_offset()` — тот же класс, что CC-14 исправила для automation-пути `resolve_automation_target`, здесь не тронут). Разбивка на срезы — CC-15-1..CC-15-6",
+       "note": "Закрыто 2026-07-28 (P1) — все шесть срезов CC-15-1…CC-15-6 влиты, легаси-хром и его rollback-флаг удалены целиком. Проскоуплено 2026-07-28 (ветка p1-cc15-scoping, только доксинк, кода не менялось) — реальный масштаб шире одной строки (по образцу S12b M→XL): `toolbar.rs`/`tabs/strip.rs` — смешанные data+paint модули, файлы не удаляются целиком, нужно точечно вырезать функции покраски/hit-теста, сохранив геометрические константы (`CHROME_H`, `avatar_x()`, `TAB_BAR_HEIGHT` и т.п.), которые безусловно читают и `content_layout_viewport()`/`resumed()`, и легаси-навсегда-панели. Панельный список риска-5 при сверке с кодом оказался неполным в обе стороны: 9 доп. панелей (`note_viewer`/`focus_panel`/`read_later_panel`/`privacy_panel`/`workspace_panel`/`vertical_tabs`/`tree_tabs`/pip-группа) не гейтированы флагом и не были названы легаси-навсегда явно; `panels/profile_menu.rs`, наоборот, числился «движковым», но не мигрирован. Побочно найдены 2 живых бага флипа CC-14: BUG-403 (поповер профиля невидим под дефолтным движковым хромом — рендер остался в легаси-гейте, hit-test безусловен) и BUG-404 (`flush_pointer_moves`, живой обработчик движения мыши, использует захардкоженный `toolbar::CHROME_H`/`left_dock()` вместо `page_offset()` — тот же класс, что CC-14 исправила для automation-пути `resolve_automation_target`, здесь не тронут). Разбивка на срезы — CC-15-1..CC-15-6",
        "bugs": [
         "BUG-403",
         "BUG-404"
@@ -4041,18 +4102,24 @@
         {
          "id": "CC-15-6",
          "title": "CC-15-6: Удаление rollback-флага",
-         "status": "planned",
+         "status": "done",
          "size": "M",
-         "note": "Финал: удалить флаг отката `LUMEN_LEGACY_CHROME` (`css_chrome_enabled`, его вычисление main.rs:893, все оставшиеся `if`/`else`/`&&`-ветки) — только когда срезам CC-15-3..CC-15-5 больше нечего откатывать на легаси-стороне этих веток. Самый рискованный срез, по аналогии с финальным удалением rollback-пути в S12b. После CC-15-3, CC-15-4, CC-15-5"
+         "note": "Закрыто (2026-07-28, P1). Удалены переменная окружения `LUMEN_LEGACY_CHROME`, поле `css_chrome_enabled` и все 24 его ветки: легаси-стороны выброшены, движковые оставлены как единственный путь (`page_offset`/`point_over_chrome`/hover/active/click-роутинг/курсор/анимации хрома/оффсеты рендера). `chrome_doc` теперь всегда `Some`; `dockable_sidebars` уменьшена с 4 записей до 2 — `ID_AI`/`ID_SIDEBAR` перестали быть записями вместо записей с вечным `visible:false`. Удаление гейта сделало недостижимым легаси-хит-тест семь панелей — clippy перечислил каскад, он снят: `find.rs` (весь bar-overlay: `BarOverlay`/`build_bar_overlay`/`append_bar`/`BAR_*`, 2 highlight-теста переведены на `build_page_with_highlights`), `bookmark`/`print`/`settings`/`cert`/`history`/`ai`/`sidebar` (`hit_test`, `*Hit`-энумы, layout-константы, `SettingsSection`, их тесты) и в `main.rs` — `bookmark_anchor`/`history_panel_anchor`/`finish_bookmark_drop`/цепочка drag-and-drop закладок. Одно поведение перенесено, а не потеряно: индикатор `ERR` невалидного regex ушёл в `ChromeFindModel::count_label` (иначе невалидный паттерн выглядел бы как «0 совпадений»). Четыре пробела паритета заведены багами — BUG-419 (цвет ERR), BUG-420 (`#printOverlay` ничего не печатает), BUG-421 (`#view-settings` не пишет ни одной настройки), BUG-422 (нет действий над записями истории/закладок); их данные оставлены под `#[allow(dead_code, reason=…)]` со ссылкой на баг. `cargo clippy -p lumen-shell --all-targets -- -D warnings` зелёный, `cargo test -p lumen-shell` 1559/1559 (было 1619 — минус тесты удалённых хит-тестов). После CC-15-3, CC-15-4, CC-15-5",
+         "bugs": [
+          "BUG-419",
+          "BUG-420",
+          "BUG-421",
+          "BUG-422"
+         ]
         }
        ]
       },
       {
        "id": "CC-16",
-       "title": "CC-16: Пред-парсинг при сборке (опц.)",
-       "status": "opt",
+       "title": "CC-16: Пред-парсинг при сборке (отклонено по замеру)",
+       "status": "done",
        "size": "M",
-       "note": "Сериализация распарсенных Document+Stylesheet хрома в build.rs (serde-фича или кодогенерация конструкторов) + include_bytes — пропуск парсинга при старте; делать только если профиль старта оправдает. После CC-14"
+       "note": "Закрыто без реализации 2026-07-28 (P1) — строка была условной («делать только если профиль старта это оправдает»), профиль не оправдал. Перепись (dev-release, min из 20 сэмплов, инструмент оставлен: `cc16_parse_cost_census`, `crates/chrome/src/lib.rs`, `#[ignore]`): `parse_document` 3.2–4.6 мс на 102 КБ / 2160 узлов / 372 правила, восстановление `Document` из bincode 0.7–0.8 мс (пол `Document::clone` — 0.6 мс), т.е. потолок выигрыша — разность 2.4–3.8 мс, а не вся стоимость парсинга. Знаменатель: старт окна до первого непустого кадра 4332/4458/4881 мс → ≈0.08 %; даже против CPU-старта headless-прогона (~280–310 мс) ~1 %. Реальный вес старта — компиляция wgpu-пайплайнов (BUG-406, 3.0–7.0 с на DX12). Соседняя стадия дороже впятеро и пред-парсингом не снимается: `layout` того же дерева 1280×800 — 22.5 мс. Цена реализации несоразмерна: в `lumen-css-parser` ноль `Serialize` на 50 публичных типов, а `Stylesheet::revision` «минтуется, никогда не выбирается» — десериализация обязана обойти этот инвариант; плюс ~194 КБ блоба в бинарнике. Пересмотр — только если BUG-406 закроется и подешевеет layout хрома. После CC-14"
       },
       {
        "id": "CC-17",
@@ -4060,6 +4127,16 @@
        "status": "opt",
        "size": "L",
        "note": "Research: разрез конвейера «после матчинга» — пред-вычисленные списки деклараций на узел (+альтернативные наборы для hover/тем/профилей) и вход в layout мимо Stylesheet; требует расчленения compute_style/build_box; только при доказанной перф-нужде из CC-12"
+      },
+      {
+       "id": "CC-18",
+       "title": "CC-18: Плавающая панель управления",
+       "status": "planned",
+       "size": "M",
+       "note": "Плавающая панель управления как штатная фича браузера (решение пользователя 2026-07-28, не обсуждается): перенести из макета `demo-bar` в продуктовый хром — перетаскиваемая панель поверх контента с переключателями профиля (Личный/Рабочий/Аноним/Гость), темы, раскладки вкладок (вертикальные/горизонтальные), экрана (Новая/Страница/История/Закладки/Настройки) и режима Фокус; 7 форм самой панели (Карточка/Компакт/Полоса/Док/Сетка/Панель/Мини), дабл-клик по шапке — сброс позиции, Ctrl+K — палитра. Генератор ассетов сейчас вырезает `demo-bar` как «не продукт» (scripts/gen_chrome_assets.py, strip_demo_bar_html) — вырезание отменяется, onclick-обработчики переезжают в Rust по образцу CC-5. Блокер: BUG-426, без него переключатели мертвы. После BUG-426",
+       "bugs": [
+        "BUG-426"
+       ]
       },
       {
        "id": "CC-CSS-1",
@@ -4898,8 +4975,8 @@
   },
   "BUG-099": {
    "status": "open",
-   "title": "`<canvas>` 2D context реализован; TEST-57 ратчет 4.14→2.96% (прогон 2026-06-23). Остаток = font-parity + canvas-AA → KNOWN_DEBTOR",
-   "component": "js/paint",
+   "title": "`<canvas>` 2D context реализован; TEST-57 ратчет 4.14→2.96%→**0.91%** (2026-07-29). Прежнее «остаток = font-parity + canvas-AA» было неверно: размеры битмапа по…",
+   "component": "js/paint/layout",
    "date": null,
    "debtor": true
   },
@@ -4911,11 +4988,11 @@
    "debtor": true
   },
   "BUG-101": {
-   "status": "open",
-   "title": "image-set()/cross-fade() РЕАЛИЗОВАНЫ. Грамматика cross-fade() приведена к CSS Images L4 §4 (`parse_cross_fade` в layout/src/style.rs, 2026-06-23): unprefixed `c…",
+   "status": "fixed",
+   "title": "image-set()/cross-fade(): источники не загружались и смесь была неверной. Ревизия P3 2026-07-29 опровергла прежний остаток («ресэмплинг фото + font-parity»): `c…",
    "component": "layout/paint",
-   "date": null,
-   "debtor": true
+   "date": "2026-07-29",
+   "debtor": false
   },
   "BUG-102": {
    "status": "fixed",
@@ -5919,10 +5996,10 @@
    "debtor": false
   },
   "BUG-272": {
-   "status": "open",
+   "status": "fixed",
    "title": "lenta.ru держала 1371 МБ WS при одной картинке. **Корень:** каждый Push{ClipRoundedRect,ClipPath,Opacity,Filter,Mask,Backdrop,BlendMode} создавал offscreen-текс…",
-   "component": "paint (femtovg, offscreen-слои) + font (bytes_store)",
-   "date": null,
+   "component": "paint (femtovg + wgpu offscreen-слои) + font (bytes_store)",
+   "date": "2026-07-29",
    "debtor": false
   },
   "BUG-273": {
@@ -6129,10 +6206,10 @@
    "debtor": false
   },
   "BUG-304": {
-   "status": "open",
-   "title": "DNS os error 11004 (WSANO_DATA) на живых доменах (mc.yandex.ru, top-fwz1.mail.ru, ssp.rambler.ru, static-mon.yandex.net, cdn.skcrtxr.com) — имя резолвится систе…",
+   "status": "fixed",
+   "title": "DNS os error 11004 (WSANO_DATA) на живых доменах (mc.yandex.ru, top-fwz1.mail.ru, ssp.rambler.ru, static-mon.yandex.net, cdn.skcrtxr.com). **Гипотеза «Lumen про…",
    "component": "network (резолвер)",
-   "date": null,
+   "date": "2026-07-29",
    "debtor": false
   },
   "BUG-305": {
@@ -6332,10 +6409,10 @@
    "debtor": false
   },
   "BUG-333": {
-   "status": "open",
+   "status": "fixed",
    "title": "В хроме `about:chrome-preview` все `.tab-row` (список вкладок сайдбара) рендерятся с `h=0.00` вместо `height:var(--tab-h)`=28px — текст соседних строк налезает…",
-   "component": "layout (flex `height: var()`, `box_tree.rs`)",
-   "date": null,
+   "component": "layout (`box_tree.rs`, `lay_out_flex`)",
+   "date": "2026-07-29",
    "debtor": false
   },
   "BUG-334": {
@@ -6395,17 +6472,17 @@
    "debtor": false
   },
   "BUG-342": {
-   "status": "open",
-   "title": "**V8-only, широкий охват.** `native_fn_trampoline` конвертирует аргументы нативных функций через `v8_to_jsvalue`, которая для Array/Object всегда возвращает `Js…",
-   "component": "js (`crates/js/src/v8_compat.rs::v8_to_jsvalue`, `native_fn_trampoline`)",
-   "date": null,
+   "status": "fixed",
+   "title": "**V8-only, широкий охват.** `native_fn_trampoline` конвертировал аргументы нативных функций через `v8_to_jsvalue`, которая для Array/Object всегда возвращала `J…",
+   "component": "js (`crates/js/src/v8_compat.rs::v8_to_jsvalue`)",
+   "date": "2026-07-29",
    "debtor": false
   },
   "BUG-343": {
-   "status": "open",
+   "status": "fixed",
    "title": "Найден при расследовании расхождения CPU-снепшота `1000000-final` после частичного фикса BUG-341. `lay_out_flex`'s финальный проход НЕОБРАТИМО перезаписывает `s…",
    "component": "layout (`box_tree.rs`, `lay_out_flex`) — **general engine bug, not chrome-specific**",
-   "date": null,
+   "date": "2026-07-29",
    "debtor": false
   },
   "BUG-344": {
@@ -6437,10 +6514,10 @@
    "debtor": false
   },
   "BUG-348": {
-   "status": "open",
-   "title": "`canvas.getContext('2d')` возвращает `null` безусловно для ЛЮБОГО canvas в текущем дефолтном V8-билде — `WEBGL_SHIM`'s `document.createElement`-monkeypatch (`in…",
-   "component": "js (`crates/js/src/webgl_canvas.rs`, `crates/js/src/v8_runtime.rs`)",
-   "date": null,
+   "status": "fixed",
+   "title": "`canvas.getContext('2d')` возвращал `null` для любого canvas, созданного через `document.createElement`, в дефолтном V8-билде — `WEBGL_SHIM`'s `createElement`-m…",
+   "component": "js (`crates/js/src/webgl_canvas.rs`)",
+   "date": "2026-07-29",
    "debtor": false
   },
   "BUG-349": {
@@ -6451,10 +6528,10 @@
    "debtor": false
   },
   "BUG-350": {
-   "status": "open",
+   "status": "fixed",
    "title": "`<script type=\"module\">` не имеет реальной семантики модуля на дефолтном V8-билде вовсе — `V8JsRuntime` не переопределяет `eval_module`/`register_module_source`…",
-   "component": "js (`crates/js/src/v8_runtime.rs`, `crates/core/src/ext.rs::JsRuntime::eval_module`)",
-   "date": null,
+   "component": "js (`crates/js/src/v8_esm.rs`, `crates/js/src/v8_runtime.rs`, `crates/core/src/ext.rs::JsRuntime::eval_module`)",
+   "date": "2026-07-29",
    "debtor": false
   },
   "BUG-351": {
@@ -6668,24 +6745,24 @@
    "debtor": false
   },
   "BUG-381": {
-   "status": "open",
-   "title": "Весь focus-API отсутствует в JS: `Element.prototype.focus`/`blur`, `document.activeElement`, `document.hasFocus`, `window.focus`/`blur`, IDL-рефлексия `tabIndex…",
-   "component": "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`: ни фабрика элементов, ни живой `document` не определяют `focus`/`blur`/`activeElement`/`hasFocus`), shell (`crates/shell/src/main.rs:8110` — состояние `focused_node`, которое в JS не отдаётся)",
-   "date": null,
+   "status": "fixed",
+   "title": "Весь focus-API отсутствовал в JS, хотя шелл держал настоящее состояние фокуса. **Фикс:** `HTMLElement.prototype.focus(options)`/`blur()` поверх уже существовавш…",
+   "component": "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`), shell (`crates/shell/src/main.rs` — `notify_focus_changed` + drain пути focus-запросов)",
+   "date": "2026-07-29",
    "debtor": false
   },
   "BUG-382": {
-   "status": "open",
-   "title": "`getComputedStyle()` отдаёт пустую строку для КАЖДОГО свойства, а `getBoundingClientRect()` — нулевой прямоугольник, примерно в трёх загрузках из четырёх: выкла…",
-   "component": "shell (`crates/shell/src/main.rs:10321-10337`, `main.rs:11067-11071` — единственные точки, где `collect_layout_rects`/`collect_computed_styles` доезжают до JS, обе внутри пути relayout), js (`crates/js/src/dom.rs:2498`, `dom.rs:12607`)",
-   "date": null,
+   "status": "fixed",
+   "title": "`getComputedStyle()` отдавал пустую строку для каждого свойства, а `getBoundingClientRect()` — нулевой прямоугольник, примерно в трёх загрузках из четырёх. **Фи…",
+   "component": "shell (`crates/shell/src/main.rs::apply_loaded_page` — путь первой загрузки), driver (`crates/driver/src/session.rs::run_pipeline`), layout (`crates/engine/layout/src/lib.rs` — оба сборщика снимка)",
+   "date": "2026-07-29",
    "debtor": false
   },
   "BUG-383": {
-   "status": "open",
-   "title": "IDL-рефлексия HTML-атрибутов почти отсутствует, а с ней и методы активации. `undefined`: `a.href`, `input.disabled/readOnly/required/maxLength/placeholder/patte…",
-   "component": "js (`crates/js/src/dom.rs` — фабрика живых элементов `_lumen_make_element`: набор рефлектируемых свойств подобран вручную)",
-   "date": null,
+   "status": "fixed",
+   "title": "IDL-рефлексия HTML-атрибутов почти отсутствовала, а с ней и методы активации: `a.href`, `input.disabled/readOnly/required/maxLength/placeholder`, `select.select…",
+   "component": "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`: таблица рефлексии + прототипы интерфейсов), shell (`main.rs::run_form_submission`, `forms.rs::enctype_of_form`)",
+   "date": "2026-07-29",
    "debtor": false
   },
   "BUG-384": {
@@ -6925,6 +7002,209 @@
    "component": "js (`crates/js/src/dom.rs:7065`/`:7082`/`:4773`/`:4779`/`:4837` — сторож `if (nid < 0)`; нативы-источники сентинела `dom.rs:946-968`, `v8_runtime.rs:1454-1478`) + dom (`crates/engine/dom/src/lib.rs:1106` `Document::get`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-419": {
+   "status": "open",
+   "title": "Движковый `#findBar` не отличает невалидный regex-паттерн от «0 совпадений» цветом: легаси-бар писал `ERR` красным (`BAR_ERR`) против приглушённого `0/0`, у `.f…",
+   "component": "chrome (`assets/chrome/chrome.html` `#findCount`, `ChromeFindModel`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-420": {
+   "status": "open",
+   "title": "Печать из UI не работает: обе кнопки подвала движкового `#printOverlay` — `data-action=\"close-modal\"`, контролы `.print-settings` (принтер/страницы/ориентация/м…",
+   "component": "chrome (`#printOverlay`), shell (`panels/print_panel.rs`, `dispatch_chrome_action`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-421": {
+   "status": "open",
+   "title": "Движковые настройки только отображают: `ToggleSwitch` — no-op с CC-9 (все шесть `.toggle` эталона несут один `data-action` без различающего атрибута), а выбора…",
+   "component": "chrome (`#view-settings`, `ChromeAction::ToggleSwitch`), shell (`panels/settings_panel.rs`, `panels/themes.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-422": {
+   "status": "open",
+   "title": "Над записями истории и закладок нет ни одного действия: грep `data-action` внутри `#view-history` пуст, внутри `#view-bookmarks` — только навигационные `archive…",
+   "component": "chrome (`#view-history`, `#view-bookmarks`), shell (`panels/history_panel.rs`, `panels/bookmark_panel.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-423": {
+   "status": "fixed",
+   "title": "**С реальных страниц пропадали буквы: у composite-глифа bbox брался из заголовка, а он бывает битым.** На ya.ru пропадали ровно те кириллические буквы, которые…",
+   "component": "font (`face.rs::glyph_resolved_inner`, `rasterizer.rs::rasterize`)",
+   "date": "2026-07-29",
+   "debtor": false
+  },
+  "BUG-424": {
+   "status": "open",
+   "title": "Иконки движкового хрома рисуются мусором: назад/вперёд/reload — несколько наложенных штрихов ~10 px, правый кластер из 7 кнопок сжат в ~20 px у правого края окн…",
+   "component": "chrome (`assets/chrome/chrome.html` — инлайн SVG-спрайт), paint (`<use href=\"#id\">`), shell (раскладка тулбара)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-425": {
+   "status": "open",
+   "title": "Вертикальный сайдбар: все элементы списка вкладок нарисованы на одной строке поверх друг друга (в макете — вертикальное дерево из 5 строк), заголовок группы `ВК…",
+   "component": "chrome (`#sbTabs`/`.sb-tab`/`.sb-section-title`), layout",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-426": {
+   "status": "open",
+   "title": "Пять действий хрома сведены в пустую ветку `=> {}` (`SetProfile`, `ArchiveCard`, `ToggleSwitch`, `ToggleFocusTimer`, `ToggleFocus`, `SetDevtoolsTab`): профиль н…",
+   "component": "shell (`main.rs:9807` — `dispatch_chrome_action`), chrome, `scripts/gen_chrome_assets.py`",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-427": {
+   "status": "open",
+   "title": "Вёрстка https://yandex.ru: поисковая строка наезжает на шапку, правая колонка — пустые серые плашки, подписи карточек съехали, ряд ссылок шапки наложен сам на с…",
+   "component": "layout / paint (не локализован)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-428": {
+   "status": "fixed",
+   "title": "Headless-CPU-рендер (`--screenshot`, `--ipc-server` Screenshot) никогда не композитил битмапы Canvas 2D: пиксели канваса попадают в paint только через дренаж JS…",
+   "component": "shell (`main.rs::render_source_to_png`) + js (`flush_canvas_updates`)",
+   "date": "2026-07-29",
+   "debtor": false
+  },
+  "BUG-429": {
+   "status": "fixed",
+   "title": "Детерминированный CPU-снапшотный гейт (`cases::snapshot_cpu`, `scripts/scoped-test.sh`) рендерил страницы через `InProcessSession`, который (а) устанавливал V8…",
+   "component": "driver (`session.rs::run_pipeline` / `screenshot_cpu_rgba`)",
+   "date": "2026-07-29",
+   "debtor": false
+  },
+  "BUG-430": {
+   "status": "open",
+   "title": "Остаток BUG-429: `InProcessSession` не грузит подресурсы, поэтому `DrawImage` для `<img>` резолвится в незарегистрированный ключ и рисуется серой заглушкой — эт…",
+   "component": "driver (`session.rs::run_pipeline` / `screenshot_cpu_rgba`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-431": {
+   "status": "open",
+   "title": "Содержимое `<img>`/`<video>` (GIF-кадр, poster)/`<iframe>`-заглушки красится в **border-box**, а не в content-box: обе ветки покраски кладут `DrawImage { rect:…",
+   "component": "paint (`display_list.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-432": {
+   "status": "open",
+   "title": "Фон `::first-line` не красится: `walk` для `BoxKind::InlineRun` зовёт только `emit_inline_run` (текст), собственной покраски фона/рамки у inline-рана нет — в от…",
+   "component": "paint (`display_list.rs` — ветка `BoxKind::InlineRun` в `walk`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-433": {
+   "status": "fixed",
+   "title": "Flex-элемент сжимался ниже **автоматического минимального размера** (CSS Flexbox §4.5): при `min-width: auto` минимум = content-based minimum size, а `lay_out_f…",
+   "component": "layout (`box_tree.rs` — `lay_out_flex`, `flex_item_min_main_width`, `min_content_outer_width_of_contents`)",
+   "date": "2026-07-29",
+   "debtor": false
+  },
+  "BUG-434": {
+   "status": "open",
+   "title": "**Сабсеты `unicode-range` одной @font-face-семьи затирают друг друга в реестре шрифтов.** Ключ записи — виртуальный путь `@font-face:<family>/<weight>/<style>`…",
+   "component": "font (`font_registry.rs:56` — `register_from_bytes`), shell (`main.rs` — обработчик `LoadEvent::FontLoaded`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-435": {
+   "status": "open",
+   "title": "**Текст хрома терял буквы на yandex.ru (`Костя · Личный` → `тя · Личны`) — причина не найдена.** Заявлено вместе с [BUG-423](bugs/BUG-423-FIXED.md), но объяснен…",
+   "component": "shell/paint (цепочка не установлена)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-436": {
+   "status": "fixed",
+   "title": "**`type` не писал значение в поле: в живом окне у движка вообще не было default action «вставить текст в форму».** `inject_char` только диспатчил `keydown`/`inp…",
+   "component": "shell (`main.rs::inject_char` + новые `edit_focused_field`/`typeable_field`, обработчик `AutomationCommand::Type`, ветка ввода в `handle_key`), js (`dom.rs` — `_lumen_set_field_value`)",
+   "date": "2026-07-29",
+   "debtor": false
+  },
+  "BUG-437": {
+   "status": "fixed",
+   "title": "**Клик по `<button type=submit>` не запускал обработчики страницы: шелл отправлял форму нативно, минуя JS.** Заявка «`click` не доставляет DOM-событие `click`»…",
+   "component": "shell (`main.rs::handle_click_at`, ветка `FormClickAction::SubmitForm`), js (`dom.rs` — `WEB_API_SHIM`)",
+   "date": "2026-07-29",
+   "debtor": false
+  },
+  "BUG-438": {
+   "status": "open",
+   "title": "**`navigate` на `data:`-URL молча не загружает страницу.** `navigate` и последующий `wait document_ready` оба возвращают успех, но в окне остаётся предыдущий до…",
+   "component": "driver/MCP (`BrowserSession::navigate`, live-window) / шелл-навигация по `data:`",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-439": {
+   "status": "open",
+   "title": "**Activation behavior не реализовано: клик, синтезированный в JS, не отправляет форму.** `btn.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:tr…",
+   "component": "js (`dom.rs` — `_lumen_dispatch_rich` / живой `dispatchEvent`), shell (активация целиком в `handle_click_at`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-440": {
+   "status": "open",
+   "title": "**На `file://` нативная GET-отправка формы строит непригодный путь.** `method=get action=\"target.html\"` с полем `q=hello` даёт `NAV → \"D:/…/.tmp\\target.html?q=h…",
+   "component": "shell (`main.rs` — `ResourceBase::resolve`/`resolve_str` для `ResourceBase::File`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-441": {
+   "status": "open",
+   "title": "**Присвоение `element.value` из скрипта не доезжает ни до рендера, ни до отправки формы.** Сеттер пишет только в JS-тень `_input_values[nid]`, поэтому `el.value…",
+   "component": "js (`dom.rs` — сеттер `value` в `_lumen_make_element`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-442": {
+   "status": "fixed",
+   "title": "**На дефолтном движке отсутствующий атрибут читался как `null`, а шим сравнивал с `undefined`** — проверка «атрибут присутствует» была истинна всегда. Проба на…",
+   "component": "js (`crates/js/src/v8_compat.rs::IntoJsReturn for Option<T>`, `v8_runtime.rs::to_v8`)",
+   "date": "2026-07-29",
+   "debtor": false
+  },
+  "BUG-443": {
+   "status": "open",
+   "title": "Код, исполняющийся **во время разбора** — инлайновый `<script>` и обработчик `DOMContentLoaded`, — по-прежнему видит `\"\"` от `getComputedStyle()` и нулевой прям…",
+   "component": "shell (`crates/shell/src/main.rs::parse_and_layout` — порядок фаз `parse → CSS → run_scripts_with_dom → images → layout`; `notify_dom_content_loaded` на `main.rs:5466`), js (`crates/js/src/dom.rs` — нативы читают снимок и не умеют его запросить)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-444": {
+   "status": "open",
+   "title": "**У checkedness нет хранилища, отдельного от content-атрибута `checked`.** HTML LS §4.10.5.5 различает текущее состояние и значение по умолчанию (`defaultChecke…",
+   "component": "js (`crates/js/src/dom.rs` — own-свойство `checked` в `_lumen_build_element`), shell (`forms.rs` — сбор формы и покраска читают атрибут)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-445": {
+   "status": "open",
+   "title": "Шесть flex-снапшотов `lumen-layout --test all` (`flex_row_equal_children`, `flex_row_explicit_basis`, `flex_column_children`, `flex_column_gap`, `flex_gap_with_…",
+   "component": "layout (`crates/engine/layout/tests/snapshots/flex_*.txt`) + гейт `scripts/scoped-test.sh`",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-446": {
+   "status": "open",
+   "title": "Граф модулей страницы не подгружается: `import './helper.js'` из `<script type=\"module\">` всегда падает как `module '…' not found`, потому что шелл нигде не зов…",
+   "component": "shell (`crates/shell/src/main.rs` — `run_scripts_with_dom`, `resolve_script_sources`), js (`crates/js/src/v8_esm.rs` — реестр исходников)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-447": {
+   "status": "fixed",
+   "title": "**На движке по умолчанию (V8) `drawImage(imgElement, …)` молча не рисовал ничего.** Пиксели `<img>`-источника Canvas 2D читает из потоко-локального реестра `img…",
+   "component": "js (`crates/js/src/v8_runtime.rs` — не было `V8JsRuntime::register_img_bitmaps`), shell (`crates/shell/src/main.rs` — `impl PersistentJs for V8PersistentJs` не переопределял `register_img_bitmaps`)",
+   "date": "2026-07-29",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -6933,6 +7213,12 @@
   ],
   "bidi-server (protocol.rs)": [
    "BUG-319"
+  ],
+  "chrome (`#sbTabs`/`.sb-tab`/`.sb-section-title`), layout": [
+   "BUG-425"
+  ],
+  "chrome (`assets/chrome/chrome.html` — инлайн SVG-спрайт), paint (`<use href=\"#id\">`), shell (раскладка тулбара)": [
+   "BUG-424"
   ],
   "css-parser": [
    "BUG-022",
@@ -6960,6 +7246,13 @@
   "driver (`crates/driver/tests/cases/snapshot_cpu.rs`, feature `cpu-render`)": [
    "BUG-316"
   ],
+  "driver (`session.rs::run_pipeline` / `screenshot_cpu_rgba`)": [
+   "BUG-429",
+   "BUG-430"
+  ],
+  "driver/MCP (`BrowserSession::navigate`, live-window) / шелл-навигация по `data:`": [
+   "BUG-438"
+  ],
   "driver/shell (`WinitSession::scroll`, `navigate_fragment`)": [
    "BUG-338"
   ],
@@ -6974,6 +7267,12 @@
   ],
   "font (`Rasterizer::rasterize`)": [
    "BUG-283"
+  ],
+  "font (`face.rs::glyph_resolved_inner`, `rasterizer.rs::rasterize`)": [
+   "BUG-423"
+  ],
+  "font (`font_registry.rs:56` — `register_from_bytes`), shell (`main.rs` — обработчик `LoadEvent::FontLoaded`)": [
+   "BUG-434"
   ],
   "font (`system_fonts.rs`)": [
    "BUG-329"
@@ -7041,6 +7340,9 @@
   "js (`crates/js/src/dom.rs` — live-DOM `Element` object literal)": [
    "BUG-351"
   ],
+  "js (`crates/js/src/dom.rs` — own-свойство `checked` в `_lumen_build_element`), shell (`forms.rs` — сбор формы и покраска читают атрибут)": [
+   "BUG-444"
+  ],
   "js (`crates/js/src/dom.rs`, `contentEditable`/`isContentEditable`)": [
    "BUG-344"
   ],
@@ -7055,6 +7357,12 @@
   ],
   "js (`dom.rs` shim, `v8_runtime.rs`, `selector_query.rs`)": [
    "BUG-298"
+  ],
+  "js (`dom.rs` — `_lumen_dispatch_rich` / живой `dispatchEvent`), shell (активация целиком в `handle_click_at`)": [
+   "BUG-439"
+  ],
+  "js (`dom.rs` — сеттер `value` в `_lumen_make_element`)": [
+   "BUG-441"
   ],
   "js (live DOM bindings)": [
    "BUG-279"
@@ -7144,6 +7452,12 @@
    "BUG-237",
    "BUG-241"
   ],
+  "layout (`box_tree.rs` — `lay_out_flex`, `flex_item_min_main_width`, `min_content_outer_width_of_contents`)": [
+   "BUG-433"
+  ],
+  "layout (`box_tree.rs`, `lay_out_flex`)": [
+   "BUG-333"
+  ],
   "layout (`box_tree.rs`, `lay_out_flex`) — **general engine bug, not chrome-specific**": [
    "BUG-341",
    "BUG-343"
@@ -7157,14 +7471,17 @@
   "layout (`crates/engine/layout/src/style.rs`, `FONT_CH_EX` thread-local)": [
    "BUG-339"
   ],
+  "layout (`crates/engine/layout/tests/snapshots/flex_*.txt`) + гейт `scripts/scoped-test.sh`": [
+   "BUG-445"
+  ],
   "layout (`style.rs` cascade, `rule_index.rs`)": [
    "BUG-284"
   ],
-  "layout (flex `height: var()`, `box_tree.rs`)": [
-   "BUG-333"
-  ],
   "layout / css-parser (`@color-profile`, `color()`)": [
    "BUG-282"
+  ],
+  "layout / paint (не локализован)": [
+   "BUG-427"
   ],
   "layout+paint": [
    "BUG-005",
@@ -7299,11 +7616,20 @@
   "paint (`display_list.rs::emit_inline_run`)": [
    "BUG-289"
   ],
+  "paint (`display_list.rs` — ветка `BoxKind::InlineRun` в `walk`)": [
+   "BUG-432"
+  ],
+  "paint (`display_list.rs`)": [
+   "BUG-431"
+  ],
   "paint (`emit_scrollbars`) / test-triage": [
    "BUG-288"
   ],
   "paint (build)": [
    "BUG-235"
+  ],
+  "paint (femtovg + wgpu offscreen-слои) + font (bytes_store)": [
+   "BUG-272"
   ],
   "paint (femtovg `backends/femtovg_backend.rs`, `BeginStickyLayer`)": [
    "BUG-337"
@@ -7313,9 +7639,6 @@
   ],
   "paint (femtovg, `acquire_layer`/`layer_pool`)": [
    "BUG-320"
-  ],
-  "paint (femtovg, offscreen-слои) + font (bytes_store)": [
-   "BUG-272"
   ],
   "paint (font-metrics)": [
    "BUG-250"
@@ -7373,6 +7696,24 @@
   "shell (`chrome_model_snapshot`, `panels/shields_panel.rs`, `panels/permission_panel.rs`), chrome (`ChromeModel::permissions`, `assets/chrome/chrome.html` `#permPopover`)": [
    "BUG-411"
   ],
+  "shell (`crates/shell/src/main.rs::parse_and_layout` — порядок фаз `parse → CSS → run_scripts_with_dom → images → layout`; `notify_dom_content_loaded` на `main.rs:5466`), js (`crates/js/src/dom.rs` — нативы читают снимок и не умеют его запросить)": [
+   "BUG-443"
+  ],
+  "shell (`crates/shell/src/main.rs` — `run_scripts_with_dom`, `resolve_script_sources`), js (`crates/js/src/v8_esm.rs` — реестр исходников)": [
+   "BUG-446"
+  ],
+  "shell (`main.rs::handle_click_at`, ветка `FormClickAction::SubmitForm`), js (`dom.rs` — `WEB_API_SHIM`)": [
+   "BUG-437"
+  ],
+  "shell (`main.rs::inject_char` + новые `edit_focused_field`/`typeable_field`, обработчик `AutomationCommand::Type`, ветка ввода в `handle_key`), js (`dom.rs` — `_lumen_set_field_value`)": [
+   "BUG-436"
+  ],
+  "shell (`main.rs::render_source_to_png`) + js (`flush_canvas_updates`)": [
+   "BUG-428"
+  ],
+  "shell (`main.rs` — `ResourceBase::resolve`/`resolve_str` для `ResourceBase::File`)": [
+   "BUG-440"
+  ],
   "shell (`main.rs` — дренаж `window.open()` popup-запросов + `location.href`)": [
    "BUG-293"
   ],
@@ -7405,6 +7746,9 @@
   ],
   "shell/paint": [
    "BUG-163"
+  ],
+  "shell/paint (цепочка не установлена)": [
+   "BUG-435"
   ],
   "shell/storage": [
    "BUG-238"

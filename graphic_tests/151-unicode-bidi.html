@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Lumen — 151 unicode-bidi</title>
+<style>
+  /* CSS Writing Modes L4 §2.2 — unicode-bidi, UAX #9 (Unicode Bidi Algorithm).
+     Все строки набраны ОДНИМ И ТЕМ ЖЕ латинским текстом «ALPHA BETA GAMMA»,
+     латиница взята намеренно: она есть в bundled-Inter, поэтому расхождение с
+     эталоном не может быть списано на отсутствующие глифы. Отличаются строки
+     только парой direction × unicode-bidi.
+
+     Корректный движок показывает:
+       r0  ltr / normal          — «ALPHA BETA GAMMA», прижато влево (базовая);
+       r1  rtl / normal          — тот же порядок слов, но прижато вправо:
+                                   латиница внутри RTL-параграфа сильная LTR
+                                   (embedding level 2), переставлять нечего,
+                                   меняется только сторона выравнивания;
+       r2  rtl / bidi-override   — «AMMAG ATEB AHPLA» справа: RLO принудительно
+                                   разворачивает и порядок слов, и порядок букв;
+       r3  ltr / bidi-override   — контроль-«ноль»: LRO ничего не меняет,
+                                   строка обязана совпасть с r0 попиксельно;
+       r4  вложенный span        — развёрнуто ТОЛЬКО слово BETA («ALPHA ATEB
+                                   GAMMA»): override живёт в своём inline-боксе
+                                   и не протекает на соседей;
+       r5  rtl / embed на span   — второй контроль-«ноль»: RLE добавляет уровень
+                                   вложенности, но латиница остаётся сильной LTR,
+                                   поэтому строка обязана совпасть с r0.
+
+     Движок, который парсит unicode-bidi, но не применяет его, покажет r2/r4
+     как r0 — тест на этом и падает. Крупные цветные плашки дают основную
+     площадь пикселей; текст — контрольный слой (ожидаем font-parity-остаток,
+     rule 3: метрики Inter против sans у Edge). */
+  body { background: #ff00ff; margin: 0; }
+  .__f {
+    background: #101820;
+    width: 1022px; height: 718px;
+    margin: 1px; padding: 0;
+    overflow: hidden;
+    font-family: sans-serif;
+  }
+  .row {
+    height: 104px;
+    margin: 8px;
+    background: #dce6f2;
+    border: 3px solid #1f4e79;
+    color: #10243a;
+    font-size: 46px;
+    line-height: 104px;
+    padding: 0 18px;
+    box-sizing: border-box;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  /* Каждая строка получает свою рамку/фон — по цвету видно, какая именно
+     строка разъехалась, даже если текст совпал случайно. */
+  .r0 { }
+  .r1 { direction: rtl; background: #f2e6dc; border-color: #a05a1f; color: #3a2410; }
+  .r2 { direction: rtl; unicode-bidi: bidi-override; background: #e6f2dc; border-color: #3f7a1f; color: #1d3a10; }
+  .r3 { direction: ltr; unicode-bidi: bidi-override; background: #f2dce6; border-color: #a01f5a; color: #3a1024; }
+  .r4 { background: #dcf2f0; border-color: #1f7a74; color: #103a37; }
+  .r5 { background: #e8dcf2; border-color: #5a1fa0; color: #24103a; }
+
+  .flip  { direction: rtl; unicode-bidi: bidi-override; }
+  .embed { direction: rtl; unicode-bidi: embed; }
+
+  /* Полоса-«линейка» под строками: одна и та же геометрия в LTR и RTL,
+     чтобы был крупный неподвижный ориентир при сравнении кадров. */
+  .ruler { display: flex; gap: 6px; margin: 8px; height: 54px; }
+  .ruler > div { flex: 1; border: 1px solid #24435e; }
+</style>
+</head>
+<body>
+  <div class="__f">
+    <div class="row r0">ALPHA BETA GAMMA</div>
+    <div class="row r1">ALPHA BETA GAMMA</div>
+    <div class="row r2">ALPHA BETA GAMMA</div>
+    <div class="row r3">ALPHA BETA GAMMA</div>
+    <div class="row r4">ALPHA <span class="flip">BETA</span> GAMMA</div>
+    <div class="row r5">ALPHA <span class="embed">BETA</span> GAMMA</div>
+    <div class="ruler">
+      <div style="background: #1f4e79;"></div>
+      <div style="background: #a05a1f;"></div>
+      <div style="background: #3f7a1f;"></div>
+      <div style="background: #a01f5a;"></div>
+      <div style="background: #1f7a74;"></div>
+      <div style="background: #5a1fa0;"></div>
+    </div>
+  </div>
+</body>
+</html>

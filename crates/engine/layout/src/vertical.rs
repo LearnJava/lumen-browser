@@ -14,11 +14,10 @@
 //!
 //! Text orientation (rotating glyphs 90°) is a paint concern
 //! (`docs/tasks/ph3-writing-mode-vertical.md`), not layout: this module only
-//! computes column positions. Both the CPU rasterizer and the wgpu renderer
-//! (live default backend, ADR-017) honor `text_orientation`, including the
-//! per-glyph `mixed` CJK-upright/Latin-rotated split (`is_cjk`, below); the
-//! femtovg fallback backend still draws every run horizontally regardless of
-//! orientation (out of scope, see the task doc).
+//! computes column positions. All three backends — the CPU rasterizer, the
+//! wgpu renderer (live default, ADR-017) and the femtovg fallback — honor
+//! `text_orientation`, including the per-glyph `mixed` CJK-upright/
+//! Latin-rotated split (`is_cjk`, below).
 //!
 //! Algorithm sketch (vertical-rl):
 //! 1. Inline-size (physical height) comes from CSS `height` or `available_height`.
@@ -387,6 +386,7 @@ pub(crate) fn wrap_inline_run_vertical(
                     is_first_line: false,
                     source_node: seg.source_node,
                     source_char_offset: seg.source_char_offset,
+                    bidi_level: seg.bidi_level,
                 });
             }
             current_y = 0.0;
@@ -423,6 +423,7 @@ pub(crate) fn wrap_inline_run_vertical(
                 is_first_line: false,
                 source_node: seg.source_node,
                 source_char_offset: seg.source_char_offset,
+                bidi_level: seg.bidi_level,
             });
             current_y += frag_h;
             continue;
@@ -449,6 +450,7 @@ pub(crate) fn wrap_inline_run_vertical(
                 is_first_line: false,
                 source_node: seg.source_node,
                 source_char_offset: seg.source_char_offset,
+                bidi_level: seg.bidi_level,
             });
             current_y += img_advance;
             prev_trailing_ws = seg_trail_ws;
@@ -513,6 +515,7 @@ pub(crate) fn wrap_inline_run_vertical(
                     is_first_line: false,
                     source_node: seg.source_node,
                     source_char_offset: frag_source_offset,
+                    bidi_level: seg.bidi_level,
                 });
                 result.push(Vec::new());
                 current_line = result.last_mut().unwrap();
@@ -534,6 +537,7 @@ pub(crate) fn wrap_inline_run_vertical(
                 is_first_line: false,
                 source_node: seg.source_node,
                 source_char_offset: frag_source_offset,
+                bidi_level: seg.bidi_level,
             });
             current_y += word_h + post;
             prev_trailing_ws = seg_trail_ws;

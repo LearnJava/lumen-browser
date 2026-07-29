@@ -187,6 +187,24 @@ impl<'a> Font<'a> {
         self.table(b"CFF ").is_some()
     }
 
+    /// `COLR` — layered color glyph definitions (v0 records). Returns
+    /// `Err(TableNotFound)` for a monochrome font. Pair with [`Font::cpal`]:
+    /// a layer's `palette_index` addresses a CPAL palette entry, and a font
+    /// with `COLR` but no `CPAL` is malformed (every layer would then paint
+    /// in the text color).
+    pub fn colr(&self) -> Result<crate::colr::Colr, FontError> {
+        let data = self.table(b"COLR").ok_or(FontError::TableNotFound(*b"COLR"))?;
+        crate::colr::Colr::parse(data)
+    }
+
+    /// `CPAL` — color palettes referenced by `COLR` layers. The CSS
+    /// `font-palette` property (CSS Fonts L4 §11.3) selects among these.
+    /// Returns `Err(TableNotFound)` for a monochrome font.
+    pub fn cpal(&self) -> Result<crate::cpal::Cpal, FontError> {
+        let data = self.table(b"CPAL").ok_or(FontError::TableNotFound(*b"CPAL"))?;
+        crate::cpal::Cpal::parse(data)
+    }
+
     pub fn name(&self) -> Result<crate::name::Name, FontError> {
         let data = self.table(b"name").ok_or(FontError::TableNotFound(*b"name"))?;
         crate::name::Name::parse(data)
@@ -478,8 +496,17 @@ impl<'a> Font<'a> {
             }
         }
 
+        // BUG-423: bbox берём по собранным контурам, а не из заголовка
+        // composite-глифа. Заголовочный bbox описывает parent-а до сборки и в
+        // реальных шрифтах бывает попросту битым — «YS Text Home» (ya.ru)
+        // пишет у кириллических композитов сдвинутую четвёрку, где `x_max <
+        // x_min`; растеризатор на таком боксе отдавал `None`, и буква молча
+        // исчезала со страницы, оставляя пробел своей ширины (advance берётся
+        // из `hmtx` и оставался верным). Пустой `merged` (все компоненты
+        // пропущены) — оставляем заголовочный bbox, рисовать всё равно нечего.
+        let bbox = crate::glyf::bbox_from_contours(&merged).unwrap_or(glyph.bbox);
         Ok(Some(crate::glyf::Glyph {
-            bbox: glyph.bbox,
+            bbox,
             outline: crate::glyf::Outline::Simple(merged),
         }))
     }

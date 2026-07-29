@@ -104,7 +104,7 @@ use lumen_layout::{LayoutBox, Mat4, PaintOrder, SnapContainer, StackingTree, Tra
 use lumen_layout::{StartingStyleTracker, compute_style_from_declarations, resolve_starting_style};
 use lumen_layout::{collect_scroll_containers, collect_snap_containers, find_scroll_container_at, find_snap_target, set_scroll_position};
 #[cfg(any(feature = "quickjs", feature = "v8"))]
-use lumen_layout::collect_computed_styles;
+use lumen_layout::{collect_computed_styles, collect_layout_rects};
 use lumen_layout::style::{ComputedStyle, ScrollBehavior};
 use lumen_layout::computed_style_to_map;
 use lumen_paint::{
@@ -929,13 +929,6 @@ fn run_window_mode(
         .collect();
     let active_profile_id = profiles_registry.active().ok().flatten().map(|p| p.id);
 
-    // CC-14 (docs/tasks/p1-css-chrome.md): engine-drawn chrome is now the
-    // default (flipped from CC-4's opt-in `LUMEN_CSS_CHROME=1`, same
-    // flag-strategy idiom as ADR-018's V8 cutover) — `LUMEN_LEGACY_CHROME=1`
-    // is the rollback opt-out, read once at startup like `LUMEN_ENGINE_THREAD`
-    // (`spawn_engine_thread_if_enabled` above).
-    let css_chrome_enabled = std::env::var("LUMEN_LEGACY_CHROME").as_deref() != Ok("1");
-
     let mut app = Lumen {
         display_list: Vec::new(),
         tile_grid: lumen_paint::TileGrid::default_size(),
@@ -950,8 +943,7 @@ fn run_window_mode(
         window: None,
         display_color_profile: platform::display_color_profile::PlatformDisplayColorProfile::new(),
         renderer: None,
-        css_chrome_enabled,
-        chrome_doc: css_chrome_enabled.then(|| lumen_chrome::parse_document(chrome_preview::HTML)),
+        chrome_doc: Some(lumen_chrome::parse_document(chrome_preview::HTML)),
         chrome_layout: None,
         chrome_page_host_rect: None,
         chrome_hovered_nid: None,
@@ -1433,7 +1425,11 @@ fn render_source_to_png(
         None,
         None,
         &NullHyphenationProvider,
-        false, // headless: no interactive JS
+        // BUG-428: this slot is `cookie_banner_dismiss`, not a JS gate — the
+        // former "headless: no interactive JS" label was wrong. Page scripts DO
+        // run here (`parse_and_layout` → `run_scripts_with_dom`); only the live
+        // event loop's per-frame pumps (timers/rAF) are absent.
+        false, // cookie_banner_dismiss: leave banners as authored
         true,  // deterministic: reproducible pixels across runs/OS
         false, // dark_mode: light
         None,  // cookie_jar
@@ -1453,16 +1449,59 @@ fn render_source_to_png(
     let width = SCREENSHOT_VP_W as u32;
     let height = content_h.ceil() as u32;
 
+    // BUG-428: Canvas 2D pixels live in per-node CPU buffers inside the JS runtime
+    // and only reach paint through a drain (`flush_canvas_updates` → an image
+    // registered under `canvas:{nid}`). The live event loop does that drain every
+    // frame; this headless path never did, so `DrawImage { src: "canvas:{nid}" }`
+    // always resolved to an unregistered key and painted transparent. Drain once —
+    // the page scripts have already run inside `parse_and_layout` — and append the
+    // bitmaps to the image set handed to the CPU rasterizer.
+    let mut images = parsed.images;
+    images.extend(canvas_updates_as_images(
+        parsed
+            .js_ctx
+            .as_ref()
+            .map(|js| js.flush_canvas_updates())
+            .unwrap_or_default(),
+    ));
+
     let (png, width, height) = {
         let _s = lumen_core::trace::span("paint", "paint");
         let dl = paint_ordered(&parsed.layout);
-        let image = Renderer::render_to_image_cpu(width, height, &dl, &parsed.images, 0.0, 0.0)?;
+        let image = Renderer::render_to_image_cpu(width, height, &dl, &images, 0.0, 0.0)?;
         let png = lumen_image::encode_png_rgba8(&image)?;
         (png, width, height)
     };
     // Pixels are ready — mark the moment the page is first fully rendered.
     lumen_core::trace::instant("first-paint", "paint");
     Ok((png, width, height))
+}
+
+/// Convert a `PersistentJs::flush_canvas_updates` drain into renderer image
+/// entries keyed exactly the way the display list refers to them.
+///
+/// Each drained tuple is `(node_index, width, height, rgba)`; the key is
+/// `canvas:{node_index}` — the same string `display_list.rs` puts into
+/// `DisplayCommand::DrawImage.src` for a `<canvas>` box. Both consumers of the
+/// drain go through here (the live event loop registers the entries with the
+/// renderer, the headless CPU path appends them to its image set), so the key
+/// format has a single definition on the shell side (BUG-428).
+fn canvas_updates_as_images(
+    updates: Vec<(u32, u32, u32, Vec<u8>)>,
+) -> Vec<(String, Arc<lumen_image::Image>)> {
+    updates
+        .into_iter()
+        .map(|(nid, width, height, rgba)| {
+            let image = lumen_image::Image {
+                width,
+                height,
+                format: lumen_image::PixelFormat::Rgba8,
+                data: rgba,
+                icc_profile: None,
+            };
+            (format!("canvas:{nid}"), Arc::new(image))
+        })
+        .collect()
 }
 
 /// Запустить headless IPC-сервер таб-команд (TAB-5).
@@ -2525,6 +2564,14 @@ enum JsNavigateRequest {
     Replace(String),
     /// Перезагрузить текущую страницу.
     Reload,
+    /// Выполнить отправку формы, запрошенную страницей из скрипта
+    /// (`form.submit()` / `form.requestSubmit()`, BUG-383).
+    SubmitForm {
+        /// Индекс узла `<form>`.
+        form: u32,
+        /// Индекс узла-сабмиттера, либо `-1`, если его нет.
+        submitter: i32,
+    },
 }
 
 /// BUG-341 S7: engine-agnostic mirror of `lumen_js::DomTouched`, kept
@@ -2953,8 +3000,11 @@ pub(crate) trait PersistentJs: Send + Sync {
 
     /// Notify the JS runtime that the shell moved keyboard focus to a new node.
     ///
-    /// Updates `_lumen_last_focused_nid` so `showModal()` can record it for
-    /// restoration when the dialog closes. `nid = None` means focus was cleared.
+    /// Runs the shim's focus-update steps (BUG-381): sets `document.activeElement`,
+    /// fires `blur`/`focusout`/`focus`/`focusin` and updates `_lumen_last_focused_nid`
+    /// so `showModal()` can record it for restoration when the dialog closes.
+    /// `nid = None` means focus was cleared. Idempotent — echoing a focus the page
+    /// itself just requested via `element.focus()` dispatches nothing.
     #[allow(dead_code)]
     fn notify_focus_changed(&self, _nid: Option<u32>) {}
 
@@ -3017,6 +3067,8 @@ impl PersistentJs for QuickPersistentJs {
             lumen_js::NavigateRequest::Push(u)    => JsNavigateRequest::Push(u),
             lumen_js::NavigateRequest::Replace(u) => JsNavigateRequest::Replace(u),
             lumen_js::NavigateRequest::Reload     => JsNavigateRequest::Reload,
+            lumen_js::NavigateRequest::SubmitForm { form, submitter } =>
+                JsNavigateRequest::SubmitForm { form, submitter },
         })
     }
     fn take_nav_intercept_result(&self) -> Vec<(bool, bool)> {
@@ -3330,6 +3382,8 @@ impl PersistentJs for V8PersistentJs {
             lumen_js::NavigateRequest::Push(u)    => JsNavigateRequest::Push(u),
             lumen_js::NavigateRequest::Replace(u) => JsNavigateRequest::Replace(u),
             lumen_js::NavigateRequest::Reload     => JsNavigateRequest::Reload,
+            lumen_js::NavigateRequest::SubmitForm { form, submitter } =>
+                JsNavigateRequest::SubmitForm { form, submitter },
         })
     }
     fn take_nav_intercept_result(&self) -> Vec<(bool, bool)> {
@@ -3401,6 +3455,12 @@ impl PersistentJs for V8PersistentJs {
     }
     fn deliver_lazy_images(&self) {
         self.eval_js("_lumen_deliver_lazy_images();");
+    }
+    // BUG-447: this override was missing, so on the default V8 build the call fell
+    // through to the trait's no-op default and the `img_bitmap_store` stayed empty
+    // for the whole session — `drawImage(imgElement, …)` silently painted nothing.
+    fn register_img_bitmaps(&self, bitmaps: Vec<(u32, Arc<lumen_image::Image>)>) {
+        self.rt.register_img_bitmaps(bitmaps);
     }
     fn take_lazy_image_requests(&self) -> Vec<(u32, String)> {
         self.rt.take_lazy_image_requests()
@@ -3582,7 +3642,8 @@ impl PersistentJs for V8PersistentJs {
     fn notify_focus_changed(&self, nid: Option<u32>) {
         let n = nid.map(|n| n as i64).unwrap_or(-1_i64);
         self.eval_js(&format!(
-            "if(typeof _lumen_last_focused_nid!=='undefined')_lumen_last_focused_nid={n};"
+            "if(typeof _lumen_focus_update==='function')_lumen_focus_update({n});\
+             else if(typeof _lumen_last_focused_nid!=='undefined')_lumen_last_focused_nid={n};"
         ));
     }
     fn pointer_capture_nid(&self) -> Option<u32> {
@@ -4014,6 +4075,21 @@ impl LoadedPage {
             page_tracks: tracks::PageTracks::default(),
         }
     }
+}
+
+/// Where a mutable form control keeps the text it renders — the two storage
+/// models HTML gives text-editing controls (BUG-436).
+///
+/// Picked by [`Lumen::typeable_field`] and consumed by
+/// [`Lumen::edit_focused_field`], which has to write the new value back to the
+/// right place: `<input>` reflects it in the `value` content attribute,
+/// `<textarea>` in its text-node children (HTML LS §4.10.11).
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum TypeableField {
+    /// `<input>` of a text-like type — value lives in the `value` attribute.
+    Input,
+    /// `<textarea>` — value lives in the element's text-node children.
+    Textarea,
 }
 
 /// Действия shell-а, на которые мапятся клавиши. Изолированы от winit, чтобы
@@ -5640,7 +5716,10 @@ fn fetch_and_decode_background_images(
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     target: lumen_core::ColorSpace,
 ) -> Vec<(String, Arc<lumen_image::Image>)> {
-    let urls = lumen_layout::collect_background_image_requests(layout);
+    // DPR 1.0 — тот же, что у `build_display_list_ordered` (обёртка без dpr),
+    // иначе выбранный здесь кандидат `image-set()` не совпал бы с ключом,
+    // который эмиттер кладёт в `DrawBackgroundImage.src`.
+    let urls = lumen_layout::collect_background_image_requests(layout, 1.0);
     // Параллельная загрузка+декодирование, порядок сохраняем (ключи уникальны).
     let decoded = parallel_map(&urls, |_, url| {
         let bytes = match fetch_image_bytes(url, base, sink, cookie_jar.clone()) {
@@ -5743,13 +5822,23 @@ fn load_font_faces(
             .as_deref()
             .and_then(FontStyle::parse_keyword)
             .unwrap_or(FontStyle::Normal);
+        // CSS Fonts L4 §4.5: дескриптор `font-stretch` правила участвует в
+        // подборе `local()`-источника — `@font-face { src: local("Arial");
+        // font-stretch: condensed }` обязан взять узкий face семейства, а не
+        // обычный. Диапазон из двух значений сводится к первому (`parse`).
+        let stretch = rule
+            .stretch
+            .as_deref()
+            .and_then(lumen_layout::FontStretch::parse)
+            .unwrap_or(lumen_layout::FontStretch::NORMAL)
+            .as_percent();
 
         let mut local_resolved = false;
         for src in &rule.sources {
             if src.kind == FontFaceSourceKind::Local {
                 // CSS Fonts L4 §4.1 + §4.3: try local() first; case-insensitive
                 // match against system fonts. First hit wins the whole rule.
-                if let Some(bytes) = registry.resolve_local_bytes(&src.value, weight, style) {
+                if let Some(bytes) = registry.resolve_local_bytes(&src.value, weight, style, stretch) {
                     eprintln!(
                         "@font-face загружен: «{}» weight={} src={} (local)",
                         rule.family, weight, src.value,
@@ -5846,26 +5935,6 @@ fn find_video_source(lb: &LayoutBox) -> Option<(String, String)> {
         }
     }
     None
-}
-
-/// Рекурсивно собирает bounding rects всех layout-боксов в плоскую карту
-/// `NodeId → [x, y, width, height]` (border-box, viewport-relative CSS px).
-/// Используется JS-runtime-ом для `getBoundingClientRect` / `ResizeObserver`
-/// / `IntersectionObserver`.
-#[cfg(any(feature = "quickjs", feature = "v8"))]
-fn collect_layout_rects(lb: &LayoutBox) -> HashMap<u32, [f32; 4]> {
-    let mut map = HashMap::new();
-    collect_layout_rects_rec(lb, &mut map);
-    map
-}
-
-#[cfg(any(feature = "quickjs", feature = "v8"))]
-fn collect_layout_rects_rec(lb: &LayoutBox, map: &mut HashMap<u32, [f32; 4]>) {
-    let r = &lb.rect;
-    map.insert(lb.node.index() as u32, [r.x, r.y, r.width, r.height]);
-    for child in &lb.children {
-        collect_layout_rects_rec(child, map);
-    }
 }
 
 /// CC-4/CC-9: removes `#contentArea`'s [`LayoutBox`] from `lb`'s subtree
@@ -7202,6 +7271,8 @@ fn run_scripts_with_dom(
                     lumen_js::NavigateRequest::Push(u)    => JsNavigateRequest::Push(u),
                     lumen_js::NavigateRequest::Replace(u) => JsNavigateRequest::Replace(u),
                     lumen_js::NavigateRequest::Reload     => JsNavigateRequest::Reload,
+                    lumen_js::NavigateRequest::SubmitForm { form, submitter } =>
+                        JsNavigateRequest::SubmitForm { form, submitter },
                 });
                 // Keep rt alive: return as PersistentJs so event handlers work after load.
                 let ctx: Arc<dyn PersistentJs> = Arc::new(QuickPersistentJs { rt });
@@ -7214,10 +7285,9 @@ fn run_scripts_with_dom(
         }
     }
 
-    // Ph3 V8 migration S4: mirrors the quickjs block above. Import maps and
-    // cookie-banner-dismiss are not wired for V8 yet (no `set_import_map` /
-    // `set_cookie_banner_dismiss` on `V8JsRuntime`) — module scripts fall back
-    // to `JsRuntime::eval_module`'s `NotImplemented` default until ESM lands.
+    // Ph3 V8 migration S4: mirrors the quickjs block above. Since S12b-23 the
+    // import map and `eval_module` are wired here too; `set_cookie_banner_dismiss`
+    // is still V8-only-missing.
     // `not(feature = "quickjs")`: the quickjs block above returns unconditionally
     // on both its match arms, so this block would be unreachable if both engine
     // features were compiled in — quickjs takes priority until S12 cutover.
@@ -7234,6 +7304,11 @@ fn run_scripts_with_dom(
                 }
                 if let Err(e) = rt.install_dom(Arc::clone(&doc_arc), page_url, fetch_provider, ws_provider, sse_provider, ls_store, idb_backend, sw_backend, cache_backend, None, cross_origin_isolated) {
                     eprintln!("JS DOM init failed: {e}");
+                }
+                // Must precede module evaluation: bare specifiers resolve
+                // through the map (HTML LS §8.1.6.2).
+                if let Some(map) = import_map {
+                    rt.set_import_map(map);
                 }
                 // Classic scripts run first (HTML LS §8.1.3 execution order).
                 for src in &scripts {
@@ -7278,6 +7353,8 @@ fn run_scripts_with_dom(
                     lumen_js::NavigateRequest::Push(u)    => JsNavigateRequest::Push(u),
                     lumen_js::NavigateRequest::Replace(u) => JsNavigateRequest::Replace(u),
                     lumen_js::NavigateRequest::Reload     => JsNavigateRequest::Reload,
+                    lumen_js::NavigateRequest::SubmitForm { form, submitter } =>
+                        JsNavigateRequest::SubmitForm { form, submitter },
                 });
                 // Keep rt alive: return as PersistentJs so event handlers work after load.
                 let ctx: Arc<dyn PersistentJs> = Arc::new(V8PersistentJs { rt });
@@ -7460,16 +7537,15 @@ struct Lumen {
     #[allow(dead_code)] // потребитель появится при P3 wiring (ph3-color-management Step 1)
     display_color_profile: platform::display_color_profile::PlatformDisplayColorProfile,
     renderer: Option<Box<dyn RenderBackend>>,
-    /// CC-4 (docs/tasks/p1-css-chrome.md): the engine-drawn browser chrome, kept
-    /// behind `LUMEN_CSS_CHROME=1` (read once at startup — see
-    /// [`css_chrome_enabled`]). `None` off the flag, leaving every other field
-    /// below `None`/unread and shell behavior byte-identical to before CC-4.
-    css_chrome_enabled: bool,
     /// CC-4: chrome document + stylesheet, parsed once at startup via
     /// [`lumen_chrome::parse_document`] from `chrome_preview::HTML` — the same
     /// bytes `build.rs` already CSS-gated. Only relaid out on resize
     /// ([`Lumen::relayout_chrome_host`]); the asset has no dynamic content yet
     /// (`ChromeModel` DOM mutation is CC-6), so nothing else invalidates it.
+    ///
+    /// CC-15-6: always `Some` since the `LUMEN_LEGACY_CHROME` rollback flag was
+    /// deleted — the `Option` is now only the shape every accessor already reads
+    /// through, not a live "no engine chrome" mode.
     chrome_doc: Option<(lumen_dom::Document, lumen_css_parser::Stylesheet)>,
     /// CC-4: `LayoutBox` + display list of the last `relayout_chrome_host` pass,
     /// painted at the front of `overlay_buf` every frame (legacy panels/tab-bar/
@@ -7526,7 +7602,7 @@ struct Lumen {
     /// because `chrome_doc` and the page `Document` number `NodeId`s
     /// independently (both start at 0), so a shared scheduler would collide
     /// entries between the two trees. Ticked on every `RedrawRequested`
-    /// alongside the page scheduler, gated on [`Self::css_chrome_enabled`].
+    /// alongside the page scheduler.
     /// Unlike the page scheduler, never `.clear()`-ed: `chrome_doc`'s nodes
     /// persist for the process lifetime (no reload/navigation equivalent for
     /// chrome), so clearing on every [`Self::relayout_chrome_host`] call —
@@ -8849,10 +8925,9 @@ impl Lumen {
     }
 
     /// CC-4 (docs/tasks/p1-css-chrome.md): re-lays-out and re-paints the
-    /// engine-drawn chrome document at the current window size. No-op when
-    /// `LUMEN_CSS_CHROME` is off ([`Self::css_chrome_enabled`] false —
-    /// `chrome_doc` is `None`) or the renderer/window is not ready yet
-    /// (mirrors the degenerate-size guard in [`Self::relayout_viewport`]).
+    /// engine-drawn chrome document at the current window size. No-op when the
+    /// renderer/window is not ready yet (mirrors the degenerate-size guard in
+    /// [`Self::relayout_viewport`]).
     ///
     /// Called once the renderer has a first non-zero size and again on every
     /// `WindowEvent::Resized`. The chrome asset has no dynamic content yet
@@ -9176,7 +9251,17 @@ impl Lumen {
         let find = lumen_chrome::ChromeFindModel {
             open: self.find.is_open(),
             value: self.find.query().to_owned(),
-            count_label: if find_matches_len == 0 {
+            // CC-15-6: the "ERR" state is carried over from the deleted legacy
+            // bar (`find::append_bar`) — without it an invalid regex is
+            // indistinguishable from "no matches" (`0/0`). Text only: the
+            // legacy bar also painted it red (`BAR_ERR`), the asset has no
+            // error class for `#findCount` (see BUG-419).
+            count_label: if self.find.is_regex_mode()
+                && !self.find.query().is_empty()
+                && !find::is_valid_regex_pattern(self.find.query())
+            {
+                "ERR".to_owned()
+            } else if find_matches_len == 0 {
                 "0/0".to_owned()
             } else {
                 format!("{}/{}", self.find.active_index() + 1, find_matches_len)
@@ -9425,33 +9510,23 @@ impl Lumen {
     /// the render-time page transform share, so a click/hover always lands
     /// on the same page element the frame actually painted there.
     ///
-    /// Under `LUMEN_CSS_CHROME=1` this is [`Self::chrome_page_host_rect`]'s
-    /// origin (falling back to `(0, CHROME_H)` before the first chrome
-    /// layout exists, mirroring [`Self::relayout_chrome_host`]'s own
-    /// degenerate-size guard — that frame paints the page flush with the
-    /// window too). Off the flag it is the legacy left-docked-panel width /
-    /// `toolbar::CHROME_H` pair.
+    /// This is [`Self::chrome_page_host_rect`]'s origin, falling back to
+    /// `(0, CHROME_H)` before the first chrome layout exists, mirroring
+    /// [`Self::relayout_chrome_host`]'s own degenerate-size guard — that frame
+    /// paints the page flush with the window too.
     fn page_offset(&self) -> (f32, f32) {
-        if self.css_chrome_enabled {
-            self.chrome_page_host_rect
-                .map(|r| (r.x, r.y))
-                .unwrap_or((0.0, toolbar::CHROME_H))
-        } else {
-            (self.left_dock().map_or(0.0, |(_, w)| w), toolbar::CHROME_H)
-        }
+        self.chrome_page_host_rect
+            .map(|r| (r.x, r.y))
+            .unwrap_or((0.0, toolbar::CHROME_H))
     }
 
     /// CC-5: `true` when `(x_css, y_css)` falls outside the page-content
     /// rect — i.e. over an opaque chrome furniture area (sidebar, toolbar,
-    /// tab strip) — under `LUMEN_CSS_CHROME=1`. Always `false` off the flag.
-    /// A `None` [`Self::chrome_page_host_rect`] (no chrome layout yet)
-    /// counts as "over chrome": mirrors [`Self::relayout_chrome_host`]'s
+    /// tab strip). A `None` [`Self::chrome_page_host_rect`] (no chrome layout
+    /// yet) counts as "over chrome": mirrors [`Self::relayout_chrome_host`]'s
     /// guard — nothing is painted at the page rect either in that frame, so
     /// there is no page underneath to click through to yet.
     fn point_over_chrome(&self, x_css: f32, y_css: f32) -> bool {
-        if !self.css_chrome_enabled {
-            return false;
-        }
         match self.chrome_page_host_rect {
             Some(r) => {
                 x_css < r.x || x_css >= r.right() || y_css < r.y || y_css >= r.bottom()
@@ -9462,8 +9537,7 @@ impl Lumen {
 
     /// CC-5: hit-tests [`Self::chrome_layout`] at window-CSS coordinates —
     /// the chrome document paints at the window origin, no scroll/page
-    /// transform involved. `None` off the flag or before the first chrome
-    /// layout exists.
+    /// transform involved. `None` before the first chrome layout exists.
     fn chrome_hit_test(&self, x_css: f32, y_css: f32) -> Option<lumen_paint::HitTestResult> {
         let (layout, _) = self.chrome_layout.as_ref()?;
         hit_test(Point::new(x_css, y_css), layout)
@@ -11562,6 +11636,43 @@ impl Lumen {
         self.refresh_cv_state();
         self.update_snap_containers();
         self.update_scroll_containers();
+        // BUG-382: publish the primary layout's geometry + computed styles into the
+        // JS runtime unconditionally, right here, before any page-visible callback
+        // of this load can run (`load`/`pageshow` below, and every timer/rAF/promise
+        // job the shell drains afterwards).
+        //
+        // `getComputedStyle()` and `getBoundingClientRect()` do not query the layout
+        // engine — both read the snapshot the shell pushes. Until this call the only
+        // pushes lived inside the relayout path (`relayout()`, `reload()`) and inside
+        // the lazy-image block below, which collects geometry **only** when the page
+        // has `loading="lazy"` images and never pushes computed styles at all. A
+        // freshly loaded page therefore answered `""` / all-zeros unless some
+        // unrelated relayout (resize, font swap, scroll) happened to race ahead of
+        // the first script — the reported "works in one load out of four".
+        //
+        // ADR-016 M2.2c-2d: routed through `route_task_js` like the other seeds; the
+        // owned `HashMap`s make the closure `Send + 'static`, and the `js_present`
+        // gate keeps the (side-effect-free) collection JS-gated.
+        #[cfg(any(feature = "quickjs", feature = "v8"))]
+        if self.js_present
+            && let Some(lb_ref) = self.layout_box.as_ref()
+        {
+            let viewport = self.renderer.as_ref().map_or_else(
+                || Size::new(1024.0, 720.0),
+                |r| {
+                    let s = r.viewport_size();
+                    Size::new(s.width, s.height)
+                },
+            );
+            let rects = collect_layout_rects(lb_ref);
+            let styles = collect_computed_styles(lb_ref);
+            let (vw, vh) = (viewport.width, viewport.height);
+            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
+                js.update_layout_rects(rects);
+                js.update_computed_styles(styles);
+                js.update_viewport_size(vw, vh);
+            });
+        }
         self.title = page.title.clone();
         if let Some(t) = &self.title {
             self.tab_strip.set_active_title(t.as_str());
@@ -11876,13 +11987,12 @@ impl Lumen {
     }
 
     /// Chrome AX siblings for [`Self::update_platform_ax_tree`]/
-    /// `automation_a11y_tree` — CC-13: under `LUMEN_CSS_CHROME=1` (`chrome_doc`
-    /// is `Some`) these come from the engine-rendered chrome `Document` via
-    /// `lumen_a11y::chrome::chrome_root_from_document` (real ARIA roles off
-    /// `assets/chrome/chrome.html`, injected at generation time). Off the
-    /// flag this falls back to the DS-17 synthetic snapshot. Never both —
-    /// same "one or the other" gating CC-10a's invisible-legacy-panel bug
-    /// taught (see CLAUDE.md known gotchas).
+    /// `automation_a11y_tree` — CC-13: these come from the engine-rendered
+    /// chrome `Document` via `lumen_a11y::chrome::chrome_root_from_document`
+    /// (real ARIA roles off `assets/chrome/chrome.html`, injected at generation
+    /// time). The DS-17 synthetic-snapshot fallback below is unreachable since
+    /// CC-15-6 removed the rollback flag ([`Self::chrome_doc`] is always
+    /// `Some`); it is kept only as the `None`-arm of that `Option`.
     fn chrome_ax_nodes(&self) -> Vec<lumen_a11y::AXNode> {
         if let Some((doc, _)) = &self.chrome_doc {
             let flat_tree = lumen_dom::build_flat_tree(doc);
@@ -12023,7 +12133,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         self.window = Some(window);
         self.renderer = Some(renderer);
         // CC-4: first chrome layout pass, now that the renderer knows the
-        // window's initial size. No-op off `LUMEN_CSS_CHROME`.
+        // window's initial size.
         self.relayout_chrome_host();
 
         // GG-4: Restore vertical-tab layout from persisted settings.
@@ -12581,16 +12691,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         let canvas_updates = self.drain_query_js(|j| j.flush_canvas_updates()).unwrap_or_default();
         if !canvas_updates.is_empty() {
             if let Some(r) = self.renderer.as_mut() {
-                for (nid, w, h, rgba) in &canvas_updates {
-                    let image = lumen_image::Image {
-                        width: *w,
-                        height: *h,
-                        format: lumen_image::PixelFormat::Rgba8,
-                        data: rgba.clone(),
-                        icc_profile: None,
-                    };
-                    if let Err(e) = r.register_image(format!("canvas:{nid}"), Arc::new(image)) {
-                        eprintln!("Canvas: не зарегистрирован canvas:{nid}: {e}");
+                // BUG-428: ключ `canvas:{nid}` строит общий с headless-путём
+                // `canvas_updates_as_images` — один источник истины формата.
+                for (key, image) in canvas_updates_as_images(canvas_updates) {
+                    if let Err(e) = r.register_image(key.clone(), image) {
+                        eprintln!("Canvas: не зарегистрирован {key}: {e}");
                     }
                 }
             }
@@ -12809,14 +12914,30 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     }
                 }
                 AutomationCommand::Type(target, text) => {
-                    let point = self.resolve_automation_target(&target);
-                    if let Some((x, y)) = point {
-                        self.handle_click_at(x, y);
+                    // Same target resolution as `Click` — and the same honest
+                    // failure when it resolves to nothing. Reporting `Ack` for
+                    // an unresolvable target was half of BUG-436's "succeeds
+                    // but does nothing" signature.
+                    match self.resolve_automation_target(&target) {
+                        Some((x, y)) => {
+                            self.handle_click_at(x, y);
+                            let mut consumed = true;
+                            for ch in text.chars() {
+                                consumed &= self.inject_char(ch);
+                            }
+                            if consumed {
+                                let _ = reply_tx.send(AutomationReply::Ack);
+                            } else {
+                                let _ = reply_tx.send(AutomationReply::Error(
+                                    "Element is not a mutable text field".to_string(),
+                                ));
+                            }
+                        }
+                        None => {
+                            let _ = reply_tx
+                                .send(AutomationReply::Error("Element not found".to_string()));
+                        }
                     }
-                    for ch in text.chars() {
-                        self.inject_char(ch);
-                    }
-                    let _ = reply_tx.send(AutomationReply::Ack);
                 }
                 AutomationCommand::Scroll(delta) => {
                     self.scroll_by_delta(delta.x, delta.y);
@@ -13160,8 +13281,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             self.handle_print_request(&req);
         }
 
-        // Dialog focus management (HTML LS §6.6.3): apply focus changes requested by
-        // showModal() / close() in JS via _lumen_request_focus / _lumen_request_blur.
+        // Focus management (HTML LS §6.6.3): apply focus changes requested by JS via
+        // _lumen_request_focus / _lumen_request_blur — `element.focus()`/`blur()`
+        // (BUG-381) as well as the older showModal() / close() pair.
         // ADR-016 M2.2d: value-drain через `route_query_js`.
         #[cfg(any(feature = "quickjs", feature = "v8"))]
         {
@@ -13180,6 +13302,15 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         // the accessibility bridge), so route it off-thread.
                         self.relayout_chrome();
                         self.platform_bridge.focused_node_changed(new_nid);
+                        // BUG-381: echo the applied focus back into JS. For a request
+                        // that came from `element.focus()` this is a no-op (the shim
+                        // already recorded it synchronously); for `showModal()`/`close()`,
+                        // which move focus without going through `focus()`, it is what
+                        // updates `document.activeElement` and fires the focus events.
+                        let focus_idx = new_nid.map(|n| n.index() as u32);
+                        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
+                            js.notify_focus_changed(focus_idx);
+                        });
                     }
                 }
             }
@@ -13390,6 +13521,16 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     click_log::log_js_nav("location.reload", &self.source.describe());
                     self.reload();
                 }
+                // BUG-383: `form.submit()` / `form.requestSubmit()` from script.
+                // The `submit` event (if any) already fired on the JS side, so
+                // this runs the submission itself and nothing else.
+                JsNavigateRequest::SubmitForm { form, submitter } => {
+                    let form_id = NodeId::from_index(form as usize);
+                    let submitter_id =
+                        (submitter >= 0).then(|| NodeId::from_index(submitter as usize));
+                    click_log::log_js_nav("form.submit", &self.source.describe());
+                    self.run_form_submission(form_id, submitter_id, false);
+                }
             }
         }
     }
@@ -13573,7 +13714,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 }
                 self.relayout();
                 // CC-4: re-lay-out the engine-drawn chrome at the new window
-                // size. No-op off `LUMEN_CSS_CHROME`.
+                // size.
                 self.relayout_chrome_host();
                 // HTML §8.1.5.1, шаг 13: ResizeObserver delivery.
                 // JS-observers are delivered inside relayout() via deliver_layout_observers().
@@ -13833,17 +13974,15 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // `point_over_chrome`/`chrome_hit_test` both answer "no
                     // chrome" once the pointer is over the page, so moving out
                     // of the sidebar/toolbar correctly clears this again.
-                    if self.css_chrome_enabled {
-                        let new_chrome_hovered = if self.point_over_chrome(x_css, y_css) {
-                            self.chrome_hit_test(x_css, y_css).map(|r| r.node)
-                        } else {
-                            None
-                        };
-                        if new_chrome_hovered != self.chrome_hovered_nid {
-                            self.chrome_hovered_nid = new_chrome_hovered;
-                            self.relayout_chrome_host();
-                            self.request_redraw();
-                        }
+                    let new_chrome_hovered = if self.point_over_chrome(x_css, y_css) {
+                        self.chrome_hit_test(x_css, y_css).map(|r| r.node)
+                    } else {
+                        None
+                    };
+                    if new_chrome_hovered != self.chrome_hovered_nid {
+                        self.chrome_hovered_nid = new_chrome_hovered;
+                        self.relayout_chrome_host();
+                        self.request_redraw();
                     }
                     // Pointer Events L3 §4.1: buffer this raw sample instead of
                     // dispatching immediately. Flushed as one coalesced
@@ -13852,21 +13991,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     #[cfg(any(feature = "quickjs", feature = "v8"))]
                     self.pending_pointer_moves.push((x_css, y_css));
                     // CC-5: `point_over_chrome` replaces the legacy `y_css <
-                    // toolbar::CHROME_H` gate under the flag — that constant no
-                    // longer describes where the chrome's opaque area ends
+                    // toolbar::CHROME_H` gate — that constant no longer
+                    // describes where the chrome's opaque area ends
                     // (variable-width sidebar, differently-sized toolbar row).
-                    // Off the flag this is byte-identical to the original check.
-                    let new_hovered = if self.css_chrome_enabled {
-                        if self.point_over_chrome(x_css, y_css) {
-                            None
-                        } else {
-                            let (page_x, page_y) = self.page_point(x_css, y_css);
-                            self.layout_box
-                                .as_ref()
-                                .and_then(|lb| hit_test(Point::new(page_x, page_y), lb))
-                                .map(|r| r.node)
-                        }
-                    } else if y_css < toolbar::CHROME_H {
+                    let new_hovered = if self.point_over_chrome(x_css, y_css) {
                         None
                     } else {
                         let (page_x, page_y) = self.page_point(x_css, y_css);
@@ -14085,7 +14213,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // `active_nid` handling above but scoped to `chrome_layout`
                     // (see `relayout_chrome_host`'s doc comment for why the two
                     // documents can't share interactive thread-locals).
-                    if self.css_chrome_enabled && self.point_over_chrome(x_css, y_css) {
+                    if self.point_over_chrome(x_css, y_css) {
                         self.chrome_active_nid = self.chrome_hit_test(x_css, y_css).map(|r| r.node);
                         self.relayout_chrome_host();
                         self.request_redraw();
@@ -14266,22 +14394,19 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         return;
                     }
 
-                    // CC-5 (docs/tasks/p1-css-chrome.md): under the flag the
-                    // engine-drawn chrome (CC-4) already covers the whole
-                    // top-strip/sidebar area the two legacy hit-testers below
-                    // assume — falling through to both would double-count the
-                    // same physical click (nothing paints the legacy geometry
-                    // to click on, yet their y/x-range checks don't know
-                    // that). Route exclusively through the chrome hit-test +
-                    // `data-action` dispatch instead; a click outside the
-                    // chrome's own opaque area (i.e. on real page content,
-                    // including any floating popover panel drawn above it —
-                    // those stay positioned within the page-content rect) is
-                    // left unhandled here and falls through unchanged to the
+                    // CC-5 (docs/tasks/p1-css-chrome.md): the engine-drawn
+                    // chrome (CC-4) covers the whole top-strip/sidebar area the
+                    // legacy hit-testers below assume — falling through to both
+                    // would double-count the same physical click (nothing
+                    // paints the legacy geometry to click on, yet their y/x-range
+                    // checks don't know that). Route exclusively through the
+                    // chrome hit-test + `data-action` dispatch instead; a click
+                    // outside the chrome's own opaque area (i.e. on real page
+                    // content, including any floating popover panel drawn above
+                    // it — those stay positioned within the page-content rect)
+                    // is left unhandled here and falls through unchanged to the
                     // panel checks below.
-                    if self.css_chrome_enabled
-                        && self.point_over_chrome(x_css, y_css)
-                    {
+                    if self.point_over_chrome(x_css, y_css) {
                         let hit = self.chrome_hit_test(x_css, y_css);
                         self.chrome_active_nid = hit.as_ref().map(|r| r.node);
                         self.relayout_chrome_host();
@@ -14321,14 +14446,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     }
                     // CC-15-3: the legacy tab-bar/toolbar left-click dispatch
                     // (tab switch/close/adblock, archive/layout/settings
-                    // buttons, toolbar buttons) lived here under
-                    // `!self.css_chrome_enabled` — removed along with the
-                    // paint/hit-test functions it called. Under the default
-                    // engine-drawn chrome this was already unreachable
-                    // (routed through `chrome_hit_test` above instead); under
-                    // the `LUMEN_LEGACY_CHROME=1` rollback flag a click in
-                    // the tab-bar/toolbar area now falls through unhandled to
-                    // the checks below, same as any other page-content click.
+                    // buttons, toolbar buttons) lived here — removed along with
+                    // the paint/hit-test functions it called, unreachable since
+                    // CC-4 routed those clicks through `chrome_hit_test` above.
                     // Archive panel: close on click below tab bar when open.
                     if self.archive.visible {
                         let win_w = self.viewport_width_css();
@@ -14613,59 +14733,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         return;
                     }
 
-                    // Bookmark manager panel (task #22): floating overlay.
-                    // CC-10b: gated off the flag — its paint is (`#view-bookmarks`
-                    // is the engine equivalent), and without this a click here
-                    // would silently swallow a click meant for the real page
-                    // content now visible underneath (same click-eating class
-                    // CC-5 fixed for the legacy tab-strip/toolbar).
-                    if self.bookmark_panel.visible && !self.css_chrome_enabled {
-                        let (ax, ay) = self.bookmark_anchor();
-                        if let Some(hit) = panels::bookmark_panel::hit_test(
-                            &self.bookmark_panel,
-                            x_css,
-                            y_css,
-                            ax,
-                            ay,
-                        ) {
-                            use panels::bookmark_panel::BookmarkHit;
-                            match hit {
-                                BookmarkHit::Close => {
-                                    self.bookmark_panel.visible = false;
-                                    self.bookmark_panel.search_active = false;
-                                }
-                                BookmarkHit::FocusSearch => {
-                                    self.bookmark_panel.search_active = true;
-                                }
-                                BookmarkHit::SelectFolder(folder) => {
-                                    self.bookmark_panel.selected_folder = folder;
-                                    self.bookmark_panel.scroll_y = 0.0;
-                                }
-                                BookmarkHit::DeleteBookmark(id) => {
-                                    if let Some(url) = self
-                                        .bookmark_panel
-                                        .entries
-                                        .iter()
-                                        .find(|e| e.id == id)
-                                        .map(|e| e.url.clone())
-                                    {
-                                        let _ = self.bookmarks.delete(&url);
-                                        self.refresh_bookmarks();
-                                    }
-                                }
-                                BookmarkHit::Bookmark(id) => {
-                                    // Begin a potential drag; open vs. re-file is
-                                    // resolved on the matching mouse release.
-                                    self.bookmark_panel.begin_drag(id);
-                                }
-                                BookmarkHit::Empty => {
-                                    self.bookmark_panel.search_active = false;
-                                }
-                            }
-                            self.request_redraw();
-                            return;
-                        }
-                    }
+                    // CC-10b/CC-15-6: the legacy bookmark-manager overlay's click
+                    // hit-test lived here, gated off the rollback flag —
+                    // `#view-bookmarks` in the engine chrome owns it now.
 
                     // Accessibility settings panel (E-2): centred overlay.
                     if self.a11y_panel.visible {
@@ -14720,213 +14790,13 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         return;
                     }
 
-                    // Print dialog (E-1): centred overlay, Ctrl+P.
-                    // CC-10b: gated off the flag — found alongside the
-                    // history/bookmarks/settings gap this slice fixes, same
-                    // click-eating class CC-5 fixed for the legacy tab-strip/
-                    // toolbar (CC-10a gated this panel's *paint* but missed
-                    // its click hit-test).
-                    if self.print_panel.visible && !self.css_chrome_enabled {
-                        let win_w = self.viewport_width_css();
-                        let win_h = self.viewport_height_css();
-                        use panels::print_panel::PrintHit;
-                        let hit = panels::print_panel::hit_test(
-                            &self.print_panel,
-                            x_css,
-                            y_css,
-                            win_w,
-                            win_h,
-                        );
-                        match hit {
-                            PrintHit::Close | PrintHit::Cancel => {
-                                self.print_panel.close();
-                            }
-                            PrintHit::Print => {
-                                let path = std::path::PathBuf::from(
-                                    self.print_panel.output_path.clone()
-                                );
-                                let source = self.source.clone();
-                                let sink = Arc::clone(&self.event_sink);
-                                let (margin_tb, margin_lr) = self.print_panel.margin_px();
-                                let scale = self.print_panel.scale;
-                                let print_backgrounds = self.print_panel.print_backgrounds;
-                                if let Err(e) = do_print_to_pdf_with_opts(
-                                    &source,
-                                    &path,
-                                    sink,
-                                    margin_tb,
-                                    margin_lr,
-                                    scale,
-                                    print_backgrounds,
-                                ) {
-                                    eprintln!("Ошибка печати: {e}");
-                                }
-                                self.print_panel.close();
-                            }
-                            PrintHit::PaperSize(s) => {
-                                self.print_panel.paper = s;
-                            }
-                            PrintHit::Orientation(o) => {
-                                self.print_panel.orientation = o;
-                            }
-                            PrintHit::Margins(m) => {
-                                self.print_panel.margins = m;
-                            }
-                            PrintHit::ScaleDecrease => {
-                                self.print_panel.scale = (self.print_panel.scale - 10).max(50);
-                            }
-                            PrintHit::ScaleIncrease => {
-                                self.print_panel.scale = (self.print_panel.scale + 10).min(200);
-                            }
-                            PrintHit::PageRangeField => {
-                                self.print_panel.editing_field =
-                                    Some(panels::print_panel::PrintField::PageRange);
-                            }
-                            PrintHit::ColorMode(c) => {
-                                self.print_panel.color_mode = c;
-                            }
-                            PrintHit::Backgrounds(on) => {
-                                self.print_panel.print_backgrounds = on;
-                            }
-                            PrintHit::OutputPathField => {
-                                self.print_panel.editing_field =
-                                    Some(panels::print_panel::PrintField::OutputPath);
-                            }
-                            PrintHit::Inside => { /* swallow */ }
-                            PrintHit::Outside => {
-                                self.print_panel.close();
-                            }
-                        }
-                        self.request_redraw();
-                        return;
-                    }
+                    // CC-10b/CC-15-6: the legacy print-dialog click hit-test lived
+                    // here, gated off the rollback flag — the engine chrome's own
+                    // print panel owns it now.
 
-                    // Settings panel (task D-7): centred overlay. CC-10b:
-                    // gated off the flag — same click-eating class as the
-                    // print/cert modals above (`#view-settings` is the
-                    // engine equivalent).
-                    if self.settings_panel.visible && !self.css_chrome_enabled {
-                        let win_w = self.viewport_width_css();
-                        let win_h = self.viewport_height_css();
-                        let sp_x = (win_w - panels::settings_panel::PANEL_W) * 0.5;
-                        let sp_y = (win_h - panels::settings_panel::PANEL_H) * 0.5;
-                        use panels::settings_panel::SettingsHit;
-                        let hit = panels::settings_panel::hit_test(
-                            &self.settings_panel,
-                            x_css,
-                            y_css,
-                            sp_x,
-                            sp_y,
-                        );
-                        match hit {
-                            SettingsHit::Close => {
-                                self.close_settings_panel();
-                            }
-                            SettingsHit::TabSelect(sec) => {
-                                self.settings_panel.section = sec;
-                                self.settings_panel.scroll_y = 0.0;
-                            }
-                            SettingsHit::ToggleShields => {
-                                self.settings_panel.draft.shields_enabled =
-                                    !self.settings_panel.draft.shields_enabled;
-                            }
-                            SettingsHit::ToggleDoh => {
-                                self.settings_panel.draft.doh_enabled =
-                                    !self.settings_panel.draft.doh_enabled;
-                            }
-                            SettingsHit::SetFingerprintMode(mode) => {
-                                self.settings_panel.draft.fingerprint_mode = mode;
-                            }
-                            SettingsHit::SetTheme(base) => {
-                                // Preserve the existing accent when changing the base.
-                                let current = panels::themes::ShellTheme::parse(
-                                    &self.settings_panel.draft.theme,
-                                );
-                                let new_theme = panels::themes::ShellTheme {
-                                    base: panels::themes::ShellTheme::parse(&base).base,
-                                    accent: current.accent,
-                                };
-                                self.settings_panel.draft.theme = new_theme.to_settings_str();
-                                self.shell_theme = new_theme;
-                            }
-                            SettingsHit::SetAccent(accent_key) => {
-                                // Preserve the existing base when changing the accent.
-                                let current = panels::themes::ShellTheme::parse(
-                                    &self.settings_panel.draft.theme,
-                                );
-                                let new_theme = panels::themes::ShellTheme {
-                                    base: current.base,
-                                    accent: panels::themes::AccentPreset::from_key(&accent_key),
-                                };
-                                self.settings_panel.draft.theme = new_theme.to_settings_str();
-                                self.shell_theme = new_theme;
-                            }
-                            SettingsHit::FontSizeDecrease => {
-                                self.settings_panel.draft.font_size =
-                                    (self.settings_panel.draft.font_size - 2.0).max(8.0);
-                            }
-                            SettingsHit::FontSizeIncrease => {
-                                self.settings_panel.draft.font_size =
-                                    (self.settings_panel.draft.font_size + 2.0).min(36.0);
-                            }
-                            SettingsHit::SetTabLayout(mode) => {
-                                self.settings_panel.draft.tab_layout = mode;
-                            }
-                            SettingsHit::FocusHomepage => {
-                                self.settings_panel.focused_input =
-                                    Some(panels::settings_panel::SettingInput::Homepage);
-                            }
-                            SettingsHit::FocusDownloadPath => {
-                                self.settings_panel.focused_input =
-                                    Some(panels::settings_panel::SettingInput::DownloadPath);
-                            }
-                            SettingsHit::ResetPanelLayout => {
-                                self.settings_panel.draft.panel_layout = String::new();
-                            }
-                            SettingsHit::ToggleHttp3 => {
-                                self.settings_panel.http3_draft = !self.settings_panel.http3_draft;
-                            }
-                            SettingsHit::ToggleSubscription(url) => {
-                                if let Some(sub) = self
-                                    .settings_panel
-                                    .adblock_subs
-                                    .iter()
-                                    .find(|s| s.url == url)
-                                {
-                                    let _ = self.adblock_store.set_subscription(
-                                        &sub.url, &sub.title, !sub.enabled,
-                                    );
-                                }
-                                self.settings_panel.adblock_subs =
-                                    self.adblock_store.list_subscriptions().unwrap_or_default();
-                                let count = adblock::load_and_install(&self.adblock_store);
-                                eprintln!("adblock: список переключён, фильтр обновлён ({count} правил)");
-                            }
-                            SettingsHit::RefreshAdblockNow => {
-                                let store = std::sync::Arc::clone(&self.adblock_store);
-                                let http = config::global().apply_http(lumen_network::HttpClient::new());
-                                std::thread::Builder::new()
-                                    .name("adblock-manual-refresh".to_owned())
-                                    .spawn(move || {
-                                        if adblock::refresh(&store, &http) {
-                                            let count = adblock::load_and_install(&store);
-                                            eprintln!(
-                                                "adblock: списки обновлены вручную, фильтр обновлён ({count} правил)"
-                                            );
-                                        } else {
-                                            eprintln!("adblock: обновление вручную — изменений нет");
-                                        }
-                                    })
-                                    .ok();
-                            }
-                            SettingsHit::Inside => { /* swallow */ }
-                            SettingsHit::Outside => {
-                                self.close_settings_panel();
-                            }
-                        }
-                        self.request_redraw();
-                        return;
-                    }
+                    // CC-10b/CC-15-6: the legacy settings-panel click hit-test lived
+                    // here, gated off the rollback flag — `#view-settings` in the
+                    // engine chrome owns it now.
 
                     // Keyboard shortcuts panel (§D-4): centred overlay.
                     if self.shortcuts_panel.visible {
@@ -14956,91 +14826,13 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         return;
                     }
 
-                    // Certificate viewer panel (§D-1): centred overlay.
-                    // CC-10b: gated off the flag — same click-eating gap as
-                    // the print dialog above.
-                    if self.cert_panel.visible && !self.css_chrome_enabled {
-                        let win_w = self.viewport_width_css();
-                        let win_h = self.viewport_height_css();
-                        let cp_x = (win_w - panels::cert_panel::PANEL_W) * 0.5;
-                        let cp_y = (win_h - panels::cert_panel::PANEL_H) * 0.5;
-                        let lx = x_css - cp_x;
-                        let ly = y_css - cp_y;
-                        if (0.0..panels::cert_panel::PANEL_W).contains(&lx)
-                            && (0.0..panels::cert_panel::PANEL_H).contains(&ly)
-                        {
-                            use panels::cert_panel::CertHit;
-                            match self.cert_panel.hit_test(lx, ly) {
-                                CertHit::Close | CertHit::Header => {
-                                    self.cert_panel.close();
-                                }
-                                CertHit::Body => { /* swallow */ }
-                            }
-                        } else {
-                            self.cert_panel.close();
-                        }
-                        self.request_redraw();
-                        return;
-                    }
+                    // CC-10b/CC-15-6: the legacy certificate-panel click hit-test
+                    // lived here, gated off the rollback flag — the engine chrome's
+                    // own cert popover owns it now.
 
-                    // History panel (task D-5): centred floating overlay.
-                    // CC-10b: gated off the flag — same click-eating class as
-                    // the print/cert/settings modals above (`#view-history`
-                    // is the engine equivalent).
-                    if self.history_panel.visible && !self.css_chrome_enabled {
-                        let (px, py) = self.history_panel_anchor();
-                        use panels::history_panel::HistoryHit;
-                        let hit = panels::history_panel::hit_test(
-                            &self.history_panel,
-                            x_css,
-                            y_css,
-                            px,
-                            py,
-                            self.active_profile_is_anonymous(),
-                        );
-                        match hit {
-                            HistoryHit::Close => {
-                                self.history_panel.visible = false;
-                                self.history_panel.search_active = false;
-                            }
-                            HistoryHit::FocusSearch => {
-                                self.history_panel.search_active = true;
-                            }
-                            HistoryHit::ClearAll => {
-                                let _ = self.history_store.clear();
-                                let _ = self.history_fts.clear();
-                                self.refresh_history();
-                            }
-                            HistoryHit::Delete(id) => {
-                                if let Some(url) = self
-                                    .history_panel
-                                    .rows
-                                    .iter()
-                                    .find_map(|r| {
-                                        if let panels::history_panel::HistoryRow::Entry(e) = r {
-                                            if e.id == id { Some(e.url.clone()) } else { None }
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                {
-                                    let _ = self.history_store.delete(&url);
-                                    self.refresh_history();
-                                }
-                            }
-                            HistoryHit::Navigate(url) => {
-                                self.history_panel.visible = false;
-                                self.navigate_to(PageSource::Url(url));
-                            }
-                            HistoryHit::Inside => { /* swallow */ }
-                            HistoryHit::Outside => {
-                                self.history_panel.visible = false;
-                                self.history_panel.search_active = false;
-                            }
-                        }
-                        self.request_redraw();
-                        return;
-                    }
+                    // CC-10b/CC-15-6: the legacy history-panel click hit-test lived
+                    // here, gated off the rollback flag — `#view-history` in the
+                    // engine chrome owns it now.
 
                     // Note viewer overlay (§12.2, GG-2): click [×] to close.
                     if self.note_viewer.visible {
@@ -15060,86 +14852,13 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         }
                     }
 
-                    // AI sidebar panel (§12.8): cross-dockable AI assistant.
-                    // CC-10b: gated off the flag — same click-eating class as
-                    // above (`#rsBodyAi` inside `#rightSidebar` is the engine
-                    // equivalent; editing/scrolling it isn't wired yet, see
-                    // `dispatch_chrome_action`'s `ToggleSwitch` doc comment
-                    // for the same class of scope cut).
-                    if self.ai_panel.visible && !self.css_chrome_enabled {
-                        let tab_h = toolbar::CHROME_H;
-                        let win_h = self.viewport_height_css() + tab_h;
-                        let ai_w = self
-                            .panel_layout
-                            .width_for(panel_layout::ID_AI, panels::ai_panel::PANEL_WIDTH);
-                        let ai_side = self.sidebar_dock_side(panel_layout::ID_AI);
-                        let ai_x = self.dock_origin_x(ai_side, ai_w);
-                        if let Some(hit) = panels::ai_panel::hit_test(
-                            &self.ai_panel,
-                            x_css,
-                            y_css,
-                            ai_x,
-                            tab_h,
-                            win_h,
-                            ai_w,
-                        ) {
-                            match hit {
-                                panels::ai_panel::AiHit::Close => {
-                                    self.ai_panel.close();
-                                    // Async-safe (M2.2b-6): mouse-click close is the
-                                    // counterpart of the `ToggleAiPanel` keyboard toggle
-                                    // routed off-thread in M2.2b-3 — chrome-inset shift,
-                                    // no page-geometry read (just redraw + `return`).
-                                    self.relayout_chrome();
-                                    self.request_redraw();
-                                }
-                                panels::ai_panel::AiHit::Input
-                                | panels::ai_panel::AiHit::Response
-                                | panels::ai_panel::AiHit::Header => {}
-                            }
-                            return;
-                        }
-                    }
+                    // CC-10b/CC-15-6: the legacy AI-sidebar click hit-test lived
+                    // here, gated off the rollback flag — `#rightSidebar` in the
+                    // engine chrome owns it now.
 
-                    // Sidebar web panel (7D.3): cross-dockable panel.
-                    // CC-10b: gated off the flag — same click-eating class as
-                    // the AI sidebar above (`#rsBodyWeb` is the engine
-                    // equivalent; its real embedded webview content isn't
-                    // representable there, see `ChromeSidebarTab::Web`'s doc
-                    // comment).
-                    if self.sidebar.visible && !self.css_chrome_enabled {
-                        let tab_h = toolbar::CHROME_H;
-                        let win_h = self.viewport_height_css() + tab_h;
-                        let sb_w = self
-                            .panel_layout
-                            .width_for(panel_layout::ID_SIDEBAR, panels::sidebar_panel::PANEL_WIDTH);
-                        let sb_side = self.sidebar_dock_side(panel_layout::ID_SIDEBAR);
-                        let sb_x = self.dock_origin_x(sb_side, sb_w);
-                        if let Some(hit) = panels::sidebar_panel::hit_test(
-                            &self.sidebar,
-                            x_css,
-                            y_css,
-                            sb_x,
-                            tab_h,
-                            win_h,
-                            sb_w,
-                        ) {
-                            match hit {
-                                panels::sidebar_panel::SidebarHit::Close => {
-                                    self.sidebar.close();
-                                    // Async-safe (M2.2b-6): mouse-click close is the
-                                    // counterpart of `open_sidebar_page` routed off-thread
-                                    // in M2.2b-2 — chrome-inset shift, no page-geometry
-                                    // read (just redraw + `return`).
-                                    self.relayout_chrome();
-                                    self.request_redraw();
-                                }
-                                panels::sidebar_panel::SidebarHit::Content
-                                | panels::sidebar_panel::SidebarHit::Header => {}
-                            }
-                            return;
-                        }
-                    }
+                    // CC-10b/CC-15-6: the legacy web-sidebar click hit-test lived
+                    // here, gated off the rollback flag — `#rightSidebar` in the
+                    // engine chrome owns it now.
 
                     // Workspace switcher bar (7A.3): clicks in the bottom bar area.
                     if self.workspace_panel.visible {
@@ -15351,13 +15070,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             }
                             self.request_redraw();
                         }
-                    // Bookmark drag-and-drop: if a bookmark drag is in progress,
-                    // resolve the drop target. Dropping on a folder re-files the
-                    // bookmark; dropping anywhere else opens it (a plain click).
-                    if let Some(id) = self.bookmark_panel.take_drag() {
-                        self.finish_bookmark_drop(id);
-                        self.request_redraw();
-                    }
+                    // CC-15-6: the bookmark drag-drop release handler lived here.
+                    // Its only drag source was the legacy overlay's press
+                    // hit-test, removed with the rollback flag — the engine
+                    // `#view-bookmarks` has no drag source yet (BUG-422).
                     // End a PiP window drag (task #21).
                     if self.pip.dragging() {
                         self.pip.end_drag();
@@ -15809,8 +15525,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // freeze_content_ticks: chrome isn't affected by page
                 // fast-scroll degradation (its own document doesn't scroll
                 // with the page).
-                if self.css_chrome_enabled
-                    && let (Some((c_lb, _)), Some((_, c_sheet))) = (&self.chrome_layout, &self.chrome_doc)
+                if let (Some((c_lb, _)), Some((_, c_sheet))) = (&self.chrome_layout, &self.chrome_doc)
                 {
                     let vp = lumen_layout::Viewport {
                         width: self.viewport_width_css(),
@@ -16027,27 +15742,13 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             &self.find,
                             &matches,
                         );
-                        // CC-9: the bar itself is gated off the flag — under
-                        // `LUMEN_CSS_CHROME=1` it's rendered by the engine
-                        // chrome instead (`#findBar`, bound in
-                        // `Self::relayout_chrome_host`), mirroring the CC-5
-                        // gate a few lines below for the tab-bar/toolbar/
-                        // dropdown. The highlighted-page overlay above is
-                        // page content, not chrome, and stays unconditional.
-                        let bar = if self.css_chrome_enabled {
-                            Vec::new()
-                        } else {
-                            let win_size = self.window.as_ref().map_or((1024, 720), |w| {
-                                let s = w.inner_size();
-                                (s.width, s.height)
-                            });
-                            find::build_bar_overlay(
-                                &self.find,
-                                matches.len(),
-                                find::BarOverlay { window_size: win_size },
-                            )
-                        };
-                        (Some(page), bar)
+                        // CC-9/CC-15-6: the find bar itself is drawn by the
+                        // engine chrome (`#findBar`, bound in
+                        // `Self::relayout_chrome_host`) — the legacy overlay
+                        // builder was deleted with the rollback flag. The
+                        // highlighted-page overlay above is page content, not
+                        // chrome, and stays unconditional.
+                        (Some(page), Vec::new())
                     } else {
                         (None, Vec::new())
                     };
@@ -16329,21 +16030,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     overlay_buf.append(&mut hint_cmds);
                 }
 
-                // Download panel: viewport-locked bottom-right panel.
-                // Rendered before the tab bar so it appears below the tab strip.
-                // CC-10: gated off the flag — under `LUMEN_CSS_CHROME=1` this
-                // is `#downloadsPanel`, rendered by the engine chrome since
-                // CC-9 (`bind_downloads`). This gate was missed in CC-9
-                // itself (both renderers painted simultaneously under the
-                // flag until now).
-                if self.downloads.visible && !self.css_chrome_enabled {
-                    let win_size = (
-                        self.viewport_width_css() as u32,
-                        self.window_height_css() as u32,
-                    );
-                    let mut dl_cmds = download::build_download_bar(&self.downloads, win_size, &pal);
-                    overlay_buf.append(&mut dl_cmds);
-                }
+                // CC-10/CC-15-6: the legacy download-panel overlay lived here,
+                // gated off the rollback flag — `#downloadsPanel` in the engine
+                // chrome (`bind_downloads`, CC-9) is the only renderer now.
 
                 // DevTools JS console panel: bottom overlay, toggled by F12.
                 if self.devtools_console.visible {
@@ -16535,14 +16224,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 }
 
                 // CC-15-3: the legacy tab-bar/toolbar paint block (viewport-
-                // locked strip at y=0..TAB_BAR_HEIGHT, gated
-                // `!self.focus.active && !self.css_chrome_enabled`) lived
-                // here — removed along with `tabs::strip::build_tab_bar`/
-                // `build_tab_tooltip`/`build_layout_toggle_btn`/
-                // `build_settings_btn` and `toolbar::build_toolbar`. Under
-                // the default engine-drawn chrome this never ran (CC-4); under
-                // `LUMEN_LEGACY_CHROME=1` the tab bar/toolbar row is no longer
-                // painted at all.
+                // locked strip at y=0..TAB_BAR_HEIGHT) lived here — removed
+                // along with `tabs::strip::build_tab_bar`/`build_tab_tooltip`/
+                // `build_layout_toggle_btn`/`build_settings_btn` and
+                // `toolbar::build_toolbar`. Under the engine-drawn chrome
+                // (CC-4) it never ran.
 
                 // Profile switcher dropdown (DS-14): BUG-403 — kept as a
                 // legacy overlay always (CC-15-1, `docs/tasks/p1-css-chrome.md`
@@ -16814,22 +16500,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // borrow so the page transform can shift right of it. Cross-dock
                 // aware across all four sidebars (tabs / AI / web).
                 //
-                // CC-4 (docs/tasks/p1-css-chrome.md): under `LUMEN_CSS_CHROME=1`
-                // both offsets instead come from the engine-drawn chrome's
-                // `#contentArea` rect (the brief's "#page-host") — replacing the
-                // legacy `left_dock()` width / `toolbar::CHROME_H` pair, which is
-                // never read in this branch. Falls back to `(0.0, CHROME_H)` only
-                // if the chrome layout is not ready yet (first resize still
-                // pending), matching `relayout_chrome_host`'s own degenerate-size
-                // guard — this frame paints the page flush with the window until
-                // the next resize event supplies a chrome layout.
-                let (page_x_offset, page_y_offset) = if self.css_chrome_enabled {
-                    self.chrome_page_host_rect
-                        .map(|r| (r.x, r.y))
-                        .unwrap_or((0.0, toolbar::CHROME_H))
-                } else {
-                    (self.left_dock().map_or(0.0, |(_, w)| w), toolbar::CHROME_H)
-                };
+                // CC-4 (docs/tasks/p1-css-chrome.md): both offsets come from the
+                // engine-drawn chrome's `#contentArea` rect (the brief's
+                // "#page-host") — the same [`Self::page_offset`] every input path
+                // reads, so a click lands on the element actually painted there.
+                let (page_x_offset, page_y_offset) = self.page_offset();
 
                 // CSS Backgrounds §3.11.1: clear the whole surface to the canvas
                 // background (the root element's propagated background color) so the
@@ -17135,9 +16810,11 @@ impl Lumen {
         let Some(&(x_css, y_css)) = samples.last() else {
             return;
         };
-        let panel_x_offset = self.left_dock().map_or(0.0, |(_, w)| w);
-        let page_x = (x_css - panel_x_offset) + self.scroll_x;
-        let page_y = (y_css - toolbar::CHROME_H) + self.scroll_y;
+        // BUG-437: same conversion as `handle_click_at` — `page_point()`, not
+        // the legacy `left_dock()`/`CHROME_H` pair, so `mousemove`/`pointermove`
+        // target the element the click will target and the one actually painted
+        // under the cursor.
+        let (page_x, page_y) = self.page_point(x_css, y_css);
         let hit = self.layout_box.as_ref().and_then(|lb| {
             hit_test(Point::new(page_x, page_y), lb)
         });
@@ -17172,6 +16849,175 @@ impl Lumen {
     fn page_point(&self, x_css: f32, y_css: f32) -> (f32, f32) {
         let (offset_x, offset_y) = self.page_offset();
         ((x_css - offset_x) + self.scroll_x, (y_css - offset_y) + self.scroll_y)
+    }
+
+    /// HTML LS §4.10.21.4 step 11 — fire a cancelable `submit` event at `form`
+    /// (with `submitter` exposed as `SubmitEvent.submitter`) and report whether
+    /// the submission may proceed.
+    ///
+    /// Returns `false` only when a page handler called `preventDefault()`. With
+    /// no JS runtime installed, or if the shim call itself throws, it returns
+    /// `true` — a script-less page must submit exactly as it did before BUG-437,
+    /// and a broken dispatch must never silently swallow a real submission.
+    ///
+    /// Any navigation the handler queued (`location.href = …`, how an SPA
+    /// normally takes the form over) is picked up here, mirroring the
+    /// click-dispatch path in [`Self::handle_click_at`] — a *cancelled*
+    /// submission still has to honour it.
+    /// Run the HTML form-submission algorithm for `form` (HTML LS §4.10.21.4).
+    ///
+    /// `submitter` is the activated submit control, or `None` when the page
+    /// submitted the form from script with no control (`form.submit()`).
+    /// `fire_submit_event` controls step 11 — the cancelable `submit` event:
+    /// a real click passes `true`, while the script paths pass `false` because
+    /// `requestSubmit()` already fired the event on the JS side and `submit()`
+    /// is defined to skip it entirely (§4.10.21.3).
+    ///
+    /// Extracted from the click handler (BUG-383) so `form.submit()` reaching
+    /// the shell over `NavigateRequest::SubmitForm` runs the very same encoding,
+    /// enctype and navigation code a button press does.
+    fn run_form_submission(
+        &mut self,
+        form: NodeId,
+        submitter: Option<NodeId>,
+        fire_submit_event: bool,
+    ) {
+        // BUG-437: everything the document lock is needed for is read in
+        // one scoped borrow *before* any JS runs. Dispatching the
+        // `submit` event below re-enters the JS runtime, which locks the
+        // very same `Arc<Mutex<Document>>` — holding `doc` across that
+        // call would deadlock the UI thread.
+        let prepared = self.layout_source.as_ref().and_then(|src| {
+            let doc = src.document.lock().ok()?;
+            let submit_event = lumen_dom::submit_form(&doc, form);
+            let enctype = forms::enctype_of_form(&doc, form);
+            let dialog_node =
+                lumen_dom::find_ancestor_dialog(&doc, submitter.unwrap_or(form));
+            Some((submit_event, enctype, dialog_node))
+        });
+        if let Some((submit_event, enctype, dialog_node)) = prepared {
+            match submit_event {
+                lumen_dom::FormSubmitEvent::Valid { action, method, fields } => {
+                    // HTML LS §4.10.21.4 step 11: fire a **cancelable**
+                    // `submit` event at the form before submitting.
+                    // BUG-437: this step was missing entirely — the shell
+                    // went straight to the native submission below, so a
+                    // page's own `submit` handler never ran and could not
+                    // `preventDefault()` the navigation. That made every
+                    // SPA login form (Keycloak, Next.js) unusable, through
+                    // the UI and through MCP/BiDi `click` alike.
+                    if fire_submit_event
+                        && let Some(sub) = submitter
+                        && !self.dispatch_submit_event(form, sub)
+                    {
+                        return;
+                    }
+                    // Form passed validation — encode using enctype (HTML LS §4.10.21.6).
+                    let body = if enctype == "multipart/form-data" {
+                        // Multipart: deterministic boundary for Phase 0.
+                        let boundary = "----LumenFormBoundary0000000000000000";
+                        let (_ct, bytes) = forms::encode_form_fields_multipart(&fields, boundary);
+                        String::from_utf8_lossy(&bytes).into_owned()
+                    } else {
+                        forms::encode_form_fields(&fields)
+                    };
+                    use lumen_core::event::{Event, TabId};
+                    self.event_sink.emit(&Event::FormSubmit {
+                        tab_id: TabId(0),
+                        action: action.clone(),
+                        method: method.clone(),
+                        body: body.clone(),
+                    });
+                    match method.as_str() {
+                        "dialog" => {
+                            // HTML LS §4.10.18.3: form with method="dialog" closes
+                            // the nearest ancestor <dialog>, setting its returnValue
+                            // to the submit button's value attribute.
+                            let rv = fields.iter()
+                                .find(|(n, _)| n.is_empty() || n == "value")
+                                .map(|(_, v)| v.as_str())
+                                .unwrap_or("");
+                            if let Some(dnid) = dialog_node {
+                                let dnid_idx = dnid.index() as u32;
+                                let rv = rv.to_string();
+                                // ADR-016 M2.2c-2d: fire-and-forget dialog-close через
+                                // маршрутизатор — под флагом off-UI-thread, без флага
+                                // байт-идентично прежнему `js.fire_dialog_close`.
+                                route_task_js(
+                                    self.engine_thread.as_ref(),
+                                    self.js_ctx.as_ref(),
+                                    move |j| j.fire_dialog_close(dnid_idx, &rv),
+                                );
+                            }
+                        }
+                        "get" => {
+                            // HTML LS §form-submission step 23: navigate
+                            // to action + query-string (only urlencoded for GET).
+                            let url_body = if enctype == "multipart/form-data" {
+                                forms::encode_form_fields(&fields)
+                            } else {
+                                body.clone()
+                            };
+                            let get_url = forms::make_get_url(&action, &url_body);
+                            let resolved = self.source.resolve_href(&get_url);
+                            self.navigate_to(PageSource::from_arg(Some(&resolved)));
+                        }
+                        _ => {
+                            // POST: emit event; real network send is P3 task.
+                            eprintln!("[forms] POST {} enctype={} body-len={}", action, enctype, body.len());
+                        }
+                    }
+                }
+                lumen_dom::FormSubmitEvent::Invalid { invalid_controls } => {
+                    // Form contains invalid controls — show first error.
+                    // HTML LS §4.10.21.4 step 4 rejects the submission
+                    // before step 11, so no `submit` event is fired here.
+                    if let Some(&first_invalid) = invalid_controls.first() {
+                        let tooltip = self.layout_source.as_ref().and_then(|src| {
+                            let doc = src.document.lock().ok()?;
+                            let lb = self.layout_box.as_ref()?;
+                            forms::find_control_rect_and_error(lb, &doc, first_invalid)
+                        });
+                        if let Some((rect, msg)) = tooltip {
+                            self.validation_tooltip = Some((rect, msg));
+                            if let Some(w) = self.window.as_ref() {
+                                w.request_redraw();
+                            }
+                        }
+                        eprintln!(
+                            "forms: submit blocked — {} control(s) failed constraint validation",
+                            invalid_controls.len()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    fn dispatch_submit_event(&mut self, form: NodeId, submitter: NodeId) -> bool {
+        let script = format!(
+            "_lumen_dispatch_submit_event({}, {})",
+            form.index(),
+            submitter.index(),
+        );
+        // `_lumen_dispatch_rich` returns `!event.defaultPrevented`, JSON-encoded
+        // by `eval_js_value` — so only a literal `false` cancels.
+        let proceed = match route_query_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            move |j| j.eval_js_value(&script),
+        ) {
+            Some(Ok(json)) => json.trim() != "false",
+            Some(Err(_)) | None => true,
+        };
+        if let Some(Some(nav)) = route_query_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            |j| j.take_navigate_request(),
+        ) {
+            self.pending_js_navigate = Some(nav);
+        }
+        proceed
     }
 
     fn handle_click_at(&mut self, x_css: f32, y_css: f32) {
@@ -17353,13 +17199,16 @@ impl Lumen {
 
         // ── Form control + link click ────────────────────
         // Single hit test shared by form dispatch and link navigation.
-        // When the vertical/tree tabs panel is visible, page content is shifted
-        // right by PANEL_WIDTH, so we subtract that offset to convert to page coords.
-        // Page content is also shifted down by toolbar::CHROME_H via PushTransform,
-        // so we subtract that offset from y to get layout coordinates.
-        let panel_x_offset = self.left_dock().map_or(0.0, |(_, w)| w);
-        let page_x = (x_css - panel_x_offset) + self.scroll_x;
-        let page_y = (y_css - toolbar::CHROME_H) + self.scroll_y;
+        //
+        // BUG-437: the conversion is [`Self::page_point`], the same one the
+        // render-time page transform (`page_offset()`) and the DevTools
+        // inspector already use. It used to be open-coded here as
+        // `left_dock() width` / `toolbar::CHROME_H`, which stopped matching
+        // where the page is actually painted once engine chrome became the
+        // default (CC-14): `#contentArea` starts at y=68, not at CHROME_H=72,
+        // so every click hit-tested 4 px below the pixel the user aimed at and
+        // controls within 4 px of an edge resolved to the wrong node.
+        let (page_x, page_y) = self.page_point(x_css, y_css);
         let hit_result = self.layout_box.as_ref().and_then(|lb| {
             hit_test(Point::new(page_x, page_y), lb)
         });
@@ -17641,92 +17490,15 @@ impl Lumen {
                 self.relayout_form();
             }
             forms::FormClickAction::SubmitForm(submit_node) => {
-                // Phase 3: HTML5 form submission algorithm integration.
-                // Execute submit_form() which performs constraint validation.
-                if let Some(src) = self.layout_source.as_ref() {
-                    let doc = src.document.lock().unwrap();
-                    if let Some(submit_event) = forms::build_form_submit_event(&doc, submit_node) {
-                        match submit_event {
-                            lumen_dom::FormSubmitEvent::Valid { action, method, fields } => {
-                                // Form passed validation — encode using enctype (HTML LS §4.10.21.6).
-                                let enctype = forms::get_form_enctype(&doc, submit_node);
-                                let body = if enctype == "multipart/form-data" {
-                                    // Multipart: deterministic boundary for Phase 0.
-                                    let boundary = "----LumenFormBoundary0000000000000000";
-                                    let (_ct, bytes) = forms::encode_form_fields_multipart(&fields, boundary);
-                                    String::from_utf8_lossy(&bytes).into_owned()
-                                } else {
-                                    forms::encode_form_fields(&fields)
-                                };
-                                use lumen_core::event::{Event, TabId};
-                                self.event_sink.emit(&Event::FormSubmit {
-                                    tab_id: TabId(0),
-                                    action: action.clone(),
-                                    method: method.clone(),
-                                    body: body.clone(),
-                                });
-                                match method.as_str() {
-                                    "dialog" => {
-                                        // HTML LS §4.10.18.3: form with method="dialog" closes
-                                        // the nearest ancestor <dialog>, setting its returnValue
-                                        // to the submit button's value attribute.
-                                        let rv = fields.iter()
-                                            .find(|(n, _)| n.is_empty() || n == "value")
-                                            .map(|(_, v)| v.as_str())
-                                            .unwrap_or("");
-                                        let dialog_nid = lumen_dom::find_ancestor_dialog(&doc, submit_node);
-                                        drop(doc);
-                                        if let Some(dnid) = dialog_nid {
-                                            let dnid_idx = dnid.index() as u32;
-                                            let rv = rv.to_string();
-                                            // ADR-016 M2.2c-2d: fire-and-forget dialog-close через
-                                            // маршрутизатор — под флагом off-UI-thread, без флага
-                                            // байт-идентично прежнему `js.fire_dialog_close`.
-                                            route_task_js(
-                                                self.engine_thread.as_ref(),
-                                                self.js_ctx.as_ref(),
-                                                move |j| j.fire_dialog_close(dnid_idx, &rv),
-                                            );
-                                        }
-                                    }
-                                    "get" => {
-                                        // HTML LS §form-submission step 23: navigate
-                                        // to action + query-string (only urlencoded for GET).
-                                        let url_body = if enctype == "multipart/form-data" {
-                                            forms::encode_form_fields(&fields)
-                                        } else {
-                                            body.clone()
-                                        };
-                                        let get_url = forms::make_get_url(&action, &url_body);
-                                        let resolved = self.source.resolve_href(&get_url);
-                                        drop(doc);
-                                        self.navigate_to(PageSource::from_arg(Some(&resolved)));
-                                    }
-                                    _ => {
-                                        // POST: emit event; real network send is P3 task.
-                                        eprintln!("[forms] POST {} enctype={} body-len={}", action, enctype, body.len());
-                                    }
-                                }
-                            }
-                            lumen_dom::FormSubmitEvent::Invalid { invalid_controls } => {
-                                // Form contains invalid controls — show first error.
-                                if let Some(&first_invalid) = invalid_controls.first() {
-                                    if let Some(lb) = self.layout_box.as_ref()
-                                        && let Some((rect, msg)) = forms::find_control_rect_and_error(lb, &doc, first_invalid)
-                                    {
-                                        self.validation_tooltip = Some((rect, msg));
-                                        if let Some(w) = self.window.as_ref() {
-                                            w.request_redraw();
-                                        }
-                                    }
-                                    eprintln!(
-                                        "forms: submit blocked — {} control(s) failed constraint validation",
-                                        invalid_controls.len()
-                                    );
-                                }
-                            }
-                        }
-                    }
+                // Phase 3: HTML5 form submission algorithm integration —
+                // constraint validation, encoding and navigation all live in
+                // `run_form_submission`, shared with script-initiated submits.
+                let form_node = self.layout_source.as_ref().and_then(|src| {
+                    let doc = src.document.lock().ok()?;
+                    lumen_dom::find_ancestor_form(&doc, submit_node)
+                });
+                if let Some(form) = form_node {
+                    self.run_form_submission(form, Some(submit_node), true);
                 }
             }
             forms::FormClickAction::Nothing => {
@@ -17858,21 +17630,109 @@ impl Lumen {
         }
     }
 
+    /// Classify `nid` as a mutable text-editing form control and read the value
+    /// it currently renders (BUG-436).
+    ///
+    /// Returns `None` for anything that is not a typeable `<input>` (the
+    /// text-like types — the same set [`InProcessSession::type_text`] accepts)
+    /// or a `<textarea>`, and for a control that is `disabled` or `readonly`
+    /// (HTML LS §4.10.19.2 — such a control is not mutable, so the engine
+    /// performs no insertion).
+    ///
+    /// The value read is the *rendered* one — the `value` content attribute for
+    /// `<input>`, the text-node children for `<textarea>` (HTML LS §4.10.11) —
+    /// because that is what layout paints and what form submission collects.
+    fn typeable_field(&self, nid: lumen_dom::NodeId) -> Option<(TypeableField, String)> {
+        let doc = self.layout_source.as_ref()?.document.lock().ok()?;
+        let node = doc.get(nid);
+        if node.get_attr("disabled").is_some() || node.get_attr("readonly").is_some() {
+            return None;
+        }
+        if node.element_name().is_some_and(|n| n.local.eq_ignore_ascii_case("textarea")) {
+            let text = node_text_content(&doc, nid);
+            return Some((TypeableField::Textarea, text));
+        }
+        let is_typeable_input = matches!(
+            node.input_type(),
+            Some(lumen_dom::InputType::Text)
+                | Some(lumen_dom::InputType::Password)
+                | Some(lumen_dom::InputType::Email)
+                | Some(lumen_dom::InputType::Tel)
+                | Some(lumen_dom::InputType::Url)
+                | Some(lumen_dom::InputType::Number)
+                | Some(lumen_dom::InputType::Search)
+        );
+        if !is_typeable_input {
+            return None;
+        }
+        let value = node.get_attr("value").unwrap_or_default().to_owned();
+        Some((TypeableField::Input, value))
+    }
+
+    /// Engine-side text-editing default action on the focused form control
+    /// (BUG-436): `edit` maps the field's current value to its new value.
+    ///
+    /// The JS shim only *dispatches* `keydown`/`input`/`keyup`; changing the
+    /// control's value is the engine's own default action (HTML LS §4.10.5.5),
+    /// exactly as [`InProcessSession::dispatch_type`] does for the headless
+    /// driver. Without it the live window fired `input` events on a field that
+    /// never changed — `type` reported success, `input.value` stayed `""` and
+    /// the field rendered empty.
+    ///
+    /// Returns `true` when a mutable field consumed the edit. The DOM mutation
+    /// happens with the document lock held and no JS dispatched under it (the
+    /// deadlock trap found in BUG-437); the JS-side value shadow is synced
+    /// afterwards so a listener reading `this.value` sees the new value.
+    fn edit_focused_field(&mut self, edit: impl FnOnce(&str) -> String) -> bool {
+        let Some(nid) = self.focused_node else { return false };
+        let Some((kind, current)) = self.typeable_field(nid) else { return false };
+        let next = edit(&current);
+        if next == current {
+            return true;
+        }
+        if let Some(src) = self.layout_source.as_mut()
+            && let Ok(mut doc) = src.document.lock()
+        {
+            match kind {
+                TypeableField::Input => forms::set_value(&mut doc, nid, &next),
+                TypeableField::Textarea => forms::set_textarea_text(&mut doc, nid, &next),
+            }
+        }
+        // Runtime value overlay used by form submission and constraint
+        // validation (`forms::collect_form_entries`) — kept in step with the DOM
+        // exactly like the spellcheck-replace path does.
+        self.form_state.entry(nid).or_default().value = next.clone();
+        route_eval_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            format!("_lumen_set_field_value({}, '{}')", nid.index(), escape_js_string(&next)),
+        );
+        self.relayout_form();
+        true
+    }
+
     /// Fires `keydown` → `input` → `keyup` JS events via `_lumen_dispatch_key_event`
     /// on the last-focused node so events have `isTrusted=true`.
-    fn inject_char(&mut self, ch: char) {
+    ///
+    /// Between `keydown` and `input` the engine runs its own text-insertion
+    /// default action ([`Self::edit_focused_field`], BUG-436), so an `input`
+    /// listener reading `this.value` observes the character just typed.
+    /// Returns `true` when a form control accepted the character.
+    fn inject_char(&mut self, ch: char) -> bool {
         let node_id = self.focused_node.map(|n| n.index()).unwrap_or(0);
         let key = escape_js_string_char(ch);
         // ADR-016 M2.2c-2d (10): same read-after-eval routing as `inject_special_key`
         // — keydown → input → keyup dispatch off-UI-thread under the flag, then the
         // `take_navigate_request` read ordered after via `route_query_js`; byte-identical
         // off-flag.
-        for event_type in &["keydown", "input", "keyup"] {
-            let script = format!(
-                "_lumen_dispatch_key_event({}, '{}', '{}', '{}', false, false, false, false)",
-                node_id, event_type, key, key,
-            );
-            route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
+        self.dispatch_injected_key(node_id, "keydown", &key);
+        let consumed = self.edit_focused_field(|current| {
+            let mut next = current.to_owned();
+            next.push(ch);
+            next
+        });
+        for event_type in &["input", "keyup"] {
+            self.dispatch_injected_key(node_id, event_type, &key);
         }
         if let Some(Some(nav)) = route_query_js(
             self.engine_thread.as_ref(),
@@ -17881,6 +17741,39 @@ impl Lumen {
         ) {
             self.pending_js_navigate = Some(nav);
         }
+        consumed
+    }
+
+    /// Backspace on the focused form control: `keydown` → engine deletes the
+    /// last character ([`Self::edit_focused_field`]) → `input` → `keyup`.
+    ///
+    /// The counterpart of [`Self::inject_char`] — without it a field could be
+    /// filled but never corrected. Returns `true` when a form control consumed
+    /// the key.
+    fn inject_backspace(&mut self) -> bool {
+        let node_id = self.focused_node.map(|n| n.index()).unwrap_or(0);
+        self.dispatch_injected_key(node_id, "keydown", "Backspace");
+        let consumed = self.edit_focused_field(|current| {
+            let mut next = current.to_owned();
+            next.pop();
+            next
+        });
+        for event_type in &["input", "keyup"] {
+            self.dispatch_injected_key(node_id, event_type, "Backspace");
+        }
+        consumed
+    }
+
+    /// Send one `_lumen_dispatch_key_event` for an injected/typed key.
+    ///
+    /// `key` must already be escaped for a single-quoted JS literal
+    /// ([`escape_js_string_char`]).
+    fn dispatch_injected_key(&mut self, node_id: usize, event_type: &str, key: &str) {
+        let script = format!(
+            "_lumen_dispatch_key_event({}, '{}', '{}', '{}', false, false, false, false)",
+            node_id, event_type, key, key,
+        );
+        route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
     }
 
     fn handle_key(&mut self, event_loop: &ActiveEventLoop, key_event: &KeyEvent) {
@@ -18227,6 +18120,32 @@ impl Lumen {
                         return;
                     }
                 }
+            }
+        }
+
+        // Text editing inside a focused `<input>`/`<textarea>` — same placement
+        // rationale as the contenteditable branch above: without it a printable
+        // key falls through to the global keybinding table, where a bare `F`
+        // opens hint mode and Space scrolls the page instead of reaching the
+        // field. The insertion itself is the engine's own default action
+        // (`inject_char` → `edit_focused_field`, BUG-436).
+        if (self.modifiers.is_empty() || self.modifiers == ModifiersState::SHIFT)
+            && self.focused_node.is_some_and(|nid| self.typeable_field(nid).is_some())
+        {
+            if code == KeyCode::Backspace {
+                self.inject_backspace();
+                self.request_redraw();
+                return;
+            }
+            if let Some(text) = key_event.logical_key.to_text()
+                && !text.is_empty()
+                && text.chars().all(|c| !c.is_control())
+            {
+                for ch in text.chars() {
+                    self.inject_char(ch);
+                }
+                self.request_redraw();
+                return;
             }
         }
 
@@ -20958,19 +20877,19 @@ impl Lumen {
         (self.viewport_width_css() - left_offset - right_offset).max(0.0)
     }
 
-    /// All four cross-dockable docked sidebars as `(persist id, visible, default
+    /// The cross-dockable docked sidebars as `(persist id, visible, default
     /// width)`, in side-resolution priority order (outermost first). Each can be
     /// flipped to either window edge; [`Self::left_dock`] / [`Self::right_dock`]
     /// pick the first visible one whose effective side matches.
     ///
-    /// CC-10b: `ID_AI`/`ID_SIDEBAR` report `visible: false` under
-    /// `LUMEN_CSS_CHROME=1` even when `self.ai_panel`/`self.sidebar` are
-    /// visible — under the flag they paint as `#rightSidebar`, a real flex
-    /// sibling of `#contentArea` in the engine chrome layout, so
-    /// `chrome_page_host_rect` (`Self::page_offset`) already reflects its
-    /// width. Without this, `Self::page_content_width_css`'s horizontal
-    /// scroll-clamp bound would subtract the same width twice.
-    fn dockable_sidebars(&self) -> [(&'static str, bool, f32); 4] {
+    /// CC-10b/CC-15-6: `ID_AI`/`ID_SIDEBAR` are **not** listed — they paint as
+    /// `#rightSidebar`, a real flex sibling of `#contentArea` in the engine
+    /// chrome layout, so `chrome_page_host_rect` ([`Self::page_offset`]) already
+    /// reflects their width. Listing them would make
+    /// [`Self::page_content_width_css`]'s horizontal scroll-clamp bound subtract
+    /// the same width twice. (They were entries reporting `visible: false` while
+    /// the `LUMEN_LEGACY_CHROME` rollback flag existed.)
+    fn dockable_sidebars(&self) -> [(&'static str, bool, f32); 2] {
         [
             (
                 panel_layout::ID_VERTICAL_TABS,
@@ -20981,16 +20900,6 @@ impl Lumen {
                 panel_layout::ID_TREE_TABS,
                 self.tree_tabs.visible,
                 panels::tree_tabs::PANEL_WIDTH,
-            ),
-            (
-                panel_layout::ID_AI,
-                self.ai_panel.visible && !self.css_chrome_enabled,
-                panels::ai_panel::PANEL_WIDTH,
-            ),
-            (
-                panel_layout::ID_SIDEBAR,
-                self.sidebar.visible && !self.css_chrome_enabled,
-                panels::sidebar_panel::PANEL_WIDTH,
             ),
         ]
     }
@@ -21415,14 +21324,6 @@ impl Lumen {
         self.history_panel.set_items(items);
     }
 
-    /// Top-left corner of the history panel in window-space CSS px.
-    fn history_panel_anchor(&self) -> (f32, f32) {
-        let win_w = self.viewport_width_css();
-        let px = (win_w - panels::history_panel::PANEL_W) * 0.5;
-        let py = toolbar::CHROME_H + 4.0;
-        (px, py)
-    }
-
     /// Rebuild the command-palette item list: curated commands, every bookmark,
     /// and — when the query is non-empty — matching history pages (FTS).
     ///
@@ -21668,48 +21569,6 @@ impl Lumen {
         "AI module not enabled — rebuild with `cargo build --features ai` \
          (requires a local Ollama daemon, see ADR-019)."
             .to_owned()
-    }
-
-    /// Top-left anchor of the bookmark panel overlay (just under the tab bar).
-    fn bookmark_anchor(&self) -> (f32, f32) {
-        (8.0, toolbar::CHROME_H + 4.0)
-    }
-
-    /// Resolve a bookmark drag release: dropping on a folder re-files the
-    /// bookmark (`Bookmarks::set_folder`), dropping elsewhere opens it.
-    fn finish_bookmark_drop(&mut self, id: i64) {
-        let Some(cursor) = self.cursor_position else { return };
-        let dpr = self
-            .renderer
-            .as_ref()
-            .map_or(1.0_f32, |r| r.scale_factor() as f32)
-            .max(1e-6);
-        let x_css = (cursor.x as f32) / dpr;
-        let y_css = (cursor.y as f32) / dpr;
-        let Some(url) = self
-            .bookmark_panel
-            .entries
-            .iter()
-            .find(|e| e.id == id)
-            .map(|e| e.url.clone())
-        else {
-            return;
-        };
-        let (ax, ay) = self.bookmark_anchor();
-        match panels::bookmark_panel::hit_test(&self.bookmark_panel, x_css, y_css, ax, ay) {
-            Some(panels::bookmark_panel::BookmarkHit::SelectFolder(folder)) => {
-                // Re-file: `None` (the "All" row) moves the bookmark to root.
-                let target = folder.unwrap_or_default();
-                let _ = self.bookmarks.set_folder(&url, &target);
-                self.refresh_bookmarks();
-            }
-            _ => {
-                // Released over the same row / list / outside: treat as a click.
-                self.bookmark_panel.visible = false;
-                self.bookmark_panel.search_active = false;
-                self.navigate_to(PageSource::from_arg(Some(&url)));
-            }
-        }
     }
 
     /// Максимальный валидный scroll_y: ничего не скроллим, если контент
@@ -22184,7 +22043,7 @@ impl Lumen {
         // horizontal-resize cursor, ahead of scrollbar/page/chrome hover.
         let desired = if self.panel_resize.is_some() || self.resize_edge_at(x_css, y_css).is_some() {
             CursorIcon::EwResize
-        } else if self.css_chrome_enabled && self.point_over_chrome(x_css, y_css) {
+        } else if self.point_over_chrome(x_css, y_css) {
             // CC-5: the engine-drawn chrome owns the cursor over its own
             // opaque area (sidebar, toolbar, tab strip) — ahead of
             // scrollbar/page hit-test below, which assume page coordinates.
@@ -23502,11 +23361,10 @@ impl Lumen {
         /// the tab-bar-only height to include the new toolbar row).
         ///
         /// CC-14: the offset itself is [`Self::page_offset`], not a hardcoded
-        /// `(left_dock width, toolbar::CHROME_H)` pair — under
-        /// `LUMEN_CSS_CHROME=1` the content area's real origin is
-        /// `chrome_page_host_rect`'s, which can differ from the legacy
-        /// toolbar/sidebar geometry (e.g. the web/AI sidebar occupies chrome
-        /// layout width but is excluded from `left_dock()` under the flag,
+        /// `(left_dock width, toolbar::CHROME_H)` pair — the content area's
+        /// real origin is `chrome_page_host_rect`'s, which can differ from the
+        /// legacy toolbar/sidebar geometry (e.g. the web/AI sidebar occupies
+        /// chrome layout width but is not a `left_dock()` entry at all,
         /// see [`Self::dockable_sidebars`]). Using the wrong offset here would
         /// silently misfire every MCP/BiDi click/type once engine chrome is
         /// the default, since `page_offset()` is otherwise the single source
@@ -24152,6 +24010,7 @@ fn build_split_placeholder(url: &str) -> lumen_paint::DisplayList {
         },
         // URL label near vertical centre of a typical viewport half.
         DisplayCommand::DrawText {
+            font_stretch: lumen_layout::FontStretch::NORMAL,
             rect: lumen_core::geom::Rect { x: 16.0, y: 300.0, width: 480.0, height: 20.0 },
             text: url.to_owned(),
             font_size: 13.0,
@@ -24172,10 +24031,15 @@ fn build_split_placeholder(url: &str) -> lumen_paint::DisplayList {
 /// Escape a single character for safe embedding in a JS string literal.
 ///
 /// Converts `ch` to an ASCII or `\uXXXX` escape so the character can be
-/// used in `"..."` JS string arguments passed via `eval_js`.
+/// used in `"..."` or `'...'` JS string arguments passed via `eval_js`.
+/// Both quote flavours are escaped because every call site in this crate
+/// interpolates the result into a **single**-quoted literal — an unescaped
+/// apostrophe there produced a syntax error and the whole dispatch script
+/// was silently dropped (found while fixing BUG-436).
 fn escape_js_string_char(ch: char) -> String {
     match ch {
         '"' => r#"\""#.to_owned(),
+        '\'' => r"\'".to_owned(),
         '\\' => r"\\".to_owned(),
         '\n' => r"\n".to_owned(),
         '\r' => r"\r".to_owned(),
@@ -24187,9 +24051,36 @@ fn escape_js_string_char(ch: char) -> String {
     }
 }
 
+/// Escape a whole string for safe embedding in a single-quoted JS literal.
+///
+/// Character-by-character application of [`escape_js_string_char`] — used to
+/// hand a form control's new value to `_lumen_set_field_value` (BUG-436).
+fn escape_js_string(s: &str) -> String {
+    s.chars().map(escape_js_string_char).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── BUG-436: typed characters reach the JS dispatch intact ───────────────
+
+    #[test]
+    fn escaped_char_is_safe_inside_single_quoted_js_literal() {
+        // Every call site interpolates into `'...'`, so an apostrophe must not
+        // close the literal — it used to, and the whole dispatch script was
+        // dropped as a syntax error.
+        assert_eq!(escape_js_string_char('\''), r"\'");
+        assert_eq!(escape_js_string_char('\\'), r"\\");
+        assert_eq!(escape_js_string_char('a'), "a");
+    }
+
+    #[test]
+    fn escaped_string_escapes_every_quote() {
+        assert_eq!(escape_js_string("it's"), r"it\'s");
+        // Non-ASCII goes over as a `\uXXXX` escape, not a raw character.
+        assert_eq!(escape_js_string("\u{444}"), r"\u0444");
+    }
 
     // ── ADR-023: engine-thread default flip + rollback precedence ────────────
 
@@ -27870,6 +27761,33 @@ mod tests {
         assert!(hist_url.is_empty());
         let hist_go = route_query_js(None, None, |j| j.take_history_traversals()).unwrap_or_default();
         assert!(hist_go.is_empty());
+    }
+
+    #[test]
+    fn bug428_canvas_updates_keyed_as_display_list_expects() {
+        // BUG-428: headless CPU-рендер получил тот же дренаж канваса, что живой цикл.
+        // Оба сайта строят ключ через `canvas_updates_as_images`, и он обязан совпасть
+        // с тем, что кладёт в `DrawImage.src` эмиттер (`display_list.rs`:
+        // `format!("canvas:{}", b.node.index())`) — иначе картинка не найдётся и
+        // канвас снова нарисуется прозрачным.
+        let updates = vec![
+            (7_u32, 2_u32, 1_u32, vec![1, 2, 3, 4, 5, 6, 7, 8]),
+            (12_u32, 1_u32, 1_u32, vec![9, 9, 9, 9]),
+        ];
+        let images = canvas_updates_as_images(updates);
+        let keys: Vec<&str> = images.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(keys, ["canvas:7", "canvas:12"]);
+        let (_, first) = &images[0];
+        assert_eq!((first.width, first.height), (2, 1));
+        assert_eq!(first.format, lumen_image::PixelFormat::Rgba8);
+        assert_eq!(first.data, vec![1, 2, 3, 4, 5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn bug428_empty_canvas_drain_adds_no_images() {
+        // Страница без канваса (или без JS-контекста) не должна подмешивать записи
+        // в набор картинок CPU-растеризатора — дренаж пуст, набор не меняется.
+        assert!(canvas_updates_as_images(Vec::new()).is_empty());
     }
 
     #[test]

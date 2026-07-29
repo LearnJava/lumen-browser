@@ -176,6 +176,9 @@ fn v8_thread_main(
     ensure_v8_platform();
 
     let mut isolate = v8::Isolate::new(Default::default());
+    // S12b-23: dynamic `import()` is resolved by an isolate-wide host hook
+    // (static imports go through the callback passed to `instantiate_module`).
+    crate::v8_esm::install_dynamic_import_hook(&mut isolate);
     // Create the context inside a short-lived HandleScope so the scope's borrow
     // of `isolate` ends before we move `isolate` into `V8Inner`.
     let (context, baseline_globals) = {
@@ -225,6 +228,9 @@ fn v8_thread_main(
     // disposed isolate, but releasing the persistent handle here is the
     // correct, leak-free order.
     crate::wasm::v8_bridge::clear_registry();
+    // Same discipline for the ESM module map's `v8::Global<v8::Module>` roots
+    // (S12b-23): release them here, while the isolate is still alive.
+    crate::v8_esm::reset();
     // `inner` (OwnedIsolate + Global<Context>) drops here, on its owning thread.
 }
 
@@ -669,6 +675,33 @@ impl V8JsRuntime {
         self.run(|_inner| crate::canvas2d::flush_dirty())
     }
 
+    /// Register decoded `<img>` bitmaps for canvas `drawImage`, keyed by node id.
+    ///
+    /// Mirrors [`crate::QuickJsRuntime::register_img_bitmaps`]: the shell calls it
+    /// after `fetch_and_decode_images` so `drawImage(imgElement, …)` can read the
+    /// decoded pixels out of [`crate::img_bitmap_store`]. The store is
+    /// `thread_local!`, so the writes must happen on the JS thread — hence `run`.
+    /// The `Arc` is shared with the shell's decode cache (no pixel copy, BUG-272
+    /// срез 20); previous contents are cleared first (navigation-scoped).
+    pub fn register_img_bitmaps(&self, bitmaps: Vec<(u32, Arc<lumen_image::Image>)>) {
+        self.run(move |_inner| {
+            crate::img_bitmap_store::clear_img_bitmaps();
+            for (nid, image) in bitmaps {
+                crate::img_bitmap_store::set_img_bitmap(nid, image);
+            }
+        });
+    }
+
+    /// Install the import map (HTML LS §8.1.6.2) used to resolve bare module
+    /// specifiers such as `"react"`.
+    ///
+    /// Call before evaluating module scripts. Mirrors
+    /// [`crate::QuickJsRuntime::set_import_map`]; the map is stored on the JS
+    /// thread because V8's resolve callback can only reach thread-local state.
+    pub fn set_import_map(&self, map: crate::esm::ImportMap) {
+        self.run(move |_inner| crate::v8_esm::set_import_map(map));
+    }
+
     /// Dispatch `f` to the JS thread, blocking until it completes.
     ///
     /// # Safety
@@ -867,6 +900,11 @@ impl V8JsRuntime {
         let page_url = page_url.to_owned();
 
         self.run(move |inner| {
+            // ESM (S12b-23): fallback base URL the module resolver uses for
+            // relative imports issued from inline `<script type=module>` bodies,
+            // which have no URL of their own. Mirrors the `module_page_url`
+            // write in `QuickJsRuntime::install_dom`.
+            crate::v8_esm::set_page_url(&page_url);
             // Disjoint field borrows: scope borrows isolate, native_fn_store is separate.
             let isolate = &mut inner.isolate;
             let context_global = &inner.context;
@@ -2019,6 +2057,14 @@ impl V8JsRuntime {
         let nav = Arc::clone(&nav_out);
         reg!("_lumen_reload", move || {
             *nav.lock().unwrap() = Some(NavigateRequest::Reload);
+        });
+
+        // BUG-383: `form.submit()` / `form.requestSubmit()`. The shell owns
+        // encoding and the navigation, so the page only hands over the node
+        // ids; `submitter` is -1 when the form was submitted with no control.
+        let nav = Arc::clone(&nav_out);
+        reg!("_lumen_request_form_submit", move |form: u32, submitter: i32| {
+            *nav.lock().unwrap() = Some(NavigateRequest::SubmitForm { form, submitter });
         });
     }
 
@@ -4306,6 +4352,39 @@ impl JsRuntime for V8JsRuntime {
         })
     }
 
+    /// Evaluate `source` as an ES module (HTML LS §8.1.3 `<script type=module>`).
+    ///
+    /// S12b-23: replaces the trait default (which ran module source through
+    /// classic `eval` and choked on `export`/`import` — BUG-350). Machinery
+    /// lives in [`crate::v8_esm`]; this method only bridges the `TryCatch`.
+    fn eval_module(&self, source: &str) -> JsResult<()> {
+        // Phase 0 decorator transform, as on the QuickJS path: the transformer
+        // is a plain JS global, so it needs no raw scope access.
+        let source = crate::decorators::maybe_transform_decorators_v8(self, source)
+            .unwrap_or_else(|| source.to_owned());
+        self.run(|inner| {
+            with_tc!(inner, |tc, _ctx| {
+                match crate::v8_esm::evaluate_entry_module(tc, &source) {
+                    Ok(()) => Ok(()),
+                    Err(()) => match tc.exception() {
+                        Some(exc) => Err(v8_err(tc, exc)),
+                        // V8 returned an empty handle without throwing (OOM on a
+                        // string allocation, termination): still an error, but
+                        // there is no exception to describe it.
+                        None => Err(JsError::Runtime("module eval failed".into())),
+                    },
+                }
+            })
+        })
+    }
+
+    /// Pre-register an ES module `source` under its resolved `specifier` so
+    /// other modules can `import` it. Mirrors
+    /// [`crate::QuickJsRuntime::register_module_source`].
+    fn register_module_source(&self, specifier: &str, source: &str) {
+        self.run(|_inner| crate::v8_esm::register_source(specifier, source));
+    }
+
     fn set_global(&self, name: &str, value: JsValue) -> JsResult<()> {
         self.run(|inner| {
             with_tc!(inner, |tc, ctx| {
@@ -4583,7 +4662,10 @@ fn from_v8<'s>(scope: &v8::PinScope<'s, '_>, val: v8::Local<'s, v8::Value>) -> J
 /// Convert a `JsValue` to a V8 `Local<Value>`.
 fn to_v8<'s>(scope: &v8::PinScope<'s, '_>, val: JsValue) -> JsResult<v8::Local<'s, v8::Value>> {
     Ok(match val {
-        JsValue::Null | JsValue::Undefined => v8::null(scope).into(),
+        // BUG-442: keep Null and Undefined distinct (see the sibling
+        // `jsvalue_to_v8` in `v8_compat.rs` for the full rationale).
+        JsValue::Null => v8::null(scope).into(),
+        JsValue::Undefined => v8::undefined(scope).into(),
         JsValue::Bool(b) => v8::Boolean::new(scope, b).into(),
         JsValue::Number(n) => v8::Number::new(scope, n).into(),
         JsValue::String(s) => v8::String::new(scope, &s)
@@ -5515,4 +5597,352 @@ mod tests {
         "#).unwrap();
         assert_eq!(r, JsValue::Number(3.0));
     }
+
+    // ── BUG-381: focus API (HTML LS §6.6) ──────────────────────────────────────
+
+    /// `html > body > [ a#link[href], input#field, input#off[disabled],
+    /// div#plain, div#tabbed[tabindex=3] ]` — one representative of every branch
+    /// `_lumen_is_focusable` distinguishes.
+    fn make_focus_doc() -> Arc<Mutex<lumen_dom::Document>> {
+        fn attr(doc: &mut lumen_dom::Document, nid: lumen_dom::NodeId, name: &str, value: &str) {
+            if let lumen_dom::NodeData::Element { attrs, .. } = &mut doc.get_mut(nid).data {
+                attrs.push(lumen_dom::Attribute {
+                    name: lumen_dom::QualName::html(name),
+                    value: value.into(),
+                });
+            }
+        }
+        let mut doc = lumen_dom::Document::new();
+        let html = doc.create_element(lumen_dom::QualName::html("html"));
+        let body = doc.create_element(lumen_dom::QualName::html("body"));
+        let link = doc.create_element(lumen_dom::QualName::html("a"));
+        attr(&mut doc, link, "id", "link");
+        attr(&mut doc, link, "href", "#x");
+        let field = doc.create_element(lumen_dom::QualName::html("input"));
+        attr(&mut doc, field, "id", "field");
+        let off = doc.create_element(lumen_dom::QualName::html("input"));
+        attr(&mut doc, off, "id", "off");
+        attr(&mut doc, off, "disabled", "");
+        let plain = doc.create_element(lumen_dom::QualName::html("div"));
+        attr(&mut doc, plain, "id", "plain");
+        let tabbed = doc.create_element(lumen_dom::QualName::html("div"));
+        attr(&mut doc, tabbed, "id", "tabbed");
+        attr(&mut doc, tabbed, "tabindex", "3");
+        doc.append_child(doc.root(), html);
+        doc.append_child(html, body);
+        for child in [link, field, off, plain, tabbed] {
+            doc.append_child(body, child);
+        }
+        Arc::new(Mutex::new(doc))
+    }
+
+    /// Evaluate `script` and assert it produced exactly `true`.
+    fn assert_js_true(rt: &V8JsRuntime, script: &str) {
+        assert_eq!(rt.eval(script).unwrap(), JsValue::Bool(true), "script: {script}");
+    }
+
+    #[test]
+    fn focus_api_surface_is_defined() {
+        let rt = runtime_with_dom(make_focus_doc(), "");
+        assert_js_true(&rt, "typeof HTMLElement.prototype.focus === 'function'");
+        assert_js_true(&rt, "typeof HTMLElement.prototype.blur === 'function'");
+        assert_js_true(&rt, "typeof document.hasFocus === 'function'");
+        assert_js_true(&rt, "typeof window.focus === 'function'");
+        assert_js_true(&rt, "typeof window.blur === 'function'");
+        assert_js_true(&rt, "typeof document.getElementById('field').focus === 'function'");
+    }
+
+    #[test]
+    fn active_element_defaults_to_body() {
+        let rt = runtime_with_dom(make_focus_doc(), "");
+        assert_js_true(&rt, "document.activeElement.tagName === 'BODY'");
+    }
+
+    #[test]
+    fn element_focus_updates_active_element_synchronously() {
+        let rt = runtime_with_dom(make_focus_doc(), "");
+        assert_js_true(
+            &rt,
+            "document.getElementById('field').focus(); document.activeElement.id === 'field'",
+        );
+    }
+
+    #[test]
+    fn element_focus_queues_a_shell_request() {
+        let doc = make_focus_doc();
+        let field = doc.lock().unwrap().find_by_id("field").unwrap();
+        let rt = runtime_with_dom(doc, "");
+        rt.eval("document.getElementById('field').focus()").unwrap();
+        assert_eq!(rt.take_focus_requests(), vec![Some(field.index() as u32)]);
+    }
+
+    #[test]
+    fn element_focus_fires_focus_then_focusin() {
+        let rt = runtime_with_dom(make_focus_doc(), "");
+        assert_js_true(
+            &rt,
+            "var seen = [];\
+             var el = document.getElementById('field');\
+             el.addEventListener('focus', function() { seen.push('focus'); });\
+             el.addEventListener('focusin', function() { seen.push('focusin'); });\
+             el.focus();\
+             seen.join(',') === 'focus,focusin'",
+        );
+    }
+
+    #[test]
+    fn focusin_bubbles_but_focus_does_not() {
+        let rt = runtime_with_dom(make_focus_doc(), "");
+        assert_js_true(
+            &rt,
+            "var seen = [];\
+             document.body.addEventListener('focus', function() { seen.push('focus'); });\
+             document.body.addEventListener('focusin', function() { seen.push('focusin'); });\
+             document.getElementById('field').focus();\
+             seen.join(',') === 'focusin'",
+        );
+    }
+
+    #[test]
+    fn on_focus_property_handler_runs() {
+        let rt = runtime_with_dom(make_focus_doc(), "");
+        assert_js_true(
+            &rt,
+            "var hit = false;\
+             var el = document.getElementById('field');\
+             el.onfocus = function() { hit = true; };\
+             el.focus();\
+             hit",
+        );
+    }
+
+    #[test]
+    fn moving_focus_fires_blur_focusout_focus_focusin_in_order() {
+        let rt = runtime_with_dom(make_focus_doc(), "");
+        assert_js_true(
+            &rt,
+            "var seen = [];\
+             var a = document.getElementById('link'), b = document.getElementById('field');\
+             ['focus','blur','focusin','focusout'].forEach(function(t) {\
+                 a.addEventListener(t, function() { seen.push('a:' + t); });\
+                 b.addEventListener(t, function() { seen.push('b:' + t); });\
+             });\
+             a.focus(); seen = []; b.focus();\
+             seen.join(',') === 'a:blur,a:focusout,b:focus,b:focusin'",
+        );
+    }
+
+    #[test]
+    fn focus_events_carry_related_target() {
+        let rt = runtime_with_dom(make_focus_doc(), "");
+        assert_js_true(
+            &rt,
+            "var related = 'unset';\
+             var a = document.getElementById('link'), b = document.getElementById('field');\
+             a.focus();\
+             b.addEventListener('focus', function(e) { related = e.relatedTarget ? e.relatedTarget.id : null; });\
+             b.focus();\
+             related === 'link'",
+        );
+    }
+
+    #[test]
+    fn refocusing_the_same_element_fires_nothing() {
+        let rt = runtime_with_dom(make_focus_doc(), "");
+        assert_js_true(
+            &rt,
+            "var n = 0;\
+             var el = document.getElementById('field');\
+             el.addEventListener('focus', function() { n++; });\
+             el.focus(); el.focus(); el.focus();\
+             n === 1",
+        );
+    }
+
+    #[test]
+    fn blur_resets_active_element_to_body_and_fires_blur() {
+        let rt = runtime_with_dom(make_focus_doc(), "");
+        assert_js_true(
+            &rt,
+            "var seen = [];\
+             var el = document.getElementById('field');\
+             el.addEventListener('blur', function() { seen.push('blur'); });\
+             el.addEventListener('focusout', function() { seen.push('focusout'); });\
+             el.focus(); el.blur();\
+             seen.join(',') === 'blur,focusout' && document.activeElement.tagName === 'BODY'",
+        );
+    }
+
+    #[test]
+    fn blur_on_an_unfocused_element_is_a_noop() {
+        let rt = runtime_with_dom(make_focus_doc(), "");
+        assert_js_true(
+            &rt,
+            "document.getElementById('field').focus();\
+             document.getElementById('link').blur();\
+             document.activeElement.id === 'field'",
+        );
+    }
+
+    #[test]
+    fn non_focusable_elements_are_not_focused() {
+        let rt = runtime_with_dom(make_focus_doc(), "");
+        // A bare <div> and a disabled <input> both stay unfocusable; a <div> with
+        // an explicit tabindex and an <a href> do not.
+        assert_js_true(
+            &rt,
+            "document.getElementById('plain').focus();\
+             document.activeElement.tagName === 'BODY'",
+        );
+        assert_js_true(
+            &rt,
+            "document.getElementById('off').focus();\
+             document.activeElement.tagName === 'BODY'",
+        );
+        assert_js_true(
+            &rt,
+            "document.getElementById('tabbed').focus();\
+             document.activeElement.id === 'tabbed'",
+        );
+        assert_js_true(
+            &rt,
+            "document.getElementById('link').focus();\
+             document.activeElement.id === 'link'",
+        );
+    }
+
+    #[test]
+    fn inert_subtree_has_no_focusable_areas() {
+        let rt = runtime_with_dom(make_focus_doc(), "");
+        assert_js_true(
+            &rt,
+            "document.body.setAttribute('inert', '');\
+             document.getElementById('field').focus();\
+             document.activeElement.tagName === 'BODY'",
+        );
+    }
+
+    #[test]
+    fn tab_index_reflects_the_content_attribute() {
+        let rt = runtime_with_dom(make_focus_doc(), "");
+        assert_js_true(&rt, "document.getElementById('tabbed').tabIndex === 3");
+        // Focusable without the attribute → 0; everything else → −1.
+        assert_js_true(&rt, "document.getElementById('field').tabIndex === 0");
+        assert_js_true(&rt, "document.getElementById('plain').tabIndex === -1");
+        assert_js_true(&rt, "document.body.tabIndex === -1");
+        assert_js_true(
+            &rt,
+            "var d = document.getElementById('plain');\
+             d.tabIndex = -1;\
+             d.getAttribute('tabindex') === '-1' && d.tabIndex === -1",
+        );
+        // A `tabindex` that is not an integer falls back to the default.
+        assert_js_true(
+            &rt,
+            "var d = document.getElementById('plain');\
+             d.setAttribute('tabindex', '2px');\
+             d.tabIndex === -1",
+        );
+    }
+
+    #[test]
+    fn autofocus_reflects_the_content_attribute() {
+        let rt = runtime_with_dom(make_focus_doc(), "");
+        // Attribute presence is checked via `getAttribute`, not `hasAttribute`:
+        // the latter answers `true` for every name on the V8 bindings (BUG-442).
+        assert_js_true(
+            &rt,
+            "var el = document.getElementById('field');\
+             var before = el.autofocus;\
+             el.autofocus = true;\
+             var mid = el.autofocus && el.getAttribute('autofocus') === '';\
+             el.autofocus = false;\
+             before === false && mid && el.autofocus === false\
+                 && el.getAttribute('autofocus') === null",
+        );
+    }
+
+    #[test]
+    fn shell_reported_focus_change_fires_events_and_moves_active_element() {
+        let doc = make_focus_doc();
+        let field = doc.lock().unwrap().find_by_id("field").unwrap();
+        let rt = runtime_with_dom(doc, "");
+        rt.eval(
+            "globalThis.seen = [];\
+             document.getElementById('field')\
+                 .addEventListener('focus', function() { globalThis.seen.push('focus'); });",
+        )
+        .unwrap();
+        // What the shell does after a click moves `focused_node`.
+        rt.eval(&format!("_lumen_focus_update({})", field.index())).unwrap();
+        assert_js_true(&rt, "document.activeElement.id === 'field'");
+        assert_js_true(&rt, "globalThis.seen.join(',') === 'focus'");
+    }
+
+    #[test]
+    fn shell_echo_of_a_page_initiated_focus_does_not_double_dispatch() {
+        let doc = make_focus_doc();
+        let field = doc.lock().unwrap().find_by_id("field").unwrap();
+        let rt = runtime_with_dom(doc, "");
+        rt.eval(
+            "globalThis.n = 0;\
+             var el = document.getElementById('field');\
+             el.addEventListener('focus', function() { globalThis.n++; });\
+             el.focus();",
+        )
+        .unwrap();
+        // The shell drains the queued request and echoes it back — must be a no-op.
+        rt.eval(&format!("_lumen_focus_update({})", field.index())).unwrap();
+        assert_js_true(&rt, "globalThis.n === 1");
+    }
+
+    #[test]
+    fn shell_reported_focus_on_a_text_node_resolves_to_its_element() {
+        // The shell tracks focus by layout box, whose node can be a text node.
+        let mut d = lumen_dom::Document::new();
+        let html = d.create_element(lumen_dom::QualName::html("html"));
+        let body = d.create_element(lumen_dom::QualName::html("body"));
+        let link = d.create_element(lumen_dom::QualName::html("a"));
+        if let lumen_dom::NodeData::Element { attrs, .. } = &mut d.get_mut(link).data {
+            attrs.push(lumen_dom::Attribute {
+                name: lumen_dom::QualName::html("id"),
+                value: "link".into(),
+            });
+        }
+        let text = d.create_text("click me");
+        d.append_child(d.root(), html);
+        d.append_child(html, body);
+        d.append_child(body, link);
+        d.append_child(link, text);
+        let text_idx = text.index();
+        let rt = runtime_with_dom(Arc::new(Mutex::new(d)), "");
+        rt.eval(&format!("_lumen_focus_update({text_idx})")).unwrap();
+        assert_js_true(&rt, "document.activeElement.id === 'link'");
+    }
+
+    #[test]
+    fn autofocus_element_is_focused_when_parsing_completes() {
+        let mut d = lumen_dom::Document::new();
+        let html = d.create_element(lumen_dom::QualName::html("html"));
+        let body = d.create_element(lumen_dom::QualName::html("body"));
+        let field = d.create_element(lumen_dom::QualName::html("input"));
+        if let lumen_dom::NodeData::Element { attrs, .. } = &mut d.get_mut(field).data {
+            attrs.push(lumen_dom::Attribute {
+                name: lumen_dom::QualName::html("id"),
+                value: "field".into(),
+            });
+            attrs.push(lumen_dom::Attribute {
+                name: lumen_dom::QualName::html("autofocus"),
+                value: "".into(),
+            });
+        }
+        d.append_child(d.root(), html);
+        d.append_child(html, body);
+        d.append_child(body, field);
+        let rt = runtime_with_dom(Arc::new(Mutex::new(d)), "");
+        assert_js_true(&rt, "document.activeElement.tagName === 'BODY'");
+        rt.eval("_lumen_apply_ready_state('interactive')").unwrap();
+        assert_js_true(&rt, "document.activeElement.id === 'field'");
+    }
+
 }

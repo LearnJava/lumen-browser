@@ -736,22 +736,71 @@ pub enum TextAlignLast {
 
 /// CSS Writing Modes L3 §2.1 — `direction: ltr | rtl`. Inherited.
 ///
-/// Базовое направление потока inline-контента. В Phase 0 layout только
-/// хранит значение и распространяет через каскад — реальное применение
-/// (RTL line-flow, перенос pivot point, bidi reordering через Unicode
-/// Bidi Algorithm) требует Bidi-движка и переписанного wrap_inline_run.
-/// Однако зафиксировать direction в `ComputedStyle` сейчас полезно для
-/// двух будущих задач: (1) когда появится `dir="rtl"` HTML-атрибут или
-/// `<bdo>` — у нас уже есть точка хранения; (2) когда возьмёмся за bidi —
-/// каскад уже даёт нам базовое направление, не нужно его ретрофитить.
-///
-/// `rtl` пока не меняет рендеринг — это явный «отложено», документированный
-/// в roadmap.
+/// Базовое направление потока inline-контента: задаёт paragraph embedding
+/// level для Unicode Bidirectional Algorithm (`ltr` → 0, `rtl` → 1) и
+/// разрешает логические значения `text-align: start|end` в физические
+/// left/right. Реальный bidi-порядок фрагментов считает [`crate::bidi`],
+/// применяет `box_tree::wrap_inline_run` → `align_lines`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Direction {
     #[default]
     Ltr,
     Rtl,
+}
+
+/// CSS Writing Modes L4 §2.2 — `unicode-bidi`. НЕ наследуется.
+///
+/// Управляет тем, как содержимое inline-бокса участвует в Unicode
+/// Bidirectional Algorithm (UAX #9). Каждое значение эквивалентно обёртке
+/// текста бокса в явные bidi-control-символы, которые [`crate::bidi`]
+/// вставляет в текст параграфа перед прогоном UBA:
+///
+/// | Значение           | Обёртка (для `direction: ltr` / `rtl`)     |
+/// |--------------------|--------------------------------------------|
+/// | `normal`           | нет — содержимое сливается с окружением     |
+/// | `embed`            | `LRE`/`RLE` … `PDF`                        |
+/// | `isolate`          | `LRI`/`RLI` … `PDI`                        |
+/// | `bidi-override`    | `LRO`/`RLO` … `PDF`                        |
+/// | `isolate-override` | `FSI` `LRO`/`RLO` … `PDF` `PDI`            |
+/// | `plaintext`        | `FSI` … `PDI` (направление — first-strong)  |
+///
+/// `plaintext` игнорирует `direction` бокса: базовое направление берётся
+/// правилом P2/P3 из самого содержимого, что и делает `FSI`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum UnicodeBidi {
+    /// Содержимое участвует в UBA наравне с соседями — bidi-control не вставляется.
+    #[default]
+    Normal,
+    /// Дополнительный уровень вложенности (`LRE`/`RLE` … `PDF`).
+    Embed,
+    /// Изолированная последовательность (`LRI`/`RLI` … `PDI`).
+    Isolate,
+    /// Принудительное направление всех символов (`LRO`/`RLO` … `PDF`).
+    BidiOverride,
+    /// Изоляция + принудительное направление (`FSI` `LRO`/`RLO` … `PDF` `PDI`).
+    IsolateOverride,
+    /// Изоляция с first-strong базовым направлением (`FSI` … `PDI`).
+    Plaintext,
+}
+
+/// Разбирает значение `unicode-bidi` (CSS Writing Modes L4 §2.2).
+///
+/// Ключевые слова CSS ASCII-case-insensitive (CSS Values L4 §2.4).
+/// Legacy-префиксы `-webkit-`/`-moz-` у трёх изолирующих значений принимаются
+/// как алиасы — так их до сих пор пишут в CSS локализованных страниц.
+/// `None` — значение не распознано, объявление игнорируется.
+fn match_unicode_bidi(val: &str) -> Option<UnicodeBidi> {
+    let v = val.trim().to_ascii_lowercase();
+    let v = v.strip_prefix("-webkit-").or_else(|| v.strip_prefix("-moz-")).unwrap_or(&v);
+    match v {
+        "normal" => Some(UnicodeBidi::Normal),
+        "embed" => Some(UnicodeBidi::Embed),
+        "isolate" => Some(UnicodeBidi::Isolate),
+        "bidi-override" => Some(UnicodeBidi::BidiOverride),
+        "isolate-override" => Some(UnicodeBidi::IsolateOverride),
+        "plaintext" => Some(UnicodeBidi::Plaintext),
+        _ => None,
+    }
 }
 
 /// CSS Backgrounds L3 §4.6 — спецификация одной тени бокса.
@@ -1056,18 +1105,98 @@ pub enum FontStyle {
     Oblique,
 }
 
-/// CSS Fonts L4 §6 — `font-variant` (упрощённый Phase 0). Inherited.
+/// CSS Fonts L4 §6.2 — `font-variant-caps`. Inherited.
 ///
-/// Полный `font-variant` — это shorthand над font-variant-caps,
-/// -ligatures, -numeric и т.д. (CSS Fonts L4). Phase 0 поддерживаем
-/// только два самых частых значения: `normal` и `small-caps`. Real
-/// small-caps rendering требует OpenType feature `smcp` или fallback
-/// на uppercase + меньший font-size — отложено.
+/// Полный набор значений спецификации. `font-variant` — shorthand, из
+/// которого сюда попадает только caps-компонента (остальные longhand-ы
+/// — `-ligatures`, `-numeric`, `-east-asian`, `-position`, `-alternates`
+/// — ещё не реализованы).
+///
+/// Рендеринг: пять значений синтезируются в layout-е (`caps_synthesis` в
+/// `box_tree.rs` — заглавные буквы, уменьшенные до `SMALL_CAPS_SCALE`),
+/// потому что bundled-шрифт (Inter) не содержит ни `smcp`, ни `c2sc`, ни
+/// `pcap`. `TitlingCaps` синтезировать нечем — оно уходит в шейпер
+/// OpenType-фичей `titl` (см. [`text_font_features`]).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum FontVariant {
+pub enum FontVariantCaps {
+    /// `normal` (initial) — обычные глифы, никаких caps-подстановок.
     #[default]
     Normal,
+    /// `small-caps` — строчные буквы показываются капителью (OpenType `smcp`).
     SmallCaps,
+    /// `all-small-caps` — капителью показываются И строчные, И заглавные
+    /// (OpenType `c2sc` + `smcp`).
+    AllSmallCaps,
+    /// `petite-caps` — как `small-caps`, но капитель ниже (OpenType `pcap`).
+    /// Синтезируется идентично `small-caps` (Phase 0, как в Gecko).
+    PetiteCaps,
+    /// `all-petite-caps` — `c2pc` + `pcap`; синтезируется как `all-small-caps`.
+    AllPetiteCaps,
+    /// `unicase` — заглавные показываются капителью, строчные остаются
+    /// строчными (OpenType `unic`).
+    Unicase,
+    /// `titling-caps` — заглавные заменяются на титульные формы (OpenType
+    /// `titl`). Синтезу не поддаётся: без глифов шрифта это no-op.
+    TitlingCaps,
+}
+
+impl FontVariantCaps {
+    /// Разбирает keyword `font-variant-caps` (CSS Fonts L4 §6.2).
+    /// `None` — токен не относится к caps-компоненте.
+    pub fn from_keyword(kw: &str) -> Option<Self> {
+        match kw {
+            "normal" => Some(Self::Normal),
+            "small-caps" => Some(Self::SmallCaps),
+            "all-small-caps" => Some(Self::AllSmallCaps),
+            "petite-caps" => Some(Self::PetiteCaps),
+            "all-petite-caps" => Some(Self::AllPetiteCaps),
+            "unicase" => Some(Self::Unicase),
+            "titling-caps" => Some(Self::TitlingCaps),
+            _ => None,
+        }
+    }
+
+    /// OpenType-фичи, которые это значение включает в шейпере.
+    ///
+    /// Пусто для всех значений, кроме `titling-caps`: остальные
+    /// синтезируются в layout-е (`caps_synthesis`), и включать вдобавок
+    /// `smcp`/`c2sc` нельзя — по уже поднятому в верхний регистр тексту
+    /// `c2sc` отработал бы второй раз и капитель уменьшилась бы дважды.
+    pub fn feature_tags(self) -> &'static [[u8; 4]] {
+        const TITL: [[u8; 4]; 1] = [*b"titl"];
+        match self {
+            Self::TitlingCaps => &TITL,
+            _ => &[],
+        }
+    }
+
+    /// CSS-сериализация значения (для `getComputedStyle` и layout-дампов).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::SmallCaps => "small-caps",
+            Self::AllSmallCaps => "all-small-caps",
+            Self::PetiteCaps => "petite-caps",
+            Self::AllPetiteCaps => "all-petite-caps",
+            Self::Unicase => "unicase",
+            Self::TitlingCaps => "titling-caps",
+        }
+    }
+}
+
+/// Собирает набор OpenType-фич для `DrawText.font_features`.
+///
+/// CSS Fonts L4 §6.4 (Font Feature Resolution) задаёт порядок: сперва фичи
+/// от `font-variant-*`, последними — `font-feature-settings`. Шейпер
+/// (`otlayout::apply_feature_overrides`) применяет пары слева направо, так
+/// что более поздняя запись перекрывает раннюю — то есть автор может
+/// выключить фичу капители через `font-feature-settings`.
+pub fn text_font_features(style: &ComputedStyle) -> Vec<([u8; 4], u32)> {
+    let caps = style.font_variant_caps.feature_tags();
+    let mut out = Vec::with_capacity(caps.len() + style.font_feature_settings.len());
+    out.extend(caps.iter().map(|tag| (*tag, 1)));
+    out.extend(style.font_feature_settings.iter().map(|f| (f.tag, f.value)));
+    out
 }
 
 /// CSS Fonts L4 §7.12 — `font-optical-sizing`. Inherited.
@@ -1093,16 +1222,45 @@ pub enum FontOpticalSizing {
 /// экстремальные значения, и это удерживает значение в u16 без
 /// переполнения.
 ///
-/// Phase 0: layout различает свойство, рендерер всегда Inter Regular
-/// (real stretch-варианты требуют variable-font wdth-axis или отдельные
-/// fontfiles). `text_rendering_eq` учитывает stretch, чтобы фрагменты
-/// с разным stretch не сливались.
+/// Значение доезжает до рендера двумя независимыми путями, которые
+/// складываются: variable-шрифты получают ось `wdth`
+/// (`DrawText::font_variation_axes`), а статические семейства с отдельными
+/// condensed/expanded-файлами подбираются matcher-ом по `usWidthClass` из
+/// OS/2 (`DrawText::font_stretch` → `FontProvider::pick_face`, CSS Fonts L4
+/// §5.2). `text_rendering_eq` учитывает stretch, чтобы фрагменты с разным
+/// stretch не сливались.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FontStretch(pub u16);
 
 impl FontStretch {
     /// 100% — нормальная ширина.
     pub const NORMAL: Self = Self(1000);
+
+    /// Значение в CSS-процентах, округлённое до целого (50..200) — единицы
+    /// [`lumen_core::FaceRecord::stretch`] и `usWidthClass`. Дробные
+    /// keyword-ы (`semi-expanded` = 112.5%) округляются: шкала
+    /// `usWidthClass` целочисленная и дробных ступеней не имеет.
+    pub fn as_percent(self) -> u16 {
+        (self.0 + 5) / 10
+    }
+
+    /// `<font-stretch-css3>`: keyword или `<percentage>` (CSS Fonts L4 §2.5).
+    /// Берёт первый токен — L4 допускает диапазон из двух значений (это
+    /// синтаксис дескриптора `@font-face`, для свойства второе значение
+    /// игнорируется). `None` — значение не распознано.
+    pub fn parse(val: &str) -> Option<Self> {
+        let token = val.split_whitespace().next()?;
+        if let Some(fs) = Self::from_keyword(token) {
+            return Some(fs);
+        }
+        let pct = token.strip_suffix('%')?;
+        let n = pct.trim().parse::<f32>().ok()?;
+        // CSS Fonts L4 §2.5: percentage >= 0%. Out-of-range значения
+        // формально валидны, но бесполезны для рендеринга и могут
+        // переполнить u16 (max ≈ 6553%). Клампим в привычные [50%, 200%].
+        let clamped = n.clamp(50.0, 200.0);
+        Some(Self((clamped * 10.0).round() as u16))
+    }
 
     fn from_keyword(kw: &str) -> Option<Self> {
         Some(match kw {
@@ -3064,9 +3222,12 @@ pub struct ComputedStyle {
     /// Phase 0: parse + store; применение при line layout — deferred.
     pub text_align_last: TextAlignLast,
     /// CSS Writing Modes L3 §2.1 — направление inline-потока. Inherited.
-    /// В Phase 0 layout/paint его пока не применяют — задел под bidi и
-    /// HTML `dir`-атрибут. См. `Direction` для подробностей.
+    /// Задаёт paragraph embedding level для UBA и разрешает логические
+    /// `text-align: start|end`. См. [`Direction`] для подробностей.
     pub direction: Direction,
+    /// CSS Writing Modes L4 §2.2 — участие бокса в UBA. NOT inherited.
+    /// Initial: `Normal`. См. [`UnicodeBidi`].
+    pub unicode_bidi: UnicodeBidi,
     pub color: Color,
     /// Цветовое пространство, в котором объявлен `color` (CSS Color L4 §10).
     /// Используется renderer-ом для точной передачи wide-gamut цветов в GPU.
@@ -3091,8 +3252,8 @@ pub struct ComputedStyle {
     pub line_height_step: f32,
     pub font_style: FontStyle,
     pub font_weight: FontWeight,
-    /// CSS Fonts L4 §6 — font-variant (Phase 0: normal | small-caps). Inherited.
-    pub font_variant: FontVariant,
+    /// CSS Fonts L4 §6.2 — font-variant-caps (весь набор значений). Inherited.
+    pub font_variant_caps: FontVariantCaps,
     /// CSS Fonts L4 §2.5 — font-stretch (десятые доли процента; normal = 1000).
     /// Inherited.
     pub font_stretch: FontStretch,
@@ -3575,27 +3736,11 @@ pub struct ComputedStyle {
     /// CSS Scroll-Driven Animations L1 §3.4 — `view-timeline-axis: block | inline | x | y`.
     /// Non-inherited. Which axis drives the named view timeline. Default `Block`.
     pub view_timeline_axis: ScrollAxis,
-    /// CSS Masking L1 §4 — `mask-image: url(...) | linear-gradient(...) | none`.
-    /// `BackgroundImage` переиспользуется как тип (same structure: None/Url/Gradient).
-    pub mask_image: BackgroundImage,
-    /// CSS Masking L1 §4 — `mask-repeat`. Те же значения, что у background-repeat.
-    pub mask_repeat: BackgroundRepeat,
-    /// CSS Masking L1 §4 — `mask-size`.
-    pub mask_size: BackgroundSize,
-    /// CSS Masking L1 §6.4 — `mask-mode: alpha | luminance | match-source`.
-    /// Non-inherited. `match-source` resolves to `Alpha` for `<image>` sources.
-    pub mask_mode: MaskMode,
-    /// CSS Masking L1 §4.4 — `mask-position`. Default `50% 50%`. Non-inherited.
-    pub mask_position: ObjectPosition,
-    /// CSS Masking L1 §4.5 — `mask-origin: border-box | padding-box | content-box`.
-    /// Default `BorderBox`. Non-inherited.
-    pub mask_origin: BackgroundOrigin,
-    /// CSS Masking L1 §4.6 — `mask-clip`. Superset of background-clip keywords
-    /// (`<coord-box> | no-clip`). Default `BorderBox`. Non-inherited.
-    pub mask_clip: MaskClip,
-    /// CSS Masking L1 §4.7 — `mask-composite: add | subtract | intersect | exclude`.
-    /// Non-inherited. Default `Add`.
-    pub mask_composite: MaskComposite,
+    /// CSS Masking L1 §4.9 — список слоёв маски (`mask-image` и все
+    /// сопутствующие per-layer longhand-ы). Первый элемент = верхний слой,
+    /// последний = нижний (тот же порядок, что у [`Self::background_layers`]).
+    /// Пустой Vec = `mask: none`, маска не применяется. Не наследуется.
+    pub mask_layers: Vec<MaskLayer>,
     /// CSS Scrollbars 1 — `scrollbar-width: auto | thin | none`.
     pub scrollbar_width: ScrollbarWidth,
     /// CSS Scrollbars 1 — `scrollbar-color: auto | <color> <color>`
@@ -6346,18 +6491,27 @@ pub enum MaskMode {
     Luminance,
 }
 
-/// CSS Masking L1 §4.7 — `mask-composite`. Controls how multiple mask layers
-/// are composited together. Single value for now; multi-layer cycling deferred.
+/// CSS Masking L1 §4.7 — `mask-composite`. Determines how a mask layer is
+/// combined with the mask already assembled from the layers **below** it
+/// (Porter-Duff on the mask channel: `add` = source-over, `subtract` =
+/// source-out, `intersect` = source-in, `exclude` = xor).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum MaskComposite {
+    /// `add` (initial) — Porter-Duff source-over on the mask channel.
     #[default]
     Add,
+    /// `subtract` — Porter-Duff source-out: the layer below is removed where
+    /// this layer paints.
     Subtract,
+    /// `intersect` — Porter-Duff source-in: only the overlap survives.
     Intersect,
+    /// `exclude` — Porter-Duff xor: the overlap is removed.
     Exclude,
 }
 
 impl MaskComposite {
+    /// Parses a single `mask-composite` keyword (CSS Masking L1 §4.7).
+    /// Case-insensitive; returns `None` on an unrecognised keyword.
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
             "add" => Some(Self::Add),
@@ -6365,6 +6519,55 @@ impl MaskComposite {
             "intersect" => Some(Self::Intersect),
             "exclude" => Some(Self::Exclude),
             _ => None,
+        }
+    }
+}
+
+/// CSS Masking L1 §4.9 — один слой маски.
+///
+/// `mask-image` задаёт количество слоёв; остальные longhand-ы циклически
+/// повторяются по этому количеству («Layering Multiple Mask Layers»). Тот же
+/// приём, что и у [`BackgroundLayer`], поэтому типы значений переиспользуются
+/// из background (`mask-repeat` / `mask-size` / `mask-position` имеют ту же
+/// грамматику, `mask-clip` — надмножество `background-clip`).
+///
+/// Порядок в [`ComputedStyle::mask_layers`]: первый = верхний слой. Слои
+/// собираются в одну маску снизу вверх, каждый — оператором своего
+/// [`MaskLayer::composite`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct MaskLayer {
+    /// `mask-image` этого слоя. `BackgroundImage` переиспользуется как тип
+    /// (та же структура: None / Url / Gradient).
+    pub image: BackgroundImage,
+    /// `mask-repeat` этого слоя (§4.3). Initial `repeat`.
+    pub repeat: BackgroundRepeat,
+    /// `mask-size` этого слоя (§4.2). Initial `auto`.
+    pub size: BackgroundSize,
+    /// `mask-position` этого слоя (§4.4). Initial `center`.
+    pub position: ObjectPosition,
+    /// `mask-origin` этого слоя (§4.5). Initial `border-box`.
+    pub origin: BackgroundOrigin,
+    /// `mask-clip` этого слоя (§4.6). Initial `border-box`.
+    pub clip: MaskClip,
+    /// `mask-mode` этого слоя (§6.4). Initial `match-source`, который для
+    /// поддерживаемых `<image>`-источников резолвится в `alpha`.
+    pub mode: MaskMode,
+    /// `mask-composite` этого слоя (§4.7) — оператор смешивания с уже
+    /// собранными слоями ниже. Initial `add`.
+    pub composite: MaskComposite,
+}
+
+impl Default for MaskLayer {
+    fn default() -> Self {
+        Self {
+            image: BackgroundImage::None,
+            repeat: BackgroundRepeat::Repeat,
+            size: BackgroundSize::Auto,
+            position: ObjectPosition::default(),
+            origin: BackgroundOrigin::BorderBox,
+            clip: MaskClip::BorderBox,
+            mode: MaskMode::Alpha,
+            composite: MaskComposite::Add,
         }
     }
 }
@@ -6391,7 +6594,7 @@ impl ComputedStyle {
             && (self.line_height - other.line_height).abs() < f32::EPSILON
             && self.font_style == other.font_style
             && self.font_weight == other.font_weight
-            && self.font_variant == other.font_variant
+            && self.font_variant_caps == other.font_variant_caps
             && self.font_stretch == other.font_stretch
             && self.font_feature_settings == other.font_feature_settings
             && (self.letter_spacing - other.letter_spacing).abs() < f32::EPSILON
@@ -6409,6 +6612,7 @@ impl ComputedStyle {
             text_align: TextAlign::Start,
             text_align_last: TextAlignLast::Auto,
             direction: Direction::Ltr,
+            unicode_bidi: UnicodeBidi::Normal,
             color: Color::BLACK,
             color_space: ColorSpace::Srgb,
             background_color: None,
@@ -6418,7 +6622,7 @@ impl ComputedStyle {
             line_height_step: 0.0,
             font_style: FontStyle::Normal,
             font_weight: FontWeight::NORMAL,
-            font_variant: FontVariant::Normal,
+            font_variant_caps: FontVariantCaps::Normal,
             font_stretch: FontStretch::NORMAL,
             font_family: Vec::new(),
             font_variation_settings: Vec::new(),
@@ -6597,14 +6801,7 @@ impl ComputedStyle {
             scroll_timeline_axis: ScrollAxis::Block,
             view_timeline_name: None,
             view_timeline_axis: ScrollAxis::Block,
-            mask_image: BackgroundImage::None,
-            mask_repeat: BackgroundRepeat::Repeat,
-            mask_size: BackgroundSize::Auto,
-            mask_mode: MaskMode::Alpha,
-            mask_position: ObjectPosition::default(),
-            mask_origin: BackgroundOrigin::BorderBox,
-            mask_clip: MaskClip::BorderBox,
-            mask_composite: MaskComposite::Add,
+            mask_layers: Vec::new(),
             scrollbar_width: ScrollbarWidth::Auto,
             scrollbar_color: None,
             scrollbar_gutter: ScrollbarGutter::Auto,
@@ -6761,13 +6958,15 @@ pub fn compute_style(
         color_space: inherited.color_space,
         text_align: inherited.text_align,
         direction: inherited.direction,
+        // `unicode-bidi` не наследуется (CSS Writing Modes L4 §2.2).
+        unicode_bidi: UnicodeBidi::Normal,
         font_size: inherited.font_size,
         line_height: inherited.line_height,
         line_height_is_relative: inherited.line_height_is_relative,
         line_height_step: inherited.line_height_step,
         font_style: inherited.font_style,
         font_weight: inherited.font_weight,
-        font_variant: inherited.font_variant,
+        font_variant_caps: inherited.font_variant_caps,
         font_stretch: inherited.font_stretch,
         font_family: inherited.font_family.clone(),
         font_variation_settings: inherited.font_variation_settings.clone(),
@@ -6972,14 +7171,7 @@ pub fn compute_style(
         view_timeline_name: None,
         view_timeline_axis: ScrollAxis::Block,
         // CSS Masking — не наследуется.
-        mask_image: BackgroundImage::None,
-        mask_repeat: BackgroundRepeat::Repeat,
-        mask_size: BackgroundSize::Auto,
-        mask_mode: MaskMode::Alpha,
-        mask_position: ObjectPosition::default(),
-        mask_origin: BackgroundOrigin::BorderBox,
-        mask_clip: MaskClip::BorderBox,
-        mask_composite: MaskComposite::Add,
+        mask_layers: Vec::new(),
         // CSS Scrollbars — scrollbar-width/-color inherited;
         // scrollbar-gutter не наследуется.
         scrollbar_width: inherited.scrollbar_width,
@@ -8334,7 +8526,7 @@ fn pseudo_inherited_style(parent: &ComputedStyle) -> ComputedStyle {
     style.line_height_step = parent.line_height_step;
     style.font_style = parent.font_style;
     style.font_weight = parent.font_weight;
-    style.font_variant = parent.font_variant;
+    style.font_variant_caps = parent.font_variant_caps;
     style.font_stretch = parent.font_stretch;
     style.font_family = parent.font_family.clone();
     style.font_variation_settings = parent.font_variation_settings.clone();
@@ -8392,6 +8584,79 @@ fn pseudo_inherited_style(parent: &ComputedStyle) -> ComputedStyle {
     style.interpolate_size = parent.interpolate_size;
     style.quotes = parent.quotes.clone();
     style
+}
+
+/// CSS Pseudo-elements L4 §3.4 — inheritance through the `::first-line` /
+/// `::first-letter` fictional tag sequence.
+///
+/// The pseudo-element is the *parent* of the affected content, not a blanket
+/// override of it: a descendant that specifies a property itself (`<b>`'s
+/// `font-weight`, `<em>`'s `font-style`, an inline `style="color:…"`) keeps its
+/// own value; only what it merely inherited comes from the pseudo-element.
+/// Replacing the whole style instead silently drops those inner declarations.
+///
+/// - `own` — the fragment's/segment's computed style (the descendant);
+/// - `base` — the originating element's style, which `own` inherited from;
+/// - `pseudo` — the `::first-line` / `::first-letter` style.
+///
+/// A property is taken from `pseudo` only when `own` still equals `base` for it,
+/// i.e. nothing in the inline chain specified it. Only the properties that apply
+/// to these pseudo-elements (§3.2 / §4.4) and are meaningful for a text run are
+/// merged — box-level ones (background, margins) are painted from the
+/// pseudo-element's own box, not from the fragment.
+///
+/// Approximation: a descendant that *re-declares* the originating element's own
+/// value (`color: blue` inside a `color: blue` block) is indistinguishable from
+/// plain inheritance here and loses to the pseudo-element.
+pub fn merge_pseudo_inherited(
+    own: &ComputedStyle,
+    base: &ComputedStyle,
+    pseudo: &ComputedStyle,
+) -> ComputedStyle {
+    let mut out = own.clone();
+    // `own == base` for a property ⇒ it was inherited ⇒ the pseudo-element
+    // supplies it. Split by `Copy`-ness: `clone()` on a `Copy` field would trip
+    // `clippy::clone_on_copy`.
+    macro_rules! take_copy {
+        ($($f:ident),+ $(,)?) => { $(if out.$f == base.$f { out.$f = pseudo.$f; })+ };
+    }
+    macro_rules! take_clone {
+        ($($f:ident),+ $(,)?) => { $(if out.$f == base.$f { out.$f = pseudo.$f.clone(); })+ };
+    }
+    take_copy!(
+        color,
+        color_space,
+        font_size,
+        line_height,
+        line_height_is_relative,
+        font_style,
+        font_weight,
+        font_variant_caps,
+        font_stretch,
+        font_optical_sizing,
+        font_size_adjust,
+        text_transform,
+        letter_spacing,
+        word_spacing,
+        text_decoration_line,
+        text_decoration_style,
+        text_decoration_thickness,
+        text_decoration_skip_ink,
+        text_emphasis_position,
+        vertical_align,
+    );
+    take_clone!(
+        font_family,
+        font_variation_settings,
+        font_feature_settings,
+        font_palette,
+        font_palette_resolved,
+        text_decoration_color,
+        text_emphasis_style,
+        text_emphasis_color,
+        text_shadow,
+    );
+    out
 }
 
 /// Вычисляет стиль для псевдоэлемента `::before` или `::after` элемента `node`.
@@ -11051,7 +11316,7 @@ fn apply_quirks_table_reset(doc: &Document, node: NodeId, style: &mut ComputedSt
     style.line_height = 1.2;
     style.font_family = Vec::new();
     style.font_style = FontStyle::Normal;
-    style.font_variant = FontVariant::Normal;
+    style.font_variant_caps = FontVariantCaps::Normal;
     style.font_weight = FontWeight::NORMAL;
     style.font_stretch = FontStretch::NORMAL;
     style.color = Color::BLACK;
@@ -14190,6 +14455,15 @@ fn apply_declaration(
                 style.direction = Direction::Rtl;
             }
         }
+        "unicode-bidi" => {
+            // CSS Writing Modes L4 §2.2. Legacy `-webkit-`/`-moz-` префиксы
+            // изолятов принимаются как алиасы — их до сих пор пишут в CSS
+            // локализованных страниц. Невалидное значение оставляет прежнее.
+            let v = val.trim();
+            if let Some(parsed) = match_unicode_bidi(v) {
+                style.unicode_bidi = parsed;
+            }
+        }
         "color" => {
             match parse_css_color_legacy(val, is_quirks) {
                 Some(CssColor::Rgba(c)) => {
@@ -14644,8 +14918,8 @@ fn apply_declaration(
             // явно заданные компоненты.
             if let Some(parts) = parse_font_shorthand(val) {
                 style.font_style = parts.style.unwrap_or(FontStyle::Normal);
-                style.font_variant =
-                    if parts.small_caps { FontVariant::SmallCaps } else { FontVariant::Normal };
+                style.font_variant_caps =
+                    if parts.small_caps { FontVariantCaps::SmallCaps } else { FontVariantCaps::Normal };
                 style.font_weight = parts
                     .weight
                     .as_deref()
@@ -14688,29 +14962,28 @@ fn apply_declaration(
                 _ => style.font_optical_sizing,
             };
         }
-        "font-variant" | "font-variant-caps" => {
-            // Phase 0: только normal | small-caps. Прочие keyword-ы
-            // (all-small-caps, petite-caps, …) и связанные субсвойства
-            // (font-variant-ligatures, -numeric, и т.д.) — отложены.
-            style.font_variant = match val.split_whitespace().next() {
-                Some("small-caps") => FontVariant::SmallCaps,
-                Some("normal") => FontVariant::Normal,
-                _ => style.font_variant,
-            };
+        "font-variant-caps" => {
+            // CSS Fonts L4 §6.2 — longhand: ровно один keyword.
+            if let Some(caps) = FontVariantCaps::from_keyword(val.trim()) {
+                style.font_variant_caps = caps;
+            }
+        }
+        "font-variant" => {
+            // CSS Fonts L4 §6.10 — shorthand над font-variant-{caps,ligatures,
+            // numeric,east-asian,position,alternates}. Реализована только
+            // caps-компонента, но сбросить её обязан любой валидный shorthand
+            // (CSS Cascade L4 §3.1): `font-variant: common-ligatures` должен
+            // вернуть caps в initial, а не оставить унаследованное small-caps.
+            // `none` (отключение лигатур) и любые нереализованные keyword-ы
+            // caps-компоненты не содержат — значит она в initial.
+            style.font_variant_caps = val
+                .split_whitespace()
+                .find_map(FontVariantCaps::from_keyword)
+                .unwrap_or(FontVariantCaps::Normal);
         }
         "font-stretch" => {
-            let token = val.split_whitespace().next().unwrap_or("");
-            if let Some(fs) = FontStretch::from_keyword(token) {
+            if let Some(fs) = FontStretch::parse(val) {
                 style.font_stretch = fs;
-            } else if let Some(pct) = token.strip_suffix('%')
-                && let Ok(n) = pct.trim().parse::<f32>()
-            {
-                // CSS Fonts L4 §2.5: percentage >= 0%. Out-of-range
-                // значения формально валидны, но бесполезны для рендеринга
-                // и могут переполнить u16 (max ≈ 6553%). Клампим в
-                // привычные [50%, 200%].
-                let clamped = n.clamp(50.0, 200.0);
-                style.font_stretch = FontStretch((clamped * 10.0).round() as u16);
             }
         }
         "text-indent" => {
@@ -16326,61 +16599,121 @@ fn apply_declaration(
         "view-timeline" => {
             apply_view_timeline_shorthand(style, val);
         }
-        "mask-image" => {
-            let trimmed = val.trim();
-            if trimmed.eq_ignore_ascii_case("none") {
-                style.mask_image = BackgroundImage::None;
-            } else if let Some(u) = parse_url_value(trimmed) {
-                style.mask_image = BackgroundImage::Url(u);
-            } else if is_gradient_function(trimmed) {
-                style.mask_image = BackgroundImage::Gradient(parse_background_gradient(trimmed));
+        "mask" => {
+            // CSS Masking L1 §4.8 shorthand: comma-separated list of layers.
+            // Each layer: <mask-reference> || <position> [/ <size>]? ||
+            //             <repeat-style> || <geometry-box> ||
+            //             [<geometry-box> | no-clip] || <compositing-operator> ||
+            //             <masking-mode>.
+            // Шортхенд всегда переписывает список целиком — свойства, не
+            // указанные в слое, сбрасываются к initial (per-layer default).
+            let layer_strs = split_top_level_commas(val.trim());
+            if layer_strs.is_empty() {
+                return;
             }
+            style.mask_layers = layer_strs
+                .iter()
+                .map(|ls| parse_single_mask_layer(ls.trim(), em_basis, viewport, is_quirks))
+                .collect();
+        }
+        "mask-image" => {
+            // CSS Masking L1 §4.1 — comma-separated list of images; задаёт
+            // количество слоёв. Прочие per-layer свойства переносятся из
+            // прежних слоёв циклически (как у `background-image`).
+            let pieces = split_top_level_commas(val.trim());
+            let old_layers = std::mem::take(&mut style.mask_layers);
+            style.mask_layers = pieces
+                .iter()
+                .enumerate()
+                .map(|(i, s)| {
+                    let s = s.trim();
+                    let image = if s.eq_ignore_ascii_case("none") {
+                        BackgroundImage::None
+                    } else if let Some(u) = parse_url_value(s) {
+                        BackgroundImage::Url(u)
+                    } else if is_gradient_function(s) {
+                        BackgroundImage::Gradient(parse_background_gradient(s))
+                    } else {
+                        BackgroundImage::None
+                    };
+                    let old = old_layers
+                        .get(i % old_layers.len().max(1))
+                        .cloned()
+                        .unwrap_or_default();
+                    MaskLayer { image, ..old }
+                })
+                .collect();
         }
         "mask-repeat" => {
-            if let Some(v) = BackgroundRepeat::parse(val) {
-                style.mask_repeat = v;
-            }
+            // CSS Masking L1 §4.3 — comma-separated list (cycling).
+            let values: Vec<BackgroundRepeat> = split_top_level_commas(val.trim())
+                .iter()
+                .filter_map(|s| BackgroundRepeat::parse(s.trim()))
+                .collect();
+            apply_mask_longhand(style, &values, |layer, v| layer.repeat = v);
         }
         "mask-mode" => {
-            // CSS Masking L1 §6.4. `match-source` resolves to `Alpha` for the
-            // `<image>` sources we support (gradients / raster URLs).
-            let trimmed = val.trim();
-            if trimmed.eq_ignore_ascii_case("luminance") {
-                style.mask_mode = MaskMode::Luminance;
-            } else if trimmed.eq_ignore_ascii_case("alpha")
-                || trimmed.eq_ignore_ascii_case("match-source")
-            {
-                style.mask_mode = MaskMode::Alpha;
-            }
+            // CSS Masking L1 §6.4 — comma-separated list (cycling).
+            // `match-source` resolves to `Alpha` for the `<image>` sources we
+            // support (gradients / raster URLs).
+            let values: Vec<MaskMode> = split_top_level_commas(val.trim())
+                .iter()
+                .filter_map(|s| {
+                    let s = s.trim();
+                    if s.eq_ignore_ascii_case("luminance") {
+                        Some(MaskMode::Luminance)
+                    } else if s.eq_ignore_ascii_case("alpha")
+                        || s.eq_ignore_ascii_case("match-source")
+                    {
+                        Some(MaskMode::Alpha)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            apply_mask_longhand(style, &values, |layer, v| layer.mode = v);
         }
         "mask-position" => {
-            // CSS Masking L1 §4.4 — `<position>` same as background-position.
-            if let Some(pos) = ObjectPosition::parse(val.trim(), em_basis, viewport) {
-                style.mask_position = pos;
-            }
+            // CSS Masking L1 §4.4 — `<position>#`, same grammar as
+            // background-position.
+            let values: Vec<ObjectPosition> = split_top_level_commas(val.trim())
+                .iter()
+                .filter_map(|s| ObjectPosition::parse(s.trim(), em_basis, viewport))
+                .collect();
+            apply_mask_longhand(style, &values, |layer, v| layer.position = v);
         }
         "mask-origin" => {
-            // CSS Masking L1 §4.5 — `border-box | padding-box | content-box`.
-            if let Some(o) = BackgroundOrigin::parse(val.trim()) {
-                style.mask_origin = o;
-            }
+            // CSS Masking L1 §4.5 — `<geometry-box>#`.
+            let values: Vec<BackgroundOrigin> = split_top_level_commas(val.trim())
+                .iter()
+                .filter_map(|s| BackgroundOrigin::parse(s.trim()))
+                .collect();
+            apply_mask_longhand(style, &values, |layer, v| layer.origin = v);
         }
         "mask-clip" => {
-            // CSS Masking L1 §4.6 — `<coord-box> | no-clip` (superset of
+            // CSS Masking L1 §4.6 — `[<coord-box> | no-clip]#` (superset of
             // background-clip: adds fill-box/stroke-box/view-box and no-clip).
-            if let Some(c) = MaskClip::parse(val.trim()) {
-                style.mask_clip = c;
-            }
+            let values: Vec<MaskClip> = split_top_level_commas(val.trim())
+                .iter()
+                .filter_map(|s| MaskClip::parse(s.trim()))
+                .collect();
+            apply_mask_longhand(style, &values, |layer, v| layer.clip = v);
         }
         "mask-composite" => {
-            // CSS Masking L1 §4.7 — `add | subtract | intersect | exclude`.
-            // Phase 0: store single value; multi-layer cycling deferred.
-            if let Some(c) = MaskComposite::parse(val.trim()) {
-                style.mask_composite = c;
-            }
+            // CSS Masking L1 §4.7 — `<compositing-operator>#`.
+            let values: Vec<MaskComposite> = split_top_level_commas(val.trim())
+                .iter()
+                .filter_map(|s| MaskComposite::parse(s.trim()))
+                .collect();
+            apply_mask_longhand(style, &values, |layer, v| layer.composite = v);
         }
         "mask-size" => {
-            style.mask_size = parse_background_size_value(val, em_basis, viewport, is_quirks);
+            // CSS Masking L1 §4.2 — `<bg-size>#`.
+            let values: Vec<BackgroundSize> = split_top_level_commas(val.trim())
+                .iter()
+                .map(|s| parse_background_size_value(s, em_basis, viewport, is_quirks))
+                .collect();
+            apply_mask_longhand(style, &values, |layer, v| layer.size = v);
         }
         "scrollbar-width" => {
             if let Some(v) = ScrollbarWidth::parse(val) {
@@ -17850,7 +18183,7 @@ fn apply_css_wide_keyword(
             style.font_weight = if inh { inherited.font_weight } else { init.font_weight };
         }
         "font-variant" | "font-variant-caps" => {
-            style.font_variant = if inh { inherited.font_variant } else { init.font_variant };
+            style.font_variant_caps = if inh { inherited.font_variant_caps } else { init.font_variant_caps };
         }
         "font-stretch" => {
             style.font_stretch = if inh { inherited.font_stretch } else { init.font_stretch };
@@ -17905,6 +18238,15 @@ fn apply_css_wide_keyword(
         }
         "direction" => {
             style.direction = if inh { inherited.direction } else { init.direction };
+        }
+        "unicode-bidi" => {
+            // Не наследуемое: голый `inherit` берёт родителя, `unset`/`initial`
+            // возвращают `normal`.
+            style.unicode_bidi = if inh_only_inherit {
+                inherited.unicode_bidi
+            } else {
+                init.unicode_bidi
+            };
         }
         "text-transform" => {
             style.text_transform = if inh { inherited.text_transform } else { init.text_transform };
@@ -19899,8 +20241,7 @@ fn is_gradient_function(s: &str) -> bool {
 
 /// CSS Images L4 §5 — is `s` an `image-set()` / `-webkit-image-set()` expression?
 fn is_image_set_value(s: &str) -> bool {
-    let v = s.trim().to_ascii_lowercase();
-    v.starts_with("image-set(") || v.starts_with("-webkit-image-set(")
+    crate::image_set::is_image_set(s)
 }
 
 /// CSS Paint API (Houdini) — parse `paint(name)` and extract the worklet name.
@@ -20371,6 +20712,191 @@ fn parse_single_bg_layer(
     }
 
     (layer, color)
+}
+
+/// CSS Masking L1 §4.9 — раскладывает значения одного mask-longhand-а по
+/// слоям [`ComputedStyle::mask_layers`] с циклическим повторением.
+///
+/// Количество слоёв задаёт `mask-image`. Если слоёв ещё нет (longhand объявлен
+/// без `mask-image` или раньше него в том же блоке), создаётся один слой с
+/// initial-значениями — иначе объявление молча потерялось бы; тот же приём, что
+/// у `background-*`. Пустой `values` (все элементы невалидны) — no-op:
+/// невалидное объявление не должно затирать уже применённое.
+fn apply_mask_longhand<T: Copy>(
+    style: &mut ComputedStyle,
+    values: &[T],
+    set: impl Fn(&mut MaskLayer, T),
+) {
+    if values.is_empty() {
+        return;
+    }
+    if style.mask_layers.is_empty() {
+        style.mask_layers.push(MaskLayer::default());
+    }
+    let n = values.len();
+    for (i, layer) in style.mask_layers.iter_mut().enumerate() {
+        set(layer, values[i % n]);
+    }
+}
+
+/// CSS Masking L1 §4.8 — разбирает один слой шортхенда `mask`.
+///
+/// Компоненты идут в любом порядке (`||` в грамматике), поэтому каждый токен
+/// классифицируется по своему множеству ключевых слов. Незаданные компоненты
+/// остаются initial-значениями [`MaskLayer::default`] — это и есть reset-часть
+/// семантики шортхенда.
+///
+/// `<geometry-box>` заполняет два независимых слота — origin и clip — а не
+/// «первое вхождение / второе вхождение» подряд: `no-clip` может занять слот
+/// clip только, поэтому `no-clip padding-box` даёт `origin: padding-box` +
+/// `clip: no-clip`, а не `clip: padding-box`. Одиночный `<geometry-box>`
+/// задаёт **оба** слота (§4.8, как у `background`); при двух — первый идёт в
+/// origin, второй в clip.
+///
+/// Ключевые слова `fill-box` / `stroke-box` / `view-box` в позиции origin
+/// схлопываются до `border-box`-семантики (`mask-origin` в нашей модели —
+/// [`BackgroundOrigin`] из трёх CSS-боксов), но в позиции clip сохраняются
+/// точно — это ровно та же аппроксимация, что и у longhand `mask-origin`.
+fn parse_single_mask_layer(
+    layer_str: &str,
+    em_basis: f32,
+    viewport: Size,
+    is_quirks: bool,
+) -> MaskLayer {
+    let mut layer = MaskLayer::default();
+    let tokens = tokenize_bg_layer(layer_str);
+    let n = tokens.len();
+    let mut idx = 0;
+    // Слоты origin / clip заполняются независимо: `no-clip` занимает только
+    // clip, поэтому счётчиком «первый / второй бокс» обойтись нельзя.
+    let mut origin_set = false;
+    let mut clip_set = false;
+
+    while idx < n {
+        let t = tokens[idx];
+
+        // <mask-reference>: none | url(...) | <gradient>
+        if t.eq_ignore_ascii_case("none") {
+            layer.image = BackgroundImage::None;
+            idx += 1;
+            continue;
+        }
+        if is_gradient_function(t) {
+            layer.image = BackgroundImage::Gradient(parse_background_gradient(t));
+            idx += 1;
+            continue;
+        }
+        if t.to_ascii_lowercase().starts_with("url(") {
+            if let Some(url) = parse_url_value(t) {
+                layer.image = BackgroundImage::Url(url);
+            }
+            idx += 1;
+            continue;
+        }
+
+        // <masking-mode> — до <repeat-style>/<geometry-box>, множества не
+        // пересекаются, порядок здесь только для читаемости.
+        if t.eq_ignore_ascii_case("luminance") {
+            layer.mode = MaskMode::Luminance;
+            idx += 1;
+            continue;
+        }
+        if t.eq_ignore_ascii_case("alpha") || t.eq_ignore_ascii_case("match-source") {
+            layer.mode = MaskMode::Alpha;
+            idx += 1;
+            continue;
+        }
+
+        // <compositing-operator>
+        if let Some(c) = MaskComposite::parse(t) {
+            layer.composite = c;
+            idx += 1;
+            continue;
+        }
+
+        // <repeat-style>
+        if let Some(r) = BackgroundRepeat::parse(t) {
+            layer.repeat = r;
+            idx += 1;
+            continue;
+        }
+
+        // <geometry-box> | no-clip
+        if let Some(c) = MaskClip::parse(t) {
+            if t.eq_ignore_ascii_case("no-clip") {
+                // `no-clip` валиден только как mask-clip — слот origin не трогаем.
+                layer.clip = c;
+                clip_set = true;
+            } else if !origin_set {
+                // Первый настоящий <geometry-box> идёт в origin и, пока clip не
+                // занят, дублируется в clip (одиночный бокс задаёт оба).
+                if let Some(o) = BackgroundOrigin::parse(t) {
+                    layer.origin = o;
+                }
+                origin_set = true;
+                if !clip_set {
+                    layer.clip = c;
+                }
+            } else if !clip_set {
+                layer.clip = c;
+                clip_set = true;
+            }
+            idx += 1;
+            continue;
+        }
+
+        // <position> [ / <bg-size> ]?
+        if t != "/" && is_bg_position_token(t) {
+            let mut pos_parts = vec![t];
+            if idx + 1 < n && tokens[idx + 1] != "/" && is_bg_position_token(tokens[idx + 1]) {
+                pos_parts.push(tokens[idx + 1]);
+                idx += 1;
+            }
+            if let Some(p) = ObjectPosition::parse(&pos_parts.join(" "), em_basis, viewport) {
+                layer.position = p;
+            }
+            idx += 1;
+
+            if idx < n && tokens[idx] == "/" {
+                idx += 1; // пропустить `/`
+                if idx < n {
+                    let mut size =
+                        parse_background_size_single(tokens[idx], em_basis, viewport, is_quirks);
+                    idx += 1;
+                    // Второй токен size (`<width> <height>`) — только если он не
+                    // начало следующей компоненты слоя.
+                    if idx < n
+                        && tokens[idx] != "/"
+                        && !is_gradient_function(tokens[idx])
+                        && BackgroundRepeat::parse(tokens[idx]).is_none()
+                        && MaskClip::parse(tokens[idx]).is_none()
+                        && MaskComposite::parse(tokens[idx]).is_none()
+                        && let Some(h) = parse_bg_size_axis(tokens[idx], em_basis, viewport, is_quirks)
+                    {
+                        match size {
+                            BackgroundSize::Length(w, BgSizeAxis::Auto) => {
+                                size = BackgroundSize::Length(w, h);
+                                idx += 1;
+                            }
+                            BackgroundSize::Auto => {
+                                if h != BgSizeAxis::Auto {
+                                    size = BackgroundSize::Length(BgSizeAxis::Auto, h);
+                                }
+                                idx += 1;
+                            }
+                            _ => {}
+                        }
+                    }
+                    layer.size = size;
+                }
+            }
+            continue;
+        }
+
+        idx += 1; // неизвестный токен — пропустить
+    }
+
+    layer
 }
 
 /// CSS Grid L1 §7.3 — parse `grid-template-areas` value.
@@ -29037,11 +29563,42 @@ mod tests {
     }
 
     #[test]
+    fn text_font_features_emits_titl_only_for_titling_caps() {
+        // Синтезируемые значения фич не дают: `c2sc` по уже поднятому в
+        // верхний регистр тексту уменьшил бы капитель второй раз.
+        let mut s = ComputedStyle::root();
+        for caps in [
+            FontVariantCaps::SmallCaps,
+            FontVariantCaps::AllSmallCaps,
+            FontVariantCaps::PetiteCaps,
+            FontVariantCaps::AllPetiteCaps,
+            FontVariantCaps::Unicase,
+            FontVariantCaps::Normal,
+        ] {
+            s.font_variant_caps = caps;
+            assert!(text_font_features(&s).is_empty(), "{}", caps.as_str());
+        }
+        s.font_variant_caps = FontVariantCaps::TitlingCaps;
+        assert_eq!(text_font_features(&s), vec![(*b"titl", 1)]);
+    }
+
+    #[test]
+    fn text_font_features_puts_feature_settings_last() {
+        // CSS Fonts L4 §6.4: font-feature-settings имеет высший приоритет,
+        // а шейпер применяет пары слева направо — значит автор может
+        // выключить фичу капители, и её запись обязана идти раньше.
+        let mut s = ComputedStyle::root();
+        s.font_variant_caps = FontVariantCaps::TitlingCaps;
+        s.font_feature_settings = vec![FontFeatureSetting { tag: *b"titl", value: 0 }];
+        assert_eq!(text_font_features(&s), vec![(*b"titl", 1), (*b"titl", 0)]);
+    }
+
+    #[test]
     fn font_shorthand_style_variant_weight() {
         let s = p_style_with_css("p { font: italic small-caps bold 20px Georgia; }");
         assert_eq!(s.font_size, 20.0);
         assert_eq!(s.font_style, FontStyle::Italic);
-        assert_eq!(s.font_variant, FontVariant::SmallCaps);
+        assert_eq!(s.font_variant_caps, FontVariantCaps::SmallCaps);
         assert_eq!(s.font_weight, FontWeight::BOLD);
         assert_eq!(s.font_family.first().map(String::as_str), Some("Georgia"));
     }

@@ -1,11 +1,3 @@
-CSS-SPECS.md:435
-CSS-SPECS.md:219
-CSS-SPECS.md:220
-CSS-SPECS.md:225
-CSS-SPECS.md:246
-CSS-SPECS.md:646
-CSS-SPECS.md:647
-CSS-SPECS.md:567
 CSS-SPECS.md:483
 CSS-SPECS.md:293
 CSS-SPECS.md:463
@@ -21,14 +13,13 @@ CSS-SPECS.md:590
 CSS-SPECS.md:593
 CSS-SPECS.md:704
 CSS-SPECS.md:393
-CSS-SPECS.md:558
 CSS-SPECS.md:507
 CSS-SPECS.md:492
 CSS-SPECS.md:654
 CSS-SPECS.md:661
 CSS-SPECS.md:609
 CSS-SPECS.md:613
-crates/engine/paint/src/display_list.rs:5050
+crates/engine/paint/src/display_list.rs:5087
 crates/engine/layout/src/box_tree.rs:758
 crates/engine/layout/src/lib.rs:1325
 CSS-SPECS.md:382
@@ -36,3 +27,4 @@ CSS-SPECS.md:375
 CSS-SPECS.md:305
 CSS-SPECS.md:345
 CSS-SPECS.md:209
+crates/engine/paint/src/display_list.rs:5207

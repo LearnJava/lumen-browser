@@ -15,8 +15,12 @@
 //! (`DrawSvgPath`), rectangular clipping (`PushClipRect` / `PopClip` +
 //! `PushScrollLayer` / `PopScrollLayer`, i.e. `overflow: hidden/scroll/auto`),
 //! the `<img>` grey placeholder quad (`DrawImage` — the headless CPU path
-//! registers no decoded pixels, so every image box paints the solid
-//! placeholder, matching the GPU renderer's fallback), and text (`DrawText` —
+//! fetches no subresources, so every image box paints the solid placeholder,
+//! matching the GPU renderer's fallback; BUG-430), Canvas 2D bitmaps
+//! (`DrawImage { src: "canvas:{nid}" }` — since BUG-429 the session runs the
+//! page's inline scripts before layout and hands the drained canvas buffers to
+//! the rasterizer, so `57-canvas-2d` captures real `fillRect`/`arc`/path output
+//! instead of a blank frame), and text (`DrawText` —
 //! glyphs of the bundled Inter Regular face rasterized via `lumen_font::
 //! Rasterizer` and composited through a coverage `Mask`; page
 //! `55-text-rendering`), group opacity (`PushOpacity` / `PopOpacity` —
@@ -169,6 +173,17 @@ const PAGES: &[&str] = &[
     "58-first-letter-line",
     // б-22: CSS Images L4 §5/§4 — image-set() + cross-fade()
     "59-image-set-cross-fade",
+    // б-23: CSS Writing Modes L4 §2.2 + UAX #9 — unicode-bidi × direction.
+    // A text page, kept here on purpose: the RTL half of the feature (fragment
+    // reordering + reversed glyph order) is otherwise gated only by the Edge
+    // pixel pipeline, which needs a focused desktop and is flake-prone. The CPU
+    // path renders the same display list deterministically.
+    "151-unicode-bidi",
+    // б-24: CSS Box Alignment L3 §5 + CSS Grid L1 §12.3 — align-content /
+    // justify-content / place-content distributing a grid container's free space.
+    // Pure FillRect geometry, so the CPU path reproduces it exactly; the whole
+    // feature is track *positioning*, which a solid-colour snapshot pins precisely.
+    "152-grid-place-content",
     // Interaction layer (series 100+): pairwise property combinations whose unit
     // tests already pass individually. A regression here with green unit pages
     // points at the interaction (clip-of-transformed-layer, stacking-context
@@ -217,6 +232,11 @@ const PAGES: &[&str] = &[
     // #3), so this deterministic CPU snapshot — not run.py's Edge pipeline — is the
     // regression gate for the baseline-shift wiring.
     "128-baseline-shift",
+    // CSS Fonts L4 §6.2 — font-variant-caps: the whole value set on one text.
+    // The capitals are synthesized in layout (`caps_synthesis`), so the visible
+    // effect is glyph case + size, which diverges from Edge (rule #3); this
+    // deterministic CPU snapshot is the regression gate for the synthesis.
+    "150-font-variant-caps",
     // Kitchen-sink final page: ~80 objects combining every implemented property.
     // Manual-only in the Edge pipeline (no run.py entry); here it serves as a
     // broad regression baseline for the CPU path.

@@ -12,7 +12,7 @@
 use crate::box_tree::{BoxKind, InlineFrag, InlineSegment, LayoutBox};
 use crate::style::{
     BorderStyle, BoxSizing, Color, ComputedStyle, CssColor, Cursor, Direction, Display,
-    FontStretch, FontStyle, FontVariant, FontWeight, Length, LengthOrAuto, OutlineColor, Position,
+    FontStretch, FontStyle, FontVariantCaps, FontWeight, Length, LengthOrAuto, OutlineColor, Position,
     OutlineStyle, Overflow, TextAlign, TextOverflow, TextTransform, Visibility, WhiteSpace,
 };
 
@@ -336,8 +336,8 @@ fn write_text_style_attrs(out: &mut String, s: &ComputedStyle) {
     if s.font_weight != FontWeight::NORMAL {
         let _ = write!(out, " font-weight={}", s.font_weight.0);
     }
-    if s.font_variant == FontVariant::SmallCaps {
-        let _ = write!(out, " font-variant=small-caps");
+    if s.font_variant_caps != FontVariantCaps::Normal {
+        let _ = write!(out, " font-variant={}", s.font_variant_caps.as_str());
     }
     if s.font_stretch != FontStretch::NORMAL {
         let whole = s.font_stretch.0 / 10;

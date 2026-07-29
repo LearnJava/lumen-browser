@@ -1,83 +1,57 @@
-# BUG-422 — Потеря GPU-устройства убивает процесс: у `frame.present()` нет пути восстановления (в отличие от acquire)
+# BUG-422 — `#view-history`/`#view-bookmarks` не поддерживают ни одного действия над записями
 
 **Статус:** OPEN
-**Компонент:** paint (`crates/engine/paint/src/renderer.rs:8803-8805` — `frame.present()`;
-обработка есть только у acquire — `backends/wgpu_backend.rs:24-40`
-`surface_error_to_render_error`)
-**Найден:** 2026-07-28 (P2), WPT-VENDOR-html-canvas — дважды за прогон среза
+**Компонент:** chrome (`assets/chrome/chrome.html` `#view-history`,
+`#view-bookmarks`), shell (`crates/shell/src/panels/history_panel.rs`,
+`panels/bookmark_panel.rs`, `dispatch_chrome_action`)
+**Найден:** P1, CC-15-6 (2026-07-28), при удалении легаси-хит-тестов панелей
 
 ## Симптом
 
-```
-thread 'main' (21396) panicked at wgpu-26.0.1\src\backend\wgpu_core.rs:3591:38:
-Error in Surface::present: Validation Error
-Caused by:
-  Parent device is lost
-```
+Легаси-оверлеи истории и закладок были интерактивными: `HistoryHit`
+(`Navigate(url)` · `Delete(id)` · `ClearAll` · `FocusSearch` · `Close`) и
+`BookmarkHit` (`Bookmark(id)` · `DeleteBookmark(id)` · `SelectFolder(folder)` ·
+`FocusSearch` · `Close`) плюс drag-and-drop перекладывания закладки в папку
+(`begin_drag` → `finish_bookmark_drop` → `Bookmarks::set_folder`).
 
-и следом со стороны раннера — `navigate: live window closed before replying`, то есть
-процесс `lumen.exe` исчез целиком: окно, все вкладки, BiDi-сессия. wptrunner поднял
-новый браузер и продолжил.
+В движковых представлениях действий над записями нет вовсе: грep `data-action`
+внутри `#view-history` даёт пустой список, внутри `#view-bookmarks` — только
+`archive-card` и `set-settings-section` (навигационные, к записям не относятся).
+То есть под дефолтным хромом:
 
-## Причина: асимметрия обработки ошибок поверхности
+* по записи истории/закладке нельзя перейти кликом;
+* нельзя удалить запись истории или закладку, нельзя очистить историю целиком;
+* нельзя отфильтровать закладки по папке и нельзя перенести закладку в папку;
+* поиск внутри панелей всё ещё работает — но только с клавиатуры
+  (`append_search`/`backspace_search` привязаны к key-обработчику, не к клику по
+  полю).
 
-Ошибку **получения** кадра движок обрабатывает штатно и полно:
+Состояние панелей (`entries`, `folders`, `selected_folder`, `search`,
+`scroll_y`) живо и читается `chrome_model_snapshot` — потеряны именно действия.
 
-```rust
-// crates/engine/paint/src/backends/wgpu_backend.rs:30-38
-wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Timeout => …
-wgpu::SurfaceError::OutOfMemory => …
-wgpu::SurfaceError::Other => …
-```
+Регрессия флипа CC-14 (не CC-15-6): легаси-панели перестали рисоваться уже
+тогда, CC-15-4 удалила их покраску, CC-15-6 — хит-тесты, `bookmark_anchor`,
+`history_panel_anchor`, `finish_bookmark_drop` и всю drag-механику
+(`BookmarkPanel::{drag, begin_drag, take_drag}`).
 
-`renderer.rs:7703` пробрасывает её через `?` (`surface.get_current_texture()?`).
-Но **предъявление** кадра ошибки не возвращает вовсе:
+## Что нужно сделать
 
-```rust
-// crates/engine/paint/src/renderer.rs:8803-8805
-if let Some(frame) = windowed_frame {
-    frame.present();          // -> () ; wgpu паникует внутри при потерянном device
-}
-```
+1. Разметить строки истории/закладок в `assets/chrome/chrome.html`
+   (`data-action="open-history-entry"`/`"delete-history-entry"`/
+   `"clear-history"`/`"open-bookmark"`/`"delete-bookmark"`/`"select-folder"`)
+   с идентификатором записи в `data-*`, регенерировать через
+   `scripts/gen_chrome_assets.py`.
+2. Обработать новые `ChromeAction`-варианты в `dispatch_chrome_action`, читая id
+   из атрибута (тем же приёмом, что `data-dl-id` у `#downloadsPanel` и
+   `data-tab-id` у вкладок).
+3. Drag-and-drop перекладывания закладки — отдельно и позже: в движковом хроме
+   нет источника перетаскивания, потребуется pointer-механика поверх DOM хрома.
 
-`wgpu::SurfaceTexture::present` имеет тип `-> ()`: любая валидационная ошибка внутри
-превращается в панику библиотеки, обойти её вызывающим кодом нельзя. Значит, единственный
-корректный вариант — не доводить до неё: реагировать на потерю устройства заранее.
-А реакции нет ни одной: во всём `crates/engine/paint` нет ни колбэка потери устройства,
-ни пересоздания `Device`/`Surface`,
-ни `on_uncaptured_error` (он есть ровно один — в `webgpu_compute.rs:136`, у
-вычислительного пути WebGPU, не у оконного рендера).
+## Связанные
 
-Устройство теряется не только «само»: TDR драйвера (Windows перезапускает GPU через
-2 с зависания), выход из сна, смена/отключение внешнего монитора, обновление драйвера —
-штатные события на пользовательской машине. Каждое из них по этому коду означает не
-чёрный кадр, а гибель процесса со всеми вкладками — тот же класс, что
-[BUG-418](BUG-418-OPEN.md) (паника в неразматываемом месте) и
-[BUG-407](BUG-407-OPEN.md).
-
-## Как измерялось (и оговорка)
-
-Два случая на ~620 прогнанных id среза `html/canvas`, ближайшие к падению
-`TEST_START` — `element/canvas-host/2d.canvas.host.size.attributes.parse.decimal.html`
-и `element/fill-and-stroke-styles/2d.pattern.image.broken.html`. Ни одна из этих
-страниц ничего экстремального не делает (`<canvas width="100.999">`; паттерн из битой
-картинки), и на 3189 id категории те же тесты дальше не падали — **привязки к
-содержимому страницы нет**, воспроизвести по конкретному id не удалось.
-
-Честная оговорка о помехе измерению: одновременно с прогоном в этой же сессии
-запускались отдельные процессы `lumen.exe` (`--dump-layout`/`--screenshot`-пробы), то
-есть на GPU в моменты падений приходилось несколько одновременных wgpu-устройств.
-Возможно, именно это спровоцировало саму потерю устройства. Что **не** зависит от
-этой оговорки и проверяется чтением кода: потеря устройства обработки не имеет вовсе,
-и любой её источник (TDR, сон, драйвер) даёт гибель процесса.
-
-## Направление починки
-
-1. Подписаться на потерю устройства (`DeviceDescriptor`/`device.set_device_lost_callback`
-   в wgpu 26) и на этом сигнале помечать рендерер невалидным до `present`.
-2. Перед `present` проверять флаг; при потере — пересоздать `Device`+`Surface`
-   (уже есть путь пересоздания поверхности при ресайзе) и перерисовать кадр,
-   а не предъявлять его.
-3. Крайняя мера того же ранга, что для [BUG-418](BUG-418-OPEN.md): падение рендера
-   не должно убивать процесс — отдельный ADR о деградации до CPU-растеризации
-   (`cpu_raster`, уже есть) вместо `abort`.
+* [BUG-408](BUG-408-OPEN.md) — панель архива вкладок, тот же класс (доступ к
+  функции потерян полностью).
+* [BUG-420](BUG-420-OPEN.md), [BUG-421](BUG-421-OPEN.md) — соседние находки того
+  же среза: печать и настройки.
+* CC-9 (`docs/tasks/p1-css-chrome.md`) — срез, где `#view-history`/
+  `#view-bookmarks` получили отображение списков, но не действия над ними.

@@ -128,6 +128,10 @@ ROADMAP.md (one line per task, status ≠ done)   ← master task list for P1/P2
    └─ docs/tasks/<id>.md   ← detailed brief, ONLY for an unimplemented task
 ```
 
+- **The order inside `STATUS-PN.md` is binding — work it strictly top-down.** It is a dependency
+  order, not a wish list: a lower line is frequently the symptom of a higher one, so picking a task
+  out of order produces a fix layered on a live defect. Take line 1; if it cannot be started, tell
+  the user why and ask — never silently skip to line 2.
 - **A task file exists only while the task is unimplemented.** A done task is just a `done` line
   in `ROADMAP.md` — no STATUS line, no task file.
 - **`STATUS-PN.md` holds only `<source>:NN` pointer lines** — `<source>` ∈ {ROADMAP.md, BUGS.md,
