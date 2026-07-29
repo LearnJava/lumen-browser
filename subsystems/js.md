@@ -18,6 +18,16 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
 
 ## Done
 
+- **`dom.rs` test monolith, mock-provider families ([P1] P3-v8-s12b-24-ws-sse, 2026-07-29).**
+  WebSocket (incl. mock session + binary mode), EventSource/SSE, fetch bindings and IME +
+  bfcache — 73 tests — now in `dom.rs::tests::v8_ws_sse`; QuickJS copies deleted. **Non-obvious:**
+  the mock provider structs (`JsWebSocketProvider`/`JsSseProvider` impls) port verbatim — they
+  implement `lumen_core::ext` traits and never name an engine type — and `V8JsRuntime::install_dom`
+  takes the providers at the same argument positions as the QuickJS one, so only the
+  `runtime_with_*` constructors change. `_lumen_pump_websockets`/`_lumen_pump_sse` deliver queued
+  events under V8 unchanged. Green 73/73 with untouched bodies; the three OPEN EventSource/Worker
+  bugs (BUG-362/363/364) are engine-agnostic shim gaps this suite doesn't cover on *either*
+  engine — "73/73 green" is not a spec-conformance claim.
 - **`dom.rs` test monolith, first porting slice ([P1] P3-v8-s12b-24-core, 2026-07-29).** The
   "Core DOM basics" family (console/SVG/wrapper identity/`self`&`window`, Canvas 2D,
   `getElementById`/`querySelector`/attributes/`textContent`/`Image`, `alert`/`print`, timers +
