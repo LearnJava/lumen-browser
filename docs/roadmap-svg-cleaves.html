@@ -57,12 +57,12 @@
 {
  "generated": "2026-07-29",
  "counts": {
-  "open": 126,
+  "open": 127,
   "fixed": 288,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 414,
+ "total_bugs": 415,
  "phases": [
   {
    "id": "P0",
@@ -7143,6 +7143,13 @@
    "component": "js (`crates/js/src/dom.rs` — own-свойство `checked` в `_lumen_build_element`), shell (`forms.rs` — сбор формы и покраска читают атрибут)",
    "date": null,
    "debtor": false
+  },
+  "BUG-445": {
+   "status": "open",
+   "title": "Шесть flex-снапшотов `lumen-layout --test all` (`flex_row_equal_children`, `flex_row_explicit_basis`, `flex_column_children`, `flex_column_gap`, `flex_gap_with_…",
+   "component": "layout (`crates/engine/layout/tests/snapshots/flex_*.txt`) + гейт `scripts/scoped-test.sh`",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -7411,6 +7418,9 @@
   ],
   "layout (`crates/engine/layout/src/style.rs`, `FONT_CH_EX` thread-local)": [
    "BUG-339"
+  ],
+  "layout (`crates/engine/layout/tests/snapshots/flex_*.txt`) + гейт `scripts/scoped-test.sh`": [
+   "BUG-445"
   ],
   "layout (`style.rs` cascade, `rule_index.rs`)": [
    "BUG-284"
