@@ -202,12 +202,33 @@ fn module_text(specifier: &str, source: &str, ty: &DeclaredType) -> Result<Strin
     }
 }
 
+/// Module-map key for `specifier` imported as `ty`.
+///
+/// The ECMAScript module map is keyed by *(specifier, type)*, not by specifier
+/// alone: the same URL imported plainly and `with { type: 'json' }` yields two
+/// different modules (a JS module and a synthetic JSON one). Keeping them apart
+/// costs one suffix; sharing one entry would hand the second importer whichever
+/// form happened to compile first.
+fn cache_key(specifier: &str, ty: &DeclaredType) -> String {
+    match ty {
+        // NUL can't appear in a URL or a bare specifier, so the suffix cannot
+        // collide with a real specifier.
+        DeclaredType::Json => format!("{specifier}\u{0}json"),
+        _ => specifier.to_owned(),
+    }
+}
+
 /// Compile `text` as an ES module named `specifier` and remember it in the
-/// module map, so a second import of the same specifier reuses the instance.
+/// module map under `key`, so a second import of the same specifier+type
+/// reuses the instance.
+///
+/// `specifier` (not `key`) is what gets recorded for the module's identity
+/// hash: it is the base URL relative imports from this module resolve against.
 ///
 /// Returns `None` with a pending exception on the scope when compilation fails.
 fn compile<'s>(
     scope: &v8::PinScope<'s, '_>,
+    key: &str,
     specifier: &str,
     text: &str,
 ) -> Option<v8::Local<'s, v8::Module>> {
@@ -231,7 +252,7 @@ fn compile<'s>(
     let hash = module.get_identity_hash().get();
     let global = v8::Global::new(scope, module);
     with_state(|s| {
-        s.modules.insert(specifier.to_owned(), global);
+        s.modules.insert(key.to_owned(), global);
         s.specifier_by_hash.insert(hash, specifier.to_owned());
     });
     Some(module)
@@ -244,7 +265,8 @@ fn module_for<'s>(
     specifier: &str,
     ty: &DeclaredType,
 ) -> Option<v8::Local<'s, v8::Module>> {
-    if let Some(existing) = with_state(|s| s.modules.get(specifier).cloned()) {
+    let key = cache_key(specifier, ty);
+    if let Some(existing) = with_state(|s| s.modules.get(&key).cloned()) {
         return Some(v8::Local::new(scope, existing));
     }
     let Some(source) = with_state(|s| s.sources.get(specifier).cloned()) else {
@@ -252,7 +274,7 @@ fn module_for<'s>(
         return None;
     };
     match module_text(specifier, &source, ty) {
-        Ok(text) => compile(scope, specifier, &text),
+        Ok(text) => compile(scope, &key, specifier, &text),
         Err(msg) => {
             throw(scope, &msg);
             None
@@ -399,7 +421,7 @@ pub(crate) fn evaluate_entry_module(
     });
     let text = transform_import_meta(source, &meta_url).unwrap_or_else(|| source.to_owned());
 
-    let module = compile(scope, &specifier, &text).ok_or(())?;
+    let module = compile(scope, &specifier, &specifier, &text).ok_or(())?;
     if module.instantiate_module(scope, resolve_module_callback).is_none() {
         return Err(());
     }
@@ -583,6 +605,26 @@ mod tests {
         rt.register_module_source("styles", "body { color: red; }");
         let result = rt.eval_module("import s from 'styles' with { type: 'css' };");
         assert!(result.is_err(), "unsupported attribute type must fail the import");
+    }
+
+    #[test]
+    fn v8_same_specifier_as_json_and_js_are_distinct_modules() {
+        // The module map is keyed by (specifier, type): the same source
+        // imported plainly and `with { type: 'json' }` must not collapse into
+        // whichever form compiled first.
+        let rt = rt();
+        rt.register_module_source("both", r#"{ "v": 3 }"#);
+        // As JSON: a synthetic default export.
+        rt.eval_module("import d from 'both' with { type: 'json' }; globalThis.__j = d.v;")
+            .unwrap();
+        assert_eq!(rt.eval("globalThis.__j").unwrap(), JsValue::Number(3.0));
+        // As JS the very same text is a bare object literal — a valid module
+        // body with no exports, so importing a binding from it must fail
+        // rather than silently reuse the cached JSON module.
+        assert!(
+            rt.eval_module("import { v } from 'both'; globalThis.__k = v;").is_err(),
+            "plain import must not reuse the JSON module's exports"
+        );
     }
 
     #[test]
