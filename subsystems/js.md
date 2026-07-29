@@ -625,6 +625,19 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
   **synchronously** (`document.activeElement` must be current on the next statement) while the shell is
   told through the pre-existing `_lumen_request_focus`/`_lumen_request_blur` queue and applies it on its
   next pump.
+- **IDL attribute reflection, form-control collections and activation (HTML LS §2.6.1/§4.10, BUG-383,
+  2026-07-29).** Reflection is one declarative table `{idl, content-attr, kind, default}` plus one
+  generic accessor pair per kind (`string`/`bool`/`long`/`ulong`/`url`/`enum`), installed by
+  `_lumen_install_reflection` onto the **interface prototypes** — adding an attribute is a table row,
+  and the properties cost nothing per element. `url`-kind getters resolve through
+  `_lumen_document_base_url()` (first `<base href>` resolved against the page URL, else the page URL)
+  over the pre-existing `_url_resolve`. Non-reflection half: `HTMLFormControlsCollection` /
+  `HTMLOptionsCollection` over `_lumen_make_nid_collection` (extracted from
+  `_lumen_make_html_collection`), the `form`/`labels`/`label.control` association graph,
+  `select`/`option` APIs, the text-selection API, and `HTMLElement.prototype.click()` with the full
+  activation sequence. `form.reset()` runs entirely in the document; `form.submit()`/`requestSubmit()`
+  queue `NavigateRequest::SubmitForm`, which the shell answers with `Lumen::run_form_submission` — the
+  same code path a real submit-button press takes.
 
 ## Deferred
 
@@ -786,6 +799,17 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
 - DOM shim: `parentElement` and `children` are defined with `enumerable: false` via `Object.defineProperty`. Prevents `from_rq`'s `obj.props()` loop from serializing these cyclic getters → infinite recursion / stack overflow.
 - DOM shim: `Option<T>` in rquickjs maps `None → undefined` (not `null`). All nullable-returning native functions are wrapped with `_lumen_u2n(v)` in the shim to convert `undefined → null` as Web API requires.
 - **DOM shim: the same `Option<T>` maps to `null` on the V8 bindings, not `undefined` (BUG-442).** `_lumen_u2n`-wrapped reads are therefore engine-agnostic, but the shim's other idiom — testing attribute *presence* with a bare `_lumen_get_attr(...) !== undefined` — is true for every name on the default engine. Use `_lumen_has_attr(nid, name)` (`dom.rs`, added with BUG-381) for presence; never compare a native's result with `undefined` directly.
+- **DOM shim: a shim-level `function` name shadows the same-named Rust native for the whole page.** Both
+  live as ordinary properties of the global object, and the shim's own top-level `function` declarations
+  are installed after the natives, so a helper called `_lumen_set_selection` silently replaced the native
+  that drives `window.getSelection()` (caught by `selection_collapse_to_start` while adding BUG-383; the
+  helper is now `_lumen_set_text_selection`). Grep the native registrations before naming a new
+  `_lumen_*` helper.
+- **DOM shim: reflected IDL attributes live on the interface prototypes, current `value`/`checked` do
+  not.** `_lumen_build_element` still owns `value` and `checked` because they are *state* seeded by a
+  content attribute (HTML LS §4.10.5.5 dirty-value flag), and an own property shadows the prototype —
+  so adding a `value`/`checked` row to the reflection table would be dead code. Everything else belongs
+  in the table (`_LUMEN_*` entries near `_lumen_install_reflection`), never as a new own property.
 - **DOM shim: `_lumen_dispatch_rich` runs the document-level listeners even for a non-bubbling event.** It stops the ancestor walk on `!event.bubbles` but not the document hop afterwards, so a non-bubbling event dispatched through it still reaches `document.addEventListener(type, …)`. The focus family (BUG-381) needed its own dispatcher for exactly this reason; anything else adding a non-bubbling shell-driven event must not reuse `_lumen_dispatch_rich` as-is.
 - **DOM shim: the shell tracks focus by layout box, whose node may be a text node.** Anything exposing `focused_node` to the page must normalise through `_lumen_nearest_element_nid` first — the spec-level focus surface only ever names elements.
 - `install_dom` must be called before `eval`. Drop the runtime before `Arc::try_unwrap(doc_arc)` — closures hold Arc clones until the runtime is dropped.

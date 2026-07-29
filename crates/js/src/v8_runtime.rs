@@ -2020,6 +2020,14 @@ impl V8JsRuntime {
         reg!("_lumen_reload", move || {
             *nav.lock().unwrap() = Some(NavigateRequest::Reload);
         });
+
+        // BUG-383: `form.submit()` / `form.requestSubmit()`. The shell owns
+        // encoding and the navigation, so the page only hands over the node
+        // ids; `submitter` is -1 when the form was submitted with no control.
+        let nav = Arc::clone(&nav_out);
+        reg!("_lumen_request_form_submit", move |form: u32, submitter: i32| {
+            *nav.lock().unwrap() = Some(NavigateRequest::SubmitForm { form, submitter });
+        });
     }
 
     // ── Fetch API ─────────────────────────────────────────────────────────────

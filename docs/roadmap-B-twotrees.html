@@ -76,11 +76,11 @@
  "generated": "2026-07-29",
  "counts": {
   "open": 127,
-  "fixed": 286,
+  "fixed": 287,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 413,
+ "total_bugs": 414,
  "phases": [
   {
    "id": "P0",
@@ -6698,10 +6698,10 @@
    "debtor": false
   },
   "BUG-383": {
-   "status": "open",
-   "title": "IDL-рефлексия HTML-атрибутов почти отсутствует, а с ней и методы активации. `undefined`: `a.href`, `input.disabled/readOnly/required/maxLength/placeholder/patte…",
-   "component": "js (`crates/js/src/dom.rs` — фабрика живых элементов `_lumen_make_element`: набор рефлектируемых свойств подобран вручную)",
-   "date": null,
+   "status": "fixed",
+   "title": "IDL-рефлексия HTML-атрибутов почти отсутствовала, а с ней и методы активации: `a.href`, `input.disabled/readOnly/required/maxLength/placeholder`, `select.select…",
+   "component": "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`: таблица рефлексии + прототипы интерфейсов), shell (`main.rs::run_form_submission`, `forms.rs::enctype_of_form`)",
+   "date": "2026-07-29",
    "debtor": false
   },
   "BUG-384": {
@@ -7116,6 +7116,13 @@
    "component": "shell (`crates/shell/src/main.rs::parse_and_layout` — порядок фаз `parse → CSS → run_scripts_with_dom → images → layout`; `notify_dom_content_loaded` на `main.rs:5466`), js (`crates/js/src/dom.rs` — нативы читают снимок и не умеют его запросить)",
    "date": null,
    "debtor": false
+  },
+  "BUG-444": {
+   "status": "open",
+   "title": "**У checkedness нет хранилища, отдельного от content-атрибута `checked`.** HTML LS §4.10.5.5 различает текущее состояние и значение по умолчанию (`defaultChecke…",
+   "component": "js (`crates/js/src/dom.rs` — own-свойство `checked` в `_lumen_build_element`), shell (`forms.rs` — сбор формы и покраска читают атрибут)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -7250,6 +7257,9 @@
   ],
   "js (`crates/js/src/dom.rs` — live-DOM `Element` object literal)": [
    "BUG-351"
+  ],
+  "js (`crates/js/src/dom.rs` — own-свойство `checked` в `_lumen_build_element`), shell (`forms.rs` — сбор формы и покраска читают атрибут)": [
+   "BUG-444"
   ],
   "js (`crates/js/src/dom.rs`, `contentEditable`/`isContentEditable`)": [
    "BUG-344"
