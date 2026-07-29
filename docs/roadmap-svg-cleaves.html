@@ -57,12 +57,12 @@
 {
  "generated": "2026-07-29",
  "counts": {
-  "open": 123,
-  "fixed": 282,
+  "open": 127,
+  "fixed": 283,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 405,
+ "total_bugs": 410,
  "phases": [
   {
    "id": "P0",
@@ -7042,6 +7042,41 @@
    "component": "shell/paint (цепочка не установлена)",
    "date": null,
    "debtor": false
+  },
+  "BUG-436": {
+   "status": "open",
+   "title": "**Инструмент `type` не записывает значение в поле.** Возвращает `{\"success\":true,\"text\":\"abc\"}`, но `input.value` остаётся `\"\"`; при этом событие `input` диспат…",
+   "component": "driver/MCP (`BrowserSession::type`, live-window)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-437": {
+   "status": "fixed",
+   "title": "**Клик по `<button type=submit>` не запускал обработчики страницы: шелл отправлял форму нативно, минуя JS.** Заявка «`click` не доставляет DOM-событие `click`»…",
+   "component": "shell (`main.rs::handle_click_at`, ветка `FormClickAction::SubmitForm`), js (`dom.rs` — `WEB_API_SHIM`)",
+   "date": "2026-07-29",
+   "debtor": false
+  },
+  "BUG-438": {
+   "status": "open",
+   "title": "**`navigate` на `data:`-URL молча не загружает страницу.** `navigate` и последующий `wait document_ready` оба возвращают успех, но в окне остаётся предыдущий до…",
+   "component": "driver/MCP (`BrowserSession::navigate`, live-window) / шелл-навигация по `data:`",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-439": {
+   "status": "open",
+   "title": "**Activation behavior не реализовано: клик, синтезированный в JS, не отправляет форму.** `btn.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:tr…",
+   "component": "js (`dom.rs` — `_lumen_dispatch_rich` / живой `dispatchEvent`), shell (активация целиком в `handle_click_at`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-440": {
+   "status": "open",
+   "title": "**На `file://` нативная GET-отправка формы строит непригодный путь.** `method=get action=\"target.html\"` с полем `q=hello` даёт `NAV → \"D:/…/.tmp\\target.html?q=h…",
+   "component": "shell (`main.rs` — `ResourceBase::resolve`/`resolve_str` для `ResourceBase::File`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -7086,6 +7121,12 @@
   "driver (`session.rs::run_pipeline` / `screenshot_cpu_rgba`)": [
    "BUG-429",
    "BUG-430"
+  ],
+  "driver/MCP (`BrowserSession::navigate`, live-window) / шелл-навигация по `data:`": [
+   "BUG-438"
+  ],
+  "driver/MCP (`BrowserSession::type`, live-window)": [
+   "BUG-436"
   ],
   "driver/shell (`WinitSession::scroll`, `navigate_fragment`)": [
    "BUG-338"
@@ -7188,6 +7229,9 @@
   ],
   "js (`dom.rs` shim, `v8_runtime.rs`, `selector_query.rs`)": [
    "BUG-298"
+  ],
+  "js (`dom.rs` — `_lumen_dispatch_rich` / живой `dispatchEvent`), shell (активация целиком в `handle_click_at`)": [
+   "BUG-439"
   ],
   "js (live DOM bindings)": [
    "BUG-279"
@@ -7518,8 +7562,14 @@
   "shell (`chrome_model_snapshot`, `panels/shields_panel.rs`, `panels/permission_panel.rs`), chrome (`ChromeModel::permissions`, `assets/chrome/chrome.html` `#permPopover`)": [
    "BUG-411"
   ],
+  "shell (`main.rs::handle_click_at`, ветка `FormClickAction::SubmitForm`), js (`dom.rs` — `WEB_API_SHIM`)": [
+   "BUG-437"
+  ],
   "shell (`main.rs::render_source_to_png`) + js (`flush_canvas_updates`)": [
    "BUG-428"
+  ],
+  "shell (`main.rs` — `ResourceBase::resolve`/`resolve_str` для `ResourceBase::File`)": [
+   "BUG-440"
   ],
   "shell (`main.rs` — дренаж `window.open()` popup-запросов + `location.href`)": [
    "BUG-293"
