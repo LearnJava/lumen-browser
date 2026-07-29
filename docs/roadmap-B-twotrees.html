@@ -73,14 +73,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-07-29",
+ "generated": "2026-07-30",
  "counts": {
-  "open": 125,
-  "fixed": 292,
+  "open": 134,
+  "fixed": 293,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 417,
+ "total_bugs": 427,
  "phases": [
   {
    "id": "P0",
@@ -2495,9 +2495,21 @@
       {
        "id": "WPT-VENDOR-html-canvas",
        "title": "WPT: прогнать срез `html/canvas`",
-       "status": "planned",
+       "status": "done",
        "size": "L",
-       "note": "Скоуп: ⬜ (кандидат). Срез категории `html`, вынесен из `WPT-VENDOR-html` 2026-07-28 (полный прогон категории — 40+ часов, не помещается в сессию). 3308 `testharness`-id (5 `testdriver`), крупнейший подкаталог. Дерево уже вендорено строкой `WPT-VENDOR-html`. Внимание: `canvas.getContext('2d')` на дефолтном V8 сломан целиком (BUG-348), поэтому до его починки прогон почти наверняка даст стену одинаковых FAIL с одной первопричиной — сначала оценить смысл прогона"
+       "note": "DONE 2026-07-29: прогнаны оба подкаталога. `element` — **1155/1243 harness OK, 486/2764 сабтестов** (23 мин); из 88 не-OK 84 приходятся на `manual/`, где `.https.`-файлы упираются в порт-гэп, вне `manual/` не-OK всего ~8. `offscreen` — **1033/1046 harness OK, 59/1265 сабтестов** (7 мин). Исходная посылка строки («getContext('2d') сломан целиком, будет стена одинаковых FAIL») **снята**: BUG-348 починен, категория исполняется штатно и даёт настоящий сигнал. Классы отказов `element` по числу файлов: неверный цвет пикселя 228 (из них 56 — серия `2d.fillStyle.parse.*` → BUG-451, остальное качество растеризации: `2d.text.draw` 26, `2d.path.arc` 15, тени 26), отсутствующий член контекста 51 (BUG-449, крупнейший — `roundRect` 20 файлов), не бросается требуемое исключение 39, `isPointInPath` 19, поля `TextMetrics` 16 (3 из 12), computed-style 15 (**BUG-382**, чужой), размеры холста 12 (BUG-452), нет глобального интерфейса 10 (BUG-449). У `offscreen` картина другая и однородная: ~200 файлов падают `Cannot read properties of undefined` на `getImageData(...).data` — BUG-456. Заведено 9 багов (BUG-448…456); BUG-407 закрыт как более не воспроизводящийся. Перед прогоном перепроверены находки прежней сессии: BUG-419 оказался наполовину починен попутно с BUG-348, шесть остальных перенумерованы из BUG-419…424 (номера были заняты чужими багами за 136 коммитов отставания ветки). Крупнейшая новая находка — BUG-448 (`getImageData` игнорирует все четыре аргумента), она же обесценила прежнее доказательство по цвету. Отчёты: `.tmp/wpt-canvas-element.html`, `.tmp/wpt-canvas-offscreen.html` (не коммитятся)",
+       "bugs": [
+        "BUG-407",
+        "BUG-448",
+        "BUG-449",
+        "BUG-450",
+        "BUG-451",
+        "BUG-452",
+        "BUG-453",
+        "BUG-454",
+        "BUG-455",
+        "BUG-456"
+       ]
       },
       {
        "id": "WPT-VENDOR-html-semantics",
@@ -6926,6 +6938,13 @@
    "date": null,
    "debtor": false
   },
+  "BUG-407": {
+   "status": "fixed",
+   "title": "Canvas 2D: `NaN`-координата в пути (например `quadraticCurveTo(NaN, ...)`) роняет весь процесс `lumen.exe` — `xs.sort_unstable_by(\\",
+   "component": "paint (`crates/engine/canvas/src/rasterize.rs::fill_path`)",
+   "date": "2026-07-29",
+   "debtor": false
+  },
   "BUG-408": {
    "status": "open",
    "title": "Панель авто-архива вкладок (7A.5) недостижима под движковым хромом: авто-архивация через 12 ч простоя работает и вкладка исчезает из полосы, но кнопка-переключа…",
@@ -7204,6 +7223,69 @@
    "title": "**На движке по умолчанию (V8) `drawImage(imgElement, …)` молча не рисовал ничего.** Пиксели `<img>`-источника Canvas 2D читает из потоко-локального реестра `img…",
    "component": "js (`crates/js/src/v8_runtime.rs` — не было `V8JsRuntime::register_img_bitmaps`), shell (`crates/shell/src/main.rs` — `impl PersistentJs for V8PersistentJs` не переопределял `register_img_bitmaps`)",
    "date": "2026-07-29",
+   "debtor": false
+  },
+  "BUG-448": {
+   "status": "open",
+   "title": "**`getImageData(sx, sy, sw, sh)` игнорирует все четыре аргумента и всегда возвращает весь холст.** Шим объявлен с сигнатурой спеки, но параметры читаются только…",
+   "component": "js (`crates/js/src/dom.rs:5224-5235` — шим `getImageData`; натив `crates/js/src/canvas2d.rs:1003` `_lumen_canvas2d_get_image_data(nid)`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-449": {
+   "status": "open",
+   "title": "Ни один интерфейс Canvas 2D не существует как глобальный объект: из 14 требуемых HTML LS §4.12.5 есть три (`HTMLCanvasElement`, `Path2D`, `OffscreenCanvas`), а…",
+   "component": "js (`crates/js/src/dom.rs` — `getContext` в фабрике обёрток, `_lumen_make_canvas2d_ctx`; `crates/js/src/canvas2d.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-450": {
+   "status": "open",
+   "title": "Члены `HTMLCanvasElement` (`getContext`/`toDataURL`/`toBlob`/`transferControlToOffscreen`/`width`/`height`) установлены на **каждом** элементе DOM: `'getContext…",
+   "component": "js (`crates/js/src/dom.rs` — фабрика обёрток `_lumen_build_element` ставит canvas-члены безусловно, а не по тегу)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-451": {
+   "status": "open",
+   "title": "Canvas 2D разбирает цвет собственным парсером на 60 строк: поддержаны `#rrggbb`/`#rgb`/`rgb(r,g,b)`/`rgba(...)`/именованные — и всё. **`hsl()`/`hsla()` не подде…",
+   "component": "canvas (`crates/engine/canvas/src/color.rs:23-83` — `CanvasColor::from_css_str`), js (`crates/js/src/dom.rs` — геттер `fillStyle`/`strokeStyle`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-452": {
+   "status": "open",
+   "title": "`<canvas width=\"0\">` даёт 300×150: `parseInt('0',10)",
+   "component": "js (`crates/js/src/dom.rs` — `_lumen_canvas_dims`; геттеры `width`/`height`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-453": {
+   "status": "open",
+   "title": "Потеря GPU-устройства убивает процесс целиком: `frame.present()` ничего не возвращает, и wgpu паникует внутри (`Error in Surface::present: Validation Error / Pa…",
+   "component": "paint (`crates/engine/paint/src/renderer.rs:9214` — `frame.present()`; обработка есть только у acquire — `backends/wgpu_backend.rs::surface_error_to_render_error`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-454": {
+   "status": "open",
+   "title": "Анти-fingerprint у canvas закрывает один канал чтения пикселей из двух: `toDataURL`/`toBlob` заглушены на всех путях создания элемента, а `getImageData` не загл…",
+   "component": "js (`crates/js/src/dom.rs` — `toDataURL` фабрики; `crates/js/src/webgl_canvas.rs:492-500` — резервная заглушка), privacy",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-455": {
+   "status": "open",
+   "title": "**`ctx.restore()` не восстанавливает ни одного JS-видимого атрибута контекста** — проверены все 15 (`fillStyle`, `strokeStyle`, `lineWidth`, `lineCap`, `lineJoi…",
+   "component": "js (`crates/js/src/dom.rs` — `save`/`restore` уходят в натив, а `fillStyle`/`font`/`lineWidth`/… живут отдельными полями JS-обёртки)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-456": {
+   "status": "open",
+   "title": "Контекст `OffscreenCanvas.getContext('2d')` — **отдельная, втрое более бедная реализация**, чем у элементного canvas: 16 членов против 59. Нет `rect`/`roundRect…",
+   "component": "js (`crates/js/src/offscreen_canvas.rs` — литерал `this._2d_context`, `getImageData` на `:767`)",
+   "date": null,
    "debtor": false
   }
  },
