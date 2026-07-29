@@ -1163,11 +1163,11 @@ fn fit_with_ratio(iw: f32, ih: f32, bw: f32, bh: f32, cover: bool) -> (f32, f32)
 /// digits, punctuation, whitespace) paints as one rotated block so kerning
 /// and ligatures inside a Latin word stay intact. Produced by
 /// [`split_mixed_runs`]; consumed by the CPU rasterizer
-/// (`cpu_raster::rasterize_text_mixed`) and the wgpu renderer
-/// (`renderer::push_text_glyphs_mixed`) — both backends that actually rotate
-/// glyphs (femtovg still ignores `text_orientation` entirely, out of scope
-/// per `docs/tasks/ph3-writing-mode-vertical.md`).
-#[cfg(any(feature = "backend-wgpu", feature = "cpu-render"))]
+/// (`cpu_raster::rasterize_text_mixed`), the wgpu renderer
+/// (`renderer::push_text_glyphs_mixed`) and the femtovg backend
+/// (`femtovg_backend::FemtovgBackend::draw_text_mixed`) — every backend
+/// rotates glyphs, so the CJK/Latin split rule lives here once.
+#[cfg(any(feature = "backend-wgpu", feature = "cpu-render", feature = "backend-femtovg"))]
 pub(crate) enum MixedSegment {
     /// A single CJK ideograph, rendered upright.
     Cjk(char),
@@ -1177,7 +1177,7 @@ pub(crate) enum MixedSegment {
 
 /// Splits `text` into [`MixedSegment`]s for `text-orientation: mixed` paint —
 /// see that type's docs for the CJK/Latin split rule.
-#[cfg(any(feature = "backend-wgpu", feature = "cpu-render"))]
+#[cfg(any(feature = "backend-wgpu", feature = "cpu-render", feature = "backend-femtovg"))]
 pub(crate) fn split_mixed_runs(text: &str) -> Vec<MixedSegment> {
     let mut out = Vec::new();
     let mut buf = String::new();
@@ -9220,7 +9220,7 @@ mod tests {
     }
 
     // ── Ph3 writing-mode vertical, Срез 3: `text-orientation: mixed` split ──
-    #[cfg(any(feature = "backend-wgpu", feature = "cpu-render"))]
+    #[cfg(any(feature = "backend-wgpu", feature = "cpu-render", feature = "backend-femtovg"))]
     #[test]
     fn split_mixed_runs_groups_consecutive_non_cjk_and_isolates_cjk() {
         let segs = split_mixed_runs("Hi日本Bye");
@@ -9242,7 +9242,7 @@ mod tests {
         );
     }
 
-    #[cfg(any(feature = "backend-wgpu", feature = "cpu-render"))]
+    #[cfg(any(feature = "backend-wgpu", feature = "cpu-render", feature = "backend-femtovg"))]
     #[test]
     fn split_mixed_runs_pure_latin_is_one_segment() {
         let segs = split_mixed_runs("Hello, world!");
@@ -9250,7 +9250,7 @@ mod tests {
         assert!(matches!(&segs[0], MixedSegment::Other(s) if s == "Hello, world!"));
     }
 
-    #[cfg(any(feature = "backend-wgpu", feature = "cpu-render"))]
+    #[cfg(any(feature = "backend-wgpu", feature = "cpu-render", feature = "backend-femtovg"))]
     #[test]
     fn split_mixed_runs_empty_text_is_empty() {
         assert!(split_mixed_runs("").is_empty());

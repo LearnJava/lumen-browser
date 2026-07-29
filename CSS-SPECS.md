@@ -642,8 +642,8 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | Property | Status | Notes |
 |----------|--------|-------|
 | `direction` | 🟡 | ltr/rtl; fragment mirroring ✅; UBA ⬜ |
-| `writing-mode` | ✅ | vertical-rl/lr axis-swap layout + vertical inline flow; glyph rotation on CPU+wgpu (femtovg fallback ⬜) |
-| `text-orientation` | 🟡 | parsed; mixed/upright/sideways glyph rotation ✅ on CPU+wgpu (per-glyph CJK-upright/Latin-rotated split for `mixed`, Срезы 1–3), femtovg ⬜ |
+| `writing-mode` | ✅ | vertical-rl/lr axis-swap layout + vertical inline flow; glyph rotation on all three backends (CPU, wgpu, femtovg) |
+| `text-orientation` | ✅ | mixed/upright/sideways glyph rotation on all three backends (per-glyph CJK-upright/Latin-rotated split for `mixed`, Срезы 1–3 + femtovg-срез); `upright`'s per-glyph (vs per-word) vertical advance → BUG-290 |
 | `unicode-bidi` | 🟡 | parsed; full bidi ⬜ |
 
 ### [T4] Shapes & Motion Path

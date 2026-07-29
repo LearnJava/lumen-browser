@@ -104,7 +104,9 @@ ROADMAP помечает PARTIAL «дошить Phase 2 vertical inline flow». 
   геометрическая проверка формулы поворота без реального GPU-рендера.
 - femtovg (fallback-бэкенд) по-прежнему игнорирует `text_orientation` —
   не в скоупе (см. `## Срезы` выше, Срез 2 приоритезирован на wgpu как
-  live default).
+  live default). **Закрыто позже отдельным P4-срезом** (`femtovg-срез`,
+  см. DoD ниже): `rotate_cw_transform` + `draw_text_mixed` в
+  `femtovg_backend.rs` дают ту же геометрию, что CPU и wgpu.
 
 **Остаток:** Срез 3 (mixed/upright различение), Срез 4 (BUG-264 реордер,
 опц.), Срез 5 (graphic-тест) — не начаты.
@@ -201,7 +203,8 @@ BUG-100/TEST-58) + `upright` per-word vs per-glyph advance. `mixed`/`upright`/
 ## Definition of done
 
 - [x] Глифы реально повёрнуты/upright в CPU-рендерере (срез 1)
-- [x] Глифы реально повёрнуты/upright в wgpu-рендерере — live default бэкенд, ADR-017 (срез 2; femtovg fallback остаётся ⬜, вне скоупа)
+- [x] Глифы реально повёрнуты/upright в wgpu-рендерере — live default бэкенд, ADR-017 (срез 2)
+- [x] Глифы реально повёрнуты в femtovg-бэкенде (femtovg-срез, P4): `rotate_cw_transform` (канвасный `Transform2D`, тот же маппинг `(x,y) → (-y+dest.x, x+dest.y)`, что у CPU/wgpu) + `draw_text_mixed` на общем `split_mixed_runs`
 - [x] `mixed`/`upright`/`sideways` дают разный визуальный результат (срез 3)
 - [x] BUG-264 (layout-часть) закрыт, `#[allow(items_after_test_module)]` снят (срез 4)
 - [x] `cargo clippy -p lumen-paint --all-targets -- -D warnings` и `-p lumen-layout` чистые
