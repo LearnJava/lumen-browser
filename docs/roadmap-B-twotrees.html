@@ -76,11 +76,11 @@
  "generated": "2026-07-29",
  "counts": {
   "open": 127,
-  "fixed": 285,
+  "fixed": 286,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 412,
+ "total_bugs": 413,
  "phases": [
   {
    "id": "P0",
@@ -6691,10 +6691,10 @@
    "debtor": false
   },
   "BUG-382": {
-   "status": "open",
-   "title": "`getComputedStyle()` отдаёт пустую строку для КАЖДОГО свойства, а `getBoundingClientRect()` — нулевой прямоугольник, примерно в трёх загрузках из четырёх: выкла…",
-   "component": "shell (`crates/shell/src/main.rs:10321-10337`, `main.rs:11067-11071` — единственные точки, где `collect_layout_rects`/`collect_computed_styles` доезжают до JS, обе внутри пути relayout), js (`crates/js/src/dom.rs:2498`, `dom.rs:12607`)",
-   "date": null,
+   "status": "fixed",
+   "title": "`getComputedStyle()` отдавал пустую строку для каждого свойства, а `getBoundingClientRect()` — нулевой прямоугольник, примерно в трёх загрузках из четырёх. **Фи…",
+   "component": "shell (`crates/shell/src/main.rs::apply_loaded_page` — путь первой загрузки), driver (`crates/driver/src/session.rs::run_pipeline`), layout (`crates/engine/layout/src/lib.rs` — оба сборщика снимка)",
+   "date": "2026-07-29",
    "debtor": false
   },
   "BUG-383": {
@@ -7107,6 +7107,13 @@
    "status": "open",
    "title": "**На дефолтном движке отсутствующий атрибут читается как `null`, а шим сравнивает с `undefined`** — проверка «атрибут присутствует» истинна всегда. Проба на `V8…",
    "component": "js (`crates/js/src/v8_runtime.rs:1306` — натив `_lumen_get_attr` отдаёт `Option<String>`, и биндинги V8 отображают `None → null`; шим `crates/js/src/dom.rs` в 15 местах проверяет наличие атрибута как `_lumen_get_attr(...) !== undefined`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-443": {
+   "status": "open",
+   "title": "Код, исполняющийся **во время разбора** — инлайновый `<script>` и обработчик `DOMContentLoaded`, — по-прежнему видит `\"\"` от `getComputedStyle()` и нулевой прям…",
+   "component": "shell (`crates/shell/src/main.rs::parse_and_layout` — порядок фаз `parse → CSS → run_scripts_with_dom → images → layout`; `notify_dom_content_loaded` на `main.rs:5466`), js (`crates/js/src/dom.rs` — нативы читают снимок и не умеют его запросить)",
    "date": null,
    "debtor": false
   }
@@ -7596,6 +7603,9 @@
   ],
   "shell (`chrome_model_snapshot`, `panels/shields_panel.rs`, `panels/permission_panel.rs`), chrome (`ChromeModel::permissions`, `assets/chrome/chrome.html` `#permPopover`)": [
    "BUG-411"
+  ],
+  "shell (`crates/shell/src/main.rs::parse_and_layout` — порядок фаз `parse → CSS → run_scripts_with_dom → images → layout`; `notify_dom_content_loaded` на `main.rs:5466`), js (`crates/js/src/dom.rs` — нативы читают снимок и не умеют его запросить)": [
+   "BUG-443"
   ],
   "shell (`main.rs::handle_click_at`, ветка `FormClickAction::SubmitForm`), js (`dom.rs` — `WEB_API_SHIM`)": [
    "BUG-437"
