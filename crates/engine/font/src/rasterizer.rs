@@ -63,10 +63,21 @@ impl Rasterizer {
         let scale = self.scale();
         let pad = 1.0_f32;
 
-        let x_min = (glyph.bbox.x_min as f32 * scale - pad).floor() as i32;
-        let y_min = (glyph.bbox.y_min as f32 * scale - pad).floor() as i32;
-        let x_max = (glyph.bbox.x_max as f32 * scale + pad).ceil() as i32;
-        let y_max = (glyph.bbox.y_max as f32 * scale + pad).ceil() as i32;
+        // BUG-423: заголовочный bbox бывает вывернутым (`x_max < x_min`) —
+        // такой встречается у composite-глифов реальных шрифтов. Раньше это
+        // давало отрицательную ширину и `None`, то есть букву без чернил при
+        // верном advance. Считаем бокс по точкам: для квадратичных Безье он
+        // надмножество истинного, обрезать глиф не может.
+        let bbox = if glyph.bbox.is_inverted() {
+            crate::glyf::bbox_from_contours(contours)?
+        } else {
+            glyph.bbox
+        };
+
+        let x_min = (bbox.x_min as f32 * scale - pad).floor() as i32;
+        let y_min = (bbox.y_min as f32 * scale - pad).floor() as i32;
+        let x_max = (bbox.x_max as f32 * scale + pad).ceil() as i32;
+        let y_max = (bbox.y_max as f32 * scale + pad).ceil() as i32;
         // BUG-283: a corrupt/inverted glyph bbox (x_max < x_min or y_max <
         // y_min) makes `x_max - x_min` negative; casting that straight to
         // `u32` wraps it near `u32::MAX` and the pixel buffer allocation
@@ -417,11 +428,16 @@ mod tests {
         assert!(coverage_at(&bm, 9, 9) > 240);
     }
 
-    /// BUG-283: инвертированный bbox (x_max < x_min) раньше заворачивал
-    /// `width` в число, близкое к `u32::MAX`, и валил процесс на
-    /// `vec![0u8; width * height]`. Должен просто вернуть `None`.
+    /// BUG-283: инвертированный bbox (x_max < x_min) заворачивал `width` в
+    /// число, близкое к `u32::MAX`, и валил процесс на
+    /// `vec![0u8; width * height]`.
+    ///
+    /// BUG-423 уточнил ответ: вместо `None` (буква молча пропадала со
+    /// страницы) бокс пересчитывается по точкам контура. Защита от
+    /// переполнения сохранена — пересчитанный бокс ограничен координатами
+    /// точек, а `MAX_GLYPH_DIM` по-прежнему режет экстремальные случаи.
     #[test]
-    fn inverted_bbox_returns_none_instead_of_crashing() {
+    fn inverted_bbox_falls_back_to_bbox_from_points() {
         let glyph = Glyph {
             bbox: BoundingBox {
                 x_min: 100,
@@ -433,12 +449,16 @@ mod tests {
                 points: vec![pt(0, 0, true), pt(100, 0, true), pt(50, 100, true)],
             }]),
         };
-        assert!(Rasterizer::new(100.0, 100).rasterize(&glyph).is_none());
+        let bm = Rasterizer::new(100.0, 100).rasterize(&glyph).expect("bbox по точкам");
+        // Тот же размер, что у честного bbox (0,0)-(100,100) — см.
+        // `rasterize_filled_triangle`.
+        assert_eq!((bm.width, bm.height), (102, 102));
+        assert!(coverage_at(&bm, 51, 60) > 200, "центр треугольника залит");
     }
 
     /// Тот же класс бага по оси Y (y_max < y_min).
     #[test]
-    fn inverted_bbox_y_axis_returns_none() {
+    fn inverted_bbox_y_axis_falls_back_to_bbox_from_points() {
         let glyph = Glyph {
             bbox: BoundingBox {
                 x_min: 0,
@@ -450,7 +470,9 @@ mod tests {
                 points: vec![pt(0, 0, true), pt(100, 0, true), pt(50, 100, true)],
             }]),
         };
-        assert!(Rasterizer::new(100.0, 100).rasterize(&glyph).is_none());
+        let bm = Rasterizer::new(100.0, 100).rasterize(&glyph).expect("bbox по точкам");
+        assert_eq!((bm.width, bm.height), (102, 102));
+        assert!(coverage_at(&bm, 51, 60) > 200, "центр треугольника залит");
     }
 
     /// Корректный, но экстремальный bbox/pixel_size не должен запрашивать

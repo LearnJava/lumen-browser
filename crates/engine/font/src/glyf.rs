@@ -29,6 +29,50 @@ pub struct BoundingBox {
     pub y_max: i16,
 }
 
+impl BoundingBox {
+    /// `true`, если бокс вывернут: правый край левее левого либо верхний ниже
+    /// нижнего. Такой bbox нельзя использовать как размер битмапа — у
+    /// растеризатора он даёт отрицательную ширину/высоту.
+    ///
+    /// Встречается в реальных шрифтах в заголовке **composite**-глифа: по
+    /// спеке поле обязано быть корректным, но сабсеттеры/сборщики его туда
+    /// пишут не всегда (BUG-423: «YS Text Home» с ya.ru хранит у кириллических
+    /// композитов сдвинутую четвёрку `advance, xMin, yMin, xMax`).
+    #[must_use]
+    pub fn is_inverted(&self) -> bool {
+        self.x_max < self.x_min || self.y_max < self.y_min
+    }
+}
+
+/// Bounding box по точкам контуров — `None`, если точек нет.
+///
+/// Для квадратичных Безье коробка по контрольным точкам является
+/// **надмножеством** истинной коробки кривой (кривая лежит в выпуклой
+/// оболочке своих контрольных точек), поэтому глиф от такого бокса никогда
+/// не обрезается — в худшем случае битмап получает лишний прозрачный край.
+///
+/// Нужна там, где заголовочному bbox доверять нельзя: у развёрнутого
+/// composite-глифа (bbox parent-а описывает не собранный результат) и у
+/// битого заголовка (см. [`BoundingBox::is_inverted`]).
+#[must_use]
+pub fn bbox_from_contours(contours: &[Contour]) -> Option<BoundingBox> {
+    let mut points = contours.iter().flat_map(|c| c.points.iter());
+    let first = points.next()?;
+    let mut bbox = BoundingBox {
+        x_min: first.x,
+        y_min: first.y,
+        x_max: first.x,
+        y_max: first.y,
+    };
+    for p in points {
+        bbox.x_min = bbox.x_min.min(p.x);
+        bbox.y_min = bbox.y_min.min(p.y);
+        bbox.x_max = bbox.x_max.max(p.x);
+        bbox.y_max = bbox.y_max.max(p.y);
+    }
+    Some(bbox)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OutlinePoint {
     pub x: i16,
@@ -308,6 +352,40 @@ impl<'a> Glyf<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn contour(points: &[(i16, i16)]) -> Contour {
+        Contour {
+            points: points
+                .iter()
+                .map(|&(x, y)| OutlinePoint { x, y, on_curve: true })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn bbox_from_contours_spans_all_points_of_all_contours() {
+        let cs = vec![contour(&[(10, 20), (30, -5)]), contour(&[(-7, 40), (25, 12)])];
+        assert_eq!(
+            bbox_from_contours(&cs),
+            Some(BoundingBox { x_min: -7, y_min: -5, x_max: 30, y_max: 40 })
+        );
+    }
+
+    #[test]
+    fn bbox_from_contours_without_points_is_none() {
+        assert_eq!(bbox_from_contours(&[]), None);
+        assert_eq!(bbox_from_contours(&[contour(&[])]), None);
+    }
+
+    #[test]
+    fn is_inverted_detects_both_axes() {
+        let ok = BoundingBox { x_min: 0, y_min: 0, x_max: 10, y_max: 10 };
+        assert!(!ok.is_inverted());
+        // Вырожденный (нулевая ширина), но не вывернутый — рисуемый случай.
+        assert!(!BoundingBox { x_min: 5, y_min: 0, x_max: 5, y_max: 10 }.is_inverted());
+        assert!(BoundingBox { x_min: 10, y_min: 0, x_max: 0, y_max: 10 }.is_inverted());
+        assert!(BoundingBox { x_min: 0, y_min: 10, x_max: 10, y_max: 0 }.is_inverted());
+    }
 
     /// Строит байты простого треугольного глифа (3 точки, все on-curve, 2-байтовые координаты).
     /// Точки: (0, 0), (100, 0), (50, 100).
