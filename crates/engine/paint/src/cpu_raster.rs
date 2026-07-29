@@ -437,15 +437,21 @@ pub(crate) fn rasterize_cpu(
                 }
             }
             // CSS Images L4 §4 — cross-fade(a, b, p): the two images are stretched
-            // to fill `dest` and alpha-blended (`a` at `1−p`, `b` at `p`). Mirrors
-            // the femtovg backend's `DrawCrossFade` arm. Missing sources are skipped.
+            // to fill `dest` and mixed as `(1−p)·a + p·b`. Both are opaque layers
+            // of the *same* result, so `a` is laid down at full alpha and `b`
+            // composited over it at `p` — source-over then yields exactly that
+            // mix for opaque sources. Drawing `a` at `1−p` instead (BUG-101)
+            // squared its weight and let the backdrop bleed through: the result
+            // became `p·b + (1−p)²·a + p(1−p)·backdrop`, i.e. washed out and
+            // darkened by whatever was underneath. Mirrors the wgpu shader's
+            // `mix(a, b, t)`. Missing sources are skipped.
             DisplayCommand::DrawCrossFade { dest, src_a, src_b, progress } => {
                 let b = rect_bounds(dest);
                 let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), b);
                 let layer = layers.last_mut().expect("base layer");
                 let p = progress.clamp(0.0, 1.0);
                 if let Some(img) = image_map.get(src_a.as_str()) {
-                    blit_image_into_rect(&mut layer.pm, *dest, *dest, img, 1.0 - p, c)?;
+                    blit_image_into_rect(&mut layer.pm, *dest, *dest, img, 1.0, c)?;
                     layer.mark(b);
                 }
                 if let Some(img) = image_map.get(src_b.as_str()) {
@@ -4669,6 +4675,37 @@ mod tests {
         let img1 = rasterize_cpu(64, 64, &mk(1.0), &images, 0.0, 0.0).expect("rasterize");
         let (r, g, b, _) = px(&img1, 30, 30);
         assert!(g > 230 && r < 25 && b < 25, "p=1 → green, got ({r},{g},{b})");
+    }
+
+    /// BUG-101: середина — единственная точка, где виден дефект композита, и
+    /// именно её `draw_cross_fade_respects_progress` не проверял: на p=0 и p=1
+    /// «`a` с альфой `1−p`» случайно совпадает с верным результатом.
+    ///
+    /// `cross-fade(red, green, 50%)` обязан дать ровно половину каждого цвета
+    /// при непрозрачном результате. Старый порядок (`a` при `1−p`, затем `b`
+    /// при `p`) давал `p·b + (1−p)²·a + p(1−p)·фон` = зелёный перевес (≈85,170,0)
+    /// и дыру в альфе, сквозь которую просвечивал фон.
+    #[test]
+    fn draw_cross_fade_midpoint_is_even_mix() {
+        let images = vec![
+            ("a.png".to_string(), std::sync::Arc::new(solid_2x2([255, 0, 0, 255]))),
+            ("b.png".to_string(), std::sync::Arc::new(solid_2x2([0, 255, 0, 255]))),
+        ];
+        let dl = vec![DisplayCommand::DrawCrossFade {
+            dest: rect(10.0, 10.0, 40.0, 40.0),
+            src_a: "a.png".to_string(),
+            src_b: "b.png".to_string(),
+            progress: 0.5,
+        }];
+        let img = rasterize_cpu(64, 64, &dl, &images, 0.0, 0.0).expect("rasterize");
+        let (r, g, b, a) = px(&img, 30, 30);
+        assert_eq!(a, 255, "результат cross-fade непрозрачен, got alpha {a}");
+        assert!(b < 10, "синего в смеси красного с зелёным нет, got ({r},{g},{b})");
+        let delta = i32::from(r) - i32::from(g);
+        assert!(
+            delta.abs() <= 8,
+            "p=0.5 → равные доли красного и зелёного, got ({r},{g},{b})"
+        );
     }
 }
 

@@ -15154,7 +15154,7 @@ mod tests {
             "<body><div></div></body>",
             "div { width: 50px; height: 50px; background-image: url(bg.png); }",
         );
-        let urls = collect_background_image_requests(&root);
+        let urls = collect_background_image_requests(&root, 1.0);
         assert_eq!(urls, vec!["bg.png".to_string()]);
     }
 
@@ -15165,7 +15165,7 @@ mod tests {
             "<body><div></div></body>",
             "div { width: 50px; height: 50px; background-image: none; }",
         );
-        assert!(collect_background_image_requests(&root).is_empty());
+        assert!(collect_background_image_requests(&root, 1.0).is_empty());
     }
 
     /// Gradient-вариант не учитывается (Phase 0 не растрит).
@@ -15176,7 +15176,7 @@ mod tests {
             "div { width: 50px; height: 50px; \
              background-image: linear-gradient(red, blue); }",
         );
-        assert!(collect_background_image_requests(&root).is_empty());
+        assert!(collect_background_image_requests(&root, 1.0).is_empty());
     }
 
     /// Дубликаты URL фильтруются.
@@ -15186,7 +15186,7 @@ mod tests {
             "<body><div></div><div></div><div></div></body>",
             "div { width: 10px; height: 10px; background-image: url(same.png); }",
         );
-        let urls = collect_background_image_requests(&root);
+        let urls = collect_background_image_requests(&root, 1.0);
         assert_eq!(urls.len(), 1, "three divs same URL → один запрос, got {urls:?}");
         assert_eq!(urls[0], "same.png");
     }
@@ -15199,10 +15199,97 @@ mod tests {
             ".a { width: 10px; height: 10px; background-image: url(a.png); } \
              .b { width: 10px; height: 10px; background-image: url(b.png); }",
         );
-        let urls = collect_background_image_requests(&root);
+        let urls = collect_background_image_requests(&root, 1.0);
         assert_eq!(urls.len(), 2);
         assert!(urls.contains(&"a.png".to_string()));
         assert!(urls.contains(&"b.png".to_string()));
+    }
+
+    // ── BUG-101: image-set() / cross-fade() как источники запросов ────────────
+
+    /// BUG-101: `image-set()` хранится в слое дословно, а эмиттер кладёт в
+    /// `DrawBackgroundImage.src` уже выбранного кандидата. Коллектор обязан
+    /// вернуть тот же URL, иначе shell качает текст функции как имя файла
+    /// (os error 123) и картинка не рисуется.
+    #[test]
+    fn collect_bg_image_resolves_image_set_candidate() {
+        let root = layout_with(
+            "<body><div></div></body>",
+            "div { width: 50px; height: 50px; background-image: \
+             image-set(url(one.png) 1x, url(two.png) 2x); }",
+        );
+        let urls = collect_background_image_requests(&root, 1.0);
+        assert_eq!(urls, vec!["one.png".to_string()], "DPR 1 → 1x-кандидат, got {urls:?}");
+    }
+
+    /// Тот же слой при DPR 2 даёт 2x-кандидата — коллектор и эмиттер должны
+    /// разрешать `image-set()` по одному и тому же DPR.
+    #[test]
+    fn collect_bg_image_image_set_follows_dpr() {
+        let root = layout_with(
+            "<body><div></div></body>",
+            "div { width: 50px; height: 50px; background-image: \
+             image-set(url(one.png) 1x, url(two.png) 2x); }",
+        );
+        let urls = collect_background_image_requests(&root, 2.0);
+        assert_eq!(urls, vec!["two.png".to_string()], "DPR 2 → 2x-кандидат, got {urls:?}");
+    }
+
+    /// `-webkit-image-set()` разворачивается так же, как беспрефиксная форма.
+    #[test]
+    fn collect_bg_image_resolves_webkit_image_set() {
+        let root = layout_with(
+            "<body><div></div></body>",
+            "div { width: 50px; height: 50px; background-image: \
+             -webkit-image-set(url(low.png) 1x, url(high.png) 2x); }",
+        );
+        let urls = collect_background_image_requests(&root, 1.0);
+        assert_eq!(urls, vec!["low.png".to_string()]);
+    }
+
+    /// BUG-101: `cross-fade()` рисуется одной командой из двух источников —
+    /// раньше не собиралась ни одна сторона, и ячейка оставалась пустой.
+    #[test]
+    fn collect_bg_image_cross_fade_both_sides() {
+        let root = layout_with(
+            "<body><div></div></body>",
+            "div { width: 50px; height: 50px; background-image: \
+             -webkit-cross-fade(url(from.png), url(to.png), 50%); }",
+        );
+        let urls = collect_background_image_requests(&root, 1.0);
+        assert_eq!(urls.len(), 2, "обе стороны cross-fade, got {urls:?}");
+        assert!(urls.contains(&"from.png".to_string()));
+        assert!(urls.contains(&"to.png".to_string()));
+    }
+
+    /// Сторона `cross-fade()` сама может быть `image-set()` — разворачивается
+    /// рекурсивно, тем же DPR.
+    #[test]
+    fn collect_bg_image_cross_fade_side_image_set() {
+        let root = layout_with(
+            "<body><div></div></body>",
+            "div { width: 50px; height: 50px; background-image: \
+             -webkit-cross-fade(image-set(url(a1.png) 1x, url(a2.png) 2x), url(b.png), 50%); }",
+        );
+        let urls = collect_background_image_requests(&root, 1.0);
+        assert_eq!(urls.len(), 2, "got {urls:?}");
+        assert!(urls.contains(&"a1.png".to_string()), "1x-сторона image-set, got {urls:?}");
+        assert!(urls.contains(&"b.png".to_string()));
+    }
+
+    /// Беспрефиксная 3-аргументная `cross-fade()` невалидна (CSS Images L4 §4),
+    /// декларация отбрасывается — собирать нечего.
+    #[test]
+    fn collect_bg_image_unprefixed_legacy_cross_fade_collects_nothing() {
+        let root = layout_with(
+            "<body><div></div></body>",
+            "div { width: 50px; height: 50px; background-image: \
+             cross-fade(url(from.png), url(to.png), 30%); }",
+        );
+        assert!(
+            collect_background_image_requests(&root, 1.0).is_empty(),
+            "невалидная декларация не должна порождать запросов"
+        );
     }
 
     // ── CSS Generated Content L3 §2.1 — content: url() ────────────────────────
@@ -15247,7 +15334,7 @@ mod tests {
             "<body><p>x</p></body>",
             "p::before { content: url(icon.png); }",
         );
-        let urls = collect_background_image_requests(&root);
+        let urls = collect_background_image_requests(&root, 1.0);
         assert_eq!(urls, vec!["icon.png".to_string()]);
     }
 
@@ -15261,7 +15348,7 @@ mod tests {
             "",
         );
         assert!(
-            collect_background_image_requests(&root).is_empty(),
+            collect_background_image_requests(&root, 1.0).is_empty(),
             "real <img> must not be collected by the background pass"
         );
     }
@@ -16238,7 +16325,7 @@ mod tests {
         } else {
             panic!("expected Marker box");
         }
-        let urls = collect_background_image_requests(&root);
+        let urls = collect_background_image_requests(&root, 1.0);
         assert!(urls.iter().any(|u| u == "bullet.png"), "marker image must be fetched");
     }
 
