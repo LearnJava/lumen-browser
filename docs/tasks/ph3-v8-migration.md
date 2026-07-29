@@ -1442,6 +1442,44 @@ rquickjs, which S12b-25 deletes. Expect more of this shape: **an assertion that 
 documented limitation may be a fossilized QuickJS defect**, so when a ported test fails, check the
 install ordering / engine behavior before "fixing" the port.
 
+### S12b-24-events-cache — second porting slice (2026-07-29, branch p1-v8-s12b-24-events-cache)
+
+Four adjacent rows from the scoping table ported together into a new `mod tests::v8_events_cache`:
+classList/CSSStyleDeclaration, Element event dispatch + Event/CustomEvent ctors, Service Worker +
+Cache Storage, Cache API SQLite backend. **72 tests**, QuickJS copies deleted. Same mechanics as
+`v8_core` (nested module, `use super::*`, twin `v8_runtime_with_*` constructors) — nothing new
+needed here, confirming the core slice's prediction that the module-nesting pattern generalizes.
+
+**Two pre-existing OPEN bugs closed as a side effect, not new ones filed.** Porting these tests
+meant exercising `_lumen_get_attr`/array-argument natives under V8 for the first time in
+`cargo test`, and both hit already-diagnosed-but-unfixed defects head-on:
+
+* [BUG-442](../../bugs/BUG-442-FIXED.md) — `Option::None` mapped to `JsValue::Null` on the V8 side
+  instead of `Undefined`, so every bare `_lumen_get_attr(...) !== undefined` presence-check in the
+  shim was always true on the default engine. Its own "Как чинить" section flagged two options —
+  patch `_lumen_get_attr` alone, or fix the conversion boundary for every native — and warned the
+  wider option needs a grep for shim call sites comparing a native's result to `null` directly
+  first. Did that grep (`_lumen_[a-z_]+\([^)]*\)\s*(===|!==)\s*null`, whole file): one hit outside
+  `dom::tests`, itself defensive (`!== null && !== undefined`). Every `Option<T>`-returning native
+  the shim reads is already wrapped in `_lumen_u2n` (`undefined`→`null` normalizer, added in
+  BUG-381), so the wider fix was safe: `IntoJsReturn for Option<T>` (`v8_compat.rs`) now returns
+  `Undefined`; `jsvalue_to_v8`/`to_v8` keep `Null` and `Undefined` distinct instead of collapsing
+  both to V8 `null`.
+* [BUG-342](../../bugs/BUG-342-FIXED.md) — `v8_to_jsvalue` collapsed `Array`/`Object` arguments to
+  `Null`, so any native taking a `Vec<u8>`/etc. silently saw empty data. Fixed by recursing into
+  `is_array()`/`is_object()` the same way the sibling `from_v8` (`v8_runtime.rs`) already did —
+  the two converters were not deduplicated, just brought back in sync.
+
+Both fixes verified with a throwaway probe (not committed): `hasAttribute('data-nope') === false`
+and `_lumen_sha_digest('SHA-256', [72,101,108,108,111])` producing the correct SHA-256 of `"Hello"`,
+both under `V8JsRuntime` directly. Full `cargo test -p lumen-js --features v8-backend` (2569 tests)
+stayed green throughout — the shim's blanket `_lumen_u2n` usage is what made the wide fix safe,
+not luck. **Lesson for the remaining slices:** porting a sub-area's tests is not just mechanical
+relocation — it is the *first real V8 exercise* of whatever natives that sub-area touches, and
+prior audits (BUG-442, BUG-342, BUG-447) that diagnosed-but-couldn't-verify-fixed a V8-only defect
+are likely to get closed for free the moment the corresponding tests move over. Check `BUGS.md` for
+OPEN bugs touching the natives your next slice's helpers use *before* starting the port.
+
 ---
 
 ## Risks (Rev 2)
