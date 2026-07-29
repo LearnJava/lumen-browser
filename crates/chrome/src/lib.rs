@@ -188,6 +188,105 @@ mod tests {
         );
     }
 
+    /// CC-16 census: what does the startup parse of the chrome asset actually
+    /// cost? The task line is explicitly conditional ("only if the startup
+    /// profile justifies it"), so this measures the exact call the shell makes
+    /// once during `Lumen` construction — [`parse_document`] on the real asset
+    /// — split into its HTML and CSS halves.
+    ///
+    /// `#[ignore]` (a wall-clock measurement, not an assertion) — run with
+    /// `cargo test -p lumen-chrome --release cc16_parse_cost_census -- --ignored --nocapture`.
+    /// Reported as min over the samples per `docs/perf-method.md` (min is the
+    /// least noise-contaminated estimator of the true cost).
+    #[test]
+    #[ignore = "wall-clock census, not an assertion — see CC-16"]
+    fn cc16_parse_cost_census() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/chrome/chrome.html");
+        let html = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+
+        const WARMUP: usize = 3;
+        const SAMPLES: usize = 20;
+
+        let mut html_ns = Vec::with_capacity(SAMPLES);
+        let mut css_ns = Vec::with_capacity(SAMPLES);
+        let mut total_ns = Vec::with_capacity(SAMPLES);
+
+        for i in 0..(WARMUP + SAMPLES) {
+            let t0 = std::time::Instant::now();
+            let doc = lumen_html_parser::parse(&html);
+            let t1 = std::time::Instant::now();
+            let mut style_text = String::from(UA_DEFAULTS);
+            style_text.push_str(&collect_style_text(&doc));
+            let sheet = lumen_css_parser::parse(&style_text);
+            let t2 = std::time::Instant::now();
+            // Keep both alive across the timers so nothing is optimized away.
+            std::hint::black_box((&doc, &sheet));
+            if i >= WARMUP {
+                html_ns.push((t1 - t0).as_nanos());
+                css_ns.push((t2 - t1).as_nanos());
+                total_ns.push((t2 - t0).as_nanos());
+            }
+        }
+
+        let min = |v: &[u128]| v.iter().copied().min().unwrap_or(0) as f64 / 1e6;
+        let doc = lumen_html_parser::parse(&html);
+        let sheet = lumen_css_parser::parse(&collect_style_text(&doc));
+        println!(
+            "CC16_CENSUS asset_bytes={} nodes={} css_rules={} html_min={:.2}ms css_min={:.2}ms total_min={:.2}ms",
+            html.len(),
+            doc.node_count(),
+            sheet.rules.len(),
+            min(&html_ns),
+            min(&css_ns),
+            min(&total_ns),
+        );
+
+        // The other half of the CC-16 ledger: a pre-parsed asset still has to be
+        // *restored* at startup. `lumen_dom::Document` already derives serde and
+        // `bincode` is what T3 hibernation uses, so this is the real cost of the
+        // proposal's own restore step — not an estimate. `Document::clone` is the
+        // floor any reconstruction (bincode, codegen'd constructors, anything)
+        // must pay, since all of them allocate the same 2160 nodes and strings.
+        let blob = bincode::serialize(&doc).expect("chrome Document must serialize");
+        let mut de_ns = Vec::with_capacity(SAMPLES);
+        let mut clone_ns = Vec::with_capacity(SAMPLES);
+        for i in 0..(WARMUP + SAMPLES) {
+            let t0 = std::time::Instant::now();
+            let restored: lumen_dom::Document =
+                bincode::deserialize(&blob).expect("chrome Document must round-trip");
+            let t1 = std::time::Instant::now();
+            let cloned = doc.clone();
+            let t2 = std::time::Instant::now();
+            std::hint::black_box((&restored, &cloned));
+            if i >= WARMUP {
+                de_ns.push((t1 - t0).as_nanos());
+                clone_ns.push((t2 - t1).as_nanos());
+            }
+        }
+        println!(
+            "CC16_CENSUS_RESTORE blob_bytes={} bincode_de_min={:.2}ms doc_clone_min={:.2}ms",
+            blob.len(),
+            min(&de_ns),
+            min(&clone_ns),
+        );
+
+        // Context for the verdict: parsing is only the first of the two things
+        // startup does with this asset. The host immediately lays it out, and
+        // that pass is *not* something a pre-parsed `Document` skips.
+        let mut layout_ns = Vec::with_capacity(SAMPLES);
+        for i in 0..(WARMUP + SAMPLES) {
+            let t0 = std::time::Instant::now();
+            let root = lumen_layout::layout(&doc, &sheet, lumen_core::geom::Size::new(1280.0, 800.0));
+            let t1 = std::time::Instant::now();
+            std::hint::black_box(&root);
+            if i >= WARMUP {
+                layout_ns.push((t1 - t0).as_nanos());
+            }
+        }
+        println!("CC16_CENSUS_LAYOUT chrome_layout_min={:.2}ms", min(&layout_ns));
+    }
+
     /// `UA_DEFAULTS` is textually first, so an author rule of equal
     /// specificity declared later in the collected style text still wins —
     /// verified with a synthetic override rather than the frozen asset
