@@ -105,16 +105,34 @@ one. It now computes fractional coverage and scales the source alpha by it.
 - `coverage_row` returns the touched column range so the compositing loop walks only
   the covered part of the row, not the full canvas width.
 
+### Line caps and joins ([BUG-099](../bugs/BUG-099-OPEN.md), 2026-07-29)
+
+`lineCap` / `lineJoin` / `miterLimit` were parsed and preserved across
+`save()`/`restore()` but never read by `rasterize.rs`, so every stroke was a union of
+per-segment quads with butt ends and a `strokeRect` corner kept a notch. `stroke_path`
+now reads the three off the context and emits join and cap shapes into the same union.
+
+- `flatten_subpaths` rebuilds the sub-path structure `collect_lines` throws away: a
+  sub-path breaks at a `Move` or wherever a segment does not start where the previous
+  one ended, and it is *closed* when its last vertex repeats its first. Caps therefore
+  land only on genuine open ends — a `closePath`d rectangle gets a join at its seam.
+- Joins sit at every interior vertex, including the ones a Bézier/arc tessellation
+  invents. Two cutoffs keep that affordable: a wedge under `MIN_JOIN_AREA` (0.05 px²,
+  computed as `half² · sin θ / 2`) is skipped outright, and a round/miter bulge under
+  `ROUND_FLATNESS` (0.05 px) degrades to the bevel triangle. A thin arc therefore
+  costs nothing extra; a thick one still gets its outer edge closed.
+- A miter is the kite `(vertex, outer₀, tip, outer₁)` with `tip` at
+  `half / cos(θ/2)`; over `miterLimit` it falls back to the bevel triangle. A round
+  join or cap is a disc of 8–64 edges scaled by radius — a full disc, not a half one,
+  since the inner half is already inside the segment quads and the union absorbs it.
+- The existing `line_cap_parse` / `line_join_parse` tests cover `from_str` only and
+  stayed green through all of this; the 8 new tests in `rasterize.rs` probe a single
+  pixel that miter fills solid, round covers partially and bevel leaves empty.
+
 ## Deferred
 
 - Gaussian blur for `shadowBlur > 0`.
 - Canvas fingerprint noise (ADR-007) — `set_noise_generator / get_image_data`.
-- `lineCap` / `lineJoin` / `miterLimit` — parsed, stored in `DrawState` and preserved
-  across `save()`/`restore()`, but never read by `rasterize.rs`: a stroke is the union
-  of per-segment quads with butt ends, so a `strokeRect` corner keeps a notch
-  ([BUG-099](../bugs/BUG-099-OPEN.md)). The `line_cap_parse` / `line_join_parse` tests
-  cover `from_str` only, so they stay green while the feature does nothing.
-
 ## Invariants
 
 - Pixels are RGBA8, straight alpha throughout (no premultiplied alpha).
