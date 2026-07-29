@@ -1663,6 +1663,35 @@ call — the only runtime methods touched are `rt.eval` and the already-mirrored
 ~900+ remaining QuickJS callers), 13/13 green on the first run, zero body edits, zero engine
 divergences.
 
+### S12b-24-elem-geometry-scroll — eighth porting slice (2026-07-30, branch p1-v8-s12b-24-elem-geometry-scroll)
+
+Element geometry API (`getBoundingClientRect`, `offsetWidth`/`offsetHeight`), scroll state
+(`scrollLeft`/`scrollTop`/`scrollWidth`/`scrollHeight` via `update_scroll_states`, `scrollTo`/
+`scrollBy` via `take_scroll_requests`), scroll events (element non-bubbling `fire_element_scroll`,
+window-level `fire_window_scroll`), CSS Scroll Snap L2 `snapchanging`/`snapchanged`
+(`fire_snap_changing`/`fire_snap_changed`) — **10 tests** ported into `mod tests::v8_elem_geometry_scroll`,
+QuickJS copies deleted. `cargo test -p lumen-js --features v8-backend` stayed at 2570/2570 (1:1 swap).
+The brief's "~18" estimate for this row bundled the adjacent "Lazy image loading" subarea in with
+it — the actual section (found by content, `dom.rs:16030-16205`, immediately after the matchMedia
+block removed by the previous slice) holds only these 10; lazy image loading is its own next slice.
+
+**First slice needing genuinely new plumbing since S12b-24-nav-url-storage's helper move.**
+`V8JsRuntime` mirrors nearly every `QuickJsRuntime` method touched by this test cluster
+(`update_layout_rects`, `update_scroll_states`, `take_scroll_requests`) but was missing
+`fire_element_scroll`/`fire_window_scroll`/`fire_snap_changing`/`fire_snap_changed` entirely — those
+four only existed as `QuickJsRuntime` methods in `lib.rs` (dispatching a small `if (typeof
+fn==='function') fn(...)` script through `ctx.eval`). Added as inherent `V8JsRuntime` methods in
+`v8_runtime.rs` using the same eval-based dispatch, just through the already-public `JsRuntime::eval`
+trait method instead of the rquickjs `ctx.with` closure — no new native bindings, no shim changes,
+because the target JS functions (`_lumen_fire_scroll_on_element`, `_lumen_fire_window_scroll_event`,
+`_lumen_fire_snap_changing`, `_lumen_fire_snap_changed`, `_lumen_make_element`) already live in the
+shared `WEB_API_SHIM` and are engine-agnostic. Forgot the `#[cfg(feature = "v8-backend")]` gate on
+the new `mod v8_elem_geometry_scroll` on the first pass — caught by running
+`cargo clippy -p lumen-js --all-targets -- -D warnings` (no `v8-backend`) before the gate, not just
+the `--features v8-backend` variant; every prior `mod v8_*` slice carries this same attribute, worth
+checking explicitly rather than assuming it copy-pasted correctly. 10/10 green after the fix, zero
+body edits, zero engine divergences.
+
 ---
 
 ## Risks (Rev 2)
