@@ -76,11 +76,11 @@
  "generated": "2026-07-29",
  "counts": {
   "open": 127,
-  "fixed": 284,
+  "fixed": 285,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 411,
+ "total_bugs": 412,
  "phases": [
   {
    "id": "P0",
@@ -6684,10 +6684,10 @@
    "debtor": false
   },
   "BUG-381": {
-   "status": "open",
-   "title": "Весь focus-API отсутствует в JS: `Element.prototype.focus`/`blur`, `document.activeElement`, `document.hasFocus`, `window.focus`/`blur`, IDL-рефлексия `tabIndex…",
-   "component": "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`: ни фабрика элементов, ни живой `document` не определяют `focus`/`blur`/`activeElement`/`hasFocus`), shell (`crates/shell/src/main.rs:8110` — состояние `focused_node`, которое в JS не отдаётся)",
-   "date": null,
+   "status": "fixed",
+   "title": "Весь focus-API отсутствовал в JS, хотя шелл держал настоящее состояние фокуса. **Фикс:** `HTMLElement.prototype.focus(options)`/`blur()` поверх уже существовавш…",
+   "component": "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`), shell (`crates/shell/src/main.rs` — `notify_focus_changed` + drain пути focus-запросов)",
+   "date": "2026-07-29",
    "debtor": false
   },
   "BUG-382": {
@@ -7102,6 +7102,13 @@
    "component": "js (`dom.rs` — сеттер `value` в `_lumen_make_element`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-442": {
+   "status": "open",
+   "title": "**На дефолтном движке отсутствующий атрибут читается как `null`, а шим сравнивает с `undefined`** — проверка «атрибут присутствует» истинна всегда. Проба на `V8…",
+   "component": "js (`crates/js/src/v8_runtime.rs:1306` — натив `_lumen_get_attr` отдаёт `Option<String>`, и биндинги V8 отображают `None → null`; шим `crates/js/src/dom.rs` в 15 местах проверяет наличие атрибута как `_lumen_get_attr(...) !== undefined`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -7242,6 +7249,9 @@
   ],
   "js (`crates/js/src/surface_api.rs` рядом с `navigator.doNotTrack`, строки 116-121) + network (`crates/network/src/http/headers.rs::build_request_headers`)": [
    "BUG-397"
+  ],
+  "js (`crates/js/src/v8_runtime.rs:1306` — натив `_lumen_get_attr` отдаёт `Option<String>`, и биндинги V8 отображают `None → null`; шим `crates/js/src/dom.rs` в 15 местах проверяет наличие атрибута как `_lumen_get_attr(...) !== undefined`)": [
+   "BUG-442"
   ],
   "js (`dom.rs` `WEB_API_SHIM`)": [
    "BUG-309"

@@ -5515,4 +5515,352 @@ mod tests {
         "#).unwrap();
         assert_eq!(r, JsValue::Number(3.0));
     }
+
+    // ── BUG-381: focus API (HTML LS §6.6) ──────────────────────────────────────
+
+    /// `html > body > [ a#link[href], input#field, input#off[disabled],
+    /// div#plain, div#tabbed[tabindex=3] ]` — one representative of every branch
+    /// `_lumen_is_focusable` distinguishes.
+    fn make_focus_doc() -> Arc<Mutex<lumen_dom::Document>> {
+        fn attr(doc: &mut lumen_dom::Document, nid: lumen_dom::NodeId, name: &str, value: &str) {
+            if let lumen_dom::NodeData::Element { attrs, .. } = &mut doc.get_mut(nid).data {
+                attrs.push(lumen_dom::Attribute {
+                    name: lumen_dom::QualName::html(name),
+                    value: value.into(),
+                });
+            }
+        }
+        let mut doc = lumen_dom::Document::new();
+        let html = doc.create_element(lumen_dom::QualName::html("html"));
+        let body = doc.create_element(lumen_dom::QualName::html("body"));
+        let link = doc.create_element(lumen_dom::QualName::html("a"));
+        attr(&mut doc, link, "id", "link");
+        attr(&mut doc, link, "href", "#x");
+        let field = doc.create_element(lumen_dom::QualName::html("input"));
+        attr(&mut doc, field, "id", "field");
+        let off = doc.create_element(lumen_dom::QualName::html("input"));
+        attr(&mut doc, off, "id", "off");
+        attr(&mut doc, off, "disabled", "");
+        let plain = doc.create_element(lumen_dom::QualName::html("div"));
+        attr(&mut doc, plain, "id", "plain");
+        let tabbed = doc.create_element(lumen_dom::QualName::html("div"));
+        attr(&mut doc, tabbed, "id", "tabbed");
+        attr(&mut doc, tabbed, "tabindex", "3");
+        doc.append_child(doc.root(), html);
+        doc.append_child(html, body);
+        for child in [link, field, off, plain, tabbed] {
+            doc.append_child(body, child);
+        }
+        Arc::new(Mutex::new(doc))
+    }
+
+    /// Evaluate `script` and assert it produced exactly `true`.
+    fn assert_js_true(rt: &V8JsRuntime, script: &str) {
+        assert_eq!(rt.eval(script).unwrap(), JsValue::Bool(true), "script: {script}");
+    }
+
+    #[test]
+    fn focus_api_surface_is_defined() {
+        let rt = runtime_with_dom(make_focus_doc(), "");
+        assert_js_true(&rt, "typeof HTMLElement.prototype.focus === 'function'");
+        assert_js_true(&rt, "typeof HTMLElement.prototype.blur === 'function'");
+        assert_js_true(&rt, "typeof document.hasFocus === 'function'");
+        assert_js_true(&rt, "typeof window.focus === 'function'");
+        assert_js_true(&rt, "typeof window.blur === 'function'");
+        assert_js_true(&rt, "typeof document.getElementById('field').focus === 'function'");
+    }
+
+    #[test]
+    fn active_element_defaults_to_body() {
+        let rt = runtime_with_dom(make_focus_doc(), "");
+        assert_js_true(&rt, "document.activeElement.tagName === 'BODY'");
+    }
+
+    #[test]
+    fn element_focus_updates_active_element_synchronously() {
+        let rt = runtime_with_dom(make_focus_doc(), "");
+        assert_js_true(
+            &rt,
+            "document.getElementById('field').focus(); document.activeElement.id === 'field'",
+        );
+    }
+
+    #[test]
+    fn element_focus_queues_a_shell_request() {
+        let doc = make_focus_doc();
+        let field = doc.lock().unwrap().find_by_id("field").unwrap();
+        let rt = runtime_with_dom(doc, "");
+        rt.eval("document.getElementById('field').focus()").unwrap();
+        assert_eq!(rt.take_focus_requests(), vec![Some(field.index() as u32)]);
+    }
+
+    #[test]
+    fn element_focus_fires_focus_then_focusin() {
+        let rt = runtime_with_dom(make_focus_doc(), "");
+        assert_js_true(
+            &rt,
+            "var seen = [];\
+             var el = document.getElementById('field');\
+             el.addEventListener('focus', function() { seen.push('focus'); });\
+             el.addEventListener('focusin', function() { seen.push('focusin'); });\
+             el.focus();\
+             seen.join(',') === 'focus,focusin'",
+        );
+    }
+
+    #[test]
+    fn focusin_bubbles_but_focus_does_not() {
+        let rt = runtime_with_dom(make_focus_doc(), "");
+        assert_js_true(
+            &rt,
+            "var seen = [];\
+             document.body.addEventListener('focus', function() { seen.push('focus'); });\
+             document.body.addEventListener('focusin', function() { seen.push('focusin'); });\
+             document.getElementById('field').focus();\
+             seen.join(',') === 'focusin'",
+        );
+    }
+
+    #[test]
+    fn on_focus_property_handler_runs() {
+        let rt = runtime_with_dom(make_focus_doc(), "");
+        assert_js_true(
+            &rt,
+            "var hit = false;\
+             var el = document.getElementById('field');\
+             el.onfocus = function() { hit = true; };\
+             el.focus();\
+             hit",
+        );
+    }
+
+    #[test]
+    fn moving_focus_fires_blur_focusout_focus_focusin_in_order() {
+        let rt = runtime_with_dom(make_focus_doc(), "");
+        assert_js_true(
+            &rt,
+            "var seen = [];\
+             var a = document.getElementById('link'), b = document.getElementById('field');\
+             ['focus','blur','focusin','focusout'].forEach(function(t) {\
+                 a.addEventListener(t, function() { seen.push('a:' + t); });\
+                 b.addEventListener(t, function() { seen.push('b:' + t); });\
+             });\
+             a.focus(); seen = []; b.focus();\
+             seen.join(',') === 'a:blur,a:focusout,b:focus,b:focusin'",
+        );
+    }
+
+    #[test]
+    fn focus_events_carry_related_target() {
+        let rt = runtime_with_dom(make_focus_doc(), "");
+        assert_js_true(
+            &rt,
+            "var related = 'unset';\
+             var a = document.getElementById('link'), b = document.getElementById('field');\
+             a.focus();\
+             b.addEventListener('focus', function(e) { related = e.relatedTarget ? e.relatedTarget.id : null; });\
+             b.focus();\
+             related === 'link'",
+        );
+    }
+
+    #[test]
+    fn refocusing_the_same_element_fires_nothing() {
+        let rt = runtime_with_dom(make_focus_doc(), "");
+        assert_js_true(
+            &rt,
+            "var n = 0;\
+             var el = document.getElementById('field');\
+             el.addEventListener('focus', function() { n++; });\
+             el.focus(); el.focus(); el.focus();\
+             n === 1",
+        );
+    }
+
+    #[test]
+    fn blur_resets_active_element_to_body_and_fires_blur() {
+        let rt = runtime_with_dom(make_focus_doc(), "");
+        assert_js_true(
+            &rt,
+            "var seen = [];\
+             var el = document.getElementById('field');\
+             el.addEventListener('blur', function() { seen.push('blur'); });\
+             el.addEventListener('focusout', function() { seen.push('focusout'); });\
+             el.focus(); el.blur();\
+             seen.join(',') === 'blur,focusout' && document.activeElement.tagName === 'BODY'",
+        );
+    }
+
+    #[test]
+    fn blur_on_an_unfocused_element_is_a_noop() {
+        let rt = runtime_with_dom(make_focus_doc(), "");
+        assert_js_true(
+            &rt,
+            "document.getElementById('field').focus();\
+             document.getElementById('link').blur();\
+             document.activeElement.id === 'field'",
+        );
+    }
+
+    #[test]
+    fn non_focusable_elements_are_not_focused() {
+        let rt = runtime_with_dom(make_focus_doc(), "");
+        // A bare <div> and a disabled <input> both stay unfocusable; a <div> with
+        // an explicit tabindex and an <a href> do not.
+        assert_js_true(
+            &rt,
+            "document.getElementById('plain').focus();\
+             document.activeElement.tagName === 'BODY'",
+        );
+        assert_js_true(
+            &rt,
+            "document.getElementById('off').focus();\
+             document.activeElement.tagName === 'BODY'",
+        );
+        assert_js_true(
+            &rt,
+            "document.getElementById('tabbed').focus();\
+             document.activeElement.id === 'tabbed'",
+        );
+        assert_js_true(
+            &rt,
+            "document.getElementById('link').focus();\
+             document.activeElement.id === 'link'",
+        );
+    }
+
+    #[test]
+    fn inert_subtree_has_no_focusable_areas() {
+        let rt = runtime_with_dom(make_focus_doc(), "");
+        assert_js_true(
+            &rt,
+            "document.body.setAttribute('inert', '');\
+             document.getElementById('field').focus();\
+             document.activeElement.tagName === 'BODY'",
+        );
+    }
+
+    #[test]
+    fn tab_index_reflects_the_content_attribute() {
+        let rt = runtime_with_dom(make_focus_doc(), "");
+        assert_js_true(&rt, "document.getElementById('tabbed').tabIndex === 3");
+        // Focusable without the attribute → 0; everything else → −1.
+        assert_js_true(&rt, "document.getElementById('field').tabIndex === 0");
+        assert_js_true(&rt, "document.getElementById('plain').tabIndex === -1");
+        assert_js_true(&rt, "document.body.tabIndex === -1");
+        assert_js_true(
+            &rt,
+            "var d = document.getElementById('plain');\
+             d.tabIndex = -1;\
+             d.getAttribute('tabindex') === '-1' && d.tabIndex === -1",
+        );
+        // A `tabindex` that is not an integer falls back to the default.
+        assert_js_true(
+            &rt,
+            "var d = document.getElementById('plain');\
+             d.setAttribute('tabindex', '2px');\
+             d.tabIndex === -1",
+        );
+    }
+
+    #[test]
+    fn autofocus_reflects_the_content_attribute() {
+        let rt = runtime_with_dom(make_focus_doc(), "");
+        // Attribute presence is checked via `getAttribute`, not `hasAttribute`:
+        // the latter answers `true` for every name on the V8 bindings (BUG-442).
+        assert_js_true(
+            &rt,
+            "var el = document.getElementById('field');\
+             var before = el.autofocus;\
+             el.autofocus = true;\
+             var mid = el.autofocus && el.getAttribute('autofocus') === '';\
+             el.autofocus = false;\
+             before === false && mid && el.autofocus === false\
+                 && el.getAttribute('autofocus') === null",
+        );
+    }
+
+    #[test]
+    fn shell_reported_focus_change_fires_events_and_moves_active_element() {
+        let doc = make_focus_doc();
+        let field = doc.lock().unwrap().find_by_id("field").unwrap();
+        let rt = runtime_with_dom(doc, "");
+        rt.eval(
+            "globalThis.seen = [];\
+             document.getElementById('field')\
+                 .addEventListener('focus', function() { globalThis.seen.push('focus'); });",
+        )
+        .unwrap();
+        // What the shell does after a click moves `focused_node`.
+        rt.eval(&format!("_lumen_focus_update({})", field.index())).unwrap();
+        assert_js_true(&rt, "document.activeElement.id === 'field'");
+        assert_js_true(&rt, "globalThis.seen.join(',') === 'focus'");
+    }
+
+    #[test]
+    fn shell_echo_of_a_page_initiated_focus_does_not_double_dispatch() {
+        let doc = make_focus_doc();
+        let field = doc.lock().unwrap().find_by_id("field").unwrap();
+        let rt = runtime_with_dom(doc, "");
+        rt.eval(
+            "globalThis.n = 0;\
+             var el = document.getElementById('field');\
+             el.addEventListener('focus', function() { globalThis.n++; });\
+             el.focus();",
+        )
+        .unwrap();
+        // The shell drains the queued request and echoes it back — must be a no-op.
+        rt.eval(&format!("_lumen_focus_update({})", field.index())).unwrap();
+        assert_js_true(&rt, "globalThis.n === 1");
+    }
+
+    #[test]
+    fn shell_reported_focus_on_a_text_node_resolves_to_its_element() {
+        // The shell tracks focus by layout box, whose node can be a text node.
+        let mut d = lumen_dom::Document::new();
+        let html = d.create_element(lumen_dom::QualName::html("html"));
+        let body = d.create_element(lumen_dom::QualName::html("body"));
+        let link = d.create_element(lumen_dom::QualName::html("a"));
+        if let lumen_dom::NodeData::Element { attrs, .. } = &mut d.get_mut(link).data {
+            attrs.push(lumen_dom::Attribute {
+                name: lumen_dom::QualName::html("id"),
+                value: "link".into(),
+            });
+        }
+        let text = d.create_text("click me");
+        d.append_child(d.root(), html);
+        d.append_child(html, body);
+        d.append_child(body, link);
+        d.append_child(link, text);
+        let text_idx = text.index();
+        let rt = runtime_with_dom(Arc::new(Mutex::new(d)), "");
+        rt.eval(&format!("_lumen_focus_update({text_idx})")).unwrap();
+        assert_js_true(&rt, "document.activeElement.id === 'link'");
+    }
+
+    #[test]
+    fn autofocus_element_is_focused_when_parsing_completes() {
+        let mut d = lumen_dom::Document::new();
+        let html = d.create_element(lumen_dom::QualName::html("html"));
+        let body = d.create_element(lumen_dom::QualName::html("body"));
+        let field = d.create_element(lumen_dom::QualName::html("input"));
+        if let lumen_dom::NodeData::Element { attrs, .. } = &mut d.get_mut(field).data {
+            attrs.push(lumen_dom::Attribute {
+                name: lumen_dom::QualName::html("id"),
+                value: "field".into(),
+            });
+            attrs.push(lumen_dom::Attribute {
+                name: lumen_dom::QualName::html("autofocus"),
+                value: "".into(),
+            });
+        }
+        d.append_child(d.root(), html);
+        d.append_child(html, body);
+        d.append_child(body, field);
+        let rt = runtime_with_dom(Arc::new(Mutex::new(d)), "");
+        assert_js_true(&rt, "document.activeElement.tagName === 'BODY'");
+        rt.eval("_lumen_apply_ready_state('interactive')").unwrap();
+        assert_js_true(&rt, "document.activeElement.id === 'field'");
+    }
+
 }

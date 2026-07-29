@@ -3300,6 +3300,15 @@ fn remove_attribute(doc: &mut Document, id: NodeId, name: &str) {
 pub(crate) const WEB_API_SHIM: &str = "
 function _lumen_u2n(v) { return v !== undefined ? v : null; }
 
+// Engine-agnostic «is this content attribute present?». A missing attribute
+// comes back as `undefined` from the QuickJS bindings but as `null` from the V8
+// ones (BUG-442), so the bare `_lumen_get_attr(...) !== undefined` test used
+// elsewhere in this shim reports «present» for every name on the default engine.
+// Normalise through `_lumen_u2n` and compare against `null` instead.
+function _lumen_has_attr(nid, name) {
+    return _lumen_u2n(_lumen_get_attr(nid, name)) !== null;
+}
+
 // DOM LS §4.5/§4.9: getElementsByClassName(names) matches elements carrying
 // EVERY whitespace-separated class token. Build a compound CSS class selector
 // ('.a.b') and reuse the native query the CSS engine already runs — same
@@ -6153,6 +6162,28 @@ function _lumen_build_element(nid) {
                 parent = _lumen_u2n(_lumen_get_parent(parent));
             }
         },
+        // ── Focus-related IDL reflection (HTML LS §6.6, BUG-381) ─────────────
+        // `tabIndex` reflects the `tabindex` content attribute; with the
+        // attribute absent or unparseable the default is 0 for elements that
+        // are focusable anyway and −1 for everything else. `<body>`/`<html>`
+        // report −1 even though a script may focus them, matching browsers.
+        get tabIndex() {
+            var parsed = _lumen_parse_integer(_lumen_u2n(_lumen_get_attr(nid, 'tabindex')));
+            if (parsed !== null) return parsed;
+            var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
+            if (tag === 'BODY' || tag === 'HTML') return -1;
+            return _lumen_is_focusable(nid) ? 0 : -1;
+        },
+        set tabIndex(v) {
+            var n = _lumen_parse_integer(v);
+            _lumen_set_attr(nid, 'tabindex', String(n !== null ? n : 0));
+        },
+        // Boolean `autofocus` content attribute (HTML LS §6.6.6).
+        get autofocus() { return _lumen_has_attr(nid, 'autofocus'); },
+        set autofocus(v) {
+            if (v) { _lumen_set_attr(nid, 'autofocus', ''); }
+            else { _lumen_remove_attr(nid, 'autofocus'); }
+        },
         // ── HTMLInputElement / HTMLTextAreaElement / HTMLSelectElement properties ──
         // Reflected HTML attributes (HTML LS §4.10.x).
         get type()  { var v = _lumen_u2n(_lumen_get_attr(nid, 'type')); return v !== null ? v.toLowerCase() : 'text'; },
@@ -7060,6 +7091,21 @@ var document = {
         var hid = _lumen_u2n(_lumen_get_html_element());
         return hid !== null ? _lumen_make_element(hid) : null;
     },
+    // HTML LS §6.6.3 (BUG-381): the element that currently holds focus. Falls
+    // back to `<body>` — not `null` — while nothing is focused, per spec; the
+    // underlying state is `_lumen_last_focused_nid`, kept in step with the
+    // shell's `focused_node` by `_lumen_focus_update`.
+    get activeElement() {
+        var n = _lumen_last_focused_nid;
+        if (n === null || n === undefined || n === -1) {
+            var bid = _lumen_u2n(_lumen_get_body());
+            return bid !== null ? _lumen_make_element(bid) : null;
+        }
+        return _lumen_make_element(n);
+    },
+    // HTML LS §6.6.3: true while this document's window is the active one.
+    // Reuses the shell signal that already drives `document.visibilityState`.
+    hasFocus: function() { return !_doc_hidden; },
     getElementById:    function(id)  {
         var n = _lumen_u2n(_lumen_get_element_by_id(String(id)));
         return n !== null ? _lumen_make_element(n) : null;
@@ -13112,6 +13158,16 @@ function _lumen_apply_ready_state(state) {
         for (var i = 0; i < winArr.length; i++) {
             try { winArr[i].call(window, dcl); } catch(e) {}
         }
+        // HTML LS §6.6.6 «flush autofocus candidates» (BUG-381): once parsing is
+        // done, focus the first `[autofocus]` element in the document — unless a
+        // DOMContentLoaded handler already moved focus itself.
+        if (_lumen_last_focused_nid === -1) {
+            var afNid = _lumen_find_autofocus_in(_lumen_root_nid);
+            if (afNid !== -1 && _lumen_is_focusable(afNid)) {
+                var afEl = _lumen_make_element(afNid);
+                if (afEl && typeof afEl.focus === 'function') { try { afEl.focus(); } catch(e) {} }
+            }
+        }
     } else if (state === 'complete') {
         // load fires on window (does not bubble)
         var loadEv = new Event('load', { bubbles: false, cancelable: false });
@@ -13157,16 +13213,205 @@ var _lumen_dialog_prev_focus = {};
 
 // DFS search for the first descendant of `container_nid` that has an
 // `autofocus` attribute. Returns its nid, or -1 if none found.
+// Presence is tested through `_lumen_has_attr`, not `!== undefined`: on the V8
+// bindings a missing attribute reads as `null` (BUG-442), which made this
+// return the container's first child on every call.
 function _lumen_find_autofocus_in(container_nid) {
     var queue = _lumen_get_children(container_nid).slice();
     while (queue.length > 0) {
         var cur = queue.shift();
-        if (_lumen_get_attr(cur, 'autofocus') !== undefined) return cur;
+        if (_lumen_has_attr(cur, 'autofocus')) return cur;
         var ch = _lumen_get_children(cur);
         for (var i = 0; i < ch.length; i++) queue.push(ch[i]);
     }
     return -1;
 }
+
+// ── Focus management (HTML LS §6.6) ──────────────────────────────────────────
+// BUG-381. The shell owns the real focus state (`Shell.focused_node` — it feeds
+// `:focus` matching, keyboard/IME routing and the platform a11y bridge) and
+// reports every change here through `_lumen_focus_update`. The page moves focus
+// the other way: `element.focus()` updates this side synchronously (the spec
+// requires `document.activeElement` to be current on the very next statement)
+// and queues `_lumen_request_focus` for the shell to apply on its next pump.
+// Both directions funnel through `_lumen_focus_update`, so the event sequence is
+// emitted exactly once and `_lumen_last_focused_nid` keeps a single writer.
+
+// Tags whose `disabled` content attribute takes them out of the focus order.
+var _LUMEN_DISABLEABLE_TAGS = {
+    INPUT: 1, SELECT: 1, TEXTAREA: 1, BUTTON: 1, OPTGROUP: 1, OPTION: 1, FIELDSET: 1,
+};
+
+// Tags that are focusable without a `tabindex` attribute (HTML LS §6.6.1).
+// `A`/`AREA` (need `href`), `INPUT` (any type but `hidden`) and `AUDIO`/`VIDEO`
+// (need `controls`) are conditional, so they are handled separately below.
+var _LUMEN_FOCUSABLE_TAGS = {
+    SELECT: 1, TEXTAREA: 1, BUTTON: 1, IFRAME: 1, EMBED: 1, OBJECT: 1, SUMMARY: 1,
+};
+
+// HTML LS §2.4.4.1 «rules for parsing integers», the subset `tabindex` needs:
+// optional sign followed by ASCII digits only. Returns null when the value is
+// absent or does not parse — deliberately stricter than `parseInt`, which would
+// accept '12px'.
+function _lumen_parse_integer(v) {
+    if (v === null || v === undefined) return null;
+    var s = String(v).trim();
+    if (s === '') return null;
+    var i = 0;
+    var sign = 1;
+    if (s.charAt(0) === '-') { sign = -1; i = 1; }
+    else if (s.charAt(0) === '+') { i = 1; }
+    if (i >= s.length) return null;
+    var n = 0;
+    for (; i < s.length; i++) {
+        var c = s.charCodeAt(i);
+        if (c < 48 || c > 57) return null;
+        n = n * 10 + (c - 48);
+    }
+    return sign * n;
+}
+
+// Nearest inclusive ancestor of `nid` that is an element, or -1. The shell
+// tracks focus by layout box and a box's node can be a text node, while the
+// spec-level focus surface only ever exposes elements.
+function _lumen_nearest_element_nid(nid) {
+    var cur = nid;
+    for (var guard = 0; guard < 512; guard++) {
+        if (cur === null || cur === undefined || cur === -1) return -1;
+        if (!_lumen_is_text_node(cur) && !_lumen_is_comment_node(cur)) return cur;
+        cur = _lumen_u2n(_lumen_get_parent(cur));
+    }
+    return -1;
+}
+
+// HTML LS §6.6.1 — can `nid` become a focusable area? `<body>`/`<html>` answer
+// yes because scripts legitimately focus them to drop focus back to the
+// viewport, even though they carry no tab index of their own.
+function _lumen_is_focusable(nid) {
+    if (nid === null || nid === undefined || nid === -1) return false;
+    if (_lumen_is_text_node(nid) || _lumen_is_comment_node(nid)) return false;
+    // HTML LS §6.7: nothing inside an inert subtree is focusable.
+    var anc = nid;
+    for (var guard = 0; guard < 512 && anc !== null && anc !== undefined; guard++) {
+        if (_lumen_has_attr(anc, 'inert')) return false;
+        anc = _lumen_u2n(_lumen_get_parent(anc));
+    }
+    var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
+    if (_LUMEN_DISABLEABLE_TAGS[tag] === 1 && _lumen_has_attr(nid, 'disabled')) {
+        return false;
+    }
+    // An explicit, parseable `tabindex` makes any element focusable.
+    if (_lumen_parse_integer(_lumen_u2n(_lumen_get_attr(nid, 'tabindex'))) !== null) return true;
+    var ce = _lumen_u2n(_lumen_get_attr(nid, 'contenteditable'));
+    if (ce !== null && String(ce).toLowerCase() !== 'false') return true;
+    if (tag === 'INPUT') {
+        return (_lumen_u2n(_lumen_get_attr(nid, 'type')) || '').toLowerCase() !== 'hidden';
+    }
+    if (tag === 'A' || tag === 'AREA') return _lumen_has_attr(nid, 'href');
+    if (tag === 'AUDIO' || tag === 'VIDEO') return _lumen_has_attr(nid, 'controls');
+    if (tag === 'BODY' || tag === 'HTML') return true;
+    return _LUMEN_FOCUSABLE_TAGS[tag] === 1;
+}
+
+// Dispatch one focus-family event. `focus`/`blur` do not bubble and must not
+// reach document-level listeners either, which is why this cannot reuse
+// `_lumen_dispatch_rich` (that one runs the document listeners even for a
+// non-bubbling event). `on<type>` properties are honoured at every hop, so
+// `el.onfocus = fn` works next to `addEventListener('focus', fn)`.
+function _lumen_dispatch_focus_event(nid, type, bubbles, related) {
+    var ev = new FocusEvent(type, {
+        bubbles: bubbles, cancelable: false, isTrusted: true, relatedTarget: related,
+    });
+    ev.target = _lumen_make_element(nid);
+    var cur = nid;
+    for (var guard = 0; guard < 512 && cur !== null && cur !== undefined; guard++) {
+        var el = _lumen_make_element(cur);
+        ev.currentTarget = el;
+        var arr = _lumen_listeners[String(cur) + ':' + type];
+        if (arr) {
+            var copy = arr.slice();
+            for (var i = 0; i < copy.length; i++) {
+                if (ev.cancelBubble) break;
+                try { copy[i].call(el, ev); } catch (e) {}
+                if (ev._stopImmediate) break;
+            }
+        }
+        if (el && typeof el['on' + type] === 'function') {
+            try { el['on' + type].call(el, ev); } catch (e) {}
+        }
+        if (!bubbles || ev.cancelBubble || ev._stopImmediate) break;
+        cur = _lumen_u2n(_lumen_get_parent(cur));
+    }
+    if (bubbles && !ev.cancelBubble && !ev._stopImmediate) {
+        var darr = _lumen_listeners[String(_LUMEN_DOC_LISTENER_NID) + ':' + type];
+        if (darr) {
+            var dcopy = darr.slice();
+            ev.currentTarget = document;
+            for (var j = 0; j < dcopy.length; j++) {
+                if (ev.cancelBubble) break;
+                try { dcopy[j].call(document, ev); } catch (e) {}
+                if (ev._stopImmediate) break;
+            }
+        }
+    }
+    ev.currentTarget = null;
+}
+
+// HTML LS §6.6.4/§6.6.5 — record a focus change and fire the event sequence
+// `blur` (old) → `focusout` (old) → `focus` (new) → `focusin` (new).
+// `newNid` is a node id, or -1/null for «nothing focused». Idempotent: focusing
+// the already-focused node fires nothing, which is exactly what stops the
+// shell's echo of a page-initiated `focus()` from dispatching a second round.
+function _lumen_focus_update(newNid) {
+    if (newNid === null || newNid === undefined) newNid = -1;
+    newNid = (newNid === -1) ? -1 : _lumen_nearest_element_nid(newNid);
+    var oldNid = _lumen_last_focused_nid;
+    if (oldNid === null || oldNid === undefined) oldNid = -1;
+    if (oldNid === newNid) return;
+    _lumen_last_focused_nid = newNid;
+    var oldEl = (oldNid !== -1) ? _lumen_make_element(oldNid) : null;
+    var newEl = (newNid !== -1) ? _lumen_make_element(newNid) : null;
+    if (oldEl !== null) {
+        _lumen_dispatch_focus_event(oldNid, 'blur', false, newEl);
+        _lumen_dispatch_focus_event(oldNid, 'focusout', true, newEl);
+    }
+    if (newEl !== null) {
+        _lumen_dispatch_focus_event(newNid, 'focus', false, oldEl);
+        _lumen_dispatch_focus_event(newNid, 'focusin', true, oldEl);
+    }
+}
+window._lumen_focus_update = _lumen_focus_update;
+
+// HTML LS §6.6.3 — `HTMLElement.focus(options)` / `HTMLElement.blur()`. The
+// shell is notified through the very `_lumen_request_focus`/`_lumen_request_blur`
+// pair `<dialog>.showModal()` already used, so `:focus`, keyboard routing and
+// the a11y bridge follow on its next pump.
+HTMLElement.prototype.focus = function(options) {
+    var nid = this.__nid__;
+    if (nid === null || nid === undefined) return;
+    if (!_lumen_is_focusable(nid)) return;
+    _lumen_request_focus(nid);
+    _lumen_focus_update(nid);
+    // HTML LS §6.6.3 «scroll into view» step, unless the caller opted out.
+    if (!(options && options.preventScroll) && typeof this.scrollIntoView === 'function') {
+        try { this.scrollIntoView(); } catch (e) {}
+    }
+};
+HTMLElement.prototype.blur = function() {
+    var nid = this.__nid__;
+    if (nid === null || nid === undefined) return;
+    // Blurring an element that is not focused is a no-op (HTML LS §6.6.3).
+    if (_lumen_last_focused_nid !== _lumen_nearest_element_nid(nid)) return;
+    _lumen_request_blur();
+    _lumen_focus_update(-1);
+};
+
+// HTML LS §7.2.2 — `window.focus()` / `window.blur()`. Lumen never lets a page
+// raise or lower its own OS window (that stays a user action), so both are
+// no-ops; they exist because feature detection and focus-trap code call them
+// unconditionally and used to die on `is not a function`.
+window.focus = function() {};
+window.blur  = function() {};
 
 // ── <selectlist> helpers (Open UI Customizable Select §3) ─────────────────────
 // Returns the <listbox> child nid of a <selectlist>, or null if absent.

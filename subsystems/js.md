@@ -616,6 +616,16 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
   recompute. The engine-thread relayout job is not wired (see BUG-341 "S7 (part 2)" for why —
   crossing the thread boundary with a `CounterMap`/dirty-roots is a separate design question).
 
+- **Focus API (HTML LS §6.6, BUG-381, 2026-07-29).** `HTMLElement.prototype.focus(options)`/`blur()`,
+  `document.activeElement`/`hasFocus()`, `window.focus()`/`blur()`, `tabIndex`/`autofocus` IDL
+  reflection, focusability per §6.6.1, and the `[autofocus]` flush at `readyState = 'interactive'`.
+  Both directions (page-initiated `focus()` and shell-reported focus change) funnel through the single
+  `_lumen_focus_update` entry point, which is idempotent — that is what lets the shell echo a focus the
+  page just requested without dispatching the event sequence twice. Page-side state moves
+  **synchronously** (`document.activeElement` must be current on the next statement) while the shell is
+  told through the pre-existing `_lumen_request_focus`/`_lumen_request_blur` queue and applies it on its
+  next pump.
+
 ## Deferred
 
 - WebGL: GLSL execution (per-vertex colour / texture sampling — currently flat `uniform4f` fill), `drawElements` / indexed draws, real textures. Backend stub lives in `lumen_paint::webgl`.
@@ -775,6 +785,9 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
 - rquickjs 0.11 `Function::call` takes `IntoArgs` (fixed-size tuples). Dynamic calls must use the eval workaround until rquickjs adds `Function::apply` or `Rest<T>: IntoArgs`.
 - DOM shim: `parentElement` and `children` are defined with `enumerable: false` via `Object.defineProperty`. Prevents `from_rq`'s `obj.props()` loop from serializing these cyclic getters → infinite recursion / stack overflow.
 - DOM shim: `Option<T>` in rquickjs maps `None → undefined` (not `null`). All nullable-returning native functions are wrapped with `_lumen_u2n(v)` in the shim to convert `undefined → null` as Web API requires.
+- **DOM shim: the same `Option<T>` maps to `null` on the V8 bindings, not `undefined` (BUG-442).** `_lumen_u2n`-wrapped reads are therefore engine-agnostic, but the shim's other idiom — testing attribute *presence* with a bare `_lumen_get_attr(...) !== undefined` — is true for every name on the default engine. Use `_lumen_has_attr(nid, name)` (`dom.rs`, added with BUG-381) for presence; never compare a native's result with `undefined` directly.
+- **DOM shim: `_lumen_dispatch_rich` runs the document-level listeners even for a non-bubbling event.** It stops the ancestor walk on `!event.bubbles` but not the document hop afterwards, so a non-bubbling event dispatched through it still reaches `document.addEventListener(type, …)`. The focus family (BUG-381) needed its own dispatcher for exactly this reason; anything else adding a non-bubbling shell-driven event must not reuse `_lumen_dispatch_rich` as-is.
+- **DOM shim: the shell tracks focus by layout box, whose node may be a text node.** Anything exposing `focused_node` to the page must normalise through `_lumen_nearest_element_nid` first — the spec-level focus surface only ever names elements.
 - `install_dom` must be called before `eval`. Drop the runtime before `Arc::try_unwrap(doc_arc)` — closures hold Arc clones until the runtime is dropped.
 - Web Storage closures capture `Arc<Mutex<WebStorage>>` clones — dropped with the runtime. The outer `Arc` in the shell's `ls_storage` map remains the authoritative store; JS mutations are immediately visible in Rust after the closure releases the lock.
 - IndexedDB requests defer their data operation to `_idb_dispatch_request` (run once via `req._action`), not to the calling site. Reading `request.result` before the `success` event is therefore always `undefined`; tests and the shell must call `_lumen_idb_flush()` to drain pending events. Synchronous validation (invalid key range → `DataError`, read-only transaction → `ReadOnlyError`) still throws at the call site, before the request is queued.

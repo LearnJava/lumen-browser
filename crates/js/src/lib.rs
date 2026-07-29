@@ -1821,15 +1821,19 @@ impl QuickJsRuntime {
 
     /// Notify the JS runtime that the shell moved keyboard focus to a new node.
     ///
-    /// Updates `_lumen_last_focused_nid` so that `showModal()` can save and restore
-    /// the previously focused element per HTML LS §6.6.3. `nid = None` means focus
-    /// was cleared (e.g. click on non-focusable area).
+    /// Runs the shim's focus-update steps (BUG-381): records the new
+    /// `document.activeElement`, fires `blur`/`focusout`/`focus`/`focusin` and
+    /// keeps `_lumen_last_focused_nid` current so `showModal()` can save and
+    /// restore the previously focused element per HTML LS §6.6.3. `nid = None`
+    /// means focus was cleared (e.g. click on a non-focusable area). No-op when
+    /// the change merely echoes a focus the page itself just requested.
     pub fn notify_focus_changed(&self, nid: Option<u32>) {
         let n = nid.map(|n| n as i64).unwrap_or(-1_i64);
         self.run(|inner| {
             inner.ctx.with(|ctx| {
                 let script = format!(
-                    "if(typeof _lumen_last_focused_nid!=='undefined')_lumen_last_focused_nid={n};"
+                    "if(typeof _lumen_focus_update==='function')_lumen_focus_update({n});\
+                     else if(typeof _lumen_last_focused_nid!=='undefined')_lumen_last_focused_nid={n};"
                 );
                 ctx.eval::<(), _>(script.as_str()).ok();
             });
