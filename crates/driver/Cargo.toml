@@ -33,7 +33,7 @@ lumen-font = { workspace = true }
 lumen-image = { workspace = true }
 lumen-network = { workspace = true }
 lumen-storage = { workspace = true }
-# Phase 4: QuickJS runtime for JS eval in headless mode (SDC-1a).
+# JS runtime for `eval`/`click`/`type_text` in headless mode (SDC-1a, DEVX-5).
 lumen-js = { workspace = true, optional = true }
 # Exception #1: winit for OS windowing
 winit.workspace = true
@@ -58,14 +58,16 @@ default = ["cpu-render", "v8"]
 # so InProcessSession can render cross-OS-identical pixels without a GPU.
 cpu-render = ["lumen-paint/cpu-render"]
 
-# QuickJS runtime for JS eval in headless mode (SDC-1a, WinitSession only).
-quickjs = ["dep:lumen-js"]
-
-# DEVX-5 slice 2: persistent V8 runtime for InProcessSession's click/type_text/
-# eval (ADR-018 — V8 is the default JS engine). Unlike `quickjs`'s one-shot,
-# DOM-snapshot-bound `WinitSession::eval`, this runtime is installed once per
-# `navigate()` against the same `Arc<Mutex<Document>>` the session's layout
-# reads, so JS-driven DOM mutations from dispatched events stay visible.
+# V8 runtime for both session kinds (ADR-018 — V8 is the default JS engine;
+# S12b-22 removed the former `quickjs` feature, which gated `WinitSession::eval`
+# and was enabled by no crate in the workspace).
+#
+# * DEVX-5 slice 2 — `InProcessSession`: a *persistent* runtime installed once
+#   per `navigate()` against the same `Arc<Mutex<Document>>` the session's
+#   layout reads, so JS-driven DOM mutations from dispatched events stay
+#   visible to `click`/`type_text`/`eval`.
+# * SDC-1a — `WinitSession::eval`: a *one-shot* runtime bound to a snapshot of
+#   the current DOM, for read/assert-style automation scripts.
 v8 = ["dep:lumen-js", "lumen-js/v8-backend"]
 
 # CompareBackend integration tests (ADR-010 RB-8): enables CompareBackend + CpuBackend

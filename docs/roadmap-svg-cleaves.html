@@ -835,9 +835,9 @@
         {
          "id": "P3-v8-s12b-22",
          "title": "V8 S12b-22: WinitSession::eval → V8 (driver)",
-         "status": "planned",
+         "status": "done",
          "size": "M",
-         "note": "Блокер: `crates/driver/src/winit_session.rs:1055-1096` — `WinitSession::eval()` реализован ТОЛЬКО через rquickjs (`#[cfg(not(feature=\"quickjs\"))]` возвращает ошибку, V8-ветки нет вовсе), хотя `lumen-driver` уже имеет фичу `v8` (используется в `session.rs::InProcessSession`). Портировать на `V8JsRuntime` до удаления фичи `quickjs` из `driver` — иначе headless `WinitSession::eval` останется нерабочим навсегда. Найдено аудитом перед S12b-final 2026-07-29"
+         "note": "ЗАКРЫТ 2026-07-29 (ветка p1-v8-s12b-22): `WinitSession::eval` переведён с `QuickJsRuntime` на `lumen_js::v8_runtime::V8JsRuntime`, гейт `#[cfg(feature=\"quickjs\")]` → `#[cfg(feature=\"v8\")]`. Семантика сохранена намеренно: one-shot рантайм на **клоне** DOM, мутации не возвращаются в layout/paint сессии (персистентный путь — `InProcessSession`, DEVX-5). Фича `quickjs` удалена из `crates/driver/Cargo.toml` целиком: после порта её не гейтил ни один `#[cfg]`, и её не включал ни один крейт воркспейса (shell/mcp/bidi-server берут `lumen-driver` с дефолтами `[\"cpu-render\",\"v8\"]`) — то есть `eval` до сих пор возвращал ошибку «требует пересборку с --features quickjs» во **всех** сборках. Два теста `test_automation_commands.rs`, годами не компилировавшиеся под мёртвым `#[cfg(feature=\"quickjs\")]`, перегейчены на `v8` и зелёные"
         },
         {
          "id": "P3-v8-s12b-23",
@@ -861,7 +861,7 @@
          "title": "V8 S12b-25: финальная чистка Cargo.toml/фич/доков",
          "status": "planned",
          "size": "M",
-         "note": "Финальный срез, строго после остальных S12b-* (включая S12b-22..24) и после того как все ~119 файлов `crates/js/src` без rquickjs. Убрать: `rquickjs`-зависимость из `crates/js/Cargo.toml` (сейчас жёсткая, не optional — в этом крейте нет даже фичи `quickjs`), фичу `quickjs` из `crates/shell/Cargo.toml` и `crates/driver/Cargo.toml`, `QuickJsRuntime`/`QuickPersistentJs`/`__lum_args__` (`lib.rs:188,2098,2126`), конструирования `QuickPersistentJs` в `main.rs` (`:3035-3040`, `:7195`, `:18888`); упростить ~84 гейта `any(feature=\"quickjs\", feature=\"v8\")` в `main.rs` обратно в безусловный код. Доксинк: закрыть ADR-018/`docs/tasks/ph3-v8-migration.md`, обновить CLAUDE.md (убрать формулировку про rollback-путь и «Phase 2 delivered: QuickJS»), CAPABILITIES.md, `subsystems/js.md`/`shell.md`/`driver.md`, ROADMAP.md. DoD: `rquickjs` отсутствует в Cargo.lock"
+         "note": "Финальный срез, строго после остальных S12b-* (включая S12b-22..24) и после того как все ~119 файлов `crates/js/src` без rquickjs. Убрать: `rquickjs`-зависимость из `crates/js/Cargo.toml` (сейчас жёсткая, не optional — в этом крейте нет даже фичи `quickjs`), фичу `quickjs` из `crates/shell/Cargo.toml` (в `crates/driver/Cargo.toml` её уже нет — снята в S12b-22), `QuickJsRuntime`/`QuickPersistentJs`/`__lum_args__` (`lib.rs:188,2098,2126`), конструирования `QuickPersistentJs` в `main.rs` (`:3035-3040`, `:7195`, `:18888`); упростить ~84 гейта `any(feature=\"quickjs\", feature=\"v8\")` в `main.rs` обратно в безусловный код. Доксинк: закрыть ADR-018/`docs/tasks/ph3-v8-migration.md`, обновить CLAUDE.md (убрать формулировку про rollback-путь и «Phase 2 delivered: QuickJS»), CAPABILITIES.md, `subsystems/js.md`/`shell.md`/`driver.md`, ROADMAP.md. DoD: `rquickjs` отсутствует в Cargo.lock"
         }
        ]
       },

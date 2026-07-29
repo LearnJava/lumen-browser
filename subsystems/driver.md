@@ -20,7 +20,8 @@ headless pipeline without winit/wgpu/ffmpeg.
   `navigate()`, `is_navigable_href` excludes `#`/`javascript:`/`mailto:`/`tel:`) or
   toggles `checked` on a checkbox/radio; `type_text` writes the `value` attribute
   (overwrite, not append — errors on non-input/textarea targets); `eval(js)` builds a
-  one-shot `QuickJsRuntime` (`--features quickjs`) bound via `install_dom` to a
+  one-shot `V8JsRuntime` (feature `v8`, on by default — S12b-22 ported this off
+  `QuickJsRuntime` and dropped the `quickjs` feature) bound via `install_dom` to a
   **clone** of the current DOM (mutations from `eval` do not feed back into the
   session's own layout/paint state — that bidirectional wiring is the larger 8A.8
   migration) and returns the result as a JSON string
@@ -92,8 +93,8 @@ headless pipeline without winit/wgpu/ffmpeg.
   `layout_snapshot`/`computed_style*`/`screenshot` don't reflect DOM mutations made via
   `click`/`type_text`/`eval` (matches `WinitSession`'s existing limitation; full
   interactive-JS-driven relayout is a separate, much larger slice). `crates/shell/Cargo.toml`:
-  `v8`/`quickjs` features now also enable `lumen-driver/v8-backend`/`lumen-driver/quickjs`
-  respectively, and `lumen-driver` always gets `cpu-render` — so a plain
+  `lumen-driver` is taken with its defaults plus an explicit `cpu-render`, and
+  `lumen-driver`'s own defaults are `["cpu-render", "v8"]` — so a plain
   `cargo build -p lumen-shell` (default features) ships a headless MCP that Just Works.
 
 
@@ -108,7 +109,12 @@ headless pipeline without winit/wgpu/ffmpeg.
 
 ## Deferred
 
-- `WinitSession::eval` without `--features quickjs` still errors.
+- `WinitSession::eval` built with `--no-default-features` (feature `v8` off) still errors —
+  the runtime it needs is not compiled in. Every workspace crate depending on `lumen-driver`
+  takes its defaults, so this only bites a deliberately stripped build.
+- `WinitSession::eval` stays one-shot: it spins up a fresh `V8JsRuntime` + `install_dom` per
+  call against a DOM **clone**, so DOM mutations are dropped and repeated calls pay full
+  runtime-init cost. The persistent alternative is `InProcessSession` (DEVX-5).
 - Native OS-level input dispatch (isTrusted mouse/keyboard events) for click/type — that's the live shell window's job (SDC-1b), not this headless session.
 - Full auto-wait (`WaitCondition::Visible/Stable/NetworkIdle/JsIdle`) beyond `WinitSession::wait`'s existing poll loop — task 8D refinements.
 - `LiveWindowSession`'s `layout_snapshot`/`computed_style(_snapshot)`/`layout_box_by_selector`/
@@ -137,4 +143,4 @@ headless pipeline without winit/wgpu/ffmpeg.
 
 ## Test counts
 
-12 unit tests in `crates/driver/src/session.rs`; 50 structural integration tests `test_00..49.rs`; 1 snapshot gate `snapshot_cpu` covering 57 pages; 5 (+2 under `--features quickjs`) `WinitSession` automation-command tests in `test_automation_commands.rs`; 6 (+3 under `--features v8`, +1 under its absence) `InProcessSession` automation-command tests in `test_devx5_headless_automation.rs`; 3 scripted-render regression tests in `scripted_render.rs` (feature `cpu-render` + `v8` — page scripts reaching layout, Canvas 2D pixels reaching the raster; BUG-429); 2 snapshot-delivery regression tests in `layout_snapshot_to_js.rs` (feature `v8` — `getComputedStyle`/`getBoundingClientRect` answering with real data after navigation, 4 fresh sessions each; BUG-382).
+12 unit tests in `crates/driver/src/session.rs`; 50 structural integration tests `test_00..49.rs`; 1 snapshot gate `snapshot_cpu` covering 57 pages; 7 (of which 2 under feature `v8`, on by default) `WinitSession` automation-command tests in `test_automation_commands.rs`; 6 (+3 under `--features v8`, +1 under its absence) `InProcessSession` automation-command tests in `test_devx5_headless_automation.rs`; 3 scripted-render regression tests in `scripted_render.rs` (feature `cpu-render` + `v8` — page scripts reaching layout, Canvas 2D pixels reaching the raster; BUG-429); 2 snapshot-delivery regression tests in `layout_snapshot_to_js.rs` (feature `v8` — `getComputedStyle`/`getBoundingClientRect` answering with real data after navigation, 4 fresh sessions each; BUG-382).

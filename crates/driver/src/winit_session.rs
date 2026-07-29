@@ -1052,7 +1052,7 @@ impl BrowserSession for WinitSession {
         }
     }
 
-    #[cfg(feature = "quickjs")]
+    #[cfg(feature = "v8")]
     fn eval(&self, js: &str) -> Result<String> {
         use lumen_core::ext::JsRuntime as _;
 
@@ -1061,17 +1061,19 @@ impl BrowserSession for WinitSession {
             let guard = state.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
             guard.doc.clone()
         };
-        // One-shot QuickJS runtime bound to a snapshot of the current DOM.
-        // This is intentionally NOT a persistent, bidirectionally-mutating
-        // runtime (that is the full 8A.8 migration): script-driven DOM
-        // mutations are visible to further `eval()` reads on the *same* doc
-        // handle within the call, but do not feed back into the session's
-        // own layout/paint state. Sufficient for read/assert-style automation
-        // scripts; native, JS-driven page interaction lives in the live
-        // shell window (SDC-1b).
+        // One-shot V8 runtime bound to a snapshot of the current DOM (ported
+        // from the rquickjs path in S12b-22; V8 is the default engine per
+        // ADR-018). This is intentionally NOT a persistent, bidirectionally-
+        // mutating runtime — that is `InProcessSession`'s job (DEVX-5, one
+        // `V8JsRuntime` installed per `navigate()` against the session's own
+        // `Arc<Mutex<Document>>`). Here script-driven DOM mutations are visible
+        // to further reads *within the same `eval` call*, but do not feed back
+        // into the session's layout/paint state. Sufficient for read/assert-
+        // style automation scripts; native, JS-driven page interaction lives in
+        // the live shell window (SDC-1b).
         let doc_arc = Arc::new(Mutex::new(doc_snapshot));
-        let rt = lumen_js::QuickJsRuntime::new()
-            .map_err(|e| Error::Other(format!("QuickJS init: {e}")))?;
+        let rt = lumen_js::v8_runtime::V8JsRuntime::new()
+            .map_err(|e| Error::Other(format!("V8 init: {e}")))?;
         rt.install_dom(
             doc_arc,
             &self.current_url,
@@ -1090,10 +1092,10 @@ impl BrowserSession for WinitSession {
         Ok(value.to_json_string())
     }
 
-    #[cfg(not(feature = "quickjs"))]
+    #[cfg(not(feature = "v8"))]
     fn eval(&self, _js: &str) -> Result<String> {
         Err(Error::Other(
-            "eval требует пересборку с --features quickjs".into(),
+            "eval требует пересборку с --features v8".into(),
         ))
     }
 
