@@ -73,7 +73,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Fonts L4 | [css-fonts-4](https://www.w3.org/TR/css-fonts-4/) | 🟡 | @font-face actual loading ⬜; font-optical-sizing ✅ 2026-05-29 | **#20** |
 | CSS Intrinsic Sizing L3 | [css3-sizing](https://www.w3.org/TR/css3-sizing/) | ✅ | min-content/max-content/fit-content/fit-content(L) for width/height/min-max; 11 tests 2026-05-24 | **#21** |
 | CSS Overflow L3 (scroll) | [css-overflow-3](https://www.w3.org/TR/css-overflow-3/) | 🟡 | scrollable containers; overflow:scroll rendering | **#22** |
-| CSS Text L3/L4 | [css3-text](https://www.w3.org/TR/css3-text/) | 🟡 | text-align-last ✅ 2026-06-08; hyphens:auto ✅ (P1 2026-05-29, KnuthLiangHyphenation); white-space-collapse ✅ + break-spaces ✅ (p4-white-space-collapse 2026-07-04); line-break CJK / text-wrap-style ⬜ | **#23** |
+| CSS Text L3/L4 | [css3-text](https://www.w3.org/TR/css3-text/) | 🟡 | text-align-last ✅ 2026-06-08; hyphens:auto ✅ (P1 2026-05-29, KnuthLiangHyphenation); white-space-collapse ✅ + break-spaces ✅ (p4-white-space-collapse 2026-07-04); line-break CJK ✅ (p4-line-break-cjk 2026-07-29); text-wrap-style ✅ | **#23** |
 | CSS Transforms L2 | [css-transforms-2](https://www.w3.org/TR/css-transforms-2/) | 🟡 | individual translate/rotate/scale ✅ 2026-05-26; 3D matrix primitive + perspective-correct rendering ✅ 2026-05-29 (P2); 3D function parsing ✅ (translate3d/rotateX/matrix3d…, property_trees.rs:773); `backface-visibility` culling ✅ (p4-backface-culling); `perspective`/`perspective-origin` projection wiring 🟡 (P4) | **#24** |
 | CSS Values L4/L5 | [css-values-4](https://www.w3.org/TR/css-values-4/) | 🟡 | env(); attr() with type; cq* units | **#25** |
 
@@ -243,7 +243,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `text-align-last` | ✅ | parsed + wired in align_lines; last-line override (CSS Text L3 §7.2); 4 tests |
 | `hyphens` | ✅ | none/manual/auto; auto = KnuthLiangHyphenation (lumen-encoding, 11 locales) wired in shell via layout_measured_hyp (P1 2026-05-29) |
 | `tab-size` | ✅ | parsed; \t expanded in pre/pre-wrap; renderer advances cursor by tab_size |
-| `line-break` | 🟡 | parsed; CJK-aware breaking ⬜ |
+| `line-break` | ✅ | auto/loose/normal/strict/anywhere wired into `wrap_inline_run`; UAX #14 CJK break opportunities (`layout::line_break`) — `auto` = `normal`; `word-break: keep-all` suppresses CJK breaking, `anywhere` overrides it (p4-line-break-cjk 2026-07-29) |
 | `text-wrap-mode` / `text-wrap-style` | ✅ | text-wrap-mode → effective white-space (p4-white-space-collapse 2026-07-04); text-wrap-style balance/pretty in line-breaker (`balance_wrap`, box_tree.rs:9359) |
 | `text-underline-position` / `text-underline-offset` | ✅ | wired in push_text_decoration(); Under→fs*0.25; offset adds to base (p4-text-underline 2026-06-10) |
 | `text-emphasis` / `text-emphasis-*` | ✅ | per-char marks rendered (emit_text_emphasis_marks) |
