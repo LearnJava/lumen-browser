@@ -1831,8 +1831,10 @@ pub struct Renderer {
     pending_readback: Option<wgpu::Texture>,
     /// GPU texture pool for layer recycling (ADR-008 Phase 2).
     /// Maintains free textures keyed by (width, height) for reuse instead of
-    /// allocating a new `wgpu::Texture` for each layer.
-    texture_pool: crate::texture_pool::TexturePool,
+    /// allocating a new `wgpu::Texture` for each layer. Свободный список
+    /// ограничен байтовым бюджетом (BUG-272 срез 21) — вытеснение в `trim()`
+    /// после сабмита кадра.
+    texture_pool: crate::texture_pool::TexturePool<crate::texture_pool::PooledTexture>,
     /// Normalized GPU fingerprint: prevents WebGL renderer/vendor fingerprinting (ADR-007).
     gpu_fingerprint: GpuFingerprint,
 }
@@ -4886,6 +4888,27 @@ impl Renderer {
     /// Get the number of free textures of a specific size (for diagnostics).
     pub fn texture_pool_len_for_size(&self, width: u32, height: u32) -> usize {
         self.texture_pool.len_for_size(width, height)
+    }
+
+    /// Однострочная сводка по пулу offscreen-слоёв для `LUMEN_MEM_REPORT`
+    /// (BUG-272 срез 21): свободные текстуры, классы размеров, объём
+    /// свободного списка против бюджета и сколько вытеснено за сессию.
+    #[must_use]
+    pub fn texture_pool_report(&self) -> String {
+        use std::sync::atomic::Ordering::Relaxed;
+        let mib = |bytes: u64| bytes as f64 / (1024.0 * 1024.0);
+        let budget = self.texture_pool.budget_bytes();
+        format!(
+            "texture_pool: free {} tex / {} size-classes / {:.1} MiB (budget {}) \
+             | evicted {} | hits {} misses {}",
+            self.texture_pool.len(),
+            self.texture_pool.size_classes(),
+            mib(self.texture_pool.free_bytes()),
+            if budget == 0 { "off".to_string() } else { format!("{:.0} MiB", mib(budget)) },
+            self.texture_pool.evicted(),
+            TEXTURE_POOL_HITS.load(Relaxed),
+            TEXTURE_POOL_MISSES.load(Relaxed),
+        )
     }
 
     /// Clear all pooled textures (e.g., when resizing or memory pressure is high).
@@ -9051,6 +9074,11 @@ impl Renderer {
         for layer in temp_grad_layers.drain(..) {
             self.release_layer_to_pool(layer);
         }
+        // BUG-272 срез 21: привести свободный список пула к байтовому бюджету.
+        // Точка выбрана после `submit` намеренно — освобождаемые здесь текстуры
+        // могли быть использованы командами этого кадра, а удерживает их до
+        // исполнения сам wgpu (тот же довод, что у `temp_grad_layers` выше).
+        self.texture_pool.trim();
         if let Some(frame) = windowed_frame {
             frame.present();
         }

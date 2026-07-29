@@ -7,11 +7,11 @@
 //! - Textures are properly cached and returned
 //! - Pool is cleared on resize
 
-use lumen_paint::texture_pool::{TextureKey, TexturePool};
+use lumen_paint::texture_pool::{PooledTexture, TextureKey, TexturePool};
 
 #[test]
 fn texture_pool_basic_operations() {
-    let mut pool = TexturePool::new();
+    let mut pool = TexturePool::<PooledTexture>::new();
 
     // Pool starts empty
     assert!(pool.is_empty());
@@ -23,7 +23,7 @@ fn texture_pool_basic_operations() {
 
 #[test]
 fn texture_pool_size_tracking() {
-    let mut pool = TexturePool::new();
+    let mut pool = TexturePool::<PooledTexture>::new();
 
     pool.update_size(5);
     assert_eq!(pool.pool_size(), 5);
@@ -40,7 +40,7 @@ fn texture_pool_size_tracking() {
 
 #[test]
 fn texture_pool_clear_resets_diagnostics() {
-    let mut pool = TexturePool::new();
+    let mut pool = TexturePool::<PooledTexture>::new();
 
     pool.update_size(10);
     assert_eq!(pool.pool_size(), 10);
@@ -63,7 +63,7 @@ fn texture_key_equality() {
 
 #[test]
 fn texture_pool_separate_by_size() {
-    let pool = TexturePool::new();
+    let pool = TexturePool::<PooledTexture>::new();
 
     // Sizes are tracked independently
     assert_eq!(pool.len_for_size(256, 256), 0);

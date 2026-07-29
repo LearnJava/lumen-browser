@@ -33,7 +33,7 @@ Related docs: [`docs/commands.md`](commands.md) (day-to-day commands), [`docs/gr
 | GUI timeline profiler | `cargo run --features tracy` | Tracy client needed |
 | Scroll performance benchmark | `scripts/scroll_perf.py`, `scripts/mt_stall_bench.py` | drives `--mcp-live-port` |
 | Real-site load perf: live GUI run (tab per site), stats, journal, bug filing | `python scripts/perf_audit.py` over `docs/perf/corpus.txt` (default: one visible window, `new_tab` per site, cumulative RAM); `--phases` = headless per-phase decomposition; full protocol = skill `/lumen-perf-audit` | dev-release build; screenshots via CPU path (BUG-221) |
-| Cache/memory growth diagnosis | `LUMEN_MEM_REPORT=1` (~10 s cadence dump) | TEMP instrumentation from BUG-272 |
+| Cache/memory growth diagnosis | `LUMEN_MEM_REPORT=1` (~10 s cadence dump) | TEMP instrumentation from BUG-272. Includes the render backend's own report: per-category GPU bytes on femtovg (slice 16), offscreen-layer pool state on the default wgpu backend (slice 21 — free textures / size classes / MiB vs budget / evictions / pool hits+misses) |
 | Print/pagination check | `lumen --print-to-pdf out.pdf <src>` | A4 |
 | Reproduce input-order bugs | `--activity-log` / `--click-log` → `activity.log` | |
 | Session-health journal (panics/console.error/load fails/white-screen) → prioritize P3 fixes by frequency | `--health-log` (or `--activity-log` / `LUMEN_HEALTH_LOG=1`) → `health.log` (JSONL); report via `python scripts/health_report.py` (PERF-6) | console/render signals fire in live window only; panic in any mode |
@@ -86,6 +86,7 @@ Snapshot-test env vars: `SNAPSHOT_VS_EDGE_STRICT=1` (hard-gate `crates/driver/te
 | `LUMEN_NO_ENGINE_THREAD=1` | **Rollback** for the off-thread layout engine thread, which is **on by default since ADR-023** (was opt-in `LUMEN_ENGINE_THREAD=1`, ADR-016 M2.2). `LUMEN_ENGINE_THREAD=0` also disables it; a leftover `=1` still works and now just agrees with the default |
 | `LUMEN_RENDER_THREAD` | Render thread on/off |
 | `LUMEN_PRESENT` | Present mode override |
+| `LUMEN_TEXTURE_POOL_MB=<N>` | Byte budget of the wgpu offscreen-layer pool's free list (default 64; `0` removes the cap = pre-BUG-272-slice-21 behaviour). A/B memory measurements on one binary |
 | `LUMEN_NO_FRAME_SKIP` / `LUMEN_NO_SCROLL_COMPOSITOR` / `LUMEN_NO_ANIM_SPLIT` / `LUMEN_NO_BBOX_SCISSOR` / `LUMEN_NO_BBOX_BACKDROP` / `LUMEN_NO_IMAGE_MIPS` / `LUMEN_NO_BAND_BIAS` | Disable one paint optimization each — **the paint-regression bisection kit** (crates/engine/paint/src/renderer.rs), driven automatically by `run.py --paint-bisect NN` (DEVX-4) |
 | `LUMEN_EAGER_PIPELINES=1` | **Rollback + A/B lever** for lazy wgpu pipeline compilation (BUG-406): compiles all 16 pipelines in `init_pipelines` instead of the 5 hot ones. Run it once after touching any `build_*_pipeline` — a lazy pipeline that is never built is never validated by wgpu |
 | `LUMEN_SCROLL_BLIT` / `LUMEN_NO_FAST_SCROLL_DEGRADE` | Scroll-blit opt / fast-scroll quality degrade |

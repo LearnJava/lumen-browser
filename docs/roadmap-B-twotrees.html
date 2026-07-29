@@ -75,8 +75,8 @@
 {
  "generated": "2026-07-29",
  "counts": {
-  "open": 123,
-  "fixed": 276,
+  "open": 122,
+  "fixed": 277,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -5935,10 +5935,10 @@
    "debtor": false
   },
   "BUG-272": {
-   "status": "open",
+   "status": "fixed",
    "title": "lenta.ru держала 1371 МБ WS при одной картинке. **Корень:** каждый Push{ClipRoundedRect,ClipPath,Opacity,Filter,Mask,Backdrop,BlendMode} создавал offscreen-текс…",
-   "component": "paint (femtovg, offscreen-слои) + font (bytes_store)",
-   "date": null,
+   "component": "paint (femtovg + wgpu offscreen-слои) + font (bytes_store)",
+   "date": "2026-07-29",
    "debtor": false
   },
   "BUG-273": {
@@ -7413,6 +7413,9 @@
   "paint (build)": [
    "BUG-235"
   ],
+  "paint (femtovg + wgpu offscreen-слои) + font (bytes_store)": [
+   "BUG-272"
+  ],
   "paint (femtovg `backends/femtovg_backend.rs`, `BeginStickyLayer`)": [
    "BUG-337"
   ],
@@ -7421,9 +7424,6 @@
   ],
   "paint (femtovg, `acquire_layer`/`layer_pool`)": [
    "BUG-320"
-  ],
-  "paint (femtovg, offscreen-слои) + font (bytes_store)": [
-   "BUG-272"
   ],
   "paint (font-metrics)": [
    "BUG-250"
