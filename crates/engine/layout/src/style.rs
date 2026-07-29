@@ -1056,18 +1056,98 @@ pub enum FontStyle {
     Oblique,
 }
 
-/// CSS Fonts L4 §6 — `font-variant` (упрощённый Phase 0). Inherited.
+/// CSS Fonts L4 §6.2 — `font-variant-caps`. Inherited.
 ///
-/// Полный `font-variant` — это shorthand над font-variant-caps,
-/// -ligatures, -numeric и т.д. (CSS Fonts L4). Phase 0 поддерживаем
-/// только два самых частых значения: `normal` и `small-caps`. Real
-/// small-caps rendering требует OpenType feature `smcp` или fallback
-/// на uppercase + меньший font-size — отложено.
+/// Полный набор значений спецификации. `font-variant` — shorthand, из
+/// которого сюда попадает только caps-компонента (остальные longhand-ы
+/// — `-ligatures`, `-numeric`, `-east-asian`, `-position`, `-alternates`
+/// — ещё не реализованы).
+///
+/// Рендеринг: пять значений синтезируются в layout-е (`caps_synthesis` в
+/// `box_tree.rs` — заглавные буквы, уменьшенные до `SMALL_CAPS_SCALE`),
+/// потому что bundled-шрифт (Inter) не содержит ни `smcp`, ни `c2sc`, ни
+/// `pcap`. `TitlingCaps` синтезировать нечем — оно уходит в шейпер
+/// OpenType-фичей `titl` (см. [`text_font_features`]).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum FontVariant {
+pub enum FontVariantCaps {
+    /// `normal` (initial) — обычные глифы, никаких caps-подстановок.
     #[default]
     Normal,
+    /// `small-caps` — строчные буквы показываются капителью (OpenType `smcp`).
     SmallCaps,
+    /// `all-small-caps` — капителью показываются И строчные, И заглавные
+    /// (OpenType `c2sc` + `smcp`).
+    AllSmallCaps,
+    /// `petite-caps` — как `small-caps`, но капитель ниже (OpenType `pcap`).
+    /// Синтезируется идентично `small-caps` (Phase 0, как в Gecko).
+    PetiteCaps,
+    /// `all-petite-caps` — `c2pc` + `pcap`; синтезируется как `all-small-caps`.
+    AllPetiteCaps,
+    /// `unicase` — заглавные показываются капителью, строчные остаются
+    /// строчными (OpenType `unic`).
+    Unicase,
+    /// `titling-caps` — заглавные заменяются на титульные формы (OpenType
+    /// `titl`). Синтезу не поддаётся: без глифов шрифта это no-op.
+    TitlingCaps,
+}
+
+impl FontVariantCaps {
+    /// Разбирает keyword `font-variant-caps` (CSS Fonts L4 §6.2).
+    /// `None` — токен не относится к caps-компоненте.
+    pub fn from_keyword(kw: &str) -> Option<Self> {
+        match kw {
+            "normal" => Some(Self::Normal),
+            "small-caps" => Some(Self::SmallCaps),
+            "all-small-caps" => Some(Self::AllSmallCaps),
+            "petite-caps" => Some(Self::PetiteCaps),
+            "all-petite-caps" => Some(Self::AllPetiteCaps),
+            "unicase" => Some(Self::Unicase),
+            "titling-caps" => Some(Self::TitlingCaps),
+            _ => None,
+        }
+    }
+
+    /// OpenType-фичи, которые это значение включает в шейпере.
+    ///
+    /// Пусто для всех значений, кроме `titling-caps`: остальные
+    /// синтезируются в layout-е (`caps_synthesis`), и включать вдобавок
+    /// `smcp`/`c2sc` нельзя — по уже поднятому в верхний регистр тексту
+    /// `c2sc` отработал бы второй раз и капитель уменьшилась бы дважды.
+    pub fn feature_tags(self) -> &'static [[u8; 4]] {
+        const TITL: [[u8; 4]; 1] = [*b"titl"];
+        match self {
+            Self::TitlingCaps => &TITL,
+            _ => &[],
+        }
+    }
+
+    /// CSS-сериализация значения (для `getComputedStyle` и layout-дампов).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::SmallCaps => "small-caps",
+            Self::AllSmallCaps => "all-small-caps",
+            Self::PetiteCaps => "petite-caps",
+            Self::AllPetiteCaps => "all-petite-caps",
+            Self::Unicase => "unicase",
+            Self::TitlingCaps => "titling-caps",
+        }
+    }
+}
+
+/// Собирает набор OpenType-фич для `DrawText.font_features`.
+///
+/// CSS Fonts L4 §6.4 (Font Feature Resolution) задаёт порядок: сперва фичи
+/// от `font-variant-*`, последними — `font-feature-settings`. Шейпер
+/// (`otlayout::apply_feature_overrides`) применяет пары слева направо, так
+/// что более поздняя запись перекрывает раннюю — то есть автор может
+/// выключить фичу капители через `font-feature-settings`.
+pub fn text_font_features(style: &ComputedStyle) -> Vec<([u8; 4], u32)> {
+    let caps = style.font_variant_caps.feature_tags();
+    let mut out = Vec::with_capacity(caps.len() + style.font_feature_settings.len());
+    out.extend(caps.iter().map(|tag| (*tag, 1)));
+    out.extend(style.font_feature_settings.iter().map(|f| (f.tag, f.value)));
+    out
 }
 
 /// CSS Fonts L4 §7.12 — `font-optical-sizing`. Inherited.
@@ -3091,8 +3171,8 @@ pub struct ComputedStyle {
     pub line_height_step: f32,
     pub font_style: FontStyle,
     pub font_weight: FontWeight,
-    /// CSS Fonts L4 §6 — font-variant (Phase 0: normal | small-caps). Inherited.
-    pub font_variant: FontVariant,
+    /// CSS Fonts L4 §6.2 — font-variant-caps (весь набор значений). Inherited.
+    pub font_variant_caps: FontVariantCaps,
     /// CSS Fonts L4 §2.5 — font-stretch (десятые доли процента; normal = 1000).
     /// Inherited.
     pub font_stretch: FontStretch,
@@ -6433,7 +6513,7 @@ impl ComputedStyle {
             && (self.line_height - other.line_height).abs() < f32::EPSILON
             && self.font_style == other.font_style
             && self.font_weight == other.font_weight
-            && self.font_variant == other.font_variant
+            && self.font_variant_caps == other.font_variant_caps
             && self.font_stretch == other.font_stretch
             && self.font_feature_settings == other.font_feature_settings
             && (self.letter_spacing - other.letter_spacing).abs() < f32::EPSILON
@@ -6460,7 +6540,7 @@ impl ComputedStyle {
             line_height_step: 0.0,
             font_style: FontStyle::Normal,
             font_weight: FontWeight::NORMAL,
-            font_variant: FontVariant::Normal,
+            font_variant_caps: FontVariantCaps::Normal,
             font_stretch: FontStretch::NORMAL,
             font_family: Vec::new(),
             font_variation_settings: Vec::new(),
@@ -6802,7 +6882,7 @@ pub fn compute_style(
         line_height_step: inherited.line_height_step,
         font_style: inherited.font_style,
         font_weight: inherited.font_weight,
-        font_variant: inherited.font_variant,
+        font_variant_caps: inherited.font_variant_caps,
         font_stretch: inherited.font_stretch,
         font_family: inherited.font_family.clone(),
         font_variation_settings: inherited.font_variation_settings.clone(),
@@ -8362,7 +8442,7 @@ fn pseudo_inherited_style(parent: &ComputedStyle) -> ComputedStyle {
     style.line_height_step = parent.line_height_step;
     style.font_style = parent.font_style;
     style.font_weight = parent.font_weight;
-    style.font_variant = parent.font_variant;
+    style.font_variant_caps = parent.font_variant_caps;
     style.font_stretch = parent.font_stretch;
     style.font_family = parent.font_family.clone();
     style.font_variation_settings = parent.font_variation_settings.clone();
@@ -11079,7 +11159,7 @@ fn apply_quirks_table_reset(doc: &Document, node: NodeId, style: &mut ComputedSt
     style.line_height = 1.2;
     style.font_family = Vec::new();
     style.font_style = FontStyle::Normal;
-    style.font_variant = FontVariant::Normal;
+    style.font_variant_caps = FontVariantCaps::Normal;
     style.font_weight = FontWeight::NORMAL;
     style.font_stretch = FontStretch::NORMAL;
     style.color = Color::BLACK;
@@ -14672,8 +14752,8 @@ fn apply_declaration(
             // явно заданные компоненты.
             if let Some(parts) = parse_font_shorthand(val) {
                 style.font_style = parts.style.unwrap_or(FontStyle::Normal);
-                style.font_variant =
-                    if parts.small_caps { FontVariant::SmallCaps } else { FontVariant::Normal };
+                style.font_variant_caps =
+                    if parts.small_caps { FontVariantCaps::SmallCaps } else { FontVariantCaps::Normal };
                 style.font_weight = parts
                     .weight
                     .as_deref()
@@ -14716,15 +14796,24 @@ fn apply_declaration(
                 _ => style.font_optical_sizing,
             };
         }
-        "font-variant" | "font-variant-caps" => {
-            // Phase 0: только normal | small-caps. Прочие keyword-ы
-            // (all-small-caps, petite-caps, …) и связанные субсвойства
-            // (font-variant-ligatures, -numeric, и т.д.) — отложены.
-            style.font_variant = match val.split_whitespace().next() {
-                Some("small-caps") => FontVariant::SmallCaps,
-                Some("normal") => FontVariant::Normal,
-                _ => style.font_variant,
-            };
+        "font-variant-caps" => {
+            // CSS Fonts L4 §6.2 — longhand: ровно один keyword.
+            if let Some(caps) = FontVariantCaps::from_keyword(val.trim()) {
+                style.font_variant_caps = caps;
+            }
+        }
+        "font-variant" => {
+            // CSS Fonts L4 §6.10 — shorthand над font-variant-{caps,ligatures,
+            // numeric,east-asian,position,alternates}. Реализована только
+            // caps-компонента, но сбросить её обязан любой валидный shorthand
+            // (CSS Cascade L4 §3.1): `font-variant: common-ligatures` должен
+            // вернуть caps в initial, а не оставить унаследованное small-caps.
+            // `none` (отключение лигатур) и любые нереализованные keyword-ы
+            // caps-компоненты не содержат — значит она в initial.
+            style.font_variant_caps = val
+                .split_whitespace()
+                .find_map(FontVariantCaps::from_keyword)
+                .unwrap_or(FontVariantCaps::Normal);
         }
         "font-stretch" => {
             let token = val.split_whitespace().next().unwrap_or("");
@@ -17938,7 +18027,7 @@ fn apply_css_wide_keyword(
             style.font_weight = if inh { inherited.font_weight } else { init.font_weight };
         }
         "font-variant" | "font-variant-caps" => {
-            style.font_variant = if inh { inherited.font_variant } else { init.font_variant };
+            style.font_variant_caps = if inh { inherited.font_variant_caps } else { init.font_variant_caps };
         }
         "font-stretch" => {
             style.font_stretch = if inh { inherited.font_stretch } else { init.font_stretch };
@@ -29310,11 +29399,42 @@ mod tests {
     }
 
     #[test]
+    fn text_font_features_emits_titl_only_for_titling_caps() {
+        // Синтезируемые значения фич не дают: `c2sc` по уже поднятому в
+        // верхний регистр тексту уменьшил бы капитель второй раз.
+        let mut s = ComputedStyle::root();
+        for caps in [
+            FontVariantCaps::SmallCaps,
+            FontVariantCaps::AllSmallCaps,
+            FontVariantCaps::PetiteCaps,
+            FontVariantCaps::AllPetiteCaps,
+            FontVariantCaps::Unicase,
+            FontVariantCaps::Normal,
+        ] {
+            s.font_variant_caps = caps;
+            assert!(text_font_features(&s).is_empty(), "{}", caps.as_str());
+        }
+        s.font_variant_caps = FontVariantCaps::TitlingCaps;
+        assert_eq!(text_font_features(&s), vec![(*b"titl", 1)]);
+    }
+
+    #[test]
+    fn text_font_features_puts_feature_settings_last() {
+        // CSS Fonts L4 §6.4: font-feature-settings имеет высший приоритет,
+        // а шейпер применяет пары слева направо — значит автор может
+        // выключить фичу капители, и её запись обязана идти раньше.
+        let mut s = ComputedStyle::root();
+        s.font_variant_caps = FontVariantCaps::TitlingCaps;
+        s.font_feature_settings = vec![FontFeatureSetting { tag: *b"titl", value: 0 }];
+        assert_eq!(text_font_features(&s), vec![(*b"titl", 1), (*b"titl", 0)]);
+    }
+
+    #[test]
     fn font_shorthand_style_variant_weight() {
         let s = p_style_with_css("p { font: italic small-caps bold 20px Georgia; }");
         assert_eq!(s.font_size, 20.0);
         assert_eq!(s.font_style, FontStyle::Italic);
-        assert_eq!(s.font_variant, FontVariant::SmallCaps);
+        assert_eq!(s.font_variant_caps, FontVariantCaps::SmallCaps);
         assert_eq!(s.font_weight, FontWeight::BOLD);
         assert_eq!(s.font_family.first().map(String::as_str), Some("Georgia"));
     }

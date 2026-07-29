@@ -3642,7 +3642,7 @@ fn emit_text_frags(
             font_family: frag.style.font_family.clone(),
             font_weight: frag.style.font_weight,
             font_style: frag.style.font_style,
-            font_features: frag.style.font_feature_settings.iter().map(|f| (f.tag, f.value)).collect(),
+            font_features: lumen_layout::style::text_font_features(&frag.style),
             font_palette: palette_selection(&frag.style),
             font_variation_axes: {
                 let mut axes: Vec<([u8; 4], f32)> = frag.style.font_variation_settings
@@ -3775,7 +3775,7 @@ fn emit_inline_run_vertical(b: &LayoutBox, lines: &[Vec<InlineFrag>], out: &mut 
                 font_family: frag.style.font_family.clone(),
                 font_weight: frag.style.font_weight,
                 font_style: frag.style.font_style,
-                font_features: frag.style.font_feature_settings.iter().map(|f| (f.tag, f.value)).collect(),
+                font_features: lumen_layout::style::text_font_features(&frag.style),
                 font_palette: palette_selection(&frag.style),
                 font_variation_axes: {
                     let mut axes: Vec<([u8; 4], f32)> = frag.style.font_variation_settings
@@ -3870,7 +3870,7 @@ fn emit_inline_run(
                 font_family: ef.style.font_family.clone(),
                 font_weight: ef.style.font_weight,
                 font_style: ef.style.font_style,
-                font_features: ef.style.font_feature_settings.iter().map(|f| (f.tag, f.value)).collect(),
+                font_features: lumen_layout::style::text_font_features(&ef.style),
                 font_palette: palette_selection(&ef.style),
                 font_variation_axes: {
                     let mut axes: Vec<([u8; 4], f32)> = ef.style.font_variation_settings
@@ -4497,7 +4497,7 @@ fn emit_text_shadows(
             // CSS Fonts L4 §7.12: for `auto`, inject opsz = font_size so the renderer
             // normalizes it via fvar like any other axis. Skipped for `none` to let
             // font-variation-settings control opsz directly.
-            font_features: frag.style.font_feature_settings.iter().map(|f| (f.tag, f.value)).collect(),
+            font_features: lumen_layout::style::text_font_features(&frag.style),
             font_palette: palette_selection(&frag.style),
             font_variation_axes: {
                 let mut axes: Vec<([u8; 4], f32)> = frag.style.font_variation_settings
@@ -6694,7 +6694,7 @@ fn emit_list_marker(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                     font_family: s.font_family.clone(),
                     font_weight: s.font_weight,
                     font_style: s.font_style,
-                    font_features: s.font_feature_settings.iter().map(|f| (f.tag, f.value)).collect(),
+                    font_features: lumen_layout::style::text_font_features(s),
                     font_palette: palette_selection(s),
                     font_variation_axes: {
                         let mut axes: Vec<([u8; 4], f32)> = s.font_variation_settings

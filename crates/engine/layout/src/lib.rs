@@ -131,7 +131,7 @@ pub use style::{
     BackfaceVisibility, ClearSide, ContainFlags, ComputedStyle, Content, CustomProps,
     ContentItem, CssColor, CssWideKeyword, Cursor, Direction, Display, EmptyCells, FilterFn, FloatSide, FontOpticalSizing, FontStretch,
     FontStyle,
-    FontVariant, FontVariationSetting, FontWeight, GradientStop, GridAutoFlow, GridLine, GridTrackSize, Hyphens, ImageRendering,
+    FontVariantCaps, FontVariationSetting, FontWeight, GradientStop, GridAutoFlow, GridLine, GridTrackSize, Hyphens, ImageRendering,
     MaskClip, MaskComposite, MaskLayer, MaskMode, MasonryAutoFlow,
     Isolation, IterationCount, Length,
     LengthOrAuto, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition,
@@ -6906,29 +6906,73 @@ mod tests {
         None
     }
 
-    // ── font-variant (CSS Fonts L4 §6, упрощённый) ──────────────────────────
+    // ── font-variant-caps (CSS Fonts L4 §6.2) ───────────────────────────────
 
     #[test]
     fn font_variant_default_normal() {
         let root = lay("<p>x</p>", "");
         let p = first_element_child(&root);
-        assert_eq!(p.style.font_variant, FontVariant::Normal);
+        assert_eq!(p.style.font_variant_caps, FontVariantCaps::Normal);
     }
 
     #[test]
     fn font_variant_small_caps_parsed() {
         let root = lay("<p>x</p>", "p { font-variant: small-caps; }");
         let p = first_element_child(&root);
-        assert_eq!(p.style.font_variant, FontVariant::SmallCaps);
+        assert_eq!(p.style.font_variant_caps, FontVariantCaps::SmallCaps);
     }
 
     #[test]
-    fn font_variant_caps_alias() {
-        // CSS Fonts L4 §6.4: font-variant-caps — отдельное property,
-        // парсится тем же кодом для small-caps значения.
-        let root = lay("<p>x</p>", "p { font-variant-caps: small-caps; }");
+    fn font_variant_caps_full_value_set_parsed() {
+        // CSS Fonts L4 §6.2 — longhand принимает все шесть не-initial значений.
+        for (css, want) in [
+            ("small-caps", FontVariantCaps::SmallCaps),
+            ("all-small-caps", FontVariantCaps::AllSmallCaps),
+            ("petite-caps", FontVariantCaps::PetiteCaps),
+            ("all-petite-caps", FontVariantCaps::AllPetiteCaps),
+            ("unicase", FontVariantCaps::Unicase),
+            ("titling-caps", FontVariantCaps::TitlingCaps),
+            ("normal", FontVariantCaps::Normal),
+        ] {
+            let root = lay("<p>x</p>", &format!("p {{ font-variant-caps: {css}; }}"));
+            let p = first_element_child(&root);
+            assert_eq!(p.style.font_variant_caps, want, "font-variant-caps: {css}");
+        }
+    }
+
+    #[test]
+    fn font_variant_caps_invalid_keyword_ignored() {
+        // Невалидное значение longhand-а не отменяет унаследованное
+        // (CSS Cascade L4 §4.4 — declaration отбрасывается).
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { font-variant-caps: small-caps; } p { font-variant-caps: nope; }",
+        );
+        let p = first_element_child(first_element_child(&root));
+        assert_eq!(p.style.font_variant_caps, FontVariantCaps::SmallCaps);
+    }
+
+    #[test]
+    fn font_variant_shorthand_picks_caps_component() {
+        let root = lay("<p>x</p>", "p { font-variant: all-small-caps; }");
         let p = first_element_child(&root);
-        assert_eq!(p.style.font_variant, FontVariant::SmallCaps);
+        assert_eq!(p.style.font_variant_caps, FontVariantCaps::AllSmallCaps);
+    }
+
+    #[test]
+    fn font_variant_shorthand_resets_caps_to_initial() {
+        // CSS Cascade L4 §3.1: shorthand выставляет ВСЕ свои longhand-ы.
+        // `font-variant: common-ligatures` (лигатурная компонента, у нас не
+        // реализована) обязан вернуть caps в initial, а не сохранить
+        // унаследованное small-caps.
+        for css in ["common-ligatures", "none"] {
+            let root = lay(
+                "<div><p>x</p></div>",
+                &format!("div {{ font-variant: small-caps; }} p {{ font-variant: {css}; }}"),
+            );
+            let p = first_element_child(first_element_child(&root));
+            assert_eq!(p.style.font_variant_caps, FontVariantCaps::Normal, "font-variant: {css}");
+        }
     }
 
     #[test]
@@ -6939,8 +6983,8 @@ mod tests {
         );
         let div = first_element_child(&root);
         let p = first_element_child(div);
-        assert_eq!(div.style.font_variant, FontVariant::SmallCaps);
-        assert_eq!(p.style.font_variant, FontVariant::Normal);
+        assert_eq!(div.style.font_variant_caps, FontVariantCaps::SmallCaps);
+        assert_eq!(p.style.font_variant_caps, FontVariantCaps::Normal);
     }
 
     #[test]
@@ -6951,7 +6995,37 @@ mod tests {
         );
         let div = first_element_child(&root);
         let p = first_element_child(div);
-        assert_eq!(p.style.font_variant, FontVariant::SmallCaps);
+        assert_eq!(p.style.font_variant_caps, FontVariantCaps::SmallCaps);
+    }
+
+    #[test]
+    fn font_variant_caps_synthesized_into_frags() {
+        // End-to-end: small-caps доезжает до фрагментов — строчные подняты в
+        // верхний регистр и нарисованы уменьшенным кеглем.
+        let root = lay_measured("<p>Hi</p>", "p { font-variant-caps: small-caps; font-size: 20px; }", 400.0);
+        let run = first_inline_run(first_element_child(&root));
+        let BoxKind::InlineRun { lines, .. } = &run.kind else { panic!("expected InlineRun") };
+        let frags: Vec<(&str, f32)> = lines
+            .iter()
+            .flatten()
+            .map(|f| (f.text.as_str(), f.style.font_size))
+            .collect();
+        assert_eq!(frags, vec![("H", 20.0), ("I", 16.0)]);
+    }
+
+    #[test]
+    fn font_variant_caps_does_not_break_word_at_case_boundary() {
+        // Разрез «H|ELLO» проходит внутри слова: перенос по нему запрещён,
+        // иначе узкий контейнер разорвал бы слово пополам.
+        let root = lay_measured(
+            "<p>Hello</p>",
+            "p { font-variant-caps: small-caps; font-size: 20px; }",
+            24.0,
+        );
+        let run = first_inline_run(first_element_child(&root));
+        let BoxKind::InlineRun { lines, .. } = &run.kind else { panic!("expected InlineRun") };
+        let non_empty = lines.iter().filter(|l| !l.is_empty()).count();
+        assert_eq!(non_empty, 1, "слово разорвано на {non_empty} строк: {lines:?}");
     }
 
     // ── font-stretch (CSS Fonts L4 §2.5) ────────────────────────────────────

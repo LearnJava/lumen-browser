@@ -21,6 +21,7 @@ use crate::style::{
     set_cq_context, AlignValue,
     BackgroundImage, BorderCollapse, BoxSizing, ClearSide, ContainFlags, ContainerContext, ContainerType, Content,
     ContentItem, ComputedStyle, Direction, Display, FlexBasis, FlexDirection, FlexWrap, FloatSide,
+    FontVariantCaps,
     GridAutoFlow, GridLine, GridTrackSize, Hyphens, Length, LengthOrAuto, ListStylePosition,
     ListStyleType, Overflow, OverflowWrap, Position, ScrollbarGutter, ScrollbarWidth,
     TextAlign, TextAlignLast, TextOverflow,
@@ -10632,6 +10633,164 @@ pub fn measure_text_w_varied(
     total - letter_spacing
 }
 
+/// CSS Fonts L4 §6.2 — множитель `font-size` для синтезированной капители.
+///
+/// Настоящая капитель приходит из OpenType-фич (`smcp`/`c2sc`/`pcap`/`c2pc`),
+/// которых нет ни в bundled-Inter, ни в большинстве системных шрифтов. Как и
+/// Gecko, синтезируем её геометрически: заглавная буква размера
+/// `0.8 × font-size` примерно совпадает по высоте со строчной. Тот же
+/// множитель используется и для `petite-caps` — отдельной, более низкой
+/// капители у нас нет.
+pub(crate) const SMALL_CAPS_SCALE: f32 = 0.8;
+
+/// Ascent/(ascent+descent) для baseline-компенсации, когда measurer недоступен.
+/// Совпадает с дефолтом [`TextMeasurer::ascent_px`].
+const FALLBACK_ASCENT_RATIO: f32 = 0.8;
+
+/// Роль символа при синтезе `font-variant-caps`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CapsRole {
+    /// Рисуется как есть, шрифтом исходного размера.
+    Plain,
+    /// Рисуется как капитель: уменьшенный шрифт (и, кроме `unicase`,
+    /// перевод в верхний регистр).
+    Capital,
+}
+
+/// Определяет роль символа для заданного `font-variant-caps`.
+///
+/// Учитываются только символы, у которых есть регистр: `is_alphabetic()`
+/// захватил бы CJK и арабицу, у которых капители не бывает, а уменьшать их
+/// нельзя.
+fn caps_role(ch: char, caps: FontVariantCaps) -> CapsRole {
+    let cased = ch.is_lowercase() || ch.is_uppercase();
+    let capital = match caps {
+        // Капителью показываются только строчные.
+        FontVariantCaps::SmallCaps | FontVariantCaps::PetiteCaps => ch.is_lowercase(),
+        // Капителью показываются все буквы, включая уже заглавные.
+        FontVariantCaps::AllSmallCaps | FontVariantCaps::AllPetiteCaps => cased,
+        // `unicase`: капитель из заглавных, строчные не трогаем.
+        FontVariantCaps::Unicase => ch.is_uppercase(),
+        // `titling-caps` синтезировать нечем — уходит в шейпер фичей `titl`.
+        FontVariantCaps::Normal | FontVariantCaps::TitlingCaps => false,
+    };
+    if capital { CapsRole::Capital } else { CapsRole::Plain }
+}
+
+/// `true`, если это значение `font-variant-caps` синтезируется в layout-е.
+fn caps_needs_synthesis(caps: FontVariantCaps) -> bool {
+    !matches!(caps, FontVariantCaps::Normal | FontVariantCaps::TitlingCaps)
+}
+
+/// CSS Fonts L4 §6.2 — синтез капители: режет сегменты на подсегменты по
+/// границам «капитель / обычный текст».
+///
+/// Символы капители переводятся в верхний регистр (кроме `unicase`, где они
+/// уже заглавные) и получают стиль с `font_size × `[`SMALL_CAPS_SCALE`].
+/// Дальше measure/wrap/paint работают с подсегментами как с обычным текстом
+/// разного размера — отдельного «capital»-режима ниже по конвейеру нет.
+///
+/// Второй элемент результата — по флагу на подсегмент: `true` означает
+/// «перенос строки перед этим подсегментом запрещён». Разрез проходит
+/// внутри слова (`Hello` → `H` + `ELLO`), а `wrap_inline_run` переносит по
+/// границам сегментов — без флага слово рвалось бы пополам.
+///
+/// `m` нужен для baseline-компенсации: `apply_inline_vertical_align`
+/// центрирует content-area фрагмента по half-leading, поэтому уменьшенный
+/// фрагмент всплыл бы над базовой линией соседей. Сдвиг записывается в
+/// `vertical-align: <length>` и только для фрагментов с `vertical-align:
+/// baseline` — явно заданное автором выравнивание не трогаем.
+///
+/// Возвращает `None`, когда синтезировать нечего — вызывающий продолжает
+/// работать с исходным срезом без аллокаций.
+fn caps_synthesis(
+    segments: &[InlineSegment],
+    m: Option<&dyn TextMeasurer>,
+) -> Option<(Vec<InlineSegment>, Vec<bool>)> {
+    if !segments
+        .iter()
+        .any(|s| caps_needs_synthesis(s.style.font_variant_caps) && !s.text.is_empty())
+    {
+        return None;
+    }
+    let mut out: Vec<InlineSegment> = Vec::with_capacity(segments.len());
+    let mut no_break: Vec<bool> = Vec::with_capacity(segments.len());
+    for seg in segments {
+        let caps = seg.style.font_variant_caps;
+        if !caps_needs_synthesis(caps) || seg.text.is_empty() || seg.img_src.is_some() {
+            out.push(seg.clone());
+            no_break.push(false);
+            continue;
+        }
+        // Стиль капители: уменьшенный кегль + компенсация базовой линии.
+        let small = {
+            let mut st = seg.style.clone();
+            let big = seg.style.font_size;
+            st.font_size = big * SMALL_CAPS_SCALE;
+            if seg.style.vertical_align == VerticalAlign::Baseline {
+                // apply_inline_vertical_align даёт y_offset = (line_h − h)/2 − px.
+                // Нужно y_offset = (line_h − big)/2 + a·(big − h), откуда
+                // px = (big − h)·(0.5 − a) и line_h сокращается.
+                let ascent_ratio = m
+                    .filter(|_| big > 0.0)
+                    .map_or(FALLBACK_ASCENT_RATIO, |m| m.ascent_px(big) / big);
+                let delta = big - st.font_size;
+                st.vertical_align = VerticalAlign::Length(delta * (0.5 - ascent_ratio));
+            }
+            st
+        };
+        // Разрез на однородные по роли прогоны символов.
+        let start = out.len();
+        let mut prev_role: Option<CapsRole> = None;
+        // Последний символ предыдущего прогона: перенос перед прогоном
+        // разрешён только если он был пробельным.
+        let mut prev_ch: Option<char> = None;
+        for (idx, ch) in seg.text.char_indices() {
+            let role = caps_role(ch, caps);
+            if prev_role != Some(role) {
+                out.push(InlineSegment {
+                    text: String::new(),
+                    style: if role == CapsRole::Capital { small.clone() } else { seg.style.clone() },
+                    pre_space: 0.0,
+                    post_space: 0.0,
+                    is_element_box: seg.is_element_box,
+                    img_src: None,
+                    img_is_lazy: false,
+                    img_width: 0.0,
+                    forced_break: false,
+                    // ::first-letter уже применён (apply_first_letter_pseudo
+                    // работает до wrap) — маркер дальше не нужен.
+                    pseudo_kind: PseudoKind::None,
+                    source_node: seg.source_node,
+                    source_char_offset: seg.source_char_offset.saturating_add(idx as u32),
+                });
+                no_break.push(
+                    out.len() > start + 1
+                        && !prev_ch.is_some_and(|c: char| c.is_whitespace()),
+                );
+                prev_role = Some(role);
+            }
+            // to_uppercase() может дать несколько символов (ß → SS) — так же
+            // ведёт себя и настоящий OpenType-`smcp`.
+            let Some(cur) = out.last_mut() else { continue };
+            match (role, caps) {
+                (CapsRole::Capital, FontVariantCaps::Unicase) => cur.text.push(ch),
+                (CapsRole::Capital, _) => cur.text.extend(ch.to_uppercase()),
+                (CapsRole::Plain, _) => cur.text.push(ch),
+            }
+            prev_ch = Some(ch);
+        }
+        // Внешние отступы inline-бокса остаются на краях исходного сегмента.
+        if let Some(first) = out.get_mut(start) {
+            first.pre_space = seg.pre_space;
+        }
+        if let Some(last) = out.last_mut() {
+            last.post_space = seg.post_space;
+        }
+    }
+    Some((out, no_break))
+}
+
 /// Tries to find a hyphenation break in `display` that fits within `available_w`.
 /// `break_positions` are byte offsets in `display` (already sorted ascending).
 /// Returns `(prefix_with_hyphen, suffix)` for the rightmost fitting break, or `None`.
@@ -10880,6 +11039,15 @@ fn wrap_inline_run(
     let _prof = lumen_core::profile::scope_detail("lo_wrap");
     let space_w = m.char_width(' ', container_font_size);
 
+    // CSS Fonts L4 §6.2 — синтезированная капитель: сегменты режутся на
+    // прогоны разного кегля до всех измерений, поэтому wrap/measure/paint
+    // ниже уже не знают о `font-variant-caps`.
+    let synthesized = caps_synthesis(segments, Some(m));
+    let (segments, caps_no_break): (&[InlineSegment], &[bool]) = match &synthesized {
+        Some((segs, flags)) => (segs, flags),
+        None => (segments, &[]),
+    };
+
     let mut result: Vec<Vec<InlineFrag>> = Vec::new();
     let mut current_line: Vec<InlineFrag> = Vec::new();
     // CSS Text L3 §7.1: text-indent только на первой строке.
@@ -10890,7 +11058,10 @@ fn wrap_inline_run(
     // `<q>` `::before` open-quote glued to the quoted text, `<a>link</a>!`).
     let mut prev_trailing_ws = false;
 
-    for seg in segments {
+    for (seg_idx, seg) in segments.iter().enumerate() {
+        // Перенос перед первым словом запрещён, когда сегмент — «хвост»
+        // разрезанного капителью слова (см. `caps_synthesis`).
+        let no_break_before = caps_no_break.get(seg_idx).copied().unwrap_or(false);
         // Forced line break from \n in white-space: pre/pre-wrap text.
         if seg.forced_break {
             result.push(std::mem::take(&mut current_line));
@@ -11031,8 +11202,12 @@ fn wrap_inline_run(
             };
             let gap = if current_line.is_empty() { 0.0 } else { word_inter };
 
+            // Перенос перед этим словом разрешён? Запрещён он только на стыке
+            // подсегментов, разрезанных капителью внутри слова.
+            let breakable = !is_seg_first || !no_break_before;
             // Wrap: слово не влезает (но первое слово строки добавляем всегда).
             let needs_wrap = !current_line.is_empty()
+                && breakable
                 && current_x + gap + pre + word_w > max_width;
 
             if needs_wrap {
@@ -11364,6 +11539,13 @@ fn apply_inline_vertical_align(lines: &mut [Vec<InlineFrag>], line_h: f32) {
 /// режиме не рисуется. layout() для финального рендеринга всё равно ходит
 /// через layout_measured().
 fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFrag>> {
+    // Капитель режется и здесь: без этого дамп без measurer-а показывал бы
+    // исходный регистр, а с measurer-ом — капитель (расхождение путей).
+    let synthesized = caps_synthesis(segments, None);
+    let segments: &[InlineSegment] = match &synthesized {
+        Some((segs, _)) => segs,
+        None => segments,
+    };
     let mut frags: Vec<InlineFrag> = Vec::new();
     // CSS Text L3 §4.1.1 — same boundary rule as wrap_inline_run: two segments
     // join with a single space only when collapsible whitespace bordered them;
@@ -11914,6 +12096,136 @@ mod tests {
             None
         }
         find_empty_block(&root).cloned().expect("empty Block not found in layout tree")
+    }
+
+    /// Строит один текстовый сегмент с заданным `font-variant-caps`.
+    fn caps_seg(text: &str, caps: crate::style::FontVariantCaps) -> super::InlineSegment {
+        let mut style = crate::style::ComputedStyle::root();
+        style.font_size = 20.0;
+        style.font_variant_caps = caps;
+        super::InlineSegment {
+            text: text.to_string(),
+            style,
+            pre_space: 0.0,
+            post_space: 0.0,
+            is_element_box: false,
+            img_src: None,
+            img_is_lazy: false,
+            img_width: 0.0,
+            forced_break: false,
+            pseudo_kind: super::PseudoKind::None,
+            source_node: lumen_dom::NodeId::from_index(0),
+            source_char_offset: 0,
+        }
+    }
+
+    #[test]
+    fn caps_synthesis_skipped_for_normal_and_titling() {
+        use crate::style::FontVariantCaps;
+        // Normal нечего синтезировать; titling-caps уходит фичей `titl`,
+        // а не геометрией — режущий проход обязан пропустить оба.
+        for caps in [FontVariantCaps::Normal, FontVariantCaps::TitlingCaps] {
+            assert!(super::caps_synthesis(&[caps_seg("Hello", caps)], None).is_none());
+        }
+    }
+
+    #[test]
+    fn caps_synthesis_small_caps_splits_and_shrinks_lowercase() {
+        use crate::style::FontVariantCaps;
+        let (segs, no_break) =
+            super::caps_synthesis(&[caps_seg("Hello", FontVariantCaps::SmallCaps)], None)
+                .expect("small-caps must be synthesized");
+        assert_eq!(segs.len(), 2);
+        assert_eq!(segs[0].text, "H");
+        assert_eq!(segs[1].text, "ELLO");
+        assert!((segs[0].style.font_size - 20.0).abs() < f32::EPSILON);
+        assert!((segs[1].style.font_size - 20.0 * super::SMALL_CAPS_SCALE).abs() < f32::EPSILON);
+        // Разрез прошёл внутри слова — перенос перед хвостом запрещён.
+        assert_eq!(no_break, vec![false, true]);
+    }
+
+    #[test]
+    fn caps_synthesis_allows_break_after_whitespace() {
+        use crate::style::FontVariantCaps;
+        let (segs, no_break) =
+            super::caps_synthesis(&[caps_seg("go home", FontVariantCaps::SmallCaps)], None)
+                .expect("small-caps must be synthesized");
+        // "GO" | " " | "HOME": пробел — отдельный Plain-прогон.
+        assert_eq!(segs.iter().map(|s| s.text.as_str()).collect::<Vec<_>>(), ["GO", " ", "HOME"]);
+        // Перенос перед "HOME" разрешён: слева от него пробел.
+        assert_eq!(no_break, vec![false, true, false]);
+    }
+
+    #[test]
+    fn caps_synthesis_all_small_caps_shrinks_uppercase_too() {
+        use crate::style::FontVariantCaps;
+        let (segs, _) =
+            super::caps_synthesis(&[caps_seg("Hi!", FontVariantCaps::AllSmallCaps)], None)
+                .expect("all-small-caps must be synthesized");
+        // Буквы — один уменьшенный прогон, `!` остаётся полноразмерным.
+        assert_eq!(segs.iter().map(|s| s.text.as_str()).collect::<Vec<_>>(), ["HI", "!"]);
+        assert!((segs[0].style.font_size - 20.0 * super::SMALL_CAPS_SCALE).abs() < f32::EPSILON);
+        assert!((segs[1].style.font_size - 20.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn caps_synthesis_unicase_shrinks_uppercase_without_recasing() {
+        use crate::style::FontVariantCaps;
+        let (segs, _) = super::caps_synthesis(&[caps_seg("Hi", FontVariantCaps::Unicase)], None)
+            .expect("unicase must be synthesized");
+        // `unicase`: заглавная становится капителью, строчная не трогается.
+        assert_eq!(segs.iter().map(|s| s.text.as_str()).collect::<Vec<_>>(), ["H", "i"]);
+        assert!((segs[0].style.font_size - 20.0 * super::SMALL_CAPS_SCALE).abs() < f32::EPSILON);
+        assert!((segs[1].style.font_size - 20.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn caps_synthesis_keeps_non_cased_scripts_full_size() {
+        use crate::style::FontVariantCaps;
+        // У иероглифов нет регистра — уменьшать их нельзя, хотя
+        // is_alphabetic() для них истинно.
+        let (segs, _) = super::caps_synthesis(&[caps_seg("漢a", FontVariantCaps::AllSmallCaps)], None)
+            .expect("all-small-caps must be synthesized");
+        assert_eq!(segs.iter().map(|s| s.text.as_str()).collect::<Vec<_>>(), ["漢", "A"]);
+        assert!((segs[0].style.font_size - 20.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn caps_synthesis_baseline_compensation_lowers_capitals() {
+        use crate::style::{FontVariantCaps, VerticalAlign};
+        let (segs, _) =
+            super::caps_synthesis(&[caps_seg("ab", FontVariantCaps::SmallCaps)], None)
+                .expect("small-caps must be synthesized");
+        // apply_inline_vertical_align центрирует content-area по half-leading:
+        // без компенсации капитель всплыла бы над базовой линией соседей.
+        // px = (big − small)·(0.5 − ascent_ratio) = 4·(0.5 − 0.8) = −1.2,
+        // а отрицательный `length` опускает фрагмент вниз.
+        let VerticalAlign::Length(px) = segs[0].style.vertical_align else {
+            panic!("capital run must carry a baseline correction");
+        };
+        assert!((px - (-1.2)).abs() < 1e-4, "px = {px}");
+    }
+
+    #[test]
+    fn caps_synthesis_respects_author_vertical_align() {
+        use crate::style::{FontVariantCaps, VerticalAlign};
+        let mut seg = caps_seg("ab", FontVariantCaps::SmallCaps);
+        seg.style.vertical_align = VerticalAlign::Super;
+        let (segs, _) = super::caps_synthesis(&[seg], None).expect("must be synthesized");
+        // Автор задал выравнивание явно — компенсацию не навязываем.
+        assert_eq!(segs[0].style.vertical_align, VerticalAlign::Super);
+    }
+
+    #[test]
+    fn caps_synthesis_keeps_source_offsets_monotonic() {
+        use crate::style::FontVariantCaps;
+        let (segs, _) =
+            super::caps_synthesis(&[caps_seg("Hello", FontVariantCaps::SmallCaps)], None)
+                .expect("must be synthesized");
+        // Смещения в исходном тексте нужны Selection/Range — они обязаны
+        // указывать на начало своего прогона в ОРИГИНАЛЕ, не в поднятом тексте.
+        assert_eq!(segs[0].source_char_offset, 0);
+        assert_eq!(segs[1].source_char_offset, 1);
     }
 
     #[test]

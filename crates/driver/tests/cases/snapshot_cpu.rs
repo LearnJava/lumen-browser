@@ -217,6 +217,11 @@ const PAGES: &[&str] = &[
     // #3), so this deterministic CPU snapshot — not run.py's Edge pipeline — is the
     // regression gate for the baseline-shift wiring.
     "128-baseline-shift",
+    // CSS Fonts L4 §6.2 — font-variant-caps: the whole value set on one text.
+    // The capitals are synthesized in layout (`caps_synthesis`), so the visible
+    // effect is glyph case + size, which diverges from Edge (rule #3); this
+    // deterministic CPU snapshot is the regression gate for the synthesis.
+    "150-font-variant-caps",
     // Kitchen-sink final page: ~80 objects combining every implemented property.
     // Manual-only in the Edge pipeline (no run.py entry); here it serves as a
     // broad regression baseline for the CPU path.
