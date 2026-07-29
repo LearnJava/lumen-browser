@@ -1692,6 +1692,27 @@ the `--features v8-backend` variant; every prior `mod v8_*` slice carries this s
 checking explicitly rather than assuming it copy-pasted correctly. 10/10 green after the fix, zero
 body edits, zero engine divergences.
 
+### S12b-24-lazy-image-io — ninth porting slice (2026-07-30, branch p1-v8-s12b-24-lazy-image-io)
+
+Lazy image loading (`_lumen_init_lazy_images`/`_lumen_deliver_intersection_observers`/
+`_lumen_deliver_lazy_images` no-op check via `take_lazy_image_requests`) and IntersectionObserver
+`rootMargin` parsing/behavior (`_parse_root_margin`, single/two/four-value CSS shorthand, root
+expansion for below-viewport elements) — **11 tests** ported into `mod tests::v8_lazy_image_io`,
+QuickJS copies deleted. `cargo test -p lumen-js --features v8-backend` stayed at 2570/2570 (1:1 swap).
+Actual section on start — `dom.rs:16030-16227`, immediately after `runtime_with_dom` and right where
+the elem-geometry-scroll slice's writeup said it would be (that slice's note about the brief bundling
+this subarea in with it was confirmed).
+
+No new plumbing: `V8JsRuntime::update_viewport_size`/`update_layout_rects`/`take_lazy_image_requests`
+already existed (mirrored from `lib.rs`, unlike the `fire_*` methods the previous slice had to add),
+and `_lumen_init_lazy_images`/`_lumen_deliver_intersection_observers`/`_parse_root_margin` all live in
+the shared engine-agnostic `WEB_API_SHIM`. Pure mechanical port: bodies unchanged except
+`runtime_with_dom` → `v8_runtime_with_dom`, `super::find_element_by_tag` → `super::super::find_element_by_tag`
+(nesting one level deeper than the flat `mod tests`). 11/11 green on the first run, zero engine
+divergences. `cargo clippy -p lumen-js --all-targets --features v8-backend -- -D warnings` clean;
+also re-checked default (no `v8-backend`) `cargo check -p lumen-js` clean, learning the gate-forgetting
+lesson from the previous slice's writeup without repeating the mistake.
+
 ---
 
 ## Risks (Rev 2)
