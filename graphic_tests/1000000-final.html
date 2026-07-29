@@ -515,6 +515,32 @@
     <div style="grid-area:m; background:#e53e3e;"></div>
   </div>
 
+  <!-- grid place-content: distributing the container's free space between tracks -->
+  <div style="margin-top:8px; font-size:10px; color:#888;">grid place-content (align-content / justify-content):</div>
+  <div style="display:flex; gap:4px; width:404px; margin-bottom:4px;">
+    <!-- justify-content: space-between + align-content: end -->
+    <div style="display:grid; grid-template-columns:24px 24px 24px; grid-template-rows:16px 16px;
+                place-content:end space-between; width:130px; height:60px; background:#edf2f7;">
+      <div style="background:#3182ce;"></div><div style="background:#38a169;"></div>
+      <div style="background:#e53e3e;"></div><div style="background:#d69e2e;"></div>
+      <div style="background:#805ad5;"></div><div style="background:#319795;"></div>
+    </div>
+    <!-- place-content: center — one value drives both axes -->
+    <div style="display:grid; grid-template-columns:24px 24px 24px; grid-template-rows:16px 16px;
+                place-content:center; width:130px; height:60px; background:#edf2f7;">
+      <div style="background:#3182ce;"></div><div style="background:#38a169;"></div>
+      <div style="background:#e53e3e;"></div><div style="background:#d69e2e;"></div>
+      <div style="background:#805ad5;"></div><div style="background:#319795;"></div>
+    </div>
+    <!-- align-content: normal → auto rows stretch to fill the definite height -->
+    <div style="display:grid; grid-template-columns:24px 24px 24px; grid-template-rows:auto auto;
+                justify-content:space-evenly; width:130px; height:60px; background:#edf2f7;">
+      <div style="background:#3182ce;"></div><div style="background:#38a169;"></div>
+      <div style="background:#e53e3e;"></div><div style="background:#d69e2e;"></div>
+      <div style="background:#805ad5;"></div><div style="background:#319795;"></div>
+    </div>
+  </div>
+
   <!-- float + clear -->
   <div style="width:404px; margin-top:8px; margin-bottom:4px; overflow:hidden;">
     <div style="float:left;  width:80px; height:40px; background:#3182ce; margin-right:4px;"></div>

@@ -7122,9 +7122,21 @@ fn lay_out_inner(
             }
             // Grid containers dispatch to lay_out_grid before block-flow.
             if matches!(s.display, Display::Grid | Display::InlineGrid) {
+                // CSS Box Alignment L3 §5: `align-content` distributes the block-axis
+                // free space of the grid container, so the row-axis pass needs the
+                // container's *definite* content-box height (None when the height is
+                // content-derived — there is no free space to distribute then).
+                let grid_definite_height = s.height.as_ref()
+                    .and_then(|h| h.resolve(em, available_height, viewport))
+                    .map(|h| match s.box_sizing {
+                        BoxSizing::ContentBox => h,
+                        BoxSizing::BorderBox => (h - padding_top - padding_bottom
+                            - s.border_top_width - s.border_bottom_width)
+                            .max(0.0),
+                    });
                 let content_height = lay_out_grid(
-                    &mut b.children, &s, content_x, content_y, content_width, measurer, viewport,
-                    children_pcb, hp,
+                    &mut b.children, &s, content_x, content_y, content_width, grid_definite_height,
+                    measurer, viewport, children_pcb, hp,
                 );
                 b.rect.height = if let Some(h_len) = &s.height
                     && let Some(h) = h_len.resolve(em, available_height, viewport)
@@ -9842,6 +9854,74 @@ fn lay_out_flex(
     }
 }
 
+/// CSS Box Alignment L3 §5 — content distribution along one axis of a grid container.
+///
+/// Returns `(start_offset, extra_gap)`: how far the first track is pushed away from
+/// the content-box start edge, and how much spacing to insert between every pair of
+/// adjacent tracks on top of the `gap` property.
+///
+/// # Arguments
+/// * `align` — the used `align-content` / `justify-content` value.
+/// * `free` — leftover space after all tracks and their gaps.
+/// * `n` — number of tracks on the axis.
+///
+/// With non-positive free space the axis overflows, and §5.3 replaces the
+/// distribution with its fallback alignment — `space-between` → `start`,
+/// `space-around` / `space-evenly` → `center` — after which the alignment is
+/// resolved *unsafely*: `center` / `end` still shift the tracks back past the
+/// content-box start edge (a negative offset), matching Edge. `safe` / `unsafe`
+/// are not parsed, so the unsafe behaviour is unconditional.
+///
+/// `normal` / `stretch` always return `(0, 0)` — that pair is handled by the track
+/// sizing pass, which hands the free space to the auto-sized tracks instead.
+fn grid_content_distribution(align: AlignValue, free: f32, n: usize) -> (f32, f32) {
+    if n == 0 {
+        return (0.0, 0.0);
+    }
+    if free <= 0.0 {
+        return match align {
+            AlignValue::End => (free, 0.0),
+            // `center` directly, plus the two distributions that fall back to it.
+            AlignValue::Center | AlignValue::SpaceAround | AlignValue::SpaceEvenly => {
+                (free / 2.0, 0.0)
+            }
+            // `start`, `space-between` (falls back to `start`), `normal`, `stretch`.
+            _ => (0.0, 0.0),
+        };
+    }
+    match align {
+        AlignValue::End => (free, 0.0),
+        AlignValue::Center => (free / 2.0, 0.0),
+        AlignValue::SpaceBetween => {
+            // A single track has no in-between gap — the spec falls back to `start`.
+            if n <= 1 { (0.0, 0.0) } else { (0.0, free / (n - 1) as f32) }
+        }
+        AlignValue::SpaceAround => {
+            let per = free / n as f32;
+            (per / 2.0, per)
+        }
+        AlignValue::SpaceEvenly => {
+            let per = free / (n + 1) as f32;
+            (per, per)
+        }
+        _ => (0.0, 0.0),
+    }
+}
+
+/// Size of the cell spanning tracks `t0..t1` (0-based, end-exclusive), measured from
+/// the resolved track offsets.
+///
+/// Deriving the span from offsets rather than summing sizes + `gap` keeps spanning
+/// items correct when `align-content` / `justify-content` injected extra spacing
+/// between tracks (`space-between` and friends).
+fn grid_track_span(offsets: &[f32], sizes: &[f32], t0: usize, t1: usize) -> f32 {
+    let last = t1.max(t0 + 1) - 1;
+    match (offsets.get(t0), offsets.get(last), sizes.get(last)) {
+        (Some(&o0), Some(&o_last), Some(&s_last)) => (o_last + s_last - o0).max(0.0),
+        _ => sizes.get(t0).copied().unwrap_or(0.0),
+    }
+}
+
 /// CSS Grid Layout Level 1 — grid container layout.
 ///
 /// Implements a Phase-0 subset of the grid layout algorithm (CSS Grid L1 §12):
@@ -9853,6 +9933,14 @@ fn lay_out_flex(
 /// - `grid-auto-flow: row | column` (no dense packing).
 /// - `gap` / `column-gap` / `row-gap` between cells.
 /// - `align-items` / `justify-items` within cells.
+/// - `align-content` / `justify-content` (and the `place-content` shorthand)
+///   distributing the container's free space between tracks — CSS Box Alignment
+///   L3 §5 / CSS Grid L1 §12.3.
+///
+/// `definite_content_height` is the container's content-box block size when it is
+/// definite (explicit `height`, box-sizing already applied), `None` when the height
+/// is derived from the content. Only a definite height leaves block-axis free space
+/// for `align-content` to distribute.
 ///
 /// Returns the total content height of the grid.
 #[allow(clippy::too_many_arguments)]
@@ -9862,6 +9950,7 @@ fn lay_out_grid(
     content_x: f32,
     content_y: f32,
     content_width: f32,
+    definite_content_height: Option<f32>,
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
     pcb: Rect,
@@ -10193,12 +10282,23 @@ fn lay_out_grid(
             }
         }
 
+        // CSS Box Alignment L3 §5 — `justify-content` distributes whatever inline-axis
+        // space the tracks left over. `fr` / `auto` tracks already absorb it during
+        // sizing above, so this only ever fires for a fixed-size track list.
+        let used_col_total: f32 = col_widths.iter().sum::<f32>() + total_col_gap;
+        let (jc_start, jc_extra) = grid_content_distribution(
+            s.justify_content,
+            content_width - used_col_total,
+            n_cols as usize,
+        );
+
         // Column start offsets.
         let mut col_offsets: Vec<f32> = Vec::with_capacity(n_cols as usize);
-        let mut x_off = 0.0_f32;
+        let mut x_off = jc_start;
         for c in 0..n_cols {
             col_offsets.push(x_off);
-            x_off += col_widths[c as usize] + if c < n_cols - 1 { col_gap } else { 0.0 };
+            x_off += col_widths[c as usize]
+                + if c < n_cols - 1 { col_gap + jc_extra } else { 0.0 };
         }
 
         (col_widths, col_offsets)
@@ -10232,11 +10332,7 @@ fn lay_out_grid(
         }
         let c0 = (cs - 1).min(n_cols - 1) as usize;
         let c1 = (ce - 1).min(n_cols) as usize;
-        let cell_w: f32 = if c1 > c0 {
-            col_widths[c0..c1].iter().sum::<f32>() + col_gap * (c1 - c0 - 1) as f32
-        } else {
-            col_widths.get(c0).copied().unwrap_or(0.0)
-        };
+        let cell_w: f32 = grid_track_span(&col_offsets, &col_widths, c0, c1);
 
         // For subgrid children: set the thread-local context before laying out.
         let child_col_subgrid = children[i].style.grid_template_columns.first()
@@ -10288,12 +10384,11 @@ fn lay_out_grid(
     }
 
     // Resolve fr row heights (skip when row axis is subgridded — sizes are fixed).
+    let total_row_gap = if n_rows > 1 { row_gap * (n_rows - 1) as f32 } else { 0.0 };
     if inherited_rows.is_none() {
-        let total_row_gap = if n_rows > 1 { row_gap * (n_rows - 1) as f32 } else { 0.0 };
         let fixed_row_total: f32 = row_heights.iter().sum::<f32>() + total_row_gap;
         // If container has explicit height, distribute fr rows from it.
-        let container_h = s.height.as_ref().and_then(|h| h.resolve(em, Some(content_width), viewport));
-        let free_row = container_h.map(|h| (h - fixed_row_total).max(0.0)).unwrap_or(0.0);
+        let free_row = definite_content_height.map(|h| (h - fixed_row_total).max(0.0)).unwrap_or(0.0);
         let total_row_fr: f32 = (0..n_rows)
             .map(|r| grid_track(r, eff_row_template, &s.grid_auto_rows).fr().unwrap_or(0.0))
             .sum();
@@ -10305,6 +10400,25 @@ fn lay_out_grid(
                 }
             }
         }
+
+        // CSS Grid L1 §12.3 — `align-content: normal` behaves as `stretch` for a grid
+        // container: the leftover block-axis space is shared equally between the
+        // `auto`-sized rows. Only an explicitly sized container has leftover space.
+        // Deferred: `minmax(_, auto)` rows do not participate — the track-sizing pass
+        // above resolves them from their min side, not as auto.
+        if matches!(s.align_content, AlignValue::Auto | AlignValue::Normal | AlignValue::Stretch) {
+            let auto_rows: Vec<u32> = (0..n_rows)
+                .filter(|&r| matches!(grid_track(r, eff_row_template, &s.grid_auto_rows), GridTrackSize::Auto))
+                .collect();
+            let used: f32 = row_heights.iter().sum::<f32>() + total_row_gap;
+            let free = definite_content_height.map(|h| h - used).unwrap_or(0.0);
+            if free > 0.0 && !auto_rows.is_empty() {
+                let per = free / auto_rows.len() as f32;
+                for r in auto_rows {
+                    row_heights[r as usize] += per;
+                }
+            }
+        }
     }
 
     // Row top offsets: if row axis is subgridded, use inherited offsets; else compute.
@@ -10313,11 +10427,21 @@ fn lay_out_grid(
         let total = ctx.total_size();
         (offsets, total)
     } else {
+        // CSS Box Alignment L3 §5 — `align-content` distributes the block-axis free
+        // space left over by the tracks (only ever non-zero for a definite height).
+        let used_row_total: f32 = row_heights.iter().sum::<f32>() + total_row_gap;
+        let (ac_start, ac_extra) = grid_content_distribution(
+            s.align_content,
+            definite_content_height.map(|h| h - used_row_total).unwrap_or(0.0),
+            n_rows as usize,
+        );
+
         let mut row_offsets: Vec<f32> = Vec::with_capacity(n_rows as usize);
-        let mut y_off = 0.0_f32;
+        let mut y_off = ac_start;
         for r in 0..n_rows {
             row_offsets.push(y_off);
-            y_off += row_heights[r as usize] + if r < n_rows - 1 { row_gap } else { 0.0 };
+            y_off += row_heights[r as usize]
+                + if r < n_rows - 1 { row_gap + ac_extra } else { 0.0 };
         }
         (row_offsets, y_off)
     };
@@ -10337,18 +10461,10 @@ fn lay_out_grid(
         let r0 = (rs - 1).min(n_rows - 1) as usize;
         let r1 = (re - 1).min(n_rows) as usize;
 
-        let cell_x = content_x + col_offsets[c0];
-        let cell_y = content_y + row_offsets[r0];
-        let cell_w: f32 = if c1 > c0 {
-            col_widths[c0..c1].iter().sum::<f32>() + col_gap * (c1 - c0 - 1) as f32
-        } else {
-            col_widths[c0]
-        };
-        let cell_h: f32 = if r1 > r0 {
-            row_heights[r0..r1].iter().sum::<f32>() + row_gap * (r1 - r0 - 1) as f32
-        } else {
-            row_heights[r0]
-        };
+        let cell_x = content_x + col_offsets.get(c0).copied().unwrap_or(0.0);
+        let cell_y = content_y + row_offsets.get(r0).copied().unwrap_or(0.0);
+        let cell_w: f32 = grid_track_span(&col_offsets, &col_widths, c0, c1);
+        let cell_h: f32 = grid_track_span(&row_offsets, &row_heights, r0, r1);
 
         // Re-layout with final cell width. For subgrid children, restore the context.
         let child_col_subgrid = children[i].style.grid_template_columns.first()

@@ -564,7 +564,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 |----------|--------|-------|
 | `justify-items` | ✅ | grid cells ✅; block-container default for block children ✅ 2026-07-18 |
 | `justify-self` | ✅ | grid items ✅; block-level start/center/end ✅ 2026-07-05; `justify-items` container default ✅ 2026-07-18 |
-| `place-items` / `place-self` / `place-content` | 🟡 | shorthands; grid ⬜ |
+| `place-items` / `place-self` / `place-content` | ✅ | shorthands (1–2 values, single value applies to both axes) → `align-*` + `justify-*` longhands; grid honours them end-to-end: `place-items`/`place-self` per cell, `place-content` distributes the container's free space between tracks (`start`/`center`/`end`/`space-between`/`space-around`/`space-evenly`, plus `normal`→`stretch` growing `auto` rows into a definite height) — CSS Box Alignment L3 §5, CSS Grid L1 §12.3, p4-place-shorthands 2026-07-29; тест 152. Overflow follows §5.3: `space-between`→`start`, `space-around`/`space-evenly`→`center`, then resolved unsafely (tracks shift past the start edge, like Edge). Deferred: `minmax(_, auto)` rows do not participate in stretch; the `safe`/`unsafe` keywords themselves are unparsed, so `safe` cannot be opted into |
 
 ### [T3] Inline / Line Box
 
