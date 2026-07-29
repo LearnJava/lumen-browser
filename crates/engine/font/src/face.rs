@@ -496,8 +496,17 @@ impl<'a> Font<'a> {
             }
         }
 
+        // BUG-423: bbox берём по собранным контурам, а не из заголовка
+        // composite-глифа. Заголовочный bbox описывает parent-а до сборки и в
+        // реальных шрифтах бывает попросту битым — «YS Text Home» (ya.ru)
+        // пишет у кириллических композитов сдвинутую четвёрку, где `x_max <
+        // x_min`; растеризатор на таком боксе отдавал `None`, и буква молча
+        // исчезала со страницы, оставляя пробел своей ширины (advance берётся
+        // из `hmtx` и оставался верным). Пустой `merged` (все компоненты
+        // пропущены) — оставляем заголовочный bbox, рисовать всё равно нечего.
+        let bbox = crate::glyf::bbox_from_contours(&merged).unwrap_or(glyph.bbox);
         Ok(Some(crate::glyf::Glyph {
-            bbox: glyph.bbox,
+            bbox,
             outline: crate::glyf::Outline::Simple(merged),
         }))
     }
