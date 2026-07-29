@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-29",
  "counts": {
-  "open": 123,
-  "fixed": 278,
+  "open": 124,
+  "fixed": 279,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 401,
+ "total_bugs": 403,
  "phases": [
   {
    "id": "P0",
@@ -4927,11 +4927,11 @@
    "debtor": true
   },
   "BUG-101": {
-   "status": "open",
-   "title": "image-set()/cross-fade() РЕАЛИЗОВАНЫ. Грамматика cross-fade() приведена к CSS Images L4 §4 (`parse_cross_fade` в layout/src/style.rs, 2026-06-23): unprefixed `c…",
+   "status": "fixed",
+   "title": "image-set()/cross-fade(): источники не загружались и смесь была неверной. Ревизия P3 2026-07-29 опровергла прежний остаток («ресэмплинг фото + font-parity»): `c…",
    "component": "layout/paint",
-   "date": null,
-   "debtor": true
+   "date": "2026-07-29",
+   "debtor": false
   },
   "BUG-102": {
    "status": "fixed",
@@ -7032,6 +7032,20 @@
    "component": "paint (`display_list.rs`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-432": {
+   "status": "open",
+   "title": "Фон `::first-line` не красится: `walk` для `BoxKind::InlineRun` зовёт только `emit_inline_run` (текст), собственной покраски фона/рамки у inline-рана нет — в от…",
+   "component": "paint (`display_list.rs` — ветка `BoxKind::InlineRun` в `walk`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-433": {
+   "status": "open",
+   "title": "Flex-элемент сжимается ниже **автоматического минимального размера** (CSS Flexbox §4.5): при `min-width: auto` минимум = min-content содержимого, а `lay_out_fle…",
+   "component": "layout (flexbox)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -7283,6 +7297,9 @@
   "layout (flex `height: var()`, `box_tree.rs`)": [
    "BUG-333"
   ],
+  "layout (flexbox)": [
+   "BUG-433"
+  ],
   "layout / css-parser (`@color-profile`, `color()`)": [
    "BUG-282"
   ],
@@ -7421,6 +7438,9 @@
   ],
   "paint (`display_list.rs::emit_inline_run`)": [
    "BUG-289"
+  ],
+  "paint (`display_list.rs` — ветка `BoxKind::InlineRun` в `walk`)": [
+   "BUG-432"
   ],
   "paint (`display_list.rs`)": [
    "BUG-431"

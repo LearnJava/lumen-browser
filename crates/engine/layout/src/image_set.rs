@@ -240,6 +240,18 @@ fn parse_option(opt: &str) -> Option<ImageSetOption> {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
+/// CSS Images L4 §5 — is `value` an `image-set()` / `-webkit-image-set()`
+/// expression?
+///
+/// [`parse_image_set`] accepts plain URLs too (as a single 1× candidate), so
+/// callers that must not split a bare URL on its commas (a `data:` URI, say)
+/// gate on this predicate first.
+#[must_use]
+pub fn is_image_set(value: &str) -> bool {
+    let v = value.trim_start();
+    ci_starts_with(v, "image-set(") || ci_starts_with(v, "-webkit-image-set(")
+}
+
 /// Parses an `image-set()` / `-webkit-image-set()` expression into a list of
 /// typed candidates.
 ///

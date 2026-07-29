@@ -5679,7 +5679,10 @@ fn fetch_and_decode_background_images(
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     target: lumen_core::ColorSpace,
 ) -> Vec<(String, Arc<lumen_image::Image>)> {
-    let urls = lumen_layout::collect_background_image_requests(layout);
+    // DPR 1.0 — тот же, что у `build_display_list_ordered` (обёртка без dpr),
+    // иначе выбранный здесь кандидат `image-set()` не совпал бы с ключом,
+    // который эмиттер кладёт в `DrawBackgroundImage.src`.
+    let urls = lumen_layout::collect_background_image_requests(layout, 1.0);
     // Параллельная загрузка+декодирование, порядок сохраняем (ключи уникальны).
     let decoded = parallel_map(&urls, |_, url| {
         let bytes = match fetch_image_bytes(url, base, sink, cookie_jar.clone()) {

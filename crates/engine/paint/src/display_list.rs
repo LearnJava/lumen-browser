@@ -16417,6 +16417,34 @@ mod tests {
         assert!(!is_image_set("https://example.com/image-set.png"));
     }
 
+    /// BUG-101: `image-set()` разрешается ДВАЖДЫ — здесь, когда эмиттер строит
+    /// `DrawBackgroundImage.src`, и в `lumen-layout`
+    /// (`collect_background_image_requests`), когда shell решает, что качать.
+    /// Это две независимые реализации; разойдись они в выборе кандидата —
+    /// картинка молча не нарисуется (ключ загрузки ≠ ключ поиска). Тест держит
+    /// их согласованными; жить он может только здесь, потому что зависимость
+    /// идёт layout → paint, и обратная сторона про эту недоступна.
+    #[test]
+    fn image_set_resolver_agrees_with_layout_collector() {
+        let cases = [
+            "image-set(\"a.png\" 1x, \"b.png\" 2x)",
+            "image-set(url(a.png) 1x, url(b.png) 2x, url(c.png) 3x)",
+            "-webkit-image-set(url(\"low.png\") 1x, url(\"high.png\") 2x)",
+            "image-set(url(a.png) 96dpi, url(b.png) 192dpi)",
+            "image-set(url(a.png) type(\"image/webp\") 1x, url(b.png) 2x)",
+            "image-set(url(only.png))",
+        ];
+        for v in cases {
+            for dpr in [1.0_f32, 1.4, 2.0, 3.0] {
+                assert_eq!(
+                    select_image_set_url(v, dpr),
+                    lumen_layout::image_set::select_image_set_url(v, dpr),
+                    "paint и layout разошлись на {v:?} при dpr={dpr}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn image_set_picks_1x_at_dpr_1() {
         let v = "image-set(\"a.png\" 1x, \"b.png\" 2x)";

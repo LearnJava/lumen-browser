@@ -5187,12 +5187,17 @@ impl FemtovgBackend {
             }
 
             // ── Cross-fade ──────────────────────────────────────────────────
+            // CSS Images L4 §4 — `(1−p)·a + p·b`: `a` goes down at full alpha and
+            // `b` composites over it at `p`, which for opaque sources is exactly
+            // that mix. Painting `a` at `1−p` (BUG-101) squared its weight and
+            // let the backdrop show through the gap. Same result as the wgpu
+            // shader's `mix(a, b, t)`.
             DisplayCommand::DrawCrossFade { dest, src_a, src_b, progress } => {
                 let p = progress.clamp(0.0, 1.0);
                 if let Some(&id_a) = self.images.get(src_a.as_str()) {
                     let paint = femtovg::Paint::image(
                         id_a,
-                        dest.x, dest.y, dest.width, dest.height, 0.0, 1.0 - p,
+                        dest.x, dest.y, dest.width, dest.height, 0.0, 1.0,
                     );
                     let mut path = femtovg::Path::new();
                     path.rect(dest.x, dest.y, dest.width, dest.height);

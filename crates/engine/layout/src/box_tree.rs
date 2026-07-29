@@ -1840,21 +1840,51 @@ pub fn collect_image_requests(doc: &Document, viewport: Size) -> Vec<ImageReques
 /// о `background-size` в стилях, intrinsic-размер картинки в layout не
 /// влияет). Дубликаты отфильтрованы — одна и та же картинка на разных
 /// элементах загружается один раз.
+///
+/// `dpr` — device pixel ratio, по которому разрешается `image-set()`
+/// (CSS Images L4 §5). Значение **обязано** совпадать с тем, что получит
+/// `build_display_list_ordered_dpr`: эмиттер кладёт в `src` уже выбранного
+/// кандидата, и ключ загрузки должен быть тем же. `1.0` — дефолт
+/// `build_display_list_ordered`.
 #[must_use]
-pub fn collect_background_image_requests(root: &LayoutBox) -> Vec<String> {
+pub fn collect_background_image_requests(root: &LayoutBox, dpr: f32) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    collect_bg_image_inner(root, &mut out);
+    collect_bg_image_inner(root, dpr, &mut out);
     out
 }
 
-fn collect_bg_image_inner(b: &LayoutBox, out: &mut Vec<String>) {
-    for layer in &b.style.background_layers {
-        if let BackgroundImage::Url(src) = &layer.image
-            && !src.is_empty()
-            && !out.iter().any(|u| u == src)
-        {
-            out.push(src.clone());
+/// Кладёт в `out` URL-ы, под которыми эмиттер будет искать картинки слоя.
+///
+/// `image-set()` хранится в слое дословно, а в display list попадает уже
+/// выбранный кандидат — поэтому здесь функция разворачивается, иначе shell
+/// уходил бы качать текст `image-set(…)` как имя файла. `cross-fade()` рисуется
+/// одной командой из **двух** источников, и обе стороны (каждая сама может быть
+/// `image-set()`) должны быть загружены. Пустые и уже собранные URL-ы
+/// пропускаются.
+fn push_bg_image_urls(image: &BackgroundImage, dpr: f32, out: &mut Vec<String>) {
+    match image {
+        BackgroundImage::Url(src) => {
+            let resolved = if crate::image_set::is_image_set(src) {
+                crate::image_set::select_image_set_url(src, dpr)
+            } else {
+                src.clone()
+            };
+            if !resolved.is_empty() && !out.contains(&resolved) {
+                out.push(resolved);
+            }
         }
+        // CSS Images L4 §4 — обе стороны попадают в `DrawCrossFade`.
+        BackgroundImage::CrossFade { a, b, .. } => {
+            push_bg_image_urls(a, dpr, out);
+            push_bg_image_urls(b, dpr, out);
+        }
+        _ => {}
+    }
+}
+
+fn collect_bg_image_inner(b: &LayoutBox, dpr: f32, out: &mut Vec<String>) {
+    for layer in &b.style.background_layers {
+        push_bg_image_urls(&layer.image, dpr, out);
     }
     // CSS Lists L3 §2.3: a `list-style-image` marker also needs its URL fetched
     // and registered, same as a background image.
@@ -1882,7 +1912,7 @@ fn collect_bg_image_inner(b: &LayoutBox, out: &mut Vec<String>) {
         }
     }
     for child in &b.children {
-        collect_bg_image_inner(child, out);
+        collect_bg_image_inner(child, dpr, out);
     }
 }
 

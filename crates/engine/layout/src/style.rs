@@ -20241,8 +20241,7 @@ fn is_gradient_function(s: &str) -> bool {
 
 /// CSS Images L4 §5 — is `s` an `image-set()` / `-webkit-image-set()` expression?
 fn is_image_set_value(s: &str) -> bool {
-    let v = s.trim().to_ascii_lowercase();
-    v.starts_with("image-set(") || v.starts_with("-webkit-image-set(")
+    crate::image_set::is_image_set(s)
 }
 
 /// CSS Paint API (Houdini) — parse `paint(name)` and extract the worklet name.
