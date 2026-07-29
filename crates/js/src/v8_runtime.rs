@@ -597,6 +597,55 @@ impl V8JsRuntime {
         *self.page_scroll_y.lock().unwrap_or_else(|e| e.into_inner()) = y;
     }
 
+    /// Fire a non-bubbling `scroll` Event on the DOM element identified by `nid`.
+    /// Mirrors [`crate::QuickJsRuntime::fire_element_scroll`].
+    pub fn fire_element_scroll(&self, nid: u32) {
+        let script = format!(
+            "if(typeof _lumen_fire_scroll_on_element==='function')\
+             _lumen_fire_scroll_on_element({nid});"
+        );
+        self.eval(&script).ok();
+    }
+
+    /// Fire a non-bubbling `scroll` Event on the `window` object (page scroll).
+    /// Mirrors [`crate::QuickJsRuntime::fire_window_scroll`].
+    pub fn fire_window_scroll(&self) {
+        self.eval(
+            "if(typeof _lumen_fire_window_scroll_event==='function')\
+             _lumen_fire_window_scroll_event();"
+        ).ok();
+    }
+
+    /// Fire a CSS Scroll Snap L2 `snapchanging` event on a scroll container.
+    /// Mirrors [`crate::QuickJsRuntime::fire_snap_changing`].
+    pub fn fire_snap_changing(&self, nid: u32, block: Option<u32>, inline: Option<u32>) {
+        self.fire_snap_event("_lumen_fire_snap_changing", nid, block, inline);
+    }
+
+    /// Fire a CSS Scroll Snap L2 `snapchanged` event on a scroll container.
+    /// Mirrors [`crate::QuickJsRuntime::fire_snap_changed`].
+    pub fn fire_snap_changed(&self, nid: u32, block: Option<u32>, inline: Option<u32>) {
+        self.fire_snap_event("_lumen_fire_snap_changed", nid, block, inline);
+    }
+
+    /// Shared dispatch path for the snap events.
+    /// Mirrors [`crate::QuickJsRuntime::fire_snap_event`].
+    fn fire_snap_event(&self, func: &str, nid: u32, block: Option<u32>, inline: Option<u32>) {
+        let blk = match block {
+            Some(b) => format!("_lumen_make_element({b})"),
+            None => "null".to_string(),
+        };
+        let inl = match inline {
+            Some(i) => format!("_lumen_make_element({i})"),
+            None => "null".to_string(),
+        };
+        let script = format!(
+            "if(typeof {func}==='function'&&typeof _lumen_make_element==='function')\
+             {func}({nid},{blk},{inl});"
+        );
+        self.eval(&script).ok();
+    }
+
     /// Push a fresh snapshot of computed CSS styles into the JS runtime.
     /// Mirrors [`crate::QuickJsRuntime::update_computed_styles`].
     pub fn update_computed_styles(&self, styles: HashMap<u32, HashMap<String, String>>) {
