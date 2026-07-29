@@ -4785,11 +4785,38 @@ fn build_box_inner(
                     .unwrap_or(150);
                 // The bitmap dimensions act as intrinsic size; explicit CSS
                 // width/height (or presentational hints) win if already set.
+                //
+                // BUG-099: unlike `<img>`/`<video>`, HTML Rendering §15.4.1 does
+                // NOT map the `<canvas>` dimension attributes to the `width`/
+                // `height` properties — they are the element's *intrinsic* size,
+                // i.e. a content-box size. Feeding them through `style.width`
+                // makes `box-sizing: border-box` subtract borders and padding
+                // from the bitmap, shrinking the element (TEST-57 c3: 180×150
+                // instead of Edge's 186×156 border box). Add the border+padding
+                // back so that the resulting *content* box stays the bitmap size.
+                // % padding resolves against the containing block, unknown here —
+                // it degrades to 0, same limitation as the `<img>` hint above.
+                let (fill_extra_w, fill_extra_h) = match style.box_sizing {
+                    BoxSizing::ContentBox => (0.0, 0.0),
+                    BoxSizing::BorderBox => {
+                        let em = style.font_size;
+                        (
+                            style.border_left_width
+                                + style.border_right_width
+                                + style.padding_left.resolve_or_zero(em, 0.0, viewport)
+                                + style.padding_right.resolve_or_zero(em, 0.0, viewport),
+                            style.border_top_width
+                                + style.border_bottom_width
+                                + style.padding_top.resolve_or_zero(em, 0.0, viewport)
+                                + style.padding_bottom.resolve_or_zero(em, 0.0, viewport),
+                        )
+                    }
+                };
                 if style.width.is_none() {
-                    Arc::make_mut(&mut style).width = Some(Length::Px(cw as f32));
+                    Arc::make_mut(&mut style).width = Some(Length::Px(cw as f32 + fill_extra_w));
                 }
                 if style.height.is_none() {
-                    Arc::make_mut(&mut style).height = Some(Length::Px(ch as f32));
+                    Arc::make_mut(&mut style).height = Some(Length::Px(ch as f32 + fill_extra_h));
                 }
                 BoxKind::Canvas { width: cw, height: ch }
             } else if is_audio_element(doc, id) {
@@ -12096,6 +12123,64 @@ mod tests {
             None
         }
         find_empty_block(&root).cloned().expect("empty Block not found in layout tree")
+    }
+
+    /// Border box of the first `<canvas>` box produced by laying out `html`+`css`.
+    fn canvas_border_box(html: &str, css: &str) -> (f32, f32) {
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        fn find(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            if matches!(b.kind, super::BoxKind::Canvas { .. }) {
+                return Some(b);
+            }
+            b.children.iter().find_map(find)
+        }
+        let c = find(&root).expect("Canvas box not found in layout tree");
+        (c.rect.width, c.rect.height)
+    }
+
+    /// BUG-099 — HTML Rendering §15.4.1 leaves `<canvas>` out of the elements
+    /// whose dimension attributes map to the `width`/`height` properties: the
+    /// bitmap size is the *intrinsic* (content-box) size. Under `box-sizing:
+    /// border-box` the border must therefore grow the border box, not shrink
+    /// the bitmap — Edge lays TEST-57's `c3` out at 186×156, not 180×150.
+    #[test]
+    fn canvas_intrinsic_size_is_a_content_box_under_border_box_sizing() {
+        assert_eq!(
+            canvas_border_box(
+                r#"<canvas width="180" height="150"></canvas>"#,
+                "*{box-sizing:border-box;margin:0;padding:0}canvas{border:3px solid red}",
+            ),
+            (186.0, 156.0),
+        );
+    }
+
+    /// The same element under the default `content-box` sizing — the border box
+    /// has always been intrinsic + border there, so the fix must not move it.
+    #[test]
+    fn canvas_intrinsic_size_unchanged_under_content_box_sizing() {
+        assert_eq!(
+            canvas_border_box(
+                r#"<canvas width="180" height="150"></canvas>"#,
+                "*{margin:0;padding:0}canvas{border:3px solid red}",
+            ),
+            (186.0, 156.0),
+        );
+    }
+
+    /// An author-specified CSS `width`/`height` keeps its ordinary `border-box`
+    /// meaning — the intrinsic-size fill-in is skipped entirely.
+    #[test]
+    fn canvas_explicit_css_size_is_not_grown_by_the_border() {
+        assert_eq!(
+            canvas_border_box(
+                r#"<canvas width="180" height="150"></canvas>"#,
+                "*{box-sizing:border-box;margin:0;padding:0}\
+                 canvas{border:3px solid red;width:100px;height:80px}",
+            ),
+            (100.0, 80.0),
+        );
     }
 
     /// Строит один текстовый сегмент с заданным `font-variant-caps`.

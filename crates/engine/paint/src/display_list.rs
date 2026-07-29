@@ -4579,23 +4579,33 @@ fn background_clip_rect(b: &LayoutBox, clip: BackgroundClip) -> Rect {
             (b.rect.width - s.border_left_width - s.border_right_width).max(0.0),
             (b.rect.height - s.border_top_width - s.border_bottom_width).max(0.0),
         ),
-        BackgroundClip::ContentBox => Rect::new(
-            b.rect.x + s.border_left_width + s.padding_left.px(),
-            b.rect.y + s.border_top_width + s.padding_top.px(),
-            (b.rect.width
-                - s.border_left_width
-                - s.border_right_width
-                - s.padding_left.px()
-                - s.padding_right.px())
-            .max(0.0),
-            (b.rect.height
-                - s.border_top_width
-                - s.border_bottom_width
-                - s.padding_top.px()
-                - s.padding_bottom.px())
-            .max(0.0),
-        ),
+        BackgroundClip::ContentBox => content_box_rect(b),
     }
+}
+
+/// Content box of `b` — `b.rect` (the border box) shrunk by borders and padding.
+///
+/// CSS Box L3 §1: the content box is where a replaced element's own bitmap is
+/// painted, so this is the destination rect for `<canvas>` (BUG-099) as well as
+/// the `content-box` arm of [`background_clip_rect`].
+fn content_box_rect(b: &LayoutBox) -> Rect {
+    let s = &b.style;
+    Rect::new(
+        b.rect.x + s.border_left_width + s.padding_left.px(),
+        b.rect.y + s.border_top_width + s.padding_top.px(),
+        (b.rect.width
+            - s.border_left_width
+            - s.border_right_width
+            - s.padding_left.px()
+            - s.padding_right.px())
+        .max(0.0),
+        (b.rect.height
+            - s.border_top_width
+            - s.border_bottom_width
+            - s.padding_top.px()
+            - s.padding_bottom.px())
+        .max(0.0),
+    )
 }
 
 /// CSS Backgrounds L3 §3.10: clip для `background-color` — last layer's clip (или default).
@@ -7112,9 +7122,11 @@ fn emit_box_self(
             }
             // Bitmap is uploaded by the shell under `canvas:{node_id}`. Until JS
             // draws anything the key is unregistered → transparent placeholder.
+            // BUG-099: the bitmap belongs in the *content* box — painting it at
+            // `b.rect` slid it under the border by the border width.
             let nid = b.node.index();
             out.push(DisplayCommand::DrawImage {
-                rect: b.rect,
+                rect: content_box_rect(b),
                 src: format!("canvas:{nid}"),
                 alt: String::new(),
                 object_fit: ObjectFit::Fill,
@@ -7953,9 +7965,10 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHi
                 });
             }
             // Bitmap uploaded by shell under `canvas:{node_id}`; unregistered → transparent.
+            // BUG-099: destination is the content box, not the border box.
             let nid = b.node.index();
             out.push(DisplayCommand::DrawImage {
-                rect: b.rect,
+                rect: content_box_rect(b),
                 src: format!("canvas:{nid}"),
                 alt: String::new(),
                 object_fit: ObjectFit::Fill,
@@ -9466,6 +9479,83 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    // ── BUG-099: `<canvas>` bitmap is a content-box-sized intrinsic size ─────
+
+    /// Destination rect of the `canvas:{nid}` bitmap in `dl`, as `(x, y, w, h)`.
+    fn canvas_bitmap_rect(dl: &DisplayList) -> (f32, f32, f32, f32) {
+        dl.iter()
+            .find_map(|c| match c {
+                DisplayCommand::DrawImage { rect, src, .. } if src.starts_with("canvas:") => {
+                    Some((rect.x, rect.y, rect.width, rect.height))
+                }
+                _ => None,
+            })
+            .expect("<canvas> must emit a DrawImage for its bitmap")
+    }
+
+    /// Border box of the single `DrawBorder` in `dl`, as `(x, y, w, h)`.
+    fn only_border_rect(dl: &DisplayList) -> (f32, f32, f32, f32) {
+        dl.iter()
+            .find_map(|c| match c {
+                DisplayCommand::DrawBorder { rect, .. } => {
+                    Some((rect.x, rect.y, rect.width, rect.height))
+                }
+                _ => None,
+            })
+            .expect("bordered <canvas> must emit a DrawBorder")
+    }
+
+    /// HTML Rendering §15.4.1 does not map the `<canvas>` dimension attributes
+    /// to the `width`/`height` properties — they are the intrinsic (content-box)
+    /// size, so `box-sizing: border-box` must not eat the border. Edge puts the
+    /// TEST-57 `c3` element at a 186×156 border box, not 180×150.
+    #[test]
+    fn canvas_intrinsic_size_survives_border_box_sizing() {
+        let dl = build(
+            r#"<canvas width="180" height="150"></canvas>"#,
+            "*{box-sizing:border-box;margin:0;padding:0}canvas{border:3px solid #38bdf8}",
+        );
+        assert_eq!(only_border_rect(&dl), (0.0, 0.0, 186.0, 156.0));
+    }
+
+    /// The bitmap belongs in the content box: painting it at the border box
+    /// slid every canvas drawing under the border by the border width.
+    #[test]
+    fn canvas_bitmap_is_painted_into_the_content_box() {
+        let dl = build(
+            r#"<canvas width="180" height="150"></canvas>"#,
+            "*{box-sizing:border-box;margin:0;padding:0}canvas{border:3px solid #38bdf8}",
+        );
+        assert_eq!(canvas_bitmap_rect(&dl), (3.0, 3.0, 180.0, 150.0));
+    }
+
+    /// Padding counts towards the content box the same way the border does —
+    /// under `content-box` sizing the border box grows instead of the bitmap
+    /// shrinking.
+    #[test]
+    fn canvas_bitmap_content_box_accounts_for_padding() {
+        let dl = build(
+            r#"<canvas width="180" height="150"></canvas>"#,
+            "*{margin:0}canvas{border:2px solid #38bdf8;padding:10px}",
+        );
+        assert_eq!(only_border_rect(&dl), (0.0, 0.0, 204.0, 174.0));
+        assert_eq!(canvas_bitmap_rect(&dl), (12.0, 12.0, 180.0, 150.0));
+    }
+
+    /// An explicit CSS `width`/`height` still wins over the intrinsic size, and
+    /// under `border-box` it keeps its border-box meaning — the bitmap is then
+    /// stretched into whatever content box is left (`object-fit: fill`).
+    #[test]
+    fn canvas_explicit_css_size_keeps_border_box_meaning() {
+        let dl = build(
+            r#"<canvas width="180" height="150"></canvas>"#,
+            "*{box-sizing:border-box;margin:0;padding:0}\
+             canvas{border:3px solid #38bdf8;width:100px;height:80px}",
+        );
+        assert_eq!(only_border_rect(&dl), (0.0, 0.0, 100.0, 80.0));
+        assert_eq!(canvas_bitmap_rect(&dl), (3.0, 3.0, 94.0, 74.0));
     }
 
     fn rounded_fills(dl: &DisplayList) -> Vec<&Color> {
