@@ -18,6 +18,17 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
 
 ## Done
 
+- **`dom.rs` test monolith, navigation/URL/storage families ([P1] P3-v8-s12b-24-nav-url-storage,
+  2026-07-29).** Location/`NavigateRequest` + fragment navigation + History API
+  (`pushState`/`replaceState`, `popstate`/`hashchange`), Web Storage, `URLSearchParams`/`URL` —
+  67 tests — now in `dom.rs::tests::v8_nav_url_storage`; QuickJS copies deleted, and with them the
+  last callers of `runtime_with_url`/`runtime_with_storage` (both helpers moved into the V8 module).
+  **Non-obvious:** `V8JsRuntime::new()` tolerates repeated construction inside one test process —
+  `local_storage_persists_across_runtimes` builds two runtimes over a shared
+  `Arc<Mutex<WebStorage>>` and passes, so the isolate-lifecycle worry the scoping note raised for
+  the IndexedDB reload cluster does not apply. Green 67/67 with untouched bodies; the 19 `URL`
+  tests pin Lumen's own Phase-0 plumbing, *not* the spec — `URL.prototype` setters are still dead
+  (BUG-375) and `Url::resolve` still keeps dot-segments (BUG-346), both engine-agnostic.
 - **`dom.rs` test monolith, mock-provider families ([P1] P3-v8-s12b-24-ws-sse, 2026-07-29).**
   WebSocket (incl. mock session + binary mode), EventSource/SSE, fetch bindings and IME +
   bfcache — 73 tests — now in `dom.rs::tests::v8_ws_sse`; QuickJS copies deleted. **Non-obvious:**
