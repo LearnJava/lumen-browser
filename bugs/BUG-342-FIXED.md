@@ -1,8 +1,9 @@
 # BUG-342: V8 native-function trampoline silently drops Array/Object arguments — `Vec<u8>`-consuming natives always see empty input
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-07-29
 **Компонент:** js (`crates/js/src/v8_compat.rs::v8_to_jsvalue`, used by `native_fn_trampoline`)
 **Найден:** P2, WPT-VENDOR-compression 2026-07-25 (`run_report.py --all --root compression --recursive`, vendored `compression/compression-multiple-chunks.any.html` and siblings)
+**Исправлен:** P1, S12b-24-events-cache 2026-07-29
 
 ## Симптом
 
@@ -78,3 +79,17 @@ After fixing, re-run `_lumen_sha_digest`/`_lumen_compress_bytes`/`_lumen_decompr
 through the live V8 diagnostic to confirm, then re-run
 `run_report.py --all --root compression --recursive` and `--root WebCryptoAPI` to check
 for newly-passing subtests.
+
+## Fix (2026-07-29, S12b-24-events-cache)
+
+`v8_to_jsvalue` now recurses into `is_array()` (via `v8::Local<v8::Array>` +
+`get_index`) and `is_object()` (via `get_own_property_names` + `get`), matching
+`from_v8`'s existing behavior — the two converters were not deduplicated (still
+two call sites), but both now agree on array/object handling. Verified with a
+targeted probe: `_lumen_sha_digest('SHA-256', [72,101,108,108,111])` under
+`V8JsRuntime` now returns the correct SHA-256 digest of `"Hello"`
+(`185f8db3...81969`), not the empty-input digest. Full `cargo test -p lumen-js
+--features v8-backend` (2569 tests) passes with no regressions. The WPT
+compression/WebCryptoAPI re-run this bug's fix direction calls for was not
+re-executed in this session — that verification is still open if anyone wants
+to confirm the vendored subtests now pass end-to-end.
