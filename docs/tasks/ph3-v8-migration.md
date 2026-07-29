@@ -1522,6 +1522,50 @@ same `eval`. Confirmed green, i.e. the no-provider `fetch()` really does reject 
 Expect ~8 more of this exact shape in the SubtleCrypto/Streams/Compression clusters (line list in
 the scoping section above).
 
+### S12b-24-nav-url-storage — fourth porting slice (2026-07-29, branch p1-v8-s12b-24-nav-url-storage)
+
+Three adjacent scoping-table rows ported together into `mod tests::v8_nav_url_storage`:
+Location/`NavigateRequest` + fragment navigation + History API (`pushState`/`replaceState`,
+`popstate`/`hashchange`), Web Storage (`localStorage`/`sessionStorage`), `URLSearchParams` + `URL`.
+**67 tests** (the table guessed ~50 + ~10 + ~20 = ~80 for these three rows — the first row was the
+over-count this time, the opposite direction from `v8_core`), QuickJS copies deleted;
+`cargo test -p lumen-js --features v8-backend` 2569/2569, unchanged total. Third slice in a row
+where the module-nesting mechanics needed nothing new: one more twin constructor
+(`v8_runtime_with_storage`) alongside `v8_runtime_with_dom`/`_with_url`.
+
+**Helper-liveness bookkeeping, second occurrence.** This slice took the *last* callers of both
+`runtime_with_url` and `runtime_with_storage`, so both definitions had to move with the tests —
+the same trap `test_img_bitmap` sprang in `v8_core`, and it stays invisible unless you
+`cargo check`/`clippy` the crate **without** `v8-backend` (with the feature on, the leftover is
+still "used" by nothing and warns; without it there is no V8 module to justify it at all). Cheap
+mechanical check before committing a slice: grep the remaining QuickJS region for each
+`runtime_with_*` name the slice touched and confirm the count is zero or non-zero deliberately.
+
+**An open scoping question closed for free.** The scoping note flagged
+`idb_persists_across_runtime_reload`/`local_storage_persists_across_runtimes` (two runtimes sharing
+one backend) as needing confirmation that `V8JsRuntime::new()` survives repeated construction in
+one test process, since "V8 isolate lifecycle can be pickier than QuickJS contexts". The
+`local_storage` half of that pattern is in this slice and passes unmodified, so the IndexedDB
+reload cluster (8 tests) can be scheduled as ordinary work, not as risk.
+
+**Zero engine divergences, and an explicit non-claim about `URL`.** 67/67 green on the first run
+with untouched bodies, no loose microtask-tolerant assertions in this range (the
+`_lumen_drain_microtasks` clusters are all downstream). No bugs closed either — but unlike
+`v8_ws_sse`, here the pre-check found OPEN defects sitting *directly* on the ported APIs:
+[BUG-375](../../bugs/BUG-375-OPEN.md) (only `URL.prototype.href` has a working setter; the other
+nine swallow assignment silently), [BUG-346](../../bugs/BUG-346-OPEN.md) (`Url::resolve` keeps
+`.`/`..` dot-segments) and the `location`-adjacent
+[BUG-359](../../bugs/BUG-359-OPEN.md)/[BUG-358](../../bugs/BUG-358-OPEN.md). All are
+engine-agnostic (shim / `lumen-core` / shell), which is exactly why the 19 green `URL` tests do not
+touch them: the suite pins Lumen's Phase-0 plumbing, not the spec. Worth recording the reason
+`url_resolve_relative_path` (`new URL('../other.html', base).pathname === '/other.html'`) is green
+while BUG-346 is open — **there are two independent relative-URL resolvers in the tree**: the JS
+`_url_resolve` inside `WEB_API_SHIM`, which `function URL(href, base)` (`dom.rs:10876`) calls and
+which *does* collapse dot-segments, and Rust `lumen_core::Url::resolve`, which does not and is what
+the shell's `ResourceBase::resolve` uses. Fixing BUG-346 is therefore not "wire the working one in"
+blindly, but it does mean a correct reference implementation already exists in-tree. Don't let a
+future reader conclude from this slice that `URL`/`location` are conformant.
+
 ---
 
 ## Risks (Rev 2)
