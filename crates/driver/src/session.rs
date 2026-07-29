@@ -99,6 +99,18 @@ pub struct InProcessSession {
     /// current page (`click`/`type_text`/`eval` then return `Err`).
     #[cfg(feature = "v8")]
     js_runtime: Option<lumen_js::v8_runtime::V8JsRuntime>,
+    /// Canvas 2D bitmaps produced by the page's scripts, keyed by `<canvas>`
+    /// node index (BUG-429).
+    ///
+    /// `Context2D` pixels live in per-node buffers inside the JS runtime and
+    /// only reach paint through a **draining** call (`flush_canvas_updates`
+    /// returns each buffer once, then clears the dirty set). The live shell
+    /// drains once per frame into the renderer's image registry; this session
+    /// has no frame loop, so it accumulates the drains here instead and hands
+    /// the whole set to the rasterizer on every screenshot. Cleared on
+    /// navigation.
+    #[cfg(feature = "v8")]
+    canvas_images: Mutex<std::collections::HashMap<u32, Arc<lumen_image::Image>>>,
 }
 
 impl InProcessSession {
@@ -117,6 +129,8 @@ impl InProcessSession {
             compositor: InProcessCompositor::new(),
             #[cfg(feature = "v8")]
             js_runtime: None,
+            #[cfg(feature = "v8")]
+            canvas_images: Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -135,6 +149,8 @@ impl InProcessSession {
             compositor: InProcessCompositor::new(),
             #[cfg(feature = "v8")]
             js_runtime: None,
+            #[cfg(feature = "v8")]
+            canvas_images: Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -169,6 +185,8 @@ impl InProcessSession {
             compositor: InProcessCompositor::new(),
             #[cfg(feature = "v8")]
             js_runtime: None,
+            #[cfg(feature = "v8")]
+            canvas_images: Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -269,8 +287,32 @@ impl InProcessSession {
         let encoding = lumen_encoding::detect(bytes, content_type);
         let source = lumen_encoding::decode(encoding, bytes);
 
-        let doc = lumen_html_parser::parse(&source);
-        let css = extract_style_blocks(&doc);
+        let doc = Arc::new(Mutex::new(lumen_html_parser::parse(&source)));
+
+        // DEVX-5 slice 2: (re-)install a fresh V8 runtime against this navigation's
+        // `doc`, mirroring the shell's per-navigate `V8JsRuntime::new()` +
+        // `install_dom()` (`crates/shell/src/main.rs`). Best-effort: a V8/install
+        // failure must not fail the navigation itself (matches shell), it only
+        // leaves `click`/`type_text`/`eval` returning `Err` for this page.
+        //
+        // BUG-429: install + run the page's own classic scripts BEFORE layout — the
+        // shell does the same (`parse_and_layout` → `run_scripts_with_dom` → layout),
+        // and anything a script builds (DOM nodes, canvas bitmaps) has to exist by
+        // the time the box tree and the display list are produced.
+        #[cfg(feature = "v8")]
+        {
+            if let Ok(mut map) = self.canvas_images.lock() {
+                map.clear();
+            }
+            self.js_runtime = new_v8_runtime(Arc::clone(&doc), &url);
+            if let Some(rt) = self.js_runtime.as_ref() {
+                run_page_scripts(rt, &doc);
+            }
+            self.drain_canvas_updates();
+        }
+
+        let doc_guard = Self::lock_arc_doc(&doc)?;
+        let css = extract_style_blocks(&doc_guard);
         let sheet = lumen_css_parser::parse(&css);
 
         let font = lumen_font::Font::parse(INTER_FONT)
@@ -278,8 +320,9 @@ impl InProcessSession {
         let measurer = lumen_paint::FontMeasurer::new(&font)
             .map_err(|e| Error::Other(format!("ошибка метрик Inter: {e}")))?;
 
-        let layout_root = lumen_layout::layout_measured(&doc, &sheet, self.viewport, &measurer);
-        let flat_tree = lumen_dom::build_flat_tree(&doc);
+        let layout_root = lumen_layout::layout_measured(&doc_guard, &sheet, self.viewport, &measurer);
+        let flat_tree = lumen_dom::build_flat_tree(&doc_guard);
+        drop(doc_guard);
 
         // Build property trees (PH1-7): four parallel trees (Transform / Scroll /
         // Effect / Clip) from the completed layout root. Committed to the in-process
@@ -298,17 +341,6 @@ impl InProcessSession {
         // current after navigation (no separate compositor tick needed).
         self.compositor.flush_pending();
 
-        let doc = Arc::new(Mutex::new(doc));
-        // DEVX-5 slice 2: (re-)install a fresh V8 runtime against this navigation's
-        // `doc`, mirroring the shell's per-navigate `V8JsRuntime::new()` +
-        // `install_dom()` (`crates/shell/src/main.rs`). Best-effort: a V8/install
-        // failure must not fail the navigation itself (matches shell), it only
-        // leaves `click`/`type_text`/`eval` returning `Err` for this page.
-        #[cfg(feature = "v8")]
-        {
-            self.js_runtime = new_v8_runtime(Arc::clone(&doc), &url);
-        }
-
         self.current_url = url;
         self.state = Some(SessionState { doc, layout_root, flat_tree });
         Ok(())
@@ -324,7 +356,62 @@ impl InProcessSession {
     /// Lock `state.doc`, converting mutex poisoning into `Error::Other`
     /// (the persistent V8 runtime holds its own clone of the same `Arc`).
     fn lock_doc(state: &SessionState) -> Result<std::sync::MutexGuard<'_, Document>> {
-        state.doc.lock().map_err(|e| Error::Other(format!("mutex poisoned: {e}")))
+        Self::lock_arc_doc(&state.doc)
+    }
+
+    /// Lock a shared `Document`, converting mutex poisoning into `Error::Other`.
+    ///
+    /// Separate from [`Self::lock_doc`] because `run_pipeline` needs the guard
+    /// before a [`SessionState`] exists (BUG-429: the page's scripts run against
+    /// the same `Arc` while layout is still ahead).
+    fn lock_arc_doc(doc: &Arc<Mutex<Document>>) -> Result<std::sync::MutexGuard<'_, Document>> {
+        doc.lock().map_err(|e| Error::Other(format!("mutex poisoned: {e}")))
+    }
+
+    /// Drain the JS runtime's dirty `<canvas>` 2D buffers into
+    /// [`Self::canvas_images`] (BUG-429).
+    ///
+    /// `flush_canvas_updates` hands each dirty buffer over exactly once, so the
+    /// result is merged into the accumulated map rather than replacing it — a
+    /// second screenshot of an untouched canvas must still see its pixels.
+    #[cfg(feature = "v8")]
+    fn drain_canvas_updates(&self) {
+        let Some(rt) = self.js_runtime.as_ref() else {
+            return;
+        };
+        let updates = rt.flush_canvas_updates();
+        if updates.is_empty() {
+            return;
+        }
+        let Ok(mut map) = self.canvas_images.lock() else {
+            return;
+        };
+        for (nid, width, height, data) in updates {
+            let image = lumen_image::Image {
+                width,
+                height,
+                format: lumen_image::PixelFormat::Rgba8,
+                data,
+                icc_profile: None,
+            };
+            map.insert(nid, Arc::new(image));
+        }
+    }
+
+    /// Canvas bitmaps as the renderer's image set, keyed exactly the way the
+    /// display list refers to them (BUG-429).
+    ///
+    /// `display_list.rs` emits `DisplayCommand::DrawImage { src: "canvas:{nid}" }`
+    /// for a `<canvas>` box; the same key format is built on the shell side by
+    /// `canvas_updates_as_images` (`crates/shell/src/main.rs`).
+    #[cfg(feature = "v8")]
+    fn canvas_image_set(&self) -> Vec<(String, Arc<lumen_image::Image>)> {
+        let Ok(map) = self.canvas_images.lock() else {
+            return Vec::new();
+        };
+        map.iter()
+            .map(|(nid, image)| (format!("canvas:{nid}"), Arc::clone(image)))
+            .collect()
     }
 
     /// Synthesize `mousedown` → `mouseup` → `click` on `node` at CSS viewport
@@ -432,7 +519,19 @@ impl InProcessSession {
         let display_list = lumen_paint::build_display_list_ordered(&state.layout_root, &tree, &order);
         let width = self.viewport.width as u32;
         let height = self.viewport.height as u32;
-        lumen_paint::Renderer::render_to_image_cpu(width, height, &display_list, &[], 0.0, 0.0)
+        // BUG-429: pick up anything the page's scripts have drawn since the last
+        // screenshot (`eval`/`click` can redraw a canvas after navigation), then
+        // hand the accumulated bitmaps to the rasterizer — without them every
+        // `DrawImage { src: "canvas:{nid}" }` resolves to an unregistered key and
+        // paints nothing.
+        #[cfg(feature = "v8")]
+        let images = {
+            self.drain_canvas_updates();
+            self.canvas_image_set()
+        };
+        #[cfg(not(feature = "v8"))]
+        let images: Vec<(String, Arc<lumen_image::Image>)> = Vec::new();
+        lumen_paint::Renderer::render_to_image_cpu(width, height, &display_list, &images, 0.0, 0.0)
             .map_err(|e| Error::Other(format!("CPU rasterization: {e}")))
     }
 
@@ -1007,6 +1106,136 @@ fn new_v8_runtime(
         return None;
     }
     Some(rt)
+}
+
+/// Execute the page's own inline classic `<script>` elements in document order,
+/// then advance `document.readyState` (BUG-429).
+///
+/// Mirrors the shell's `parse_and_layout` → `run_scripts_with_dom` →
+/// `notify_dom_content_loaded` sequence (`crates/shell/src/main.rs`), reduced to
+/// what a **deterministic, offline** session can do:
+///
+/// * inline classic scripts only — an external `<script src>` would have to be
+///   fetched, which would make this path depend on the network and on the disk
+///   layout around the page. The count of skipped externals is reported on
+///   stderr so a page silently missing its behaviour is visible;
+/// * `<script type="module">` is skipped too (module evaluation is not wired on
+///   this runtime — BUG-350).
+///
+/// Errors from a script are logged and do not abort the remaining ones, matching
+/// the browser's per-script error isolation.
+#[cfg(feature = "v8")]
+fn run_page_scripts(rt: &lumen_js::v8_runtime::V8JsRuntime, doc: &Arc<Mutex<Document>>) {
+    use lumen_core::ext::JsRuntime as _;
+
+    // Collect first, then evaluate: the DOM bindings lock the same mutex, so the
+    // guard must be gone before the first `eval`.
+    let (sources, skipped_external) = {
+        let Ok(guard) = doc.lock() else {
+            return;
+        };
+        let mut sources = Vec::new();
+        let mut skipped_external = 0usize;
+        collect_inline_classic_scripts(&guard, guard.root(), &mut sources, &mut skipped_external);
+        (sources, skipped_external)
+    };
+
+    if skipped_external > 0 {
+        eprintln!(
+            "InProcessSession: пропущено {skipped_external} внешних <script src> \
+             (headless-путь исполняет только inline-скрипты)"
+        );
+    }
+
+    for source in sources {
+        if let Err(e) = rt.eval(&source) {
+            eprintln!("InProcessSession: ошибка исполнения <script>: {e}");
+        }
+    }
+
+    // HTML LS §8.2.3 — after parse + inline scripts: readyState → "interactive"
+    // (+ DOMContentLoaded). Nothing else loads asynchronously on this path, so
+    // "complete" (+ window `load`) follows immediately instead of waiting on
+    // images/fonts the way the shell's `notify_window_loaded` does.
+    for state in ["interactive", "complete"] {
+        if let Err(e) = rt.eval(&format!("_lumen_apply_ready_state('{state}')")) {
+            eprintln!("InProcessSession: readyState '{state}': {e}");
+        }
+    }
+}
+
+/// Walk the DOM in document order, collecting inline classic `<script>` bodies
+/// into `out` and counting external (`src`) ones into `skipped_external`.
+///
+/// Classification mirrors the shell's `collect_scripts_ordered` +
+/// `is_classic_script_type` (`crates/shell/src/main.rs`).
+#[cfg(feature = "v8")]
+fn collect_inline_classic_scripts(
+    doc: &Document,
+    id: NodeId,
+    out: &mut Vec<String>,
+    skipped_external: &mut usize,
+) {
+    let node = doc.get(id);
+    if let NodeData::Element { name, .. } = &node.data
+        && name.local == "script"
+    {
+        if !is_classic_script_type(node.get_attr("type").map(str::trim)) {
+            return;
+        }
+        if node.get_attr("src").is_some() {
+            *skipped_external += 1;
+            return;
+        }
+        let mut body = String::new();
+        for &child in &node.children {
+            if let NodeData::Text(s) = &doc.get(child).data {
+                body.push_str(s);
+            }
+        }
+        if !body.trim().is_empty() {
+            out.push(body);
+        }
+        return;
+    }
+    for &child in &node.children {
+        collect_inline_classic_scripts(doc, child, out, skipped_external);
+    }
+}
+
+/// True for `type` values that designate an executable classic script
+/// (HTML LS §4.12.1 — absent/empty `type`, or a JavaScript MIME type).
+///
+/// Kept in sync with the shell's `is_classic_script_type`
+/// (`crates/shell/src/main.rs`); anything else (`module`, `application/json`,
+/// `text/template`, …) is data, not code.
+#[cfg(feature = "v8")]
+fn is_classic_script_type(t: Option<&str>) -> bool {
+    match t {
+        None | Some("") => true,
+        Some(t) => {
+            let t = t.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+            matches!(
+                t.as_str(),
+                "text/javascript"
+                    | "application/javascript"
+                    | "application/ecmascript"
+                    | "application/x-ecmascript"
+                    | "application/x-javascript"
+                    | "text/ecmascript"
+                    | "text/javascript1.0"
+                    | "text/javascript1.1"
+                    | "text/javascript1.2"
+                    | "text/javascript1.3"
+                    | "text/javascript1.4"
+                    | "text/javascript1.5"
+                    | "text/jscript"
+                    | "text/livescript"
+                    | "text/x-ecmascript"
+                    | "text/x-javascript"
+            )
+        }
+    }
 }
 
 /// Извлечь содержимое всех `<style>` блоков из документа (рекурсивный обход).

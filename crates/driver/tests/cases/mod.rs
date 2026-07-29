@@ -13,6 +13,7 @@ mod antidetect_surface_api;
 mod compare_backends;
 mod isolation;
 mod mock_transport;
+mod scripted_render;
 mod snapshot_cpu;
 mod snapshot_generator;
 mod snapshot_vs_edge;

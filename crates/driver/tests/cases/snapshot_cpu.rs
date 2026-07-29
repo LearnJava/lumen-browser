@@ -15,8 +15,12 @@
 //! (`DrawSvgPath`), rectangular clipping (`PushClipRect` / `PopClip` +
 //! `PushScrollLayer` / `PopScrollLayer`, i.e. `overflow: hidden/scroll/auto`),
 //! the `<img>` grey placeholder quad (`DrawImage` — the headless CPU path
-//! registers no decoded pixels, so every image box paints the solid
-//! placeholder, matching the GPU renderer's fallback), and text (`DrawText` —
+//! fetches no subresources, so every image box paints the solid placeholder,
+//! matching the GPU renderer's fallback; BUG-430), Canvas 2D bitmaps
+//! (`DrawImage { src: "canvas:{nid}" }` — since BUG-429 the session runs the
+//! page's inline scripts before layout and hands the drained canvas buffers to
+//! the rasterizer, so `57-canvas-2d` captures real `fillRect`/`arc`/path output
+//! instead of a blank frame), and text (`DrawText` —
 //! glyphs of the bundled Inter Regular face rasterized via `lumen_font::
 //! Rasterizer` and composited through a coverage `Mask`; page
 //! `55-text-rendering`), group opacity (`PushOpacity` / `PopOpacity` —
