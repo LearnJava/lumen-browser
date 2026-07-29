@@ -1809,6 +1809,25 @@ unmodified, zero engine divergences. `cargo test -p lumen-js --features v8-backe
 feature); default-feature `cargo test -p lumen-js` — 1784/1784 (was 1826, −42, since the V8
 module is feature-gated out). Both clippy passes clean.
 
+### S12b-24-computedstyle — fourteenth porting slice (2026-07-30, branch p1-v8-s12b-24-computedstyle)
+
+`window.getComputedStyle()`: `getPropertyValue`, camelCase property access (`fontSize` →
+`font-size`), the pseudo-element argument (accepted but ignored — not yet supported),
+`null`-element lookups, and value replacement across repeated `update_computed_styles`
+calls — **16 tests** ported into `mod tests::v8_computedstyle`. Actual section on start —
+`dom.rs:16065-16292`, immediately after the selection-range-editing slice's block, ending
+right before `// ─── Web Crypto API tests ───`. Brief's estimate ("~16") was accurate this time.
+
+Fully mechanical: the only fixture builder was `runtime_with_dom` (twin `v8_runtime_with_dom`),
+and `V8JsRuntime::update_computed_styles` already mirrors the QuickJS signature
+(`HashMap<u32, HashMap<String, String>>`) one-for-one. `make_computed_styles_map`/
+`get_main_nid` were both scoped to this section only (grepped across the file before deleting,
+per the selection-range-editing lesson) — no downstream callers, so the QuickJS copies were
+deleted outright rather than kept as shared helpers. 16/16 green on the first run, bodies
+unmodified, zero engine divergences. `cargo test -p lumen-js --features v8-backend` —
+2570/2570 (unchanged: −16 ungated QuickJS, +16 gated V8); default-feature
+`cargo test -p lumen-js` — 1768/1768 (was 1784, −16). Both clippy passes clean.
+
 ---
 
 ## Risks (Rev 2)
