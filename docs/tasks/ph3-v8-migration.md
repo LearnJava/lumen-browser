@@ -1566,6 +1566,49 @@ the shell's `ResourceBase::resolve` uses. Fixing BUG-346 is therefore not "wire 
 blindly, but it does mean a correct reference implementation already exists in-tree. Don't let a
 future reader conclude from this slice that `URL`/`location` are conformant.
 
+### S12b-24-perf-observers — fifth porting slice (2026-07-30, branch p1-v8-s12b-24-perf-observers)
+
+Three adjacent scoping-table rows ported together into `mod tests::v8_perf_observers`:
+Performance API + PerformanceObserver (incl. the Performance Timeline L2 §6.2.2 single-type
+form), `queueMicrotask` + rAF/cAF (incl. the EE-5 vsync batching cluster), and
+MutationObserver/ResizeObserver/IntersectionObserver. **71 tests** — the table guessed
+~19 + ~21 + ~36 = ~76, the closest any three-row estimate has landed so far — QuickJS copies
+deleted; `cargo test -p lumen-js --features v8-backend` 2570/2570 (2569 before: −71 QuickJS,
++72 V8, the extra one explained below).
+
+**The most mechanical slice of the five, and why.** Two properties made it so, both cheap to check
+before starting and worth checking on every future slice: (1) the whole range uses exactly one
+helper, `runtime_with_dom` — `grep -o "runtime_with_[a-z_]*"` over the extracted block returned
+that name and nothing else, so a single `v8_runtime_with_dom` twin sufficed and no helper had to
+move (~910 QuickJS callers remain, so the helper-liveness trap from `v8_core`/`v8_nav_url_storage`
+could not fire); (2) the six runtime methods the bodies call besides `eval` —
+`update_layout_rects`, `update_viewport_size`, `take_raf_pending`, `take_dom_dirty`,
+`raf_pending_flag`, `dom_dirty_flag` — all already exist on `V8JsRuntime` with identical
+signatures (`v8_runtime.rs:523-566`). 71/71 green on the first run, zero body edits, zero engine
+divergences. The `grep -o` on `rt\.[a-z_]*(` over the extracted block is the two-minute
+pre-flight that predicted this; run it before assuming a slice needs new plumbing.
+
+**A microtask *coverage gap*, not a loose assertion — the S12b-2 lesson's other shape.** This
+range contains no `_lumen_drain_microtasks()` calls and no "may be false if microtasks not yet
+flushed" assertions, so by the letter of the scoping note there was nothing to tighten. But the
+three ported `queue_microtask_*` tests assert only `typeof queueMicrotask === 'function'` (twice)
+and that a non-function argument throws — none observes the callback ever running, because under
+QuickJS `eval()` returned with the job queue unprocessed and the effect was unreachable from Rust
+without an explicit drain. Under V8 the microtask checkpoint runs after each script, so the actual
+scheduling contract is testable, and the slice adds `queue_microtask_callback_runs_after_sync_tail`
+(the 72nd test): the callback must *not* run inline at the call site (first `eval` returns
+`"sync"`), and must already have run by the start of the next `eval` (`"sync,micro"`). Generalized
+rule for the remaining slices: the QuickJS microtask limitation left behind both weakened
+assertions *and* silently missing ones — when a ported family touches async ordering, check what
+the tests decline to assert, not only what they assert loosely.
+
+**Relevant while reading `_lumen_drain_microtasks` in the ported ranges:** the V8 binding
+(`v8_runtime.rs:3611`) is a deliberate no-op stub with a `TODO(v8-s3)` — the compat-layer closure
+signature (JsValue-level only) cannot reach the isolate for `perform_microtask_checkpoint`. So the
+85 call sites downstream can be deleted rather than reimplemented, but a test that *needs* a
+forced flush at a point V8 does not choose one has no primitive available; restructure into two
+`eval` calls instead, as above.
+
 ---
 
 ## Risks (Rev 2)
