@@ -76,11 +76,11 @@
  "generated": "2026-07-29",
  "counts": {
   "open": 127,
-  "fixed": 289,
+  "fixed": 290,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 416,
+ "total_bugs": 417,
  "phases": [
   {
    "id": "P0",
@@ -870,9 +870,21 @@
         {
          "id": "P3-v8-s12b-24",
          "title": "V8 S12b-24: dom.rs тест-монолит — скоупинг сделан, портирование по слайсам",
-         "status": "planned",
+         "status": "done",
          "size": "XL",
-         "note": "Крупнейший непортированный кусок: `dom.rs::mod tests` (строки 15982-31167, **1113** `#[test]` fn — числа из аудита 2026-07-14 устарели, файл вырос) — единственная regression-suite для DOM-поведения (события, формы, storage, IndexedDB, fetch/XHR, cache, websockets, history, scroll), эквивалента на V8 нет. Скоупинг сделан (ветка p1-v8-s12b-24, 2026-07-29, код не менялся): ~30 под-областей с диапазонами строк/числом тестов, 5 кластеров на mock-провайдерах (Cache/WS/SSE/IDB/Fetch), кластерный тест `event_target_dependent_apis_installed` (:29308, пришпиливает webxr/serial/hid/usb/bluetooth/navigation — разбить на 5-6 тестов при портировании), `_lumen_drain_microtasks` (:3024, QuickJS-only, 85 вызовов, гуще всего в SubtleCrypto/WHATWG Streams/MessagePort/Compression-Stream) — полный разбор в `docs/tasks/ph3-v8-migration.md` Findings log «S12b-24 — scoping only». Портировать по под-областям отдельными слайсами `S12b-24-<slug>` (не один сеанс), синхронно со сносом соответствующего rquickjs-кода — не удалять просто так, иначе теряется единственное покрытие; каждый слайс заводит свою строку ROADMAP при старте, не пре-файлить все заранее"
+         "note": "Крупнейший непортированный кусок: `dom.rs::mod tests` (строки 15982-31167, **1113** `#[test]` fn — числа из аудита 2026-07-14 устарели, файл вырос) — единственная regression-suite для DOM-поведения (события, формы, storage, IndexedDB, fetch/XHR, cache, websockets, history, scroll), эквивалента на V8 нет. Скоупинг сделан (ветка p1-v8-s12b-24, 2026-07-29, код не менялся): ~30 под-областей с диапазонами строк/числом тестов, 5 кластеров на mock-провайдерах (Cache/WS/SSE/IDB/Fetch), кластерный тест `event_target_dependent_apis_installed` (:29308, пришпиливает webxr/serial/hid/usb/bluetooth/navigation — разбить на 5-6 тестов при портировании), `_lumen_drain_microtasks` (:3024, QuickJS-only, 85 вызовов, гуще всего в SubtleCrypto/WHATWG Streams/MessagePort/Compression-Stream) — полный разбор в `docs/tasks/ph3-v8-migration.md` Findings log «S12b-24 — scoping only». Портировать по под-областям отдельными слайсами `S12b-24-<slug>` (не один сеанс), синхронно со сносом соответствующего rquickjs-кода — не удалять просто так, иначе теряется единственное покрытие; каждый слайс заводит свою строку ROADMAP при старте, не пре-файлить все заранее. ПРОГРЕСС: первый слайс закрыт (P3-v8-s12b-24-core, 99 тестов), остаётся ~1014",
+         "tasks": [
+          {
+           "id": "P3-v8-s12b-24-core",
+           "title": "V8 S12b-24-core: Core DOM basics → V8 (99 тестов)",
+           "status": "done",
+           "size": "M",
+           "note": "ЗАКРЫТ 2026-07-29 (ветка p1-v8-s12b-24-core): первая под-область брифа («Core DOM basics», строки 16043-17530 нумерации на момент скоупинга) — **99** тестов перенесены из QuickJS-монолита `dom.rs::mod tests` во вложенный `mod v8_core` под `#[cfg(feature = \"v8-backend\")]`, QuickJS-копии удалены. Семейства: console/SVG/идентичность обёрток/`self`&`window`, Canvas 2D, getElementById/querySelector/атрибуты/textContent/`Image`, alert/print, таймеры + `scheduler.postTask`, History API. Порт механический (тела — `rt.eval` плюс `update_layout_rects`/`flush_canvas_updates`/`take_*`, которые `V8JsRuntime` зеркалит), добавлены двойники `v8_runtime_with_dom`/`v8_runtime_with_url`. Два расхождения: (1) [BUG-447](bugs/BUG-447-FIXED.md) — `register_img_bitmaps` отсутствовал и в `V8JsRuntime`, и в `impl PersistentJs for V8PersistentJs`, поэтому `drawImage(imgElement, …)` на дефолтном движке молча не рисовал; (2) тест `canvas_get_context_webgl_via_2d_shim_is_null` фиксировал дефект порядка установки на QuickJS-пути (WEBGL_SHIM выполнялся до появления `document`, перехват `createElement` пропускался, WebGL там был мёртв) — переписан под корректное V8-поведение как `canvas_get_context_webgl_returns_functional_context`. Тестовый факт для следующих слайсов: 98 из 99 тестов прошли на V8 без единой правки тела",
+           "bugs": [
+            "BUG-447"
+           ]
+          }
+         ]
         },
         {
          "id": "P3-v8-s12b-25",
@@ -7174,6 +7186,13 @@
    "title": "Граф модулей страницы не подгружается: `import './helper.js'` из `<script type=\"module\">` всегда падает как `module '…' not found`, потому что шелл нигде не зов…",
    "component": "shell (`crates/shell/src/main.rs` — `run_scripts_with_dom`, `resolve_script_sources`), js (`crates/js/src/v8_esm.rs` — реестр исходников)",
    "date": null,
+   "debtor": false
+  },
+  "BUG-447": {
+   "status": "fixed",
+   "title": "**На движке по умолчанию (V8) `drawImage(imgElement, …)` молча не рисовал ничего.** Пиксели `<img>`-источника Canvas 2D читает из потоко-локального реестра `img…",
+   "component": "js (`crates/js/src/v8_runtime.rs` — не было `V8JsRuntime::register_img_bitmaps`), shell (`crates/shell/src/main.rs` — `impl PersistentJs for V8PersistentJs` не переопределял `register_img_bitmaps`)",
+   "date": "2026-07-29",
    "debtor": false
   }
  },

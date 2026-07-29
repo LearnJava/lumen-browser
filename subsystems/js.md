@@ -18,6 +18,24 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
 
 ## Done
 
+- **`dom.rs` test monolith, first porting slice ([P1] P3-v8-s12b-24-core, 2026-07-29).** The
+  "Core DOM basics" family (console/SVG/wrapper identity/`self`&`window`, Canvas 2D,
+  `getElementById`/`querySelector`/attributes/`textContent`/`Image`, `alert`/`print`, timers +
+  `scheduler.postTask`, History API) — 99 tests — now lives in `dom.rs::tests::v8_core`, a nested
+  module gated `#[cfg(feature = "v8-backend")]`; the QuickJS copies are deleted. **Where to look:**
+  everything still under `mod tests` directly is unported and runs against `QuickJsRuntime`;
+  everything under a `v8_*` nested module is ported. Twin constructors `v8_runtime_with_dom` /
+  `v8_runtime_with_url` mirror the outer helpers — `V8JsRuntime::install_dom`'s signature is
+  identical to `QuickJsRuntime::install_dom`. **Non-obvious:** a helper whose only callers move
+  into the V8 module must move with them, otherwise it is dead code in a build *without*
+  `v8-backend` and `clippy -D warnings` goes red only in that configuration — check both.
+  Slice log and the two behavioral divergences found (`register_img_bitmaps`,
+  `getContext('webgl')`) — `docs/tasks/ph3-v8-migration.md`.
+- **`V8JsRuntime::register_img_bitmaps` ([P1], 2026-07-29, [BUG-447](../bugs/BUG-447-FIXED.md)).**
+  Mirrors the QuickJS method: clears `img_bitmap_store` (navigation-scoped) and writes the
+  `(nid, Arc<Image>)` pairs **on the JS thread** via `run`, because the store is `thread_local!`.
+  It had no V8 counterpart at all, and the shell's `PersistentJs` trait default silently absorbed
+  the missing override — `drawImage(imgElement, …)` painted nothing on the default engine.
 - **ES modules on V8 — `<script type=module>` ([P1] P3-v8-s12b-23, 2026-07-29, closes
   [BUG-350](../bugs/BUG-350-FIXED.md)).** New `v8_esm.rs`: `script_compiler::compile_module`
   → `instantiate_module` → `evaluate` → `perform_microtask_checkpoint`; `V8JsRuntime` now
