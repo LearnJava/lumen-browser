@@ -203,8 +203,9 @@ pub struct DrawState {
     pub shadow_offset_x: f32,
     /// Shadow vertical offset in pixels.
     pub shadow_offset_y: f32,
-    /// Clipping region bitmap: `None` = no clip; `Some(mask)` = per-pixel bool (true = allowed).
-    pub clip_mask: Option<Vec<bool>>,
+    /// Clipping region: `None` = no clip; `Some(mask)` = per-pixel 8-bit coverage
+    /// (`0` = clipped out, `255` = fully inside, intermediate = anti-aliased edge).
+    pub clip_mask: Option<Vec<u8>>,
     /// CSS font string e.g. `"16px sans-serif"`.
     pub font: String,
     /// Horizontal text alignment: `"start" | "end" | "left" | "right" | "center"`. Default `"start"`.
@@ -550,9 +551,9 @@ pub struct Context2D {
     pen: (f32, f32),
 
     // ── Clipping region ─────────────────────────────────────────────────────
-    /// Per-pixel clip mask: `None` = no clip; `Some(v)` where `v[y*w+x]` is `true`
-    /// when the pixel is within the clip region (may be drawn).
-    clip_mask: Option<Vec<bool>>,
+    /// Per-pixel clip mask: `None` = no clip; `Some(v)` where `v[y*w+x]` is the
+    /// 8-bit coverage of the clip region over that pixel (`0` = fully clipped out).
+    clip_mask: Option<Vec<u8>>,
 
     // ── State stack ─────────────────────────────────────────────────────────
     /// Stack of saved drawing states (via `save()`).
@@ -1084,10 +1085,7 @@ impl Context2D {
         let w = self.width;
         let h = self.height;
         let new_mask = rasterize::build_clip_mask(&path, w, h);
-        self.clip_mask = Some(match self.clip_mask.take() {
-            None => new_mask,
-            Some(old) => old.iter().zip(new_mask.iter()).map(|(a, b)| *a && *b).collect(),
-        });
+        self.clip_mask = Some(intersect_masks(self.clip_mask.take(), new_mask));
     }
 
     // ── Phase 5: Path2D ─────────────────────────────────────────────────────
@@ -1132,16 +1130,14 @@ impl Context2D {
         let w = self.width;
         let h = self.height;
         let new_mask = rasterize::build_clip_mask(&path, w, h);
-        self.clip_mask = Some(match self.clip_mask.take() {
-            None => new_mask,
-            Some(old) => old.iter().zip(new_mask.iter()).map(|(a, b)| *a && *b).collect(),
-        });
+        self.clip_mask = Some(intersect_masks(self.clip_mask.take(), new_mask));
     }
 
     /// `isPointInPath(path2d, x, y)` — test whether `(x, y)` lies inside a `Path2D`.
     ///
     /// Uses the even-odd rule.  Returns `false` for degenerate paths.
-    /// This is a conservative stub: builds a 1×1 clip mask at pixel (x,y) and checks the bit.
+    /// This is a conservative stub: rasterizes the path and treats a pixel as "inside"
+    /// when the path covers at least half of it.
     pub fn is_point_in_path2d(&self, path2d: &Path2dData, x: f32, y: f32) -> bool {
         let path = path2d.to_device_space(self.ctm);
         if path.is_empty() { return false; }
@@ -1150,7 +1146,7 @@ impl Context2D {
         if xi >= self.width || yi >= self.height { return false; }
         // Build a minimal mask just for the 1×1 region around (x,y).
         let mask = rasterize::build_clip_mask(&path, self.width, self.height);
-        mask.get((yi * self.width + xi) as usize).copied().unwrap_or(false)
+        mask.get((yi * self.width + xi) as usize).copied().unwrap_or(0) >= 128
     }
 
     /// `drawImage(src_pixels, src_w, src_h, dx, dy, dw, dh)` — blit source image onto canvas.
@@ -1221,7 +1217,8 @@ impl Context2D {
                 if dx_px < 0 || dy_px < 0 || dx_px >= self.width as i32 || dy_px >= self.height as i32 {
                     continue;
                 }
-                if !self.pixel_allowed(dx_px as u32, dy_px as u32) { continue; }
+                let clip = self.clip_coverage(dx_px as u32, dy_px as u32);
+                if clip <= 0.0 { continue; }
                 let u = (dx_px as f32 - x0) / dest_w;
                 let v = (dy_px as f32 - y0) / dest_h;
                 // Map the destination sample into the source crop rectangle (source px).
@@ -1235,7 +1232,7 @@ impl Context2D {
                     src_pixels[si],
                     src_pixels[si + 1],
                     src_pixels[si + 2],
-                    ((src_pixels[si + 3] as f32) * alpha) as u8,
+                    ((src_pixels[si + 3] as f32) * alpha * clip) as u8,
                 );
                 self.composite_pixel(dx_px as u32, dy_px as u32, src_color);
             }
@@ -1297,12 +1294,13 @@ impl Context2D {
                     }
                     let ux = cx_dev as u32;
                     let uy = cy_dev as u32;
-                    if !self.pixel_allowed(ux, uy) { continue; }
+                    let clip = self.clip_coverage(ux, uy);
+                    if clip <= 0.0 { continue; }
                     let ci = (row * gw + col) as usize;
                     if ci >= coverage.len() { continue; }
                     let cov = coverage[ci] as f32 / 255.0;
                     if cov < f32::EPSILON { continue; }
-                    let final_alpha = ((color.a as f32 / 255.0) * cov * alpha * 255.0) as u8;
+                    let final_alpha = ((color.a as f32 / 255.0) * cov * clip * alpha * 255.0) as u8;
                     let c = CanvasColor::rgba(color.r, color.g, color.b, final_alpha);
                     self.composite_pixel(ux, uy, c);
                 }
@@ -1310,13 +1308,17 @@ impl Context2D {
         }
     }
 
-    /// Returns `true` when pixel `(x, y)` is within the current clipping region.
-    pub(crate) fn pixel_allowed(&self, x: u32, y: u32) -> bool {
-        if let Some(mask) = &self.clip_mask {
-            let idx = (y * self.width + x) as usize;
-            idx < mask.len() && mask[idx]
-        } else {
-            true
+    /// Fraction `[0.0, 1.0]` of pixel `(x, y)` that the current clipping region covers.
+    ///
+    /// `1.0` when no clip is set; a boundary pixel of a clip path yields the
+    /// anti-aliased in-between value, which callers multiply into the source alpha.
+    pub(crate) fn clip_coverage(&self, x: u32, y: u32) -> f32 {
+        match &self.clip_mask {
+            Some(mask) => {
+                let idx = (y * self.width + x) as usize;
+                mask.get(idx).map(|c| *c as f32 / 255.0).unwrap_or(0.0)
+            }
+            None => 1.0,
         }
     }
 
@@ -1536,6 +1538,18 @@ fn shift_path(path: &[PathSegment], dx: f32, dy: f32) -> Vec<PathSegment> {
         PathSegment::Quadratic(x0, y0, cx, cy, x1, y1) =>
             PathSegment::Quadratic(x0 + dx, y0 + dy, cx + dx, cy + dy, x1 + dx, y1 + dy),
     }).collect()
+}
+
+/// Intersect an existing clip coverage mask with a freshly rasterized one.
+///
+/// Coverage is combined with `min` rather than a product: two clip paths sharing the
+/// same anti-aliased edge describe *one* boundary, and multiplying would darken it
+/// on every nested `clip()` call.
+fn intersect_masks(old: Option<Vec<u8>>, new_mask: Vec<u8>) -> Vec<u8> {
+    match old {
+        None => new_mask,
+        Some(old) => old.iter().zip(new_mask.iter()).map(|(a, b)| (*a).min(*b)).collect(),
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
