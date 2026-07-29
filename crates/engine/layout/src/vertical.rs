@@ -14,11 +14,10 @@
 //!
 //! Text orientation (rotating glyphs 90°) is a paint concern
 //! (`docs/tasks/ph3-writing-mode-vertical.md`), not layout: this module only
-//! computes column positions. Both the CPU rasterizer and the wgpu renderer
-//! (live default backend, ADR-017) honor `text_orientation`, including the
-//! per-glyph `mixed` CJK-upright/Latin-rotated split (`is_cjk`, below); the
-//! femtovg fallback backend still draws every run horizontally regardless of
-//! orientation (out of scope, see the task doc).
+//! computes column positions. All three backends — the CPU rasterizer, the
+//! wgpu renderer (live default, ADR-017) and the femtovg fallback — honor
+//! `text_orientation`, including the per-glyph `mixed` CJK-upright/
+//! Latin-rotated split (`is_cjk`, below).
 //!
 //! Algorithm sketch (vertical-rl):
 //! 1. Inline-size (physical height) comes from CSS `height` or `available_height`.
