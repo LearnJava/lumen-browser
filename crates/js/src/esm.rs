@@ -168,35 +168,53 @@ impl LumenResolver {
     ///    If `base` is empty or a virtual `lumen://` specifier, fall back to `page_url`.
     /// 4. Bare specifier — try import map, fall back to returning unchanged.
     pub fn resolve_specifier(&self, base: &str, name: &str) -> String {
-        // (1) data: and blob: — pass through
-        if name.starts_with("data:") || name.starts_with("blob:") {
-            return name.to_owned();
-        }
-        // (2) Absolute URL — pass through
-        if name.starts_with("https://") || name.starts_with("http://") || name.starts_with("file://") {
-            return name.to_owned();
-        }
-        // (3) Relative specifier — resolve against base
-        if name.starts_with("./") || name.starts_with("../") {
-            // `lumen://inline-N` is a virtual specifier assigned to inline module scripts.
-            // Relative imports from them should resolve against the page URL, not the
-            // virtual specifier (which has no meaningful directory path).
-            let effective_base = if base.is_empty() || base.starts_with("lumen://") {
-                self.page_url.lock().unwrap_or_else(|e| e.into_inner()).clone()
-            } else {
-                base.to_owned()
-            };
-            return resolve_relative(&effective_base, name);
-        }
-        // (4) Bare specifier — try import map
-        if let Ok(map) = self.import_map.lock()
-            && let Some(resolved) = map.resolve(name, Some(base))
-        {
-            return resolved;
-        }
-        // Fall back to returning as-is
-        name.to_owned()
+        let page_url = self.page_url.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let map = self.import_map.lock().unwrap_or_else(|e| e.into_inner());
+        resolve_specifier_with(&page_url, &map, base, name)
     }
+}
+
+/// Engine-agnostic core of [`LumenResolver::resolve_specifier`].
+///
+/// Kept as a free function so the V8 module loader ([`crate::v8_esm`]), whose
+/// resolve callback is a captureless `fn` reading thread-local state rather
+/// than an `Arc<Mutex<…>>`-backed resolver object, applies exactly the same
+/// URL Standard §5.1 rules as the rquickjs `Resolver` impl.
+///
+/// `page_url` is the fallback base for relative specifiers whose importer has
+/// no meaningful directory (inline `lumen://inline-N` module scripts).
+pub fn resolve_specifier_with(
+    page_url: &str,
+    import_map: &ImportMap,
+    base: &str,
+    name: &str,
+) -> String {
+    // (1) data: and blob: — pass through
+    if name.starts_with("data:") || name.starts_with("blob:") {
+        return name.to_owned();
+    }
+    // (2) Absolute URL — pass through
+    if name.starts_with("https://") || name.starts_with("http://") || name.starts_with("file://") {
+        return name.to_owned();
+    }
+    // (3) Relative specifier — resolve against base
+    if name.starts_with("./") || name.starts_with("../") {
+        // `lumen://inline-N` is a virtual specifier assigned to inline module scripts.
+        // Relative imports from them should resolve against the page URL, not the
+        // virtual specifier (which has no meaningful directory path).
+        let effective_base = if base.is_empty() || base.starts_with("lumen://") {
+            page_url
+        } else {
+            base
+        };
+        return resolve_relative(effective_base, name);
+    }
+    // (4) Bare specifier — try import map
+    if let Some(resolved) = import_map.resolve(name, Some(base)) {
+        return resolved;
+    }
+    // Fall back to returning as-is
+    name.to_owned()
 }
 
 impl std::fmt::Debug for LumenResolver {

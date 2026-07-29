@@ -1164,11 +1164,13 @@ Three items block a clean finish and must not be treated as "just another slice"
    calling `V8JsRuntime`, even though `lumen-driver` already has a `v8` feature (used by
    `session.rs::InProcessSession`). Deleting `quickjs` from `driver` without porting this first
    permanently breaks headless `eval` on that path.
-2. **BUG-350** — the ESM stack (`esm.rs`, `QuickJsRuntime::eval_module`) is rquickjs-only;
+2. ~~**BUG-350** — the ESM stack (`esm.rs`, `QuickJsRuntime::eval_module`) is rquickjs-only;
    `V8JsRuntime` has no `eval_module`/`register_module_source` override, so the trait default
    (`ext.rs::eval_module` → `self.eval(source)`) feeds `export`/`import` through classic-script
    parsing and fails on all 80 vendored WPT files using `type="module"`. Porting this closes
-   BUG-350 as a side effect, not a separate bug.
+   BUG-350 as a side effect, not a separate bug.~~ **Closed by S12b-23** (2026-07-29) — see
+   the findings entry below; the WPT files additionally need module-graph *fetching*
+   ([BUG-446](../../bugs/BUG-446-OPEN.md)), which is a separate, engine-independent gap.
 3. **`dom.rs`'s `mod tests` monolith** (~12796-26677, 1047 tests) — the only regression
    coverage for a large swath of DOM behavior (events, forms, storage, IndexedDB, fetch/XHR,
    Cache, WebSockets, history, scroll). No V8-side equivalent exists; it needs a docs/tasks
@@ -1211,6 +1213,58 @@ unmodified — the assertions (`getAttribute('checked')` → `"checked"`, `getAt
 **Lesson for the remaining slices:** a `#[cfg(feature = …)]` on a feature nothing enables is
 not a rollback path, it is dead code plus a dead test suite — grep for who actually turns a
 feature on before trusting a "still available under `--features X`" line in the docs.
+
+### S12b-23 — ESM (`<script type=module>`) → V8 (2026-07-29, branch p1-v8-s12b-23-esm)
+
+Blocker 2 from the audit above, closed; [BUG-350](../../bugs/BUG-350-FIXED.md) fixed. New
+`crates/js/src/v8_esm.rs` drives `script_compiler::compile_module` →
+`instantiate_module(resolve_module_callback)` → `evaluate` →
+`perform_microtask_checkpoint` (the V8 analogue of the QuickJS
+`while ctx.execute_pending_job()` drain), and `impl JsRuntime for V8JsRuntime` now overrides
+`eval_module` / `register_module_source`, so the classic-eval trait default in `ext.rs` is no
+longer reachable on the default build. `V8JsRuntime::set_import_map` was added and the shell's
+V8 branch calls it, retiring the "module scripts fall back to `NotImplemented` until ESM
+lands" comment in `run_scripts_with_dom`.
+
+**Why the plumbing diverges from rquickjs, and where it deliberately does not.** rquickjs
+takes a `Resolver`/`Loader` pair *by value* (`Runtime::set_loader`), so `QuickJsRuntime` shares
+its registries with them through `Arc<Mutex<…>>` fields. V8's `ResolveModuleCallback` is a
+captureless `extern "C" fn` — there is no `data` pointer to smuggle state through — so the
+registries (sources, compiled modules, `identity_hash → specifier`, page URL, import map) live
+in a `thread_local!` on the isolate's dedicated JS thread. That is exactly as scoped as the
+QuickJS version (per runtime, per thread), and it is the same pattern S9/S10 already used for
+`wasm::v8_bridge` and `HUB_V8`. Specifier *resolution*, by contrast, is shared: extracted from
+`LumenResolver::resolve_specifier` into the free function `esm::resolve_specifier_with`, which
+both engines call — so import maps, relative-URL joining and the virtual `lumen://inline-N`
+base cannot drift apart.
+
+**Two rquickjs-era workarounds that V8 makes unnecessary.** Import attributes
+(`import … with { type: 'json' }`) arrive in the resolve callback as a ready `FixedArray`
+(`[key, value, source-offset]` per attribute), so the Phase 0 source-stripping preprocessor in
+`import_attributes.rs` — written because rquickjs 0.11 cannot parse the clause and its `Loader`
+never sees attributes — is simply not on the V8 path. Dynamic `import()` is wired through
+`set_host_import_module_dynamically_callback` instead of being driven by the loader trait; its
+array is `[key, value]` per attribute (no offset), hence the `stride` parameter in
+`declared_type`. `import.meta` deliberately *keeps* the shared source-level transformer
+(`import_meta.rs`): the `.url` / `.resolve()` / `.env` shape is Lumen policy, not an engine
+capability, and reusing it keeps both engines byte-identical there.
+
+Inline modules were also switched on in the driver's headless path
+(`session.rs::run_page_scripts`, after the classic scripts per HTML LS §8.1.3.1). No page in
+`graphic_tests/` uses `type="module"`, so the CPU-snapshot gate is untouched.
+
+The rquickjs ESM stack (`esm.rs`'s `Loader`/`Resolver` impls, `QuickJsRuntime::eval_module`)
+was **not** removed here — it is still the live path under `--features quickjs`, and its tests
+belong to the `dom.rs`/final-cleanup slices (S12b-24/25).
+
+**Remaining gap, filed rather than silently shipped:** nothing in the shell ever calls
+`register_module_source`, so a page's `import './helper.js'` resolves to a specifier no one
+ever registered and fails with `module '…' not found`. That is not a regression (the rquickjs
+`LumenLoader` also only read a pre-populated registry, and the shell never populated it) and
+not what BUG-350 described, but it is what the 80 vendored `type="module"` WPT files actually
+need — [BUG-446](../../bugs/BUG-446-OPEN.md), with a concrete fix sketch (scan specifiers with
+the `import_attributes.rs` lexer, BFS-prefetch through the shell's existing synchronous
+subresource path — *not* network I/O inside the synchronous V8 callback).
 
 ---
 

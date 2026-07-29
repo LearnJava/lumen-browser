@@ -18,6 +18,26 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
 
 ## Done
 
+- **ES modules on V8 — `<script type=module>` ([P1] P3-v8-s12b-23, 2026-07-29, closes
+  [BUG-350](../bugs/BUG-350-FIXED.md)).** New `v8_esm.rs`: `script_compiler::compile_module`
+  → `instantiate_module` → `evaluate` → `perform_microtask_checkpoint`; `V8JsRuntime` now
+  overrides `eval_module`/`register_module_source` (the `ext.rs` trait default ran module
+  source through classic `eval`, which rejects top-level `export`/`import` at parse time) and
+  gains `set_import_map`, which the shell calls on the V8 branch. **Non-obvious:** V8's
+  `ResolveModuleCallback` is a captureless `extern "C" fn` — there is no `data` pointer — so
+  the module registries (sources, compiled modules, `identity_hash → specifier`, page URL,
+  import map) live in a `thread_local!` on the isolate's JS thread, not in the `Arc<Mutex<…>>`
+  fields the rquickjs `Loader`/`Resolver` share with `QuickJsRuntime`. Specifier resolution is
+  *not* duplicated: `esm::resolve_specifier_with` is the shared core both engines call, so
+  import maps / relative URLs / the virtual `lumen://inline-N` base cannot drift. Import
+  attributes (`with { type: 'json' }`) and dynamic `import()` use V8's native machinery (the
+  callback's `FixedArray`; `set_host_import_module_dynamically_callback`), so the Phase 0
+  `import_attributes.rs` preprocessor is rquickjs-only; `import.meta` keeps the shared
+  `import_meta.rs` transformer because its `.url`/`.resolve()`/`.env` shape is Lumen policy.
+  19 tests in `v8_esm.rs`. **Gap:** the shell never calls `register_module_source`, so a
+  page's `import './x.js'` still fails "module not found" —
+  [BUG-446](../bugs/BUG-446-OPEN.md), engine-independent (rquickjs had it too).
+
 - **Document Picture-in-Picture reaches a real OS window ([P1] P3-pip, 2026-07-17).**
   `documentPictureInPicture.requestWindow({width,height})` (`document_pip.rs`) called
   `_lumen_pip_request_window(width,height)` — but that native was never registered, so the

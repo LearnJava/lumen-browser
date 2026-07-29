@@ -65,6 +65,34 @@ pub fn maybe_transform_decorators(ctx: &Ctx<'_>, source: &str) -> Option<String>
     if out == source { None } else { Some(out) }
 }
 
+/// V8 port of [`maybe_transform_decorators`] (Ph3 V8 migration S12b-23).
+///
+/// The transformer is a plain JS global installed by
+/// [`install_decorator_shim_v8`], so it is reachable through
+/// [`lumen_core::ext::JsRuntime::call_function`] — no raw scope needed. Same
+/// fail-open contract: a missing shim (bare runtime, no `install_dom`) or a
+/// transformer error yields `None` and the caller evaluates `source` as-is.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn maybe_transform_decorators_v8(
+    rt: &crate::v8_runtime::V8JsRuntime,
+    source: &str,
+) -> Option<String> {
+    use lumen_core::ext::JsRuntime as _;
+    if !source.contains('@') {
+        return None;
+    }
+    let out = rt
+        .call_function(
+            "__lumen_transform_decorators",
+            &[lumen_core::JsValue::String(source.to_owned())],
+        )
+        .ok()?;
+    match out {
+        lumen_core::JsValue::String(s) if s != source => Some(s),
+        _ => None,
+    }
+}
+
 /// The combined shim: well-known symbols, runtime apply-helpers and the
 /// tokenizer-based source transformer.
 const DECORATOR_SHIM: &str = r##"(function(global) {
