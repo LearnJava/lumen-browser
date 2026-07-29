@@ -126,6 +126,13 @@ impl WgpuBackend {
 }
 
 impl RenderBackend for WgpuBackend {
+    /// BUG-272 срез 21: пул offscreen-слоёв — единственное хранилище дефолтного
+    /// бэкенда, которое могло расти неограниченно, поэтому `LUMEN_MEM_REPORT`
+    /// показывает именно его (у femtovg-бэкенда отчёт свой, срез 16).
+    fn debug_mem_report(&self) -> String {
+        self.renderer.texture_pool_report()
+    }
+
     fn render(
         &mut self,
         content: &[DisplayCommand],
