@@ -20,6 +20,7 @@
 //! интерполяции fixed-size атласа (раньше всё рисовалось на 24 px и потом
 //! масштабировалось).
 
+use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::error::Error;
 use std::path::PathBuf;
@@ -1578,6 +1579,40 @@ impl<'a> LazyParsedFaces<'a> {
     }
 }
 
+// BUG-406: на DX12 суммарная компиляция шейдеров/пайплайнов стоит 3–7 с против
+// 0.28 с на Vulkan (то же железо), и до этих двух счётчиков известна была только
+// суммарная цифра. Обе обёртки — no-op без `LUMEN_FRAME_LOG`.
+/// Создаёт шейдерный модуль, печатая время его трансляции под `LUMEN_FRAME_LOG`
+/// (naga: парсинг + валидация WGSL).
+fn timed_shader(
+    device: &wgpu::Device,
+    desc: wgpu::ShaderModuleDescriptor<'_>,
+) -> wgpu::ShaderModule {
+    if !crate::frame_log_enabled() {
+        return device.create_shader_module(desc);
+    }
+    let label = desc.label.unwrap_or("<unlabeled>").to_string();
+    let t0 = std::time::Instant::now();
+    let module = device.create_shader_module(desc);
+    eprintln!("[wgpu]   shader {label}: {:.0}ms", t0.elapsed().as_secs_f64() * 1000.0);
+    module
+}
+/// Создаёт render-пайплайн, печатая время его компиляции под `LUMEN_FRAME_LOG`
+/// (на DX12 здесь идёт naga → HLSL → FXC/DXC).
+fn timed_pipeline(
+    device: &wgpu::Device,
+    desc: &wgpu::RenderPipelineDescriptor<'_>,
+) -> wgpu::RenderPipeline {
+    if !crate::frame_log_enabled() {
+        return device.create_render_pipeline(desc);
+    }
+    let label = desc.label.unwrap_or("<unlabeled>");
+    let t0 = std::time::Instant::now();
+    let pipeline = device.create_render_pipeline(desc);
+    eprintln!("[wgpu]   pipeline {label}: {:.0}ms", t0.elapsed().as_secs_f64() * 1000.0);
+    pipeline
+}
+
 pub struct Renderer {
     /// Windowed surface; `None` in headless mode (created with `new_headless()`).
     surface: Option<wgpu::Surface<'static>>,
@@ -1620,48 +1655,67 @@ pub struct Renderer {
     depth_view: Option<wgpu::TextureView>,
 
     fill_pipeline: wgpu::RenderPipeline,
-    circle_pipeline: wgpu::RenderPipeline,
+    /// BUG-406: ленивая компиляция — `OnceCell` заполняется при первом
+    /// использовании (`circle_pipeline()`), не при старте окна.
+    circle_pipeline: OnceCell<wgpu::RenderPipeline>,
     /// CSS border-radius SDF pipeline. Uses `RRectVertex` layout.
     rrect_pipeline: wgpu::RenderPipeline,
     text_pipeline: wgpu::RenderPipeline,
     image_pipeline: wgpu::RenderPipeline,
     /// Blit-каскад mip-цепочки картинок: пасс «mip N−1 → mip N» при
     /// `register_image` (fullscreen triangle, bilinear = 2×2 box).
-    mipgen_pipeline: wgpu::RenderPipeline,
+    /// BUG-406: ленивая компиляция — `OnceCell` заполняется при первом
+    /// использовании (`mipgen_pipeline()`), не при старте окна.
+    mipgen_pipeline: OnceCell<wgpu::RenderPipeline>,
     /// CSS Images L4 §4 — `cross-fade(A, B, p)` two-texture blend pipeline.
     /// Uses `CrossFadeVertex` layout (pos+uv). Bind group 0 = viewport uniform
     /// (shared with `image_pipeline`); bind group 1 = `cross_fade_bgl`
     /// (tex_a, tex_b, sampler, progress uniform). Blend state: `ALPHA_BLENDING`.
-    cross_fade_pipeline: wgpu::RenderPipeline,
+    /// BUG-406: ленивая компиляция — `OnceCell` заполняется при первом
+    /// использовании (`cross_fade_pipeline()`), не при старте окна.
+    cross_fade_pipeline: OnceCell<wgpu::RenderPipeline>,
     /// Bind group layout for the `cross_fade_pipeline` per-quad bindings
     /// (group 1): two textures + sampler + progress uniform.
     cross_fade_bgl: wgpu::BindGroupLayout,
-    composite_pipeline: wgpu::RenderPipeline,
+    /// BUG-406: ленивая компиляция — `OnceCell` заполняется при первом
+    /// использовании (`composite_pipeline()`), не при старте окна.
+    composite_pipeline: OnceCell<wgpu::RenderPipeline>,
     composite_bgl: wgpu::BindGroupLayout,
-    blend_pipeline: wgpu::RenderPipeline,
+    /// BUG-406: ленивая компиляция — `OnceCell` заполняется при первом
+    /// использовании (`blend_pipeline()`), не при старте окна.
+    blend_pipeline: OnceCell<wgpu::RenderPipeline>,
     blend_bgl: wgpu::BindGroupLayout,
     /// CSS Masking L1 §4 — mask composite pipeline + bind group layout.
     /// Used by PopMask to composite the offscreen layer using a mask image.
     mask_composite_bgl: wgpu::BindGroupLayout,
-    mask_composite_pipeline: wgpu::RenderPipeline,
+    /// BUG-406: ленивая компиляция — `OnceCell` заполняется при первом
+    /// использовании (`mask_composite_pipeline()`), не при старте окна.
+    mask_composite_pipeline: OnceCell<wgpu::RenderPipeline>,
     /// CSS Masking L1 §5 — mask-layer composite pipelines.
     /// Used by PopMaskLayer to apply an arbitrary rendered mask to the parent layer.
     /// `_alpha` samples mask.a; `_luma` converts RGB to luminance × alpha.
     /// Shared BGL with mask_composite (same binding layout: t_content, t_mask, s).
-    mask_layer_alpha_pipeline: wgpu::RenderPipeline,
-    mask_layer_luma_pipeline: wgpu::RenderPipeline,
+    /// BUG-406: ленивая компиляция пары (alpha, luminance) — общий шейдер,
+    /// поэтому один `OnceCell` на оба пайплайна.
+    mask_layer_pipelines: OnceCell<(wgpu::RenderPipeline, wgpu::RenderPipeline)>,
     /// CSS Filter Effects L1 — color filter pipeline (grayscale/sepia/brightness/etc.).
     filter_bgl: wgpu::BindGroupLayout,
-    filter_pipeline: wgpu::RenderPipeline,
+    /// BUG-406: ленивая компиляция — `OnceCell` заполняется при первом
+    /// использовании (`filter_pipeline()`), не при старте окна.
+    filter_pipeline: OnceCell<wgpu::RenderPipeline>,
     /// CSS Filter Effects L1 — separable Gaussian blur pipeline (one pass: H or V).
     blur_bgl: wgpu::BindGroupLayout,
-    blur_pipeline: wgpu::RenderPipeline,
+    /// BUG-406: ленивая компиляция — `OnceCell` заполняется при первом
+    /// использовании (`blur_pipeline()`), не при старте окна.
+    blur_pipeline: OnceCell<wgpu::RenderPipeline>,
     blur_uniform: wgpu::Buffer,
     /// CSS Filter Effects L1 §2 — backdrop-filter blit pipeline.
     /// Same shader as `filter_pipeline` but uses REPLACE blend so the filtered
     /// backdrop snapshot overwrites (not composites over) the parent layer at
     /// the bounded element rect.
-    backdrop_blit_pipeline: wgpu::RenderPipeline,
+    /// BUG-406: ленивая компиляция — `OnceCell` заполняется при первом
+    /// использовании (`backdrop_blit_pipeline()`), не при старте окна.
+    backdrop_blit_pipeline: OnceCell<wgpu::RenderPipeline>,
     /// Intermediate texture for backdrop-filter: ping-pong target for blur passes
     /// (H: scratch → backdrop_layer; V: backdrop_layer → scratch), and color-filter
     /// target when compositing filtered backdrop back onto parent.
@@ -1691,6 +1745,9 @@ pub struct Renderer {
     layer_textures: Vec<OffscreenLayer>,
     surface_format: wgpu::TextureFormat,
 
+    /// Layout viewport-униформы (bind group 0). Хранится, потому что ленивые
+    /// пайплайны (BUG-406) строят свой `PipelineLayout` уже после `init_pipelines`.
+    uniform_bgl: wgpu::BindGroupLayout,
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
 
@@ -2238,9 +2295,16 @@ impl Renderer {
         )
     }
 
-    /// Общий инициализатор пайплайнов: создаёт все GPU-ресурсы (шейдеры, pipeline-ы,
-    /// atlas, samplers). Вызывается как из windowed (`new_async`), так и из headless
-    /// (`new_headless_async`) путей.
+    /// Общий инициализатор GPU-ресурсов: bind group layouts, atlas, samplers,
+    /// буферы и **горячие** пайплайны. Вызывается как из windowed (`new_async`),
+    /// так и из headless (`new_headless_async`) путей.
+    ///
+    /// BUG-406: сразу компилируются только пять пайплайнов, нужные почти любой
+    /// странице (fill / rrect / text / image / gradient). Остальные одиннадцать
+    /// (circle, mipgen, cross-fade, composite, blend, mask-composite, две
+    /// mask-layer, filter, blur, backdrop-blit) компилируются лениво, при первом
+    /// использовании — на DX12 компиляция одного пайплайна стоит ~1 с wall-clock,
+    /// и страница без соответствующего эффекта не должна за неё платить.
     #[allow(clippy::too_many_arguments)]
     fn init_pipelines(
         device: wgpu::Device,
@@ -2255,6 +2319,15 @@ impl Renderer {
         target_color_space: ColorSpace,
         gpu_fingerprint: GpuFingerprint,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        let t_init = std::time::Instant::now();
+        /// Печатает время от входа в `init_pipelines` до контрольной точки
+        /// (только под `LUMEN_FRAME_LOG`).
+        fn mark(t0: &std::time::Instant, label: &str) {
+            if crate::frame_log_enabled() {
+                eprintln!("[wgpu]   @{label}: {:.0}ms", t0.elapsed().as_secs_f64() * 1000.0);
+            }
+        }
+
         // ── Uniform bind group (viewport) — общий для fill и text ──────────
         let uniform_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("uniform-bgl"),
@@ -2347,8 +2420,9 @@ impl Renderer {
             ],
         });
 
+        mark(&t_init, "pre-pipelines");
         // ── Fill pipeline ─────────────────────────────────────────────────
-        let fill_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        let fill_shader = timed_shader(&device, wgpu::ShaderModuleDescriptor {
             label: Some("fill-shader"),
             source: wgpu::ShaderSource::Wgsl(FILL_SHADER_SRC.into()),
         });
@@ -2357,7 +2431,7 @@ impl Renderer {
             bind_group_layouts: &[&uniform_bgl],
             push_constant_ranges: &[],
         });
-        let fill_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let fill_pipeline = timed_pipeline(&device, &wgpu::RenderPipelineDescriptor {
             label: Some("fill-pipeline"),
             layout: Some(&fill_layout),
             vertex: wgpu::VertexState {
@@ -2412,75 +2486,9 @@ impl Renderer {
             cache: None,
         });
 
-        // ── Circle pipeline ───────────────────────────────────────────────
-        let circle_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("circle-shader"),
-            source: wgpu::ShaderSource::Wgsl(CIRCLE_SHADER_SRC.into()),
-        });
-        let circle_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("circle-layout"),
-            bind_group_layouts: &[&uniform_bgl],
-            push_constant_ranges: &[],
-        });
-        let circle_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("circle-pipeline"),
-            layout: Some(&circle_layout),
-            vertex: wgpu::VertexState {
-                module: &circle_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<CircleVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x2,
-                            offset: 0,
-                            shader_location: 0,
-                        },
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x2,
-                            offset: 8,
-                            shader_location: 1,
-                        },
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x4,
-                            offset: 16,
-                            shader_location: 2,
-                        },
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32,
-                            offset: 32,
-                            shader_location: 3,
-                        },
-                    ],
-                }],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &circle_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::Always,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
 
         // ── RRect (SDF rounded-rect) pipeline ─────────────────────────────
-        let rrect_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        let rrect_shader = timed_shader(&device, wgpu::ShaderModuleDescriptor {
             label: Some("rrect-shader"),
             source: wgpu::ShaderSource::Wgsl(RRECT_SHADER_SRC.into()),
         });
@@ -2489,7 +2497,7 @@ impl Renderer {
             bind_group_layouts: &[&uniform_bgl],
             push_constant_ranges: &[],
         });
-        let rrect_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let rrect_pipeline = timed_pipeline(&device, &wgpu::RenderPipelineDescriptor {
             label: Some("rrect-pipeline"),
             layout: Some(&rrect_layout),
             vertex: wgpu::VertexState {
@@ -2572,7 +2580,7 @@ impl Renderer {
         });
 
         // ── Text pipeline ─────────────────────────────────────────────────
-        let text_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        let text_shader = timed_shader(&device, wgpu::ShaderModuleDescriptor {
             label: Some("text-shader"),
             source: wgpu::ShaderSource::Wgsl(TEXT_SHADER_SRC.into()),
         });
@@ -2581,7 +2589,7 @@ impl Renderer {
             bind_group_layouts: &[&uniform_bgl, &atlas_bgl],
             push_constant_ranges: &[],
         });
-        let text_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let text_pipeline = timed_pipeline(&device, &wgpu::RenderPipelineDescriptor {
             label: Some("text-pipeline"),
             layout: Some(&text_layout),
             vertex: wgpu::VertexState {
@@ -2691,7 +2699,7 @@ impl Renderer {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             ..Default::default()
         });
-        let image_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        let image_shader = timed_shader(&device, wgpu::ShaderModuleDescriptor {
             label: Some("image-shader"),
             source: wgpu::ShaderSource::Wgsl(IMAGE_SHADER_SRC.into()),
         });
@@ -2700,7 +2708,7 @@ impl Renderer {
             bind_group_layouts: &[&uniform_bgl, &image_bgl],
             push_constant_ranges: &[],
         });
-        let image_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let image_pipeline = timed_pipeline(&device, &wgpu::RenderPipelineDescriptor {
             label: Some("image-pipeline"),
             layout: Some(&image_layout),
             vertex: wgpu::VertexState {
@@ -2759,47 +2767,8 @@ impl Renderer {
             cache: None,
         });
 
-        // ── Mipgen pipeline (mip-цепочка картинок) ────────────────────────
-        // Пасс «mip N−1 → mip N» без depth и без блендинга: fullscreen
-        // triangle пишет bilinear-выборку источника (2×2 box-даунскейл).
-        let mipgen_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("mipgen-shader"),
-            source: wgpu::ShaderSource::Wgsl(MIPGEN_SHADER_SRC.into()),
-        });
-        let mipgen_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("mipgen-layout"),
-            bind_group_layouts: &[&image_bgl],
-            push_constant_ranges: &[],
-        });
-        let mipgen_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("mipgen-pipeline"),
-            layout: Some(&mipgen_layout),
-            vertex: wgpu::VertexState {
-                module: &mipgen_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &mipgen_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    // Картинки всегда Rgba8Unorm (см. make_gpu_image_entry),
-                    // не surface format.
-                    format: wgpu::TextureFormat::Rgba8Unorm,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
 
-        // ── Cross-fade pipeline (CSS Images L4 §4: mix(A, B, p)) ──────────
+        // ── Cross-fade BGL (CSS Images L4 §4; пайплайн ленив, BUG-406) ────
         // BGL group 1 — two textures + sampler + progress uniform.
         let cross_fade_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("cross-fade-bgl"),
@@ -2842,68 +2811,8 @@ impl Renderer {
                 },
             ],
         });
-        let cross_fade_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("cross-fade-shader"),
-            source: wgpu::ShaderSource::Wgsl(CROSS_FADE_SHADER_SRC.into()),
-        });
-        let cross_fade_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("cross-fade-layout"),
-            bind_group_layouts: &[&uniform_bgl, &cross_fade_bgl],
-            push_constant_ranges: &[],
-        });
-        let cross_fade_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("cross-fade-pipeline"),
-            layout: Some(&cross_fade_layout),
-            vertex: wgpu::VertexState {
-                module: &cross_fade_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<CrossFadeVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x2,
-                            offset: 0,
-                            shader_location: 0, // pos
-                        },
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x2,
-                            offset: 8,
-                            shader_location: 1, // uv
-                        },
-                    ],
-                }],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &cross_fade_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    // Same blend as image_pipeline — straight-alpha source,
-                    // SrcAlpha · src + (1-SrcAlpha) · dst.
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            // Cross-fade quads run at fixed mid-plane depth (z = 0.5 NDC in
-            // shader) — depth_write_enabled = false so they do not occlude
-            // 3D-transformed siblings under preserve-3d.
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::LessEqual,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
 
-        // ── Composite pipeline (opacity layer → parent target) ────────────
+        // ── Composite BGL + layer sampler (пайплайн ленив, BUG-406) ───────
         let composite_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("composite-bgl"),
             entries: &[
@@ -2935,70 +2844,8 @@ impl Renderer {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             ..Default::default()
         });
-        let composite_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("composite-shader"),
-            source: wgpu::ShaderSource::Wgsl(COMPOSITE_SHADER_SRC.into()),
-        });
-        let composite_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("composite-layout"),
-            bind_group_layouts: &[&composite_bgl],
-            push_constant_ranges: &[],
-        });
-        let composite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("composite-pipeline"),
-            layout: Some(&composite_layout),
-            vertex: wgpu::VertexState {
-                module: &composite_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<CompositeVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x2,
-                            offset: 0,
-                            shader_location: 0,
-                        },
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x2,
-                            offset: 8,
-                            shader_location: 1,
-                        },
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32,
-                            offset: 16,
-                            shader_location: 2,
-                        },
-                    ],
-                }],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &composite_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    // Premultiplied-alpha blend: off-screen layers store premultiplied content.
-                    // Shader multiplies rgb*opacity so "one * src + (1-src.a) * dst" is correct.
-                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::Always,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
 
-        // ── Blend pipeline (CSS Compositing L1 §8 — two-texture blend) ─────
+        // ── Blend BGL (CSS Compositing L1 §8; пайплайн ленив, BUG-406) ─────
         // 4 bindings: t_src(0), t_dst(1), sampler(2), blend_mode uniform(3).
         let blend_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("blend-bgl"),
@@ -3041,69 +2888,8 @@ impl Renderer {
                 },
             ],
         });
-        let blend_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("blend-shader"),
-            source: wgpu::ShaderSource::Wgsl(BLEND_SHADER_SRC.into()),
-        });
-        let blend_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("blend-layout"),
-            bind_group_layouts: &[&blend_bgl],
-            push_constant_ranges: &[],
-        });
-        // REPLACE blend state: shader implements full CSS compositing formula.
-        let blend_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("blend-pipeline"),
-            layout: Some(&blend_layout),
-            vertex: wgpu::VertexState {
-                module: &blend_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<CompositeVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x2,
-                            offset: 0,
-                            shader_location: 0,
-                        },
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x2,
-                            offset: 8,
-                            shader_location: 1,
-                        },
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32,
-                            offset: 16,
-                            shader_location: 2,
-                        },
-                    ],
-                }],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &blend_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::Always,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
 
-        // ── Mask composite pipeline ──────────────────────────────────────────
+        // ── Mask composite BGL (пайплайн ленив, BUG-406) ─────────────────────
         // CSS Masking L1 §4: two-texture composite (content layer + mask image).
         // Group 0 = viewport uniform (reuses uniform_bgl).
         // Group 1 = { t_layer, t_mask, s_layer }.
@@ -3138,155 +2924,9 @@ impl Renderer {
                 },
             ],
         });
-        let mask_composite_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("mask-composite-layout"),
-            bind_group_layouts: &[&uniform_bgl, &mask_composite_bgl],
-            push_constant_ranges: &[],
-        });
-        let mask_composite_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("mask-composite-shader"),
-            source: wgpu::ShaderSource::Wgsl(MASK_COMPOSITE_SHADER_SRC.into()),
-        });
-        let mask_composite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("mask-composite-pipeline"),
-            layout: Some(&mask_composite_layout),
-            vertex: wgpu::VertexState {
-                module: &mask_composite_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<MaskVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x2,
-                            offset: 0,
-                            shader_location: 0,
-                        },
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x2,
-                            offset: 8,
-                            shader_location: 1,
-                        },
-                    ],
-                }],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &mask_composite_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::Always,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
 
-        // ── Mask-layer composite pipelines ──────────────────────────────────
-        // CSS Masking L1 §5: apply a rendered mask layer to the parent layer.
-        // Reuses mask_composite_bgl (same binding layout: t_content, t_mask, s).
-        // Two pipelines sharing one shader module: alpha mode and luminance mode.
-        // Blend: REPLACE (src_factor=One, dst_factor=Zero) — overwrites parent at element rect.
-        let mask_layer_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("mask-layer-shader"),
-            source: wgpu::ShaderSource::Wgsl(MASK_LAYER_SHADER_SRC.into()),
-        });
-        let mask_layer_vtx_layout = wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<MaskVertex>() as u64,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &[
-                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
-                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 8, shader_location: 1 },
-            ],
-        };
-        let replace_blend = wgpu::BlendState {
-            color: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::One,
-                dst_factor: wgpu::BlendFactor::Zero,
-                operation: wgpu::BlendOperation::Add,
-            },
-            alpha: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::One,
-                dst_factor: wgpu::BlendFactor::Zero,
-                operation: wgpu::BlendOperation::Add,
-            },
-        };
-        let mask_layer_alpha_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("mask-layer-alpha-pipeline"),
-            layout: Some(&mask_composite_layout),
-            vertex: wgpu::VertexState {
-                module: &mask_layer_shader,
-                entry_point: Some("vs_main"),
-                buffers: std::slice::from_ref(&mask_layer_vtx_layout),
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &mask_layer_shader,
-                entry_point: Some("fs_alpha"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(replace_blend),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::Always,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
-        let mask_layer_luma_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("mask-layer-luma-pipeline"),
-            layout: Some(&mask_composite_layout),
-            vertex: wgpu::VertexState {
-                module: &mask_layer_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[mask_layer_vtx_layout],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &mask_layer_shader,
-                entry_point: Some("fs_luma"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(replace_blend),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::Always,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
 
-        // ── CSS Filter pipeline ──────────────────────────────────────────────
+        // ── CSS Filter BGL (пайплайн ленив, BUG-406) ─────────────────────────
         // Group 0: { t_src, s_src, FilterParams uniform }
         let filter_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("filter-bgl"),
@@ -3319,56 +2959,8 @@ impl Renderer {
                 },
             ],
         });
-        let filter_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("filter-shader"),
-            source: wgpu::ShaderSource::Wgsl(FILTER_SHADER_SRC.into()),
-        });
-        let filter_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("filter-layout"),
-            bind_group_layouts: &[&filter_bgl],
-            push_constant_ranges: &[],
-        });
-        let filter_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("filter-pipeline"),
-            layout: Some(&filter_layout),
-            vertex: wgpu::VertexState {
-                module: &filter_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<CompositeVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[
-                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
-                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 8, shader_location: 1 },
-                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32, offset: 16, shader_location: 2 },
-                    ],
-                }],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &filter_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::Always,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
 
-        // ── CSS Blur pipeline ────────────────────────────────────────────────
+        // ── CSS Blur BGL + uniform (пайплайн ленив, BUG-406) ─────────────────
         // Group 0: { t_src, s_src, BlurParams uniform }
         let blur_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("blur-bgl"),
@@ -3407,100 +2999,7 @@ impl Renderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let blur_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("blur-shader"),
-            source: wgpu::ShaderSource::Wgsl(BLUR_SHADER_SRC.into()),
-        });
-        let blur_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("blur-layout"),
-            bind_group_layouts: &[&blur_bgl],
-            push_constant_ranges: &[],
-        });
-        let blur_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("blur-pipeline"),
-            layout: Some(&blur_layout),
-            vertex: wgpu::VertexState {
-                module: &blur_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<CompositeVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[
-                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
-                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 8, shader_location: 1 },
-                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32, offset: 16, shader_location: 2 },
-                    ],
-                }],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &blur_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::Always,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
 
-        // ── Backdrop-filter blit pipeline ────────────────────────────────────
-        // Same shader + bind group layout as filter_pipeline, but REPLACE blend.
-        // Used to overwrite the parent layer's element-bounds region with the
-        // filtered backdrop snapshot (with optional color-matrix filter applied).
-        let backdrop_blit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("backdrop-blit-pipeline"),
-            layout: Some(&filter_layout),
-            vertex: wgpu::VertexState {
-                module: &filter_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<CompositeVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[
-                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
-                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 8, shader_location: 1 },
-                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32, offset: 16, shader_location: 2 },
-                    ],
-                }],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &filter_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    // Write only RGB — preserve destination alpha so the parent
-                    // layer's opacity isn't reduced by blur-edge transparency.
-                    write_mask: wgpu::ColorWrites::COLOR,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::Always,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
 
         // ── Gradient pipeline (linear + radial) ──────────────────────────────
         let gradient_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -3516,7 +3015,7 @@ impl Renderer {
                 count: None,
             }],
         });
-        let gradient_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        let gradient_shader = timed_shader(&device, wgpu::ShaderModuleDescriptor {
             label: Some("gradient-shader"),
             source: wgpu::ShaderSource::Wgsl(GRADIENT_SHADER_SRC.into()),
         });
@@ -3525,7 +3024,7 @@ impl Renderer {
             bind_group_layouts: &[&uniform_bgl, &gradient_bgl],
             push_constant_ranges: &[],
         });
-        let gradient_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let gradient_pipeline = timed_pipeline(&device, &wgpu::RenderPipelineDescriptor {
             label: Some("gradient-pipeline"),
             layout: Some(&gradient_layout),
             vertex: wgpu::VertexState {
@@ -3572,7 +3071,9 @@ impl Renderer {
             cache: None,
         });
 
+        mark(&t_init, "pipelines-done");
         let atlas = GlyphAtlas::new(ATLAS_DIM);
+        mark(&t_init, "glyph-atlas");
 
         // DS-4: bundled chrome UI faces (Golos Text + JetBrains Mono), loaded
         // eagerly right after the default (Inter) face at index 0 — mirrors
@@ -3598,12 +3099,14 @@ impl Renderer {
         let mono_face_id =
             push_chrome_face(&mut faces, crate::chrome_fonts::JETBRAINS_MONO_REGULAR);
 
+        mark(&t_init, "faces");
         let (depth_texture, depth_view) = {
             let (t, v) = create_depth_texture(&device, headless_w, headless_h);
             (Some(t), Some(v))
         };
 
-        Ok(Self {
+        mark(&t_init, "depth-texture");
+        let renderer = Self {
             surface,
             device,
             queue,
@@ -3614,13 +3117,14 @@ impl Renderer {
             depth_texture,
             depth_view,
             fill_pipeline,
-            circle_pipeline,
+            circle_pipeline: OnceCell::new(),
             rrect_pipeline,
             text_pipeline,
             image_pipeline,
-            mipgen_pipeline,
-            cross_fade_pipeline,
+            mipgen_pipeline: OnceCell::new(),
+            cross_fade_pipeline: OnceCell::new(),
             cross_fade_bgl,
+            uniform_bgl,
             uniform_buffer,
             uniform_bind_group,
             atlas_texture,
@@ -3637,20 +3141,19 @@ impl Renderer {
             pending_base_blit: None,
             last_content_key: None,
             layer_cache: crate::layer_cache::LayerCache::new(),
-            composite_pipeline,
+            composite_pipeline: OnceCell::new(),
             composite_bgl,
-            blend_pipeline,
+            blend_pipeline: OnceCell::new(),
             blend_bgl,
             mask_composite_bgl,
-            mask_composite_pipeline,
-            mask_layer_alpha_pipeline,
-            mask_layer_luma_pipeline,
+            mask_composite_pipeline: OnceCell::new(),
+            mask_layer_pipelines: OnceCell::new(),
             filter_bgl,
-            filter_pipeline,
+            filter_pipeline: OnceCell::new(),
             blur_bgl,
-            blur_pipeline,
+            blur_pipeline: OnceCell::new(),
             blur_uniform,
-            backdrop_blit_pipeline,
+            backdrop_blit_pipeline: OnceCell::new(),
             backdrop_layer: None,
             small_depth_cache: HashMap::new(),
             backdrop_cache: crate::backdrop_cache::BackdropCache::new(),
@@ -3675,7 +3178,755 @@ impl Renderer {
             pending_readback: None,
             texture_pool: crate::texture_pool::TexturePool::new(),
             gpu_fingerprint,
+        };
+        // BUG-406: `LUMEN_EAGER_PIPELINES=1` возвращает доленивое поведение —
+        // все 16 пайплайнов компилируются в `init_pipelines`. Нужен для A/B в
+        // одном бинарнике и как откат, если ленивая компиляция где-то мешает.
+        if std::env::var("LUMEN_EAGER_PIPELINES").is_ok_and(|v| v == "1" || v == "true") {
+            renderer.warm_all_pipelines();
+            mark(&t_init, "eager-warm");
+        }
+        Ok(renderer)
+    }
+
+    /// Компилирует все ленивые пайплайны (BUG-406) немедленно.
+    /// Используется только форс-режимом `LUMEN_EAGER_PIPELINES=1`.
+    fn warm_all_pipelines(&self) {
+        self.circle_pipeline();
+        self.mipgen_pipeline();
+        self.cross_fade_pipeline();
+        self.composite_pipeline();
+        self.blend_pipeline();
+        self.mask_composite_pipeline();
+        self.mask_layer_pipelines();
+        self.filter_pipeline();
+        self.blur_pipeline();
+        self.backdrop_blit_pipeline();
+    }
+
+    /// Пайплайн кружков (SDF): маркеры списков, radio-кнопки.
+    ///
+    /// BUG-406: компилируется лениво, при первом реальном использовании —
+    /// на DX12 компиляция одного пайплайна стоит ~1 с, и держать её в
+    /// старте окна ради эффекта, которого на странице может не быть, нельзя.
+    fn build_circle_pipeline(&self) -> wgpu::RenderPipeline {
+        // ── Circle pipeline ───────────────────────────────────────────────
+        let circle_shader = timed_shader(&self.device, wgpu::ShaderModuleDescriptor {
+            label: Some("circle-shader"),
+            source: wgpu::ShaderSource::Wgsl(CIRCLE_SHADER_SRC.into()),
+        });
+        let circle_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("circle-layout"),
+            bind_group_layouts: &[&self.uniform_bgl],
+            push_constant_ranges: &[],
+        });
+        timed_pipeline(&self.device, &wgpu::RenderPipelineDescriptor {
+            label: Some("circle-pipeline"),
+            layout: Some(&circle_layout),
+            vertex: wgpu::VertexState {
+                module: &circle_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<CircleVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 0,
+                            shader_location: 0,
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 8,
+                            shader_location: 1,
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x4,
+                            offset: 16,
+                            shader_location: 2,
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32,
+                            offset: 32,
+                            shader_location: 3,
+                        },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &circle_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: self.surface_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
         })
+    }
+
+    /// Пайплайн генерации mip-цепочки картинок (даунскейл 2×2 box).
+    ///
+    /// BUG-406: компилируется лениво, при первом реальном использовании —
+    /// на DX12 компиляция одного пайплайна стоит ~1 с, и держать её в
+    /// старте окна ради эффекта, которого на странице может не быть, нельзя.
+    fn build_mipgen_pipeline(&self) -> wgpu::RenderPipeline {
+        // ── Mipgen pipeline (mip-цепочка картинок) ────────────────────────
+        // Пасс «mip N−1 → mip N» без depth и без блендинга: fullscreen
+        // triangle пишет bilinear-выборку источника (2×2 box-даунскейл).
+        let mipgen_shader = timed_shader(&self.device, wgpu::ShaderModuleDescriptor {
+            label: Some("mipgen-shader"),
+            source: wgpu::ShaderSource::Wgsl(MIPGEN_SHADER_SRC.into()),
+        });
+        let mipgen_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("mipgen-layout"),
+            bind_group_layouts: &[&self.image_bgl],
+            push_constant_ranges: &[],
+        });
+        timed_pipeline(&self.device, &wgpu::RenderPipelineDescriptor {
+            label: Some("mipgen-pipeline"),
+            layout: Some(&mipgen_layout),
+            vertex: wgpu::VertexState {
+                module: &mipgen_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &mipgen_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    // Картинки всегда Rgba8Unorm (см. make_gpu_image_entry),
+                    // не surface format.
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        })
+    }
+
+    /// Пайплайн `cross-fade(A, B, p)` (CSS Images L4 §4).
+    ///
+    /// BUG-406: компилируется лениво, при первом реальном использовании —
+    /// на DX12 компиляция одного пайплайна стоит ~1 с, и держать её в
+    /// старте окна ради эффекта, которого на странице может не быть, нельзя.
+    fn build_cross_fade_pipeline(&self) -> wgpu::RenderPipeline {
+        let cross_fade_shader = timed_shader(&self.device, wgpu::ShaderModuleDescriptor {
+            label: Some("cross-fade-shader"),
+            source: wgpu::ShaderSource::Wgsl(CROSS_FADE_SHADER_SRC.into()),
+        });
+        let cross_fade_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("cross-fade-layout"),
+            bind_group_layouts: &[&self.uniform_bgl, &self.cross_fade_bgl],
+            push_constant_ranges: &[],
+        });
+        timed_pipeline(&self.device, &wgpu::RenderPipelineDescriptor {
+            label: Some("cross-fade-pipeline"),
+            layout: Some(&cross_fade_layout),
+            vertex: wgpu::VertexState {
+                module: &cross_fade_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<CrossFadeVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 0,
+                            shader_location: 0, // pos
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 8,
+                            shader_location: 1, // uv
+                        },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &cross_fade_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: self.surface_format,
+                    // Same blend as image_pipeline — straight-alpha source,
+                    // SrcAlpha · src + (1-SrcAlpha) · dst.
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            // Cross-fade quads run at fixed mid-plane depth (z = 0.5 NDC in
+            // shader) — depth_write_enabled = false so they do not occlude
+            // 3D-transformed siblings under preserve-3d.
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        })
+    }
+
+    /// Пайплайн композита offscreen-слоя в родителя (opacity/clip-группы).
+    ///
+    /// BUG-406: компилируется лениво, при первом реальном использовании —
+    /// на DX12 компиляция одного пайплайна стоит ~1 с, и держать её в
+    /// старте окна ради эффекта, которого на странице может не быть, нельзя.
+    fn build_composite_pipeline(&self) -> wgpu::RenderPipeline {
+        let composite_shader = timed_shader(&self.device, wgpu::ShaderModuleDescriptor {
+            label: Some("composite-shader"),
+            source: wgpu::ShaderSource::Wgsl(COMPOSITE_SHADER_SRC.into()),
+        });
+        let composite_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("composite-layout"),
+            bind_group_layouts: &[&self.composite_bgl],
+            push_constant_ranges: &[],
+        });
+        timed_pipeline(&self.device, &wgpu::RenderPipelineDescriptor {
+            label: Some("composite-pipeline"),
+            layout: Some(&composite_layout),
+            vertex: wgpu::VertexState {
+                module: &composite_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<CompositeVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 0,
+                            shader_location: 0,
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 8,
+                            shader_location: 1,
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32,
+                            offset: 16,
+                            shader_location: 2,
+                        },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &composite_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: self.surface_format,
+                    // Premultiplied-alpha blend: off-screen layers store premultiplied content.
+                    // Shader multiplies rgb*opacity so "one * src + (1-src.a) * dst" is correct.
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        })
+    }
+
+    /// Пайплайн CSS-блендинга двух текстур (CSS Compositing L1 §8).
+    ///
+    /// BUG-406: компилируется лениво, при первом реальном использовании —
+    /// на DX12 компиляция одного пайплайна стоит ~1 с, и держать её в
+    /// старте окна ради эффекта, которого на странице может не быть, нельзя.
+    fn build_blend_pipeline(&self) -> wgpu::RenderPipeline {
+        let blend_shader = timed_shader(&self.device, wgpu::ShaderModuleDescriptor {
+            label: Some("blend-shader"),
+            source: wgpu::ShaderSource::Wgsl(BLEND_SHADER_SRC.into()),
+        });
+        let blend_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("blend-layout"),
+            bind_group_layouts: &[&self.blend_bgl],
+            push_constant_ranges: &[],
+        });
+        // REPLACE blend state: shader implements full CSS compositing formula.
+        timed_pipeline(&self.device, &wgpu::RenderPipelineDescriptor {
+            label: Some("blend-pipeline"),
+            layout: Some(&blend_layout),
+            vertex: wgpu::VertexState {
+                module: &blend_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<CompositeVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 0,
+                            shader_location: 0,
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 8,
+                            shader_location: 1,
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32,
+                            offset: 16,
+                            shader_location: 2,
+                        },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &blend_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: self.surface_format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        })
+    }
+
+    /// Пайплайн композита слоя по маске-картинке (CSS Masking L1 §4).
+    ///
+    /// BUG-406: компилируется лениво, при первом реальном использовании —
+    /// на DX12 компиляция одного пайплайна стоит ~1 с, и держать её в
+    /// старте окна ради эффекта, которого на странице может не быть, нельзя.
+    fn build_mask_composite_pipeline(&self) -> wgpu::RenderPipeline {
+        let mask_composite_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("mask-composite-layout"),
+            bind_group_layouts: &[&self.uniform_bgl, &self.mask_composite_bgl],
+            push_constant_ranges: &[],
+        });
+        let mask_composite_shader = timed_shader(&self.device, wgpu::ShaderModuleDescriptor {
+            label: Some("mask-composite-shader"),
+            source: wgpu::ShaderSource::Wgsl(MASK_COMPOSITE_SHADER_SRC.into()),
+        });
+        timed_pipeline(&self.device, &wgpu::RenderPipelineDescriptor {
+            label: Some("mask-composite-pipeline"),
+            layout: Some(&mask_composite_layout),
+            vertex: wgpu::VertexState {
+                module: &mask_composite_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<MaskVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 0,
+                            shader_location: 0,
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 8,
+                            shader_location: 1,
+                        },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &mask_composite_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: self.surface_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        })
+    }
+
+    /// Пара пайплайнов композита по отрисованному mask-слою (CSS Masking L1 §5), alpha и luminance.
+    ///
+    /// BUG-406: компилируется лениво, при первом реальном использовании —
+    /// на DX12 компиляция одного пайплайна стоит ~1 с, и держать её в
+    /// старте окна ради эффекта, которого на странице может не быть, нельзя.
+    fn build_mask_layer_pipeline(&self) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
+        // ── Mask-layer composite pipelines ──────────────────────────────────
+        // CSS Masking L1 §5: apply a rendered mask layer to the parent layer.
+        // Reuses mask_composite_bgl (same binding layout: t_content, t_mask, s).
+        // Two pipelines sharing one shader module: alpha mode and luminance mode.
+        // Blend: REPLACE (src_factor=One, dst_factor=Zero) — overwrites parent at element rect.
+        // Свой `PipelineLayout` поверх общего `mask_composite_bgl`: билдер
+        // `mask_composite`-пайплайна тоже ленив (BUG-406), его локальный layout
+        // сюда не дотягивается.
+        let mask_composite_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("mask-layer-layout"),
+            bind_group_layouts: &[&self.uniform_bgl, &self.mask_composite_bgl],
+            push_constant_ranges: &[],
+        });
+        let mask_layer_shader = timed_shader(&self.device, wgpu::ShaderModuleDescriptor {
+            label: Some("mask-layer-shader"),
+            source: wgpu::ShaderSource::Wgsl(MASK_LAYER_SHADER_SRC.into()),
+        });
+        let mask_layer_vtx_layout = wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<MaskVertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
+                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 8, shader_location: 1 },
+            ],
+        };
+        let replace_blend = wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::Zero,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::Zero,
+                operation: wgpu::BlendOperation::Add,
+            },
+        };
+        let mask_layer_alpha_pipeline = timed_pipeline(&self.device, &wgpu::RenderPipelineDescriptor {
+            label: Some("mask-layer-alpha-pipeline"),
+            layout: Some(&mask_composite_layout),
+            vertex: wgpu::VertexState {
+                module: &mask_layer_shader,
+                entry_point: Some("vs_main"),
+                buffers: std::slice::from_ref(&mask_layer_vtx_layout),
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &mask_layer_shader,
+                entry_point: Some("fs_alpha"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: self.surface_format,
+                    blend: Some(replace_blend),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+        let mask_layer_luma_pipeline = timed_pipeline(&self.device, &wgpu::RenderPipelineDescriptor {
+            label: Some("mask-layer-luma-pipeline"),
+            layout: Some(&mask_composite_layout),
+            vertex: wgpu::VertexState {
+                module: &mask_layer_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[mask_layer_vtx_layout],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &mask_layer_shader,
+                entry_point: Some("fs_luma"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: self.surface_format,
+                    blend: Some(replace_blend),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+        (mask_layer_alpha_pipeline, mask_layer_luma_pipeline)
+    }
+
+    /// Пайплайн цветовых CSS-фильтров (CSS Filter Effects L1).
+    ///
+    /// BUG-406: компилируется лениво, при первом реальном использовании —
+    /// на DX12 компиляция одного пайплайна стоит ~1 с, и держать её в
+    /// старте окна ради эффекта, которого на странице может не быть, нельзя.
+    fn build_filter_pipeline(&self) -> wgpu::RenderPipeline {
+        let filter_shader = timed_shader(&self.device, wgpu::ShaderModuleDescriptor {
+            label: Some("filter-shader"),
+            source: wgpu::ShaderSource::Wgsl(FILTER_SHADER_SRC.into()),
+        });
+        let filter_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("filter-layout"),
+            bind_group_layouts: &[&self.filter_bgl],
+            push_constant_ranges: &[],
+        });
+        timed_pipeline(&self.device, &wgpu::RenderPipelineDescriptor {
+            label: Some("filter-pipeline"),
+            layout: Some(&filter_layout),
+            vertex: wgpu::VertexState {
+                module: &filter_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<CompositeVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 8, shader_location: 1 },
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32, offset: 16, shader_location: 2 },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &filter_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: self.surface_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        })
+    }
+
+    /// Пайплайн сепарабельного гауссова блюра (один проход, H или V).
+    ///
+    /// BUG-406: компилируется лениво, при первом реальном использовании —
+    /// на DX12 компиляция одного пайплайна стоит ~1 с, и держать её в
+    /// старте окна ради эффекта, которого на странице может не быть, нельзя.
+    fn build_blur_pipeline(&self) -> wgpu::RenderPipeline {
+        let blur_shader = timed_shader(&self.device, wgpu::ShaderModuleDescriptor {
+            label: Some("blur-shader"),
+            source: wgpu::ShaderSource::Wgsl(BLUR_SHADER_SRC.into()),
+        });
+        let blur_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("blur-layout"),
+            bind_group_layouts: &[&self.blur_bgl],
+            push_constant_ranges: &[],
+        });
+        timed_pipeline(&self.device, &wgpu::RenderPipelineDescriptor {
+            label: Some("blur-pipeline"),
+            layout: Some(&blur_layout),
+            vertex: wgpu::VertexState {
+                module: &blur_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<CompositeVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 8, shader_location: 1 },
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32, offset: 16, shader_location: 2 },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &blur_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: self.surface_format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        })
+    }
+
+    /// Пайплайн блита отфильтрованного backdrop-снимка (REPLACE-блендинг).
+    ///
+    /// BUG-406: компилируется лениво, при первом реальном использовании —
+    /// на DX12 компиляция одного пайплайна стоит ~1 с, и держать её в
+    /// старте окна ради эффекта, которого на странице может не быть, нельзя.
+    fn build_backdrop_blit_pipeline(&self) -> wgpu::RenderPipeline {
+        // ── Backdrop-filter blit pipeline ────────────────────────────────────
+        // Same shader + bind group layout as filter_pipeline, but REPLACE blend.
+        // Used to overwrite the parent layer's element-bounds region with the
+        // filtered backdrop snapshot (with optional color-matrix filter applied).
+        // Собственные shader/layout: `filter_pipeline` тоже ленив (BUG-406), и его
+        // локальные shader/layout не переживают своего билдера.
+        let filter_shader = timed_shader(&self.device, wgpu::ShaderModuleDescriptor {
+            label: Some("filter-shader"),
+            source: wgpu::ShaderSource::Wgsl(FILTER_SHADER_SRC.into()),
+        });
+        let filter_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("filter-layout"),
+            bind_group_layouts: &[&self.filter_bgl],
+            push_constant_ranges: &[],
+        });
+        timed_pipeline(&self.device, &wgpu::RenderPipelineDescriptor {
+            label: Some("backdrop-blit-pipeline"),
+            layout: Some(&filter_layout),
+            vertex: wgpu::VertexState {
+                module: &filter_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<CompositeVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 8, shader_location: 1 },
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32, offset: 16, shader_location: 2 },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &filter_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: self.surface_format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    // Write only RGB — preserve destination alpha so the parent
+                    // layer's opacity isn't reduced by blur-edge transparency.
+                    write_mask: wgpu::ColorWrites::COLOR,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        })
+    }
+
+    /// Ленивый доступ к `circle`-пайплайну (BUG-406): компилирует его при
+    /// первом обращении и кэширует на весь срок жизни рендера.
+    fn circle_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.circle_pipeline.get_or_init(|| self.build_circle_pipeline())
+    }
+    /// Ленивый доступ к `mipgen`-пайплайну (BUG-406): компилирует его при
+    /// первом обращении и кэширует на весь срок жизни рендера.
+    fn mipgen_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.mipgen_pipeline.get_or_init(|| self.build_mipgen_pipeline())
+    }
+    /// Ленивый доступ к `cross_fade`-пайплайну (BUG-406): компилирует его при
+    /// первом обращении и кэширует на весь срок жизни рендера.
+    fn cross_fade_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.cross_fade_pipeline.get_or_init(|| self.build_cross_fade_pipeline())
+    }
+    /// Ленивый доступ к `composite`-пайплайну (BUG-406): компилирует его при
+    /// первом обращении и кэширует на весь срок жизни рендера.
+    fn composite_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.composite_pipeline.get_or_init(|| self.build_composite_pipeline())
+    }
+    /// Ленивый доступ к `blend`-пайплайну (BUG-406): компилирует его при
+    /// первом обращении и кэширует на весь срок жизни рендера.
+    fn blend_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.blend_pipeline.get_or_init(|| self.build_blend_pipeline())
+    }
+    /// Ленивый доступ к `mask_composite`-пайплайну (BUG-406): компилирует его при
+    /// первом обращении и кэширует на весь срок жизни рендера.
+    fn mask_composite_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.mask_composite_pipeline.get_or_init(|| self.build_mask_composite_pipeline())
+    }
+    /// Ленивый доступ к `filter`-пайплайну (BUG-406): компилирует его при
+    /// первом обращении и кэширует на весь срок жизни рендера.
+    fn filter_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.filter_pipeline.get_or_init(|| self.build_filter_pipeline())
+    }
+    /// Ленивый доступ к `blur`-пайплайну (BUG-406): компилирует его при
+    /// первом обращении и кэширует на весь срок жизни рендера.
+    fn blur_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.blur_pipeline.get_or_init(|| self.build_blur_pipeline())
+    }
+    /// Ленивый доступ к `backdrop_blit`-пайплайну (BUG-406): компилирует его при
+    /// первом обращении и кэширует на весь срок жизни рендера.
+    fn backdrop_blit_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.backdrop_blit_pipeline.get_or_init(|| self.build_backdrop_blit_pipeline())
+    }
+    /// Ленивый доступ к паре mask-layer-пайплайнов (alpha, luminance) — BUG-406.
+    fn mask_layer_pipelines(&self) -> &(wgpu::RenderPipeline, wgpu::RenderPipeline) {
+        self.mask_layer_pipelines.get_or_init(|| self.build_mask_layer_pipeline())
     }
 
     /// Заменяет источник лукапа face-ов. Полезно для тестов (mock-provider) и
@@ -4361,7 +4612,7 @@ impl Renderer {
                     timestamp_writes: None,
                     occlusion_query_set: None,
                 });
-                pass.set_pipeline(&self.mipgen_pipeline);
+                pass.set_pipeline(self.mipgen_pipeline());
                 pass.set_bind_group(0, &bg, &[]);
                 pass.draw(0..3, 0..1);
                 drop(pass);
@@ -7752,7 +8003,7 @@ impl Renderer {
                         }
                         DrawOp::Circle { v_start, v_count } => {
                             if let Some(vb) = &circle_vbuf {
-                                $pass.set_pipeline(&self.circle_pipeline);
+                                $pass.set_pipeline(self.circle_pipeline());
                                 $pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                                 $pass.set_vertex_buffer(0, vb.slice(..));
                                 $pass.draw(*v_start..*v_start + *v_count, 0..1);
@@ -7804,7 +8055,7 @@ impl Renderer {
                                 &cross_fade_vbuf,
                                 cross_fade_bind_groups.get(*cf_batch_idx as usize),
                             ) {
-                                $pass.set_pipeline(&self.cross_fade_pipeline);
+                                $pass.set_pipeline(self.cross_fade_pipeline());
                                 $pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                                 $pass.set_bind_group(1, bind_group, &[]);
                                 $pass.set_vertex_buffer(0, vb.slice(..));
@@ -7992,7 +8243,7 @@ impl Renderer {
                                 timestamp_writes: None,
                                 occlusion_query_set: None,
                             });
-                            pass.set_pipeline(&self.blend_pipeline);
+                            pass.set_pipeline(self.blend_pipeline());
                             pass.set_bind_group(0, &blend_bg, &[]);
                             pass.set_vertex_buffer(0, cvb.slice(..));
                             pass.draw(comp.comp_v_start..comp.comp_v_start + 6, 0..1);
@@ -8023,7 +8274,7 @@ impl Renderer {
                                 timestamp_writes: None,
                                 occlusion_query_set: None,
                             });
-                            pass.set_pipeline(&self.composite_pipeline);
+                            pass.set_pipeline(self.composite_pipeline());
                             pass.set_bind_group(0, src_bg, &[]);
                             pass.set_vertex_buffer(0, cvb.slice(..));
                             pass.draw(comp.comp_v_start..comp.comp_v_start + 6, 0..1);
@@ -8170,7 +8421,7 @@ impl Renderer {
                                 timestamp_writes: None,
                                 occlusion_query_set: None,
                             });
-                            pass.set_pipeline(&self.mask_composite_pipeline);
+                            pass.set_pipeline(self.mask_composite_pipeline());
                             pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                             pass.set_bind_group(1, &mask_bg, &[]);
                             pass.set_vertex_buffer(0, mvb.slice(..));
@@ -8213,7 +8464,7 @@ impl Renderer {
                             timestamp_writes: None,
                             occlusion_query_set: None,
                         });
-                        pass.set_pipeline(&self.composite_pipeline);
+                        pass.set_pipeline(self.composite_pipeline());
                         pass.set_bind_group(0, src_bg, &[]);
                         pass.set_vertex_buffer(0, fallback_buf.slice(..));
                         pass.draw(0..6, 0..1);
@@ -8269,7 +8520,7 @@ impl Renderer {
                                 timestamp_writes: None,
                                 occlusion_query_set: None,
                             });
-                            pass.set_pipeline(&self.blur_pipeline);
+                            pass.set_pipeline(self.blur_pipeline());
                             if let Some(s) = plan.scissor {
                                 pass.set_scissor_rect(s.x, s.y, s.width, s.height);
                             }
@@ -8309,7 +8560,7 @@ impl Renderer {
                                 timestamp_writes: None,
                                 occlusion_query_set: None,
                             });
-                            pass.set_pipeline(&self.blur_pipeline);
+                            pass.set_pipeline(self.blur_pipeline());
                             if let Some(s) = plan.scissor {
                                 pass.set_scissor_rect(s.x, s.y, s.width, s.height);
                             }
@@ -8368,7 +8619,7 @@ impl Renderer {
                             timestamp_writes: None,
                             occlusion_query_set: None,
                         });
-                        pass.set_pipeline(&self.filter_pipeline);
+                        pass.set_pipeline(self.filter_pipeline());
                         if let Some(s) = plan.scissor {
                             pass.set_scissor_rect(s.x, s.y, s.width, s.height);
                         }
@@ -8514,7 +8765,7 @@ impl Renderer {
                                     timestamp_writes: None,
                                     occlusion_query_set: None,
                                 });
-                                pass.set_pipeline(&self.blur_pipeline);
+                                pass.set_pipeline(self.blur_pipeline());
                                 pass.set_bind_group(0, &blur_bg_h, &[]);
                                 pass.set_vertex_buffer(0, cvb.slice(..));
                                 pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
@@ -8550,7 +8801,7 @@ impl Renderer {
                                     timestamp_writes: None,
                                     occlusion_query_set: None,
                                 });
-                                pass.set_pipeline(&self.blur_pipeline);
+                                pass.set_pipeline(self.blur_pipeline());
                                 pass.set_bind_group(0, &blur_bg_v, &[]);
                                 pass.set_vertex_buffer(0, cvb.slice(..));
                                 pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
@@ -8623,7 +8874,7 @@ impl Renderer {
                             timestamp_writes: None,
                             occlusion_query_set: None,
                         });
-                        pass.set_pipeline(&self.backdrop_blit_pipeline);
+                        pass.set_pipeline(self.backdrop_blit_pipeline());
                         pass.set_bind_group(0, &bd_blit_bg, &[]);
                         pass.set_vertex_buffer(0, cvb.slice(..));
                         pass.draw(plan.bounds_v_start..plan.bounds_v_start + 6, 0..1);
@@ -8686,7 +8937,7 @@ impl Renderer {
                             timestamp_writes: None,
                             occlusion_query_set: None,
                         });
-                        pass.set_pipeline(&self.filter_pipeline);
+                        pass.set_pipeline(self.filter_pipeline());
                         pass.set_bind_group(0, &elem_filter_bg, &[]);
                         pass.set_vertex_buffer(0, cvb.slice(..));
                         pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
@@ -8754,8 +9005,8 @@ impl Renderer {
                     });
                     let parent_view = &self.layer_textures[parent_idx].view;
                     let pipeline = match plan.mode {
-                        MaskMode::Alpha     => &self.mask_layer_alpha_pipeline,
-                        MaskMode::Luminance => &self.mask_layer_luma_pipeline,
+                        MaskMode::Alpha     => &self.mask_layer_pipelines().0,
+                        MaskMode::Luminance => &self.mask_layer_pipelines().1,
                     };
                     {
                         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
