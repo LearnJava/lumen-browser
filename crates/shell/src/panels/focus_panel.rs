@@ -309,6 +309,7 @@ pub fn build_panel(panel: &FocusModePanel, window_w: f32, pal: &Palette) -> Disp
     let time = panel.timer.label();
     let time_sz = 24.0;
     out.push(DisplayCommand::DrawText {
+        font_stretch: lumen_layout::FontStretch::NORMAL,
         rect: Rect::new(ring_cx - RING_OUTER, ring_cy - time_sz * 0.55, RING_OUTER * 2.0, time_sz * 1.2),
         text: time,
         font_size: time_sz,
@@ -334,6 +335,7 @@ pub fn build_panel(panel: &FocusModePanel, window_w: f32, pal: &Palette) -> Disp
     };
     let status_sz = 11.0;
     out.push(DisplayCommand::DrawText {
+        font_stretch: lumen_layout::FontStretch::NORMAL,
         rect: Rect::new(cx0, cy0 + RING_CY_OFFSET + RING_OUTER + 12.0, CARD_W, status_sz * 1.4),
         text: status.to_owned(),
         font_size: status_sz,
@@ -351,6 +353,7 @@ pub fn build_panel(panel: &FocusModePanel, window_w: f32, pal: &Palette) -> Disp
 
     // Hint line.
     out.push(DisplayCommand::DrawText {
+        font_stretch: lumen_layout::FontStretch::NORMAL,
         rect: Rect::new(cx0, cy0 + CARD_H - status_sz * 1.8, CARD_W, status_sz * 1.4),
         text: "click: pause  ·  Esc: exit".to_owned(),
         font_size: 9.0,
@@ -368,6 +371,7 @@ pub fn build_panel(panel: &FocusModePanel, window_w: f32, pal: &Palette) -> Disp
 
     // `×` exit glyph, top-right corner.
     out.push(DisplayCommand::DrawText {
+        font_stretch: lumen_layout::FontStretch::NORMAL,
         rect: Rect::new(cx0 + CARD_W - CLOSE_W, cy0 + 3.0, CLOSE_W, 16.0),
         text: "×".to_owned(),
         font_size: 14.0,

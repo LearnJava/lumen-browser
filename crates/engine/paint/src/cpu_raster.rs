@@ -3384,6 +3384,7 @@ mod tests {
     fn draw_text_renders_ink() {
         let blue = Color { r: 0, g: 0, b: 255, a: 255 };
         let cmds = vec![DisplayCommand::DrawText {
+            font_stretch: lumen_layout::FontStretch::NORMAL,
             rect: rect(2.0, 2.0, 120.0, 40.0),
             text: "Hi".to_string(),
             font_size: 32.0,
@@ -3422,6 +3423,7 @@ mod tests {
         let blue = Color { r: 0, g: 0, b: 255, a: 255 };
         let make_cmds = |orientation: Option<TextOrientation>| {
             vec![DisplayCommand::DrawText {
+                font_stretch: lumen_layout::FontStretch::NORMAL,
                 rect: rect(4.0, 4.0, 120.0, 40.0),
                 text: "Hi".to_string(),
                 font_size: 32.0,
@@ -3497,6 +3499,7 @@ mod tests {
         let blue = Color { r: 0, g: 0, b: 255, a: 255 };
         let make_cmds = |orientation: Option<TextOrientation>| {
             vec![DisplayCommand::DrawText {
+                font_stretch: lumen_layout::FontStretch::NORMAL,
                 rect: rect(4.0, 4.0, 60.0, 60.0),
                 text: "日".to_string(),
                 font_size: 32.0,
@@ -3534,6 +3537,7 @@ mod tests {
         let blue = Color { r: 0, g: 0, b: 255, a: 255 };
         let make_cmds = |orientation: Option<TextOrientation>| {
             vec![DisplayCommand::DrawText {
+                font_stretch: lumen_layout::FontStretch::NORMAL,
                 rect: rect(4.0, 4.0, 120.0, 40.0),
                 text: "Hi".to_string(),
                 font_size: 32.0,
@@ -3571,6 +3575,7 @@ mod tests {
     fn draw_text_empty_is_noop() {
         let black = Color { r: 0, g: 0, b: 0, a: 255 };
         let cmds = vec![DisplayCommand::DrawText {
+            font_stretch: lumen_layout::FontStretch::NORMAL,
             rect: rect(0.0, 0.0, 64.0, 64.0),
             text: String::new(),
             font_size: 20.0,
@@ -3598,6 +3603,7 @@ mod tests {
             // Clip to the right half; the text sits in the left half → no ink.
             DisplayCommand::PushClipRect { rect: rect(200.0, 0.0, 100.0, 64.0) },
             DisplayCommand::DrawText {
+                font_stretch: lumen_layout::FontStretch::NORMAL,
                 rect: rect(2.0, 2.0, 180.0, 40.0),
                 text: "Hidden".to_string(),
                 font_size: 32.0,

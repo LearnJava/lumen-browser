@@ -273,6 +273,7 @@ pub fn build_panel(panel: &WorkspacePanel, window_w: f32, window_h: f32, pal: &P
         let del_left = chip_right - DELETE_W;
         let del_text_top = chip_top + (CHIP_H - FONT_SZ * 1.2) * 0.5;
         out.push(DisplayCommand::DrawText {
+            font_stretch: lumen_layout::FontStretch::NORMAL,
             rect: Rect::new(del_left, del_text_top, DELETE_W, FONT_SZ * 1.2),
             text: "×".to_owned(),
             font_size: FONT_SZ,
@@ -293,6 +294,7 @@ pub fn build_panel(panel: &WorkspacePanel, window_w: f32, window_h: f32, pal: &P
         let name_top = chip_top + (CHIP_H - FONT_SZ * 1.3) * 0.5;
         let text_color = if is_active { pal.text } else { pal.text_dim };
         out.push(DisplayCommand::DrawText {
+            font_stretch: lumen_layout::FontStretch::NORMAL,
             rect: Rect::new(cursor_x + CHIP_TEXT_PAD, name_top, name_w, FONT_SZ * 1.3),
             text: entry.name.clone(),
             font_size: FONT_SZ,
@@ -320,6 +322,7 @@ pub fn build_panel(panel: &WorkspacePanel, window_w: f32, window_h: f32, pal: &P
     let add_text_top = chip_top + (CHIP_H - FONT_SZ * 1.2) * 0.5;
     let add_text_x = add_left + (ADD_BTN_W - FONT_SZ) * 0.5;
     out.push(DisplayCommand::DrawText {
+        font_stretch: lumen_layout::FontStretch::NORMAL,
         rect: Rect::new(add_text_x, add_text_top, FONT_SZ * 1.2, FONT_SZ * 1.2),
         text: "+".to_owned(),
         font_size: FONT_SZ * 1.1,

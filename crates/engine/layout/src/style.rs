@@ -1173,16 +1173,45 @@ pub enum FontOpticalSizing {
 /// экстремальные значения, и это удерживает значение в u16 без
 /// переполнения.
 ///
-/// Phase 0: layout различает свойство, рендерер всегда Inter Regular
-/// (real stretch-варианты требуют variable-font wdth-axis или отдельные
-/// fontfiles). `text_rendering_eq` учитывает stretch, чтобы фрагменты
-/// с разным stretch не сливались.
+/// Значение доезжает до рендера двумя независимыми путями, которые
+/// складываются: variable-шрифты получают ось `wdth`
+/// (`DrawText::font_variation_axes`), а статические семейства с отдельными
+/// condensed/expanded-файлами подбираются matcher-ом по `usWidthClass` из
+/// OS/2 (`DrawText::font_stretch` → `FontProvider::pick_face`, CSS Fonts L4
+/// §5.2). `text_rendering_eq` учитывает stretch, чтобы фрагменты с разным
+/// stretch не сливались.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FontStretch(pub u16);
 
 impl FontStretch {
     /// 100% — нормальная ширина.
     pub const NORMAL: Self = Self(1000);
+
+    /// Значение в CSS-процентах, округлённое до целого (50..200) — единицы
+    /// [`lumen_core::FaceRecord::stretch`] и `usWidthClass`. Дробные
+    /// keyword-ы (`semi-expanded` = 112.5%) округляются: шкала
+    /// `usWidthClass` целочисленная и дробных ступеней не имеет.
+    pub fn as_percent(self) -> u16 {
+        (self.0 + 5) / 10
+    }
+
+    /// `<font-stretch-css3>`: keyword или `<percentage>` (CSS Fonts L4 §2.5).
+    /// Берёт первый токен — L4 допускает диапазон из двух значений (это
+    /// синтаксис дескриптора `@font-face`, для свойства второе значение
+    /// игнорируется). `None` — значение не распознано.
+    pub fn parse(val: &str) -> Option<Self> {
+        let token = val.split_whitespace().next()?;
+        if let Some(fs) = Self::from_keyword(token) {
+            return Some(fs);
+        }
+        let pct = token.strip_suffix('%')?;
+        let n = pct.trim().parse::<f32>().ok()?;
+        // CSS Fonts L4 §2.5: percentage >= 0%. Out-of-range значения
+        // формально валидны, но бесполезны для рендеринга и могут
+        // переполнить u16 (max ≈ 6553%). Клампим в привычные [50%, 200%].
+        let clamped = n.clamp(50.0, 200.0);
+        Some(Self((clamped * 10.0).round() as u16))
+    }
 
     fn from_keyword(kw: &str) -> Option<Self> {
         Some(match kw {
@@ -14816,18 +14845,8 @@ fn apply_declaration(
                 .unwrap_or(FontVariantCaps::Normal);
         }
         "font-stretch" => {
-            let token = val.split_whitespace().next().unwrap_or("");
-            if let Some(fs) = FontStretch::from_keyword(token) {
+            if let Some(fs) = FontStretch::parse(val) {
                 style.font_stretch = fs;
-            } else if let Some(pct) = token.strip_suffix('%')
-                && let Ok(n) = pct.trim().parse::<f32>()
-            {
-                // CSS Fonts L4 §2.5: percentage >= 0%. Out-of-range
-                // значения формально валидны, но бесполезны для рендеринга
-                // и могут переполнить u16 (max ≈ 6553%). Клампим в
-                // привычные [50%, 200%].
-                let clamped = n.clamp(50.0, 200.0);
-                style.font_stretch = FontStretch((clamped * 10.0).round() as u16);
             }
         }
         "text-indent" => {

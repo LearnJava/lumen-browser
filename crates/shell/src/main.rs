@@ -5782,13 +5782,23 @@ fn load_font_faces(
             .as_deref()
             .and_then(FontStyle::parse_keyword)
             .unwrap_or(FontStyle::Normal);
+        // CSS Fonts L4 §4.5: дескриптор `font-stretch` правила участвует в
+        // подборе `local()`-источника — `@font-face { src: local("Arial");
+        // font-stretch: condensed }` обязан взять узкий face семейства, а не
+        // обычный. Диапазон из двух значений сводится к первому (`parse`).
+        let stretch = rule
+            .stretch
+            .as_deref()
+            .and_then(lumen_layout::FontStretch::parse)
+            .unwrap_or(lumen_layout::FontStretch::NORMAL)
+            .as_percent();
 
         let mut local_resolved = false;
         for src in &rule.sources {
             if src.kind == FontFaceSourceKind::Local {
                 // CSS Fonts L4 §4.1 + §4.3: try local() first; case-insensitive
                 // match against system fonts. First hit wins the whole rule.
-                if let Some(bytes) = registry.resolve_local_bytes(&src.value, weight, style) {
+                if let Some(bytes) = registry.resolve_local_bytes(&src.value, weight, style, stretch) {
                     eprintln!(
                         "@font-face загружен: «{}» weight={} src={} (local)",
                         rule.family, weight, src.value,
@@ -23655,6 +23665,7 @@ fn build_split_placeholder(url: &str) -> lumen_paint::DisplayList {
         },
         // URL label near vertical centre of a typical viewport half.
         DisplayCommand::DrawText {
+            font_stretch: lumen_layout::FontStretch::NORMAL,
             rect: lumen_core::geom::Rect { x: 16.0, y: 300.0, width: 480.0, height: 20.0 },
             text: url.to_owned(),
             font_size: 13.0,

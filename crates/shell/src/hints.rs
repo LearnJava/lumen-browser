@@ -186,6 +186,7 @@ pub fn build_hints_overlay(state: &HintState, scroll_x: f32, scroll_y: f32) -> D
         });
         if !dimmed {
             out.push(DisplayCommand::DrawText {
+                font_stretch: lumen_layout::FontStretch::NORMAL,
                 rect: Rect::new(
                     bx + BADGE_PAD_X,
                     by + BADGE_PAD_Y,

@@ -457,6 +457,7 @@ fn make_text(
     color: Color,
 ) -> DisplayCommand {
     DisplayCommand::DrawText {
+        font_stretch: lumen_layout::FontStretch::NORMAL,
         rect: Rect::new(x, y, w, font_size * 1.4),
         text,
         font_size,

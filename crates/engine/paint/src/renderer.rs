@@ -34,7 +34,7 @@ use lumen_font::{
     SystemFontIndex, maybe_decode_font,
 };
 use lumen_image::{correct_rgba_pixels, Image, PixelFormat};
-use lumen_layout::{BackgroundRepeat, BackgroundSize, BorderStyle, Color, FilterFn, FontStyle, FontWeight, GradientStop, ImageRendering, Mat4, ObjectFit, ObjectPosition, OutlineStyle, PositionComponent, style::TextOrientation};
+use lumen_layout::{BackgroundRepeat, BackgroundSize, BorderStyle, Color, FilterFn, FontStretch, FontStyle, FontWeight, GradientStop, ImageRendering, Mat4, ObjectFit, ObjectPosition, OutlineStyle, PositionComponent, style::TextOrientation};
 use winit::window::Window;
 
 use crate::atlas::{AtlasKey, GlyphAtlas, GlyphEntry};
@@ -3966,6 +3966,7 @@ impl Renderer {
                 &[(*name).to_string()],
                 FontWeight::NORMAL,
                 FontStyle::Normal,
+                FontStretch::NORMAL,
             );
         }
     }
@@ -4005,6 +4006,7 @@ impl Renderer {
         families: &[String],
         weight: FontWeight,
         style: FontStyle,
+        stretch: FontStretch,
     ) -> usize {
         // DS-4: chrome never queries the CSS FontProvider — every chrome
         // `DrawText` passes an empty `font_family` (page content always has a
@@ -4030,19 +4032,25 @@ impl Renderer {
         };
         // Мемоизация: горячий путь (каждый DrawText каждого кадра) — один
         // hash-lookup без аллокаций вместо to_lowercase + pick_face.
-        let cache_key = Self::resolve_cache_key(families, weight, style);
+        let cache_key = Self::resolve_cache_key(families, weight, style, stretch);
         if let Some(&id) = self.resolve_cache.get(&cache_key) {
             return id;
         }
-        let resolved = self.resolve_face_id_uncached(families, weight, style, &provider);
+        let resolved =
+            self.resolve_face_id_uncached(families, weight, style, stretch, &provider);
         self.resolve_cache.insert(cache_key, resolved);
         resolved
     }
 
     /// Ключ мемо-кэша [`Self::resolve_face_id`]: хэш `(families, weight,
-    /// style)` без аллокаций. Вынесен, чтобы префетч и резолв считали ключ
-    /// одинаково.
-    fn resolve_cache_key(families: &[String], weight: FontWeight, style: FontStyle) -> u64 {
+    /// style, stretch)` без аллокаций. Вынесен, чтобы префетч и резолв
+    /// считали ключ одинаково.
+    fn resolve_cache_key(
+        families: &[String],
+        weight: FontWeight,
+        style: FontStyle,
+        stretch: FontStretch,
+    ) -> u64 {
         use std::hash::Hasher;
         let mut h = std::collections::hash_map::DefaultHasher::new();
         for fam in families {
@@ -4055,6 +4063,10 @@ impl Renderer {
             FontStyle::Italic => 1,
             FontStyle::Oblique => 2,
         });
+        // Часть ключа: `pick_face` выбирает по stretch-у отдельный
+        // condensed/expanded face, значит два stretch-а одного
+        // (family, weight, style) — это два разных face_id.
+        h.write_u16(stretch.0);
         h.finish()
     }
 
@@ -4107,11 +4119,14 @@ impl Renderer {
         let mut seen_keys: std::collections::HashSet<u64> = std::collections::HashSet::new();
         let mut scheduled: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
         for cmd in content.iter().chain(overlay.iter()) {
-            let DisplayCommand::DrawText { font_family, font_weight, font_style, .. } = cmd
+            let DisplayCommand::DrawText {
+                font_family, font_weight, font_style, font_stretch, ..
+            } = cmd
             else {
                 continue;
             };
-            let key = Self::resolve_cache_key(font_family, *font_weight, *font_style);
+            let key =
+                Self::resolve_cache_key(font_family, *font_weight, *font_style, *font_stretch);
             if self.resolve_cache.contains_key(&key) || !seen_keys.insert(key) {
                 continue;
             }
@@ -4128,9 +4143,12 @@ impl Renderer {
                 if Self::is_generic_family(&lc) {
                     continue;
                 }
-                let Some(rec) =
-                    provider.pick_face(fam, font_weight.0, Self::css_style_of(*font_style))
-                else {
+                let Some(rec) = provider.pick_face(
+                    fam,
+                    font_weight.0,
+                    Self::css_style_of(*font_style),
+                    font_stretch.as_percent(),
+                ) else {
                     continue;
                 };
                 if !self.face_id_by_path.contains_key(&rec.path)
@@ -4214,6 +4232,7 @@ impl Renderer {
         families: &[String],
         weight: FontWeight,
         style: FontStyle,
+        stretch: FontStretch,
         provider: &Arc<dyn FontProvider>,
     ) -> usize {
         for fam in families {
@@ -4221,7 +4240,12 @@ impl Renderer {
             if Self::is_generic_family(&lc) {
                 continue;
             }
-            let Some(rec) = provider.pick_face(fam, weight.0, Self::css_style_of(style)) else {
+            let Some(rec) = provider.pick_face(
+                fam,
+                weight.0,
+                Self::css_style_of(style),
+                stretch.as_percent(),
+            ) else {
                 continue;
             };
             if let Some(&id) = self.face_id_by_path.get(&rec.path) {
@@ -5674,10 +5698,16 @@ impl Renderer {
                 font_family,
                 font_weight,
                 font_style,
+                font_stretch,
                 ..
             } = cmd
             {
-                text_face_ids.push(self.resolve_face_id(font_family, *font_weight, *font_style));
+                text_face_ids.push(self.resolve_face_id(
+                    font_family,
+                    *font_weight,
+                    *font_style,
+                    *font_stretch,
+                ));
             }
         }
         let mut text_face_iter = text_face_ids.into_iter();
@@ -6236,6 +6266,9 @@ impl Renderer {
                     font_family: _,
                     font_weight: _,
                     font_style: _,
+                    // Уже учтён при резолве face_id в пре-проходе выше —
+                    // здесь берём готовый id из `text_face_iter`.
+                    font_stretch: _,
                     font_variation_axes,
                     font_features: _,
                     font_palette: _,

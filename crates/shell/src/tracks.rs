@@ -174,6 +174,7 @@ pub fn build_cue_overlay(
 
                 // Текст строки
                 commands.push(DisplayCommand::DrawText {
+                    font_stretch: lumen_layout::FontStretch::NORMAL,
                     rect: Rect::new(
                         tx,
                         ly + (line_height - font_size) * 0.5,

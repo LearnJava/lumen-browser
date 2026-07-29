@@ -286,6 +286,7 @@ pub fn build_panel(pip: &PipWindow, pal: &Palette) -> DisplayList {
         truncate(&pip.title, 40)
     };
     out.push(DisplayCommand::DrawText {
+        font_stretch: lumen_layout::FontStretch::NORMAL,
         rect: Rect::new(cx0 + 10.0, cy0 + 6.0, CARD_W - CLOSE_W - 14.0, 16.0),
         text: title,
         font_size: 12.0,
@@ -303,6 +304,7 @@ pub fn build_panel(pip: &PipWindow, pal: &Palette) -> DisplayList {
 
     // `×` close glyph.
     out.push(DisplayCommand::DrawText {
+        font_stretch: lumen_layout::FontStretch::NORMAL,
         rect: Rect::new(cx0 + CARD_W - CLOSE_W, cy0 + 5.0, CLOSE_W, 16.0),
         text: "×".to_owned(),
         font_size: 15.0,

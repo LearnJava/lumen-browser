@@ -285,6 +285,7 @@ fn default_font_dirs() -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lumen_core::NORMAL_STRETCH_PERCENT;
 
     fn assets_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -302,7 +303,7 @@ mod tests {
         assert!(idx.list_families().is_empty());
         assert!(idx.lookup_family("Inter").is_empty());
         assert!(idx.lookup_faces("Inter").is_empty());
-        assert!(idx.pick_face("Inter", 400, FontStyle::Normal).is_none());
+        assert!(idx.pick_face("Inter", 400, FontStyle::Normal, NORMAL_STRETCH_PERCENT).is_none());
     }
 
     #[test]
@@ -330,7 +331,7 @@ mod tests {
     #[test]
     fn pick_face_returns_only_face_for_inter() {
         let idx = SystemFontIndex::with_dirs(vec![assets_dir()]);
-        let face = idx.pick_face("Inter", 700, FontStyle::Italic).unwrap();
+        let face = idx.pick_face("Inter", 700, FontStyle::Italic, NORMAL_STRETCH_PERCENT).unwrap();
         // У нас нет Bold Italic, так что matcher вернёт единственный имеющийся.
         assert_eq!(face.weight, 400);
         assert_eq!(face.style, FontStyle::Normal);
@@ -343,7 +344,7 @@ mod tests {
         assert_eq!(idx.lookup_family("INTER").len(), 1);
         assert_eq!(idx.lookup_family("Inter").len(), 1);
         assert_eq!(idx.lookup_faces("inter").len(), 1);
-        assert!(idx.pick_face("INTER", 400, FontStyle::Normal).is_some());
+        assert!(idx.pick_face("INTER", 400, FontStyle::Normal, NORMAL_STRETCH_PERCENT).is_some());
     }
 
     #[test]
