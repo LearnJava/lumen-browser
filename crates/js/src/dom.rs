@@ -5827,8 +5827,21 @@ function _lumen_build_element(nid) {
             return c;
         },
         // ── ChildNode mixin (DOM LS §4.2.6) ─────────────────────────────────────
-        // Removes this element from its parent.
-        remove: function() {
+        // Removes this element from its parent — except on a <select>, where
+        // `remove(index)` is HTMLSelectElement's option remover (HTML LS §4.10.7)
+        // and only the argument-less call is `ChildNode.remove()`. The two have to
+        // be distinguished here rather than on `HTMLSelectElement.prototype`,
+        // because this own property would shadow any prototype method (BUG-383).
+        remove: function(index) {
+            if (index !== undefined
+                && (_lumen_get_tag_name(nid) || '').toUpperCase() === 'SELECT') {
+                var opts = _lumen_select_options(nid);
+                var oi = Math.trunc(Number(index));
+                if (!isFinite(oi) || oi < 0 || oi >= opts.length) return;
+                var op_parent = _lumen_u2n(_lumen_get_parent(opts[oi]));
+                if (op_parent !== null) _lumen_remove_child(op_parent, opts[oi]);
+                return;
+            }
             var pid = _lumen_u2n(_lumen_get_parent(nid));
             if (pid !== null) {
                 _lumen_remove_child(pid, nid);
@@ -14381,24 +14394,9 @@ HTMLSelectElement.prototype.add = function(element, before) {
     if (parent === null) { this.appendChild(element); return; }
     _lumen_make_element(parent).insertBefore(element, _lumen_make_element(refNid));
 };
-// HTML LS §4.10.7: `select.remove(index)`. With no argument it is
-// `ChildNode.remove()` — which is why the plain `remove` on the wrapper is not
-// enough and this override has to forward that case explicitly.
-HTMLSelectElement.prototype.remove = function(index) {
-    var n = _lumen_reflect_nid(this);
-    if (n === -1) return;
-    if (index === undefined) {
-        var p = _lumen_u2n(_lumen_get_parent(n));
-        if (p !== null) _lumen_remove_child(p, n);
-        return;
-    }
-    var opts = _lumen_select_options(n);
-    var i = Math.trunc(Number(index));
-    if (!isFinite(i) || i < 0 || i >= opts.length) return;
-    var op = opts[i];
-    var op_parent = _lumen_u2n(_lumen_get_parent(op));
-    if (op_parent !== null) _lumen_remove_child(op_parent, op);
-};
+// `select.remove(index)` (HTML LS §4.10.7) lives in the wrapper's own `remove`,
+// next to `ChildNode.remove()` — an own property shadows the prototype, so an
+// override here would never run.
 
 Object.defineProperty(HTMLOptionElement.prototype, 'selected', {
     get: function() {

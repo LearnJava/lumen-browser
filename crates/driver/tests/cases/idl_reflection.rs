@@ -293,3 +293,39 @@ fn form_submit_methods_exist_and_requestsubmit_fires_the_event() {
     );
     assert_eq!(out, "1|1", "submit() must not fire a `submit` event");
 }
+
+/// `select.remove(index)` removes an option; `select.remove()` with no argument
+/// is still `ChildNode.remove()`. The bug report singled this pair out — the
+/// element wrapper's own `remove` shadows anything put on the prototype.
+#[test]
+fn select_remove_takes_an_index() {
+    let mut s = session();
+    let out = ev(
+        &mut s,
+        "(function () {
+            var sel = document.getElementById('s');
+            sel.remove(0);
+            var afterIndexed = sel.options.length + ',' + sel.options[0].value;
+            sel.remove();
+            return afterIndexed + '|' + (document.getElementById('s') === null);
+        })()",
+    );
+    assert_eq!(out, "1,b|true");
+}
+
+/// `select.add()` inserts an option, optionally before an index or an option.
+#[test]
+fn select_add_inserts_options() {
+    let mut s = session();
+    let out = ev(
+        &mut s,
+        "(function () {
+            var sel = document.getElementById('s');
+            sel.add(new Option('C', 'c'));
+            var appended = sel.options.length + ',' + sel.options[2].value;
+            sel.add(new Option('Z', 'z'), 0);
+            return appended + '|' + sel.options[0].value + ',' + sel.options.length;
+        })()",
+    );
+    assert_eq!(out, "3,c|z,4");
+}
