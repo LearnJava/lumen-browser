@@ -1,13 +1,15 @@
 # BUG-442 — на V8 отсутствующий атрибут читается как `null`, а весь шим сравнивает с `undefined`: `hasAttribute()` всегда `true`, `<details>/<dialog>.open` всегда `true`, `input.checked` всегда `true`, Popover API работает по инвертированному состоянию
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/v8_runtime.rs:1306` — натив `_lumen_get_attr`
-возвращает `Option<String>`, и биндинги V8 отображают `None → null`; шим
-`crates/js/src/dom.rs` в 15 местах проверяет наличие атрибута выражением
-`_lumen_get_attr(...) !== undefined`, написанным под rquickjs, где `None →
-undefined` — это расхождение прямо задокументировано в шапке `WEB_API_SHIM`,
-`dom.rs:3295`)
+**Статус:** FIXED 2026-07-29
+**Компонент:** js (`crates/js/src/v8_compat.rs::IntoJsReturn for Option<T>`,
+`v8_runtime.rs::to_v8` — было `crates/js/src/v8_runtime.rs:1306`, натив
+`_lumen_get_attr` возвращает `Option<String>`, и биндинги V8 отображали
+`None → null`; шим `crates/js/src/dom.rs` в 15 местах проверяет наличие
+атрибута выражением `_lumen_get_attr(...) !== undefined`, написанным под
+rquickjs, где `None → undefined` — это расхождение было прямо
+задокументировано в шапке `WEB_API_SHIM`, `dom.rs:3295`)
 **Найден:** P1, BUG-381 (2026-07-29), юнит-проба на `V8JsRuntime::install_dom`
+**Исправлен:** P1, S12b-24-events-cache 2026-07-29
 
 ## Симптом
 
@@ -84,3 +86,28 @@ rquickjs. Тогда оба стиля чтения снова сойдутся,
 * [BUG-381](BUG-381-FIXED.md) — при реализации focus-API проба и вскрыла
   расхождение; `_lumen_is_focusable` и `_lumen_find_autofocus_in` уже переведены
   на `_lumen_has_attr`.
+* [BUG-447](BUG-447-FIXED.md) — тот же класс слепоты (регрессия видна только на
+  V8, а покрывающие тесты жили в QuickJS-монолите).
+
+## Fix (2026-07-29, S12b-24-events-cache)
+
+Chosen the wider option flagged in "Как чинить" step 1 — the boundary fix
+(all natives, not just `_lumen_get_attr`), after grepping the shim for direct
+`native(...) === null`/`!== null` comparisons first as that step demanded: only
+one hit outside `dom::tests`, itself defensive (`!== null && !== undefined`),
+and every `Option<T>`-returning native in the shim (`_lumen_get_parent`,
+`_lumen_get_element_by_id`, `_lumen_query_selector`, `_lumen_ls_get`/`_lumen_ss_get`,
+`_lumen_get_shadow_root`, …) is already read through `_lumen_u2n`, which
+normalizes both `undefined` and `null` to `null` — so it was safe to change the
+conversion boundary for every native, not just this one.
+
+`IntoJsReturn for Option<T>` (`v8_compat.rs`) now maps `None` to
+`JsValue::Undefined` instead of `JsValue::Null`; `jsvalue_to_v8`
+(`v8_compat.rs`) and `to_v8` (`v8_runtime.rs`) now map `JsValue::Null` and
+`JsValue::Undefined` to V8's `null`/`undefined` respectively instead of both
+collapsing to `null`. Verified with a targeted probe:
+`document.getElementById('main').hasAttribute('data-nope')` under
+`V8JsRuntime` now correctly returns `false`. Full `cargo test -p lumen-js
+--features v8-backend` (2569 tests) passes with no regressions — the shim's
+pervasive `_lumen_u2n` usage absorbed the semantic change everywhere except
+the 15 originally-buggy bare `!== undefined` sites, which are now correct too.

@@ -57,8 +57,8 @@
 {
  "generated": "2026-07-29",
  "counts": {
-  "open": 127,
-  "fixed": 290,
+  "open": 125,
+  "fixed": 292,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -854,7 +854,7 @@
          "title": "V8 S12b-24: dom.rs тест-монолит — скоупинг сделан, портирование по слайсам",
          "status": "done",
          "size": "XL",
-         "note": "Крупнейший непортированный кусок: `dom.rs::mod tests` (строки 15982-31167, **1113** `#[test]` fn — числа из аудита 2026-07-14 устарели, файл вырос) — единственная regression-suite для DOM-поведения (события, формы, storage, IndexedDB, fetch/XHR, cache, websockets, history, scroll), эквивалента на V8 нет. Скоупинг сделан (ветка p1-v8-s12b-24, 2026-07-29, код не менялся): ~30 под-областей с диапазонами строк/числом тестов, 5 кластеров на mock-провайдерах (Cache/WS/SSE/IDB/Fetch), кластерный тест `event_target_dependent_apis_installed` (:29308, пришпиливает webxr/serial/hid/usb/bluetooth/navigation — разбить на 5-6 тестов при портировании), `_lumen_drain_microtasks` (:3024, QuickJS-only, 85 вызовов, гуще всего в SubtleCrypto/WHATWG Streams/MessagePort/Compression-Stream) — полный разбор в `docs/tasks/ph3-v8-migration.md` Findings log «S12b-24 — scoping only». Портировать по под-областям отдельными слайсами `S12b-24-<slug>` (не один сеанс), синхронно со сносом соответствующего rquickjs-кода — не удалять просто так, иначе теряется единственное покрытие; каждый слайс заводит свою строку ROADMAP при старте, не пре-файлить все заранее. ПРОГРЕСС: первый слайс закрыт (P3-v8-s12b-24-core, 99 тестов), остаётся ~1014",
+         "note": "Крупнейший непортированный кусок: `dom.rs::mod tests` (строки 15982-31167, **1113** `#[test]` fn — числа из аудита 2026-07-14 устарели, файл вырос) — единственная regression-suite для DOM-поведения (события, формы, storage, IndexedDB, fetch/XHR, cache, websockets, history, scroll), эквивалента на V8 нет. Скоупинг сделан (ветка p1-v8-s12b-24, 2026-07-29, код не менялся): ~30 под-областей с диапазонами строк/числом тестов, 5 кластеров на mock-провайдерах (Cache/WS/SSE/IDB/Fetch), кластерный тест `event_target_dependent_apis_installed` (:29308, пришпиливает webxr/serial/hid/usb/bluetooth/navigation — разбить на 5-6 тестов при портировании), `_lumen_drain_microtasks` (:3024, QuickJS-only, 85 вызовов, гуще всего в SubtleCrypto/WHATWG Streams/MessagePort/Compression-Stream) — полный разбор в `docs/tasks/ph3-v8-migration.md` Findings log «S12b-24 — scoping only». Портировать по под-областям отдельными слайсами `S12b-24-<slug>` (не один сеанс), синхронно со сносом соответствующего rquickjs-кода — не удалять просто так, иначе теряется единственное покрытие; каждый слайс заводит свою строку ROADMAP при старте, не пре-файлить все заранее. ПРОГРЕСС: два слайса закрыты (P3-v8-s12b-24-core 99 тестов, P3-v8-s12b-24-events-cache 72 теста), остаётся ~942",
          "tasks": [
           {
            "id": "P3-v8-s12b-24-core",
@@ -864,6 +864,17 @@
            "note": "ЗАКРЫТ 2026-07-29 (ветка p1-v8-s12b-24-core): первая под-область брифа («Core DOM basics», строки 16043-17530 нумерации на момент скоупинга) — **99** тестов перенесены из QuickJS-монолита `dom.rs::mod tests` во вложенный `mod v8_core` под `#[cfg(feature = \"v8-backend\")]`, QuickJS-копии удалены. Семейства: console/SVG/идентичность обёрток/`self`&`window`, Canvas 2D, getElementById/querySelector/атрибуты/textContent/`Image`, alert/print, таймеры + `scheduler.postTask`, History API. Порт механический (тела — `rt.eval` плюс `update_layout_rects`/`flush_canvas_updates`/`take_*`, которые `V8JsRuntime` зеркалит), добавлены двойники `v8_runtime_with_dom`/`v8_runtime_with_url`. Два расхождения: (1) [BUG-447](bugs/BUG-447-FIXED.md) — `register_img_bitmaps` отсутствовал и в `V8JsRuntime`, и в `impl PersistentJs for V8PersistentJs`, поэтому `drawImage(imgElement, …)` на дефолтном движке молча не рисовал; (2) тест `canvas_get_context_webgl_via_2d_shim_is_null` фиксировал дефект порядка установки на QuickJS-пути (WEBGL_SHIM выполнялся до появления `document`, перехват `createElement` пропускался, WebGL там был мёртв) — переписан под корректное V8-поведение как `canvas_get_context_webgl_returns_functional_context`. Тестовый факт для следующих слайсов: 98 из 99 тестов прошли на V8 без единой правки тела",
            "bugs": [
             "BUG-447"
+           ]
+          },
+          {
+           "id": "P3-v8-s12b-24-events-cache",
+           "title": "V8 S12b-24-events-cache: classList/события/Cache Storage/SW → V8 (72 теста) + BUG-442/BUG-342",
+           "status": "done",
+           "size": "M",
+           "note": "ЗАКРЫТ 2026-07-29 (ветка p1-v8-s12b-24-events-cache): четыре смежные под-области брифа — classList/CSSStyleDeclaration, диспетчеризация событий + Event/CustomEvent ctors, Service Worker + Cache Storage, Cache API SQLite backend — **72** теста перенесены во вложенный `mod v8_events_cache`, QuickJS-копии удалены. Механика та же, что в `v8_core` (не потребовалось ничего нового). Побочным эффектом закрыты два ранее диагностированных, но не исправленных бага, вскрытых первым же V8-прогоном этих тестов: [BUG-442](bugs/BUG-442-FIXED.md) (`Option::None` мапился в `JsValue::Null` вместо `Undefined` на границе V8-биндингов — `hasAttribute()`/`<details>.open`/`input.checked`/Popover API были сломаны на дефолтном движке; фикс — граница конвертации для всех нативов, безопасно благодаря повсеместному `_lumen_u2n` в шиме) и [BUG-342](bugs/BUG-342-FIXED.md) (`v8_to_jsvalue` схлопывал Array/Object-аргументы в `Null` — нативы с `Vec<u8>`-параметром получали пустые данные; фикс — рекурсивный разбор, зеркалящий уже корректный `from_v8`). Оба подтверждены точечными пробами. `cargo test -p lumen-js --features v8-backend` — 2569/2569",
+           "bugs": [
+            "BUG-442",
+            "BUG-342"
            ]
           }
          ]
@@ -6443,10 +6454,10 @@
    "debtor": false
   },
   "BUG-342": {
-   "status": "open",
-   "title": "**V8-only, широкий охват.** `native_fn_trampoline` конвертирует аргументы нативных функций через `v8_to_jsvalue`, которая для Array/Object всегда возвращает `Js…",
-   "component": "js (`crates/js/src/v8_compat.rs::v8_to_jsvalue`, `native_fn_trampoline`)",
-   "date": null,
+   "status": "fixed",
+   "title": "**V8-only, широкий охват.** `native_fn_trampoline` конвертировал аргументы нативных функций через `v8_to_jsvalue`, которая для Array/Object всегда возвращала `J…",
+   "component": "js (`crates/js/src/v8_compat.rs::v8_to_jsvalue`)",
+   "date": "2026-07-29",
    "debtor": false
   },
   "BUG-343": {
@@ -7136,10 +7147,10 @@
    "debtor": false
   },
   "BUG-442": {
-   "status": "open",
-   "title": "**На дефолтном движке отсутствующий атрибут читается как `null`, а шим сравнивает с `undefined`** — проверка «атрибут присутствует» истинна всегда. Проба на `V8…",
-   "component": "js (`crates/js/src/v8_runtime.rs:1306` — натив `_lumen_get_attr` отдаёт `Option<String>`, и биндинги V8 отображают `None → null`; шим `crates/js/src/dom.rs` в 15 местах проверяет наличие атрибута как `_lumen_get_attr(...) !== undefined`)",
-   "date": null,
+   "status": "fixed",
+   "title": "**На дефолтном движке отсутствующий атрибут читался как `null`, а шим сравнивал с `undefined`** — проверка «атрибут присутствует» была истинна всегда. Проба на…",
+   "component": "js (`crates/js/src/v8_compat.rs::IntoJsReturn for Option<T>`, `v8_runtime.rs::to_v8`)",
+   "date": "2026-07-29",
    "debtor": false
   },
   "BUG-443": {
@@ -7319,9 +7330,6 @@
   ],
   "js (`crates/js/src/surface_api.rs` рядом с `navigator.doNotTrack`, строки 116-121) + network (`crates/network/src/http/headers.rs::build_request_headers`)": [
    "BUG-397"
-  ],
-  "js (`crates/js/src/v8_runtime.rs:1306` — натив `_lumen_get_attr` отдаёт `Option<String>`, и биндинги V8 отображают `None → null`; шим `crates/js/src/dom.rs` в 15 местах проверяет наличие атрибута как `_lumen_get_attr(...) !== undefined`)": [
-   "BUG-442"
   ],
   "js (`dom.rs` `WEB_API_SHIM`)": [
    "BUG-309"
