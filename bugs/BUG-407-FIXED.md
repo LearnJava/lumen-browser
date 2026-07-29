@@ -1,6 +1,6 @@
 # BUG-407 — Canvas 2D: NaN-координата пути роняет весь процесс (`Option::unwrap()` в скан-лайн заливке)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-07-29 (попутно, отдельным изменением — см. ниже)
 **Компонент:** paint (`crates/engine/canvas/src/rasterize.rs::fill_path`) — сортировка
 пересечений скан-лайна с рёбрами пути
 **Найден:** 2026-07-28 (P2), проба категории `WPT-VENDOR-html`
@@ -72,3 +72,39 @@ target/dev-release/lumen.exe tests/wpt/html/canvas/element/path-objects/2d.path.
 Найден при вендоринге и пробе `WPT-VENDOR-html` (`docs/wpt-status.md`); тот же класс, что
 предыдущие находки `partial_cmp`/`unwrap` в геометрии — искать похожие точки грепом
 `\.unwrap\(\)` рядом с `partial_cmp`/`sort` в `crates/engine/canvas/` и `crates/engine/paint/`.
+
+## Проверка 2026-07-29 (P2, срез WPT-VENDOR-html-canvas): краш больше не воспроизводится
+
+Падения нет ни на исходном тесте, ни на минимальной странице:
+
+```
+lumen.exe --screenshot .tmp/nf.png tests/wpt/html/canvas/element/path-objects/2d.path.quadraticCurveTo.nonfinite.html
+# exit=0, ни одной строки panic в логе, PNG записан
+```
+
+Использован режим `--screenshot`, а не `--dump-layout`: он реально растеризует
+холст на CPU (после починки BUG-428), то есть доходит до `fill_path` — той самой
+функции, где стояла паника. `--dump-layout` до растеризации не доходит и краш бы
+не воспроизвёл в любом случае.
+
+Причина исчезновения — пункт 2 плана починки выполнен попутно, чужим изменением:
+растеризатор переписан под антиалиасинг (BUG-099, коммиты `b8588f321` +
+`8c2b37f72`), и обе сортировки теперь устойчивы к `NaN`:
+
+```rust
+// crates/engine/canvas/src/rasterize.rs:409,419
+self.crossings.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(core::cmp::Ordering::Equal));
+self.spans.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(core::cmp::Ordering::Equal));
+```
+
+плюс появились явные проверки конечности (`rasterize.rs:60`, `:189`, `:370`).
+DoS со страницы закрыт.
+
+**Пункт 1 плана (валидация `is_finite()` в JS-биндинге `CanvasPath` до добавления
+сегмента) не сделан** — движок больше не падает, но спека требует, чтобы такой
+вызов был тихим no-op, а не «как получится» внутри растеризатора. Соответствие
+проверяется серией `element/path-objects/2d.path.*.nonfinite.html` и
+`drawing-rectangles-to-the-canvas/2d.*Rect.nonfinite.html` того же прогона; их
+исход — в отчёте среза (строка `WPT-VENDOR-html-canvas` в ROADMAP.md). Если они
+красные, заводить отдельный баг на валидацию аргументов, а не переоткрывать этот:
+класс отказа другой (неверная картинка вместо abort процесса).
