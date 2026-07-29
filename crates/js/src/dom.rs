@@ -115,6 +115,21 @@ pub enum NavigateRequest {
     Replace(String),
     /// Reload the current page.
     Reload,
+    /// Run the form-submission algorithm for a `<form>` the page submitted from
+    /// script (`form.submit()` / `form.requestSubmit()`, BUG-383).
+    ///
+    /// Encoding, enctype and the navigation itself live in the shell, so the JS
+    /// side only names the nodes: `form` is the `<form>`'s node index and
+    /// `submitter` the activated control's, or `-1` when there is none.
+    /// Travels on the same single-slot channel as the other navigations because
+    /// a form submission *is* one — a second request in the same JS pump
+    /// supersedes the first, exactly as two `location.href =` do.
+    SubmitForm {
+        /// Node index of the `<form>` element.
+        form: u32,
+        /// Node index of the submitter control, or `-1` for none.
+        submitter: i32,
+    },
 }
 
 // ─── history URL update ───────────────────────────────────────────────────────
@@ -1496,6 +1511,14 @@ fn install_primitives(
         let nav = Arc::clone(&nav_out);
         reg!("_lumen_reload", move || {
             *nav.lock().unwrap() = Some(NavigateRequest::Reload);
+        });
+
+        // BUG-383: `form.submit()` / `form.requestSubmit()`. The shell owns
+        // encoding and the navigation, so the page only hands over the node
+        // ids; `submitter` is -1 when the form was submitted with no control.
+        let nav = Arc::clone(&nav_out);
+        reg!("_lumen_request_form_submit", move |form: u32, submitter: i32| {
+            *nav.lock().unwrap() = Some(NavigateRequest::SubmitForm { form, submitter });
         });
     }
 
@@ -5464,8 +5487,19 @@ function _lumen_html_collection_own_names(ids) {
 // append/remove without being rebuilt. Consumers may index it (`coll[0]`),
 // call `.item(i)`/`.namedItem(name)` or read `.length`.
 function _lumen_make_html_collection(owner_nid) {
-    var proto = Object.create(HTMLCollection.prototype);
-    function ids() { return _lumen_element_child_nids(owner_nid); }
+    return _lumen_make_nid_collection(
+        function() { return _lumen_element_child_nids(owner_nid); },
+        HTMLCollection.prototype);
+}
+
+// The Proxy machinery behind every collection Lumen hands out: `idsFn` returns
+// the current member node ids, `protoObj` decides which interface the result
+// claims to implement. Split out of `_lumen_make_html_collection` so
+// `HTMLFormControlsCollection` (BUG-383) shares it instead of re-implementing
+// indexed and named access.
+function _lumen_make_nid_collection(idsFn, protoObj) {
+    var proto = Object.create(protoObj);
+    function ids() { return idsFn(); }
     return new Proxy(proto, {
         get: function(target, prop) {
             if (prop === 'length') return ids().length;
@@ -6115,13 +6149,13 @@ function _lumen_build_element(nid) {
                 var d = _lumen_canvas_dims(nid); _lumen_canvas2d_resize(nid, d[0], d[1]);
             }
         },
-        // Reflected `src` URL attribute — shared by <img>/<script>/<iframe>/<source>/…
-        // (HTML LS: each element's `src` IDL attribute reflects the content attribute).
-        // Returns the raw attribute string (same simplification as `getAttribute`; full
-        // URL resolution to an absolute URL is deferred). Empty string when unset, per
-        // the reflect-a-URL steps. Enables `new Image().src = …` to reach layout (BUG-305).
-        get src()  { var v = _lumen_u2n(_lumen_get_attr(nid, 'src')); return v !== null ? v : ''; },
-        set src(v) { _lumen_set_attr(nid, 'src', String(v)); },
+        // `src` used to live here as an own property on EVERY element (BUG-305).
+        // It is now one row of the reflection table (BUG-383) installed on the
+        // interfaces that actually have the attribute — `<img>`/`<script>`/
+        // `<iframe>`/`<source>`/`<track>`/`<video>`/`<input type=image>` — so
+        // `document.createElement('div').src` is `undefined` again, as it is in
+        // every browser. `<audio>` keeps its own `src` accessor (`audio_element.rs`),
+        // which shadows the prototype one and drives the media loader.
         get offsetWidth()  { var r = _lumen_get_bounding_rect(nid); return r ? r[2] : 0; },
         get offsetHeight() { var r = _lumen_get_bounding_rect(nid); return r ? r[3] : 0; },
         get offsetLeft()   { var r = _lumen_get_bounding_rect(nid); return r ? r[0] : 0; },
@@ -6185,19 +6219,48 @@ function _lumen_build_element(nid) {
             else { _lumen_remove_attr(nid, 'autofocus'); }
         },
         // ── HTMLInputElement / HTMLTextAreaElement / HTMLSelectElement properties ──
-        // Reflected HTML attributes (HTML LS §4.10.x).
-        get type()  { var v = _lumen_u2n(_lumen_get_attr(nid, 'type')); return v !== null ? v.toLowerCase() : 'text'; },
-        get name()  { var v = _lumen_u2n(_lumen_get_attr(nid, 'name')); return v !== null ? v : ''; },
-        set name(v) { _lumen_set_attr(nid, 'name', String(v)); },
-        // Current value — stored in _input_values map so it survives re-calls to _lumen_make_element.
+        // `type` and `name` used to be own properties here, reflected for every
+        // element alike; they are now table rows per interface (BUG-383), which
+        // is what gives `<button>` its `submit` default and `<textarea>`/`<select>`
+        // their fixed `type` strings.
+        //
+        // `value` and `checked`, by contrast, are NOT plain reflection: they are
+        // the *current* value/checkedness, which the content attribute only seeds
+        // (HTML LS §4.10.5.4 «dirty value flag»). They stay here, keyed by nid in
+        // `_input_values` so they survive wrapper re-creation. The content
+        // attribute behind each one is reachable as `defaultValue`/`defaultChecked`
+        // from the reflection table.
         get value() {
             if (_input_values[nid] !== undefined) return _input_values[nid];
+            var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
+            // HTML LS §4.10.10: an <option> with no `value` attribute takes its
+            // value from its text; §4.10.7: a <select>'s value is that of its
+            // first selected option. Both are needed for `select.value` and
+            // `select.options[i].value` to agree.
+            if (tag === 'OPTION') {
+                var ov = _lumen_u2n(_lumen_get_attr(nid, 'value'));
+                if (ov !== null) return String(ov);
+                return _lumen_option_text(nid);
+            }
+            if (tag === 'SELECT') {
+                var _si = _lumen_select_selected_index(nid);
+                if (_si === -1) return '';
+                return _lumen_make_element(_lumen_select_options(nid)[_si]).value;
+            }
+            if (tag === 'TEXTAREA') return _lumen_get_text_content(nid);
             var av = _lumen_u2n(_lumen_get_attr(nid, 'value'));
             return av !== null ? av : '';
         },
-        set value(v) { _input_values[nid] = String(v); },
-        get checked() { return _lumen_get_attr(nid, 'checked') !== undefined; },
+        set value(v) {
+            var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
+            if (tag === 'SELECT') { _lumen_select_set_value(nid, String(v)); return; }
+            _input_values[nid] = String(v);
+        },
+        // BUG-442: presence must go through `_lumen_has_attr` — on the default (V8)
+        // engine a missing attribute comes back as `null`, not `undefined`.
+        get checked() { return _lumen_has_attr(nid, 'checked'); },
         set checked(v) {
+            _lumen_capture_default_checked(nid);
             if (v) _lumen_set_attr(nid, 'checked', '');
             else _lumen_remove_attr(nid, 'checked');
         },
@@ -6269,25 +6332,10 @@ function _lumen_build_element(nid) {
             // Fire a click event; shell / test code can listen to open a native picker.
             this.dispatchEvent(new Event('click', { bubbles: true, cancelable: true }));
         },
-        // HTMLFormElement.elements — live collection of associated form controls.
-        // Phase 0: selector engine handles only single-tag selectors, so query
-        // each tag separately and merge (avoids comma-selector limitation).
-        get elements() {
-            var self = this;
-            var tags = ['input', 'select', 'textarea', 'button'];
-            var out = [];
-            for (var _ti = 0; _ti < tags.length; _ti++) {
-                var found = self.querySelectorAll(tags[_ti]);
-                for (var _fi = 0; _fi < found.length; _fi++) out.push(found[_fi]);
-            }
-            return out;
-        },
-        // Reflects the novalidate content attribute (disables constraint validation on submit).
-        get noValidate() { return this.hasAttribute('novalidate'); },
-        set noValidate(v) {
-            if (v) this.setAttribute('novalidate', '');
-            else this.removeAttribute('novalidate');
-        },
+        // `elements` (was a plain `Array` on every element) and `noValidate` moved
+        // to `HTMLFormElement.prototype`/`HTMLFieldSetElement.prototype` — the
+        // former is now a real `HTMLFormControlsCollection`, the latter a row of
+        // the reflection table (BUG-383).
         // DOM LS §4.2.4: insertBefore(newNode, refNode) — inserts before refNode (or appends if null).
         insertBefore: function(newNode, refNode) {
             if (!newNode || newNode.__nid__ === undefined) return newNode;
@@ -13413,6 +13461,1377 @@ HTMLElement.prototype.blur = function() {
 window.focus = function() {};
 window.blur  = function() {};
 
+// ── Declarative IDL attribute reflection (HTML LS §2.6.1, BUG-383) ───────────
+// Until this block the live-element factory hand-listed the few reflected
+// attributes some earlier fix happened to need (`value`, `name`, `type`,
+// `checked`, `src`) — so `a.href`, `input.disabled`, `textarea.rows` and forty
+// more were plain `undefined`, and every new one meant editing the factory
+// again. Reflection is a mechanical mapping «IDL name ↔ content attribute ↔
+// type», so it is written here once as a table and installed through one
+// generic accessor pair per kind, onto the *interface prototypes* rather than
+// onto every instance: adding an attribute is now a single table row, and the
+// properties cost nothing per element (which is also why they no longer show up
+// in `Object.getOwnPropertyNames(el)` — BUG-367's complaint).
+//
+// Kinds, per HTML LS §2.6.1 «reflecting content attributes in IDL attributes»:
+//   string — DOMString; absent → ''
+//   bool   — boolean; presence of the attribute
+//   long   — long; absent or unparseable → `extra` (the default)
+//   ulong  — unsigned long; absent, negative or unparseable → `extra`
+//   url    — DOMString reflecting a URL; the getter returns the value resolved
+//            against the document base URL, the setter stores it verbatim
+//   enum   — limited to known values; `extra` = { def: <default>, keys: [...] }.
+//            The spec distinguishes a missing-value default from an
+//            invalid-value default; the two coincide for every attribute in the
+//            table below, so one `def` covers both.
+
+// HTML LS §4.2.3 «document base URL»: the `href` of the first <base> element
+// resolved against the document URL, falling back to the document URL itself.
+// Deliberately internal — exposing it to script as `Node.baseURI` is BUG-377.
+function _lumen_document_base_url() {
+    var docUrl = '';
+    try {
+        if (typeof location !== 'undefined' && location.href) docUrl = String(location.href);
+    } catch (e) {}
+    var baseEl = null;
+    try { baseEl = document.querySelector('base'); } catch (e) {}
+    if (baseEl) {
+        var h = baseEl.getAttribute('href');
+        if (h !== null && h !== undefined && String(h) !== '') {
+            return _url_resolve(String(h), docUrl);
+        }
+    }
+    return docUrl;
+}
+
+// «Reflect a URL» steps: an absent or empty attribute reflects as '' (NOT as the
+// document URL), anything else is resolved against the document base URL.
+function _lumen_reflect_url(nid, attr) {
+    var v = _lumen_u2n(_lumen_get_attr(nid, attr));
+    if (v === null || String(v) === '') return '';
+    return _url_resolve(String(v), _lumen_document_base_url());
+}
+
+// The node id behind a reflection receiver, or -1 when the accessor was called
+// on something that is not a live element (`HTMLInputElement.prototype.disabled`
+// read directly off the prototype, a detached literal, …).
+function _lumen_reflect_nid(self) {
+    var n = (self === null || self === undefined) ? undefined : self.__nid__;
+    return (n === null || n === undefined) ? -1 : n;
+}
+
+function _lumen_define_reflection(proto, entry) {
+    var idl = entry[0], attr = entry[1], kind = entry[2], extra = entry[3];
+    var get, set;
+    if (kind === 'bool') {
+        get = function() {
+            var n = _lumen_reflect_nid(this);
+            return n === -1 ? false : _lumen_has_attr(n, attr);
+        };
+        set = function(v) {
+            var n = _lumen_reflect_nid(this);
+            if (n === -1) return;
+            if (v) _lumen_set_attr(n, attr, ''); else _lumen_remove_attr(n, attr);
+        };
+    } else if (kind === 'long' || kind === 'ulong') {
+        get = function() {
+            var n = _lumen_reflect_nid(this);
+            if (n === -1) return extra;
+            var p = _lumen_parse_integer(_lumen_u2n(_lumen_get_attr(n, attr)));
+            if (p === null) return extra;
+            if (kind === 'ulong' && p < 0) return extra;
+            return p;
+        };
+        set = function(v) {
+            var n = _lumen_reflect_nid(this);
+            if (n === -1) return;
+            var p = Number(v);
+            p = isFinite(p) ? Math.trunc(p) : 0;
+            if (kind === 'ulong' && p < 0) p = extra;
+            _lumen_set_attr(n, attr, String(p));
+        };
+    } else if (kind === 'url') {
+        get = function() {
+            var n = _lumen_reflect_nid(this);
+            return n === -1 ? '' : _lumen_reflect_url(n, attr);
+        };
+        set = function(v) {
+            var n = _lumen_reflect_nid(this);
+            if (n !== -1) _lumen_set_attr(n, attr, String(v));
+        };
+    } else if (kind === 'enum') {
+        get = function() {
+            var n = _lumen_reflect_nid(this);
+            if (n === -1) return extra.def;
+            var v = _lumen_u2n(_lumen_get_attr(n, attr));
+            if (v === null) return extra.def;
+            v = String(v).toLowerCase();
+            for (var i = 0; i < extra.keys.length; i++) if (extra.keys[i] === v) return v;
+            return extra.def;
+        };
+        set = function(v) {
+            var n = _lumen_reflect_nid(this);
+            if (n !== -1) _lumen_set_attr(n, attr, String(v));
+        };
+    } else {
+        get = function() {
+            var n = _lumen_reflect_nid(this);
+            if (n === -1) return '';
+            var v = _lumen_u2n(_lumen_get_attr(n, attr));
+            return v !== null ? String(v) : '';
+        };
+        set = function(v) {
+            var n = _lumen_reflect_nid(this);
+            if (n !== -1) _lumen_set_attr(n, attr, String(v));
+        };
+    }
+    Object.defineProperty(proto, idl, { get: get, set: set, enumerable: true, configurable: true });
+}
+
+function _lumen_install_reflection(proto, entries) {
+    if (!proto) return;
+    for (var i = 0; i < entries.length; i++) _lumen_define_reflection(proto, entries[i]);
+}
+
+// Interfaces the tag→prototype table (BUG-322) did not carry yet. Without them
+// `<area>`/`<optgroup>`/`<fieldset>`/… would fall back to `HTMLElement.prototype`
+// and their reflected attributes would land on every element instead. Same shape
+// as the generated block next to `HTMLElement` further up.
+['HTMLAreaElement','HTMLOptGroupElement','HTMLFieldSetElement','HTMLLegendElement',
+ 'HTMLSourceElement','HTMLTrackElement','HTMLTimeElement','HTMLBaseElement',
+ 'HTMLOutputElement','HTMLDetailsElement','HTMLEmbedElement','HTMLObjectElement',
+ 'HTMLSlotElement','HTMLDataElement','HTMLQuoteElement','HTMLModElement',
+ 'HTMLProgressElement','HTMLMeterElement','HTMLMapElement','HTMLPictureElement',
+ 'HTMLTableColElement','HTMLTableCaptionElement','HTMLDListElement','HTMLMenuElement'
+].forEach(function(_name) {
+    if (_name in globalThis) return;
+    var _ctor = function() { throw new TypeError('Illegal constructor'); };
+    Object.defineProperty(_ctor, 'name', { value: _name, configurable: true });
+    _ctor.prototype = Object.create(HTMLElement.prototype);
+    _ctor.prototype.constructor = _ctor;
+    globalThis[_name] = _ctor;
+});
+_lumen_html_tag_prototypes['AREA']      = HTMLAreaElement;
+_lumen_html_tag_prototypes['OPTGROUP']  = HTMLOptGroupElement;
+_lumen_html_tag_prototypes['FIELDSET']  = HTMLFieldSetElement;
+_lumen_html_tag_prototypes['LEGEND']    = HTMLLegendElement;
+_lumen_html_tag_prototypes['SOURCE']    = HTMLSourceElement;
+_lumen_html_tag_prototypes['TRACK']     = HTMLTrackElement;
+_lumen_html_tag_prototypes['TIME']      = HTMLTimeElement;
+_lumen_html_tag_prototypes['BASE']      = HTMLBaseElement;
+_lumen_html_tag_prototypes['OUTPUT']    = HTMLOutputElement;
+_lumen_html_tag_prototypes['DETAILS']   = HTMLDetailsElement;
+_lumen_html_tag_prototypes['EMBED']     = HTMLEmbedElement;
+_lumen_html_tag_prototypes['OBJECT']    = HTMLObjectElement;
+_lumen_html_tag_prototypes['SLOT']      = HTMLSlotElement;
+_lumen_html_tag_prototypes['DATA']      = HTMLDataElement;
+_lumen_html_tag_prototypes['Q']          = HTMLQuoteElement;
+_lumen_html_tag_prototypes['BLOCKQUOTE'] = HTMLQuoteElement;
+_lumen_html_tag_prototypes['INS']       = HTMLModElement;
+_lumen_html_tag_prototypes['DEL']       = HTMLModElement;
+_lumen_html_tag_prototypes['PROGRESS']  = HTMLProgressElement;
+_lumen_html_tag_prototypes['METER']     = HTMLMeterElement;
+_lumen_html_tag_prototypes['MAP']       = HTMLMapElement;
+_lumen_html_tag_prototypes['PICTURE']   = HTMLPictureElement;
+_lumen_html_tag_prototypes['COL']       = HTMLTableColElement;
+_lumen_html_tag_prototypes['COLGROUP']  = HTMLTableColElement;
+_lumen_html_tag_prototypes['CAPTION']   = HTMLTableCaptionElement;
+_lumen_html_tag_prototypes['DL']        = HTMLDListElement;
+_lumen_html_tag_prototypes['MENU']      = HTMLMenuElement;
+
+// `referrerpolicy` shares one keyword set across <a>/<area>/<img>/<iframe>/…
+var _LUMEN_REFERRER_POLICY = { def: '', keys: [
+    'no-referrer', 'no-referrer-when-downgrade', 'same-origin', 'origin',
+    'strict-origin', 'origin-when-cross-origin', 'strict-origin-when-cross-origin',
+    'unsafe-url'] };
+
+// Global attributes (HTML LS §3.2.6) — every HTML element has them.
+// `id`, `className`, `slot` and `draggable` stay own properties on the wrapper
+// (they predate this table and carry extra behaviour), so they are not repeated.
+_lumen_install_reflection(HTMLElement.prototype, [
+    ['title',          'title',          'string'],
+    ['lang',           'lang',           'string'],
+    ['dir',            'dir',            'enum',   { def: '', keys: ['ltr', 'rtl', 'auto'] }],
+    ['hidden',         'hidden',         'bool'],
+    ['inert',          'inert',          'bool'],
+    ['accessKey',      'accesskey',      'string'],
+    ['autocapitalize', 'autocapitalize', 'string'],
+    ['enterKeyHint',   'enterkeyhint',   'string'],
+    ['inputMode',      'inputmode',      'string'],
+    ['nonce',          'nonce',          'string'],
+]);
+
+_lumen_install_reflection(HTMLAnchorElement.prototype, [
+    ['href',           'href',           'url'],
+    ['target',         'target',         'string'],
+    ['download',       'download',       'string'],
+    ['rel',            'rel',            'string'],
+    ['hreflang',       'hreflang',       'string'],
+    ['type',           'type',           'string'],
+    ['ping',           'ping',           'string'],
+    ['referrerPolicy', 'referrerpolicy', 'enum',   _LUMEN_REFERRER_POLICY],
+]);
+
+_lumen_install_reflection(HTMLAreaElement.prototype, [
+    ['href',           'href',           'url'],
+    ['alt',            'alt',            'string'],
+    ['coords',         'coords',         'string'],
+    ['shape',          'shape',          'string'],
+    ['target',         'target',         'string'],
+    ['download',       'download',       'string'],
+    ['rel',            'rel',            'string'],
+    ['ping',           'ping',           'string'],
+    ['referrerPolicy', 'referrerpolicy', 'enum',   _LUMEN_REFERRER_POLICY],
+]);
+
+_lumen_install_reflection(HTMLInputElement.prototype, [
+    ['type',           'type',           'enum',   { def: 'text', keys: [
+        'button', 'checkbox', 'color', 'date', 'datetime-local', 'email', 'file',
+        'hidden', 'image', 'month', 'number', 'password', 'radio', 'range',
+        'reset', 'search', 'submit', 'tel', 'text', 'time', 'url', 'week'] }],
+    ['name',           'name',           'string'],
+    ['disabled',       'disabled',       'bool'],
+    ['readOnly',       'readonly',       'bool'],
+    ['required',       'required',       'bool'],
+    ['multiple',       'multiple',       'bool'],
+    ['placeholder',    'placeholder',    'string'],
+    ['pattern',        'pattern',        'string'],
+    ['accept',         'accept',         'string'],
+    ['alt',            'alt',            'string'],
+    ['autocomplete',   'autocomplete',   'string'],
+    ['capture',        'capture',        'string'],
+    ['min',            'min',            'string'],
+    ['max',            'max',            'string'],
+    ['step',           'step',           'string'],
+    ['src',            'src',            'url'],
+    ['dirName',        'dirname',        'string'],
+    ['maxLength',      'maxlength',      'long',   -1],
+    ['minLength',      'minlength',      'long',   -1],
+    ['size',           'size',           'ulong',  20],
+    ['defaultValue',   'value',          'string'],
+    ['formAction',     'formaction',     'url'],
+    ['formEnctype',    'formenctype',    'string'],
+    ['formMethod',     'formmethod',     'enum',   { def: '', keys: ['get', 'post', 'dialog'] }],
+    ['formTarget',     'formtarget',     'string'],
+    ['formNoValidate', 'formnovalidate', 'bool'],
+]);
+
+_lumen_install_reflection(HTMLTextAreaElement.prototype, [
+    ['name',           'name',           'string'],
+    ['disabled',       'disabled',       'bool'],
+    ['readOnly',       'readonly',       'bool'],
+    ['required',       'required',       'bool'],
+    ['placeholder',    'placeholder',    'string'],
+    ['autocomplete',   'autocomplete',   'string'],
+    ['dirName',        'dirname',        'string'],
+    ['wrap',           'wrap',           'string'],
+    ['rows',           'rows',           'ulong',  2],
+    ['cols',           'cols',           'ulong',  20],
+    ['maxLength',      'maxlength',      'long',   -1],
+    ['minLength',      'minlength',      'long',   -1],
+]);
+
+_lumen_install_reflection(HTMLSelectElement.prototype, [
+    ['name',           'name',           'string'],
+    ['disabled',       'disabled',       'bool'],
+    ['required',       'required',       'bool'],
+    ['multiple',       'multiple',       'bool'],
+    ['autocomplete',   'autocomplete',   'string'],
+    ['size',           'size',           'ulong',  0],
+]);
+
+_lumen_install_reflection(HTMLOptionElement.prototype, [
+    ['disabled',        'disabled',      'bool'],
+    ['defaultSelected', 'selected',      'bool'],
+]);
+
+_lumen_install_reflection(HTMLOptGroupElement.prototype, [
+    ['disabled',       'disabled',       'bool'],
+    ['label',          'label',          'string'],
+]);
+
+_lumen_install_reflection(HTMLButtonElement.prototype, [
+    ['name',           'name',           'string'],
+    ['disabled',       'disabled',       'bool'],
+    ['type',           'type',           'enum',   { def: 'submit', keys: ['submit', 'reset', 'button'] }],
+    ['formAction',     'formaction',     'url'],
+    ['formEnctype',    'formenctype',    'string'],
+    ['formMethod',     'formmethod',     'enum',   { def: '', keys: ['get', 'post', 'dialog'] }],
+    ['formTarget',     'formtarget',     'string'],
+    ['formNoValidate', 'formnovalidate', 'bool'],
+]);
+
+_lumen_install_reflection(HTMLFormElement.prototype, [
+    ['name',           'name',           'string'],
+    ['action',         'action',         'url'],
+    ['method',         'method',         'enum',   { def: 'get', keys: ['get', 'post', 'dialog'] }],
+    ['enctype',        'enctype',        'string'],
+    ['encoding',       'enctype',        'string'],
+    ['target',         'target',         'string'],
+    ['acceptCharset',  'accept-charset', 'string'],
+    ['autocomplete',   'autocomplete',   'string'],
+    ['rel',            'rel',            'string'],
+    ['noValidate',     'novalidate',     'bool'],
+]);
+
+_lumen_install_reflection(HTMLFieldSetElement.prototype, [
+    ['name',           'name',           'string'],
+    ['disabled',       'disabled',       'bool'],
+]);
+
+_lumen_install_reflection(HTMLLabelElement.prototype, [
+    ['htmlFor',        'for',            'string'],
+]);
+
+_lumen_install_reflection(HTMLOutputElement.prototype, [
+    ['name',           'name',           'string'],
+    ['htmlFor',        'for',            'string'],
+]);
+
+_lumen_install_reflection(HTMLImageElement.prototype, [
+    ['src',            'src',            'url'],
+    ['alt',            'alt',            'string'],
+    ['srcset',         'srcset',         'string'],
+    ['sizes',          'sizes',          'string'],
+    ['useMap',         'usemap',         'string'],
+    ['isMap',          'ismap',          'bool'],
+    ['crossOrigin',    'crossorigin',    'string'],
+    ['decoding',       'decoding',       'string'],
+    ['loading',        'loading',        'string'],
+    ['referrerPolicy', 'referrerpolicy', 'enum',   _LUMEN_REFERRER_POLICY],
+]);
+
+_lumen_install_reflection(HTMLScriptElement.prototype, [
+    ['src',            'src',            'url'],
+    ['type',           'type',           'string'],
+    ['async',          'async',          'bool'],
+    ['defer',          'defer',          'bool'],
+    ['noModule',       'nomodule',       'bool'],
+    ['crossOrigin',    'crossorigin',    'string'],
+    ['integrity',      'integrity',      'string'],
+    ['referrerPolicy', 'referrerpolicy', 'enum',   _LUMEN_REFERRER_POLICY],
+]);
+
+_lumen_install_reflection(HTMLLinkElement.prototype, [
+    ['href',           'href',           'url'],
+    ['rel',            'rel',            'string'],
+    ['media',          'media',          'string'],
+    ['hreflang',       'hreflang',       'string'],
+    ['type',           'type',           'string'],
+    ['as',             'as',             'string'],
+    ['sizes',          'sizes',          'string'],
+    ['imageSrcset',    'imagesrcset',    'string'],
+    ['imageSizes',     'imagesizes',     'string'],
+    ['crossOrigin',    'crossorigin',    'string'],
+    ['integrity',      'integrity',      'string'],
+    ['referrerPolicy', 'referrerpolicy', 'enum',   _LUMEN_REFERRER_POLICY],
+]);
+
+_lumen_install_reflection(HTMLStyleElement.prototype, [
+    ['media',          'media',          'string'],
+    ['type',           'type',           'string'],
+]);
+
+_lumen_install_reflection(HTMLIFrameElement.prototype, [
+    ['src',            'src',            'url'],
+    ['srcdoc',         'srcdoc',         'string'],
+    ['name',           'name',           'string'],
+    ['allow',          'allow',          'string'],
+    ['allowFullscreen','allowfullscreen','bool'],
+    ['loading',        'loading',        'string'],
+    ['referrerPolicy', 'referrerpolicy', 'enum',   _LUMEN_REFERRER_POLICY],
+]);
+
+_lumen_install_reflection(HTMLMetaElement.prototype, [
+    ['name',           'name',           'string'],
+    ['content',        'content',        'string'],
+    ['httpEquiv',      'http-equiv',     'string'],
+    ['media',          'media',          'string'],
+]);
+
+_lumen_install_reflection(HTMLTableCellElement.prototype, [
+    ['colSpan',        'colspan',        'ulong',  1],
+    ['rowSpan',        'rowspan',        'ulong',  1],
+    ['headers',        'headers',        'string'],
+    ['abbr',           'abbr',           'string'],
+    ['scope',          'scope',          'string'],
+]);
+
+_lumen_install_reflection(HTMLTableColElement.prototype, [
+    ['span',           'span',           'ulong',  1],
+]);
+
+_lumen_install_reflection(HTMLOListElement.prototype, [
+    ['reversed',       'reversed',       'bool'],
+    ['start',          'start',          'long',   1],
+    ['type',           'type',           'string'],
+]);
+
+_lumen_install_reflection(HTMLTimeElement.prototype, [
+    ['dateTime',       'datetime',       'string'],
+]);
+
+_lumen_install_reflection(HTMLQuoteElement.prototype, [
+    ['cite',           'cite',           'url'],
+]);
+
+_lumen_install_reflection(HTMLModElement.prototype, [
+    ['cite',           'cite',           'url'],
+    ['dateTime',       'datetime',       'string'],
+]);
+
+_lumen_install_reflection(HTMLTrackElement.prototype, [
+    ['kind',           'kind',           'enum',   { def: 'subtitles', keys: [
+        'subtitles', 'captions', 'descriptions', 'chapters', 'metadata'] }],
+    ['src',            'src',            'url'],
+    ['srclang',        'srclang',        'string'],
+    ['label',          'label',          'string'],
+    ['default',        'default',        'bool'],
+]);
+
+_lumen_install_reflection(HTMLSourceElement.prototype, [
+    ['src',            'src',            'url'],
+    ['type',           'type',           'string'],
+    ['srcset',         'srcset',         'string'],
+    ['sizes',          'sizes',          'string'],
+    ['media',          'media',          'string'],
+]);
+
+// <video>/<audio> share HTMLMediaElement's attributes; Lumen has no
+// HTMLMediaElement interface yet, so the rows are installed on both. <audio>
+// additionally carries its own `src` accessor (`audio_element.rs`) that drives
+// the media loader — an own property, so it keeps shadowing the row below.
+[HTMLVideoElement.prototype, HTMLAudioElement.prototype].forEach(function(_p) {
+    _lumen_install_reflection(_p, [
+        ['src',          'src',          'url'],
+        ['preload',      'preload',      'string'],
+        ['crossOrigin',  'crossorigin',  'string'],
+        ['autoplay',     'autoplay',     'bool'],
+        ['loop',         'loop',         'bool'],
+        ['controls',     'controls',     'bool'],
+        ['defaultMuted', 'muted',        'bool'],
+        ['playsInline',  'playsinline',  'bool'],
+    ]);
+});
+_lumen_install_reflection(HTMLVideoElement.prototype, [
+    ['poster',         'poster',         'url'],
+]);
+
+_lumen_install_reflection(HTMLObjectElement.prototype, [
+    ['data',           'data',           'url'],
+    ['type',           'type',           'string'],
+    ['name',           'name',           'string'],
+    ['useMap',         'usemap',         'string'],
+]);
+
+_lumen_install_reflection(HTMLEmbedElement.prototype, [
+    ['src',            'src',            'url'],
+    ['type',           'type',           'string'],
+]);
+
+_lumen_install_reflection(HTMLMapElement.prototype,     [['name', 'name', 'string']]);
+_lumen_install_reflection(HTMLSlotElement.prototype,    [['name', 'name', 'string']]);
+_lumen_install_reflection(HTMLDetailsElement.prototype, [['name', 'name', 'string']]);
+
+// HTML LS §4.2.3: `base.href` resolves against the *document* URL, never against
+// the base URL it is itself defining — so it cannot be an ordinary `url` row.
+Object.defineProperty(HTMLBaseElement.prototype, 'href', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        var docUrl = '';
+        try {
+            if (typeof location !== 'undefined' && location.href) docUrl = String(location.href);
+        } catch (e) {}
+        if (n === -1) return docUrl;
+        var v = _lumen_u2n(_lumen_get_attr(n, 'href'));
+        if (v === null || String(v) === '') return docUrl;
+        return _url_resolve(String(v), docUrl);
+    },
+    set: function(v) {
+        var n = _lumen_reflect_nid(this);
+        if (n !== -1) _lumen_set_attr(n, 'href', String(v));
+    },
+    enumerable: true, configurable: true,
+});
+_lumen_install_reflection(HTMLBaseElement.prototype, [['target', 'target', 'string']]);
+
+// `text` is a child-text alias rather than an attribute reflection, so it is
+// defined by hand: HTML LS §4.5.1 (`a.text`), §4.12.1 (`script.text`).
+[HTMLAnchorElement.prototype, HTMLScriptElement.prototype].forEach(function(_p) {
+    Object.defineProperty(_p, 'text', {
+        get: function() {
+            var n = _lumen_reflect_nid(this);
+            return n === -1 ? '' : _lumen_get_text_content(n);
+        },
+        set: function(v) {
+            var n = _lumen_reflect_nid(this);
+            if (n !== -1) _lumen_set_text_content(n, String(v));
+        },
+        enumerable: true, configurable: true,
+    });
+});
+
+// `type` is fixed for these two interfaces (HTML LS §4.10.7/§4.10.11) — they
+// have no `type` content attribute at all, so it is a read-only getter.
+Object.defineProperty(HTMLTextAreaElement.prototype, 'type', {
+    get: function() { return 'textarea'; }, enumerable: true, configurable: true,
+});
+Object.defineProperty(HTMLSelectElement.prototype, 'type', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        return (n !== -1 && _lumen_has_attr(n, 'multiple')) ? 'select-multiple' : 'select-one';
+    },
+    enumerable: true, configurable: true,
+});
+Object.defineProperty(HTMLFieldSetElement.prototype, 'type', {
+    get: function() { return 'fieldset'; }, enumerable: true, configurable: true,
+});
+
+// ── Form-control associations, collections and activation (BUG-383) ──────────
+// Everything below is the non-reflection half of the same gap: `form.elements`
+// was a plain `Array` (so `namedItem`/named access silently did nothing),
+// `select.options`/`selectedIndex` did not exist, and no element had `click()`,
+// `select()` or `setSelectionRange()` — the standard ways to drive a form from
+// script and the ones every polyfill and e2e helper reaches for first.
+
+// Tags that are «listed elements» for the purposes of `form.elements`
+// (HTML LS §4.10.3). `<option>` is deliberately absent: it belongs to
+// `select.options`, not to the form's control list.
+var _LUMEN_LISTED_TAGS = {
+    INPUT: 1, SELECT: 1, TEXTAREA: 1, BUTTON: 1, FIELDSET: 1, OBJECT: 1, OUTPUT: 1,
+};
+// Controls a <label> can label (HTML LS §4.10.4 «labelable elements»).
+var _LUMEN_LABELABLE_TAGS = {
+    INPUT: 1, SELECT: 1, TEXTAREA: 1, BUTTON: 1, METER: 1, OUTPUT: 1, PROGRESS: 1,
+};
+// `<input>` types with a text-entry cursor, i.e. the ones whose selection API
+// is defined (HTML LS §4.10.5.4). Everything else answers `null`.
+var _LUMEN_SELECTABLE_INPUT_TYPES = {
+    text: 1, search: 1, url: 1, tel: 1, password: 1,
+};
+
+// nid → true/false override of an <option>'s selectedness, set by
+// `option.selected = …` / `select.selectedIndex = …`. Absent means «follow the
+// `selected` content attribute», which is the markup default.
+var _lumen_option_selected = {};
+// nid → { start, end, direction } for text-entry controls.
+var _lumen_selection_state = {};
+// nid → indeterminate flag for checkboxes (never reflected as an attribute).
+var _lumen_indeterminate = {};
+// nid → the control's *default* checkedness, captured the first time a script
+// changes the current one. Lumen keeps checkedness in the `checked` content
+// attribute itself — that is what the shell paints and submits from — so the
+// element has no separate storage for the default and the first write would
+// otherwise destroy it, taking `defaultChecked` and `form.reset()` with it.
+// A real dirty-checkedness flag independent of the attribute is BUG-444.
+var _lumen_default_checked = {};
+function _lumen_capture_default_checked(nid) {
+    if (_lumen_default_checked[nid] === undefined) {
+        _lumen_default_checked[nid] = _lumen_has_attr(nid, 'checked');
+    }
+}
+// nid → true while an activation behaviour is running on that node, so a
+// `click()` inside a click handler for the same element cannot recurse forever
+// (label → control → label is the usual cycle).
+var _lumen_click_in_progress = {};
+
+// Depth-first element descendants of `nid`, in tree order.
+function _lumen_descendant_elements(nid, out) {
+    var kids = _lumen_get_children(nid);
+    for (var i = 0; i < kids.length; i++) {
+        if (_lumen_is_text_node(kids[i]) || _lumen_is_comment_node(kids[i])) continue;
+        out.push(kids[i]);
+        _lumen_descendant_elements(kids[i], out);
+    }
+    return out;
+}
+
+// HTML LS §4.10.18.6 «form owner»: the form named by the control's `form`
+// content attribute, else the nearest ancestor <form>.
+function _lumen_form_owner(nid) {
+    var formId = _lumen_u2n(_lumen_get_attr(nid, 'form'));
+    if (formId !== null && String(formId) !== '') {
+        var byId = _lumen_u2n(_lumen_get_element_by_id(String(formId)));
+        if (byId !== null && (_lumen_get_tag_name(byId) || '').toUpperCase() === 'FORM') return byId;
+        return -1;
+    }
+    var cur = _lumen_u2n(_lumen_get_parent(nid));
+    for (var guard = 0; guard < 512 && cur !== null; guard++) {
+        if ((_lumen_get_tag_name(cur) || '').toUpperCase() === 'FORM') return cur;
+        cur = _lumen_u2n(_lumen_get_parent(cur));
+    }
+    return -1;
+}
+
+// The controls a <form> or <fieldset> owns, in tree order.
+function _lumen_listed_controls(owner_nid) {
+    var all = _lumen_descendant_elements(owner_nid, []);
+    var out = [];
+    var ownerIsForm = (_lumen_get_tag_name(owner_nid) || '').toUpperCase() === 'FORM';
+    for (var i = 0; i < all.length; i++) {
+        var tag = (_lumen_get_tag_name(all[i]) || '').toUpperCase();
+        if (_LUMEN_LISTED_TAGS[tag] !== 1) continue;
+        // A control inside the subtree but re-parented by a `form` attribute
+        // belongs to that other form, not to this one.
+        if (ownerIsForm && _lumen_form_owner(all[i]) !== owner_nid) continue;
+        out.push(all[i]);
+    }
+    return out;
+}
+
+// HTML LS §4.10.3 — `HTMLFormControlsCollection`, the interface `form.elements`
+// is supposed to return. It was a plain `Array` before, which silently lacked
+// `namedItem()` and named access while `Array` methods made it look complete.
+function HTMLFormControlsCollection() { throw new TypeError('Illegal constructor'); }
+HTMLFormControlsCollection.prototype = Object.create(HTMLCollection.prototype);
+HTMLFormControlsCollection.prototype.constructor = HTMLFormControlsCollection;
+window.HTMLFormControlsCollection = HTMLFormControlsCollection;
+
+// HTML LS §4.10.7 — `HTMLOptionsCollection`, returned by `select.options`.
+function HTMLOptionsCollection() { throw new TypeError('Illegal constructor'); }
+HTMLOptionsCollection.prototype = Object.create(HTMLCollection.prototype);
+HTMLOptionsCollection.prototype.constructor = HTMLOptionsCollection;
+window.HTMLOptionsCollection = HTMLOptionsCollection;
+
+// `for (var c of form.elements)` / `[...select.options]` — the indexed getter
+// alone does not make a legacy platform object iterable. `Symbol.toStringTag`
+// goes on at the same time so `Object.prototype.toString.call(...)` names the
+// interface instead of answering the `[object Object]` that made the old
+// `Array` masquerade so hard to spot.
+[['HTMLCollection', HTMLCollection.prototype],
+ ['HTMLFormControlsCollection', HTMLFormControlsCollection.prototype],
+ ['HTMLOptionsCollection', HTMLOptionsCollection.prototype]].forEach(function(_e) {
+    if (typeof Symbol === 'undefined' || !Symbol.iterator) return;
+    var _p = _e[1];
+    if (!_p[Symbol.iterator]) {
+        Object.defineProperty(_p, Symbol.iterator, {
+            value: function() {
+                var self = this, i = 0;
+                return { next: function() {
+                    return i < self.length ? { value: self[i++], done: false }
+                                           : { value: undefined, done: true };
+                } };
+            },
+            writable: true, configurable: true, enumerable: false,
+        });
+    }
+    if (Symbol.toStringTag) {
+        Object.defineProperty(_p, Symbol.toStringTag, {
+            value: _e[0], writable: false, configurable: true, enumerable: false,
+        });
+    }
+});
+
+[HTMLFormElement.prototype, HTMLFieldSetElement.prototype].forEach(function(_p) {
+    Object.defineProperty(_p, 'elements', {
+        get: function() {
+            var n = _lumen_reflect_nid(this);
+            if (n === -1) return _lumen_make_nid_collection(function() { return []; },
+                                                            HTMLFormControlsCollection.prototype);
+            return _lumen_make_nid_collection(function() { return _lumen_listed_controls(n); },
+                                              HTMLFormControlsCollection.prototype);
+        },
+        enumerable: true, configurable: true,
+    });
+});
+Object.defineProperty(HTMLFormElement.prototype, 'length', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        return n === -1 ? 0 : _lumen_listed_controls(n).length;
+    },
+    enumerable: true, configurable: true,
+});
+
+// Form-owner back-references on the controls themselves (HTML LS §4.10.18.6).
+['HTMLInputElement', 'HTMLSelectElement', 'HTMLTextAreaElement', 'HTMLButtonElement',
+ 'HTMLFieldSetElement', 'HTMLObjectElement', 'HTMLOutputElement', 'HTMLLabelElement',
+ 'HTMLLegendElement'].forEach(function(_iface) {
+    Object.defineProperty(globalThis[_iface].prototype, 'form', {
+        get: function() {
+            var n = _lumen_reflect_nid(this);
+            if (n === -1) return null;
+            var f = _lumen_form_owner(n);
+            return f === -1 ? null : _lumen_make_element(f);
+        },
+        enumerable: true, configurable: true,
+    });
+});
+// `<option>.form` is the form of its owning <select>, not its own ancestor form.
+Object.defineProperty(HTMLOptionElement.prototype, 'form', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return null;
+        var sel = _lumen_option_owner_select(n);
+        if (sel === -1) return null;
+        var f = _lumen_form_owner(sel);
+        return f === -1 ? null : _lumen_make_element(f);
+    },
+    enumerable: true, configurable: true,
+});
+
+// HTML LS §4.10.4 — the <label>s associated with a control: every ancestor
+// <label>, plus every `<label for=id>` pointing at it.
+function _lumen_labels_for(nid) {
+    var out = [];
+    var id = _lumen_u2n(_lumen_get_attr(nid, 'id'));
+    var cur = _lumen_u2n(_lumen_get_parent(nid));
+    for (var guard = 0; guard < 512 && cur !== null; guard++) {
+        if ((_lumen_get_tag_name(cur) || '').toUpperCase() === 'LABEL') out.push(cur);
+        cur = _lumen_u2n(_lumen_get_parent(cur));
+    }
+    if (id !== null && String(id) !== '') {
+        var all = _lumen_descendant_elements(_lumen_root_nid, []);
+        for (var i = 0; i < all.length; i++) {
+            if ((_lumen_get_tag_name(all[i]) || '').toUpperCase() !== 'LABEL') continue;
+            if (_lumen_u2n(_lumen_get_attr(all[i], 'for')) === String(id)) {
+                if (out.indexOf(all[i]) === -1) out.push(all[i]);
+            }
+        }
+    }
+    return out;
+}
+['HTMLInputElement', 'HTMLSelectElement', 'HTMLTextAreaElement', 'HTMLButtonElement',
+ 'HTMLOutputElement', 'HTMLProgressElement', 'HTMLMeterElement'].forEach(function(_iface) {
+    Object.defineProperty(globalThis[_iface].prototype, 'labels', {
+        get: function() {
+            var n = _lumen_reflect_nid(this);
+            if (n === -1) return null;
+            return _lumen_make_nid_collection(function() { return _lumen_labels_for(n); },
+                                              HTMLCollection.prototype);
+        },
+        enumerable: true, configurable: true,
+    });
+});
+
+// HTML LS §4.10.4 — `label.control`: the element named by `for`, else the first
+// labelable descendant.
+Object.defineProperty(HTMLLabelElement.prototype, 'control', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return null;
+        var target = _lumen_u2n(_lumen_get_attr(n, 'for'));
+        if (target !== null && String(target) !== '') {
+            var byId = _lumen_u2n(_lumen_get_element_by_id(String(target)));
+            if (byId === null) return null;
+            var t = (_lumen_get_tag_name(byId) || '').toUpperCase();
+            return _LUMEN_LABELABLE_TAGS[t] === 1 ? _lumen_make_element(byId) : null;
+        }
+        var desc = _lumen_descendant_elements(n, []);
+        for (var i = 0; i < desc.length; i++) {
+            if (_LUMEN_LABELABLE_TAGS[(_lumen_get_tag_name(desc[i]) || '').toUpperCase()] === 1) {
+                return _lumen_make_element(desc[i]);
+            }
+        }
+        return null;
+    },
+    enumerable: true, configurable: true,
+});
+
+// ── <select> / <option> (HTML LS §4.10.7, §4.10.10) ──────────────────────────
+
+// The flattened list of options of a <select>: direct <option> children plus
+// the ones nested in <optgroup>.
+function _lumen_select_options(select_nid) {
+    var out = [];
+    var kids = _lumen_get_children(select_nid);
+    for (var i = 0; i < kids.length; i++) {
+        var tag = (_lumen_get_tag_name(kids[i]) || '').toUpperCase();
+        if (tag === 'OPTION') out.push(kids[i]);
+        else if (tag === 'OPTGROUP') {
+            var sub = _lumen_get_children(kids[i]);
+            for (var j = 0; j < sub.length; j++) {
+                if ((_lumen_get_tag_name(sub[j]) || '').toUpperCase() === 'OPTION') out.push(sub[j]);
+            }
+        }
+    }
+    return out;
+}
+function _lumen_option_owner_select(option_nid) {
+    var cur = _lumen_u2n(_lumen_get_parent(option_nid));
+    for (var guard = 0; guard < 8 && cur !== null; guard++) {
+        var tag = (_lumen_get_tag_name(cur) || '').toUpperCase();
+        if (tag === 'SELECT') return cur;
+        if (tag !== 'OPTGROUP') return -1;
+        cur = _lumen_u2n(_lumen_get_parent(cur));
+    }
+    return -1;
+}
+function _lumen_option_text(nid) {
+    var t = _lumen_get_text_content(nid);
+    return (t === null || t === undefined) ? '' : String(t).trim();
+}
+function _lumen_option_is_selected(option_nid) {
+    if (_lumen_option_selected[option_nid] !== undefined) return _lumen_option_selected[option_nid];
+    return _lumen_has_attr(option_nid, 'selected');
+}
+// HTML LS §4.10.7 «ask for a reset»: a single-selection <select> always has a
+// selected option — the first non-disabled one when the markup names none.
+function _lumen_select_selected_index(select_nid) {
+    var opts = _lumen_select_options(select_nid);
+    for (var i = 0; i < opts.length; i++) if (_lumen_option_is_selected(opts[i])) return i;
+    if (!_lumen_has_attr(select_nid, 'multiple')) {
+        for (var j = 0; j < opts.length; j++) {
+            if (!_lumen_has_attr(opts[j], 'disabled')) return j;
+        }
+    }
+    return -1;
+}
+function _lumen_select_set_index(select_nid, index) {
+    var opts = _lumen_select_options(select_nid);
+    for (var i = 0; i < opts.length; i++) _lumen_option_selected[opts[i]] = (i === index);
+    // The shell's own copy of the value is now stale; recompute on next read.
+    delete _input_values[select_nid];
+}
+function _lumen_select_set_value(select_nid, value) {
+    var opts = _lumen_select_options(select_nid);
+    var match = -1;
+    for (var i = 0; i < opts.length; i++) {
+        if (_lumen_make_element(opts[i]).value === value) { match = i; break; }
+    }
+    _lumen_select_set_index(select_nid, match);
+    if (match === -1) _input_values[select_nid] = '';
+}
+
+Object.defineProperty(HTMLSelectElement.prototype, 'options', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return null;
+        return _lumen_make_nid_collection(function() { return _lumen_select_options(n); },
+                                          HTMLOptionsCollection.prototype);
+    },
+    enumerable: true, configurable: true,
+});
+Object.defineProperty(HTMLSelectElement.prototype, 'selectedOptions', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return null;
+        return _lumen_make_nid_collection(function() {
+            return _lumen_select_options(n).filter(_lumen_option_is_selected);
+        }, HTMLCollection.prototype);
+    },
+    enumerable: true, configurable: true,
+});
+Object.defineProperty(HTMLSelectElement.prototype, 'length', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        return n === -1 ? 0 : _lumen_select_options(n).length;
+    },
+    set: function(v) {
+        // Truncating via `select.length = N` removes trailing options; growing
+        // it is a no-op here (it would require minting bare <option>s).
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return;
+        var opts = _lumen_select_options(n);
+        var want = Number(v); if (!isFinite(want) || want < 0) want = 0;
+        for (var i = opts.length - 1; i >= want; i--) _lumen_make_element(opts[i]).remove();
+    },
+    enumerable: true, configurable: true,
+});
+Object.defineProperty(HTMLSelectElement.prototype, 'selectedIndex', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return -1;
+        // A shell-driven pick lands in `_input_values`; map it back to an index
+        // so `selectedIndex` and `value` cannot disagree.
+        if (_input_values[n] !== undefined) {
+            var opts = _lumen_select_options(n);
+            for (var i = 0; i < opts.length; i++) {
+                if (_lumen_make_element(opts[i]).value === _input_values[n]) return i;
+            }
+            return -1;
+        }
+        return _lumen_select_selected_index(n);
+    },
+    set: function(v) {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return;
+        var idx = Number(v); if (!isFinite(idx)) idx = -1;
+        _lumen_select_set_index(n, Math.trunc(idx));
+    },
+    enumerable: true, configurable: true,
+});
+HTMLSelectElement.prototype.item = function(i) {
+    var n = _lumen_reflect_nid(this);
+    if (n === -1) return null;
+    var opts = _lumen_select_options(n);
+    i = i >>> 0;
+    return i < opts.length ? _lumen_make_element(opts[i]) : null;
+};
+HTMLSelectElement.prototype.namedItem = function(name) {
+    var n = _lumen_reflect_nid(this);
+    if (n === -1) return null;
+    return _lumen_html_collection_named(_lumen_select_options(n), String(name));
+};
+// HTML LS §4.10.7: `add(element, before)` — `before` is an option or an index;
+// omitted/null appends.
+HTMLSelectElement.prototype.add = function(element, before) {
+    var n = _lumen_reflect_nid(this);
+    if (n === -1 || !element) return;
+    if (before === undefined || before === null) { this.appendChild(element); return; }
+    var refNid = -1;
+    if (typeof before === 'number') {
+        var opts = _lumen_select_options(n);
+        var bi = Math.trunc(before);
+        if (bi >= 0 && bi < opts.length) refNid = opts[bi];
+    } else if (before.__nid__ !== undefined) {
+        refNid = before.__nid__;
+    }
+    if (refNid === -1) { this.appendChild(element); return; }
+    var parent = _lumen_u2n(_lumen_get_parent(refNid));
+    if (parent === null) { this.appendChild(element); return; }
+    _lumen_make_element(parent).insertBefore(element, _lumen_make_element(refNid));
+};
+// HTML LS §4.10.7: `select.remove(index)`. With no argument it is
+// `ChildNode.remove()` — which is why the plain `remove` on the wrapper is not
+// enough and this override has to forward that case explicitly.
+HTMLSelectElement.prototype.remove = function(index) {
+    var n = _lumen_reflect_nid(this);
+    if (n === -1) return;
+    if (index === undefined) {
+        var p = _lumen_u2n(_lumen_get_parent(n));
+        if (p !== null) _lumen_remove_child(p, n);
+        return;
+    }
+    var opts = _lumen_select_options(n);
+    var i = Math.trunc(Number(index));
+    if (!isFinite(i) || i < 0 || i >= opts.length) return;
+    var op = opts[i];
+    var op_parent = _lumen_u2n(_lumen_get_parent(op));
+    if (op_parent !== null) _lumen_remove_child(op_parent, op);
+};
+
+Object.defineProperty(HTMLOptionElement.prototype, 'selected', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        return n === -1 ? false : _lumen_option_is_selected(n);
+    },
+    set: function(v) {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return;
+        var sel = _lumen_option_owner_select(n);
+        if (v && sel !== -1 && !_lumen_has_attr(sel, 'multiple')) {
+            var opts = _lumen_select_options(sel);
+            for (var i = 0; i < opts.length; i++) _lumen_option_selected[opts[i]] = (opts[i] === n);
+        } else {
+            _lumen_option_selected[n] = !!v;
+        }
+        if (sel !== -1) delete _input_values[sel];
+    },
+    enumerable: true, configurable: true,
+});
+Object.defineProperty(HTMLOptionElement.prototype, 'index', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return 0;
+        var sel = _lumen_option_owner_select(n);
+        if (sel === -1) return 0;
+        var idx = _lumen_select_options(sel).indexOf(n);
+        return idx === -1 ? 0 : idx;
+    },
+    enumerable: true, configurable: true,
+});
+Object.defineProperty(HTMLOptionElement.prototype, 'text', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        return n === -1 ? '' : _lumen_option_text(n);
+    },
+    set: function(v) {
+        var n = _lumen_reflect_nid(this);
+        if (n !== -1) _lumen_set_text_content(n, String(v));
+    },
+    enumerable: true, configurable: true,
+});
+// `label` reflects the content attribute but falls back to the option's text.
+Object.defineProperty(HTMLOptionElement.prototype, 'label', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return '';
+        var v = _lumen_u2n(_lumen_get_attr(n, 'label'));
+        return v !== null ? String(v) : _lumen_option_text(n);
+    },
+    set: function(v) {
+        var n = _lumen_reflect_nid(this);
+        if (n !== -1) _lumen_set_attr(n, 'label', String(v));
+    },
+    enumerable: true, configurable: true,
+});
+// HTML LS §4.10.10 — the legacy `Option(text, value, defaultSelected, selected)`
+// factory, the counterpart of `Image()`.
+function Option(text, value, defaultSelected, selected) {
+    var op = document.createElement('option');
+    if (text !== undefined && text !== null && String(text) !== '') op.text = String(text);
+    if (value !== undefined && value !== null) op.setAttribute('value', String(value));
+    if (defaultSelected) op.setAttribute('selected', '');
+    op.selected = !!selected;
+    return op;
+}
+window.Option = Option;
+
+// ── Text selection on <input>/<textarea> (HTML LS §4.10.5.4) ─────────────────
+function _lumen_selection_applies(nid) {
+    var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
+    if (tag === 'TEXTAREA') return true;
+    if (tag !== 'INPUT') return false;
+    var t = _lumen_u2n(_lumen_get_attr(nid, 'type'));
+    t = (t === null) ? 'text' : String(t).toLowerCase();
+    return _LUMEN_SELECTABLE_INPUT_TYPES[t] === 1;
+}
+function _lumen_selection_of(nid) {
+    var s = _lumen_selection_state[nid];
+    if (s === undefined) { s = { start: 0, end: 0, direction: 'none' }; _lumen_selection_state[nid] = s; }
+    return s;
+}
+function _lumen_set_selection(nid, start, end, direction) {
+    var len = String(_lumen_make_element(nid).value || '').length;
+    start = Math.trunc(Number(start)); if (!isFinite(start) || start < 0) start = 0;
+    end   = Math.trunc(Number(end));   if (!isFinite(end)   || end   < 0) end   = 0;
+    if (start > len) start = len;
+    if (end > len) end = len;
+    if (end < start) start = end;
+    var dir = (direction === 'forward' || direction === 'backward') ? direction : 'none';
+    _lumen_selection_state[nid] = { start: start, end: end, direction: dir };
+    // §4.10.5.4 step 4: queue a `select` event when the selection actually moves.
+    _lumen_dispatch_rich(nid, new Event('select', { bubbles: true, cancelable: false }));
+}
+[HTMLInputElement.prototype, HTMLTextAreaElement.prototype].forEach(function(_p) {
+    ['selectionStart', 'selectionEnd'].forEach(function(_prop) {
+        var key = (_prop === 'selectionStart') ? 'start' : 'end';
+        Object.defineProperty(_p, _prop, {
+            get: function() {
+                var n = _lumen_reflect_nid(this);
+                if (n === -1 || !_lumen_selection_applies(n)) return null;
+                return _lumen_selection_of(n)[key];
+            },
+            set: function(v) {
+                var n = _lumen_reflect_nid(this);
+                if (n === -1 || !_lumen_selection_applies(n)) return;
+                var s = _lumen_selection_of(n);
+                if (key === 'start') _lumen_set_selection(n, v, Math.max(Number(v) || 0, s.end), s.direction);
+                else _lumen_set_selection(n, s.start, v, s.direction);
+            },
+            enumerable: true, configurable: true,
+        });
+    });
+    Object.defineProperty(_p, 'selectionDirection', {
+        get: function() {
+            var n = _lumen_reflect_nid(this);
+            if (n === -1 || !_lumen_selection_applies(n)) return null;
+            return _lumen_selection_of(n).direction;
+        },
+        set: function(v) {
+            var n = _lumen_reflect_nid(this);
+            if (n === -1 || !_lumen_selection_applies(n)) return;
+            var s = _lumen_selection_of(n);
+            _lumen_set_selection(n, s.start, s.end, String(v));
+        },
+        enumerable: true, configurable: true,
+    });
+    _p.setSelectionRange = function(start, end, direction) {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return;
+        if (!_lumen_selection_applies(n)) {
+            throw new DOMException(
+                'setSelectionRange does not apply to this input type', 'InvalidStateError');
+        }
+        _lumen_set_selection(n, start, end, direction);
+    };
+    _p.select = function() {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return;
+        var len = String(this.value || '').length;
+        _lumen_set_selection(n, 0, len, 'none');
+    };
+    _p.setRangeText = function(replacement, start, end, mode) {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1 || !_lumen_selection_applies(n)) return;
+        var s = _lumen_selection_of(n);
+        var from = (start === undefined) ? s.start : Math.trunc(Number(start));
+        var to   = (end   === undefined) ? s.end   : Math.trunc(Number(end));
+        var val = String(this.value || '');
+        if (from > to) { var t = from; from = to; to = t; }
+        var repl = String(replacement);
+        this.value = val.slice(0, from) + repl + val.slice(to);
+        var newEnd = from + repl.length;
+        if (mode === 'start') _lumen_set_selection(n, from, from, 'none');
+        else if (mode === 'end') _lumen_set_selection(n, newEnd, newEnd, 'none');
+        else _lumen_set_selection(n, from, newEnd, 'none');
+    };
+});
+
+// ── Remaining HTMLInputElement bits that are state, not reflection ───────────
+// `defaultChecked` reflects the `checked` content attribute — but that same
+// attribute is where Lumen stores the *current* checkedness, so once a script
+// has written `checked` the attribute no longer answers for the default. Read
+// the snapshot taken at that first write instead (see `_lumen_default_checked`).
+Object.defineProperty(HTMLInputElement.prototype, 'defaultChecked', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return false;
+        return (_lumen_default_checked[n] !== undefined)
+            ? _lumen_default_checked[n] : _lumen_has_attr(n, 'checked');
+    },
+    set: function(v) {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return;
+        _lumen_default_checked[n] = !!v;
+        if (v) _lumen_set_attr(n, 'checked', '');
+        else _lumen_remove_attr(n, 'checked');
+    },
+    enumerable: true, configurable: true,
+});
+Object.defineProperty(HTMLInputElement.prototype, 'indeterminate', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        return n === -1 ? false : !!_lumen_indeterminate[n];
+    },
+    set: function(v) {
+        var n = _lumen_reflect_nid(this);
+        if (n !== -1) _lumen_indeterminate[n] = !!v;
+    },
+    enumerable: true, configurable: true,
+});
+// `files` is `null` for every type but `file`. Lumen has no file picker yet, so
+// a file input reports an empty FileList rather than a fabricated one.
+Object.defineProperty(HTMLInputElement.prototype, 'files', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return null;
+        var t = _lumen_u2n(_lumen_get_attr(n, 'type'));
+        if (t === null || String(t).toLowerCase() !== 'file') return null;
+        var empty = { length: 0, item: function() { return null; } };
+        return empty;
+    },
+    enumerable: true, configurable: true,
+});
+// `list` points at the <datalist> named by the `list` attribute (HTML LS §4.10.5).
+Object.defineProperty(HTMLInputElement.prototype, 'list', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        if (n === -1) return null;
+        var ref = _lumen_u2n(_lumen_get_attr(n, 'list'));
+        if (ref === null || String(ref) === '') return null;
+        var el = _lumen_u2n(_lumen_get_element_by_id(String(ref)));
+        if (el === null) return null;
+        return (_lumen_get_tag_name(el) || '').toUpperCase() === 'DATALIST'
+            ? _lumen_make_element(el) : null;
+    },
+    enumerable: true, configurable: true,
+});
+// `defaultValue` on <textarea> is its child text, not a content attribute
+// (HTML LS §4.10.11) — so it cannot be a reflection-table row.
+Object.defineProperty(HTMLTextAreaElement.prototype, 'defaultValue', {
+    get: function() {
+        var n = _lumen_reflect_nid(this);
+        return n === -1 ? '' : _lumen_get_text_content(n);
+    },
+    set: function(v) {
+        var n = _lumen_reflect_nid(this);
+        if (n !== -1) _lumen_set_text_content(n, String(v));
+    },
+    enumerable: true, configurable: true,
+});
+Object.defineProperty(HTMLTextAreaElement.prototype, 'textLength', {
+    get: function() { return String(this.value || '').length; },
+    enumerable: true, configurable: true,
+});
+// HTML LS §4.10.5.4 — stepUp/stepDown for the numeric input types.
+[['stepUp', 1], ['stepDown', -1]].forEach(function(_e) {
+    HTMLInputElement.prototype[_e[0]] = function(n) {
+        var nid = _lumen_reflect_nid(this);
+        if (nid === -1) return;
+        var stepAttr = _lumen_u2n(_lumen_get_attr(nid, 'step'));
+        var step = (stepAttr === null || String(stepAttr) === 'any') ? 1 : Number(stepAttr);
+        if (!isFinite(step) || step <= 0) step = 1;
+        var count = (n === undefined) ? 1 : Number(n);
+        if (!isFinite(count)) count = 1;
+        var cur = Number(this.value);
+        if (!isFinite(cur)) cur = 0;
+        var next = cur + _e[1] * step * count;
+        var minA = _lumen_u2n(_lumen_get_attr(nid, 'min'));
+        var maxA = _lumen_u2n(_lumen_get_attr(nid, 'max'));
+        if (minA !== null && isFinite(Number(minA)) && next < Number(minA)) next = Number(minA);
+        if (maxA !== null && isFinite(Number(maxA)) && next > Number(maxA)) next = Number(maxA);
+        // Trim binary-float noise (0.1 + 0.2) without pulling in a formatter.
+        this.value = String(Math.round(next * 1e9) / 1e9);
+    };
+});
+
+// ── Activation: HTMLElement.click() (HTML LS §4.10.19 / DOM §3.4) ────────────
+// The only standard way to press a control from script, and the only way to
+// start a download through a synthetic `<a download>`. Runs the full sequence:
+// pre-click activation (checkbox/radio flip) → dispatch a cancelable `click` →
+// activation behaviour, or undo the pre-click flip when a handler cancelled.
+function _lumen_pre_click_activation(nid) {
+    var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
+    if (tag !== 'INPUT') return null;
+    var t = _lumen_u2n(_lumen_get_attr(nid, 'type'));
+    t = (t === null) ? 'text' : String(t).toLowerCase();
+    var el = _lumen_make_element(nid);
+    if (t === 'checkbox') {
+        var was = el.checked;
+        _lumen_indeterminate[nid] = false;
+        el.checked = !was;
+        return { kind: 'checkbox', checked: was };
+    }
+    if (t === 'radio') {
+        var wasR = el.checked;
+        _lumen_radio_select(nid);
+        return { kind: 'radio', checked: wasR };
+    }
+    return null;
+}
+function _lumen_undo_pre_click_activation(nid, pre) {
+    if (!pre) return;
+    _lumen_make_element(nid).checked = pre.checked;
+}
+// HTML LS §4.10.5.1.13 «radio button group»: same form owner, same name.
+function _lumen_radio_select(nid) {
+    var name = _lumen_u2n(_lumen_get_attr(nid, 'name'));
+    var owner = _lumen_form_owner(nid);
+    var scope = (owner !== -1) ? owner : _lumen_root_nid;
+    var all = _lumen_descendant_elements(scope, []);
+    for (var i = 0; i < all.length; i++) {
+        if ((_lumen_get_tag_name(all[i]) || '').toUpperCase() !== 'INPUT') continue;
+        var t = _lumen_u2n(_lumen_get_attr(all[i], 'type'));
+        if (t === null || String(t).toLowerCase() !== 'radio') continue;
+        if (name !== null && _lumen_u2n(_lumen_get_attr(all[i], 'name')) !== name) continue;
+        if (all[i] !== nid) _lumen_remove_attr(all[i], 'checked');
+    }
+    _lumen_set_attr(nid, 'checked', '');
+}
+function _lumen_fire_input_and_change(nid) {
+    _lumen_dispatch_rich(nid, new Event('input',  { bubbles: true, cancelable: false }));
+    _lumen_dispatch_rich(nid, new Event('change', { bubbles: true, cancelable: false }));
+}
+function _lumen_run_activation_behavior(nid, el) {
+    var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
+    if (tag === 'INPUT') {
+        var t = _lumen_u2n(_lumen_get_attr(nid, 'type'));
+        t = (t === null) ? 'text' : String(t).toLowerCase();
+        if (t === 'checkbox' || t === 'radio') { _lumen_fire_input_and_change(nid); return; }
+        if (t === 'submit' || t === 'image') { _lumen_activate_submit(nid); return; }
+        if (t === 'reset') { _lumen_activate_reset(nid); return; }
+        return;
+    }
+    if (tag === 'BUTTON') {
+        var bt = _lumen_u2n(_lumen_get_attr(nid, 'type'));
+        bt = (bt === null) ? 'submit' : String(bt).toLowerCase();
+        if (bt === 'submit') { _lumen_activate_submit(nid); return; }
+        if (bt === 'reset') { _lumen_activate_reset(nid); return; }
+        return;
+    }
+    if (tag === 'A' || tag === 'AREA') {
+        var href = el.href;
+        if (href) _lumen_navigate(String(href), false);
+        return;
+    }
+    if (tag === 'SUMMARY') {
+        var parent = _lumen_u2n(_lumen_get_parent(nid));
+        if (parent !== null && (_lumen_get_tag_name(parent) || '').toUpperCase() === 'DETAILS') {
+            if (_lumen_has_attr(parent, 'open')) _lumen_remove_attr(parent, 'open');
+            else _lumen_set_attr(parent, 'open', '');
+        }
+        return;
+    }
+    if (tag === 'LABEL') {
+        var ctrl = el.control;
+        // The re-entrancy guard below keeps label → control → label finite.
+        if (ctrl && typeof ctrl.click === 'function') ctrl.click();
+    }
+}
+function _lumen_activate_submit(nid) {
+    var owner = _lumen_form_owner(nid);
+    if (owner === -1) return;
+    _lumen_make_element(owner).requestSubmit(_lumen_make_element(nid));
+}
+function _lumen_activate_reset(nid) {
+    var owner = _lumen_form_owner(nid);
+    if (owner !== -1) _lumen_make_element(owner).reset();
+}
+HTMLElement.prototype.click = function() {
+    var nid = _lumen_reflect_nid(this);
+    if (nid === -1) return;
+    var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
+    // HTML LS §4.10.19: a disabled form control is not activated at all — no
+    // event either.
+    if (_LUMEN_DISABLEABLE_TAGS[tag] === 1 && _lumen_has_attr(nid, 'disabled')) return;
+    if (_lumen_click_in_progress[nid]) return;
+    _lumen_click_in_progress[nid] = true;
+    try {
+        var pre = _lumen_pre_click_activation(nid);
+        var ev = new MouseEvent('click', {
+            bubbles: true, cancelable: true, composed: true, isTrusted: false,
+            clientX: 0, clientY: 0, screenX: 0, screenY: 0,
+            button: 0, buttons: 0, detail: 1,
+        });
+        var notCancelled = _lumen_dispatch_rich(nid, ev);
+        if (notCancelled) _lumen_run_activation_behavior(nid, this);
+        else _lumen_undo_pre_click_activation(nid, pre);
+    } finally {
+        delete _lumen_click_in_progress[nid];
+    }
+};
+
+// ── form.submit() / requestSubmit() / reset() (HTML LS §4.10.21) ─────────────
+// `reset()` is entirely a document-side operation and runs here. Submission is
+// not: encoding, enctype and the actual navigation live in the shell
+// (`forms.rs`), so the page-initiated form goes to it through the same
+// queue-and-drain shape `focus()` uses (`_lumen_request_form_submit`).
+HTMLFormElement.prototype.reset = function() {
+    var nid = _lumen_reflect_nid(this);
+    if (nid === -1) return;
+    var ev = new Event('reset', { bubbles: true, cancelable: true });
+    if (!_lumen_dispatch_rich(nid, ev)) return;
+    var controls = _lumen_listed_controls(nid);
+    for (var i = 0; i < controls.length; i++) {
+        var cn = controls[i];
+        var tag = (_lumen_get_tag_name(cn) || '').toUpperCase();
+        if (tag === 'SELECT') {
+            var opts = _lumen_select_options(cn);
+            for (var j = 0; j < opts.length; j++) delete _lumen_option_selected[opts[j]];
+            delete _input_values[cn];
+            continue;
+        }
+        if (tag !== 'INPUT' && tag !== 'TEXTAREA') continue;
+        // Dropping the dirty value restores `value` to its default, which the
+        // getter derives from the content attribute (or the child text).
+        delete _input_values[cn];
+        delete _lumen_selection_state[cn];
+        delete _lumen_indeterminate[cn];
+        if (tag === 'INPUT') {
+            var defChecked = (_lumen_default_checked[cn] !== undefined)
+                ? _lumen_default_checked[cn] : _lumen_has_attr(cn, 'checked');
+            delete _lumen_default_checked[cn];
+            if (defChecked) _lumen_set_attr(cn, 'checked', '');
+            else _lumen_remove_attr(cn, 'checked');
+        }
+    }
+};
+HTMLFormElement.prototype.requestSubmit = function(submitter) {
+    var nid = _lumen_reflect_nid(this);
+    if (nid === -1) return;
+    var submitterNid = -1;
+    if (submitter !== undefined && submitter !== null) {
+        if (submitter.__nid__ === undefined) {
+            throw new TypeError('requestSubmit: the submitter is not an element');
+        }
+        if (_lumen_form_owner(submitter.__nid__) !== nid) {
+            throw new DOMException(
+                'The submitter is not owned by this form', 'NotFoundError');
+        }
+        submitterNid = submitter.__nid__;
+    }
+    // §4.10.21.4 step 11: fire a cancelable `submit` before handing over.
+    if (!_lumen_dispatch_submit_event(nid, submitterNid)) return;
+    _lumen_request_form_submit(nid, submitterNid);
+};
+// §4.10.21.3: `submit()` skips both constraint validation and the `submit`
+// event — that is the whole difference from `requestSubmit()`.
+HTMLFormElement.prototype.submit = function() {
+    var nid = _lumen_reflect_nid(this);
+    if (nid !== -1) _lumen_request_form_submit(nid, -1);
+};
+
 // ── <selectlist> helpers (Open UI Customizable Select §3) ─────────────────────
 // Returns the <listbox> child nid of a <selectlist>, or null if absent.
 function _lumen_selectlist_listbox(sl_nid) {
@@ -14407,6 +15826,12 @@ function _lumen_gc_collect(nids) {
         delete _input_values[nid];
         delete _canvas2d_ctxs[nid];
         delete _lumen_element_wrappers[nid];
+        // BUG-383 per-nid form state.
+        delete _lumen_option_selected[nid];
+        delete _lumen_selection_state[nid];
+        delete _lumen_indeterminate[nid];
+        delete _lumen_default_checked[nid];
+        delete _lumen_click_in_progress[nid];
     }
 }
 

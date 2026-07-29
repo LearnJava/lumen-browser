@@ -16,7 +16,7 @@ use lumen_core::form::{encode_form_multipart, encode_form_urlencoded, FormEntry,
 use lumen_core::geom::{Rect, Size};
 use lumen_dom::{
     check_validity_form, collect_dom_form_fields, element_validity, find_ancestor_form,
-    invalid_controls_in_form, submit_form, Attribute, Document, FormSubmitEvent, InputType,
+    invalid_controls_in_form, Attribute, Document, InputType,
     NodeData, NodeId, QualName,
 };
 use lumen_layout::{
@@ -553,18 +553,6 @@ pub fn collect_form_entries(
 ///
 /// Для GET-форм вызывающий должен добавить `?body` к action-URL.
 /// Для POST-форм `body` — тело запроса, Content-Type: application/x-www-form-urlencoded.
-/// Execute HTML5 form submission algorithm on the form containing submit_node.
-/// Returns FormSubmitEvent::Valid with action, method, fields if validation passes,
-/// or FormSubmitEvent::Invalid with list of invalid controls if validation fails.
-/// Returns None if submit_node is not part of a form.
-pub fn build_form_submit_event(
-    doc: &Document,
-    submit_node: NodeId,
-) -> Option<FormSubmitEvent> {
-    let form_id = find_ancestor_form(doc, submit_node)?;
-    Some(submit_form(doc, form_id))
-}
-
 /// Encode form fields for submission. Wraps a FormSubmitEvent::Valid variant
 /// and encodes fields as application/x-www-form-urlencoded.
 pub fn encode_form_fields(fields: &[(String, String)]) -> String {
@@ -592,20 +580,34 @@ pub fn encode_form_fields_multipart(fields: &[(String, String)], boundary: &str)
 
 /// Return the `enctype` attribute of the `<form>` ancestor of `submit_node`,
 /// normalised to lower-case. Default: `"application/x-www-form-urlencoded"`.
+///
+/// Kept alongside [`enctype_of_form`] (which the live submission path uses since
+/// BUG-383) for callers that only hold a control inside the form; exercised by
+/// the `get_form_enctype_*` tests below.
+#[allow(dead_code)]
 pub fn get_form_enctype(doc: &Document, submit_node: NodeId) -> String {
-    if let Some(form_id) = find_ancestor_form(doc, submit_node) {
-        let enctype = doc
-            .get(form_id)
-            .get_attr("enctype")
-            .unwrap_or("application/x-www-form-urlencoded")
-            .to_ascii_lowercase();
-        // HTML LS §4.10.18.6: valid enctype values.
-        match enctype.as_str() {
-            "multipart/form-data" | "text/plain" => enctype,
-            _ => "application/x-www-form-urlencoded".to_string(),
-        }
-    } else {
-        "application/x-www-form-urlencoded".to_string()
+    match find_ancestor_form(doc, submit_node) {
+        Some(form_id) => enctype_of_form(doc, form_id),
+        None => "application/x-www-form-urlencoded".to_string(),
+    }
+}
+
+/// Normalised `enctype` of the `<form>` element `form_id` itself.
+///
+/// Same rules as [`get_form_enctype`], but taking the form directly instead of
+/// a control inside it — which is what a script-initiated `form.submit()` has
+/// (BUG-383); `find_ancestor_form` is strictly ancestor-walking and would miss
+/// the form when handed the form itself.
+pub fn enctype_of_form(doc: &Document, form_id: NodeId) -> String {
+    let enctype = doc
+        .get(form_id)
+        .get_attr("enctype")
+        .unwrap_or("application/x-www-form-urlencoded")
+        .to_ascii_lowercase();
+    // HTML LS §4.10.18.6: valid enctype values.
+    match enctype.as_str() {
+        "multipart/form-data" | "text/plain" => enctype,
+        _ => "application/x-www-form-urlencoded".to_string(),
     }
 }
 
