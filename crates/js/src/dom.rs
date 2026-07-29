@@ -16019,1513 +16019,12 @@ mod tests {
         Arc::new(Mutex::new(doc))
     }
 
-    /// Wrap raw RGBA8 test pixels in a shared `Arc<Image>` for `register_img_bitmaps`
-    /// (BUG-272 срез 20: the store shares the decoded `Arc<Image>` rather than an
-    /// eager RGBA8 copy). `data` is a `width × height` RGBA8 buffer.
-    fn test_img_bitmap(width: u32, height: u32, data: Vec<u8>) -> Arc<lumen_image::Image> {
-        Arc::new(lumen_image::Image {
-            width,
-            height,
-            format: lumen_image::PixelFormat::Rgba8,
-            data,
-            icc_profile: None,
-        })
-    }
-
     fn runtime_with_dom(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
         // Enable extension API (chrome.runtime) for unit tests that verify its behaviour.
         rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
         rt.install_dom(doc, "", None, None, None, None, None, None, None, None, false).unwrap();
         rt
-    }
-
-    #[test]
-    fn console_log_does_not_crash() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval("console.log('hello from test')").unwrap();
-    }
-
-    // BUG-243: dynamic SVG built via document.createElementNS must produce NATIVE
-    // arena nodes (carrying __nid__) so that appendChild attaches them to the Rust
-    // document tree and layout/paint can see them. The previous svg.rs override
-    // returned detached `new Ctor()` objects without __nid__, which native
-    // appendChild silently dropped — leaving script-built SVG invisible.
-    #[test]
-    fn create_element_ns_builds_native_svg_tree() {
-        let rt = runtime_with_dom(make_doc());
-        let ok = rt
-            .eval(
-                "var NS = 'http://www.w3.org/2000/svg';\
-                 var svg = document.createElementNS(NS, 'svg');\
-                 var rect = document.createElementNS(NS, 'rect');\
-                 svg.appendChild(rect);\
-                 document.getElementById('main').appendChild(svg);\
-                 typeof svg.__nid__ === 'number' && typeof rect.__nid__ === 'number' \
-                   && document.querySelectorAll('svg').length === 1 \
-                   && document.querySelectorAll('rect').length === 1",
-            )
-            .unwrap();
-        assert_eq!(ok, lumen_core::JsValue::Bool(true));
-    }
-
-    // BUG-243: the repro page (docs/roadmap-svg-cleaves.html) builds its UI with
-    // ParentNode.append() (variadic, accepts strings) and clears the SVG via
-    // `while (svg.firstChild) svg.removeChild(svg.firstChild)`. Both were missing on
-    // native elements, so the page threw "not a function" before rendering. Verify
-    // append() attaches node+string children and firstChild/removeChild can clear them.
-    #[test]
-    fn element_append_and_first_child_round_trip() {
-        let rt = runtime_with_dom(make_doc());
-        let ok = rt
-            .eval(
-                "var box = document.createElement('div');\
-                 var a = document.createElement('span');\
-                 var b = document.createElement('b');\
-                 box.append(a, b);\
-                 var built = box.firstChild.__nid__ === a.__nid__ && box.lastChild.__nid__ === b.__nid__;\
-                 box.append('trailing text');\
-                 var n = 0; while (box.firstChild) { box.removeChild(box.firstChild); if (++n > 20) break; }\
-                 built && box.firstChild === null",
-            )
-            .unwrap();
-        assert_eq!(ok, lumen_core::JsValue::Bool(true));
-    }
-
-    // BUG-291: repeated wraps of the same underlying node (via .lastChild,
-    // .parentElement, .children, etc.) must return the SAME JS object, not a
-    // fresh wrapper each time. `testharness.js`'s `Output.show_results` relies
-    // on `tbody.lastChild.lastChild.appendChild(...)` reading back the very
-    // node it just appended two statements earlier — with fresh wrappers each
-    // access, `tbody.lastChild` after appending a child-of-a-child came back
-    // stale/inconsistent and the nested `.lastChild` was `null`, throwing
-    // `TypeError: Cannot read properties of null (reading 'appendChild')` and
-    // aborting `notify_complete()` before the WPT result callback ran.
-    #[test]
-    fn repeated_node_access_returns_identical_wrapper() {
-        let rt = runtime_with_dom(make_doc());
-        let ok = rt
-            .eval(
-                "var tbody = document.createElement('tbody');\
-                 var tr = document.createElement('tr');\
-                 var td = document.createElement('td');\
-                 tr.appendChild(td);\
-                 tbody.appendChild(tr);\
-                 var identityHolds = tbody.lastChild === tr && tr.lastChild === td;\
-                 var expando = tbody.lastChild;\
-                 expando._probe = 'kept';\
-                 var expandoSurvives = tbody.lastChild._probe === 'kept';\
-                 var nested = tbody.lastChild.lastChild;\
-                 var assertionsNode = document.createElement('div');\
-                 var appended = nested !== null && (nested.appendChild(assertionsNode), true);\
-                 identityHolds && expandoSurvives && appended",
-            )
-            .unwrap();
-        assert_eq!(ok, lumen_core::JsValue::Bool(true));
-    }
-
-    // BUG-243: installing the SVG shim must not abort. It previously threw at
-    // `class SVGElement extends Element` because no global `Element` class exists,
-    // which killed the whole shim (and silently disabled SVG typed interfaces).
-    #[test]
-    fn svg_shim_installs_and_exposes_svg_element() {
-        let rt = runtime_with_dom(make_doc());
-        let ok = rt
-            .eval("typeof window.SVGElement === 'function' && typeof window.SVGSVGElement === 'function'")
-            .unwrap();
-        assert_eq!(ok, lumen_core::JsValue::Bool(true));
-    }
-
-    // BUG-233: `self` must be defined as a global aliasing `window`
-    // (WindowOrWorkerGlobalScope). Webpack runtimes reference bare `self`;
-    // without this they throw `ReferenceError: self is not defined`.
-    #[test]
-    fn self_window_globalthis_are_the_same_object() {
-        let rt = runtime_with_dom(make_doc());
-        let ok = rt
-            .eval(
-                "typeof self !== 'undefined' \
-                 && self === window \
-                 && window.self === window \
-                 && window.window === window \
-                 && globalThis.self === window \
-                 && window.top === window \
-                 && window.parent === window \
-                 && window.frames === window",
-            )
-            .unwrap();
-        assert_eq!(ok, lumen_core::JsValue::Bool(true));
-    }
-
-    // BUG-233: a property stored on `self` must be visible through `window`
-    // and vice-versa, because webpack stores its chunk registry on `self`
-    // and later reads it back. They are the same object reference.
-    #[test]
-    fn self_and_window_share_property_storage() {
-        let rt = runtime_with_dom(make_doc());
-        let ok = rt
-            .eval(
-                "(self.webpackChunk = self.webpackChunk || []).push([1]); \
-                 Array.isArray(window.webpackChunk) && window.webpackChunk.length === 1",
-            )
-            .unwrap();
-        assert_eq!(ok, lumen_core::JsValue::Bool(true));
-    }
-
-    // BUG-280: `window` must literally BE the real QuickJS global object, not
-    // a plain object cross-referenced with `globalThis` via a fixed alias
-    // list. Any property assigned via `window.foo = ...` — including names
-    // not known in advance, e.g. testharness.js's dynamic `expose(fn, name)`
-    // (`window[name] = fn`) — must resolve as a bare, unqualified identifier.
-    #[test]
-    fn dynamic_window_property_is_bare_reachable() {
-        let rt = runtime_with_dom(make_doc());
-        let ok = rt
-            .eval(
-                "window.__bug280_probe = function() { return 42; }; \
-                 typeof __bug280_probe === 'function' && __bug280_probe() === 42",
-            )
-            .unwrap();
-        assert_eq!(ok, lumen_core::JsValue::Bool(true));
-    }
-
-    // BUG-280: same for a property assigned via bare `self`, matching the
-    // real-browser invariant `self === window === globalThis` (same object).
-    #[test]
-    fn dynamic_self_property_is_bare_reachable() {
-        let rt = runtime_with_dom(make_doc());
-        let ok = rt
-            .eval(
-                "self.__bug280_probe2 = 'hi'; \
-                 typeof __bug280_probe2 !== 'undefined' && __bug280_probe2 === 'hi' \
-                 && window === globalThis",
-            )
-            .unwrap();
-        assert_eq!(ok, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn canvas_get_context_2d_returns_object() {
-        let rt = runtime_with_dom(make_doc());
-        let ok = rt
-            .eval(
-                "var c = document.createElement('canvas');\
-                 var ctx = c.getContext('2d');\
-                 ctx !== null && typeof ctx.fillRect === 'function' \
-                   && typeof ctx.beginPath === 'function'",
-            )
-            .unwrap();
-        assert_eq!(ok, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn canvas_get_context_2d_caches_same_object() {
-        let rt = runtime_with_dom(make_doc());
-        let same = rt
-            .eval(
-                "var c = document.createElement('canvas');\
-                 c.getContext('2d') === c.getContext('2d')",
-            )
-            .unwrap();
-        assert_eq!(same, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn canvas_default_dimensions_are_300x150() {
-        let rt = runtime_with_dom(make_doc());
-        let w = rt
-            .eval("var c = document.createElement('canvas'); c.width")
-            .unwrap();
-        let h = rt
-            .eval("var c = document.createElement('canvas'); c.height")
-            .unwrap();
-        assert_eq!(w, lumen_core::JsValue::Number(300.0));
-        assert_eq!(h, lumen_core::JsValue::Number(150.0));
-    }
-
-    #[test]
-    fn canvas_draw_flushes_dirty_buffer() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(
-            "var c = document.createElement('canvas');\
-             c.setAttribute('width', '4'); c.setAttribute('height', '4');\
-             var ctx = c.getContext('2d');\
-             ctx.fillStyle = '#00ff00';\
-             ctx.fillRect(0, 0, 4, 4);",
-        )
-        .unwrap();
-        let updates = rt.flush_canvas_updates();
-        assert_eq!(updates.len(), 1, "one dirty canvas after fillRect");
-        let (_nid, w, h, rgba) = &updates[0];
-        assert_eq!((*w, *h), (4, 4));
-        assert_eq!(rgba[1], 255, "green channel painted");
-    }
-
-    #[test]
-    fn canvas_gradient_object_has_gid_and_add_color_stop() {
-        let rt = runtime_with_dom(make_doc());
-        let ok = rt
-            .eval(
-                "var c = document.createElement('canvas'); var ctx = c.getContext('2d');\
-                 var g = ctx.createLinearGradient(0, 0, 1, 1);\
-                 typeof g === 'object' && g.__gid__ !== undefined \
-                   && typeof g.addColorStop === 'function'",
-            )
-            .unwrap();
-        assert_eq!(ok, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn canvas_radial_and_conic_gradient_constructors_distinct() {
-        let rt = runtime_with_dom(make_doc());
-        let ok = rt
-            .eval(
-                "var c = document.createElement('canvas'); var ctx = c.getContext('2d');\
-                 var r = ctx.createRadialGradient(0, 0, 0, 0, 0, 5);\
-                 var k = ctx.createConicGradient(0, 5, 5);\
-                 r.__gid__ !== undefined && k.__gid__ !== undefined && r.__gid__ !== k.__gid__",
-            )
-            .unwrap();
-        assert_eq!(ok, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn canvas_gradient_fillstyle_paints_pixels() {
-        // A gradient with two identical green stops fills solid green regardless
-        // of interpolation — robustly exercises the fillStyle gradient dispatch.
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(
-            "var c = document.createElement('canvas');\
-             c.setAttribute('width', '4'); c.setAttribute('height', '4');\
-             var ctx = c.getContext('2d');\
-             var g = ctx.createLinearGradient(0, 0, 4, 0);\
-             g.addColorStop(0, '#00ff00'); g.addColorStop(1, '#00ff00');\
-             ctx.fillStyle = g;\
-             ctx.fillRect(0, 0, 4, 4);",
-        )
-        .unwrap();
-        let updates = rt.flush_canvas_updates();
-        assert_eq!(updates.len(), 1, "gradient fill marks the canvas dirty");
-        assert_eq!(updates[0].3[1], 255, "solid-green gradient painted");
-    }
-
-    #[test]
-    fn canvas_shadow_properties_are_wired() {
-        let rt = runtime_with_dom(make_doc());
-        let ok = rt
-            .eval(
-                "var c = document.createElement('canvas'); var ctx = c.getContext('2d');\
-                 ctx.shadowColor = '#ff0000'; ctx.shadowBlur = 4;\
-                 ctx.shadowOffsetX = 2; ctx.shadowOffsetY = 3;\
-                 ctx.shadowColor === '#ff0000' && ctx.shadowBlur === 4 \
-                   && ctx.shadowOffsetX === 2 && ctx.shadowOffsetY === 3",
-            )
-            .unwrap();
-        assert_eq!(ok, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn canvas_create_pattern_returns_pattern_id() {
-        let rt = runtime_with_dom(make_doc());
-        let ok = rt
-            .eval(
-                "var src = document.createElement('canvas');\
-                 src.setAttribute('width', '4'); src.setAttribute('height', '4');\
-                 var sctx = src.getContext('2d'); sctx.fillStyle = '#0000ff'; sctx.fillRect(0, 0, 4, 4);\
-                 var c = document.createElement('canvas'); var ctx = c.getContext('2d');\
-                 var p = ctx.createPattern(src, 'repeat');\
-                 p !== null && p.__patid__ !== undefined",
-            )
-            .unwrap();
-        assert_eq!(ok, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn canvas_create_pattern_null_for_invalid_source() {
-        let rt = runtime_with_dom(make_doc());
-        let ok = rt
-            .eval(
-                "var c = document.createElement('canvas'); var ctx = c.getContext('2d');\
-                 ctx.createPattern(null, 'repeat') === null \
-                   && ctx.createPattern({}, 'repeat') === null",
-            )
-            .unwrap();
-        assert_eq!(ok, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn canvas_draw_image_blits_canvas_source() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(
-            "var src = document.createElement('canvas');\
-             src.setAttribute('width', '4'); src.setAttribute('height', '4');\
-             var sctx = src.getContext('2d'); sctx.fillStyle = '#ff0000'; sctx.fillRect(0, 0, 4, 4);\
-             var c = document.createElement('canvas');\
-             c.setAttribute('width', '4'); c.setAttribute('height', '4');\
-             var ctx = c.getContext('2d');\
-             ctx.drawImage(src, 0, 0);",
-        )
-        .unwrap();
-        let updates = rt.flush_canvas_updates();
-        let any_red = updates
-            .iter()
-            .any(|(_n, _w, _h, rgba)| rgba[0] == 255 && rgba[2] == 0);
-        assert!(any_red, "drawImage blits the red source onto the destination");
-    }
-
-    #[test]
-    fn canvas_draw_image_9arg_crops_source_subrect() {
-        // Source 2×2: left column red, right column blue. The 9-arg form crops the
-        // right (blue) column and stretches it over the whole destination — the
-        // result must contain blue and no red, proving source-crop is honoured.
-        let rt = runtime_with_dom(make_doc());
-        let dest_nid = match rt
-            .eval(
-                "var src = document.createElement('canvas');\
-                 src.setAttribute('width', '2'); src.setAttribute('height', '2');\
-                 var sctx = src.getContext('2d');\
-                 sctx.fillStyle = '#ff0000'; sctx.fillRect(0, 0, 1, 2);\
-                 sctx.fillStyle = '#0000ff'; sctx.fillRect(1, 0, 1, 2);\
-                 var c = document.createElement('canvas');\
-                 c.setAttribute('width', '2'); c.setAttribute('height', '2');\
-                 var ctx = c.getContext('2d');\
-                 ctx.drawImage(src, 1, 0, 1, 2, 0, 0, 2, 2);\
-                 c.__nid__;",
-            )
-            .unwrap()
-        {
-            lumen_core::JsValue::Number(n) => n as u32,
-            other => panic!("expected dest nid number, got {other:?}"),
-        };
-        let updates = rt.flush_canvas_updates();
-        // Inspect the destination canvas pixel buffer (identified by its node id —
-        // the source canvas also contains red, so it must not be sampled here).
-        let dest = updates
-            .iter()
-            .find(|(n, _, _, _)| *n == dest_nid)
-            .expect("destination canvas update");
-        let rgba = &dest.3;
-        let mut any_blue = false;
-        let mut any_red = false;
-        for px in rgba.chunks_exact(4) {
-            if px[3] == 0 {
-                continue;
-            }
-            if px[2] == 255 && px[0] == 0 {
-                any_blue = true;
-            }
-            if px[0] == 255 && px[2] == 0 {
-                any_red = true;
-            }
-        }
-        assert!(any_blue, "cropped blue column must be drawn");
-        assert!(!any_red, "red column must be excluded by the source crop");
-    }
-
-    #[test]
-    fn canvas_draw_image_from_img_element_3arg() {
-        // 3-arg drawImage(img, dx, dy): the img element's registered RGBA8 bitmap is
-        // blitted at natural size onto the destination canvas.
-        let rt = runtime_with_dom(make_doc());
-        // Register a 2×2 fully-red bitmap for the img element (nid is arbitrary but
-        // must match the DOM node created below).
-        let img_nid: u32 = match rt
-            .eval(
-                "var img = document.createElement('img');\
-                 img.setAttribute('src', 'test.png');\
-                 img.setAttribute('width', '2');\
-                 img.setAttribute('height', '2');\
-                 document.body.appendChild(img);\
-                 img.__nid__;",
-            )
-            .unwrap()
-        {
-            lumen_core::JsValue::Number(n) => n as u32,
-            other => panic!("expected img nid, got {other:?}"),
-        };
-        // Inject decoded bitmap: 2×2 solid red RGBA8.
-        let rgba8 = vec![255u8, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255];
-        rt.register_img_bitmaps(vec![(img_nid, test_img_bitmap(2, 2, rgba8))]);
-
-        let dest_nid = match rt
-            .eval(
-                "var c = document.createElement('canvas');\
-                 c.setAttribute('width', '4'); c.setAttribute('height', '4');\
-                 var ctx = c.getContext('2d');\
-                 ctx.drawImage(img, 0, 0);\
-                 c.__nid__;",
-            )
-            .unwrap()
-        {
-            lumen_core::JsValue::Number(n) => n as u32,
-            other => panic!("expected dest nid, got {other:?}"),
-        };
-        let updates = rt.flush_canvas_updates();
-        let dest = updates.iter().find(|(n, _, _, _)| *n == dest_nid)
-            .expect("destination canvas must have an update");
-        // Top-left 2×2 region should be red; natural size is used (dw/dh=0 → native picks 2×2).
-        let rgba = &dest.3;
-        let any_red = rgba.chunks_exact(4).any(|px| px[0] == 255 && px[2] == 0 && px[3] == 255);
-        assert!(any_red, "drawImage(img, dx, dy) must blit the registered red bitmap");
-    }
-
-    #[test]
-    fn canvas_draw_image_from_img_element_5arg() {
-        // 5-arg drawImage(img, dx, dy, dw, dh): blits and scales the bitmap.
-        let rt = runtime_with_dom(make_doc());
-        let img_nid: u32 = match rt
-            .eval(
-                "var img = document.createElement('img');\
-                 img.setAttribute('src', 'blue.png');\
-                 document.body.appendChild(img);\
-                 img.__nid__;",
-            )
-            .unwrap()
-        {
-            lumen_core::JsValue::Number(n) => n as u32,
-            other => panic!("expected img nid, got {other:?}"),
-        };
-        // 1×1 solid blue.
-        let rgba8 = vec![0u8, 0, 255, 255];
-        rt.register_img_bitmaps(vec![(img_nid, test_img_bitmap(1, 1, rgba8))]);
-
-        let dest_nid = match rt
-            .eval(
-                "var c = document.createElement('canvas');\
-                 c.setAttribute('width', '4'); c.setAttribute('height', '4');\
-                 var ctx = c.getContext('2d');\
-                 ctx.drawImage(img, 0, 0, 4, 4);\
-                 c.__nid__;",
-            )
-            .unwrap()
-        {
-            lumen_core::JsValue::Number(n) => n as u32,
-            other => panic!("expected dest nid, got {other:?}"),
-        };
-        let updates = rt.flush_canvas_updates();
-        let dest = updates.iter().find(|(n, _, _, _)| *n == dest_nid)
-            .expect("destination canvas must have an update");
-        let any_blue = dest.3.chunks_exact(4).any(|px| px[2] == 255 && px[0] == 0 && px[3] == 255);
-        assert!(any_blue, "drawImage(img, dx, dy, dw, dh) must blit the registered blue bitmap");
-    }
-
-    #[test]
-    fn canvas_draw_image_from_img_element_9arg_crop() {
-        // 9-arg drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh): crops source sub-rect.
-        // Source: 2×1 bitmap — left pixel red, right pixel green.
-        // Crop right (green) half only: sx=1, sy=0, sw=1, sh=1.
-        let rt = runtime_with_dom(make_doc());
-        let img_nid: u32 = match rt
-            .eval(
-                "var img = document.createElement('img');\
-                 img.setAttribute('src', 'rg.png');\
-                 document.body.appendChild(img);\
-                 img.__nid__;",
-            )
-            .unwrap()
-        {
-            lumen_core::JsValue::Number(n) => n as u32,
-            other => panic!("expected img nid, got {other:?}"),
-        };
-        // 2×1 RGBA8: [R, G, B, A] × 2 pixels.
-        let rgba8 = vec![255u8, 0, 0, 255, 0, 255, 0, 255]; // red | green
-        rt.register_img_bitmaps(vec![(img_nid, test_img_bitmap(2, 1, rgba8))]);
-
-        let dest_nid = match rt
-            .eval(
-                "var c = document.createElement('canvas');\
-                 c.setAttribute('width', '2'); c.setAttribute('height', '2');\
-                 var ctx = c.getContext('2d');\
-                 ctx.drawImage(img, 1, 0, 1, 1, 0, 0, 2, 2);\
-                 c.__nid__;",
-            )
-            .unwrap()
-        {
-            lumen_core::JsValue::Number(n) => n as u32,
-            other => panic!("expected dest nid, got {other:?}"),
-        };
-        let updates = rt.flush_canvas_updates();
-        let dest = updates.iter().find(|(n, _, _, _)| *n == dest_nid)
-            .expect("destination canvas must have an update");
-        let rgba = &dest.3;
-        let any_green = rgba.chunks_exact(4).any(|px| px[1] == 255 && px[0] == 0 && px[3] == 255);
-        let any_red   = rgba.chunks_exact(4).any(|px| px[0] == 255 && px[2] == 0 && px[3] == 255);
-        assert!(any_green, "9-arg drawImage from <img> must blit the green crop");
-        assert!(!any_red, "red pixels from left half must be excluded by the crop");
-    }
-
-    #[test]
-    fn canvas_draw_image_from_img_unregistered_is_noop() {
-        // drawImage with an <img> that has no registered bitmap must be a silent no-op.
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(
-            "var img = document.createElement('img');\
-             img.setAttribute('src', 'missing.png');\
-             document.body.appendChild(img);\
-             var c = document.createElement('canvas');\
-             c.setAttribute('width', '2'); c.setAttribute('height', '2');\
-             var ctx = c.getContext('2d');\
-             ctx.drawImage(img, 0, 0);",
-        )
-        .unwrap();
-        // No bitmap registered → canvas remains transparent, no dirty update needed.
-        let updates = rt.flush_canvas_updates();
-        // The canvas was never dirtied so either has no entry or all-transparent pixels.
-        let all_transparent = updates.iter().all(|(_, _, _, rgba)| {
-            rgba.chunks_exact(4).all(|px| px[3] == 0)
-        });
-        assert!(all_transparent, "drawImage with unregistered <img> must be a no-op");
-    }
-
-    #[test]
-    fn canvas_put_image_data_paints_pixels() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(
-            "var c = document.createElement('canvas');\
-             c.setAttribute('width', '2'); c.setAttribute('height', '2');\
-             var ctx = c.getContext('2d');\
-             var img = ctx.createImageData(2, 2);\
-             for (var i = 0; i < img.data.length; i += 4) {\
-                 img.data[i] = 0; img.data[i + 1] = 255; img.data[i + 2] = 0; img.data[i + 3] = 255;\
-             }\
-             ctx.putImageData(img, 0, 0);",
-        )
-        .unwrap();
-        let updates = rt.flush_canvas_updates();
-        assert!(
-            updates.iter().any(|(_n, _w, _h, rgba)| rgba[1] == 255),
-            "putImageData paints the supplied green pixels"
-        );
-    }
-
-    #[test]
-    fn canvas_get_context_webgl_via_2d_shim_is_null() {
-        // The 2D shim's getContext returns null for non-2d types (the functional
-        // WebGL path is the separate webgl_canvas shim, not wired in these tests).
-        let rt = runtime_with_dom(make_doc());
-        let is_null = rt
-            .eval(
-                "var c = document.createElement('canvas');\
-                 c.getContext('webgl') === null",
-            )
-            .unwrap();
-        assert_eq!(is_null, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn non_canvas_get_context_2d_is_null() {
-        let rt = runtime_with_dom(make_doc());
-        let is_null = rt
-            .eval(
-                "var d = document.createElement('div');\
-                 d.getContext('2d') === null",
-            )
-            .unwrap();
-        assert_eq!(is_null, lumen_core::JsValue::Bool(true));
-    }
-
-    // ── Canvas CSS resize tests ───────────────────────────────────────────────
-
-    #[test]
-    fn canvas_css_resize_scales_pixels() {
-        // After a CSS-driven resize, scale_resize is called and pixels are preserved.
-        let rt = runtime_with_dom(make_doc());
-        // Create canvas, draw a red fill, then trigger CSS resize.
-        rt.eval(r#"
-            var c = document.createElement('canvas');
-            c.width = 4; c.height = 4;
-            var ctx = c.getContext('2d');
-            ctx.fillStyle = '#ff0000';
-            ctx.fillRect(0, 0, 4, 4);
-            window.__test_canvas_nid = c.__nid__;
-        "#).unwrap();
-        let nid_val = rt.eval("window.__test_canvas_nid").unwrap();
-        let nid = if let lumen_core::JsValue::Number(n) = nid_val { n as u32 } else { panic!("no nid") };
-        // First delivery at 4×4 — records baseline.
-        rt.update_layout_rects([(nid, [0.0, 0.0, 4.0, 4.0])].into_iter().collect());
-        rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
-        // Drain dirty list so next flush only sees scale_resize changes.
-        // Must go through the runtime so the drain runs on the JS thread where
-        // the canvas thread-local registry lives (B-1: runtime off the UI thread).
-        let _ = rt.flush_canvas_updates();
-        // Change CSS dims to 8×8 — triggers scale_resize + marks dirty.
-        rt.update_layout_rects([(nid, [0.0, 0.0, 8.0, 8.0])].into_iter().collect());
-        rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
-        // Canvas backing buffer should now be 8×8.
-        let dirty = rt.flush_canvas_updates();
-        let resized = dirty.iter().any(|(id, w, h, _)| *id == nid && *w == 8 && *h == 8);
-        assert!(resized, "canvas should have been scaled to 8×8");
-    }
-
-    #[test]
-    fn canvas_css_resize_fires_resize_event() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(r#"
-            var c2 = document.createElement('canvas');
-            c2.width = 10; c2.height = 10;
-            c2.getContext('2d');
-            var _css_resize_fired = false;
-            c2.addEventListener('resize', function() { _css_resize_fired = true; });
-            window.__test_c2_nid = c2.__nid__;
-        "#).unwrap();
-        let nid_val = rt.eval("window.__test_c2_nid").unwrap();
-        let nid = if let lumen_core::JsValue::Number(n) = nid_val { n as u32 } else { panic!("no nid") };
-        // First delivery at 10×10 — records baseline, no event.
-        rt.update_layout_rects([(nid, [0.0, 0.0, 10.0, 10.0])].into_iter().collect());
-        rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
-        let fired_before = rt.eval("_css_resize_fired").unwrap();
-        assert_eq!(fired_before, lumen_core::JsValue::Bool(false));
-        // Change CSS dims — event should fire.
-        rt.update_layout_rects([(nid, [0.0, 0.0, 20.0, 20.0])].into_iter().collect());
-        rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
-        let fired = rt.eval("_css_resize_fired").unwrap();
-        assert_eq!(fired, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn canvas_css_resize_no_event_when_size_unchanged() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(r#"
-            var c3 = document.createElement('canvas');
-            c3.width = 10; c3.height = 10;
-            c3.getContext('2d');
-            var _css_cnt = 0;
-            c3.addEventListener('resize', function() { _css_cnt++; });
-            window.__test_c3_nid = c3.__nid__;
-        "#).unwrap();
-        let nid_val = rt.eval("window.__test_c3_nid").unwrap();
-        let nid = if let lumen_core::JsValue::Number(n) = nid_val { n as u32 } else { panic!("no nid") };
-        let rect = [(nid, [0.0, 0.0, 10.0, 10.0])].into_iter().collect();
-        rt.update_layout_rects(rect);
-        // First delivery — baseline.
-        rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
-        // Second delivery — same size, no event.
-        rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
-        let cnt = rt.eval("_css_cnt").unwrap();
-        assert_eq!(cnt, lumen_core::JsValue::Number(0.0));
-    }
-
-    #[test]
-    fn canvas_css_resize_not_triggered_without_context() {
-        // A canvas without a 2D context is not tracked by _lumen_deliver_canvas_css_resize.
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(r#"
-            var c4 = document.createElement('canvas');
-            // intentionally no getContext('2d')
-            var _no_ctx_fired = false;
-            c4.addEventListener('resize', function() { _no_ctx_fired = true; });
-            window.__test_c4_nid = c4.__nid__;
-        "#).unwrap();
-        let nid_val = rt.eval("window.__test_c4_nid").unwrap();
-        let nid = if let lumen_core::JsValue::Number(n) = nid_val { n as u32 } else { panic!("no nid") };
-        rt.update_layout_rects([(nid, [0.0, 0.0, 50.0, 50.0])].into_iter().collect());
-        rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
-        rt.update_layout_rects([(nid, [0.0, 0.0, 100.0, 100.0])].into_iter().collect());
-        rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
-        let fired = rt.eval("_no_ctx_fired").unwrap();
-        assert_eq!(fired, lumen_core::JsValue::Bool(false));
-    }
-
-    #[test]
-    fn get_element_by_id_found() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.getElementById('main') !== null")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn get_element_by_id_not_found() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.getElementById('nonexistent') === null")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn get_element_by_id_tag_name() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.getElementById('main').tagName")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::String("DIV".into()));
-    }
-
-    #[test]
-    fn query_selector_by_id() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.querySelector('#main') !== null")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn query_selector_by_class() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.querySelector('.highlight') !== null")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn query_selector_by_tag() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt.eval("document.querySelector('span') !== null").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    // BUG-291: Element.querySelector(All) must be scoped to the calling
-    // element's descendants, and must therefore also work on a subtree that
-    // is not (yet) attached to the document — `document.querySelector` has no
-    // path to reach such nodes at all. Before the fix, `_lumen_query_selector`
-    // ignored `this` and always searched from `document.root()`, so this
-    // returned `null` and crashed `testharness.js`'s results renderer
-    // (`Output.show_results`) with `Cannot read properties of null`.
-    #[test]
-    fn element_query_selector_finds_descendant_in_detached_subtree() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval(
-                "var table = document.createElement('table'); \
-                 var tbody = document.createElement('tbody'); \
-                 table.appendChild(tbody); \
-                 table.querySelector('tbody') === tbody",
-            )
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn element_query_selector_all_finds_matches_in_detached_subtree() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval(
-                "var ul = document.createElement('ul'); \
-                 ul.appendChild(document.createElement('li')); \
-                 ul.appendChild(document.createElement('li')); \
-                 ul.querySelectorAll('li').length",
-            )
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Number(2.0));
-    }
-
-    // BUG-291: Element.querySelector must be scoped to *descendants* — it
-    // must not match the calling element itself, nor elements outside its
-    // subtree (the pre-fix implementation searched the whole document).
-    #[test]
-    fn element_query_selector_excludes_self_and_siblings() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval(
-                "var a = document.createElement('div'); a.id = 'scope'; \
-                 var b = document.createElement('div'); b.id = 'outside'; \
-                 document.body.appendChild(a); document.body.appendChild(b); \
-                 a.querySelector('#scope') === null && a.querySelector('#outside') === null",
-            )
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    // BUG-291: repeated access to the same DOM node must yield the same JS
-    // wrapper object (`===` identity), matching real engines and required by
-    // `testharness.js`'s results renderer (`tbody.lastChild === row`-style
-    // checks). Before the fix, `_lumen_make_element` minted a fresh object on
-    // every call.
-    #[test]
-    fn repeated_node_access_yields_stable_identity() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval(
-                "var parent = document.createElement('div'); \
-                 var child = document.createElement('span'); \
-                 parent.appendChild(child); \
-                 parent.lastChild === child && \
-                 parent.firstChild === parent.lastChild && \
-                 parent.children[0] === child && \
-                 document.getElementById('main') === document.getElementById('main')",
-            )
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn text_content_get() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.getElementById('main').textContent")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::String("Hello".into()));
-    }
-
-    #[test]
-    fn text_content_set_mutates_dom() {
-        let doc = make_doc();
-        let rt = runtime_with_dom(Arc::clone(&doc));
-        rt.eval("document.getElementById('main').textContent = 'World';")
-            .unwrap();
-        drop(rt);
-        let doc = Arc::try_unwrap(doc).unwrap().into_inner().unwrap();
-        // The div#main should now have a single text child "World".
-        let body_id = find_element_by_tag(&doc, "body").unwrap();
-        let div_id = doc.get(body_id).children[0];
-        let text = collect_text_content(&doc, div_id);
-        assert_eq!(text, "World");
-    }
-
-    #[test]
-    fn set_attribute_mutates_dom() {
-        let doc = make_doc();
-        let rt = runtime_with_dom(Arc::clone(&doc));
-        rt.eval("document.getElementById('main').setAttribute('data-x', '42');")
-            .unwrap();
-        drop(rt);
-        let doc = Arc::try_unwrap(doc).unwrap().into_inner().unwrap();
-        let body_id = find_element_by_tag(&doc, "body").unwrap();
-        let div_id = doc.get(body_id).children[0];
-        assert_eq!(doc.get(div_id).get_attr("data-x"), Some("42"));
-    }
-
-    #[test]
-    fn get_attribute_returns_value() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.getElementById('main').getAttribute('id')")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::String("main".into()));
-    }
-
-    #[test]
-    fn get_attribute_returns_null_for_missing() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.getElementById('main').getAttribute('data-missing') === null")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn document_title_get() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt.eval("document.title").unwrap();
-        assert_eq!(result, lumen_core::JsValue::String("Test Page".into()));
-    }
-
-    #[test]
-    fn document_title_set() {
-        let doc = make_doc();
-        let rt = runtime_with_dom(Arc::clone(&doc));
-        rt.eval("document.title = 'New Title';").unwrap();
-        drop(rt);
-        let doc = Arc::try_unwrap(doc).unwrap().into_inner().unwrap();
-        let title_text = find_element_by_tag(&doc, "title")
-            .map(|nid| collect_text_content(&doc, nid))
-            .unwrap_or_default();
-        assert_eq!(title_text, "New Title");
-    }
-
-    #[test]
-    fn document_body_not_null() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt.eval("document.body !== null").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn create_element_and_append() {
-        let doc = make_doc();
-        let rt = runtime_with_dom(Arc::clone(&doc));
-        rt.eval(
-            "var p = document.createElement('p'); \
-             p.textContent = 'new paragraph'; \
-             document.body.appendChild(p);",
-        )
-        .unwrap();
-        drop(rt);
-        let doc = Arc::try_unwrap(doc).unwrap().into_inner().unwrap();
-        let body_id = find_element_by_tag(&doc, "body").unwrap();
-        let body = doc.get(body_id);
-        // body should now have 2 children: the original div + the new <p>
-        assert_eq!(body.children.len(), 2);
-        let p_id = body.children[1];
-        assert_eq!(
-            doc.get(p_id)
-                .element_name()
-                .map(|n| n.local.as_str()),
-            Some("p")
-        );
-        assert_eq!(collect_text_content(&doc, p_id), "new paragraph");
-    }
-
-    #[test]
-    fn query_selector_all_returns_array() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.querySelectorAll('span').length")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Number(1.0));
-    }
-
-    #[test]
-    fn get_elements_by_class_name_document() {
-        // BUG-302: getElementsByClassName was missing from WEB_API_SHIM.
-        let rt = runtime_with_dom(make_doc());
-        let hit = rt
-            .eval("document.getElementsByClassName('highlight').length")
-            .unwrap();
-        assert_eq!(hit, lumen_core::JsValue::Number(1.0));
-        let miss = rt
-            .eval("document.getElementsByClassName('nope').length")
-            .unwrap();
-        assert_eq!(miss, lumen_core::JsValue::Number(0.0));
-        // Empty / whitespace-only token list yields an empty collection.
-        let empty = rt
-            .eval("document.getElementsByClassName('   ').length")
-            .unwrap();
-        assert_eq!(empty, lumen_core::JsValue::Number(0.0));
-    }
-
-    #[test]
-    fn get_elements_by_class_name_scoped_element() {
-        // BUG-302: the scoped variant lives on Element too, restricted to the
-        // element's own descendants.
-        let rt = runtime_with_dom(make_doc());
-        let inside = rt
-            .eval("document.body.getElementsByClassName('highlight').length")
-            .unwrap();
-        assert_eq!(inside, lumen_core::JsValue::Number(1.0));
-        // The <span.highlight> has no descendants, so scoping to it finds none.
-        let none = rt
-            .eval(
-                "document.getElementsByClassName('highlight')[0]\
-                 .getElementsByClassName('highlight').length",
-            )
-            .unwrap();
-        assert_eq!(none, lumen_core::JsValue::Number(0.0));
-    }
-
-    #[test]
-    fn image_constructor_creates_img_element() {
-        // BUG-305: `new Image()` must produce a native <img> wrapper.
-        let rt = runtime_with_dom(make_doc());
-        let tag = rt.eval("new Image().tagName").unwrap();
-        assert_eq!(tag, lumen_core::JsValue::String("IMG".into()));
-    }
-
-    #[test]
-    fn image_constructor_applies_width_height_args() {
-        // BUG-305: Image(width, height) sets the width/height content attributes.
-        let rt = runtime_with_dom(make_doc());
-        let dims = rt
-            .eval(
-                "var i = new Image(4, 6);\
-                 i.getAttribute('width') + 'x' + i.getAttribute('height')",
-            )
-            .unwrap();
-        assert_eq!(dims, lumen_core::JsValue::String("4x6".into()));
-    }
-
-    #[test]
-    fn image_src_reflects_content_attribute() {
-        // BUG-305: `img.src = …` reaches the underlying `src` attribute so layout
-        // can see the dynamically-assigned image, and reads back the same value.
-        let rt = runtime_with_dom(make_doc());
-        let via_attr = rt
-            .eval("var i = new Image(); i.src = 'test.png'; i.getAttribute('src')")
-            .unwrap();
-        assert_eq!(via_attr, lumen_core::JsValue::String("test.png".into()));
-        let via_prop = rt
-            .eval("var i = new Image(); i.src = 'blue.png'; i.src")
-            .unwrap();
-        assert_eq!(via_prop, lumen_core::JsValue::String("blue.png".into()));
-        // Unset `src` reflects as the empty string, per the reflect-a-URL steps.
-        let unset = rt.eval("new Image().src").unwrap();
-        assert_eq!(unset, lumen_core::JsValue::String("".into()));
-    }
-
-    #[test]
-    fn html_image_element_is_a_global() {
-        // BUG-305: `HTMLImageElement` is exposed as a bare interface global.
-        let rt = runtime_with_dom(make_doc());
-        let ty = rt.eval("typeof HTMLImageElement").unwrap();
-        assert_eq!(ty, lumen_core::JsValue::String("function".into()));
-    }
-
-    #[test]
-    fn query_selector_compound_tag_and_id() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.querySelector('div#main') !== null")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn query_selector_compound_wrong_tag_returns_null() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.querySelector('span#main') === null")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn query_selector_compound_tag_and_class() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.querySelector('span.highlight') !== null")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn query_selector_child_combinator() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.querySelector('div > span') !== null")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn query_selector_descendant_combinator() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.querySelector('body span') !== null")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn query_selector_id_child_class() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.querySelector('#main > .highlight') !== null")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn element_matches_compound() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.querySelector('span').matches('span.highlight')")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn element_matches_wrong_compound_returns_false() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.querySelector('span').matches('div.highlight')")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(false));
-    }
-
-    #[test]
-    fn element_closest_finds_ancestor() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.querySelector('span').closest('div') !== null")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn element_closest_id_selector() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.querySelector('span').closest('#main') !== null")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn query_selector_attribute_selector() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("document.querySelector('[id=\"main\"]') !== null")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn alert_does_not_crash() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval("alert('test')").unwrap();
-    }
-
-    #[test]
-    fn window_print_emits_request() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval("window.print()").unwrap();
-        let reqs = rt.take_print_requests();
-        assert_eq!(reqs.len(), 1);
-        assert_eq!(reqs[0].margin_top, 48.0);
-        assert_eq!(reqs[0].margin_bottom, 48.0);
-        assert_eq!(reqs[0].margin_left, 48.0);
-        assert_eq!(reqs[0].margin_right, 48.0);
-    }
-
-    #[test]
-    fn timeout_is_deferred_until_tick() {
-        let rt = runtime_with_dom(make_doc());
-        // Timer must NOT fire synchronously — deferred to _lumen_tick_timers().
-        let result = rt
-            .eval("var x = 0; setTimeout(function() { x = 1; }, 0); x")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Number(0.0));
-    }
-
-    #[test]
-    fn timeout_fires_after_tick() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval("var x = 0; setTimeout(function() { x = 1; }, 0);")
-            .unwrap();
-        let result = rt.eval("_lumen_tick_timers(); x").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Number(1.0));
-    }
-
-    #[test]
-    fn clear_timeout_prevents_fire() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval("var x = 0; var id = setTimeout(function() { x = 1; }, 0); clearTimeout(id);")
-            .unwrap();
-        let result = rt.eval("_lumen_tick_timers(); x").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Number(0.0));
-    }
-
-    #[test]
-    fn set_interval_fires_repeatedly() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval("var n = 0; setInterval(function() { n++; }, 0);")
-            .unwrap();
-        rt.eval("_lumen_tick_timers();").unwrap();
-        rt.eval("_lumen_tick_timers();").unwrap();
-        let result = rt.eval("n").unwrap();
-        // Fired at least twice (exact count depends on scheduling).
-        assert!(matches!(result, lumen_core::JsValue::Number(n) if n >= 2.0));
-    }
-
-    #[test]
-    fn clear_interval_stops_fire() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval("var n = 0; var id = setInterval(function() { n++; }, 0);")
-            .unwrap();
-        rt.eval("_lumen_tick_timers(); clearInterval(id);")
-            .unwrap();
-        rt.eval("_lumen_tick_timers();").unwrap();
-        let result = rt.eval("n").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Number(1.0));
-    }
-
-    #[test]
-    fn bug271_nested_timeout_clamped_to_4ms() {
-        // HTML LS §8.6: nesting level > 5 clamps timeout < 4 ms up to 4 ms.
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("_lumen_clamp_timeout(0, 6) === 4 && _lumen_clamp_timeout(0, 5) === 0 && _lumen_clamp_timeout(10, 7) === 10")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn bug271_timer_callback_inherits_nesting_level() {
-        // A timer scheduled from inside a timer callback records nesting+1,
-        // so deep setTimeout(fn,0) chains eventually hit the 4 ms clamp.
-        let rt = runtime_with_dom(make_doc());
-        rt.eval("setTimeout(function() { setTimeout(function() {}, 0); }, 0);")
-            .unwrap();
-        let before = rt
-            .eval("_lumen_timers.some(function(t) { return t.nesting === 2; })")
-            .unwrap();
-        assert_eq!(before, lumen_core::JsValue::Bool(false));
-        rt.eval("_lumen_tick_timers();").unwrap();
-        // The inner timer scheduled from inside the fired callback carries nesting 2.
-        let after = rt
-            .eval("_lumen_timers.some(function(t) { return t.nesting === 2; })")
-            .unwrap();
-        assert_eq!(after, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn scheduler_post_task_returns_promise() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("typeof scheduler.postTask(function() { return 42; })")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::String("object".into()));
-    }
-
-    #[test]
-    fn scheduler_post_task_rejects_non_function() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("var rejected = false; scheduler.postTask(42).catch(function() { rejected = true; }); rejected")
-            .unwrap();
-        // Promise rejection is async; we can only verify the call didn't throw synchronously.
-        assert_eq!(result, lumen_core::JsValue::Bool(false));
-    }
-
-    #[test]
-    fn history_initial_length_is_one() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt.eval("history.length").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Number(1.0));
-    }
-
-    #[test]
-    fn history_initial_state_is_null() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt.eval("history.state === null").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn history_push_state_increments_length() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval("history.pushState({page: 1}, '', '/page1');").unwrap();
-        rt.eval("history.pushState({page: 2}, '', '/page2');").unwrap();
-        let result = rt.eval("history.length").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Number(3.0));
-    }
-
-    #[test]
-    fn history_state_after_push_returns_state() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval("history.pushState({x: 42}, '', '/p');").unwrap();
-        let result = rt.eval("history.state.x").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Number(42.0));
-    }
-
-    #[test]
-    fn history_replace_state_keeps_length() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval("history.pushState({n: 1}, '', '/a');").unwrap();
-        rt.eval("history.replaceState({n: 99}, '', '/a2');").unwrap();
-        let len = rt.eval("history.length").unwrap();
-        assert_eq!(len, lumen_core::JsValue::Number(2.0));
-        let state = rt.eval("history.state.n").unwrap();
-        assert_eq!(state, lumen_core::JsValue::Number(99.0));
-    }
-
-    #[test]
-    fn history_back_fires_popstate_with_previous_state() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(
-            "var events = []; \
-             window.addEventListener('popstate', function(e) { events.push(e.state); }); \
-             history.pushState({page: 1}, '', '/p1'); \
-             history.pushState({page: 2}, '', '/p2'); \
-             history.back();",
-        )
-        .unwrap();
-        // Traversal is shell-authoritative: history.back() moved the read-cache
-        // cursor and queued a -1 delta, but the popstate is delivered by the shell.
-        // Simulate the shell handing the destination entry back to JS.
-        assert_eq!(rt.take_history_traversals(), vec![-1]);
-        rt.eval("_lumen_deliver_popstate(_lumen_history_state_json(), _lumen_history_url())")
-            .unwrap();
-        let len = rt.eval("events.length").unwrap();
-        assert_eq!(len, lumen_core::JsValue::Number(1.0));
-        let page = rt.eval("events[0].page").unwrap();
-        assert_eq!(page, lumen_core::JsValue::Number(1.0));
-    }
-
-    #[test]
-    fn history_forward_after_back() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(
-            "history.pushState({n: 1}, '', '/p1'); \
-             history.pushState({n: 2}, '', '/p2'); \
-             history.back();",
-        )
-        .unwrap();
-        let state_after_back = rt.eval("history.state.n").unwrap();
-        assert_eq!(state_after_back, lumen_core::JsValue::Number(1.0));
-
-        rt.eval("history.forward();").unwrap();
-        let state_after_fwd = rt.eval("history.state.n").unwrap();
-        assert_eq!(state_after_fwd, lumen_core::JsValue::Number(2.0));
-    }
-
-    #[test]
-    fn history_go_beyond_bounds_does_not_fire_popstate() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(
-            "var fired = false; \
-             window.addEventListener('popstate', function() { fired = true; }); \
-             history.go(-5);",
-        )
-        .unwrap();
-        let result = rt.eval("fired").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(false));
-    }
-
-    #[test]
-    fn window_onpopstate_fires_on_back() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(
-            "var captured = null; \
-             window.onpopstate = function(e) { captured = e.state; }; \
-             history.pushState({v: 7}, '', '/p'); \
-             history.back();",
-        )
-        .unwrap();
-        let result = rt.eval("captured === null").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true)); // initial state is null
-    }
-
-    #[test]
-    fn history_push_drops_forward_entries() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(
-            "history.pushState({n: 1}, '', '/p1'); \
-             history.pushState({n: 2}, '', '/p2'); \
-             history.back(); \
-             history.pushState({n: 3}, '', '/p3');",
-        )
-        .unwrap();
-        // After back + push, forward entries are dropped: entries = [init, {n:1}, {n:3}]
-        let len = rt.eval("history.length").unwrap();
-        assert_eq!(len, lumen_core::JsValue::Number(3.0));
-        let state = rt.eval("history.state.n").unwrap();
-        assert_eq!(state, lumen_core::JsValue::Number(3.0));
-    }
-
-    #[test]
-    fn history_go_zero_reloads() {
-        let rt = runtime_with_url("https://example.com/");
-        rt.eval("history.go(0)").unwrap();
-        let req = rt.take_navigate_request();
-        assert!(matches!(req, Some(NavigateRequest::Reload)));
-    }
-
-    #[test]
-    fn history_go_updates_location() {
-        let rt = runtime_with_url("https://example.com/start");
-        rt.eval(
-            "history.pushState({},'','https://example.com/p1'); \
-             history.pushState({},'','https://example.com/p2'); \
-             history.go(-1);",
-        )
-        .unwrap();
-        // go(-1) queued the traversal and moved the read-cache cursor; the shell
-        // delivers the popstate that syncs `location`. Simulate that delivery.
-        assert_eq!(rt.take_history_traversals(), vec![-1]);
-        rt.eval("_lumen_deliver_popstate(_lumen_history_state_json(), _lumen_history_url())")
-            .unwrap();
-        let path = rt.eval("location.pathname").unwrap();
-        assert_eq!(path, lumen_core::JsValue::String("/p1".into()));
-    }
-
-    #[test]
-    fn history_go_queues_single_step_traversal() {
-        let rt = runtime_with_url("https://example.com/start");
-        rt.eval(
-            "history.pushState({},'','/p1'); \
-             history.pushState({},'','/p2'); \
-             history.back();",
-        )
-        .unwrap();
-        // back() routes through history.go(-1): one shell traversal queued.
-        assert_eq!(rt.take_history_traversals(), vec![-1]);
-    }
-
-    #[test]
-    fn history_go_multistep_queues_full_delta_and_moves_cache() {
-        let rt = runtime_with_url("https://example.com/start");
-        rt.eval(
-            "history.pushState({n:1},'','/p1'); \
-             history.pushState({n:2},'','/p2'); \
-             history.pushState({n:3},'','/p3'); \
-             history.go(-2);",
-        )
-        .unwrap();
-        // The full multi-step delta is queued once (the shell fires a single
-        // destination popstate), and the read-cache cursor jumped two entries.
-        assert_eq!(rt.take_history_traversals(), vec![-2]);
-        assert_eq!(
-            rt.eval("history.state.n").unwrap(),
-            lumen_core::JsValue::Number(1.0)
-        );
-    }
-
-    #[test]
-    fn history_go_zero_does_not_queue_traversal() {
-        let rt = runtime_with_url("https://example.com/");
-        rt.eval("history.go(0)").unwrap();
-        assert!(rt.take_history_traversals().is_empty());
-        assert!(matches!(
-            rt.take_navigate_request(),
-            Some(NavigateRequest::Reload)
-        ));
-    }
-
-    #[test]
-    fn history_go_out_of_range_does_not_queue_traversal() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval("history.go(7)").unwrap();
-        // Out of range in the read-cache → no traversal handed to the shell.
-        assert!(rt.take_history_traversals().is_empty());
-    }
-
-    #[test]
-    fn history_go_out_of_bounds_no_popstate() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(
-            "var fired=false; \
-             window.addEventListener('popstate', function(){fired=true;}); \
-             history.go(7);",
-        )
-        .unwrap();
-        let fired = rt.eval("fired").unwrap();
-        assert_eq!(fired, lumen_core::JsValue::Bool(false));
-    }
-
-    #[test]
-    fn window_object_exposes_history() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt.eval("window.history === history").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn window_remove_event_listener_stops_popstate() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(
-            "var count = 0; \
-             function handler(e) { count++; } \
-             window.addEventListener('popstate', handler); \
-             history.pushState({}, '', '/p'); \
-             history.back();",
-        )
-        .unwrap();
-        // Traversal is shell-authoritative: history.back() queues a -1 delta and
-        // the shell delivers the popstate. While registered, the handler fires once.
-        assert_eq!(rt.take_history_traversals(), vec![-1]);
-        rt.eval("_lumen_deliver_popstate(_lumen_history_state_json(), _lumen_history_url())")
-            .unwrap();
-        // Remove the listener, then traverse again. The shell still delivers a
-        // popstate for each queued delta, but the removed handler must not fire.
-        rt.eval(
-            "window.removeEventListener('popstate', handler); \
-             history.forward(); \
-             history.back();",
-        )
-        .unwrap();
-        let _ = rt.take_history_traversals();
-        rt.eval("_lumen_deliver_popstate(_lumen_history_state_json(), _lumen_history_url())")
-            .unwrap();
-        rt.eval("_lumen_deliver_popstate(_lumen_history_state_json(), _lumen_history_url())")
-            .unwrap();
-        // handler fired once (before removal), then stayed silent.
-        let result = rt.eval("count").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Number(1.0));
     }
 
     // ── classList ────────────────────────────────────────────────────────────
@@ -31163,5 +29662,1563 @@ mod tests {
             )
             .unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    /// V8 port of the "Core DOM basics" test row (S12b-24-core), the first slice of
+    /// the `dom.rs` test-monolith migration described in
+    /// `docs/tasks/ph3-v8-migration.md`: console/SVG/node identity/`self`&`window`
+    /// aliasing, Canvas 2D, `getElementById`/`querySelector`/attributes/text content/
+    /// the `Image` constructor, `alert`/`print`, timers + `scheduler.postTask`, and
+    /// the History API.
+    ///
+    /// The 99 tests moved here verbatim from the QuickJS monolith above — their bodies
+    /// are `rt.eval(...)` plus a handful of `update_layout_rects`/`flush_canvas_updates`/
+    /// `register_img_bitmaps`/`take_*` calls that `V8JsRuntime` mirrors one-for-one — so
+    /// the only edit was which runtime the fixture builds. One assertion did change:
+    /// see `canvas_get_context_webgl_returns_functional_context`.
+    ///
+    /// Gated on `v8-backend` like every other ported module (see `csp.rs`,
+    /// `pointer_capture.rs`): the QuickJS copies are gone, V8 is the default engine
+    /// (ADR-018) and carries the coverage from here on.
+    #[cfg(feature = "v8-backend")]
+    mod v8_core {
+        use super::*;
+        use crate::v8_runtime::V8JsRuntime;
+
+        /// V8 twin of [`super::runtime_with_dom`]: same fixture document, same
+        /// `install_dom` argument list (the two signatures are identical), same
+        /// `_LUMEN_EXTENSION_ACTIVE` pre-eval so `chrome.runtime` is present.
+        fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
+            let rt = V8JsRuntime::new().unwrap();
+            rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+            rt.install_dom(doc, "", None, None, None, None, None, None, None, None, false)
+                .unwrap();
+            rt
+        }
+
+        /// Wrap raw RGBA8 test pixels in a shared `Arc<Image>` for `register_img_bitmaps`
+        /// (BUG-272 срез 20: the store shares the decoded `Arc<Image>` rather than an
+        /// eager RGBA8 copy). `data` is a `width × height` RGBA8 buffer. Moved down here
+        /// with the `drawImage(<img>)` tests — its only callers.
+        fn test_img_bitmap(width: u32, height: u32, data: Vec<u8>) -> Arc<lumen_image::Image> {
+            Arc::new(lumen_image::Image {
+                width,
+                height,
+                format: lumen_image::PixelFormat::Rgba8,
+                data,
+                icc_profile: None,
+            })
+        }
+
+        /// V8 twin of [`super::runtime_with_url`]: the fixture document installed
+        /// against a concrete page URL, which is what the History API tests need
+        /// (`pushState` resolves relative URLs against it).
+        fn v8_runtime_with_url(url: &str) -> V8JsRuntime {
+            let rt = V8JsRuntime::new().unwrap();
+            rt.install_dom(make_doc(), url, None, None, None, None, None, None, None, None, false)
+                .unwrap();
+            rt
+        }
+
+        #[test]
+        fn console_log_does_not_crash() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("console.log('hello from test')").unwrap();
+        }
+
+        // BUG-243: dynamic SVG built via document.createElementNS must produce NATIVE
+        // arena nodes (carrying __nid__) so that appendChild attaches them to the Rust
+        // document tree and layout/paint can see them. The previous svg.rs override
+        // returned detached `new Ctor()` objects without __nid__, which native
+        // appendChild silently dropped — leaving script-built SVG invisible.
+        #[test]
+        fn create_element_ns_builds_native_svg_tree() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "var NS = 'http://www.w3.org/2000/svg';\
+                     var svg = document.createElementNS(NS, 'svg');\
+                     var rect = document.createElementNS(NS, 'rect');\
+                     svg.appendChild(rect);\
+                     document.getElementById('main').appendChild(svg);\
+                     typeof svg.__nid__ === 'number' && typeof rect.__nid__ === 'number' \
+                       && document.querySelectorAll('svg').length === 1 \
+                       && document.querySelectorAll('rect').length === 1",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        // BUG-243: the repro page (docs/roadmap-svg-cleaves.html) builds its UI with
+        // ParentNode.append() (variadic, accepts strings) and clears the SVG via
+        // `while (svg.firstChild) svg.removeChild(svg.firstChild)`. Both were missing on
+        // native elements, so the page threw "not a function" before rendering. Verify
+        // append() attaches node+string children and firstChild/removeChild can clear them.
+        #[test]
+        fn element_append_and_first_child_round_trip() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "var box = document.createElement('div');\
+                     var a = document.createElement('span');\
+                     var b = document.createElement('b');\
+                     box.append(a, b);\
+                     var built = box.firstChild.__nid__ === a.__nid__ && box.lastChild.__nid__ === b.__nid__;\
+                     box.append('trailing text');\
+                     var n = 0; while (box.firstChild) { box.removeChild(box.firstChild); if (++n > 20) break; }\
+                     built && box.firstChild === null",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        // BUG-291: repeated wraps of the same underlying node (via .lastChild,
+        // .parentElement, .children, etc.) must return the SAME JS object, not a
+        // fresh wrapper each time. `testharness.js`'s `Output.show_results` relies
+        // on `tbody.lastChild.lastChild.appendChild(...)` reading back the very
+        // node it just appended two statements earlier — with fresh wrappers each
+        // access, `tbody.lastChild` after appending a child-of-a-child came back
+        // stale/inconsistent and the nested `.lastChild` was `null`, throwing
+        // `TypeError: Cannot read properties of null (reading 'appendChild')` and
+        // aborting `notify_complete()` before the WPT result callback ran.
+        #[test]
+        fn repeated_node_access_returns_identical_wrapper() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "var tbody = document.createElement('tbody');\
+                     var tr = document.createElement('tr');\
+                     var td = document.createElement('td');\
+                     tr.appendChild(td);\
+                     tbody.appendChild(tr);\
+                     var identityHolds = tbody.lastChild === tr && tr.lastChild === td;\
+                     var expando = tbody.lastChild;\
+                     expando._probe = 'kept';\
+                     var expandoSurvives = tbody.lastChild._probe === 'kept';\
+                     var nested = tbody.lastChild.lastChild;\
+                     var assertionsNode = document.createElement('div');\
+                     var appended = nested !== null && (nested.appendChild(assertionsNode), true);\
+                     identityHolds && expandoSurvives && appended",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        // BUG-243: installing the SVG shim must not abort. It previously threw at
+        // `class SVGElement extends Element` because no global `Element` class exists,
+        // which killed the whole shim (and silently disabled SVG typed interfaces).
+        #[test]
+        fn svg_shim_installs_and_exposes_svg_element() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval("typeof window.SVGElement === 'function' && typeof window.SVGSVGElement === 'function'")
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        // BUG-233: `self` must be defined as a global aliasing `window`
+        // (WindowOrWorkerGlobalScope). Webpack runtimes reference bare `self`;
+        // without this they throw `ReferenceError: self is not defined`.
+        #[test]
+        fn self_window_globalthis_are_the_same_object() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "typeof self !== 'undefined' \
+                     && self === window \
+                     && window.self === window \
+                     && window.window === window \
+                     && globalThis.self === window \
+                     && window.top === window \
+                     && window.parent === window \
+                     && window.frames === window",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        // BUG-233: a property stored on `self` must be visible through `window`
+        // and vice-versa, because webpack stores its chunk registry on `self`
+        // and later reads it back. They are the same object reference.
+        #[test]
+        fn self_and_window_share_property_storage() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "(self.webpackChunk = self.webpackChunk || []).push([1]); \
+                     Array.isArray(window.webpackChunk) && window.webpackChunk.length === 1",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        // BUG-280: `window` must literally BE the real QuickJS global object, not
+        // a plain object cross-referenced with `globalThis` via a fixed alias
+        // list. Any property assigned via `window.foo = ...` — including names
+        // not known in advance, e.g. testharness.js's dynamic `expose(fn, name)`
+        // (`window[name] = fn`) — must resolve as a bare, unqualified identifier.
+        #[test]
+        fn dynamic_window_property_is_bare_reachable() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "window.__bug280_probe = function() { return 42; }; \
+                     typeof __bug280_probe === 'function' && __bug280_probe() === 42",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        // BUG-280: same for a property assigned via bare `self`, matching the
+        // real-browser invariant `self === window === globalThis` (same object).
+        #[test]
+        fn dynamic_self_property_is_bare_reachable() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "self.__bug280_probe2 = 'hi'; \
+                     typeof __bug280_probe2 !== 'undefined' && __bug280_probe2 === 'hi' \
+                     && window === globalThis",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn get_element_by_id_found() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.getElementById('main') !== null")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn get_element_by_id_not_found() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.getElementById('nonexistent') === null")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn get_element_by_id_tag_name() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.getElementById('main').tagName")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("DIV".into()));
+        }
+
+        #[test]
+        fn query_selector_by_id() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.querySelector('#main') !== null")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn query_selector_by_class() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.querySelector('.highlight') !== null")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn query_selector_by_tag() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt.eval("document.querySelector('span') !== null").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        // BUG-291: Element.querySelector(All) must be scoped to the calling
+        // element's descendants, and must therefore also work on a subtree that
+        // is not (yet) attached to the document — `document.querySelector` has no
+        // path to reach such nodes at all. Before the fix, `_lumen_query_selector`
+        // ignored `this` and always searched from `document.root()`, so this
+        // returned `null` and crashed `testharness.js`'s results renderer
+        // (`Output.show_results`) with `Cannot read properties of null`.
+        #[test]
+        fn element_query_selector_finds_descendant_in_detached_subtree() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval(
+                    "var table = document.createElement('table'); \
+                     var tbody = document.createElement('tbody'); \
+                     table.appendChild(tbody); \
+                     table.querySelector('tbody') === tbody",
+                )
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn element_query_selector_all_finds_matches_in_detached_subtree() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval(
+                    "var ul = document.createElement('ul'); \
+                     ul.appendChild(document.createElement('li')); \
+                     ul.appendChild(document.createElement('li')); \
+                     ul.querySelectorAll('li').length",
+                )
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(2.0));
+        }
+
+        // BUG-291: Element.querySelector must be scoped to *descendants* — it
+        // must not match the calling element itself, nor elements outside its
+        // subtree (the pre-fix implementation searched the whole document).
+        #[test]
+        fn element_query_selector_excludes_self_and_siblings() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval(
+                    "var a = document.createElement('div'); a.id = 'scope'; \
+                     var b = document.createElement('div'); b.id = 'outside'; \
+                     document.body.appendChild(a); document.body.appendChild(b); \
+                     a.querySelector('#scope') === null && a.querySelector('#outside') === null",
+                )
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        // BUG-291: repeated access to the same DOM node must yield the same JS
+        // wrapper object (`===` identity), matching real engines and required by
+        // `testharness.js`'s results renderer (`tbody.lastChild === row`-style
+        // checks). Before the fix, `_lumen_make_element` minted a fresh object on
+        // every call.
+        #[test]
+        fn repeated_node_access_yields_stable_identity() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval(
+                    "var parent = document.createElement('div'); \
+                     var child = document.createElement('span'); \
+                     parent.appendChild(child); \
+                     parent.lastChild === child && \
+                     parent.firstChild === parent.lastChild && \
+                     parent.children[0] === child && \
+                     document.getElementById('main') === document.getElementById('main')",
+                )
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn text_content_get() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.getElementById('main').textContent")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("Hello".into()));
+        }
+
+        #[test]
+        fn text_content_set_mutates_dom() {
+            let doc = make_doc();
+            let rt = v8_runtime_with_dom(Arc::clone(&doc));
+            rt.eval("document.getElementById('main').textContent = 'World';")
+                .unwrap();
+            drop(rt);
+            let doc = Arc::try_unwrap(doc).unwrap().into_inner().unwrap();
+            // The div#main should now have a single text child "World".
+            let body_id = find_element_by_tag(&doc, "body").unwrap();
+            let div_id = doc.get(body_id).children[0];
+            let text = collect_text_content(&doc, div_id);
+            assert_eq!(text, "World");
+        }
+
+        #[test]
+        fn set_attribute_mutates_dom() {
+            let doc = make_doc();
+            let rt = v8_runtime_with_dom(Arc::clone(&doc));
+            rt.eval("document.getElementById('main').setAttribute('data-x', '42');")
+                .unwrap();
+            drop(rt);
+            let doc = Arc::try_unwrap(doc).unwrap().into_inner().unwrap();
+            let body_id = find_element_by_tag(&doc, "body").unwrap();
+            let div_id = doc.get(body_id).children[0];
+            assert_eq!(doc.get(div_id).get_attr("data-x"), Some("42"));
+        }
+
+        #[test]
+        fn get_attribute_returns_value() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.getElementById('main').getAttribute('id')")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("main".into()));
+        }
+
+        #[test]
+        fn get_attribute_returns_null_for_missing() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.getElementById('main').getAttribute('data-missing') === null")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn document_title_get() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt.eval("document.title").unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("Test Page".into()));
+        }
+
+        #[test]
+        fn document_title_set() {
+            let doc = make_doc();
+            let rt = v8_runtime_with_dom(Arc::clone(&doc));
+            rt.eval("document.title = 'New Title';").unwrap();
+            drop(rt);
+            let doc = Arc::try_unwrap(doc).unwrap().into_inner().unwrap();
+            let title_text = find_element_by_tag(&doc, "title")
+                .map(|nid| collect_text_content(&doc, nid))
+                .unwrap_or_default();
+            assert_eq!(title_text, "New Title");
+        }
+
+        #[test]
+        fn document_body_not_null() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt.eval("document.body !== null").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn create_element_and_append() {
+            let doc = make_doc();
+            let rt = v8_runtime_with_dom(Arc::clone(&doc));
+            rt.eval(
+                "var p = document.createElement('p'); \
+                 p.textContent = 'new paragraph'; \
+                 document.body.appendChild(p);",
+            )
+            .unwrap();
+            drop(rt);
+            let doc = Arc::try_unwrap(doc).unwrap().into_inner().unwrap();
+            let body_id = find_element_by_tag(&doc, "body").unwrap();
+            let body = doc.get(body_id);
+            // body should now have 2 children: the original div + the new <p>
+            assert_eq!(body.children.len(), 2);
+            let p_id = body.children[1];
+            assert_eq!(
+                doc.get(p_id)
+                    .element_name()
+                    .map(|n| n.local.as_str()),
+                Some("p")
+            );
+            assert_eq!(collect_text_content(&doc, p_id), "new paragraph");
+        }
+
+        #[test]
+        fn query_selector_all_returns_array() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.querySelectorAll('span').length")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(1.0));
+        }
+
+        #[test]
+        fn get_elements_by_class_name_document() {
+            // BUG-302: getElementsByClassName was missing from WEB_API_SHIM.
+            let rt = v8_runtime_with_dom(make_doc());
+            let hit = rt
+                .eval("document.getElementsByClassName('highlight').length")
+                .unwrap();
+            assert_eq!(hit, lumen_core::JsValue::Number(1.0));
+            let miss = rt
+                .eval("document.getElementsByClassName('nope').length")
+                .unwrap();
+            assert_eq!(miss, lumen_core::JsValue::Number(0.0));
+            // Empty / whitespace-only token list yields an empty collection.
+            let empty = rt
+                .eval("document.getElementsByClassName('   ').length")
+                .unwrap();
+            assert_eq!(empty, lumen_core::JsValue::Number(0.0));
+        }
+
+        #[test]
+        fn get_elements_by_class_name_scoped_element() {
+            // BUG-302: the scoped variant lives on Element too, restricted to the
+            // element's own descendants.
+            let rt = v8_runtime_with_dom(make_doc());
+            let inside = rt
+                .eval("document.body.getElementsByClassName('highlight').length")
+                .unwrap();
+            assert_eq!(inside, lumen_core::JsValue::Number(1.0));
+            // The <span.highlight> has no descendants, so scoping to it finds none.
+            let none = rt
+                .eval(
+                    "document.getElementsByClassName('highlight')[0]\
+                     .getElementsByClassName('highlight').length",
+                )
+                .unwrap();
+            assert_eq!(none, lumen_core::JsValue::Number(0.0));
+        }
+
+        #[test]
+        fn image_constructor_creates_img_element() {
+            // BUG-305: `new Image()` must produce a native <img> wrapper.
+            let rt = v8_runtime_with_dom(make_doc());
+            let tag = rt.eval("new Image().tagName").unwrap();
+            assert_eq!(tag, lumen_core::JsValue::String("IMG".into()));
+        }
+
+        #[test]
+        fn image_constructor_applies_width_height_args() {
+            // BUG-305: Image(width, height) sets the width/height content attributes.
+            let rt = v8_runtime_with_dom(make_doc());
+            let dims = rt
+                .eval(
+                    "var i = new Image(4, 6);\
+                     i.getAttribute('width') + 'x' + i.getAttribute('height')",
+                )
+                .unwrap();
+            assert_eq!(dims, lumen_core::JsValue::String("4x6".into()));
+        }
+
+        #[test]
+        fn image_src_reflects_content_attribute() {
+            // BUG-305: `img.src = …` reaches the underlying `src` attribute so layout
+            // can see the dynamically-assigned image, and reads back the same value.
+            let rt = v8_runtime_with_dom(make_doc());
+            let via_attr = rt
+                .eval("var i = new Image(); i.src = 'test.png'; i.getAttribute('src')")
+                .unwrap();
+            assert_eq!(via_attr, lumen_core::JsValue::String("test.png".into()));
+            let via_prop = rt
+                .eval("var i = new Image(); i.src = 'blue.png'; i.src")
+                .unwrap();
+            assert_eq!(via_prop, lumen_core::JsValue::String("blue.png".into()));
+            // Unset `src` reflects as the empty string, per the reflect-a-URL steps.
+            let unset = rt.eval("new Image().src").unwrap();
+            assert_eq!(unset, lumen_core::JsValue::String("".into()));
+        }
+
+        #[test]
+        fn html_image_element_is_a_global() {
+            // BUG-305: `HTMLImageElement` is exposed as a bare interface global.
+            let rt = v8_runtime_with_dom(make_doc());
+            let ty = rt.eval("typeof HTMLImageElement").unwrap();
+            assert_eq!(ty, lumen_core::JsValue::String("function".into()));
+        }
+
+        #[test]
+        fn query_selector_compound_tag_and_id() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.querySelector('div#main') !== null")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn query_selector_compound_wrong_tag_returns_null() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.querySelector('span#main') === null")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn query_selector_compound_tag_and_class() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.querySelector('span.highlight') !== null")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn query_selector_child_combinator() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.querySelector('div > span') !== null")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn query_selector_descendant_combinator() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.querySelector('body span') !== null")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn query_selector_id_child_class() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.querySelector('#main > .highlight') !== null")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn element_matches_compound() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.querySelector('span').matches('span.highlight')")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn element_matches_wrong_compound_returns_false() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.querySelector('span').matches('div.highlight')")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(false));
+        }
+
+        #[test]
+        fn element_closest_finds_ancestor() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.querySelector('span').closest('div') !== null")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn element_closest_id_selector() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.querySelector('span').closest('#main') !== null")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn query_selector_attribute_selector() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("document.querySelector('[id=\"main\"]') !== null")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn canvas_get_context_2d_returns_object() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "var c = document.createElement('canvas');\
+                     var ctx = c.getContext('2d');\
+                     ctx !== null && typeof ctx.fillRect === 'function' \
+                       && typeof ctx.beginPath === 'function'",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn canvas_get_context_2d_caches_same_object() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let same = rt
+                .eval(
+                    "var c = document.createElement('canvas');\
+                     c.getContext('2d') === c.getContext('2d')",
+                )
+                .unwrap();
+            assert_eq!(same, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn canvas_default_dimensions_are_300x150() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let w = rt
+                .eval("var c = document.createElement('canvas'); c.width")
+                .unwrap();
+            let h = rt
+                .eval("var c = document.createElement('canvas'); c.height")
+                .unwrap();
+            assert_eq!(w, lumen_core::JsValue::Number(300.0));
+            assert_eq!(h, lumen_core::JsValue::Number(150.0));
+        }
+
+        #[test]
+        fn canvas_draw_flushes_dirty_buffer() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var c = document.createElement('canvas');\
+                 c.setAttribute('width', '4'); c.setAttribute('height', '4');\
+                 var ctx = c.getContext('2d');\
+                 ctx.fillStyle = '#00ff00';\
+                 ctx.fillRect(0, 0, 4, 4);",
+            )
+            .unwrap();
+            let updates = rt.flush_canvas_updates();
+            assert_eq!(updates.len(), 1, "one dirty canvas after fillRect");
+            let (_nid, w, h, rgba) = &updates[0];
+            assert_eq!((*w, *h), (4, 4));
+            assert_eq!(rgba[1], 255, "green channel painted");
+        }
+
+        #[test]
+        fn canvas_gradient_object_has_gid_and_add_color_stop() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "var c = document.createElement('canvas'); var ctx = c.getContext('2d');\
+                     var g = ctx.createLinearGradient(0, 0, 1, 1);\
+                     typeof g === 'object' && g.__gid__ !== undefined \
+                       && typeof g.addColorStop === 'function'",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn canvas_radial_and_conic_gradient_constructors_distinct() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "var c = document.createElement('canvas'); var ctx = c.getContext('2d');\
+                     var r = ctx.createRadialGradient(0, 0, 0, 0, 0, 5);\
+                     var k = ctx.createConicGradient(0, 5, 5);\
+                     r.__gid__ !== undefined && k.__gid__ !== undefined && r.__gid__ !== k.__gid__",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn canvas_gradient_fillstyle_paints_pixels() {
+            // A gradient with two identical green stops fills solid green regardless
+            // of interpolation — robustly exercises the fillStyle gradient dispatch.
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var c = document.createElement('canvas');\
+                 c.setAttribute('width', '4'); c.setAttribute('height', '4');\
+                 var ctx = c.getContext('2d');\
+                 var g = ctx.createLinearGradient(0, 0, 4, 0);\
+                 g.addColorStop(0, '#00ff00'); g.addColorStop(1, '#00ff00');\
+                 ctx.fillStyle = g;\
+                 ctx.fillRect(0, 0, 4, 4);",
+            )
+            .unwrap();
+            let updates = rt.flush_canvas_updates();
+            assert_eq!(updates.len(), 1, "gradient fill marks the canvas dirty");
+            assert_eq!(updates[0].3[1], 255, "solid-green gradient painted");
+        }
+
+        #[test]
+        fn canvas_shadow_properties_are_wired() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "var c = document.createElement('canvas'); var ctx = c.getContext('2d');\
+                     ctx.shadowColor = '#ff0000'; ctx.shadowBlur = 4;\
+                     ctx.shadowOffsetX = 2; ctx.shadowOffsetY = 3;\
+                     ctx.shadowColor === '#ff0000' && ctx.shadowBlur === 4 \
+                       && ctx.shadowOffsetX === 2 && ctx.shadowOffsetY === 3",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn canvas_create_pattern_returns_pattern_id() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "var src = document.createElement('canvas');\
+                     src.setAttribute('width', '4'); src.setAttribute('height', '4');\
+                     var sctx = src.getContext('2d'); sctx.fillStyle = '#0000ff'; sctx.fillRect(0, 0, 4, 4);\
+                     var c = document.createElement('canvas'); var ctx = c.getContext('2d');\
+                     var p = ctx.createPattern(src, 'repeat');\
+                     p !== null && p.__patid__ !== undefined",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn canvas_create_pattern_null_for_invalid_source() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "var c = document.createElement('canvas'); var ctx = c.getContext('2d');\
+                     ctx.createPattern(null, 'repeat') === null \
+                       && ctx.createPattern({}, 'repeat') === null",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn canvas_draw_image_blits_canvas_source() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var src = document.createElement('canvas');\
+                 src.setAttribute('width', '4'); src.setAttribute('height', '4');\
+                 var sctx = src.getContext('2d'); sctx.fillStyle = '#ff0000'; sctx.fillRect(0, 0, 4, 4);\
+                 var c = document.createElement('canvas');\
+                 c.setAttribute('width', '4'); c.setAttribute('height', '4');\
+                 var ctx = c.getContext('2d');\
+                 ctx.drawImage(src, 0, 0);",
+            )
+            .unwrap();
+            let updates = rt.flush_canvas_updates();
+            let any_red = updates
+                .iter()
+                .any(|(_n, _w, _h, rgba)| rgba[0] == 255 && rgba[2] == 0);
+            assert!(any_red, "drawImage blits the red source onto the destination");
+        }
+
+        #[test]
+        fn canvas_draw_image_9arg_crops_source_subrect() {
+            // Source 2×2: left column red, right column blue. The 9-arg form crops the
+            // right (blue) column and stretches it over the whole destination — the
+            // result must contain blue and no red, proving source-crop is honoured.
+            let rt = v8_runtime_with_dom(make_doc());
+            let dest_nid = match rt
+                .eval(
+                    "var src = document.createElement('canvas');\
+                     src.setAttribute('width', '2'); src.setAttribute('height', '2');\
+                     var sctx = src.getContext('2d');\
+                     sctx.fillStyle = '#ff0000'; sctx.fillRect(0, 0, 1, 2);\
+                     sctx.fillStyle = '#0000ff'; sctx.fillRect(1, 0, 1, 2);\
+                     var c = document.createElement('canvas');\
+                     c.setAttribute('width', '2'); c.setAttribute('height', '2');\
+                     var ctx = c.getContext('2d');\
+                     ctx.drawImage(src, 1, 0, 1, 2, 0, 0, 2, 2);\
+                     c.__nid__;",
+                )
+                .unwrap()
+            {
+                lumen_core::JsValue::Number(n) => n as u32,
+                other => panic!("expected dest nid number, got {other:?}"),
+            };
+            let updates = rt.flush_canvas_updates();
+            // Inspect the destination canvas pixel buffer (identified by its node id —
+            // the source canvas also contains red, so it must not be sampled here).
+            let dest = updates
+                .iter()
+                .find(|(n, _, _, _)| *n == dest_nid)
+                .expect("destination canvas update");
+            let rgba = &dest.3;
+            let mut any_blue = false;
+            let mut any_red = false;
+            for px in rgba.chunks_exact(4) {
+                if px[3] == 0 {
+                    continue;
+                }
+                if px[2] == 255 && px[0] == 0 {
+                    any_blue = true;
+                }
+                if px[0] == 255 && px[2] == 0 {
+                    any_red = true;
+                }
+            }
+            assert!(any_blue, "cropped blue column must be drawn");
+            assert!(!any_red, "red column must be excluded by the source crop");
+        }
+
+        #[test]
+        fn canvas_draw_image_from_img_element_3arg() {
+            // 3-arg drawImage(img, dx, dy): the img element's registered RGBA8 bitmap is
+            // blitted at natural size onto the destination canvas.
+            let rt = v8_runtime_with_dom(make_doc());
+            // Register a 2×2 fully-red bitmap for the img element (nid is arbitrary but
+            // must match the DOM node created below).
+            let img_nid: u32 = match rt
+                .eval(
+                    "var img = document.createElement('img');\
+                     img.setAttribute('src', 'test.png');\
+                     img.setAttribute('width', '2');\
+                     img.setAttribute('height', '2');\
+                     document.body.appendChild(img);\
+                     img.__nid__;",
+                )
+                .unwrap()
+            {
+                lumen_core::JsValue::Number(n) => n as u32,
+                other => panic!("expected img nid, got {other:?}"),
+            };
+            // Inject decoded bitmap: 2×2 solid red RGBA8.
+            let rgba8 = vec![255u8, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255];
+            rt.register_img_bitmaps(vec![(img_nid, test_img_bitmap(2, 2, rgba8))]);
+
+            let dest_nid = match rt
+                .eval(
+                    "var c = document.createElement('canvas');\
+                     c.setAttribute('width', '4'); c.setAttribute('height', '4');\
+                     var ctx = c.getContext('2d');\
+                     ctx.drawImage(img, 0, 0);\
+                     c.__nid__;",
+                )
+                .unwrap()
+            {
+                lumen_core::JsValue::Number(n) => n as u32,
+                other => panic!("expected dest nid, got {other:?}"),
+            };
+            let updates = rt.flush_canvas_updates();
+            let dest = updates.iter().find(|(n, _, _, _)| *n == dest_nid)
+                .expect("destination canvas must have an update");
+            // Top-left 2×2 region should be red; natural size is used (dw/dh=0 → native picks 2×2).
+            let rgba = &dest.3;
+            let any_red = rgba.chunks_exact(4).any(|px| px[0] == 255 && px[2] == 0 && px[3] == 255);
+            assert!(any_red, "drawImage(img, dx, dy) must blit the registered red bitmap");
+        }
+
+        #[test]
+        fn canvas_draw_image_from_img_element_5arg() {
+            // 5-arg drawImage(img, dx, dy, dw, dh): blits and scales the bitmap.
+            let rt = v8_runtime_with_dom(make_doc());
+            let img_nid: u32 = match rt
+                .eval(
+                    "var img = document.createElement('img');\
+                     img.setAttribute('src', 'blue.png');\
+                     document.body.appendChild(img);\
+                     img.__nid__;",
+                )
+                .unwrap()
+            {
+                lumen_core::JsValue::Number(n) => n as u32,
+                other => panic!("expected img nid, got {other:?}"),
+            };
+            // 1×1 solid blue.
+            let rgba8 = vec![0u8, 0, 255, 255];
+            rt.register_img_bitmaps(vec![(img_nid, test_img_bitmap(1, 1, rgba8))]);
+
+            let dest_nid = match rt
+                .eval(
+                    "var c = document.createElement('canvas');\
+                     c.setAttribute('width', '4'); c.setAttribute('height', '4');\
+                     var ctx = c.getContext('2d');\
+                     ctx.drawImage(img, 0, 0, 4, 4);\
+                     c.__nid__;",
+                )
+                .unwrap()
+            {
+                lumen_core::JsValue::Number(n) => n as u32,
+                other => panic!("expected dest nid, got {other:?}"),
+            };
+            let updates = rt.flush_canvas_updates();
+            let dest = updates.iter().find(|(n, _, _, _)| *n == dest_nid)
+                .expect("destination canvas must have an update");
+            let any_blue = dest.3.chunks_exact(4).any(|px| px[2] == 255 && px[0] == 0 && px[3] == 255);
+            assert!(any_blue, "drawImage(img, dx, dy, dw, dh) must blit the registered blue bitmap");
+        }
+
+        #[test]
+        fn canvas_draw_image_from_img_element_9arg_crop() {
+            // 9-arg drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh): crops source sub-rect.
+            // Source: 2×1 bitmap — left pixel red, right pixel green.
+            // Crop right (green) half only: sx=1, sy=0, sw=1, sh=1.
+            let rt = v8_runtime_with_dom(make_doc());
+            let img_nid: u32 = match rt
+                .eval(
+                    "var img = document.createElement('img');\
+                     img.setAttribute('src', 'rg.png');\
+                     document.body.appendChild(img);\
+                     img.__nid__;",
+                )
+                .unwrap()
+            {
+                lumen_core::JsValue::Number(n) => n as u32,
+                other => panic!("expected img nid, got {other:?}"),
+            };
+            // 2×1 RGBA8: [R, G, B, A] × 2 pixels.
+            let rgba8 = vec![255u8, 0, 0, 255, 0, 255, 0, 255]; // red | green
+            rt.register_img_bitmaps(vec![(img_nid, test_img_bitmap(2, 1, rgba8))]);
+
+            let dest_nid = match rt
+                .eval(
+                    "var c = document.createElement('canvas');\
+                     c.setAttribute('width', '2'); c.setAttribute('height', '2');\
+                     var ctx = c.getContext('2d');\
+                     ctx.drawImage(img, 1, 0, 1, 1, 0, 0, 2, 2);\
+                     c.__nid__;",
+                )
+                .unwrap()
+            {
+                lumen_core::JsValue::Number(n) => n as u32,
+                other => panic!("expected dest nid, got {other:?}"),
+            };
+            let updates = rt.flush_canvas_updates();
+            let dest = updates.iter().find(|(n, _, _, _)| *n == dest_nid)
+                .expect("destination canvas must have an update");
+            let rgba = &dest.3;
+            let any_green = rgba.chunks_exact(4).any(|px| px[1] == 255 && px[0] == 0 && px[3] == 255);
+            let any_red   = rgba.chunks_exact(4).any(|px| px[0] == 255 && px[2] == 0 && px[3] == 255);
+            assert!(any_green, "9-arg drawImage from <img> must blit the green crop");
+            assert!(!any_red, "red pixels from left half must be excluded by the crop");
+        }
+
+        #[test]
+        fn canvas_draw_image_from_img_unregistered_is_noop() {
+            // drawImage with an <img> that has no registered bitmap must be a silent no-op.
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var img = document.createElement('img');\
+                 img.setAttribute('src', 'missing.png');\
+                 document.body.appendChild(img);\
+                 var c = document.createElement('canvas');\
+                 c.setAttribute('width', '2'); c.setAttribute('height', '2');\
+                 var ctx = c.getContext('2d');\
+                 ctx.drawImage(img, 0, 0);",
+            )
+            .unwrap();
+            // No bitmap registered → canvas remains transparent, no dirty update needed.
+            let updates = rt.flush_canvas_updates();
+            // The canvas was never dirtied so either has no entry or all-transparent pixels.
+            let all_transparent = updates.iter().all(|(_, _, _, rgba)| {
+                rgba.chunks_exact(4).all(|px| px[3] == 0)
+            });
+            assert!(all_transparent, "drawImage with unregistered <img> must be a no-op");
+        }
+
+        #[test]
+        fn canvas_put_image_data_paints_pixels() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var c = document.createElement('canvas');\
+                 c.setAttribute('width', '2'); c.setAttribute('height', '2');\
+                 var ctx = c.getContext('2d');\
+                 var img = ctx.createImageData(2, 2);\
+                 for (var i = 0; i < img.data.length; i += 4) {\
+                     img.data[i] = 0; img.data[i + 1] = 255; img.data[i + 2] = 0; img.data[i + 3] = 255;\
+                 }\
+                 ctx.putImageData(img, 0, 0);",
+            )
+            .unwrap();
+            let updates = rt.flush_canvas_updates();
+            assert!(
+                updates.iter().any(|(_n, _w, _h, rgba)| rgba[1] == 255),
+                "putImageData paints the supplied green pixels"
+            );
+        }
+
+        #[test]
+        fn canvas_get_context_webgl_returns_functional_context() {
+            // Tightened during the port (was `canvas_get_context_webgl_via_2d_shim_is_null`,
+            // asserting `getContext('webgl') === null`). That expectation encoded an
+            // install-ordering defect of the QuickJS path, not a shim boundary:
+            // `lib.rs::install_dom` evaluates `webgl_canvas::WEBGL_SHIM` *before*
+            // `dom::install_dom_api` defines `document`, so the shim's
+            // `if (typeof document !== 'undefined')` guard skipped its
+            // `document.createElement` hook and WebGL was silently dead there.
+            // `V8JsRuntime::install_dom` evals WEB_API_SHIM first, so the hook lands and
+            // `getContext('webgl')` hands out the real software-rasterizer context —
+            // the spec-correct answer (HTML LS §4.12.4). The 2D shim's own fall-through
+            // to `null` for unknown types is still covered by
+            // `webgl_canvas::tests::get_context_unknown_type_returns_null`.
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "var c = document.createElement('canvas');\
+                     var gl = c.getContext('webgl');\
+                     gl !== null && typeof gl.getParameter === 'function' \
+                       && gl.drawingBufferWidth === 300 && gl.canvas === c \
+                       && typeof gl.fillRect === 'undefined'",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn non_canvas_get_context_2d_is_null() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let is_null = rt
+                .eval(
+                    "var d = document.createElement('div');\
+                     d.getContext('2d') === null",
+                )
+                .unwrap();
+            assert_eq!(is_null, lumen_core::JsValue::Bool(true));
+        }
+
+        // ── Canvas CSS resize tests ───────────────────────────────────────────────
+
+        #[test]
+        fn canvas_css_resize_scales_pixels() {
+            // After a CSS-driven resize, scale_resize is called and pixels are preserved.
+            let rt = v8_runtime_with_dom(make_doc());
+            // Create canvas, draw a red fill, then trigger CSS resize.
+            rt.eval(r#"
+                var c = document.createElement('canvas');
+                c.width = 4; c.height = 4;
+                var ctx = c.getContext('2d');
+                ctx.fillStyle = '#ff0000';
+                ctx.fillRect(0, 0, 4, 4);
+                window.__test_canvas_nid = c.__nid__;
+            "#).unwrap();
+            let nid_val = rt.eval("window.__test_canvas_nid").unwrap();
+            let nid = if let lumen_core::JsValue::Number(n) = nid_val { n as u32 } else { panic!("no nid") };
+            // First delivery at 4×4 — records baseline.
+            rt.update_layout_rects([(nid, [0.0, 0.0, 4.0, 4.0])].into_iter().collect());
+            rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
+            // Drain dirty list so next flush only sees scale_resize changes.
+            // Must go through the runtime so the drain runs on the JS thread where
+            // the canvas thread-local registry lives (B-1: runtime off the UI thread).
+            let _ = rt.flush_canvas_updates();
+            // Change CSS dims to 8×8 — triggers scale_resize + marks dirty.
+            rt.update_layout_rects([(nid, [0.0, 0.0, 8.0, 8.0])].into_iter().collect());
+            rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
+            // Canvas backing buffer should now be 8×8.
+            let dirty = rt.flush_canvas_updates();
+            let resized = dirty.iter().any(|(id, w, h, _)| *id == nid && *w == 8 && *h == 8);
+            assert!(resized, "canvas should have been scaled to 8×8");
+        }
+
+        #[test]
+        fn canvas_css_resize_fires_resize_event() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(r#"
+                var c2 = document.createElement('canvas');
+                c2.width = 10; c2.height = 10;
+                c2.getContext('2d');
+                var _css_resize_fired = false;
+                c2.addEventListener('resize', function() { _css_resize_fired = true; });
+                window.__test_c2_nid = c2.__nid__;
+            "#).unwrap();
+            let nid_val = rt.eval("window.__test_c2_nid").unwrap();
+            let nid = if let lumen_core::JsValue::Number(n) = nid_val { n as u32 } else { panic!("no nid") };
+            // First delivery at 10×10 — records baseline, no event.
+            rt.update_layout_rects([(nid, [0.0, 0.0, 10.0, 10.0])].into_iter().collect());
+            rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
+            let fired_before = rt.eval("_css_resize_fired").unwrap();
+            assert_eq!(fired_before, lumen_core::JsValue::Bool(false));
+            // Change CSS dims — event should fire.
+            rt.update_layout_rects([(nid, [0.0, 0.0, 20.0, 20.0])].into_iter().collect());
+            rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
+            let fired = rt.eval("_css_resize_fired").unwrap();
+            assert_eq!(fired, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn canvas_css_resize_no_event_when_size_unchanged() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(r#"
+                var c3 = document.createElement('canvas');
+                c3.width = 10; c3.height = 10;
+                c3.getContext('2d');
+                var _css_cnt = 0;
+                c3.addEventListener('resize', function() { _css_cnt++; });
+                window.__test_c3_nid = c3.__nid__;
+            "#).unwrap();
+            let nid_val = rt.eval("window.__test_c3_nid").unwrap();
+            let nid = if let lumen_core::JsValue::Number(n) = nid_val { n as u32 } else { panic!("no nid") };
+            let rect = [(nid, [0.0, 0.0, 10.0, 10.0])].into_iter().collect();
+            rt.update_layout_rects(rect);
+            // First delivery — baseline.
+            rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
+            // Second delivery — same size, no event.
+            rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
+            let cnt = rt.eval("_css_cnt").unwrap();
+            assert_eq!(cnt, lumen_core::JsValue::Number(0.0));
+        }
+
+        #[test]
+        fn canvas_css_resize_not_triggered_without_context() {
+            // A canvas without a 2D context is not tracked by _lumen_deliver_canvas_css_resize.
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(r#"
+                var c4 = document.createElement('canvas');
+                // intentionally no getContext('2d')
+                var _no_ctx_fired = false;
+                c4.addEventListener('resize', function() { _no_ctx_fired = true; });
+                window.__test_c4_nid = c4.__nid__;
+            "#).unwrap();
+            let nid_val = rt.eval("window.__test_c4_nid").unwrap();
+            let nid = if let lumen_core::JsValue::Number(n) = nid_val { n as u32 } else { panic!("no nid") };
+            rt.update_layout_rects([(nid, [0.0, 0.0, 50.0, 50.0])].into_iter().collect());
+            rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
+            rt.update_layout_rects([(nid, [0.0, 0.0, 100.0, 100.0])].into_iter().collect());
+            rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
+            let fired = rt.eval("_no_ctx_fired").unwrap();
+            assert_eq!(fired, lumen_core::JsValue::Bool(false));
+        }
+
+        #[test]
+        fn alert_does_not_crash() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("alert('test')").unwrap();
+        }
+
+        #[test]
+        fn window_print_emits_request() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("window.print()").unwrap();
+            let reqs = rt.take_print_requests();
+            assert_eq!(reqs.len(), 1);
+            assert_eq!(reqs[0].margin_top, 48.0);
+            assert_eq!(reqs[0].margin_bottom, 48.0);
+            assert_eq!(reqs[0].margin_left, 48.0);
+            assert_eq!(reqs[0].margin_right, 48.0);
+        }
+
+        #[test]
+        fn timeout_is_deferred_until_tick() {
+            let rt = v8_runtime_with_dom(make_doc());
+            // Timer must NOT fire synchronously — deferred to _lumen_tick_timers().
+            let result = rt
+                .eval("var x = 0; setTimeout(function() { x = 1; }, 0); x")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(0.0));
+        }
+
+        #[test]
+        fn timeout_fires_after_tick() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("var x = 0; setTimeout(function() { x = 1; }, 0);")
+                .unwrap();
+            let result = rt.eval("_lumen_tick_timers(); x").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(1.0));
+        }
+
+        #[test]
+        fn clear_timeout_prevents_fire() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("var x = 0; var id = setTimeout(function() { x = 1; }, 0); clearTimeout(id);")
+                .unwrap();
+            let result = rt.eval("_lumen_tick_timers(); x").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(0.0));
+        }
+
+        #[test]
+        fn set_interval_fires_repeatedly() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("var n = 0; setInterval(function() { n++; }, 0);")
+                .unwrap();
+            rt.eval("_lumen_tick_timers();").unwrap();
+            rt.eval("_lumen_tick_timers();").unwrap();
+            let result = rt.eval("n").unwrap();
+            // Fired at least twice (exact count depends on scheduling).
+            assert!(matches!(result, lumen_core::JsValue::Number(n) if n >= 2.0));
+        }
+
+        #[test]
+        fn clear_interval_stops_fire() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("var n = 0; var id = setInterval(function() { n++; }, 0);")
+                .unwrap();
+            rt.eval("_lumen_tick_timers(); clearInterval(id);")
+                .unwrap();
+            rt.eval("_lumen_tick_timers();").unwrap();
+            let result = rt.eval("n").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(1.0));
+        }
+
+        #[test]
+        fn bug271_nested_timeout_clamped_to_4ms() {
+            // HTML LS §8.6: nesting level > 5 clamps timeout < 4 ms up to 4 ms.
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("_lumen_clamp_timeout(0, 6) === 4 && _lumen_clamp_timeout(0, 5) === 0 && _lumen_clamp_timeout(10, 7) === 10")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn bug271_timer_callback_inherits_nesting_level() {
+            // A timer scheduled from inside a timer callback records nesting+1,
+            // so deep setTimeout(fn,0) chains eventually hit the 4 ms clamp.
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("setTimeout(function() { setTimeout(function() {}, 0); }, 0);")
+                .unwrap();
+            let before = rt
+                .eval("_lumen_timers.some(function(t) { return t.nesting === 2; })")
+                .unwrap();
+            assert_eq!(before, lumen_core::JsValue::Bool(false));
+            rt.eval("_lumen_tick_timers();").unwrap();
+            // The inner timer scheduled from inside the fired callback carries nesting 2.
+            let after = rt
+                .eval("_lumen_timers.some(function(t) { return t.nesting === 2; })")
+                .unwrap();
+            assert_eq!(after, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn scheduler_post_task_returns_promise() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("typeof scheduler.postTask(function() { return 42; })")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("object".into()));
+        }
+
+        #[test]
+        fn scheduler_post_task_rejects_non_function() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("var rejected = false; scheduler.postTask(42).catch(function() { rejected = true; }); rejected")
+                .unwrap();
+            // Promise rejection is async; we can only verify the call didn't throw synchronously.
+            assert_eq!(result, lumen_core::JsValue::Bool(false));
+        }
+
+        #[test]
+        fn history_initial_length_is_one() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt.eval("history.length").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(1.0));
+        }
+
+        #[test]
+        fn history_initial_state_is_null() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt.eval("history.state === null").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn history_push_state_increments_length() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("history.pushState({page: 1}, '', '/page1');").unwrap();
+            rt.eval("history.pushState({page: 2}, '', '/page2');").unwrap();
+            let result = rt.eval("history.length").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(3.0));
+        }
+
+        #[test]
+        fn history_state_after_push_returns_state() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("history.pushState({x: 42}, '', '/p');").unwrap();
+            let result = rt.eval("history.state.x").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(42.0));
+        }
+
+        #[test]
+        fn history_replace_state_keeps_length() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("history.pushState({n: 1}, '', '/a');").unwrap();
+            rt.eval("history.replaceState({n: 99}, '', '/a2');").unwrap();
+            let len = rt.eval("history.length").unwrap();
+            assert_eq!(len, lumen_core::JsValue::Number(2.0));
+            let state = rt.eval("history.state.n").unwrap();
+            assert_eq!(state, lumen_core::JsValue::Number(99.0));
+        }
+
+        #[test]
+        fn history_back_fires_popstate_with_previous_state() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var events = []; \
+                 window.addEventListener('popstate', function(e) { events.push(e.state); }); \
+                 history.pushState({page: 1}, '', '/p1'); \
+                 history.pushState({page: 2}, '', '/p2'); \
+                 history.back();",
+            )
+            .unwrap();
+            // Traversal is shell-authoritative: history.back() moved the read-cache
+            // cursor and queued a -1 delta, but the popstate is delivered by the shell.
+            // Simulate the shell handing the destination entry back to JS.
+            assert_eq!(rt.take_history_traversals(), vec![-1]);
+            rt.eval("_lumen_deliver_popstate(_lumen_history_state_json(), _lumen_history_url())")
+                .unwrap();
+            let len = rt.eval("events.length").unwrap();
+            assert_eq!(len, lumen_core::JsValue::Number(1.0));
+            let page = rt.eval("events[0].page").unwrap();
+            assert_eq!(page, lumen_core::JsValue::Number(1.0));
+        }
+
+        #[test]
+        fn history_forward_after_back() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "history.pushState({n: 1}, '', '/p1'); \
+                 history.pushState({n: 2}, '', '/p2'); \
+                 history.back();",
+            )
+            .unwrap();
+            let state_after_back = rt.eval("history.state.n").unwrap();
+            assert_eq!(state_after_back, lumen_core::JsValue::Number(1.0));
+
+            rt.eval("history.forward();").unwrap();
+            let state_after_fwd = rt.eval("history.state.n").unwrap();
+            assert_eq!(state_after_fwd, lumen_core::JsValue::Number(2.0));
+        }
+
+        #[test]
+        fn history_go_beyond_bounds_does_not_fire_popstate() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var fired = false; \
+                 window.addEventListener('popstate', function() { fired = true; }); \
+                 history.go(-5);",
+            )
+            .unwrap();
+            let result = rt.eval("fired").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(false));
+        }
+
+        #[test]
+        fn window_onpopstate_fires_on_back() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var captured = null; \
+                 window.onpopstate = function(e) { captured = e.state; }; \
+                 history.pushState({v: 7}, '', '/p'); \
+                 history.back();",
+            )
+            .unwrap();
+            let result = rt.eval("captured === null").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true)); // initial state is null
+        }
+
+        #[test]
+        fn history_push_drops_forward_entries() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "history.pushState({n: 1}, '', '/p1'); \
+                 history.pushState({n: 2}, '', '/p2'); \
+                 history.back(); \
+                 history.pushState({n: 3}, '', '/p3');",
+            )
+            .unwrap();
+            // After back + push, forward entries are dropped: entries = [init, {n:1}, {n:3}]
+            let len = rt.eval("history.length").unwrap();
+            assert_eq!(len, lumen_core::JsValue::Number(3.0));
+            let state = rt.eval("history.state.n").unwrap();
+            assert_eq!(state, lumen_core::JsValue::Number(3.0));
+        }
+
+        #[test]
+        fn history_go_zero_reloads() {
+            let rt = v8_runtime_with_url("https://example.com/");
+            rt.eval("history.go(0)").unwrap();
+            let req = rt.take_navigate_request();
+            assert!(matches!(req, Some(NavigateRequest::Reload)));
+        }
+
+        #[test]
+        fn history_go_updates_location() {
+            let rt = v8_runtime_with_url("https://example.com/start");
+            rt.eval(
+                "history.pushState({},'','https://example.com/p1'); \
+                 history.pushState({},'','https://example.com/p2'); \
+                 history.go(-1);",
+            )
+            .unwrap();
+            // go(-1) queued the traversal and moved the read-cache cursor; the shell
+            // delivers the popstate that syncs `location`. Simulate that delivery.
+            assert_eq!(rt.take_history_traversals(), vec![-1]);
+            rt.eval("_lumen_deliver_popstate(_lumen_history_state_json(), _lumen_history_url())")
+                .unwrap();
+            let path = rt.eval("location.pathname").unwrap();
+            assert_eq!(path, lumen_core::JsValue::String("/p1".into()));
+        }
+
+        #[test]
+        fn history_go_queues_single_step_traversal() {
+            let rt = v8_runtime_with_url("https://example.com/start");
+            rt.eval(
+                "history.pushState({},'','/p1'); \
+                 history.pushState({},'','/p2'); \
+                 history.back();",
+            )
+            .unwrap();
+            // back() routes through history.go(-1): one shell traversal queued.
+            assert_eq!(rt.take_history_traversals(), vec![-1]);
+        }
+
+        #[test]
+        fn history_go_multistep_queues_full_delta_and_moves_cache() {
+            let rt = v8_runtime_with_url("https://example.com/start");
+            rt.eval(
+                "history.pushState({n:1},'','/p1'); \
+                 history.pushState({n:2},'','/p2'); \
+                 history.pushState({n:3},'','/p3'); \
+                 history.go(-2);",
+            )
+            .unwrap();
+            // The full multi-step delta is queued once (the shell fires a single
+            // destination popstate), and the read-cache cursor jumped two entries.
+            assert_eq!(rt.take_history_traversals(), vec![-2]);
+            assert_eq!(
+                rt.eval("history.state.n").unwrap(),
+                lumen_core::JsValue::Number(1.0)
+            );
+        }
+
+        #[test]
+        fn history_go_zero_does_not_queue_traversal() {
+            let rt = v8_runtime_with_url("https://example.com/");
+            rt.eval("history.go(0)").unwrap();
+            assert!(rt.take_history_traversals().is_empty());
+            assert!(matches!(
+                rt.take_navigate_request(),
+                Some(NavigateRequest::Reload)
+            ));
+        }
+
+        #[test]
+        fn history_go_out_of_range_does_not_queue_traversal() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("history.go(7)").unwrap();
+            // Out of range in the read-cache → no traversal handed to the shell.
+            assert!(rt.take_history_traversals().is_empty());
+        }
+
+        #[test]
+        fn history_go_out_of_bounds_no_popstate() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var fired=false; \
+                 window.addEventListener('popstate', function(){fired=true;}); \
+                 history.go(7);",
+            )
+            .unwrap();
+            let fired = rt.eval("fired").unwrap();
+            assert_eq!(fired, lumen_core::JsValue::Bool(false));
+        }
+
+        #[test]
+        fn window_object_exposes_history() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt.eval("window.history === history").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn window_remove_event_listener_stops_popstate() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var count = 0; \
+                 function handler(e) { count++; } \
+                 window.addEventListener('popstate', handler); \
+                 history.pushState({}, '', '/p'); \
+                 history.back();",
+            )
+            .unwrap();
+            // Traversal is shell-authoritative: history.back() queues a -1 delta and
+            // the shell delivers the popstate. While registered, the handler fires once.
+            assert_eq!(rt.take_history_traversals(), vec![-1]);
+            rt.eval("_lumen_deliver_popstate(_lumen_history_state_json(), _lumen_history_url())")
+                .unwrap();
+            // Remove the listener, then traverse again. The shell still delivers a
+            // popstate for each queued delta, but the removed handler must not fire.
+            rt.eval(
+                "window.removeEventListener('popstate', handler); \
+                 history.forward(); \
+                 history.back();",
+            )
+            .unwrap();
+            let _ = rt.take_history_traversals();
+            rt.eval("_lumen_deliver_popstate(_lumen_history_state_json(), _lumen_history_url())")
+                .unwrap();
+            rt.eval("_lumen_deliver_popstate(_lumen_history_state_json(), _lumen_history_url())")
+                .unwrap();
+            // handler fired once (before removal), then stayed silent.
+            let result = rt.eval("count").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(1.0));
+        }
     }
 }

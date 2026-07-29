@@ -3456,6 +3456,12 @@ impl PersistentJs for V8PersistentJs {
     fn deliver_lazy_images(&self) {
         self.eval_js("_lumen_deliver_lazy_images();");
     }
+    // BUG-447: this override was missing, so on the default V8 build the call fell
+    // through to the trait's no-op default and the `img_bitmap_store` stayed empty
+    // for the whole session — `drawImage(imgElement, …)` silently painted nothing.
+    fn register_img_bitmaps(&self, bitmaps: Vec<(u32, Arc<lumen_image::Image>)>) {
+        self.rt.register_img_bitmaps(bitmaps);
+    }
     fn take_lazy_image_requests(&self) -> Vec<(u32, String)> {
         self.rt.take_lazy_image_requests()
     }

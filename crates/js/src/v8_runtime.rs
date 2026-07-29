@@ -675,6 +675,23 @@ impl V8JsRuntime {
         self.run(|_inner| crate::canvas2d::flush_dirty())
     }
 
+    /// Register decoded `<img>` bitmaps for canvas `drawImage`, keyed by node id.
+    ///
+    /// Mirrors [`crate::QuickJsRuntime::register_img_bitmaps`]: the shell calls it
+    /// after `fetch_and_decode_images` so `drawImage(imgElement, …)` can read the
+    /// decoded pixels out of [`crate::img_bitmap_store`]. The store is
+    /// `thread_local!`, so the writes must happen on the JS thread — hence `run`.
+    /// The `Arc` is shared with the shell's decode cache (no pixel copy, BUG-272
+    /// срез 20); previous contents are cleared first (navigation-scoped).
+    pub fn register_img_bitmaps(&self, bitmaps: Vec<(u32, Arc<lumen_image::Image>)>) {
+        self.run(move |_inner| {
+            crate::img_bitmap_store::clear_img_bitmaps();
+            for (nid, image) in bitmaps {
+                crate::img_bitmap_store::set_img_bitmap(nid, image);
+            }
+        });
+    }
+
     /// Install the import map (HTML LS §8.1.6.2) used to resolve bare module
     /// specifiers such as `"react"`.
     ///
