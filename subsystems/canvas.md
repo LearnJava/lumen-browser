@@ -109,6 +109,11 @@ one. It now computes fractional coverage and scales the source alpha by it.
 
 - Gaussian blur for `shadowBlur > 0`.
 - Canvas fingerprint noise (ADR-007) — `set_noise_generator / get_image_data`.
+- `lineCap` / `lineJoin` / `miterLimit` — parsed, stored in `DrawState` and preserved
+  across `save()`/`restore()`, but never read by `rasterize.rs`: a stroke is the union
+  of per-segment quads with butt ends, so a `strokeRect` corner keeps a notch
+  ([BUG-099](../bugs/BUG-099-OPEN.md)). The `line_cap_parse` / `line_join_parse` tests
+  cover `from_str` only, so they stay green while the feature does nothing.
 
 ## Invariants
 
