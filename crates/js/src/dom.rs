@@ -16027,535 +16027,6 @@ mod tests {
         rt
     }
 
-
-    // ── IndexedDB ───────────────────────────────────────────────────────────
-
-    #[test]
-    fn idb_global_exists() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "typeof indexedDB === 'object' && typeof indexedDB.open === 'function' \
-             && typeof IDBKeyRange === 'function' && typeof window.indexedDB === 'object'",
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn idb_open_fires_upgrade_then_success() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(r#"
-            var log = [];
-            var req = indexedDB.open('db1', 3);
-            req.onupgradeneeded = function(e) { log.push('upg:' + e.oldVersion + '->' + e.newVersion); };
-            req.onsuccess = function(e) { log.push('ok:' + e.target.result.version); };
-            _lumen_idb_flush();
-            log.join(',')
-        "#).unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("upg:0->3,ok:3".into()));
-    }
-
-    #[test]
-    fn idb_add_and_get_keypath() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(r#"
-            var out;
-            var req = indexedDB.open('d', 1);
-            req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s', { keyPath: 'id' }); };
-            req.onsuccess = function(e) {
-                var db = e.target.result;
-                var tx = db.transaction('s', 'readwrite');
-                var st = tx.objectStore('s');
-                st.add({ id: 1, name: 'alpha' });
-                st.add({ id: 2, name: 'beta' });
-                var g = st.get(2);
-                g.onsuccess = function() { out = g.result.name; };
-            };
-            _lumen_idb_flush();
-            out
-        "#).unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("beta".into()));
-    }
-
-    #[test]
-    fn idb_autoincrement_out_of_line() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(r#"
-            var keys = [];
-            var req = indexedDB.open('d', 1);
-            req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s', { autoIncrement: true }); };
-            req.onsuccess = function(e) {
-                var st = e.target.result.transaction('s', 'readwrite').objectStore('s');
-                var a = st.add('x'); a.onsuccess = function() { keys.push(a.result); };
-                var b = st.add('y'); b.onsuccess = function() { keys.push(b.result); };
-            };
-            _lumen_idb_flush();
-            keys.join(',')
-        "#).unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("1,2".into()));
-    }
-
-    #[test]
-    fn idb_put_overwrites() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(r#"
-            var out;
-            var req = indexedDB.open('d', 1);
-            req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s', { keyPath: 'id' }); };
-            req.onsuccess = function(e) {
-                var st = e.target.result.transaction('s', 'readwrite').objectStore('s');
-                st.add({ id: 1, v: 'old' });
-                st.put({ id: 1, v: 'new' });
-                var g = st.get(1);
-                var c = st.count();
-                c.onsuccess = function() { out = g.result.v + ':' + c.result; };
-            };
-            _lumen_idb_flush();
-            out
-        "#).unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("new:1".into()));
-    }
-
-    #[test]
-    fn idb_add_duplicate_aborts_transaction() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(r#"
-            var log = [];
-            var req = indexedDB.open('d', 1);
-            req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s', { keyPath: 'id' }); };
-            req.onsuccess = function(e) {
-                var tx = e.target.result.transaction('s', 'readwrite');
-                tx.onabort = function() { log.push('abort'); };
-                var st = tx.objectStore('s');
-                st.add({ id: 1 });
-                var dup = st.add({ id: 1 });
-                dup.onerror = function(ev) { log.push('err:' + ev.target.error.name); };
-            };
-            _lumen_idb_flush();
-            log.join(',')
-        "#).unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("err:ConstraintError,abort".into()));
-    }
-
-    #[test]
-    fn idb_getall_sorted_by_key() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(r#"
-            var out;
-            var req = indexedDB.open('d', 1);
-            req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s'); };
-            req.onsuccess = function(e) {
-                var st = e.target.result.transaction('s', 'readwrite').objectStore('s');
-                st.add('c', 3); st.add('a', 1); st.add('b', 2);
-                var g = st.getAll(); g.onsuccess = function() { out = g.result.join(''); };
-            };
-            _lumen_idb_flush();
-            out
-        "#).unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("abc".into()));
-    }
-
-    #[test]
-    fn idb_getall_with_key_range() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(r#"
-            var out;
-            var req = indexedDB.open('d', 1);
-            req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s'); };
-            req.onsuccess = function(e) {
-                var st = e.target.result.transaction('s', 'readwrite').objectStore('s');
-                for (var i = 1; i <= 5; i++) st.add('v' + i, i);
-                var g = st.getAll(IDBKeyRange.bound(2, 4, false, true));
-                g.onsuccess = function() { out = g.result.join(','); };
-            };
-            _lumen_idb_flush();
-            out
-        "#).unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("v2,v3".into()));
-    }
-
-    #[test]
-    fn idb_delete_and_clear() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(r#"
-            var out;
-            var req = indexedDB.open('d', 1);
-            req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s'); };
-            req.onsuccess = function(e) {
-                var st = e.target.result.transaction('s', 'readwrite').objectStore('s');
-                st.add('a', 1); st.add('b', 2); st.add('c', 3);
-                st.delete(2);
-                var c1 = st.count(); c1.onsuccess = function() {
-                    st.clear();
-                    var c2 = st.count(); c2.onsuccess = function() { out = c1.result + ':' + c2.result; };
-                };
-            };
-            _lumen_idb_flush();
-            out
-        "#).unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("2:0".into()));
-    }
-
-    #[test]
-    fn idb_index_get_and_getall() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(r#"
-            var out;
-            var req = indexedDB.open('d', 1);
-            req.onupgradeneeded = function(e) {
-                var st = e.target.result.createObjectStore('s', { keyPath: 'id' });
-                st.createIndex('by_cat', 'cat');
-            };
-            req.onsuccess = function(e) {
-                var st = e.target.result.transaction('s', 'readwrite').objectStore('s');
-                st.add({ id: 1, cat: 'x', n: 'one' });
-                st.add({ id: 2, cat: 'y', n: 'two' });
-                st.add({ id: 3, cat: 'x', n: 'three' });
-                var idx = st.index('by_cat');
-                var g = idx.get('y');
-                var ga = idx.getAll('x');
-                ga.onsuccess = function() {
-                    out = g.result.n + '|' + ga.result.map(function(r){return r.n;}).join(',');
-                };
-            };
-            _lumen_idb_flush();
-            out
-        "#).unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("two|one,three".into()));
-    }
-
-    #[test]
-    fn idb_unique_index_violation() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(r#"
-            var log = [];
-            var req = indexedDB.open('d', 1);
-            req.onupgradeneeded = function(e) {
-                var st = e.target.result.createObjectStore('s', { keyPath: 'id' });
-                st.createIndex('email', 'email', { unique: true });
-            };
-            req.onsuccess = function(e) {
-                var tx = e.target.result.transaction('s', 'readwrite');
-                tx.onabort = function() { log.push('abort'); };
-                var st = tx.objectStore('s');
-                st.add({ id: 1, email: 'a@b.c' });
-                var dup = st.add({ id: 2, email: 'a@b.c' });
-                dup.onerror = function(ev) { log.push(ev.target.error.name); };
-            };
-            _lumen_idb_flush();
-            log.join(',')
-        "#).unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("ConstraintError,abort".into()));
-    }
-
-    #[test]
-    fn idb_cursor_iterates_in_order() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(r#"
-            var keys = [];
-            var req = indexedDB.open('d', 1);
-            req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s'); };
-            req.onsuccess = function(e) {
-                var st = e.target.result.transaction('s', 'readwrite').objectStore('s');
-                st.add('a', 3); st.add('b', 1); st.add('c', 2);
-                var cur = st.openCursor();
-                cur.onsuccess = function(ev) {
-                    var c = ev.target.result;
-                    if (c) { keys.push(c.key + '=' + c.value); c.continue(); }
-                };
-            };
-            _lumen_idb_flush();
-            keys.join(',')
-        "#).unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("1=b,2=c,3=a".into()));
-    }
-
-    #[test]
-    fn idb_cursor_reverse_direction() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(r#"
-            var keys = [];
-            var req = indexedDB.open('d', 1);
-            req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s'); };
-            req.onsuccess = function(e) {
-                var st = e.target.result.transaction('s', 'readwrite').objectStore('s');
-                for (var i = 1; i <= 3; i++) st.add('v', i);
-                var cur = st.openKeyCursor(null, 'prev');
-                cur.onsuccess = function(ev) {
-                    var c = ev.target.result;
-                    if (c) { keys.push(c.key); c.continue(); }
-                };
-            };
-            _lumen_idb_flush();
-            keys.join(',')
-        "#).unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("3,2,1".into()));
-    }
-
-    #[test]
-    fn idb_cursor_update_and_delete() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(r#"
-            var out;
-            var req = indexedDB.open('d', 1);
-            req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s', { keyPath: 'id' }); };
-            req.onsuccess = function(e) {
-                var db = e.target.result;
-                var st = db.transaction('s', 'readwrite').objectStore('s');
-                st.add({ id: 1, v: 10 }); st.add({ id: 2, v: 20 }); st.add({ id: 3, v: 30 });
-                var cur = st.openCursor();
-                cur.onsuccess = function(ev) {
-                    var c = ev.target.result;
-                    if (!c) return;
-                    if (c.primaryKey === 1) c.update({ id: 1, v: 99 });
-                    else if (c.primaryKey === 2) c.delete();
-                    c.continue();
-                };
-                var tx2 = db.transaction('s');
-                var g = tx2.objectStore('s').getAll();
-                g.onsuccess = function() {
-                    out = g.result.map(function(r){return r.id + ':' + r.v;}).join(',');
-                };
-            };
-            _lumen_idb_flush();
-            out
-        "#).unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("1:99,3:30".into()));
-    }
-
-    #[test]
-    fn idb_keyrange_includes_and_cmp() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(r#"
-            var kr = IDBKeyRange.bound(1, 5, true, false);
-            var a = kr.includes(1) === false && kr.includes(5) === true && kr.includes(3) === true;
-            var b = indexedDB.cmp(1, 2) === -1 && indexedDB.cmp('b', 'a') === 1 && indexedDB.cmp(7, 7) === 0;
-            var c = indexedDB.cmp(5, 'x') === -1 && indexedDB.cmp([1,2], [1,3]) === -1;
-            a && b && c
-        "#).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn idb_open_version_downgrade_errors() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(r#"
-            var log = [];
-            var r1 = indexedDB.open('d', 5);
-            r1.onsuccess = function(e) { e.target.result.close(); log.push('v5'); };
-            _lumen_idb_flush();
-            var r2 = indexedDB.open('d', 2);
-            r2.onerror = function(e) { log.push('err:' + e.target.error.name); };
-            r2.onsuccess = function() { log.push('unexpected'); };
-            _lumen_idb_flush();
-            log.join(',')
-        "#).unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("v5,err:VersionError".into()));
-    }
-
-    #[test]
-    fn idb_delete_database() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(r#"
-            var log = [];
-            var r1 = indexedDB.open('d', 1);
-            r1.onsuccess = function(e) { e.target.result.close(); };
-            _lumen_idb_flush();
-            var del = indexedDB.deleteDatabase('d');
-            del.onsuccess = function() { log.push('deleted'); };
-            _lumen_idb_flush();
-            indexedDB.databases().then(function(list) { log.push('count:' + list.length); });
-            _lumen_idb_flush();
-            log.join(',')
-        "#).unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("deleted".into()));
-    }
-
-    #[test]
-    fn idb_second_connection_sees_persisted_data() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(r#"
-            var out;
-            var r1 = indexedDB.open('d', 1);
-            r1.onupgradeneeded = function(e) { e.target.result.createObjectStore('s', { keyPath: 'id' }); };
-            r1.onsuccess = function(e) {
-                var db = e.target.result;
-                db.transaction('s', 'readwrite').objectStore('s').add({ id: 1, v: 'kept' });
-                db.close();
-            };
-            _lumen_idb_flush();
-            var r2 = indexedDB.open('d');
-            r2.onsuccess = function(e) {
-                var g = e.target.result.transaction('s').objectStore('s').get(1);
-                g.onsuccess = function() { out = g.result.v; };
-            };
-            _lumen_idb_flush();
-            out
-        "#).unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("kept".into()));
-    }
-
-    // ── IndexedDB persistence (Rust-backed snapshot survives reload) ──────────
-
-    /// In-memory `IdbBackend` capturing the snapshot the shim persists, shared
-    /// across runtimes via `Arc` to simulate the same origin across reloads.
-    struct MockIdb(Arc<Mutex<Option<String>>>);
-    impl IdbBackend for MockIdb {
-        fn load(&self) -> Option<String> {
-            self.0.lock().unwrap().clone()
-        }
-        fn save(&self, snapshot: &str) {
-            *self.0.lock().unwrap() = Some(snapshot.to_owned());
-        }
-    }
-
-    fn runtime_with_idb(backend: Arc<dyn IdbBackend>) -> QuickJsRuntime {
-        let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(make_doc(), "https://example.com/", None, None, None, None, Some(backend), None, None, None, false)
-            .unwrap();
-        rt
-    }
-
-    #[test]
-    fn idb_persists_across_runtime_reload() {
-        let cell = Arc::new(Mutex::new(None));
-        // First "page load": create a store and write a record.
-        {
-            let rt = runtime_with_idb(Arc::new(MockIdb(Arc::clone(&cell))));
-            rt.eval(r#"
-                var req = indexedDB.open('d', 1);
-                req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s', { keyPath: 'id' }); };
-                req.onsuccess = function(e) {
-                    e.target.result.transaction('s', 'readwrite').objectStore('s').add({ id: 1, v: 'kept' });
-                };
-                _lumen_idb_flush();
-            "#).unwrap();
-        }
-        // Backend captured a snapshot from the mutating transaction.
-        assert!(cell.lock().unwrap().is_some(), "snapshot must be persisted");
-
-        // Second "page load": a fresh runtime restores the database without re-running
-        // the upgrade — the store and its record are already present.
-        let rt2 = runtime_with_idb(Arc::new(MockIdb(Arc::clone(&cell))));
-        let r = rt2.eval(r#"
-            var out;
-            var req = indexedDB.open('d');
-            req.onupgradeneeded = function() { out = 'UNEXPECTED_UPGRADE'; };
-            req.onsuccess = function(e) {
-                var g = e.target.result.transaction('s').objectStore('s').get(1);
-                g.onsuccess = function() { out = g.result ? g.result.v : 'MISSING'; };
-            };
-            _lumen_idb_flush();
-            out
-        "#).unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("kept".into()));
-    }
-
-    #[test]
-    fn idb_persisted_version_is_restored() {
-        let cell = Arc::new(Mutex::new(None));
-        {
-            let rt = runtime_with_idb(Arc::new(MockIdb(Arc::clone(&cell))));
-            rt.eval(r#"
-                var req = indexedDB.open('d', 4);
-                req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s'); };
-                req.onsuccess = function() {};
-                _lumen_idb_flush();
-            "#).unwrap();
-        }
-        let rt2 = runtime_with_idb(Arc::new(MockIdb(Arc::clone(&cell))));
-        let r = rt2.eval(r#"
-            var out;
-            var req = indexedDB.open('d');
-            req.onsuccess = function(e) { out = e.target.result.version; };
-            _lumen_idb_flush();
-            out
-        "#).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Number(4.0));
-    }
-
-    #[test]
-    fn idb_persisted_date_value_roundtrips() {
-        let cell = Arc::new(Mutex::new(None));
-        {
-            let rt = runtime_with_idb(Arc::new(MockIdb(Arc::clone(&cell))));
-            rt.eval(r#"
-                var req = indexedDB.open('d', 1);
-                req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s', { keyPath: 'id' }); };
-                req.onsuccess = function(e) {
-                    e.target.result.transaction('s', 'readwrite').objectStore('s')
-                        .add({ id: 1, when: new Date(1700000000000) });
-                };
-                _lumen_idb_flush();
-            "#).unwrap();
-        }
-        let rt2 = runtime_with_idb(Arc::new(MockIdb(Arc::clone(&cell))));
-        let r = rt2.eval(r#"
-            var out;
-            var req = indexedDB.open('d');
-            req.onsuccess = function(e) {
-                var g = e.target.result.transaction('s').objectStore('s').get(1);
-                g.onsuccess = function() {
-                    out = (g.result.when instanceof Date) + ':' + g.result.when.getTime();
-                };
-            };
-            _lumen_idb_flush();
-            out
-        "#).unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("true:1700000000000".into()));
-    }
-
-    #[test]
-    fn idb_persisted_delete_database_is_restored() {
-        let cell = Arc::new(Mutex::new(None));
-        {
-            let rt = runtime_with_idb(Arc::new(MockIdb(Arc::clone(&cell))));
-            rt.eval(r#"
-                var req = indexedDB.open('d', 1);
-                req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s'); };
-                req.onsuccess = function() {};
-                _lumen_idb_flush();
-                indexedDB.deleteDatabase('d');
-                _lumen_idb_flush();
-            "#).unwrap();
-        }
-        // After deletion the restored snapshot must not contain the database:
-        // opening it fresh re-triggers upgradeneeded and the store is gone.
-        let rt2 = runtime_with_idb(Arc::new(MockIdb(Arc::clone(&cell))));
-        let r = rt2.eval(r#"
-            var out = 'no-upgrade';
-            var req = indexedDB.open('d');
-            req.onupgradeneeded = function(e) {
-                out = 'upgrade:' + e.target.result.objectStoreNames.length;
-            };
-            req.onsuccess = function() {};
-            _lumen_idb_flush();
-            out
-        "#).unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("upgrade:0".into()));
-    }
-
-    #[test]
-    fn idb_read_only_transaction_does_not_persist() {
-        let cell = Arc::new(Mutex::new(None));
-        let rt = runtime_with_idb(Arc::new(MockIdb(Arc::clone(&cell))));
-        // Create + populate (this persists once).
-        rt.eval(r#"
-            var req = indexedDB.open('d', 1);
-            req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s', { keyPath: 'id' }); };
-            req.onsuccess = function(e) { e.target.result.transaction('s', 'readwrite').objectStore('s').add({ id: 1 }); };
-            _lumen_idb_flush();
-        "#).unwrap();
-        // Overwrite the captured snapshot with a sentinel, then run a read-only txn.
-        *cell.lock().unwrap() = Some("SENTINEL".into());
-        rt.eval(r#"
-            var req = indexedDB.open('d');
-            req.onsuccess = function(e) { e.target.result.transaction('s').objectStore('s').get(1); };
-            _lumen_idb_flush();
-        "#).unwrap();
-        // A read-only flush must not have re-persisted (sentinel intact).
-        assert_eq!(cell.lock().unwrap().as_deref(), Some("SENTINEL"));
-    }
-
     // ── FormData API tests ────────────────────────────────────────────────────
 
     #[test]
@@ -31463,6 +30934,549 @@ mod tests {
                 parent.children.length === 3 && parent.children[0].tagName.toLowerCase() === 'strong'
             "#).unwrap();
             assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+    }
+
+    #[cfg(feature = "v8-backend")]
+    mod v8_idb {
+        use super::*;
+        use crate::v8_runtime::V8JsRuntime;
+
+        /// V8 twin of [`super::runtime_with_dom`].
+        fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
+            let rt = V8JsRuntime::new().unwrap();
+            rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+            rt.install_dom(doc, "", None, None, None, None, None, None, None, None, false)
+                .unwrap();
+            rt
+        }
+
+        // ── IndexedDB ───────────────────────────────────────────────────────────
+
+        #[test]
+        fn idb_global_exists() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "typeof indexedDB === 'object' && typeof indexedDB.open === 'function' \
+                 && typeof IDBKeyRange === 'function' && typeof window.indexedDB === 'object'",
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn idb_open_fires_upgrade_then_success() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var log = [];
+                var req = indexedDB.open('db1', 3);
+                req.onupgradeneeded = function(e) { log.push('upg:' + e.oldVersion + '->' + e.newVersion); };
+                req.onsuccess = function(e) { log.push('ok:' + e.target.result.version); };
+                _lumen_idb_flush();
+                log.join(',')
+            "#).unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("upg:0->3,ok:3".into()));
+        }
+
+        #[test]
+        fn idb_add_and_get_keypath() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var out;
+                var req = indexedDB.open('d', 1);
+                req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s', { keyPath: 'id' }); };
+                req.onsuccess = function(e) {
+                    var db = e.target.result;
+                    var tx = db.transaction('s', 'readwrite');
+                    var st = tx.objectStore('s');
+                    st.add({ id: 1, name: 'alpha' });
+                    st.add({ id: 2, name: 'beta' });
+                    var g = st.get(2);
+                    g.onsuccess = function() { out = g.result.name; };
+                };
+                _lumen_idb_flush();
+                out
+            "#).unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("beta".into()));
+        }
+
+        #[test]
+        fn idb_autoincrement_out_of_line() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var keys = [];
+                var req = indexedDB.open('d', 1);
+                req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s', { autoIncrement: true }); };
+                req.onsuccess = function(e) {
+                    var st = e.target.result.transaction('s', 'readwrite').objectStore('s');
+                    var a = st.add('x'); a.onsuccess = function() { keys.push(a.result); };
+                    var b = st.add('y'); b.onsuccess = function() { keys.push(b.result); };
+                };
+                _lumen_idb_flush();
+                keys.join(',')
+            "#).unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("1,2".into()));
+        }
+
+        #[test]
+        fn idb_put_overwrites() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var out;
+                var req = indexedDB.open('d', 1);
+                req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s', { keyPath: 'id' }); };
+                req.onsuccess = function(e) {
+                    var st = e.target.result.transaction('s', 'readwrite').objectStore('s');
+                    st.add({ id: 1, v: 'old' });
+                    st.put({ id: 1, v: 'new' });
+                    var g = st.get(1);
+                    var c = st.count();
+                    c.onsuccess = function() { out = g.result.v + ':' + c.result; };
+                };
+                _lumen_idb_flush();
+                out
+            "#).unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("new:1".into()));
+        }
+
+        #[test]
+        fn idb_add_duplicate_aborts_transaction() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var log = [];
+                var req = indexedDB.open('d', 1);
+                req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s', { keyPath: 'id' }); };
+                req.onsuccess = function(e) {
+                    var tx = e.target.result.transaction('s', 'readwrite');
+                    tx.onabort = function() { log.push('abort'); };
+                    var st = tx.objectStore('s');
+                    st.add({ id: 1 });
+                    var dup = st.add({ id: 1 });
+                    dup.onerror = function(ev) { log.push('err:' + ev.target.error.name); };
+                };
+                _lumen_idb_flush();
+                log.join(',')
+            "#).unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("err:ConstraintError,abort".into()));
+        }
+
+        #[test]
+        fn idb_getall_sorted_by_key() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var out;
+                var req = indexedDB.open('d', 1);
+                req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s'); };
+                req.onsuccess = function(e) {
+                    var st = e.target.result.transaction('s', 'readwrite').objectStore('s');
+                    st.add('c', 3); st.add('a', 1); st.add('b', 2);
+                    var g = st.getAll(); g.onsuccess = function() { out = g.result.join(''); };
+                };
+                _lumen_idb_flush();
+                out
+            "#).unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("abc".into()));
+        }
+
+        #[test]
+        fn idb_getall_with_key_range() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var out;
+                var req = indexedDB.open('d', 1);
+                req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s'); };
+                req.onsuccess = function(e) {
+                    var st = e.target.result.transaction('s', 'readwrite').objectStore('s');
+                    for (var i = 1; i <= 5; i++) st.add('v' + i, i);
+                    var g = st.getAll(IDBKeyRange.bound(2, 4, false, true));
+                    g.onsuccess = function() { out = g.result.join(','); };
+                };
+                _lumen_idb_flush();
+                out
+            "#).unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("v2,v3".into()));
+        }
+
+        #[test]
+        fn idb_delete_and_clear() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var out;
+                var req = indexedDB.open('d', 1);
+                req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s'); };
+                req.onsuccess = function(e) {
+                    var st = e.target.result.transaction('s', 'readwrite').objectStore('s');
+                    st.add('a', 1); st.add('b', 2); st.add('c', 3);
+                    st.delete(2);
+                    var c1 = st.count(); c1.onsuccess = function() {
+                        st.clear();
+                        var c2 = st.count(); c2.onsuccess = function() { out = c1.result + ':' + c2.result; };
+                    };
+                };
+                _lumen_idb_flush();
+                out
+            "#).unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("2:0".into()));
+        }
+
+        #[test]
+        fn idb_index_get_and_getall() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var out;
+                var req = indexedDB.open('d', 1);
+                req.onupgradeneeded = function(e) {
+                    var st = e.target.result.createObjectStore('s', { keyPath: 'id' });
+                    st.createIndex('by_cat', 'cat');
+                };
+                req.onsuccess = function(e) {
+                    var st = e.target.result.transaction('s', 'readwrite').objectStore('s');
+                    st.add({ id: 1, cat: 'x', n: 'one' });
+                    st.add({ id: 2, cat: 'y', n: 'two' });
+                    st.add({ id: 3, cat: 'x', n: 'three' });
+                    var idx = st.index('by_cat');
+                    var g = idx.get('y');
+                    var ga = idx.getAll('x');
+                    ga.onsuccess = function() {
+                        out = g.result.n + '|' + ga.result.map(function(r){return r.n;}).join(',');
+                    };
+                };
+                _lumen_idb_flush();
+                out
+            "#).unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("two|one,three".into()));
+        }
+
+        #[test]
+        fn idb_unique_index_violation() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var log = [];
+                var req = indexedDB.open('d', 1);
+                req.onupgradeneeded = function(e) {
+                    var st = e.target.result.createObjectStore('s', { keyPath: 'id' });
+                    st.createIndex('email', 'email', { unique: true });
+                };
+                req.onsuccess = function(e) {
+                    var tx = e.target.result.transaction('s', 'readwrite');
+                    tx.onabort = function() { log.push('abort'); };
+                    var st = tx.objectStore('s');
+                    st.add({ id: 1, email: 'a@b.c' });
+                    var dup = st.add({ id: 2, email: 'a@b.c' });
+                    dup.onerror = function(ev) { log.push(ev.target.error.name); };
+                };
+                _lumen_idb_flush();
+                log.join(',')
+            "#).unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("ConstraintError,abort".into()));
+        }
+
+        #[test]
+        fn idb_cursor_iterates_in_order() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var keys = [];
+                var req = indexedDB.open('d', 1);
+                req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s'); };
+                req.onsuccess = function(e) {
+                    var st = e.target.result.transaction('s', 'readwrite').objectStore('s');
+                    st.add('a', 3); st.add('b', 1); st.add('c', 2);
+                    var cur = st.openCursor();
+                    cur.onsuccess = function(ev) {
+                        var c = ev.target.result;
+                        if (c) { keys.push(c.key + '=' + c.value); c.continue(); }
+                    };
+                };
+                _lumen_idb_flush();
+                keys.join(',')
+            "#).unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("1=b,2=c,3=a".into()));
+        }
+
+        #[test]
+        fn idb_cursor_reverse_direction() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var keys = [];
+                var req = indexedDB.open('d', 1);
+                req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s'); };
+                req.onsuccess = function(e) {
+                    var st = e.target.result.transaction('s', 'readwrite').objectStore('s');
+                    for (var i = 1; i <= 3; i++) st.add('v', i);
+                    var cur = st.openKeyCursor(null, 'prev');
+                    cur.onsuccess = function(ev) {
+                        var c = ev.target.result;
+                        if (c) { keys.push(c.key); c.continue(); }
+                    };
+                };
+                _lumen_idb_flush();
+                keys.join(',')
+            "#).unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("3,2,1".into()));
+        }
+
+        #[test]
+        fn idb_cursor_update_and_delete() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var out;
+                var req = indexedDB.open('d', 1);
+                req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s', { keyPath: 'id' }); };
+                req.onsuccess = function(e) {
+                    var db = e.target.result;
+                    var st = db.transaction('s', 'readwrite').objectStore('s');
+                    st.add({ id: 1, v: 10 }); st.add({ id: 2, v: 20 }); st.add({ id: 3, v: 30 });
+                    var cur = st.openCursor();
+                    cur.onsuccess = function(ev) {
+                        var c = ev.target.result;
+                        if (!c) return;
+                        if (c.primaryKey === 1) c.update({ id: 1, v: 99 });
+                        else if (c.primaryKey === 2) c.delete();
+                        c.continue();
+                    };
+                    var tx2 = db.transaction('s');
+                    var g = tx2.objectStore('s').getAll();
+                    g.onsuccess = function() {
+                        out = g.result.map(function(r){return r.id + ':' + r.v;}).join(',');
+                    };
+                };
+                _lumen_idb_flush();
+                out
+            "#).unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("1:99,3:30".into()));
+        }
+
+        #[test]
+        fn idb_keyrange_includes_and_cmp() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var kr = IDBKeyRange.bound(1, 5, true, false);
+                var a = kr.includes(1) === false && kr.includes(5) === true && kr.includes(3) === true;
+                var b = indexedDB.cmp(1, 2) === -1 && indexedDB.cmp('b', 'a') === 1 && indexedDB.cmp(7, 7) === 0;
+                var c = indexedDB.cmp(5, 'x') === -1 && indexedDB.cmp([1,2], [1,3]) === -1;
+                a && b && c
+            "#).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn idb_open_version_downgrade_errors() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var log = [];
+                var r1 = indexedDB.open('d', 5);
+                r1.onsuccess = function(e) { e.target.result.close(); log.push('v5'); };
+                _lumen_idb_flush();
+                var r2 = indexedDB.open('d', 2);
+                r2.onerror = function(e) { log.push('err:' + e.target.error.name); };
+                r2.onsuccess = function() { log.push('unexpected'); };
+                _lumen_idb_flush();
+                log.join(',')
+            "#).unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("v5,err:VersionError".into()));
+        }
+
+        #[test]
+        fn idb_delete_database() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var log = [];
+                var r1 = indexedDB.open('d', 1);
+                r1.onsuccess = function(e) { e.target.result.close(); };
+                _lumen_idb_flush();
+                var del = indexedDB.deleteDatabase('d');
+                del.onsuccess = function() { log.push('deleted'); };
+                _lumen_idb_flush();
+                indexedDB.databases().then(function(list) { log.push('count:' + list.length); });
+                _lumen_idb_flush();
+                log.join(',')
+            "#).unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("deleted".into()));
+        }
+
+        #[test]
+        fn idb_second_connection_sees_persisted_data() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var out;
+                var r1 = indexedDB.open('d', 1);
+                r1.onupgradeneeded = function(e) { e.target.result.createObjectStore('s', { keyPath: 'id' }); };
+                r1.onsuccess = function(e) {
+                    var db = e.target.result;
+                    db.transaction('s', 'readwrite').objectStore('s').add({ id: 1, v: 'kept' });
+                    db.close();
+                };
+                _lumen_idb_flush();
+                var r2 = indexedDB.open('d');
+                r2.onsuccess = function(e) {
+                    var g = e.target.result.transaction('s').objectStore('s').get(1);
+                    g.onsuccess = function() { out = g.result.v; };
+                };
+                _lumen_idb_flush();
+                out
+            "#).unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("kept".into()));
+        }
+
+        // ── IndexedDB persistence (Rust-backed snapshot survives reload) ──────────
+
+        /// In-memory `IdbBackend` capturing the snapshot the shim persists, shared
+        /// across runtimes via `Arc` to simulate the same origin across reloads.
+        struct MockIdb(Arc<Mutex<Option<String>>>);
+        impl IdbBackend for MockIdb {
+            fn load(&self) -> Option<String> {
+                self.0.lock().unwrap().clone()
+            }
+            fn save(&self, snapshot: &str) {
+                *self.0.lock().unwrap() = Some(snapshot.to_owned());
+            }
+        }
+
+        fn v8_runtime_with_idb(backend: Arc<dyn IdbBackend>) -> V8JsRuntime {
+            let rt = V8JsRuntime::new().unwrap();
+            rt.install_dom(make_doc(), "https://example.com/", None, None, None, None, Some(backend), None, None, None, false)
+                .unwrap();
+            rt
+        }
+
+        #[test]
+        fn idb_persists_across_runtime_reload() {
+            let cell = Arc::new(Mutex::new(None));
+            // First "page load": create a store and write a record.
+            {
+                let rt = v8_runtime_with_idb(Arc::new(MockIdb(Arc::clone(&cell))));
+                rt.eval(r#"
+                    var req = indexedDB.open('d', 1);
+                    req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s', { keyPath: 'id' }); };
+                    req.onsuccess = function(e) {
+                        e.target.result.transaction('s', 'readwrite').objectStore('s').add({ id: 1, v: 'kept' });
+                    };
+                    _lumen_idb_flush();
+                "#).unwrap();
+            }
+            // Backend captured a snapshot from the mutating transaction.
+            assert!(cell.lock().unwrap().is_some(), "snapshot must be persisted");
+
+            // Second "page load": a fresh runtime restores the database without re-running
+            // the upgrade — the store and its record are already present.
+            let rt2 = v8_runtime_with_idb(Arc::new(MockIdb(Arc::clone(&cell))));
+            let r = rt2.eval(r#"
+                var out;
+                var req = indexedDB.open('d');
+                req.onupgradeneeded = function() { out = 'UNEXPECTED_UPGRADE'; };
+                req.onsuccess = function(e) {
+                    var g = e.target.result.transaction('s').objectStore('s').get(1);
+                    g.onsuccess = function() { out = g.result ? g.result.v : 'MISSING'; };
+                };
+                _lumen_idb_flush();
+                out
+            "#).unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("kept".into()));
+        }
+
+        #[test]
+        fn idb_persisted_version_is_restored() {
+            let cell = Arc::new(Mutex::new(None));
+            {
+                let rt = v8_runtime_with_idb(Arc::new(MockIdb(Arc::clone(&cell))));
+                rt.eval(r#"
+                    var req = indexedDB.open('d', 4);
+                    req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s'); };
+                    req.onsuccess = function() {};
+                    _lumen_idb_flush();
+                "#).unwrap();
+            }
+            let rt2 = v8_runtime_with_idb(Arc::new(MockIdb(Arc::clone(&cell))));
+            let r = rt2.eval(r#"
+                var out;
+                var req = indexedDB.open('d');
+                req.onsuccess = function(e) { out = e.target.result.version; };
+                _lumen_idb_flush();
+                out
+            "#).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Number(4.0));
+        }
+
+        #[test]
+        fn idb_persisted_date_value_roundtrips() {
+            let cell = Arc::new(Mutex::new(None));
+            {
+                let rt = v8_runtime_with_idb(Arc::new(MockIdb(Arc::clone(&cell))));
+                rt.eval(r#"
+                    var req = indexedDB.open('d', 1);
+                    req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s', { keyPath: 'id' }); };
+                    req.onsuccess = function(e) {
+                        e.target.result.transaction('s', 'readwrite').objectStore('s')
+                            .add({ id: 1, when: new Date(1700000000000) });
+                    };
+                    _lumen_idb_flush();
+                "#).unwrap();
+            }
+            let rt2 = v8_runtime_with_idb(Arc::new(MockIdb(Arc::clone(&cell))));
+            let r = rt2.eval(r#"
+                var out;
+                var req = indexedDB.open('d');
+                req.onsuccess = function(e) {
+                    var g = e.target.result.transaction('s').objectStore('s').get(1);
+                    g.onsuccess = function() {
+                        out = (g.result.when instanceof Date) + ':' + g.result.when.getTime();
+                    };
+                };
+                _lumen_idb_flush();
+                out
+            "#).unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("true:1700000000000".into()));
+        }
+
+        #[test]
+        fn idb_persisted_delete_database_is_restored() {
+            let cell = Arc::new(Mutex::new(None));
+            {
+                let rt = v8_runtime_with_idb(Arc::new(MockIdb(Arc::clone(&cell))));
+                rt.eval(r#"
+                    var req = indexedDB.open('d', 1);
+                    req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s'); };
+                    req.onsuccess = function() {};
+                    _lumen_idb_flush();
+                    indexedDB.deleteDatabase('d');
+                    _lumen_idb_flush();
+                "#).unwrap();
+            }
+            // After deletion the restored snapshot must not contain the database:
+            // opening it fresh re-triggers upgradeneeded and the store is gone.
+            let rt2 = v8_runtime_with_idb(Arc::new(MockIdb(Arc::clone(&cell))));
+            let r = rt2.eval(r#"
+                var out = 'no-upgrade';
+                var req = indexedDB.open('d');
+                req.onupgradeneeded = function(e) {
+                    out = 'upgrade:' + e.target.result.objectStoreNames.length;
+                };
+                req.onsuccess = function() {};
+                _lumen_idb_flush();
+                out
+            "#).unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("upgrade:0".into()));
+        }
+
+        #[test]
+        fn idb_read_only_transaction_does_not_persist() {
+            let cell = Arc::new(Mutex::new(None));
+            let rt = v8_runtime_with_idb(Arc::new(MockIdb(Arc::clone(&cell))));
+            // Create + populate (this persists once).
+            rt.eval(r#"
+                var req = indexedDB.open('d', 1);
+                req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s', { keyPath: 'id' }); };
+                req.onsuccess = function(e) { e.target.result.transaction('s', 'readwrite').objectStore('s').add({ id: 1 }); };
+                _lumen_idb_flush();
+            "#).unwrap();
+            // Overwrite the captured snapshot with a sentinel, then run a read-only txn.
+            *cell.lock().unwrap() = Some("SENTINEL".into());
+            rt.eval(r#"
+                var req = indexedDB.open('d');
+                req.onsuccess = function(e) { e.target.result.transaction('s').objectStore('s').get(1); };
+                _lumen_idb_flush();
+            "#).unwrap();
+            // A read-only flush must not have re-persisted (sentinel intact).
+            assert_eq!(cell.lock().unwrap().as_deref(), Some("SENTINEL"));
         }
     }
 }
