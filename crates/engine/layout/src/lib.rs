@@ -26,6 +26,7 @@ pub mod counters;
 pub mod font_palette;
 pub mod image_gating;
 pub mod image_set;
+pub mod line_break;
 pub mod mathml;
 pub mod motion_path;
 pub mod page;
