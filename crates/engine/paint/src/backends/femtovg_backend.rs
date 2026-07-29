@@ -50,7 +50,7 @@ use lumen_layout::Color;
 
 use lumen_layout::{
     BackgroundRepeat, BackgroundSize, BorderStyle, FontStyle, GradientStop, ObjectFit,
-    ObjectPosition,
+    ObjectPosition, style::TextOrientation,
 };
 
 use lumen_core::geom::Rect;
@@ -1699,6 +1699,51 @@ fn crop_region_rgba(
     (out, w, h)
 }
 
+/// The style half of a `DisplayCommand::DrawText` — everything except the
+/// destination rectangle and the run text.
+///
+/// Grouped into one struct so the three `text-orientation` paths (horizontal,
+/// rotated, mixed) can hand the same bundle down to
+/// [`FemtovgBackend::draw_text_run`] instead of repeating a ten-argument call
+/// at each call site.
+struct TextRunStyle<'a> {
+    /// Used font size in CSS pixels.
+    font_size: f32,
+    /// Resolved text colour.
+    color: Color,
+    /// `font-family` list, in cascade order (empty = chrome UI face, DS-4).
+    font_family: &'a [String],
+    /// Numeric `font-weight` (100–900).
+    font_weight: u16,
+    /// Computed `font-style`.
+    font_style: FontStyle,
+    /// Computed `font-stretch` as a percentage (100 = normal).
+    font_stretch: u16,
+    /// `font-variation-settings` axes; non-empty routes through the
+    /// outline-based variable-font path (BUG-109).
+    font_variation_axes: &'a [([u8; 4], f32)],
+    /// `font-feature-settings` tags passed to the shaper.
+    font_features: &'a [([u8; 4], u32)],
+    /// Tab advance in CSS pixels (CSS Text L3 §10.1).
+    tab_size: f32,
+}
+
+/// Ph3 writing-mode vertical — the 90°-clockwise rotation that maps a run laid
+/// out horizontally at the local origin onto its vertical column at `dest`.
+///
+/// Mirrors the CPU rasterizer's transform
+/// (`tiny_skia::Transform::from_row(0, 1, -1, 0, dest.x, dest.y)`) and the wgpu
+/// renderer's `rotate_text_vertices_cw`: a point `(x, y)` maps to
+/// `(-y + dest.x, x + dest.y)`. Fed to `Canvas::set_transform`, which
+/// *premultiplies* — so the rotation composes under whatever scale/translate
+/// the enclosing clip or transform layer already installed, instead of
+/// replacing it.
+fn rotate_cw_transform(dest: Rect) -> femtovg::Transform2D {
+    // Transform2D is [a, b, c, d, e, f] with x' = a·x + c·y + e,
+    // y' = b·x + d·y + f.
+    femtovg::Transform2D([0.0, 1.0, -1.0, 0.0, dest.x, dest.y])
+}
+
 impl FemtovgBackend {
     /// Создаёт оконный femtovg-бэкенд из winit-окна.
     ///
@@ -2839,6 +2884,102 @@ impl FemtovgBackend {
         }
 
         (ids, true_bold, true_italic)
+    }
+
+    /// Draws one horizontal text run into `rect` — the whole body of a
+    /// `DisplayCommand::DrawText` minus the `text-orientation` dispatch.
+    ///
+    /// BUG-109: femtovg's text API cannot apply `font-variation-settings`
+    /// axes. When axes are present and resolve to a variable face, the run is
+    /// rendered via lumen-font outlines (vector fill) so wght/wdth/slnt take
+    /// effect; otherwise femtovg's fast text path runs, with synthetic
+    /// bold/italic filled in when the picked face is not truly bold/italic.
+    ///
+    /// Everything here works through the *current* canvas transform, so the
+    /// vertical paths ([`Self::draw_text_mixed`] and the `Sideways` branch of
+    /// the `DrawText` arm) get rotation for free by installing
+    /// [`rotate_cw_transform`] and passing a local-space `rect`.
+    fn draw_text_run(&mut self, rect: &Rect, text: &str, s: &TextRunStyle<'_>) {
+        if !s.font_variation_axes.is_empty()
+            && self.draw_varied_text(
+                rect, text, s.font_size, s.color, s.font_family,
+                s.font_weight, s.font_style, s.font_stretch,
+                s.font_variation_axes, s.font_features, s.tab_size,
+            )
+        {
+            return;
+        }
+        let (chain, true_bold, true_italic) =
+            self.resolve_font_chain(s.font_family, s.font_weight, s.font_style, s.font_stretch);
+        let synth_bold = s.font_weight >= 600 && !true_bold;
+        let synth_italic = !matches!(s.font_style, FontStyle::Normal) && !true_italic;
+        self.draw_text_styled(
+            rect.x, rect.y, text, s.font_size, s.color, &chain, synth_bold, synth_italic,
+        );
+    }
+
+    /// Shaped horizontal advance of `text` under `s`, in CSS pixels.
+    ///
+    /// Used by [`Self::draw_text_mixed`] to step the column cursor: ink extent
+    /// alone would misplace a whitespace-only segment (no glyph, but a real
+    /// advance). Measured through femtovg's own shaper — the same one that
+    /// will draw the segment — so cursor and glyphs cannot drift apart. A run
+    /// that ends up on the variable-font outline path (BUG-109) is still
+    /// measured with the static face femtovg picks; per-segment drift there is
+    /// bounded by the axis delta and is not worth a second shaping engine.
+    fn measure_run_advance(&mut self, text: &str, s: &TextRunStyle<'_>) -> f32 {
+        if text.is_empty() {
+            return 0.0;
+        }
+        let (chain, _, _) =
+            self.resolve_font_chain(s.font_family, s.font_weight, s.font_style, s.font_stretch);
+        let mut paint = femtovg::Paint::color(lumen_to_fvg(s.color));
+        if !chain.is_empty() {
+            paint.set_font(&chain);
+        }
+        paint.set_font_size(s.font_size);
+        self.canvas
+            .measure_text(0.0, 0.0, text, &paint)
+            .map(|m| m.width())
+            .unwrap_or(0.0)
+    }
+
+    /// Ph3 writing-mode vertical — per-glyph split for `text-orientation:
+    /// mixed` (CSS Writing Modes L4 §4), femtovg path.
+    ///
+    /// Each CJK ideograph paints upright at an increasing offset down `dest`'s
+    /// column (no rotation — exactly the horizontal path, just moved down);
+    /// each run of consecutive non-CJK characters is drawn as one block at the
+    /// local origin under [`rotate_cw_transform`], so Latin kerning and
+    /// ligatures inside a word stay intact. Mirrors the CPU rasterizer's
+    /// `rasterize_text_mixed` and the wgpu renderer's `push_text_glyphs_mixed`
+    /// — including the local-x offset trick: the rotated segment is laid out
+    /// at `x = y_cursor` in the pre-rotation frame, which the rotation turns
+    /// into a downward shift of `y_cursor` in `dest`'s column.
+    fn draw_text_mixed(&mut self, dest: &Rect, text: &str, s: &TextRunStyle<'_>) {
+        let mut y_cursor = 0.0_f32;
+        for seg in crate::display_list::split_mixed_runs(text) {
+            let (seg_text, upright) = match seg {
+                crate::display_list::MixedSegment::Cjk(ch) => (ch.to_string(), true),
+                crate::display_list::MixedSegment::Other(txt) => (txt, false),
+            };
+            // Measured before any rotation is installed: `Canvas::measure_text`
+            // quantizes the font size by the current transform's average scale,
+            // and keeping the measurement in the unrotated frame matches what
+            // the upright branch will actually draw.
+            let advance = self.measure_run_advance(&seg_text, s);
+            if upright {
+                let seg_rect = Rect::new(dest.x, dest.y + y_cursor, dest.width, dest.height);
+                self.draw_text_run(&seg_rect, &seg_text, s);
+            } else {
+                self.canvas.save();
+                self.canvas.set_transform(&rotate_cw_transform(*dest));
+                let local = Rect::new(y_cursor, 0.0, dest.height, dest.width);
+                self.draw_text_run(&local, &seg_text, s);
+                self.canvas.restore();
+            }
+            y_cursor += advance;
+        }
     }
 
     /// Рисует текст с опциональными синтетическими bold/italic (RP-6).
@@ -4669,27 +4810,43 @@ impl FemtovgBackend {
                     }
                 }
             }
-            DisplayCommand::DrawText { rect, text, font_size, color, font_family, font_weight, font_style, font_stretch, font_variation_axes, font_features, font_palette: _, tab_size, highlight_name: _, text_orientation: _ } => {
-                // BUG-109: femtovg's text API cannot apply font-variation-settings
-                // axes. When axes are present and resolve to a variable face,
-                // render the run via lumen-font outlines (vector fill) so wght/
-                // wdth/slnt take effect; otherwise use femtovg's fast text path.
-                if !font_variation_axes.is_empty()
-                    && self.draw_varied_text(
-                        rect, text, *font_size, *color, font_family,
-                        font_weight.0, *font_style, font_stretch.as_percent(),
-                        font_variation_axes, font_features, *tab_size,
-                    )
-                {
-                    return;
+            DisplayCommand::DrawText { rect, text, font_size, color, font_family, font_weight, font_style, font_stretch, font_variation_axes, font_features, font_palette: _, tab_size, highlight_name: _, text_orientation } => {
+                let style = TextRunStyle {
+                    font_size: *font_size,
+                    color: *color,
+                    font_family,
+                    font_weight: font_weight.0,
+                    font_style: *font_style,
+                    font_stretch: font_stretch.as_percent(),
+                    font_variation_axes,
+                    font_features,
+                    tab_size: *tab_size,
+                };
+                // Ph3 writing-mode vertical: `Sideways` rotates the whole run
+                // 90° CW; `Mixed` splits it per glyph (CJK upright, Latin
+                // rotated). Both mirror the CPU rasterizer
+                // (`rasterize_text_rotated` / `rasterize_text_mixed`) and the
+                // wgpu renderer, so the three backends place a vertical run
+                // identically. `Upright` and the horizontal (`None`) case fall
+                // through to the unrotated path — `Upright`'s per-glyph
+                // vertical advance is the same follow-up the other two
+                // backends still owe.
+                match text_orientation {
+                    Some(TextOrientation::Sideways) => {
+                        self.canvas.save();
+                        self.canvas.set_transform(&rotate_cw_transform(*rect));
+                        // In the pre-rotation frame the run's inline axis is X
+                        // again, so the column's extents swap: `rect.height`
+                        // (the inline size layout assigned) becomes the local
+                        // width and `rect.width` (the block size) the local
+                        // height — same swap wgpu applies to its `glyph_rect`.
+                        let local = Rect::new(0.0, 0.0, rect.height, rect.width);
+                        self.draw_text_run(&local, text, &style);
+                        self.canvas.restore();
+                    }
+                    Some(TextOrientation::Mixed) => self.draw_text_mixed(rect, text, &style),
+                    _ => self.draw_text_run(rect, text, &style),
                 }
-                let (chain, true_bold, true_italic) =
-                    self.resolve_font_chain(font_family, font_weight.0, *font_style, font_stretch.as_percent());
-                let synth_bold = font_weight.0 >= 600 && !true_bold;
-                let synth_italic = !matches!(font_style, FontStyle::Normal) && !true_italic;
-                self.draw_text_styled(
-                    rect.x, rect.y, text, *font_size, *color, &chain, synth_bold, synth_italic,
-                );
             }
             DisplayCommand::PushClipRect { rect } => {
                 self.canvas.save();
@@ -6321,6 +6478,49 @@ mod tests {
         // Capacity floored to 1: inserting a second entry evicts the first.
         assert_eq!(c.insert("b".into(), 2), Some(1));
         assert_eq!(c.len(), 1);
+    }
+
+    // ─── Ph3 writing-mode vertical: text-orientation rotation geometry ──────
+
+    /// Applies a femtovg `Transform2D` the same way the canvas does, so a test
+    /// can assert on where a locally-laid-out glyph actually lands.
+    fn map(t: &femtovg::Transform2D, x: f32, y: f32) -> (f32, f32) {
+        t.transform_point(x, y)
+    }
+
+    #[test]
+    fn rotate_cw_transform_matches_cpu_and_wgpu_mapping() {
+        // Both other backends implement `(x, y) -> (-y + dest.x, x + dest.y)`
+        // (tiny-skia `from_row(0, 1, -1, 0, dest.x, dest.y)` /
+        // `rotate_text_vertices_cw`). Any divergence here would place femtovg's
+        // vertical runs somewhere the reference backends do not.
+        let t = rotate_cw_transform(Rect::new(100.0, 40.0, 30.0, 260.0));
+        for (x, y) in [(0.0, 0.0), (12.0, 5.0), (200.0, -8.0), (-3.0, 17.0)] {
+            let expected = (-y + 100.0, x + 40.0);
+            let got = map(&t, x, y);
+            assert!(
+                (got.0 - expected.0).abs() < 1e-4 && (got.1 - expected.1).abs() < 1e-4,
+                "({x}, {y}) -> {got:?}, expected {expected:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn rotate_cw_transform_makes_the_run_flow_downwards_from_the_column_origin() {
+        // The `Sideways` branch lays the run out at local `(0, 0)` and relies on
+        // the rotation to start it at the column's top-left and advance
+        // top→bottom, matching `wrap_inline_run_vertical`'s column placement.
+        let dest = Rect::new(64.0, 12.0, 30.0, 260.0);
+        let t = rotate_cw_transform(dest);
+        assert_eq!(map(&t, 0.0, 0.0), (dest.x, dest.y));
+        // Pen advance along local +X becomes downward movement in the column…
+        let advanced = map(&t, 50.0, 0.0);
+        assert_eq!(advanced, (dest.x, dest.y + 50.0));
+        // …and the local baseline drop (+Y, glyph height) becomes leftward
+        // movement — the glyph body sits to the left of the column origin,
+        // which is why the `Sideways` branch feeds the swapped local rect
+        // (width = rect.height, height = rect.width).
+        assert_eq!(map(&t, 0.0, 18.0), (dest.x - 18.0, dest.y));
     }
 
     // ─── ADR-016 M3.2.1b band geometry ──────────────────────────────────────

@@ -22,7 +22,8 @@ use crate::style::{
     BackgroundImage, BorderCollapse, BoxSizing, ClearSide, ContainFlags, ContainerContext, ContainerType, Content,
     ContentItem, ComputedStyle, Direction, Display, FlexBasis, FlexDirection, FlexWrap, FloatSide,
     FontVariantCaps,
-    GridAutoFlow, GridLine, GridTrackSize, Hyphens, Length, LengthOrAuto, ListStylePosition,
+    GridAutoFlow, GridLine, GridTrackSize, Hyphens, Length, LengthOrAuto, LineBreak,
+    ListStylePosition,
     ListStyleType, Overflow, OverflowWrap, Position, ScrollbarGutter, ScrollbarWidth,
     TextAlign, TextAlignLast, TextOverflow,
     TextWrapMode, TextWrapStyle,
@@ -6890,7 +6891,7 @@ fn lay_out_inner(
                     .collect();
                 let mut lines_a = wrap_inline_run(
                     &fl_segments, wrap_width, fls.font_size, text_indent_px, viewport,
-                    m, Hyphens::None, hp, s.white_space, s.word_break, s.overflow_wrap,
+                    m, Hyphens::None, hp, s.white_space, s.word_break, s.overflow_wrap, s.line_break,
                 );
                 if lines_a.len() <= 1 {
                     // Everything fits the first formatted line; ::first-line covers it all.
@@ -6904,17 +6905,17 @@ fn lay_out_inner(
                     );
                     let raw_rest = wrap_inline_run(
                         &rest_segs, wrap_width, s.font_size, 0.0, viewport,
-                        m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap,
+                        m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap, s.line_break,
                     );
                     let rest = if wrap_width.is_finite() {
                         match s.text_wrap_style {
                             TextWrapStyle::Balance => balance_wrap(
                                 &rest_segs, wrap_width, raw_rest, s.font_size, 0.0,
-                                viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap,
+                                viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap, s.line_break,
                             ),
                             TextWrapStyle::Pretty => pretty_wrap(
                                 &rest_segs, wrap_width, raw_rest, s.font_size, 0.0,
-                                viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap,
+                                viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap, s.line_break,
                             ),
                             TextWrapStyle::Auto | TextWrapStyle::Stable => raw_rest,
                         }
@@ -6927,18 +6928,18 @@ fn lay_out_inner(
                     all
                 }
             } else {
-                let raw_lines = wrap_inline_run(segments, wrap_width, s.font_size, text_indent_px, viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap);
+                let raw_lines = wrap_inline_run(segments, wrap_width, s.font_size, text_indent_px, viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap, s.line_break);
                 // CSS Text L4 §6.4.2: apply text-wrap-style post-processing only when
                 // wrapping is active (wrap_width is finite) and text actually wraps.
                 if wrap_width.is_finite() {
                     match s.text_wrap_style {
                         TextWrapStyle::Balance => balance_wrap(
                             segments, wrap_width, raw_lines, s.font_size, text_indent_px,
-                            viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap,
+                            viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap, s.line_break,
                         ),
                         TextWrapStyle::Pretty => pretty_wrap(
                             segments, wrap_width, raw_lines, s.font_size, text_indent_px,
-                            viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap,
+                            viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap, s.line_break,
                         ),
                         // Auto / Stable: greedy result unchanged.
                         // Stable stability is about incremental editing; for static layout it's identical to auto.
@@ -10883,6 +10884,46 @@ fn char_break_offset(
     word.len()
 }
 
+/// Longest prefix of `word[start..]` that fits into `avail_px`, cut only at a
+/// soft wrap opportunity listed in `opps` (byte offsets into `word`, ascending)
+/// or at the end of the word.
+///
+/// Returns `start` when not even the first opportunity fits — the caller then
+/// wraps to a fresh line and retries. Width is accumulated per character, the
+/// same approximation `char_break_offset` uses.
+#[allow(clippy::too_many_arguments)]
+fn opportunity_break_offset(
+    word: &str,
+    start: usize,
+    opps: &[usize],
+    avail_px: f32,
+    font_size: f32,
+    ls: f32,
+    families: &[String],
+    m: &dyn TextMeasurer,
+) -> usize {
+    // Last opportunity known to fit; `start` means "nothing fits".
+    let mut fit = start;
+    // Width of `word[start..pos]` for the position reached so far.
+    let mut w = 0.0_f32;
+    for (idx, (rel, ch)) in word[start..].char_indices().enumerate() {
+        let pos = start + rel;
+        if pos > start {
+            // `w` only grows, so once it overflows no later cut can fit.
+            if w > avail_px {
+                return fit;
+            }
+            if opps.binary_search(&pos).is_ok() {
+                fit = pos;
+            }
+        }
+        let cw = m.char_width_with_families(ch, font_size, families);
+        // Width of the prefix ending at this char: sum(cw + ls) - ls.
+        w = if idx == 0 { cw } else { w + ls + cw };
+    }
+    if w <= avail_px { word.len() } else { fit }
+}
+
 // ─── text-wrap: balance / pretty (CSS Text L4 §6.4.2) ───────────────────────
 
 /// Returns the pixel width of the widest single word across all text segments.
@@ -10929,6 +10970,7 @@ fn balance_wrap(
     white_space: crate::style::WhiteSpace,
     word_break: WordBreak,
     overflow_wrap: OverflowWrap,
+    line_break: LineBreak,
 ) -> Vec<Vec<InlineFrag>> {
     let target = greedy_lines.len();
     if target <= 1 {
@@ -10944,7 +10986,7 @@ fn balance_wrap(
         let mid = (lo + hi) * 0.5;
         let n = wrap_inline_run(
             segments, mid, container_font_size, text_indent, viewport,
-            m, hyphens, hp, white_space, word_break, overflow_wrap,
+            m, hyphens, hp, white_space, word_break, overflow_wrap, line_break,
         ).len();
         if n <= target {
             hi = mid;
@@ -10956,7 +10998,7 @@ fn balance_wrap(
     if hi < container_width - 0.5 {
         wrap_inline_run(
             segments, hi, container_font_size, text_indent, viewport,
-            m, hyphens, hp, white_space, word_break, overflow_wrap,
+            m, hyphens, hp, white_space, word_break, overflow_wrap, line_break,
         )
     } else {
         greedy_lines
@@ -10983,6 +11025,7 @@ fn pretty_wrap(
     white_space: crate::style::WhiteSpace,
     word_break: WordBreak,
     overflow_wrap: OverflowWrap,
+    line_break: LineBreak,
 ) -> Vec<Vec<InlineFrag>> {
     // A "widow" is a last line with exactly one word. Words may be merged into a
     // single InlineFrag, so check word count, not frag count.
@@ -11029,7 +11072,7 @@ fn pretty_wrap(
     }
     let trial = wrap_inline_run(
         segments, trial_w, container_font_size, text_indent, viewport,
-        m, hyphens, hp, white_space, word_break, overflow_wrap,
+        m, hyphens, hp, white_space, word_break, overflow_wrap, line_break,
     );
     // Accept if the new last line has ≥ 2 words (merged or not) and line count
     // didn't blow up by more than 1 line.
@@ -11062,6 +11105,7 @@ fn wrap_inline_run(
     white_space: crate::style::WhiteSpace,
     word_break: WordBreak,
     overflow_wrap: OverflowWrap,
+    line_break: LineBreak,
 ) -> Vec<Vec<InlineFrag>> {
     let _prof = lumen_core::profile::scope_detail("lo_wrap");
     let space_w = m.char_width(' ', container_font_size);
@@ -11236,6 +11280,81 @@ fn wrap_inline_run(
             let needs_wrap = !current_line.is_empty()
                 && breakable
                 && current_x + gap + pre + word_w > max_width;
+
+            // CSS Text L3 §5.5 `line-break` — soft wrap opportunities *inside*
+            // the word. CJK text carries no spaces, so `split_whitespace` hands
+            // us whole paragraphs here; without this the run would either
+            // overflow the container or be pushed onto a line of its own.
+            // Only relevant when the word does not fit as-is; `word-break:
+            // keep-all` suppresses CJK breaking entirely, except under
+            // `line-break: anywhere`, which overrides every prohibition.
+            let lb_avail = max_width - current_x - gap - pre;
+            let lb_allowed = word_break != WordBreak::KeepAll || line_break == LineBreak::Anywhere;
+            let lb_opps = if breakable && lb_allowed && word_w > lb_avail {
+                crate::line_break::break_opportunities(&display_word, line_break)
+            } else {
+                Vec::new()
+            };
+
+            if !lb_opps.is_empty() {
+                // Byte offset of the part of the word still to be placed.
+                let mut start = 0usize;
+                let mut first_chunk = true;
+                while start < display_word.len() {
+                    let chunk_gap = if current_line.is_empty() { 0.0 } else { word_inter };
+                    let chunk_pre = if first_chunk { pre } else { 0.0 };
+                    let avail = (max_width - current_x - chunk_gap - chunk_pre).max(0.0);
+                    let mut end = opportunity_break_offset(
+                        &display_word, start, &lb_opps, avail,
+                        style.font_size, ls, &style.font_family, m,
+                    );
+                    if end == start {
+                        if !current_line.is_empty() {
+                            // Nothing fits in what is left of this line — wrap
+                            // and measure again against the full width.
+                            result.push(std::mem::take(&mut current_line));
+                            current_x = 0.0;
+                            continue;
+                        }
+                        // The line is empty and even the shortest chunk
+                        // overflows: emit it anyway so the loop terminates.
+                        end = lb_opps
+                            .iter()
+                            .copied()
+                            .find(|&o| o > start)
+                            .unwrap_or(display_word.len());
+                    }
+                    let chunk = &display_word[start..end];
+                    let chunk_w = measure_text_w_varied(chunk, style.font_size, ls, 0.0, &style.font_family, &style.font_variation_settings, m);
+                    current_x += chunk_gap + chunk_pre;
+                    current_line.push(InlineFrag {
+                        x: current_x,
+                        y_offset: 0.0,
+                        width: chunk_w,
+                        text: chunk.to_string(),
+                        style: style.clone(),
+                        padding_left: if first_chunk && is_seg_first { pad_l } else { 0.0 },
+                        padding_right: if end == display_word.len() && is_seg_last { pad_r } else { 0.0 },
+                        is_element_box: seg.is_element_box,
+                        img_src: None,
+                        img_is_lazy: false,
+                        is_first_line: false,
+                        source_node: seg.source_node,
+                        // Soft hyphens (stripped from `display_word`) would shift
+                        // this; CJK text does not use them.
+                        source_char_offset: frag_source_offset.saturating_add(start as u32),
+                    });
+                    current_x += chunk_w;
+                    first_chunk = false;
+                    start = end;
+                    if start < display_word.len() {
+                        result.push(std::mem::take(&mut current_line));
+                        current_x = 0.0;
+                    }
+                }
+                current_x += post;
+                continue;
+            }
 
             if needs_wrap {
                 // CSS Text L3 §6: try hyphenation before hard wrap.
@@ -12482,7 +12601,7 @@ mod tests {
 
         let m = Fixed10;
         let hp = NullHyphenationProvider;
-        let lines = wrap_inline_run(&[seg], 60.0, 16.0, 0.0, Size::new(800.0, 600.0), &m, Hyphens::Manual, &hp, crate::style::WhiteSpace::Normal, crate::style::WordBreak::Normal, crate::style::OverflowWrap::Normal);
+        let lines = wrap_inline_run(&[seg], 60.0, 16.0, 0.0, Size::new(800.0, 600.0), &m, Hyphens::Manual, &hp, crate::style::WhiteSpace::Normal, crate::style::WordBreak::Normal, crate::style::OverflowWrap::Normal, crate::style::LineBreak::Auto);
         assert_eq!(lines.len(), 2, "expected 2 lines, got {}", lines.len());
         // Line 1 has both "hi" and "hy-" merged or as separate frags.
         let line1_text: String = lines[0].iter().map(|f| f.text.as_str()).collect::<Vec<_>>().join(" ");
@@ -12523,7 +12642,7 @@ mod tests {
         };
         let m = Fixed10;
         let hp = NullHyphenationProvider;
-        let lines = wrap_inline_run(&[seg], 60.0, 16.0, 0.0, Size::new(800.0, 600.0), &m, Hyphens::None, &hp, crate::style::WhiteSpace::Normal, crate::style::WordBreak::Normal, crate::style::OverflowWrap::Normal);
+        let lines = wrap_inline_run(&[seg], 60.0, 16.0, 0.0, Size::new(800.0, 600.0), &m, Hyphens::None, &hp, crate::style::WhiteSpace::Normal, crate::style::WordBreak::Normal, crate::style::OverflowWrap::Normal, crate::style::LineBreak::Auto);
         assert_eq!(lines.len(), 2, "expected 2 lines, got {}", lines.len());
         // Line 1 has only "hi"; line 2 has "hyphen" (whole, no hyphen char).
         assert_eq!(lines[0].len(), 1);
@@ -12574,6 +12693,7 @@ mod tests {
             crate::style::WhiteSpace::Normal,
             crate::style::WordBreak::Normal,
             crate::style::OverflowWrap::Normal,
+            crate::style::LineBreak::Auto,
         );
         assert_eq!(lines.len(), 1, "single word must stay on one line");
         let text = &lines[0][0].text;
@@ -12627,6 +12747,7 @@ mod tests {
             crate::style::WhiteSpace::Normal,
             crate::style::WordBreak::Normal,
             crate::style::OverflowWrap::Normal,
+            crate::style::LineBreak::Auto,
         );
         assert_eq!(lines.len(), 2, "expected 2 lines, got {}", lines.len());
         let line1_text: String = lines[0].iter().map(|f| f.text.as_str()).collect::<Vec<_>>().join(" ");
@@ -12676,6 +12797,7 @@ mod tests {
             crate::style::WhiteSpace::Normal,
             crate::style::WordBreak::Normal,
             crate::style::OverflowWrap::Normal,
+            crate::style::LineBreak::Auto,
         );
         assert_eq!(lines.len(), 2, "auto mode: expected 2 lines, got {}", lines.len());
         let line1_text: String = lines[0].iter().map(|f| f.text.as_str()).collect::<Vec<_>>().join(" ");
@@ -12728,6 +12850,7 @@ mod tests {
             crate::style::WhiteSpace::Normal,
             crate::style::WordBreak::Normal,
             crate::style::OverflowWrap::Normal,
+            crate::style::LineBreak::Auto,
         );
         assert_eq!(lines.len(), 2, "expected 2 lines");
         assert_eq!(lines[0].len(), 1);
@@ -12838,6 +12961,7 @@ mod tests {
             crate::style::WhiteSpace::Normal,
             WordBreak::Normal,
             OverflowWrap::BreakWord,
+            crate::style::LineBreak::Auto,
         );
         // 13 chars at 10px = 130px > 80px, so must wrap.
         assert!(lines.len() >= 2, "expected multiple lines, got {}", lines.len());
@@ -12851,6 +12975,133 @@ mod tests {
         // All characters of "Superlongword" must appear in the output.
         let all_text: String = lines.iter().flat_map(|l| l.iter().map(|f| f.text.as_str())).collect();
         assert_eq!(all_text, "Superlongword", "all chars must be emitted: {all_text}");
+    }
+
+    // ── line-break: CJK wrapping (CSS Text L3 §5.5) ───────────────────────────
+
+    /// Wraps one CJK segment under the given `line-break` / `word-break` and
+    /// returns the text of each produced line.
+    #[cfg(test)]
+    fn wrap_cjk(
+        text: &str,
+        max_width: f32,
+        line_break: crate::style::LineBreak,
+        word_break: crate::style::WordBreak,
+    ) -> Vec<String> {
+        use lumen_core::ext::NullHyphenationProvider;
+        use super::{InlineSegment, PseudoKind, wrap_inline_run};
+        use crate::style::{ComputedStyle, Hyphens, OverflowWrap};
+        use lumen_core::geom::Size;
+        use lumen_dom::NodeId;
+
+        struct Fixed10;
+        impl super::super::TextMeasurer for Fixed10 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 10.0 }
+        }
+
+        let seg = InlineSegment {
+            text: text.to_string(),
+            style: ComputedStyle::root(),
+            pre_space: 0.0,
+            post_space: 0.0,
+            is_element_box: false,
+            img_src: None,
+            img_is_lazy: false,
+            img_width: 0.0,
+            forced_break: false,
+            pseudo_kind: PseudoKind::None,
+            source_node: NodeId::from_index(0),
+            source_char_offset: 0,
+        };
+        let lines = wrap_inline_run(
+            &[seg], max_width, 16.0, 0.0,
+            Size::new(800.0, 600.0),
+            &Fixed10, Hyphens::None, &NullHyphenationProvider,
+            crate::style::WhiteSpace::Normal,
+            word_break,
+            OverflowWrap::Normal,
+            line_break,
+        );
+        lines
+            .iter()
+            .map(|l| l.iter().map(|f| f.text.as_str()).collect::<String>())
+            .collect()
+    }
+
+    #[test]
+    fn cjk_paragraph_wraps_without_spaces() {
+        use crate::style::{LineBreak, WordBreak};
+        // 8 ideographs × 10px = 80px into a 30px box → 3 chars per line.
+        let lines = wrap_cjk("日本語版日本語版", 30.0, LineBreak::Auto, WordBreak::Normal);
+        assert_eq!(lines, vec!["日本語", "版日本", "語版"]);
+    }
+
+    #[test]
+    fn cjk_wrap_keeps_all_text() {
+        use crate::style::{LineBreak, WordBreak};
+        let text = "日本語版日本語版";
+        for w in [10.0_f32, 25.0, 55.0, 200.0] {
+            let joined = wrap_cjk(text, w, LineBreak::Auto, WordBreak::Normal).concat();
+            assert_eq!(joined, text, "text lost at max_width={w}");
+        }
+    }
+
+    #[test]
+    fn cjk_wrap_respects_word_break_keep_all() {
+        use crate::style::{LineBreak, WordBreak};
+        // keep-all forbids breaking between ideographs — one overflowing line.
+        let lines = wrap_cjk("日本語版日本語版", 30.0, LineBreak::Auto, WordBreak::KeepAll);
+        assert_eq!(lines, vec!["日本語版日本語版"]);
+    }
+
+    #[test]
+    fn cjk_wrap_line_break_anywhere_overrides_keep_all() {
+        use crate::style::{LineBreak, WordBreak};
+        let lines = wrap_cjk("日本語版", 20.0, LineBreak::Anywhere, WordBreak::KeepAll);
+        assert_eq!(lines, vec!["日本", "語版"]);
+    }
+
+    #[test]
+    fn cjk_wrap_never_starts_a_line_with_small_kana() {
+        use crate::style::{LineBreak, WordBreak};
+        // きゃきゃきゃ into 15px (1.5 chars): a break before ゃ is forbidden
+        // unless `loose`, so `normal` keeps each きゃ pair together and lets it
+        // overflow rather than starting a line with the small kana.
+        let normal = wrap_cjk("きゃきゃきゃ", 15.0, LineBreak::Normal, WordBreak::Normal);
+        assert_eq!(normal, vec!["きゃ", "きゃ", "きゃ"]);
+        for line in &normal {
+            assert!(!line.starts_with('ゃ'), "small kana must not start a line: {line}");
+        }
+        // `loose` takes the extra opportunity and fits one char per line.
+        let loose = wrap_cjk("きゃきゃきゃ", 15.0, LineBreak::Loose, WordBreak::Normal);
+        assert_eq!(loose, vec!["き", "ゃ", "き", "ゃ", "き", "ゃ"]);
+    }
+
+    #[test]
+    fn cjk_wrap_line_break_anywhere_splits_latin() {
+        use crate::style::{LineBreak, WordBreak};
+        let lines = wrap_cjk("Superlongword", 50.0, LineBreak::Anywhere, WordBreak::Normal);
+        assert!(lines.len() >= 3, "expected char-level wrapping, got {lines:?}");
+        assert_eq!(lines.concat(), "Superlongword");
+    }
+
+    #[test]
+    fn latin_wrapping_unchanged_by_line_break_auto() {
+        use crate::style::{LineBreak, WordBreak};
+        // A long Latin word has no opportunities under `auto` — it overflows
+        // exactly as it did before CJK support.
+        let lines = wrap_cjk("Superlongword", 50.0, LineBreak::Auto, WordBreak::Normal);
+        assert_eq!(lines, vec!["Superlongword"]);
+    }
+
+    #[test]
+    fn cjk_wrap_lines_fit_max_width() {
+        use crate::style::{LineBreak, WordBreak};
+        let lines = wrap_cjk("日本語版日本語版日本語版", 45.0, LineBreak::Auto, WordBreak::Normal);
+        for line in &lines {
+            let w = line.chars().count() as f32 * 10.0;
+            assert!(w <= 45.0, "line {line} is {w}px wide, max 45");
+        }
     }
 
     // ── word-break: break-all ─────────────────────────────────────────────────
@@ -12898,6 +13149,7 @@ mod tests {
             crate::style::WhiteSpace::Normal,
             WordBreak::BreakAll,
             OverflowWrap::Normal,
+            crate::style::LineBreak::Auto,
         );
         assert_eq!(lines.len(), 2, "expected 2 lines with break-all, got {}", lines.len());
         // All text must be preserved.
