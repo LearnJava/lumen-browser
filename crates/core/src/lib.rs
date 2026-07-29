@@ -37,6 +37,7 @@ pub use error::{Error, Result};
 pub use event::{Event, FetchPriority, RequestStage, SubresourceKind, TabId};
 pub use ext::{
     match_face, BrowserSession, ClockMode, EventSink, FaceRecord, FontProvider, FontStyle,
+    NORMAL_STRETCH_PERCENT,
     HyphenationProvider, NullBrowserSession, NullHyphenationProvider,
     JsError, JsResult, JsRuntime, JsValue, NoopEventSink, NullJsRuntime, SuspendedHeap,
     MemoryPressureLevel, MemoryPressureSource, NullMemoryPressureSource,

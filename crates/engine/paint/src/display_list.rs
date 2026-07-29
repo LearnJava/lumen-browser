@@ -387,6 +387,18 @@ pub enum DisplayCommand {
         font_weight: FontWeight,
         /// `font-style`. По умолчанию Normal.
         font_style: FontStyle,
+        /// CSS Fonts L4 §2.5 — `font-stretch` для **статического** подбора
+        /// face-а: renderer отдаёт его в `FontProvider::pick_face`, где он
+        /// сопоставляется с `usWidthClass` из OS/2 каждого face-а семейства
+        /// (§5.2). Это выбирает отдельный condensed/expanded файл там, где
+        /// семейство их имеет.
+        ///
+        /// Ортогонально оси `wdth` в `font_variation_axes`: variable-шрифт
+        /// интерполируется осью, статическое семейство — этим полем; на
+        /// шрифте, у которого есть и то и другое, работают оба. Хранится в
+        /// десятых долях процента (`FontStretch::NORMAL` = 1000 = 100%),
+        /// в проценты для matcher-а переводится `FontStretch::as_percent`.
+        font_stretch: FontStretch,
         /// CSS Fonts L4 §7 — user-space variation axes из `font-variation-settings`.
         /// Пары `(tag, value)` в user units — нормализация через fvar+avar
         /// выполняется в renderer-е, который имеет доступ к шрифтовым таблицам.
@@ -1610,6 +1622,7 @@ pub(crate) fn hash_command_into(
             font_family,
             font_weight,
             font_style,
+            font_stretch,
             font_variation_axes,
             font_features,
             font_palette,
@@ -1627,6 +1640,10 @@ pub(crate) fn hash_command_into(
             }
             h.write_u16(font_weight.0);
             std::mem::discriminant(font_style).hash(h);
+            // Влияет на выбор face-а — стало быть, и на пиксели: без него
+            // кадр, где сменился только font-stretch, переиспользует
+            // закэшированный тайл со старым (нормальной ширины) face-ом.
+            h.write_u16(font_stretch.0);
             h.write_usize(font_variation_axes.len());
             for (tag, v) in font_variation_axes {
                 h.write(tag);
@@ -2533,7 +2550,7 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
             }
             DisplayCommand::DrawText {
                 rect, text, font_size, color, font_family, font_weight, font_style,
-                font_variation_axes, font_features, font_palette, tab_size: _,
+                font_stretch, font_variation_axes, font_features, font_palette, tab_size: _,
                 highlight_name: _, text_orientation: _,
             } => {
                 out.push_str(&format!(
@@ -2562,6 +2579,10 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                         FontStyle::Oblique => " style=oblique",
                         FontStyle::Normal => "",
                     });
+                }
+                if *font_stretch != FontStretch::NORMAL {
+                    // Проценты, как в layout-снапшоте: stretch=75 ≡ condensed.
+                    out.push_str(&format!(" stretch={}", font_stretch.as_percent()));
                 }
                 if !font_variation_axes.is_empty() {
                     out.push_str(" var=[");
@@ -3287,6 +3308,7 @@ fn emit_margin_box_text(margin_box: &MarginBox, cmds: &mut DisplayList) {
             height: frag.height,
         };
         cmds.push(DisplayCommand::DrawText {
+            font_stretch: FontStretch::NORMAL,
             rect,
             text: frag.text.clone(),
             font_size: default_font_size,
@@ -3552,6 +3574,7 @@ fn emit_text_emphasis_marks(
     let frag_x = container_x + frag.x;
     for i in 0..char_count {
         out.push(DisplayCommand::DrawText {
+            font_stretch: frag.style.font_stretch,
             rect: Rect::new(frag_x + i as f32 * char_w, mark_y, char_w, mark_size * 1.5),
             text: mark.to_string(),
             font_size: mark_size,
@@ -3635,6 +3658,7 @@ fn emit_text_frags(
         let base_rect = Rect::new(container_x + frag.x, frag_y, container_width, line_h);
         emit_text_shadows(out, base_rect, line_h, frag);
         out.push(DisplayCommand::DrawText {
+            font_stretch: frag.style.font_stretch,
             rect: base_rect,
             text: frag.text.clone(),
             font_size: frag.style.font_size,
@@ -3768,6 +3792,7 @@ fn emit_inline_run_vertical(b: &LayoutBox, lines: &[Vec<InlineFrag>], out: &mut 
             let rect = Rect::new(column_x, b.rect.y + frag.x, col_width, frag.width);
             emit_text_shadows(out, rect, rect.height, frag);
             out.push(DisplayCommand::DrawText {
+                font_stretch: frag.style.font_stretch,
                 rect,
                 text: frag.text.clone(),
                 font_size: frag.style.font_size,
@@ -3863,6 +3888,7 @@ fn emit_inline_run(
             emit_text_frags(line, b.rect.x, b.rect.width, line_y, line_h, sel, out);
             out.push(DisplayCommand::PopClip);
             out.push(DisplayCommand::DrawText {
+                font_stretch: ef.style.font_stretch,
                 rect: Rect::new(b.rect.x + clip_w, line_y, ew, line_h),
                 text: "\u{2026}".to_string(),
                 font_size: ef.style.font_size,
@@ -4487,6 +4513,7 @@ fn emit_text_shadows(
             });
         }
         out.push(DisplayCommand::DrawText {
+            font_stretch: frag.style.font_stretch,
             rect: text_shadow_rect,
             text: frag.text.clone(),
             font_size: frag.style.font_size,
@@ -6120,6 +6147,7 @@ fn emit_input_value_text(
         rect: Rect::new(content_x, content_y, content_w, content_h),
     });
     out.push(DisplayCommand::DrawText {
+        font_stretch: s.font_stretch,
         rect: Rect::new(text_x, text_y, content_w, font_size),
         text,
         font_size,
@@ -6186,6 +6214,7 @@ fn emit_input_placeholder_text(
         rect: Rect::new(content_x, content_y, content_w, content_h),
     });
     out.push(DisplayCommand::DrawText {
+        font_stretch: s.font_stretch,
         rect: Rect::new(content_x, text_y, content_w, font_size),
         text: placeholder.to_owned(),
         font_size,
@@ -6561,6 +6590,7 @@ fn emit_select_indicator(b: &LayoutBox, selected_text: &str, suppress_primitive:
     // Selected label — clipped to available width.
     if !selected_text.is_empty() {
         out.push(DisplayCommand::DrawText {
+            font_stretch: s.font_stretch,
             rect: Rect::new(b.rect.x + pad, b.rect.y + pad, text_w, b.rect.height - pad * 2.0),
             text: selected_text.to_owned(),
             font_size,
@@ -6595,6 +6625,7 @@ fn emit_select_indicator(b: &LayoutBox, selected_text: &str, suppress_primitive:
 
         // Dropdown arrow "▼".
         out.push(DisplayCommand::DrawText {
+            font_stretch: s.font_stretch,
             rect: Rect::new(sep_x + pad, b.rect.y + pad, arrow_w - pad, b.rect.height - pad * 2.0),
             text: "\u{25BC}".to_owned(),
             font_size: font_size * 0.75,
@@ -6687,6 +6718,7 @@ fn emit_list_marker(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
             // overrides — render the string.
             if !text.is_empty() {
                 out.push(DisplayCommand::DrawText {
+                    font_stretch: s.font_stretch,
                     rect: b.rect,
                     text: text.clone(),
                     font_size: em,
@@ -8377,6 +8409,7 @@ fn emit_svg_text(
         rect.width = approx_text_width;
         rect.height = font_size;
         out.push(DisplayCommand::DrawText {
+            font_stretch: b.style.font_stretch,
             rect,
             text: text.to_string(),
             font_family: b.style.font_family.clone(),
@@ -15981,6 +16014,7 @@ mod tests {
                 rect: r, text: "hi".to_owned(), font_size: 12.0,
                 color: Color { r: 0, g: 0, b: 0, a: 255 }, font_family: vec![],
                 font_weight: FontWeight::NORMAL, font_style: FontStyle::Normal,
+                font_stretch: FontStretch::NORMAL,
                 font_variation_axes: vec![], font_features: vec![], tab_size: 0.0,
                 font_palette: None,
                 highlight_name: None, text_orientation: None,
@@ -16516,6 +16550,7 @@ mod tests {
 
     fn text_cmd(text: &str, font_size: f32, weight: u16) -> DisplayCommand {
         DisplayCommand::DrawText {
+            font_stretch: lumen_layout::FontStretch::NORMAL,
             rect: Rect::new(1.0, 2.0, 30.0, 12.0),
             text: text.to_string(),
             font_size,
@@ -17897,6 +17932,94 @@ mod tests {
             wdth
         );
     }
+
+    // ── font-stretch → статический подбор face-а (DrawText::font_stretch) ───
+    //
+    // Ось `wdth` выше обслуживает variable-шрифты; поле `font_stretch`
+    // отвечает за второй, независимый механизм — выбор отдельного
+    // condensed/expanded файла через `FontProvider::pick_face`. Тесты ниже
+    // фиксируют, что значение вообще доезжает до display list-а: без него
+    // renderer звал matcher с «normal» и любое `font-stretch` на статическом
+    // семействе молча не работало.
+
+    fn drawtext_stretches(dl: &DisplayList) -> Vec<FontStretch> {
+        dl.iter()
+            .filter_map(|c| match c {
+                DisplayCommand::DrawText { font_stretch, .. } => Some(*font_stretch),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn font_stretch_reaches_draw_text_field() {
+        let dl = build("<p>hello</p>", "p { font-stretch: condensed; }");
+        let got = drawtext_stretches(&dl);
+        assert!(!got.is_empty(), "страница должна дать хотя бы один DrawText");
+        assert!(
+            got.iter().all(|s| *s == FontStretch(750)),
+            "condensed = 75% → FontStretch(750), got {got:?}"
+        );
+    }
+
+    #[test]
+    fn font_stretch_default_is_normal_on_draw_text() {
+        let dl = build("<p>hello</p>", "");
+        let got = drawtext_stretches(&dl);
+        assert!(!got.is_empty());
+        assert!(
+            got.iter().all(|s| *s == FontStretch::NORMAL),
+            "без объявления DrawText обязан нести NORMAL, got {got:?}"
+        );
+    }
+
+    #[test]
+    fn font_stretch_explicit_wdth_still_sets_static_field() {
+        // Зеркало `font_stretch_explicit_wdth_not_overridden`: явный
+        // `font-variation-settings: "wdth" 80` подавляет инъекцию оси, но
+        // НЕ должен подавлять статический подбор — по спеке ось низкого
+        // уровня применяется после выбора face-а и на выбор не влияет.
+        let dl = build(
+            "<p>hello</p>",
+            r#"p { font-stretch: condensed; font-variation-settings: "wdth" 80; }"#,
+        );
+        let got = drawtext_stretches(&dl);
+        assert!(!got.is_empty());
+        assert!(
+            got.iter().all(|s| *s == FontStretch(750)),
+            "font-stretch: condensed обязан дойти до matcher-а независимо от \
+             font-variation-settings, got {got:?}"
+        );
+    }
+
+    #[test]
+    fn font_stretch_changes_display_list_hash() {
+        // Поле обязано входить в хэш: иначе кадр, где сменился только
+        // font-stretch, переиспользует закэшированный тайл со старым face-ом.
+        //
+        // Обе страницы задают ОДИНАКОВЫЙ явный `wdth` — иначе тест был бы
+        // фиктивным: инъекция оси из font-stretch и так лежит в хэше через
+        // `font_variation_axes`, и разошедшийся хэш ничего не сказал бы про
+        // новое поле. С явным `wdth` оси совпадают, и хэш расходится ровно
+        // и только из-за `font_stretch`.
+        let condensed = build(
+            "<p>hello</p>",
+            r#"p { font-stretch: condensed; font-variation-settings: "wdth" 80; }"#,
+        );
+        let expanded = build(
+            "<p>hello</p>",
+            r#"p { font-stretch: expanded; font-variation-settings: "wdth" 80; }"#,
+        );
+        // Именно `hash_display_list`: он складывает команды рукописным
+        // `hash_command_into`, где каждое поле перечислено явно. (Соседний
+        // `hash_content` свернул бы derive-`Debug` и разошёлся бы сам собой —
+        // на нём тест был бы фиктивным и ничего не проверял.)
+        assert_ne!(
+            hash_display_list(&condensed, &[], 0.0, 0.0, 800, 600),
+            hash_display_list(&expanded, &[], 0.0, 0.0, 800, 600),
+            "смена font-stretch обязана менять хэш display list-а"
+        );
+    }
 }
 
 
@@ -17912,6 +18035,7 @@ pub fn emit_text_with_highlights(
     font_family: Vec<String>,
     font_weight: FontWeight,
     font_style: FontStyle,
+    font_stretch: FontStretch,
     font_variation_axes: Vec<([u8; 4], f32)>,
     font_features: Vec<([u8; 4], u32)>,
     tab_size: f32,
@@ -17920,6 +18044,7 @@ pub fn emit_text_with_highlights(
     out: &mut DisplayList,
 ) {
     out.push(DisplayCommand::DrawText {
+        font_stretch,
         rect,
         text: text.to_string(),
         font_size,
@@ -17944,6 +18069,7 @@ mod highlight_tests {
     fn highlight_field_none_by_default() {
         // DrawText created without highlight_name should have None
         let dl = DisplayList::from(vec![DisplayCommand::DrawText {
+            font_stretch: lumen_layout::FontStretch::NORMAL,
             rect: Rect::new(0.0, 0.0, 100.0, 20.0),
             text: "test".to_string(),
             font_size: 14.0,
@@ -17975,6 +18101,7 @@ mod highlight_tests {
             vec![],
             FontWeight::NORMAL,
             FontStyle::Normal,
+            FontStretch::NORMAL,
             vec![],
             Vec::new(),
             0.0,
@@ -18003,6 +18130,7 @@ mod highlight_tests {
                 vec![],
                 FontWeight::NORMAL,
                 FontStyle::Normal,
+                FontStretch::NORMAL,
                 vec![],
                 Vec::new(),
                 0.0,
@@ -18028,6 +18156,7 @@ mod highlight_tests {
             vec![],
             FontWeight::NORMAL,
             FontStyle::Normal,
+            FontStretch::NORMAL,
             vec![],
             Vec::new(),
             0.0,
@@ -18056,6 +18185,7 @@ mod highlight_tests {
             family.clone(),
             weight,
             FontStyle::Italic,
+            FontStretch::NORMAL,
             vec![],
             Vec::new(),
             4.0,
@@ -18089,6 +18219,7 @@ mod highlight_tests {
             vec![],
             FontWeight::NORMAL,
             FontStyle::Normal,
+            FontStretch::NORMAL,
             vec![],
             Vec::new(),
             0.0,
@@ -18117,6 +18248,7 @@ mod highlight_tests {
             vec![],
             FontWeight::NORMAL,
             FontStyle::Normal,
+            FontStretch::NORMAL,
             vec![],
             Vec::new(),
             0.0,
@@ -18133,6 +18265,7 @@ mod highlight_tests {
             vec![],
             FontWeight::NORMAL,
             FontStyle::Normal,
+            FontStretch::NORMAL,
             vec![],
             Vec::new(),
             0.0,
@@ -18167,6 +18300,7 @@ mod highlight_tests {
             vec![],
             FontWeight::NORMAL,
             FontStyle::Normal,
+            FontStretch::NORMAL,
             axes.clone(),
             Vec::new(),
             0.0,

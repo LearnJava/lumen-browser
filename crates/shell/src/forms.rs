@@ -485,6 +485,7 @@ pub fn build_validation_tooltip(
     });
     // Text
     out.push(DisplayCommand::DrawText {
+        font_stretch: lumen_layout::FontStretch::NORMAL,
         rect: Rect::new(vp_x + TOOLTIP_PADDING, vp_y + TOOLTIP_PADDING, w - TOOLTIP_PADDING * 2.0, TOOLTIP_FONT_SIZE),
         text: message.to_owned(),
         font_size: TOOLTIP_FONT_SIZE,
@@ -870,6 +871,7 @@ pub fn build_select_dropdown(
         };
 
         out.push(DisplayCommand::DrawText {
+            font_stretch: lumen_layout::FontStretch::NORMAL,
             rect: Rect::new(
                 vp_x + DROPDOWN_PAD_X,
                 row_y + (DROPDOWN_ROW_H - DROPDOWN_FONT) * 0.5,
@@ -1023,6 +1025,7 @@ pub fn build_base_select_dropdown(
 
         let font_size = os.font_size.max(1.0);
         out.push(DisplayCommand::DrawText {
+            font_stretch: lumen_layout::FontStretch::NORMAL,
             rect: Rect::new(
                 vp_x + DROPDOWN_PAD_X,
                 row_y + (DROPDOWN_ROW_H - font_size) * 0.5,
@@ -1260,6 +1263,7 @@ pub fn build_date_picker(
         color: Color { r: 235, g: 235, b: 235, a: 255 },
     });
     out.push(DisplayCommand::DrawText {
+        font_stretch: lumen_layout::FontStretch::NORMAL,
         rect: Rect::new(content_x, header_y + 4.0, arrow_w, DATE_HEADER_H - 4.0),
         text: "<".to_owned(),
         font_size: 14.0,
@@ -1277,6 +1281,7 @@ pub fn build_date_picker(
     // Month/year label centered
     let label = format!("{} {}", month_name(month), year);
     out.push(DisplayCommand::DrawText {
+        font_stretch: lumen_layout::FontStretch::NORMAL,
         rect: Rect::new(content_x + arrow_w, header_y + 4.0, content_w - arrow_w * 2.0, DATE_HEADER_H - 4.0),
         text: label,
         font_size: 12.0,
@@ -1297,6 +1302,7 @@ pub fn build_date_picker(
         color: Color { r: 235, g: 235, b: 235, a: 255 },
     });
     out.push(DisplayCommand::DrawText {
+        font_stretch: lumen_layout::FontStretch::NORMAL,
         rect: Rect::new(content_x + content_w - arrow_w, header_y + 4.0, arrow_w, DATE_HEADER_H - 4.0),
         text: ">".to_owned(),
         font_size: 14.0,
@@ -1318,6 +1324,7 @@ pub fn build_date_picker(
     for (i, name) in daynames.iter().enumerate() {
         let cell_x = content_x + i as f32 * (DATE_CELL_W + DATE_CELL_GAP);
         out.push(DisplayCommand::DrawText {
+            font_stretch: lumen_layout::FontStretch::NORMAL,
             rect: Rect::new(cell_x, daynames_y, DATE_CELL_W, DATE_DAYNAME_H),
             text: (*name).to_owned(),
             font_size: 10.0,
@@ -1355,6 +1362,7 @@ pub fn build_date_picker(
             });
         }
         out.push(DisplayCommand::DrawText {
+            font_stretch: lumen_layout::FontStretch::NORMAL,
             rect: cell_rect,
             text: day.to_string(),
             font_size: 12.0,

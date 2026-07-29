@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
-use lumen_core::{FaceRecord, FontProvider, FontStyle};
+use lumen_core::{FaceRecord, FontProvider, FontStyle, NORMAL_STRETCH_PERCENT};
 
 use crate::system_fonts::SystemFontIndex;
 
@@ -70,7 +70,10 @@ impl FontRegistry {
             family: family.to_owned(),
             weight,
             style,
-            stretch: 100, // @font-face не явно указывает stretch
+            // @font-face-дескриптор `font-stretch` сюда пока не доезжает:
+            // ключ регистрации — (family, weight, style), и разделить два
+            // правила одного семейства по stretch этой схемой нельзя.
+            stretch: NORMAL_STRETCH_PERCENT,
             path: virt_path.clone(),
         };
 
@@ -101,10 +104,18 @@ impl FontRegistry {
     /// system face is found, reads it from disk and returns the raw bytes. Returns
     /// `None` if no matching face exists or the file cannot be read.
     ///
-    /// `weight` and `style` are the @font-face rule's own descriptors, used to pick
-    /// the closest face from the family (CSS §5.2 matching algorithm).
-    pub fn resolve_local_bytes(&self, name: &str, weight: u16, style: FontStyle) -> Option<Vec<u8>> {
-        let face = self.system.pick_face(name, weight, style)?;
+    /// `weight`, `style` and `stretch` are the @font-face rule's own descriptors,
+    /// used to pick the closest face from the family (CSS §5.2 matching algorithm).
+    /// `stretch` is in CSS percent ([`lumen_core::NORMAL_STRETCH_PERCENT`] = normal)
+    /// and is matched against each face's `usWidthClass`.
+    pub fn resolve_local_bytes(
+        &self,
+        name: &str,
+        weight: u16,
+        style: FontStyle,
+        stretch: u16,
+    ) -> Option<Vec<u8>> {
+        let face = self.system.pick_face(name, weight, style, stretch)?;
         std::fs::read(&face.path).ok()
     }
 
@@ -268,7 +279,7 @@ mod tests {
     #[test]
     fn resolve_local_finds_bundled_inter() {
         let reg = FontRegistry::with_dirs(vec![assets_dir()]);
-        let bytes = reg.resolve_local_bytes("Inter", 400, FontStyle::Normal);
+        let bytes = reg.resolve_local_bytes("Inter", 400, FontStyle::Normal, NORMAL_STRETCH_PERCENT);
         assert!(bytes.is_some(), "Inter must be found in assets/fonts");
         let b = bytes.unwrap();
         assert!(!b.is_empty());
@@ -279,19 +290,19 @@ mod tests {
     #[test]
     fn resolve_local_unknown_family_returns_none() {
         let reg = FontRegistry::with_dirs(vec![assets_dir()]);
-        assert!(reg.resolve_local_bytes("NoSuchFontXYZ", 400, FontStyle::Normal).is_none());
+        assert!(reg.resolve_local_bytes("NoSuchFontXYZ", 400, FontStyle::Normal, NORMAL_STRETCH_PERCENT).is_none());
     }
 
     #[test]
     fn resolve_local_case_insensitive() {
         let reg = FontRegistry::with_dirs(vec![assets_dir()]);
-        assert!(reg.resolve_local_bytes("inter", 400, FontStyle::Normal).is_some());
-        assert!(reg.resolve_local_bytes("INTER", 400, FontStyle::Normal).is_some());
+        assert!(reg.resolve_local_bytes("inter", 400, FontStyle::Normal, NORMAL_STRETCH_PERCENT).is_some());
+        assert!(reg.resolve_local_bytes("INTER", 400, FontStyle::Normal, NORMAL_STRETCH_PERCENT).is_some());
     }
 
     #[test]
     fn resolve_local_empty_dir_returns_none() {
         let reg = FontRegistry::with_dirs(vec![std::path::PathBuf::from("/no/such/dir")]);
-        assert!(reg.resolve_local_bytes("Inter", 400, FontStyle::Normal).is_none());
+        assert!(reg.resolve_local_bytes("Inter", 400, FontStyle::Normal, NORMAL_STRETCH_PERCENT).is_none());
     }
 }

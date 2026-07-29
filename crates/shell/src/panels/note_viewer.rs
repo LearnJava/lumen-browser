@@ -186,6 +186,7 @@ pub fn build_note_viewer(panel: &NoteViewerPanel, window_size: (u32, u32), pal: 
         color: pal.header_bg,
     });
     out.push(DisplayCommand::DrawText {
+        font_stretch: lumen_layout::FontStretch::NORMAL,
         rect: Rect::new(x + PAD, y + (HEADER_H - FONT_HEADER * 1.3) * 0.5, OVERLAY_W - 60.0, FONT_HEADER * 1.3),
         text: "Заметка".to_string(),
         font_size: FONT_HEADER,
@@ -209,6 +210,7 @@ pub fn build_note_viewer(panel: &NoteViewerPanel, window_size: (u32, u32), pal: 
         color: pal.item_bg,
     });
     out.push(DisplayCommand::DrawText {
+        font_stretch: lumen_layout::FontStretch::NORMAL,
         rect: Rect::new(close_x, close_y, 18.0, 18.0),
         text: "×".to_string(),
         font_size: 14.0,
@@ -232,6 +234,7 @@ pub fn build_note_viewer(panel: &NoteViewerPanel, window_size: (u32, u32), pal: 
         color: pal.input_bg,
     });
     out.push(DisplayCommand::DrawText {
+        font_stretch: lumen_layout::FontStretch::NORMAL,
         rect: Rect::new(x + PAD, url_y + (URL_ROW_H - FONT_URL * 1.3) * 0.5, OVERLAY_W - PAD * 2.0, FONT_URL * 1.3),
         text: panel.url.clone(),
         font_size: FONT_URL,
@@ -269,6 +272,7 @@ pub fn build_note_viewer(panel: &NoteViewerPanel, window_size: (u32, u32), pal: 
     });
 
     out.push(DisplayCommand::DrawText {
+        font_stretch: lumen_layout::FontStretch::NORMAL,
         rect: Rect::new(x + PAD + 10.0, sel_y + PAD, OVERLAY_W - PAD * 2.0 - 10.0, sel_h - PAD * 2.0),
         text: panel.selection.clone(),
         font_size: FONT_SEL,
@@ -298,6 +302,7 @@ pub fn build_note_viewer(panel: &NoteViewerPanel, window_size: (u32, u32), pal: 
             color: pal.item_bg,
         });
         out.push(DisplayCommand::DrawText {
+            font_stretch: lumen_layout::FontStretch::NORMAL,
             rect: Rect::new(x + PAD, cmt_y + 4.0, 60.0, FONT_LABEL * 1.3),
             text: "Комментарий:".to_string(),
             font_size: FONT_LABEL,
@@ -313,6 +318,7 @@ pub fn build_note_viewer(panel: &NoteViewerPanel, window_size: (u32, u32), pal: 
             text_orientation: None,
         });
         out.push(DisplayCommand::DrawText {
+            font_stretch: lumen_layout::FontStretch::NORMAL,
             rect: Rect::new(x + PAD, cmt_y + 4.0 + FONT_LABEL * 1.5, OVERLAY_W - PAD * 2.0, FONT_COMMENT * 1.3),
             text: panel.comment.clone(),
             font_size: FONT_COMMENT,

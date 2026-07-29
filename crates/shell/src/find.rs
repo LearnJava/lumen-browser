@@ -358,6 +358,7 @@ mod tests {
 
     fn draw_text(text: &str, x: f32, y: f32, w: f32, h: f32) -> DisplayCommand {
         DisplayCommand::DrawText {
+            font_stretch: lumen_layout::FontStretch::NORMAL,
             rect: Rect::new(x, y, w, h),
             text: text.to_string(),
             font_size: 16.0,

@@ -603,6 +603,7 @@ fn truncate_url(url: &str, width: f32) -> String {
 
 fn make_text(text: String, x: f32, y: f32, w: f32, font_size: f32, color: Color) -> DisplayCommand {
     DisplayCommand::DrawText {
+        font_stretch: lumen_layout::FontStretch::NORMAL,
         rect: Rect::new(x, y, w, font_size * 1.4),
         text,
         font_size,

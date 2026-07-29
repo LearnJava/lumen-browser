@@ -237,6 +237,7 @@ pub fn build_panel(
         let text_x = mx + MENU_PAD + 4.0 + DOT_SZ + 8.0;
         let text_y = row_y + (ROW_H - FONT_SZ * 1.3) * 0.5;
         out.push(DisplayCommand::DrawText {
+            font_stretch: lumen_layout::FontStretch::NORMAL,
             rect: Rect::new(text_x, text_y, (mx + MENU_W - MENU_PAD - text_x).max(0.0), FONT_SZ * 1.3),
             text: entry.name.clone(),
             font_size: FONT_SZ,
