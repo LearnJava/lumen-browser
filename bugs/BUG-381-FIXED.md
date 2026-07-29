@@ -1,6 +1,6 @@
 # BUG-381 — весь focus-API отсутствует в JS: `element.focus()`, `document.activeElement`, `document.hasFocus()`, события `focus`/`blur` — ничего нет, хотя шелл держит настоящее состояние фокуса
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-07-29 (P1)
 **Компонент:** js (`crates/js/src/dom.rs` — `WEB_API_SHIM`: ни фабрика элементов
 `_lumen_make_element`, ни литерал живого `document` (`dom.rs:6989`), ни билдер
 отсоединённого документа `_lumen_build_detached_document` не определяют ни
@@ -142,12 +142,83 @@ BUG-378), но не может сделать это стандартным `el.
 `focus-sync-when-blur.html`, `scroll-matches-focus.html` не требуют ни iframe,
 ни `window.open` (последний дополнительно упирается в BUG-382).
 
+## Как исправлено (2026-07-29, P1)
+
+Данные и механизм действительно уже были — не хватало связки, и она сведена в
+одну точку `_lumen_focus_update` (`crates/js/src/dom.rs`), через которую ходят
+**обе** стороны:
+
+* **страница → шелл.** `HTMLElement.prototype.focus(options)`/`blur()` дёргают
+  уже существовавшую пару нативов `_lumen_request_focus`/`_lumen_request_blur`
+  (её заводили ради `<dialog>.showModal()`), а спецификационное состояние
+  двигают синхронно — вызывающий код имеет право прочитать
+  `document.activeElement` следующей же строкой. `focus(options)` уважает
+  `preventScroll`, иначе скроллит элемент в видимую область.
+* **шелл → страница.** `notify_focus_changed` (`main.rs`, V8-ветка, и
+  `crates/js/src/lib.rs`, QuickJS-ветка) теперь исполняет focus-update steps
+  вместо голого присваивания `_lumen_last_focused_nid`, и вызывается **также**
+  из drain-пути JS-запросов фокуса — до этого после `showModal()`/`close()`
+  глобал оставался протухшим.
+
+Идемпотентность `_lumen_focus_update` (совпал старый nid с новым — не делаем
+ничего) — это то, что позволяет шеллу безопасно эхом подтверждать фокус,
+который страница только что запросила сама: второй раунд событий не выпускается.
+
+Остальное:
+
+* `document.activeElement` — по спеке откатывается к `<body>`, а не к `null`;
+  nid нормализуется до ближайшего элемента-предка, потому что шелл ведёт фокус
+  по layout-боксу, чей узел бывает текстовым.
+* `document.hasFocus()` — поверх того же сигнала, что кормит
+  `document.visibilityState`.
+* `window.focus()`/`blur()` — осознанные no-op: поднимать или опускать своё OS-окно
+  странице не даём, но функции обязаны существовать, иначе focus-trap и
+  feature-detection умирают на `is not a function`.
+* Порядок событий — `blur` → `focusout` → `focus` → `focusin`, с `relatedTarget`.
+  `focus`/`blur` не всплывают **и не доходят до document-слушателей**; для этого
+  понадобился отдельный диспатчер, т.к. `_lumen_dispatch_rich` гоняет
+  document-слушателей даже для невсплывающего события. На каждом хопе вызывается
+  и `on<type>`-свойство, так что `el.onfocus = fn` работает.
+* Фокусируемость (HTML LS §6.6.1): разобранный `tabindex` · нативно фокусируемые
+  теги (`INPUT` кроме `type=hidden`, `SELECT`/`TEXTAREA`/`BUTTON`/`IFRAME`/
+  `EMBED`/`OBJECT`/`SUMMARY`, `A`/`AREA` с `href`, `AUDIO`/`VIDEO` с `controls`) ·
+  `contenteditable` · `<body>`/`<html>` — минус `disabled` и минус любое
+  `inert`-поддерево.
+* IDL-рефлексия `tabIndex`/`autofocus`. Умолчание `tabIndex` — 0 для фокусируемых
+  и −1 для остальных (`<body>`/`<html>` — −1, как в браузерах).
+* Флеш `[autofocus]` по окончании разбора (HTML LS §6.6.6) — на переходе
+  `readyState = 'interactive'`, после `DOMContentLoaded`, и только если страница
+  не увела фокус сама.
+
+**Чего фикс не делает.** `SVGElement` фокус-методов не получил (SVG-шим ставит
+свои прототипы отдельно). `focusVisible` игнорируется. Последовательная
+навигация по `Tab` порядком `tabindex` — по-прежнему дело шелла и не
+переписывалась.
+
+**Проверка** (дефолтный движок — V8): 17 юнит-тестов в
+`crates/js/src/v8_runtime.rs` (поверхность API, синхронность `activeElement`,
+порядок и всплытие четвёрки событий, `relatedTarget`, идемпотентность,
+нефокусируемые элементы и `inert`, `tabIndex`/`autofocus`, эхо шелла,
+текстовый nid, флеш `autofocus`) плюс живое окно через `--mcp-live-port`:
+реальный клик по `<input>` даёт `activeElement === "field"` и события
+`focus,focusin`, а `blur()` возвращает `BODY` и всплывает `focusout` до
+document.
+
+**Побочная находка.** Проба вскрыла [BUG-442](BUG-442-OPEN.md): на V8
+отсутствующий атрибут читается как `null`, а шим сравнивает с `undefined`, из-за
+чего `hasAttribute()` истинен для любого имени. В рамках этой правки на
+engine-agnostic `_lumen_has_attr` переведены только зависимости focus-API
+(`_lumen_is_focusable`, `_lumen_find_autofocus_in`); остальные 15 мест — за
+BUG-442.
+
 ## Связанные
 
 * [BUG-383](BUG-383-OPEN.md) — `tabIndex`/`autofocus` — часть общего провала
   IDL-рефлексии; `click()` отсутствует там же, где `focus()`.
 * [BUG-384](BUG-384-OPEN.md) — named access on Window; мешает измерить этот баг
   на трёх тестах категории.
+* [BUG-442](BUG-442-OPEN.md) — расхождение `null`/`undefined` в биндингах
+  атрибутов, найденное этой пробой.
 * [BUG-378](BUG-378-OPEN.md) — почему `_lumen_request_focus` вообще виден
   странице.
 * [BUG-360](BUG-360-OPEN.md) — `onfocus="…"` не работал бы и после починки

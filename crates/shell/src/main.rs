@@ -2992,8 +2992,11 @@ pub(crate) trait PersistentJs: Send + Sync {
 
     /// Notify the JS runtime that the shell moved keyboard focus to a new node.
     ///
-    /// Updates `_lumen_last_focused_nid` so `showModal()` can record it for
-    /// restoration when the dialog closes. `nid = None` means focus was cleared.
+    /// Runs the shim's focus-update steps (BUG-381): sets `document.activeElement`,
+    /// fires `blur`/`focusout`/`focus`/`focusin` and updates `_lumen_last_focused_nid`
+    /// so `showModal()` can record it for restoration when the dialog closes.
+    /// `nid = None` means focus was cleared. Idempotent — echoing a focus the page
+    /// itself just requested via `element.focus()` dispatches nothing.
     #[allow(dead_code)]
     fn notify_focus_changed(&self, _nid: Option<u32>) {}
 
@@ -3621,7 +3624,8 @@ impl PersistentJs for V8PersistentJs {
     fn notify_focus_changed(&self, nid: Option<u32>) {
         let n = nid.map(|n| n as i64).unwrap_or(-1_i64);
         self.eval_js(&format!(
-            "if(typeof _lumen_last_focused_nid!=='undefined')_lumen_last_focused_nid={n};"
+            "if(typeof _lumen_focus_update==='function')_lumen_focus_update({n});\
+             else if(typeof _lumen_last_focused_nid!=='undefined')_lumen_last_focused_nid={n};"
         ));
     }
     fn pointer_capture_nid(&self) -> Option<u32> {
@@ -13234,8 +13238,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             self.handle_print_request(&req);
         }
 
-        // Dialog focus management (HTML LS §6.6.3): apply focus changes requested by
-        // showModal() / close() in JS via _lumen_request_focus / _lumen_request_blur.
+        // Focus management (HTML LS §6.6.3): apply focus changes requested by JS via
+        // _lumen_request_focus / _lumen_request_blur — `element.focus()`/`blur()`
+        // (BUG-381) as well as the older showModal() / close() pair.
         // ADR-016 M2.2d: value-drain через `route_query_js`.
         #[cfg(any(feature = "quickjs", feature = "v8"))]
         {
@@ -13254,6 +13259,15 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         // the accessibility bridge), so route it off-thread.
                         self.relayout_chrome();
                         self.platform_bridge.focused_node_changed(new_nid);
+                        // BUG-381: echo the applied focus back into JS. For a request
+                        // that came from `element.focus()` this is a no-op (the shim
+                        // already recorded it synchronously); for `showModal()`/`close()`,
+                        // which move focus without going through `focus()`, it is what
+                        // updates `document.activeElement` and fires the focus events.
+                        let focus_idx = new_nid.map(|n| n.index() as u32);
+                        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
+                            js.notify_focus_changed(focus_idx);
+                        });
                     }
                 }
             }
