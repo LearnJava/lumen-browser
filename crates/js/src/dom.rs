@@ -16027,1067 +16027,6 @@ mod tests {
         rt
     }
 
-    // ── IME composition API ───────────────────────────────────────────────────
-
-    #[test]
-    fn dispatch_composition_function_exists() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("typeof _lumen_dispatch_composition === 'function'")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn set_ime_target_function_exists() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("typeof _lumen_set_ime_target === 'function'")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn dispatch_composition_on_element_fires_listener() {
-        let rt = runtime_with_dom(make_doc());
-        // Регистрируем слушатель compositionstart на main div.
-        // При диспатче он должен сохранить data в глобальной переменной.
-        rt.eval(r#"
-            var _got_composition = null;
-            var el = document.getElementById('main');
-            el.addEventListener('compositionstart', function(e) {
-                _got_composition = e.type;
-            });
-            _lumen_set_ime_target(el);
-            _lumen_dispatch_composition('compositionstart', '');
-        "#).unwrap();
-        let result = rt.eval("_got_composition").unwrap();
-        assert_eq!(result, lumen_core::JsValue::String("compositionstart".into()));
-    }
-
-    #[test]
-    fn dispatch_composition_update_carries_data() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(r#"
-            var _comp_data = null;
-            var el = document.getElementById('main');
-            el.addEventListener('compositionupdate', function(e) {
-                _comp_data = e.data;
-            });
-            _lumen_set_ime_target(el);
-            _lumen_dispatch_composition('compositionupdate', 'あい');
-        "#).unwrap();
-        let result = rt.eval("_comp_data").unwrap();
-        assert_eq!(result, lumen_core::JsValue::String("あい".into()));
-    }
-
-    #[test]
-    fn dispatch_composition_without_target_does_not_crash() {
-        let rt = runtime_with_dom(make_doc());
-        // Нет target — должен молча ничего не сделать.
-        rt.eval("_lumen_set_ime_target(null); _lumen_dispatch_composition('compositionstart', '');")
-            .unwrap();
-    }
-
-    #[test]
-    fn window_has_dispatch_composition() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt
-            .eval("typeof window._lumen_dispatch_composition === 'function'")
-            .unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    // ── bfcache / pageshow / pagehide ────────────────────────────────────────
-
-    #[test]
-    fn window_has_pageshow_pagehide_handlers() {
-        let rt = runtime_with_dom(make_doc());
-        // onpageshow and onpagehide should be null (not set) initially.
-        let r1 = rt.eval("window.onpageshow === null").unwrap();
-        let r2 = rt.eval("window.onpagehide === null").unwrap();
-        assert_eq!(r1, lumen_core::JsValue::Bool(true));
-        assert_eq!(r2, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn pageshow_listener_receives_event_with_persisted_false() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(
-            "var saw = false; var persistedFlag = null;
-             window.addEventListener('pageshow', function(e) { saw = true; persistedFlag = e.persisted; });
-             _lumen_fire_page_lifecycle('pageshow', false);",
-        ).unwrap();
-        let saw = rt.eval("saw").unwrap();
-        let persisted = rt.eval("persistedFlag").unwrap();
-        assert_eq!(saw, lumen_core::JsValue::Bool(true));
-        assert_eq!(persisted, lumen_core::JsValue::Bool(false));
-    }
-
-    #[test]
-    fn pageshow_listener_receives_persisted_true_from_bfcache() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(
-            "var persistedFlag = null;
-             window.addEventListener('pageshow', function(e) { persistedFlag = e.persisted; });
-             _lumen_fire_page_lifecycle('pageshow', true);",
-        ).unwrap();
-        let persisted = rt.eval("persistedFlag").unwrap();
-        assert_eq!(persisted, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn pagehide_listener_fires() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(
-            "var fired = false;
-             window.addEventListener('pagehide', function(e) { fired = true; });
-             _lumen_fire_page_lifecycle('pagehide', false);",
-        ).unwrap();
-        let fired = rt.eval("fired").unwrap();
-        assert_eq!(fired, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn onpageshow_handler_fires() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(
-            "var saw = false;
-             window.onpageshow = function(e) { saw = true; };
-             _lumen_fire_page_lifecycle('pageshow', false);",
-        ).unwrap();
-        let saw = rt.eval("saw").unwrap();
-        assert_eq!(saw, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn remove_pageshow_listener_stops_it_firing() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(
-            "var count = 0;
-             var fn1 = function() { count++; };
-             window.addEventListener('pageshow', fn1);
-             window.removeEventListener('pageshow', fn1);
-             _lumen_fire_page_lifecycle('pageshow', false);",
-        ).unwrap();
-        let count = rt.eval("count").unwrap();
-        assert_eq!(count, lumen_core::JsValue::Number(0.0));
-    }
-
-    #[test]
-    fn lumen_bfcache_persisted_default_false() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt.eval("_lumen_bfcache_persisted").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(false));
-    }
-
-    #[test]
-    fn lumen_fire_page_lifecycle_exported_on_window() {
-        let rt = runtime_with_dom(make_doc());
-        let result = rt.eval("typeof window._lumen_fire_page_lifecycle === 'function'").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Bool(true));
-    }
-
-    // ── Fetch API tests ───────────────────────────────────────────────────────
-
-    #[test]
-    fn fetch_global_is_function() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("typeof fetch === 'function'").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn window_fetch_is_function() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("typeof window.fetch === 'function'").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn headers_class_exists() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("typeof Headers === 'function'").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn request_class_exists() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("typeof Request === 'function'").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn response_class_exists() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("typeof Response === 'function'").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn abort_controller_class_exists() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("typeof AbortController === 'function'").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn headers_get_set() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var h = new Headers(); h.set('Content-Type', 'application/json'); h.get('content-type')"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("application/json".into()));
-    }
-
-    #[test]
-    fn headers_case_insensitive() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var h = new Headers({'X-Foo': 'bar'}); h.get('x-foo')"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("bar".into()));
-    }
-
-    #[test]
-    fn response_ok_for_200() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("new Response(null, {status: 200}).ok").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn response_not_ok_for_404() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("new Response(null, {status: 404}).ok").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(false));
-    }
-
-    #[test]
-    fn response_text_returns_promise() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var r = new Response(new Uint8Array([104, 105])); \
-             typeof r.text() === 'object'"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn abort_controller_abort_sets_signal() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var ctrl = new AbortController(); ctrl.abort(); ctrl.signal.aborted"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn fetch_without_provider_returns_promise() {
-        // install_dom with None fetch_provider: fetch() should return a rejected Promise.
-        // QuickJS doesn't flush microtasks synchronously in eval, so we only verify
-        // that fetch() returns a thenable (Promise), not that catch fired.
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var p = fetch('http://example.com/'); \
-             typeof p === 'object' && typeof p.then === 'function'"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn request_default_method_get() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("new Request('https://x.com/').method").unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("GET".into()));
-    }
-
-    #[test]
-    fn window_has_abort_controller() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("typeof window.AbortController === 'function'").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    // ── WebSocket API ─────────────────────────────────────────────────────────
-
-    #[test]
-    fn window_has_websocket_constructor() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("typeof window.WebSocket === 'function'").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn websocket_constants_defined() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt
-            .eval("WebSocket.CONNECTING === 0 && WebSocket.OPEN === 1 && WebSocket.CLOSING === 2 && WebSocket.CLOSED === 3")
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    // Mock WS provider: connect always fails (no server).
-    struct FailWsProvider;
-    impl lumen_core::ext::JsWebSocketProvider for FailWsProvider {
-        fn connect(&self, _url: &str, _protocols: &[String]) -> lumen_core::error::Result<Box<dyn lumen_core::ext::JsWebSocketSession>> {
-            Err(lumen_core::error::Error::Network("test: no server".into()))
-        }
-    }
-
-    fn runtime_with_ws(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
-        let rt = QuickJsRuntime::new().unwrap();
-        let provider: Arc<dyn lumen_core::ext::JsWebSocketProvider> = Arc::new(FailWsProvider);
-        rt.install_dom(doc, "", None, Some(provider), None, None, None, None, None, None, false).unwrap();
-        rt
-    }
-
-    #[test]
-    fn websocket_connect_fail_sets_closed_state() {
-        let rt = runtime_with_ws(make_doc());
-        // connect fails immediately → readyState = 3 (CLOSED)
-        let r = rt
-            .eval("var ws = new WebSocket('ws://127.0.0.1:1'); ws.readyState")
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::Number(3.0));
-    }
-
-    #[test]
-    fn websocket_connect_fail_no_handle() {
-        let rt = runtime_with_ws(make_doc());
-        let r = rt
-            .eval("var ws = new WebSocket('ws://127.0.0.1:1'); ws._handle === 0")
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn websocket_connect_fail_fires_onerror() {
-        let rt = runtime_with_ws(make_doc());
-        // onerror is called asynchronously via setTimeout(fn, 0) in the shim.
-        // We can't pump the timeout in this test — just verify the handler is set.
-        let r = rt
-            .eval(
-                "var fired = false;
-                 var ws = new WebSocket('ws://127.0.0.1:1');
-                 ws.onerror = function() { fired = true; };
-                 ws.readyState === 3",
-            )
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    // ── _lumen_bfcache_blocked: bfcache eligibility filters (Ph3 bfcache L1) ──
-
-    #[test]
-    fn bfcache_blocked_false_by_default() {
-        let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false).unwrap();
-        let r = rt.eval("_lumen_bfcache_blocked()").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(false));
-    }
-
-    #[test]
-    fn bfcache_blocked_true_when_websocket_open() {
-        let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false).unwrap();
-        let r = rt
-            .eval("_ws_instances.push({ readyState: 1 }); _lumen_bfcache_blocked()")
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn bfcache_blocked_false_when_websocket_closed() {
-        let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false).unwrap();
-        // readyState 3 (CLOSED) must not block — only OPEN (1) does.
-        let r = rt
-            .eval("_ws_instances.push({ readyState: 3 }); _lumen_bfcache_blocked()")
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(false));
-    }
-
-    #[test]
-    fn bfcache_blocked_true_when_eventsource_open() {
-        let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false).unwrap();
-        let r = rt
-            .eval("_sse_instances.push({ readyState: 1 }); _lumen_bfcache_blocked()")
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn bfcache_blocked_true_when_beforeunload_listener_registered() {
-        let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false).unwrap();
-        let r = rt
-            .eval("window.addEventListener('beforeunload', function() {}); _lumen_bfcache_blocked()")
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn bfcache_blocked_true_when_unload_listener_registered() {
-        let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false).unwrap();
-        let r = rt
-            .eval("window.addEventListener('unload', function() {}); _lumen_bfcache_blocked()")
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn bfcache_blocked_true_when_onbeforeunload_property_set() {
-        let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false).unwrap();
-        let r = rt
-            .eval("window.onbeforeunload = function() {}; _lumen_bfcache_blocked()")
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    // Mock WS provider: immediately queues Open + one Text message.
-    struct MockWsProvider;
-    struct MockWsSession {
-        queue: std::sync::Mutex<std::collections::VecDeque<lumen_core::ext::JsWsEvent>>,
-        /// Sub-protocol echoed back to the client (first requested, "" if none).
-        protocol: String,
-    }
-    impl lumen_core::ext::JsWebSocketSession for MockWsSession {
-        fn send_text(&self, _text: &str) -> lumen_core::error::Result<()> { Ok(()) }
-        fn send_binary(&self, _data: &[u8]) -> lumen_core::error::Result<()> { Ok(()) }
-        fn poll(&self) -> Option<lumen_core::ext::JsWsEvent> {
-            self.queue.lock().unwrap().pop_front()
-        }
-        fn close(&self, _code: u16, _reason: &str) -> lumen_core::error::Result<()> { Ok(()) }
-        fn protocol(&self) -> String { self.protocol.clone() }
-    }
-    impl lumen_core::ext::JsWebSocketProvider for MockWsProvider {
-        fn connect(&self, _url: &str, protocols: &[String]) -> lumen_core::error::Result<Box<dyn lumen_core::ext::JsWebSocketSession>> {
-            use lumen_core::ext::JsWsEvent;
-            let mut q = std::collections::VecDeque::new();
-            q.push_back(JsWsEvent::Open);
-            q.push_back(JsWsEvent::Message { data: b"hello".to_vec(), is_binary: false });
-            // Echo the client's first requested sub-protocol, mirroring a real server.
-            let protocol = protocols.first().cloned().unwrap_or_default();
-            Ok(Box::new(MockWsSession { queue: std::sync::Mutex::new(q), protocol }))
-        }
-    }
-
-    fn runtime_with_mock_ws(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
-        let rt = QuickJsRuntime::new().unwrap();
-        let provider: Arc<dyn lumen_core::ext::JsWebSocketProvider> = Arc::new(MockWsProvider);
-        rt.install_dom(doc, "", None, Some(provider), None, None, None, None, None, None, false).unwrap();
-        rt
-    }
-
-    #[test]
-    fn websocket_mock_connect_open_state() {
-        let rt = runtime_with_mock_ws(make_doc());
-        // Phase 0: pump explicitly to deliver Open event → readyState = 1.
-        let r = rt
-            .eval("var ws = new WebSocket('ws://mock'); _lumen_pump_websockets(); ws.readyState")
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::Number(1.0));
-    }
-
-    #[test]
-    fn websocket_mock_open_fires_onopen() {
-        let rt = runtime_with_mock_ws(make_doc());
-        let r = rt
-            .eval(
-                "var opened = false;
-                 var ws = new WebSocket('ws://mock');
-                 ws.onopen = function() { opened = true; };
-                 _lumen_pump_websockets();
-                 opened",
-            )
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    /// `new WebSocket(url, protocols)` forwards the requested sub-protocol; on open,
-    /// the server-selected protocol is surfaced as `ws.protocol`. The mock echoes the
-    /// first requested protocol.
-    #[test]
-    fn websocket_subprotocol_surfaced_on_open() {
-        let rt = runtime_with_mock_ws(make_doc());
-        let r = rt
-            .eval(
-                "var ws = new WebSocket('ws://mock', ['chat', 'superchat']);
-                 _lumen_pump_websockets();
-                 ws.protocol",
-            )
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("chat".into()));
-    }
-
-    /// A string `protocols` argument is accepted and surfaced as `ws.protocol`.
-    #[test]
-    fn websocket_subprotocol_string_arg() {
-        let rt = runtime_with_mock_ws(make_doc());
-        let r = rt
-            .eval(
-                "var ws = new WebSocket('ws://mock', 'json');
-                 _lumen_pump_websockets();
-                 ws.protocol",
-            )
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("json".into()));
-    }
-
-    #[test]
-    fn websocket_mock_message_via_pump() {
-        let rt = runtime_with_mock_ws(make_doc());
-        // Set handler before pump so onmessage fires when the message is dispatched.
-        let r = rt
-            .eval(
-                "var received = null;
-                 var ws = new WebSocket('ws://mock');
-                 ws.onmessage = function(e) { received = e.data; };
-                 _lumen_pump_websockets();
-                 received",
-            )
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("hello".into()));
-    }
-
-    /// `send()` while CONNECTING must throw `InvalidStateError` (WHATWG WebSocket).
-    #[test]
-    fn websocket_send_in_connecting_throws() {
-        let rt = runtime_with_mock_ws(make_doc());
-        // No pump → stays CONNECTING (readyState 0).
-        let r = rt
-            .eval(
-                "var ws = new WebSocket('ws://mock');
-                 try { ws.send('x'); 'nothrow'; } catch (e) { e.name; }",
-            )
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("InvalidStateError".into()));
-    }
-
-    /// `close()` with an out-of-range code throws `InvalidAccessError`; a valid
-    /// custom code (3000–4999) transitions the socket to CLOSING (2).
-    #[test]
-    fn websocket_close_code_validation() {
-        let rt = runtime_with_mock_ws(make_doc());
-        let bad = rt
-            .eval(
-                "var ws = new WebSocket('ws://mock');
-                 try { ws.close(1234); 'nothrow'; } catch (e) { e.name; }",
-            )
-            .unwrap();
-        assert_eq!(bad, lumen_core::JsValue::String("InvalidAccessError".into()));
-        let ok = rt
-            .eval(
-                "var ws2 = new WebSocket('ws://mock');
-                 ws2.close(3001); ws2.readyState",
-            )
-            .unwrap();
-        assert_eq!(ok, lumen_core::JsValue::Number(2.0));
-    }
-
-    /// `close()` with a reason longer than 123 UTF-8 bytes throws `SyntaxError`.
-    #[test]
-    fn websocket_close_reason_too_long_throws() {
-        let rt = runtime_with_mock_ws(make_doc());
-        let r = rt
-            .eval(
-                "var ws = new WebSocket('ws://mock');
-                 var long = 'a'.repeat(124);
-                 try { ws.close(1000, long); 'nothrow'; } catch (e) { e.name; }",
-            )
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("SyntaxError".into()));
-    }
-
-    /// `send()` in CLOSING/CLOSED discards data but counts it in `bufferedAmount`.
-    #[test]
-    fn websocket_buffered_amount_in_closing() {
-        let rt = runtime_with_mock_ws(make_doc());
-        let r = rt
-            .eval(
-                "var ws = new WebSocket('ws://mock');
-                 ws.close();           // CONNECTING → CLOSING
-                 ws.send('hello');     // 5 bytes, discarded but counted
-                 ws.bufferedAmount",
-            )
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::Number(5.0));
-    }
-
-    /// Ready-state constants are exposed on instances, not only the constructor.
-    #[test]
-    fn websocket_instance_constants() {
-        let rt = runtime_with_mock_ws(make_doc());
-        let r = rt
-            .eval(
-                "var ws = new WebSocket('ws://mock');
-                 ws.CONNECTING === 0 && ws.OPEN === 1 && ws.CLOSING === 2 && ws.CLOSED === 3",
-            )
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    /// A second `close()` is a no-op (idempotent), readyState stays CLOSING.
-    #[test]
-    fn websocket_close_idempotent() {
-        let rt = runtime_with_mock_ws(make_doc());
-        let r = rt
-            .eval(
-                "var ws = new WebSocket('ws://mock');
-                 ws.close(); ws.close(); ws.readyState",
-            )
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::Number(2.0));
-    }
-
-    #[test]
-    fn websocket_no_provider_connect_returns_zero() {
-        // Without ws_provider, _lumen_ws_connect always returns 0.
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("_lumen_ws_connect('ws://test', '')").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Number(0.0));
-    }
-
-    // ── EventSource / Server-Sent Events (HTML Living Standard §9.2) ──────────
-
-    /// Mock SSE session feeding a preset event sequence via `poll()`.
-    struct MockSseSession {
-        queue: std::sync::Mutex<std::collections::VecDeque<lumen_core::ext::JsSseEvent>>,
-    }
-    impl lumen_core::ext::JsSseSession for MockSseSession {
-        fn poll(&self) -> Option<lumen_core::ext::JsSseEvent> {
-            self.queue.lock().unwrap().pop_front()
-        }
-        fn close(&mut self) {}
-    }
-
-    /// Mock SSE provider that queues a fixed event sequence on connect.
-    struct MockSseProvider {
-        events: Vec<lumen_core::ext::JsSseEvent>,
-    }
-    impl lumen_core::ext::JsSseProvider for MockSseProvider {
-        fn connect_sse(
-            &self,
-            _url: &str,
-        ) -> lumen_core::error::Result<Box<dyn lumen_core::ext::JsSseSession>> {
-            let q: std::collections::VecDeque<_> = self.events.iter().cloned().collect();
-            Ok(Box::new(MockSseSession {
-                queue: std::sync::Mutex::new(q),
-            }))
-        }
-    }
-
-    fn runtime_with_mock_sse(
-        doc: Arc<Mutex<Document>>,
-        events: Vec<lumen_core::ext::JsSseEvent>,
-    ) -> QuickJsRuntime {
-        let rt = QuickJsRuntime::new().unwrap();
-        let provider: Arc<dyn lumen_core::ext::JsSseProvider> =
-            Arc::new(MockSseProvider { events });
-        rt.install_dom(doc, "", None, None, Some(provider), None, None, None, None, None, false)
-            .unwrap();
-        rt
-    }
-
-    #[test]
-    fn eventsource_constructor_no_provider_sets_closed() {
-        // Without an sse_provider, _lumen_sse_connect returns 0 → readyState CLOSED.
-        let rt = runtime_with_dom(make_doc());
-        let r = rt
-            .eval("var es = new EventSource('https://x/sse'); es.readyState")
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::Number(2.0));
-    }
-
-    #[test]
-    fn eventsource_no_provider_connect_returns_zero() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("_lumen_sse_connect('https://x/sse')").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Number(0.0));
-    }
-
-    #[test]
-    fn eventsource_opens_on_sse_connect() {
-        use lumen_core::ext::JsSseEvent;
-        let rt = runtime_with_mock_sse(make_doc(), vec![JsSseEvent::Open]);
-        let r = rt
-            .eval(
-                "var opened = false;
-                 var es = new EventSource('https://x/sse');
-                 es.onopen = function() { opened = true; };
-                 _lumen_pump_sse();
-                 [es.readyState, opened]",
-            )
-            .unwrap();
-        match r {
-            lumen_core::JsValue::Array(arr) => {
-                // readyState OPEN (1) and onopen fired.
-                assert_eq!(arr[0], lumen_core::JsValue::Number(1.0));
-                assert_eq!(arr[1], lumen_core::JsValue::Bool(true));
-            }
-            other => panic!("expected array, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn eventsource_delivers_message() {
-        use lumen_core::ext::JsSseEvent;
-        let rt = runtime_with_mock_sse(
-            make_doc(),
-            vec![
-                JsSseEvent::Open,
-                JsSseEvent::Message {
-                    event_type: "message".into(),
-                    data: "hello world".into(),
-                    id: Some("42".into()),
-                },
-            ],
-        );
-        let r = rt
-            .eval(
-                "var data = null; var lid = null;
-                 var es = new EventSource('https://x/sse');
-                 es.onmessage = function(e) { data = e.data; lid = e.lastEventId; };
-                 _lumen_pump_sse();
-                 [data, lid]",
-            )
-            .unwrap();
-        match r {
-            lumen_core::JsValue::Array(arr) => {
-                assert_eq!(arr[0], lumen_core::JsValue::String("hello world".into()));
-                assert_eq!(arr[1], lumen_core::JsValue::String("42".into()));
-            }
-            other => panic!("expected array, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn eventsource_delivers_typed_event() {
-        use lumen_core::ext::JsSseEvent;
-        let rt = runtime_with_mock_sse(
-            make_doc(),
-            vec![
-                JsSseEvent::Open,
-                JsSseEvent::Message {
-                    event_type: "ping".into(),
-                    data: "p".into(),
-                    id: None,
-                },
-            ],
-        );
-        // A named event must reach addEventListener('ping', ...), not onmessage.
-        let r = rt
-            .eval(
-                "var got = null; var onmsg = false;
-                 var es = new EventSource('https://x/sse');
-                 es.onmessage = function() { onmsg = true; };
-                 es.addEventListener('ping', function(e) { got = e.data; });
-                 _lumen_pump_sse();
-                 [got, onmsg]",
-            )
-            .unwrap();
-        match r {
-            lumen_core::JsValue::Array(arr) => {
-                assert_eq!(arr[0], lumen_core::JsValue::String("p".into()));
-                assert_eq!(arr[1], lumen_core::JsValue::Bool(false));
-            }
-            other => panic!("expected array, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn eventsource_close_sets_closed() {
-        use lumen_core::ext::JsSseEvent;
-        let rt = runtime_with_mock_sse(make_doc(), vec![JsSseEvent::Open]);
-        let r = rt
-            .eval(
-                "var es = new EventSource('https://x/sse');
-                 _lumen_pump_sse();
-                 es.close();
-                 es.readyState",
-            )
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::Number(2.0));
-    }
-
-    #[test]
-    fn eventsource_server_close_fires_error_and_reconnects() {
-        use lumen_core::ext::JsSseEvent;
-        // Server-initiated close: readyState becomes CONNECTING (0), error fires,
-        // reconnect scheduled (HTML Living Standard §9.2.7).
-        let rt = runtime_with_mock_sse(make_doc(), vec![JsSseEvent::Open, JsSseEvent::Close]);
-        let r = rt
-            .eval(
-                "var errored = false;
-                 var es = new EventSource('https://x/sse');
-                 es.onerror = function() { errored = true; };
-                 _lumen_pump_sse();
-                 [es.readyState, errored]",
-            )
-            .unwrap();
-        match r {
-            lumen_core::JsValue::Array(arr) => {
-                assert_eq!(arr[0], lumen_core::JsValue::Number(0.0)); // CONNECTING
-                assert_eq!(arr[1], lumen_core::JsValue::Bool(true));  // error fired
-            }
-            other => panic!("expected array, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn eventsource_error_event_fires_onerror() {
-        use lumen_core::ext::JsSseEvent;
-        let rt = runtime_with_mock_sse(
-            make_doc(),
-            vec![JsSseEvent::Open, JsSseEvent::Error("boom".into())],
-        );
-        let r = rt
-            .eval(
-                "var errored = false; var msg = null;
-                 var es = new EventSource('https://x/sse');
-                 es.onerror = function(e) { errored = true; msg = e.message; };
-                 _lumen_pump_sse();
-                 [errored, msg, es.readyState]",
-            )
-            .unwrap();
-        match r {
-            lumen_core::JsValue::Array(arr) => {
-                assert_eq!(arr[0], lumen_core::JsValue::Bool(true));
-                assert_eq!(arr[1], lumen_core::JsValue::String("boom".into()));
-                assert_eq!(arr[2], lumen_core::JsValue::Number(2.0));
-            }
-            other => panic!("expected array, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn eventsource_poll_json_escapes_message() {
-        use lumen_core::ext::JsSseEvent;
-        // Data containing quotes/newlines must round-trip through JSON intact.
-        let rt = runtime_with_mock_sse(
-            make_doc(),
-            vec![
-                JsSseEvent::Open,
-                JsSseEvent::Message {
-                    event_type: "message".into(),
-                    data: "line1\nline2 \"quoted\"".into(),
-                    id: None,
-                },
-            ],
-        );
-        let r = rt
-            .eval(
-                "var data = null;
-                 var es = new EventSource('https://x/sse');
-                 es.onmessage = function(e) { data = e.data; };
-                 _lumen_pump_sse();
-                 data",
-            )
-            .unwrap();
-        assert_eq!(
-            r,
-            lumen_core::JsValue::String("line1\nline2 \"quoted\"".into())
-        );
-    }
-
-    #[test]
-    fn eventsource_retry_event_updates_reconnect_delay() {
-        use lumen_core::ext::JsSseEvent;
-        // A Retry event from the server updates the internal reconnect delay.
-        let rt = runtime_with_mock_sse(
-            make_doc(),
-            vec![JsSseEvent::Open, JsSseEvent::Retry(500)],
-        );
-        let r = rt
-            .eval(
-                "var es = new EventSource('https://x/sse');
-                 _lumen_pump_sse();
-                 es._retryMs",
-            )
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::Number(500.0));
-    }
-
-    #[test]
-    fn eventsource_close_cancels_pending_reconnect() {
-        use lumen_core::ext::JsSseEvent;
-        // Calling close() after server-close must cancel the pending reconnect.
-        let rt = runtime_with_mock_sse(make_doc(), vec![JsSseEvent::Open, JsSseEvent::Close]);
-        let r = rt
-            .eval(
-                "var es = new EventSource('https://x/sse');
-                 _lumen_pump_sse();
-                 es.close();
-                 [es.readyState, es._reconnecting]",
-            )
-            .unwrap();
-        match r {
-            lumen_core::JsValue::Array(arr) => {
-                assert_eq!(arr[0], lumen_core::JsValue::Number(2.0)); // CLOSED
-                assert_eq!(arr[1], lumen_core::JsValue::Bool(false)); // no reconnect
-            }
-            other => panic!("expected array, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn eventsource_remove_event_listener() {
-        use lumen_core::ext::JsSseEvent;
-        // removeEventListener must stop delivery to the removed handler.
-        let rt = runtime_with_mock_sse(
-            make_doc(),
-            vec![
-                JsSseEvent::Open,
-                JsSseEvent::Message {
-                    event_type: "ping".into(),
-                    data: "p".into(),
-                    id: None,
-                },
-            ],
-        );
-        let r = rt
-            .eval(
-                "var count = 0;
-                 var fn1 = function() { count++; };
-                 var es = new EventSource('https://x/sse');
-                 es.addEventListener('ping', fn1);
-                 es.removeEventListener('ping', fn1);
-                 _lumen_pump_sse();
-                 count",
-            )
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::Number(0.0));
-    }
-
-    #[test]
-    fn close_event_constructor() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt
-            .eval("var ce = new CloseEvent(1001, 'bye', true); ce.code === 1001 && ce.reason === 'bye' && ce.wasClean === true")
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn message_event_constructor() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt
-            .eval("var me = new MessageEvent('payload'); me.data === 'payload' && me.type === 'message'")
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn websocket_has_buffered_amount() {
-        let rt = runtime_with_ws(make_doc());
-        let r = rt
-            .eval("var ws = new WebSocket('ws://127.0.0.1:1'); ws.bufferedAmount === 0")
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn websocket_has_extensions_field() {
-        let rt = runtime_with_ws(make_doc());
-        let r = rt
-            .eval("var ws = new WebSocket('ws://127.0.0.1:1'); ws.extensions === ''")
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn websocket_binary_type_default_blob() {
-        let rt = runtime_with_ws(make_doc());
-        let r = rt
-            .eval("var ws = new WebSocket('ws://127.0.0.1:1'); ws.binaryType")
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("blob".into()));
-    }
-
-    // Mock provider: queues Open + one binary message (bytes [0x01, 0x02, 0x03]).
-    struct MockBinaryWsProvider;
-    struct MockBinaryWsSession {
-        queue: std::sync::Mutex<std::collections::VecDeque<lumen_core::ext::JsWsEvent>>,
-    }
-    impl lumen_core::ext::JsWebSocketSession for MockBinaryWsSession {
-        fn send_text(&self, _text: &str) -> lumen_core::error::Result<()> { Ok(()) }
-        fn send_binary(&self, _data: &[u8]) -> lumen_core::error::Result<()> { Ok(()) }
-        fn poll(&self) -> Option<lumen_core::ext::JsWsEvent> {
-            self.queue.lock().unwrap().pop_front()
-        }
-        fn close(&self, _code: u16, _reason: &str) -> lumen_core::error::Result<()> { Ok(()) }
-    }
-    impl lumen_core::ext::JsWebSocketProvider for MockBinaryWsProvider {
-        fn connect(&self, _url: &str, _protocols: &[String]) -> lumen_core::error::Result<Box<dyn lumen_core::ext::JsWebSocketSession>> {
-            use lumen_core::ext::JsWsEvent;
-            let mut q = std::collections::VecDeque::new();
-            q.push_back(JsWsEvent::Open);
-            q.push_back(JsWsEvent::Message { data: vec![0x01, 0x02, 0x03], is_binary: true });
-            Ok(Box::new(MockBinaryWsSession { queue: std::sync::Mutex::new(q) }))
-        }
-    }
-
-    fn runtime_with_binary_ws(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
-        let rt = QuickJsRuntime::new().unwrap();
-        let provider: Arc<dyn lumen_core::ext::JsWebSocketProvider> = Arc::new(MockBinaryWsProvider);
-        rt.install_dom(doc, "", None, Some(provider), None, None, None, None, None, None, false).unwrap();
-        rt
-    }
-
-    #[test]
-    fn websocket_binary_blob_mode_delivers_uint8array() {
-        let rt = runtime_with_binary_ws(make_doc());
-        // Default binaryType='blob' → Uint8Array (our Phase 0 representation).
-        let r = rt
-            .eval(
-                "var received = null;
-                 var ws = new WebSocket('ws://mock');
-                 ws.onmessage = function(e) { received = e.data; };
-                 _lumen_pump_websockets();
-                 received instanceof Uint8Array && received[0] === 1 && received[1] === 2 && received[2] === 3",
-            )
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn websocket_binary_arraybuffer_mode_delivers_arraybuffer() {
-        let rt = runtime_with_binary_ws(make_doc());
-        // binaryType='arraybuffer' → ArrayBuffer.
-        let r = rt
-            .eval(
-                "var received = null;
-                 var ws = new WebSocket('ws://mock');
-                 ws.binaryType = 'arraybuffer';
-                 ws.onmessage = function(e) { received = e.data; };
-                 _lumen_pump_websockets();
-                 received instanceof ArrayBuffer && new Uint8Array(received)[0] === 1",
-            )
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn websocket_binary_hex_length_matches_byte_count() {
-        let rt = runtime_with_binary_ws(make_doc());
-        // 3 bytes → Uint8Array of length 3.
-        let r = rt
-            .eval(
-                "var len = 0;
-                 var ws = new WebSocket('ws://mock');
-                 ws.onmessage = function(e) { len = e.data.length; };
-                 _lumen_pump_websockets();
-                 len === 3",
-            )
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
     // ── location / NavigateRequest tests ─────────────────────────────────────
 
     fn runtime_with_url(url: &str) -> QuickJsRuntime {
@@ -31275,6 +30214,1098 @@ mod tests {
             let rt = v8_runtime_with_cache_backend();
             let r = rt.eval("_lumen_cache_delete('https://example.com/', 'v1', 'https://example.com/nosuchurl')").unwrap();
             assert_eq!(r, lumen_core::JsValue::Bool(false));
+        }
+    }
+
+    /// V8 port of the WebSocket / EventSource / fetch-bindings / IME+bfcache test
+    /// families (S12b-24-ws-sse, третий слайс `dom.rs`-монолита). Первый слайс с
+    /// мок-провайдерами (`JsWebSocketProvider`, `JsSseProvider`) — они внедряются
+    /// через тот же `install_dom`, что и у QuickJS (сигнатуры совпадают
+    /// аргумент-в-аргумент), сами моки движка не касаются: реализуют трейты
+    /// `lumen_core::ext`.
+    ///
+    /// Gated on `v8-backend` like `v8_core`/`v8_events_cache`: QuickJS-копии удалены,
+    /// V8 — движок по умолчанию (ADR-018) и несёт это покрытие дальше.
+    #[cfg(feature = "v8-backend")]
+    mod v8_ws_sse {
+        use super::*;
+        use crate::v8_runtime::V8JsRuntime;
+
+        /// V8 twin of the deleted `runtime_with_dom`: same fixture document, same
+        /// `install_dom` argument list, same `_LUMEN_EXTENSION_ACTIVE` pre-eval.
+        fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
+            let rt = V8JsRuntime::new().unwrap();
+            rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+            rt.install_dom(doc, "", None, None, None, None, None, None, None, None, false)
+                .unwrap();
+            rt
+        }
+
+        // ── IME composition API ───────────────────────────────────────────────────
+
+        #[test]
+        fn dispatch_composition_function_exists() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("typeof _lumen_dispatch_composition === 'function'")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn set_ime_target_function_exists() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("typeof _lumen_set_ime_target === 'function'")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn dispatch_composition_on_element_fires_listener() {
+            let rt = v8_runtime_with_dom(make_doc());
+            // Регистрируем слушатель compositionstart на main div.
+            // При диспатче он должен сохранить data в глобальной переменной.
+            rt.eval(r#"
+                var _got_composition = null;
+                var el = document.getElementById('main');
+                el.addEventListener('compositionstart', function(e) {
+                    _got_composition = e.type;
+                });
+                _lumen_set_ime_target(el);
+                _lumen_dispatch_composition('compositionstart', '');
+            "#).unwrap();
+            let result = rt.eval("_got_composition").unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("compositionstart".into()));
+        }
+
+        #[test]
+        fn dispatch_composition_update_carries_data() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(r#"
+                var _comp_data = null;
+                var el = document.getElementById('main');
+                el.addEventListener('compositionupdate', function(e) {
+                    _comp_data = e.data;
+                });
+                _lumen_set_ime_target(el);
+                _lumen_dispatch_composition('compositionupdate', 'あい');
+            "#).unwrap();
+            let result = rt.eval("_comp_data").unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("あい".into()));
+        }
+
+        #[test]
+        fn dispatch_composition_without_target_does_not_crash() {
+            let rt = v8_runtime_with_dom(make_doc());
+            // Нет target — должен молча ничего не сделать.
+            rt.eval("_lumen_set_ime_target(null); _lumen_dispatch_composition('compositionstart', '');")
+                .unwrap();
+        }
+
+        #[test]
+        fn window_has_dispatch_composition() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval("typeof window._lumen_dispatch_composition === 'function'")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        // ── bfcache / pageshow / pagehide ────────────────────────────────────────
+
+        #[test]
+        fn window_has_pageshow_pagehide_handlers() {
+            let rt = v8_runtime_with_dom(make_doc());
+            // onpageshow and onpagehide should be null (not set) initially.
+            let r1 = rt.eval("window.onpageshow === null").unwrap();
+            let r2 = rt.eval("window.onpagehide === null").unwrap();
+            assert_eq!(r1, lumen_core::JsValue::Bool(true));
+            assert_eq!(r2, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn pageshow_listener_receives_event_with_persisted_false() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var saw = false; var persistedFlag = null;
+                 window.addEventListener('pageshow', function(e) { saw = true; persistedFlag = e.persisted; });
+                 _lumen_fire_page_lifecycle('pageshow', false);",
+            ).unwrap();
+            let saw = rt.eval("saw").unwrap();
+            let persisted = rt.eval("persistedFlag").unwrap();
+            assert_eq!(saw, lumen_core::JsValue::Bool(true));
+            assert_eq!(persisted, lumen_core::JsValue::Bool(false));
+        }
+
+        #[test]
+        fn pageshow_listener_receives_persisted_true_from_bfcache() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var persistedFlag = null;
+                 window.addEventListener('pageshow', function(e) { persistedFlag = e.persisted; });
+                 _lumen_fire_page_lifecycle('pageshow', true);",
+            ).unwrap();
+            let persisted = rt.eval("persistedFlag").unwrap();
+            assert_eq!(persisted, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn pagehide_listener_fires() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var fired = false;
+                 window.addEventListener('pagehide', function(e) { fired = true; });
+                 _lumen_fire_page_lifecycle('pagehide', false);",
+            ).unwrap();
+            let fired = rt.eval("fired").unwrap();
+            assert_eq!(fired, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn onpageshow_handler_fires() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var saw = false;
+                 window.onpageshow = function(e) { saw = true; };
+                 _lumen_fire_page_lifecycle('pageshow', false);",
+            ).unwrap();
+            let saw = rt.eval("saw").unwrap();
+            assert_eq!(saw, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn remove_pageshow_listener_stops_it_firing() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var count = 0;
+                 var fn1 = function() { count++; };
+                 window.addEventListener('pageshow', fn1);
+                 window.removeEventListener('pageshow', fn1);
+                 _lumen_fire_page_lifecycle('pageshow', false);",
+            ).unwrap();
+            let count = rt.eval("count").unwrap();
+            assert_eq!(count, lumen_core::JsValue::Number(0.0));
+        }
+
+        #[test]
+        fn lumen_bfcache_persisted_default_false() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt.eval("_lumen_bfcache_persisted").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(false));
+        }
+
+        #[test]
+        fn lumen_fire_page_lifecycle_exported_on_window() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt.eval("typeof window._lumen_fire_page_lifecycle === 'function'").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        // ── Fetch API tests ───────────────────────────────────────────────────────
+
+        #[test]
+        fn fetch_global_is_function() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("typeof fetch === 'function'").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn window_fetch_is_function() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("typeof window.fetch === 'function'").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn headers_class_exists() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("typeof Headers === 'function'").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn request_class_exists() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("typeof Request === 'function'").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn response_class_exists() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("typeof Response === 'function'").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn abort_controller_class_exists() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("typeof AbortController === 'function'").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn headers_get_set() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var h = new Headers(); h.set('Content-Type', 'application/json'); h.get('content-type')"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("application/json".into()));
+        }
+
+        #[test]
+        fn headers_case_insensitive() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var h = new Headers({'X-Foo': 'bar'}); h.get('x-foo')"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("bar".into()));
+        }
+
+        #[test]
+        fn response_ok_for_200() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("new Response(null, {status: 200}).ok").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn response_not_ok_for_404() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("new Response(null, {status: 404}).ok").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(false));
+        }
+
+        #[test]
+        fn response_text_returns_promise() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var r = new Response(new Uint8Array([104, 105])); \
+                 typeof r.text() === 'object'"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn abort_controller_abort_sets_signal() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var ctrl = new AbortController(); ctrl.abort(); ctrl.signal.aborted"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// `install_dom` with `None` fetch_provider: `fetch()` returns a thenable that
+        /// actually rejects. The QuickJS original could only assert "is a thenable"
+        /// (`eval()` there didn't drain microtasks); V8 drains its microtask queue, so
+        /// the rejection is observable — S12b-2 lesson, tighten what V8 makes
+        /// deterministic instead of carrying the loose assertion over.
+        #[test]
+        fn fetch_without_provider_rejects() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var thenable = false; var rejected = false;
+                 var p = fetch('http://example.com/');
+                 thenable = typeof p === 'object' && typeof p.then === 'function';
+                 p.catch(function() { rejected = true; });",
+            )
+            .unwrap();
+            assert_eq!(rt.eval("thenable").unwrap(), lumen_core::JsValue::Bool(true));
+            assert_eq!(rt.eval("rejected").unwrap(), lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn request_default_method_get() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("new Request('https://x.com/').method").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("GET".into()));
+        }
+
+        #[test]
+        fn window_has_abort_controller() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("typeof window.AbortController === 'function'").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        // ── WebSocket API ─────────────────────────────────────────────────────────
+
+        #[test]
+        fn window_has_websocket_constructor() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("typeof window.WebSocket === 'function'").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn websocket_constants_defined() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval("WebSocket.CONNECTING === 0 && WebSocket.OPEN === 1 && WebSocket.CLOSING === 2 && WebSocket.CLOSED === 3")
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        // Mock WS provider: connect always fails (no server).
+        struct FailWsProvider;
+        impl lumen_core::ext::JsWebSocketProvider for FailWsProvider {
+            fn connect(&self, _url: &str, _protocols: &[String]) -> lumen_core::error::Result<Box<dyn lumen_core::ext::JsWebSocketSession>> {
+                Err(lumen_core::error::Error::Network("test: no server".into()))
+            }
+        }
+
+        fn v8_runtime_with_ws(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
+            let rt = V8JsRuntime::new().unwrap();
+            let provider: Arc<dyn lumen_core::ext::JsWebSocketProvider> = Arc::new(FailWsProvider);
+            rt.install_dom(doc, "", None, Some(provider), None, None, None, None, None, None, false).unwrap();
+            rt
+        }
+
+        #[test]
+        fn websocket_connect_fail_sets_closed_state() {
+            let rt = v8_runtime_with_ws(make_doc());
+            // connect fails immediately → readyState = 3 (CLOSED)
+            let r = rt
+                .eval("var ws = new WebSocket('ws://127.0.0.1:1'); ws.readyState")
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Number(3.0));
+        }
+
+        #[test]
+        fn websocket_connect_fail_no_handle() {
+            let rt = v8_runtime_with_ws(make_doc());
+            let r = rt
+                .eval("var ws = new WebSocket('ws://127.0.0.1:1'); ws._handle === 0")
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn websocket_connect_fail_fires_onerror() {
+            let rt = v8_runtime_with_ws(make_doc());
+            // onerror is called asynchronously via setTimeout(fn, 0) in the shim.
+            // We can't pump the timeout in this test — just verify the handler is set.
+            let r = rt
+                .eval(
+                    "var fired = false;
+                     var ws = new WebSocket('ws://127.0.0.1:1');
+                     ws.onerror = function() { fired = true; };
+                     ws.readyState === 3",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        // ── _lumen_bfcache_blocked: bfcache eligibility filters (Ph3 bfcache L1) ──
+
+        #[test]
+        fn bfcache_blocked_false_by_default() {
+            let rt = V8JsRuntime::new().unwrap();
+            rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false).unwrap();
+            let r = rt.eval("_lumen_bfcache_blocked()").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(false));
+        }
+
+        #[test]
+        fn bfcache_blocked_true_when_websocket_open() {
+            let rt = V8JsRuntime::new().unwrap();
+            rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false).unwrap();
+            let r = rt
+                .eval("_ws_instances.push({ readyState: 1 }); _lumen_bfcache_blocked()")
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn bfcache_blocked_false_when_websocket_closed() {
+            let rt = V8JsRuntime::new().unwrap();
+            rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false).unwrap();
+            // readyState 3 (CLOSED) must not block — only OPEN (1) does.
+            let r = rt
+                .eval("_ws_instances.push({ readyState: 3 }); _lumen_bfcache_blocked()")
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(false));
+        }
+
+        #[test]
+        fn bfcache_blocked_true_when_eventsource_open() {
+            let rt = V8JsRuntime::new().unwrap();
+            rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false).unwrap();
+            let r = rt
+                .eval("_sse_instances.push({ readyState: 1 }); _lumen_bfcache_blocked()")
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn bfcache_blocked_true_when_beforeunload_listener_registered() {
+            let rt = V8JsRuntime::new().unwrap();
+            rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false).unwrap();
+            let r = rt
+                .eval("window.addEventListener('beforeunload', function() {}); _lumen_bfcache_blocked()")
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn bfcache_blocked_true_when_unload_listener_registered() {
+            let rt = V8JsRuntime::new().unwrap();
+            rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false).unwrap();
+            let r = rt
+                .eval("window.addEventListener('unload', function() {}); _lumen_bfcache_blocked()")
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn bfcache_blocked_true_when_onbeforeunload_property_set() {
+            let rt = V8JsRuntime::new().unwrap();
+            rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false).unwrap();
+            let r = rt
+                .eval("window.onbeforeunload = function() {}; _lumen_bfcache_blocked()")
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        // Mock WS provider: immediately queues Open + one Text message.
+        struct MockWsProvider;
+        struct MockWsSession {
+            queue: std::sync::Mutex<std::collections::VecDeque<lumen_core::ext::JsWsEvent>>,
+            /// Sub-protocol echoed back to the client (first requested, "" if none).
+            protocol: String,
+        }
+        impl lumen_core::ext::JsWebSocketSession for MockWsSession {
+            fn send_text(&self, _text: &str) -> lumen_core::error::Result<()> { Ok(()) }
+            fn send_binary(&self, _data: &[u8]) -> lumen_core::error::Result<()> { Ok(()) }
+            fn poll(&self) -> Option<lumen_core::ext::JsWsEvent> {
+                self.queue.lock().unwrap().pop_front()
+            }
+            fn close(&self, _code: u16, _reason: &str) -> lumen_core::error::Result<()> { Ok(()) }
+            fn protocol(&self) -> String { self.protocol.clone() }
+        }
+        impl lumen_core::ext::JsWebSocketProvider for MockWsProvider {
+            fn connect(&self, _url: &str, protocols: &[String]) -> lumen_core::error::Result<Box<dyn lumen_core::ext::JsWebSocketSession>> {
+                use lumen_core::ext::JsWsEvent;
+                let mut q = std::collections::VecDeque::new();
+                q.push_back(JsWsEvent::Open);
+                q.push_back(JsWsEvent::Message { data: b"hello".to_vec(), is_binary: false });
+                // Echo the client's first requested sub-protocol, mirroring a real server.
+                let protocol = protocols.first().cloned().unwrap_or_default();
+                Ok(Box::new(MockWsSession { queue: std::sync::Mutex::new(q), protocol }))
+            }
+        }
+
+        fn v8_runtime_with_mock_ws(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
+            let rt = V8JsRuntime::new().unwrap();
+            let provider: Arc<dyn lumen_core::ext::JsWebSocketProvider> = Arc::new(MockWsProvider);
+            rt.install_dom(doc, "", None, Some(provider), None, None, None, None, None, None, false).unwrap();
+            rt
+        }
+
+        #[test]
+        fn websocket_mock_connect_open_state() {
+            let rt = v8_runtime_with_mock_ws(make_doc());
+            // Phase 0: pump explicitly to deliver Open event → readyState = 1.
+            let r = rt
+                .eval("var ws = new WebSocket('ws://mock'); _lumen_pump_websockets(); ws.readyState")
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Number(1.0));
+        }
+
+        #[test]
+        fn websocket_mock_open_fires_onopen() {
+            let rt = v8_runtime_with_mock_ws(make_doc());
+            let r = rt
+                .eval(
+                    "var opened = false;
+                     var ws = new WebSocket('ws://mock');
+                     ws.onopen = function() { opened = true; };
+                     _lumen_pump_websockets();
+                     opened",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// `new WebSocket(url, protocols)` forwards the requested sub-protocol; on open,
+        /// the server-selected protocol is surfaced as `ws.protocol`. The mock echoes the
+        /// first requested protocol.
+        #[test]
+        fn websocket_subprotocol_surfaced_on_open() {
+            let rt = v8_runtime_with_mock_ws(make_doc());
+            let r = rt
+                .eval(
+                    "var ws = new WebSocket('ws://mock', ['chat', 'superchat']);
+                     _lumen_pump_websockets();
+                     ws.protocol",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("chat".into()));
+        }
+
+        /// A string `protocols` argument is accepted and surfaced as `ws.protocol`.
+        #[test]
+        fn websocket_subprotocol_string_arg() {
+            let rt = v8_runtime_with_mock_ws(make_doc());
+            let r = rt
+                .eval(
+                    "var ws = new WebSocket('ws://mock', 'json');
+                     _lumen_pump_websockets();
+                     ws.protocol",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("json".into()));
+        }
+
+        #[test]
+        fn websocket_mock_message_via_pump() {
+            let rt = v8_runtime_with_mock_ws(make_doc());
+            // Set handler before pump so onmessage fires when the message is dispatched.
+            let r = rt
+                .eval(
+                    "var received = null;
+                     var ws = new WebSocket('ws://mock');
+                     ws.onmessage = function(e) { received = e.data; };
+                     _lumen_pump_websockets();
+                     received",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("hello".into()));
+        }
+
+        /// `send()` while CONNECTING must throw `InvalidStateError` (WHATWG WebSocket).
+        #[test]
+        fn websocket_send_in_connecting_throws() {
+            let rt = v8_runtime_with_mock_ws(make_doc());
+            // No pump → stays CONNECTING (readyState 0).
+            let r = rt
+                .eval(
+                    "var ws = new WebSocket('ws://mock');
+                     try { ws.send('x'); 'nothrow'; } catch (e) { e.name; }",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("InvalidStateError".into()));
+        }
+
+        /// `close()` with an out-of-range code throws `InvalidAccessError`; a valid
+        /// custom code (3000–4999) transitions the socket to CLOSING (2).
+        #[test]
+        fn websocket_close_code_validation() {
+            let rt = v8_runtime_with_mock_ws(make_doc());
+            let bad = rt
+                .eval(
+                    "var ws = new WebSocket('ws://mock');
+                     try { ws.close(1234); 'nothrow'; } catch (e) { e.name; }",
+                )
+                .unwrap();
+            assert_eq!(bad, lumen_core::JsValue::String("InvalidAccessError".into()));
+            let ok = rt
+                .eval(
+                    "var ws2 = new WebSocket('ws://mock');
+                     ws2.close(3001); ws2.readyState",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Number(2.0));
+        }
+
+        /// `close()` with a reason longer than 123 UTF-8 bytes throws `SyntaxError`.
+        #[test]
+        fn websocket_close_reason_too_long_throws() {
+            let rt = v8_runtime_with_mock_ws(make_doc());
+            let r = rt
+                .eval(
+                    "var ws = new WebSocket('ws://mock');
+                     var long = 'a'.repeat(124);
+                     try { ws.close(1000, long); 'nothrow'; } catch (e) { e.name; }",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("SyntaxError".into()));
+        }
+
+        /// `send()` in CLOSING/CLOSED discards data but counts it in `bufferedAmount`.
+        #[test]
+        fn websocket_buffered_amount_in_closing() {
+            let rt = v8_runtime_with_mock_ws(make_doc());
+            let r = rt
+                .eval(
+                    "var ws = new WebSocket('ws://mock');
+                     ws.close();           // CONNECTING → CLOSING
+                     ws.send('hello');     // 5 bytes, discarded but counted
+                     ws.bufferedAmount",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Number(5.0));
+        }
+
+        /// Ready-state constants are exposed on instances, not only the constructor.
+        #[test]
+        fn websocket_instance_constants() {
+            let rt = v8_runtime_with_mock_ws(make_doc());
+            let r = rt
+                .eval(
+                    "var ws = new WebSocket('ws://mock');
+                     ws.CONNECTING === 0 && ws.OPEN === 1 && ws.CLOSING === 2 && ws.CLOSED === 3",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// A second `close()` is a no-op (idempotent), readyState stays CLOSING.
+        #[test]
+        fn websocket_close_idempotent() {
+            let rt = v8_runtime_with_mock_ws(make_doc());
+            let r = rt
+                .eval(
+                    "var ws = new WebSocket('ws://mock');
+                     ws.close(); ws.close(); ws.readyState",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Number(2.0));
+        }
+
+        #[test]
+        fn websocket_no_provider_connect_returns_zero() {
+            // Without ws_provider, _lumen_ws_connect always returns 0.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("_lumen_ws_connect('ws://test', '')").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Number(0.0));
+        }
+
+        // ── EventSource / Server-Sent Events (HTML Living Standard §9.2) ──────────
+
+        /// Mock SSE session feeding a preset event sequence via `poll()`.
+        struct MockSseSession {
+            queue: std::sync::Mutex<std::collections::VecDeque<lumen_core::ext::JsSseEvent>>,
+        }
+        impl lumen_core::ext::JsSseSession for MockSseSession {
+            fn poll(&self) -> Option<lumen_core::ext::JsSseEvent> {
+                self.queue.lock().unwrap().pop_front()
+            }
+            fn close(&mut self) {}
+        }
+
+        /// Mock SSE provider that queues a fixed event sequence on connect.
+        struct MockSseProvider {
+            events: Vec<lumen_core::ext::JsSseEvent>,
+        }
+        impl lumen_core::ext::JsSseProvider for MockSseProvider {
+            fn connect_sse(
+                &self,
+                _url: &str,
+            ) -> lumen_core::error::Result<Box<dyn lumen_core::ext::JsSseSession>> {
+                let q: std::collections::VecDeque<_> = self.events.iter().cloned().collect();
+                Ok(Box::new(MockSseSession {
+                    queue: std::sync::Mutex::new(q),
+                }))
+            }
+        }
+
+        fn v8_runtime_with_mock_sse(
+            doc: Arc<Mutex<Document>>,
+            events: Vec<lumen_core::ext::JsSseEvent>,
+        ) -> V8JsRuntime {
+            let rt = V8JsRuntime::new().unwrap();
+            let provider: Arc<dyn lumen_core::ext::JsSseProvider> =
+                Arc::new(MockSseProvider { events });
+            rt.install_dom(doc, "", None, None, Some(provider), None, None, None, None, None, false)
+                .unwrap();
+            rt
+        }
+
+        #[test]
+        fn eventsource_constructor_no_provider_sets_closed() {
+            // Without an sse_provider, _lumen_sse_connect returns 0 → readyState CLOSED.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval("var es = new EventSource('https://x/sse'); es.readyState")
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Number(2.0));
+        }
+
+        #[test]
+        fn eventsource_no_provider_connect_returns_zero() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("_lumen_sse_connect('https://x/sse')").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Number(0.0));
+        }
+
+        #[test]
+        fn eventsource_opens_on_sse_connect() {
+            use lumen_core::ext::JsSseEvent;
+            let rt = v8_runtime_with_mock_sse(make_doc(), vec![JsSseEvent::Open]);
+            let r = rt
+                .eval(
+                    "var opened = false;
+                     var es = new EventSource('https://x/sse');
+                     es.onopen = function() { opened = true; };
+                     _lumen_pump_sse();
+                     [es.readyState, opened]",
+                )
+                .unwrap();
+            match r {
+                lumen_core::JsValue::Array(arr) => {
+                    // readyState OPEN (1) and onopen fired.
+                    assert_eq!(arr[0], lumen_core::JsValue::Number(1.0));
+                    assert_eq!(arr[1], lumen_core::JsValue::Bool(true));
+                }
+                other => panic!("expected array, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn eventsource_delivers_message() {
+            use lumen_core::ext::JsSseEvent;
+            let rt = v8_runtime_with_mock_sse(
+                make_doc(),
+                vec![
+                    JsSseEvent::Open,
+                    JsSseEvent::Message {
+                        event_type: "message".into(),
+                        data: "hello world".into(),
+                        id: Some("42".into()),
+                    },
+                ],
+            );
+            let r = rt
+                .eval(
+                    "var data = null; var lid = null;
+                     var es = new EventSource('https://x/sse');
+                     es.onmessage = function(e) { data = e.data; lid = e.lastEventId; };
+                     _lumen_pump_sse();
+                     [data, lid]",
+                )
+                .unwrap();
+            match r {
+                lumen_core::JsValue::Array(arr) => {
+                    assert_eq!(arr[0], lumen_core::JsValue::String("hello world".into()));
+                    assert_eq!(arr[1], lumen_core::JsValue::String("42".into()));
+                }
+                other => panic!("expected array, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn eventsource_delivers_typed_event() {
+            use lumen_core::ext::JsSseEvent;
+            let rt = v8_runtime_with_mock_sse(
+                make_doc(),
+                vec![
+                    JsSseEvent::Open,
+                    JsSseEvent::Message {
+                        event_type: "ping".into(),
+                        data: "p".into(),
+                        id: None,
+                    },
+                ],
+            );
+            // A named event must reach addEventListener('ping', ...), not onmessage.
+            let r = rt
+                .eval(
+                    "var got = null; var onmsg = false;
+                     var es = new EventSource('https://x/sse');
+                     es.onmessage = function() { onmsg = true; };
+                     es.addEventListener('ping', function(e) { got = e.data; });
+                     _lumen_pump_sse();
+                     [got, onmsg]",
+                )
+                .unwrap();
+            match r {
+                lumen_core::JsValue::Array(arr) => {
+                    assert_eq!(arr[0], lumen_core::JsValue::String("p".into()));
+                    assert_eq!(arr[1], lumen_core::JsValue::Bool(false));
+                }
+                other => panic!("expected array, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn eventsource_close_sets_closed() {
+            use lumen_core::ext::JsSseEvent;
+            let rt = v8_runtime_with_mock_sse(make_doc(), vec![JsSseEvent::Open]);
+            let r = rt
+                .eval(
+                    "var es = new EventSource('https://x/sse');
+                     _lumen_pump_sse();
+                     es.close();
+                     es.readyState",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Number(2.0));
+        }
+
+        #[test]
+        fn eventsource_server_close_fires_error_and_reconnects() {
+            use lumen_core::ext::JsSseEvent;
+            // Server-initiated close: readyState becomes CONNECTING (0), error fires,
+            // reconnect scheduled (HTML Living Standard §9.2.7).
+            let rt = v8_runtime_with_mock_sse(make_doc(), vec![JsSseEvent::Open, JsSseEvent::Close]);
+            let r = rt
+                .eval(
+                    "var errored = false;
+                     var es = new EventSource('https://x/sse');
+                     es.onerror = function() { errored = true; };
+                     _lumen_pump_sse();
+                     [es.readyState, errored]",
+                )
+                .unwrap();
+            match r {
+                lumen_core::JsValue::Array(arr) => {
+                    assert_eq!(arr[0], lumen_core::JsValue::Number(0.0)); // CONNECTING
+                    assert_eq!(arr[1], lumen_core::JsValue::Bool(true));  // error fired
+                }
+                other => panic!("expected array, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn eventsource_error_event_fires_onerror() {
+            use lumen_core::ext::JsSseEvent;
+            let rt = v8_runtime_with_mock_sse(
+                make_doc(),
+                vec![JsSseEvent::Open, JsSseEvent::Error("boom".into())],
+            );
+            let r = rt
+                .eval(
+                    "var errored = false; var msg = null;
+                     var es = new EventSource('https://x/sse');
+                     es.onerror = function(e) { errored = true; msg = e.message; };
+                     _lumen_pump_sse();
+                     [errored, msg, es.readyState]",
+                )
+                .unwrap();
+            match r {
+                lumen_core::JsValue::Array(arr) => {
+                    assert_eq!(arr[0], lumen_core::JsValue::Bool(true));
+                    assert_eq!(arr[1], lumen_core::JsValue::String("boom".into()));
+                    assert_eq!(arr[2], lumen_core::JsValue::Number(2.0));
+                }
+                other => panic!("expected array, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn eventsource_poll_json_escapes_message() {
+            use lumen_core::ext::JsSseEvent;
+            // Data containing quotes/newlines must round-trip through JSON intact.
+            let rt = v8_runtime_with_mock_sse(
+                make_doc(),
+                vec![
+                    JsSseEvent::Open,
+                    JsSseEvent::Message {
+                        event_type: "message".into(),
+                        data: "line1\nline2 \"quoted\"".into(),
+                        id: None,
+                    },
+                ],
+            );
+            let r = rt
+                .eval(
+                    "var data = null;
+                     var es = new EventSource('https://x/sse');
+                     es.onmessage = function(e) { data = e.data; };
+                     _lumen_pump_sse();
+                     data",
+                )
+                .unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String("line1\nline2 \"quoted\"".into())
+            );
+        }
+
+        #[test]
+        fn eventsource_retry_event_updates_reconnect_delay() {
+            use lumen_core::ext::JsSseEvent;
+            // A Retry event from the server updates the internal reconnect delay.
+            let rt = v8_runtime_with_mock_sse(
+                make_doc(),
+                vec![JsSseEvent::Open, JsSseEvent::Retry(500)],
+            );
+            let r = rt
+                .eval(
+                    "var es = new EventSource('https://x/sse');
+                     _lumen_pump_sse();
+                     es._retryMs",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Number(500.0));
+        }
+
+        #[test]
+        fn eventsource_close_cancels_pending_reconnect() {
+            use lumen_core::ext::JsSseEvent;
+            // Calling close() after server-close must cancel the pending reconnect.
+            let rt = v8_runtime_with_mock_sse(make_doc(), vec![JsSseEvent::Open, JsSseEvent::Close]);
+            let r = rt
+                .eval(
+                    "var es = new EventSource('https://x/sse');
+                     _lumen_pump_sse();
+                     es.close();
+                     [es.readyState, es._reconnecting]",
+                )
+                .unwrap();
+            match r {
+                lumen_core::JsValue::Array(arr) => {
+                    assert_eq!(arr[0], lumen_core::JsValue::Number(2.0)); // CLOSED
+                    assert_eq!(arr[1], lumen_core::JsValue::Bool(false)); // no reconnect
+                }
+                other => panic!("expected array, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn eventsource_remove_event_listener() {
+            use lumen_core::ext::JsSseEvent;
+            // removeEventListener must stop delivery to the removed handler.
+            let rt = v8_runtime_with_mock_sse(
+                make_doc(),
+                vec![
+                    JsSseEvent::Open,
+                    JsSseEvent::Message {
+                        event_type: "ping".into(),
+                        data: "p".into(),
+                        id: None,
+                    },
+                ],
+            );
+            let r = rt
+                .eval(
+                    "var count = 0;
+                     var fn1 = function() { count++; };
+                     var es = new EventSource('https://x/sse');
+                     es.addEventListener('ping', fn1);
+                     es.removeEventListener('ping', fn1);
+                     _lumen_pump_sse();
+                     count",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Number(0.0));
+        }
+
+        #[test]
+        fn close_event_constructor() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval("var ce = new CloseEvent(1001, 'bye', true); ce.code === 1001 && ce.reason === 'bye' && ce.wasClean === true")
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn message_event_constructor() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval("var me = new MessageEvent('payload'); me.data === 'payload' && me.type === 'message'")
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn websocket_has_buffered_amount() {
+            let rt = v8_runtime_with_ws(make_doc());
+            let r = rt
+                .eval("var ws = new WebSocket('ws://127.0.0.1:1'); ws.bufferedAmount === 0")
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn websocket_has_extensions_field() {
+            let rt = v8_runtime_with_ws(make_doc());
+            let r = rt
+                .eval("var ws = new WebSocket('ws://127.0.0.1:1'); ws.extensions === ''")
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn websocket_binary_type_default_blob() {
+            let rt = v8_runtime_with_ws(make_doc());
+            let r = rt
+                .eval("var ws = new WebSocket('ws://127.0.0.1:1'); ws.binaryType")
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("blob".into()));
+        }
+
+        // Mock provider: queues Open + one binary message (bytes [0x01, 0x02, 0x03]).
+        struct MockBinaryWsProvider;
+        struct MockBinaryWsSession {
+            queue: std::sync::Mutex<std::collections::VecDeque<lumen_core::ext::JsWsEvent>>,
+        }
+        impl lumen_core::ext::JsWebSocketSession for MockBinaryWsSession {
+            fn send_text(&self, _text: &str) -> lumen_core::error::Result<()> { Ok(()) }
+            fn send_binary(&self, _data: &[u8]) -> lumen_core::error::Result<()> { Ok(()) }
+            fn poll(&self) -> Option<lumen_core::ext::JsWsEvent> {
+                self.queue.lock().unwrap().pop_front()
+            }
+            fn close(&self, _code: u16, _reason: &str) -> lumen_core::error::Result<()> { Ok(()) }
+        }
+        impl lumen_core::ext::JsWebSocketProvider for MockBinaryWsProvider {
+            fn connect(&self, _url: &str, _protocols: &[String]) -> lumen_core::error::Result<Box<dyn lumen_core::ext::JsWebSocketSession>> {
+                use lumen_core::ext::JsWsEvent;
+                let mut q = std::collections::VecDeque::new();
+                q.push_back(JsWsEvent::Open);
+                q.push_back(JsWsEvent::Message { data: vec![0x01, 0x02, 0x03], is_binary: true });
+                Ok(Box::new(MockBinaryWsSession { queue: std::sync::Mutex::new(q) }))
+            }
+        }
+
+        fn v8_runtime_with_binary_ws(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
+            let rt = V8JsRuntime::new().unwrap();
+            let provider: Arc<dyn lumen_core::ext::JsWebSocketProvider> = Arc::new(MockBinaryWsProvider);
+            rt.install_dom(doc, "", None, Some(provider), None, None, None, None, None, None, false).unwrap();
+            rt
+        }
+
+        #[test]
+        fn websocket_binary_blob_mode_delivers_uint8array() {
+            let rt = v8_runtime_with_binary_ws(make_doc());
+            // Default binaryType='blob' → Uint8Array (our Phase 0 representation).
+            let r = rt
+                .eval(
+                    "var received = null;
+                     var ws = new WebSocket('ws://mock');
+                     ws.onmessage = function(e) { received = e.data; };
+                     _lumen_pump_websockets();
+                     received instanceof Uint8Array && received[0] === 1 && received[1] === 2 && received[2] === 3",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn websocket_binary_arraybuffer_mode_delivers_arraybuffer() {
+            let rt = v8_runtime_with_binary_ws(make_doc());
+            // binaryType='arraybuffer' → ArrayBuffer.
+            let r = rt
+                .eval(
+                    "var received = null;
+                     var ws = new WebSocket('ws://mock');
+                     ws.binaryType = 'arraybuffer';
+                     ws.onmessage = function(e) { received = e.data; };
+                     _lumen_pump_websockets();
+                     received instanceof ArrayBuffer && new Uint8Array(received)[0] === 1",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn websocket_binary_hex_length_matches_byte_count() {
+            let rt = v8_runtime_with_binary_ws(make_doc());
+            // 3 bytes → Uint8Array of length 3.
+            let r = rt
+                .eval(
+                    "var len = 0;
+                     var ws = new WebSocket('ws://mock');
+                     ws.onmessage = function(e) { len = e.data.length; };
+                     _lumen_pump_websockets();
+                     len === 3",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
         }
     }
 }

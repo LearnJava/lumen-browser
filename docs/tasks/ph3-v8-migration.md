@@ -1480,6 +1480,48 @@ prior audits (BUG-442, BUG-342, BUG-447) that diagnosed-but-couldn't-verify-fixe
 are likely to get closed for free the moment the corresponding tests move over. Check `BUGS.md` for
 OPEN bugs touching the natives your next slice's helpers use *before* starting the port.
 
+### S12b-24-ws-sse — third porting slice (2026-07-29, branch p1-v8-s12b-24-ws-sse)
+
+Five adjacent scoping-table rows ported together into `mod tests::v8_ws_sse`: IME composition +
+bfcache pageshow/pagehide, fetch bindings (Headers/Request/Response/AbortController existence),
+WebSocket ctors/constants/connect-failure + the `_lumen_bfcache_blocked` eligibility filters,
+WebSocket mock-session behavior + binary mode, EventSource/SSE. **73 tests**, QuickJS copies
+deleted; `cargo test -p lumen-js --features v8-backend` 2569/2569 (unchanged total — 73 out, 73
+in).
+
+**The mock-provider question the scoping note left open is now answered: yes, verbatim.** This was
+the first slice carrying `install_dom` provider injection, and all four mock providers
+(`FailWsProvider`, `MockWsProvider` + `MockWsSession`, `MockBinaryWsProvider` +
+`MockBinaryWsSession` for `JsWebSocketProvider`; `MockSseProvider` + `MockSseSession` for
+`JsSseProvider`) moved without a single line changed — they implement `lumen_core::ext` traits and
+never touch an engine type, and `V8JsRuntime::install_dom` takes them at the same argument
+positions as `QuickJsRuntime::install_dom`. Only the four `runtime_with_*` constructors needed
+retargeting (`v8_runtime_with_ws`/`_mock_ws`/`_mock_sse`/`_binary_ws`). Same for the pump natives:
+`_lumen_pump_websockets` and `_lumen_pump_sse` deliver queued `JsWsEvent`/`JsSseEvent` under V8
+with no shim or binding change, so the whole event-delivery path (open/message/typed event/
+error/server-close-and-reconnect/retry) is exercised as-is. The remaining injection helpers
+(`runtime_with_cache_backend` was already proven in S12b-24-events-cache; `runtime_with_idb`,
+`runtime_with_fetch`/`_abort_fetch`/`_blocking_fetch`, `runtime_with_storage`) can be scheduled on
+this precedent rather than treated as risk.
+
+**Zero engine divergences in this slice** — 73 of 73 passed on the first run with untouched test
+bodies. Unlike the two earlier slices this one closed no bugs: the `BUGS.md` pre-check flagged
+three OPEN EventSource/Worker defects ([BUG-362](../../bugs/BUG-362-OPEN.md),
+[BUG-363](../../bugs/BUG-363-OPEN.md), [BUG-364](../../bugs/BUG-364-OPEN.md)) and none of them are
+V8-vs-QuickJS divergences — they are engine-agnostic shim gaps (relative-URL resolution, WebIDL
+shape of `EventSource`, `Worker` fetching no script) that the ported suite does not cover on
+either engine. Worth stating explicitly so a later reader doesn't mistake "73/73 green" for
+"EventSource is spec-conformant": these tests pin Lumen's own Phase-0 SSE plumbing, not the spec.
+
+**One loose assertion tightened (the S12b-2 lesson, applied at last).**
+`fetch_without_provider_returns_promise` asserted only that `fetch()` returns a thenable, with a
+comment explaining that QuickJS's `eval()` doesn't flush microtasks so the rejection can't be
+observed. V8 drains its microtask queue, so the ported test — renamed
+`fetch_without_provider_rejects` — now attaches a `.catch` and asserts the flag flipped inside the
+same `eval`. Confirmed green, i.e. the no-provider `fetch()` really does reject rather than hang.
+Expect ~8 more of this exact shape in the SubtleCrypto/Streams/Compression clusters (line list in
+the scoping section above).
+
 ---
 
 ## Risks (Rev 2)
