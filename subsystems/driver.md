@@ -136,4 +136,4 @@ headless pipeline without winit/wgpu/ffmpeg.
 
 ## Test counts
 
-12 unit tests in `crates/driver/src/session.rs`; 50 structural integration tests `test_00..49.rs`; 1 snapshot gate `snapshot_cpu` covering 57 pages; 5 (+2 under `--features quickjs`) `WinitSession` automation-command tests in `test_automation_commands.rs`; 6 (+3 under `--features v8`, +1 under its absence) `InProcessSession` automation-command tests in `test_devx5_headless_automation.rs`.
+12 unit tests in `crates/driver/src/session.rs`; 50 structural integration tests `test_00..49.rs`; 1 snapshot gate `snapshot_cpu` covering 57 pages; 5 (+2 under `--features quickjs`) `WinitSession` automation-command tests in `test_automation_commands.rs`; 6 (+3 under `--features v8`, +1 under its absence) `InProcessSession` automation-command tests in `test_devx5_headless_automation.rs`; 3 scripted-render regression tests in `scripted_render.rs` (feature `cpu-render` + `v8` — page scripts reaching layout, Canvas 2D pixels reaching the raster; BUG-429).
