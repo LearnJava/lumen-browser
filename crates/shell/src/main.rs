@@ -7279,10 +7279,9 @@ fn run_scripts_with_dom(
         }
     }
 
-    // Ph3 V8 migration S4: mirrors the quickjs block above. Import maps and
-    // cookie-banner-dismiss are not wired for V8 yet (no `set_import_map` /
-    // `set_cookie_banner_dismiss` on `V8JsRuntime`) — module scripts fall back
-    // to `JsRuntime::eval_module`'s `NotImplemented` default until ESM lands.
+    // Ph3 V8 migration S4: mirrors the quickjs block above. Since S12b-23 the
+    // import map and `eval_module` are wired here too; `set_cookie_banner_dismiss`
+    // is still V8-only-missing.
     // `not(feature = "quickjs")`: the quickjs block above returns unconditionally
     // on both its match arms, so this block would be unreachable if both engine
     // features were compiled in — quickjs takes priority until S12 cutover.
@@ -7299,6 +7298,11 @@ fn run_scripts_with_dom(
                 }
                 if let Err(e) = rt.install_dom(Arc::clone(&doc_arc), page_url, fetch_provider, ws_provider, sse_provider, ls_store, idb_backend, sw_backend, cache_backend, None, cross_origin_isolated) {
                     eprintln!("JS DOM init failed: {e}");
+                }
+                // Must precede module evaluation: bare specifiers resolve
+                // through the map (HTML LS §8.1.6.2).
+                if let Some(map) = import_map {
+                    rt.set_import_map(map);
                 }
                 // Classic scripts run first (HTML LS §8.1.3 execution order).
                 for src in &scripts {

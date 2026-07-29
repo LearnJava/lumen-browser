@@ -134,6 +134,11 @@ pub(crate) mod v8_compat;
 #[cfg(feature = "v8-backend")]
 pub mod v8_runtime;
 
+/// V8 ES-module loader (slice S12b-23): `<script type=module>`, import maps,
+/// import attributes and dynamic `import()` on the V8 backend.
+#[cfg(feature = "v8-backend")]
+pub(crate) mod v8_esm;
+
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
 use rquickjs::{Array, Context, Ctx, FromJs, Function, IntoJs, Object, Runtime, Type, Value};

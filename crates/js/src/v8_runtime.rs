@@ -176,6 +176,9 @@ fn v8_thread_main(
     ensure_v8_platform();
 
     let mut isolate = v8::Isolate::new(Default::default());
+    // S12b-23: dynamic `import()` is resolved by an isolate-wide host hook
+    // (static imports go through the callback passed to `instantiate_module`).
+    crate::v8_esm::install_dynamic_import_hook(&mut isolate);
     // Create the context inside a short-lived HandleScope so the scope's borrow
     // of `isolate` ends before we move `isolate` into `V8Inner`.
     let (context, baseline_globals) = {
@@ -225,6 +228,9 @@ fn v8_thread_main(
     // disposed isolate, but releasing the persistent handle here is the
     // correct, leak-free order.
     crate::wasm::v8_bridge::clear_registry();
+    // Same discipline for the ESM module map's `v8::Global<v8::Module>` roots
+    // (S12b-23): release them here, while the isolate is still alive.
+    crate::v8_esm::reset();
     // `inner` (OwnedIsolate + Global<Context>) drops here, on its owning thread.
 }
 
@@ -669,6 +675,16 @@ impl V8JsRuntime {
         self.run(|_inner| crate::canvas2d::flush_dirty())
     }
 
+    /// Install the import map (HTML LS §8.1.6.2) used to resolve bare module
+    /// specifiers such as `"react"`.
+    ///
+    /// Call before evaluating module scripts. Mirrors
+    /// [`crate::QuickJsRuntime::set_import_map`]; the map is stored on the JS
+    /// thread because V8's resolve callback can only reach thread-local state.
+    pub fn set_import_map(&self, map: crate::esm::ImportMap) {
+        self.run(move |_inner| crate::v8_esm::set_import_map(map));
+    }
+
     /// Dispatch `f` to the JS thread, blocking until it completes.
     ///
     /// # Safety
@@ -867,6 +883,11 @@ impl V8JsRuntime {
         let page_url = page_url.to_owned();
 
         self.run(move |inner| {
+            // ESM (S12b-23): fallback base URL the module resolver uses for
+            // relative imports issued from inline `<script type=module>` bodies,
+            // which have no URL of their own. Mirrors the `module_page_url`
+            // write in `QuickJsRuntime::install_dom`.
+            crate::v8_esm::set_page_url(&page_url);
             // Disjoint field borrows: scope borrows isolate, native_fn_store is separate.
             let isolate = &mut inner.isolate;
             let context_global = &inner.context;
@@ -4312,6 +4333,39 @@ impl JsRuntime for V8JsRuntime {
                 }
             })
         })
+    }
+
+    /// Evaluate `source` as an ES module (HTML LS §8.1.3 `<script type=module>`).
+    ///
+    /// S12b-23: replaces the trait default (which ran module source through
+    /// classic `eval` and choked on `export`/`import` — BUG-350). Machinery
+    /// lives in [`crate::v8_esm`]; this method only bridges the `TryCatch`.
+    fn eval_module(&self, source: &str) -> JsResult<()> {
+        // Phase 0 decorator transform, as on the QuickJS path: the transformer
+        // is a plain JS global, so it needs no raw scope access.
+        let source = crate::decorators::maybe_transform_decorators_v8(self, source)
+            .unwrap_or_else(|| source.to_owned());
+        self.run(|inner| {
+            with_tc!(inner, |tc, _ctx| {
+                match crate::v8_esm::evaluate_entry_module(tc, &source) {
+                    Ok(()) => Ok(()),
+                    Err(()) => match tc.exception() {
+                        Some(exc) => Err(v8_err(tc, exc)),
+                        // V8 returned an empty handle without throwing (OOM on a
+                        // string allocation, termination): still an error, but
+                        // there is no exception to describe it.
+                        None => Err(JsError::Runtime("module eval failed".into())),
+                    },
+                }
+            })
+        })
+    }
+
+    /// Pre-register an ES module `source` under its resolved `specifier` so
+    /// other modules can `import` it. Mirrors
+    /// [`crate::QuickJsRuntime::register_module_source`].
+    fn register_module_source(&self, specifier: &str, source: &str) {
+        self.run(|_inner| crate::v8_esm::register_source(specifier, source));
     }
 
     fn set_global(&self, name: &str, value: JsValue) -> JsResult<()> {

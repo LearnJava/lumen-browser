@@ -1121,19 +1121,21 @@ fn new_v8_runtime(
     Some(rt)
 }
 
-/// Execute the page's own inline classic `<script>` elements in document order,
-/// then advance `document.readyState` (BUG-429).
+/// Execute the page's own inline `<script>` elements in document order, then
+/// advance `document.readyState` (BUG-429).
 ///
 /// Mirrors the shell's `parse_and_layout` → `run_scripts_with_dom` →
 /// `notify_dom_content_loaded` sequence (`crates/shell/src/main.rs`), reduced to
 /// what a **deterministic, offline** session can do:
 ///
-/// * inline classic scripts only — an external `<script src>` would have to be
+/// * inline scripts only — an external `<script src>` would have to be
 ///   fetched, which would make this path depend on the network and on the disk
 ///   layout around the page. The count of skipped externals is reported on
 ///   stderr so a page silently missing its behaviour is visible;
-/// * `<script type="module">` is skipped too (module evaluation is not wired on
-///   this runtime — BUG-350).
+/// * inline `<script type="module">` bodies run after the classic ones
+///   (HTML LS §8.1.3.1 — modules are deferred). Their `import`s only resolve
+///   against modules registered on the runtime, since fetching is off-limits
+///   here.
 ///
 /// Errors from a script are logged and do not abort the remaining ones, matching
 /// the browser's per-script error isolation.
@@ -1143,14 +1145,21 @@ fn run_page_scripts(rt: &lumen_js::v8_runtime::V8JsRuntime, doc: &Arc<Mutex<Docu
 
     // Collect first, then evaluate: the DOM bindings lock the same mutex, so the
     // guard must be gone before the first `eval`.
-    let (sources, skipped_external) = {
+    let (sources, modules, skipped_external) = {
         let Ok(guard) = doc.lock() else {
             return;
         };
         let mut sources = Vec::new();
+        let mut modules = Vec::new();
         let mut skipped_external = 0usize;
-        collect_inline_classic_scripts(&guard, guard.root(), &mut sources, &mut skipped_external);
-        (sources, skipped_external)
+        collect_inline_scripts(
+            &guard,
+            guard.root(),
+            &mut sources,
+            &mut modules,
+            &mut skipped_external,
+        );
+        (sources, modules, skipped_external)
     };
 
     if skipped_external > 0 {
@@ -1165,6 +1174,11 @@ fn run_page_scripts(rt: &lumen_js::v8_runtime::V8JsRuntime, doc: &Arc<Mutex<Docu
             eprintln!("InProcessSession: ошибка исполнения <script>: {e}");
         }
     }
+    for source in modules {
+        if let Err(e) = rt.eval_module(&source) {
+            eprintln!("InProcessSession: ошибка исполнения <script type=module>: {e}");
+        }
+    }
 
     // HTML LS §8.2.3 — after parse + inline scripts: readyState → "interactive"
     // (+ DOMContentLoaded). Nothing else loads asynchronously on this path, so
@@ -1177,23 +1191,27 @@ fn run_page_scripts(rt: &lumen_js::v8_runtime::V8JsRuntime, doc: &Arc<Mutex<Docu
     }
 }
 
-/// Walk the DOM in document order, collecting inline classic `<script>` bodies
-/// into `out` and counting external (`src`) ones into `skipped_external`.
+/// Walk the DOM in document order, collecting inline `<script>` bodies into
+/// `classic` / `modules` and counting external (`src`) ones into
+/// `skipped_external`.
 ///
 /// Classification mirrors the shell's `collect_scripts_ordered` +
 /// `is_classic_script_type` (`crates/shell/src/main.rs`).
 #[cfg(feature = "v8")]
-fn collect_inline_classic_scripts(
+fn collect_inline_scripts(
     doc: &Document,
     id: NodeId,
-    out: &mut Vec<String>,
+    classic: &mut Vec<String>,
+    modules: &mut Vec<String>,
     skipped_external: &mut usize,
 ) {
     let node = doc.get(id);
     if let NodeData::Element { name, .. } = &node.data
         && name.local == "script"
     {
-        if !is_classic_script_type(node.get_attr("type").map(str::trim)) {
+        let script_type = node.get_attr("type").map(str::trim);
+        let is_module = script_type.is_some_and(|t| t.eq_ignore_ascii_case("module"));
+        if !is_module && !is_classic_script_type(script_type) {
             return;
         }
         if node.get_attr("src").is_some() {
@@ -1207,12 +1225,16 @@ fn collect_inline_classic_scripts(
             }
         }
         if !body.trim().is_empty() {
-            out.push(body);
+            if is_module {
+                modules.push(body);
+            } else {
+                classic.push(body);
+            }
         }
         return;
     }
     for &child in &node.children {
-        collect_inline_classic_scripts(doc, child, out, skipped_external);
+        collect_inline_scripts(doc, child, classic, modules, skipped_external);
     }
 }
 

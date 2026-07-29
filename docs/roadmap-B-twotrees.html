@@ -76,11 +76,11 @@
  "generated": "2026-07-29",
  "counts": {
   "open": 127,
-  "fixed": 288,
+  "fixed": 289,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 415,
+ "total_bugs": 416,
  "phases": [
   {
    "id": "P0",
@@ -860,9 +860,9 @@
         {
          "id": "P3-v8-s12b-23",
          "title": "V8 S12b-23: ESM (`type=\"module\"`) → V8, закрывает BUG-350",
-         "status": "planned",
+         "status": "done",
          "size": "M",
-         "note": "Блокер: полноценный ESM-стек (`crates/js/src/esm.rs`, `QuickJsRuntime::eval_module`) существует только под rquickjs — на дефолтном V8 `<script type=\"module\">` не имеет модульной семантики вовсе (трейтовый дефолт `ext.rs::eval_module` прогоняет модульный скрипт через classic eval, парсинг падает на `export`/`import`). Портировать на `V8JsRuntime::eval_module`/`register_module_source` — закрывает BUG-350, 80 вендоренных WPT-файлов используют `type=\"module\"`. Найдено аудитом перед S12b-final 2026-07-29",
+         "note": "ЗАКРЫТ 2026-07-29 (ветка p1-v8-s12b-23-esm): ESM портирован на V8, BUG-350 закрыт. Новый `crates/js/src/v8_esm.rs`: `script_compiler::compile_module` → `instantiate_module` → `evaluate` + `perform_microtask_checkpoint`; `impl JsRuntime for V8JsRuntime` переопределяет `eval_module`/`register_module_source`, добавлен `V8JsRuntime::set_import_map` (зовётся шеллом). Плумбинг отличается от rquickjs намеренно: `ResolveModuleCallback` у V8 — `extern \"C\" fn` без захвата, поэтому реестры (исходники, модули, `identity_hash→specifier`, page URL, import map) в `thread_local!` на JS-потоке, а не в `Arc<Mutex<…>>`; разрешение спецификаторов общее для обоих движков — вынесено в `esm::resolve_specifier_with`. Import attributes (`with { type: 'json' }`) и динамический `import()` — нативные V8 (FixedArray в callback / `set_host_import_module_dynamically_callback`), Phase-0 препроцессор `import_attributes.rs` на V8-пути не нужен; `import.meta` остался на общем `import_meta.rs` (форма `.url`/`.resolve()`/`.env` — политика Lumen). Inline-модули включены и в headless-путь драйвера (`session.rs::run_page_scripts`); ни одна страница graphic_tests не использует `type=module` — CPU-снапшоты не затронуты. 19 новых тестов в `v8_esm.rs` + живой прогон `--dump-layout`. rquickjs-путь ESM НЕ удалён (это S12b-24/25). Остаток: сетевая подгрузка импортируемых модулей — [BUG-446](bugs/BUG-446-OPEN.md)",
          "bugs": [
           "BUG-350"
          ]
@@ -6505,10 +6505,10 @@
    "debtor": false
   },
   "BUG-350": {
-   "status": "open",
+   "status": "fixed",
    "title": "`<script type=\"module\">` не имеет реальной семантики модуля на дефолтном V8-билде вовсе — `V8JsRuntime` не переопределяет `eval_module`/`register_module_source`…",
-   "component": "js (`crates/js/src/v8_runtime.rs`, `crates/core/src/ext.rs::JsRuntime::eval_module`)",
-   "date": null,
+   "component": "js (`crates/js/src/v8_esm.rs`, `crates/js/src/v8_runtime.rs`, `crates/core/src/ext.rs::JsRuntime::eval_module`)",
+   "date": "2026-07-29",
    "debtor": false
   },
   "BUG-351": {
@@ -7168,6 +7168,13 @@
    "component": "layout (`crates/engine/layout/tests/snapshots/flex_*.txt`) + гейт `scripts/scoped-test.sh`",
    "date": null,
    "debtor": false
+  },
+  "BUG-446": {
+   "status": "open",
+   "title": "Граф модулей страницы не подгружается: `import './helper.js'` из `<script type=\"module\">` всегда падает как `module '…' not found`, потому что шелл нигде не зов…",
+   "component": "shell (`crates/shell/src/main.rs` — `run_scripts_with_dom`, `resolve_script_sources`), js (`crates/js/src/v8_esm.rs` — реестр исходников)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -7664,6 +7671,9 @@
   ],
   "shell (`crates/shell/src/main.rs::parse_and_layout` — порядок фаз `parse → CSS → run_scripts_with_dom → images → layout`; `notify_dom_content_loaded` на `main.rs:5466`), js (`crates/js/src/dom.rs` — нативы читают снимок и не умеют его запросить)": [
    "BUG-443"
+  ],
+  "shell (`crates/shell/src/main.rs` — `run_scripts_with_dom`, `resolve_script_sources`), js (`crates/js/src/v8_esm.rs` — реестр исходников)": [
+   "BUG-446"
   ],
   "shell (`main.rs::handle_click_at`, ветка `FormClickAction::SubmitForm`), js (`dom.rs` — `WEB_API_SHIM`)": [
    "BUG-437"

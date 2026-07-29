@@ -1,6 +1,6 @@
 # BUG-350 — `<script type="module">` silently degrades to classic `eval()` on the default V8 build: no module semantics at all
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-07-29
 **Компонент:** js (`crates/js/src/v8_runtime.rs`, `crates/core/src/ext.rs::JsRuntime::eval_module`)
 **Найден:** P2, WPT-VENDOR-device-bound-session-credentials (2026-07-26), while triaging why the vendored category's sole non-`.https.` test (`not-secure-connection.html`) TIMEOUT-ed: it loads `helper.js` via both `<script src="helper.js" type="module">` and an inline `<script type="module">` doing `import {...} from "./helper.js"`, and the browser log showed `module error: JS runtime error: Unexpected token 'export'` / `Cannot use import statement outside a module`.
 
@@ -88,3 +88,51 @@ Port `eval_module`/`register_module_source` to `V8JsRuntime`, using V8's own
 what `crates/js/src/esm.rs`'s `LumenLoader`/`LumenResolver` already do for the
 QuickJS path) — tracked as part of the broader V8-migration module-support work in
 `docs/tasks/ph3-v8-migration.md`.
+
+## Исправление (2026-07-29, P1, ветка `p1-v8-s12b-23-esm`, срез P3-v8-s12b-23)
+
+Реализовано по предложенному плану. Новый модуль `crates/js/src/v8_esm.rs`:
+`script_compiler::compile_module` → `instantiate_module` → `evaluate` +
+`perform_microtask_checkpoint` (аналог `execute_pending_job`-цикла QuickJS).
+`impl JsRuntime for V8JsRuntime` теперь переопределяет `eval_module` и
+`register_module_source`, так что трейтовый classic-eval дефолт (`ext.rs`) на
+дефолтной сборке больше не достигается; добавлен `V8JsRuntime::set_import_map`,
+и шелл (`main.rs`, V8-ветка `run_scripts_with_dom`) его зовёт — комментарий
+«module scripts fall back to `NotImplemented` until ESM lands» снят.
+
+Ключевое отличие от rquickjs-плумбинга: `ResolveModuleCallback` у V8 — это
+`extern "C" fn` без захвата, поэтому реестры (исходники, скомпилированные
+модули, `identity_hash → specifier`, page URL, import map) живут в
+`thread_local!` на JS-потоке изолята, а не в `Arc<Mutex<…>>`, разделяемых с
+`Loader`/`Resolver`. Разрешение спецификаторов при этом общее для обоих
+движков — вынесено в `esm::resolve_specifier_with`, `LumenResolver` делегирует
+туда же, так что import maps, относительные URL и виртуальная база
+`lumen://inline-N` ведут себя одинаково.
+
+Что V8 умеет сам и потому не эмулируется: import attributes
+(`with { type: 'json' }`) приходят в callback готовым `FixedArray` — Phase-0
+препроцессор `import_attributes.rs` на V8-пути не нужен; динамический
+`import()` подключён изолятным хуком `set_host_import_module_dynamically_callback`.
+`import.meta` остался на общем строковом преобразователе `import_meta.rs` —
+форма `.url`/`.resolve()`/`.env` там политика Lumen, а не возможность движка.
+
+Также включены inline-модули в headless-пути драйвера
+(`crates/driver/src/session.rs::run_page_scripts` — теперь `eval_module` после
+классических скриптов, HTML LS §8.1.3.1); ни одна страница `graphic_tests/` не
+использует `type="module"`, так что CPU-снапшоты не затронуты.
+
+Проверка: 19 новых тестов в `v8_esm.rs` (экспорт, побочные эффекты, импорт
+зарегистрированного модуля, синтаксическая ошибка, отсутствующий модуль, throw
+в теле, «ромб» с однократным исполнением, top-level await, динамический import
+и его reject, относительный импорт, import map, json/невалидный json/чужой
+тип, `import.meta.url`/`resolve`/`env`) + живой прогон
+`lumen.exe --dump-layout` на странице с инлайновым `<script type="module">`,
+мутирующим DOM: текст меняется (`before` → `module-works`) вместо
+`Unexpected token 'export'`.
+
+**Остаток вне этого среза:** страница не может подгрузить импортируемый модуль
+по сети — шелл нигде не зовёт `register_module_source`, поэтому
+`import './helper.js'` со страницы падает как `module '…/helper.js' not found`.
+Это не регрессия (на QuickJS было ровно так же) и не то, что описывал этот баг,
+но именно оно нужно 80 вендоренным WPT-файлам — заведено отдельно как
+[BUG-446](BUG-446-OPEN.md).
