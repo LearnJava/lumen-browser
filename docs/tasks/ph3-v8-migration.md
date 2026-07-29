@@ -1394,6 +1394,54 @@ construction within one test process before porting that cluster — V8 isolate 
 pickier than QuickJS contexts about repeated init/teardown. `BlockingFetch`'s real-OS-thread
 `sleep`-poll loop (`dom.rs:23460-23479`) never touches `Ctx` and should port unchanged.
 
+### S12b-24-core — first porting slice, "Core DOM basics" (2026-07-29, branch p1-v8-s12b-24-core)
+
+The scoping table's first row, ported whole: **99 tests** (not the row's guessed "~55" — the
+per-sub-family counts were the accurate ones, as that row warned) moved out of the QuickJS
+monolith into `mod tests::v8_core`, gated `#[cfg(feature = "v8-backend")]`, QuickJS copies
+deleted. Families: console/SVG/wrapper identity/`self`&`window`, Canvas 2D,
+`getElementById`/`querySelector`/attributes/`textContent`/`Image`, `alert`/`print`, timers +
+`scheduler.postTask`, History API.
+
+**Mechanics that the next slices can copy verbatim.** A nested module inside the existing
+`mod tests` (not a new file) keeps `use super::*` working, so `make_doc`, the `Arc`/`Mutex`
+imports and every other outer helper stay reachable and the diff is a helper-name swap plus a
+4-space re-indent. Two twin constructors were enough for this row: `v8_runtime_with_dom` and
+`v8_runtime_with_url` — `V8JsRuntime::install_dom`'s signature is argument-for-argument identical
+to `QuickJsRuntime::install_dom`, as the scoping note predicted. Helpers whose *only* callers move
+into the V8 module must move with them (`test_img_bitmap` did): left behind, they are dead code in
+a non-`v8-backend` build and `clippy -D warnings` fails there while passing with the feature on —
+so check **both** feature configurations before committing.
+
+**Result: 98 of 99 passed on V8 with zero changes to test bodies.** The families in this row use
+only `rt.eval` plus `update_layout_rects`/`flush_canvas_updates`/`register_img_bitmaps`/`take_*`,
+all of which `V8JsRuntime` mirrors. That is a useful prior for scheduling the remaining ~1014
+tests, but do not generalize it past this row: this slice contains none of the
+`_lumen_drain_microtasks` clusters and none of the mock-provider helpers.
+
+**Divergence 1 — a real user-visible defect, [BUG-447](../../bugs/BUG-447-FIXED.md).**
+`V8JsRuntime` had no `register_img_bitmaps` at all, and `impl PersistentJs for V8PersistentJs`
+(`shell/src/main.rs`) did not override the trait method either — so the shell's call after
+`fetch_and_decode_images` hit the trait's no-op default, `img_bitmap_store` stayed empty for the
+whole session, and `drawImage(imgElement, …)` silently painted nothing on the default engine.
+Fixed in this slice (both halves). Method-set diff of the two `impl PersistentJs` blocks is a
+cheap audit worth repeating: it also showed `suspend` (intentionally absent on V8 — DoD item 5)
+and `debug_js_heap` (QuickJS-only `TEMP BUG-272` diagnostic) as the only other gaps.
+
+**Divergence 2 — a green QuickJS test that encoded a QuickJS bug.**
+`canvas_get_context_webgl_via_2d_shim_is_null` asserted `getContext('webgl') === null` and
+explained it as a shim boundary. It is not: `lib.rs::install_dom` evals `webgl_canvas`'s
+`WEBGL_SHIM` (line ~748) *before* `dom::install_dom_api` (line ~770) defines `document`, so the
+shim's `if (typeof document !== 'undefined' && …)` guard skipped its `document.createElement`
+hook and functional WebGL was dead on the whole QuickJS path. `V8JsRuntime::install_dom` evals
+`WEB_API_SHIM` first and `webgl_canvas` after, so the hook lands and the call returns the real
+software-rasterizer context (probed: `typeof gl.getParameter === 'function'`,
+`drawingBufferWidth === 300`, no 2D methods). Test rewritten to the correct expectation and
+renamed `canvas_get_context_webgl_returns_functional_context`. No bug filed — the broken path is
+rquickjs, which S12b-25 deletes. Expect more of this shape: **an assertion that looks like a
+documented limitation may be a fossilized QuickJS defect**, so when a ported test fails, check the
+install ordering / engine behavior before "fixing" the port.
+
 ---
 
 ## Risks (Rev 2)
