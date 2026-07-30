@@ -2150,6 +2150,54 @@ confirm the expected ∓13 shift before treating the slice as done.
 gated V8); default-feature `cargo test -p lumen-js` — 1495/1495 (was 1508, −13). Both clippy passes
 (with and without `v8-backend`) clean.
 
+Note for the next session: `S12b-24-window-anim-compress` (24th slice, ROADMAP.md, merged
+2026-07-30 — caretPositionFromPoint/gc_collect/deterministic-mode/window.open/Web Animations/
+CompressionStream, 52 tests) landed without its own entry here; this file's slice numbering below
+resumes at 25 to match the ROADMAP.md progress count, not the count of entries in this file.
+
+### S12b-24-fullscreen-locks — twenty-fifth porting slice (2026-07-30, branch p1-v8-s12b-24-fullscreen-locks)
+
+Fullscreen API (WHATWG Fullscreen §4) + Web Locks API + Screen Wake Lock stub + Network
+Information stub + `navigator.userActivation` + Web Share API stub + `window.reportError()` —
+seven adjacent scoping-table sub-families (`Fullscreen API` and `Web Locks + Wake Lock + Network
+Information + userActivation + Web Share + reportError`) — **32 tests** (brief estimated ~36
+combined) ported to `mod v8_fullscreen_locks`, QuickJS copies deleted. All API surface here is
+plain JS in the shared `WEB_API_SHIM`, not native bindings — no `V8JsRuntime` changes needed.
+
+This is the first slice into the single ~209-test tail block flagged in the original scoping note
+(`dom.rs:15982` `mod tests` no longer has any nested `mod v8_*` boundary until `mod v8_core`, i.e.
+every still-unported family from here down is one contiguous run, not scattered — confirmed by
+counting `^    fn ` at 4-space indent between the `runtime_with_dom` helper and `mod v8_core`: 209,
+matching the STATUS-P1/ROADMAP "~209 remaining" estimate exactly). Sat immediately after the
+still-blocked Trusted Types block (first section, 8 tests, `dom.rs:16038-16157` — left in place,
+see the `S12b-24 — scoping only` comment right above it) and immediately before `// ──
+CSS.supports() / CSS.escape()`.
+
+Heaviest use yet of the S12b-2 `_lumen_drain_microtasks()`-removal lesson on Promise-heavy code
+(11 of 32 tests touch `navigator.locks`/`navigator.wakeLock`/`navigator.share` promise chains,
+including nested `.then()`s and a `steal_option_grants_immediately` test with a `new Promise`
+executor calling back into `navigator.locks.request` before settling). Two removal shapes, not
+one: (1) tests that already called `rt.eval("_lumen_drain_microtasks()")` as its own separate
+Rust-level statement between a setup `eval()` and an assertion `eval()` — here the drain line is
+simply deleted, since V8's default `MicrotasksPolicy::kAuto` already performed a full checkpoint
+at the end of the *setup* `eval()`'s `Script::Run` (`v8_runtime.rs:4504-4529`, confirmed by reading
+the impl — no explicit checkpoint call exists or is needed). (2) the four `request_fullscreen_*`/
+`exit_fullscreen_*` tests concatenated setup + drain + assertion into *one* JS string via `\`
+line-continuations — these needed actual restructuring into two separate `rt.eval()` Rust calls
+(drop the drain statement, split the string at that point), because V8's checkpoint only runs at
+the `eval()`/`Script::Run` boundary, not between statements inside one script. Getting shape (1)
+right for the Locks tests (just delete the middle line, no restructuring) depended on recognizing
+they were *already* three separate Rust calls, unlike the fullscreen tests being one call each —
+worth checking call-count, not just presence of the drain string, before deciding how to edit each
+test.
+
+32/32 passed on the first run, no assertion or timing fixups needed. `cargo test -p lumen-js
+--features v8-backend` — 2570/2570 (unchanged: −32 ungated QuickJS, +32 gated V8); default-feature
+`cargo test -p lumen-js` — 1411/1411 (down from the 1495 recorded after `S12b-24-webworker`;
+delta includes both this slice's −32 and drift from sessions in between that didn't log their
+default-feature count here — not re-derived, out of scope for this slice). Both clippy passes
+(with and without `v8-backend`) clean.
+
 ---
 
 ## Risks (Rev 2)
