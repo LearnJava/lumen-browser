@@ -2093,6 +2093,37 @@ gated V8); default-feature `cargo test -p lumen-js` — 1533/1533 (was 1565, −
 
 ---
 
+### S12b-24-idle-message-clipboard — twenty-second porting slice (2026-07-30, branch p1-v8-s12b-24-idle-message-clipboard)
+
+`requestIdleCallback`/`cancelIdleCallback`, `MessageChannel`/`MessagePort` (construction,
+`postMessage` delivery via `onmessage` and `addEventListener`, structured-clone deep copy,
+`close()`/`removeEventListener` suppressing further delivery), `navigator.clipboard`
+(`readText`/`writeText` stub), `navigator.permissions.query` (clipboard-read granted, camera
+denied, bad descriptor rejects), `window.isSecureContext`/`crossOriginIsolated` — 25 tests ported
+to `mod v8_idle_message_clipboard`, QuickJS copies deleted.
+
+Same line-drift finding as every prior slice: located the block by grepping for
+`requestIdleCallback`/`MessageChannel`/`navigator.clipboard`/`isSecureContext` rather than trusting
+recorded line numbers — it sat at `dom.rs:16188-16429`, immediately after the
+`S12b-24-form-constraint-validation` block and immediately before `// ── Web Worker tests`.
+
+Unlike the previous (fully synchronous) slice, 9 of the 25 tests use `.then()`/`.catch()` on
+`MessagePort`/`navigator.clipboard`/`navigator.permissions` promises and tripped the by-now-familiar
+S12b-2 promise-timing lesson on the first literal-copy run: `_lumen_drain_microtasks()` is a no-op
+on V8 (`v8_runtime.rs:3611`) and the automatic microtask checkpoint runs at the end of the *previous*
+`eval()` call, not mid-script — so a same-eval read of a `.then()`-assigned variable observes
+pre-resolution state. Fixed by splitting each into two `rt.eval()` calls: one that sets up the
+promise/message chain (assigning to a script-global var, no `_lumen_drain_microtasks()` call), a
+second that reads the var — the same two-step shape used in `v8_webcrypto`/`v8_whatwg_streams`.
+16/25 passed unmodified on the first run (bodies with no promise involved, or where the assertion
+only needs `count === 0` which holds regardless of delivery timing).
+
+`cargo test -p lumen-js --features v8-backend` — 2570/2570 (unchanged: −25 ungated QuickJS, +25
+gated V8); default-feature `cargo test -p lumen-js` — 1508/1508 (was 1533, −25). Both clippy passes
+(with and without `v8-backend`) clean.
+
+---
+
 ## Risks (Rev 2)
 
 | Risk | Likelihood | Mitigation |

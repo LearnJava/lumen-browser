@@ -16185,248 +16185,6 @@ mod tests {
              })()"));
     }
 
-    // ── requestIdleCallback / cancelIdleCallback tests ─────────────────────────
-
-    #[test]
-    fn request_idle_callback_exists() {
-        let rt = runtime_with_dom(make_doc());
-        assert!(bool_eval(&rt,
-            "typeof requestIdleCallback === 'function' && typeof window.requestIdleCallback === 'function'"));
-    }
-
-    #[test]
-    fn cancel_idle_callback_exists() {
-        let rt = runtime_with_dom(make_doc());
-        assert!(bool_eval(&rt,
-            "typeof cancelIdleCallback === 'function'"));
-    }
-
-    #[test]
-    fn request_idle_callback_returns_numeric_id() {
-        let rt = runtime_with_dom(make_doc());
-        assert!(bool_eval(&rt,
-            "typeof requestIdleCallback(function(){}) === 'number'"));
-    }
-
-    #[test]
-    fn cancel_idle_callback_does_not_throw() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval("cancelIdleCallback(999)").unwrap();
-    }
-
-    #[test]
-    fn request_idle_callback_bad_arg_throws() {
-        let rt = runtime_with_dom(make_doc());
-        assert!(bool_eval(&rt,
-            "var threw = false; \
-             try { requestIdleCallback('notafn'); } catch(e) { threw = e instanceof TypeError; } \
-             threw"));
-    }
-
-    // ── MessageChannel / MessagePort tests ────────────────────────────────────
-
-    #[test]
-    fn message_channel_creates_two_ports() {
-        let rt = runtime_with_dom(make_doc());
-        assert!(bool_eval(&rt,
-            "var ch = new MessageChannel(); \
-             ch.port1 instanceof MessagePort && ch.port2 instanceof MessagePort"));
-    }
-
-    #[test]
-    fn message_channel_ports_are_distinct() {
-        let rt = runtime_with_dom(make_doc());
-        assert!(bool_eval(&rt,
-            "var ch = new MessageChannel(); ch.port1 !== ch.port2"));
-    }
-
-    #[test]
-    fn message_port_post_delivers_via_onmessage() {
-        let rt = runtime_with_dom(make_doc());
-        // onmessage auto-starts port1; postMessage on port2 delivers to port1.
-        assert!(bool_eval(&rt,
-            "var ch = new MessageChannel(); \
-             var received = null; \
-             ch.port1.onmessage = function(e) { received = e.data; }; \
-             ch.port2.postMessage('hello'); \
-             _lumen_drain_microtasks(); \
-             received === 'hello'"));
-    }
-
-    #[test]
-    fn message_port_post_delivers_object() {
-        let rt = runtime_with_dom(make_doc());
-        assert!(bool_eval(&rt,
-            "var ch = new MessageChannel(); \
-             var got = null; \
-             ch.port1.onmessage = function(e) { got = e.data; }; \
-             ch.port2.postMessage({ x: 42 }); \
-             _lumen_drain_microtasks(); \
-             got !== null && got.x === 42"));
-    }
-
-    #[test]
-    fn message_port_structured_clone_is_deep_copy() {
-        let rt = runtime_with_dom(make_doc());
-        // Mutations to the original after postMessage should not affect received copy.
-        assert!(bool_eval(&rt,
-            "var ch = new MessageChannel(); \
-             var got = null; \
-             ch.port1.onmessage = function(e) { got = e.data; }; \
-             var orig = { v: 1 }; \
-             ch.port2.postMessage(orig); \
-             orig.v = 99; \
-             _lumen_drain_microtasks(); \
-             got !== null && got.v === 1"));
-    }
-
-    #[test]
-    fn message_port_start_drains_queue() {
-        let rt = runtime_with_dom(make_doc());
-        // Post before onmessage is set → message queued; start() drains it.
-        assert!(bool_eval(&rt,
-            "var ch = new MessageChannel(); \
-             var got = null; \
-             ch.port2.postMessage('queued'); \
-             ch.port1.onmessage = function(e) { got = e.data; }; \
-             _lumen_drain_microtasks(); \
-             got === 'queued'"));
-    }
-
-    #[test]
-    fn message_port_add_event_listener_delivers() {
-        let rt = runtime_with_dom(make_doc());
-        assert!(bool_eval(&rt,
-            "var ch = new MessageChannel(); \
-             var got = null; \
-             ch.port1.addEventListener('message', function(e) { got = e.data; }); \
-             ch.port2.postMessage('evt'); \
-             _lumen_drain_microtasks(); \
-             got === 'evt'"));
-    }
-
-    #[test]
-    fn message_port_close_stops_delivery() {
-        let rt = runtime_with_dom(make_doc());
-        assert!(bool_eval(&rt,
-            "var ch = new MessageChannel(); \
-             var count = 0; \
-             ch.port1.onmessage = function() { count++; }; \
-             ch.port2.postMessage('a'); \
-             ch.port1.close(); \
-             ch.port2.postMessage('b'); \
-             _lumen_drain_microtasks(); \
-             count === 0"));
-    }
-
-    #[test]
-    fn message_port_remove_event_listener_stops_delivery() {
-        let rt = runtime_with_dom(make_doc());
-        assert!(bool_eval(&rt,
-            "var ch = new MessageChannel(); \
-             var count = 0; \
-             var fn = function() { count++; }; \
-             ch.port1.addEventListener('message', fn); \
-             ch.port1.removeEventListener('message', fn); \
-             ch.port2.postMessage('x'); \
-             _lumen_drain_microtasks(); \
-             count === 0"));
-    }
-
-    #[test]
-    fn message_channel_window_export() {
-        let rt = runtime_with_dom(make_doc());
-        assert!(bool_eval(&rt, "window.MessageChannel === MessageChannel"));
-    }
-
-    // ── navigator.clipboard tests ──────────────────────────────────────────────
-
-    #[test]
-    fn navigator_clipboard_exists() {
-        let rt = runtime_with_dom(make_doc());
-        assert!(bool_eval(&rt, "typeof navigator.clipboard === 'object' && navigator.clipboard !== null"));
-    }
-
-    #[test]
-    fn navigator_clipboard_read_text_returns_promise() {
-        let rt = runtime_with_dom(make_doc());
-        assert!(bool_eval(&rt,
-            "typeof navigator.clipboard.readText === 'function' && \
-             typeof navigator.clipboard.readText().then === 'function'"));
-    }
-
-    #[test]
-    fn navigator_clipboard_write_text_returns_promise() {
-        let rt = runtime_with_dom(make_doc());
-        assert!(bool_eval(&rt,
-            "typeof navigator.clipboard.writeText === 'function' && \
-             typeof navigator.clipboard.writeText('hi').then === 'function'"));
-    }
-
-    #[test]
-    fn navigator_clipboard_stub_read_resolves_string() {
-        let rt = runtime_with_dom(make_doc());
-        // Without native binding, readText resolves to empty string.
-        assert!(bool_eval(&rt,
-            "var ok = false; \
-             navigator.clipboard.readText().then(function(v) { ok = typeof v === 'string'; }); \
-             _lumen_drain_microtasks(); \
-             ok"));
-    }
-
-    // ── navigator.permissions tests ───────────────────────────────────────────
-
-    #[test]
-    fn navigator_permissions_query_returns_promise() {
-        let rt = runtime_with_dom(make_doc());
-        assert!(bool_eval(&rt,
-            "typeof navigator.permissions === 'object' && \
-             typeof navigator.permissions.query === 'function'"));
-    }
-
-    #[test]
-    fn navigator_permissions_clipboard_granted() {
-        let rt = runtime_with_dom(make_doc());
-        assert!(bool_eval(&rt,
-            "var state = null; \
-             navigator.permissions.query({ name: 'clipboard-read' }).then(function(ps) { state = ps.state; }); \
-             _lumen_drain_microtasks(); \
-             state === 'granted'"));
-    }
-
-    #[test]
-    fn navigator_permissions_camera_denied() {
-        let rt = runtime_with_dom(make_doc());
-        assert!(bool_eval(&rt,
-            "var state = null; \
-             navigator.permissions.query({ name: 'camera' }).then(function(ps) { state = ps.state; }); \
-             _lumen_drain_microtasks(); \
-             state === 'denied'"));
-    }
-
-    #[test]
-    fn navigator_permissions_bad_descriptor_rejects() {
-        let rt = runtime_with_dom(make_doc());
-        assert!(bool_eval(&rt,
-            "var rejected = false; \
-             navigator.permissions.query(null).catch(function(e) { rejected = true; }); \
-             _lumen_drain_microtasks(); \
-             rejected"));
-    }
-
-    // ── isSecureContext / crossOriginIsolated tests ────────────────────────────
-
-    #[test]
-    fn is_secure_context_is_true() {
-        let rt = runtime_with_dom(make_doc());
-        assert!(bool_eval(&rt, "window.isSecureContext === true"));
-    }
-
-    #[test]
-    fn cross_origin_isolated_is_false() {
-        let rt = runtime_with_dom(make_doc());
-        assert!(bool_eval(&rt, "window.crossOriginIsolated === false"));
-    }
 
     // ── Web Worker tests (WHATWG Web Workers §4) ─────────────────────────────
 
@@ -31667,6 +31425,282 @@ mod tests {
                    try { inp.showPicker(); } catch(e) {} \
                    return clicked; \
                  })()"));
+        }
+    }
+    #[cfg(feature = "v8-backend")]
+    mod v8_idle_message_clipboard {
+        use super::*;
+        use crate::v8_runtime::V8JsRuntime;
+
+        /// V8 twin of [`super::runtime_with_dom`].
+        fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
+            let rt = V8JsRuntime::new().unwrap();
+            rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+            rt.install_dom(doc, "", None, None, None, None, None, None, None, None, false)
+                .unwrap();
+            rt
+        }
+
+        fn bool_eval(rt: &V8JsRuntime, script: &str) -> bool {
+            rt.eval(script).unwrap() == lumen_core::JsValue::Bool(true)
+        }
+
+        // ── requestIdleCallback / cancelIdleCallback tests ─────────────────────────
+
+        #[test]
+        fn request_idle_callback_exists() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(&rt,
+                "typeof requestIdleCallback === 'function' && typeof window.requestIdleCallback === 'function'"));
+        }
+
+        #[test]
+        fn cancel_idle_callback_exists() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(&rt,
+                "typeof cancelIdleCallback === 'function'"));
+        }
+
+        #[test]
+        fn request_idle_callback_returns_numeric_id() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(&rt,
+                "typeof requestIdleCallback(function(){}) === 'number'"));
+        }
+
+        #[test]
+        fn cancel_idle_callback_does_not_throw() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("cancelIdleCallback(999)").unwrap();
+        }
+
+        #[test]
+        fn request_idle_callback_bad_arg_throws() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(&rt,
+                "var threw = false; \
+                 try { requestIdleCallback('notafn'); } catch(e) { threw = e instanceof TypeError; } \
+                 threw"));
+        }
+
+        // ── MessageChannel / MessagePort tests ────────────────────────────────────
+
+        #[test]
+        fn message_channel_creates_two_ports() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(&rt,
+                "var ch = new MessageChannel(); \
+                 ch.port1 instanceof MessagePort && ch.port2 instanceof MessagePort"));
+        }
+
+        #[test]
+        fn message_channel_ports_are_distinct() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(&rt,
+                "var ch = new MessageChannel(); ch.port1 !== ch.port2"));
+        }
+
+        #[test]
+        fn message_port_post_delivers_via_onmessage() {
+            let rt = v8_runtime_with_dom(make_doc());
+            // onmessage auto-starts port1; postMessage on port2 delivers to port1.
+            // Two-step per the S12b-2 lesson: the end-of-script microtask
+            // checkpoint runs after this eval() returns, so a same-eval read
+            // would observe pre-delivery state — the second eval() reads the
+            // global after delivery has actually happened.
+            rt.eval(
+                "var ch = new MessageChannel(); \
+                 var received = null; \
+                 ch.port1.onmessage = function(e) { received = e.data; }; \
+                 ch.port2.postMessage('hello');",
+            )
+            .unwrap();
+            assert!(bool_eval(&rt, "received === 'hello'"));
+        }
+
+        #[test]
+        fn message_port_post_delivers_object() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var ch = new MessageChannel(); \
+                 var got = null; \
+                 ch.port1.onmessage = function(e) { got = e.data; }; \
+                 ch.port2.postMessage({ x: 42 });",
+            )
+            .unwrap();
+            assert!(bool_eval(&rt, "got !== null && got.x === 42"));
+        }
+
+        #[test]
+        fn message_port_structured_clone_is_deep_copy() {
+            let rt = v8_runtime_with_dom(make_doc());
+            // Mutations to the original after postMessage should not affect received copy.
+            rt.eval(
+                "var ch = new MessageChannel(); \
+                 var got = null; \
+                 ch.port1.onmessage = function(e) { got = e.data; }; \
+                 var orig = { v: 1 }; \
+                 ch.port2.postMessage(orig); \
+                 orig.v = 99;",
+            )
+            .unwrap();
+            assert!(bool_eval(&rt, "got !== null && got.v === 1"));
+        }
+
+        #[test]
+        fn message_port_start_drains_queue() {
+            let rt = v8_runtime_with_dom(make_doc());
+            // Post before onmessage is set → message queued; start() drains it.
+            rt.eval(
+                "var ch = new MessageChannel(); \
+                 var got = null; \
+                 ch.port2.postMessage('queued'); \
+                 ch.port1.onmessage = function(e) { got = e.data; };",
+            )
+            .unwrap();
+            assert!(bool_eval(&rt, "got === 'queued'"));
+        }
+
+        #[test]
+        fn message_port_add_event_listener_delivers() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var ch = new MessageChannel(); \
+                 var got = null; \
+                 ch.port1.addEventListener('message', function(e) { got = e.data; }); \
+                 ch.port2.postMessage('evt');",
+            )
+            .unwrap();
+            assert!(bool_eval(&rt, "got === 'evt'"));
+        }
+
+        #[test]
+        fn message_port_close_stops_delivery() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(&rt,
+                "var ch = new MessageChannel(); \
+                 var count = 0; \
+                 ch.port1.onmessage = function() { count++; }; \
+                 ch.port2.postMessage('a'); \
+                 ch.port1.close(); \
+                 ch.port2.postMessage('b'); \
+                 _lumen_drain_microtasks(); \
+                 count === 0"));
+        }
+
+        #[test]
+        fn message_port_remove_event_listener_stops_delivery() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(&rt,
+                "var ch = new MessageChannel(); \
+                 var count = 0; \
+                 var fn = function() { count++; }; \
+                 ch.port1.addEventListener('message', fn); \
+                 ch.port1.removeEventListener('message', fn); \
+                 ch.port2.postMessage('x'); \
+                 _lumen_drain_microtasks(); \
+                 count === 0"));
+        }
+
+        #[test]
+        fn message_channel_window_export() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(&rt, "window.MessageChannel === MessageChannel"));
+        }
+
+        // ── navigator.clipboard tests ──────────────────────────────────────────────
+
+        #[test]
+        fn navigator_clipboard_exists() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(&rt, "typeof navigator.clipboard === 'object' && navigator.clipboard !== null"));
+        }
+
+        #[test]
+        fn navigator_clipboard_read_text_returns_promise() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(&rt,
+                "typeof navigator.clipboard.readText === 'function' && \
+                 typeof navigator.clipboard.readText().then === 'function'"));
+        }
+
+        #[test]
+        fn navigator_clipboard_write_text_returns_promise() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(&rt,
+                "typeof navigator.clipboard.writeText === 'function' && \
+                 typeof navigator.clipboard.writeText('hi').then === 'function'"));
+        }
+
+        #[test]
+        fn navigator_clipboard_stub_read_resolves_string() {
+            let rt = v8_runtime_with_dom(make_doc());
+            // Without native binding, readText resolves to empty string. Two-step
+            // per the S12b-2 lesson (see message_port_post_delivers_via_onmessage).
+            rt.eval(
+                "var ok = false; \
+                 navigator.clipboard.readText().then(function(v) { ok = typeof v === 'string'; });",
+            )
+            .unwrap();
+            assert!(bool_eval(&rt, "ok"));
+        }
+
+        // ── navigator.permissions tests ───────────────────────────────────────────
+
+        #[test]
+        fn navigator_permissions_query_returns_promise() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(&rt,
+                "typeof navigator.permissions === 'object' && \
+                 typeof navigator.permissions.query === 'function'"));
+        }
+
+        #[test]
+        fn navigator_permissions_clipboard_granted() {
+            let rt = v8_runtime_with_dom(make_doc());
+            // Two-step per the S12b-2 lesson (see message_port_post_delivers_via_onmessage).
+            rt.eval(
+                "var state = null; \
+                 navigator.permissions.query({ name: 'clipboard-read' }).then(function(ps) { state = ps.state; });",
+            )
+            .unwrap();
+            assert!(bool_eval(&rt, "state === 'granted'"));
+        }
+
+        #[test]
+        fn navigator_permissions_camera_denied() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var state = null; \
+                 navigator.permissions.query({ name: 'camera' }).then(function(ps) { state = ps.state; });",
+            )
+            .unwrap();
+            assert!(bool_eval(&rt, "state === 'denied'"));
+        }
+
+        #[test]
+        fn navigator_permissions_bad_descriptor_rejects() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var rejected = false; \
+                 navigator.permissions.query(null).catch(function(e) { rejected = true; });",
+            )
+            .unwrap();
+            assert!(bool_eval(&rt, "rejected"));
+        }
+
+        // ── isSecureContext / crossOriginIsolated tests ────────────────────────────
+
+        #[test]
+        fn is_secure_context_is_true() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(&rt, "window.isSecureContext === true"));
+        }
+
+        #[test]
+        fn cross_origin_isolated_is_false() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(&rt, "window.crossOriginIsolated === false"));
         }
     }
 }
