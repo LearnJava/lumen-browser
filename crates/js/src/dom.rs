@@ -16187,411 +16187,6 @@ mod tests {
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
 
-    // ─── Event class hierarchy tests ──────────────────────────────────────────
-
-    #[test]
-    fn uievent_instanceof_event() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var e = new UIEvent('focus'); \
-             (e instanceof UIEvent) && (e instanceof Event)"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn mouseevent_instanceof_chain() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var e = new MouseEvent('click', {clientX: 10, clientY: 20, button: 0, buttons: 1}); \
-             (e instanceof MouseEvent) && (e instanceof UIEvent) && (e instanceof Event) && \
-             e.clientX === 10 && e.clientY === 20 && e.button === 0 && e.buttons === 1"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn mouseevent_modifier_keys() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var e = new MouseEvent('click', {ctrlKey: true, shiftKey: false, altKey: true}); \
-             e.ctrlKey && !e.shiftKey && e.altKey && \
-             e.getModifierState('Control') && e.getModifierState('Alt') && \
-             !e.getModifierState('Shift')"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn mouseevent_page_coords_default_to_client() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var e = new MouseEvent('mousemove', {clientX: 42, clientY: 7}); \
-             e.pageX === 42 && e.pageY === 7"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn keyboardevent_instanceof_chain() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var e = new KeyboardEvent('keydown', {key: 'Enter', code: 'Enter', keyCode: 13}); \
-             (e instanceof KeyboardEvent) && (e instanceof UIEvent) && (e instanceof Event) && \
-             e.key === 'Enter' && e.code === 'Enter' && e.keyCode === 13"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn keyboardevent_location_constants() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "KeyboardEvent.DOM_KEY_LOCATION_STANDARD === 0 && \
-             KeyboardEvent.DOM_KEY_LOCATION_LEFT     === 1 && \
-             KeyboardEvent.DOM_KEY_LOCATION_RIGHT    === 2 && \
-             KeyboardEvent.DOM_KEY_LOCATION_NUMPAD   === 3"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn keyboardevent_repeat_and_composing() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var e = new KeyboardEvent('keydown', {repeat: true, isComposing: false}); \
-             e.repeat === true && e.isComposing === false"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn inputevent_instanceof_chain() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var e = new InputEvent('input', {data: 'a', inputType: 'insertText'}); \
-             (e instanceof InputEvent) && (e instanceof UIEvent) && \
-             e.data === 'a' && e.inputType === 'insertText' && \
-             Array.isArray(e.getTargetRanges())"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn focusevent_instanceof_chain() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var e = new FocusEvent('focus', {relatedTarget: null}); \
-             (e instanceof FocusEvent) && (e instanceof UIEvent) && \
-             e.relatedTarget === null"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn wheelevent_instanceof_chain_and_deltas() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var e = new WheelEvent('wheel', {deltaX: 0, deltaY: 100, deltaMode: 0}); \
-             (e instanceof WheelEvent) && (e instanceof MouseEvent) && \
-             e.deltaY === 100 && e.deltaMode === WheelEvent.DOM_DELTA_PIXEL"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn wheelevent_delta_constants() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "WheelEvent.DOM_DELTA_PIXEL === 0 && \
-             WheelEvent.DOM_DELTA_LINE  === 1 && \
-             WheelEvent.DOM_DELTA_PAGE  === 2"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn pointerevent_instanceof_chain_and_fields() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var e = new PointerEvent('pointerdown', {pointerId: 1, pointerType: 'mouse', isPrimary: true}); \
-             (e instanceof PointerEvent) && (e instanceof MouseEvent) && \
-             e.pointerId === 1 && e.pointerType === 'mouse' && e.isPrimary === true && \
-             Array.isArray(e.getCoalescedEvents()) && Array.isArray(e.getPredictedEvents())"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn dispatch_pointer_event_delivers_to_element() {
-        // _lumen_dispatch_pointer_event must fire a PointerEvent on the target node
-        // with pointerId=1, pointerType='mouse', isPrimary=true per Pointer Events L2.
-        let doc = make_doc();
-        let rt = runtime_with_dom(doc);
-        let r = rt.eval(
-            "var div = document.createElement('div'); document.body.appendChild(div); \
-             var got = null; \
-             div.addEventListener('pointerdown', function(e) { got = e; }); \
-             _lumen_dispatch_pointer_event(div.__nid__, 'pointerdown', 10, 20, 0, 1, 0); \
-             got !== null && got instanceof PointerEvent && \
-             got.type === 'pointerdown' && \
-             got.clientX === 10 && got.clientY === 20 && \
-             got.pointerId === 1 && got.pointerType === 'mouse' && got.isPrimary === true && \
-             got.pressure === 0.5"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn dispatch_pointer_event_bubbles_for_bubbling_types() {
-        // pointerdown / pointermove / pointerup must bubble through ancestor chain.
-        let doc = make_doc();
-        let rt = runtime_with_dom(doc);
-        let r = rt.eval(
-            "var parent = document.createElement('div'); document.body.appendChild(parent); \
-             var child = document.createElement('span'); parent.appendChild(child); \
-             var bubbled = false; \
-             parent.addEventListener('pointerdown', function(e) { bubbled = e.bubbles; }); \
-             _lumen_dispatch_pointer_event(child.__nid__, 'pointerdown', 0, 0, 0, 1, 0); \
-             bubbled"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn dispatch_pointer_event_no_bubble_for_enter_leave() {
-        // pointerenter / pointerleave must NOT bubble (bubbles:false per spec).
-        let doc = make_doc();
-        let rt = runtime_with_dom(doc);
-        let r = rt.eval(
-            "var parent = document.createElement('div'); document.body.appendChild(parent); \
-             var child = document.createElement('span'); parent.appendChild(child); \
-             var bubbled_to_parent = false; \
-             parent.addEventListener('pointerenter', function(e) { bubbled_to_parent = true; }); \
-             _lumen_dispatch_pointer_event(child.__nid__, 'pointerenter', 0, 0, 0, 0, 0); \
-             !bubbled_to_parent"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn dispatch_pointer_event_mouseover_and_mouseenter_both_exist() {
-        // Both mouseover (bubbles) and mouseenter (no bubble) should be dispatchable.
-        let doc = make_doc();
-        let rt = runtime_with_dom(doc);
-        let r = rt.eval(
-            "var el = document.createElement('div'); document.body.appendChild(el); \
-             var over = false; var enter = false; \
-             el.addEventListener('mouseover',  function() { over = true; }); \
-             el.addEventListener('mouseenter', function() { enter = true; }); \
-             _lumen_dispatch_mouse_event(el.__nid__, 'mouseover',  5, 5, 0, 0, 0); \
-             _lumen_dispatch_mouse_event(el.__nid__, 'mouseenter', 5, 5, 0, 0, 0); \
-             over && enter"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn dispatch_pointer_event_mousedown_mouseup_sequence() {
-        // mousedown and mouseup must deliver with correct button/buttons values.
-        let doc = make_doc();
-        let rt = runtime_with_dom(doc);
-        let r = rt.eval(
-            "var el = document.createElement('button'); document.body.appendChild(el); \
-             var downBtns = -1; var upBtns = -1; \
-             el.addEventListener('mousedown', function(e) { downBtns = e.buttons; }); \
-             el.addEventListener('mouseup',   function(e) { upBtns   = e.buttons; }); \
-             _lumen_dispatch_mouse_event(el.__nid__, 'mousedown', 0, 0, 0, 1, 0); \
-             _lumen_dispatch_mouse_event(el.__nid__, 'mouseup',   0, 0, 0, 0, 0); \
-             downBtns === 1 && upBtns === 0"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn animationevent_fields() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var e = new AnimationEvent('animationend', {animationName: 'fade', elapsedTime: 0.5}); \
-             (e instanceof AnimationEvent) && (e instanceof Event) && \
-             e.animationName === 'fade' && e.elapsedTime === 0.5 && e.pseudoElement === ''"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn transitionevent_fields() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var e = new TransitionEvent('transitionend', {propertyName: 'opacity', elapsedTime: 0.3}); \
-             (e instanceof TransitionEvent) && e.propertyName === 'opacity' && e.elapsedTime === 0.3"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn storageevent_fields() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var e = new StorageEvent('storage', {key: 'x', oldValue: 'a', newValue: 'b', url: 'http://ex.com/'}); \
-             e.key === 'x' && e.oldValue === 'a' && e.newValue === 'b' && e.url === 'http://ex.com/'"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn popstateevent_state() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var e = new PopStateEvent('popstate', {state: {page: 2}}); \
-             e.state && e.state.page === 2"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn hashchangeevent_fields() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var e = new HashChangeEvent('hashchange', {oldURL: 'http://ex.com/#a', newURL: 'http://ex.com/#b'}); \
-             e.oldURL === 'http://ex.com/#a' && e.newURL === 'http://ex.com/#b'"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn errorevent_fields() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var e = new ErrorEvent('error', {message: 'oops', filename: 'app.js', lineno: 10, colno: 5}); \
-             e.message === 'oops' && e.filename === 'app.js' && e.lineno === 10 && e.colno === 5"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn submitevent_submitter() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var btn = document.createElement('button'); \
-             var e = new SubmitEvent('submit', {bubbles: true, cancelable: true, submitter: btn}); \
-             e.submitter === btn"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    /// BUG-437: the shell asks the shim whether a form submission may proceed.
-    /// A page handler calling `preventDefault()` must come back as `false`, and
-    /// the event must reach listeners as a trusted, bubbling `SubmitEvent`.
-    #[test]
-    fn dispatch_submit_event_reports_prevent_default() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var form = document.getElementById('main'); \
-             var seen = null; \
-             form.addEventListener('submit', function(e) { seen = e; e.preventDefault(); }); \
-             var proceed = _lumen_dispatch_submit_event(form.__nid__, -1); \
-             proceed === false && seen !== null && seen.type === 'submit' && \
-             seen.isTrusted === true && seen.bubbles === true && seen.submitter === null"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    /// BUG-437: without `preventDefault()` the shell must still submit — the
-    /// dispatch reports `true` and exposes the submitter element.
-    #[test]
-    fn dispatch_submit_event_uncancelled_proceeds_with_submitter() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var form = document.getElementById('main'); \
-             var btn = form.querySelector('.highlight'); \
-             var got = null; \
-             form.addEventListener('submit', function(e) { got = e.submitter; }); \
-             var proceed = _lumen_dispatch_submit_event(form.__nid__, btn.__nid__); \
-             proceed === true && got !== null && got.__nid__ === btn.__nid__"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn compositionevent_data() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var e = new CompositionEvent('compositionupdate', {data: 'あ'}); \
-             (e instanceof CompositionEvent) && (e instanceof UIEvent) && e.data === 'あ'"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn dispatch_mouse_event_delivers_coordinates() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var received = null; \
-             var el = document.getElementById('main'); \
-             el.addEventListener('click', function(e) { received = e; }); \
-             _lumen_dispatch_mouse_event(el.__nid__, 'click', 42, 99, 0, 1, 0); \
-             received !== null && received instanceof MouseEvent && \
-             received.clientX === 42 && received.clientY === 99 && \
-             received.button === 0 && received.buttons === 1 && received.isTrusted === true"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn dispatch_key_event_delivers_properties() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var received = null; \
-             var el = document.getElementById('main'); \
-             el.addEventListener('keydown', function(e) { received = e; }); \
-             _lumen_dispatch_key_event(el.__nid__, 'keydown', 'Enter', 'Enter', 13, 0, 0, false, false); \
-             received !== null && received instanceof KeyboardEvent && \
-             received.key === 'Enter' && received.code === 'Enter' && received.keyCode === 13 && \
-             received.isTrusted === true"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn dispatch_mouse_event_modifier_flags() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var received = null; \
-             var el = document.getElementById('main'); \
-             el.addEventListener('click', function(e) { received = e; }); \
-             _lumen_dispatch_mouse_event(el.__nid__, 'click', 0, 0, 0, 1, 3); \
-             received !== null && received.ctrlKey === true && received.shiftKey === true && \
-             received.altKey === false && received.metaKey === false"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn window_exports_all_event_classes() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "typeof window.UIEvent === 'function' && \
-             typeof window.MouseEvent === 'function' && \
-             typeof window.KeyboardEvent === 'function' && \
-             typeof window.InputEvent === 'function' && \
-             typeof window.FocusEvent === 'function' && \
-             typeof window.WheelEvent === 'function' && \
-             typeof window.PointerEvent === 'function' && \
-             typeof window.AnimationEvent === 'function' && \
-             typeof window.TransitionEvent === 'function' && \
-             typeof window.StorageEvent === 'function' && \
-             typeof window.PopStateEvent === 'function' && \
-             typeof window.HashChangeEvent === 'function' && \
-             typeof window.ErrorEvent === 'function' && \
-             typeof window.SubmitEvent === 'function' && \
-             typeof window.DragEvent === 'function' && \
-             typeof window.ClipboardEvent === 'function' && \
-             typeof window.CompositionEvent === 'function'"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
     // ─── WHATWG Streams API tests ─────────────────────────────────────────────
 
     #[test]
@@ -31640,6 +31235,423 @@ mod tests {
                  var u = URL.createObjectURL(b); \
                  URL.revokeObjectURL(u); \
                  u.startsWith('blob:lumen/')"  // revoke just removes from store, url string stays
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+    }
+    #[cfg(feature = "v8-backend")]
+    mod v8_event_classes {
+        use super::*;
+        use crate::v8_runtime::V8JsRuntime;
+
+        /// V8 twin of [`super::runtime_with_dom`].
+        fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
+            let rt = V8JsRuntime::new().unwrap();
+            rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+            rt.install_dom(doc, "", None, None, None, None, None, None, None, None, false)
+                .unwrap();
+            rt
+        }
+
+        #[test]
+        fn uievent_instanceof_event() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var e = new UIEvent('focus'); \
+                 (e instanceof UIEvent) && (e instanceof Event)"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn mouseevent_instanceof_chain() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var e = new MouseEvent('click', {clientX: 10, clientY: 20, button: 0, buttons: 1}); \
+                 (e instanceof MouseEvent) && (e instanceof UIEvent) && (e instanceof Event) && \
+                 e.clientX === 10 && e.clientY === 20 && e.button === 0 && e.buttons === 1"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn mouseevent_modifier_keys() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var e = new MouseEvent('click', {ctrlKey: true, shiftKey: false, altKey: true}); \
+                 e.ctrlKey && !e.shiftKey && e.altKey && \
+                 e.getModifierState('Control') && e.getModifierState('Alt') && \
+                 !e.getModifierState('Shift')"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn mouseevent_page_coords_default_to_client() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var e = new MouseEvent('mousemove', {clientX: 42, clientY: 7}); \
+                 e.pageX === 42 && e.pageY === 7"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn keyboardevent_instanceof_chain() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var e = new KeyboardEvent('keydown', {key: 'Enter', code: 'Enter', keyCode: 13}); \
+                 (e instanceof KeyboardEvent) && (e instanceof UIEvent) && (e instanceof Event) && \
+                 e.key === 'Enter' && e.code === 'Enter' && e.keyCode === 13"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn keyboardevent_location_constants() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "KeyboardEvent.DOM_KEY_LOCATION_STANDARD === 0 && \
+                 KeyboardEvent.DOM_KEY_LOCATION_LEFT     === 1 && \
+                 KeyboardEvent.DOM_KEY_LOCATION_RIGHT    === 2 && \
+                 KeyboardEvent.DOM_KEY_LOCATION_NUMPAD   === 3"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn keyboardevent_repeat_and_composing() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var e = new KeyboardEvent('keydown', {repeat: true, isComposing: false}); \
+                 e.repeat === true && e.isComposing === false"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn inputevent_instanceof_chain() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var e = new InputEvent('input', {data: 'a', inputType: 'insertText'}); \
+                 (e instanceof InputEvent) && (e instanceof UIEvent) && \
+                 e.data === 'a' && e.inputType === 'insertText' && \
+                 Array.isArray(e.getTargetRanges())"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn focusevent_instanceof_chain() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var e = new FocusEvent('focus', {relatedTarget: null}); \
+                 (e instanceof FocusEvent) && (e instanceof UIEvent) && \
+                 e.relatedTarget === null"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn wheelevent_instanceof_chain_and_deltas() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var e = new WheelEvent('wheel', {deltaX: 0, deltaY: 100, deltaMode: 0}); \
+                 (e instanceof WheelEvent) && (e instanceof MouseEvent) && \
+                 e.deltaY === 100 && e.deltaMode === WheelEvent.DOM_DELTA_PIXEL"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn wheelevent_delta_constants() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "WheelEvent.DOM_DELTA_PIXEL === 0 && \
+                 WheelEvent.DOM_DELTA_LINE  === 1 && \
+                 WheelEvent.DOM_DELTA_PAGE  === 2"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn pointerevent_instanceof_chain_and_fields() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var e = new PointerEvent('pointerdown', {pointerId: 1, pointerType: 'mouse', isPrimary: true}); \
+                 (e instanceof PointerEvent) && (e instanceof MouseEvent) && \
+                 e.pointerId === 1 && e.pointerType === 'mouse' && e.isPrimary === true && \
+                 Array.isArray(e.getCoalescedEvents()) && Array.isArray(e.getPredictedEvents())"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn dispatch_pointer_event_delivers_to_element() {
+            // _lumen_dispatch_pointer_event must fire a PointerEvent on the target node
+            // with pointerId=1, pointerType='mouse', isPrimary=true per Pointer Events L2.
+            let doc = make_doc();
+            let rt = v8_runtime_with_dom(doc);
+            let r = rt.eval(
+                "var div = document.createElement('div'); document.body.appendChild(div); \
+                 var got = null; \
+                 div.addEventListener('pointerdown', function(e) { got = e; }); \
+                 _lumen_dispatch_pointer_event(div.__nid__, 'pointerdown', 10, 20, 0, 1, 0); \
+                 got !== null && got instanceof PointerEvent && \
+                 got.type === 'pointerdown' && \
+                 got.clientX === 10 && got.clientY === 20 && \
+                 got.pointerId === 1 && got.pointerType === 'mouse' && got.isPrimary === true && \
+                 got.pressure === 0.5"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn dispatch_pointer_event_bubbles_for_bubbling_types() {
+            // pointerdown / pointermove / pointerup must bubble through ancestor chain.
+            let doc = make_doc();
+            let rt = v8_runtime_with_dom(doc);
+            let r = rt.eval(
+                "var parent = document.createElement('div'); document.body.appendChild(parent); \
+                 var child = document.createElement('span'); parent.appendChild(child); \
+                 var bubbled = false; \
+                 parent.addEventListener('pointerdown', function(e) { bubbled = e.bubbles; }); \
+                 _lumen_dispatch_pointer_event(child.__nid__, 'pointerdown', 0, 0, 0, 1, 0); \
+                 bubbled"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn dispatch_pointer_event_no_bubble_for_enter_leave() {
+            // pointerenter / pointerleave must NOT bubble (bubbles:false per spec).
+            let doc = make_doc();
+            let rt = v8_runtime_with_dom(doc);
+            let r = rt.eval(
+                "var parent = document.createElement('div'); document.body.appendChild(parent); \
+                 var child = document.createElement('span'); parent.appendChild(child); \
+                 var bubbled_to_parent = false; \
+                 parent.addEventListener('pointerenter', function(e) { bubbled_to_parent = true; }); \
+                 _lumen_dispatch_pointer_event(child.__nid__, 'pointerenter', 0, 0, 0, 0, 0); \
+                 !bubbled_to_parent"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn dispatch_pointer_event_mouseover_and_mouseenter_both_exist() {
+            // Both mouseover (bubbles) and mouseenter (no bubble) should be dispatchable.
+            let doc = make_doc();
+            let rt = v8_runtime_with_dom(doc);
+            let r = rt.eval(
+                "var el = document.createElement('div'); document.body.appendChild(el); \
+                 var over = false; var enter = false; \
+                 el.addEventListener('mouseover',  function() { over = true; }); \
+                 el.addEventListener('mouseenter', function() { enter = true; }); \
+                 _lumen_dispatch_mouse_event(el.__nid__, 'mouseover',  5, 5, 0, 0, 0); \
+                 _lumen_dispatch_mouse_event(el.__nid__, 'mouseenter', 5, 5, 0, 0, 0); \
+                 over && enter"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn dispatch_pointer_event_mousedown_mouseup_sequence() {
+            // mousedown and mouseup must deliver with correct button/buttons values.
+            let doc = make_doc();
+            let rt = v8_runtime_with_dom(doc);
+            let r = rt.eval(
+                "var el = document.createElement('button'); document.body.appendChild(el); \
+                 var downBtns = -1; var upBtns = -1; \
+                 el.addEventListener('mousedown', function(e) { downBtns = e.buttons; }); \
+                 el.addEventListener('mouseup',   function(e) { upBtns   = e.buttons; }); \
+                 _lumen_dispatch_mouse_event(el.__nid__, 'mousedown', 0, 0, 0, 1, 0); \
+                 _lumen_dispatch_mouse_event(el.__nid__, 'mouseup',   0, 0, 0, 0, 0); \
+                 downBtns === 1 && upBtns === 0"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn animationevent_fields() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var e = new AnimationEvent('animationend', {animationName: 'fade', elapsedTime: 0.5}); \
+                 (e instanceof AnimationEvent) && (e instanceof Event) && \
+                 e.animationName === 'fade' && e.elapsedTime === 0.5 && e.pseudoElement === ''"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn transitionevent_fields() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var e = new TransitionEvent('transitionend', {propertyName: 'opacity', elapsedTime: 0.3}); \
+                 (e instanceof TransitionEvent) && e.propertyName === 'opacity' && e.elapsedTime === 0.3"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn storageevent_fields() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var e = new StorageEvent('storage', {key: 'x', oldValue: 'a', newValue: 'b', url: 'http://ex.com/'}); \
+                 e.key === 'x' && e.oldValue === 'a' && e.newValue === 'b' && e.url === 'http://ex.com/'"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn popstateevent_state() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var e = new PopStateEvent('popstate', {state: {page: 2}}); \
+                 e.state && e.state.page === 2"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn hashchangeevent_fields() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var e = new HashChangeEvent('hashchange', {oldURL: 'http://ex.com/#a', newURL: 'http://ex.com/#b'}); \
+                 e.oldURL === 'http://ex.com/#a' && e.newURL === 'http://ex.com/#b'"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn errorevent_fields() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var e = new ErrorEvent('error', {message: 'oops', filename: 'app.js', lineno: 10, colno: 5}); \
+                 e.message === 'oops' && e.filename === 'app.js' && e.lineno === 10 && e.colno === 5"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn submitevent_submitter() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var btn = document.createElement('button'); \
+                 var e = new SubmitEvent('submit', {bubbles: true, cancelable: true, submitter: btn}); \
+                 e.submitter === btn"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// BUG-437: the shell asks the shim whether a form submission may proceed.
+        /// A page handler calling `preventDefault()` must come back as `false`, and
+        /// the event must reach listeners as a trusted, bubbling `SubmitEvent`.
+        #[test]
+        fn dispatch_submit_event_reports_prevent_default() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var form = document.getElementById('main'); \
+                 var seen = null; \
+                 form.addEventListener('submit', function(e) { seen = e; e.preventDefault(); }); \
+                 var proceed = _lumen_dispatch_submit_event(form.__nid__, -1); \
+                 proceed === false && seen !== null && seen.type === 'submit' && \
+                 seen.isTrusted === true && seen.bubbles === true && seen.submitter === null"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// BUG-437: without `preventDefault()` the shell must still submit — the
+        /// dispatch reports `true` and exposes the submitter element.
+        #[test]
+        fn dispatch_submit_event_uncancelled_proceeds_with_submitter() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var form = document.getElementById('main'); \
+                 var btn = form.querySelector('.highlight'); \
+                 var got = null; \
+                 form.addEventListener('submit', function(e) { got = e.submitter; }); \
+                 var proceed = _lumen_dispatch_submit_event(form.__nid__, btn.__nid__); \
+                 proceed === true && got !== null && got.__nid__ === btn.__nid__"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn compositionevent_data() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var e = new CompositionEvent('compositionupdate', {data: 'あ'}); \
+                 (e instanceof CompositionEvent) && (e instanceof UIEvent) && e.data === 'あ'"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn dispatch_mouse_event_delivers_coordinates() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var received = null; \
+                 var el = document.getElementById('main'); \
+                 el.addEventListener('click', function(e) { received = e; }); \
+                 _lumen_dispatch_mouse_event(el.__nid__, 'click', 42, 99, 0, 1, 0); \
+                 received !== null && received instanceof MouseEvent && \
+                 received.clientX === 42 && received.clientY === 99 && \
+                 received.button === 0 && received.buttons === 1 && received.isTrusted === true"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn dispatch_key_event_delivers_properties() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var received = null; \
+                 var el = document.getElementById('main'); \
+                 el.addEventListener('keydown', function(e) { received = e; }); \
+                 _lumen_dispatch_key_event(el.__nid__, 'keydown', 'Enter', 'Enter', 13, 0, 0, false, false); \
+                 received !== null && received instanceof KeyboardEvent && \
+                 received.key === 'Enter' && received.code === 'Enter' && received.keyCode === 13 && \
+                 received.isTrusted === true"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn dispatch_mouse_event_modifier_flags() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var received = null; \
+                 var el = document.getElementById('main'); \
+                 el.addEventListener('click', function(e) { received = e; }); \
+                 _lumen_dispatch_mouse_event(el.__nid__, 'click', 0, 0, 0, 1, 3); \
+                 received !== null && received.ctrlKey === true && received.shiftKey === true && \
+                 received.altKey === false && received.metaKey === false"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn window_exports_all_event_classes() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "typeof window.UIEvent === 'function' && \
+                 typeof window.MouseEvent === 'function' && \
+                 typeof window.KeyboardEvent === 'function' && \
+                 typeof window.InputEvent === 'function' && \
+                 typeof window.FocusEvent === 'function' && \
+                 typeof window.WheelEvent === 'function' && \
+                 typeof window.PointerEvent === 'function' && \
+                 typeof window.AnimationEvent === 'function' && \
+                 typeof window.TransitionEvent === 'function' && \
+                 typeof window.StorageEvent === 'function' && \
+                 typeof window.PopStateEvent === 'function' && \
+                 typeof window.HashChangeEvent === 'function' && \
+                 typeof window.ErrorEvent === 'function' && \
+                 typeof window.SubmitEvent === 'function' && \
+                 typeof window.DragEvent === 'function' && \
+                 typeof window.ClipboardEvent === 'function' && \
+                 typeof window.CompositionEvent === 'function'"
             ).unwrap();
             assert_eq!(r, lumen_core::JsValue::Bool(true));
         }
