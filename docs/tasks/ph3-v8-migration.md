@@ -2318,6 +2318,31 @@ first run, no engine divergences, no bugs found. `cargo test -p lumen-js --featu
 after this slice: ~29 tests (Pointer Lock API cluster, `dom.rs:18184+`), immediately before
 `mod v8_core` — the flat tail is now down to a single cluster.
 
+### S12b-24-pointer-lock — twenty-ninth porting slice (2026-07-30, branch p1-v8-s12b-24-pointer-lock)
+
+Final flat-tail cluster, `dom.rs:18199-18686`, immediately before `mod v8_core`. Only the first 6
+tests under the `// ── Pointer Lock API tests` comment are actually Pointer Lock API (W3C Pointer
+Lock L2 §2-4 + Phase 1: `requestPointerLock`/`exitPointerLock`/`pointerLockElement`/
+`pointerlockchange`, locked-`mousemove` movement-delta/`pointermove` dispatch via
+`_lumen_dispatch_locked_mousemove`). The remaining 23 are an un-headered grab-bag left behind by
+earlier slices' scoping — the section comment named only the first cluster, same "don't trust the
+header" gotcha as `S12b-24-css-storage-nav-misc`: `Comment`/`Text` constructors + CharacterData
+prototype chain/methods (BUG-313/314/322/325), native element/text wrapper `instanceof` resolution
+(BUG-322), and `DocumentType`/`DOMImplementation` (BUG-321/324). All 29 tests ported to
+`mod v8_pointer_lock`, QuickJS copies deleted, `runtime_with_dom` renamed to `v8_runtime_with_dom`
+per convention. All bodies are synchronous `rt.eval(...)` — no promise/microtask timing, so the
+S12b-2 lesson didn't apply. 29/29 passed on the first run, no engine divergences, no bugs found.
+`cargo test -p lumen-js --features v8-backend` — 2575/2575 (unchanged: −29 ungated QuickJS, +29
+gated V8); default-feature `cargo test -p lumen-js` — 1253/1253 (was 1282, −29). Both clippy passes
+(with and without `v8-backend`) clean.
+
+**The flat tail is now empty.** Every test in the former `dom.rs::mod tests` monolith is either
+under a nested `mod v8_*` (ported, gated on `v8-backend`) or one of the two Trusted Types clusters
+(11 tests total, still QuickJS-only — blocked on `V8JsRuntime::install_dom` not calling
+`crate::trusted_types::install_trusted_types_bindings`, `v8_runtime.rs:3856`). S12b-24 itself stays
+"in progress" until a dedicated slice wires Trusted Types into V8; that slice is the only remaining
+work in this task.
+
 ---
 
 ## Risks (Rev 2)
