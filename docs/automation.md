@@ -2,7 +2,9 @@
 
 Reference for every built-in automation/diagnostic capability of `lumen.exe` and the workspace crates. Read this **before** writing a new debugging script, adding a `time.sleep`, or reaching for pixel-diffing — the browser probably already has a cheaper surface for the job. Audit date: 2026-07-16 (full sweep of shell/mcp/bidi-server/ipc/driver/devtools + scripts/).
 
-Related docs: [`docs/commands.md`](commands.md) (day-to-day commands), [`docs/graphic-tests.md`](graphic-tests.md) (visual pipeline). Improvement tasks for the gaps below: `DEVX-*` rows in [`ROADMAP.md`](../ROADMAP.md) (owner P2).
+Related docs: [`docs/commands.md`](commands.md) (day-to-day commands), [`docs/graphic-tests.md`](graphic-tests.md) (visual pipeline). Improvement tasks for the gaps below: `DEVX-*` rows in [`ROADMAP.md`](../ROADMAP.md) — `DEVX-1…6` (done, tooling, owner P2) and `DEVX-7…16` (planned, engine-side, owner P1, brief [`docs/tasks/p1-introspection-track.md`](tasks/p1-introspection-track.md)).
+
+**Before adding a new surface, read [ADR-024](decisions/ADR-024-introspection-api-levels.md).** It assigns every introspection capability a level — L0 internal (Rust only, no guarantees), L1 experimental (wire-exposed under an `x-` prefix, unstable), L2 stable (versioned, removal needs an ADR) — and the level is chosen in the same commit as the capability. A new MCP/BiDi tool without an `x-` prefix and without `"experimental": true` is a review error. Identity semantics for anything geometry- or paint-flavoured come from [ADR-025](decisions/ADR-025-identity-propagation.md): `NodeId` alone is **not** a valid key (anonymous boxes reuse the parent id, `NodeId::from_index(0)` aliases the document root, pseudo-elements have no id).
 
 ---
 

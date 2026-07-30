@@ -57,12 +57,12 @@
 {
  "generated": "2026-07-30",
  "counts": {
-  "open": 134,
-  "fixed": 293,
+  "open": 132,
+  "fixed": 297,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 427,
+ "total_bugs": 429,
  "phases": [
   {
    "id": "P0",
@@ -851,10 +851,10 @@
         },
         {
          "id": "P3-v8-s12b-24",
-         "title": "V8 S12b-24: dom.rs тест-монолит — скоупинг сделан, портирование по слайсам",
+         "title": "V8 S12b-24: dom.rs тест-монолит → V8 полностью (30 слайсов)",
          "status": "done",
          "size": "XL",
-         "note": "Крупнейший непортированный кусок: `dom.rs::mod tests` (строки 15982-31167, **1113** `#[test]` fn — числа из аудита 2026-07-14 устарели, файл вырос) — единственная regression-suite для DOM-поведения (события, формы, storage, IndexedDB, fetch/XHR, cache, websockets, history, scroll), эквивалента на V8 нет. Скоупинг сделан (ветка p1-v8-s12b-24, 2026-07-29, код не менялся): ~30 под-областей с диапазонами строк/числом тестов, 5 кластеров на mock-провайдерах (Cache/WS/SSE/IDB/Fetch), кластерный тест `event_target_dependent_apis_installed` (:29308, пришпиливает webxr/serial/hid/usb/bluetooth/navigation — разбить на 5-6 тестов при портировании), `_lumen_drain_microtasks` (:3024, QuickJS-only, 85 вызовов, гуще всего в SubtleCrypto/WHATWG Streams/MessagePort/Compression-Stream) — полный разбор в `docs/tasks/ph3-v8-migration.md` Findings log «S12b-24 — scoping only». Портировать по под-областям отдельными слайсами `S12b-24-<slug>` (не один сеанс), синхронно со сносом соответствующего rquickjs-кода — не удалять просто так, иначе теряется единственное покрытие; каждый слайс заводит свою строку ROADMAP при старте, не пре-файлить все заранее. ПРОГРЕСС: двадцать четыре слайса закрыто (P3-v8-s12b-24-core 99 тестов, P3-v8-s12b-24-events-cache 72 теста, P3-v8-s12b-24-ws-sse 73 теста, P3-v8-s12b-24-nav-url-storage 67 тестов, P3-v8-s12b-24-perf-observers 71 тест, P3-v8-s12b-24-childnode-traversal 27 тестов, P3-v8-s12b-24-matchmedia 13 тестов, P3-v8-s12b-24-elem-geometry-scroll 10 тестов, P3-v8-s12b-24-lazy-image-io 11 тестов, P3-v8-s12b-24-fontface-shadow-custom 25 тестов, P3-v8-s12b-24-idb 23 теста, P3-v8-s12b-24-formdata 30 тестов, P3-v8-s12b-24-selection-range-editing 42 теста, P3-v8-s12b-24-computedstyle 16 тестов, P3-v8-s12b-24-webcrypto 18 тестов, P3-v8-s12b-24-url-abort-clone-blob 43 теста, P3-v8-s12b-24-page-visibility-beacon 26 тестов, P3-v8-s12b-24-event-classes 31 тест, P3-v8-s12b-24-whatwg-streams 42 теста, P3-v8-s12b-24-details-dialog-popover 43 теста, P3-v8-s12b-24-form-constraint-validation 32 теста, P3-v8-s12b-24-idle-message-clipboard 25 тестов, P3-v8-s12b-24-webworker 13 тестов, P3-v8-s12b-24-window-anim-compress 52 теста, P3-v8-s12b-24-fullscreen-locks 32 теста), остаётся ~177. Trusted Types (8 тестов в этом диапазоне + ~10 во втором кластере у :29019-29517) осталась на QuickJS — `V8JsRuntime::install_dom` не вызывает `crate::trusted_types::install_trusted_types_bindings` (`v8_runtime.rs:3856`, был TODO ещё до этого среза); чинить отдельным слайсом, разбор в ph3-v8-migration.md",
+         "note": "Крупнейший непортированный кусок: `dom.rs::mod tests` (строки 15982-31167, **1113** `#[test]` fn — числа из аудита 2026-07-14 устарели, файл вырос) — единственная regression-suite для DOM-поведения (события, формы, storage, IndexedDB, fetch/XHR, cache, websockets, history, scroll), эквивалента на V8 нет. Скоупинг сделан (ветка p1-v8-s12b-24, 2026-07-29, код не менялся): ~30 под-областей с диапазонами строк/числом тестов, 5 кластеров на mock-провайдерах (Cache/WS/SSE/IDB/Fetch), кластерный тест `event_target_dependent_apis_installed` (:29308, пришпиливает webxr/serial/hid/usb/bluetooth/navigation — разбить на 5-6 тестов при портировании), `_lumen_drain_microtasks` (:3024, QuickJS-only, 85 вызовов, гуще всего в SubtleCrypto/WHATWG Streams/MessagePort/Compression-Stream) — полный разбор в `docs/tasks/ph3-v8-migration.md` Findings log «S12b-24 — scoping only». Портировать по под-областям отдельными слайсами `S12b-24-<slug>` (не один сеанс), синхронно со сносом соответствующего rquickjs-кода — не удалять просто так, иначе теряется единственное покрытие; каждый слайс заводит свою строку ROADMAP при старте, не пре-файлить все заранее. ПРОГРЕСС: двадцать девять слайсов закрыто (P3-v8-s12b-24-core 99 тестов, P3-v8-s12b-24-events-cache 72 теста, P3-v8-s12b-24-ws-sse 73 теста, P3-v8-s12b-24-nav-url-storage 67 тестов, P3-v8-s12b-24-perf-observers 71 тест, P3-v8-s12b-24-childnode-traversal 27 тестов, P3-v8-s12b-24-matchmedia 13 тестов, P3-v8-s12b-24-elem-geometry-scroll 10 тестов, P3-v8-s12b-24-lazy-image-io 11 тестов, P3-v8-s12b-24-fontface-shadow-custom 25 тестов, P3-v8-s12b-24-idb 23 теста, P3-v8-s12b-24-formdata 30 тестов, P3-v8-s12b-24-selection-range-editing 42 теста, P3-v8-s12b-24-computedstyle 16 тестов, P3-v8-s12b-24-webcrypto 18 тестов, P3-v8-s12b-24-url-abort-clone-blob 43 теста, P3-v8-s12b-24-page-visibility-beacon 26 тестов, P3-v8-s12b-24-event-classes 31 тест, P3-v8-s12b-24-whatwg-streams 42 теста, P3-v8-s12b-24-details-dialog-popover 43 теста, P3-v8-s12b-24-form-constraint-validation 32 теста, P3-v8-s12b-24-idle-message-clipboard 25 тестов, P3-v8-s12b-24-webworker 13 тестов, P3-v8-s12b-24-window-anim-compress 52 теста, P3-v8-s12b-24-fullscreen-locks 32 теста, P3-v8-s12b-24-css-storage-nav-misc 41 тест — CSS.supports/escape, Storage Access API, EventTarget-dependent APIs (event_target_dependent_apis_installed разбит на 6 отдельных тестов), Navigation API entries/History fallback, CSS.registerProperty(), PerformanceObserver misc, P3-v8-s12b-24-perf-typedom-node 42 теста — Resource Timing L2, generic `_lumen_deliver_perf_entry` binding, Navigation Timing L2, CSS Typed OM L1 + BUG-281 namespace/identity regressions, DOM node-count/quota bindings (вскрыл BUG-457), chrome.runtime/browser.runtime stubs, P3-v8-s12b-24-dragdrop-scroll-pointer 51 тест — HTML5 Drag and Drop API (DataTransfer/DataTransferItem/DataTransferItemList, `_lumen_dispatch_drag_event`), window scroll API (scrollTo/scrollBy/scroll, pageYOffset, PrintRequest), JJ Phase 5 (setHTMLUnsafe/getHTML/moveBefore/checkVisibility), Web Animations доп. покрытие (DocumentTimeline/playbackRate/ready/getAnimations), Pointer Events L3 pointer capture + real coalesced/predicted pointermove), P3-v8-s12b-24-pointer-lock 29 тестов — только первые 6 были реально Pointer Lock API (W3C Pointer Lock L2 §2-4 + Phase 1), остальные 23 — непомеченный «хвост» из более ранних срезов (Comment/Text-конструкторы + CharacterData прототип/методы BUG-313/314/322/325, DocumentType/DOMImplementation BUG-321/324), заголовок секции называл только первый кластер — тот же урок «не доверять заголовку», что и в css-storage-nav-misc. Флэт-хвост дошёл до нуля — весь `dom.rs::mod tests` теперь либо перенесён во вложенные `mod v8_*`, либо это Trusted Types. ЗАКРЫТО 2026-07-30 (ветка p1-v8-s12b-24-trusted-types), тридцатый и последний слайс — P3-v8-s12b-24-trusted-types **19** тестов (оба кластера Trusted Types объединены в один `mod v8_trusted_types`; оценка «11 тестов» в findings-log была занижена — пропустила первый кластер, тот же урок «не доверять счётчику», что в css-storage-nav-misc/pointer-lock). `V8JsRuntime::install_dom` теперь вычисляет общую `TRUSTED_TYPES_SHIM`-константу инлайн (plain JS, без rquickjs-специфичного API — как `WEB_API_SHIM`), `crate::trusted_types::install_trusted_types_bindings(ctx: &rquickjs::Ctx)` остаётся QuickJS-only хелпером как есть. QuickJS-копии удалены, вместе с ними — осиротевший хелпер `runtime_with_dom` (тот же паттерн, что `bool_eval`/`runtime_with_url`/`runtime_with_storage`); `make_doc()` и три `use`-импорта в внешнем `mod tests` догейчены `#[cfg(feature = \"v8-backend\")]`, поскольку остались нужны только вложенным `mod v8_*`. 19/19 зелёные с первого прогона, ни одного расхождения движков. `cargo test -p lumen-js --features v8-backend` — 2575/2575 (без изменений: −19 негейченных QuickJS +19 гейченных V8); `cargo test -p lumen-js` (дефолт) — 1234/1234 (было 1253, −19). Оба clippy-прохода чистые. **P3-v8-s12b-24 закрыт целиком** — `dom.rs::mod tests`-монолит полностью портирован на V8, остаток работы по сносу rquickjs живёт в родительском `P3-v8-s12b`",
          "tasks": [
           {
            "id": "P3-v8-s12b-24-core",
@@ -1701,7 +1701,7 @@
     {
      "id": "DEVX",
      "title": "DEVX: dev-tooling на готовых поверхностях браузера",
-     "status": "done",
+     "status": "active",
      "note": "Дорожка dev-tooling (владелец — P2): задействовать уже существующие automation/introspection-поверхности браузера для ускорения разработки. Полный каталог поверхностей и «что когда применять» — `docs/automation.md` (аудит 2026-07-16): MCP tools/resources, BiDi-команды, driver-API, `--deterministic`, `LUMEN_NO_*` paint-флаги — почти всё не задействовано тулингом",
      "tasks": [
       {
@@ -1751,6 +1751,86 @@
        "bugs": [
         "BUG-295"
        ]
+      },
+      {
+       "id": "DEVX-7",
+       "title": "DEVX-7: provenance в display list (ADR-025)",
+       "status": "planned",
+       "size": "L",
+       "note": "Provenance в display list: реализует §3 ADR-025. `BoxOrigin { node: Option<NodeId>, role: BoxRole }` в `lumen-layout` + заполнение во всех конструкторах `box_tree.rs` (включая `anon_inline_run`/`anon_inline_block_row`/table-fixup), снятие сентинела `NodeId::from_index(0)` («нет DOM-происхождения», коллизия с корнем документа), сохранение origin в `incremental::graft_geometry`, и `ProvenanceIndex` — побочная таблица спанов рядом с `DisplayList` с парными маркерами по образцу `PushClipRect`/`PopClip`. `DisplayCommand` НЕ меняется (~40 вариантов, список строится каждый кадр). Размер L из-за расшивки перегруженной идентичности, а не из-за самой таблицы. Гейт: побочная таблица display-list-нейтральна (пустой дифф `dump_golden.py`), правка конструирования боксов может двигать пиксели (анонимные боксы, `::first-letter`) → полный графический прогон + перегенерация CPU-эталонов. Бриф — docs/tasks/p1-introspection-track.md"
+      },
+      {
+       "id": "DEVX-8a",
+       "title": "DEVX-8a: геометрические и style-инварианты",
+       "status": "planned",
+       "size": "M",
+       "note": "Инвариантный слой, часть 1 — геометрия и style, без зависимостей, стартует параллельно DEVX-7. Только `debug_assert!`/`cfg(debug_assertions)`: rect ребёнка ⊆ родителя без overflow/позиционирования; нет NaN/∞ в координатах и размерах; после style не осталось неразрешённых `var()`; у каждого бокса есть containing block; в DOM нет циклов; каждый `ClipNode` в `PropertyTrees` достижим от корня. Сейчас на весь крейт `lumen-layout` 2 `debug_assert` и 14 проверок на NaN — ошибки обнаруживаются на три стадии позже места возникновения. Правило: сработавший инвариант = баг в BUGS.md, инвариант под него НЕ ослабляется"
+      },
+      {
+       "id": "DEVX-8b",
+       "title": "DEVX-8b: paint-инварианты поверх provenance",
+       "status": "planned",
+       "size": "S",
+       "note": "Инвариантный слой, часть 2 — paint поверх provenance (§4 ADR-025), после DEVX-7 и служит его приёмкой: каждая команда внутри ровно одного спана; origin каждого спана разрешается; вложенность спанов сбалансирована и согласована с глубиной клип-стека; у каждого бокса с видимым фоном/границей есть хотя бы один спан; порядок команд внутри stacking-контекста согласован со stacking-деревом. Прогон инварианта «у бокса с видимым фоном есть спан» по всему набору graphic_tests — доказательство, что provenance не врёт"
+      },
+      {
+       "id": "DEVX-9",
+       "title": "DEVX-9: релейаут после мутации (BUG-221)",
+       "status": "done",
+       "size": "M",
+       "note": "Релейаут после мутации DOM в `InProcessSession` (crates/driver/src/session.rs) — закрывает цикл mutate→style→layout→paint→snapshot на headless-пути: сейчас `click`/`type_text`/`eval` мутируют DOM, но `layout_snapshot`/`layout_box_by_selector`/`screenshot` продолжают отражать состояние на момент `navigate()`. Неотложенный потребитель — детерминированный CPU-гейт (`cases::snapshot_cpu`/`scripted_render`): страницы, чьи скрипты меняют геометрию, сейчас им не покрываются в принципе. Не первым в дорожке (итеративные сценарии, которые он разблокирует, отложены), но и не «только для AI». Гейт: может сдвинуть CPU-эталоны на скриптованных страницах → перегенерация в том же коммите",
+       "bugs": [
+        "BUG-221"
+       ]
+      },
+      {
+       "id": "DEVX-10",
+       "title": "DEVX-10: explain_element — причинная цепочка",
+       "status": "planned",
+       "size": "S",
+       "note": "`explain_element(selector)` — причинная цепочка одним запросом: есть в DOM → стили применились → попал в layout → размер → stacking-контекст → порождены ли команды → отбракован ли клипом → в каком слое. Первые четыре звена отвечаются существующим driver-API, последние три — только через `ProvenanceIndex` (DEVX-7). Эвристическая подсказка о причине выдаётся отдельным полем и помечается как эвристика. Уровень по ADR-024: L1, имя `x-explain-element`. DoD: на элементе внутри анонимного бокса НЕ приписывает его paint родителю"
+      },
+      {
+       "id": "DEVX-11",
+       "title": "DEVX-11: explain_page — инварианты + телеметрия",
+       "status": "planned",
+       "size": "S",
+       "note": "`explain_page()` — агрегат по странице: срабатывания инвариантов по категориям ПЛЮС телеметрия (число боксов/анонимных боксов/overflow/релейаутов/команд, глубина клип-стека, время по фазам). Проектное ограничение: счётчики машинно-читаемые и предназначены для сравнения (дифф против предыдущего прогона той же страницы + профиль по корпусу), человеческий отчёт — производная; «17 overflow» в отрыве не значит ничего. Смыкается с DEVX-13 в один ратчет. Часть счётчиков уже считается в box_tree.rs (наносекунды `extract_clean_subtrees` и инкрементальная бухгалтерия) — выставить, а не считать заново. Уровень L1, `x-explain-page`"
+      },
+      {
+       "id": "DEVX-12",
+       "title": "DEVX-12: скоупинг операций на поддерево",
+       "status": "planned",
+       "size": "M",
+       "note": "Скоупинг операций на поддерево: `query`/`eval`/`screenshot`/дамп display list/релейаут в границах селектора, а не всей страницы. Частичный релейаут — это уже влитая механика `crates/engine/layout/src/incremental.rs` (`DirtyBits`/`mark_dirty`/`graft_geometry`, срезы S16–S27 влиты), задача выставляет её наружу. ГРАНИЦА: BUG-341 остановлен решением пользователя 2026-07-28 и эта задача его НЕ возобновляет — если влитой части не хватает, остановиться и спросить пользователя, а не доделывать BUG-341 под видом DEVX-12. Уровень L1"
+      },
+      {
+       "id": "DEVX-13",
+       "title": "DEVX-13: структурный дифф деревьев",
+       "status": "planned",
+       "size": "S",
+       "note": "Структурный дифф layout-дерева и display list — взамен текстового диффа в `graphic_tests/dump_golden.py`. Вывод уровня «отличается padding одного div» / «изменился stacking-контекст», а не «изменилась команда №417» (для последнего и нужен provenance из DEVX-7). Общий ратчет со счётчиками DEVX-11"
+      },
+      {
+       "id": "DEVX-14",
+       "title": "DEVX-14: display_list/computed_style в MCP",
+       "status": "planned",
+       "size": "S",
+       "note": "`resource://x-display-list` + `x-computed-style` в MCP — механическая выдача уже существующих CLI-дампов через протокол; плюс подключить `resource://layout` и `resource://network` для ЖИВОГО окна (сейчас реальные данные только через `InProcessSession`, для живого окна это гэп SDC-2 MVP, зафиксирован в docs/automation.md). Ни от чего не зависит, берётся в любой момент. Уровень по ADR-024: L1, `x-`-префикс обязателен"
+      },
+      {
+       "id": "DEVX-15",
+       "title": "DEVX-15: аутентификация MCP/BiDi",
+       "status": "planned",
+       "size": "M",
+       "note": "Аутентификация и модель доступа MCP/BiDi (§Access model ADR-024) — ГЕЙТ РЕЛИЗА, не гейт дорожки. Сейчас `--mcp-port`/`--mcp-live-port`/`--bidi-port`/`--ipc-server` слушают 127.0.0.1 БЕЗ аутентификации (crates/mcp/src/main.rs:31): любой локальный процесс может водить браузер, читать DOM, снимать скриншоты, исполнять JS — недопустимо для privacy-first позиционирования вместе с богатой интроспекцией. Токен обязателен по умолчанию (автогенерация на запуск, печать в stderr рядом со строкой порта, приём как параметр MCP `initialize` и capability BiDi `session.new`), bind остаётся loopback-only; наличие `--mcp-allow-anonymous` определяется ответом на Q1 в ADR-024. В скоуп входят правки нашего же тулинга (graphic_tests/run.py, scripts/*_perf.py, tests/wpt/*)"
+      },
+      {
+       "id": "DEVX-16",
+       "title": "DEVX-16: детерминизм до JS-рантайма",
+       "status": "planned",
+       "size": "S",
+       "note": "Довести детерминизм до JS-рантайма: `--rng-seed`/`--monotonic-clock` разбираются в `DetConfig`, но до рантайма не доходят — сид всегда выводится из хеша URL, значение флага игнорируется (зафиксировано в docs/automation.md §CLI flags). Предпосылка для записи внутреннего состояния по кадрам (обсуждена и отложена: без полного детерминизма не даёт воспроизводимости, ради которой затевается)"
       }
      ]
     },
@@ -4396,6 +4476,36 @@
        "note": "Khronos WebGL conformance suite (1.0, минимальное подмножество) на webgl_canvas; делать после стабилизации canvas/webgl-пути (BUG-348); информационный отчёт, не гейт. Бриф docs/tasks/p2-test-track.md"
       }
      ]
+    },
+    {
+     "id": "WPT-RUN",
+     "title": "WPT-RUN: пропускная способность WPT-раннера",
+     "status": "planned",
+     "size": "L",
+     "note": "Дорожка пропускной способности WPT-раннера (владелец тулинга — P2; движковые баги по находкам — P3/P1). Превратить УЖЕ ВЕНДОРЕННЫЙ корпус в измеряемый: не вендорить новое (это WPT-VENDOR) и не писать новые тесты (это TEST), а снять три ограничения исполнителя. Повод: категория `css/` вендорена целиком (54350 файлов, 34607 id — рекорд корпуса), прогнана на 1.1% (382 id), и на этой пробе прошло 1294 из 2594 сабтестов — половина базовой блочной модели CSS1/CSS2 падает, а в BUGS.md на css-parser числится 13 багов из 429, т.е. счёт багов отражает, где искали, а не где они есть. Бриф — docs/tasks/p2-wpt-runner-throughput.md",
+     "tasks": [
+      {
+       "id": "WPT-RUN-1",
+       "title": "WPT-RUN-1: довендорить хелперы (check-layout-th.js)",
+       "status": "planned",
+       "size": "S",
+       "note": "Довендорить внекатегорийные хелперы, начиная с `/resources/check-layout-th.js` (56 попаданий 404 в пробе `css/`) — это хелпер самопроверяющихся layout-тестов, выдающий «expected width = 342, actual = 318, node = &lt;div&gt;» нативно, для тысяч тестов, БЕЗ эталонного браузера; ровно то, ради чего предлагалось строить кросс-движковый дифер с Chromium. Полный список недостающих зависимостей неизвестен (при объёме `css/` ручной обход нереалистичен) → первым делом скрипт, собирающий список 404 из прогона. `/fonts/ahem.css` пересекается с TEST-5 (бандл Ahem) — не дублировать"
+      },
+      {
+       "id": "WPT-RUN-2",
+       "title": "WPT-RUN-2: testdriver.js + HTTPS-порт в исполнителе",
+       "status": "planned",
+       "size": "M",
+       "note": "Две независимые половины в минимальном исполнителе tests/wpt/ (НЕ в немодифицированном tools/wptrunner): (1) поддержка `testdriver.js` — 267 из 382 id пробы `css/` ушли в SKIP только из-за её отсутствия, тот же гэп душит accname/clear-site-data/accelerometer; (2) HTTPS-порт — `invalid url: invalid port: \"None\"` съедает почти всю WebCryptoAPI (122 из 125 файлов `.https.`-only), 4 теста BlobURL/ в FileAPI, 6 в accelerometer"
+      },
+      {
+       "id": "WPT-RUN-3",
+       "title": "WPT-RUN-3: шардирование + массовый прогон css/",
+       "status": "planned",
+       "size": "M",
+       "note": "Шардированный/параллельный прогон (34607 id последовательно ≈ сутки при наблюдаемом темпе) + массовый прогон `css/` с записью ожиданий в `.ini` и группировкой провалов в BUG-NNN по первопричине (существующая методология P2-wpt S5, вендоренные тесты НЕ ослабляются: движковый пробел = expected:FAIL + BUG-NNN). Зависит от WPT-RUN-1/2 — иначе прогон измеряет пробелы исполнителя, а не движок. Полезнее делать после DEVX-8a (инварианты локализуют часть падений), но это не блокирующая зависимость — ратчет ожиданий удержит прогон и без них. Зафиксировать в журнале, сколько id не добежало и почему (правило no-silent-caps)"
+      }
+     ]
     }
    ],
    "date": "36–48 мес"
@@ -6347,10 +6457,10 @@
    "debtor": false
   },
   "BUG-303": {
-   "status": "open",
-   "title": "github.com: JS-исполнение не завершается ≥240с и на V8 (сеть готова за 0.7с) — гипотеза «медленный QuickJS» из аудита 2026-07-02 опровергнута; похоже на незавер…",
+   "status": "fixed",
+   "title": "github.com: JS-исполнение не завершалось ≥240с и на V8 (сеть готова за 0.7с). Проверка 2026-07-30 не воспроизвела симптом (dump-layout 6.6с, screenshot 22с, ×3…",
    "component": "js (V8 / event loop)",
-   "date": null,
+   "date": "2026-07-30",
    "debtor": false
   },
   "BUG-304": {
@@ -7195,10 +7305,10 @@
   },
   "BUG-424": {
    "status": "open",
-   "title": "Иконки движкового хрома рисуются мусором: назад/вперёд/reload — несколько наложенных штрихов ~10 px, правый кластер из 7 кнопок сжат в ~20 px у правого края окн…",
-   "component": "chrome (`assets/chrome/chrome.html` — инлайн SVG-спрайт), paint (`<use href=\"#id\">`), shell (раскладка тулбара)",
+   "title": "Иконки движкового хрома рисовались мусором/пропадали. **Переразбор P1 2026-07-30 опроверг заявку про `<use>`/`<symbol>`** (резолвится верно всегда; водораздел п…",
+   "component": "paint (`display_list.rs::emit_svg_shape`, `box_tree.rs::lay_out_svg_element_position`/`svg_paint_matrix`/`shift_tree`/`shift_y_box`) — **general engine bug, not chrome-specific**",
    "date": null,
-   "debtor": false
+   "debtor": true
   },
   "BUG-425": {
    "status": "open",
@@ -7299,10 +7409,10 @@
    "debtor": false
   },
   "BUG-439": {
-   "status": "open",
+   "status": "fixed",
    "title": "**Activation behavior не реализовано: клик, синтезированный в JS, не отправляет форму.** `btn.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:tr…",
-   "component": "js (`dom.rs` — `_lumen_dispatch_rich` / живой `dispatchEvent`), shell (активация целиком в `handle_click_at`)",
-   "date": null,
+   "component": "js (`dom.rs` — элементный `dispatchEvent` в `_lumen_make_element`)",
+   "date": "2026-07-30",
    "debtor": false
   },
   "BUG-440": {
@@ -7341,10 +7451,10 @@
    "debtor": false
   },
   "BUG-445": {
-   "status": "open",
-   "title": "Шесть flex-снапшотов `lumen-layout --test all` (`flex_row_equal_children`, `flex_row_explicit_basis`, `flex_column_children`, `flex_column_gap`, `flex_gap_with_…",
+   "status": "fixed",
+   "title": "Шесть flex-снапшотов `lumen-layout --test all` были красными на `main`: геометрия `rect=` совпадала, расходилась только хвостовая аннотация `w=`/`h=`, печатаема…",
    "component": "layout (`crates/engine/layout/tests/snapshots/flex_*.txt`) + гейт `scripts/scoped-test.sh`",
-   "date": null,
+   "date": "2026-07-30",
    "debtor": false
   },
   "BUG-446": {
@@ -7423,6 +7533,20 @@
    "component": "js (`crates/js/src/offscreen_canvas.rs` — литерал `this._2d_context`, `getImageData` на `:767`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-457": {
+   "status": "fixed",
+   "title": "`document.createElement()` на дефолтном движке (V8) при полной DOM-квоте (50 000 узлов) не бросал `QuotaExceededError`, а ронял процесс: sentinel `u32::MAX` на…",
+   "component": "js (`crates/js/src/v8_runtime.rs::_lumen_create_element`/`_lumen_create_element_ns`, `v8_compat.rs::IntoJsReturn for u32`)",
+   "date": "2026-07-30",
+   "debtor": false
+  },
+  "BUG-459": {
+   "status": "open",
+   "title": "Внешний `<script type=module src=…>` теряет свой реальный URL — `main.rs` собирает внешние и инлайновые module-скрипты в один `Vec<String>` тел, `eval_module` р…",
+   "component": "js (V8 ESM, `crates/js/src/v8_esm.rs` + `crates/shell/src/main.rs`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -7434,9 +7558,6 @@
   ],
   "chrome (`#sbTabs`/`.sb-tab`/`.sb-section-title`), layout": [
    "BUG-425"
-  ],
-  "chrome (`assets/chrome/chrome.html` — инлайн SVG-спрайт), paint (`<use href=\"#id\">`), shell (раскладка тулбара)": [
-   "BUG-424"
   ],
   "css-parser": [
    "BUG-022",
@@ -7525,6 +7646,9 @@
   "js (V8 / event loop)": [
    "BUG-303"
   ],
+  "js (V8 ESM, `crates/js/src/v8_esm.rs` + `crates/shell/src/main.rs`)": [
+   "BUG-459"
+  ],
   "js (WEB_API_SHIM, dom.rs)": [
    "BUG-302",
    "BUG-305",
@@ -7567,6 +7691,9 @@
   "js (`crates/js/src/surface_api.rs` рядом с `navigator.doNotTrack`, строки 116-121) + network (`crates/network/src/http/headers.rs::build_request_headers`)": [
    "BUG-397"
   ],
+  "js (`crates/js/src/v8_runtime.rs::_lumen_create_element`/`_lumen_create_element_ns`, `v8_compat.rs::IntoJsReturn for u32`)": [
+   "BUG-457"
+  ],
   "js (`dom.rs` `WEB_API_SHIM`)": [
    "BUG-309"
   ],
@@ -7576,11 +7703,11 @@
   "js (`dom.rs` shim, `v8_runtime.rs`, `selector_query.rs`)": [
    "BUG-298"
   ],
-  "js (`dom.rs` — `_lumen_dispatch_rich` / живой `dispatchEvent`), shell (активация целиком в `handle_click_at`)": [
-   "BUG-439"
-  ],
   "js (`dom.rs` — сеттер `value` в `_lumen_make_element`)": [
    "BUG-441"
+  ],
+  "js (`dom.rs` — элементный `dispatchEvent` в `_lumen_make_element`)": [
+   "BUG-439"
   ],
   "js (live DOM bindings)": [
    "BUG-279"
@@ -7833,6 +7960,9 @@
   ],
   "paint (`display_list.rs::emit_inline_run`)": [
    "BUG-289"
+  ],
+  "paint (`display_list.rs::emit_svg_shape`, `box_tree.rs::lay_out_svg_element_position`/`svg_paint_matrix`/`shift_tree`/`shift_y_box`) — **general engine bug, not chrome-specific**": [
+   "BUG-424"
   ],
   "paint (`display_list.rs` — ветка `BoxKind::InlineRun` в `walk`)": [
    "BUG-432"
