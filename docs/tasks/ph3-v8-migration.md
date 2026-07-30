@@ -1993,6 +1993,45 @@ first run. `cargo test -p lumen-js --features v8-backend` — 2570/2570 (unchang
 QuickJS, +31 gated V8); default-feature `cargo test -p lumen-js` — 1650/1650 (was 1681, −31). Both
 clippy passes (with and without `v8-backend`) clean.
 
+### S12b-24-whatwg-streams — nineteenth porting slice (2026-07-30, branch p1-v8-s12b-24-whatwg-streams)
+
+The "WHATWG Streams API" row, ported whole into `mod tests::v8_whatwg_streams`:
+`ReadableStream`/`WritableStream`/`TransformStream` constructors, `getReader`/`getWriter`/
+`locked`/`releaseLock`, `tee()`, `pipeTo`/`pipeThrough`, a custom transformer, `Blob.stream()`,
+`Response.body`/`bodyUsed` plus the K-3 fetch-streaming-body cluster, `TextDecoderStream`/
+`TextEncoderStream` and `TextDecoder`'s `{stream: true}` partial-multibyte-UTF-8 buffering,
+`ByteLengthQueuingStrategy`/`CountQueuingStrategy`, and `ReadableStream.from()` — **42 tests**
+(matched the scoping table's "~42" guess exactly), QuickJS copies deleted. Actual range on start —
+`dom.rs:16190-16730`, immediately after the Trusted Types block (still QuickJS-only, unrelated to
+this slice) and ending right before `// ── <details>/<summary> + <dialog> tests`.
+
+**Real plumbing question was promise timing, not Rust.** 16 of the 42 tests ported literally were
+red on first run: each read a value set inside a `.then()` callback within the *same* `eval()`
+call that scheduled it. That contract was already established by `v8_perf_observers`'s
+`queue_microtask_callback_runs_after_sync_tail` test (a microtask never runs before its scheduling
+script returns, matching every JS engine's real semantics — V8 is not special here, the QuickJS
+originals only "worked" because `_lumen_drain_microtasks()` was a real forced-drain on that engine,
+while on V8 it's a documented no-op, `v8_runtime.rs:3672`). Fixed with the same two-`eval()` split
+pattern used by `v8_webcrypto`/`v8_url_abort_clone_blob`: a setup `eval()` that schedules the
+`.then()`, then a second `eval()` that reads the now-settled state (V8's Auto microtask policy
+drains the queue to a fixpoint before returning control to the embedder, so a chained
+`.then().then()` — `response_body_reader_done_after_all_chunks` — and a two-step
+`TextDecoderStream` test needing a mid-sequence `eval()` between two `writer.write()` calls both
+resolve correctly across the split). No engine-level divergence — this is a test-authoring
+artifact of the QuickJS suite leaning on a QuickJS-only forced-drain primitive, not a product bug.
+
+Second cleanup: `CaptureFetch`/`runtime_with_fetch` (`dom.rs:16030-16058`, the QuickJS fetch mock)
+were deleted outright rather than kept dead. The formdata slice's note said they were "still used
+by the not-yet-ported sendBeacon/fetch-keepalive/fetch-priority/Streams tests" — but sendBeacon and
+fetch-keepalive/priority were ported away in `S12b-24-page-visibility-beacon`, leaving only
+`fetch_response_body_getreader_yields_correct_bytes` (this slice) as the sole remaining caller. The
+V8 twin (`v8_runtime_with_fetch`/`CaptureFetch` inside `mod v8_whatwg_streams`) follows the same
+copy-verbatim pattern as the other five per-module fetch-mock twins already in the file.
+
+42/42 green after the eval-split fixes. `cargo test -p lumen-js --features v8-backend` —
+2570/2570 (unchanged: −42 ungated QuickJS, +42 gated V8); default-feature `cargo test -p lumen-js`
+— 1608/1608 (was 1650, −42). Both clippy passes (with and without `v8-backend`) clean.
+
 ---
 
 ## Risks (Rev 2)
