@@ -652,6 +652,18 @@ impl V8JsRuntime {
         *self.computed_styles.lock().unwrap_or_else(|e| e.into_inner()) = styles;
     }
 
+    /// Update `document.hidden` / `document.visibilityState` and fire
+    /// `visibilitychange` on both `document` and `window`.
+    /// Mirrors [`crate::QuickJsRuntime::set_document_visibility`].
+    pub fn set_document_visibility(&self, hidden: bool) {
+        let script = if hidden {
+            "_lumen_apply_visibility(true)"
+        } else {
+            "_lumen_apply_visibility(false)"
+        };
+        self.eval(script).ok();
+    }
+
     /// Drain all popup window requests queued by JS `window.open(...)`.
     /// Mirrors [`crate::QuickJsRuntime::take_window_open_requests`].
     pub fn take_window_open_requests(&self) -> Vec<PopupRequest> {
