@@ -8129,10 +8129,25 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
         _ => [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
     };
     let has_rot_skew = xmat[1].abs() > 1e-6 || xmat[2].abs() > 1e-6;
+    // BUG-424 (a): unlike Rect/Circle/Ellipse/Line, a `<path>`/`<polyline>`/
+    // `<polygon>` (all lowered to `Path`) has no scaled `b.rect` — layout collapses
+    // it to a zero-size anchor point (BUG-174: its true extent needs the parsed `d`
+    // data, which layout does not have). Rect/Circle/Ellipse/Line get their scale
+    // baked into `b.rect` by `apply_transform_to_bbox`, so a pure scale with no
+    // rotation (`has_rot_skew=false`) already renders correctly via the fast path
+    // below. `Path` does not: the common icon-sprite case (`viewBox="0 0 24 24"`
+    // scaled to a 14px box, no rotation) left it painting raw `d`-space vertices
+    // shifted but never scaled — ~1.7× oversized, mostly clipped away. Route it
+    // through the same CTM `PushTransform` as rotate/skew whenever the matrix's
+    // linear part isn't the identity scale, so the parser's raw vertices get the
+    // viewBox→CSS-px scale applied like every other shape kind already gets.
+    let needs_ctm = has_rot_skew
+        || (matches!(shape, SvgShapeKind::Path { .. })
+            && ((xmat[0] - 1.0).abs() > 1e-6 || (xmat[3] - 1.0).abs() > 1e-6));
     // `geom` is the rect the shape arms draw into; `path_shift` offsets raw `<path>`
-    // `d` vertices. Under a rotate/skew CTM both live in user space (shift = 0, the
+    // `d` vertices. Under the CTM path both live in user space (shift = 0, the
     // matrix positions everything); otherwise they are the document-space `b.rect`.
-    let (geom, path_shift) = if has_rot_skew {
+    let (geom, path_shift) = if needs_ctm {
         let user_bbox = match shape {
             SvgShapeKind::Rect { x, y, width, height, .. } => Rect::new(*x, *y, *width, *height),
             SvgShapeKind::Circle { cx, cy, r } => Rect::new(cx - r, cy - r, 2.0 * r, 2.0 * r),
@@ -8145,7 +8160,7 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
     } else {
         (b.rect, (b.rect.x, b.rect.y))
     };
-    if has_rot_skew {
+    if needs_ctm {
         out.push(DisplayCommand::PushTransform {
             matrix: Mat4::from_2d_affine(xmat[0], xmat[1], xmat[2], xmat[3], xmat[4], xmat[5]),
         });
@@ -8357,8 +8372,8 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
         out.append(&mut fill_cmds);
     }
 
-    // Close the rotate/skew CTM opened above (BUG-244).
-    if has_rot_skew {
+    // Close the CTM opened above (BUG-244 rotate/skew, BUG-424 (a) Path scale).
+    if needs_ctm {
         out.push(DisplayCommand::PopTransform);
     }
 }
@@ -17333,6 +17348,43 @@ mod tests {
             !dl.iter().any(|c| matches!(c, DisplayCommand::PushTransform { .. })),
             "untransformed <rect> must not emit a PushTransform, got {dl:?}",
         );
+    }
+
+    #[test]
+    fn svg_scaled_use_path_paints_under_ctm() {
+        // BUG-424 (a): a `<path>`/`<polyline>`/`<polygon>` (lowered to `Path`) has no
+        // scaled `b.rect` — layout collapses it to a zero-size anchor point (BUG-174).
+        // Rect/Circle/Ellipse/Line get their scale baked into `b.rect`, so a pure
+        // scale with no rotation (`has_rot_skew=false`) already rendered correctly
+        // via the axis-aligned fast path; `Path` did not — the common icon-sprite
+        // case (`viewBox="0 0 24 24"` scaled down to a 12px box, no rotation) used
+        // to paint the raw, unscaled `d`/`points` vertices, ~2× oversized. It must
+        // now route through the same CTM `PushTransform` as rotate/skew whenever
+        // the matrix carries a non-identity scale.
+        let html = "<svg width='12' height='12'>\
+            <symbol id='s' viewBox='0 0 24 24'><polyline points='15 18 9 12 15 6' fill='none' stroke='#000'/></symbol>\
+            <use href='#s'/>\
+         </svg>";
+        let dl = build(html, "");
+        let ctm = dl.iter().find_map(|c| match c {
+            DisplayCommand::PushTransform { matrix } if (matrix.0[0] - 0.5).abs() < 0.01 => Some(*matrix),
+            _ => None,
+        });
+        assert!(ctm.is_some(), "scaled <use>-<polyline> must emit a PushTransform with the 0.5 viewBox→viewport scale, got {dl:?}");
+        let ctm = ctm.unwrap();
+        assert!(ctm.0[1].abs() < 1e-6 && ctm.0[2].abs() < 1e-6, "pure scale, no rotation/skew expected, got {ctm:?}");
+        assert!(
+            dl.iter().any(|c| matches!(c, DisplayCommand::PopTransform)),
+            "PushTransform must be closed by PopTransform, got {dl:?}",
+        );
+        // Under the CTM the stroke's vertices stay in raw local (0..24) units —
+        // the matrix, not a pre-shift, carries the viewBox→viewport scale.
+        let stroke = dl.iter().find_map(|c| match c {
+            DisplayCommand::DrawSvgStroke { contours, .. } => Some(contours),
+            _ => None,
+        }).expect("polyline stroke present");
+        let max_coord = stroke.iter().flatten().flat_map(|[x, y]| [*x, *y]).fold(0.0_f32, f32::max);
+        assert!(max_coord > 10.0, "stroke vertices should stay in raw 0..24 local units under the CTM, got max={max_coord} in {stroke:?}");
     }
 
     #[test]
