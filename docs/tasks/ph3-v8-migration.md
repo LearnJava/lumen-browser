@@ -2122,6 +2122,34 @@ only needs `count === 0` which holds regardless of delivery timing).
 gated V8); default-feature `cargo test -p lumen-js` — 1508/1508 (was 1533, −25). Both clippy passes
 (with and without `v8-backend`) clean.
 
+### S12b-24-webworker — twenty-third porting slice (2026-07-30, branch p1-v8-s12b-24-webworker)
+
+`Worker` class existence (bare + `window.Worker`), constructor returning an instance from a
+`data:` URL, `postMessage`/`terminate`/`addEventListener` presence, `onmessage` default/getter/
+setter, `terminate()` not throwing, and four `pump_workers()`-driven message-roundtrip tests
+(plain, `addEventListener('message', …)`, base64 `data:` URL script, `Blob`-backed `URL.
+createObjectURL` script) — 13 tests ported to `mod v8_webworker`, QuickJS copies deleted. Found by
+grepping for `Web Worker tests`, not trusting recorded line numbers — the section sat at
+`dom.rs:16189-16343`, immediately after `S12b-24-idle-message-clipboard`'s block and immediately
+before `// ── _lumen_gc_collect tests`. Original scoping table estimated ~18 tests for this area;
+actual count was 13 (same recount-at-slice-start drift as every prior slice).
+
+Ported without modification beyond `runtime_with_dom` → `v8_runtime_with_dom`: no `.then()`/
+`.catch()` anywhere in this section (the roundtrip tests use a real worker thread plus an explicit
+`rt.pump_workers()` call after a `std::thread::sleep`, not a JS promise), so the S12b-2
+promise-timing lesson didn't apply here — `V8JsRuntime` already carries full `Worker` support
+(`workers`/`worker_messages`/`pump_workers()`) from the S10 hand-port
+(`v8_runtime.rs:338-458`), confirmed before starting. First slice since `S12b-24-matchmedia` to
+port 13/13 tests verbatim with zero behavioral fixups. One process mistake caught before commit:
+forgot the `#[cfg(feature = "v8-backend")]` gate on the new `mod v8_webworker` on the first pass —
+without it the module compiles unconditionally and both `cargo test` variants under- and
+over-count; added the gate (matching all 22 prior `mod v8_*` blocks) and re-ran both suites to
+confirm the expected ∓13 shift before treating the slice as done.
+
+`cargo test -p lumen-js --features v8-backend` — 2570/2570 (unchanged: −13 ungated QuickJS, +13
+gated V8); default-feature `cargo test -p lumen-js` — 1495/1495 (was 1508, −13). Both clippy passes
+(with and without `v8-backend`) clean.
+
 ---
 
 ## Risks (Rev 2)
