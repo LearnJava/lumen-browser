@@ -16027,36 +16027,6 @@ mod tests {
         rt
     }
 
-    // Mock fetch provider that records calls to fetch_with_body_sync. Still used by the
-    // not-yet-ported sendBeacon/fetch-keepalive/fetch-priority/Streams tests below (out of
-    // scope for the FormData slice — its own V8 twin lives in `mod v8_formdata`).
-    type FetchCall = (String, String, String, Vec<u8>);
-    struct CaptureFetch {
-        calls: std::sync::Mutex<Vec<FetchCall>>,
-    }
-    impl CaptureFetch {
-        fn new() -> Arc<Self> {
-            Arc::new(Self { calls: std::sync::Mutex::new(vec![]) })
-        }
-    }
-    impl lumen_core::ext::JsFetchProvider for CaptureFetch {
-        fn fetch_sync(&self, url: &str, method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
-            self.calls.lock().unwrap().push((url.into(), method.into(), String::new(), vec![]));
-            Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"ok".to_vec() })
-        }
-        fn fetch_with_body_sync(&self, url: &str, method: &str, content_type: &str, body: &[u8]) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
-            self.calls.lock().unwrap().push((url.into(), method.into(), content_type.into(), body.to_vec()));
-            Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"ok".to_vec() })
-        }
-    }
-
-    fn runtime_with_fetch(provider: Arc<CaptureFetch>) -> QuickJsRuntime {
-        let rt = QuickJsRuntime::new().unwrap();
-        let p: Arc<dyn lumen_core::ext::JsFetchProvider> = provider;
-        rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, false).unwrap();
-        rt
-    }
-
     // Still used by the not-yet-ported details/dialog/window.open/etc. tests below.
     fn bool_eval(rt: &QuickJsRuntime, script: &str) -> bool {
         rt.eval(script).unwrap() == lumen_core::JsValue::Bool(true)
@@ -16183,547 +16153,6 @@ mod tests {
                  createHTML: function(s, a, b) { return s + ':' + a + ':' + b; }
              });
              String(p.createHTML('x', 1, 2)) === 'x:1:2'"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    // ─── WHATWG Streams API tests ─────────────────────────────────────────────
-
-    #[test]
-    fn readable_stream_constructor_on_window() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("typeof window.ReadableStream === 'function'").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn writable_stream_constructor_on_window() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("typeof window.WritableStream === 'function'").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn transform_stream_constructor_on_window() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("typeof window.TransformStream === 'function'").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn readable_stream_locked_initially_false() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var rs = new ReadableStream(); rs.locked === false"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn readable_stream_get_reader_locks_stream() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var rs = new ReadableStream({ start: function(c) { c.close(); } }); \
-             var reader = rs.getReader(); \
-             rs.locked === true"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn readable_stream_read_delivers_chunk_promise() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var done = false; \
-             var rs = new ReadableStream({ \
-               start: function(c) { c.enqueue('hello'); c.close(); } \
-             }); \
-             var reader = rs.getReader(); \
-             reader.read().then(function(r) { done = (r.value === 'hello' && r.done === false); }); \
-             _lumen_drain_microtasks(); \
-             done"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn readable_stream_read_done_after_close() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var got = []; \
-             var rs = new ReadableStream({ \
-               start: function(c) { c.enqueue(1); c.enqueue(2); c.close(); } \
-             }); \
-             var reader = rs.getReader(); \
-             reader.read().then(function(r) { got.push(r.value); }); \
-             reader.read().then(function(r) { got.push(r.value); }); \
-             reader.read().then(function(r) { got.push(r.done ? 'done' : 'nodone'); }); \
-             _lumen_drain_microtasks(); \
-             got.length === 3 && got[0] === 1 && got[1] === 2 && got[2] === 'done'"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn readable_stream_release_lock_unlocks() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var rs = new ReadableStream({ start: function(c) { c.close(); } }); \
-             var reader = rs.getReader(); \
-             reader.releaseLock(); \
-             rs.locked === false"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn readable_stream_tee_produces_two_streams() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var rs = new ReadableStream({ \
-               start: function(c) { c.enqueue(42); c.close(); } \
-             }); \
-             var pair = rs.tee(); \
-             pair.length === 2 && pair[0] instanceof ReadableStream && pair[1] instanceof ReadableStream"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn readable_stream_tee_both_clones_have_data() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var rs = new ReadableStream({ \
-               start: function(c) { c.enqueue(99); c.close(); } \
-             }); \
-             var pair = rs.tee(); \
-             var v1, v2; \
-             pair[0].getReader().read().then(function(r) { v1 = r.value; }); \
-             pair[1].getReader().read().then(function(r) { v2 = r.value; }); \
-             _lumen_drain_microtasks(); \
-             v1 === 99 && v2 === 99"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn writable_stream_get_writer_and_write() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var written = []; \
-             var ws = new WritableStream({ \
-               write: function(chunk) { written.push(chunk); } \
-             }); \
-             var writer = ws.getWriter(); \
-             writer.write('a'); writer.write('b'); \
-             written.length === 2 && written[0] === 'a' && written[1] === 'b'"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn writable_stream_locked_when_writer_held() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var ws = new WritableStream(); \
-             var w = ws.getWriter(); \
-             ws.locked === true"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn writable_stream_close_resolves() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var closed = false; \
-             var ws = new WritableStream({ close: function() { closed = true; } }); \
-             var w = ws.getWriter(); \
-             w.close().then(function() {}); \
-             closed"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn transform_stream_has_readable_and_writable() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var ts = new TransformStream(); \
-             ts.readable instanceof ReadableStream && ts.writable instanceof WritableStream"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn transform_stream_passthrough() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var received = []; \
-             var ts = new TransformStream(); \
-             var writer = ts.writable.getWriter(); \
-             var reader = ts.readable.getReader(); \
-             writer.write('x'); \
-             reader.read().then(function(r) { received.push(r.value); }); \
-             _lumen_drain_microtasks(); \
-             received.length === 1 && received[0] === 'x'"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn transform_stream_custom_transformer() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var out = []; \
-             var ts = new TransformStream({ \
-               transform: function(chunk, ctrl) { ctrl.enqueue(chunk * 2); } \
-             }); \
-             var writer = ts.writable.getWriter(); \
-             var reader = ts.readable.getReader(); \
-             writer.write(5); \
-             reader.read().then(function(r) { out.push(r.value); }); \
-             _lumen_drain_microtasks(); \
-             out.length === 1 && out[0] === 10"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn pipe_to_writable_stream() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var collected = []; \
-             var rs = new ReadableStream({ \
-               start: function(c) { c.enqueue('a'); c.enqueue('b'); c.close(); } \
-             }); \
-             var ws = new WritableStream({ write: function(ch) { collected.push(ch); } }); \
-             var done = false; \
-             rs.pipeTo(ws).then(function() { done = true; }); \
-             _lumen_drain_microtasks(); \
-             done && collected.length === 2 && collected[0] === 'a' && collected[1] === 'b'"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn pipe_through_transform_stream() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var out = []; \
-             var rs = new ReadableStream({ \
-               start: function(c) { c.enqueue(3); c.close(); } \
-             }); \
-             var ts = new TransformStream({ \
-               transform: function(chunk, ctrl) { ctrl.enqueue(chunk + 10); } \
-             }); \
-             var dest = rs.pipeThrough(ts); \
-             dest.getReader().read().then(function(r) { out.push(r.value); }); \
-             _lumen_drain_microtasks(); \
-             out.length === 1 && out[0] === 13"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn blob_stream_returns_readable_stream() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "new Blob(['hello']).stream() instanceof ReadableStream"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn blob_stream_delivers_bytes() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var got = null; \
-             var blob = new Blob(['hi']); \
-             var reader = blob.stream().getReader(); \
-             reader.read().then(function(r) { got = r.value instanceof Uint8Array ? r.value.length : -1; }); \
-             _lumen_drain_microtasks(); \
-             got === 2"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn response_body_is_readable_stream() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "new Response('hello').body instanceof ReadableStream"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn response_body_used_starts_false() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "new Response('data').bodyUsed === false"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn response_body_used_after_text() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var resp = new Response('x'); \
-             resp.text().then(function() {}); \
-             resp.bodyUsed === true"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    // ── K-3: Fetch streaming body tests ──────────────────────────────────────
-
-    #[test]
-    fn response_body_reader_reads_first_chunk() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var out = null; \
-             var reader = new Response('hello').body.getReader(); \
-             reader.read().then(function(r) { out = r; }); \
-             _lumen_drain_microtasks(); \
-             out !== null && !out.done && out.value instanceof Uint8Array && out.value.length === 5"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn response_body_reader_done_after_all_chunks() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var done = false; \
-             var reader = new Response('hi').body.getReader(); \
-             reader.read().then(function() { return reader.read(); }) \
-                   .then(function(r) { done = r.done; }); \
-             _lumen_drain_microtasks(); \
-             done === true"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn response_body_getreader_marks_body_used() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var resp = new Response('data'); \
-             resp.body.getReader(); \
-             resp.bodyUsed === true"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn response_body_text_rejects_after_getreader() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var resp = new Response('abc'); \
-             resp.body.getReader(); \
-             var rejected = false; \
-             resp.text().then(null, function() { rejected = true; }); \
-             _lumen_drain_microtasks(); \
-             rejected === true"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn response_body_getreader_rejects_if_already_used() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var resp = new Response('x'); \
-             resp.text().then(function() {}); \
-             var threw = false; \
-             try { resp.body.getReader(); } catch(e) { threw = true; } \
-             threw === true"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn fetch_body_chunk_binding_returns_slice() {
-        // _lumen_fetch_body_length / _lumen_fetch_body_chunk work when no cache is set.
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "_lumen_fetch_body_length() === 0 && _lumen_fetch_body_chunk(0, 10).length === 0"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn stream_slot_alloc_returns_zero_when_no_cache() {
-        // _lumen_stream_alloc returns 0 when FetchCache is empty (no prior fetch).
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("_lumen_stream_alloc() === 0").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn fetch_response_body_getreader_yields_correct_bytes() {
-        // fetch() via mock provider → response.body.getReader().read() delivers body bytes.
-        let capture = CaptureFetch::new();
-        let rt = runtime_with_fetch(Arc::clone(&capture));
-        let r = rt.eval(
-            "var out = null; \
-             fetch('https://example.com/').then(function(resp) { \
-                 return resp.body.getReader().read(); \
-             }).then(function(r) { out = r; }); \
-             _lumen_drain_microtasks(); \
-             out !== null && !out.done && out.value instanceof Uint8Array \
-             && out.value[0] === 111 && out.value[1] === 107"  // 'ok' = [111, 107]
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn text_decoder_stream_decodes_utf8() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var out = []; \
-             var tds = new TextDecoderStream(); \
-             var writer = tds.writable.getWriter(); \
-             var reader = tds.readable.getReader(); \
-             writer.write(new Uint8Array([72, 101, 108, 108, 111])); \
-             reader.read().then(function(r) { out.push(r.value); }); \
-             _lumen_drain_microtasks(); \
-             out.length === 1 && out[0] === 'Hello'"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn text_decoder_stream_mode_ascii() {
-        // {stream: true} with complete ASCII works like normal decode.
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var dec = new TextDecoder(); \
-             var s = dec.decode(new Uint8Array([72,101,108,108,111]), {stream: true}); \
-             s === 'Hello'"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn text_decoder_stream_mode_buffers_partial_utf8() {
-        // Euro sign € = 0xE2 0x82 0xAC (3-byte UTF-8).
-        // Sending only the first byte with stream:true must return '' and buffer it.
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var dec = new TextDecoder(); \
-             var partial = dec.decode(new Uint8Array([0xE2]), {stream: true}); \
-             partial === ''"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn text_decoder_stream_mode_reassembles_split_multibyte() {
-        // Continuation of previous: second chunk provides the rest of €.
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var dec = new TextDecoder(); \
-             dec.decode(new Uint8Array([0xE2]), {stream: true}); \
-             var result = dec.decode(new Uint8Array([0x82, 0xAC])); \
-             result === '€'"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn text_decoder_stream_mode_final_flush_clears_buffer() {
-        // After streaming, final decode() with no args flushes (returns empty or replacement).
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var dec = new TextDecoder(); \
-             dec.decode(new Uint8Array([72]), {stream: true}); \
-             var flushed = dec.decode(); \
-             typeof flushed === 'string'"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn text_decoder_no_arg_returns_empty_string() {
-        // decode() with no arguments (empty flush) always returns a string.
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var dec = new TextDecoder(); \
-             dec.decode() === '' && dec.decode(null) === ''"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn text_decoder_stream_decoder_stream_splits_multibyte() {
-        // TextDecoderStream uses {stream:true} internally — writing bytes of €
-        // in two chunks must produce the character exactly once.
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var out = []; \
-             var tds = new TextDecoderStream(); \
-             var writer = tds.writable.getWriter(); \
-             var reader = tds.readable.getReader(); \
-             writer.write(new Uint8Array([0xE2])); \
-             reader.read().then(function(r) { if (!r.done) out.push(r.value); }); \
-             _lumen_drain_microtasks(); \
-             writer.write(new Uint8Array([0x82, 0xAC])); \
-             reader.read().then(function(r) { if (!r.done) out.push(r.value); }); \
-             _lumen_drain_microtasks(); \
-             out.join('') === '€'"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn text_encoder_stream_encodes_string() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var out = []; \
-             var tes = new TextEncoderStream(); \
-             var writer = tes.writable.getWriter(); \
-             var reader = tes.readable.getReader(); \
-             writer.write('Hi'); \
-             reader.read().then(function(r) { out.push(r.value); }); \
-             _lumen_drain_microtasks(); \
-             out.length === 1 && out[0] instanceof Uint8Array && out[0][0] === 72"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn byte_length_queuing_strategy() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var s = new ByteLengthQueuingStrategy({ highWaterMark: 16 }); \
-             s.highWaterMark === 16 && s.size(new Uint8Array(4)) === 4"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn count_queuing_strategy() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var s = new CountQueuingStrategy({ highWaterMark: 10 }); \
-             s.highWaterMark === 10 && s.size('anything') === 1"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn readable_stream_from_array() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var done = false; \
-             var rs = ReadableStream.from([10, 20, 30]); \
-             var reader = rs.getReader(); \
-             reader.read().then(function(r) { done = r.value === 10 && !r.done; }); \
-             _lumen_drain_microtasks(); \
-             done"
         ).unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
@@ -31653,6 +31082,586 @@ mod tests {
                  typeof window.ClipboardEvent === 'function' && \
                  typeof window.CompositionEvent === 'function'"
             ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+    }
+    #[cfg(feature = "v8-backend")]
+    mod v8_whatwg_streams {
+        use super::*;
+        use crate::v8_runtime::V8JsRuntime;
+
+        // V8 twin of the (removed) QuickJS `runtime_with_dom` helper.
+        fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
+            let rt = V8JsRuntime::new().unwrap();
+            rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+            rt.install_dom(doc, "", None, None, None, None, None, None, None, None, false)
+                .unwrap();
+            rt
+        }
+
+        // Mock fetch provider that records calls to fetch_with_body_sync.
+        // V8 twin of the (removed) QuickJS `CaptureFetch` mock: after porting
+        // `fetch_response_body_getreader_yields_correct_bytes`, no QuickJS-region
+        // test used the original any longer, so it was deleted rather than kept dead.
+        type FetchCall = (String, String, String, Vec<u8>);
+        struct CaptureFetch {
+            calls: std::sync::Mutex<Vec<FetchCall>>,
+        }
+        impl CaptureFetch {
+            fn new() -> Arc<Self> {
+                Arc::new(Self { calls: std::sync::Mutex::new(vec![]) })
+            }
+        }
+        impl lumen_core::ext::JsFetchProvider for CaptureFetch {
+            fn fetch_sync(&self, url: &str, method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+                self.calls.lock().unwrap().push((url.into(), method.into(), String::new(), vec![]));
+                Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"ok".to_vec() })
+            }
+            fn fetch_with_body_sync(&self, url: &str, method: &str, content_type: &str, body: &[u8]) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+                self.calls.lock().unwrap().push((url.into(), method.into(), content_type.into(), body.to_vec()));
+                Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"ok".to_vec() })
+            }
+        }
+
+        // V8 twin of the (removed) QuickJS `runtime_with_fetch` helper.
+        fn v8_runtime_with_fetch(provider: Arc<CaptureFetch>) -> V8JsRuntime {
+            let rt = V8JsRuntime::new().unwrap();
+            let p: Arc<dyn lumen_core::ext::JsFetchProvider> = provider;
+            rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, false).unwrap();
+            rt
+        }
+
+        #[test]
+        fn readable_stream_constructor_on_window() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("typeof window.ReadableStream === 'function'").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn writable_stream_constructor_on_window() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("typeof window.WritableStream === 'function'").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn transform_stream_constructor_on_window() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("typeof window.TransformStream === 'function'").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn readable_stream_locked_initially_false() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var rs = new ReadableStream(); rs.locked === false"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn readable_stream_get_reader_locks_stream() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var rs = new ReadableStream({ start: function(c) { c.close(); } }); \
+                 var reader = rs.getReader(); \
+                 rs.locked === true"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn readable_stream_read_delivers_chunk_promise() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var done = false; \
+                 var rs = new ReadableStream({ \
+                   start: function(c) { c.enqueue('hello'); c.close(); } \
+                 }); \
+                 var reader = rs.getReader(); \
+                 reader.read().then(function(r) { done = (r.value === 'hello' && r.done === false); });"
+            ).unwrap();
+            let r = rt.eval("done").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn readable_stream_read_done_after_close() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var got = []; \
+                 var rs = new ReadableStream({ \
+                   start: function(c) { c.enqueue(1); c.enqueue(2); c.close(); } \
+                 }); \
+                 var reader = rs.getReader(); \
+                 reader.read().then(function(r) { got.push(r.value); }); \
+                 reader.read().then(function(r) { got.push(r.value); }); \
+                 reader.read().then(function(r) { got.push(r.done ? 'done' : 'nodone'); });"
+            ).unwrap();
+            let r = rt.eval(
+                "got.length === 3 && got[0] === 1 && got[1] === 2 && got[2] === 'done'"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn readable_stream_release_lock_unlocks() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var rs = new ReadableStream({ start: function(c) { c.close(); } }); \
+                 var reader = rs.getReader(); \
+                 reader.releaseLock(); \
+                 rs.locked === false"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn readable_stream_tee_produces_two_streams() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var rs = new ReadableStream({ \
+                   start: function(c) { c.enqueue(42); c.close(); } \
+                 }); \
+                 var pair = rs.tee(); \
+                 pair.length === 2 && pair[0] instanceof ReadableStream && pair[1] instanceof ReadableStream"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn readable_stream_tee_both_clones_have_data() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var rs = new ReadableStream({ \
+                   start: function(c) { c.enqueue(99); c.close(); } \
+                 }); \
+                 var pair = rs.tee(); \
+                 var v1, v2; \
+                 pair[0].getReader().read().then(function(r) { v1 = r.value; }); \
+                 pair[1].getReader().read().then(function(r) { v2 = r.value; });"
+            ).unwrap();
+            let r = rt.eval("v1 === 99 && v2 === 99").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn writable_stream_get_writer_and_write() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var written = []; \
+                 var ws = new WritableStream({ \
+                   write: function(chunk) { written.push(chunk); } \
+                 }); \
+                 var writer = ws.getWriter(); \
+                 writer.write('a'); writer.write('b'); \
+                 written.length === 2 && written[0] === 'a' && written[1] === 'b'"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn writable_stream_locked_when_writer_held() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var ws = new WritableStream(); \
+                 var w = ws.getWriter(); \
+                 ws.locked === true"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn writable_stream_close_resolves() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var closed = false; \
+                 var ws = new WritableStream({ close: function() { closed = true; } }); \
+                 var w = ws.getWriter(); \
+                 w.close().then(function() {}); \
+                 closed"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn transform_stream_has_readable_and_writable() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var ts = new TransformStream(); \
+                 ts.readable instanceof ReadableStream && ts.writable instanceof WritableStream"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn transform_stream_passthrough() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var received = []; \
+                 var ts = new TransformStream(); \
+                 var writer = ts.writable.getWriter(); \
+                 var reader = ts.readable.getReader(); \
+                 writer.write('x'); \
+                 reader.read().then(function(r) { received.push(r.value); });"
+            ).unwrap();
+            let r = rt.eval("received.length === 1 && received[0] === 'x'").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn transform_stream_custom_transformer() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var out = []; \
+                 var ts = new TransformStream({ \
+                   transform: function(chunk, ctrl) { ctrl.enqueue(chunk * 2); } \
+                 }); \
+                 var writer = ts.writable.getWriter(); \
+                 var reader = ts.readable.getReader(); \
+                 writer.write(5); \
+                 reader.read().then(function(r) { out.push(r.value); });"
+            ).unwrap();
+            let r = rt.eval("out.length === 1 && out[0] === 10").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn pipe_to_writable_stream() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var collected = []; \
+                 var rs = new ReadableStream({ \
+                   start: function(c) { c.enqueue('a'); c.enqueue('b'); c.close(); } \
+                 }); \
+                 var ws = new WritableStream({ write: function(ch) { collected.push(ch); } }); \
+                 var done = false; \
+                 rs.pipeTo(ws).then(function() { done = true; });"
+            ).unwrap();
+            let r = rt.eval(
+                "done && collected.length === 2 && collected[0] === 'a' && collected[1] === 'b'"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn pipe_through_transform_stream() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var out = []; \
+                 var rs = new ReadableStream({ \
+                   start: function(c) { c.enqueue(3); c.close(); } \
+                 }); \
+                 var ts = new TransformStream({ \
+                   transform: function(chunk, ctrl) { ctrl.enqueue(chunk + 10); } \
+                 }); \
+                 var dest = rs.pipeThrough(ts); \
+                 dest.getReader().read().then(function(r) { out.push(r.value); });"
+            ).unwrap();
+            let r = rt.eval("out.length === 1 && out[0] === 13").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn blob_stream_returns_readable_stream() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "new Blob(['hello']).stream() instanceof ReadableStream"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn blob_stream_delivers_bytes() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var got = null; \
+                 var blob = new Blob(['hi']); \
+                 var reader = blob.stream().getReader(); \
+                 reader.read().then(function(r) { got = r.value instanceof Uint8Array ? r.value.length : -1; });"
+            ).unwrap();
+            let r = rt.eval("got === 2").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn response_body_is_readable_stream() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "new Response('hello').body instanceof ReadableStream"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn response_body_used_starts_false() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "new Response('data').bodyUsed === false"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn response_body_used_after_text() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var resp = new Response('x'); \
+                 resp.text().then(function() {}); \
+                 resp.bodyUsed === true"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        // ── K-3: Fetch streaming body tests ──────────────────────────────────────
+
+        #[test]
+        fn response_body_reader_reads_first_chunk() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var out = null; \
+                 var reader = new Response('hello').body.getReader(); \
+                 reader.read().then(function(r) { out = r; });"
+            ).unwrap();
+            let r = rt.eval(
+                "out !== null && !out.done && out.value instanceof Uint8Array && out.value.length === 5"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn response_body_reader_done_after_all_chunks() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var done = false; \
+                 var reader = new Response('hi').body.getReader(); \
+                 reader.read().then(function() { return reader.read(); }) \
+                       .then(function(r) { done = r.done; });"
+            ).unwrap();
+            let r = rt.eval("done === true").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn response_body_getreader_marks_body_used() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var resp = new Response('data'); \
+                 resp.body.getReader(); \
+                 resp.bodyUsed === true"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn response_body_text_rejects_after_getreader() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var resp = new Response('abc'); \
+                 resp.body.getReader(); \
+                 var rejected = false; \
+                 resp.text().then(null, function() { rejected = true; });"
+            ).unwrap();
+            let r = rt.eval("rejected === true").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn response_body_getreader_rejects_if_already_used() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var resp = new Response('x'); \
+                 resp.text().then(function() {}); \
+                 var threw = false; \
+                 try { resp.body.getReader(); } catch(e) { threw = true; } \
+                 threw === true"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn fetch_body_chunk_binding_returns_slice() {
+            // _lumen_fetch_body_length / _lumen_fetch_body_chunk work when no cache is set.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "_lumen_fetch_body_length() === 0 && _lumen_fetch_body_chunk(0, 10).length === 0"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn stream_slot_alloc_returns_zero_when_no_cache() {
+            // _lumen_stream_alloc returns 0 when FetchCache is empty (no prior fetch).
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("_lumen_stream_alloc() === 0").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn fetch_response_body_getreader_yields_correct_bytes() {
+            // fetch() via mock provider → response.body.getReader().read() delivers body bytes.
+            let capture = CaptureFetch::new();
+            let rt = v8_runtime_with_fetch(Arc::clone(&capture));
+            rt.eval(
+                "var out = null; \
+                 fetch('https://example.com/').then(function(resp) { \
+                     return resp.body.getReader().read(); \
+                 }).then(function(r) { out = r; });"
+            ).unwrap();
+            let r = rt.eval(
+                "out !== null && !out.done && out.value instanceof Uint8Array \
+                 && out.value[0] === 111 && out.value[1] === 107"  // 'ok' = [111, 107]
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn text_decoder_stream_decodes_utf8() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var out = []; \
+                 var tds = new TextDecoderStream(); \
+                 var writer = tds.writable.getWriter(); \
+                 var reader = tds.readable.getReader(); \
+                 writer.write(new Uint8Array([72, 101, 108, 108, 111])); \
+                 reader.read().then(function(r) { out.push(r.value); });"
+            ).unwrap();
+            let r = rt.eval("out.length === 1 && out[0] === 'Hello'").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn text_decoder_stream_mode_ascii() {
+            // {stream: true} with complete ASCII works like normal decode.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var dec = new TextDecoder(); \
+                 var s = dec.decode(new Uint8Array([72,101,108,108,111]), {stream: true}); \
+                 s === 'Hello'"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn text_decoder_stream_mode_buffers_partial_utf8() {
+            // Euro sign € = 0xE2 0x82 0xAC (3-byte UTF-8).
+            // Sending only the first byte with stream:true must return '' and buffer it.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var dec = new TextDecoder(); \
+                 var partial = dec.decode(new Uint8Array([0xE2]), {stream: true}); \
+                 partial === ''"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn text_decoder_stream_mode_reassembles_split_multibyte() {
+            // Continuation of previous: second chunk provides the rest of €.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var dec = new TextDecoder(); \
+                 dec.decode(new Uint8Array([0xE2]), {stream: true}); \
+                 var result = dec.decode(new Uint8Array([0x82, 0xAC])); \
+                 result === '€'"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn text_decoder_stream_mode_final_flush_clears_buffer() {
+            // After streaming, final decode() with no args flushes (returns empty or replacement).
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var dec = new TextDecoder(); \
+                 dec.decode(new Uint8Array([72]), {stream: true}); \
+                 var flushed = dec.decode(); \
+                 typeof flushed === 'string'"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn text_decoder_no_arg_returns_empty_string() {
+            // decode() with no arguments (empty flush) always returns a string.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var dec = new TextDecoder(); \
+                 dec.decode() === '' && dec.decode(null) === ''"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn text_decoder_stream_decoder_stream_splits_multibyte() {
+            // TextDecoderStream uses {stream:true} internally — writing bytes of €
+            // in two chunks must produce the character exactly once.
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var out = []; \
+                 var tds = new TextDecoderStream(); \
+                 var writer = tds.writable.getWriter(); \
+                 var reader = tds.readable.getReader(); \
+                 writer.write(new Uint8Array([0xE2])); \
+                 reader.read().then(function(r) { if (!r.done) out.push(r.value); });"
+            ).unwrap();
+            rt.eval(
+                "writer.write(new Uint8Array([0x82, 0xAC])); \
+                 reader.read().then(function(r) { if (!r.done) out.push(r.value); });"
+            ).unwrap();
+            let r = rt.eval("out.join('') === '€'").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn text_encoder_stream_encodes_string() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var out = []; \
+                 var tes = new TextEncoderStream(); \
+                 var writer = tes.writable.getWriter(); \
+                 var reader = tes.readable.getReader(); \
+                 writer.write('Hi'); \
+                 reader.read().then(function(r) { out.push(r.value); });"
+            ).unwrap();
+            let r = rt.eval(
+                "out.length === 1 && out[0] instanceof Uint8Array && out[0][0] === 72"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn byte_length_queuing_strategy() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var s = new ByteLengthQueuingStrategy({ highWaterMark: 16 }); \
+                 s.highWaterMark === 16 && s.size(new Uint8Array(4)) === 4"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn count_queuing_strategy() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var s = new CountQueuingStrategy({ highWaterMark: 10 }); \
+                 s.highWaterMark === 10 && s.size('anything') === 1"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn readable_stream_from_array() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var done = false; \
+                 var rs = ReadableStream.from([10, 20, 30]); \
+                 var reader = rs.getReader(); \
+                 reader.read().then(function(r) { done = r.value === 10 && !r.done; });"
+            ).unwrap();
+            let r = rt.eval("done").unwrap();
             assert_eq!(r, lumen_core::JsValue::Bool(true));
         }
     }
