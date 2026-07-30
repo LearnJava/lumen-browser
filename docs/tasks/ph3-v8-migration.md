@@ -1965,6 +1965,34 @@ untouched. `cargo test -p lumen-js --features v8-backend` — 2570/2570 (unchang
 QuickJS, +26 gated V8); default-feature `cargo test -p lumen-js` — 1681/1681. Both clippy passes
 (with and without `v8-backend`) clean.
 
+### S12b-24-event-classes — eighteenth porting slice (2026-07-30, branch p1-v8-s12b-24-event-classes)
+
+The "Event class hierarchy" row, ported whole into `mod tests::v8_event_classes`: constructors +
+`instanceof` chains + field checks for `UIEvent`/`MouseEvent`/`KeyboardEvent`/`InputEvent`/
+`FocusEvent`/`WheelEvent`/`PointerEvent`/`AnimationEvent`/`TransitionEvent`/`StorageEvent`/
+`PopStateEvent`/`HashChangeEvent`/`ErrorEvent`/`SubmitEvent`/`CompositionEvent`, the
+`_lumen_dispatch_mouse_event`/`_lumen_dispatch_key_event`/`_lumen_dispatch_pointer_event`/
+`_lumen_dispatch_submit_event` dispatch natives (coordinates, modifier bitmask, bubbling vs
+non-bubbling delivery, BUG-437 submit-event `preventDefault`/submitter contract), and the
+`window.<EventClass>` existence roll-call — **31 tests** (matched the scoping table's "~31" guess
+exactly), QuickJS copies deleted. Actual range on start — `dom.rs:16190-16594`, immediately after
+the just-merged page-visibility-beacon block and ending right before
+`// ─── WHATWG Streams API tests`, exactly where that slice's own note predicted.
+
+**No plumbing needed — every `_lumen_dispatch_*` native is plain JS in `WEB_API_SHIM`, not a
+Rust-side binding.** Unlike the geometry/scroll slice (which had to add `fire_*` methods to
+`V8JsRuntime`) or the page-visibility slice (`set_document_visibility`), this range's only runtime
+touchpoint is `rt.eval()` through the shared `runtime_with_dom` helper (twin `v8_runtime_with_dom`,
+copied verbatim from the prior slice). All four dispatch functions and every `Event` subclass
+constructor already live in the engine-agnostic shim string, so the port was a pure
+`runtime_with_dom` → `v8_runtime_with_dom` rename with zero body edits.
+
+Zero engine divergences, zero loose-assertion tightenings — no `_lumen_drain_microtasks` calls, no
+promise bodies read across two `eval()`s, nothing async in this range at all. 31/31 green on the
+first run. `cargo test -p lumen-js --features v8-backend` — 2570/2570 (unchanged: −31 ungated
+QuickJS, +31 gated V8); default-feature `cargo test -p lumen-js` — 1650/1650 (was 1681, −31). Both
+clippy passes (with and without `v8-backend`) clean.
+
 ---
 
 ## Risks (Rev 2)
