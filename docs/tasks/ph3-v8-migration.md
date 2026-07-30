@@ -2063,6 +2063,34 @@ were never listed in their own scoping-table row, and were too small to justify 
 gated V8); default-feature `cargo test -p lumen-js` — 1565/1565 (was 1608, −43). Both clippy passes
 (with and without `v8-backend`) clean.
 
+### S12b-24-form-constraint-validation — twenty-first porting slice (2026-07-30, branch p1-v8-s12b-24-form-constraint-validation)
+
+Form Constraint Validation API (`ValidityState`, `validity.{valueMissing,typeMismatch,
+patternMismatch,tooLong,tooShort,rangeUnderflow,rangeOverflow,stepMismatch,customError,valid}`,
+`checkValidity()`/`reportValidity()` + `invalid` event, `setCustomValidity()`/`validationMessage`,
+`form.elements`/`noValidate`) plus the tests that shared its header block: `input.value`/`type`
+reflection, the BUG-436 `_lumen_set_field_value` value-shadow sync regression test, and
+`HTMLInputElement.showPicker()` — 32 tests (brief estimated ~31) ported to
+`mod v8_form_constraint_validation`, QuickJS copies deleted.
+
+Same line-drift finding as the two prior slices: the table's recorded `27279-27607` range was
+stale by the time this slice started. Located the block by grepping for `make_form_doc`/
+`checkValidity`/`ValidityState` instead — it sat at `dom.rs:16160-16459`, immediately after the
+still-blocked Trusted Types section (see `S12b-24-details-dialog-popover` above) and immediately
+before `// ── document.caretPositionFromPoint tests`, i.e. right before where
+`S12b-24-details-dialog-popover` itself started. All ported slices so far have landed in original
+file order once each area's tests are located by content grep rather than by trusting recorded
+line numbers.
+
+All 32 tests are synchronous (no `.then()`/microtask timing, no `_lumen_drain_microtasks` calls in
+this cluster) — ported as a literal copy: `bool_eval`/`runtime_with_dom` renamed to their
+`V8JsRuntime` twins (`v8_runtime_with_dom`), test bodies and the shared `make_form_doc` fixture
+unchanged. 32/32 green on the first run, no test bodies needed adjustment.
+
+`cargo test -p lumen-js --features v8-backend` — 2570/2570 (unchanged: −32 ungated QuickJS, +32
+gated V8); default-feature `cargo test -p lumen-js` — 1533/1533 (was 1565, −32). Both clippy passes
+(with and without `v8-backend`) clean.
+
 ---
 
 ## Risks (Rev 2)
