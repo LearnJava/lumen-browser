@@ -5567,6 +5567,46 @@ mod tests {
         assert!(rt.take_navigate_request().is_none());
     }
 
+    /// BUG-439: a JS-synthesized `click` (`el.dispatchEvent(new MouseEvent(...))`,
+    /// as opposed to the native `HTMLElement.prototype.click()`) must still run
+    /// the target's activation behavior — here, submitting the owning form —
+    /// as long as the event was not cancelled and is not already trusted.
+    #[test]
+    fn dispatch_event_click_runs_activation_behavior_for_submit_button() {
+        let rt = runtime_with_dom(make_doc(), "https://example.com/page");
+        rt.eval(
+            "var form = document.createElement('form');
+             var btn = document.createElement('button');
+             btn.type = 'submit';
+             form.appendChild(btn);
+             document.body.appendChild(form);
+             btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));",
+        )
+        .unwrap();
+        match rt.take_navigate_request() {
+            Some(crate::dom::NavigateRequest::SubmitForm { .. }) => {}
+            other => panic!("expected NavigateRequest::SubmitForm, got {other:?}"),
+        }
+    }
+
+    /// Same as above, but the `click` handler calls `preventDefault()` — the
+    /// activation behavior (form submit) must not run.
+    #[test]
+    fn dispatch_event_click_cancelled_skips_activation_behavior() {
+        let rt = runtime_with_dom(make_doc(), "https://example.com/page");
+        rt.eval(
+            "var form = document.createElement('form');
+             var btn = document.createElement('button');
+             btn.type = 'submit';
+             btn.addEventListener('click', function(e) { e.preventDefault(); });
+             form.appendChild(btn);
+             document.body.appendChild(form);
+             btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));",
+        )
+        .unwrap();
+        assert!(rt.take_navigate_request().is_none());
+    }
+
     // ── S11: suspend/resume (partial 10C.2) ───────────────────────────────────
 
     #[test]
