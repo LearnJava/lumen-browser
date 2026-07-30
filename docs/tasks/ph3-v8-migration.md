@@ -2200,6 +2200,57 @@ default-feature count here — not re-derived, out of scope for this slice). Bot
 
 ---
 
+### S12b-24-css-storage-nav-misc — twenty-sixth porting slice (2026-07-30, branch p1-v8-s12b-24-css-storage-nav-misc)
+
+First slice into the flat ~209-test tail block flagged by `S12b-24-fullscreen-locks` (no nested
+`mod v8_*` boundary until `mod v8_core`). The single QuickJS-side header comment covering this
+chunk — `// ── CSS.supports() / CSS.escape() ──` — turned out to be stale: it labelled a
+grab-bag of six unrelated feature clusters that had accreted under it over time with no further
+headers, not just CSS.supports/escape. Ported all six, minus the one still-blocked cluster mixed
+in among them:
+
+- CSS.supports() / CSS.escape() (12 tests)
+- Storage Access API (`document.requestStorageAccess`/`hasStorageAccess`/etc., 4 tests)
+- `EventTarget` global + dependent-API installation (3 tests) — this is the
+  `event_target_dependent_apis_installed` cluster flagged in the original `S12b-24 — scoping
+  only` note (originally at `:29308`, drifted down to `:16811` by the time this slice started as
+  earlier slices removed content above it) for splitting into 5-6 tests; split the combined
+  assert (`navigator.hid`/`usb`/`bluetooth`/`serial`/`xr`/`window.navigation` all `typeof ===
+  'object'` in one `&&` chain) into 6 standalone tests, one per API, for per-API failure
+  attribution — kept the two adjacent non-combined `EventTarget` tests (constructibility, dispatch)
+  as single tests since they weren't part of the flagged combined assertion
+- Navigation API `entries()`/`currentEntry`/`canGoBack`/`canGoForward` + History-fallback
+  (`history.go`/`history.length`) (5 tests) — uses `rt.take_nav_updates()`/
+  `rt.take_history_traversals()` and the unqualified `NavAction` enum; both already proven
+  reachable from a nested `mod v8_*` via `use super::*` (`NavigateRequest` in
+  `S12b-24-nav-url-storage`), confirmed working unchanged here
+- `CSS.registerProperty()` (7 tests)
+- `PerformanceObserver` misc: paint/LCP/layout-shift entry delivery, `takeRecords`, `buffered`,
+  `disconnect` (5 tests) — distinct fn names from the already-ported `mod v8_perf_observers`
+  (slice 5), no collision
+
+**Second Trusted Types cluster found and left in place.** Mixed in among the above (right after
+`css_escape_is_function`, before `storage_access_request_storage_access_exists`) sat an 11-test
+Trusted Types cluster (`trusted_types_is_defined`, `createPolicy`/`createHTML`/`createScript`/
+`createScriptURL`, default policy, duplicate-name handling, `isHTML`/`isScript`/`isScriptURL`) —
+the "~10 tests in a second cluster" the original scoping note guessed was at `:29019-29517` (that
+line estimate, like `event_target_dependent_apis_installed`'s, had drifted from earlier slices
+removing content above it; actual position by this slice was `:16610-16744`). Same block as the
+first Trusted Types cluster (before `mod v8_fullscreen_locks`): blocked on
+`V8JsRuntime::install_dom` not calling `crate::trusted_types::install_trusted_types_bindings`.
+Left untouched in place, with a new comment pointing back at the first cluster's explanation,
+directly after the new `mod v8_css_storage_nav_misc` (so both Trusted Types clusters are now
+adjacent to each other, one right before `mod v8_fullscreen_locks` and one right after
+`mod v8_css_storage_nav_misc`).
+
+41/41 passed on the first run. `cargo test -p lumen-js --features v8-backend` — 2575/2575 (+5 net:
+−36 ungated QuickJS, +41 gated V8, the +5 delta from the 1-test-becomes-6-tests split).
+Default-feature `cargo test -p lumen-js` — 1375/1375 (down exactly 36 from the 1411 recorded after
+`S12b-24-fullscreen-locks`, matching the QuickJS tests removed). Both clippy passes (with and
+without `v8-backend`) clean.
+
+---
+
 ## Risks (Rev 2)
 
 | Risk | Likelihood | Mitigation |
