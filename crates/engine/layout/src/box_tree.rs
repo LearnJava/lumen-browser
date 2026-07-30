@@ -5903,8 +5903,21 @@ fn flex_item_min_main_width(
 }
 
 /// Рекурсивно смещает rect.y всего поддерева на dy (для vertical-align).
+///
+/// BUG-424 (в): `svg_paint_matrix` (document-space CTM for rotated/skewed SVG
+/// shapes, `lay_out_svg_element_position`) bakes in the viewport origin at the
+/// time it was computed. When flex/grid cross-axis alignment (`AlignValue::
+/// Center`/`End` in `lay_out_flex`) relocates an already-laid-out SVG subtree
+/// by patching `rect.y` instead of re-running SVG layout, the matrix used to
+/// silently keep the stale origin — `rect` (used by the axis-aligned fast
+/// path) moved, the CTM (used only when `has_rot_skew`) did not, drifting the
+/// two out of sync by exactly this shift. Translating the matrix in lockstep
+/// keeps both representations of the same box consistent.
 fn shift_y_box(b: &mut LayoutBox, dy: f32) {
     b.rect.y += dy;
+    if let BoxKind::SvgShape { svg_paint_matrix, .. } = &mut b.kind {
+        svg_paint_matrix.matrix[5] += dy;
+    }
     for child in &mut b.children {
         shift_y_box(child, dy);
     }
@@ -5912,12 +5925,19 @@ fn shift_y_box(b: &mut LayoutBox, dy: f32) {
 
 /// Рекурсивно смещает rect всего поддерева на (dx, dy).
 /// Используется при позиционировании абсолютных потомков.
+///
+/// BUG-424 (в): keeps `svg_paint_matrix` in sync with `rect` — see
+/// `shift_y_box` for why this matters.
 fn shift_tree(b: &mut LayoutBox, dx: f32, dy: f32) {
     if dx == 0.0 && dy == 0.0 {
         return;
     }
     b.rect.x += dx;
     b.rect.y += dy;
+    if let BoxKind::SvgShape { svg_paint_matrix, .. } = &mut b.kind {
+        svg_paint_matrix.matrix[4] += dx;
+        svg_paint_matrix.matrix[5] += dy;
+    }
     for child in &mut b.children {
         shift_tree(child, dx, dy);
     }
@@ -15060,6 +15080,48 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = super::layout(&doc, &sheet, lumen_core::geom::Size::new(200.0, 200.0));
         assert!(!root.children.is_empty());
+    }
+
+    #[test]
+    fn bug424_flex_centered_svg_use_path_ctm_tracks_alignment() {
+        // BUG-424 (в): a flex-centered SVG icon (toolbar button, `align-items:
+        // center`) whose content is a `<use>` onto a `<symbol viewBox>`. Before
+        // the fix, `AlignValue::Center`'s `shift_y_box` moved `rect.y` to the
+        // centered position but left the `Path` shape's `svg_paint_matrix`
+        // (the CTM paint uses for rotated/skewed shapes, BUG-244) pinned to the
+        // pre-alignment origin — drifting the two representations of the same
+        // box out of sync by the alignment offset.
+        let css = ".tb-btn{width:26px;height:26px;display:flex;align-items:center;justify-content:center;}";
+        let html = r##"
+            <div class="tb-btn"><svg width="14" height="14"><symbol id="i-back" viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></symbol><use href="#i-back"/></svg></div>
+        "##;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, lumen_core::geom::Size::new(400.0, 400.0));
+        fn find_svg_root(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            if matches!(b.kind, super::BoxKind::SvgRoot { .. }) { return Some(b); }
+            b.children.iter().find_map(find_svg_root)
+        }
+        fn find_path_shape(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            if matches!(&b.kind, super::BoxKind::SvgShape { shape: super::SvgShapeKind::Path { .. }, .. }) {
+                return Some(b);
+            }
+            b.children.iter().find_map(find_path_shape)
+        }
+        let svg_root = find_svg_root(&root).expect("svg root box");
+        // 26px button, 14px icon, align-items:center → icon top = (26-14)/2 = 6px
+        // below the button's own top; confirms flex actually centered this box
+        // (not just an assumption about layout details this test doesn't own).
+        assert!((svg_root.rect.y - 14.0).abs() < 0.01, "expected centered svg root y=14, got {}", svg_root.rect.y);
+        let path = find_path_shape(&root).expect("path shape box");
+        let super::BoxKind::SvgShape { svg_paint_matrix, .. } = &path.kind else { unreachable!() };
+        // The icon's own viewBox→viewport scale is centered (no letterboxing, tx=ty=0),
+        // so the CTM's translation must equal the svg root's own document-space origin.
+        assert!((svg_paint_matrix.matrix[4] - svg_root.rect.x).abs() < 0.01,
+            "svg_paint_matrix tx should track svg root x={}, got {}", svg_root.rect.x, svg_paint_matrix.matrix[4]);
+        assert!((svg_paint_matrix.matrix[5] - svg_root.rect.y).abs() < 0.01,
+            "svg_paint_matrix ty should track svg root y={} (flex-centered), got {} — BUG-424 (в): shift_y_box didn't move the CTM",
+            svg_root.rect.y, svg_paint_matrix.matrix[5]);
     }
 
     // ── ::first-letter / ::first-line CSS wiring ─────────────────────────────
