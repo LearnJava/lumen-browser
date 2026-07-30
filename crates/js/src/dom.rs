@@ -16186,161 +16186,6 @@ mod tests {
     }
 
 
-    // ── Web Worker tests (WHATWG Web Workers §4) ─────────────────────────────
-
-    #[test]
-    fn worker_class_exists() {
-        let rt = runtime_with_dom(make_doc());
-        assert!(bool_eval(&rt, "typeof Worker === 'function'"));
-    }
-
-    #[test]
-    fn window_worker_class_exists() {
-        let rt = runtime_with_dom(make_doc());
-        assert!(bool_eval(&rt, "typeof window.Worker === 'function'"));
-    }
-
-    #[test]
-    fn worker_constructor_returns_instance() {
-        let rt = runtime_with_dom(make_doc());
-        // Use a data: URL so no network fetch is needed.
-        assert!(bool_eval(
-            &rt,
-            "var w = new Worker('data:text/javascript,'); w instanceof Worker"
-        ));
-    }
-
-    #[test]
-    fn worker_has_post_message() {
-        let rt = runtime_with_dom(make_doc());
-        assert!(bool_eval(
-            &rt,
-            "var w = new Worker('data:text/javascript,'); typeof w.postMessage === 'function'"
-        ));
-    }
-
-    #[test]
-    fn worker_has_terminate() {
-        let rt = runtime_with_dom(make_doc());
-        assert!(bool_eval(
-            &rt,
-            "var w = new Worker('data:text/javascript,'); typeof w.terminate === 'function'"
-        ));
-    }
-
-    #[test]
-    fn worker_has_add_event_listener() {
-        let rt = runtime_with_dom(make_doc());
-        assert!(bool_eval(
-            &rt,
-            "var w = new Worker('data:text/javascript,'); typeof w.addEventListener === 'function'"
-        ));
-    }
-
-    #[test]
-    fn worker_onmessage_is_null_by_default() {
-        let rt = runtime_with_dom(make_doc());
-        assert!(bool_eval(
-            &rt,
-            "var w = new Worker('data:text/javascript,'); w.onmessage === null"
-        ));
-    }
-
-    #[test]
-    fn worker_onmessage_setter_and_getter() {
-        let rt = runtime_with_dom(make_doc());
-        assert!(bool_eval(
-            &rt,
-            "var w = new Worker('data:text/javascript,'); \
-             var fn = function(e){}; \
-             w.onmessage = fn; \
-             w.onmessage === fn"
-        ));
-    }
-
-    #[test]
-    fn worker_terminate_removes_from_registry() {
-        let rt = runtime_with_dom(make_doc());
-        // terminate() should not throw and the worker object still exists.
-        assert!(bool_eval(
-            &rt,
-            "var w = new Worker('data:text/javascript,'); \
-             w.terminate(); \
-             w instanceof Worker"
-        ));
-    }
-
-    #[test]
-    fn worker_roundtrip_message_via_pump() {
-        use std::time::Duration;
-        let rt = runtime_with_dom(make_doc());
-        // Worker script: echo back any message with a 'reply' wrapper.
-        let script = "data:text/javascript,onmessage%20%3D%20function(e)%7BpostMessage(%7Breply%3Ae.data%7D)%3B%7D";
-        rt.eval(&format!("var w = new Worker('{}'); var received = null; w.onmessage = function(e){{received=e.data.reply;}}; w.postMessage(42);", script)).unwrap();
-        // Give the worker thread time to process the message.
-        std::thread::sleep(Duration::from_millis(150));
-        rt.pump_workers();
-        let result = rt.eval("received").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Number(42.0));
-    }
-
-    #[test]
-    fn worker_add_event_listener_fires_on_pump() {
-        use std::time::Duration;
-        let rt = runtime_with_dom(make_doc());
-        let script = "data:text/javascript,onmessage%20%3D%20function(e)%7BpostMessage(e.data%20*%202)%3B%7D";
-        rt.eval(&format!(
-            "var w = new Worker('{}'); \
-             var got = null; \
-             w.addEventListener('message', function(e){{got=e.data;}}); \
-             w.postMessage(7);",
-            script
-        ))
-        .unwrap();
-        std::thread::sleep(Duration::from_millis(150));
-        rt.pump_workers();
-        let result = rt.eval("got").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Number(14.0));
-    }
-
-    #[test]
-    fn worker_data_url_base64_script() {
-        use std::time::Duration;
-        // base64("postMessage('hello');") = "cG9zdE1lc3NhZ2UoJ2hlbGxvJyk7"
-        let rt = runtime_with_dom(make_doc());
-        rt.eval(
-            "var w = new Worker('data:text/javascript;base64,cG9zdE1lc3NhZ2UoJ2hlbGxvJyk7'); \
-             var got = null; \
-             w.onmessage = function(e){ got = e.data; };",
-        )
-        .unwrap();
-        std::thread::sleep(Duration::from_millis(150));
-        rt.pump_workers();
-        let result = rt.eval("got").unwrap();
-        assert_eq!(result, lumen_core::JsValue::String("hello".into()));
-    }
-
-    #[test]
-    fn worker_blob_url_script() {
-        use std::time::Duration;
-        let rt = runtime_with_dom(make_doc());
-        // Create a blob URL from a JS Blob and use it as the worker script.
-        rt.eval(
-            "var blob = new Blob([\"onmessage=function(e){postMessage(e.data+1);}\"], \
-              {type:'text/javascript'}); \
-             var url = URL.createObjectURL(blob); \
-             var w = new Worker(url); \
-             var res = null; \
-             w.onmessage = function(e){ res = e.data; }; \
-             w.postMessage(10);",
-        )
-        .unwrap();
-        std::thread::sleep(Duration::from_millis(150));
-        rt.pump_workers();
-        let result = rt.eval("res").unwrap();
-        assert_eq!(result, lumen_core::JsValue::Number(11.0));
-    }
-
     // ── _lumen_gc_collect tests ────────────────────────────────────────────────
 
     #[test]
@@ -31701,6 +31546,180 @@ mod tests {
         fn cross_origin_isolated_is_false() {
             let rt = v8_runtime_with_dom(make_doc());
             assert!(bool_eval(&rt, "window.crossOriginIsolated === false"));
+        }
+    }
+
+    #[cfg(feature = "v8-backend")]
+    mod v8_webworker {
+        use super::*;
+        use crate::v8_runtime::V8JsRuntime;
+
+        /// V8 twin of [`super::runtime_with_dom`].
+        fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
+            let rt = V8JsRuntime::new().unwrap();
+            rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+            rt.install_dom(doc, "", None, None, None, None, None, None, None, None, false)
+                .unwrap();
+            rt
+        }
+
+        fn bool_eval(rt: &V8JsRuntime, script: &str) -> bool {
+            rt.eval(script).unwrap() == lumen_core::JsValue::Bool(true)
+        }
+
+        // ── Web Worker tests (WHATWG Web Workers §4) ─────────────────────────────
+
+        #[test]
+        fn worker_class_exists() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(&rt, "typeof Worker === 'function'"));
+        }
+
+        #[test]
+        fn window_worker_class_exists() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(&rt, "typeof window.Worker === 'function'"));
+        }
+
+        #[test]
+        fn worker_constructor_returns_instance() {
+            let rt = v8_runtime_with_dom(make_doc());
+            // Use a data: URL so no network fetch is needed.
+            assert!(bool_eval(
+                &rt,
+                "var w = new Worker('data:text/javascript,'); w instanceof Worker"
+            ));
+        }
+
+        #[test]
+        fn worker_has_post_message() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(
+                &rt,
+                "var w = new Worker('data:text/javascript,'); typeof w.postMessage === 'function'"
+            ));
+        }
+
+        #[test]
+        fn worker_has_terminate() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(
+                &rt,
+                "var w = new Worker('data:text/javascript,'); typeof w.terminate === 'function'"
+            ));
+        }
+
+        #[test]
+        fn worker_has_add_event_listener() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(
+                &rt,
+                "var w = new Worker('data:text/javascript,'); typeof w.addEventListener === 'function'"
+            ));
+        }
+
+        #[test]
+        fn worker_onmessage_is_null_by_default() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(
+                &rt,
+                "var w = new Worker('data:text/javascript,'); w.onmessage === null"
+            ));
+        }
+
+        #[test]
+        fn worker_onmessage_setter_and_getter() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(
+                &rt,
+                "var w = new Worker('data:text/javascript,'); \
+                 var fn = function(e){}; \
+                 w.onmessage = fn; \
+                 w.onmessage === fn"
+            ));
+        }
+
+        #[test]
+        fn worker_terminate_removes_from_registry() {
+            let rt = v8_runtime_with_dom(make_doc());
+            // terminate() should not throw and the worker object still exists.
+            assert!(bool_eval(
+                &rt,
+                "var w = new Worker('data:text/javascript,'); \
+                 w.terminate(); \
+                 w instanceof Worker"
+            ));
+        }
+
+        #[test]
+        fn worker_roundtrip_message_via_pump() {
+            use std::time::Duration;
+            let rt = v8_runtime_with_dom(make_doc());
+            // Worker script: echo back any message with a 'reply' wrapper.
+            let script = "data:text/javascript,onmessage%20%3D%20function(e)%7BpostMessage(%7Breply%3Ae.data%7D)%3B%7D";
+            rt.eval(&format!("var w = new Worker('{}'); var received = null; w.onmessage = function(e){{received=e.data.reply;}}; w.postMessage(42);", script)).unwrap();
+            // Give the worker thread time to process the message.
+            std::thread::sleep(Duration::from_millis(150));
+            rt.pump_workers();
+            let result = rt.eval("received").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(42.0));
+        }
+
+        #[test]
+        fn worker_add_event_listener_fires_on_pump() {
+            use std::time::Duration;
+            let rt = v8_runtime_with_dom(make_doc());
+            let script = "data:text/javascript,onmessage%20%3D%20function(e)%7BpostMessage(e.data%20*%202)%3B%7D";
+            rt.eval(&format!(
+                "var w = new Worker('{}'); \
+                 var got = null; \
+                 w.addEventListener('message', function(e){{got=e.data;}}); \
+                 w.postMessage(7);",
+                script
+            ))
+            .unwrap();
+            std::thread::sleep(Duration::from_millis(150));
+            rt.pump_workers();
+            let result = rt.eval("got").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(14.0));
+        }
+
+        #[test]
+        fn worker_data_url_base64_script() {
+            use std::time::Duration;
+            // base64("postMessage('hello');") = "cG9zdE1lc3NhZ2UoJ2hlbGxvJyk7"
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var w = new Worker('data:text/javascript;base64,cG9zdE1lc3NhZ2UoJ2hlbGxvJyk7'); \
+                 var got = null; \
+                 w.onmessage = function(e){ got = e.data; };",
+            )
+            .unwrap();
+            std::thread::sleep(Duration::from_millis(150));
+            rt.pump_workers();
+            let result = rt.eval("got").unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("hello".into()));
+        }
+
+        #[test]
+        fn worker_blob_url_script() {
+            use std::time::Duration;
+            let rt = v8_runtime_with_dom(make_doc());
+            // Create a blob URL from a JS Blob and use it as the worker script.
+            rt.eval(
+                "var blob = new Blob([\"onmessage=function(e){postMessage(e.data+1);}\"], \
+                  {type:'text/javascript'}); \
+                 var url = URL.createObjectURL(blob); \
+                 var w = new Worker(url); \
+                 var res = null; \
+                 w.onmessage = function(e){ res = e.data; }; \
+                 w.postMessage(10);",
+            )
+            .unwrap();
+            std::thread::sleep(Duration::from_millis(150));
+            rt.pump_workers();
+            let result = rt.eval("res").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(11.0));
         }
     }
 }
