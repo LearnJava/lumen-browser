@@ -1548,31 +1548,37 @@ impl V8JsRuntime {
         let d = Arc::clone(&doc);
         reg!(
             "_lumen_create_element",
-            move |tag: String| -> u32 {
+            move |tag: String| -> i32 {
                 let mut doc = d.lock().unwrap();
-                // Returns u32::MAX when MAX_DOM_NODES is reached; JS shim handles this.
+                // Returns -1 when MAX_DOM_NODES is reached; JS shim checks `nid < 0`.
+                // Must be i32, not u32: `IntoJsReturn for u32` widens via `as f64`,
+                // which turns a u32::MAX sentinel into the *positive* 4294967295
+                // (unlike the rquickjs FFI, which happened to truncate u32 to a
+                // signed 32-bit value) — the shim's `< 0` check would then miss the
+                // sentinel and index the arena out of bounds.
                 match doc.try_create_element(QualName::html(tag.to_ascii_lowercase())) {
-                    Ok(nid) => nid.index() as u32,
-                    Err(_) => u32::MAX,
+                    Ok(nid) => nid.index() as i32,
+                    Err(_) => -1,
                 }
             }
         );
         let d = Arc::clone(&doc);
         reg!(
             "_lumen_create_element_ns",
-            move |ns: String, local: String| -> u32 {
+            move |ns: String, local: String| -> i32 {
                 let mut doc = d.lock().unwrap();
                 // Foreign-content namespace selection. SVG keeps the local name's
                 // original case (case-sensitive tags like `linearGradient`); all
-                // other namespaces fall back to HTML. Returns u32::MAX on overflow.
+                // other namespaces fall back to HTML. Returns -1 on overflow (see
+                // `_lumen_create_element` above for why this must be i32, not u32).
                 let namespace = if ns == "http://www.w3.org/2000/svg" {
                     Namespace::Svg
                 } else {
                     Namespace::Html
                 };
                 match doc.try_create_element(QualName { namespace, local }) {
-                    Ok(nid) => nid.index() as u32,
-                    Err(_) => u32::MAX,
+                    Ok(nid) => nid.index() as i32,
+                    Err(_) => -1,
                 }
             }
         );
