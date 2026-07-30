@@ -2,9 +2,21 @@
 
 ## Status
 
-Proposed — the contract below is a proposal for review, not a user decision. It
-must land before `DEVX-7` (provenance), because `DEVX-7` builds an index keyed on
-identity and the current key is wrong.
+Accepted (2026-07-30). This is a technical contract, not a policy question — it
+needed review rather than a user decision, and leaving it `Proposed` would stall
+`DEVX-7` on a review with no reviewer. It must land **before** `DEVX-7`, because
+`DEVX-7` builds an index keyed on identity and the current key is wrong.
+
+**Scope of what is fixed here.** Three rules are binding and changing any of them
+needs a new ADR:
+
+1. absence of a DOM origin is expressed by `Option`, never by a sentinel value;
+2. identity is the pair `(node, role)`, never `node` alone;
+3. provenance lives in a side index, not as a field on `DisplayCommand`.
+
+Everything else — the exact `BoxRole` variants, field names, the span struct's
+layout — may be refined while implementing `DEVX-7` without a new ADR, as long as
+the three rules hold. Record such refinements in the `DEVX-7` commit body.
 
 ## Date
 

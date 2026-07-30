@@ -2,8 +2,9 @@
 
 ## Status
 
-Proposed — two questions (Q1, Q2 below) need a user decision before any `DEVX-7…16`
-code lands. Everything else in this ADR is decided.
+Accepted — the two questions that were open at drafting (token escape hatch, and
+whether L2 exists before v1.0) were decided by the user on 2026-07-30; see
+§Decided questions.
 
 ## Date
 
@@ -108,21 +109,33 @@ auto-generated per run, printed to stderr next to the port line, accepted as an
 MCP `initialize` parameter and a BiDi `session.new` capability. Tracked as
 `DEVX-15`, and it gates the release, not the track.
 
-### Open questions for the user (Q1, Q2)
+### Decided questions (user, 2026-07-30)
 
-- **Q1 — token delivery and the CI escape hatch.** Auto-generated token printed
-  to stderr, plus an explicit `--mcp-allow-anonymous` for CI convenience? Or no
-  escape hatch at all (CI reads the token from stderr like any other consumer)?
-  The escape hatch is a footgun that will end up in someone's script; the strict
-  option costs every harness a few lines.
-- **Q2 — does L2 exist before v1.0?** Option A: no L2 until the engine is
-  measured (`WPT-RUN-3` complete) — everything wire-exposed stays `x-`, and we
-  keep full freedom through Phase 3. Option B: promote a minimal L2 now
-  (`navigate`/`wait`/`query`/`eval`/`screenshot` — already de-facto stable and
-  spec-anchored) so external tooling has something to stand on. Recommendation:
-  **Option A**, because the identity contract (ADR-025) has to reshape
-  `box_tree.rs` first, and anything geometry-flavoured promoted before that would
-  be promoted onto a key we already know is wrong.
+- **Q1 — no escape hatch.** There is **no `--mcp-allow-anonymous`** and no other
+  way to run the automation ports without a token. Every consumer reads the token
+  from stderr, including our own (`graphic_tests/run.py`, `scripts/*_perf.py`,
+  `tests/wpt/*`) — those edits are inside `DEVX-15`'s scope, not a follow-up.
+  Rationale: every consumer of these ports today is ours, so being strict costs a
+  one-time edit in ~5 scripts; a convenience flag would outlive the convenience,
+  spreading into instructions and third-party scripts until the token is
+  decorative. A future session must not re-introduce the flag "just for CI" —
+  reopening this needs a new ADR.
+
+- **Q2 — Option A: no L2 before v1.0.** Every wire-exposed introspection
+  capability stays **L1** (`x-` prefixed, `"experimental": true`) for the whole of
+  Phase 3. The four L2 admission criteria and the promotion rule above stay in
+  force as the mechanism, but nothing is promoted through them yet. Rationale:
+  ADR-025 reshapes how elements are identified, so anything geometry-flavoured
+  promoted before that lands would be promoted onto a key we already know is
+  wrong; and with zero external consumers the promise buys nothing today while
+  costing the freedom the whole track depends on. The decision is deliberately
+  the reversible one — A → B is available at any time, B → A is not.
+
+  Practical consequence: the de-facto-stable tools (`navigate`, `wait`, `query`,
+  `eval`, `screenshot`) **keep their current unprefixed names** rather than being
+  renamed to `x-`. They predate this ADR and renaming them would break our own
+  tooling for no gain; they are simply not L2 — they are unpromoted L1 with
+  legacy names. New capabilities get the `x-` prefix. Revisit at v1.0.
 
 ## Alternatives considered
 
@@ -148,9 +161,9 @@ MCP `initialize` parameter and a BiDi `session.new` capability. Tracked as
   L2 small.
 - **Negative:** `docs/automation.md` grows a level column and must be kept
   accurate, or the levels become fiction.
-- **Future:** revisit at the v1.0 (Phase 3 → v1.0) boundary, or earlier if Q2 is
-  answered with Option B. The trigger for revisiting is the first external
-  consumer outside this repository.
+- **Future:** revisit at the v1.0 (Phase 3 → v1.0) boundary. The trigger for
+  revisiting Q2 earlier is the first external consumer outside this repository;
+  the trigger for revisiting Q1 is nothing short of a new ADR.
 
 ## Related
 
