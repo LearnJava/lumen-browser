@@ -2249,6 +2249,47 @@ Default-feature `cargo test -p lumen-js` — 1375/1375 (down exactly 36 from the
 `S12b-24-fullscreen-locks`, matching the QuickJS tests removed). Both clippy passes (with and
 without `v8-backend`) clean.
 
+### S12b-24-perf-typedom-node — twenty-seventh porting slice (2026-07-30, branch p1-v8-s12b-24-perf-typedom-node)
+
+First slice cut out of the flat ~99-test remainder after `S12b-24-css-storage-nav-misc` (still no
+nested `mod v8_*` boundary between `runtime_with_dom` and `mod v8_core`). Four adjacent clusters —
+Resource Timing L2 (E-2), the generic `_lumen_deliver_perf_entry` binding (O-2), Navigation Timing
+L2 (II-1), CSS Typed OM L1 (A-3) interleaved with the five BUG-281 document/element identity
+regression tests, DOM node-count/quota bindings, and the D-6 `chrome.runtime`/`browser.runtime`
+stubs — **42 tests** ported to `mod v8_perf_typedom_node`, QuickJS copies deleted. Located by
+grepping for `resource_timing_record_exists_in_entries`/`chrome_runtime_get_url` rather than
+trusting any recorded line range (none existed for this tail — it was never itemized in the
+original scoping table, only flagged as one contiguous ~209/~141/~99-test remainder by the three
+preceding slices): actual range at start was `dom.rs:17007-17510`, immediately after the second
+Trusted Types cluster (still QuickJS-only, left in place — same blocker as the first cluster, see
+`S12b-24-fullscreen-locks`) and immediately before `// ── HTML5 Drag and Drop API (HTML LS §9.10)`.
+All 42 tests are synchronous (no `.then()`/microtask timing anywhere in this cluster), so the
+S12b-2 promise-timing lesson didn't apply — ported as a literal copy, `runtime_with_dom` renamed to
+`v8_runtime_with_dom`.
+
+**Found and fixed [BUG-457](../../bugs/BUG-457-FIXED.md)**, a real V8/QuickJS marshalling
+divergence, not a test-authoring artifact: `dom_create_element_throws_quota_exceeded_when_full`
+crashed the whole test process on first run (`STATUS_STACK_BUFFER_OVERRUN`, arena index out of
+bounds by ~4 billion) instead of failing an assertion. `_lumen_create_element`/
+`_lumen_create_element_ns` (`v8_runtime.rs`) signal "arena full" with a `u32::MAX` sentinel that the
+engine-agnostic shim checks via `nid < 0` — a contract that only ever worked by rquickjs accident
+(its FFI truncates `u32` through a signed 32-bit intermediate, so `u32::MAX` comes out as `-1`).
+`IntoJsReturn for u32` (`v8_compat.rs`) instead widens via `self as f64`, so on V8 the same sentinel
+becomes the *positive* `4294967295.0`, the shim's `< 0` check never fires, and `_lumen_make_element`
+proceeds to wrap and index a node id 4 billion past the 50 000-slot arena — a panic that then
+crosses back through V8's native-callback FFI boundary and aborts the process instead of unwinding
+(same "no test can observe this as a red assertion" shape BUG-442/BUG-342 had). Fixed by changing
+both bindings' return type from `u32` to `i32` (`nid.index() as i32` / `-1` on error) — `IntoJsReturn
+for i32` already does the correct sign-preserving `as f64` conversion, and the shim's `nid < 0`
+check needed no change. No `V8JsRuntime`/shim changes otherwise; this class of bug (an
+rquickjs-marshalling-specific contract silently wrong on V8, uncovered only once its covering test
+left the QuickJS monolith) keeps recurring — see BUG-442/BUG-342/BUG-457, all three found by this
+same migration.
+
+42/42 passed after the fix. `cargo test -p lumen-js --features v8-backend` — 2575/2575 (unchanged:
+−42 ungated QuickJS, +42 gated V8); default-feature `cargo test -p lumen-js` — 1333/1333 (was 1375,
+−42). Both clippy passes (with and without `v8-backend`) clean.
+
 ---
 
 ## Risks (Rev 2)
