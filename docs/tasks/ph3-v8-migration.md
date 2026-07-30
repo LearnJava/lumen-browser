@@ -2290,6 +2290,34 @@ same migration.
 −42 ungated QuickJS, +42 gated V8); default-feature `cargo test -p lumen-js` — 1333/1333 (was 1375,
 −42). Both clippy passes (with and without `v8-backend`) clean.
 
+### S12b-24-dragdrop-scroll-pointer — twenty-eighth porting slice (2026-07-30, branch p1-v8-s12b-24-dragdrop-scroll-pointer)
+
+Second slice cut out of the flat tail after `S12b-24-perf-typedom-node` (still no nested `mod v8_*`
+boundary before `mod v8_core`). Seven adjacent clusters — HTML5 Drag and Drop API (`DataTransfer`/
+`DataTransferItem`/`DataTransferItemList`, `_lumen_dispatch_drag_event`), window scroll API (CSSOM
+View §4: `scrollTo`/`scrollBy`/`scroll`, `pageYOffset`, `PrintRequest`), "JJ Phase 5" modern HTML5
+APIs (`setHTMLUnsafe`/`getHTML`/`moveBefore`/`checkVisibility`), Web Animations API additional
+coverage (`DocumentTimeline`, `playbackRate`, `.ready`, `getAnimations()`), and two adjacent Pointer
+Events L3 §4.1 clusters (pointer capture altitude/azimuth + `getCoalescedEvents`/
+`getPredictedEvents`, and the real coalesced/predicted `pointermove` batch dispatcher plus
+`setPointerCapture`/`releasePointerCapture`/`gotpointercapture`/`lostpointercapture`) — **51 tests**
+ported to `mod v8_dragdrop_scroll_pointer`, QuickJS copies deleted. Range at start:
+`dom.rs:17526-18183`, immediately after the second Trusted Types cluster (still QuickJS-only, same
+blocker as before) and immediately before `// ── Pointer Lock API tests`. All native dispatch
+helpers used by this cluster (`_lumen_dispatch_drag_event`, `_lumen_dispatch_pointer_event`,
+`_lumen_dispatch_pointer_move_coalesced`, `_lumen_dispatch_capture_event`) turned out to be pure JS
+functions already living in the shared, engine-agnostic `WEB_API_SHIM` (`dom.rs:3791-4143`), not
+native Rust bindings — so unlike `S12b-24-webcrypto`/`S12b-24-page-visibility-beacon`, no new
+`V8JsRuntime` plumbing was needed; `take_page_scroll_requests`/`set_page_scroll_y`/
+`take_print_requests`/`PrintRequest` were already mirrored. All 51 tests are synchronous (no
+`.then()`/microtask timing in this cluster), so the S12b-2 promise-timing lesson didn't apply —
+ported as a literal copy, `runtime_with_dom` renamed to `v8_runtime_with_dom`. 51/51 passed on the
+first run, no engine divergences, no bugs found. `cargo test -p lumen-js --features v8-backend` —
+2575/2575 (unchanged: −51 ungated QuickJS, +51 gated V8); default-feature `cargo test -p lumen-js`
+— 1282/1282 (was 1333, −51). Both clippy passes (with and without `v8-backend`) clean. Remainder
+after this slice: ~29 tests (Pointer Lock API cluster, `dom.rs:18184+`), immediately before
+`mod v8_core` — the flat tail is now down to a single cluster.
+
 ---
 
 ## Risks (Rev 2)
