@@ -16187,316 +16187,6 @@ mod tests {
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
 
-    // ─── Page Visibility API tests ───────────────────────────────────────────
-
-    #[test]
-    fn page_visibility_initial_visible() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("document.visibilityState === 'visible' && document.hidden === false").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn apply_visibility_hidden() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var fired = false; \
-             document.addEventListener('visibilitychange', function() { fired = true; }); \
-             _lumen_apply_visibility(true); \
-             document.visibilityState === 'hidden' && document.hidden === true && fired"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn apply_visibility_noop_when_same() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var count = 0; \
-             document.addEventListener('visibilitychange', function() { count++; }); \
-             _lumen_apply_visibility(false); \
-             count"  // already visible → no event
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Number(0.0));
-    }
-
-    // ─── PH1-15: T1 pause/unpause via set_document_visibility ───────────────
-
-    #[test]
-    fn set_document_visibility_hidden_sets_document_hidden() {
-        let rt = runtime_with_dom(make_doc());
-        rt.set_document_visibility(true);
-        let r = rt.eval("document.hidden").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn set_document_visibility_visible_clears_document_hidden() {
-        let rt = runtime_with_dom(make_doc());
-        // Start hidden, then unpause.
-        rt.set_document_visibility(true);
-        rt.set_document_visibility(false);
-        let r = rt.eval("document.visibilityState === 'visible' && document.hidden === false").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn set_document_visibility_fires_visibilitychange_on_hide() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var fired = false; \
-             document.addEventListener('visibilitychange', function() { fired = true; }); \
-             true"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-        rt.set_document_visibility(true);
-        let fired = rt.eval("fired").unwrap();
-        assert_eq!(fired, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn set_document_visibility_fires_visibilitychange_on_show() {
-        let rt = runtime_with_dom(make_doc());
-        // Hide first.
-        rt.set_document_visibility(true);
-        // Register listener after hide.
-        rt.eval(
-            "var showFired = false; \
-             document.addEventListener('visibilitychange', function() { showFired = true; });"
-        ).unwrap();
-        rt.set_document_visibility(false);
-        let r = rt.eval("showFired").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn set_document_visibility_noop_on_same_state() {
-        let rt = runtime_with_dom(make_doc());
-        // Already visible — hiding fires event.
-        rt.eval(
-            "var count = 0; \
-             document.addEventListener('visibilitychange', function() { count++; });"
-        ).unwrap();
-        // Calling visible→visible: no event expected.
-        rt.set_document_visibility(false); // already visible
-        let r = rt.eval("count").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Number(0.0));
-    }
-
-    #[test]
-    fn set_document_visibility_heap_survives_pause_unpause() {
-        let rt = runtime_with_dom(make_doc());
-        rt.eval("globalThis.__t1_val__ = 99;").unwrap();
-        // Simulate T0 → T1 → T0.
-        rt.set_document_visibility(true);
-        rt.set_document_visibility(false);
-        let v = rt.eval("globalThis.__t1_val__").unwrap();
-        assert_eq!(v, lumen_core::JsValue::Number(99.0));
-    }
-
-    // ─── document.readyState + lifecycle tests ───────────────────────────────
-
-    #[test]
-    fn ready_state_initial_loading() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("document.readyState").unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("loading".into()));
-    }
-
-    #[test]
-    fn ready_state_interactive_fires_dcl() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var dcl = false; var rsc = false; \
-             document.addEventListener('readystatechange', function() { rsc = true; }); \
-             document.addEventListener('DOMContentLoaded', function() { dcl = true; }); \
-             _lumen_apply_ready_state('interactive'); \
-             document.readyState === 'interactive' && rsc && dcl"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn ready_state_complete_fires_load() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var loaded = false; \
-             window.addEventListener('load', function() { loaded = true; }); \
-             _lumen_apply_ready_state('interactive'); \
-             _lumen_apply_ready_state('complete'); \
-             document.readyState === 'complete' && loaded"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn ready_state_onload_handler() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var called = false; \
-             window.onload = function() { called = true; }; \
-             _lumen_apply_ready_state('interactive'); \
-             _lumen_apply_ready_state('complete'); \
-             called"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn ready_state_forward_only() {
-        let rt = runtime_with_dom(make_doc());
-        // Cannot go backward from 'complete' to 'interactive'
-        let r = rt.eval(
-            "_lumen_apply_ready_state('interactive'); \
-             _lumen_apply_ready_state('complete'); \
-             _lumen_apply_ready_state('interactive'); \
-             document.readyState"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("complete".into()));
-    }
-
-    #[test]
-    fn window_dcl_listener() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var got = false; \
-             window.addEventListener('DOMContentLoaded', function() { got = true; }); \
-             _lumen_apply_ready_state('interactive'); \
-             got"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    // ─── navigator.sendBeacon tests ──────────────────────────────────────────
-
-    #[test]
-    fn send_beacon_exists() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("typeof navigator.sendBeacon === 'function'").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn send_beacon_no_provider_returns_false() {
-        let rt = runtime_with_dom(make_doc());
-        // No fetch provider registered → _lumen_send_beacon returns false
-        let r = rt.eval("navigator.sendBeacon('https://example.com/beacon', 'data')").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(false));
-    }
-
-    #[test]
-    fn send_beacon_urlsearchparams_body() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "typeof navigator.sendBeacon === 'function' && \
-             navigator.sendBeacon('https://example.com/', new URLSearchParams('k=v')) === false"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn send_beacon_blob_body() {
-        let rt = runtime_with_dom(make_doc());
-        // Blob body: content_type taken from blob.type; no provider → false.
-        let r = rt.eval(
-            "var b = new Blob(['ping'], { type: 'application/octet-stream' }); \
-             navigator.sendBeacon('https://example.com/b', b) === false"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn send_beacon_with_provider_returns_true() {
-        // W3C Beacon §4: sendBeacon returns true when request is queued (not when complete).
-        let capture = CaptureFetch::new();
-        let rt = runtime_with_fetch(Arc::clone(&capture));
-        let r = rt.eval("navigator.sendBeacon('https://example.com/ping', 'hit')").unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    // ─── fetch keepalive + priority tests (FF-5) ─────────────────────────────
-
-    #[test]
-    fn fetch_keepalive_with_provider_fires_request() {
-        // keepalive=true in Phase 0 behaves like a normal fetch (synchronous path),
-        // so the provider is called and the response is resolved.
-        let capture = CaptureFetch::new();
-        let rt = runtime_with_fetch(Arc::clone(&capture));
-        // Keepalive POST with body — should fire the request synchronously.
-        let r = rt.eval(
-            "var p = fetch('https://example.com/analytics', \
-               { method: 'POST', body: 'ping', keepalive: true }); \
-             p instanceof Promise"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-        let calls = capture.calls.lock().unwrap();
-        assert_eq!(calls.len(), 1, "keepalive fetch must fire the network request");
-        assert_eq!(calls[0].0, "https://example.com/analytics");
-        assert_eq!(calls[0].1, "POST");
-    }
-
-    #[test]
-    fn fetch_keepalive_no_provider_returns_promise() {
-        // Without a provider, keepalive fetch behaves like a normal fetch:
-        // still returns a Promise (rejected), does not throw synchronously.
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "fetch('https://example.com/ping', { keepalive: true }) instanceof Promise"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn fetch_priority_high_and_low_accepted() {
-        // Fetch Priority Hints §2.2.6: 'high' and 'low' are valid values.
-        // Both should be accepted without error; Phase 0 ignores them for scheduling.
-        let capture = CaptureFetch::new();
-        let rt = runtime_with_fetch(Arc::clone(&capture));
-        rt.eval(
-            "fetch('https://example.com/h', { priority: 'high' }); \
-             fetch('https://example.com/l', { priority: 'low' })"
-        ).unwrap();
-        let calls = capture.calls.lock().unwrap();
-        assert_eq!(calls.len(), 2, "both priority fetch calls must fire");
-    }
-
-    #[test]
-    fn fetch_priority_invalid_normalizes_to_auto() {
-        // Any value outside 'high'|'low' normalises to 'auto' — no error thrown,
-        // request still fires normally.
-        let capture = CaptureFetch::new();
-        let rt = runtime_with_fetch(Arc::clone(&capture));
-        // 'urgent' is not a valid priority value; silently treated as 'auto'.
-        rt.eval("fetch('https://example.com/', { priority: 'urgent' })").unwrap();
-        let calls = capture.calls.lock().unwrap();
-        assert_eq!(calls.len(), 1, "invalid priority must not prevent request from firing");
-    }
-
-    // ─── URL.createObjectURL tests ────────────────────────────────────────────
-
-    #[test]
-    fn url_create_object_url() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var b = new Blob(['data']); \
-             var url = URL.createObjectURL(b); \
-             url.startsWith('blob:lumen/')"
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
-    #[test]
-    fn url_revoke_object_url() {
-        let rt = runtime_with_dom(make_doc());
-        let r = rt.eval(
-            "var b = new Blob(['x']); \
-             var u = URL.createObjectURL(b); \
-             URL.revokeObjectURL(u); \
-             u.startsWith('blob:lumen/')"  // revoke just removes from store, url string stays
-        ).unwrap();
-        assert_eq!(r, lumen_core::JsValue::Bool(true));
-    }
-
     // ─── Event class hierarchy tests ──────────────────────────────────────────
 
     #[test]
@@ -31597,6 +31287,361 @@ mod tests {
                 }
                 other => panic!("expected resolved data URL string, got {other:?}"),
             }
+        }
+    }
+
+    #[cfg(feature = "v8-backend")]
+    mod v8_page_visibility_beacon {
+        use super::*;
+        use crate::v8_runtime::V8JsRuntime;
+
+        /// V8 twin of [`super::runtime_with_dom`].
+        fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
+            let rt = V8JsRuntime::new().unwrap();
+            rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+            rt.install_dom(doc, "", None, None, None, None, None, None, None, None, false)
+                .unwrap();
+            rt
+        }
+
+        // Mock fetch provider that records calls to fetch_with_body_sync.
+        // V8 twin of [`super::CaptureFetch`].
+        type FetchCall = (String, String, String, Vec<u8>);
+        struct CaptureFetch {
+            calls: std::sync::Mutex<Vec<FetchCall>>,
+        }
+        impl CaptureFetch {
+            fn new() -> Arc<Self> {
+                Arc::new(Self { calls: std::sync::Mutex::new(vec![]) })
+            }
+        }
+        impl lumen_core::ext::JsFetchProvider for CaptureFetch {
+            fn fetch_sync(&self, url: &str, method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+                self.calls.lock().unwrap().push((url.into(), method.into(), String::new(), vec![]));
+                Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"ok".to_vec() })
+            }
+            fn fetch_with_body_sync(&self, url: &str, method: &str, content_type: &str, body: &[u8]) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+                self.calls.lock().unwrap().push((url.into(), method.into(), content_type.into(), body.to_vec()));
+                Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"ok".to_vec() })
+            }
+        }
+
+        /// V8 twin of [`super::runtime_with_fetch`].
+        fn v8_runtime_with_fetch(provider: Arc<CaptureFetch>) -> V8JsRuntime {
+            let rt = V8JsRuntime::new().unwrap();
+            let p: Arc<dyn lumen_core::ext::JsFetchProvider> = provider;
+            rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, false).unwrap();
+            rt
+        }
+
+        // ─── Page Visibility API tests ───────────────────────────────────────────
+
+        #[test]
+        fn page_visibility_initial_visible() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("document.visibilityState === 'visible' && document.hidden === false").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn apply_visibility_hidden() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var fired = false; \
+                 document.addEventListener('visibilitychange', function() { fired = true; }); \
+                 _lumen_apply_visibility(true); \
+                 document.visibilityState === 'hidden' && document.hidden === true && fired"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn apply_visibility_noop_when_same() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var count = 0; \
+                 document.addEventListener('visibilitychange', function() { count++; }); \
+                 _lumen_apply_visibility(false); \
+                 count"  // already visible → no event
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Number(0.0));
+        }
+
+        // ─── PH1-15: T1 pause/unpause via set_document_visibility ───────────────
+
+        #[test]
+        fn set_document_visibility_hidden_sets_document_hidden() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.set_document_visibility(true);
+            let r = rt.eval("document.hidden").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn set_document_visibility_visible_clears_document_hidden() {
+            let rt = v8_runtime_with_dom(make_doc());
+            // Start hidden, then unpause.
+            rt.set_document_visibility(true);
+            rt.set_document_visibility(false);
+            let r = rt.eval("document.visibilityState === 'visible' && document.hidden === false").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn set_document_visibility_fires_visibilitychange_on_hide() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var fired = false; \
+                 document.addEventListener('visibilitychange', function() { fired = true; }); \
+                 true"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+            rt.set_document_visibility(true);
+            let fired = rt.eval("fired").unwrap();
+            assert_eq!(fired, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn set_document_visibility_fires_visibilitychange_on_show() {
+            let rt = v8_runtime_with_dom(make_doc());
+            // Hide first.
+            rt.set_document_visibility(true);
+            // Register listener after hide.
+            rt.eval(
+                "var showFired = false; \
+                 document.addEventListener('visibilitychange', function() { showFired = true; });"
+            ).unwrap();
+            rt.set_document_visibility(false);
+            let r = rt.eval("showFired").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn set_document_visibility_noop_on_same_state() {
+            let rt = v8_runtime_with_dom(make_doc());
+            // Already visible — hiding fires event.
+            rt.eval(
+                "var count = 0; \
+                 document.addEventListener('visibilitychange', function() { count++; });"
+            ).unwrap();
+            // Calling visible→visible: no event expected.
+            rt.set_document_visibility(false); // already visible
+            let r = rt.eval("count").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Number(0.0));
+        }
+
+        #[test]
+        fn set_document_visibility_heap_survives_pause_unpause() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("globalThis.__t1_val__ = 99;").unwrap();
+            // Simulate T0 → T1 → T0.
+            rt.set_document_visibility(true);
+            rt.set_document_visibility(false);
+            let v = rt.eval("globalThis.__t1_val__").unwrap();
+            assert_eq!(v, lumen_core::JsValue::Number(99.0));
+        }
+
+        // ─── document.readyState + lifecycle tests ───────────────────────────────
+
+        #[test]
+        fn ready_state_initial_loading() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("document.readyState").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("loading".into()));
+        }
+
+        #[test]
+        fn ready_state_interactive_fires_dcl() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var dcl = false; var rsc = false; \
+                 document.addEventListener('readystatechange', function() { rsc = true; }); \
+                 document.addEventListener('DOMContentLoaded', function() { dcl = true; }); \
+                 _lumen_apply_ready_state('interactive'); \
+                 document.readyState === 'interactive' && rsc && dcl"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn ready_state_complete_fires_load() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var loaded = false; \
+                 window.addEventListener('load', function() { loaded = true; }); \
+                 _lumen_apply_ready_state('interactive'); \
+                 _lumen_apply_ready_state('complete'); \
+                 document.readyState === 'complete' && loaded"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn ready_state_onload_handler() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var called = false; \
+                 window.onload = function() { called = true; }; \
+                 _lumen_apply_ready_state('interactive'); \
+                 _lumen_apply_ready_state('complete'); \
+                 called"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn ready_state_forward_only() {
+            let rt = v8_runtime_with_dom(make_doc());
+            // Cannot go backward from 'complete' to 'interactive'
+            let r = rt.eval(
+                "_lumen_apply_ready_state('interactive'); \
+                 _lumen_apply_ready_state('complete'); \
+                 _lumen_apply_ready_state('interactive'); \
+                 document.readyState"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("complete".into()));
+        }
+
+        #[test]
+        fn window_dcl_listener() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var got = false; \
+                 window.addEventListener('DOMContentLoaded', function() { got = true; }); \
+                 _lumen_apply_ready_state('interactive'); \
+                 got"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        // ─── navigator.sendBeacon tests ──────────────────────────────────────────
+
+        #[test]
+        fn send_beacon_exists() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("typeof navigator.sendBeacon === 'function'").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn send_beacon_no_provider_returns_false() {
+            let rt = v8_runtime_with_dom(make_doc());
+            // No fetch provider registered → _lumen_send_beacon returns false
+            let r = rt.eval("navigator.sendBeacon('https://example.com/beacon', 'data')").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(false));
+        }
+
+        #[test]
+        fn send_beacon_urlsearchparams_body() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "typeof navigator.sendBeacon === 'function' && \
+                 navigator.sendBeacon('https://example.com/', new URLSearchParams('k=v')) === false"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn send_beacon_blob_body() {
+            let rt = v8_runtime_with_dom(make_doc());
+            // Blob body: content_type taken from blob.type; no provider → false.
+            let r = rt.eval(
+                "var b = new Blob(['ping'], { type: 'application/octet-stream' }); \
+                 navigator.sendBeacon('https://example.com/b', b) === false"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn send_beacon_with_provider_returns_true() {
+            // W3C Beacon §4: sendBeacon returns true when request is queued (not when complete).
+            let capture = CaptureFetch::new();
+            let rt = v8_runtime_with_fetch(Arc::clone(&capture));
+            let r = rt.eval("navigator.sendBeacon('https://example.com/ping', 'hit')").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        // ─── fetch keepalive + priority tests (FF-5) ─────────────────────────────
+
+        #[test]
+        fn fetch_keepalive_with_provider_fires_request() {
+            // keepalive=true in Phase 0 behaves like a normal fetch (synchronous path),
+            // so the provider is called and the response is resolved.
+            let capture = CaptureFetch::new();
+            let rt = v8_runtime_with_fetch(Arc::clone(&capture));
+            // Keepalive POST with body — should fire the request synchronously.
+            let r = rt.eval(
+                "var p = fetch('https://example.com/analytics', \
+                   { method: 'POST', body: 'ping', keepalive: true }); \
+                 p instanceof Promise"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+            let calls = capture.calls.lock().unwrap();
+            assert_eq!(calls.len(), 1, "keepalive fetch must fire the network request");
+            assert_eq!(calls[0].0, "https://example.com/analytics");
+            assert_eq!(calls[0].1, "POST");
+        }
+
+        #[test]
+        fn fetch_keepalive_no_provider_returns_promise() {
+            // Without a provider, keepalive fetch behaves like a normal fetch:
+            // still returns a Promise (rejected), does not throw synchronously.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "fetch('https://example.com/ping', { keepalive: true }) instanceof Promise"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn fetch_priority_high_and_low_accepted() {
+            // Fetch Priority Hints §2.2.6: 'high' and 'low' are valid values.
+            // Both should be accepted without error; Phase 0 ignores them for scheduling.
+            let capture = CaptureFetch::new();
+            let rt = v8_runtime_with_fetch(Arc::clone(&capture));
+            rt.eval(
+                "fetch('https://example.com/h', { priority: 'high' }); \
+                 fetch('https://example.com/l', { priority: 'low' })"
+            ).unwrap();
+            let calls = capture.calls.lock().unwrap();
+            assert_eq!(calls.len(), 2, "both priority fetch calls must fire");
+        }
+
+        #[test]
+        fn fetch_priority_invalid_normalizes_to_auto() {
+            // Any value outside 'high'|'low' normalises to 'auto' — no error thrown,
+            // request still fires normally.
+            let capture = CaptureFetch::new();
+            let rt = v8_runtime_with_fetch(Arc::clone(&capture));
+            // 'urgent' is not a valid priority value; silently treated as 'auto'.
+            rt.eval("fetch('https://example.com/', { priority: 'urgent' })").unwrap();
+            let calls = capture.calls.lock().unwrap();
+            assert_eq!(calls.len(), 1, "invalid priority must not prevent request from firing");
+        }
+
+        // ─── URL.createObjectURL tests ────────────────────────────────────────────
+
+        #[test]
+        fn url_create_object_url() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var b = new Blob(['data']); \
+                 var url = URL.createObjectURL(b); \
+                 url.startsWith('blob:lumen/')"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn url_revoke_object_url() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "var b = new Blob(['x']); \
+                 var u = URL.createObjectURL(b); \
+                 URL.revokeObjectURL(u); \
+                 u.startsWith('blob:lumen/')"  // revoke just removes from store, url string stays
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
         }
     }
 }
