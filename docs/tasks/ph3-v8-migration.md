@@ -2343,6 +2343,49 @@ under a nested `mod v8_*` (ported, gated on `v8-backend`) or one of the two Trus
 "in progress" until a dedicated slice wires Trusted Types into V8; that slice is the only remaining
 work in this task.
 
+### S12b-24-trusted-types — thirtieth (final) porting slice (2026-07-30, branch p1-v8-s12b-24-trusted-types)
+
+Closes S12b-24 entirely. The "11 tests total" estimate two slices back was wrong — it counted only
+the second Trusted Types cluster and missed the first one (8 tests, `dom.rs:16030-16154`, right
+before `mod v8_fullscreen_locks`); the real count was **19** across both clusters. Another instance
+of the "don't trust the header/count" gotcha that already hit `S12b-24-css-storage-nav-misc` and
+`S12b-24-pointer-lock` — should have grepped `#[test]` fn names directly instead of trusting the
+prose before starting.
+
+The actual blocker (`crate::trusted_types::install_trusted_types_bindings(ctx: &rquickjs::Ctx)` never
+called from `V8JsRuntime::install_dom`) turned out to be mechanical, as predicted: `TRUSTED_TYPES_SHIM`
+(now `pub(crate)`, was a private `const` inside `trusted_types.rs`) is plain JS with no
+`rquickjs`-specific API, so `V8JsRuntime::install_dom` evaluates it inline via the same
+`v8::Script::compile`/`run` pattern already used for `WEB_API_SHIM` and `DOM_EXCEPTION_POLYFILL`,
+right after the `WEB_API_SHIM` block. The QuickJS-only `install_trusted_types_bindings` helper is
+untouched and keeps serving `QuickJsRuntime::install_dom`.
+
+Both clusters merged into one `mod v8_trusted_types` (placed where the first cluster used to be),
+QuickJS copies of all 19 tests deleted. All bodies are synchronous `rt.eval(...)` — no promise/
+microtask timing, so the S12b-2 lesson doesn't apply; ported as literal copies. 19/19 passed on the
+first run, no engine divergences.
+
+Side cleanup, same pattern as `bool_eval` (`S12b-24-window-anim-compress`) and `runtime_with_url`/
+`runtime_with_storage` (`S12b-24-nav-url-storage`): the QuickJS-only `runtime_with_dom` helper in the
+outer (ungated) `mod tests` lost its last caller (both Trusted Types clusters were the only remaining
+ungated tests calling it) and was deleted outright. Unlike those precedents, `make_doc()` still has
+hundreds of live callers — just all of them inside `#[cfg(feature = "v8-backend")]` nested modules
+now that the flat tail is empty — so instead of deleting it, `make_doc()` and its outer `mod tests`'s
+three `use` lines (`super::*`, `lumen_core::JsRuntime`, `lumen_dom::{Document, NodeData, QualName}`)
+were gated with `#[cfg(feature = "v8-backend")]` too, since under a build without that feature they
+have zero callers left (fresh `dead_code`/`unused_imports` warnings that didn't exist before this
+slice — the previous slice's "flat tail is empty" state was only true because the two Trusted Types
+clusters were still keeping these alive under a default build).
+
+`cargo test -p lumen-js --features v8-backend` — 2575/2575 (unchanged: −19 ungated QuickJS, +19
+gated V8); default-feature `cargo test -p lumen-js` — 1234/1234 (was 1253, −19). Both clippy passes
+(with and without `v8-backend`) clean.
+
+**S12b-24 is now fully closed.** Every test that once lived in the `dom.rs::mod tests` monolith is
+under a nested `mod v8_*`, gated on `v8-backend`. The remaining rquickjs-removal work (deleting
+`QuickJsRuntime`/`QuickPersistentJs` themselves, the 119-file sweep, `Cargo.toml` feature cleanup)
+lives in the parent `P3-v8-s12b` task, not this one.
+
 ---
 
 ## Risks (Rev 2)
