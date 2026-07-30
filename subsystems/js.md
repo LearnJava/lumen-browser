@@ -714,6 +714,15 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
   activation sequence. `form.reset()` runs entirely in the document; `form.submit()`/`requestSubmit()`
   queue `NavigateRequest::SubmitForm`, which the shell answers with `Lumen::run_form_submission` — the
   same code path a real submit-button press takes.
+- **`dispatchEvent` runs activation behavior for script-synthesised clicks (BUG-439, 2026-07-30).**
+  `HTMLElement.prototype.click()` already ran `_lumen_run_activation_behavior` after its internal
+  dispatch (BUG-383), but `el.dispatchEvent(new MouseEvent('click', ...))` did not — that call lands on
+  the per-element `dispatchEvent` closure inside `_lumen_make_element` (`_lumen_dispatch(nid, evt)`,
+  *not* `_lumen_dispatch_rich`, which only serves shell-originated mouse/key dispatch), and it had no
+  activation step at all. Fixed by calling `_lumen_run_activation_behavior(nid, this)` there too, gated
+  on `!evt.defaultPrevented && evt.isTrusted === false && evt.type === 'click'` — covers submit/reset
+  buttons, `<a href>`/`<area>`, checkbox/radio, `<summary>`, `<label>` in one place since they all share
+  that same function.
 
 ## Deferred
 

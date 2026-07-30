@@ -6011,10 +6011,20 @@ function _lumen_build_element(nid) {
         },
         addEventListener:    function(type, fn) { _lumen_add_listener(nid, type, fn); },
         removeEventListener: function(type, fn) { _lumen_rm_listener(nid, type, fn); },
+        // HTML LS §6.10 activation behavior: a non-cancelled, script-dispatched
+        // `click` runs the same activation the native `click()` method runs
+        // (form submit, link navigation, checkbox toggle, …). Native clicks
+        // reach it through HTMLElement.prototype.click(); this is the
+        // dispatchEvent-side counterpart for `el.dispatchEvent(new
+        // MouseEvent('click', ...))` (BUG-439).
         dispatchEvent:       function(evt) {
             if (!evt) return true;
             evt.target = this; evt.currentTarget = this;
-            return _lumen_dispatch(nid, evt);
+            var notCancelled = _lumen_dispatch(nid, evt);
+            if (notCancelled && evt.isTrusted === false && evt.type === 'click') {
+                _lumen_run_activation_behavior(nid, this);
+            }
+            return notCancelled;
         },
         closest: function(sel) {
             var cur = nid;

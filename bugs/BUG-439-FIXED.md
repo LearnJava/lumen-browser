@@ -1,7 +1,7 @@
 # BUG-439 — activation behavior не реализовано: клик, синтезированный в JS, не отправляет форму и не активирует ссылку
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/dom.rs` — `_lumen_dispatch_rich` / живой `dispatchEvent`), shell (вся активация живёт в `Lumen::handle_click_at`, JS-слой в неё не входит)
+**Статус:** FIXED 2026-07-30
+**Компонент:** js (`crates/js/src/dom.rs` — элементный `dispatchEvent` в `_lumen_make_element`)
 **Найден:** 2026-07-29, P1, при разборе [BUG-437](BUG-437-FIXED.md) — третий пункт исходной заявки, подтверждён отдельным прогоном
 
 ## Симптом
@@ -61,3 +61,25 @@ checkbox/radio (`input`+`change`), `<input type=submit|image>` и
 сузился до одного места: после доставки `click` через живой `dispatchEvent`
 нужно вызвать ту же `_lumen_run_activation_behavior`, если событие не было
 отменено и `isTrusted === false`.
+
+## Исправлено 2026-07-30
+
+Уточнение по коду: сам "живой" `element.dispatchEvent` — это не
+`_lumen_dispatch_rich` (та функция обслуживает только доставку из шелла для
+мышиных/клавиатурных событий, `_lumen_dispatch_mouse_event`/
+`_lumen_dispatch_key_event`), а отдельный объектный метод
+`dispatchEvent: function(evt) { … return _lumen_dispatch(nid, evt); }` внутри
+`_lumen_make_element` — именно он вызывается для
+`el.dispatchEvent(new MouseEvent(...))`. Правка добавлена туда: после
+`_lumen_dispatch(nid, evt)` — если результат `true` (событие не отменено) и
+`evt.isTrusted === false` и `evt.type === 'click'` — вызывается
+`_lumen_run_activation_behavior(nid, this)`, тот же путь, что и у
+`HTMLElement.prototype.click()`. Так как `_lumen_run_activation_behavior` уже
+покрывает submit/reset-кнопки, `<a href>`/`<area>`, чекбоксы/радио, `<summary>`
+и `<label>` (BUG-383), фикс закрывает все перечисленные в заявке случаи одним
+изменением, без дублирования логики активации.
+
+Регрессия проверена двумя тестами в `crates/js/src/v8_runtime.rs`:
+`dispatch_event_click_runs_activation_behavior_for_submit_button` (форма
+уходит в отправку) и `dispatch_event_click_cancelled_skips_activation_behavior`
+(`preventDefault()` в обработчике `click` подавляет активацию).
