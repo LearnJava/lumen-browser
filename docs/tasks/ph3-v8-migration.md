@@ -2032,6 +2032,37 @@ copy-verbatim pattern as the other five per-module fetch-mock twins already in t
 2570/2570 (unchanged: −42 ungated QuickJS, +42 gated V8); default-feature `cargo test -p lumen-js`
 — 1608/1608 (was 1650, −42). Both clippy passes (with and without `v8-backend`) clean.
 
+### S12b-24-details-dialog-popover — twentieth porting slice (2026-07-30, branch p1-v8-s12b-24-details-dialog-popover)
+
+`<toggleAttribute>` + `<details>`/`<summary>` + `<dialog>` (including focus management, HTML LS
+§6.6.3) + `<selectlist>` (Open UI Customizable Select §3) + HTML Popover API (WHATWG HTML §6.12,
+including `popover=hint`, Popover API L2) — 43 tests ported to `mod v8_details_dialog_popover`,
+QuickJS copies deleted. This slice sat right after the still-blocked Trusted Types tests (see the
+`S12b-24 — scoping only` comment left at `dom.rs:16030-16040`: Trusted Types needs
+`crate::trusted_types::install_trusted_types_bindings` wired into `V8JsRuntime::install_dom` first,
+out of scope here — left un-ported, comment now trimmed to just "window.open/etc." since
+details/dialog is no longer in that list) — the table's line-range estimates for this row were
+already stale by the time this slice started (prior slices' deletions had shifted everything below
+them up by thousands of lines), confirmed by grep for the `fn.*details|dialog|selectlist|popover`
+test names rather than trusting the recorded `26687-27278` range.
+
+All 43 tests are synchronous (no `.then()`/microtask timing anywhere in this cluster) — first
+slice since `S12b-24-matchmedia` with zero `_lumen_drain_microtasks`-pattern breakage, so it ported
+as a literal copy: `bool_eval`/`runtime_with_dom` renamed to their `V8JsRuntime` twins, test bodies
+(including the raw `_lumen_dispatch_bubble`/`_lumen_dispatch_key_event`/`_lumen_dispatch_mouse_event`
+calls and the `_lumen_root_nid`/`_lumen_last_focused_nid` global reads, all engine-agnostic
+`WEB_API_SHIM` surface) unchanged. `take_focus_requests()` exists identically on both
+`QuickJsRuntime` and `V8JsRuntime` (`lib.rs:1805` / `v8_runtime.rs:711`), so the dialog focus-request
+tests also ported without adaptation.
+
+Four `toggle_attribute_*` tests were folded into this slice rather than left as an orphaned
+one-off: they sat immediately adjacent (between the Trusted Types block and `make_details_doc`),
+were never listed in their own scoping-table row, and were too small to justify a separate slice.
+
+`cargo test -p lumen-js --features v8-backend` — 2570/2570 (unchanged: −43 ungated QuickJS, +43
+gated V8); default-feature `cargo test -p lumen-js` — 1565/1565 (was 1608, −43). Both clippy passes
+(with and without `v8-backend`) clean.
+
 ---
 
 ## Risks (Rev 2)
