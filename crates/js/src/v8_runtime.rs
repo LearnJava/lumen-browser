@@ -3871,7 +3871,10 @@ impl V8JsRuntime {
     }
 
     // Trusted Types API: trustedTypes.createPolicy(), TrustedHTML/Script/ScriptURL
-    // TODO(v8-s3, out of scope): Trusted Types install is rquickjs-ctx-based (crate::trusted_types) — separate future slice.
+    // (S12b-24-trusted-types) The shim itself is plain JS (`TRUSTED_TYPES_SHIM`, no
+    // rquickjs-specific API), so it's evaluated inline alongside `WEB_API_SHIM` further
+    // down in this function rather than reusing `crate::trusted_types::install_trusted_types_bindings`
+    // (that helper takes an `rquickjs::Ctx` and stays QuickJS-only).
 
     // D-6: Extension system — chrome.runtime.sendMessage() native binding.
     // Phase 0: no-op; the message is logged to stderr for debugging.
@@ -4021,6 +4024,28 @@ impl V8JsRuntime {
                 }
                 let compiled = compiled
                     .ok_or_else(|| JsError::Runtime("WEB_API_SHIM compile returned None".into()))?;
+                let result = compiled.run(tc);
+                if tc.has_caught() {
+                    let exc = tc.exception().unwrap();
+                    return Err(v8_err(tc, exc));
+                }
+                let _ = result;
+            }
+
+            // Trusted Types API (W3C TT L2, Phase 0): plain JS, no rquickjs-specific API,
+            // so the shared shim string is evaluated the same way as WEB_API_SHIM above.
+            {
+                v8::tc_scope!(tc, scope);
+                let src = v8::String::new(tc, crate::trusted_types::TRUSTED_TYPES_SHIM)
+                    .ok_or_else(|| JsError::Runtime("OOM: TRUSTED_TYPES_SHIM source".into()))?;
+                let compiled = v8::Script::compile(tc, src, None);
+                if tc.has_caught() {
+                    let exc = tc.exception().unwrap();
+                    return Err(v8_err(tc, exc));
+                }
+                let compiled = compiled.ok_or_else(|| {
+                    JsError::Runtime("TRUSTED_TYPES_SHIM compile returned None".into())
+                })?;
                 let result = compiled.run(tc);
                 if tc.has_caught() {
                     let exc = tc.exception().unwrap();

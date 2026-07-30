@@ -20,7 +20,7 @@ pub fn install_trusted_types_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
     Ok(())
 }
 
-const TRUSTED_TYPES_SHIM: &str = r#"
+pub(crate) const TRUSTED_TYPES_SHIM: &str = r#"
 // Trusted Types API (W3C TT L2, Phase 0: no sink enforcement).
 (function () {
   'use strict';
