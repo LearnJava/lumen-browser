@@ -1881,6 +1881,52 @@ v8-backend` — 2570/2570 (unchanged: −18 ungated QuickJS, +18 gated V8); defa
 `cargo test -p lumen-js` — 1750/1750 (was 1768, −18). Both clippy passes (with and without
 `v8-backend`) clean.
 
+### S12b-24-url-abort-clone-blob — sixteenth porting slice (2026-07-30, branch p1-v8-s12b-24-url-abort-clone-blob)
+
+URL static methods (`canParse`/`parse`), `AbortSignal`/`AbortController` (incl. `.any`/
+`.timeout`), fetch abort rejection, `structuredClone` (primitives/objects/arrays/Map/Set/
+RegExp/circular+shared refs/ArrayBuffer/typed arrays/DataCloneError cases/BigInt), `btoa`/
+`atob`, `Blob`, `File`, `FileReader` — **43 tests** ported into `mod tests::v8_url_abort_clone_blob`,
+QuickJS copies deleted. Actual section on start — `dom.rs:16065-16727`, immediately after the
+webcrypto slice's block and ending right before `// ─── Page Visibility API tests`; the scoping
+table's original three rows for this range ("Trusted Types (two sections)", "structuredClone",
+"btoa/atob, Blob, File, FileReader") had grown a preceding, unlabeled cluster (URL static methods
++ AbortSignal + fetch-abort, ~8 tests) not in the 2026-07-29 audit — same "file grew, re-locate by
+content" pattern every slice since childnode-traversal has hit.
+
+**Trusted Types dropped from this slice — scope correction, not a deferral of convenience.**
+Porting the 8 Trusted Types tests hit `Runtime("trustedTypes is not defined")` on every one:
+`crate::trusted_types::install_trusted_types_bindings` is called from `QuickJsRuntime::install_dom`
+(`dom.rs:3116`) but has no V8 counterpart — `v8_runtime.rs:3856` already carries
+`// TODO(v8-s3, out of scope): Trusted Types install is rquickjs-ctx-based (crate::trusted_types)
+— separate future slice`, a pre-existing, deliberate scope boundary from the S12b-3 module sweep,
+not something this slice's scoping missed. Un-ported the 8 tests back onto `QuickJsRuntime`
+(restored in place, same names, right after `bool_eval`) rather than deleting or silently
+weakening them — the V8 gap is real: `window.trustedTypes` is `undefined` on the default engine
+today. A second, un-ported Trusted Types cluster (`trusted_types_is_defined` and friends,
+`dom.rs:~19740`, part of the still-unlabeled "CSS.supports/escape + Trusted Types #2 + Storage
+Access + EventTarget" catch-all row) has the same dependency and should move together with this
+one when that follow-up slice is scheduled. **The fix itself looks trivial, worth flagging for
+whoever picks it up**: `crate::trusted_types::TRUSTED_TYPES_SHIM` is a plain JS string evaluated
+via `ctx.eval::<(), _>(...)` — no `rquickjs`-specific type touches it — so wiring it into
+`V8JsRuntime::install_dom` (the same way `WEB_API_SHIM` already is, `v8_runtime.rs:3991-4005`)
+should not require touching `trusted_types.rs` at all, only the V8 install path. Not attempted
+here to keep this slice scoped to test-porting mechanics, not new-feature plumbing.
+
+**Two more loose-assertion tightenings beyond `fetch_rejects_on_aborted_signal`** (which follows
+the by-now-standard two-`eval()` split): `blob_text_promise`/`blob_array_buffer_promise` dropped
+their `Null`-tolerant `match` for a direct `assert_eq!` against the resolved `String`/`Number`, and
+`file_reader_read_as_data_url` dropped its `if let ... else { /* acceptable */ }` no-op branch for
+an `assert!`-backed `match` that panics on anything but the resolved data URL. All three are exactly
+the "at least 8 more tests accept either the resolved value or Null/false" shape the original
+S12b-24 scoping note flagged for the SubtleCrypto/Streams/Compression clusters — confirms it also
+reaches Blob/FileReader, not just those three.
+
+43/43 green on the first run once Trusted Types was carved out. `cargo test -p lumen-js --features
+v8-backend` — 2570/2570 (unchanged: −43 ungated QuickJS, +43 gated V8; the 8 Trusted Types tests
+stayed QuickJS-only throughout, no net change there either); default-feature `cargo test -p
+lumen-js` — 1707/1707 (was 1750, −43). Both clippy passes (with and without `v8-backend`) clean.
+
 ---
 
 ## Risks (Rev 2)
