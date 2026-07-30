@@ -69,5 +69,5 @@ for p in $all; do args="$args -p $p"; done
 echo "Затронуто:  $(printf '%s ' $pkgs)"
 echo "Тестирую (затронутые + обратные зависимости):"
 printf '  %s\n' $all
-echo "+ cargo test$args"
-exec cargo test $args
+echo "+ cargo test$args --no-fail-fast"
+exec cargo test $args --no-fail-fast
