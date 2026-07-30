@@ -37,6 +37,7 @@ Version↔phase mapping (from `docs/plan/phases.md`): Phase 1 → v0.1, **Phase 
 | `docs/roadmap-trees.md` | **How to use the interactive roadmap trees** (`docs/roadmap-*.html`): open in a browser, filters/search, and how to keep them current (`ROADMAP.md` + `python scripts/gen_roadmap.py`, auto-pulls bug status from `BUGS.md`). |
 | `ROADMAP.md` | Flat, grep-friendly source of the phase/task tree (two markdown tables: phases + tasks, one task per line). Feeds `gen_roadmap.py`; replaced the old nested `docs/roadmap.json`. Bug↔task links live in its `bugs` column; CSS-module status is live-aggregated from `CSS-SPECS.md` into rows `css-specs-t0`…`t4` (note = `AUTO:CSS-SPECS:T<N>`, do not hand-edit that note). |
 | `CLAUDE.md` | (this file) Conventions and invariants for the assistant. |
+| `REVIEW.md` | **Code-review policy** — what a reviewer blocks a change on (hard gates), architecture boundaries, style/design rules, docs that must move in the same commit, and what is explicitly out of scope for review. Read before reviewing someone's diff; the rules restate this file and `docs/conventions.md` in reviewer form, so on conflict trust the code and flag the change. |
 | `docs/decisions/` | Formal ADR files (one per architectural decision). See README.md + TEMPLATE.md inside. |
 | `DECISIONS.md` | Historical decisions (pre-ADR format). Read-only — add new decisions to `docs/decisions/` instead. |
 | `samples/page.html` | Test page for pipeline runs. |
