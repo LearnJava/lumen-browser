@@ -1330,7 +1330,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/ipc/src/lib.rs:251` **fn** `connect` — Connect to the network service listening on `127.0.0.1:port`
 `crates/ipc/src/lib.rs:261` **fn** `request` — Send a request and block until the matching response arrives
 
-## lumen-js  (393 symbols)
+## lumen-js  (398 symbols)
 
 `crates/js/src/audio_bindings.rs:37` **fn** `new_session_seed` — Generate a unique per-session noise seed
 `crates/js/src/audio_bindings.rs:46` **fn** `install_audio_bindings` — Install the complete Web Audio API Level 2 into the JS context
@@ -1614,22 +1614,27 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/v8_runtime.rs:584` **fn** `take_scroll_requests` — Drain JS-initiated scroll requests queued by `_lumen_request_scroll`
 `crates/js/src/v8_runtime.rs:590` **fn** `take_page_scroll_requests` — Drain JS page-level scroll requests from `window.scrollTo/scrollBy`
 `crates/js/src/v8_runtime.rs:596` **fn** `set_page_scroll_y` — Update the page scroll Y exposed to JS `window.scrollY`/`pageYOffset`
-`crates/js/src/v8_runtime.rs:602` **fn** `update_computed_styles` — Push a fresh snapshot of computed CSS styles into the JS runtime
-`crates/js/src/v8_runtime.rs:608` **fn** `take_window_open_requests` — Drain all popup window requests queued by JS `window.open(...)`
-`crates/js/src/v8_runtime.rs:614` **fn** `take_console_messages` — Drain all `console.log/warn/error` messages queued since the last call
-`crates/js/src/v8_runtime.rs:620` **fn** `take_history_url_updates` — Drain `history.pushState`/`history.replaceState` URL-update notifications
-`crates/js/src/v8_runtime.rs:626` **fn** `take_history_traversals` — Drain all `history.go(n)`/back/forward traversal deltas queued by JS
-`crates/js/src/v8_runtime.rs:632` **fn** `take_nav_updates` — Drain all Navigation API update requests queued by `_lumen_navigation_request`
-`crates/js/src/v8_runtime.rs:638` **fn** `take_nav_intercept_result` — Drain `NavigateEvent` intercept results queued during event dispatch
-`crates/js/src/v8_runtime.rs:644` **fn** `take_fullscreen_requests` — Drain all fullscreen requests queued by `element.requestFullscreen()`/`exitFullscreen()`
-`crates/js/src/v8_runtime.rs:650` **fn** `take_focus_requests` — Drain JS dialog focus requests queued by `_lumen_request_focus`/`_lumen_request_blur`
-`crates/js/src/v8_runtime.rs:659` **fn** `pointer_capture_nid` — Returns the DOM node nid that currently holds pointer capture (pointer_id=1)
-`crates/js/src/v8_runtime.rs:667` **fn** `take_pointer_capture` — Release the active pointer capture, returning the former capture target nid
-`crates/js/src/v8_runtime.rs:674` **fn** `flush_canvas_updates` — Drain dirty `<canvas>` 2D buffers for GPU re-upload. Mirrors
-`crates/js/src/v8_runtime.rs:686` **fn** `register_img_bitmaps` — Register decoded `<img>` bitmaps for canvas `drawImage`, keyed by node id
-`crates/js/src/v8_runtime.rs:701` **fn** `set_import_map` — Install the import map (HTML LS §8.1.6.2) used to resolve bare module
-`crates/js/src/v8_runtime.rs:799` **fn** `install_console_natives` — Register the three console natives (`_lumen_console_log`,
-`crates/js/src/v8_runtime.rs:868` **fn** `install_dom` — Install DOM-core native bindings (`_lumen_*`, 184 functions) and the
+`crates/js/src/v8_runtime.rs:602` **fn** `fire_element_scroll` — Fire a non-bubbling `scroll` Event on the DOM element identified by `nid`
+`crates/js/src/v8_runtime.rs:612` **fn** `fire_window_scroll` — Fire a non-bubbling `scroll` Event on the `window` object (page scroll)
+`crates/js/src/v8_runtime.rs:621` **fn** `fire_snap_changing` — Fire a CSS Scroll Snap L2 `snapchanging` event on a scroll container
+`crates/js/src/v8_runtime.rs:627` **fn** `fire_snap_changed` — Fire a CSS Scroll Snap L2 `snapchanged` event on a scroll container
+`crates/js/src/v8_runtime.rs:651` **fn** `update_computed_styles` — Push a fresh snapshot of computed CSS styles into the JS runtime
+`crates/js/src/v8_runtime.rs:658` **fn** `set_document_visibility` — Update `document.hidden` / `document.visibilityState` and fire
+`crates/js/src/v8_runtime.rs:669` **fn** `take_window_open_requests` — Drain all popup window requests queued by JS `window.open(...)`
+`crates/js/src/v8_runtime.rs:675` **fn** `take_console_messages` — Drain all `console.log/warn/error` messages queued since the last call
+`crates/js/src/v8_runtime.rs:681` **fn** `take_history_url_updates` — Drain `history.pushState`/`history.replaceState` URL-update notifications
+`crates/js/src/v8_runtime.rs:687` **fn** `take_history_traversals` — Drain all `history.go(n)`/back/forward traversal deltas queued by JS
+`crates/js/src/v8_runtime.rs:693` **fn** `take_nav_updates` — Drain all Navigation API update requests queued by `_lumen_navigation_request`
+`crates/js/src/v8_runtime.rs:699` **fn** `take_nav_intercept_result` — Drain `NavigateEvent` intercept results queued during event dispatch
+`crates/js/src/v8_runtime.rs:705` **fn** `take_fullscreen_requests` — Drain all fullscreen requests queued by `element.requestFullscreen()`/`exitFullscreen()`
+`crates/js/src/v8_runtime.rs:711` **fn** `take_focus_requests` — Drain JS dialog focus requests queued by `_lumen_request_focus`/`_lumen_request_blur`
+`crates/js/src/v8_runtime.rs:720` **fn** `pointer_capture_nid` — Returns the DOM node nid that currently holds pointer capture (pointer_id=1)
+`crates/js/src/v8_runtime.rs:728` **fn** `take_pointer_capture` — Release the active pointer capture, returning the former capture target nid
+`crates/js/src/v8_runtime.rs:735` **fn** `flush_canvas_updates` — Drain dirty `<canvas>` 2D buffers for GPU re-upload. Mirrors
+`crates/js/src/v8_runtime.rs:747` **fn** `register_img_bitmaps` — Register decoded `<img>` bitmaps for canvas `drawImage`, keyed by node id
+`crates/js/src/v8_runtime.rs:762` **fn** `set_import_map` — Install the import map (HTML LS §8.1.6.2) used to resolve bare module
+`crates/js/src/v8_runtime.rs:860` **fn** `install_console_natives` — Register the three console natives (`_lumen_console_log`,
+`crates/js/src/v8_runtime.rs:929` **fn** `install_dom` — Install DOM-core native bindings (`_lumen_*`, 184 functions) and the
 `crates/js/src/video_bindings.rs:46` **fn** `install_video_bindings` — Install HTMLVideoElement Phase 1 bindings into the JS context
 `crates/js/src/video_gif_store.rs:36` **struct** `VideoPlaybackState` — Per-`<video>` playback timing, stored by the shell after a GIF is decoded
 `crates/js/src/video_gif_store.rs:57` **fn** `current_ms` — Playback position in ms at a given real-clock instant
@@ -5631,4 +5636,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 5554 symbols in 24 crates*
+*Total: 5559 symbols in 24 crates*

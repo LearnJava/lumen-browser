@@ -1927,6 +1927,44 @@ v8-backend` — 2570/2570 (unchanged: −43 ungated QuickJS, +43 gated V8; the 8
 stayed QuickJS-only throughout, no net change there either); default-feature `cargo test -p
 lumen-js` — 1707/1707 (was 1750, −43). Both clippy passes (with and without `v8-backend`) clean.
 
+### S12b-24-page-visibility-beacon — seventeenth porting slice (2026-07-30, branch p1-v8-s12b-24-page-visibility-beacon)
+
+Three adjacent scoping-table rows ported together into `mod tests::v8_page_visibility_beacon`:
+Page Visibility API (`document.visibilityState`/`.hidden`, `visibilitychange`, the PH1-15
+pause/unpause cluster driven by `set_document_visibility`), `document.readyState` + lifecycle
+(`readystatechange`/`DOMContentLoaded`/`load`, forward-only transitions), and the unlabeled
+"sendBeacon + fetch keepalive/priority + `URL.createObjectURL`" row (FF-5 fetch priority hints,
+Beacon §4, `URL.createObjectURL`/`revokeObjectURL`) — **26 tests**, QuickJS copies deleted. Actual
+range on start — `dom.rs:16190-16498`, immediately after the just-merged url-abort-clone-blob block
+and ending right before `// ─── Event class hierarchy tests`, exactly where the scoping table
+(and the url-abort-clone-blob slice's own note) predicted it.
+
+**Second slice needing genuinely new plumbing since S12b-24-webcrypto.** `QuickJsRuntime` exposes
+`set_document_visibility(hidden: bool)` (`lib.rs:1863`) — a thin wrapper that `eval()`s
+`_lumen_apply_visibility(bool)`, itself plain JS already living in the shared `WEB_API_SHIM`
+(`dom.rs:13248`) — but `V8JsRuntime` had no equivalent method at all, so the 6-test T1
+pause/unpause cluster (`set_document_visibility_*`) could not compile against it. Added the mirror
+method on `V8JsRuntime` next to `update_computed_styles`/`fire_element_scroll` (`v8_runtime.rs:~656`),
+same one-line-`eval` shape, `Mirrors [`crate::QuickJsRuntime::set_document_visibility`]` doc
+convention. `_lumen_apply_ready_state` (used directly via `rt.eval(...)` by every `ready_state_*`
+test, no Rust-side wrapper) was already plain JS in the shim, needing nothing.
+
+**`CaptureFetch`/`runtime_with_fetch` liveness check, by now routine.** The QuickJS mock fetch
+provider at `dom.rs:16034`/`16053` carries a comment flagging it as still used by
+"not-yet-ported sendBeacon/fetch-keepalive/fetch-priority/Streams tests" — this slice took the
+sendBeacon/keepalive/priority share of that but one Streams test (`dom.rs:~16973` post-slice, the
+fetch-streaming-body family, still unported) keeps a live call, so the QuickJS helper stayed in
+place; the V8 module got its own private `CaptureFetch`/`v8_runtime_with_fetch` copy, following the
+per-module self-containment pattern every prior slice (`v8_formdata`, `v8_url_abort_clone_blob`,
+…) already established rather than sharing across `mod v8_*` boundaries.
+
+Zero engine divergences and zero loose-assertion tightenings needed — this range has no
+`_lumen_drain_microtasks` calls and no promise bodies read across two `eval()`s; every assertion in
+the block was already a plain synchronous read. 26/26 green on the first run, test bodies otherwise
+untouched. `cargo test -p lumen-js --features v8-backend` — 2570/2570 (unchanged: −26 ungated
+QuickJS, +26 gated V8); default-feature `cargo test -p lumen-js` — 1681/1681. Both clippy passes
+(with and without `v8-backend`) clean.
+
 ---
 
 ## Risks (Rev 2)
