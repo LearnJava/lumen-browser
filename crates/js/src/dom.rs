@@ -4840,8 +4840,16 @@ function _lumen_build_detached_document(proto, contentType) {
         if (nid < 0) { throw new DOMException('DOM node limit exceeded', 'QuotaExceededError'); }
         return _lumen_make_element(nid);
     };
-    doc.createTextNode = function(t) { return _lumen_make_element(_lumen_create_text_node(String(t))); };
-    doc.createComment = function(t) { return _lumen_make_element(_lumen_create_comment(t === undefined ? '' : String(t))); };
+    doc.createTextNode = function(t) {
+        var nid = _lumen_create_text_node(String(t));
+        if (nid < 0) { throw new DOMException('DOM node limit exceeded', 'QuotaExceededError'); }
+        return _lumen_make_element(nid);
+    };
+    doc.createComment = function(t) {
+        var nid = _lumen_create_comment(t === undefined ? '' : String(t));
+        if (nid < 0) { throw new DOMException('DOM node limit exceeded', 'QuotaExceededError'); }
+        return _lumen_make_element(nid);
+    };
     doc.createDocumentFragment = function() { return _lumen_make_document_fragment(_lumen_create_fragment()); };
     doc.appendChild = function(node) {
         if (node) {
@@ -7208,7 +7216,9 @@ var document = {
     },
     createElement:     function(tag) {
         var nid = _lumen_create_element(String(tag).toLowerCase());
-        // QuickJS converts the Rust u32::MAX sentinel to -1 (signed overflow).
+        // QuickJS truncates the Rust u32::MAX sentinel to -1 (signed FFI
+        // narrowing); the V8 native returns -1 explicitly as i32 (BUG-457) —
+        // either way `nid < 0` catches the overflow on both engines.
         if (nid < 0) {
             throw new DOMException('DOM node limit exceeded', 'QuotaExceededError');
         }
@@ -7225,19 +7235,27 @@ var document = {
     createElementNS:   function(ns, qualifiedName) {
         var local = String(qualifiedName || '').replace(/^[^:]+:/, '');
         var nid = _lumen_create_element_ns(String(ns), local);
-        // QuickJS converts the Rust u32::MAX sentinel to -1 (signed overflow).
+        // See createElement above re: engine-specific overflow encoding.
         if (nid < 0) {
             throw new DOMException('DOM node limit exceeded', 'QuotaExceededError');
         }
         return _lumen_make_element(nid);
     },
-    createTextNode:         function(t)   { return _lumen_make_element(_lumen_create_text_node(String(t))); },
+    createTextNode:         function(t) {
+        var nid = _lumen_create_text_node(String(t));
+        if (nid < 0) { throw new DOMException('DOM node limit exceeded', 'QuotaExceededError'); }
+        return _lumen_make_element(nid);
+    },
     // DOM LS §4.5: createComment(data) — previously ignored `data` entirely and
     // always built an empty *Text* node (both the missing argument and the
     // wrong node kind are fixed here; see `_lumen_create_comment`/BUG-322-family
     // nodeType/nodeName/prototype fixes below for why a real Comment node now
     // reports nodeType 8, nodeName '#comment' and `Comment.prototype`).
-    createComment:          function(t)   { return _lumen_make_element(_lumen_create_comment(t === undefined ? '' : String(t))); },
+    createComment:          function(t) {
+        var nid = _lumen_create_comment(t === undefined ? '' : String(t));
+        if (nid < 0) { throw new DOMException('DOM node limit exceeded', 'QuotaExceededError'); }
+        return _lumen_make_element(nid);
+    },
     // DOM LS §4.5: createDocumentFragment() returns an empty DocumentFragment.
     createDocumentFragment: function()    { return _lumen_make_document_fragment(_lumen_create_fragment()); },
     // DOM LS §4.5: createProcessingInstruction(target, data). Throws
@@ -17477,6 +17495,73 @@ mod tests {
                 "#,
             ).unwrap();
             assert_eq!(r, lumen_core::JsValue::String("QuotaExceededError".into()));
+        }
+
+        #[test]
+        fn dom_create_text_node_throws_quota_exceeded_when_full() {
+            // BUG-418: createTextNode/createComment were completely ungated —
+            // unlike createElement they never checked MAX_DOM_NODES at all.
+            let doc = {
+                use lumen_dom::{Document, QualName};
+                let mut d = Document::new();
+                while d.node_count() < lumen_dom::MAX_DOM_NODES {
+                    d.create_element(QualName::html("div"));
+                }
+                Arc::new(Mutex::new(d))
+            };
+            let rt = v8_runtime_with_dom(doc);
+            let r = rt.eval(
+                r#"
+                var caught = '';
+                try { document.createTextNode('x'); }
+                catch (e) { caught = e.name; }
+                caught
+                "#,
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("QuotaExceededError".into()));
+        }
+
+        #[test]
+        fn dom_create_comment_throws_quota_exceeded_when_full() {
+            let doc = {
+                use lumen_dom::{Document, QualName};
+                let mut d = Document::new();
+                while d.node_count() < lumen_dom::MAX_DOM_NODES {
+                    d.create_element(QualName::html("div"));
+                }
+                Arc::new(Mutex::new(d))
+            };
+            let rt = v8_runtime_with_dom(doc);
+            let r = rt.eval(
+                r#"
+                var caught = '';
+                try { document.createComment('x'); }
+                catch (e) { caught = e.name; }
+                caught
+                "#,
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("QuotaExceededError".into()));
+        }
+
+        #[test]
+        fn native_binding_panic_does_not_abort_process() {
+            // BUG-418: an invalid NodeId reaching `Document::get`/`get_mut` used to
+            // panic inside V8's `extern "C"` callback boundary, which Rust refuses
+            // to unwind through ("panic in a function that cannot unwind") and
+            // aborts the whole process. `native_fn_trampoline` now wraps native
+            // dispatch in `catch_unwind`, turning that into a catchable JS error —
+            // if this test runs at all (rather than aborting the test binary), the
+            // guard is in place; the assertions confirm the error surfaces to JS.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                r#"
+                var caught = '';
+                try { _lumen_append_child(0, 4294967295); }
+                catch (e) { caught = e.name; }
+                caught
+                "#,
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("Error".into()));
         }
 
         // ── D-6: chrome.runtime stub tests ───────────────────────────────────────

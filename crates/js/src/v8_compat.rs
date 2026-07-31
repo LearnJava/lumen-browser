@@ -819,6 +819,16 @@ pub(crate) fn jsvalue_to_v8<'s>(
 /// Retrieves the `Box<dyn V8NativeFn + Send>` stored in the External passed as
 /// `data`, converts the JS args to `JsValue`, dispatches to `call_js`, and sets
 /// the return value.  If `call_js` returns an error a `TypeError` is scheduled.
+///
+/// `call_js` runs inside `catch_unwind`: rusty_v8 calls this trampoline through
+/// an `extern "C"` shim, and unwinding through that boundary is refused by the
+/// Rust runtime ("panic in a function that cannot unwind") and aborts the
+/// *whole process*, not just the current tab. A native touching a bad `NodeId`
+/// from JS (BUG-418: `document.createElement` past the 50 000-node arena limit
+/// hit this exact path) must not be able to bring down the browser — catching
+/// the panic here turns it into an ordinary JS exception instead. Every native
+/// registered through `reg!`/`register_v8_native` goes through this one choke
+/// point, so this is a blanket guard, not a per-native fix.
 pub(crate) fn native_fn_trampoline(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
@@ -842,13 +852,17 @@ pub(crate) fn native_fn_trampoline(
         js_args.push(v8_to_jsvalue(scope, args.get(i as i32)));
     }
 
-    // Dispatch.
-    match fn_ref.call_js(&js_args) {
-        Ok(result) => {
+    // Dispatch. AssertUnwindSafe is sound here: every native closure captures
+    // its mutable state behind `Arc<Mutex<_>>`/`Arc<Atomic*>`, which are
+    // already poison-on-panic and therefore unwind-safe by design.
+    let outcome =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fn_ref.call_js(&js_args)));
+    match outcome {
+        Ok(Ok(result)) => {
             let v8_val = jsvalue_to_v8(scope, result);
             rv.set(v8_val);
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             // Schedule a JS TypeError so the error propagates to JS callers.
             let msg_str = match e {
                 JsError::Runtime(s) | JsError::Parse(s) => s,
@@ -859,6 +873,27 @@ pub(crate) fn native_fn_trampoline(
                 scope.throw_exception(exc);
             }
         }
+        Err(payload) => {
+            let msg_str = panic_payload_message(&payload);
+            eprintln!("[JS native panic] {msg_str}");
+            if let Some(msg) = v8::String::new(scope, &msg_str) {
+                let exc = v8::Exception::error(scope, msg);
+                scope.throw_exception(exc);
+            }
+        }
+    }
+}
+
+/// Extract a human-readable message from a caught `catch_unwind` payload.
+/// Panics raised via `panic!("{}", s)`/`format!` carry a `String`; `unwrap()`
+/// on a `Result`/`Option` and most stdlib panics carry a `&'static str`.
+fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        format!("internal error: {s}")
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        format!("internal error: {s}")
+    } else {
+        "internal error (native binding panicked)".to_string()
     }
 }
 
