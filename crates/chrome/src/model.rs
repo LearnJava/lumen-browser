@@ -278,6 +278,9 @@ pub struct ChromeFindModel {
     pub value: String,
     /// Written into `#findCount`'s text (e.g. `"2/5"` or `"0/0"`).
     pub count_label: String,
+    /// `true` when `count_label` is `"ERR"` (invalid regex pattern) — toggles
+    /// `#findCount`'s `.error` class ([BUG-419](../../../bugs/BUG-419-FIXED.md)).
+    pub error: bool,
 }
 
 /// One `.dl-card` in `#downloadsPanel`'s `.dl-list` (CC-9).
@@ -1007,10 +1010,11 @@ fn build_dd_row(doc: &mut Document, s: &ChromeSuggestionModel) -> NodeId {
     row
 }
 
-/// Toggles `#findBar`'s `.open` class and writes [`ChromeFindModel::value`]/
-/// `count_label` into `#findInput`/`#findCount` (CC-9). Editing (caret,
-/// append/backspace) stays owned by the legacy `FindState`, mirroring
-/// [`bind_omnibox`].
+/// Toggles `#findBar`'s `.open` class, writes [`ChromeFindModel::value`]/
+/// `count_label` into `#findInput`/`#findCount` (CC-9), and toggles
+/// `#findCount`'s `.error` class per [`ChromeFindModel::error`] (BUG-419).
+/// Editing (caret, append/backspace) stays owned by the legacy `FindState`,
+/// mirroring [`bind_omnibox`].
 fn bind_find_bar(doc: &mut Document, find: &ChromeFindModel) {
     let Some(bar) = doc.find_by_id(crate::ids::FIND_BAR) else { return };
     set_class_token(doc, bar, "open", find.open);
@@ -1019,6 +1023,7 @@ fn bind_find_bar(doc: &mut Document, find: &ChromeFindModel) {
     }
     if let Some(count) = doc.find_by_id(crate::ids::FIND_COUNT) {
         set_text(doc, count, &find.count_label);
+        set_class_token(doc, count, "error", find.error);
     }
 }
 
@@ -2534,7 +2539,12 @@ mod tests {
     fn find_bar_binds_value_count_and_open_state() {
         let mut doc = parse_asset();
         let model = ChromeModel {
-            find: ChromeFindModel { open: true, value: "needle".to_owned(), count_label: "2/5".to_owned() },
+            find: ChromeFindModel {
+                open: true,
+                value: "needle".to_owned(),
+                count_label: "2/5".to_owned(),
+                error: false,
+            },
             ..ChromeModel::default()
         };
         bind_model(&mut doc, &model);
@@ -2553,6 +2563,24 @@ mod tests {
             })
             .collect();
         assert_eq!(text, "2/5");
+        assert!(!has_class(&doc, count, "error"));
+    }
+
+    #[test]
+    fn find_bar_toggles_count_error_class() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            find: ChromeFindModel {
+                open: true,
+                value: "(".to_owned(),
+                count_label: "ERR".to_owned(),
+                error: true,
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let count = doc.find_by_id(crate::ids::FIND_COUNT).expect("asset has #findCount");
+        assert!(has_class(&doc, count, "error"));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # BUG-419 — `#findCount` не выделяет невалидный regex-паттерн цветом
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-07-31
 **Компонент:** chrome (`assets/chrome/chrome.html` `#findCount`/`.find-count`,
 `ChromeFindModel::count_label`), shell (`chrome_model_snapshot`)
 **Найден:** P1, CC-15-6 (2026-07-28), при удалении легаси find-bar overlay
@@ -21,18 +21,29 @@
 Косметика: информация о невалидном паттерне доступна (текст `ERR`), потерян
 только цветовой акцент.
 
-## Что нужно сделать
+## Фикс (2026-07-31, P1)
 
-Добавить в `ChromeFindModel` признак ошибки (`error: bool` вместо/помимо
-разбора `count_label == "ERR"`), в `assets/chrome/chrome.html` — правило
-`.find-count.error{ color:var(--danger) }` (генератор `scripts/gen_chrome_assets.py`),
-в `bind_find_bar` — переключение класса через уже существующий `set_class_token`
-(тем же приёмом, что `.open` у `#findBar`).
+`ChromeFindModel` получил поле `error: bool`; `main.rs::chrome_model_snapshot`
+считает условие невалидного regex один раз (`find_is_error`) и пишет его и в
+`count_label` (`"ERR"`), и в новое поле. `assets/chrome/chrome.html` получил
+правило `.find-count.error{ color:var(--red-badge); }` (переиспользован
+существующий токен, которым уже красились `.perm-btn.deny`/`.console-line.error`
+— отдельного `--danger` в палитре ассета нет), добавлено в замороженный эталон
+`docs/design/lumen-v3_3.html` и перегенерировано `gen_chrome_assets.py`.
+`bind_find_bar` переключает класс через уже существующий `set_class_token`
+(тот же приём, что `.open` у `#findBar`).
+
+Пиксельно нейтрально в дефолтных состояниях (класс применяется только когда
+find-бар открыт с невалидным regex — ни один графический тест этого состояния
+не создаёт): `cargo test -p lumen-chrome` (69/69, 1 новый), `cargo clippy
+-p lumen-chrome -p lumen-shell --all-targets -- -D warnings`, `python
+scripts/gen_chrome_assets.py --check`, полный `graphic_tests/run.py
+--continue-on-fail` (152 теста) — дельта vs main пустая.
 
 ## Связанные
 
 * CC-9 (`docs/tasks/p1-css-chrome.md`) — срез, где `#findBar` получил
   `value`/`count_label`, но не состояние ошибки.
 * CC-15-6 (`ROADMAP.md`) — срез, вскрывший пробел и перенёсший текстовую часть.
-* [BUG-410](BUG-410-OPEN.md) — тот же класс «модель CC-9/CC-10 переносит не всё,
+* [BUG-410](BUG-410-FIXED.md) — тот же класс «модель CC-9/CC-10 переносит не всё,
   что рисовал легаси-виджет».
