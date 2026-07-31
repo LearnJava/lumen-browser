@@ -305,6 +305,7 @@ body[data-profile="guest"] .avatar{ background:var(--surface-2); color:var(--tex
 .dd-text{ min-width:0; }
 .dd-title{ font-size:12.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .dd-sub{ font-size:11px; color:var(--text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.dd-tag{ font-size:10.5px; color:var(--text-secondary); flex:none; white-space:nowrap; }
 
 .tb-right{ display:flex; align-items:center; gap:2px; }
 
@@ -1018,22 +1019,27 @@ body.qa-cvd .content-area{ filter:grayscale(1) contrast(.9); }
             <div class="dd-row" onclick="ddGo('page','Дизайн-система Lumen — Figma')">
               <span class="dd-icon" style="background:#0B6FE0"><svg class="icon"><use href="#i-tabicon"/></svg></span>
               <div class="dd-text"><div class="dd-title">@tabs · Дизайн-система Lumen — Figma</div><div class="dd-sub">Открытая вкладка</div></div>
+              <span class="dd-tag">вкладка</span>
             </div>
             <div class="dd-row" onclick="ddGo('history')">
               <span class="dd-icon" style="background:#8E8E93"><svg class="icon"><use href="#i-clock"/></svg></span>
               <div class="dd-text"><div class="dd-title">@history · figma.com/file/lumen-ds</div><div class="dd-sub">Посещено вчера в 21:14</div></div>
+              <span class="dd-tag">история</span>
             </div>
             <div class="dd-row" onclick="ddGo('bookmarks')">
               <span class="dd-icon" style="background:#D8A400"><svg class="icon"><use href="#i-star"/></svg></span>
               <div class="dd-text"><div class="dd-title">@bookmarks · Rust wgpu Guide</div><div class="dd-sub">wgpu.rs/guide</div></div>
+              <span class="dd-tag">закладка</span>
             </div>
             <div class="dd-row" onclick="ddGo('bookmarks')">
               <span class="dd-icon" style="background:#F08A2E"><svg class="icon"><use href="#i-book"/></svg></span>
               <div class="dd-text"><div class="dd-title">@read-later · Почему borders дешевле теней</div><div class="dd-sub">Непрочитано · 6 мин чтения</div></div>
+              <span class="dd-tag">позже</span>
             </div>
             <div class="dd-row" onclick="openAiSidebar()">
               <span class="dd-icon" style="background:#8B5CF6"><svg class="icon"><use href="#i-spark"/></svg></span>
               <div class="dd-text"><div class="dd-title">@ai · Спросить ИИ про текущую страницу</div><div class="dd-sub">Открыть AI-сайдбар</div></div>
+              <span class="dd-tag">ai</span>
             </div>
           </div>
 

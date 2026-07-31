@@ -212,14 +212,8 @@ pub enum OmniboxSuggestion {
     SearchQuery {
         /// Исходная строка запроса (case-preserved).
         query: String,
-        /// Частота использования — показывалась легаси-dropdown'ом как тег
-        /// `×N`.
-        ///
-        /// BUG-410: `#omniDropdown` (CC-9) переносит из подсказки только
-        /// `label`/`sub_label`/`tag_color`, но не текстовый тег, поэтому с
-        /// удалением легаси-рендера (CC-15-3) поле осталось без читателя.
-        /// Данные сохранены — их потребит миграция тега в движковый хром.
-        #[allow(dead_code, reason = "BUG-410: тег строки dropdown ещё не перенесён в движковый хром")]
+        /// Частота использования — показывается тегом `×N` при `>1` (см.
+        /// [`OmniboxSuggestion::tag`]).
         frequency: i64,
     },
     /// Результат FTS5-поиска по списку «прочитать позже» (§12.3, `@read-later`).
@@ -331,6 +325,25 @@ impl OmniboxSuggestion {
                 if !snippet.is_empty() { snippet } else { url }
             }
             OmniboxSuggestion::Ai { .. } => "",
+        }
+    }
+
+    /// Text tag shown right-aligned in the dropdown row (`.dd-tag`, BUG-410):
+    /// suggestion-kind label, or a `×N` use-count for a repeated search
+    /// query. Read by `Lumen::chrome_model_snapshot` into
+    /// `ChromeSuggestionModel::tag`.
+    pub(crate) fn tag(&self) -> String {
+        match self {
+            OmniboxSuggestion::HistoryFts { .. } => "история".to_string(),
+            OmniboxSuggestion::Note { .. } => "заметка".to_string(),
+            OmniboxSuggestion::SearchQuery { frequency, .. } if *frequency > 1 => {
+                format!("×{frequency}")
+            }
+            OmniboxSuggestion::SearchQuery { .. } => "запрос".to_string(),
+            OmniboxSuggestion::ReadLater { .. } => "позже".to_string(),
+            OmniboxSuggestion::Tab { .. } => "вкладка".to_string(),
+            OmniboxSuggestion::Bookmark { .. } => "закладка".to_string(),
+            OmniboxSuggestion::Ai { .. } => "ai".to_string(),
         }
     }
 
@@ -903,6 +916,28 @@ mod tests {
         assert_eq!(s.commit_value(), "ai-answer:noop");
         assert_eq!(s.label(), "Rust is a systems language.");
         assert_eq!(s.sub_label(), "");
+    }
+
+    #[test]
+    fn search_query_suggestion_tag_is_generic_label_below_frequency_two() {
+        let s = OmniboxSuggestion::SearchQuery { query: "rust book".into(), frequency: 1 };
+        assert_eq!(s.tag(), "запрос");
+    }
+
+    #[test]
+    fn search_query_suggestion_tag_shows_use_count_from_frequency_two() {
+        let s = OmniboxSuggestion::SearchQuery { query: "rust book".into(), frequency: 3 };
+        assert_eq!(s.tag(), "×3");
+    }
+
+    #[test]
+    fn tab_suggestion_tag_is_kind_label() {
+        let s = OmniboxSuggestion::Tab {
+            title: "GitHub".into(),
+            url: "https://github.com/".into(),
+            switch_value: "switch-tab:42".into(),
+        };
+        assert_eq!(s.tag(), "вкладка");
     }
 
     fn make_note_suggestion(note_id: i64) -> OmniboxSuggestion {

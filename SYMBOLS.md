@@ -194,36 +194,38 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/canvas/src/rasterize.rs:308` **fn** `build_clip_mask` — Build an 8-bit clip coverage mask by rasterizing `path` with the even-odd rule
 `crates/engine/canvas/src/rasterize.rs:472` **fn** `collect_lines` — Extract `(x0, y0, x1, y1)` line tuples from `path`, tessellating Bézier curves
 
-## lumen-chrome  (28 symbols)
+## lumen-chrome  (30 symbols)
 
 `crates/chrome/src/lib.rs:41` **struct** `ChromeIdError` — Error returned by [`ChromeIds::resolve`] when the chrome [`lumen_dom::Document`]
 `crates/chrome/src/lib.rs:80` **fn** `parse_document` — Parses `html` (the chrome asset's contents — a runtime host passes
 `crates/chrome/src/model.rs:27` **struct** `ChromeModel` — Snapshot of shell state [`bind_model`] reflects into the chrome document
-`crates/chrome/src/model.rs:96` **enum** `ChromeContentView` — Which content view fills `#contentArea` (CC-10b) — bound to `.view.active`
-`crates/chrome/src/model.rs:110` **struct** `ChromeHistoryModel` — `#view-history` snapshot (CC-10b) — mirrors `HistoryPanel::rows`
-`crates/chrome/src/model.rs:123` **enum** `ChromeHistoryRow` — One row of [`ChromeHistoryModel::rows`]
-`crates/chrome/src/model.rs:142` **struct** `ChromeBookmarksModel` — `#view-bookmarks` snapshot (CC-10b) — mirrors `BookmarkPanel`
-`crates/chrome/src/model.rs:157` **struct** `ChromeBookmarkFolderModel` — One `.bm-folder` row
-`crates/chrome/src/model.rs:168` **struct** `ChromeBookmarkCardModel` — One `.bm-card` in `#view-bookmarks`'s `.bm-grid` (CC-10b). Per-card
-`crates/chrome/src/model.rs:194` **struct** `ChromeSettingsModel` — `#view-settings` snapshot (CC-10b) — mirrors a subset of `SettingsPanel`
-`crates/chrome/src/model.rs:211` **struct** `ChromeRightSidebarModel` — `#rightSidebar` snapshot (CC-10b) — merges the legacy `AiPanel`/
-`crates/chrome/src/model.rs:221` **enum** `ChromeSidebarTab` — `#rightSidebar`'s two tabs (CC-10b)
-`crates/chrome/src/model.rs:234` **struct** `ChromeDropdownModel` — `#omniDropdown` snapshot (CC-9): whether it's open, plus its suggestion
-`crates/chrome/src/model.rs:250` **struct** `ChromeSuggestionModel` — One `.dd-row` in `#omniDropdown` (CC-9)
-`crates/chrome/src/model.rs:265` **struct** `ChromeFindModel` — `#findBar` snapshot (CC-9) — mirrors [`OmniboxModel`]'s "engine renders,
-`crates/chrome/src/model.rs:281` **struct** `ChromeDownloadModel` — One `.dl-card` in `#downloadsPanel`'s `.dl-list` (CC-9)
-`crates/chrome/src/model.rs:298` **struct** `ChromePaletteModel` — `#cpOverlay` snapshot (CC-10) — mirrors `CommandPalette`
-`crates/chrome/src/model.rs:319` **struct** `ChromePaletteResultModel` — One `.cp-row` in `#cpList` (CC-10)
-`crates/chrome/src/model.rs:340` **struct** `ChromeCertModel` — `#certOverlay` snapshot (CC-10) — mirrors `CertPanel`/`PanelCertData`
-`crates/chrome/src/model.rs:356` **enum** `ChromePermState` — Grant state for one permission row (CC-9) — mirrors the shell's
-`crates/chrome/src/model.rs:374` **struct** `OmniboxModel` — Omnibox snapshot [`bind_model`] reflects into `#omniInput`/`#omniWarn`
-`crates/chrome/src/model.rs:387` **struct** `ChromeTabModel` — One tab row for the sidebar tab list (`#sbTabs`)
-`crates/chrome/src/model.rs:416` **struct** `ChromeWorkspaceModel` — One workspace button for the sidebar switcher (`.sb-workspaces`)
-`crates/chrome/src/model.rs:434` **struct** `ChromeMutations` — What one [`bind_model_tracked`] call changed in the document, split by what
-`crates/chrome/src/model.rs:465` **fn** `is_empty` — `true` when this bind changed nothing at all
-`crates/chrome/src/model.rs:473` **struct** `SelectorTouch` — What changed about one selector-relevant node in a [`ChromeMutations`]
-`crates/chrome/src/model.rs:577` **fn** `bind_model` — Binds `model` into `doc`: `data-theme`/`data-layout`/`data-profile` on
-`crates/chrome/src/model.rs:640` **fn** `bind_model_tracked` — Like [`bind_model`], but also reports what the call actually changed, split
+`crates/chrome/src/model.rs:101` **enum** `ChromeContentView` — Which content view fills `#contentArea` (CC-10b) — bound to `.view.active`
+`crates/chrome/src/model.rs:115` **struct** `ChromeHistoryModel` — `#view-history` snapshot (CC-10b) — mirrors `HistoryPanel::rows`
+`crates/chrome/src/model.rs:128` **enum** `ChromeHistoryRow` — One row of [`ChromeHistoryModel::rows`]
+`crates/chrome/src/model.rs:147` **struct** `ChromeBookmarksModel` — `#view-bookmarks` snapshot (CC-10b) — mirrors `BookmarkPanel`
+`crates/chrome/src/model.rs:162` **struct** `ChromeBookmarkFolderModel` — One `.bm-folder` row
+`crates/chrome/src/model.rs:173` **struct** `ChromeBookmarkCardModel` — One `.bm-card` in `#view-bookmarks`'s `.bm-grid` (CC-10b). Per-card
+`crates/chrome/src/model.rs:199` **struct** `ChromeSettingsModel` — `#view-settings` snapshot (CC-10b) — mirrors a subset of `SettingsPanel`
+`crates/chrome/src/model.rs:216` **struct** `ChromeRightSidebarModel` — `#rightSidebar` snapshot (CC-10b) — merges the legacy `AiPanel`/
+`crates/chrome/src/model.rs:226` **enum** `ChromeSidebarTab` — `#rightSidebar`'s two tabs (CC-10b)
+`crates/chrome/src/model.rs:239` **struct** `ChromeDropdownModel` — `#omniDropdown` snapshot (CC-9): whether it's open, plus its suggestion
+`crates/chrome/src/model.rs:255` **struct** `ChromeSuggestionModel` — One `.dd-row` in `#omniDropdown` (CC-9)
+`crates/chrome/src/model.rs:274` **struct** `ChromeFindModel` — `#findBar` snapshot (CC-9) — mirrors [`OmniboxModel`]'s "engine renders,
+`crates/chrome/src/model.rs:290` **struct** `ChromeDownloadModel` — One `.dl-card` in `#downloadsPanel`'s `.dl-list` (CC-9)
+`crates/chrome/src/model.rs:308` **struct** `ChromeArchiveEntryModel` — One `.arc-card` in `#archivePanel`'s `.arc-list` (BUG-408) — mirrors one
+`crates/chrome/src/model.rs:329` **struct** `ChromePaletteModel` — `#cpOverlay` snapshot (CC-10) — mirrors `CommandPalette`
+`crates/chrome/src/model.rs:350` **struct** `ChromePaletteResultModel` — One `.cp-row` in `#cpList` (CC-10)
+`crates/chrome/src/model.rs:371` **struct** `ChromeCertModel` — `#certOverlay` snapshot (CC-10) — mirrors `CertPanel`/`PanelCertData`
+`crates/chrome/src/model.rs:387` **enum** `ChromePermState` — Grant state for one permission row (CC-9) — mirrors the shell's
+`crates/chrome/src/model.rs:405` **struct** `OmniboxModel` — Omnibox snapshot [`bind_model`] reflects into `#omniInput`/`#omniWarn`
+`crates/chrome/src/model.rs:418` **struct** `ChromeTabModel` — One tab row for the sidebar tab list (`#sbTabs`)
+`crates/chrome/src/model.rs:457` **struct** `ChromeTabGroup` — A tab's group membership, as rendered by `.group-stripe` (BUG-409)
+`crates/chrome/src/model.rs:478` **struct** `ChromeWorkspaceModel` — One workspace button for the sidebar switcher (`.sb-workspaces`)
+`crates/chrome/src/model.rs:496` **struct** `ChromeMutations` — What one [`bind_model_tracked`] call changed in the document, split by what
+`crates/chrome/src/model.rs:527` **fn** `is_empty` — `true` when this bind changed nothing at all
+`crates/chrome/src/model.rs:535` **struct** `SelectorTouch` — What changed about one selector-relevant node in a [`ChromeMutations`]
+`crates/chrome/src/model.rs:639` **fn** `bind_model` — Binds `model` into `doc`: `data-theme`/`data-layout`/`data-profile` on
+`crates/chrome/src/model.rs:703` **fn** `bind_model_tracked` — Like [`bind_model`], but also reports what the call actually changed, split
 
 ## lumen-core  (287 symbols)
 
@@ -1904,11 +1906,11 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/box_tree.rs:3442` **fn** `build_iframe_document` — Parse inline HTML from an `<iframe srcdoc="...">` attribute (HTML spec §4.8.5)
 `crates/engine/layout/src/box_tree.rs:3517` **fn** `canvas_background_color` — CSS Backgrounds §3.11.1 — the canvas background color
 `crates/engine/layout/src/box_tree.rs:4684` **fn** `incremental_build_box` — BUG-341 S4 — incremental box-build entry point
-`crates/engine/layout/src/box_tree.rs:10790` **fn** `resolve_auto_fill_fit_count` — CSS Grid Layout L3 §9 — Resolve `repeat(auto-fill|auto-fit, <track-list>)` count
-`crates/engine/layout/src/box_tree.rs:10973` **fn** `measure_text_w` — Measures text width (letter_spacing applied between each character)
-`crates/engine/layout/src/box_tree.rs:10992` **fn** `measure_text_w_families` — Как [`measure_text_w`], но учитывает CSS `font-family` каскад
-`crates/engine/layout/src/box_tree.rs:11022` **fn** `measure_text_w_varied` — Как [`measure_text_w_families`], но учитывает CSS `font-variation-settings`
-`crates/engine/layout/src/box_tree.rs:12313` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
+`crates/engine/layout/src/box_tree.rs:10822` **fn** `resolve_auto_fill_fit_count` — CSS Grid Layout L3 §9 — Resolve `repeat(auto-fill|auto-fit, <track-list>)` count
+`crates/engine/layout/src/box_tree.rs:11005` **fn** `measure_text_w` — Measures text width (letter_spacing applied between each character)
+`crates/engine/layout/src/box_tree.rs:11024` **fn** `measure_text_w_families` — Как [`measure_text_w`], но учитывает CSS `font-family` каскад
+`crates/engine/layout/src/box_tree.rs:11054` **fn** `measure_text_w_varied` — Как [`measure_text_w_families`], но учитывает CSS `font-variation-settings`
+`crates/engine/layout/src/box_tree.rs:12345` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
 `crates/engine/layout/src/color_mix.rs:38` **enum** `MixColorSpace` — CSS Color L5 §10.2 — interpolation color space for `color-mix()`
 `crates/engine/layout/src/color_mix.rs:63` **fn** `from_css` — Parse a CSS `color-mix()` interpolation space identifier (case-insensitive)
 `crates/engine/layout/src/color_mix.rs:80` **fn** `is_polar` — Returns `true` if this space has a hue (polar) axis
@@ -3905,7 +3907,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/display_list.rs:4834` **fn** `select_image_set_url` — CSS Images L4 §5 — selects the best `image-set()` candidate URL for `dpr`
 `crates/engine/paint/src/display_list.rs:5821` **fn** `patch_scroll_layer` — In-place патч скролл-позиции overflow-контейнера в готовом display list —
 `crates/engine/paint/src/display_list.rs:5951` **fn** `point_on_resize_grip` — Возвращает `true`, если точка (`px`, `py`) попадает в resize-grip элемента
-`crates/engine/paint/src/display_list.rs:18152` **fn** `emit_text_with_highlights` — CSS Custom Highlight API L1 — helper to emit DrawText with highlight name
+`crates/engine/paint/src/display_list.rs:18204` **fn** `emit_text_with_highlights` — CSS Custom Highlight API L1 — helper to emit DrawText with highlight name
 `crates/engine/paint/src/display_list_cache.rs:21` **struct** `CachedDisplayLayer` — Cached display list for a stacking context or page subtree
 `crates/engine/paint/src/display_list_cache.rs:45` **struct** `DisplayListCache` — LRU cache that maps `NodeId` (u32) to a pre-built `Vec<DisplayCommand>`
 `crates/engine/paint/src/display_list_cache.rs:59` **fn** `new` — Create a cache with the default 32 MB budget
@@ -4175,7 +4177,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgpu_compute.rs:982` **enum** `GpuOp` — Одна записанная операция command-encoder для исполнения на `queue.submit`
 `crates/engine/paint/src/webgpu_compute.rs:1037` **fn** `submit` — Исполняет набор операций в одном `CommandEncoder` и сабмитит на очередь
 
-## lumen-shell  (931 symbols)
+## lumen-shell  (932 symbols)
 
 `crates/shell/src/adblock.rs:44` **fn** `browser_data_dir` — Root of all browser user data (portable): `<exe_dir>/data`
 `crates/shell/src/adblock.rs:52` **fn** `adblock_dir` — `<data>/adblock` — root of the ad-block subsystem's files
@@ -4188,24 +4190,24 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/address_bar.rs:131` **enum** `OmniboxPrefix` — Префикс @-команды, распознанный в строке ввода
 `crates/shell/src/address_bar.rs:161` **fn** `parse_omnibox_prefix` — Разбирает raw ввод → `(OmniboxPrefix, query_str)`
 `crates/shell/src/address_bar.rs:184` **enum** `OmniboxSuggestion` — Одна строка autocomplete в dropdown omnibox
-`crates/shell/src/address_bar.rs:280` **fn** `commit_value` — Строка, которая будет зафиксирована при выборе этой подсказки
-`crates/shell/src/address_bar.rs:293` **fn** `label` — Основной текст строки dropdown
-`crates/shell/src/address_bar.rs:317` **fn** `sub_label` — Дополнительный текст под основным label
-`crates/shell/src/address_bar.rs:356` **struct** `AddressBarState` — Состояние адресной строки. Хранится в `Lumen` struct наряду с `FindState`
-`crates/shell/src/address_bar.rs:371` **fn** `open` — Открыть бар, предзаполнив поле текущим URL страницы
-`crates/shell/src/address_bar.rs:379` **fn** `close`
-`crates/shell/src/address_bar.rs:387` **fn** `is_open`
-`crates/shell/src/address_bar.rs:391` **fn** `input`
-`crates/shell/src/address_bar.rs:396` **fn** `suggestions` — Текущий список подсказок (для рендера и клавиатурной навигации)
-`crates/shell/src/address_bar.rs:401` **fn** `selected_idx` — Индекс выделенной подсказки. `None` — ни одна не выделена
-`crates/shell/src/address_bar.rs:407` **fn** `set_suggestions` — Установить новый список подсказок и сбросить выделение
-`crates/shell/src/address_bar.rs:413` **fn** `select_next` — Перейти к следующей (вниз) подсказке
-`crates/shell/src/address_bar.rs:424` **fn** `select_prev` — Перейти к предыдущей (вверх) подсказке. `None` если уже на первой
-`crates/shell/src/address_bar.rs:432` **fn** `append_str` — Добавить непечатаемые символы (printable chars из keyboard event)
-`crates/shell/src/address_bar.rs:446` **fn** `backspace` — Backspace — удалить последний Unicode-символ
-`crates/shell/src/address_bar.rs:456` **fn** `commit` — Зафиксировать текущий ввод или выделенную подсказку: закрыть бар и,
-`crates/shell/src/address_bar.rs:476` **fn** `take_commit` — Вернуть зафиксированный URL/запрос (если есть) и сбросить его
-`crates/shell/src/address_bar.rs:484` **fn** `commit_suggestion` — Фиксирует подсказку `idx` напрямую (CC-9: клик по движковому
+`crates/shell/src/address_bar.rs:274` **fn** `commit_value` — Строка, которая будет зафиксирована при выборе этой подсказки
+`crates/shell/src/address_bar.rs:287` **fn** `label` — Основной текст строки dropdown
+`crates/shell/src/address_bar.rs:311` **fn** `sub_label` — Дополнительный текст под основным label
+`crates/shell/src/address_bar.rs:369` **struct** `AddressBarState` — Состояние адресной строки. Хранится в `Lumen` struct наряду с `FindState`
+`crates/shell/src/address_bar.rs:384` **fn** `open` — Открыть бар, предзаполнив поле текущим URL страницы
+`crates/shell/src/address_bar.rs:392` **fn** `close`
+`crates/shell/src/address_bar.rs:400` **fn** `is_open`
+`crates/shell/src/address_bar.rs:404` **fn** `input`
+`crates/shell/src/address_bar.rs:409` **fn** `suggestions` — Текущий список подсказок (для рендера и клавиатурной навигации)
+`crates/shell/src/address_bar.rs:414` **fn** `selected_idx` — Индекс выделенной подсказки. `None` — ни одна не выделена
+`crates/shell/src/address_bar.rs:420` **fn** `set_suggestions` — Установить новый список подсказок и сбросить выделение
+`crates/shell/src/address_bar.rs:426` **fn** `select_next` — Перейти к следующей (вниз) подсказке
+`crates/shell/src/address_bar.rs:437` **fn** `select_prev` — Перейти к предыдущей (вверх) подсказке. `None` если уже на первой
+`crates/shell/src/address_bar.rs:445` **fn** `append_str` — Добавить непечатаемые символы (printable chars из keyboard event)
+`crates/shell/src/address_bar.rs:459` **fn** `backspace` — Backspace — удалить последний Unicode-символ
+`crates/shell/src/address_bar.rs:469` **fn** `commit` — Зафиксировать текущий ввод или выделенную подсказку: закрыть бар и,
+`crates/shell/src/address_bar.rs:489` **fn** `take_commit` — Вернуть зафиксированный URL/запрос (если есть) и сбросить его
+`crates/shell/src/address_bar.rs:497` **fn** `commit_suggestion` — Фиксирует подсказку `idx` напрямую (CC-9: клик по движковому
 `crates/shell/src/animation_scheduler.rs:116` **struct** `AnimationScheduler` — Планировщик CSS-анимаций. Хранит timing-состояние между кадрами
 `crates/shell/src/animation_scheduler.rs:121` **fn** `new`
 `crates/shell/src/animation_scheduler.rs:133` **fn** `tick` — Тик планировщика: обходит layout-дерево, для каждой активной анимации
@@ -5022,16 +5024,17 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/tab_lifecycle/state.rs:136` **fn** `advance_tier` — Advance to the next tier. Returns `true` if a transition occurred
 `crates/shell/src/tab_lifecycle/state.rs:150` **fn** `should_transition_on_idle` — Returns `true` if the idle timeout for the current tier has elapsed
 `crates/shell/src/tab_lifecycle/state.rs:167` **fn** `suggested_pressure_state` — If memory pressure justifies an earlier-than-scheduled tier advance, returns
-`crates/shell/src/tabs/archive.rs:38` **struct** `ArchivedTab` — A tab that was auto-archived and removed from the visible tab strip
-`crates/shell/src/tabs/archive.rs:62` **enum** `ArchiveHit` — Hit result from the archive button or panel
-`crates/shell/src/tabs/archive.rs:74` **struct** `TabArchive` — State of the tab archive system
-`crates/shell/src/tabs/archive.rs:91` **fn** `new` — Create an empty archive with the panel closed
-`crates/shell/src/tabs/archive.rs:96` **fn** `push` — Push a newly-archived tab (prepend — newest entry shown first)
-`crates/shell/src/tabs/archive.rs:101` **fn** `take` — Remove and return the archived entry with the given original tab `id`
-`crates/shell/src/tabs/archive.rs:107` **fn** `close` — Close panel without clearing entries
-`crates/shell/src/tabs/archive.rs:113` **fn** `scroll_up` — Scroll up by one row (clamped at zero)
-`crates/shell/src/tabs/archive.rs:119` **fn** `scroll_down` — Scroll down by one row (clamped at last page)
-`crates/shell/src/tabs/archive.rs:145` **fn** `hit_test_panel` — Hit-test the archive panel when it is open
+`crates/shell/src/tabs/archive.rs:44` **struct** `ArchivedTab` — A tab that was auto-archived and removed from the visible tab strip
+`crates/shell/src/tabs/archive.rs:60` **enum** `ArchiveHit` — Hit result from the archive button or panel
+`crates/shell/src/tabs/archive.rs:72` **struct** `TabArchive` — State of the tab archive system
+`crates/shell/src/tabs/archive.rs:89` **fn** `new` — Create an empty archive with the panel closed
+`crates/shell/src/tabs/archive.rs:94` **fn** `push` — Push a newly-archived tab (prepend — newest entry shown first)
+`crates/shell/src/tabs/archive.rs:99` **fn** `take` — Remove and return the archived entry with the given original tab `id`
+`crates/shell/src/tabs/archive.rs:105` **fn** `close` — Close panel without clearing entries
+`crates/shell/src/tabs/archive.rs:110` **fn** `toggle` — Flip panel visibility — mirrors `download::DownloadManager::toggle_visible`
+`crates/shell/src/tabs/archive.rs:116` **fn** `scroll_up` — Scroll up by one row (clamped at zero)
+`crates/shell/src/tabs/archive.rs:122` **fn** `scroll_down` — Scroll down by one row (clamped at last page)
+`crates/shell/src/tabs/archive.rs:148` **fn** `hit_test_panel` — Hit-test the archive panel when it is open
 `crates/shell/src/tabs/containers.rs:44` **enum** `ContainerKind` — Kind of tab container. Drives the border-top colour in the tab strip
 `crates/shell/src/tabs/containers.rs:65` **fn** `border_color` — Accent strip colour, or `None` for [`ContainerKind::None`]
 `crates/shell/src/tabs/containers.rs:82` **fn** `name` — Human-readable container name for UI labels
@@ -5051,11 +5054,11 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/tabs/context_menu.rs:214` **fn** `action_at` — Map a CSS-px `(x, y)` to the [`MenuAction`] under it, or `None`
 `crates/shell/src/tabs/context_menu.rs:224` **fn** `build_overlay` — Build a viewport-locked display list for the open menu
 `crates/shell/src/tabs/groups.rs:24` **enum** `GroupColor` — One of the preset tab-group colours (Chrome-compatible palette)
-`crates/shell/src/tabs/groups.rs:65` **fn** `color` — Fully-opaque RGB for the strip label and the per-tab accent bar
-`crates/shell/src/tabs/groups.rs:80` **fn** `index` — Stable palette index (`0..8`), used as the persisted on-disk value
-`crates/shell/src/tabs/groups.rs:87` **fn** `from_index` — Inverse of [`index`](GroupColor::index). Out-of-range indices clamp to
-`crates/shell/src/tabs/groups.rs:105` **struct** `TabGroup` — A named, colour-coded group of tabs
-`crates/shell/src/tabs/groups.rs:120` **fn** `new` — Create an expanded group with the given id, label and colour
+`crates/shell/src/tabs/groups.rs:62` **fn** `color` — Fully-opaque RGB for the strip label and the per-tab accent bar
+`crates/shell/src/tabs/groups.rs:77` **fn** `index` — Stable palette index (`0..8`), used as the persisted on-disk value
+`crates/shell/src/tabs/groups.rs:84` **fn** `from_index` — Inverse of [`index`](GroupColor::index). Out-of-range indices clamp to
+`crates/shell/src/tabs/groups.rs:102` **struct** `TabGroup` — A named, colour-coded group of tabs
+`crates/shell/src/tabs/groups.rs:117` **fn** `new` — Create an expanded group with the given id, label and colour
 `crates/shell/src/tabs/strip.rs:58` **struct** `TabEntry` — Metadata for one browser tab
 `crates/shell/src/tabs/strip.rs:108` **struct** `TabStrip` — State of the tab strip (tab list + active index)
 `crates/shell/src/tabs/strip.rs:123` **fn** `new` — Create the initial tab strip with one blank tab
@@ -5080,17 +5083,17 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/tabs/strip.rs:403` **fn** `ungroup` — Remove the tab at `idx` from its group (no-op if already ungrouped or
 `crates/shell/src/tabs/strip.rs:411` **fn** `toggle_collapse` — Toggle the collapsed flag of the group `id`. Returns the new collapsed
 `crates/shell/src/tabs/strip.rs:422` **fn** `is_collapsed` — `true` if the group `id` exists and is collapsed
-`crates/shell/src/tabs/strip.rs:432` **fn** `group_color` — The colour of the group `id`, or `None` for an unknown group
-`crates/shell/src/tabs/strip.rs:438` **fn** `group_members` — Strip indices of every tab in the group `id`, in left-to-right order
-`crates/shell/src/tabs/strip.rs:449` **fn** `remove_group` — Remove the group `id` and ungroup all of its member tabs. No-op if the
-`crates/shell/src/tabs/strip.rs:465` **fn** `visible_indices` — Strip indices of the tabs that should be drawn, in order
-`crates/shell/src/tabs/strip.rs:489` **struct** `TabDragState` — State for an in-progress tab drag-and-drop
-`crates/shell/src/tabs/strip.rs:503` **fn** `drop_target` — Compute the tab index where the dragged tab would be dropped if the
-`crates/shell/src/tabs/strip.rs:515` **enum** `TabHit` — Result of clicking inside the tab bar area
-`crates/shell/src/tabs/strip.rs:528` **enum** `TabLayout` — Tab layout mode: horizontal strip or vertical sidebar
-`crates/shell/src/tabs/strip.rs:538` **fn** `from_str` — Parse from a stored settings string (`"horizontal"` or `"vertical"`)
-`crates/shell/src/tabs/strip.rs:543` **fn** `as_str` — Serialize to a settings string
-`crates/shell/src/tabs/strip.rs:562` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the tab bar
+`crates/shell/src/tabs/strip.rs:428` **fn** `group_color` — The colour of the group `id`, or `None` for an unknown group
+`crates/shell/src/tabs/strip.rs:434` **fn** `group_members` — Strip indices of every tab in the group `id`, in left-to-right order
+`crates/shell/src/tabs/strip.rs:445` **fn** `remove_group` — Remove the group `id` and ungroup all of its member tabs. No-op if the
+`crates/shell/src/tabs/strip.rs:461` **fn** `visible_indices` — Strip indices of the tabs that should be drawn, in order
+`crates/shell/src/tabs/strip.rs:485` **struct** `TabDragState` — State for an in-progress tab drag-and-drop
+`crates/shell/src/tabs/strip.rs:499` **fn** `drop_target` — Compute the tab index where the dragged tab would be dropped if the
+`crates/shell/src/tabs/strip.rs:511` **enum** `TabHit` — Result of clicking inside the tab bar area
+`crates/shell/src/tabs/strip.rs:524` **enum** `TabLayout` — Tab layout mode: horizontal strip or vertical sidebar
+`crates/shell/src/tabs/strip.rs:534` **fn** `from_str` — Parse from a stored settings string (`"horizontal"` or `"vertical"`)
+`crates/shell/src/tabs/strip.rs:539` **fn** `as_str` — Serialize to a settings string
+`crates/shell/src/tabs/strip.rs:558` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the tab bar
 `crates/shell/src/tabs/tree.rs:22` **fn** `depth_of` — Compute the tree depth of the tab with `id` in the given slice
 `crates/shell/src/tabs/tree.rs:38` **fn** `children_of` — Return the IDs of direct children of `parent_id` in strip order
 `crates/shell/src/tabs/tree.rs:48` **fn** `subtree_ids` — Collect the IDs of all tabs in the subtree rooted at `root_id` (inclusive)
@@ -5636,4 +5639,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 5559 symbols in 24 crates*
+*Total: 5562 symbols in 24 crates*

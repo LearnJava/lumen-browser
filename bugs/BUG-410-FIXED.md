@@ -1,9 +1,9 @@
 # BUG-410 — строка dropdown омнибокса потеряла текстовый тег типа
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-07-31 (P1)
 **Компонент:** shell (`crates/shell/src/main.rs::chrome_model_snapshot`,
-`crates/shell/src/address_bar.rs`), chrome (`ChromeSuggestionModel`,
-`assets/chrome/chrome.html` `#omniDropdown`)
+`crates/shell/src/address_bar.rs`), chrome (`crates/chrome/src/model.rs::ChromeSuggestionModel`,
+`assets/chrome/chrome.html` `#omniDropdown`, `docs/design/lumen-v3_3.html`)
 **Найден:** P1, CC-15-3 (2026-07-28), при удалении легаси-`build_dropdown`
 
 ## Симптом
@@ -32,6 +32,28 @@ CC-15-3 удалила уже мёртвый `tag()` вместе с остал�
 `frequency`), добавить поле `tag: String` в `ChromeSuggestionModel`, элемент
 `.dd-tag` в `#omniDropdown` (`assets/chrome/chrome.html`) и биндинг в `bind_model`.
 После этого снять `#[allow(dead_code)]` с `frequency`.
+
+## Фикс (2026-07-31, P1)
+
+Восстановлен `OmniboxSuggestion::tag()` (удалённый CC-15-3 вместе с легаси-рендером,
+тот же текст: «история»/«заметка»/«позже»/«вкладка»/«закладка»/«ai», `×N` для
+`SearchQuery` при `frequency > 1`, иначе «запрос»). `#[allow(dead_code)]` на
+`SearchQuery::frequency` снят — поле снова читается.
+
+`ChromeSuggestionModel` получил поле `tag: String`; `chrome_model_snapshot` заполняет
+его вызовом `s.tag()` рядом с уже существующим `tag_color()`. `build_dd_row` добавляет
+`<span class="dd-tag">` третьим элементом строки (после `.dd-icon`/`.dd-text`).
+
+Разметка и `.dd-tag` CSS (`font-size:10.5px; color:var(--text-secondary); flex:none;
+white-space:nowrap;`) добавлены в замороженный эталон (`docs/design/lumen-v3_3.html`,
+по одному тегу на каждую из 5 демо-строк `#omniDropdown`) и перенесены в
+`assets/chrome/chrome.html` через `scripts/gen_chrome_assets.py`.
+
+Тесты: `crates/shell/src/address_bar.rs` — `search_query_suggestion_tag_is_generic_label_below_frequency_two`,
+`search_query_suggestion_tag_shows_use_count_from_frequency_two`, `tab_suggestion_tag_is_kind_label`;
+`crates/chrome/src/model.rs::dropdown_is_rebuilt_from_suggestions_and_toggles_open` расширен
+проверкой текста `.dd-tag`. `cargo clippy -p lumen-chrome -p lumen-shell --all-targets -- -D warnings`
+чист.
 
 ## Связанные
 
