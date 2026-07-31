@@ -1235,12 +1235,44 @@ impl Document {
         }))
     }
 
+    /// Create a text node unconditionally. Used by the HTML parser — does **not**
+    /// enforce [`MAX_DOM_NODES`]. JS-driven mutations should use
+    /// [`try_create_text`][Self::try_create_text].
     pub fn create_text(&mut self, content: impl Into<String>) -> NodeId {
         self.alloc(NodeData::Text(content.into()))
     }
 
+    /// Create a text node, returning `Err(`[`NodeLimitExceeded`]`)` if the arena already
+    /// holds [`MAX_DOM_NODES`] or more nodes.
+    ///
+    /// Called by the `_lumen_create_text_node` JS binding so that JS-driven DOM mutations
+    /// cannot grow the tree beyond the safety limit (BUG-418: unlike `createElement`,
+    /// this path was previously ungated entirely).
+    pub fn try_create_text(&mut self, content: impl Into<String>) -> Result<NodeId, NodeLimitExceeded> {
+        if self.nodes.len() >= MAX_DOM_NODES {
+            return Err(NodeLimitExceeded);
+        }
+        Ok(self.alloc(NodeData::Text(content.into())))
+    }
+
+    /// Create a comment node unconditionally. Used by the HTML parser — does **not**
+    /// enforce [`MAX_DOM_NODES`]. JS-driven mutations should use
+    /// [`try_create_comment`][Self::try_create_comment].
     pub fn create_comment(&mut self, content: impl Into<String>) -> NodeId {
         self.alloc(NodeData::Comment(content.into()))
+    }
+
+    /// Create a comment node, returning `Err(`[`NodeLimitExceeded`]`)` if the arena already
+    /// holds [`MAX_DOM_NODES`] or more nodes.
+    ///
+    /// Called by the `_lumen_create_comment` JS binding so that JS-driven DOM mutations
+    /// cannot grow the tree beyond the safety limit (BUG-418: unlike `createElement`,
+    /// this path was previously ungated entirely).
+    pub fn try_create_comment(&mut self, content: impl Into<String>) -> Result<NodeId, NodeLimitExceeded> {
+        if self.nodes.len() >= MAX_DOM_NODES {
+            return Err(NodeLimitExceeded);
+        }
+        Ok(self.alloc(NodeData::Comment(content.into())))
     }
 
     /// Allocate a `DocumentFragment` node in the arena.
@@ -6431,6 +6463,36 @@ mod tests {
         assert_eq!(doc.node_count(), MAX_DOM_NODES);
         let result = doc.try_create_element(QualName::html("p"));
         assert_eq!(result, Err(NodeLimitExceeded));
+    }
+
+    #[test]
+    fn try_create_text_ok_below_limit() {
+        let mut doc = Document::new();
+        assert!(doc.try_create_text("hi").is_ok());
+    }
+
+    #[test]
+    fn try_create_text_err_at_limit() {
+        let mut doc = Document::new();
+        while doc.node_count() < MAX_DOM_NODES {
+            doc.create_element(QualName::html("div"));
+        }
+        assert_eq!(doc.try_create_text("hi"), Err(NodeLimitExceeded));
+    }
+
+    #[test]
+    fn try_create_comment_ok_below_limit() {
+        let mut doc = Document::new();
+        assert!(doc.try_create_comment("hi").is_ok());
+    }
+
+    #[test]
+    fn try_create_comment_err_at_limit() {
+        let mut doc = Document::new();
+        while doc.node_count() < MAX_DOM_NODES {
+            doc.create_element(QualName::html("div"));
+        }
+        assert_eq!(doc.try_create_comment("hi"), Err(NodeLimitExceeded));
     }
 
     #[test]

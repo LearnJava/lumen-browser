@@ -1585,19 +1585,27 @@ impl V8JsRuntime {
         let d = Arc::clone(&doc);
         reg!(
             "_lumen_create_text_node",
-            move |text: String| -> u32 {
+            move |text: String| -> i32 {
                 let mut doc = d.lock().unwrap();
-                let nid = doc.create_text(text);
-                nid.index() as u32
+                // Returns -1 when MAX_DOM_NODES is reached; JS shim checks `nid < 0`
+                // (BUG-418: was ungated, letting the arena grow past the limit).
+                match doc.try_create_text(text) {
+                    Ok(nid) => nid.index() as i32,
+                    Err(_) => -1,
+                }
             }
         );
         let d = Arc::clone(&doc);
         reg!(
             "_lumen_create_comment",
-            move |text: String| -> u32 {
+            move |text: String| -> i32 {
                 let mut doc = d.lock().unwrap();
-                let nid = doc.create_comment(text);
-                nid.index() as u32
+                // Returns -1 when MAX_DOM_NODES is reached; JS shim checks `nid < 0`
+                // (BUG-418: was ungated, letting the arena grow past the limit).
+                match doc.try_create_comment(text) {
+                    Ok(nid) => nid.index() as i32,
+                    Err(_) => -1,
+                }
             }
         );
         let d = Arc::clone(&doc);
