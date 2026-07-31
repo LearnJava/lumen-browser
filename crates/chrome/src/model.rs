@@ -262,6 +262,10 @@ pub struct ChromeSuggestionModel {
     pub sub_label: String,
     /// `#RRGGBB` accent for the `.dd-icon` swatch background.
     pub color: String,
+    /// Suggestion-kind label shown right-aligned in the row (`.dd-tag`,
+    /// BUG-410) — e.g. "история"/"закладка"/"×3" for a repeated search
+    /// query. Mirrors the legacy overlay's `OmniboxSuggestion::tag()`.
+    pub tag: String,
 }
 
 /// `#findBar` snapshot (CC-9) — mirrors [`OmniboxModel`]'s "engine renders,
@@ -994,6 +998,11 @@ fn build_dd_row(doc: &mut Document, s: &ChromeSuggestionModel) -> NodeId {
     append_text(doc, sub, &s.sub_label);
     attach_child(doc, text, sub);
     attach_child(doc, row, text);
+
+    let tag = doc.create_element(QualName::html("span"));
+    set_attr(doc, tag, "class", "dd-tag");
+    append_text(doc, tag, &s.tag);
+    attach_child(doc, row, tag);
 
     row
 }
@@ -2497,6 +2506,7 @@ mod tests {
                     label: "figma.com".to_owned(),
                     sub_label: "Посещено вчера".to_owned(),
                     color: "#0B6FE0".to_owned(),
+                    tag: "история".to_owned(),
                 }],
             },
             ..ChromeModel::default()
@@ -2508,6 +2518,8 @@ mod tests {
             doc.get(container).children.iter().copied().filter(|&c| has_class(&doc, c, "dd-row")).collect();
         assert_eq!(rows.len(), 1, "old demo rows must be gone, only the 1 model suggestion remains");
         assert_eq!(doc.get(rows[0]).get_attr("data-sugg-idx"), Some("0"));
+        let tag = find_descendant_by_class(&doc, rows[0], "dd-tag").expect("row has .dd-tag");
+        assert_eq!(text_of(&doc, tag), "история");
     }
 
     #[test]

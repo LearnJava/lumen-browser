@@ -9252,6 +9252,7 @@ impl Lumen {
                     label,
                     sub_label,
                     color: Self::chrome_hex_color(s.tag_color()),
+                    tag: s.tag(),
                 }
             })
             .collect();
