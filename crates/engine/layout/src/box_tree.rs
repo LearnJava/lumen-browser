@@ -6769,7 +6769,19 @@ fn lay_out_inner(
     // Replaced element (Image): auto-ширина = intrinsic (0 в Phase 0, без
     // декодированных пикселей). Это CSS 2.1 §10.3.2 — replaced-боксы
     // НЕ растягиваются на весь контейнер при отсутствии width.
-    let is_replaced = matches!(b.kind, BoxKind::Image { .. } | BoxKind::Video { .. } | BoxKind::Canvas { .. } | BoxKind::Iframe { .. } | BoxKind::FormControl { .. });
+    // CSS Display L3 §2.4: FormControl (`<button>`, `<select>`) is only
+    // "replaced" for sizing while its used `display` keeps the UA-default
+    // box type. An author `display: flex`/`grid` blockifies it into a real
+    // flex/grid *container* with ordinary box-tree children (e.g. an icon +
+    // text `<span>` inside `<button>`) — those children must get auto-width =
+    // available space like any other block, not intrinsic-0. Leaving this
+    // unconditional made `.ws-add`-style buttons (icon + label, no explicit
+    // `width`, in a `flex-direction: column` sidebar) collapse to width 0 and
+    // wrap their label onto two lines (BUG-425 item 3) — real browsers don't,
+    // because `display: flex` overrides the replaced-sizing default.
+    let is_replaced = matches!(b.kind, BoxKind::Image { .. } | BoxKind::Video { .. } | BoxKind::Canvas { .. } | BoxKind::Iframe { .. })
+        || (matches!(b.kind, BoxKind::FormControl { .. })
+            && !matches!(s.display, Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid));
     // CSS Basic UI L4 §4.4 — field-sizing: content.
     // Pre-compute intrinsic (padding-box width, padding-box height) from text content.
     // Only applies to text-entry FormControls when UA did not supply explicit dimensions.
