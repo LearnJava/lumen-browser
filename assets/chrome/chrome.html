@@ -123,6 +123,7 @@ body[data-profile="guest"] .avatar{ background:var(--surface-2); color:var(--tex
 .tab-row.child{ margin-left:12px; }
 .tab-row .tree-line{ position:absolute; left:-8px; top:-2px; bottom:14px; width:8px; border-left:1px solid var(--stroke); border-bottom:1px solid var(--stroke); border-radius:0 0 0 4px; }
 .container-stripe{ width:3px; align-self:stretch; border-radius:2px; flex:none; margin-right:1px; }
+.group-stripe{ width:3px; align-self:stretch; border-radius:2px; flex:none; margin-right:1px; }
 .tab-fav{ width:14px; height:14px; border-radius:3px; flex:none; display:flex; align-items:center; justify-content:center; background:var(--surface-2); font-size:9px; overflow:hidden; }
 .tab-row.sleeping .tab-fav{ opacity:.4; }
 .tab-title{ flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:12px; }
@@ -679,6 +680,13 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
           <span class="container-stripe" style="background:#1F9D55"></span>
           <span class="tab-fav">Б</span>
           <span class="tab-title">Выписка за июль</span>
+          <button class="tab-close" data-action="close-tab" aria-label="Закрыть вкладку"><svg class="icon"><use href="#i-x"/></svg></button>
+        </div>
+
+        <div class="tab-row" data-ws="personal" data-title="Roadmap Q3 — черновик" data-url="notion.example/roadmap-q3" data-action="select-tab" role="tab" aria-selected="false">
+          <span class="group-stripe" style="background:#8B5CF6" title="Проект Х"></span>
+          <span class="tab-fav">R</span>
+          <span class="tab-title">Roadmap Q3 — черновик</span>
           <button class="tab-close" data-action="close-tab" aria-label="Закрыть вкладку"><svg class="icon"><use href="#i-x"/></svg></button>
         </div>
 

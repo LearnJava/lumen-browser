@@ -24,7 +24,7 @@ pub use model::{
     ChromeFindModel, ChromeMutations,
     ChromeHistoryModel, ChromeHistoryRow, ChromeModel, ChromePaletteModel,
     ChromePaletteResultModel, ChromePermState, ChromeRightSidebarModel, ChromeSettingsModel,
-    ChromeSidebarTab, ChromeSuggestionModel, ChromeTabModel, ChromeWorkspaceModel, OmniboxModel,
+    ChromeSidebarTab, ChromeSuggestionModel, ChromeTabGroup, ChromeTabModel, ChromeWorkspaceModel, OmniboxModel,
     SelectorTouch,
 };
 
