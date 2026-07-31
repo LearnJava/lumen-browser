@@ -424,11 +424,7 @@ impl TabStrip {
     }
 
     /// The colour of the group `id`, or `None` for an unknown group.
-    ///
-    /// BUG-409: unread since CC-15-3 removed the legacy strip painter — see
-    /// [`GroupColor::color`] for why the group palette is kept.
     #[must_use]
-    #[allow(dead_code, reason = "BUG-409: цвета групп вкладок ещё не перенесены в движковый хром")]
     pub fn group_color(&self, id: usize) -> Option<GroupColor> {
         self.group(id).map(|g| g.color)
     }

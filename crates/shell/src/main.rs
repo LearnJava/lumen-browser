@@ -9179,22 +9179,38 @@ impl Lumen {
     /// the omnibox value/spoof-warning, read from the legacy `address_bar`.
     fn chrome_model_snapshot(&self) -> lumen_chrome::ChromeModel {
         let active_id = self.tab_strip.tabs.get(self.tab_strip.active).map(|t| t.id);
+        // BUG-409: iterate `visible_indices()` rather than `tabs` directly —
+        // a collapsed group's non-leftmost members stay hidden behind the
+        // leftmost (chip) row, mirroring the legacy strip's own collapse
+        // behaviour. For a strip with no collapsed groups this is `0..len()`.
         let tabs = self
             .tab_strip
-            .tabs
-            .iter()
-            .map(|t| lumen_chrome::ChromeTabModel {
-                id: t.id,
-                title: t.title.clone(),
-                active: Some(t.id) == active_id,
-                sleeping: t.tab_state == TabState::Hibernated,
-                // CC-8: tree-style tabs (7A.2) — a tab with an opener is
-                // rendered as a `.child` row with a `.tree-line` connector.
-                // The asset's CSS only indents one nesting level, so this
-                // collapses depth ≥1 to a single boolean rather than
-                // threading `tabs::tree::depth_of`'s full depth through.
-                is_child: t.opener_id.is_some(),
-                container_color: t.container.border_color().map(Self::chrome_hex_color),
+            .visible_indices()
+            .into_iter()
+            .map(|i| {
+                let t = &self.tab_strip.tabs[i];
+                lumen_chrome::ChromeTabModel {
+                    id: t.id,
+                    title: t.title.clone(),
+                    active: Some(t.id) == active_id,
+                    sleeping: t.tab_state == TabState::Hibernated,
+                    // CC-8: tree-style tabs (7A.2) — a tab with an opener is
+                    // rendered as a `.child` row with a `.tree-line` connector.
+                    // The asset's CSS only indents one nesting level, so this
+                    // collapses depth ≥1 to a single boolean rather than
+                    // threading `tabs::tree::depth_of`'s full depth through.
+                    is_child: t.opener_id.is_some(),
+                    container_color: t.container.border_color().map(Self::chrome_hex_color),
+                    group: t.group_id.and_then(|gid| {
+                        let group = self.tab_strip.group(gid)?;
+                        let color = self.tab_strip.group_color(gid)?.color();
+                        Some(lumen_chrome::ChromeTabGroup {
+                            color: Self::chrome_hex_color(color),
+                            name: group.label.clone(),
+                            collapsed: group.collapsed,
+                        })
+                    }),
+                }
             })
             .collect();
         let workspaces = self
@@ -24292,6 +24308,7 @@ mod tests {
                 sleeping: false,
                 is_child: false,
                 container_color: None,
+                group: None,
             })
             .collect();
         let workspaces = (0..3i64)
