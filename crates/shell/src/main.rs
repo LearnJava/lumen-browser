@@ -9300,6 +9300,26 @@ impl Lumen {
                 }
             })
             .collect();
+        // BUG-408: mirrors `TabArchive`'s entries into `#archivePanel`'s
+        // `.arc-list` — same shape `ChromeTabModel`'s favicon fallback and
+        // `container_color` convention already use.
+        let archive: Vec<lumen_chrome::ChromeArchiveEntryModel> = self
+            .archive
+            .entries
+            .iter()
+            .map(|e| lumen_chrome::ChromeArchiveEntryModel {
+                id: e.id,
+                fav_letter: e
+                    .title
+                    .chars()
+                    .next()
+                    .map(|c| c.to_uppercase().to_string())
+                    .unwrap_or_else(|| "\u{2022}".to_owned()),
+                title: e.title.clone(),
+                url: e.url.clone(),
+                container_color: e.container.border_color().map(Self::chrome_hex_color),
+            })
+            .collect();
         // CC-9: the frozen design merges shields' blocked-count and the
         // permission rows into one `#permPopover` — no separate engine
         // control exists for `PermissionPanel::visible` (`Ctrl+Shift+P`), so
@@ -9481,6 +9501,8 @@ impl Lumen {
             find,
             downloads_open: self.downloads.visible,
             downloads,
+            archive_open: self.archive.visible,
+            archive,
             popover_open,
             blocked_total: self.shields.blocked_total_count(),
             permissions,
@@ -9657,6 +9679,33 @@ impl Lumen {
             ChromeAction::ToggleDownloads => {
                 self.downloads.toggle_visible();
                 self.relayout_chrome_host();
+            }
+            // BUG-408: shared by `#archiveToggleBtn`, `.nt-restore`, and
+            // `#archivePanel`'s own close button (all three carry this same
+            // action, mirroring how `toggle-downloads` closes its own panel).
+            ChromeAction::ToggleArchive => {
+                self.archive.toggle();
+                self.relayout_chrome_host();
+            }
+            // BUG-408: `.arc-restore`/`.arc-dismiss` carry their own copy of
+            // `data-archive-id` (mirrors `.tab-close`'s `data-tab-id`), so
+            // `nid` is the button itself, not the row.
+            ChromeAction::ArchiveRestore => {
+                if let Some(id) = self.chrome_data_id(nid, "data-archive-id")
+                    && let Some(entry) = self.archive.take(id as usize)
+                {
+                    if !entry.url.is_empty() {
+                        self.navigate_to(PageSource::Url(entry.url));
+                    }
+                    self.archive.close();
+                    self.relayout_chrome_host();
+                }
+            }
+            ChromeAction::ArchiveDismiss => {
+                if let Some(id) = self.chrome_data_id(nid, "data-archive-id") {
+                    self.archive.take(id as usize);
+                    self.relayout_chrome_host();
+                }
             }
             ChromeAction::OpenPrintDialog => {
                 self.print_panel.toggle();

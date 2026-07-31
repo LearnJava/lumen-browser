@@ -435,6 +435,29 @@ body[data-theme="dark"] .elements-tree .tag{ color:#6cb2ff; } body[data-theme="d
 .dl-actions button{ font-size:10.5px; padding:4px 8px; border-radius:var(--radius-sm); border:1px solid var(--stroke); background:var(--surface-0); display:flex; align-items:center; gap:4px; }
 .dl-actions button:hover{ background:var(--surface-2); }
 
+/* ---------- Tab archive panel ---------- */
+.archive-panel{
+  position:absolute; right:350px; bottom:14px; width:320px; max-height:400px; background:var(--surface-0);
+  border:1px solid var(--stroke); border-radius:var(--radius-lg); box-shadow:0 10px 30px rgba(0,0,0,.18);
+  display:none; flex-direction:column; z-index:70; overflow:hidden;
+}
+.archive-panel.open{ display:flex; }
+.arc-header{ display:flex; align-items:center; padding:10px 12px; border-bottom:1px solid var(--stroke); font-weight:600; font-size:12.5px; }
+.arc-close{ margin-left:auto; width:20px; height:20px; border:none; background:none; color:var(--text-secondary); border-radius:var(--radius-sm); }
+.arc-close:hover{ background:var(--surface-2); }
+.arc-list{ overflow-y:auto; padding:8px; }
+.arc-card{ padding:10px; border-radius:var(--radius-md); }
+.arc-card:hover{ background:var(--surface-1); }
+.arc-row{ display:flex; align-items:center; gap:8px; }
+.arc-stripe{ width:3px; align-self:stretch; border-radius:2px; flex:none; }
+.arc-fav{ width:28px; height:28px; border-radius:6px; background:var(--surface-2); display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:700; color:var(--text-secondary); flex:none; }
+.arc-text{ flex:1; min-width:0; }
+.arc-title{ font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.arc-url{ font-size:10.5px; color:var(--text-secondary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.arc-actions{ display:flex; gap:6px; flex:none; }
+.arc-actions button{ width:22px; height:22px; border-radius:var(--radius-sm); border:1px solid var(--stroke); background:var(--surface-0); display:flex; align-items:center; justify-content:center; color:var(--text-secondary); }
+.arc-actions button:hover{ background:var(--surface-2); color:var(--text-primary); }
+
 /* ---------- Find in page ---------- */
 .find-bar{
   position:absolute; top:8px; right:8px; height:32px; background:var(--surface-0); border:1px solid var(--stroke);
@@ -798,6 +821,7 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
           <button class="tb-btn" data-action="toggle-find" aria-label="Найти на странице"><svg class="icon"><use href="#i-search"/></svg></button>
           <button class="tb-btn" data-action="open-web-sidebar" aria-label="Веб-сайдбар"><svg class="icon"><use href="#i-panel"/></svg></button>
           <button class="tb-btn" data-action="open-ai-sidebar" aria-label="ИИ-сайдбар"><svg class="icon"><use href="#i-spark"/></svg></button>
+          <button class="tb-btn" id="archiveToggleBtn" data-action="toggle-archive" aria-label="Архив вкладок"><svg class="icon"><use href="#i-clock"/></svg></button>
           <button class="tb-btn" id="dlToggleBtn" data-action="toggle-downloads" aria-label="Загрузки"><svg class="icon"><use href="#i-download"/></svg><span class="tb-dot"></span></button>
           <button class="tb-btn" data-action="open-print-dialog"><svg class="icon"><use href="#i-printer"/></svg></button>
           <button class="tb-btn" id="devtoolsBtn" data-action="toggle-devtools" aria-label="DevTools"><svg class="icon"><use href="#i-code"/></svg></button>
@@ -823,7 +847,7 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
                 <div class="tile"><div class="tile-icon">N</div><div class="tile-label">Notion</div></div>
                 <div class="tile"><div class="tile-icon">+</div><div class="tile-label">Добавить</div></div>
               </div>
-              <button class="nt-restore"><svg class="icon"><use href="#i-clock"/></svg>Восстановить закрытые</button>
+              <button class="nt-restore" data-action="toggle-archive"><svg class="icon"><use href="#i-clock"/></svg>Восстановить закрытые</button>
             </div>
           </div>
 
@@ -1098,6 +1122,24 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
               <div class="dl-card">
                 <div class="dl-row"><div class="dl-icon">PNG</div><div><div class="dl-name">screenshot-2026-07-21.png</div><div class="dl-meta">640 KB — готово</div></div></div>
                 <div class="dl-actions"><button><svg class="icon"><use href="#i-ext"/></svg>Открыть</button><button><svg class="icon"><use href="#i-folder"/></svg>В папке</button><button><svg class="icon"><use href="#i-trash"/></svg></button></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Tab archive panel -->
+          <div class="archive-panel" id="archivePanel">
+            <div class="arc-header">Архив вкладок<button class="arc-close" data-action="toggle-archive" aria-label="Архив вкладок"><svg class="icon"><use href="#i-x"/></svg></button></div>
+            <div class="arc-list">
+              <div class="arc-card">
+                <div class="arc-row">
+                  <span class="arc-stripe" style="background:#0066FF"></span>
+                  <div class="arc-fav">L</div>
+                  <div class="arc-text"><div class="arc-title">Lumen — дизайн-система</div><div class="arc-url">lumen.example/design</div></div>
+                  <div class="arc-actions">
+                    <button class="arc-restore" title="Восстановить" data-action="archive-restore" aria-label="Восстановить вкладку"><svg class="icon"><use href="#i-reload"/></svg></button>
+                    <button class="arc-dismiss" title="Удалить из архива" data-action="archive-dismiss" aria-label="Удалить из архива"><svg class="icon"><use href="#i-x"/></svg></button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
