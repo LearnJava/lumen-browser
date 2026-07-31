@@ -1,8 +1,36 @@
 # BUG-404 — `flush_pointer_moves` использует захардкоженную геометрию вместо `page_offset()`
 
-**Статус:** OPEN
-**Компонент:** shell (`crates/shell/src/main.rs::flush_pointer_moves`)
+**Статус:** FIXED 2026-07-31
+**Компонент:** shell (`crates/shell/src/main.rs::flush_pointer_moves`, right-click tab context menu, `tabs/strip.rs`)
 **Найден:** P1, скоупинг CC-15 (2026-07-28), при аудите зависимостей от `toolbar::CHROME_H`
+
+## Закрытие (P1, 2026-07-31)
+
+Проверка сайтов из этой находки:
+
+1. **`flush_pointer_moves`** — уже переведён на `page_point()`/`page_offset()` попутно фиксом
+   BUG-437 (см. комментарий на месте вызова, `main.rs:16880-16884`): «same conversion as
+   `handle_click_at` — `page_point()`, not the legacy `left_dock()`/`CHROME_H` pair». Отдельного
+   изменения не потребовалось, симптом из этой находки больше не воспроизводится.
+2. **Правый клик по вкладке** (второй сайт, CC-15-3) — исправлен: индекс вкладки под курсором
+   теперь резолвится через `Lumen::chrome_hit_test(x_css, y_css)` + поиск ближайшего предка с
+   атрибутом `data-tab-id` (`Lumen::chrome_data_id`), тот же приём, что `ChromeAction::SelectTab`
+   уже использует для левого клика (`main.rs`, ветка `MouseInput(Pressed, Right)`). Больше не
+   зависит от `TAB_BAR_HEIGHT`/`ARCHIVE_BTN_W`/`LAYOUT_BTN_W`/`SETTINGS_BTN_W`.
+   Это был последний живой потребитель `tabs::strip::hit_test`/`TabHit` — CC-15-3 не смогла их
+   удалить именно из-за этого сайта (см. её комментарий, ранее в шапке этого файла). Удалены
+   вместе с приватными хелперами, ставшими мёртвыми (`tab_x_range`, `adblock_cb_x_range`,
+   `TAB_PAD`, `CLOSE_SZ`, `ADBLOCK_CB_SZ`) и четырьмя их юнит-тестами. `cargo clippy -p lumen-shell
+   --all-targets -- -D warnings` чист, `cargo test -p lumen-shell` (пакет `tabs::strip`) — 48/48
+   OK. Ручная проверка правого клика мышью не выполнена (нет автоматизации правого клика в MCP —
+   `docs/automation.md` не документирует такой tool); фикс проверен на уровне кода — зеркалирует
+   уже рабочий и покрытый левым кликом путь `ChromeAction::SelectTab`.
+3. **Три оставшихся сайта** (командная палитра / щиты / разрешения, CC-15-4) — при разборе
+   выяснилось, что это не тот же класс бага (не всегда `CHROME_H`-дрейф; для командной палитры
+   и вовсе не зависит от него) и не сводится к замене офсета — `.cp-row` не несёт `data-action`
+   вовсе, так что просто гейтировать/удалить легаси-хит-тест сломает активацию строк палитры.
+   Нужен либо замер реального layout-rect chrome-узла, либо новые `ChromeAction`. Вынесено в
+   отдельный баг — [BUG-461](BUG-461-OPEN.md) — с деталями, почему это не быстрый фикс.
 
 ## Симптом
 

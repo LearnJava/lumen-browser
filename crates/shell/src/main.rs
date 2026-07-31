@@ -14220,12 +14220,20 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // CC-4: right-click on a tab opens the tab context menu
                     // instead of starting a mouse gesture.
                     if state == ElementState::Pressed && !self.focus.active {
-                        let tab_area_w = self.viewport_width_css()
-                            - tabs::archive::ARCHIVE_BTN_W
-                            - tabs::strip::LAYOUT_BTN_W
-                            - tabs::strip::SETTINGS_BTN_W;
-                        if let tabs::strip::TabHit::Tab(idx) =
-                            tabs::strip::hit_test(&self.tab_strip, x_css, y_css, tab_area_w)
+                        // BUG-404: resolve the tab under the cursor via the
+                        // chrome hit-test + `data-tab-id` (the same
+                        // mechanism `ChromeAction::SelectTab` uses for a
+                        // left-click), not `tabs::strip::hit_test`'s legacy
+                        // geometry — the engine-drawn tab strip's real
+                        // layout no longer matches `TAB_BAR_HEIGHT`/
+                        // `ARCHIVE_BTN_W`/`LAYOUT_BTN_W`/`SETTINGS_BTN_W`.
+                        let tab_id = self.chrome_hit_test(x_css, y_css).and_then(|hit| {
+                            hit.path
+                                .iter()
+                                .find_map(|&nid| self.chrome_data_id(nid, "data-tab-id"))
+                        });
+                        if let Some(idx) = tab_id
+                            .and_then(|id| self.tab_strip.tabs.iter().position(|t| t.id == id as usize))
                         {
                             let pinned = self.tab_strip.is_pinned(idx);
                             let group = self.tab_strip.group_of(idx);

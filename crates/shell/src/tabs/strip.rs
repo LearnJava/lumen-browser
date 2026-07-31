@@ -1,11 +1,11 @@
-//! Tab strip: per-tab metadata and hit-testing.
+//! Tab strip: per-tab metadata.
 //!
-//! `TabStrip` holds the list of open tabs and the active index.
-//! `hit_test` maps CSS-px (x, y) → `TabHit` for mouse dispatch — still used
-//! unconditionally by the tab right-click context menu (CC-15-3: the
-//! `build_tab_bar`/`build_tab_tooltip` paint path and the layout-toggle/
-//! settings-button paint+hit-test pairs were removed once the engine-drawn
-//! chrome (CC-4) made them dead code under the default config).
+//! `TabStrip` holds the list of open tabs and the active index. Its own
+//! CSS-px hit-testing (`hit_test`/`TabHit`) was removed in BUG-404 — the
+//! last live caller (tab right-click context menu) now resolves the tab
+//! under the cursor via the engine-drawn chrome's `data-tab-id` instead
+//! (`Lumen::chrome_hit_test` + `chrome_data_id`, `crates/shell/src/main.rs`),
+//! same mechanism `ChromeAction::SelectTab` uses for a left-click.
 
 use crate::tab_lifecycle::state::TabState;
 use crate::tabs::containers::ContainerKind;
@@ -29,28 +29,10 @@ pub const LAYOUT_BTN_W: f32 = 28.0;
 /// `about:settings`, mirrors [`LAYOUT_BTN_W`]'s geometry).
 pub const SETTINGS_BTN_W: f32 = 28.0;
 
-/// Side length of the per-tab ad-block checkbox square in CSS px.
-/// Rendered at the tab's left edge, before the title (away from the × button so
-/// the user does not hit close by mistake).
-const ADBLOCK_CB_SZ: f32 = 12.0;
-
-/// `[left, right)` x-range of a tab's ad-block checkbox, given the tab's own
-/// left edge. Placed at the left edge (inset by `TAB_PAD`), before the title.
-/// Mirrors the geometry used by [`hit_test`] so hit-testing matches where the
-/// checkbox used to be painted.
-fn adblock_cb_x_range(tab_left: f32) -> (f32, f32) {
-    let cb_left = tab_left + TAB_PAD;
-    (cb_left, cb_left + ADBLOCK_CB_SZ)
-}
-
 /// Minimum tab button width in CSS px.
 const TAB_MIN_W: f32 = 80.0;
 /// Maximum tab button width in CSS px.
 const TAB_MAX_W: f32 = 200.0;
-/// Horizontal padding inside a tab (text from left edge).
-const TAB_PAD: f32 = 10.0;
-/// Close-button glyph size.
-const CLOSE_SZ: f32 = 14.0;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -504,21 +486,6 @@ impl TabDragState {
     }
 }
 
-// ── Hit-testing ───────────────────────────────────────────────────────────────
-
-/// Result of clicking inside the tab bar area.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TabHit {
-    /// Clicked the tab body (not close button) — `idx` = tab index.
-    Tab(usize),
-    /// Clicked the close ×  button — `idx` = tab index.
-    Close(usize),
-    /// Clicked the per-tab ad-block checkbox — `idx` = tab index.
-    Adblock(usize),
-    /// Clicked empty area (right of all tabs).
-    Empty,
-}
-
 /// Tab layout mode: horizontal strip or vertical sidebar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TabLayout {
@@ -542,45 +509,6 @@ impl TabLayout {
             Self::Vertical => "vertical",
         }
     }
-}
-
-/// Returns the `[left, right)` x-range of tab `idx` given `n_tabs` tabs and
-/// a `window_w`-wide window.
-fn tab_x_range(idx: usize, n_tabs: usize, window_w: f32) -> (f32, f32) {
-    let tab_w = (window_w / n_tabs as f32).clamp(TAB_MIN_W, TAB_MAX_W);
-    let left = idx as f32 * tab_w;
-    (left, left + tab_w)
-}
-
-/// Hit-test a click at CSS-px `(x, y)` against the tab bar.
-///
-/// Returns `TabHit::Empty` if `y >= TAB_BAR_HEIGHT` (below the strip).
-pub fn hit_test(strip: &TabStrip, x: f32, y: f32, window_w: f32) -> TabHit {
-    if !(0.0..TAB_BAR_HEIGHT).contains(&y) {
-        return TabHit::Empty;
-    }
-    // Lay out over the *visible* tabs so collapsed-group members map to the
-    // chip tab. For a strip with no collapsed groups this is `0..tabs.len()`.
-    let visible = strip.visible_indices();
-    let n = visible.len();
-    for (slot, &i) in visible.iter().enumerate() {
-        let (left, right) = tab_x_range(slot, n, window_w);
-        if x >= left && x < right {
-            // Close-button occupies the rightmost CLOSE_SZ + CLOSE_MARGIN px.
-            let close_right = right - TAB_PAD;
-            let close_left = close_right - CLOSE_SZ;
-            if x >= close_left && x < close_right {
-                return TabHit::Close(i);
-            }
-            // Ad-block checkbox sits at the tab's left edge, before the title.
-            let (cb_left, cb_right) = adblock_cb_x_range(left);
-            if x >= cb_left && x < cb_right {
-                return TabHit::Adblock(i);
-            }
-            return TabHit::Tab(i);
-        }
-    }
-    TabHit::Empty
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -648,33 +576,6 @@ mod tests {
     fn set_tab_state_out_of_bounds_no_panic() {
         let mut s = TabStrip::new();
         s.set_tab_state(99, TabState::Hibernated); // must not panic
-    }
-
-    #[test]
-    fn hit_test_tab_body() {
-        let mut s = TabStrip::new();
-        s.push_blank(0.0);
-        // Two tabs, each 512px wide in a 1024px window.
-        // Click in the middle of the first tab, away from close button.
-        let hit = hit_test(&s, 100.0, 18.0, 1024.0);
-        assert_eq!(hit, TabHit::Tab(0));
-    }
-
-    #[test]
-    fn hit_test_close_button() {
-        let s = TabStrip::new();
-        // Single tab: tab_w = clamp(1024/1, 80, 200) = 200, so tab occupies [0, 200).
-        // Close button: close_right = 200 - 10 = 190, close_left = 190 - 14 = 176.
-        // → button at [176, 190); click at 182 should hit it.
-        let hit = hit_test(&s, 182.0, 18.0, 1024.0);
-        assert_eq!(hit, TabHit::Close(0));
-    }
-
-    #[test]
-    fn hit_test_below_bar_returns_empty() {
-        let s = TabStrip::new();
-        let hit = hit_test(&s, 100.0, TAB_BAR_HEIGHT + 1.0, 1024.0);
-        assert_eq!(hit, TabHit::Empty);
     }
 
     // ── Container strip tests (7D.2) ─────────────────────────────────────────
@@ -1046,19 +947,4 @@ mod tests {
         assert_eq!(s.group_of(new_idx), Some(g));
     }
 
-    #[test]
-    fn hit_test_collapsed_group_maps_to_chip() {
-        let mut s = strip_with_n(4); // 4 tabs
-        let g = s.create_group("G", GroupColor::Blue);
-        s.assign_to_group(1, g);
-        s.assign_to_group(2, g);
-        s.toggle_collapse(g);
-        // Visible: [0, 1(chip), 3]. With 3 visible tabs the width is clamped to
-        // TAB_MAX_W=200, so slot 1 spans [200, 400). Click inside it, away from
-        // the close button — it must map to the chip's real index (1).
-        let visible = s.visible_indices();
-        assert_eq!(visible, vec![0, 1, 3]);
-        let hit = hit_test(&s, 250.0, 18.0, 1024.0);
-        assert_eq!(hit, TabHit::Tab(1));
-    }
 }

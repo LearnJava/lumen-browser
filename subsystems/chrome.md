@@ -346,8 +346,12 @@ tab-bar for both layouts (CC-8) are done — see below and `crates/shell/src/mai
   rows since the CC-14 flip (now `address_bar::chrome_suggestion_text()`). Three parity gaps filed
   rather than silently deleted, their data kept under `#[allow(dead_code, reason = "BUG-NNN: …")]`:
   BUG-408 (archive panel unreachable), BUG-409 (tab-group colours unrendered), BUG-410 (dropdown
-  row type tag lost). `strip::hit_test`/`TabHit` deliberately kept — the live, ungated right-click
-  tab-context-menu path still uses them, which is itself a second BUG-404 site.
+  row type tag lost). `strip::hit_test`/`TabHit` were kept at the time — the live, ungated
+  right-click tab-context-menu path still used them, which was itself a second BUG-404 site.
+  **BUG-404 (fixed 2026-07-31):** the right-click path now resolves the tab under the cursor via
+  `Lumen::chrome_hit_test` + `data-tab-id` (same mechanism `ChromeAction::SelectTab` uses for a
+  left-click); `strip::hit_test`/`TabHit` had no remaining caller and were removed along with the
+  private helpers/tests that only they used.
 
 - **CC-15-4: legacy paint of ten gated `panels/*` removed** (`crates/shell/src/panels/{bookmark,
   print,settings,cert,history,ai,sidebar,shields,permission}_panel.rs`, `command_palette.rs`,
@@ -359,12 +363,14 @@ tab-bar for both layouts (CC-8) are done — see below and `crates/shell/src/mai
   hit-tests. Two follow-ons this cut-out surfaced: the `settings_hover` field plus its `CursorMoved`
   writer were dead work (they fed only the removed tooltip — every mouse move with the settings panel
   open recomputed hover and forced a redraw for nothing; removed), and the three *ungated* hit-tests
-  (`command_palette`, `shields_panel`, `permission_panel`) are live BUG-404 sites — while the engine
-  chrome's own overlay is open, a click inside the panel's legacy rectangle is swallowed by an
-  invisible hit-test (appended to `bugs/BUG-404-OPEN.md` as sites 3-5, which is why those three
-  `hit_test`s were kept). One parity gap filed: BUG-411 (`#permPopover` carries neither the current
-  domain nor the shields on/off indicator, and has rows only for Camera/Microphone — Notifications
-  and Clipboard are unreachable from the UI).
+  (`command_palette`, `shields_panel`, `permission_panel`) remain live — while the engine chrome's
+  own overlay is open, a click inside the panel's legacy rectangle can be swallowed by an invisible
+  hit-test or activate the wrong row. Unlike the CC-15-3 tab-context-menu site (BUG-404, fixed), this
+  one isn't a simple offset swap — `.cp-row` carries no `data-action`/`data-idx` at all, so removing
+  the legacy hit-test would break palette-row activation outright; needs either a measured chrome-node
+  rect or new `ChromeAction`s (tracked as [BUG-461](../bugs/BUG-461-OPEN.md)). One parity gap filed:
+  BUG-411 (`#permPopover` carries neither the current domain nor the shields on/off indicator, and
+  has rows only for Camera/Microphone — Notifications and Clipboard are unreachable from the UI).
 
 - **CC-15-5: three orphan `Palette` fields removed** (`crates/shell/src/panels/themes.rs`):
   `toolbar_bg`, `tab_sleep_bg`, `tab_hibernate_bg` — the only fields of the 17 with no reader outside

@@ -211,21 +211,21 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/chrome/src/model.rs:239` **struct** `ChromeDropdownModel` — `#omniDropdown` snapshot (CC-9): whether it's open, plus its suggestion
 `crates/chrome/src/model.rs:255` **struct** `ChromeSuggestionModel` — One `.dd-row` in `#omniDropdown` (CC-9)
 `crates/chrome/src/model.rs:274` **struct** `ChromeFindModel` — `#findBar` snapshot (CC-9) — mirrors [`OmniboxModel`]'s "engine renders,
-`crates/chrome/src/model.rs:290` **struct** `ChromeDownloadModel` — One `.dl-card` in `#downloadsPanel`'s `.dl-list` (CC-9)
-`crates/chrome/src/model.rs:308` **struct** `ChromeArchiveEntryModel` — One `.arc-card` in `#archivePanel`'s `.arc-list` (BUG-408) — mirrors one
-`crates/chrome/src/model.rs:329` **struct** `ChromePaletteModel` — `#cpOverlay` snapshot (CC-10) — mirrors `CommandPalette`
-`crates/chrome/src/model.rs:350` **struct** `ChromePaletteResultModel` — One `.cp-row` in `#cpList` (CC-10)
-`crates/chrome/src/model.rs:371` **struct** `ChromeCertModel` — `#certOverlay` snapshot (CC-10) — mirrors `CertPanel`/`PanelCertData`
-`crates/chrome/src/model.rs:387` **enum** `ChromePermState` — Grant state for one permission row (CC-9) — mirrors the shell's
-`crates/chrome/src/model.rs:405` **struct** `OmniboxModel` — Omnibox snapshot [`bind_model`] reflects into `#omniInput`/`#omniWarn`
-`crates/chrome/src/model.rs:418` **struct** `ChromeTabModel` — One tab row for the sidebar tab list (`#sbTabs`)
-`crates/chrome/src/model.rs:457` **struct** `ChromeTabGroup` — A tab's group membership, as rendered by `.group-stripe` (BUG-409)
-`crates/chrome/src/model.rs:478` **struct** `ChromeWorkspaceModel` — One workspace button for the sidebar switcher (`.sb-workspaces`)
-`crates/chrome/src/model.rs:496` **struct** `ChromeMutations` — What one [`bind_model_tracked`] call changed in the document, split by what
-`crates/chrome/src/model.rs:527` **fn** `is_empty` — `true` when this bind changed nothing at all
-`crates/chrome/src/model.rs:535` **struct** `SelectorTouch` — What changed about one selector-relevant node in a [`ChromeMutations`]
-`crates/chrome/src/model.rs:639` **fn** `bind_model` — Binds `model` into `doc`: `data-theme`/`data-layout`/`data-profile` on
-`crates/chrome/src/model.rs:703` **fn** `bind_model_tracked` — Like [`bind_model`], but also reports what the call actually changed, split
+`crates/chrome/src/model.rs:293` **struct** `ChromeDownloadModel` — One `.dl-card` in `#downloadsPanel`'s `.dl-list` (CC-9)
+`crates/chrome/src/model.rs:311` **struct** `ChromeArchiveEntryModel` — One `.arc-card` in `#archivePanel`'s `.arc-list` (BUG-408) — mirrors one
+`crates/chrome/src/model.rs:332` **struct** `ChromePaletteModel` — `#cpOverlay` snapshot (CC-10) — mirrors `CommandPalette`
+`crates/chrome/src/model.rs:353` **struct** `ChromePaletteResultModel` — One `.cp-row` in `#cpList` (CC-10)
+`crates/chrome/src/model.rs:374` **struct** `ChromeCertModel` — `#certOverlay` snapshot (CC-10) — mirrors `CertPanel`/`PanelCertData`
+`crates/chrome/src/model.rs:390` **enum** `ChromePermState` — Grant state for one permission row (CC-9) — mirrors the shell's
+`crates/chrome/src/model.rs:408` **struct** `OmniboxModel` — Omnibox snapshot [`bind_model`] reflects into `#omniInput`/`#omniWarn`
+`crates/chrome/src/model.rs:421` **struct** `ChromeTabModel` — One tab row for the sidebar tab list (`#sbTabs`)
+`crates/chrome/src/model.rs:460` **struct** `ChromeTabGroup` — A tab's group membership, as rendered by `.group-stripe` (BUG-409)
+`crates/chrome/src/model.rs:481` **struct** `ChromeWorkspaceModel` — One workspace button for the sidebar switcher (`.sb-workspaces`)
+`crates/chrome/src/model.rs:499` **struct** `ChromeMutations` — What one [`bind_model_tracked`] call changed in the document, split by what
+`crates/chrome/src/model.rs:530` **fn** `is_empty` — `true` when this bind changed nothing at all
+`crates/chrome/src/model.rs:538` **struct** `SelectorTouch` — What changed about one selector-relevant node in a [`ChromeMutations`]
+`crates/chrome/src/model.rs:642` **fn** `bind_model` — Binds `model` into `doc`: `data-theme`/`data-layout`/`data-profile` on
+`crates/chrome/src/model.rs:706` **fn** `bind_model_tracked` — Like [`bind_model`], but also reports what the call actually changed, split
 
 ## lumen-core  (287 symbols)
 
@@ -598,7 +598,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/devtools/src/ws.rs:104` **fn** `read_text_frame` — Прочитать один WebSocket фрейм (RFC 6455 §5.2)
 `crates/devtools/src/ws.rs:125` **fn** `write_text_frame` — Отправить text фрейм (server→client, без маски)
 
-## lumen-dom  (228 symbols)
+## lumen-dom  (230 symbols)
 
 `crates/engine/dom/src/contenteditable.rs:10` **enum** `DomCommand` — A single, reversible DOM modification
 `crates/engine/dom/src/contenteditable.rs:40` **struct** `PasteData` — Data from a paste operation (clipboard or drag-drop)
@@ -731,91 +731,93 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/dom/src/lib.rs:1210` **fn** `node_count` — Number of nodes currently allocated in this document's arena (including the root)
 `crates/engine/dom/src/lib.rs:1216` **fn** `create_element` — Create an element unconditionally. Used by the HTML parser — does **not** enforce
 `crates/engine/dom/src/lib.rs:1228` **fn** `try_create_element` — Create an element, returning `Err(`[`NodeLimitExceeded`]`)` if the arena already
-`crates/engine/dom/src/lib.rs:1238` **fn** `create_text`
-`crates/engine/dom/src/lib.rs:1242` **fn** `create_comment`
-`crates/engine/dom/src/lib.rs:1252` **fn** `create_fragment` — Allocate a `DocumentFragment` node in the arena
-`crates/engine/dom/src/lib.rs:1260` **fn** `set_template_content` — Register `fragment` as the content container for `template`
-`crates/engine/dom/src/lib.rs:1266` **fn** `template_content` — Return the content `DocumentFragment` for a `<template>` element, or
-`crates/engine/dom/src/lib.rs:1270` **fn** `create_doctype`
-`crates/engine/dom/src/lib.rs:1284` **fn** `append_child` — Append `child` as the last child of `parent`. If `child` already has a parent, it is detached first
-`crates/engine/dom/src/lib.rs:1296` **fn** `insert_after` — Insert `new_node` immediately after `reference` in their shared parent
-`crates/engine/dom/src/lib.rs:1315` **fn** `detach` — Remove `node` from its current parent. The node itself stays in the arena and can be re-attached
-`crates/engine/dom/src/lib.rs:1329` **fn** `insert_before` — Insert `new_node` immediately before `reference` in `reference`'s parent
-`crates/engine/dom/src/lib.rs:1349` **fn** `deep_clone` — Deep-clone `node` and (if `deep`) all its descendants
-`crates/engine/dom/src/lib.rs:1373` **fn** `acquire_js_ref` — Increment the JS wrapper reference count for `node_id`
-`crates/engine/dom/src/lib.rs:1391` **fn** `release_js_ref` — Decrement the JS wrapper reference count for `node_id`
-`crates/engine/dom/src/lib.rs:1407` **fn** `js_ref_count` — Returns the number of live JS wrapper objects currently referencing `node_id`
-`crates/engine/dom/src/lib.rs:1420` **fn** `is_detached` — Returns `true` if `node_id` is not reachable from the document tree
-`crates/engine/dom/src/lib.rs:1447` **fn** `dead_node_ids` — Returns the IDs of all nodes that are safe to collect from the arena
-`crates/engine/dom/src/lib.rs:1490` **fn** `begin_composition` — Begin a new IME composition session in the given editable element
-`crates/engine/dom/src/lib.rs:1507` **fn** `update_composition` — Update the active composition with new preedit text and selection range
-`crates/engine/dom/src/lib.rs:1521` **fn** `end_composition` — End the active composition and return its final state
-`crates/engine/dom/src/lib.rs:1531` **fn** `get_composition` — Get the current composition state without removing it
-`crates/engine/dom/src/lib.rs:1539` **fn** `is_composing` — Check if an IME composition is currently active
-`crates/engine/dom/src/lib.rs:1547` **fn** `get_composition_range` — Get the composition range (offset and length) if composition is active
-`crates/engine/dom/src/lib.rs:1555` **fn** `get_composition_target` — Get the target node that is receiving composition input
-`crates/engine/dom/src/lib.rs:1561` **fn** `fonts` — Get a reference to the document's FontFaceSet collection
-`crates/engine/dom/src/lib.rs:1567` **fn** `fonts_mut` — Get a mutable reference to the document's FontFaceSet collection
-`crates/engine/dom/src/lib.rs:1575` **fn** `set_timing_origin` — Set the timing origin (navigation start time in milliseconds since epoch)
-`crates/engine/dom/src/lib.rs:1581` **fn** `current_time` — Get the current time relative to timing_origin (milliseconds)
-`crates/engine/dom/src/lib.rs:1589` **fn** `mark` — Record a performance mark at the current time
-`crates/engine/dom/src/lib.rs:1598` **fn** `measure` — Record a performance measure between two marks
-`crates/engine/dom/src/lib.rs:1612` **fn** `performance_entries` — Get a reference to the performance entries collection
-`crates/engine/dom/src/lib.rs:1618` **fn** `performance_entries_mut` — Get a mutable reference to the performance entries collection
-`crates/engine/dom/src/lib.rs:1623` **fn** `performance_entries_by_type` — Get all performance entries of a specific type
-`crates/engine/dom/src/lib.rs:1631` **fn** `performance_entries_by_name` — Get all performance entries with a specific name
-`crates/engine/dom/src/lib.rs:1636` **fn** `clear_performance_entries` — Clear all performance entries
-`crates/engine/dom/src/lib.rs:1649` **fn** `to_bytes` — Serialise the entire document to a compact binary blob (bincode)
-`crates/engine/dom/src/lib.rs:1654` **fn** `from_bytes` — Deserialise a document from a binary blob produced by [`to_bytes`]
-`crates/engine/dom/src/lib.rs:1751` **fn** `check_form_gate` — Гейт отправки форм по sandbox-флагу HTML §7.6.5
-`crates/engine/dom/src/lib.rs:1772` **fn** `find_ancestor_form` — Найти ближайший предок `<form>` для узла `node`
-`crates/engine/dom/src/lib.rs:1789` **fn** `find_ancestor_dialog` — Walk up the DOM from `node` and return the first ancestor `<dialog>` element
-`crates/engine/dom/src/lib.rs:1808` **fn** `node_is_contenteditable` — True when `node` carries `contenteditable=""` or `contenteditable="true"`
-`crates/engine/dom/src/lib.rs:1823` **fn** `find_editing_host` — Walk up the tree from `node` (inclusive) and return the nearest element
-`crates/engine/dom/src/lib.rs:1843` **fn** `is_element_draggable` — Return `true` when `node` is draggable by default HTML5 rules (HTML LS §9.3.3)
-`crates/engine/dom/src/lib.rs:1864` **fn** `set_pointer_capture` — Set pointer capture for `pointer_id` to `node` (W3C Pointer Events L3 §4.1)
-`crates/engine/dom/src/lib.rs:1872` **fn** `release_pointer_capture` — Release pointer capture for `pointer_id` from `node`
-`crates/engine/dom/src/lib.rs:1879` **fn** `has_pointer_capture` — Returns `true` if `node` currently holds pointer capture for `pointer_id`
-`crates/engine/dom/src/lib.rs:1887` **fn** `pointer_capture_target` — Returns the element that holds pointer capture for `pointer_id`, if any
-`crates/engine/dom/src/lib.rs:1901` **fn** `collect_dom_form_fields` — Собрать имена и значения submittable-контролов формы из DOM-атрибутов
-`crates/engine/dom/src/lib.rs:2003` **struct** `ValidityState` — Validity state for a form control — HTML5 §4.10.21.1 `ValidityState` interface
-`crates/engine/dom/src/lib.rs:2028` **fn** `valid` — Returns `true` when all flags are `false` (element satisfies all constraints)
-`crates/engine/dom/src/lib.rs:2049` **fn** `element_validity` — Returns the validity state for `node`, or `None` if the node is not a
-`crates/engine/dom/src/lib.rs:2152` **fn** `check_validity_form` — Returns `true` if all submittable controls in `form_id` satisfy their
-`crates/engine/dom/src/lib.rs:2160` **fn** `invalid_controls_in_form` — Returns the `NodeId`s of all invalid (failing constraint validation) controls
-`crates/engine/dom/src/lib.rs:2177` **fn** `submit_form` — Execute HTML5 form submission algorithm (§4.10.22 «Form submission»)
-`crates/engine/dom/src/lib.rs:2316` **struct** `AnchorInfo` — Информация об якорной ссылке (`<a href>`), найденной в документе
-`crates/engine/dom/src/lib.rs:2349` **struct** `FlatTree` — Pre-computed composed tree (flat tree) for Shadow DOM layout traversal
-`crates/engine/dom/src/lib.rs:2359` **fn** `children_of` — Composed-tree children of `id`
-`crates/engine/dom/src/lib.rs:2384` **fn** `is_plain` — Whether the composed tree *is* the DOM tree — no shadow host or slot
-`crates/engine/dom/src/lib.rs:2396` **fn** `build_flat_tree` — Build the composed (flat) tree for the document
-`crates/engine/dom/src/lib.rs:2491` **fn** `check_navigation_gate` — Гейт навигации по sandbox-флагу HTML §7.6.5
-`crates/engine/dom/src/lib.rs:2515` **struct** `IframeInfo` — Данные `<iframe>` элемента — URL содержимого и sandbox-ограничения
-`crates/engine/dom/src/lib.rs:2571` **fn** `collect_iframes` — Собрать все `<iframe>` элементы документа с их sandbox-ограничениями
-`crates/engine/dom/src/lib.rs:2582` **fn** `check_popup_gate` — Гейт открытия popup-ов (`window.open()`, `target="_blank"`) по sandbox HTML §7.6.5
-`crates/engine/dom/src/lib.rs:2601` **enum** `EditInputType` — Input event type per Input Events Level 2 §4.1.3
-`crates/engine/dom/src/lib.rs:2632` **fn** `as_str` — The canonical `inputType` string for the `InputEvent` interface
-`crates/engine/dom/src/lib.rs:2655` **struct** `InputEvent` — Data for a `beforeinput` or `input` DOM event (Input Events Level 2 §4.1)
-`crates/engine/dom/src/lib.rs:2674` **fn** `trusted` — Construct a trusted input event (native input pipeline or automation
-`crates/engine/dom/src/lib.rs:2685` **fn** `untrusted` — Construct an untrusted input event (synthesized by page script via
-`crates/engine/dom/src/lib.rs:2706` **enum** `CompositionEventType` — Type of IME composition event (UI Events §5.2.5)
-`crates/engine/dom/src/lib.rs:2717` **fn** `as_str` — The canonical DOM event name per UI Events §5.2.5
-`crates/engine/dom/src/lib.rs:2731` **struct** `CompositionData` — Data for a `compositionstart` / `compositionupdate` / `compositionend` event
-`crates/engine/dom/src/lib.rs:2758` **struct** `CompositionEvent` — An IME composition event (compositionstart / update / end)
-`crates/engine/dom/src/lib.rs:2777` **fn** `new` — Create a new trusted composition event (native IME pipeline)
-`crates/engine/dom/src/lib.rs:2789` **fn** `untrusted` — Create an untrusted composition event (synthesized by page script)
-`crates/engine/dom/src/lib.rs:2800` **fn** `start` — Create a `compositionstart` event with initial IME text
-`crates/engine/dom/src/lib.rs:2815` **fn** `update` — Create a `compositionupdate` event for interim preedit text
-`crates/engine/dom/src/lib.rs:2830` **fn** `end` — Create a `compositionend` event for final committed text
-`crates/engine/dom/src/lib.rs:2858` **fn** `split_text_node` — Split a text node at `byte_offset`, creating a second text node with the
-`crates/engine/dom/src/lib.rs:2900` **fn** `insert_text_at` — Insert `text` into the text node at `pos`, returning the caret position
-`crates/engine/dom/src/lib.rs:2958` **fn** `delete_range` — Delete the content of `range` from the document, returning a collapsed
-`crates/engine/dom/src/lib.rs:3012` **fn** `insert_paragraph_break`
-`crates/engine/dom/src/lib.rs:3041` **fn** `node_text_content` — Returns the full text content of `node` — concatenation of all descendant text nodes
-`crates/engine/dom/src/lib.rs:3054` **fn** `locate_text_offset_range` — Locate the text node and local byte range covering `[start, end)` of
-`crates/engine/dom/src/lib.rs:3098` **fn** `node_child_count` — Number of direct DOM children of `node`
-`crates/engine/dom/src/lib.rs:3107` **fn** `node_length` — DOM-spec "length" of `node`: UTF-16 code-unit count for text nodes, child
-`crates/engine/dom/src/lib.rs:3119` **fn** `range_text` — Extracts the text covered by `range` (WHATWG DOM §4.6 `stringification`)
+`crates/engine/dom/src/lib.rs:1241` **fn** `create_text` — Create a text node unconditionally. Used by the HTML parser — does **not**
+`crates/engine/dom/src/lib.rs:1251` **fn** `try_create_text` — Create a text node, returning `Err(`[`NodeLimitExceeded`]`)` if the arena already
+`crates/engine/dom/src/lib.rs:1261` **fn** `create_comment` — Create a comment node unconditionally. Used by the HTML parser — does **not**
+`crates/engine/dom/src/lib.rs:1271` **fn** `try_create_comment` — Create a comment node, returning `Err(`[`NodeLimitExceeded`]`)` if the arena already
+`crates/engine/dom/src/lib.rs:1284` **fn** `create_fragment` — Allocate a `DocumentFragment` node in the arena
+`crates/engine/dom/src/lib.rs:1292` **fn** `set_template_content` — Register `fragment` as the content container for `template`
+`crates/engine/dom/src/lib.rs:1298` **fn** `template_content` — Return the content `DocumentFragment` for a `<template>` element, or
+`crates/engine/dom/src/lib.rs:1302` **fn** `create_doctype`
+`crates/engine/dom/src/lib.rs:1316` **fn** `append_child` — Append `child` as the last child of `parent`. If `child` already has a parent, it is detached first
+`crates/engine/dom/src/lib.rs:1328` **fn** `insert_after` — Insert `new_node` immediately after `reference` in their shared parent
+`crates/engine/dom/src/lib.rs:1347` **fn** `detach` — Remove `node` from its current parent. The node itself stays in the arena and can be re-attached
+`crates/engine/dom/src/lib.rs:1361` **fn** `insert_before` — Insert `new_node` immediately before `reference` in `reference`'s parent
+`crates/engine/dom/src/lib.rs:1381` **fn** `deep_clone` — Deep-clone `node` and (if `deep`) all its descendants
+`crates/engine/dom/src/lib.rs:1405` **fn** `acquire_js_ref` — Increment the JS wrapper reference count for `node_id`
+`crates/engine/dom/src/lib.rs:1423` **fn** `release_js_ref` — Decrement the JS wrapper reference count for `node_id`
+`crates/engine/dom/src/lib.rs:1439` **fn** `js_ref_count` — Returns the number of live JS wrapper objects currently referencing `node_id`
+`crates/engine/dom/src/lib.rs:1452` **fn** `is_detached` — Returns `true` if `node_id` is not reachable from the document tree
+`crates/engine/dom/src/lib.rs:1479` **fn** `dead_node_ids` — Returns the IDs of all nodes that are safe to collect from the arena
+`crates/engine/dom/src/lib.rs:1522` **fn** `begin_composition` — Begin a new IME composition session in the given editable element
+`crates/engine/dom/src/lib.rs:1539` **fn** `update_composition` — Update the active composition with new preedit text and selection range
+`crates/engine/dom/src/lib.rs:1553` **fn** `end_composition` — End the active composition and return its final state
+`crates/engine/dom/src/lib.rs:1563` **fn** `get_composition` — Get the current composition state without removing it
+`crates/engine/dom/src/lib.rs:1571` **fn** `is_composing` — Check if an IME composition is currently active
+`crates/engine/dom/src/lib.rs:1579` **fn** `get_composition_range` — Get the composition range (offset and length) if composition is active
+`crates/engine/dom/src/lib.rs:1587` **fn** `get_composition_target` — Get the target node that is receiving composition input
+`crates/engine/dom/src/lib.rs:1593` **fn** `fonts` — Get a reference to the document's FontFaceSet collection
+`crates/engine/dom/src/lib.rs:1599` **fn** `fonts_mut` — Get a mutable reference to the document's FontFaceSet collection
+`crates/engine/dom/src/lib.rs:1607` **fn** `set_timing_origin` — Set the timing origin (navigation start time in milliseconds since epoch)
+`crates/engine/dom/src/lib.rs:1613` **fn** `current_time` — Get the current time relative to timing_origin (milliseconds)
+`crates/engine/dom/src/lib.rs:1621` **fn** `mark` — Record a performance mark at the current time
+`crates/engine/dom/src/lib.rs:1630` **fn** `measure` — Record a performance measure between two marks
+`crates/engine/dom/src/lib.rs:1644` **fn** `performance_entries` — Get a reference to the performance entries collection
+`crates/engine/dom/src/lib.rs:1650` **fn** `performance_entries_mut` — Get a mutable reference to the performance entries collection
+`crates/engine/dom/src/lib.rs:1655` **fn** `performance_entries_by_type` — Get all performance entries of a specific type
+`crates/engine/dom/src/lib.rs:1663` **fn** `performance_entries_by_name` — Get all performance entries with a specific name
+`crates/engine/dom/src/lib.rs:1668` **fn** `clear_performance_entries` — Clear all performance entries
+`crates/engine/dom/src/lib.rs:1681` **fn** `to_bytes` — Serialise the entire document to a compact binary blob (bincode)
+`crates/engine/dom/src/lib.rs:1686` **fn** `from_bytes` — Deserialise a document from a binary blob produced by [`to_bytes`]
+`crates/engine/dom/src/lib.rs:1783` **fn** `check_form_gate` — Гейт отправки форм по sandbox-флагу HTML §7.6.5
+`crates/engine/dom/src/lib.rs:1804` **fn** `find_ancestor_form` — Найти ближайший предок `<form>` для узла `node`
+`crates/engine/dom/src/lib.rs:1821` **fn** `find_ancestor_dialog` — Walk up the DOM from `node` and return the first ancestor `<dialog>` element
+`crates/engine/dom/src/lib.rs:1840` **fn** `node_is_contenteditable` — True when `node` carries `contenteditable=""` or `contenteditable="true"`
+`crates/engine/dom/src/lib.rs:1855` **fn** `find_editing_host` — Walk up the tree from `node` (inclusive) and return the nearest element
+`crates/engine/dom/src/lib.rs:1875` **fn** `is_element_draggable` — Return `true` when `node` is draggable by default HTML5 rules (HTML LS §9.3.3)
+`crates/engine/dom/src/lib.rs:1896` **fn** `set_pointer_capture` — Set pointer capture for `pointer_id` to `node` (W3C Pointer Events L3 §4.1)
+`crates/engine/dom/src/lib.rs:1904` **fn** `release_pointer_capture` — Release pointer capture for `pointer_id` from `node`
+`crates/engine/dom/src/lib.rs:1911` **fn** `has_pointer_capture` — Returns `true` if `node` currently holds pointer capture for `pointer_id`
+`crates/engine/dom/src/lib.rs:1919` **fn** `pointer_capture_target` — Returns the element that holds pointer capture for `pointer_id`, if any
+`crates/engine/dom/src/lib.rs:1933` **fn** `collect_dom_form_fields` — Собрать имена и значения submittable-контролов формы из DOM-атрибутов
+`crates/engine/dom/src/lib.rs:2035` **struct** `ValidityState` — Validity state for a form control — HTML5 §4.10.21.1 `ValidityState` interface
+`crates/engine/dom/src/lib.rs:2060` **fn** `valid` — Returns `true` when all flags are `false` (element satisfies all constraints)
+`crates/engine/dom/src/lib.rs:2081` **fn** `element_validity` — Returns the validity state for `node`, or `None` if the node is not a
+`crates/engine/dom/src/lib.rs:2184` **fn** `check_validity_form` — Returns `true` if all submittable controls in `form_id` satisfy their
+`crates/engine/dom/src/lib.rs:2192` **fn** `invalid_controls_in_form` — Returns the `NodeId`s of all invalid (failing constraint validation) controls
+`crates/engine/dom/src/lib.rs:2209` **fn** `submit_form` — Execute HTML5 form submission algorithm (§4.10.22 «Form submission»)
+`crates/engine/dom/src/lib.rs:2348` **struct** `AnchorInfo` — Информация об якорной ссылке (`<a href>`), найденной в документе
+`crates/engine/dom/src/lib.rs:2381` **struct** `FlatTree` — Pre-computed composed tree (flat tree) for Shadow DOM layout traversal
+`crates/engine/dom/src/lib.rs:2391` **fn** `children_of` — Composed-tree children of `id`
+`crates/engine/dom/src/lib.rs:2416` **fn** `is_plain` — Whether the composed tree *is* the DOM tree — no shadow host or slot
+`crates/engine/dom/src/lib.rs:2428` **fn** `build_flat_tree` — Build the composed (flat) tree for the document
+`crates/engine/dom/src/lib.rs:2523` **fn** `check_navigation_gate` — Гейт навигации по sandbox-флагу HTML §7.6.5
+`crates/engine/dom/src/lib.rs:2547` **struct** `IframeInfo` — Данные `<iframe>` элемента — URL содержимого и sandbox-ограничения
+`crates/engine/dom/src/lib.rs:2603` **fn** `collect_iframes` — Собрать все `<iframe>` элементы документа с их sandbox-ограничениями
+`crates/engine/dom/src/lib.rs:2614` **fn** `check_popup_gate` — Гейт открытия popup-ов (`window.open()`, `target="_blank"`) по sandbox HTML §7.6.5
+`crates/engine/dom/src/lib.rs:2633` **enum** `EditInputType` — Input event type per Input Events Level 2 §4.1.3
+`crates/engine/dom/src/lib.rs:2664` **fn** `as_str` — The canonical `inputType` string for the `InputEvent` interface
+`crates/engine/dom/src/lib.rs:2687` **struct** `InputEvent` — Data for a `beforeinput` or `input` DOM event (Input Events Level 2 §4.1)
+`crates/engine/dom/src/lib.rs:2706` **fn** `trusted` — Construct a trusted input event (native input pipeline or automation
+`crates/engine/dom/src/lib.rs:2717` **fn** `untrusted` — Construct an untrusted input event (synthesized by page script via
+`crates/engine/dom/src/lib.rs:2738` **enum** `CompositionEventType` — Type of IME composition event (UI Events §5.2.5)
+`crates/engine/dom/src/lib.rs:2749` **fn** `as_str` — The canonical DOM event name per UI Events §5.2.5
+`crates/engine/dom/src/lib.rs:2763` **struct** `CompositionData` — Data for a `compositionstart` / `compositionupdate` / `compositionend` event
+`crates/engine/dom/src/lib.rs:2790` **struct** `CompositionEvent` — An IME composition event (compositionstart / update / end)
+`crates/engine/dom/src/lib.rs:2809` **fn** `new` — Create a new trusted composition event (native IME pipeline)
+`crates/engine/dom/src/lib.rs:2821` **fn** `untrusted` — Create an untrusted composition event (synthesized by page script)
+`crates/engine/dom/src/lib.rs:2832` **fn** `start` — Create a `compositionstart` event with initial IME text
+`crates/engine/dom/src/lib.rs:2847` **fn** `update` — Create a `compositionupdate` event for interim preedit text
+`crates/engine/dom/src/lib.rs:2862` **fn** `end` — Create a `compositionend` event for final committed text
+`crates/engine/dom/src/lib.rs:2890` **fn** `split_text_node` — Split a text node at `byte_offset`, creating a second text node with the
+`crates/engine/dom/src/lib.rs:2932` **fn** `insert_text_at` — Insert `text` into the text node at `pos`, returning the caret position
+`crates/engine/dom/src/lib.rs:2990` **fn** `delete_range` — Delete the content of `range` from the document, returning a collapsed
+`crates/engine/dom/src/lib.rs:3044` **fn** `insert_paragraph_break`
+`crates/engine/dom/src/lib.rs:3073` **fn** `node_text_content` — Returns the full text content of `node` — concatenation of all descendant text nodes
+`crates/engine/dom/src/lib.rs:3086` **fn** `locate_text_offset_range` — Locate the text node and local byte range covering `[start, end)` of
+`crates/engine/dom/src/lib.rs:3130` **fn** `node_child_count` — Number of direct DOM children of `node`
+`crates/engine/dom/src/lib.rs:3139` **fn** `node_length` — DOM-spec "length" of `node`: UTF-16 code-unit count for text nodes, child
+`crates/engine/dom/src/lib.rs:3151` **fn** `range_text` — Extracts the text covered by `range` (WHATWG DOM §4.6 `stringification`)
 `crates/engine/dom/src/vtt.rs:7` **struct** `VttCueSettings` — Настройки позиционирования cue (WebVTT §6.3). Phase 0: сырые строки значений
 `crates/engine/dom/src/vtt.rs:16` **struct** `VttCue`
 `crates/engine/dom/src/vtt.rs:28` **enum** `VttError`
@@ -4177,7 +4179,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgpu_compute.rs:982` **enum** `GpuOp` — Одна записанная операция command-encoder для исполнения на `queue.submit`
 `crates/engine/paint/src/webgpu_compute.rs:1037` **fn** `submit` — Исполняет набор операций в одном `CommandEncoder` и сабмитит на очередь
 
-## lumen-shell  (932 symbols)
+## lumen-shell  (930 symbols)
 
 `crates/shell/src/adblock.rs:44` **fn** `browser_data_dir` — Root of all browser user data (portable): `<exe_dir>/data`
 `crates/shell/src/adblock.rs:52` **fn** `adblock_dir` — `<data>/adblock` — root of the ad-block subsystem's files
@@ -5059,41 +5061,39 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/tabs/groups.rs:84` **fn** `from_index` — Inverse of [`index`](GroupColor::index). Out-of-range indices clamp to
 `crates/shell/src/tabs/groups.rs:102` **struct** `TabGroup` — A named, colour-coded group of tabs
 `crates/shell/src/tabs/groups.rs:117` **fn** `new` — Create an expanded group with the given id, label and colour
-`crates/shell/src/tabs/strip.rs:58` **struct** `TabEntry` — Metadata for one browser tab
-`crates/shell/src/tabs/strip.rs:108` **struct** `TabStrip` — State of the tab strip (tab list + active index)
-`crates/shell/src/tabs/strip.rs:123` **fn** `new` — Create the initial tab strip with one blank tab
-`crates/shell/src/tabs/strip.rs:144` **fn** `len` — Number of open tabs
-`crates/shell/src/tabs/strip.rs:152` **fn** `push_blank` — Append a new blank tab and return its index
-`crates/shell/src/tabs/strip.rs:176` **fn** `push_with_opener` — Append a new blank child tab opened by the tab with `opener_id`
-`crates/shell/src/tabs/strip.rs:197` **fn** `update_last_activated` — Record `now_ms` as the activation timestamp for the tab at `idx`
-`crates/shell/src/tabs/strip.rs:207` **fn** `set_tab_container` — Assign `container` to the tab at `idx`. Out-of-bounds index is a no-op
-`crates/shell/src/tabs/strip.rs:215` **fn** `remove` — Remove the tab at `idx`. Returns the new active index (clamped to valid
-`crates/shell/src/tabs/strip.rs:227` **fn** `set_active_title` — Update the title of the active tab
-`crates/shell/src/tabs/strip.rs:237` **fn** `set_tab_state` — Update the lifecycle state of the tab at `idx`
-`crates/shell/src/tabs/strip.rs:247` **fn** `move_tab` — Reorder: move the tab currently at `src` so that it ends up at `dst`
-`crates/shell/src/tabs/strip.rs:266` **fn** `toggle_pin` — Toggle the pinned flag of the tab at `idx`. Returns the new state
-`crates/shell/src/tabs/strip.rs:276` **fn** `is_pinned` — `true` if the tab at `idx` is pinned. Out-of-bounds → `false`
-`crates/shell/src/tabs/strip.rs:287` **fn** `duplicate` — Insert a duplicate of the tab at `src` immediately to its right
-`crates/shell/src/tabs/strip.rs:315` **fn** `close_others` — Remove every tab except `keep_idx` and any pinned tabs
-`crates/shell/src/tabs/strip.rs:340` **fn** `close_right` — Remove all non-pinned tabs positioned to the right of `idx`
-`crates/shell/src/tabs/strip.rs:366` **fn** `create_group` — Create a new expanded [`TabGroup`] with `label` and `color`
-`crates/shell/src/tabs/strip.rs:375` **fn** `group` — Borrow the group with the given id, if it exists
-`crates/shell/src/tabs/strip.rs:381` **fn** `group_of` — The group id of the tab at `idx`, or `None` when ungrouped / out of bounds
-`crates/shell/src/tabs/strip.rs:389` **fn** `assign_to_group` — Assign the tab at `idx` to the group `group_id`
-`crates/shell/src/tabs/strip.rs:403` **fn** `ungroup` — Remove the tab at `idx` from its group (no-op if already ungrouped or
-`crates/shell/src/tabs/strip.rs:411` **fn** `toggle_collapse` — Toggle the collapsed flag of the group `id`. Returns the new collapsed
-`crates/shell/src/tabs/strip.rs:422` **fn** `is_collapsed` — `true` if the group `id` exists and is collapsed
-`crates/shell/src/tabs/strip.rs:428` **fn** `group_color` — The colour of the group `id`, or `None` for an unknown group
-`crates/shell/src/tabs/strip.rs:434` **fn** `group_members` — Strip indices of every tab in the group `id`, in left-to-right order
-`crates/shell/src/tabs/strip.rs:445` **fn** `remove_group` — Remove the group `id` and ungroup all of its member tabs. No-op if the
-`crates/shell/src/tabs/strip.rs:461` **fn** `visible_indices` — Strip indices of the tabs that should be drawn, in order
-`crates/shell/src/tabs/strip.rs:485` **struct** `TabDragState` — State for an in-progress tab drag-and-drop
-`crates/shell/src/tabs/strip.rs:499` **fn** `drop_target` — Compute the tab index where the dragged tab would be dropped if the
-`crates/shell/src/tabs/strip.rs:511` **enum** `TabHit` — Result of clicking inside the tab bar area
-`crates/shell/src/tabs/strip.rs:524` **enum** `TabLayout` — Tab layout mode: horizontal strip or vertical sidebar
-`crates/shell/src/tabs/strip.rs:534` **fn** `from_str` — Parse from a stored settings string (`"horizontal"` or `"vertical"`)
-`crates/shell/src/tabs/strip.rs:539` **fn** `as_str` — Serialize to a settings string
-`crates/shell/src/tabs/strip.rs:558` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the tab bar
+`crates/shell/src/tabs/strip.rs:40` **struct** `TabEntry` — Metadata for one browser tab
+`crates/shell/src/tabs/strip.rs:90` **struct** `TabStrip` — State of the tab strip (tab list + active index)
+`crates/shell/src/tabs/strip.rs:105` **fn** `new` — Create the initial tab strip with one blank tab
+`crates/shell/src/tabs/strip.rs:126` **fn** `len` — Number of open tabs
+`crates/shell/src/tabs/strip.rs:134` **fn** `push_blank` — Append a new blank tab and return its index
+`crates/shell/src/tabs/strip.rs:158` **fn** `push_with_opener` — Append a new blank child tab opened by the tab with `opener_id`
+`crates/shell/src/tabs/strip.rs:179` **fn** `update_last_activated` — Record `now_ms` as the activation timestamp for the tab at `idx`
+`crates/shell/src/tabs/strip.rs:189` **fn** `set_tab_container` — Assign `container` to the tab at `idx`. Out-of-bounds index is a no-op
+`crates/shell/src/tabs/strip.rs:197` **fn** `remove` — Remove the tab at `idx`. Returns the new active index (clamped to valid
+`crates/shell/src/tabs/strip.rs:209` **fn** `set_active_title` — Update the title of the active tab
+`crates/shell/src/tabs/strip.rs:219` **fn** `set_tab_state` — Update the lifecycle state of the tab at `idx`
+`crates/shell/src/tabs/strip.rs:229` **fn** `move_tab` — Reorder: move the tab currently at `src` so that it ends up at `dst`
+`crates/shell/src/tabs/strip.rs:248` **fn** `toggle_pin` — Toggle the pinned flag of the tab at `idx`. Returns the new state
+`crates/shell/src/tabs/strip.rs:258` **fn** `is_pinned` — `true` if the tab at `idx` is pinned. Out-of-bounds → `false`
+`crates/shell/src/tabs/strip.rs:269` **fn** `duplicate` — Insert a duplicate of the tab at `src` immediately to its right
+`crates/shell/src/tabs/strip.rs:297` **fn** `close_others` — Remove every tab except `keep_idx` and any pinned tabs
+`crates/shell/src/tabs/strip.rs:322` **fn** `close_right` — Remove all non-pinned tabs positioned to the right of `idx`
+`crates/shell/src/tabs/strip.rs:348` **fn** `create_group` — Create a new expanded [`TabGroup`] with `label` and `color`
+`crates/shell/src/tabs/strip.rs:357` **fn** `group` — Borrow the group with the given id, if it exists
+`crates/shell/src/tabs/strip.rs:363` **fn** `group_of` — The group id of the tab at `idx`, or `None` when ungrouped / out of bounds
+`crates/shell/src/tabs/strip.rs:371` **fn** `assign_to_group` — Assign the tab at `idx` to the group `group_id`
+`crates/shell/src/tabs/strip.rs:385` **fn** `ungroup` — Remove the tab at `idx` from its group (no-op if already ungrouped or
+`crates/shell/src/tabs/strip.rs:393` **fn** `toggle_collapse` — Toggle the collapsed flag of the group `id`. Returns the new collapsed
+`crates/shell/src/tabs/strip.rs:404` **fn** `is_collapsed` — `true` if the group `id` exists and is collapsed
+`crates/shell/src/tabs/strip.rs:410` **fn** `group_color` — The colour of the group `id`, or `None` for an unknown group
+`crates/shell/src/tabs/strip.rs:416` **fn** `group_members` — Strip indices of every tab in the group `id`, in left-to-right order
+`crates/shell/src/tabs/strip.rs:427` **fn** `remove_group` — Remove the group `id` and ungroup all of its member tabs. No-op if the
+`crates/shell/src/tabs/strip.rs:443` **fn** `visible_indices` — Strip indices of the tabs that should be drawn, in order
+`crates/shell/src/tabs/strip.rs:467` **struct** `TabDragState` — State for an in-progress tab drag-and-drop
+`crates/shell/src/tabs/strip.rs:481` **fn** `drop_target` — Compute the tab index where the dragged tab would be dropped if the
+`crates/shell/src/tabs/strip.rs:491` **enum** `TabLayout` — Tab layout mode: horizontal strip or vertical sidebar
+`crates/shell/src/tabs/strip.rs:501` **fn** `from_str` — Parse from a stored settings string (`"horizontal"` or `"vertical"`)
+`crates/shell/src/tabs/strip.rs:506` **fn** `as_str` — Serialize to a settings string
 `crates/shell/src/tabs/tree.rs:22` **fn** `depth_of` — Compute the tree depth of the tab with `id` in the given slice
 `crates/shell/src/tabs/tree.rs:38` **fn** `children_of` — Return the IDs of direct children of `parent_id` in strip order
 `crates/shell/src/tabs/tree.rs:48` **fn** `subtree_ids` — Collect the IDs of all tabs in the subtree rooted at `root_id` (inclusive)
