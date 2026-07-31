@@ -73,14 +73,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-07-30",
+ "generated": "2026-08-01",
  "counts": {
-  "open": 132,
-  "fixed": 297,
+  "open": 126,
+  "fixed": 305,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 429,
+ "total_bugs": 431,
  "phases": [
   {
    "id": "P0",
@@ -4300,7 +4300,7 @@
       {
        "id": "CC-15",
        "title": "CC-15: Удаление legacy-хрома",
-       "status": "active",
+       "status": "done",
        "size": "M",
        "note": "Закрыто 2026-07-28 (P1) — все шесть срезов CC-15-1…CC-15-6 влиты, легаси-хром и его rollback-флаг удалены целиком. Проскоуплено 2026-07-28 (ветка p1-cc15-scoping, только доксинк, кода не менялось) — реальный масштаб шире одной строки (по образцу S12b M→XL): `toolbar.rs`/`tabs/strip.rs` — смешанные data+paint модули, файлы не удаляются целиком, нужно точечно вырезать функции покраски/hit-теста, сохранив геометрические константы (`CHROME_H`, `avatar_x()`, `TAB_BAR_HEIGHT` и т.п.), которые безусловно читают и `content_layout_viewport()`/`resumed()`, и легаси-навсегда-панели. Панельный список риска-5 при сверке с кодом оказался неполным в обе стороны: 9 доп. панелей (`note_viewer`/`focus_panel`/`read_later_panel`/`privacy_panel`/`workspace_panel`/`vertical_tabs`/`tree_tabs`/pip-группа) не гейтированы флагом и не были названы легаси-навсегда явно; `panels/profile_menu.rs`, наоборот, числился «движковым», но не мигрирован. Побочно найдены 2 живых бага флипа CC-14: BUG-403 (поповер профиля невидим под дефолтным движковым хромом — рендер остался в легаси-гейте, hit-test безусловен) и BUG-404 (`flush_pointer_moves`, живой обработчик движения мыши, использует захардкоженный `toolbar::CHROME_H`/`left_dock()` вместо `page_offset()` — тот же класс, что CC-14 исправила для automation-пути `resolve_automation_target`, здесь не тронут). Разбивка на срезы — CC-15-1..CC-15-6",
        "bugs": [
@@ -7182,10 +7182,10 @@
    "debtor": false
   },
   "BUG-404": {
-   "status": "open",
-   "title": "Живой (не automation) обработчик буферизованных `pointermove`-семплов считает page-координаты через захардкоженные `toolbar::CHROME_H`/`left_dock()` вместо един…",
-   "component": "shell (`crates/shell/src/main.rs::flush_pointer_moves`)",
-   "date": null,
+   "status": "fixed",
+   "title": "Живой (не automation) обработчик буферизованных `pointermove`-семплов считал page-координаты через захардкоженные `toolbar::CHROME_H`/`left_dock()` вместо едино…",
+   "component": "shell (`crates/shell/src/main.rs::flush_pointer_moves`, `tabs/strip.rs`)",
+   "date": "2026-07-31",
    "debtor": false
   },
   "BUG-405": {
@@ -7210,24 +7210,24 @@
    "debtor": false
   },
   "BUG-408": {
-   "status": "open",
+   "status": "fixed",
    "title": "Панель авто-архива вкладок (7A.5) недостижима под движковым хромом: авто-архивация через 12 ч простоя работает и вкладка исчезает из полосы, но кнопка-переключа…",
-   "component": "shell (`crates/shell/src/tabs/archive.rs`, `crates/shell/src/main.rs`)",
-   "date": null,
+   "component": "shell (`crates/shell/src/tabs/archive.rs`, `crates/shell/src/main.rs`), chrome (`crates/chrome/src/model.rs`, `assets/chrome/chrome.html`)",
+   "date": "2026-07-31",
    "debtor": false
   },
   "BUG-409": {
-   "status": "open",
-   "title": "Группы вкладок не отображаются в движковом хроме: модель (`TabGroup`, цвет, свёрнутость, команды меню) жива, но `ChromeTabModel` несёт только `container_color`/…",
-   "component": "shell (`crates/shell/src/tabs/groups.rs`, `strip.rs`), chrome (`ChromeTabModel`)",
-   "date": null,
+   "status": "fixed",
+   "title": "Группы вкладок не отображались в движковом хроме: модель (`TabGroup`, цвет, свёрнутость, команды меню) была жива, но `ChromeTabModel` несла только `container_co…",
+   "component": "shell (`crates/shell/src/tabs/groups.rs`, `strip.rs`, `main.rs::chrome_model_snapshot`), chrome (`ChromeTabModel`, `assets/chrome/chrome.html`, `docs/design/lumen-v3_3.html`)",
+   "date": "2026-07-31",
    "debtor": false
   },
   "BUG-410": {
-   "status": "open",
+   "status": "fixed",
    "title": "Строка dropdown омнибокса потеряла текстовый тег типа («история»/«заметка»/«вкладка»/… и `×N` для частого запроса): `ChromeSuggestionModel` (CC-9) переносит тол…",
    "component": "shell (`chrome_model_snapshot`, `address_bar.rs`), chrome (`ChromeSuggestionModel`)",
-   "date": null,
+   "date": "2026-07-31",
    "debtor": false
   },
   "BUG-411": {
@@ -7280,24 +7280,24 @@
    "debtor": false
   },
   "BUG-418": {
-   "status": "open",
-   "title": "**Страница, создающая скриптом >50 000 узлов, убивает процесс браузера целиком** (abort, exit 127), вместо спекового `QuotaExceededError`. Нативы `_lumen_create…",
-   "component": "js (`crates/js/src/dom.rs:7065`/`:7082`/`:4773`/`:4779`/`:4837` — сторож `if (nid < 0)`; нативы-источники сентинела `dom.rs:946-968`, `v8_runtime.rs:1454-1478`) + dom (`crates/engine/dom/src/lib.rs:1106` `Document::get`)",
-   "date": null,
+   "status": "fixed",
+   "title": "Страница, создающая скриптом >50 000 узлов, убивала процесс браузера целиком (abort, exit 127), вместо спекового `QuotaExceededError`. Основной путь (`createEle…",
+   "component": "js (`v8_compat.rs::native_fn_trampoline`, `v8_runtime.rs::_lumen_create_text_node`/`_lumen_create_comment`, `dom.rs::WEB_API_SHIM`) + dom (`Document::try_create_text`/`try_create_comment`)",
+   "date": "2026-07-31",
    "debtor": false
   },
   "BUG-419": {
-   "status": "open",
-   "title": "Движковый `#findBar` не отличает невалидный regex-паттерн от «0 совпадений» цветом: легаси-бар писал `ERR` красным (`BAR_ERR`) против приглушённого `0/0`, у `.f…",
+   "status": "fixed",
+   "title": "Движковый `#findBar` не отличал невалидный regex-паттерн от «0 совпадений» цветом: легаси-бар писал `ERR` красным (`BAR_ERR`) против приглушённого `0/0`, у `.fi…",
    "component": "chrome (`assets/chrome/chrome.html` `#findCount`, `ChromeFindModel`)",
-   "date": null,
+   "date": "2026-07-31",
    "debtor": false
   },
   "BUG-420": {
-   "status": "open",
-   "title": "Печать из UI не работает: обе кнопки подвала движкового `#printOverlay` — `data-action=\"close-modal\"`, контролы `.print-settings` (принтер/страницы/ориентация/м…",
+   "status": "fixed",
+   "title": "Печать из UI не работала: обе кнопки подвала движкового `#printOverlay` — `data-action=\"close-modal\"`, контролы `.print-settings` (принтер/страницы/ориентация/м…",
    "component": "chrome (`#printOverlay`), shell (`panels/print_panel.rs`, `dispatch_chrome_action`)",
-   "date": null,
+   "date": "2026-08-01",
    "debtor": false
   },
   "BUG-421": {
@@ -7329,10 +7329,10 @@
    "debtor": true
   },
   "BUG-425": {
-   "status": "open",
-   "title": "Вертикальный сайдбар: все элементы списка вкладок нарисованы на одной строке поверх друг друга (в макете — вертикальное дерево из 5 строк), заголовок группы `ВК…",
-   "component": "chrome (`#sbTabs`/`.sb-tab`/`.sb-section-title`), layout",
-   "date": null,
+   "status": "fixed",
+   "title": "Вертикальный сайдбар: список вкладок и заголовок группы `ВКЛАДКИ · ЛИЧНОЕ` закрылись побочным эффектом BUG-333/343; перенос подписей «Новое пространство»/«Восст…",
+   "component": "chrome (`#sbTabs`/`.sb-tab`/`.sb-section-title`), layout (`box_tree.rs::lay_out_inner`)",
+   "date": "2026-07-31",
    "debtor": false
   },
   "BUG-426": {
@@ -7565,6 +7565,20 @@
    "component": "js (V8 ESM, `crates/js/src/v8_esm.rs` + `crates/shell/src/main.rs`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-460": {
+   "status": "open",
+   "title": "Column-direction flex: `align-items`/`align-self` кроме `stretch` не обрабатывается для кросс-оси (ширины) — код прямо помечен как «column cross axis (width) no…",
+   "component": "layout (`box_tree.rs::lay_out_flex`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-461": {
+   "status": "open",
+   "title": "Командная палитра/поповер щитов-разрешений рисуются движковым хромом (`#cpOverlay`/`#permPopover`), но клики по ним разбирают легаси Rust-хит-тестеры со своей г…",
+   "component": "shell (`main.rs`, `panels/command_palette.rs`, `panels/shields_panel.rs`, `panels/permission_panel.rs`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -7574,7 +7588,7 @@
   "bidi-server (protocol.rs)": [
    "BUG-319"
   ],
-  "chrome (`#sbTabs`/`.sb-tab`/`.sb-section-title`), layout": [
+  "chrome (`#sbTabs`/`.sb-tab`/`.sb-section-title`), layout (`box_tree.rs::lay_out_inner`)": [
    "BUG-425"
   ],
   "css-parser": [
@@ -7814,6 +7828,9 @@
    "BUG-236",
    "BUG-237",
    "BUG-241"
+  ],
+  "layout (`box_tree.rs::lay_out_flex`)": [
+   "BUG-460"
   ],
   "layout (`box_tree.rs` — `lay_out_flex`, `flex_item_min_main_width`, `min_content_outer_width_of_contents`)": [
    "BUG-433"
@@ -8088,6 +8105,9 @@
   ],
   "shell (`main.rs`, `maybe_expand_cv_relevant`)": [
    "BUG-286"
+  ],
+  "shell (`main.rs`, `panels/command_palette.rs`, `panels/shields_panel.rs`, `panels/permission_panel.rs`)": [
+   "BUG-461"
   ],
   "shell (event loop) + js (таймер-шим)": [
    "BUG-271"

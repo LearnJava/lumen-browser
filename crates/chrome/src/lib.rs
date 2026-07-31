@@ -23,7 +23,7 @@ pub use model::{
     ChromeBookmarksModel, ChromeCertModel, ChromeContentView, ChromeDownloadModel, ChromeDropdownModel,
     ChromeFindModel, ChromeMutations,
     ChromeHistoryModel, ChromeHistoryRow, ChromeModel, ChromePaletteModel,
-    ChromePaletteResultModel, ChromePermState, ChromeRightSidebarModel, ChromeSettingsModel,
+    ChromePaletteResultModel, ChromePermState, ChromePrintModel, ChromeRightSidebarModel, ChromeSettingsModel,
     ChromeSidebarTab, ChromeSuggestionModel, ChromeTabGroup, ChromeTabModel, ChromeWorkspaceModel, OmniboxModel,
     SelectorTouch,
 };

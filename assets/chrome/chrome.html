@@ -1233,15 +1233,15 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
                 <div class="print-settings">
                   <div class="print-field"><label>Принтер</label><select><option>Сохранить как PDF</option><option>HP LaserJet (сеть)</option><option>Системный диалог…</option></select></div>
                   <div class="print-field"><label>Страницы</label><input type="text" value="Все" ></div>
-                  <div class="print-field"><label>Ориентация</label><select><option>Книжная</option><option>Альбомная</option></select></div>
+                  <div class="print-field"><label>Ориентация</label><select id="printOrientationSelect" data-action="cycle-print-orientation"><option>Книжная</option><option>Альбомная</option></select></div>
                   <div class="print-field"><label>Масштаб</label><select><option>По умолчанию</option><option>По ширине</option><option>75%</option></select></div>
-                  <label class="print-check"><input type="checkbox" checked> Фон и графика</label>
+                  <label class="print-check" data-action="toggle-print-backgrounds"><input type="checkbox" checked id="printBgCheck"> Фон и графика</label>
                   <label class="print-check"><input type="checkbox"> Колонтитулы</label>
                 </div>
               </div>
               <div class="modal-foot">
                 <button data-action="close-modal">Отмена</button>
-                <button class="primary" data-action="close-modal">Печать</button>
+                <button class="primary" data-action="print-confirm">Печать</button>
               </div>
             </div>
           </div>

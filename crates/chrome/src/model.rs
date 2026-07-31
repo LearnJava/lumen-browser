@@ -77,12 +77,8 @@ pub struct ChromeModel {
     pub palette: ChromePaletteModel,
     /// `#certOverlay` snapshot (CC-10) — mirrors `CertPanel`.
     pub cert: ChromeCertModel,
-    /// `true` shows `#printOverlay` (CC-10) — mirrors `PrintPanel::visible`.
-    /// The design's print form (plain `<select>`/`<input type=checkbox>`, no
-    /// `data-action`/id hooks) carries no real `PrintPanel` field data —
-    /// only open/close state is bound, same class of scope cut as CC-9's
-    /// per-download-card buttons (frozen markup has nothing to bind to).
-    pub print_open: bool,
+    /// `#printOverlay` snapshot (CC-10, extended [BUG-420](../../../bugs/BUG-420-FIXED.md)) — mirrors `PrintPanel`.
+    pub print: ChromePrintModel,
     /// Which `#contentArea` view is shown (CC-10b).
     pub content_view: ChromeContentView,
     /// `#view-history` snapshot (CC-10b).
@@ -383,6 +379,32 @@ pub struct ChromeCertModel {
     pub fingerprint: String,
 }
 
+/// `#printOverlay` snapshot ([BUG-420](../../../bugs/BUG-420-FIXED.md)) —
+/// mirrors `PrintPanel`.
+///
+/// The design's print form has controls for printer target, page range,
+/// orientation, scale, and two checkboxes — of these only `orientation`
+/// (`#printOrientationSelect`, a clean 1:1 `Книжная`/`Альбомная` ↔
+/// `Portrait`/`Landscape` mapping) and `backgrounds` (`#printBgCheck`) map
+/// onto a `PrintPanel` field *and* have a real engine effect
+/// (`do_print_to_pdf_with_opts`'s `landscape`/`print_backgrounds` params).
+/// Printer target, page range, scale, and the header/footer checkbox stay
+/// static demo content — same honesty-over-fabrication call CC-9/CC-10 made
+/// for `#statAds`/`#statFp`: "Принтер" has no non-PDF backend to select
+/// between, page-range/scale have no click-driven text-edit or dropdown
+/// mechanism in the chrome host yet, and there is no `PrintPanel` field for
+/// headers/footers.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChromePrintModel {
+    /// `true` shows the overlay — mirrors `PrintPanel::visible`.
+    pub open: bool,
+    /// `true` selects "Альбомная" (landscape) — mirrors
+    /// `PrintPanel::orientation == Orientation::Landscape`.
+    pub landscape: bool,
+    /// `true` checks "Фон и графика" — mirrors `PrintPanel::print_backgrounds`.
+    pub backgrounds: bool,
+}
+
 /// Grant state for one permission row (CC-9) — mirrors the shell's
 /// `PermissionState` shaped down to the asset's two-button (allow/deny, no
 /// explicit "ask" control) markup.
@@ -676,9 +698,7 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
     bind_popover(doc, model.popover_open, model.blocked_total, &model.permissions);
     bind_palette(doc, &model.palette);
     bind_cert(doc, &model.cert);
-    if let Some(overlay) = doc.find_by_id(crate::ids::PRINT_OVERLAY) {
-        set_class_token(doc, overlay, "open", model.print_open);
-    }
+    bind_print(doc, &model.print);
     bind_content_view(doc, model.content_view);
     bind_history(doc, &model.history);
     bind_bookmarks(doc, &model.bookmarks);
@@ -964,6 +984,38 @@ fn bind_cert(doc: &mut Document, cert: &ChromeCertModel) {
     }
     if let Some(fp) = find_descendant_by_class(doc, overlay, "cert-fp") {
         set_text(doc, fp, &cert.fingerprint);
+    }
+}
+
+/// Toggles `#printOverlay`'s `.open` class, moves the `selected` attribute
+/// between `#printOrientationSelect`'s two `<option>`s, and toggles
+/// `#printBgCheck`'s `checked` attribute ([BUG-420](../../../bugs/BUG-420-FIXED.md)).
+///
+/// Both the native `<select>`/`<option selected>` and `<input checked>`
+/// attributes are what `lumen_layout::box_tree` reads to paint a collapsed
+/// select's shown option / a checkbox's tick — the same mechanism
+/// `crates/shell/src/forms.rs` drives for real web-content forms, reused
+/// here directly on the chrome `Document`.
+fn bind_print(doc: &mut Document, print: &ChromePrintModel) {
+    let Some(overlay) = doc.find_by_id(crate::ids::PRINT_OVERLAY) else { return };
+    set_class_token(doc, overlay, "open", print.open);
+    if let Some(select) = doc.find_by_id(crate::ids::PRINT_ORIENTATION_SELECT) {
+        let options = doc.get(select).children.clone();
+        let selected_idx = usize::from(print.landscape);
+        for (i, &opt) in options.iter().enumerate() {
+            if i == selected_idx {
+                set_attr(doc, opt, "selected", "");
+            } else {
+                remove_attr(doc, opt, "selected");
+            }
+        }
+    }
+    if let Some(check) = doc.find_by_id(crate::ids::PRINT_BG_CHECK) {
+        if print.backgrounds {
+            set_attr(doc, check, "checked", "");
+        } else {
+            remove_attr(doc, check, "checked");
+        }
     }
 }
 
@@ -2858,12 +2910,45 @@ mod tests {
     #[test]
     fn print_open_toggles_the_open_class() {
         let mut doc = parse_asset();
-        bind_model(&mut doc, &ChromeModel { print_open: true, ..ChromeModel::default() });
+        let open = ChromePrintModel { open: true, ..ChromePrintModel::default() };
+        bind_model(&mut doc, &ChromeModel { print: open, ..ChromeModel::default() });
         let overlay = doc.find_by_id(crate::ids::PRINT_OVERLAY).expect("asset has #printOverlay");
         assert!(has_class(&doc, overlay, "open"));
 
-        bind_model(&mut doc, &ChromeModel { print_open: false, ..ChromeModel::default() });
+        bind_model(&mut doc, &ChromeModel { print: ChromePrintModel::default(), ..ChromeModel::default() });
         assert!(!has_class(&doc, overlay, "open"));
+    }
+
+    #[test]
+    fn print_landscape_moves_selected_option() {
+        let mut doc = parse_asset();
+        let select = doc.find_by_id(crate::ids::PRINT_ORIENTATION_SELECT).expect("asset has #printOrientationSelect");
+        let options = doc.get(select).children.clone();
+        assert_eq!(options.len(), 2, "asset must have exactly 2 orientation options");
+
+        let portrait = ChromePrintModel { landscape: false, ..ChromePrintModel::default() };
+        bind_model(&mut doc, &ChromeModel { print: portrait, ..ChromeModel::default() });
+        assert!(doc.get(options[0]).get_attr("selected").is_some());
+        assert!(doc.get(options[1]).get_attr("selected").is_none());
+
+        let landscape = ChromePrintModel { landscape: true, ..ChromePrintModel::default() };
+        bind_model(&mut doc, &ChromeModel { print: landscape, ..ChromeModel::default() });
+        assert!(doc.get(options[0]).get_attr("selected").is_none());
+        assert!(doc.get(options[1]).get_attr("selected").is_some());
+    }
+
+    #[test]
+    fn print_backgrounds_toggles_checked() {
+        let mut doc = parse_asset();
+        let check = doc.find_by_id(crate::ids::PRINT_BG_CHECK).expect("asset has #printBgCheck");
+
+        let on = ChromePrintModel { backgrounds: true, ..ChromePrintModel::default() };
+        bind_model(&mut doc, &ChromeModel { print: on, ..ChromeModel::default() });
+        assert!(doc.get(check).get_attr("checked").is_some());
+
+        let off = ChromePrintModel { backgrounds: false, ..ChromePrintModel::default() };
+        bind_model(&mut doc, &ChromeModel { print: off, ..ChromeModel::default() });
+        assert!(doc.get(check).get_attr("checked").is_none());
     }
 
     fn text_of(doc: &Document, id: NodeId) -> String {
