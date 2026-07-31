@@ -1683,28 +1683,42 @@ fn do_print_to_pdf(
     Ok(page_count)
 }
 
+/// Per-job settings for [`do_print_to_pdf_with_opts`] (E-1, `landscape`
+/// added [BUG-420](../../../bugs/BUG-420-FIXED.md)) — grouped into a struct
+/// to keep the function under clippy's `too_many_arguments` threshold.
+struct PrintOptions {
+    /// Top + bottom margin, in CSS px.
+    margin_tb: f32,
+    /// Left + right margin, in CSS px.
+    margin_lr: f32,
+    /// Content zoom, in percent (50–200).
+    scale: i32,
+    /// `false` strips CSS background fills/images/gradients before rasterising.
+    print_backgrounds: bool,
+    /// `true` swaps the output page's raster width/height. Independent of
+    /// `scale`, which still zooms content within the (possibly swapped) page.
+    landscape: bool,
+}
+
 /// Print with custom margin values (in CSS px) from the print dialog (E-1).
-///
-/// `margin_tb` applies to top + bottom; `margin_lr` applies to left + right.
 fn do_print_to_pdf_with_opts(
     source: &PageSource,
     output: &std::path::Path,
     event_sink: Arc<dyn EventSink>,
-    margin_tb: f32,
-    margin_lr: f32,
-    scale: i32,
-    print_backgrounds: bool,
+    opts: PrintOptions,
 ) -> Result<usize, Box<dyn Error>> {
     use lumen_layout::{paginate, PaginationContext};
     use lumen_paint::{
         build_print_display_list, split_at_page_breaks, strip_background_graphics, Renderer,
     };
+    let PrintOptions { margin_tb, margin_lr, scale, print_backgrounds, landscape } = opts;
 
     let raw = source.load_bytes(event_sink.clone(), None)?;
+    let (page_w, page_h) = if landscape { (PDF_PAGE_H, PDF_PAGE_W) } else { (PDF_PAGE_W, PDF_PAGE_H) };
     // Apply scale to viewport (W-2b): 50–200% zoom
     let scale_factor = scale as f32 / 100.0;
-    let scaled_w = (PDF_PAGE_W as f32 * scale_factor).ceil();
-    let scaled_h = (PDF_PAGE_H as f32 * scale_factor).ceil();
+    let scaled_w = (page_w as f32 * scale_factor).ceil();
+    let scaled_h = (page_h as f32 * scale_factor).ceil();
     let vp = Size::new(scaled_w, scaled_h);
     let parsed = parse_and_layout(
         &raw.bytes,
@@ -1747,15 +1761,31 @@ fn do_print_to_pdf_with_opts(
     let images = Renderer::render_print_pages(
         INTER_FONT.to_vec(),
         &split_pages,
-        PDF_PAGE_W,
-        PDF_PAGE_H,
+        page_w,
+        page_h,
         ColorSpace::Srgb,
     )?;
 
     let page_count = images.len();
-    let pdf_bytes = encode_images_as_pdf(&images, PDF_PAGE_W, PDF_PAGE_H);
+    let pdf_bytes = encode_images_as_pdf(&images, page_w, page_h);
     std::fs::write(output, &pdf_bytes)?;
     Ok(page_count)
+}
+
+/// Default PDF output path when the caller has no explicit path (JS
+/// `window.print()` with no `outputPath`, or the engine chrome's "Печать"
+/// button, [BUG-420](../../../bugs/BUG-420-FIXED.md)): `document.pdf` in the
+/// current directory, or `document_<unix-seconds>.pdf` if that already
+/// exists — avoids silently clobbering a previous export.
+fn default_pdf_output_path() -> std::path::PathBuf {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let mut path = std::env::current_dir().unwrap_or_default();
+    path.push("document.pdf");
+    if path.exists() {
+        let ts = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        path.set_file_name(format!("document_{}.pdf", ts));
+    }
+    path
 }
 
 /// Attaches `PageBox` data to each page with default @page content: page N of M at bottom-center.
@@ -9526,7 +9556,11 @@ impl Lumen {
             permissions,
             palette,
             cert,
-            print_open: self.print_panel.visible,
+            print: lumen_chrome::ChromePrintModel {
+                open: self.print_panel.visible,
+                landscape: self.print_panel.orientation == panels::print_panel::Orientation::Landscape,
+                backgrounds: self.print_panel.print_backgrounds,
+            },
             content_view,
             history,
             bookmarks,
@@ -9728,6 +9762,29 @@ impl Lumen {
             ChromeAction::OpenPrintDialog => {
                 self.print_panel.toggle();
                 // CC-10: see the matching comment on `ToggleShieldPopover`.
+                self.relayout_chrome_host();
+            }
+            // BUG-420: `#printOrientationSelect` has exactly two `<option>`s
+            // (Книжная/Альбомная) — a click anywhere on the closed select
+            // just flips between them, mirroring `#printOverlay`'s lack of a
+            // real dropdown-popover mechanism in the chrome host.
+            ChromeAction::CyclePrintOrientation => {
+                self.print_panel.orientation = match self.print_panel.orientation {
+                    panels::print_panel::Orientation::Portrait => panels::print_panel::Orientation::Landscape,
+                    panels::print_panel::Orientation::Landscape => panels::print_panel::Orientation::Portrait,
+                };
+                self.relayout_chrome_host();
+            }
+            ChromeAction::TogglePrintBackgrounds => {
+                self.print_panel.print_backgrounds = !self.print_panel.print_backgrounds;
+                self.relayout_chrome_host();
+            }
+            // BUG-420: the "Печать" footer button — was `close-modal` (did
+            // nothing but dismiss the overlay). Runs the real PDF export
+            // with `PrintPanel`'s current settings, mirroring
+            // `handle_print_request`'s JS `window.print()` path.
+            ChromeAction::PrintConfirm => {
+                self.handle_print_confirm();
                 self.relayout_chrome_host();
             }
             ChromeAction::ToggleDevtools => self.devtools_console.toggle(),
@@ -20505,27 +20562,12 @@ impl Lumen {
 
     /// Export current document as PDF using parameters from PrintRequest (W-2 Phase 3b).
     fn handle_print_request(&mut self, req: &lumen_js::PrintRequest) {
-        use std::time::{SystemTime, UNIX_EPOCH};
-
         // Determine output path: use provided path or generate default.
-        let output_path = if let Some(custom_path) = &req.output_path {
-            std::path::PathBuf::from(custom_path)
-        } else {
-            // Default: document.pdf in current directory (or Documents folder).
-            let mut path = std::env::current_dir().unwrap_or_default();
-            path.push("document.pdf");
-
-            // If file exists, append timestamp to avoid overwrite.
-            if path.exists() {
-                let ts = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
-                let filename = format!("document_{}.pdf", ts);
-                path.set_file_name(filename);
-            }
-            path
-        };
+        let output_path = req
+            .output_path
+            .as_ref()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(default_pdf_output_path);
 
         // Convert margins from CSS px (96 DPI) to points (1 point = 1/72 inch).
         // 1 CSS px at 96 DPI = 72/96 points = 0.75 points (not used here; we keep px).
@@ -20539,10 +20581,13 @@ impl Lumen {
             &self.source,
             &output_path,
             self.event_sink.clone(),
-            (margin_top + margin_bottom) / 2.0,  // Simplified: average for TB and LR.
-            (margin_left + margin_right) / 2.0,
-            100,  // Default scale: 100%
-            true, // print background graphics (JS print request default)
+            PrintOptions {
+                margin_tb: (margin_top + margin_bottom) / 2.0, // Simplified: average for TB and LR.
+                margin_lr: (margin_left + margin_right) / 2.0,
+                scale: 100, // Default scale: 100%
+                print_backgrounds: true, // print background graphics (JS print request default)
+                landscape: false, // BUG-420: JS `window.print()` carries no orientation — always portrait.
+            },
         ) {
             Ok(page_count) => {
                 eprintln!(
@@ -20557,6 +20602,42 @@ impl Lumen {
                 // Phase 2 future: show error dialog to user.
             }
         }
+    }
+
+    /// The engine chrome's "Печать" button (`ChromeAction::PrintConfirm`,
+    /// [BUG-420](../../../bugs/BUG-420-FIXED.md)) — exports the active tab
+    /// with `PrintPanel`'s live settings (margin preset, scale, background
+    /// graphics, orientation) and closes the dialog, mirroring
+    /// `handle_print_request`'s JS `window.print()` path.
+    fn handle_print_confirm(&mut self) {
+        let output_path = default_pdf_output_path();
+        let (margin_tb, margin_lr) = self.print_panel.margin_px();
+        let landscape = self.print_panel.orientation == panels::print_panel::Orientation::Landscape;
+
+        match do_print_to_pdf_with_opts(
+            &self.source,
+            &output_path,
+            self.event_sink.clone(),
+            PrintOptions {
+                margin_tb,
+                margin_lr,
+                scale: self.print_panel.scale,
+                print_backgrounds: self.print_panel.print_backgrounds,
+                landscape,
+            },
+        ) {
+            Ok(page_count) => {
+                eprintln!(
+                    "[shell] PDF exported to {}: {} pages",
+                    output_path.display(),
+                    page_count
+                );
+            }
+            Err(e) => {
+                eprintln!("[shell] PDF export failed: {}", e);
+            }
+        }
+        self.print_panel.close();
     }
 
     /// Open the settings panel, populating every section — including the ones
