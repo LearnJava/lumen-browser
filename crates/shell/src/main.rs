@@ -9265,24 +9265,25 @@ impl Lumen {
         // explicit chrome-relayout triggers (resize/click/key), not every
         // `RedrawRequested` frame (see `Self::relayout_chrome_host`'s doc).
         let find_matches_len = if self.find.is_open() { self.current_matches().len() } else { 0 };
+        // CC-15-6/BUG-419: the "ERR" state is carried over from the deleted
+        // legacy bar (`find::append_bar`) — without it an invalid regex is
+        // indistinguishable from "no matches" (`0/0`). The legacy bar also
+        // painted it red (`BAR_ERR`); `error` drives `#findCount`'s `.error`
+        // class to restore that accent (see BUG-419).
+        let find_is_error = self.find.is_regex_mode()
+            && !self.find.query().is_empty()
+            && !find::is_valid_regex_pattern(self.find.query());
         let find = lumen_chrome::ChromeFindModel {
             open: self.find.is_open(),
             value: self.find.query().to_owned(),
-            // CC-15-6: the "ERR" state is carried over from the deleted legacy
-            // bar (`find::append_bar`) — without it an invalid regex is
-            // indistinguishable from "no matches" (`0/0`). Text only: the
-            // legacy bar also painted it red (`BAR_ERR`), the asset has no
-            // error class for `#findCount` (see BUG-419).
-            count_label: if self.find.is_regex_mode()
-                && !self.find.query().is_empty()
-                && !find::is_valid_regex_pattern(self.find.query())
-            {
+            count_label: if find_is_error {
                 "ERR".to_owned()
             } else if find_matches_len == 0 {
                 "0/0".to_owned()
             } else {
                 format!("{}/{}", self.find.active_index() + 1, find_matches_len)
             },
+            error: find_is_error,
         };
         let downloads: Vec<lumen_chrome::ChromeDownloadModel> = self
             .downloads
