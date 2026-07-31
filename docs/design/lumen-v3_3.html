@@ -1242,11 +1242,11 @@ body.qa-cvd .content-area{ filter:grayscale(1) contrast(.9); }
                   <h3>Adblock & Fingerprinting</h3>
                   <div class="set-row">
                     <div class="st-text"><div class="st-title">Блокировать рекламу</div><div class="st-desc">Блокировка скриптов: Выкл</div></div>
-                    <div class="toggle on" onclick="toggleSwitch(this)"><div class="thumb"></div></div>
+                    <div class="toggle on" onclick="toggleShields(this)"><div class="thumb"></div></div>
                   </div>
                   <div class="set-row">
                     <div class="st-text"><div class="st-title">Блокировать фингерпринтинг</div><div class="st-desc">Маскировка: Вкл &nbsp;·&nbsp; <a class="link" href="javascript:void(0)">Посмотреть, что именно маскируется</a></div></div>
-                    <div class="toggle on" onclick="toggleSwitch(this)"><div class="thumb"></div></div>
+                    <div class="toggle on" onclick="toggleFingerprintMode(this)"><div class="thumb"></div></div>
                   </div>
                   <div class="set-row">
                     <div class="st-text"><div class="st-title">Принудительный HTTPS</div><div class="st-desc">Автоматический апгрейд: Выкл</div></div>
@@ -1867,6 +1867,11 @@ function toggleSwitch(el){
   if(desc && desc.textContent.indexOf('Вкл')>-1) desc.textContent = desc.textContent.replace('Вкл','Выкл');
   else if(desc && desc.textContent.indexOf('Выкл')>-1) desc.textContent = desc.textContent.replace('Выкл','Вкл');
 }
+/* Shields (ad-block) and fingerprint-mode toggles: distinct handlers so the
+   generated chrome asset can give each a real data-action (BUG-421) — same
+   visual behaviour as the generic toggleSwitch above. */
+function toggleShields(el){ toggleSwitch(el); }
+function toggleFingerprintMode(el){ toggleSwitch(el); }
 
 /* ---------- Focus mode + рабочий Помодоро-таймер ---------- */
 function toggleFocus(){ document.body.classList.toggle('focus-mode'); }
