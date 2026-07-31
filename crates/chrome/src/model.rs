@@ -53,6 +53,11 @@ pub struct ChromeModel {
     pub downloads_open: bool,
     /// Download entries rendered into `#downloadsPanel`'s `.dl-list` (CC-9).
     pub downloads: Vec<ChromeDownloadModel>,
+    /// `true` shows `#archivePanel` (BUG-408) — mirrors `TabArchive::visible`.
+    pub archive_open: bool,
+    /// Archived-tab entries rendered into `#archivePanel`'s `.arc-list`
+    /// (BUG-408) — mirrors `TabArchive::entries`.
+    pub archive: Vec<ChromeArchiveEntryModel>,
     /// `true` shows `#permPopover` (CC-9) — the frozen design merges the
     /// shields counters and the permission rows into one popover, so this
     /// follows either `ShieldsPanel::visible` or `PermissionPanel::visible`.
@@ -291,6 +296,28 @@ pub struct ChromeDownloadModel {
     /// at this fill (in-flight downloads only); `None` omits the bar
     /// (matches the asset's own "done" cards, which carry no progress track).
     pub progress_fraction: Option<f32>,
+}
+
+/// One `.arc-card` in `#archivePanel`'s `.arc-list` (BUG-408) — mirrors one
+/// `tabs::archive::ArchivedTab`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChromeArchiveEntryModel {
+    /// Round-trips through `data-archive-id` (`ArchivedTab::id`, opaque
+    /// here) so a restore/dismiss click on the rebuilt row resolves back to
+    /// a `TabArchive` entry.
+    pub id: usize,
+    /// `.arc-fav` single-letter fallback (first letter of `title`), mirroring
+    /// [`ChromeTabModel::title`]'s own favicon fallback.
+    pub fav_letter: String,
+    /// `.arc-title`.
+    pub title: String,
+    /// `.arc-url`.
+    pub url: String,
+    /// `#RRGGBB` accent for the `.arc-stripe` left-edge strip — the caller
+    /// derives this from `ArchivedTab::container.border_color()`, or `None`
+    /// for `ContainerKind::None`, in which case the strip is omitted
+    /// entirely (matches [`ChromeTabModel::container_color`]'s convention).
+    pub container_color: Option<String>,
 }
 
 /// `#cpOverlay` snapshot (CC-10) — mirrors `CommandPalette`.
@@ -607,6 +634,7 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
     bind_dropdown(doc, &model.dropdown);
     bind_find_bar(doc, &model.find);
     bind_downloads(doc, model.downloads_open, &model.downloads);
+    bind_archive(doc, model.archive_open, &model.archive);
     bind_popover(doc, model.popover_open, model.blocked_total, &model.permissions);
     bind_palette(doc, &model.palette);
     bind_cert(doc, &model.cert);
@@ -1000,6 +1028,76 @@ fn build_dl_card(doc: &mut Document, d: &ChromeDownloadModel) -> NodeId {
         attach_child(doc, track, fill);
         attach_child(doc, card, track);
     }
+
+    card
+}
+
+/// Toggles `#archivePanel`'s `.open` class and rebuilds `.arc-card` rows
+/// from `entries` (BUG-408) — mirrors [`bind_downloads`].
+fn bind_archive(doc: &mut Document, open: bool, entries: &[ChromeArchiveEntryModel]) {
+    let Some(panel) = doc.find_by_id(crate::ids::ARCHIVE_PANEL) else { return };
+    set_class_token(doc, panel, "open", open);
+    let Some(list) = find_by_class(doc, "arc-list") else { return };
+    remove_children_with_class(doc, list, "arc-card");
+    for e in entries {
+        let card = build_arc_card(doc, e);
+        attach_child(doc, list, card);
+    }
+}
+
+fn build_arc_card(doc: &mut Document, e: &ChromeArchiveEntryModel) -> NodeId {
+    let card = doc.create_element(QualName::html("div"));
+    set_attr(doc, card, "class", "arc-card");
+
+    let row = doc.create_element(QualName::html("div"));
+    set_attr(doc, row, "class", "arc-row");
+
+    if let Some(color) = &e.container_color {
+        let stripe = doc.create_element(QualName::html("span"));
+        set_attr(doc, stripe, "class", "arc-stripe");
+        set_attr(doc, stripe, "style", &format!("background:{color}"));
+        attach_child(doc, row, stripe);
+    }
+
+    let fav = doc.create_element(QualName::html("div"));
+    set_attr(doc, fav, "class", "arc-fav");
+    append_text(doc, fav, &e.fav_letter);
+    attach_child(doc, row, fav);
+
+    let text = doc.create_element(QualName::html("div"));
+    set_attr(doc, text, "class", "arc-text");
+    let title = doc.create_element(QualName::html("div"));
+    set_attr(doc, title, "class", "arc-title");
+    append_text(doc, title, &e.title);
+    attach_child(doc, text, title);
+    let url = doc.create_element(QualName::html("div"));
+    set_attr(doc, url, "class", "arc-url");
+    append_text(doc, url, &e.url);
+    attach_child(doc, text, url);
+    attach_child(doc, row, text);
+
+    let actions = doc.create_element(QualName::html("div"));
+    set_attr(doc, actions, "class", "arc-actions");
+
+    let restore = doc.create_element(QualName::html("button"));
+    set_attr(doc, restore, "class", "arc-restore");
+    set_attr(doc, restore, "data-action", "archive-restore");
+    set_attr(doc, restore, "aria-label", "Восстановить вкладку");
+    // Carries its own copy of `data-archive-id` (not just the row), same
+    // reason `build_tab_row`'s close button does — `chrome_action_at` only
+    // sees the `data-action`-carrying node.
+    set_attr(doc, restore, "data-archive-id", &e.id.to_string());
+    attach_child(doc, actions, restore);
+
+    let dismiss = doc.create_element(QualName::html("button"));
+    set_attr(doc, dismiss, "class", "arc-dismiss");
+    set_attr(doc, dismiss, "data-action", "archive-dismiss");
+    set_attr(doc, dismiss, "aria-label", "Удалить из архива");
+    set_attr(doc, dismiss, "data-archive-id", &e.id.to_string());
+    attach_child(doc, actions, dismiss);
+
+    attach_child(doc, row, actions);
+    attach_child(doc, card, row);
 
     card
 }
@@ -2296,6 +2394,72 @@ mod tests {
         bind_model(&mut doc, &ChromeModel::default());
         let list = find_by_class(&doc, "dl-list").expect("asset has .dl-list");
         let cards = doc.get(list).children.iter().filter(|&&c| has_class(&doc, c, "dl-card")).count();
+        assert_eq!(cards, 0);
+    }
+
+    #[test]
+    fn archive_panel_is_rebuilt_from_entries_and_toggles_open() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            archive_open: true,
+            archive: vec![ChromeArchiveEntryModel {
+                id: 7,
+                fav_letter: "L".to_owned(),
+                title: "Lumen design".to_owned(),
+                url: "https://lumen.example/design".to_owned(),
+                container_color: Some("#0066FF".to_owned()),
+            }],
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let panel = doc.find_by_id(crate::ids::ARCHIVE_PANEL).expect("asset has #archivePanel");
+        assert!(has_class(&doc, panel, "open"));
+        let list = find_by_class(&doc, "arc-list").expect("asset has .arc-list");
+        let cards: Vec<NodeId> =
+            doc.get(list).children.iter().copied().filter(|&c| has_class(&doc, c, "arc-card")).collect();
+        assert_eq!(cards.len(), 1, "old demo card must be gone, only the 1 model entry remains");
+
+        let restore = find_descendants_by_class(&doc, cards[0], "arc-restore");
+        let restore = restore.first().copied().expect("card has .arc-restore");
+        assert_eq!(doc.get(restore).get_attr("data-action"), Some("archive-restore"));
+        assert_eq!(doc.get(restore).get_attr("data-archive-id"), Some("7"));
+
+        let dismiss = find_descendants_by_class(&doc, cards[0], "arc-dismiss");
+        let dismiss = dismiss.first().copied().expect("card has .arc-dismiss");
+        assert_eq!(doc.get(dismiss).get_attr("data-action"), Some("archive-dismiss"));
+        assert_eq!(doc.get(dismiss).get_attr("data-archive-id"), Some("7"));
+
+        let stripe = find_descendants_by_class(&doc, cards[0], "arc-stripe");
+        let stripe = stripe.first().copied().expect("colour-tagged entry renders a stripe");
+        assert_eq!(doc.get(stripe).get_attr("style"), Some("background:#0066FF"));
+    }
+
+    #[test]
+    fn archive_entry_without_container_omits_the_stripe() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            archive_open: true,
+            archive: vec![ChromeArchiveEntryModel {
+                id: 1,
+                fav_letter: "A".to_owned(),
+                title: "A".to_owned(),
+                url: String::new(),
+                container_color: None,
+            }],
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let list = find_by_class(&doc, "arc-list").expect("asset has .arc-list");
+        let card = doc.get(list).children.iter().copied().find(|&c| has_class(&doc, c, "arc-card")).unwrap();
+        assert!(find_descendants_by_class(&doc, card, "arc-stripe").is_empty());
+    }
+
+    #[test]
+    fn empty_archive_clears_all_cards() {
+        let mut doc = parse_asset();
+        bind_model(&mut doc, &ChromeModel::default());
+        let list = find_by_class(&doc, "arc-list").expect("asset has .arc-list");
+        let cards = doc.get(list).children.iter().filter(|&&c| has_class(&doc, c, "arc-card")).count();
         assert_eq!(cards, 0);
     }
 

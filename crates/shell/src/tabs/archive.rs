@@ -13,6 +13,12 @@
 //! were removed once the engine-drawn chrome (CC-4) made their sole caller
 //! (the legacy tab-bar paint/dispatch in `main.rs`) dead code. `hit_test_panel`
 //! stays — it is reachable from the click-outside-panel path unconditionally.
+//!
+//! BUG-408: the button + panel painters above were legacy-only and are not
+//! reintroduced — the engine chrome renders `#archivePanel` instead
+//! (`lumen_chrome::model::bind_archive`, `assets/chrome/chrome.html`),
+//! dispatched via `ChromeAction::ToggleArchive`/`ArchiveRestore`/
+//! `ArchiveDismiss` in `crates/shell/src/main.rs`.
 
 use crate::tabs::containers::ContainerKind;
 
@@ -39,11 +45,6 @@ pub struct ArchivedTab {
     /// Original tab ID (for reference only — not reused on restore).
     pub id: usize,
     /// Display title at the time of archiving.
-    ///
-    /// BUG-408: read only by the removed legacy panel painter — the engine
-    /// chrome has no archive view yet, so the field is kept (the data is
-    /// still recorded on archiving) but currently unread.
-    #[allow(dead_code, reason = "BUG-408: панель архива ещё не перенесена в движковый хром")]
     pub title: String,
     /// Page URL string; empty for blank/file tabs without a navigable URL.
     pub url: String,
@@ -51,9 +52,6 @@ pub struct ArchivedTab {
     ///
     /// Rendered as a 3 px left-side colour strip in the archive panel row,
     /// identical to the border-top strip in the tab bar (7D.2).
-    ///
-    /// BUG-408: same as `title` — kept, currently unread.
-    #[allow(dead_code, reason = "BUG-408: панель архива ещё не перенесена в движковый хром")]
     pub container: ContainerKind,
 }
 
@@ -106,6 +104,11 @@ impl TabArchive {
     /// Close panel without clearing entries.
     pub fn close(&mut self) {
         self.visible = false;
+    }
+
+    /// Flip panel visibility — mirrors `download::DownloadManager::toggle_visible`.
+    pub fn toggle(&mut self) {
+        self.visible = !self.visible;
     }
 
     /// Scroll up by one row (clamped at zero).

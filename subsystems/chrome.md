@@ -392,6 +392,26 @@ tab-bar for both layouts (CC-8) are done — see below and `crates/shell/src/mai
   since CC-9), BUG-422 (no actions on history/bookmark entries) — with the now-readerless state kept
   under `#[allow(dead_code, reason = "BUG-NNN: …")]`.
 
+- **BUG-408 fix (2026-07-31, P1): tab-archive panel added to the engine chrome.** The frozen design
+  reference had no archive UI at all (unlike downloads/history/bookmarks, which CC-9/CC-10b already
+  ported) — `.nt-restore` on `about:newtab` ("Восстановить закрытые") was the only pre-existing hook,
+  and it was purely decorative (no `onclick`). Fixed by extending the reference itself (not
+  `assets/chrome/chrome.html` directly — the generator's "changes only through the reference" rule,
+  CC-13, applies to genuinely new markup too): a new toolbar button `#archiveToggleBtn`, `.nt-restore`
+  wired to the same action, and `#archivePanel`/`.arc-list`/`.arc-card` (1:1 structural mirror of
+  `.downloads-panel`/`.dl-list`/`.dl-card`, plus a `.arc-stripe` container-colour strip reusing the
+  tab row's `.container-stripe` flex-child trick rather than absolute positioning). Three new
+  `scripts/gen_chrome_assets.py` onclick→data-action mappings (`toggle-archive`/`archive-restore`/
+  `archive-dismiss`) plus two `ARIA_LABEL_RULES` entries. `crates/chrome/src/model.rs` gained
+  `ChromeArchiveEntryModel`/`bind_archive`/`build_arc_card` (restore/dismiss buttons carry their own
+  `data-archive-id` copy, same reason `.tab-close` carries its own `data-tab-id`). `main.rs`'s
+  `dispatch_chrome_action` gained `ToggleArchive`/`ArchiveRestore`/`ArchiveDismiss`, reusing the
+  `archive.take`/`navigate_to(PageSource::Url(...))` logic that already existed in the legacy
+  pixel-geometry click handler (that handler is not deleted — `hit_test_panel` is reachable
+  unconditionally per CC-15-3 — but is now effectively dead in practice, since the only writer of
+  `archive.visible` is the new `ToggleArchive` action). `ArchivedTab::{title,container}`'s
+  `#[allow(dead_code)]` markers are gone — both fields are read by `chrome_model_snapshot` now.
+
 ## Deferred
 
 - **`<template>` markup + `templates::IDS` population**: the frozen design reference has none —

@@ -154,6 +154,9 @@ ONCLICK_EXACT_ACTIONS: dict[str, tuple[str, dict[str, str]]] = {
     "toggleFind()": ("toggle-find", {}),
     "toggleDevtools()": ("toggle-devtools", {}),
     "toggleDownloads()": ("toggle-downloads", {}),
+    "toggleArchive()": ("toggle-archive", {}),
+    "archiveRestore(this)": ("archive-restore", {}),
+    "archiveDismiss(this)": ("archive-dismiss", {}),
     "toggleFocusTimer()": ("toggle-focus-timer", {}),
     "toggleFocus()": ("toggle-focus", {}),
     "toggleProfileMenu()": ("toggle-profile-menu", {}),
@@ -332,9 +335,12 @@ ARIA_LABEL_RULES: list[tuple[str, dict[str, str], str]] = [
     ("open-web-sidebar", {}, "Веб-сайдбар"),
     ("open-ai-sidebar", {}, "ИИ-сайдбар"),
     ("toggle-downloads", {}, "Загрузки"),
+    ("toggle-archive", {}, "Архив вкладок"),
     ("toggle-devtools", {}, "DevTools"),
     ("show-view", {"data-view": "settings"}, "Настройки"),
     ("close-tab", {}, "Закрыть вкладку"),
+    ("archive-restore", {}, "Восстановить вкладку"),
+    ("archive-dismiss", {}, "Удалить из архива"),
 ]
 
 _BUTTON_RE = re.compile(r"<button([^>]*)>((?:(?!</button>).)*?)</button>", re.DOTALL)
