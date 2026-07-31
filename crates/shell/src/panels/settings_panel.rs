@@ -150,6 +150,23 @@ impl SettingsPanel {
         }
     }
 
+    /// Flip the "Блокировать рекламу" (shields) toggle
+    /// ([BUG-421](../../../../bugs/BUG-421-FIXED.md)).
+    pub fn toggle_shields(&mut self) {
+        self.draft.shields_enabled = !self.draft.shields_enabled;
+    }
+
+    /// Flip the "Блокировать фингерпринтинг" toggle
+    /// ([BUG-421](../../../../bugs/BUG-421-FIXED.md)). `fingerprint_mode` is a
+    /// tri-state string (`"standard"`/`"strict"`/`"off"`), but the toggle
+    /// only exposes on/off — matching `ChromeSettingsModel::fingerprint_on`'s
+    /// read-side simplification — so switching on always lands on the
+    /// default `"standard"` rather than round-tripping a prior `"strict"`.
+    pub fn toggle_fingerprint_mode(&mut self) {
+        self.draft.fingerprint_mode =
+            if self.draft.fingerprint_mode == "off" { "standard".to_owned() } else { "off".to_owned() };
+    }
+
     /// Scroll the content area by `dy` CSS px (positive = down).
     pub fn scroll_by(&mut self, dy: f32) {
         self.scroll_y = (self.scroll_y + dy).max(0.0);
@@ -231,6 +248,36 @@ mod tests {
         assert!(p.tor_active);
         assert_eq!(p.spell_locale.as_deref(), Some("en_US+ru_RU"));
         assert_eq!(p.adblock_subs.len(), 1);
+    }
+
+    // ── BUG-421: shields / fingerprint-mode toggles ──────────────────────────
+
+    #[test]
+    fn toggle_shields_flips_bool() {
+        let mut p = panel_at_origin();
+        p.draft.shields_enabled = true;
+        p.toggle_shields();
+        assert!(!p.draft.shields_enabled);
+        p.toggle_shields();
+        assert!(p.draft.shields_enabled);
+    }
+
+    #[test]
+    fn toggle_fingerprint_mode_off_to_standard() {
+        let mut p = panel_at_origin();
+        p.draft.fingerprint_mode = "off".to_owned();
+        p.toggle_fingerprint_mode();
+        assert_eq!(p.draft.fingerprint_mode, "standard");
+    }
+
+    #[test]
+    fn toggle_fingerprint_mode_strict_to_off() {
+        // A non-default "on" state (`"strict"`) still switches off — the
+        // toggle only distinguishes off from any-on state.
+        let mut p = panel_at_origin();
+        p.draft.fingerprint_mode = "strict".to_owned();
+        p.toggle_fingerprint_mode();
+        assert_eq!(p.draft.fingerprint_mode, "off");
     }
 
     #[test]

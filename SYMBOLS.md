@@ -4180,7 +4180,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgpu_compute.rs:982` **enum** `GpuOp` — Одна записанная операция command-encoder для исполнения на `queue.submit`
 `crates/engine/paint/src/webgpu_compute.rs:1037` **fn** `submit` — Исполняет набор операций в одном `CommandEncoder` и сабмитит на очередь
 
-## lumen-shell  (930 symbols)
+## lumen-shell  (932 symbols)
 
 `crates/shell/src/adblock.rs:44` **fn** `browser_data_dir` — Root of all browser user data (portable): `<exe_dir>/data`
 `crates/shell/src/adblock.rs:52` **fn** `adblock_dir` — `<data>/adblock` — root of the ad-block subsystem's files
@@ -4736,7 +4736,9 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panels/settings_panel.rs:131` **fn** `set_spell_locale` — Populate the read-only spellcheck locale line (Language section)
 `crates/shell/src/panels/settings_panel.rs:136` **fn** `append_char` — Append a printable character to the focused text field
 `crates/shell/src/panels/settings_panel.rs:145` **fn** `backspace` — Remove the last character from the focused text field
-`crates/shell/src/panels/settings_panel.rs:154` **fn** `scroll_by` — Scroll the content area by `dy` CSS px (positive = down)
+`crates/shell/src/panels/settings_panel.rs:155` **fn** `toggle_shields` — Flip the "Блокировать рекламу" (shields) toggle
+`crates/shell/src/panels/settings_panel.rs:165` **fn** `toggle_fingerprint_mode` — Flip the "Блокировать фингерпринтинг" toggle
+`crates/shell/src/panels/settings_panel.rs:171` **fn** `scroll_by` — Scroll the content area by `dy` CSS px (positive = down)
 `crates/shell/src/panels/shields_panel.rs:50` **struct** `BlockedLog` — Shared accumulator for the total blocked-request count
 `crates/shell/src/panels/shields_panel.rs:59` **fn** `record` — Increment the total if `url` has a valid HTTP(S) host
 `crates/shell/src/panels/shields_panel.rs:66` **fn** `clear` — Clear the total (call on every top-level navigation)
@@ -5640,4 +5642,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 5563 symbols in 24 crates*
+*Total: 5565 symbols in 24 crates*

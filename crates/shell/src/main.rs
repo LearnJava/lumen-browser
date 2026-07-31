@@ -9997,6 +9997,23 @@ impl Lumen {
                 self.relayout_chrome();
                 self.relayout_chrome_host();
             }
+            // BUG-421: of `#view-settings`'s six `.toggle`s, only these two
+            // (Privacy → "Adblock & Fingerprinting") have a clean 1:1 backing
+            // field on `SettingsPanel::draft` — they got their own
+            // `data-action` in the design reference (`toggleShields`/
+            // `toggleFingerprintMode`) instead of the shared `toggle-switch`,
+            // so `nid` here is already the specific toggle and needs no
+            // structural resolver. Persisted on close via
+            // `close_settings_panel` → `settings_store.apply_snapshot`, same
+            // as every other `draft` field.
+            ChromeAction::ToggleShields => {
+                self.settings_panel.toggle_shields();
+                self.relayout_chrome_host();
+            }
+            ChromeAction::ToggleFingerprintMode => {
+                self.settings_panel.toggle_fingerprint_mode();
+                self.relayout_chrome_host();
+            }
             // Demo-only actions on the static preview markup: no shell state
             // backs them yet. Recognised (so the click doesn't fall through
             // to legacy geometry) but otherwise a no-op for now. `SetProfile`
@@ -10006,13 +10023,11 @@ impl Lumen {
             // `WindowEvent::MouseInput` legacy-popover branch, not here),
             // and `ChromeModel` already reflects whatever profile that path
             // activates on the very next relayout. `ToggleSwitch`: the
-            // clicked toggle can't be resolved to a specific setting from
-            // `data-action` alone (all 6 `.toggle`s in the design share the
-            // same action, no distinguishing attribute) — `bind_settings`
-            // still reflects the two settings with real backing state
-            // read-only; wiring a click-to-flip requires a structural
-            // resolver (à la `chrome_permission_kind_for_node`), out of this
-            // slice's DoD.
+            // remaining four `.toggle`s ("Принудительный HTTPS", the two
+            // Extensions rows, and the QA "Стабильные test-id" row) have no
+            // matching real-state field at all (BUG-421 closing rationale —
+            // no force-HTTPS setting, no extensions/QA-flag store), so the
+            // click can't be resolved to anything and stays a no-op.
             ChromeAction::SetProfile
             | ChromeAction::ArchiveCard
             | ChromeAction::ToggleSwitch

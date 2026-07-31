@@ -163,6 +163,12 @@ ONCLICK_EXACT_ACTIONS: dict[str, tuple[str, dict[str, str]]] = {
     "toggleSidebar()": ("toggle-sidebar", {}),
     "toggleShieldPopover(event)": ("toggle-shield-popover", {}),
     "toggleSwitch(this)": ("toggle-switch", {}),
+    # BUG-421: split out of the generic toggle-switch above — these two are
+    # the only `.toggle`s in `#view-settings` with a clean 1:1 backing field
+    # (`SettingsPanel::draft.shields_enabled`/`.fingerprint_mode`), so they
+    # get their own actions instead of the unresolvable shared one.
+    "toggleShields(this)": ("toggle-shields", {}),
+    "toggleFingerprintMode(this)": ("toggle-fingerprint-mode", {}),
     "closeRightSidebar()": ("close-right-sidebar", {}),
     "openAiSidebar()": ("open-ai-sidebar", {}),
     "openCertViewer(event)": ("open-cert-viewer", {}),
