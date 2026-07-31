@@ -194,38 +194,39 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/canvas/src/rasterize.rs:308` **fn** `build_clip_mask` — Build an 8-bit clip coverage mask by rasterizing `path` with the even-odd rule
 `crates/engine/canvas/src/rasterize.rs:472` **fn** `collect_lines` — Extract `(x0, y0, x1, y1)` line tuples from `path`, tessellating Bézier curves
 
-## lumen-chrome  (30 symbols)
+## lumen-chrome  (31 symbols)
 
 `crates/chrome/src/lib.rs:41` **struct** `ChromeIdError` — Error returned by [`ChromeIds::resolve`] when the chrome [`lumen_dom::Document`]
 `crates/chrome/src/lib.rs:80` **fn** `parse_document` — Parses `html` (the chrome asset's contents — a runtime host passes
 `crates/chrome/src/model.rs:27` **struct** `ChromeModel` — Snapshot of shell state [`bind_model`] reflects into the chrome document
-`crates/chrome/src/model.rs:101` **enum** `ChromeContentView` — Which content view fills `#contentArea` (CC-10b) — bound to `.view.active`
-`crates/chrome/src/model.rs:115` **struct** `ChromeHistoryModel` — `#view-history` snapshot (CC-10b) — mirrors `HistoryPanel::rows`
-`crates/chrome/src/model.rs:128` **enum** `ChromeHistoryRow` — One row of [`ChromeHistoryModel::rows`]
-`crates/chrome/src/model.rs:147` **struct** `ChromeBookmarksModel` — `#view-bookmarks` snapshot (CC-10b) — mirrors `BookmarkPanel`
-`crates/chrome/src/model.rs:162` **struct** `ChromeBookmarkFolderModel` — One `.bm-folder` row
-`crates/chrome/src/model.rs:173` **struct** `ChromeBookmarkCardModel` — One `.bm-card` in `#view-bookmarks`'s `.bm-grid` (CC-10b). Per-card
-`crates/chrome/src/model.rs:199` **struct** `ChromeSettingsModel` — `#view-settings` snapshot (CC-10b) — mirrors a subset of `SettingsPanel`
-`crates/chrome/src/model.rs:216` **struct** `ChromeRightSidebarModel` — `#rightSidebar` snapshot (CC-10b) — merges the legacy `AiPanel`/
-`crates/chrome/src/model.rs:226` **enum** `ChromeSidebarTab` — `#rightSidebar`'s two tabs (CC-10b)
-`crates/chrome/src/model.rs:239` **struct** `ChromeDropdownModel` — `#omniDropdown` snapshot (CC-9): whether it's open, plus its suggestion
-`crates/chrome/src/model.rs:255` **struct** `ChromeSuggestionModel` — One `.dd-row` in `#omniDropdown` (CC-9)
-`crates/chrome/src/model.rs:274` **struct** `ChromeFindModel` — `#findBar` snapshot (CC-9) — mirrors [`OmniboxModel`]'s "engine renders,
-`crates/chrome/src/model.rs:293` **struct** `ChromeDownloadModel` — One `.dl-card` in `#downloadsPanel`'s `.dl-list` (CC-9)
-`crates/chrome/src/model.rs:311` **struct** `ChromeArchiveEntryModel` — One `.arc-card` in `#archivePanel`'s `.arc-list` (BUG-408) — mirrors one
-`crates/chrome/src/model.rs:332` **struct** `ChromePaletteModel` — `#cpOverlay` snapshot (CC-10) — mirrors `CommandPalette`
-`crates/chrome/src/model.rs:353` **struct** `ChromePaletteResultModel` — One `.cp-row` in `#cpList` (CC-10)
-`crates/chrome/src/model.rs:374` **struct** `ChromeCertModel` — `#certOverlay` snapshot (CC-10) — mirrors `CertPanel`/`PanelCertData`
-`crates/chrome/src/model.rs:390` **enum** `ChromePermState` — Grant state for one permission row (CC-9) — mirrors the shell's
-`crates/chrome/src/model.rs:408` **struct** `OmniboxModel` — Omnibox snapshot [`bind_model`] reflects into `#omniInput`/`#omniWarn`
-`crates/chrome/src/model.rs:421` **struct** `ChromeTabModel` — One tab row for the sidebar tab list (`#sbTabs`)
-`crates/chrome/src/model.rs:460` **struct** `ChromeTabGroup` — A tab's group membership, as rendered by `.group-stripe` (BUG-409)
-`crates/chrome/src/model.rs:481` **struct** `ChromeWorkspaceModel` — One workspace button for the sidebar switcher (`.sb-workspaces`)
-`crates/chrome/src/model.rs:499` **struct** `ChromeMutations` — What one [`bind_model_tracked`] call changed in the document, split by what
-`crates/chrome/src/model.rs:530` **fn** `is_empty` — `true` when this bind changed nothing at all
-`crates/chrome/src/model.rs:538` **struct** `SelectorTouch` — What changed about one selector-relevant node in a [`ChromeMutations`]
-`crates/chrome/src/model.rs:642` **fn** `bind_model` — Binds `model` into `doc`: `data-theme`/`data-layout`/`data-profile` on
-`crates/chrome/src/model.rs:706` **fn** `bind_model_tracked` — Like [`bind_model`], but also reports what the call actually changed, split
+`crates/chrome/src/model.rs:97` **enum** `ChromeContentView` — Which content view fills `#contentArea` (CC-10b) — bound to `.view.active`
+`crates/chrome/src/model.rs:111` **struct** `ChromeHistoryModel` — `#view-history` snapshot (CC-10b) — mirrors `HistoryPanel::rows`
+`crates/chrome/src/model.rs:124` **enum** `ChromeHistoryRow` — One row of [`ChromeHistoryModel::rows`]
+`crates/chrome/src/model.rs:143` **struct** `ChromeBookmarksModel` — `#view-bookmarks` snapshot (CC-10b) — mirrors `BookmarkPanel`
+`crates/chrome/src/model.rs:158` **struct** `ChromeBookmarkFolderModel` — One `.bm-folder` row
+`crates/chrome/src/model.rs:169` **struct** `ChromeBookmarkCardModel` — One `.bm-card` in `#view-bookmarks`'s `.bm-grid` (CC-10b). Per-card
+`crates/chrome/src/model.rs:195` **struct** `ChromeSettingsModel` — `#view-settings` snapshot (CC-10b) — mirrors a subset of `SettingsPanel`
+`crates/chrome/src/model.rs:212` **struct** `ChromeRightSidebarModel` — `#rightSidebar` snapshot (CC-10b) — merges the legacy `AiPanel`/
+`crates/chrome/src/model.rs:222` **enum** `ChromeSidebarTab` — `#rightSidebar`'s two tabs (CC-10b)
+`crates/chrome/src/model.rs:235` **struct** `ChromeDropdownModel` — `#omniDropdown` snapshot (CC-9): whether it's open, plus its suggestion
+`crates/chrome/src/model.rs:251` **struct** `ChromeSuggestionModel` — One `.dd-row` in `#omniDropdown` (CC-9)
+`crates/chrome/src/model.rs:270` **struct** `ChromeFindModel` — `#findBar` snapshot (CC-9) — mirrors [`OmniboxModel`]'s "engine renders,
+`crates/chrome/src/model.rs:289` **struct** `ChromeDownloadModel` — One `.dl-card` in `#downloadsPanel`'s `.dl-list` (CC-9)
+`crates/chrome/src/model.rs:307` **struct** `ChromeArchiveEntryModel` — One `.arc-card` in `#archivePanel`'s `.arc-list` (BUG-408) — mirrors one
+`crates/chrome/src/model.rs:328` **struct** `ChromePaletteModel` — `#cpOverlay` snapshot (CC-10) — mirrors `CommandPalette`
+`crates/chrome/src/model.rs:349` **struct** `ChromePaletteResultModel` — One `.cp-row` in `#cpList` (CC-10)
+`crates/chrome/src/model.rs:370` **struct** `ChromeCertModel` — `#certOverlay` snapshot (CC-10) — mirrors `CertPanel`/`PanelCertData`
+`crates/chrome/src/model.rs:398` **struct** `ChromePrintModel` — `#printOverlay` snapshot ([BUG-420](../../../bugs/BUG-420-FIXED.md)) —
+`crates/chrome/src/model.rs:412` **enum** `ChromePermState` — Grant state for one permission row (CC-9) — mirrors the shell's
+`crates/chrome/src/model.rs:430` **struct** `OmniboxModel` — Omnibox snapshot [`bind_model`] reflects into `#omniInput`/`#omniWarn`
+`crates/chrome/src/model.rs:443` **struct** `ChromeTabModel` — One tab row for the sidebar tab list (`#sbTabs`)
+`crates/chrome/src/model.rs:482` **struct** `ChromeTabGroup` — A tab's group membership, as rendered by `.group-stripe` (BUG-409)
+`crates/chrome/src/model.rs:503` **struct** `ChromeWorkspaceModel` — One workspace button for the sidebar switcher (`.sb-workspaces`)
+`crates/chrome/src/model.rs:521` **struct** `ChromeMutations` — What one [`bind_model_tracked`] call changed in the document, split by what
+`crates/chrome/src/model.rs:552` **fn** `is_empty` — `true` when this bind changed nothing at all
+`crates/chrome/src/model.rs:560` **struct** `SelectorTouch` — What changed about one selector-relevant node in a [`ChromeMutations`]
+`crates/chrome/src/model.rs:664` **fn** `bind_model` — Binds `model` into `doc`: `data-theme`/`data-layout`/`data-profile` on
+`crates/chrome/src/model.rs:726` **fn** `bind_model_tracked` — Like [`bind_model`], but also reports what the call actually changed, split
 
 ## lumen-core  (287 symbols)
 
@@ -4670,18 +4671,18 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panels/pip_window.rs:183` **enum** `PipHit` — Result of a click inside the PiP card
 `crates/shell/src/panels/pip_window.rs:199` **fn** `hit_test` — Hit-test a click at window CSS-px `(x, y)` against the PiP card
 `crates/shell/src/panels/pip_window.rs:236` **fn** `build_panel` — Build the display list for the PiP overlay.  Empty when inactive
-`crates/shell/src/panels/print_panel.rs:16` **enum** `PaperSize` — Paper size for the print job
-`crates/shell/src/panels/print_panel.rs:29` **enum** `Orientation` — Page orientation for the print job
-`crates/shell/src/panels/print_panel.rs:39` **enum** `MarginPreset` — Margin preset for the print job
-`crates/shell/src/panels/print_panel.rs:52` **enum** `ColorMode` — Output colour mode for the print job
-`crates/shell/src/panels/print_panel.rs:62` **enum** `PrintField` — Which editable text field currently has keyboard focus in the print panel
-`crates/shell/src/panels/print_panel.rs:78` **struct** `PrintPanel` — Print dialog panel state
-`crates/shell/src/panels/print_panel.rs:111` **fn** `new` — Create a new hidden panel with default print settings
-`crates/shell/src/panels/print_panel.rs:127` **fn** `toggle` — Toggle panel visibility; clears the active editing field on hide
-`crates/shell/src/panels/print_panel.rs:135` **fn** `close` — Hide the panel and clear the editing field
-`crates/shell/src/panels/print_panel.rs:141` **fn** `push_char` — Append a character to the currently focused text field
-`crates/shell/src/panels/print_panel.rs:150` **fn** `pop_char` — Delete the last character from the currently focused text field
-`crates/shell/src/panels/print_panel.rs:162` **fn** `margin_px` — Resolve margin values (top/bottom, left/right) in CSS px at 96 DPI
+`crates/shell/src/panels/print_panel.rs:19` **enum** `PaperSize` — Paper size for the print job
+`crates/shell/src/panels/print_panel.rs:32` **enum** `Orientation` — Page orientation for the print job
+`crates/shell/src/panels/print_panel.rs:41` **enum** `MarginPreset` — Margin preset for the print job
+`crates/shell/src/panels/print_panel.rs:54` **enum** `ColorMode` — Output colour mode for the print job
+`crates/shell/src/panels/print_panel.rs:64` **enum** `PrintField` — Which editable text field currently has keyboard focus in the print panel
+`crates/shell/src/panels/print_panel.rs:80` **struct** `PrintPanel` — Print dialog panel state
+`crates/shell/src/panels/print_panel.rs:109` **fn** `new` — Create a new hidden panel with default print settings
+`crates/shell/src/panels/print_panel.rs:125` **fn** `toggle` — Toggle panel visibility; clears the active editing field on hide
+`crates/shell/src/panels/print_panel.rs:133` **fn** `close` — Hide the panel and clear the editing field
+`crates/shell/src/panels/print_panel.rs:139` **fn** `push_char` — Append a character to the currently focused text field
+`crates/shell/src/panels/print_panel.rs:148` **fn** `pop_char` — Delete the last character from the currently focused text field
+`crates/shell/src/panels/print_panel.rs:159` **fn** `margin_px` — Resolve margin values (top/bottom, left/right) in CSS px at 96 DPI
 `crates/shell/src/panels/privacy_panel.rs:71` **fn** `list_body_height` — Height in CSS px of the scrollable request-list area, given the full window
 `crates/shell/src/panels/privacy_panel.rs:80` **struct** `PrivacyPanel` — Privacy network panel (V5). Holds a snapshot of the shared [`NetworkLog`] and
 `crates/shell/src/panels/privacy_panel.rs:96` **fn** `new` — Create a new hidden panel backed by the given shared `log`
@@ -5639,4 +5640,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 5562 symbols in 24 crates*
+*Total: 5563 symbols in 24 crates*
