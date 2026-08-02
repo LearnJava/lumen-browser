@@ -69,7 +69,7 @@ pub(crate) fn restore_js_context(
     idb_dir: Option<&std::path::Path>,
     sw_backend: &Arc<Mutex<dyn lumen_core::ext::StorageBackend>>,
     cookie_banner_dismiss: bool,
-    deterministic: bool,
+    deterministic: crate::deterministic::DetConfig,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
 ) -> (Arc<Mutex<Document>>, Option<Arc<dyn PersistentJs>>) {
     let base = resource_base_from_url(url);

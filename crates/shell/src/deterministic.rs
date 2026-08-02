@@ -11,7 +11,7 @@
 //! - `--monotonic-clock` — use a monotonically increasing clock (1 ms per tick) instead of frozen
 
 /// Parsed deterministic-mode configuration from CLI args.
-#[derive(Debug, Default, Clone, PartialEq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub struct DetConfig {
     /// `--deterministic`: master switch — freeze clock at 0, seed RNG from URL hash.
     pub enabled: bool,

@@ -156,7 +156,7 @@ pub(crate) fn rasterize_svg(
         None,
         &NullHyphenationProvider,
         false, // cookie_banner_dismiss
-        true,  // deterministic
+        crate::deterministic::DetConfig { enabled: true, ..Default::default() }, // deterministic
         false, // dark_mode
         None,  // cookie_jar
         false, // cross_origin_isolated

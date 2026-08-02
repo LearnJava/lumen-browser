@@ -398,7 +398,6 @@ fn main() -> ExitCode {
     let (health_log_flag, rest_args) = extract_health_log(&rest_args);
     health_log::init(click_log_flag || health_log_flag);
     let (det_cfg, rest_args) = deterministic::extract_deterministic(&rest_args);
-    let det_mode = det_cfg.enabled;
     let (viewport_override, rest_args) = extract_viewport_override(&rest_args);
     let (pdf_output, rest_args) = extract_print_to_pdf(&rest_args);
     let (screenshot_output, rest_args) = extract_screenshot(&rest_args);
@@ -540,7 +539,7 @@ fn main() -> ExitCode {
 
     match cli {
         CliMode::Dump { source, kind } => run_dump_mode(&source, kind, event_sink),
-        CliMode::OpenWindow(source) => run_window_mode(source, event_sink, blocked_log, network_log, initial_scroll, no_scrollbar, maximized, det_mode, viewport_override, automation_handle, automation_cmd_tx, automation_rx, bidi_port.is_some() || mcp_live_port.is_some()),
+        CliMode::OpenWindow(source) => run_window_mode(source, event_sink, blocked_log, network_log, initial_scroll, no_scrollbar, maximized, det_cfg, viewport_override, automation_handle, automation_cmd_tx, automation_rx, bidi_port.is_some() || mcp_live_port.is_some()),
         CliMode::PrintToPdf { source, output } => run_print_to_pdf(&source, &output, event_sink),
         CliMode::Screenshot { source, output } => run_screenshot(&source, &output, event_sink),
         CliMode::TraceNav { source, output } => run_trace_nav(&source, &output, event_sink),
@@ -749,7 +748,7 @@ fn run_window_mode(
     initial_scroll: (f32, f32),
     no_scrollbar: bool,
     maximized: bool,
-    deterministic: bool,
+    deterministic: deterministic::DetConfig,
     viewport_override: Option<(f32, f32)>,
     automation_handle: AutomationHandle,
     automation_cmd_tx: std::sync::mpsc::Sender<AutomationRequest>,
@@ -1430,7 +1429,7 @@ fn render_source_to_png(
         // run here (`parse_and_layout` → `run_scripts_with_dom`); only the live
         // event loop's per-frame pumps (timers/rAF) are absent.
         false, // cookie_banner_dismiss: leave banners as authored
-        true,  // deterministic: reproducible pixels across runs/OS
+        deterministic::DetConfig { enabled: true, ..Default::default() }, // reproducible pixels across runs/OS
         false, // dark_mode: light
         None,  // cookie_jar
         raw.cross_origin_isolated,
@@ -1677,7 +1676,7 @@ fn do_print_to_pdf(
         None,
         &NullHyphenationProvider,
         false, // headless PDF mode: no interactive JS needed
-        false, // deterministic: not needed for PDF rendering
+        deterministic::DetConfig::default(), // deterministic: not needed for PDF rendering
         false, // dark_mode: light mode for PDF output
         None,  // cookie_jar: not available in standalone PDF mode
         raw.cross_origin_isolated,
@@ -1764,9 +1763,9 @@ fn do_print_to_pdf_with_opts(
         None,
         None,
         &NullHyphenationProvider,
-        false,
-        false,
-        false,
+        false, // cookie_banner_dismiss
+        deterministic::DetConfig::default(), // deterministic: not needed for PDF rendering
+        false, // dark_mode
         None,
         raw.cross_origin_isolated,
         None, // sw_worker_store: not needed in headless print mode
@@ -1962,13 +1961,13 @@ fn run_dump(
         }
         DumpKind::Layout => {
             let vp = Size::new(1024.0, 720.0);
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, false, false, None, false, None, None, lumen_core::ColorSpace::Srgb, false)?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, deterministic::DetConfig::default(), false, None, false, None, None, lumen_core::ColorSpace::Srgb, false)?;
             print!("{}", lumen_layout::serialize_layout_tree(&parsed.layout));
             Ok(())
         }
         DumpKind::DisplayList => {
             let vp = Size::new(1024.0, 720.0);
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, false, false, None, false, None, None, lumen_core::ColorSpace::Srgb, false)?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, deterministic::DetConfig::default(), false, None, false, None, None, lumen_core::ColorSpace::Srgb, false)?;
             let dl = paint_ordered(&parsed.layout);
             print!("{}", lumen_paint::serialize_display_list(&dl));
             Ok(())
@@ -3953,7 +3952,7 @@ impl PageSource {
         }
         let raw = self.load_bytes(sink.clone(), None)?;
         let (page, layout_source, js_ctx) =
-            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, false, false, None, raw.cross_origin_isolated, None, None, lumen_core::ColorSpace::Srgb, raw.cache_control_no_store)?;
+            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic::DetConfig::default(), false, None, raw.cross_origin_isolated, None, None, lumen_core::ColorSpace::Srgb, raw.cache_control_no_store)?;
         Ok((page, Some(layout_source), js_ctx))
     }
 }
@@ -5458,7 +5457,7 @@ fn parse_and_layout(
     sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
     hp: &dyn HyphenationProvider,
     cookie_banner_dismiss: bool,
-    deterministic: bool,
+    deterministic: deterministic::DetConfig,
     dark_mode: bool,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     cross_origin_isolated: bool,
@@ -6755,7 +6754,7 @@ fn render_bytes(
     sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
     hp: &dyn HyphenationProvider,
     cookie_banner_dismiss: bool,
-    deterministic: bool,
+    deterministic: deterministic::DetConfig,
     dark_mode: bool,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     cross_origin_isolated: bool,
@@ -7250,7 +7249,7 @@ fn run_scripts_with_dom(
     // store (the SW serves cache-first responses the page previously cached).
     cache_backend: Option<Arc<dyn lumen_core::ext::CacheBackend>>,
     cookie_banner_dismiss: bool,
-    deterministic: bool,
+    deterministic: deterministic::DetConfig,
     cross_origin_isolated: bool,
     extra_scripts: &[String],
     scripts: Vec<String>,
@@ -7282,7 +7281,7 @@ fn run_scripts_with_dom(
         match lumen_js::QuickJsRuntime::new() {
             Ok(mut rt) => {
                 rt.set_cookie_banner_dismiss(cookie_banner_dismiss);
-                if deterministic {
+                if deterministic.enabled {
                     rt.set_deterministic_mode();
                 }
                 if let Some(store) = sw_worker_store {
@@ -7362,8 +7361,8 @@ fn run_scripts_with_dom(
         use lumen_core::ext::JsRuntime as _;
         match lumen_js::v8_runtime::V8JsRuntime::new() {
             Ok(mut rt) => {
-                if deterministic {
-                    rt.set_deterministic_mode(true);
+                if deterministic.enabled {
+                    rt.set_deterministic_mode(true, deterministic.rng_seed, deterministic.monotonic_clock);
                 }
                 if let Some(store) = sw_worker_store {
                     rt = rt.with_sw_worker_store(store);
@@ -8569,12 +8568,14 @@ struct Lumen {
     cache_registry: lumen_core::ext::CacheRegistry,
     /// Deterministic render mode (8F).
     ///
-    /// When `true` (`--deterministic` CLI flag): window opens at 1280×800
+    /// When `enabled` (`--deterministic` CLI flag): window opens at 1280×800
     /// (unless overridden by `viewport_override`, DEVX-1), `Date.now()` is
     /// frozen at 0, `Math.random` uses a seeded PRNG, and
     /// `requestAnimationFrame` callbacks receive a 0 ms timestamp.
+    /// `rng_seed`/`monotonic_clock` (DEVX-16, `--rng-seed`/`--monotonic-clock`)
+    /// reach the JS runtime via `V8JsRuntime::set_deterministic_mode`.
     /// Intended for snapshot testing and reproducible output.
-    deterministic: bool,
+    deterministic: deterministic::DetConfig,
     /// `--viewport <W>x<H>` override (DEVX-1): pins the window's CSS content
     /// viewport size, taking priority over both the `deterministic` 1280×800
     /// default and the plain 1024×720 default (see `resumed()`). Lets
@@ -10476,7 +10477,7 @@ impl Lumen {
         }
         if raf_due && self.take_raf_pending_lockfree() {
             self.last_raf_batch_ms = timestamp_ms;
-            let raf_ts = if self.deterministic { 0.0 } else { -1.0 };
+            let raf_ts = if self.deterministic.enabled { 0.0 } else { -1.0 };
             self.fire_raf_turn_async(raf_ts);
             self.raf_drain_gate = true;
         }
@@ -12282,7 +12283,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             // `--deterministic` be combined with graphic_tests' fixed 1024×720
             // crop-calibration contract.
             (w, h + toolbar::CHROME_H)
-        } else if self.deterministic {
+        } else if self.deterministic.enabled {
             (1280.0, 800.0)
         } else {
             // Высота окна = CSS viewport (720) + tab bar + toolbar (CHROME_H) = 792,
@@ -12332,7 +12333,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // window exists. winit resolves it per platform (Win32 immersive dark mode,
         // macOS NSAppearance, Linux portal/XSettings); `None` → light fallback.
         // In deterministic/headless runs we keep light to preserve snapshot stability.
-        if !self.deterministic {
+        if !self.deterministic.enabled {
             self.dark_mode = platform::dark_mode::theme_prefers_dark(window.theme());
         }
 
@@ -12829,7 +12830,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     j.take_raf_pending();
                 }
                 self.last_raf_batch_ms = now_ms;
-                let raf_ts = if self.deterministic { 0.0 } else { -1.0 };
+                let raf_ts = if self.deterministic.enabled { 0.0 } else { -1.0 };
                 if let Some(j) = self.js_ctx.as_ref() {
                     j.run_animation_frame(raf_ts);
                 }
@@ -15886,7 +15887,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             j.take_raf_pending()
                         });
                         self.last_raf_batch_ms = timestamp_ms;
-                        let raf_ts = if self.deterministic { 0.0 } else { -1.0 };
+                        let raf_ts = if self.deterministic.enabled { 0.0 } else { -1.0 };
                         route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
                             j.run_animation_frame(raf_ts);
                         });
@@ -19190,7 +19191,7 @@ impl Lumen {
             match lumen_js::QuickJsRuntime::new() {
                 Ok(rt) => {
                     rt.set_cookie_banner_dismiss(self.cookie_banner_dismiss);
-                    if self.deterministic {
+                    if self.deterministic.enabled {
                         rt.set_deterministic_mode();
                     }
                     let ls_store = self
@@ -19237,8 +19238,8 @@ impl Lumen {
         {
             match lumen_js::v8_runtime::V8JsRuntime::new() {
                 Ok(rt) => {
-                    if self.deterministic {
-                        rt.set_deterministic_mode(true);
+                    if self.deterministic.enabled {
+                        rt.set_deterministic_mode(true, self.deterministic.rng_seed, self.deterministic.monotonic_clock);
                     }
                     let ls_store = self
                         .source
