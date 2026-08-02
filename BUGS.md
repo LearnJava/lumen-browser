@@ -3,7 +3,7 @@
 Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-494)
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-497)
 2. Добавь строку в таблицу ниже со ссылкой на файл
 
 **При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
@@ -506,6 +506,9 @@
 | [BUG-492](bugs/BUG-492-OPEN.md) | OPEN | css-parser/layout (`crates/engine/layout/src/style.rs::apply_declaration`) | `border-image` (CSS Backgrounds/Borders Level 3, зрелая спека) не реализован вовсе — ни `border-image-source`/`-slice`/`-width`/`-outset`/`-repeat`, ни шорткод; `grep` по всему workspace даёт ноль совпадений. `CSS-SPECS.md` не содержит строки для `border-image` вообще. 1 файл `css/css-borders`. Найден P2, WPT-RUN-3 срез 8, 2026-08-02 |
 | [BUG-493](bugs/BUG-493-OPEN.md) | OPEN | js/layout граница (`crates/js/src/v8_runtime.rs::_lumen_get_computed_style`, `crates/driver/src/session.rs:379`) | `getComputedStyle()` — чистое чтение кэша `computed_styles`, без синхронного форсированного пересчёта стиля/layout перед чтением (спека требует). Узел, мутированный и прочитанный в ОДНОМ синхронном тике скрипта, либо видит устаревшее значение, либо (для только что созданного узла) пустую строку — правильное значение появляется только после того, как между мутацией и чтением прошёл релейаут (например, граница eval-вызовов DEVX-9). Подтверждено живой пробой (`--mcp-port`). 1 файл `css/css-borders`, блеск-радиус неизмерен по всему `css/`. Найден P2, WPT-RUN-3 срез 8, 2026-08-02 |
 | [BUG-494](bugs/BUG-494-OPEN.md) | OPEN | js shim (`crates/js/src/dom.rs:5613`, `_lumen_make_style` Proxy `dom.rs:4264`) | `element.style = "css текст"` (присваивание строки целиком) — молчаливый no-op: `style` определён как get-only аксессор без сеттера, нет `[PutForwards=cssText]` из WebIDL. `element.style.cssText = ...`/`.setProperty(...)`/поэлементное присваивание через Proxy работают верно — сломан только путь голого присваивания. 1 файл `css/css-borders` напрямую (пересекается с BUG-493 на тех же сабтестах). Найден P2, WPT-RUN-3 срез 8, 2026-08-02 |
+| [BUG-495](bugs/BUG-495-OPEN.md) | OPEN | css-parser/layout (`crates/engine/layout/src/style.rs::apply_declaration`, `selector_query.rs::computed_style_to_map`) | `background-position-x`/`background-position-y` (отдельные лонгхенды CSS Backgrounds/Borders Level 4) не реализованы вовсе — только шорткод `background-position` существует; `CSS.supports()` подтверждает, что это не просто гэп карты computed style (BUG-472), а отсутствие самого свойства. 5 файлов/214 сабтестов `css/css-backgrounds`. Найден P2, WPT-RUN-3 срез 9, 2026-08-02 |
+| [BUG-496](bugs/BUG-496-OPEN.md) | OPEN | js (`crates/js/src/dom.rs`, нет `dataset` нигде в `WEB_API_SHIM`) | `HTMLElement.dataset` (DOMStringMap) не реализован вовсе — `grep` ноль совпадений. Скрипт падает на первом же `element.dataset.x`, харнес зависает TIMEOUT с нулём сабтестов. Широкий по потенциальному охвату гэп (частый паттерн `data-*`-атрибутов), измерен пока на 1 файле `css/css-backgrounds`. Найден P2, WPT-RUN-3 срез 9, 2026-08-02 |
+| [BUG-497](bugs/BUG-497-OPEN.md) | OPEN | js (`crates/js/src/dom.rs:4257`, `_lumen_serialize_style`) | `CSSStyleDeclaration.cssText` не добавляет завершающую точку с запятой после последней (единственной) декларации — `"border-radius: 10px"` вместо спекового `"border-radius: 10px;"`. 1 сабтест `css/css-backgrounds`, дефект безусловный (не зависит от входных данных). Найден P2, WPT-RUN-3 срез 9, 2026-08-02 |
 ---
 
 ## Ограничения Phase 0 (не баги — запланировано позже)

@@ -92,3 +92,11 @@ HTML LS §7.3.3 (`Window` named properties object) требует, чтобы о
   — следующий слой той же темы.
 * [BUG-381](BUG-381-OPEN.md) — измерение которого этот баг закрывает на трёх
   тестах категории `focus`.
+
+**WPT-RUN-3 срез 9 (`css/css-backgrounds`, 2026-08-02):** ещё один harness
+TIMEOUT-кейс того же класса — `inheritance.sub.html` объявляет
+`<div id="container">` и синхронно читает `container.style.color = ...` как
+голый идентификатор; скрипт падает на первой же ссылке до регистрации
+любого `test()`, харнес зависает с нулём сабтестов. `.ini`:
+`tests/wpt/metadata/css/css-backgrounds/inheritance.sub.html.ini`
+(`expected: TIMEOUT`).

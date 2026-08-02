@@ -51,8 +51,24 @@ Element.prototype` поэтому честно `false`, хотя `'animate' in s
 не поддерживающим Web Animations и уходит в CSS-fallback-путь, хотя
 функционально API работает.
 
+**WPT-RUN-3 срез 9 (`css/css-backgrounds`, 2026-08-02)** — крупнейшее на
+сегодня расширение: 16 файлов / 952 сабтеста, весь `animations/`
+поддиректорий категории (`background-color-interpolation.html`,
+`background-image-interpolation.html`, `background-position-interpolation.html`,
+`background-position-origin-interpolation.html`, `background-size-interpolation.html`,
+`border-color-interpolation.html`, `border-radius-interpolation.html`,
+`border-width-interpolation.html`, `box-shadow-interpolation.html`,
+`discrete-no-interpolation.html` и другие) — тот же хелпер
+`interpolation-testcommon.js`'s `'animate' in Element.prototype`
+feature-detect, применяется теперь к background/border-свойствам вместо
+CSS2's float/clear/table. Три файла (`border-color-interpolation.html`,
+`border-radius-interpolation.html`, `border-width-interpolation.html`)
+дополнительно частично объяснены [BUG-472](BUG-472-OPEN.md) (18 сабтестов
+каждый — `getComputedStyle()` map-гэп на смежных сабтестах того же файла).
+
 ## .ini
 
 `tests/wpt/metadata/css/CSS2/{floats/float-no-interpolation,floats-clear/clear-no-interpolation,borders/discrete-no-interpolation,tables/border-collapse-no-interpolation,tables/empty-cells-no-interpolation,visufx/animation/visibility-interpolation,linebox/animations/line-height-interpolation}.html.ini`
 — `expected: FAIL` на затронутых сабтестах, флипнуть на `PASS` после переноса
-`animate`/`getAnimations` на `Element.prototype`.
+`animate`/`getAnimations` на `Element.prototype`. Срез 9 добавил `.ini` под
+`tests/wpt/metadata/css/css-backgrounds/` для тех же 16 файлов.
