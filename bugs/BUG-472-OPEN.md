@@ -96,3 +96,31 @@ additionally exposes a **wider, SVG-specific gap**: none of ~40 SVG
 presentation properties it tests (`stroke-width`, `fill`, `clip-rule`,
 `dominant-baseline`, `alignment-baseline`, …) are in the map at all — same
 mechanism, unmeasured beyond this one file.
+
+## Срез 12 (`css/css-logical`, 2026-08-02) — the whole CSS Logical Properties family, confirmed absent from the map by direct source read
+
+`grep -n "block-size\|inline-size\|inset-block\|inset-inline\|margin-block\|
+margin-inline\|padding-block\|padding-inline\|border-block\|border-inline"
+crates/engine/layout/src/selector_query.rs` returns **zero hits** — not a
+single CSS Logical Properties longhand or shorthand name is a key in
+`computed_style_to_map`, even though the physical properties they resolve
+to (`width`/`height`/`top`/`right`/`bottom`/`left`/`margin-top`/…/
+`border-top-color`/…) are themselves present and correctly computed
+(`resolve_logical_properties`, `style.rs:8304`, converts logical → physical
+on the `ComputedStyle` struct itself, upstream of the map — the map is
+simply never taught the logical *names* as aliases). This is the largest
+single extension of BUG-472 to date: 19 files / ~180 subtests this slice
+— every `parsing/*-computed.html` file in the category
+(`block-size-computed`, `inline-size-computed`, `max-/min-block-/inline-
+size-computed`, `border-block-/inline-{color,style,width}-computed`,
+`inset-block-inline-computed`, `inset-computed`, `margin-block-inline-
+computed`, `padding-block-inline-computed`), plus `getComputedStyle-listing.html`
+(all 30 subtests — the test iterates the full CSS Logical Properties list
+and asserts each name is present in the resolved computed style),
+`logicalprops-with-deferred-writing-mode.html` (fails on the very first
+checked property, `margin-block-start`), and `logicalprops-with-variables.html`
+(the `margin-inline-start`/`-end`/`margin-inline` computed-value checks —
+compounded by [BUG-493](BUG-493-OPEN.md), but the map gap alone is
+sufficient: even a synchronous flush wouldn't produce a value for a key
+that was never inserted). `.ini` under `tests/wpt/metadata/css/css-logical/`
+for all 19 files, `expected: FAIL` per subtest.

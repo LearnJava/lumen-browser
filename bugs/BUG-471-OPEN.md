@@ -70,3 +70,12 @@ end of stylesheet" does `document.getElementById(id).sheet.cssRules[0]` —
 same failure, `<style>`'s `.sheet` property. `.ini` for both files cites
 BUG-471 for these specific subtests (each file's remaining subtests are
 [BUG-484](BUG-484-OPEN.md) instead — see that bug's own extension).
+
+**WPT-RUN-3 срез 12 (`css/css-logical`, 2026-08-02):** `logicalprops-quirklength.html`
+does `document.styleSheets[0].cssRules[0]` at the top of its
+`isValidDeclaration` helper, called from every one of its 10 subtests —
+`document.styleSheets` is `undefined`, so `[0]` throws `Cannot read
+properties of undefined (reading '0')` on the first access, before the
+helper's own logic (mutate `cssRule.style`, check `.length`) ever runs.
+`.ini`: `tests/wpt/metadata/css/css-logical/logicalprops-quirklength.html.ini`
+(`expected: FAIL` per subtest).
