@@ -96,7 +96,90 @@ stacking-деревом») невозможно сформулировать б�
 
 ---
 
-## DEVX-7: provenance в display list (L, P1)
+## DEVX-7: provenance в display list (L, P1) — ЗАКРЫТ (2026-08-02)
+
+**Итог (P1, 2026-08-02):** все 4 пункта состава закрыты. Пункты 1–3 —
+`BoxOrigin`/`BoxRole` в `lumen-layout` (`box_tree.rs`), заполнены во всех
+продакшн- и тестовых конструкторах `LayoutBox` по всему workspace (box_tree.rs,
+incremental.rs, mathml.rs, ruby.rs, shell/main.rs, shell/forms.rs,
+shell/animation_scheduler.rs + тестовые фикстуры anchor.rs/masonry.rs/table.rs/
+text_iter.rs/selection.rs/scroll_timeline.rs), сентинел `NodeId::from_index(0)`
+для «нет DOM-происхождения» убран (заменён на `origin.node: None`) на всех трёх
+найденных production-сайтах (box_tree.rs, mathml.rs, ruby.rs — исходный аудит
+ADR-025 нашёл только box_tree.rs). `graft_geometry`'s identity-гейт учитывает
+`origin.role` (два анонимных бокса на одном узле больше не грейфтятся друг в
+друга). Уточнение по ADR-025 §1 (разрешено правкой без нового ADR): `BoxRole`
+не включает отдельный `TableFixup` — аудит `table.rs` не нашёл ни одного сайта
+синтеза анонимных table-боксов (`_ => {}` в `collect_table_structure` молча
+игнорирует orphan-контент вместо генерации fixup-бокса; это отдельная, не
+задокументированная ранее находка про сам layout, не про provenance — не
+заведена багом в этом заходе, т.к. вне скоупа DEVX-7). `PseudoKind` расширен
+`Before`/`After`/`FirstLine`/`Marker` (было только `None`/`FirstLetter`) —
+переиспользуется как `BoxRole::Pseudo(PseudoKind)` тег, `anon_inline_run` теперь
+принимает явный `role: BoxRole` параметр вместо одного жёстко зашитого
+значения. Гейт: `dump_golden.py` пустой дифф (6 страниц × 2 дампа, включая
+table/grid/flex/transform) — чисто аддитивное поле, ничем ещё не читается,
+полный графический прогон признан избыточным для этого коммита (обоснование в
+теле коммита).
+
+**Пункт 4 (закрыт P1, 2026-08-02):** `ProvenanceIndex`/`ProvenanceSpan` теперь
+живут в `crates/engine/paint/src/display_list.rs`, рядом с `DisplayList`.
+Разрешение двух открытых вопросов, оставленных предыдущим заходом:
+
+- **Тип-alias vs кортеж:** выбран вариант (б) — `build_display_list_ordered`/
+  `build_display_list_ordered_dpr` возвращают `(DisplayList, ProvenanceIndex)`
+  кортежем; `DisplayList` остался `pub type DisplayList = Vec<DisplayCommand>`,
+  не структурой. Блэст-радиус варианта (б) оказался у́же предполагавшегося: не
+  все ~34 файла, читающие тип `DisplayList` ниже по потоку, а только те, что
+  зовут `build_display_list_ordered`/`_dpr` напрямую — 7 сайтов
+  (`main.rs:6147`, `session.rs`×4, `winit_session.rs`×2) плюс тестовые
+  хелперы внутри `display_list.rs`. Все 7 сейчас берут `.0` и отбрасывают
+  provenance — `DEVX-10` (`explain_element`) станет первым реальным
+  потребителем. `build_display_list`/`_with_selection`/`_with_anim*` (простой
+  `walk`, не `fill_buckets`) и compositor-анимационный путь
+  (`ordered_with_anim_internal`) провенанс не строят — не читаются
+  интроспекцией, вариант с двумя формами возврата у соседних функций признан
+  приемлемым ради меньшего блэст-радиуса.
+
+- **`fill_buckets`'s четырёхфазная сборка:** решено переводом координат, а не
+  live-трекингом внутри рекурсии. `fill_buckets` пишет `RawSpan{sc, field,
+  range}`, где `range` — локальный диапазон ВНУТРИ ОДНОГО поля `ScBucket`
+  (`pre`/`root_bg`/`contents`/`post`) на момент вызова, ещё не слитого в
+  финальный список. `build_display_list_ordered_dpr` при каждом
+  `out.append(&mut bucket.X)` знает точный `offset = out.len()` — RawSpan'ы,
+  сгруппированные по `(sc, field)` в `HashMap`, переводятся в глобальные
+  индексы (`offset + local`) ровно в этот момент. Рекурсия ничего не знает о
+  финальном списке — только о своих локальных `Vec`.
+
+- **«Один бокс — не один диапазон» оказалось общее свойство, не только
+  SC-owner'ов.** Находка предыдущего захода (SC-владеющий бокс размазан по
+  `pre`/`root_bg`/`post` в разных фазах) обобщилась при реализации: **любой
+  бокс с потомками** распадается на lead-span (own-emission перед рекурсией в
+  children) и trail-span (own-emission после неё) — между ними в том же поле
+  (`contents` для non-SC, `post` для SC-owner) лежат команды детей. Это
+  свойство самой рекурсивной структуры `fill_buckets` (enter/exit на каждый
+  узел), а не частный случай четырёх ScBucket-фаз. `record_span` вызывается
+  на каждой такой границе; per-cell репассы бордеров (`collapse_border_repass`,
+  BUG-200) получают собственные span'ы с origin `cell.origin`, а не `b.origin`
+  таблицы — иначе бордер чужой ячейки приписывался бы таблице целиком.
+  Переустановленные inherited-clip команды (BUG-131) — документированное
+  над-приближение: физически новая команда атрибутируется текущему `b`, а не
+  исходному владельцу клипа (тот уже получил свой span выше по дереву).
+
+- **`clip_depth` — постфактум-проход, не счётчик в рекурсии.** Один линейный
+  проход по готовому `out` (считает вложенность `PushClipRect`/
+  `PushClipRoundedRect`/`PushClipPath` vs. `PopClip`, `PushScrollLayer`/
+  `PopScrollLayer` не считаются — так в самом ADR-025 §3) проще и дешевле,
+  чем протаскивать счётчик через рекурсию `fill_buckets`.
+
+DoD подтверждён тестом `provenance_distinguishes_element_anon_and_pseudo_boxes`
+(`display_list.rs`): `Element`-бокс и его собственный `AnonymousInlineRun`
+текстовый потомок делят один `NodeId`, но получают непересекающиеся span'ы с
+разным `BoxOrigin`; изолированный `::before` получает собственный
+`Pseudo`-span. `display_command_size_unchanged` пинит `size_of::<DisplayCommand>()
+== 192`. Гейт: `dump_golden.py` пустой дифф (12/12 дампов) — пункт 4
+display-list-нейтрален, дополнительный графический прогон не потребовался
+(эмиссия команд не менялась, только сопутствующие метаданные).
 
 Реализует §3 [ADR-025](../decisions/ADR-025-identity-propagation.md).
 

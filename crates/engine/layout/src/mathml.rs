@@ -15,7 +15,7 @@
 //! `math-depth` CSS properties wired — compact fractions scale their children, and
 //! script scale is derived from the cascade's `math-depth` when available.
 
-use crate::box_tree::{LayoutBox, BoxKind};
+use crate::box_tree::{LayoutBox, BoxKind, BoxOrigin, BoxRole};
 use crate::style::ComputedStyle;
 use lumen_core::geom::Rect;
 use lumen_dom::NodeId;
@@ -422,6 +422,7 @@ fn make_anonymous_box_with_style(style: std::sync::Arc<ComputedStyle>) -> Layout
         scroll_x: 0.0,
         scroll_y: 0.0,
         dirty: Default::default(),
+        origin: BoxOrigin { node: None, role: BoxRole::AnonymousBlock },
     }
 }
 

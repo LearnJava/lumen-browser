@@ -79,7 +79,7 @@ pub use box_tree::{
     collect_background_image_requests, collect_image_requests, is_open_details, layout, layout_measured,
     layout_measured_hyp, layout_measured_hyp_with_counters, layout_mutation_incremental,
     layout_streaming_incremental,
-    lay_out_incremental, BoxKind, FormControlKind, ImageRequest, InlineFrag, InlineSegment, LayoutBox,
+    lay_out_incremental, BoxKind, BoxOrigin, BoxRole, FormControlKind, ImageRequest, InlineFrag, InlineSegment, LayoutBox,
     PseudoKind, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline, SvgBaselineShift, ViewBox,
 };
 pub use incremental::{DirtyBits, mark_dirty, mark_dirty_set, clear_dirty, translate_subtree};

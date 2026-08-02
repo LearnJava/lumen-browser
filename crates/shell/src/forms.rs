@@ -2060,6 +2060,7 @@ mod tests {
             scroll_x: 0.0,
             scroll_y: 0.0,
             dirty: DirtyBits::CLEAN,
+            origin: lumen_layout::BoxOrigin { node: Some(node), role: lumen_layout::BoxRole::Element },
         }
     }
 

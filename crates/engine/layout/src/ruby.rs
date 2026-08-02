@@ -12,7 +12,7 @@
 //! [`RubyBox::from_style`]. Box-tree integration of `<ruby>` elements into the
 //! inline flow is deferred (this module has no pipeline callers yet).
 
-use crate::box_tree::{LayoutBox, BoxKind};
+use crate::box_tree::{LayoutBox, BoxKind, BoxOrigin, BoxRole};
 use crate::style::ComputedStyle;
 use lumen_dom::NodeId;
 use lumen_core::geom::Rect;
@@ -317,6 +317,7 @@ fn make_anonymous_box_with_style(style: std::sync::Arc<crate::style::ComputedSty
         scroll_x: 0.0,
         scroll_y: 0.0,
         dirty: Default::default(),
+        origin: BoxOrigin { node: None, role: BoxRole::AnonymousBlock },
     }
 }
 

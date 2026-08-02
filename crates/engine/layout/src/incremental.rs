@@ -242,6 +242,7 @@ fn moved_out_husk(b: &LayoutBox) -> LayoutBox {
         node: b.node,
         rect: b.rect,
         style: std::sync::Arc::clone(&b.style),
+        origin: b.origin,
         kind: crate::box_tree::BoxKind::Skip,
         children: Vec::new(),
         col_span: 1,
@@ -456,6 +457,11 @@ pub fn graft_geometry_with_cascade(
     // would: the subtree stays dirty and is laid out fresh.
     if prev.dirty.contains(DirtyBits::MOVED_OUT) || new.node != prev.node
         || !kind_layout_eq(&new.kind, &prev.kind)
+        // ADR-025 §2: `node` alone is not identity — two anonymous boxes on the
+        // same parent node (e.g. an AnonymousBlock wrapper vs. the Element box
+        // it wraps) must never be grafted against each other even though
+        // `node` and (today) `kind` can coincide.
+        || new.origin.role != prev.origin.role
     {
         bump_graft(|s| s.reject_identity += 1);
         // Node identity or box-kind payload differ → this position no longer
@@ -741,6 +747,7 @@ mod tests {
 
     fn leaf(id: u32, rect: Rect) -> LayoutBox {
         LayoutBox {
+            origin: crate::box_tree::BoxOrigin::default(),
             node: NodeId::from_index(id as usize),
             rect,
             style: std::sync::Arc::new(ComputedStyle::root()),
@@ -757,6 +764,7 @@ mod tests {
 
     fn block_with_children(id: u32, rect: Rect, children: Vec<LayoutBox>) -> LayoutBox {
         LayoutBox {
+            origin: crate::box_tree::BoxOrigin::default(),
             node: NodeId::from_index(id as usize),
             rect,
             style: std::sync::Arc::new(ComputedStyle::root()),
@@ -1851,6 +1859,7 @@ mod tests {
 
         let node = lumen_dom::NodeId::from_index(7);
         let husk = LayoutBox {
+            origin: crate::box_tree::BoxOrigin::default(),
             node,
             rect: Rect::new(1.0, 2.0, 3.0, 4.0),
             style: std::sync::Arc::new(ComputedStyle::root()),

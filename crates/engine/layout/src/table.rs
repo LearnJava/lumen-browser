@@ -612,6 +612,7 @@ mod tests {
     /// Build a minimal LayoutBox with the given kind for unit testing.
     fn make_box(kind: BoxKind) -> LayoutBox {
         LayoutBox {
+            origin: crate::box_tree::BoxOrigin::default(),
             node: lumen_dom::NodeId::from_index(0),
             rect: lumen_core::geom::Rect::ZERO,
             style: std::sync::Arc::new(crate::style::ComputedStyle::root()),

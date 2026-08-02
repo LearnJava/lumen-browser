@@ -4098,6 +4098,7 @@ impl LoadedPage {
                 row_span: 1,
                 svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
                 dirty: lumen_layout::DirtyBits::CLEAN,
+                origin: lumen_layout::BoxOrigin { node: None, role: lumen_layout::BoxRole::Placeholder },
             },
             font_registry: Arc::new(lumen_font::FontRegistry::new()),
             pending_web_fonts: Vec::new(),
@@ -6143,7 +6144,7 @@ enum ChromeModalKind {
 fn paint_ordered(layout: &lumen_layout::LayoutBox) -> DisplayList {
     let tree = StackingTree::build(layout);
     let order = PaintOrder::from_tree(&tree);
-    build_display_list_ordered(layout, &tree, &order)
+    build_display_list_ordered(layout, &tree, &order).0
 }
 
 /// Outcome of a single fullscreen-resize poll tick (BUG-167).
@@ -27259,6 +27260,7 @@ mod tests {
             scroll_x: 0.0,
             scroll_y: 0.0,
             dirty: Default::default(),
+            origin: lumen_layout::BoxOrigin { node: None, role: lumen_layout::BoxRole::Placeholder },
         };
         lumen_layout::set_interactive_state(Some(tab_a), None, None);
         let baseline = precompute_counters(&doc, &sheet, viewport, &flat, false);

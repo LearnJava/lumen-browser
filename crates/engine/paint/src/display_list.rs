@@ -13,11 +13,14 @@
 //! Renderer caching (glyph atlas, image cache, layer snapshots) lives in separate crates
 //! (lumen-font, lumen-image) with explicit eviction APIs.
 
+use std::collections::HashMap;
+use std::ops::Range;
+
 use lumen_core::geom::{Rect, Size};
 use lumen_dom::InputType;
 use lumen_layout::{
     box_can_own_stacking_context, creates_stacking_context, forward_box_transform,
-    transform_fns_to_matrix, CompositorAnimFrame, CompositorOverride,
+    transform_fns_to_matrix, BoxOrigin, CompositorAnimFrame, CompositorOverride,
     Appearance, BackfaceVisibility,
     BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderStyle, BoxKind, MaskClip, MaskComposite, MaskLayer,
     ClipPath, Color, ComputedStyle, ContainFlags, CssColor, Display, EmptyCells, FilterFn, FontOpticalSizing, FontStretch, FontStyle, FontWeight, ShapeValue,
@@ -1086,6 +1089,52 @@ impl DisplayCommand {
 }
 
 pub type DisplayList = Vec<DisplayCommand>;
+
+/// Provenance for a display list (ADR-025 §3): a side index, not a field on
+/// `DisplayCommand`. Answers "which layout box produced this command" without
+/// touching the ~40-variant enum rebuilt every frame.
+#[derive(Debug, Clone, Default)]
+pub struct ProvenanceIndex {
+    spans: Vec<ProvenanceSpan>,
+}
+
+impl ProvenanceIndex {
+    /// All spans, in emission order. Not sorted by range — a box's spans can
+    /// be interleaved with unrelated boxes' spans (see `ProvenanceSpan` docs).
+    pub fn spans(&self) -> &[ProvenanceSpan] {
+        &self.spans
+    }
+
+    /// Spans produced by exactly this origin — the primitive `explain_element`
+    /// (DEVX-10) answers "which commands did this node produce" with.
+    pub fn spans_for(&self, origin: BoxOrigin) -> impl Iterator<Item = &ProvenanceSpan> {
+        self.spans.iter().filter(move |s| s.origin == origin)
+    }
+}
+
+/// One contiguous run of commands produced by a single layout box's own
+/// paint (ADR-025 §3). A box with descendants owns *more than one* span in
+/// general: its own background/border is emitted before its children and its
+/// closing layer-ops after them, with the children's own spans sitting in
+/// between — `range` is contiguous, but "all of this box's spans" is not.
+/// This is the resolution of the `p1-introspection-track.md` DEVX-7 finding
+/// that `Range<usize>` cannot describe a *box*, only one of its spans.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProvenanceSpan {
+    /// Half-open range into the final command list.
+    pub range: Range<usize>,
+    pub origin: BoxOrigin,
+    /// Fragment index within the box — line box / column / page break.
+    /// MVP: always `0` (the engine does not fragment single spans yet beyond
+    /// the stacking-context bucket phases already captured by having several
+    /// `ProvenanceSpan`s per box).
+    pub fragment: u32,
+    /// Number of open rect/rounded-rect/path clips at this span's first
+    /// command — pairs with `PushClipRect`/`PushClipRoundedRect`/
+    /// `PushClipPath` vs. `PopClip`. Scroll layers (`PushScrollLayer`/
+    /// `PopScrollLayer`) are a separate stack and not counted here.
+    pub clip_depth: u16,
+}
 
 fn object_fit_name(f: ObjectFit) -> &'static str {
     match f {
@@ -3023,26 +3072,58 @@ pub fn build_display_list_ordered(
     root: &LayoutBox,
     tree: &StackingTree,
     order: &PaintOrder,
-) -> DisplayList {
+) -> (DisplayList, ProvenanceIndex) {
     build_display_list_ordered_dpr(root, tree, order, 1.0)
 }
 
 /// Like [`build_display_list_ordered`] but resolves `image-set()` background
 /// variants for the device pixel ratio `dpr` (CSS Images L4 §5). Shell passes
 /// the window scale factor; `build_display_list_ordered` defaults to `1.0`.
+///
+/// The returned [`ProvenanceIndex`] (ADR-025 §3, DEVX-7 п.4) is built by
+/// translating the `RawSpan`s `fill_buckets` recorded — local to one
+/// `ScBucket` field — into global indices at the exact point each field is
+/// flushed into `out` below. This keeps span-tracking decoupled from the
+/// four-phase bucket assembly: `fill_buckets` never sees the final list.
 pub fn build_display_list_ordered_dpr(
     root: &LayoutBox,
     tree: &StackingTree,
     order: &PaintOrder,
     dpr: f32,
-) -> DisplayList {
+) -> (DisplayList, ProvenanceIndex) {
     let n_sc = tree.contexts.len().max(1);
     let mut buckets: Vec<ScBucket> = vec![ScBucket::default(); n_sc];
     let mut next_sc_id: u32 = 1;
     let mut split = SplitTracker::disabled();
-    fill_buckets(root, StackingContextId::ROOT, &mut next_sc_id, &mut buckets, true, None, dpr, &[], &mut split);
+    let mut raw_spans: Vec<RawSpan> = Vec::new();
+    fill_buckets(root, StackingContextId::ROOT, &mut next_sc_id, &mut buckets, true, None, dpr, &[], &mut split, &mut raw_spans);
+
+    let mut spans_by_field: HashMap<(u32, BucketField), Vec<RawSpan>> = HashMap::new();
+    for rs in raw_spans {
+        spans_by_field.entry((rs.sc, rs.field)).or_default().push(rs);
+    }
 
     let mut out = Vec::new();
+    let mut final_spans: Vec<ProvenanceSpan> = Vec::new();
+    let mut flush = |field_vec: &mut Vec<DisplayCommand>,
+                      sc: u32,
+                      field: BucketField,
+                      out: &mut Vec<DisplayCommand>,
+                      final_spans: &mut Vec<ProvenanceSpan>| {
+        let offset = out.len();
+        out.append(field_vec);
+        if let Some(list) = spans_by_field.remove(&(sc, field)) {
+            for rs in list {
+                final_spans.push(ProvenanceSpan {
+                    range: (offset + rs.range.start)..(offset + rs.range.end),
+                    origin: rs.origin,
+                    fragment: rs.fragment,
+                    // Filled below by `annotate_clip_depth` once `out` is complete.
+                    clip_depth: 0,
+                });
+            }
+        }
+    };
     for (sc_id, phase) in &order.steps {
         let idx = sc_id.0 as usize;
         if idx >= buckets.len() {
@@ -3051,11 +3132,11 @@ pub fn build_display_list_ordered_dpr(
         let bucket = &mut buckets[idx];
         match phase {
             PaintPhase::RootBackground => {
-                out.append(&mut bucket.pre);
-                out.append(&mut bucket.root_bg);
+                flush(&mut bucket.pre, sc_id.0, BucketField::Pre, &mut out, &mut final_spans);
+                flush(&mut bucket.root_bg, sc_id.0, BucketField::RootBg, &mut out, &mut final_spans);
             }
             PaintPhase::InlineContent => {
-                out.append(&mut bucket.contents);
+                flush(&mut bucket.contents, sc_id.0, BucketField::Contents, &mut out, &mut final_spans);
                 // post (PopTransform / PopOpacity / etc.) is now in CloseLayer —
                 // emitted AFTER all child SCs so nested transforms compose correctly
                 // (BUG-139). Do NOT move post back here.
@@ -3063,7 +3144,7 @@ pub fn build_display_list_ordered_dpr(
             // CloseLayer is emitted last in paint_sc, after all child SCs, so the
             // parent's Pop-commands wrap the children's Push-commands correctly.
             PaintPhase::CloseLayer => {
-                out.append(&mut bucket.post);
+                flush(&mut bucket.post, sc_id.0, BucketField::Post, &mut out, &mut final_spans);
             }
             // Phase 0: BlockBackgrounds / Floats merged into InlineContent;
             // marker-фазы (NegativeZ / PositionedAndZAuto / PositiveZ) в
@@ -3072,7 +3153,33 @@ pub fn build_display_list_ordered_dpr(
             _ => {}
         }
     }
-    out
+    annotate_clip_depth(&out, &mut final_spans);
+    (out, ProvenanceIndex { spans: final_spans })
+}
+
+/// Post-processes `spans` in place with `clip_depth` (ADR-025 §3): the number
+/// of open rect/rounded-rect/path clips at each span's first command. A
+/// single linear scan over the finished list is simpler and cheaper than
+/// threading a running counter through `fill_buckets`'s recursion, and gives
+/// the same answer since clip nesting is a property of the final painting
+/// order, not of the bucket-assembly process that produced it.
+fn annotate_clip_depth(out: &[DisplayCommand], spans: &mut [ProvenanceSpan]) {
+    let mut depth_at: Vec<u16> = Vec::with_capacity(out.len() + 1);
+    let mut depth: i32 = 0;
+    for cmd in out {
+        depth_at.push(depth.max(0) as u16);
+        match cmd {
+            DisplayCommand::PushClipRect { .. }
+            | DisplayCommand::PushClipRoundedRect { .. }
+            | DisplayCommand::PushClipPath { .. } => depth += 1,
+            DisplayCommand::PopClip => depth -= 1,
+            _ => {}
+        }
+    }
+    depth_at.push(depth.max(0) as u16);
+    for s in spans.iter_mut() {
+        s.clip_depth = depth_at.get(s.range.start).copied().unwrap_or(0);
+    }
 }
 
 /// Like [`build_display_list_ordered`] but applies compositor animation overrides per node.
@@ -3168,7 +3275,9 @@ fn ordered_with_anim_internal(
     let mut next_sc_id: u32 = 1;
     let mut split = SplitTracker::disabled();
     split.enabled = track_split && anim.is_some_and(|a| !a.is_empty());
-    fill_buckets(root, StackingContextId::ROOT, &mut next_sc_id, &mut buckets, true, anim, dpr, &[], &mut split);
+    // Compositor-animation path does not consume provenance (only the
+    // introspection-facing `build_display_list_ordered*` does) — discard.
+    fill_buckets(root, StackingContextId::ROOT, &mut next_sc_id, &mut buckets, true, anim, dpr, &[], &mut split, &mut Vec::new());
 
     let animated_scs: std::collections::HashSet<u32> =
         split.animated_scs.iter().copied().collect();
@@ -3395,6 +3504,47 @@ struct ScBucket {
     /// `InlineContent`. См. Phase 0 ограничение в docstring
     /// `build_display_list_ordered`.
     post: Vec<DisplayCommand>,
+}
+
+/// Which [`ScBucket`] field a [`RawSpan`] was recorded against. `fill_buckets`
+/// only ever appends to one field at a time per call, so this plus the SC id
+/// is enough to find the field again when `build_display_list_ordered_dpr`
+/// flushes buckets into the final command list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum BucketField {
+    Pre,
+    RootBg,
+    Contents,
+    Post,
+}
+
+/// A [`ProvenanceSpan`] before translation to global command-list indices.
+/// `range` is local to one `ScBucket` field (`fill_buckets` only ever sees
+/// that field's own, not-yet-flushed `Vec`); `build_display_list_ordered_dpr`
+/// offsets it by that field's position in the final list once flushed.
+struct RawSpan {
+    sc: u32,
+    field: BucketField,
+    range: Range<usize>,
+    origin: BoxOrigin,
+    fragment: u32,
+}
+
+/// Records `[start, end)` of `field` as one `RawSpan` for `origin`, unless
+/// empty (a box that emitted nothing this call — e.g. `display:none` subtree,
+/// zero-size overflow clip — gets no span rather than a degenerate one).
+fn record_span(
+    spans: &mut Vec<RawSpan>,
+    sc: u32,
+    field: BucketField,
+    start: usize,
+    end: usize,
+    origin: BoxOrigin,
+    fragment: u32,
+) {
+    if end > start {
+        spans.push(RawSpan { sc, field, range: start..end, origin, fragment });
+    }
 }
 
 /// CSS Compositing & Blending L1 §5: маппинг style-уровневого `MixBlendMode`
@@ -4216,6 +4366,7 @@ fn fill_buckets(
     dpr: f32,
     inherited_clips: &[DisplayCommand],
     split: &mut SplitTracker,
+    raw_spans: &mut Vec<RawSpan>,
 ) {
     let ov = anim.and_then(|a| a.get(b.node));
     let ops = box_layer_ops(b, ov);
@@ -4233,16 +4384,30 @@ fn fill_buckets(
         }
         let bucket = &mut buckets[current_sc.0 as usize];
         // BUG-131: переустановить клипы non-SC предков как внешний слой SC.
+        // Note (ADR-025): re-established clip commands are physically new
+        // `DisplayCommand`s, but conceptually belong to whichever ancestor
+        // established them first (already spanned there) — attributing this
+        // copy to `b` too is a documented over-approximation, not a lie: `b`
+        // genuinely re-emits them as its own layer wrapper.
+        let pre_start = bucket.pre.len();
         for clip in inherited_clips {
             bucket.pre.push(clip.clone());
         }
         bucket.pre.extend(ops.pre);
+        let pre_end = bucket.pre.len();
+        record_span(raw_spans, current_sc.0, BucketField::Pre, pre_start, pre_end, b.origin, 0);
+
+        let bg_start = bucket.root_bg.len();
         emit_box_self(b, &mut bucket.root_bg, dpr, None, ov);
         // Overflow-клип — после собственных bg/border (они не клиппятся
         // своим overflow, BUG-123), но до contents с детьми.
         bucket.root_bg.extend(ops.overflow_pre);
+        let bg_end = bucket.root_bg.len();
+        record_span(raw_spans, current_sc.0, BucketField::RootBg, bg_start, bg_end, b.origin, 0);
+
         // `post` эмитится в фазе InlineContent после descendants — заполним
         // его сейчас, чтобы не повторно вычислять триггеры.
+        let post_start = bucket.post.len();
         bucket.post.extend(ops.overflow_post);
         bucket.post.extend(ops.post);
         // PopClip для переустановленных клипов — в LIFO порядке, после
@@ -4250,6 +4415,8 @@ fn fill_buckets(
         for clip in inherited_clips.iter().rev() {
             bucket.post.push(clip_pop_for(clip));
         }
+        let post_end = bucket.post.len();
+        record_span(raw_spans, current_sc.0, BucketField::Post, post_start, post_end, b.origin, 0);
 
         // Этот SC становится новым clip-anchor: его собственный клип +
         // переустановленные inherited-клипы охватывают дочерние SC через
@@ -4261,9 +4428,9 @@ fn fill_buckets(
             if child_creates_sc {
                 let id = StackingContextId(*next_sc_id);
                 *next_sc_id += 1;
-                fill_buckets(child, id, next_sc_id, buckets, true, anim, dpr, &[], split);
+                fill_buckets(child, id, next_sc_id, buckets, true, anim, dpr, &[], split, raw_spans);
             } else {
-                fill_buckets(child, current_sc, next_sc_id, buckets, false, anim, dpr, &[], split);
+                fill_buckets(child, current_sc, next_sc_id, buckets, false, anim, dpr, &[], split, raw_spans);
             }
         }
         // BUG-200: redraw collapsed cell borders on top of all cell backgrounds —
@@ -4273,7 +4440,10 @@ fn fill_buckets(
             collect_table_cells(b, &mut cells);
             let bucket = &mut buckets[current_sc.0 as usize];
             for cell in &cells {
+                let start = bucket.post.len();
                 emit_table_cell_border(cell, &mut bucket.post);
+                let end = bucket.post.len();
+                record_span(raw_spans, current_sc.0, BucketField::Post, start, end, cell.origin, 0);
             }
         }
     } else {
@@ -4288,10 +4458,13 @@ fn fill_buckets(
         let split_span_start = (split.enabled && ov.is_some())
             .then(|| (buckets[current_sc.0 as usize].contents.len(), split.sc_entries));
         let bucket = &mut buckets[current_sc.0 as usize];
+        let lead_start = bucket.contents.len();
         bucket.contents.extend(ops.pre);
         emit_box_self(b, &mut bucket.contents, dpr, None, ov);
         // Overflow-клип после собственных bg/border (BUG-123).
         bucket.contents.extend(ops.overflow_pre.iter().cloned());
+        let lead_end = bucket.contents.len();
+        record_span(raw_spans, current_sc.0, BucketField::Contents, lead_start, lead_end, b.origin, 0);
 
         // BUG-131: собственный rect-клип этого non-SC box-а добавляется к
         // цепочке для дочерних SC (его inline push/pop их не охватывает).
@@ -4339,9 +4512,9 @@ fn fill_buckets(
                     };
                 let id = StackingContextId(*next_sc_id);
                 *next_sc_id += 1;
-                fill_buckets(child, id, next_sc_id, buckets, true, anim, dpr, &child_layers, split);
+                fill_buckets(child, id, next_sc_id, buckets, true, anim, dpr, &child_layers, split, raw_spans);
             } else {
-                fill_buckets(child, current_sc, next_sc_id, buckets, false, anim, dpr, &child_clips, split);
+                fill_buckets(child, current_sc, next_sc_id, buckets, false, anim, dpr, &child_clips, split, raw_spans);
             }
         }
 
@@ -4361,11 +4534,17 @@ fn fill_buckets(
             let mut cells: Vec<&LayoutBox> = Vec::new();
             collect_table_cells(b, &mut cells);
             for cell in &cells {
+                let start = bucket.contents.len();
                 emit_table_cell_border(cell, &mut bucket.contents);
+                let end = bucket.contents.len();
+                record_span(raw_spans, current_sc.0, BucketField::Contents, start, end, cell.origin, 0);
             }
         }
+        let trail_start = bucket.contents.len();
         bucket.contents.extend(ops.overflow_post);
         bucket.contents.extend(ops.post);
+        let trail_end = bucket.contents.len();
+        record_span(raw_spans, current_sc.0, BucketField::Contents, trail_start, trail_end, b.origin, 0);
         if let Some((start, sc_before)) = split_span_start {
             if split.sc_entries != sc_before {
                 split.invalid = true;
@@ -12122,7 +12301,7 @@ mod tests {
         );
         let stacking_tree = lumen_layout::StackingTree::build(&tree);
         let order = lumen_layout::PaintOrder::from_tree(&stacking_tree);
-        build_display_list_ordered(&tree, &stacking_tree, &order)
+        build_display_list_ordered(&tree, &stacking_tree, &order).0
     }
 
     // ── patch_scroll_layer: эквивалентность полной пересборке ─────────────
@@ -12136,7 +12315,7 @@ mod tests {
     fn ordered_of(tree: &lumen_layout::LayoutBox) -> DisplayList {
         let stacking_tree = lumen_layout::StackingTree::build(tree);
         let order = lumen_layout::PaintOrder::from_tree(&stacking_tree);
-        build_display_list_ordered(tree, &stacking_tree, &order)
+        build_display_list_ordered(tree, &stacking_tree, &order).0
     }
 
     fn assert_dl_eq(a: &[DisplayCommand], b: &[DisplayCommand]) {
@@ -12459,7 +12638,7 @@ mod tests {
         let dom = build_display_list(&tree);
         let stacking_tree = lumen_layout::StackingTree::build(&tree);
         let order = lumen_layout::PaintOrder::from_tree(&stacking_tree);
-        let ordered = build_display_list_ordered(&tree, &stacking_tree, &order);
+        let ordered = build_display_list_ordered(&tree, &stacking_tree, &order).0;
         assert_eq!(dom, ordered);
     }
 
@@ -13050,12 +13229,106 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let tree =
             lumen_layout::layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8);
-        let dl = build_display_list_ordered(
+        let (dl, provenance) = build_display_list_ordered(
             &tree,
             &lumen_layout::StackingTree { contexts: vec![] },
             &lumen_layout::PaintOrder::default(),
         );
         assert!(dl.is_empty(), "пустой PaintOrder → пустой display list");
+        assert!(provenance.spans().is_empty(), "пустой display list → пустой provenance");
+    }
+
+    // ───────── DEVX-7 п.4: ProvenanceIndex ─────────
+
+    /// `DisplayCommand` must not grow — `ProvenanceIndex` is a side index
+    /// specifically so the ~40-variant, rebuilt-every-frame enum stays
+    /// untouched (ADR-025 §3, DEVX-7 DoD).
+    #[test]
+    fn display_command_size_unchanged() {
+        // Captured baseline, not a magic number chosen to make the test pass:
+        // this is `size_of::<DisplayCommand>()` on `main` before DEVX-7 п.4.
+        // If this fails, a `DisplayCommand` variant grew — provenance must
+        // stay a side index, not a field, so look there first.
+        assert_eq!(std::mem::size_of::<DisplayCommand>(), 192);
+    }
+
+    fn find_box<'a>(b: &'a LayoutBox, pred: &dyn Fn(&LayoutBox) -> bool) -> Option<&'a LayoutBox> {
+        if pred(b) {
+            return Some(b);
+        }
+        b.children.iter().find_map(|c| find_box(c, pred))
+    }
+
+    /// ADR-025 §1: identity is `(node, role)`, never `node` alone. Builds a
+    /// page where two DOM elements each own a background (unambiguous
+    /// `Element` origins), one element has only a `::before` (isolated
+    /// `Pseudo` box, CSS default `display: inline` for `::before` folds it
+    /// into a sibling `InlineRun` when one already exists — this element has
+    /// none, so it does not), and the other has plain text (an
+    /// `AnonymousInlineRun` box sharing the element's `NodeId` but not its
+    /// role). `explain_element`/`ProvenanceIndex::spans_for` must not
+    /// conflate any of these four origins.
+    #[test]
+    fn provenance_distinguishes_element_anon_and_pseudo_boxes() {
+        let html = r#"
+            <div id="outer" style="background:#008000"></div>
+            <div id="inner" style="background:#ff0000">plain text</div>
+        "#;
+        let css = r#"#outer::before { content: "*"; color: #0000ff; }"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let tree = lumen_layout::layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8);
+        let stacking_tree = lumen_layout::StackingTree::build(&tree);
+        let order = lumen_layout::PaintOrder::from_tree(&stacking_tree);
+        let (dl, provenance) = build_display_list_ordered(&tree, &stacking_tree, &order);
+
+        let green = Color { r: 0, g: 0x80, b: 0, a: 255 };
+        let red = Color { r: 0xff, g: 0, b: 0, a: 255 };
+        let bg = |c: Color| move |b: &LayoutBox| b.style.background_color.and_then(|x| x.to_color_opt()) == Some(c);
+        let outer = find_box(&tree, &bg(green)).expect("outer div must have its own box");
+        let inner = find_box(&tree, &bg(red)).expect("inner div must have its own box");
+        let pseudo_before = find_box(&tree, &|b| matches!(b.origin.role, lumen_layout::BoxRole::Pseudo(_)))
+            .expect("::before must produce an isolated Pseudo box (outer has no other inline content)");
+        let anon_text = find_box(&tree, &|b| {
+            b.origin.node == Some(inner.node) && matches!(b.origin.role, lumen_layout::BoxRole::AnonymousInlineRun)
+        })
+        .expect("plain text in a block div must produce an AnonymousInlineRun box");
+
+        // Same NodeId, different role — the case ADR-025 §1 exists for.
+        assert_eq!(inner.origin.node, anon_text.origin.node);
+        assert_ne!(inner.origin, anon_text.origin);
+
+        for (label, origin) in [
+            ("outer element", outer.origin),
+            ("inner element", inner.origin),
+            ("::before pseudo", pseudo_before.origin),
+            ("anonymous inline run", anon_text.origin),
+        ] {
+            let spans: Vec<_> = provenance.spans_for(origin).collect();
+            assert!(!spans.is_empty(), "{label} must own at least one span");
+            for s in &spans {
+                assert!(s.range.start < s.range.end, "{label}: span must not be empty");
+                assert!(s.range.end <= dl.len(), "{label}: span must index into the emitted list");
+            }
+        }
+
+        // No two of the four distinct origins may share a span (ADR-025 §4:
+        // "every emitted command falls inside exactly one span").
+        let origins = [outer.origin, inner.origin, pseudo_before.origin, anon_text.origin];
+        for i in 0..origins.len() {
+            for j in (i + 1)..origins.len() {
+                let a: Vec<_> = provenance.spans_for(origins[i]).map(|s| s.range.clone()).collect();
+                let b: Vec<_> = provenance.spans_for(origins[j]).map(|s| s.range.clone()).collect();
+                for ra in &a {
+                    for rb in &b {
+                        assert!(
+                            ra.end <= rb.start || rb.end <= ra.start,
+                            "spans of distinct origins must not overlap: {ra:?} vs {rb:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     // ───────── outline rendering ─────────
@@ -14592,7 +14865,7 @@ mod tests {
         let order = lumen_layout::PaintOrder::from_tree(&stacking_tree);
 
         // Base ordered DL paints the green background.
-        let base = build_display_list_ordered(&tree, &stacking_tree, &order);
+        let base = build_display_list_ordered(&tree, &stacking_tree, &order).0;
         assert!(
             base.iter().any(|c| matches!(c,
                 DisplayCommand::FillRect { color, .. } | DisplayCommand::FillRoundedRect { color, .. }
@@ -15695,7 +15968,7 @@ mod tests {
         let tree = lumen_layout::layout(&doc, &sheet, Size::new(800.0, 600.0));
         let st = StackingTree::build(&tree);
         let order = PaintOrder::from_tree(&st);
-        let dl_ordered = build_display_list_ordered(&tree, &st, &order);
+        let dl_ordered = build_display_list_ordered(&tree, &st, &order).0;
         assert_baked_luma_stops(&dl_ordered, "build_display_list_ordered");
     }
 
@@ -16588,7 +16861,7 @@ mod tests {
         assert!(set_first_bg_image_set(&mut tree, "image-set(url(a.png) 1x, url(b.png) 2x)"));
         let stree = lumen_layout::StackingTree::build(&tree);
         let order = PaintOrder::from_tree(&stree);
-        let dl = build_display_list_ordered_dpr(&tree, &stree, &order, 2.0);
+        let dl = build_display_list_ordered_dpr(&tree, &stree, &order, 2.0).0;
         let srcs: Vec<&str> = dl
             .iter()
             .filter_map(|c| match c {

@@ -183,7 +183,7 @@ impl WinitSession {
 
         let sc_tree = StackingTree::build(&layout_root);
         let sc_order = PaintOrder::from_tree(&sc_tree);
-        let display_list = lumen_paint::build_display_list_ordered(&layout_root, &sc_tree, &sc_order);
+        let display_list = lumen_paint::build_display_list_ordered(&layout_root, &sc_tree, &sc_order).0;
 
         // Build property trees (PH1-7) and commit to the threaded compositor.
         let property_trees = PropertyTrees::build(&layout_root);
@@ -720,7 +720,7 @@ impl BrowserSession for WinitSession {
 
         let sc_tree = StackingTree::build(&state.layout_root);
         let sc_order = PaintOrder::from_tree(&sc_tree);
-        let display_list = lumen_paint::build_display_list_ordered(&state.layout_root, &sc_tree, &sc_order);
+        let display_list = lumen_paint::build_display_list_ordered(&state.layout_root, &sc_tree, &sc_order).0;
         let width = self.viewport.width as u32;
         let height = self.viewport.height as u32;
         let mut renderer = lumen_paint::Renderer::new_headless(INTER_FONT.to_vec(), width, height, lumen_core::ColorSpace::Srgb)
