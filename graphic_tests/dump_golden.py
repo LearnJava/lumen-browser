@@ -11,13 +11,18 @@
 сверяет текстовый вывод с закоммиченными эталонами в
 `graphic_tests/dump-golden/`. Ловит регрессии геометрии/порядка отрисовки/
 z-index стабильно и кросс-платформенно — без GPU, без Edge, без ffmpeg.
+
+При несовпадении (DEVX-13) дифф структурный, а не построчный: называет узел
+дерева (тип бокса/команды + путь по индексам среди соседей) и изменившееся
+свойство, вместо «изменилась строка №417» — см. `structural_diff.py`.
 """
 from __future__ import annotations
 import argparse
-import difflib
 import os
 import subprocess
 import sys
+
+from structural_diff import structural_diff
 
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -152,14 +157,7 @@ def main() -> int:
                 expected = f.read()
 
             if actual != expected:
-                diff = ''.join(
-                    difflib.unified_diff(
-                        expected.splitlines(keepends=True),
-                        actual.splitlines(keepends=True),
-                        fromfile='expected',
-                        tofile='actual',
-                    )
-                )
+                diff = structural_diff(expected, actual, kind)
                 print(f'{label}: FAIL\n{diff}')
                 mismatches.append(label)
             else:
