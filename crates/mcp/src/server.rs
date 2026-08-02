@@ -17,12 +17,28 @@ pub struct McpServer<S: BrowserSession, T: Transport> {
     session: S,
     /// Транспортный канал (stdio, socket и т.д.).
     transport: T,
+    /// Токен, обязательный для `initialize` (ADR-024 §Access model, DEVX-15).
+    /// `None` — аутентификация не требуется (stdio-режим: недоступен другим
+    /// локальным процессам, см. модульный doc-комментарий [`crate`]).
+    required_token: Option<String>,
+    /// `true`, если аутентификация не требуется, либо `initialize` уже прошёл
+    /// с верным токеном. Пока `false`, любой метод кроме `initialize`
+    /// отклоняется.
+    authenticated: bool,
 }
 
 impl<S: BrowserSession, T: Transport> McpServer<S, T> {
-    /// Создать новый MCP сервер.
+    /// Создать новый MCP сервер без обязательной аутентификации (stdio-режим
+    /// или тесты — недоступен другим локальным процессам).
     pub fn new(session: S, transport: T) -> Self {
-        Self { session, transport }
+        Self { session, transport, required_token: None, authenticated: true }
+    }
+
+    /// Создать MCP сервер, требующий верный токен в параметрах `initialize`
+    /// (ADR-024 §Access model, DEVX-15) — используется на всех TCP-портах
+    /// (`--mcp-port`/`--mcp-live-port`), доступных любому локальному процессу.
+    pub fn with_token(session: S, transport: T, token: String) -> Self {
+        Self { session, transport, required_token: Some(token), authenticated: false }
     }
 
     /// Основной цикл сервера: читать запросы и писать ответы.
@@ -50,9 +66,17 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
     fn handle_request(&mut self, req: &McpRequest) -> McpResponse {
         let id = req.id.clone().unwrap_or(json!(null));
 
+        if !self.authenticated && req.method != "initialize" {
+            return McpResponse::err(
+                id,
+                -32001,
+                "Not authenticated: call `initialize` with a valid token first",
+            );
+        }
+
         match req.method.as_str() {
             // ── Инициализация ──
-            "initialize" => self.on_initialize(&id),
+            "initialize" => self.on_initialize(&id, &req.params),
             "resources/list" => self.on_resources_list(&id),
             "tools/list" => self.on_tools_list(&id),
 
@@ -66,8 +90,18 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
         }
     }
 
-    /// Инициализация сервера.
-    fn on_initialize(&self, id: &Value) -> McpResponse {
+    /// Инициализация сервера. Если сервер создан через [`McpServer::with_token`],
+    /// проверяет `params.token` перед тем, как отметить соединение
+    /// аутентифицированным.
+    fn on_initialize(&mut self, id: &Value, params: &Value) -> McpResponse {
+        if let Some(expected) = &self.required_token {
+            let provided = params.get("token").and_then(|v| v.as_str()).unwrap_or("");
+            if !lumen_core::auth::tokens_match(expected, provided) {
+                return McpResponse::err(id.clone(), -32001, "Invalid or missing token");
+            }
+        }
+        self.authenticated = true;
+
         let response = json!({
             "serverVersion": "0.1.0",
             "protocolVersion": "2024-11-05",
@@ -1327,5 +1361,59 @@ mod tests {
         let resp = run_one(&mut server, &req);
         assert!(resp.error.is_some());
         assert_eq!(resp.error.unwrap().code, -32601);
+    }
+
+    // ── ADR-024 §Access model (DEVX-15): token auth ──
+
+    #[test]
+    fn with_token_rejects_calls_before_initialize() {
+        let mut server = McpServer::with_token(MockSession, VecTransport::new(), "secret".to_string());
+        let req = make_request("tools/list", serde_json::json!({}));
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_some());
+        assert_eq!(resp.error.unwrap().code, -32001);
+    }
+
+    #[test]
+    fn with_token_rejects_initialize_with_wrong_token() {
+        let mut server = McpServer::with_token(MockSession, VecTransport::new(), "secret".to_string());
+        let req = make_request("initialize", serde_json::json!({ "token": "wrong" }));
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_some());
+        assert_eq!(resp.error.unwrap().code, -32001);
+
+        // Still unauthenticated afterwards — a failed attempt must not unlock the connection.
+        let req2 = make_request("tools/list", serde_json::json!({}));
+        let resp2 = run_one(&mut server, &req2);
+        assert!(resp2.error.is_some());
+    }
+
+    #[test]
+    fn with_token_rejects_initialize_with_missing_token() {
+        let mut server = McpServer::with_token(MockSession, VecTransport::new(), "secret".to_string());
+        let req = make_request("initialize", serde_json::json!({}));
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_some());
+        assert_eq!(resp.error.unwrap().code, -32001);
+    }
+
+    #[test]
+    fn with_token_accepts_initialize_with_correct_token_and_unlocks() {
+        let mut server = McpServer::with_token(MockSession, VecTransport::new(), "secret".to_string());
+        let req = make_request("initialize", serde_json::json!({ "token": "secret" }));
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_none());
+
+        let req2 = make_request("tools/list", serde_json::json!({}));
+        let resp2 = run_one(&mut server, &req2);
+        assert!(resp2.error.is_none());
+    }
+
+    #[test]
+    fn new_without_token_never_gates_requests() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request("tools/list", serde_json::json!({}));
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_none());
     }
 }

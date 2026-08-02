@@ -4,6 +4,7 @@
 //! Lumen зависят от него; он не зависит ни от одного из них. Сюда кладём
 //! только то, что нужно более чем одному модулю.
 
+pub mod auth;
 pub mod capability;
 pub mod color;
 pub mod crash;
@@ -28,6 +29,7 @@ pub mod trace;
 pub mod url;
 pub mod web_storage;
 
+pub use auth::{generate_token, tokens_match};
 pub use capability::{Capability, CapabilityToken};
 pub use color::{ColorSpace, detect_color_space_from_icc};
 pub use icc::{DataColorSpace, IccProfile, ProfileClass, ToneCurve, XyzNumber};

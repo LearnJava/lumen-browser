@@ -616,28 +616,37 @@ def read_png(path: str) -> tuple[int, int, int, bytes]:
 # становится TCP-сервером таб-команд. Кадр кодируется тем же CPU-пайплайном,
 # что `--screenshot` — окно/wgpu/ffmpeg-grab не нужны, результат воспроизводим.
 #
+# ADR-024 §Access model (DEVX-15): шелл также печатает `LUMEN_IPC_TOKEN=<token>`
+# — первое сообщение соединения ДОЛЖНО быть `Auth{token}`, иначе сервер
+# отвечает `AuthErr` на любую команду. Нет escape hatch — читаем и шлём токен
+# по-настоящему, как и любой другой потребитель этих портов.
+#
 # Протокол (см. crates/ipc/src/lib.rs): каждое сообщение —
 #   [u32 LE body_len][body], body — bincode payload:
 #     enum variant tag = u32 LE; длины String/Vec = u64 LE; u32-поля = 4 байта LE.
 #
 # Индексы вариантов в объявлении enum (важно — соответствуют lumen_ipc):
-#   IpcRequest:  0 Fetch · 1 Ping · 2 Shutdown · 3 CreateTab · 4 CloseTab ·
-#                5 NavigateTab · 6 Screenshot
-#   IpcResponse: 0 FetchOk · 1 FetchErr · 2 Pong · 3 Shutdown · 4 TabCreated ·
-#                5 TabClosed · 6 Navigated · 7 Screenshot · 8 TabError
+#   IpcRequest:  0 Fetch · 1 Ping · 2 Shutdown · 3 Auth · 4 CreateTab ·
+#                5 CloseTab · 6 NavigateTab · 7 Screenshot
+#   IpcResponse: 0 FetchOk · 1 FetchErr · 2 Pong · 3 Shutdown · 4 AuthOk ·
+#                5 AuthErr · 6 TabCreated · 7 TabClosed · 8 Navigated ·
+#                9 Screenshot · 10 TabError
 
 _REQ_SHUTDOWN     = 2
-_REQ_CREATE_TAB   = 3
-_REQ_CLOSE_TAB    = 4
-_REQ_NAVIGATE_TAB = 5
-_REQ_SCREENSHOT   = 6
+_REQ_AUTH         = 3
+_REQ_CREATE_TAB   = 4
+_REQ_CLOSE_TAB    = 5
+_REQ_NAVIGATE_TAB = 6
+_REQ_SCREENSHOT   = 7
 
 _RESP_SHUTDOWN    = 3
-_RESP_TAB_CREATED = 4
-_RESP_TAB_CLOSED  = 5
-_RESP_NAVIGATED   = 6
-_RESP_SCREENSHOT  = 7
-_RESP_TAB_ERROR   = 8
+_RESP_AUTH_OK     = 4
+_RESP_AUTH_ERR    = 5
+_RESP_TAB_CREATED = 6
+_RESP_TAB_CLOSED  = 7
+_RESP_NAVIGATED   = 8
+_RESP_SCREENSHOT  = 9
+_RESP_TAB_ERROR   = 10
 
 
 class IpcError(Exception):
@@ -694,6 +703,7 @@ class LumenIpcClient:
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
         )
         port: int | None = None
+        token: str | None = None
         assert self.proc.stdout is not None
         for _ in range(400):
             line = self.proc.stdout.readline()
@@ -705,14 +715,23 @@ class LumenIpcClient:
                     port = int(line.split('=', 1)[1])
                 except ValueError:
                     port = None
+            elif line.startswith('LUMEN_IPC_TOKEN='):
+                token = line.split('=', 1)[1]
+            if port is not None and token is not None:
                 break
-        if port is None:
+        if port is None or token is None:
             self.proc.kill()
-            raise IpcError('lumen --ipc-server не напечатал LUMEN_IPC_PORT')
+            raise IpcError('lumen --ipc-server не напечатал LUMEN_IPC_PORT/LUMEN_IPC_TOKEN')
         # Дренируем остаток stdout, иначе рендер-логи переполнят пайп → блок шелла.
         threading.Thread(target=self._drain_stdout, daemon=True).start()
         self.sock = socket.create_connection(('127.0.0.1', port), timeout=30)
         self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        # ADR-024 §Access model (DEVX-15): mandatory first message.
+        self._send(_u32(_REQ_AUTH) + _bstr(token))
+        c = self._recv()
+        tag = c.u32()
+        if tag != _RESP_AUTH_OK:
+            raise IpcError(f'ожидался AuthOk, получен вариант {tag}')
 
     def _drain_stdout(self) -> None:
         out = self.proc.stdout
@@ -838,15 +857,49 @@ class LiveWindowClient:
         # forces a 1280x800 window; `--viewport` (added alongside) overrides that
         # back to the pipeline's calibrated 1024x720 so TEST-00's magenta-marker
         # crop offset stays valid for the rest of the --live run.
+        #
+        # stderr is piped (not DEVNULL) so we can read the ADR-024 §Access
+        # model (DEVX-15) token the process prints there — mandatory, no
+        # escape hatch. `_read_token` drains the rest in a background thread
+        # afterward so unrelated stderr output cannot block the child.
         self.proc = subprocess.Popen(
             [lumen_path, '--mcp-live-port', str(port), '--no-scrollbar',
              '--deterministic', '--viewport', f'{VIEWPORT_W}x{VIEWPORT_H}',
              'about:blank'],
-            cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
         )
+        token = self._read_token()
         self.sock = self._connect_with_retry(port)
         self._reader = self.sock.makefile('r', encoding='utf-8', newline='\n')
         self._next_id = 1
+        self._call('initialize', {'token': token})
+
+    def _read_token(self) -> str:
+        assert self.proc.stderr is not None
+        token: str | None = None
+        for _ in range(400):
+            line = self.proc.stderr.readline()
+            if not line:
+                break
+            line = line.strip()
+            if line.startswith('[mcp] token: '):
+                token = line[len('[mcp] token: '):]
+                break
+        if token is None:
+            self.proc.kill()
+            raise McpLiveError('lumen --mcp-live-port не напечатал [mcp] token')
+        threading.Thread(target=self._drain_stderr, daemon=True).start()
+        return token
+
+    def _drain_stderr(self) -> None:
+        err = self.proc.stderr
+        if err is None:
+            return
+        try:
+            for _ in err:
+                pass
+        except Exception:
+            pass
 
     def _connect_with_retry(self, port: int, attempts: int = 200, delay: float = 0.1) -> socket.socket:
         """Poll for the MCP TCP listener — window/GPU startup takes longer than

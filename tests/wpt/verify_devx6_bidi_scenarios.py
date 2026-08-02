@@ -89,6 +89,33 @@ def wait_for_port(host: str, port: int, proc: subprocess.Popen, timeout: float) 
     raise TimeoutError(f"BiDi port {port} did not open within {timeout}s")
 
 
+def read_token_and_drain(stderr) -> str:
+    """Read the ADR-024 §Access model (DEVX-15) `[bidi] token: <token>` line
+    the child prints to stderr, then keep draining the rest in a background
+    thread so unrelated stderr output cannot block the child."""
+    token: str | None = None
+    for _ in range(400):
+        line = stderr.readline()
+        if not line:
+            break
+        line = line.strip()
+        if line.startswith("[bidi] token: "):
+            token = line[len("[bidi] token: "):]
+            break
+    if token is None:
+        raise RuntimeError("lumen --bidi-port did not print [bidi] token")
+
+    def _drain() -> None:
+        try:
+            for _ in stderr:
+                pass
+        except Exception:
+            pass
+
+    threading.Thread(target=_drain, daemon=True).start()
+    return token
+
+
 class _StaticHandler(http.server.BaseHTTPRequestHandler):
     """Serves `INDEX_HTML` for any GET — a minimal same-origin fetch target
     for the offline/intercept scenarios, so they don't depend on live network
@@ -353,9 +380,11 @@ async def fetch_probe(session: BidiSession, ctx: str, url: str, var_name: str):
     return "rejected" if result == "pending" else result
 
 
-async def run_scenarios(ws_url: str, http_port: int) -> Report:
+async def run_scenarios(ws_url: str, http_port: int, token: str) -> Report:
     report = Report()
-    session = BidiSession.bidi_only(ws_url)
+    session = BidiSession.bidi_only(ws_url, requested_capabilities={
+        "alwaysMatch": {"token": token},
+    })
     await session.start()
     try:
         ctx = await get_default_context(session)
@@ -395,10 +424,14 @@ def main() -> int:
 
     host = "127.0.0.1"
     bidi_port = get_free_port()
-    proc = subprocess.Popen([args.binary, "--bidi-port", str(bidi_port)])
+    proc = subprocess.Popen(
+        [args.binary, "--bidi-port", str(bidi_port)],
+        stderr=subprocess.PIPE, text=True,
+    )
     try:
         wait_for_port(host, bidi_port, proc, timeout=30)
-        report = asyncio.run(run_scenarios(f"ws://{host}:{bidi_port}", http_port))
+        token = read_token_and_drain(proc.stderr)
+        report = asyncio.run(run_scenarios(f"ws://{host}:{bidi_port}", http_port, token))
     except Exception as e:
         print(f"DEVX-6 FAILED: {e}", file=sys.stderr)
         return 1

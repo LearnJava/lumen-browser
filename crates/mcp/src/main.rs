@@ -29,11 +29,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(port) = port {
         // TCP mode: принимаем одно соединение и обслуживаем его.
         let listener = TcpListener::bind(("127.0.0.1", port))?;
+        let token = lumen_core::auth::generate_token();
         eprintln!("MCP listening on 127.0.0.1:{port}");
+        eprintln!("MCP token: {token}");
         let (stream, addr) = listener.accept()?;
         eprintln!("MCP connection from {addr}");
         let transport = TcpTransport::from_stream(stream)?;
-        let mut server = McpServer::new(session, transport);
+        let mut server = McpServer::with_token(session, transport, token);
         let _ = server.run();
     } else {
         // Stdio mode.

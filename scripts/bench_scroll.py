@@ -162,8 +162,28 @@ def last_scroll_y(stderr_path):
     return float(ms[-1]) if ms else None
 
 
-def mcp_rpc_factory(port):
-    """Connect to a lumen --mcp-live-port and return an rpc(method, params) fn."""
+def mcp_rpc_factory(port, stderr_path):
+    """Connect to a lumen --mcp-live-port and return an rpc(method, params) fn.
+
+    ADR-024 §Access model (DEVX-15): the mandatory per-run token is printed to
+    the child's stderr (`[mcp] token: <token>`), captured here into
+    `stderr_path`. Reads it and sends it via `initialize` before returning.
+    Raises OSError (same as "port not open yet") if the token line hasn't
+    appeared yet, so existing callers that retry this factory in a loop
+    catching OSError keep working unmodified.
+    """
+    token = None
+    try:
+        with open(stderr_path) as fh:
+            for line in fh:
+                if line.startswith("[mcp] token: "):
+                    token = line.strip()[len("[mcp] token: "):]
+                    break
+    except OSError:
+        pass
+    if token is None:
+        raise OSError("lumen --mcp-live-port token not printed yet")
+
     import socket as socket_mod
     s = socket_mod.create_connection(("127.0.0.1", port), timeout=30)
     f = s.makefile("rw", encoding="utf-8", newline="\n")
@@ -177,7 +197,7 @@ def mcp_rpc_factory(port):
         f.flush()
         return json.loads(f.readline())
 
-    rpc("initialize", {})
+    rpc("initialize", {"token": token})
     return rpc
 
 
@@ -225,7 +245,7 @@ def one_run_mcp(args, run_idx):
         rpc = None
         while time.monotonic() < deadline:
             try:
-                rpc = mcp_rpc_factory(port)
+                rpc = mcp_rpc_factory(port, stderr_path)
                 break
             except OSError:
                 time.sleep(0.5)

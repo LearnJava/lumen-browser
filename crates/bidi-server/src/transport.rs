@@ -17,7 +17,9 @@ use crate::protocol::{dispatch, BidiState};
 /// Blocks until the connection is closed (by `session.end`, read timeout, or error).
 /// The `stream` is fully consumed; the caller must not use it afterwards.
 /// `automation` binds this connection's `BidiState` to a live window (SDC-2).
-pub fn handle(mut stream: TcpStream, automation: AutomationHandle) {
+/// `required_token` — see [`BidiState::with_live_session`] (ADR-024
+/// §Access model, DEVX-15); `None` disables the `session.new` token check.
+pub fn handle(mut stream: TcpStream, automation: AutomationHandle, required_token: Option<String>) {
     // 60-second read timeout — guards against stalled connections.
     let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
 
@@ -26,7 +28,7 @@ pub fn handle(mut stream: TcpStream, automation: AutomationHandle) {
         return;
     }
 
-    let mut state = BidiState::with_live_session(LiveWindowSession::new(automation));
+    let mut state = BidiState::with_live_session(LiveWindowSession::new(automation), required_token);
     loop {
         match read_text_frame(&mut stream) {
             Ok(msg) => {

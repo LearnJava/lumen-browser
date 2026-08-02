@@ -1814,9 +1814,9 @@
       {
        "id": "DEVX-15",
        "title": "DEVX-15: аутентификация MCP/BiDi",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Аутентификация и модель доступа MCP/BiDi (§Access model ADR-024) — ГЕЙТ РЕЛИЗА, не гейт дорожки. Сейчас `--mcp-port`/`--mcp-live-port`/`--bidi-port`/`--ipc-server` слушают 127.0.0.1 БЕЗ аутентификации (crates/mcp/src/main.rs:31): любой локальный процесс может водить браузер, читать DOM, снимать скриншоты, исполнять JS — недопустимо для privacy-first позиционирования вместе с богатой интроспекцией. Токен обязателен по умолчанию (автогенерация на запуск, печать в stderr рядом со строкой порта, приём как параметр MCP `initialize` и capability BiDi `session.new`), bind остаётся loopback-only; escape hatch `--mcp-allow-anonymous` НЕ делать — решение пользователя 2026-07-30 (Q1 в ADR-024), заводить его «только для CI» нельзя без нового ADR. В скоуп входят правки нашего же тулинга (graphic_tests/run.py, scripts/*_perf.py, tests/wpt/*)"
+       "note": "Аутентификация и модель доступа MCP/BiDi (§Access model ADR-024) — ГЕЙТ РЕЛИЗА, не гейт дорожки. Токен обязателен по умолчанию на всех четырёх TCP-портов (`--mcp-port`/`--mcp-live-port`/`--bidi-port`/`--ipc-server`): `lumen_core::auth::generate_token`/`tokens_match`, печать в stderr/stdout рядом со строкой порта, `McpServer::with_token` гейтует все методы кроме `initialize` до успешного токена, `BidiState::session_new` читает `capabilities.alwaysMatch.token`, `--ipc-server` требует `IpcRequest::Auth{token}` первым сообщением; bind остаётся loopback-only. Escape hatch `--mcp-allow-anonymous` НЕ заведён (Q1 ADR-024). stdio-режим MCP и internal-канал сетевого сервиса (PH1-4) осознанно вне скоупа — недостижимы посторонним локальным процессом тем же путём. Весь наш тулинг обновлён в этом же коммите (`graphic_tests/run.py`, `scripts/bench_scroll.py`+5 других perf-скриптов, `tests/wpt/verify_*`, `tools/wptrunner/wptrunner/browsers/lumen.py`+`executorlumen.py`)"
       },
       {
        "id": "DEVX-16",

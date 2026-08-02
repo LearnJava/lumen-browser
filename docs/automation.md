@@ -47,7 +47,21 @@ Related docs: [`docs/commands.md`](commands.md) (day-to-day commands), [`docs/gr
 ## CLI flags (crates/shell/src/main.rs, `print_usage()`)
 
 Headless one-shot: `--dump-source` · `--dump-layout` · `--dump-display-list` · `--screenshot` · `--trace-nav <out.json>` (PERF-1, load waterfall as Chrome-trace JSON) · `--print-to-pdf`.
-Servers: `--ipc-server [--ipc-port N]` · `--mcp [url]` · `--mcp-port N` · `--mcp-live-port N <src>` · `--bidi-port N` · `--devtools-port N` (CDP, stub — see below).
+Servers: `--ipc-server [--ipc-port N]` · `--mcp [url]` · `--mcp-port N` · `--mcp-live-port N <src>` · `--bidi-port N` · `--devtools-port N` (CDP, stub — see below). **All four TCP automation ports require a token** (ADR-024 §Access model, DEVX-15) — see below.
+
+### Access model: mandatory per-run token (ADR-024, DEVX-15)
+
+`--mcp-port`/`--mcp-live-port`/`--bidi-port`/`--ipc-server` bind `127.0.0.1` only, but loopback-only is not private — any local process can connect. Each of the four prints a fresh random token to stderr/stdout right next to its port line, and every connection must authenticate with it before running any other command. **No escape hatch** — there is no `--mcp-allow-anonymous` and none will be added without a new ADR (user decision 2026-07-30, ADR-024 §Decided questions Q1).
+
+| Port | Token line | How to send it |
+|---|---|---|
+| `--mcp-port` / `--mcp-live-port` | stderr: `MCP token: <token>` / `[mcp] token: <token>` | `initialize` request params: `{"token": "<token>"}`. Rejected with JSON-RPC error `-32001` until a matching `initialize` succeeds; every other method is rejected the same way in the meantime. |
+| `--bidi-port` | stderr: `[bidi] token: <token>` | `session.new` params: `capabilities.alwaysMatch.token`. No session (and so no browsing context) is created on mismatch — `session not created` error. |
+| `--ipc-server` | stdout: `LUMEN_IPC_TOKEN=<token>` (next to `LUMEN_IPC_PORT=<port>`) | First message on the connection must be `IpcRequest::Auth{token}` → `IpcResponse::AuthOk`/`AuthErr`. Any other request before a successful `Auth` gets `AuthErr`. |
+
+stdio-mode MCP (no `--port`) does **not** require a token — only the parent process that spawned it can reach its stdin/stdout, so a token adds nothing there. Same reasoning for the network-service IPC channel (PH1-4, child spawned by the shell itself) — out of ADR-024's scope, unauthenticated.
+
+Token generation/comparison: `lumen_core::auth` (`generate_token`, `tokens_match` — constant-time). All in-repo consumers of these ports were updated in the same commit: `graphic_tests/run.py` (`LumenIpcClient`, `LiveWindowClient`), `scripts/bench_scroll.py`+`scripts/miss_probe.py` (`mcp_rpc_factory`), `scripts/input_perf.py`/`scripts/mem_perf.py`/`scripts/mt_stall_bench.py`/`scripts/scroll_perf.py`/`scripts/perf_audit.py`/`scripts/scroll_blit_accept.py` (each script's own inline MCP client class), `tests/wpt/verify_s3_bidi_session.py`/`verify_devx6_bidi_scenarios.py`/`verify_s6_await_promise.py`, and `tools/wptrunner/wptrunner/browsers/lumen.py`+`executors/executorlumen.py` (`_TokenCapturingOutputHandler` taps the existing per-line output callback; `LumenBidiProtocol.connect()` merges the live token into `capabilities.alwaysMatch`).
 Determinism: `--deterministic` · `--rng-seed N` · `--monotonic-clock` (parsed into `DetConfig` but **not currently wired** to the JS runtime — only `--deterministic`'s plain on/off reaches `set_deterministic_mode`; the RNG seed always derives from the page URL hash regardless of `--rng-seed`'s value) · `--viewport WxH` (DEVX-1: pins the window's CSS content viewport, overriding `--deterministic`'s 1280×800 default — used by `graphic_tests/run.py`'s default live window to combine determinism with the pipeline's calibrated 1024×720).
 Misc: `--maximized` (window opens full-screen — live perf audit) · `--no-scrollbar` (cleaner screenshot crops) · `--activity-log` / `--click-log` · `--health-log` (PERF-6 session-health journal → `health.log`; also on with `--activity-log`) · `--import-session` · `--network-service` · `--proxy` · `--tor`.
 

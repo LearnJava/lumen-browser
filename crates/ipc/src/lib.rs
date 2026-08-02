@@ -48,6 +48,15 @@ pub enum IpcRequest {
     Ping,
     /// Orderly shutdown — service exits after sending `IpcResponse::Shutdown`.
     Shutdown,
+    /// TAB-5/DEVX-15: authenticate this connection. Must be the first message
+    /// sent when the server requires a token (`--ipc-server`, ADR-024
+    /// §Access model) — reply is `AuthOk` or `AuthErr`; every other request
+    /// sent before a successful `Auth` is rejected with `AuthErr`. Ignored by
+    /// the network-service channel (PH1-4), which does not require a token.
+    Auth {
+        /// Token printed to stdout by the server as `LUMEN_IPC_TOKEN=<token>`.
+        token: String,
+    },
     /// TAB-4: allocate a new headless tab. Reply: `TabCreated { tab_id }`.
     CreateTab,
     /// TAB-4: close the tab `tab_id`. Reply: `TabClosed { tab_id }` (or
@@ -83,6 +92,14 @@ pub enum IpcResponse {
     Pong,
     /// Acknowledgement of `IpcRequest::Shutdown` before the service exits.
     Shutdown,
+    /// TAB-5/DEVX-15: reply to a successful `IpcRequest::Auth`.
+    AuthOk,
+    /// TAB-5/DEVX-15: reply to a failed `IpcRequest::Auth`, or to any other
+    /// request received before authentication succeeded.
+    AuthErr {
+        /// Human-readable failure reason.
+        message: String,
+    },
     /// TAB-4: reply to `CreateTab` — the freshly allocated tab id.
     TabCreated {
         /// Id of the new tab.
@@ -409,6 +426,34 @@ mod tests {
         } else {
             panic!("expected FetchOk");
         }
+
+        server_thread.join().unwrap();
+    }
+
+    /// ADR-024 §Access model (DEVX-15): `Auth`/`AuthOk`/`AuthErr` round-trip
+    /// through the framing layer like any other message. Gating on
+    /// authentication order is `--ipc-server`'s own responsibility
+    /// (`crates/shell/src/main.rs::run_ipc_server`), not this layer's.
+    #[test]
+    fn test_round_trip_auth() {
+        let (server, port) = IpcServer::bind().unwrap();
+
+        let server_thread = std::thread::spawn(move || {
+            let mut ch = server.accept().unwrap();
+            match ch.recv::<IpcRequest>().unwrap() {
+                IpcRequest::Auth { token } => {
+                    assert_eq!(token, "secret");
+                    ch.send(&IpcResponse::AuthOk).unwrap();
+                }
+                other => panic!("expected Auth, got {other:?}"),
+            }
+        });
+
+        let mut client = IpcClient::connect(port).unwrap();
+        let resp = client
+            .request(&IpcRequest::Auth { token: "secret".into() })
+            .unwrap();
+        assert!(matches!(resp, IpcResponse::AuthOk));
 
         server_thread.join().unwrap();
     }

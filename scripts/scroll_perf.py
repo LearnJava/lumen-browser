@@ -58,10 +58,29 @@ def free_port() -> int:
     return port
 
 
+def _wait_for_mcp_token(stderr_log: str, timeout_s: float = 20.0) -> str:
+    """Poll `stderr_log` for the ADR-024 §Access model (DEVX-15) token line.
+
+    The child's stderr is redirected straight to `stderr_log` (see `main`),
+    so polling the file is enough — no drain thread is involved here.
+    """
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        try:
+            with open(stderr_log, encoding='utf-8', errors='replace') as fh:
+                for line in fh:
+                    if line.startswith('[mcp] token: '):
+                        return line.strip()[len('[mcp] token: '):]
+        except OSError:
+            pass
+        time.sleep(0.1)
+    raise RuntimeError(f'lumen --mcp-live-port token not found in {stderr_log}')
+
+
 class Client:
     """Line-delimited JSON-RPC клиент к `--mcp-live-port` (тот же протокол, что run.py --live)."""
 
-    def __init__(self, port: int) -> None:
+    def __init__(self, port: int, stderr_log: str) -> None:
         last: Exception | None = None
         for _ in range(200):
             try:
@@ -76,20 +95,25 @@ class Client:
         self.sock.settimeout(60)
         self._reader = self.sock.makefile('r', encoding='utf-8', newline='\n')
         self._id = 0
+        # ADR-024 §Access model (DEVX-15): mandatory first call.
+        token = _wait_for_mcp_token(stderr_log)
+        self._raw_call('initialize', {'token': token})
 
-    def call(self, name: str, arguments: dict) -> dict:
+    def _raw_call(self, method: str, params: dict) -> dict:
         self._id += 1
         req = json.dumps({'jsonrpc': '2.0', 'id': self._id,
-                          'method': 'tools/call',
-                          'params': {'name': name, 'arguments': arguments}})
+                          'method': method, 'params': params})
         self.sock.sendall((req + '\n').encode('utf-8'))
         line = self._reader.readline()
         if not line:
             raise RuntimeError('MCP-соединение закрыто (окно упало?)')
         resp = json.loads(line)
         if resp.get('error') is not None:
-            raise RuntimeError(f'{name}: {resp["error"]}')
+            raise RuntimeError(f'{method}: {resp["error"]}')
         return resp.get('result') or {}
+
+    def call(self, name: str, arguments: dict) -> dict:
+        return self._raw_call('tools/call', {'name': name, 'arguments': arguments})
 
 
 def main() -> int:
@@ -127,7 +151,7 @@ def main() -> int:
                             cwd=REPO, env=env,
                             stdout=subprocess.DEVNULL, stderr=log_f)
     try:
-        c = Client(port)
+        c = Client(port, log_path)
         c.call('navigate', {'url': page})
         c.call('wait', {'condition': 'document_ready', 'timeout_ms': 20000})
         time.sleep(1.0)  # дать странице дорисоваться / докачать ресурсы

@@ -237,6 +237,12 @@ pub struct BidiState {
     /// `script.evaluate`, `browsingContext.captureScreenshot`, and
     /// `input.performActions` fall back to their Phase 1 in-memory stub behavior.
     live: Option<LiveWindowSession>,
+    /// Token `session.new` must be given (ADR-024 §Access model, DEVX-15).
+    /// `None` disables the check — the [`BidiState::new`] unit-test
+    /// constructor never sets it, so the existing `dispatch()` tests are
+    /// unaffected; production connections always carry `Some` (see
+    /// `transport::handle`).
+    required_token: Option<String>,
 }
 
 impl BidiState {
@@ -251,8 +257,11 @@ impl BidiState {
 
     /// State connected to a live shell window (SDC-2): real navigation,
     /// script evaluation, screenshots, and pointer/key input.
-    pub fn with_live_session(live: LiveWindowSession) -> Self {
-        Self { live: Some(live), ..Self::default() }
+    ///
+    /// `required_token` — see [`BidiState::required_token`]; `None` disables
+    /// the `session.new` token check.
+    pub fn with_live_session(live: LiveWindowSession, required_token: Option<String>) -> Self {
+        Self { live: Some(live), required_token, ..Self::default() }
     }
 
     /// Сгенерировать псевдо-UUID из монотонного счётчика.
@@ -706,13 +715,34 @@ fn session_status_result(state: &BidiState) -> JsonValue {
 /// Возвращает успешный ответ с `sessionId` + минимальными capabilities.
 /// Событие `browsingContext.created` НЕ эмитится: на момент `session.new`
 /// клиент ещё не подписан (BiDi-порядок — сначала сессия, затем `subscribe`).
-fn session_new(id: i64, _params: &JsonValue, state: &mut BidiState) -> DispatchResult {
+///
+/// If [`BidiState::required_token`] is set (ADR-024 §Access model, DEVX-15),
+/// `params.capabilities.alwaysMatch.token` must match it — the standard
+/// WebDriver extension-capability slot. No session (and thus no browsing
+/// context) is created on mismatch.
+fn session_new(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
     if state.session_id.is_some() {
         return DispatchResult::single(make_error(
             Some(id),
             "session not created",
             "session already exists",
         ));
+    }
+
+    if let Some(expected) = &state.required_token {
+        let provided = params
+            .get("capabilities")
+            .and_then(|c| c.get("alwaysMatch"))
+            .and_then(|a| a.get("token"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if !lumen_core::auth::tokens_match(expected, provided) {
+            return DispatchResult::single(make_error(
+                Some(id),
+                "session not created",
+                "invalid or missing capabilities.alwaysMatch.token",
+            ));
+        }
     }
 
     let session_id = state.next_id(0x5e55);
@@ -2159,7 +2189,7 @@ mod tests {
 
     #[test]
     fn navigate_with_live_window_executes_real_navigate() {
-        let mut state = BidiState::with_live_session(fake_live_session());
+        let mut state = BidiState::with_live_session(fake_live_session(), None);
         let cid = new_session_ctx(&mut state);
         let cmd = format!(
             r#"{{"id":10,"method":"browsingContext.navigate","params":{{"context":"{cid}","url":"https://example.com/"}}}}"#
@@ -2173,7 +2203,7 @@ mod tests {
     /// unconditionally before the load signal existed.
     #[test]
     fn navigate_with_live_window_emits_load_with_real_timestamp() {
-        let mut state = BidiState::with_live_session(fake_live_session());
+        let mut state = BidiState::with_live_session(fake_live_session(), None);
         let cid = new_session_ctx(&mut state);
         dispatch(
             r#"{"id":9,"method":"session.subscribe","params":{"events":["browsingContext.load"]}}"#,
@@ -2195,7 +2225,7 @@ mod tests {
     /// report success with a fabricated load event.
     #[test]
     fn navigate_with_live_window_errors_when_load_never_completes() {
-        let mut state = BidiState::with_live_session(fake_live_session_load_never_completes());
+        let mut state = BidiState::with_live_session(fake_live_session_load_never_completes(), None);
         let cid = new_session_ctx(&mut state);
         let cmd = format!(
             r#"{{"id":10,"method":"browsingContext.navigate","params":{{"context":"{cid}","url":"https://example.com/"}}}}"#
@@ -2207,7 +2237,7 @@ mod tests {
 
     #[test]
     fn script_evaluate_with_live_window_returns_real_result() {
-        let mut state = BidiState::with_live_session(fake_live_session());
+        let mut state = BidiState::with_live_session(fake_live_session(), None);
         let cmd = r#"{"id":1,"method":"script.evaluate","params":{"expression":"1+1","awaitPromise":false}}"#;
         let r = dispatch(cmd, &mut state);
         let v = parse(&r.frames[0]);
@@ -2221,7 +2251,7 @@ mod tests {
     #[test]
     fn script_evaluate_await_promise_returns_resolved_value() {
         let mut state =
-            BidiState::with_live_session(fake_live_session_await(r#"{"state":"fulfilled","value":42}"#));
+            BidiState::with_live_session(fake_live_session_await(r#"{"state":"fulfilled","value":42}"#), None);
         let cmd = r#"{"id":1,"method":"script.evaluate","params":{"expression":"Promise.resolve(42)","awaitPromise":true}}"#;
         let r = dispatch(cmd, &mut state);
         let v = parse(&r.frames[0]);
@@ -2235,7 +2265,7 @@ mod tests {
     #[test]
     fn script_evaluate_await_promise_undefined_fulfillment() {
         let mut state =
-            BidiState::with_live_session(fake_live_session_await(r#"{"state":"fulfilled"}"#));
+            BidiState::with_live_session(fake_live_session_await(r#"{"state":"fulfilled"}"#), None);
         let cmd = r#"{"id":1,"method":"script.evaluate","params":{"expression":"Promise.resolve()","awaitPromise":true}}"#;
         let r = dispatch(cmd, &mut state);
         let v = parse(&r.frames[0]);
@@ -2249,7 +2279,7 @@ mod tests {
     fn script_evaluate_await_promise_rejection_is_error() {
         let mut state = BidiState::with_live_session(fake_live_session_await(
             r#"{"state":"rejected","error":"boom"}"#,
-        ));
+        ), None);
         let cmd = r#"{"id":1,"method":"script.evaluate","params":{"expression":"Promise.reject(new Error('boom'))","awaitPromise":true}}"#;
         let r = dispatch(cmd, &mut state);
         let v = parse(&r.frames[0]);
@@ -2264,7 +2294,7 @@ mod tests {
     #[test]
     fn script_evaluate_await_promise_pending_falls_back_to_promise_object() {
         let mut state =
-            BidiState::with_live_session(fake_live_session_await(r#"{"state":"pending"}"#));
+            BidiState::with_live_session(fake_live_session_await(r#"{"state":"pending"}"#), None);
         let cmd = r#"{"id":1,"method":"script.evaluate","params":{"expression":"new Promise(function(){})","awaitPromise":true}}"#;
         let r = dispatch(cmd, &mut state);
         let v = parse(&r.frames[0]);
@@ -2275,7 +2305,7 @@ mod tests {
 
     #[test]
     fn capture_screenshot_with_live_window_returns_base64_data() {
-        let mut state = BidiState::with_live_session(fake_live_session());
+        let mut state = BidiState::with_live_session(fake_live_session(), None);
         let r = dispatch(r#"{"id":1,"method":"browsingContext.captureScreenshot","params":{}}"#, &mut state);
         let v = parse(&r.frames[0]);
         assert!(!v.get("result").unwrap().get("data").unwrap().as_str().unwrap().is_empty());
@@ -2289,9 +2319,59 @@ mod tests {
         assert_eq!(v.get("error").and_then(|x| x.as_str()), Some("unknown error"));
     }
 
+    // ── ADR-024 §Access model (DEVX-15): token auth ──
+
+    #[test]
+    fn session_new_rejects_missing_token_when_required() {
+        let mut state = BidiState::with_live_session(fake_live_session(), Some("secret".into()));
+        let r = dispatch(
+            r#"{"id":1,"method":"session.new","params":{"capabilities":{}}}"#,
+            &mut state,
+        );
+        let v = parse(&r.frames[0]);
+        assert_eq!(v.get("type").and_then(|x| x.as_str()), Some("error"));
+        assert!(state.session_id.is_none(), "no session must be created on auth failure");
+    }
+
+    #[test]
+    fn session_new_rejects_wrong_token_when_required() {
+        let mut state = BidiState::with_live_session(fake_live_session(), Some("secret".into()));
+        let r = dispatch(
+            r#"{"id":1,"method":"session.new","params":{"capabilities":{"alwaysMatch":{"token":"wrong"}}}}"#,
+            &mut state,
+        );
+        let v = parse(&r.frames[0]);
+        assert_eq!(v.get("type").and_then(|x| x.as_str()), Some("error"));
+        assert!(state.session_id.is_none());
+    }
+
+    #[test]
+    fn session_new_accepts_correct_token_when_required() {
+        let mut state = BidiState::with_live_session(fake_live_session(), Some("secret".into()));
+        let r = dispatch(
+            r#"{"id":1,"method":"session.new","params":{"capabilities":{"alwaysMatch":{"token":"secret"}}}}"#,
+            &mut state,
+        );
+        let v = parse(&r.frames[0]);
+        assert_eq!(v.get("type").and_then(|x| x.as_str()), Some("success"));
+        assert!(state.session_id.is_some());
+    }
+
+    #[test]
+    fn session_new_without_required_token_ignores_capabilities() {
+        // BidiState::new() (test ctor) never sets a required token.
+        let mut state = BidiState::new();
+        let r = dispatch(
+            r#"{"id":1,"method":"session.new","params":{"capabilities":{}}}"#,
+            &mut state,
+        );
+        let v = parse(&r.frames[0]);
+        assert_eq!(v.get("type").and_then(|x| x.as_str()), Some("success"));
+    }
+
     #[test]
     fn input_perform_actions_with_live_window_clicks() {
-        let mut state = BidiState::with_live_session(fake_live_session());
+        let mut state = BidiState::with_live_session(fake_live_session(), None);
         let cid = new_session_ctx(&mut state);
         let cmd = format!(
             r#"{{"id":1,"method":"input.performActions","params":{{"context":"{cid}","actions":[
