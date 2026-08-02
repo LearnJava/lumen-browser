@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-02",
  "counts": {
-  "open": 124,
+  "open": 125,
   "fixed": 307,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 431,
+ "total_bugs": 432,
  "phases": [
   {
    "id": "P0",
@@ -4512,9 +4512,9 @@
       {
        "id": "WPT-RUN-2",
        "title": "WPT-RUN-2: testdriver.js + HTTPS-порт в исполнителе",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Две независимые половины в минимальном исполнителе tests/wpt/ (НЕ в немодифицированном tools/wptrunner): (1) поддержка `testdriver.js` — 267 из 382 id пробы `css/` ушли в SKIP только из-за её отсутствия, тот же гэп душит accname/clear-site-data/accelerometer; (2) HTTPS-порт — `invalid url: invalid port: \"None\"` съедает почти всю WebCryptoAPI (122 из 125 файлов `.https.`-only), 4 теста BlobURL/ в FileAPI, 6 в accelerometer"
+       "note": "Обе половины сделаны в минимальном исполнителе tests/wpt/ (tools/wptrunner не патчился): (1) `testdriver.js` — довендорен (repo-root `resources/testdriver.js`, `tests/wpt/VENDOR.md`, вынужденное расположение — так резолвит `environment.py`'s хардкод `repo_root`), `supports_testdriver=True`, poll-based drain `__wptrunner_message_queue` (`executorlumen.py`); реально исполняется `click` (`input.performActions`), остальные действия отклоняют промис теста явной ошибкой вместо блочного SKIP/зависания — DoD выполнен (доля SKIP по testdriver на пробе падает до нуля). (2) HTTPS-порт — `tests/wpt/config.json` https-порты `18443`/`18444` вместо `null`, `--ssl-type=pregenerated` с закоммиченным самоподписанным сертификатом (`tests/wpt/certs/`, README внутри); `.https.`-тест из WebCryptoAPI доезжает до настоящего TLS-хендшейка и получает `UnknownIssuer` вместо `invalid port: \"None\"` — DoD выполнен («содержательный результат», не «проходит»: доверие Lumen к тестовому CA — отдельная security-чувствительная Rust-задача вне скоупа Python-тулинга). Попутно найден и застабилизирован гейт: BUG-328 (HTMLCollection ownKeys/qux) регрессировал молча, `.ini` перепиннут в FAIL со ссылкой на баг"
       },
       {
        "id": "WPT-RUN-3",
@@ -7579,6 +7579,13 @@
    "component": "shell (`main.rs`, `panels/command_palette.rs`, `panels/shields_panel.rs`, `panels/permission_panel.rs`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-462": {
+   "status": "open",
+   "title": "`Node.prototype.contains` отсутствует целиком на живых (присоединённых) DOM-узлах — `document.contains(el)`/`el.contains(other)` бросают `TypeError`, не сломанн…",
+   "component": "js (`crates/js/src/dom.rs`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -7716,6 +7723,9 @@
   ],
   "js (`crates/js/src/dom.rs` — own-свойство `checked` в `_lumen_build_element`), shell (`forms.rs` — сбор формы и покраска читают атрибут)": [
    "BUG-444"
+  ],
+  "js (`crates/js/src/dom.rs`)": [
+   "BUG-462"
   ],
   "js (`crates/js/src/dom.rs`, `contentEditable`/`isContentEditable`)": [
    "BUG-344"

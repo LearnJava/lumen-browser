@@ -19,7 +19,13 @@
 **вендорены и гоняются две** — `dom/nodes/` (168 файлов) и `FileAPI/` (115 файлов, добавлена
 2026-07-21 в рамках дорожки WPT-VENDOR) — движок исполнения обеих один и тот же минимальный
 executor `tests/wpt/browsers/lumen.py` поверх `wptrunner` + WebDriver BiDi: одно окно, без
-`test_driver.*`, без iframes/multi-window — см. `docs/tasks/p2-wpt-integration.md`. Остальные
+iframes/multi-window — см. `docs/tasks/p2-wpt-integration.md`. `test_driver.*` (WPT-RUN-2,
+2026-08-02) больше не блокирует тесты блочным SKIP — из действий реально исполняется только
+`click` (`input.performActions`), остальные `test_driver_internal.*`-вызовы отклоняют промис
+теста явной ошибкой вместо зависания. HTTPS-порт (WPT-RUN-2) тоже больше не `invalid port:
+"None"` — `.https.`-тесты доезжают до настоящего TLS-хендшейка и получают `UnknownIssuer`
+(тестовый сертификат самоподписан и не в доверенных корнях Lumen, см.
+`tests/wpt/certs/README.md`), не хендшейк вовсе. Остальные
 275 категорий **не вендорены** — таблица ниже перечисляет их все, чтобы было видно полное поле
 задачи, а не только то, что уже потрогали.
 
