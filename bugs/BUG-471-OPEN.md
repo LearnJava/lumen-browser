@@ -79,3 +79,18 @@ properties of undefined (reading '0')` on the first access, before the
 helper's own logic (mutate `cssRule.style`, check `.length`) ever runs.
 `.ini`: `tests/wpt/metadata/css/css-logical/logicalprops-quirklength.html.ini`
 (`expected: FAIL` per subtest).
+
+## Срез 19 (`css/css-nesting`, 2026-08-03)
+
+6 files, 45 subtests + 1 file-level `TIMEOUT` — CSS Nesting's own CSSOM
+surface (`CSSNestedDeclarations`, sub-`cssRules` on a `CSSStyleRule` for its
+nested rules, `insertRule`/`deleteRule`/`selectorText` on nested rules) is
+entirely unreachable through this gap, same root cause as every prior slice
+(`document.styleSheets` is `undefined`, `CSSStyleRule`/`CSSStyleSheet`
+globals don't exist). `parsing.html` is the category's most informative
+instance of the failure mode already on file for BUG-471 (top-level,
+non-`test()`-wrapped access throws before the harness ever registers a
+subtest, so wptrunner reports `TIMEOUT` with zero subtests rather than a
+FAIL list) — its very first line is `let [ss] = document.styleSheets`,
+destructuring `undefined`. `.ini` under `tests/wpt/metadata/css/css-nesting/`
+for all 6 files.

@@ -85,3 +85,16 @@ file where this is the attributed (sole or contributing) cause — see file
 list above; each `.ini` header cites BUG-499 alongside any co-attributed bug
 for that file (BUG-493 for files that also read a standard, cache-timing-
 sensitive property; BUG-384 for files masked by named-access-on-window).
+
+## Срез 19 (`css/css-nesting`, 2026-08-03)
+
+`nested-declarations-matching.html` — 11/11 subtests, the entire file — is a
+CSS Nesting-specific stress test of `CSSNestedDeclarations`/specificity
+behavior, but every assertion bottoms out in
+`getComputedStyle(e).getPropertyValue('--x')` (or `--y`/`--z`/`--w`)
+comparing against a literal `'PASS'`/`'FAIL'` string baked into the custom
+property's value by the stylesheet author — a documented WPT idiom for this
+spec (encode the expected pass/fail outcome as the property's own string
+value) that happens to make this bug's `""` result indistinguishable from a
+genuine `'FAIL'`. `.ini`:
+`tests/wpt/metadata/css/css-nesting/nested-declarations-matching.html.ini`.

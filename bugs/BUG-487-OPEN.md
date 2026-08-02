@@ -85,3 +85,13 @@ the working assumption is these two files will keep failing (now on a
 `getComputedStyle` mismatch instead of `assert_true`) until this bug is
 fixed too. `.ini` for both files attributes to BUG-501 (the directly
 observed cause); re-check against this bug once BUG-501 lands.
+
+## Срез 19 (`css/css-nesting`, 2026-08-03)
+
+`nesting-revert-rule.html` — 4/4 subtests, `assert_true: expected true got
+false` on all of them, same clean signature as the Срез 6 finding — the
+CSS Nesting-specific cases (`revert-rule` reverting to a nested rule, to/from
+a `CSSNestedDeclarationsRule`, to scoped declarations) confirm the gap is
+independent of whether the prior rule in cascade order came from ordinary
+nesting or a dedicated nested-declarations rule. `.ini`:
+`tests/wpt/metadata/css/css-nesting/nesting-revert-rule.html.ini`.
