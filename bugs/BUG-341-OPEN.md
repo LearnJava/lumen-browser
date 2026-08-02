@@ -1,6 +1,6 @@
 # BUG-341: `lay_out_flex` double-lays-out every item — general engine bug, ~300× over CC-12's 2ms chrome perf-gate budget
 
-**Статус:** OPEN — **на паузе с 2026-08-02 после S28** (see below; not a silent relaxation, an explicit user decision).
+**Статус:** OPEN — **на паузе с 2026-08-02 после S29** (see below; not a silent relaxation, an explicit user decision).
 **Компонент:** layout (`crates/engine/layout/src/box_tree.rs::lay_out_flex`) — **general flexbox algorithm bug, affects any nested-flexbox page**, not just chrome. Surfaced via the chrome document (`crates/shell/src/main.rs::relayout_chrome_host`, `docs/tasks/p1-css-chrome.md`) because CC-12 was the first hard perf budget + realistic flex-nesting-depth bench to exist.
 **Найден:** P1, CC-12 (перф-гейт хрома) 2026-07-25 — новый тест `crates/shell/src/main.rs::tests::cc12_chrome_perf_gate_hover_and_keystroke_cycles`. Root-caused: P1, 2026-07-25.
 
@@ -29,6 +29,20 @@ left — both resolved to "no code change" once measured. Paused again
 immediately after, same terms: **the rest of the BUG-341 queue is not
 abandoned** — resume only on explicit user request; see `STATUS-P1.md` and
 memory `project_bug341_paused_cc14_unblocked_by_decision`.
+
+**Update 2026-08-02 (second pause, after S29):** resumed on explicit user
+request, then re-measured the gate itself before starting the layout-result-
+cache the queue had pointed at next — 12/12 `cc12_chrome_perf_gate` runs green
+with real margin on this session's machine (see "S29" below), not the coin
+flip S27/S28 documented on theirs. Same mechanism, same counters — only the
+wall-clock differs, a machine/contention effect `docs/perf-method.md` §4
+already names as a known source of cross-session noise on this bug. Shown
+these numbers, the user chose to pause the queue here rather than commit to
+the cache as headroom against slower hardware. **Terms unchanged from every
+prior pause: the queue is not abandoned, only paused — resume on explicit
+request.** The architectural gap S1's profile named (residual `lay_out_flex`
+double-layout, the cascade's per-visited-node floor) is still open; it is
+simply not, on this machine right now, large enough to fail the 2 ms budget.
 
 ## Follow-up (P1, 2026-07-25, fourth session): profiled the *remaining* cost — the "layout-result cache" plan is insufficient; real fix is incremental **cascade** + layout
 
