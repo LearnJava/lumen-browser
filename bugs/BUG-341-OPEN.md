@@ -1,6 +1,6 @@
 # BUG-341: `lay_out_flex` double-lays-out every item — general engine bug, ~300× over CC-12's 2ms chrome perf-gate budget
 
-**Статус:** OPEN — **на паузе с 2026-08-02 после S29** (see below; not a silent relaxation, an explicit user decision).
+**Статус:** OPEN — **на паузе с 2026-08-02 после S30** (see below; not a silent relaxation, an explicit user decision).
 **Компонент:** layout (`crates/engine/layout/src/box_tree.rs::lay_out_flex`) — **general flexbox algorithm bug, affects any nested-flexbox page**, not just chrome. Surfaced via the chrome document (`crates/shell/src/main.rs::relayout_chrome_host`, `docs/tasks/p1-css-chrome.md`) because CC-12 was the first hard perf budget + realistic flex-nesting-depth bench to exist.
 **Найден:** P1, CC-12 (перф-гейт хрома) 2026-07-25 — новый тест `crates/shell/src/main.rs::tests::cc12_chrome_perf_gate_hover_and_keystroke_cycles`. Root-caused: P1, 2026-07-25.
 
@@ -43,6 +43,16 @@ prior pause: the queue is not abandoned, only paused — resume on explicit
 request.** The architectural gap S1's profile named (residual `lay_out_flex`
 double-layout, the cascade's per-visited-node floor) is still open; it is
 simply not, on this machine right now, large enough to fail the 2 ms budget.
+
+**Update 2026-08-02 (third pause, after S30):** resumed on explicit user
+request to build the census S29 itself deferred (whether a `(node,
+constraints)`-keyed cache's premise actually holds) — see "S30" below.
+Finding: **86.5%** of real `lay_out_inner` calls in one full pass hit an
+already-seen key, a strong confirmation of the S1 "Fix scope note" idea.
+The cache itself was **not** built this slice — same terms as every prior
+pause: the queue is not abandoned, only paused, resume on explicit request.
+This session's authorization was scoped to finishing and committing the S30
+census specifically, not to starting the multi-slice cache build it informs.
 
 ## Follow-up (P1, 2026-07-25, fourth session): profiled the *remaining* cost — the "layout-result cache" plan is insufficient; real fix is incremental **cascade** + layout
 
@@ -3901,6 +3911,75 @@ make for the user: whether the remaining gap is worth closing as headroom
 against slower hardware regardless, or whether the queue should pause again
 here given the concrete number it was chasing is not currently failing.
 
+## S30 — census: how much of `lay_out_flex`'s residual cost a (node, constraints) cache would actually remove
+
+Before building the layout-result-cache/memoization layer the "Fix scope note"
+(S1) and every subsequent pause has pointed at as BUG-341's remaining lever,
+re-measured the premise itself per `docs/perf-method.md` §1 ("census before
+the fix") — the same discipline S29 applied to the gate's own wall-clock, now
+applied to the *cache's* hypothetical hit rate, before spending a multi-slice
+architectural effort building a mechanism whose payoff had never actually been
+counted.
+
+**Mechanism:** instrumented `lay_out_inner` (`crates/engine/layout/src/box_tree.rs`)
+with a thread-local `LayoutKeyCensus` recording every real (non-`Skip`,
+non-incremental-translate) call's `(NodeId, available_width.to_bits(),
+available_height.map(f32::to_bits))` key and whether that exact key had
+already been seen earlier in the same full pass — a call a `(node,
+constraints)`-keyed cache could have served from cache instead of recomputing.
+Exact bit-equality, not an epsilon compare: an honest ceiling for what such a
+cache could achieve, not an approximation of it. Gated behind
+`set_layout_key_census`/`take_layout_key_census`, off by default, plain
+thread-local `Cell`/`RefCell` (no `Mutex`, unlike `BOX_BUILD_STATS`'s S18/S20
+siblings) — verified via grep that `lay_out`/`lay_out_inner` never fan out over
+rayon (that dispatch only happens inside `build_box`, a different stage), so
+none of S15's parallel-counter trap applies here.
+
+**Measured** (`bug341_s30_flex_key_census`, `cargo test -p lumen-shell
+--profile dev-release bug341_s30_flex_key_census -- --ignored --nocapture`,
+dev-release, full non-incremental `layout_measured_hyp` per cycle, same
+`chrome_preview::HTML`/`ChromeModel` fixture shape as `cc12_bench_cycle`, 5
+cycles each of the KEY (typed omnibox growing one character per cycle) and
+HOVER (`SIDEBAR`/`None` toggle) scenarios):
+
+```
+[s30-census] KEY   cycle=0..4 calls=2186 repeat_key_calls=1890 (86.5%)
+[s30-census] HOVER cycle=0..4 calls=2186 repeat_key_calls=1890 (86.5%)
+```
+
+Identical across all 5 cycles of both scenarios — expected, not a harness bug:
+each cycle here runs a full, from-scratch `layout_measured_hyp` pass (not the
+incremental path), and neither scenario changes the document's node count or
+flex-nesting shape (typed characters mutate text content in place; the hover
+toggle alternates between two existing states), so the same tree shape
+produces the same call/repeat counts every time regardless of which specific
+state is active that cycle.
+
+**Finding: 86.5% of all real `lay_out_inner` calls in one full pass hit a
+`(node, constraints)` key already seen earlier in that same pass.** This is a
+strong, honest confirmation of the S1 "Fix scope note" premise: the
+overwhelming majority of `lay_out_flex`'s double/triple-layout redundancy
+really is attributable to *identical* re-derivations a memoization cache keyed
+this way could serve without recomputing — not a smaller fraction diluted by
+incidentally-different constraints at each call site, which was the open
+question this census existed to answer before committing to the cache's
+design.
+
+**What this does not answer:** call count is not wall-clock — a `HashMap`
+cache's lookup/insert has its own real cost per call, and per-call work varies
+by box kind/subtree size, so an 86.5% call-count reduction does not imply an
+86.5% wall-clock reduction (S4's `index_by_node` found exactly this gap for
+`build_box`'s reuse: a real skip-rate that still netted negative once the
+index's own upkeep cost was counted). It also does not re-litigate S1's later
+finding that a `lay_out`-only cache still leaves `precompute_counters`'s
+cascade cost (S3-S9's own target) standing separately — this census is scoped
+to `lay_out_flex`'s residual cost specifically, the one lever S1-S29 never
+built.
+
+**Not attempted in S30:** the cache itself. Building it is the same "large,
+multi-slice architectural undertaking" every prior pause named — S30 only
+answers the premise question honestly, for whoever authorizes the next slice.
+
 ## Repro
 
 ```bash
@@ -3915,7 +3994,11 @@ cargo test -p lumen-shell --profile dev-release bug341_s19_copy_census -- --igno
 cargo test -p lumen-shell --profile dev-release bug341_s20_stage_census -- --ignored --nocapture
 cargo test -p lumen-shell --profile dev-release bug341_s21_cascade_index_census -- --ignored --nocapture
 cargo test -p lumen-shell --profile dev-release bug341_s27_walk_census -- --ignored --nocapture
+cargo test -p lumen-shell --profile dev-release bug341_s30_flex_key_census -- --ignored --nocapture
 ```
+
+S30 added `bug341_s30_flex_key_census`, a new census (not an extension of a
+prior one) — see its own section above for what it measures.
 
 S28 extended `bug341_s27_walk_census`'s per-cycle `pass=` line with
 `confirmed=`/`confirm_misses=`, so the ordinal-restamp cost the section above
