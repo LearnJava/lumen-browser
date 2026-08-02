@@ -84,22 +84,71 @@ pub struct LayoutKeyCensus {
     /// a hit, how many would actually be safe to serve" before the cache is
     /// built, not after.
     pub repeat_key_same_style: u32,
+    /// BUG-341 S35 — of `repeat_key_same_style`, the ones whose
+    /// [`UsedSizeOverride`] (S34: `lay_out_flex`'s three re-layout call sites'
+    /// resolved-size override, applied out-of-place instead of mutating
+    /// `b.style`) also matches the override recorded the *previous* time this
+    /// key was seen. S34 removed `SavedItemSizing`'s style mutation, which
+    /// made `repeat_key_same_style` jump from S31's 23.5% to 77.7% — but
+    /// `repeat_key_same_style` alone does not prove a cache could safely serve
+    /// those repeats: a Step-1 probe call (no override) and a final-pass call
+    /// (`UsedSizeOverride` present, carrying the item's *resolved* main/cross
+    /// size) can now land on the exact same `(node, available_width,
+    /// available_height)` key with the exact same style `Arc` — and still be
+    /// two genuinely different calls, since the override is not part of that
+    /// key. Naively caching the probe's result and serving it to the override
+    /// call (or vice versa) would silently use the wrong width/height/
+    /// box-sizing whenever they differ, which the raw S34 number alone cannot
+    /// tell you. This field is the honest ceiling S34's own "first job" note
+    /// asked for: the fraction of same-style repeats that are *also* safe by
+    /// this additional check, before any cache mechanism is written.
+    pub repeat_key_same_style_and_override: u32,
 }
 
 /// `(node, available_width bits, available_height bits)` — the census key a
 /// hypothetical layout-result cache would use, per [`LayoutKeyCensus`].
 type LayoutCensusKey = (NodeId, u32, Option<u32>);
 
-thread_local! {
-    static LAYOUT_KEY_CENSUS_ON: Cell<bool> = const { Cell::new(false) };
-    static LAYOUT_KEY_CENSUS: Cell<LayoutKeyCensus> = const { Cell::new(LayoutKeyCensus { calls: 0, repeat_key_calls: 0, repeat_key_same_style: 0 }) };
-    // BUG-341 S31: the map's value is now `(occurrence count, style Arc from the
-    // most recent occurrence)` — S30 only needed the count, S31 also needs to
-    // compare the incoming call's style against the last-recorded one.
-    static LAYOUT_KEY_SEEN: RefCell<HashMap<LayoutCensusKey, (u32, Arc<ComputedStyle>)>> = RefCell::new(HashMap::new());
+/// BUG-341 S35 — a plain-data snapshot of [`UsedSizeOverride`] the census can
+/// store and compare by value (`UsedSizeOverride` itself derives neither
+/// `PartialEq` nor `Hash`, and does not need to for its one real caller,
+/// `lay_out_inner`'s local `s` binding — adding them there would be dead
+/// weight on the production struct for a comparison only this diagnostic
+/// needs). `f32` fields are compared via `to_bits`, matching the census's
+/// existing exact-bit-equality convention for `available_width`/`available_height`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct UsedSizeOverrideBits {
+    width_bits: Option<u32>,
+    height_bits: Option<u32>,
+    box_sizing: Option<BoxSizing>,
 }
 
-/// Enables/disables the BUG-341 S30/S31 layout-key census and clears its
+impl From<Option<&UsedSizeOverride>> for UsedSizeOverrideBits {
+    fn from(o: Option<&UsedSizeOverride>) -> Self {
+        match o {
+            None => Self::default(),
+            Some(o) => Self {
+                width_bits: o.width.map(f32::to_bits),
+                height_bits: o.height.map(f32::to_bits),
+                box_sizing: o.box_sizing,
+            },
+        }
+    }
+}
+
+/// One [`LAYOUT_KEY_SEEN`] entry: occurrence count, the style `Arc` from the
+/// most recent occurrence, and that occurrence's `UsedSizeOverride` snapshot
+/// (S30 only needed the count, S31 added the style compare, S35 adds the
+/// override compare) — factored out per clippy's `type_complexity`.
+type LayoutCensusSeenEntry = (u32, Arc<ComputedStyle>, UsedSizeOverrideBits);
+
+thread_local! {
+    static LAYOUT_KEY_CENSUS_ON: Cell<bool> = const { Cell::new(false) };
+    static LAYOUT_KEY_CENSUS: Cell<LayoutKeyCensus> = const { Cell::new(LayoutKeyCensus { calls: 0, repeat_key_calls: 0, repeat_key_same_style: 0, repeat_key_same_style_and_override: 0 }) };
+    static LAYOUT_KEY_SEEN: RefCell<HashMap<LayoutCensusKey, LayoutCensusSeenEntry>> = RefCell::new(HashMap::new());
+}
+
+/// Enables/disables the BUG-341 S30/S31/S35 layout-key census and clears its
 /// state — call once before a full layout pass, then read with
 /// [`take_layout_key_census`].
 pub fn set_layout_key_census(on: bool) {
@@ -114,37 +163,44 @@ pub fn take_layout_key_census() -> LayoutKeyCensus {
     LAYOUT_KEY_CENSUS.with(|c| c.replace(LayoutKeyCensus::default()))
 }
 
-/// Records one real `lay_out_inner` invocation for the S30/S31 census — see
-/// [`LayoutKeyCensus`]. Exact bit-equality on the constraints, not an epsilon
-/// compare: a real cache keyed this way would only ever hit on an exact
-/// re-derivation of the same numbers, so exact equality is the honest measure
-/// of its ceiling, not an approximation of it. `style` is compared by `Arc`
-/// identity (S31): the cascade hands out one `Arc<ComputedStyle>` per node and
-/// only in-place `Arc::make_mut` callers (the flex placement pass) ever
-/// diverge it, so `ptr_eq` is exact, not approximate, for "has this box's
-/// style changed since the last time this key was recorded".
+/// Records one real `lay_out_inner` invocation for the S30/S31/S35 census —
+/// see [`LayoutKeyCensus`]. Exact bit-equality on the constraints, not an
+/// epsilon compare: a real cache keyed this way would only ever hit on an
+/// exact re-derivation of the same numbers, so exact equality is the honest
+/// measure of its ceiling, not an approximation of it. `style` is compared by
+/// `Arc` identity (S31): the cascade hands out one `Arc<ComputedStyle>` per
+/// node and only in-place `Arc::make_mut` callers ever diverge it, so
+/// `ptr_eq` is exact, not approximate, for "has this box's style changed
+/// since the last time this key was recorded". `used_size_override` (S35) is
+/// compared by value via [`UsedSizeOverrideBits`], since it is never behind
+/// an `Arc` and two calls legitimately construct equal-but-distinct override
+/// values.
 fn record_layout_key_occurrence(
     node: NodeId,
     available_width: f32,
     available_height: Option<f32>,
     style: &Arc<ComputedStyle>,
+    used_size_override: Option<&UsedSizeOverride>,
 ) {
     if !LAYOUT_KEY_CENSUS_ON.with(|c| c.get()) {
         return;
     }
     let key = (node, available_width.to_bits(), available_height.map(f32::to_bits));
-    let (repeat, same_style) = LAYOUT_KEY_SEEN.with(|m| {
+    let override_bits = UsedSizeOverrideBits::from(used_size_override);
+    let (repeat, same_style, same_override) = LAYOUT_KEY_SEEN.with(|m| {
         let mut seen = m.borrow_mut();
         match seen.get_mut(&key) {
-            Some((count, prev_style)) => {
+            Some((count, prev_style, prev_override)) => {
                 *count += 1;
                 let same_style = Arc::ptr_eq(prev_style, style);
+                let same_override = *prev_override == override_bits;
                 *prev_style = Arc::clone(style);
-                (true, same_style)
+                *prev_override = override_bits;
+                (true, same_style, same_override)
             }
             None => {
-                seen.insert(key, (1, Arc::clone(style)));
-                (false, false)
+                seen.insert(key, (1, Arc::clone(style), override_bits));
+                (false, false, false)
             }
         }
     });
@@ -155,6 +211,9 @@ fn record_layout_key_occurrence(
             v.repeat_key_calls += 1;
             if same_style {
                 v.repeat_key_same_style += 1;
+                if same_override {
+                    v.repeat_key_same_style_and_override += 1;
+                }
             }
         }
         c.set(v);
@@ -6984,7 +7043,7 @@ fn lay_out_inner(
         return;
     }
 
-    record_layout_key_occurrence(b.node, available_width, available_height, &b.style);
+    record_layout_key_occurrence(b.node, available_width, available_height, &b.style, used_size_override.as_ref());
 
     // CSS Values L4 §5.1.1 — publish this box's real `ch`/`ex` metrics (advance of
     // the "0" glyph and the x-height at the used font-size) so `Length::{Ch,Ex}`

@@ -27148,12 +27148,15 @@ mod tests {
                 );
                 let census = lumen_layout::box_tree::take_layout_key_census();
                 eprintln!(
-                    "[s30-census] {scenario} cycle={i} calls={} repeat_key_calls={} ({:.1}%) repeat_key_same_style={} ({:.1}% of repeats)",
+                    "[s30-census] {scenario} cycle={i} calls={} repeat_key_calls={} ({:.1}%) repeat_key_same_style={} ({:.1}% of repeats) repeat_key_same_style_and_override={} ({:.1}% of repeats, {:.1}% of same_style)",
                     census.calls,
                     census.repeat_key_calls,
                     100.0 * census.repeat_key_calls as f64 / census.calls.max(1) as f64,
                     census.repeat_key_same_style,
                     100.0 * census.repeat_key_same_style as f64 / census.repeat_key_calls.max(1) as f64,
+                    census.repeat_key_same_style_and_override,
+                    100.0 * census.repeat_key_same_style_and_override as f64 / census.repeat_key_calls.max(1) as f64,
+                    100.0 * census.repeat_key_same_style_and_override as f64 / census.repeat_key_same_style.max(1) as f64,
                 );
                 lumen_layout::clear_interactive_state();
             }
