@@ -292,3 +292,24 @@ clobbers the valid one, the same rejection-shape bug but observed through a
 round-trip assertion rather than a direct empty-string check. `.ini` under
 each category's own `tests/wpt/metadata/css/<category>/` for all 9 files,
 `expected: FAIL` per subtest.
+
+## Срез 22 (`css/css-rhythm`+`css/css-mixins`, 2026-08-03)
+
+9 files, ~55 subtests, both established shapes, no new ones — driven by two
+different underlying "property doesn't exist" bugs
+([BUG-517](BUG-517-OPEN.md) for `block-step*`, [BUG-518](BUG-518-OPEN.md)
+for `@mixin`) rather than a partial-validation gap this time: since the
+property/at-rule isn't recognized at all, the generic passthrough is the
+*only* code path reached. **Rejection**: `css-rhythm/parsing/block-step-
+align-invalid.html` (12), `block-step-insert-invalid.html` (12),
+`block-step-invalid.html` (7), `block-step-round-invalid.html` (16),
+`block-step-size-invalid.html` (5), `css-mixins/functions/dashed-function-
+parsing.html` (29, malformed `--func(...)` argument-list syntax accepted
+verbatim), `dashed-function-named-arg.tentative.html` (6, malformed named-
+argument syntax `--func(--myident:)` accepted). **Canonicalization**:
+`css-rhythm/parsing/block-step-valid.html` (23 — every valid `block-step`
+shorthand serializes as the raw input instead of the spec's longhand
+order), `block-step-size-valid.html` (1, `"0"` not canonicalized to
+`"0px"`). `.ini` under `tests/wpt/metadata/css/css-rhythm/` and
+`tests/wpt/metadata/css/css-mixins/` for all 9 files, `expected: FAIL` per
+subtest.

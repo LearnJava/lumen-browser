@@ -80,6 +80,24 @@ helper's own logic (mutate `cssRule.style`, check `.length`) ever runs.
 `.ini`: `tests/wpt/metadata/css/css-logical/logicalprops-quirklength.html.ini`
 (`expected: FAIL` per subtest).
 
+## Срез 22 (`css/css-mixins`, 2026-08-03)
+
+Largest single-category extension of this bug to date: 135 subtests across
+6 files — `functions/at-function-cssom.html` (33, the dedicated
+`CSSFunctionRule`/`CSSFunctionDescriptors` CSSOM surface test),
+`functions/at-function-parsing.html` (~39, every `@function` grammar
+variant checked via `document.styleSheets[0].cssRules[0]`),
+`mixins/mixin-cssom.tentative.html` (6), `mixins/mixin-invalidation.
+tentative.html` (3, `ss.cssRules[0].cssRules[0]` — confirms the gap is not
+just top-level `cssRules` but the whole nested-rule chain), `mixins/
+mixin-parsing.html` (14, `@layer`/style-rule/`@media`/`@supports`/
+`@container`/`@starting-style`/`@scope` validity checks *inside* a
+`@mixin` body, all routed through the same missing `CSSStyleSheet`
+global), `mixins/mixin-shadow-dom.html` (1 of 3 — "access to mixins from
+adopted stylesheets" needs `new CSSStyleSheet()`; the other 2 subtests in
+that file are [BUG-518](BUG-518-OPEN.md), mixins not applying at all).
+`.ini` under `tests/wpt/metadata/css/css-mixins/` for these 6 files.
+
 ## Срез 19 (`css/css-nesting`, 2026-08-03)
 
 6 files, 45 subtests + 1 file-level `TIMEOUT` — CSS Nesting's own CSSOM

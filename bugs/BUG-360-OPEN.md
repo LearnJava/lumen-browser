@@ -167,3 +167,15 @@ onload="checkLayout('.container')">`) целиком мёртв на этой к
 textarea,zero-one-axis,float,empty-child-box,replaced-element-001}.html`.
 `.ini`: `expected: TIMEOUT` на уровне файла (ноль зарегистрированных
 `test()`).
+
+**Срез 22 (`css/css-rhythm/computedstyle`, 2026-08-03):** те же 2 файла, тот
+же механизм — `<body onload="checkLayout('.test')">`, ноль
+зарегистрированных `test()`, TIMEOUT на уровне файла:
+`block-level-replaced-elements-affected-by-block-step-size.html`,
+`inline-level-replaced-elements-not-affected-by-block-step-size.html`.
+Изначально пропущены в этом же срезе при первом прогоне (не попали в
+собственный `<summary>`-блок HTML-отчёта, тот же артефакт вложенных
+meta-строк, что и у BUG-519's файлов) — найдены только повторным прогоном
+после коммита `.ini`, подтверждающим 0 unexpected passes. `.ini` под
+`tests/wpt/metadata/css/css-rhythm/computedstyle/` для обоих файлов,
+`expected: TIMEOUT` на уровне файла.
