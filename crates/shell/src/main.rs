@@ -9656,14 +9656,12 @@ impl Lumen {
     /// resolve the clicked row back to a real `tab_strip`/`workspace_panel`
     /// entry via the `data-tab-id`/`data-ws-id` attribute `ChromeModel`
     /// stamped on it (CC-6, `crates/chrome/src/model.rs`) — `nid` is the
-    /// `data-action`-carrying node itself for these four. Actions whose only
-    /// visible effect would still need a `chrome_doc` DOM mutation this slice
-    /// doesn't cover (`SetProfile`, settings/history/bookmarks section
-    /// switches, …) remain no-ops: those panels are still legacy overlays
-    /// pending CC-10b, and `data-profile` already updates automatically on
-    /// any profile switch made through the legacy profile-menu popover (it
-    /// is read fresh from `self.profile_menu` by every
-    /// [`Self::chrome_model_snapshot`]).
+    /// `data-action`-carrying node itself for these four. `SetSettingsSection`/
+    /// `ShowView`/`SetSidebarTab` and friends (CC-10b) since grew the same
+    /// pattern for the settings/history/bookmarks views and the right
+    /// sidebar. A handful of actions remain permanent no-ops for reasons
+    /// specific to each — see the comment on the final match arm below
+    /// (BUG-426).
     fn dispatch_chrome_action(
         &mut self,
         nid: NodeId,
@@ -10014,20 +10012,67 @@ impl Lumen {
                 self.settings_panel.toggle_fingerprint_mode();
                 self.relayout_chrome_host();
             }
-            // Demo-only actions on the static preview markup: no shell state
-            // backs them yet. Recognised (so the click doesn't fall through
-            // to legacy geometry) but otherwise a no-op for now. `SetProfile`
-            // specifically: the profile-menu popover is still a legacy
-            // overlay (its click handling — and the actual
-            // `profiles.set_active` call — lives in the
-            // `WindowEvent::MouseInput` legacy-popover branch, not here),
-            // and `ChromeModel` already reflects whatever profile that path
-            // activates on the very next relayout. `ToggleSwitch`: the
-            // remaining four `.toggle`s ("Принудительный HTTPS", the two
-            // Extensions rows, and the QA "Стабильные test-id" row) have no
-            // matching real-state field at all (BUG-421 closing rationale —
-            // no force-HTTPS setting, no extensions/QA-flag store), so the
-            // click can't be resolved to anything and stays a no-op.
+            // BUG-426 reinvestigation (2026-08-01): all six of these were
+            // filed together as "sit in one empty branch" but each is a
+            // no-op for its own, unrelated reason — none is a small wiring
+            // gap like BUG-419/420/421 turned out to be.
+            //
+            // `SetProfile`: `#profileMenu`/`.pm-item` in the chrome asset are
+            // permanently unreachable, not just unwired — CC-15-1
+            // (`docs/tasks/p1-css-chrome.md`) deliberately kept the profile
+            // switcher a legacy overlay (`panels::profile_menu::build_panel`,
+            // painted and hit-tested outside `chrome_doc` entirely, see the
+            // `WindowEvent::MouseInput` branch above `ToggleProfileMenu`'s
+            // callers) rather than migrate it to `ChromeModel`/`bind_model`;
+            // nothing ever sets `#profileMenu`'s `.open` class, so it never
+            // gets a layout box for the engine chrome to hit-test in the
+            // first place. `ChromeModel::profile_slug` already reflects
+            // whatever profile the legacy path activates, same as CC-15-1's
+            // rationale describes.
+            //
+            // `ArchiveCard`: the two `.bm-card.readlater` demo cards
+            // (`data-action="archive-card"`) live inside `#view-bookmarks`'s
+            // `.bm-grid`, whose *entire* card list `bind_bookmarks`
+            // (`crates/chrome/src/model.rs`) deletes and rebuilds from
+            // `ChromeBookmarksModel::cards` on every relayout —
+            // `remove_children_with_class(doc, grid, "bm-card")` matches by
+            // class token, so it removes `.bm-card.readlater` too, and the
+            // rebuilt cards never carry a `readlater`/`archive-card` variant
+            // (no such concept in `ChromeBookmarkCardModel`). The action-
+            // carrying markup is wiped before the first paint; this branch
+            // is provably dead code, not merely low priority.
+            //
+            // `ToggleSwitch`: of `#view-settings`'s six `.toggle`s, the two
+            // with a clean 1:1 backing field got their own `data-action` in
+            // [BUG-421](../../../bugs/BUG-421-FIXED.md) (`ToggleShields`/
+            // `ToggleFingerprintMode`, handled above). The remaining four
+            // ("Принудительный HTTPS", the two Extensions rows, and the QA
+            // "Стабильные test-id" row) have no matching real-state field at
+            // all — no force-HTTPS setting, no extensions/QA-flag store —
+            // so a click still can't resolve to anything.
+            //
+            // `ToggleFocusTimer`/`ToggleFocus`: unlike the above, real
+            // backing state exists (`self.focus: FocusModePanel`) and is
+            // fully interactive already — but through a *different* legacy
+            // overlay (`panels::focus_panel::build_panel` + its own
+            // `MouseInput`/`FocusHit` hit-test, unconditionally painted
+            // whenever `self.focus.active`), not `chrome_doc`. The chrome
+            // asset's `.focus-timer` pill is a simpler visual (icon + `MM:SS`
+            // + two buttons) than the legacy widget's card-with-progress-ring
+            // — `body` never gets a `focus-mode` class, so the pill has no
+            // layout box today. Wiring these two actions for real would mean
+            // either drawing both widgets at once (visibly duplicated) or
+            // retiring the ring animation to cut over to the frozen design's
+            // pill, the same class of legacy-overlay-vs-engine-chrome call
+            // CC-15-1 already made for the profile switcher — a follow-up
+            // task, not a same-shape fix as this bug's other five actions.
+            //
+            // `SetDevtoolsTab`: `.dt-tab`'s four static rows (Elements /
+            // Console / Network / Sources, `data-dt-tab="…"`) mock a
+            // multi-panel DevTools UI the engine does not have —
+            // `self.devtools_console: ConsolePanel` is a single JS-console
+            // view with no per-tab data behind Elements/Network/Sources, so
+            // there is nothing to switch between.
             ChromeAction::SetProfile
             | ChromeAction::ArchiveCard
             | ChromeAction::ToggleSwitch
