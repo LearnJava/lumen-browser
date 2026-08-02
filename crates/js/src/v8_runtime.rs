@@ -34,7 +34,7 @@ use lumen_dom::{
 use lumen_layout::{matches_selector, query_all, query_all_scoped, query_all_within};
 use std::collections::{HashMap, HashSet};
 use v8::{ValueDeserializerHelper, ValueSerializerHelper};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::sync::{
     Once,
@@ -327,6 +327,17 @@ pub struct V8JsRuntime {
     pointer_capture_nid: Arc<Mutex<Option<u32>>>,
     /// Deterministic render mode (8F): when `true`, `Date.now()`/`Math.random` are frozen/seeded.
     deterministic: AtomicBool,
+    /// DEVX-16: `--rng-seed` override for deterministic mode's `Math.random`
+    /// seed. `None` means derive the seed from the page URL hash (previous,
+    /// still-default behaviour).
+    deterministic_rng_seed: Mutex<Option<u64>>,
+    /// DEVX-16: `--monotonic-clock` — when `true` (and `deterministic` is also
+    /// `true`), `Date.now()`/`performance.now()` advance [`Self::deterministic_clock_ms`]
+    /// by 1 ms per call instead of staying frozen at 0.
+    deterministic_monotonic: AtomicBool,
+    /// Shared counter backing `deterministic_monotonic`'s clock advance, reset
+    /// to 0 by [`Self::set_deterministic_mode`].
+    deterministic_clock_ms: Arc<AtomicU64>,
     /// Live SW execution threads keyed by `(origin, scope)`.
     sw_worker_store: Option<lumen_core::ext::SwWorkerStore>,
     /// `BroadcastChannel` instances created on this page (WHATWG HTML §9.5).
@@ -396,6 +407,9 @@ impl V8JsRuntime {
             pending_focus_requests: Arc::new(Mutex::new(Vec::new())),
             pointer_capture_nid: Arc::new(Mutex::new(None)),
             deterministic: AtomicBool::new(false),
+            deterministic_rng_seed: Mutex::new(None),
+            deterministic_monotonic: AtomicBool::new(false),
+            deterministic_clock_ms: Arc::new(AtomicU64::new(0)),
             sw_worker_store: None,
             broadcast_channels: Arc::new(Mutex::new(Vec::new())),
             pending_notifications: Arc::new(Mutex::new(Vec::new())),
@@ -503,9 +517,21 @@ impl V8JsRuntime {
     }
 
     /// Enable or disable deterministic render mode (8F) before calling `install_dom`.
-    pub fn set_deterministic_mode(&self, on: bool) {
-        self.deterministic
-            .store(on, std::sync::atomic::Ordering::Relaxed);
+    ///
+    /// `rng_seed` (DEVX-16, `--rng-seed`): overrides the URL-hash-derived
+    /// `Math.random` seed when `Some`; ignored when `on` is `false`.
+    /// `monotonic_clock` (DEVX-16, `--monotonic-clock`): when `true`,
+    /// `Date.now()`/`performance.now()` advance by 1 ms per call instead of
+    /// staying frozen at 0; also ignored when `on` is `false`.
+    pub fn set_deterministic_mode(&self, on: bool, rng_seed: Option<u64>, monotonic_clock: bool) {
+        self.deterministic.store(on, Ordering::Relaxed);
+        *self
+            .deterministic_rng_seed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = rng_seed;
+        self.deterministic_monotonic
+            .store(monotonic_clock, Ordering::Relaxed);
+        self.deterministic_clock_ms.store(0, Ordering::Relaxed);
     }
 
     /// Attach a `SwWorkerStore` so that `_lumen_sw_activate_script` can spawn and
@@ -954,10 +980,18 @@ impl V8JsRuntime {
             .deterministic
             .load(std::sync::atomic::Ordering::Relaxed)
         {
-            Some(crate::deterministic_seed_from_url(page_url))
+            // DEVX-16: an explicit `--rng-seed` override takes precedence over
+            // the URL-hash derivation.
+            let override_seed = *self
+                .deterministic_rng_seed
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            Some(override_seed.unwrap_or_else(|| crate::deterministic_seed_from_url(page_url)))
         } else {
             None
         };
+        let monotonic_clock = self.deterministic_monotonic.load(Ordering::Relaxed);
+        let deterministic_clock_ms = Arc::clone(&self.deterministic_clock_ms);
         let page_url = page_url.to_owned();
 
         self.run(move |inner| {
@@ -2934,11 +2968,17 @@ impl V8JsRuntime {
     // Returns milliseconds since Unix epoch as f64; JS shim subtracts
     // the time-origin captured at install_dom_api time to give DOMHighResTimeStamp.
     // In deterministic mode (8F) always returns 0 so Date.now()/performance.now()
-    // are frozen at the epoch, making rendering output independent of wall-clock time.
+    // are frozen at the epoch, making rendering output independent of wall-clock
+    // time — unless DEVX-16's `--monotonic-clock` is set, in which case each
+    // call advances `deterministic_clock_ms` by 1 ms instead of staying at 0.
     let det_time = deterministic_seed.is_some();
     reg!("_lumen_now_ms", move || -> f64 {
         if det_time {
-            0.0
+            if monotonic_clock {
+                deterministic_clock_ms.fetch_add(1, Ordering::Relaxed) as f64
+            } else {
+                0.0
+            }
         } else {
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -4064,15 +4104,26 @@ impl V8JsRuntime {
 
             // Deterministic render mode (8F): override Math.random with a seeded
             // xorshift32 PRNG and freeze Date.now() at 0. Must run after WEB_API_SHIM
-            // so Date and Math are fully set up. Same script QuickJS's
-            // `dom::install_dom_api` builds (kept byte-for-byte identical).
+            // so Date and Math are fully set up. Mirrors the script QuickJS's
+            // `dom::install_dom_api` builds, except for the DEVX-16 monotonic-clock
+            // branch below, which is V8-only (QuickJS is a frozen rollback path,
+            // see CLAUDE.md — no new functionality is added there).
             if let Some(seed) = deterministic_seed {
                 let seed32 = u32::try_from(seed & 0xffff_ffff).unwrap_or(1);
                 let seed32 = if seed32 == 0 { 1 } else { seed32 };
+                // DEVX-16: `--monotonic-clock` routes Date.now() through the same
+                // `_lumen_now_ms()` native binding performance.now() uses, so both
+                // advance in lockstep off one shared counter instead of Date.now()
+                // staying frozen at 0.
+                let date_now_body = if monotonic_clock {
+                    "return _lumen_now_ms();"
+                } else {
+                    "return 0;"
+                };
                 let js = format!(
                     "(function(){{var s={seed32};\
                      Math.random=function(){{s^=s<<13;s^=s>>>17;s^=s<<5;return (s>>>0)/4294967296;}};\
-                     Date.now=function(){{return 0;}};\
+                     Date.now=function(){{{date_now_body}}};\
                      }})()"
                 );
                 v8::tc_scope!(tc, scope);

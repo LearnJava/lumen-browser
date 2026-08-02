@@ -1719,7 +1719,7 @@
     {
      "id": "DEVX",
      "title": "DEVX: dev-tooling на готовых поверхностях браузера",
-     "status": "active",
+     "status": "done",
      "note": "Дорожка dev-tooling (владелец — P2): задействовать уже существующие automation/introspection-поверхности браузера для ускорения разработки. Полный каталог поверхностей и «что когда применять» — `docs/automation.md` (аудит 2026-07-16): MCP tools/resources, BiDi-команды, driver-API, `--deterministic`, `LUMEN_NO_*` paint-флаги — почти всё не задействовано тулингом",
      "tasks": [
       {
@@ -1839,9 +1839,9 @@
       {
        "id": "DEVX-16",
        "title": "DEVX-16: детерминизм до JS-рантайма",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Довести детерминизм до JS-рантайма: `--rng-seed`/`--monotonic-clock` разбираются в `DetConfig`, но до рантайма не доходят — сид всегда выводится из хеша URL, значение флага игнорируется (зафиксировано в docs/automation.md §CLI flags). Предпосылка для записи внутреннего состояния по кадрам (обсуждена и отложена: без полного детерминизма не даёт воспроизводимости, ради которой затевается)"
+       "note": "DONE 2026-08-02 (P1): `V8JsRuntime::set_deterministic_mode(on, rng_seed, monotonic_clock)` — `--rng-seed` overrides the URL-hash `Math.random` seed, `--monotonic-clock` advances `Date.now()`/`performance.now()` by 1ms per call off one shared counter instead of staying frozen at 0. `DetConfig` threaded as a `Copy` struct through `WinitSession`'s two runtime-creation sites (fresh load + bfcache thaw) in place of a bare bool. QuickJS rollback path untouched (CLAUDE.md policy). See docs/tasks/p1-introspection-track.md §DEVX-16"
       }
      ]
     },

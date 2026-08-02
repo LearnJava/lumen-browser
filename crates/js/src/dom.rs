@@ -25736,8 +25736,19 @@ mod tests {
 
         // V8 twin of the (removed) QuickJS `runtime_deterministic` helper.
         fn v8_runtime_deterministic(doc: Arc<Mutex<Document>>, url: &str) -> V8JsRuntime {
+            v8_runtime_deterministic_cfg(doc, url, None, false)
+        }
+
+        // DEVX-16: like `v8_runtime_deterministic`, but exposes the `--rng-seed`
+        // override / `--monotonic-clock` knobs instead of hardcoding them off.
+        fn v8_runtime_deterministic_cfg(
+            doc: Arc<Mutex<Document>>,
+            url: &str,
+            rng_seed: Option<u64>,
+            monotonic_clock: bool,
+        ) -> V8JsRuntime {
             let rt = V8JsRuntime::new().unwrap();
-            rt.set_deterministic_mode(true);
+            rt.set_deterministic_mode(true, rng_seed, monotonic_clock);
             rt.install_dom(doc, url, None, None, None, None, None, None, None, None, false).unwrap();
             rt
         }
@@ -25895,6 +25906,84 @@ mod tests {
             } else {
                 panic!("Date.now() must return a number");
             }
+        }
+
+        // ── DEVX-16: --rng-seed / --monotonic-clock reach the JS runtime ─────────
+
+        #[test]
+        fn rng_seed_override_beats_url_hash() {
+            // Different URLs, but the same explicit `--rng-seed` override, must
+            // produce identical Math.random sequences (the override takes
+            // precedence over URL-hash derivation).
+            let rt_a = v8_runtime_deterministic_cfg(make_doc(), "http://x.com/#foo", Some(7), false);
+            let rt_b = v8_runtime_deterministic_cfg(make_doc(), "http://y.org/other#bar", Some(7), false);
+            let seq_a: Vec<_> = (0..5).map(|_| rt_a.eval("Math.random()").unwrap()).collect();
+            let seq_b: Vec<_> = (0..5).map(|_| rt_b.eval("Math.random()").unwrap()).collect();
+            assert_eq!(seq_a, seq_b, "same --rng-seed override → same random sequence regardless of URL");
+        }
+
+        #[test]
+        fn rng_seed_override_differs_from_default_url_derivation() {
+            // Same URL fragment, but one runtime gets an explicit override —
+            // the override must NOT collapse to the URL-hash-derived sequence.
+            let rt_default = v8_runtime_deterministic(make_doc(), "http://x.com/#test");
+            let rt_override = v8_runtime_deterministic_cfg(make_doc(), "http://x.com/#test", Some(999), false);
+            let r_default = rt_default.eval("Math.random()").unwrap();
+            let r_override = rt_override.eval("Math.random()").unwrap();
+            assert_ne!(r_default, r_override, "--rng-seed override must change the sequence vs URL-hash default");
+        }
+
+        // Extracts the f64 payload of a `Number` JsValue, panicking otherwise —
+        // the monotonic-clock tests below compare deltas rather than absolute
+        // values, since `performance` shim install already consumes one tick of
+        // the shared counter (`_perf_origin_ms = _lumen_now_ms()`).
+        fn expect_number(v: lumen_core::JsValue) -> f64 {
+            match v {
+                lumen_core::JsValue::Number(n) => n,
+                other => panic!("expected Number, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn monotonic_clock_advances_date_now() {
+            let rt = v8_runtime_deterministic_cfg(make_doc(), "http://x.com/#test", None, true);
+            let a = expect_number(rt.eval("Date.now()").unwrap());
+            let b = expect_number(rt.eval("Date.now()").unwrap());
+            let c = expect_number(rt.eval("Date.now()").unwrap());
+            assert_eq!(b - a, 1.0, "each Date.now() call must advance by exactly 1 ms");
+            assert_eq!(c - b, 1.0, "each Date.now() call must advance by exactly 1 ms");
+        }
+
+        #[test]
+        fn monotonic_clock_advances_performance_now() {
+            let rt = v8_runtime_deterministic_cfg(make_doc(), "http://x.com/#test", None, true);
+            let a = expect_number(rt.eval("performance.now()").unwrap());
+            let b = expect_number(rt.eval("performance.now()").unwrap());
+            assert_eq!(b - a, 1.0, "each performance.now() call must advance by exactly 1 ms");
+        }
+
+        #[test]
+        fn monotonic_clock_shares_one_counter_across_date_and_performance() {
+            // Date.now() and performance.now() both read `_lumen_now_ms()`, so an
+            // interleaved performance.now() call must consume a tick of the SAME
+            // counter Date.now() reads — two consecutive Date.now() calls with one
+            // performance.now() call between them must be 2 ms apart, not 1.
+            let rt = v8_runtime_deterministic_cfg(make_doc(), "http://x.com/#test", None, true);
+            let a = expect_number(rt.eval("Date.now()").unwrap());
+            let _ = rt.eval("performance.now()").unwrap();
+            let c = expect_number(rt.eval("Date.now()").unwrap());
+            assert_eq!(c - a, 2.0, "an interleaved performance.now() call must advance the shared counter too");
+        }
+
+        #[test]
+        fn without_monotonic_clock_date_now_stays_frozen() {
+            // Default deterministic mode (monotonic_clock = false) keeps the
+            // pre-DEVX-16 frozen-at-0 behaviour on repeated calls.
+            let rt = v8_runtime_deterministic(make_doc(), "http://x.com/#test");
+            let a = rt.eval("Date.now()").unwrap();
+            let b = rt.eval("Date.now()").unwrap();
+            assert_eq!(a, lumen_core::JsValue::Number(0.0));
+            assert_eq!(b, lumen_core::JsValue::Number(0.0));
         }
 
         // ─── window.open() / window.opener tests ─────────────────────────────────

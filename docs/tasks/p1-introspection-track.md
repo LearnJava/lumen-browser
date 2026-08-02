@@ -850,7 +850,7 @@ CI» нельзя без нового ADR.
 
 ---
 
-## DEVX-16: довести детерминизм до JS-рантайма (S, P3)
+## DEVX-16: довести детерминизм до JS-рантайма (S, P3) — ЗАКРЫТ (2026-08-02)
 
 **Зависит от:** ничего.
 
@@ -861,6 +861,52 @@ CI» нельзя без нового ADR.
 **Почему это важно для дорожки:** без полного детерминизма запись внутреннего
 состояния по кадрам (обсуждалась и отложена) не даёт воспроизводимости, ради
 которой затевается. `DEVX-16` — её предпосылка, а не самостоятельная фича.
+
+**Итог (P1, 2026-08-02):** V8-only (per CLAUDE.md — QuickJS — уходящий
+rollback-путь, новая функциональность туда не добавляется).
+`V8JsRuntime::set_deterministic_mode` расширен с `(on: bool)` до
+`(on: bool, rng_seed: Option<u64>, monotonic_clock: bool)`; новые поля
+`deterministic_rng_seed: Mutex<Option<u64>>`/`deterministic_monotonic:
+AtomicBool`/`deterministic_clock_ms: Arc<AtomicU64>` на `V8JsRuntime`
+(`crates/js/src/v8_runtime.rs`). `install_dom` берёт `rng_seed`-оверрайд
+вместо хеша URL, когда он задан (`unwrap_or_else` на URL-derivation как и
+раньше — оверрайд не убирает дефолт). `--monotonic-clock` перевёл `Date.now`
+на вызов уже существующего нативного байндинга `_lumen_now_ms()` (вместо
+хардкода `return 0`), а сам `_lumen_now_ms` при активном флаге инкрементит
+общий `AtomicU64` на 1 за вызов вместо возврата 0.0 — `Date.now()` и
+`performance.now()` делят один счётчик (что и требует doc-комментарий флага),
+не два независимых.
+
+`DetConfig` в `crates/shell` стал `Copy` и протянут как единый тип через всю
+цепочку (вместо голого `bool`): `run_window_mode` → `WinitSession.deterministic`
+→ `run_scripts_with_dom`/`bfcache_thaw`'s V8-блоки (оба места, где рантайм
+реально создаётся) → `rt.set_deterministic_mode(on, rng_seed, monotonic_clock)`.
+Все прежние truthy-проверки (`raf_ts`, стартовый размер окна 1280×800,
+`dark_mode`-эвристика) стали `.enabled` — семантика не изменилась, поменялся
+только тип носителя. `--screenshot`/`--print-to-pdf`/`--dump-layout`/
+`--dump-display-list`/SVG-как-изображение путях (`svg_image.rs`) и раньше
+жёстко фиксировали `true`/`false` независимо от CLI-флагов — это сохранено
+как есть (не регрессия этой задачи, не в её скоупе трогать).
+
+**Гейт:** `cargo clippy -p lumen-js --features v8-backend --all-targets` и
+`cargo clippy -p lumen-shell --all-targets` чистые; `cargo check -p lumen-shell
+--all-features` (обе фичи `quickjs`+`v8` разом) чистый. 7 новых тестов в
+`crates/js/src/dom.rs` (`dom::tests::v8_window_anim_compress::*`) гоняют
+реальный V8-рантайм (не мок): `rng_seed_override_beats_url_hash` (разные URL,
+общий `--rng-seed` → идентичная последовательность `Math.random`),
+`rng_seed_override_differs_from_default_url_derivation`, три теста на
+монотонные `Date.now()`/`performance.now()` через дельты между
+последовательными вызовами (абсолютные значения хрупки — `_perf_origin_ms`
+в WEB_API_SHIM уже потребляет один тик счётчика при установке), и
+`monotonic_clock_shares_one_counter_across_date_and_performance` (интерливинг
+вызовов доказывает общий счётчик: разница между двумя `Date.now()` с
+`performance.now()` между ними равна 2, а не 1). Плюс регрессионный
+`without_monotonic_clock_date_now_stays_frozen` — старое поведение (заморожен
+на 0) без `--monotonic-clock` не сломано. Живой `--deterministic --rng-seed N
+--monotonic-clock` через реальное окно вручную не гонялся — вне практического
+охвата headless-сессии без дисплея; уровень V8-рантайма покрыт напрямую, а
+CLI→`WinitSession`-проводка — типобезопасный passthrough без логики,
+провер­енный компилятором на всех путях выше.
 
 ---
 
