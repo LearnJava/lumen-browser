@@ -19,7 +19,8 @@ use lumen_paint::hit_test;
 
 use crate::{
     A11yNode, AxQuery, BoxModel, BrowserSession, ComputedProperties, ComputedStyleSnapshot,
-    ConsoleEntry, FingerprintProfile, NetworkEntry, NodeRef, ScrollDelta, Target, WaitCondition,
+    ConsoleEntry, ExplainElement, FingerprintProfile, NetworkEntry, NodeRef, ScrollDelta, Target,
+    WaitCondition,
     context::SessionContext,
     isolation::OriginIsolationContext,
 };
@@ -979,6 +980,12 @@ impl BrowserSession for InProcessSession {
         }
 
         Ok(out)
+    }
+
+    fn explain_element(&self, selector: &str) -> Result<ExplainElement> {
+        let state = self.state()?;
+        let doc = Self::lock_doc(state)?;
+        Ok(crate::explain::explain_element(&state.layout_root, &doc, selector))
     }
 
     // ── Isolation & Fingerprinting (Task 8E, Phase 1) ────────────────────────

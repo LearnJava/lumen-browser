@@ -162,6 +162,51 @@ pub enum ConsoleLevel {
     Error,
 }
 
+/// Causal chain answer for [`BrowserSession::explain_element`] (DEVX-10, ADR-024
+/// L1 `x-explain-element`): why an element did — or didn't — paint.
+///
+/// `есть в DOM → стили применились → попал в layout → размер → stacking-контекст
+/// → команды → клип → слой` (`docs/tasks/p1-introspection-track.md`). Each stage
+/// is only meaningful once the stage before it held, but every stage the tool
+/// *could* determine is still filled in — the caller sees exactly where the
+/// chain stops instead of a single boolean.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ExplainElement {
+    /// A DOM node matching the selector exists — checked at the DOM level,
+    /// independent of layout (so `display: none` nodes still count).
+    pub in_dom: bool,
+    /// The CSS cascade ran for this node — a `LayoutBox` exists for it, even
+    /// if `in_layout` is `false` (e.g. `display: none` still gets a box,
+    /// tagged to be skipped, with its computed style attached).
+    pub style_applied: bool,
+    /// The node produced a real (non-skipped) layout box.
+    pub in_layout: bool,
+    /// Border-box `(width, height)` in CSS px, once `in_layout` is `true`.
+    pub size: Option<(f32, f32)>,
+    /// This box establishes its own CSS stacking context (CSS Positioned
+    /// Layout L3 §9.10).
+    pub creates_stacking_context: bool,
+    /// Number of display-list commands attributed to this box's *own* paint
+    /// (its `BoxOrigin`, i.e. not any anonymous wrapper or child box). `0` is
+    /// common and legitimate — e.g. a container with no visible background
+    /// or border paints nothing of its own.
+    pub commands_emitted: usize,
+    /// Maximum number of open rect/rounded-rect/path clips across this box's
+    /// own paint span(s). `None` when the box produced no span at all —
+    /// nothing to anchor a clip-depth reading to.
+    pub clip_depth: Option<u16>,
+    /// Compositor layer index this box's paint landed in. Currently always
+    /// `Some(0)` when `in_layout` is `true` — the in-process compositor has a
+    /// single layer (`BasicLayerTree::single_layer`) until multi-layer
+    /// compositing lands.
+    pub layer: Option<usize>,
+    /// Best-effort, human-readable guess at why the element has no visible
+    /// paint — **not derived from a diff and must not be read as fact**
+    /// (ADR-024's requirement that heuristic output be labelled as such).
+    /// `None` when nothing stood out, or when the element did paint.
+    pub heuristic: Option<String>,
+}
+
 /// Значения вычисленных CSS-свойств элемента из [`BrowserSession::computed_style`].
 ///
 /// Ключи — lowercase имена CSS-свойств (`"color"`, `"font-size"`, …),

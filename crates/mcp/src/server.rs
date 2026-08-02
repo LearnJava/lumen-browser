@@ -141,6 +141,7 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                         }
                     }
                 }),
+                experimental: false,
             },
             McpTool {
                 name: "new_tab".to_string(),
@@ -155,6 +156,7 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                         }
                     }
                 }),
+                experimental: false,
             },
             McpTool {
                 name: "click".to_string(),
@@ -169,6 +171,7 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                         }
                     }
                 }),
+                experimental: false,
             },
             McpTool {
                 name: "type".to_string(),
@@ -187,6 +190,7 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                         }
                     }
                 }),
+                experimental: false,
             },
             McpTool {
                 name: "scroll".to_string(),
@@ -214,6 +218,7 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                         }
                     }
                 }),
+                experimental: false,
             },
             McpTool {
                 name: "wait".to_string(),
@@ -237,6 +242,7 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                         }
                     }
                 }),
+                experimental: false,
             },
             McpTool {
                 name: "eval".to_string(),
@@ -251,6 +257,7 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                         }
                     }
                 }),
+                experimental: false,
             },
             McpTool {
                 name: "query".to_string(),
@@ -265,6 +272,29 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                         }
                     }
                 }),
+                experimental: false,
+            },
+            McpTool {
+                // ADR-024 L1 (`x-` prefix + `experimental: true`, DEVX-10):
+                // may change shape or vanish between commits. See
+                // `docs/tasks/p1-introspection-track.md` §DEVX-10.
+                name: "x-explain-element".to_string(),
+                description: "EXPERIMENTAL (ADR-024 L1): causal chain for the first element \
+                    matching a CSS selector — DOM -> style -> layout -> size -> stacking \
+                    context -> paint commands -> clip depth -> compositor layer. Includes a \
+                    best-effort `heuristic` field for why an element has no visible paint; \
+                    that field is a guess, not a fact.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["selector"],
+                    "properties": {
+                        "selector": {
+                            "type": "string",
+                            "description": "CSS selector"
+                        }
+                    }
+                }),
+                experimental: true,
             },
         ];
 
@@ -453,6 +483,19 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                     Err(e) => return McpResponse::err(id.clone(), -32603, format!("Query error: {e}")),
                 }
             }
+            "x-explain-element" => {
+                let selector = match args.get("selector").and_then(|v| v.as_str()) {
+                    Some(s) => s,
+                    None => return McpResponse::err(id.clone(), -32602, "Missing selector argument"),
+                };
+                match self.session.explain_element(selector) {
+                    Ok(explain) => match serde_json::to_value(&explain) {
+                        Ok(v) => v,
+                        Err(e) => return McpResponse::err(id.clone(), -32603, format!("Explain serialization error: {e}")),
+                    },
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("Explain error: {e}")),
+                }
+            }
             _ => {
                 return McpResponse::err(id.clone(), -32601, format!("Unknown tool: {name}"));
             }
@@ -614,6 +657,10 @@ mod tests {
             Ok(vec![])
         }
 
+        fn explain_element(&self, _sel: &str) -> lumen_core::error::Result<lumen_driver::ExplainElement> {
+            Ok(lumen_driver::ExplainElement::default())
+        }
+
         fn fingerprint_profile(&self) -> lumen_driver::FingerprintProfile {
             lumen_driver::FingerprintProfile::Standard
         }
@@ -690,13 +737,13 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_returns_eight_tools() {
+    fn tools_list_returns_nine_tools() {
         let mut server = McpServer::new(MockSession, VecTransport::new());
         let req = make_request("tools/list", serde_json::json!({}));
         let resp = run_one(&mut server, &req);
         assert!(resp.error.is_none());
         let tools = resp.result.unwrap()["tools"].as_array().cloned().unwrap_or_default();
-        assert_eq!(tools.len(), 8);
+        assert_eq!(tools.len(), 9);
         let names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap_or("")).collect();
         assert!(names.contains(&"navigate"));
         assert!(names.contains(&"new_tab"));
@@ -706,6 +753,54 @@ mod tests {
         assert!(names.contains(&"wait"));
         assert!(names.contains(&"eval"));
         assert!(names.contains(&"query"));
+        assert!(names.contains(&"x-explain-element"));
+    }
+
+    /// ADR-024 L1: `x-explain-element` must carry `"experimental": true` in
+    /// `tools/list`; the pre-ADR-024 tools must NOT carry the key at all
+    /// (`skip_serializing_if`) — their wire shape must stay exactly as it was
+    /// before this task.
+    #[test]
+    fn tools_list_marks_only_explain_element_as_experimental() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request("tools/list", serde_json::json!({}));
+        let resp = run_one(&mut server, &req);
+        let tools = resp.result.unwrap()["tools"].as_array().cloned().unwrap_or_default();
+        for tool in &tools {
+            let name = tool["name"].as_str().unwrap_or("");
+            if name == "x-explain-element" {
+                assert_eq!(tool["experimental"], true, "x-explain-element must be marked experimental");
+            } else {
+                assert!(
+                    tool.get("experimental").is_none(),
+                    "{name} must not carry an experimental key (ADR-024: legacy tools keep their original shape)"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tools_call_explain_element_ok() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request(
+            "tools/call",
+            serde_json::json!({ "name": "x-explain-element", "arguments": { "selector": "#missing" } }),
+        );
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_none());
+        let result = resp.result.unwrap();
+        assert_eq!(result["in_dom"], false);
+    }
+
+    #[test]
+    fn tools_call_explain_element_missing_selector_errors() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request(
+            "tools/call",
+            serde_json::json!({ "name": "x-explain-element", "arguments": {} }),
+        );
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_some());
     }
 
     #[test]

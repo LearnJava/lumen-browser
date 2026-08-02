@@ -23,8 +23,8 @@ use lumen_paint::compositor::{BasicLayerTree, Compositor, ThreadedCompositor};
 
 use crate::{
     A11yNode, AxQuery, BoxModel, BrowserSession, ComputedProperties, ComputedStyleSnapshot,
-    ConsoleEntry, FingerprintProfile, InputCommand, NetworkEntry, NodeRef, ScrollDelta, Target,
-    WaitCondition, context::SessionContext,
+    ConsoleEntry, ExplainElement, FingerprintProfile, InputCommand, NetworkEntry, NodeRef,
+    ScrollDelta, Target, WaitCondition, context::SessionContext,
 };
 
 /// Встроенный шрифт Inter-Regular (SIL OFL 1.1).
@@ -859,6 +859,12 @@ impl BrowserSession for WinitSession {
         }
 
         Ok(out)
+    }
+
+    fn explain_element(&self, selector: &str) -> Result<ExplainElement> {
+        let state = self.state()?;
+        let state = state.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+        Ok(crate::explain::explain_element(&state.layout_root, &state.doc, selector))
     }
 
     fn network_log(&self) -> Result<Vec<NetworkEntry>> {

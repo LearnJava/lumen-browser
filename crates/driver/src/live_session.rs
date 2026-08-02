@@ -24,8 +24,8 @@ use lumen_core::error::{Error, Result};
 
 use crate::{
     A11yNode, AutomationCommand, AutomationHandle, AutomationReply, AxQuery, BoxModel,
-    BrowserSession, ComputedProperties, ComputedStyleSnapshot, ConsoleEntry, FingerprintProfile,
-    NetworkEntry, NodeRef, ScrollDelta, Target, WaitCondition,
+    BrowserSession, ComputedProperties, ComputedStyleSnapshot, ConsoleEntry, ExplainElement,
+    FingerprintProfile, NetworkEntry, NodeRef, ScrollDelta, Target, WaitCondition,
 };
 
 /// Default timeout for a single automation round-trip to the live window.
@@ -114,6 +114,14 @@ impl BrowserSession for LiveWindowSession {
     /// Not yet wired to the live window (SDC-2 MVP scope) — always empty.
     fn all_layout_boxes_by_selector(&self, _selector: &str) -> Result<Vec<BoxModel>> {
         Ok(Vec::new())
+    }
+
+    /// Not yet wired to the live window (SDC-2 MVP scope, same gap as
+    /// `layout_box_by_selector`) — always the all-default `ExplainElement`
+    /// (`in_dom: false`), not an error: the live channel has no layout data
+    /// to answer any link of the chain with yet (DEVX-14 tracks closing this).
+    fn explain_element(&self, _selector: &str) -> Result<ExplainElement> {
+        Ok(ExplainElement::default())
     }
 
     /// Not yet wired to the live window (SDC-2 MVP scope) — always empty.

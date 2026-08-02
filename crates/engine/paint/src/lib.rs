@@ -335,7 +335,7 @@ pub use display_list::{
     point_on_resize_grip, select_image_set_url, split_at_page_breaks, serialize_display_list,
     strip_background_graphics,
     BlendMode, CornerRadii,
-    DisplayCommand, DisplayList, FrameDelta, FrameFingerprint,
+    DisplayCommand, DisplayList, FrameDelta, FrameFingerprint, ProvenanceIndex, ProvenanceSpan,
 };
 pub use gap_decorations::{emit_gap_rules, GapDecorationContext, GapSegment};
 pub use tile_grid::{TileDirty, TileGrid, DEFAULT_TILE_SIZE};
