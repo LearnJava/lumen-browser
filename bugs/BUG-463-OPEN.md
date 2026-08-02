@@ -73,6 +73,13 @@ CSS2's float/clear/table. Три файла (`border-color-interpolation.html`,
 `animate`/`getAnimations` на `Element.prototype`. Срез 9 добавил `.ini` под
 `tests/wpt/metadata/css/css-backgrounds/` для тех же 16 файлов.
 
+**Срез 22 (`css/css-color-adjust`, 2026-08-03):** те же 14 сабтестов
+"Web Animations should be supported expected true got false", тот же
+`interpolation-testcommon.js`-хелпер, теперь на `color-scheme` (7,
+`color-scheme-no-interpolation.html`) и `forced-color-adjust` (7,
+`forced-color-adjust-no-interpolation.html`). `.ini` добавлен под
+`tests/wpt/metadata/css/css-color-adjust/` для обоих файлов.
+
 **WPT-RUN-3 срез 12 (`css/css-logical`, 2026-08-02)** — same
 `interpolation-testcommon.js` feature-detect, 6 files/38 subtests:
 `animations/float-interpolation.html` (7 of 42 — the rest pass, this file

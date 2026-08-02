@@ -191,3 +191,28 @@ BUG-384 instead). `.ini` under
 `tests/wpt/metadata/css/css-device-adapt/`, `tests/wpt/metadata/css/css-env/`,
 `tests/wpt/metadata/css/css-overscroll-behavior/` for all 3 files, `expected:
 FAIL` per affected subtest.
+
+## Срез 22 (`css/css-mixins` + `css/css-color-adjust`, 2026-08-03)
+
+~55 subtests across 12 files, largest cluster of this bug in the track so
+far. `css-mixins`: `mixin-layers.html` (`e1`/`e2`/`e3`/`e4`, 4),
+`function-container-dynamic/-self/-style.html` (bare `target`, 4),
+`function-in-media.html`/`function-media-dynamic.html` (bare `iframe`
+inside a rejected promise, 2), `function-invalidation.html` (bare
+`mutable_style`, 4), `function-shadow-cache.html` (bare `host1`, 1),
+`mixins/apply-nested-declarations.html`/`contents-nested-declarations(-
+fallback).html` (bare `e1`/`e2`, 6), `functions/function-attr.html` — same
+shape as `set-selector-text.html` in срез 19: the first `test()`'s cleanup
+references bare `main`, so `t.add_cleanup` throws, wptrunner reports the
+file `ERROR` instead of `FAIL`, and the remaining 17 parameterized `test()`
+calls never run (`NOTRUN`). `css-color-adjust`: bare `dark`/`light` (2,
+`color-scheme-color-initial-affected-by-color-scheme-property.html`), bare
+`meta` (2, `…-affected-by-meta-color-scheme-dynamic.html`), bare `frm` (1
+`FAIL` + `ERROR` file status on `color-scheme-iframe-dynamic.html`'s own
+cleanup, same masking shape as `function-attr.html` above, 3 subtests
+NOTRUN as a result; 1 more `FAIL` on `…-preferred-change-same-origin.html`),
+bare `main` (12, `color-scheme-iframe-preferred-nested.sub.html` — every
+subtest in the file), bare `light` again (1,
+`color-scheme-system-colors.html`). `.ini` under
+`tests/wpt/metadata/css/css-mixins/` and
+`tests/wpt/metadata/css/css-color-adjust/` for all 12 files.

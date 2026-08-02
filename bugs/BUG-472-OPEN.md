@@ -162,3 +162,20 @@ same two files is a *different*, deeper gap — the properties aren't
 recognized by the parser at all, not merely missing from this map — filed
 separately as [BUG-516](BUG-516-OPEN.md). `.ini` under
 `tests/wpt/metadata/css/css-overscroll-behavior/` for both files.
+
+## Срез 22 (`css/css-color-adjust`, 2026-08-03) — `color-scheme`/`color-adjust`/`forced-color-adjust`/`print-color-adjust` all parse and store but never reach the map
+
+`grep -n "color-scheme\|color-adjust" crates/driver/src/*.rs crates/js/
+src/*.rs` for `computed_style_to_map`-style insertions returns zero hits,
+while `layout/src/style.rs:14538/14561/15313/18420/18491` confirm all four
+properties are parsed and applied to `ComputedStyle` — same
+"parsed-but-never-taught-to-the-map" shape as срезы 12/15/21. 21 subtests /
+2 files: `inheritance.html` (8 — initial-value/inherits checks for all four
+properties), `parsing/color-scheme-computed.html` (13 — every valid
+`color-scheme` value). `color-scheme-root-background.html`'s single fail
+(`expected "rgba(0, 0, 0, 0)" but got ""` for the root element's UA
+background under a dark scheme) is left unattributed this slice — plausibly
+the same map gap surfacing through `background-color`, plausibly a real
+rendering gap (dark-scheme UA stylesheet override not applied at all); not
+isolated further. `.ini` under `tests/wpt/metadata/css/css-color-adjust/`
+for both files.

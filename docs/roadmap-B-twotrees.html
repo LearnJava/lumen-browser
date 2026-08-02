@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-03",
  "counts": {
-  "open": 177,
+  "open": 180,
   "fixed": 309,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 486,
+ "total_bugs": 489,
  "phases": [
   {
    "id": "P0",
@@ -7950,6 +7950,27 @@
    "component": "css-parser/layout (логические свойства не распознаются нигде, `grep -n \"overscroll-behavior-block\\",
    "date": null,
    "debtor": false
+  },
+  "BUG-517": {
+   "status": "open",
+   "title": "`block-step`/`block-step-size`/`-insert`/`-align`/`-round` (CSS Rhythmic Sizing L1 §3, Editor's Draft) не реализованы вовсе. 15 файлов/155 сабтестов, вся катего…",
+   "component": "css-parser/layout (`block-step*` не распознаётся нигде, `grep -n \"\\\"block-step\" crates/engine/css-parser/src/lib.rs crates/engine/layout/src/style.rs` — ноль совпадений)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-518": {
+   "status": "open",
+   "title": "ApplyRule\\",
+   "component": "css-parser (`@mixin`/`@apply`/`@contents` не распознаются нигде, `grep -rn \"MixinRule\\",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-519": {
+   "status": "open",
+   "title": "`@function`-тела с `if()`/типизированным `attr()`/локальными переменными/вложенным `@layer`/`@container`/shadow-scoping зависают (TIMEOUT, 0/0 сабтестов) вместо…",
+   "component": "css-parser/layout (первопричина не изолирована — один из `if()`/типизированный `attr()`/локальные переменные/вложенный `@layer`/`@container`/scoping в shadow-дереве внутри тела `@function`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -7969,6 +7990,9 @@
    "BUG-217",
    "BUG-502"
   ],
+  "css-parser (`@mixin`/`@apply`/`@contents` не распознаются нигде, `grep -rn \"MixinRule\\": [
+   "BUG-518"
+  ],
   "css-parser (`crates/engine/css-parser/src/parser.rs::skip_ws_and_comments`)": [
    "BUG-510"
   ],
@@ -7987,6 +8011,9 @@
    "BUG-465",
    "BUG-500"
   ],
+  "css-parser/layout (`block-step*` не распознаётся нигде, `grep -n \"\\\"block-step\" crates/engine/css-parser/src/lib.rs crates/engine/layout/src/style.rs` — ноль совпадений)": [
+   "BUG-517"
+  ],
   "css-parser/layout (`crates/engine/layout/src/style.rs::apply_declaration`)": [
    "BUG-492"
   ],
@@ -7999,6 +8026,9 @@
   ],
   "css-parser/layout (логические свойства не распознаются нигде, `grep -n \"overscroll-behavior-block\\": [
    "BUG-516"
+  ],
+  "css-parser/layout (первопричина не изолирована — один из `if()`/типизированный `attr()`/локальные переменные/вложенный `@layer`/`@container`/scoping в shadow-дереве внутри тела `@function`)": [
+   "BUG-519"
   ],
   "css-parser/layout (свойство не распознаётся нигде, `grep -rln \"text.size.adjust\\": [
    "BUG-513"
