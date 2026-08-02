@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-02",
  "counts": {
-  "open": 137,
+  "open": 145,
   "fixed": 307,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 444,
+ "total_bugs": 452,
  "phases": [
   {
    "id": "P0",
@@ -4521,7 +4521,7 @@
        "title": "WPT-RUN-3: шардирование + массовый прогон css/",
        "status": "planned",
        "size": "M",
-       "note": "Шардированный/параллельный прогон (34607 id последовательно ≈ сутки при наблюдаемом темпе) + массовый прогон `css/` с записью ожиданий в `.ini` и группировкой провалов в BUG-NNN по первопричине (существующая методология P2-wpt S5, вендоренные тесты НЕ ослабляются: движковый пробел = expected:FAIL + BUG-NNN). Зависит от WPT-RUN-1/2 — иначе прогон измеряет пробелы исполнителя, а не движок. Полезнее делать после DEVX-8a (инварианты локализуют часть падений), но это не блокирующая зависимость — ратчет ожиданий удержит прогон и без них. Зафиксировать в журнале, сколько id не добежало и почему (правило no-silent-caps). **Срез 1 (2026-08-02, шардирование) готов**: `run_report.py` получил `--processes`/`--offset`/`--limit` (wptrunner's `PathGroupedSource` группирует тесты по каталогу, поэтому параллелизм реально масштабируется на разнородном `css/`, не только на одном каталоге — проверено на `css/CSS2/floats`, 12 id, `--processes=1` и `--processes=4` дали идентичный результат: 3/3 harness OK, 54/68 сабтестов). Замер пропускной способности на срезе `--root css --recursive --offset 0 --limit 600` (353 отобранных id): `--processes=6` — 353 id за ~48с (~7.7 id/с) против ~0.55 id/с у прежней последовательной пробы (~14×) — пересматривает оценку \"сутки\" вниз до порядка **~75 минут** чистого времени wptrunner на весь корпус при сопоставимом темпе (не гарантия — начальный срез CSS1/CSS2 может быть легче среднего по корпусу; директории с testdriver/https будут медленнее). **Срез 2 (2026-08-02, массовый прогон + `.ini` + группировка) готов на `css/CSS2`**: 63 `testharness`-тестов (из 805 файловых id — остальное reftest/crashtest, `TEST-4`), полная поимённая триаж → 8 новых BUG-NNN (BUG-463…470) + 2 файла объяснены уже открытыми BUG-360/BUG-384, committed `.ini` на 58/63 файлов (0 unexpected подтверждён прогоном), 5 файлов намеренно не кластеризованы (см. `docs/wpt-status.md` → строка `css` за полным разбором). Остаток DoD — тот же массовый прогон + триаж на оставшихся ~34500 id `css/` (за пределами `CSS2`) — задел для среза 3. **Срез 3 (2026-08-02) готов на `css/cssom`**: 226 id, 188 testharness, 151/188 harness OK, 727/1448 сабтестов; поимённая триаж 178 непройденных файлов → 4 новых BUG-NNN (BUG-471…474, крупнейший — CSSOM-модель таблиц стилей/правил не подключена, 97 файлов) + 3 файла объяснены уже открытыми BUG-384/BUG-462, committed `.ini` на 171/178 файлов, 0 unexpected подтверждён прогоном (1476 проверок). Остаток DoD — тот же массовый прогон + триаж на оставшихся ~34300 id `css/` (все `css-*`-модули, `cssom-view`, `selectors` и т.д.) — задел на срез 4"
+       "note": "Шардированный/параллельный прогон (34607 id последовательно ≈ сутки при наблюдаемом темпе) + массовый прогон `css/` с записью ожиданий в `.ini` и группировкой провалов в BUG-NNN по первопричине (существующая методология P2-wpt S5, вендоренные тесты НЕ ослабляются: движковый пробел = expected:FAIL + BUG-NNN). Зависит от WPT-RUN-1/2 — иначе прогон измеряет пробелы исполнителя, а не движок. Полезнее делать после DEVX-8a (инварианты локализуют часть падений), но это не блокирующая зависимость — ратчет ожиданий удержит прогон и без них. Зафиксировать в журнале, сколько id не добежало и почему (правило no-silent-caps). **Срез 1 (2026-08-02, шардирование) готов**: `run_report.py` получил `--processes`/`--offset`/`--limit` (wptrunner's `PathGroupedSource` группирует тесты по каталогу, поэтому параллелизм реально масштабируется на разнородном `css/`, не только на одном каталоге — проверено на `css/CSS2/floats`, 12 id, `--processes=1` и `--processes=4` дали идентичный результат: 3/3 harness OK, 54/68 сабтестов). Замер пропускной способности на срезе `--root css --recursive --offset 0 --limit 600` (353 отобранных id): `--processes=6` — 353 id за ~48с (~7.7 id/с) против ~0.55 id/с у прежней последовательной пробы (~14×) — пересматривает оценку \"сутки\" вниз до порядка **~75 минут** чистого времени wptrunner на весь корпус при сопоставимом темпе (не гарантия — начальный срез CSS1/CSS2 может быть легче среднего по корпусу; директории с testdriver/https будут медленнее). **Срез 2 (2026-08-02, массовый прогон + `.ini` + группировка) готов на `css/CSS2`**: 63 `testharness`-тестов (из 805 файловых id — остальное reftest/crashtest, `TEST-4`), полная поимённая триаж → 8 новых BUG-NNN (BUG-463…470) + 2 файла объяснены уже открытыми BUG-360/BUG-384, committed `.ini` на 58/63 файлов (0 unexpected подтверждён прогоном), 5 файлов намеренно не кластеризованы (см. `docs/wpt-status.md` → строка `css` за полным разбором). Остаток DoD — тот же массовый прогон + триаж на оставшихся ~34500 id `css/` (за пределами `CSS2`) — задел для среза 3. **Срез 3 (2026-08-02) готов на `css/cssom`**: 226 id, 188 testharness, 151/188 harness OK, 727/1448 сабтестов; поимённая триаж 178 непройденных файлов → 4 новых BUG-NNN (BUG-471…474, крупнейший — CSSOM-модель таблиц стилей/правил не подключена, 97 файлов) + 3 файла объяснены уже открытыми BUG-384/BUG-462, committed `.ini` на 171/178 файлов, 0 unexpected подтверждён прогоном (1476 проверок). Остаток DoD — тот же массовый прогон + триаж на оставшихся ~34300 id `css/` (все `css-*`-модули, `cssom-view`, `selectors` и т.д.) — задел на срез 4. **Срез 4 (2026-08-02) готов на `css/cssom-view`**: 208 testharness id, 169/208 harness OK, 469/1694 сабтестов; поимённая триаж 178 непройденных файлов → 8 новых BUG-NNN (BUG-475…482) + 6 файлов объяснены уже открытыми BUG-384/BUG-462/BUG-368/BUG-472, committed `.ini` на 113/178 файлов, 0 unexpected passes подтверждён прогоном. 9 файлов пропущены (невендоренный `/dom/events/scrolling/scroll_support.js`), 56 намеренно без `.ini` (мелкие взаимно-независимые гэпы, не форсировались в атрибуцию — см. `docs/wpt-status.md` → строка `css`). Остаток DoD — тот же массовый прогон + триаж на `css-*`-модулях/`selectors`/прочем `css/` — задел на срез 5"
       }
      ]
     }
@@ -7670,6 +7670,62 @@
    "component": "js (`crates/js/src/dom.rs`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-475": {
+   "status": "open",
+   "title": "`scrollWidth`/`scrollHeight`/`scrollTop`/`scrollLeft` — 0 на любом элементе, у которого `overflow` не `scroll`/`auto`: `collect_scroll_containers` заводит запис…",
+   "component": "js (`crates/js/src/dom.rs:6196-6205`) + layout (`collect_scroll_containers`, `layout/src/lib.rs:1121`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-476": {
+   "status": "open",
+   "title": "`offsetLeft`/`offsetTop` отдают viewport-абсолютные координаты (`_lumen_get_bounding_rect(nid)[0]/[1]`) вместо смещения относительно `offsetParent` (CSSOM View…",
+   "component": "js (`crates/js/src/dom.rs:6190-6193`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-477": {
+   "status": "open",
+   "title": "`document.elementFromPoint`/`elementsFromPoint` отсутствуют вовсе — на JS-стороне нет вообще никакого hit-test'а «точка → узел» (тот же гэп, что делает `caretPo…",
+   "component": "js (`crates/js/src/dom.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-478": {
+   "status": "open",
+   "title": "`Element.prototype.getClientRects()` отсутствует вовсе — метод с этим именем есть только на `Range` (`dom.rs:6947`). 12 сабтестов + 1 файл TIMEOUT. Найден P2, W…",
+   "component": "js (`crates/js/src/dom.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-479": {
+   "status": "open",
+   "title": "Скролл-API `Element`/`Window` — узкая x/y-заглушка: нет алиаса `scroll()` (только `scrollTo`/`scrollBy`/`scrollIntoView`), `scrollIntoView` полностью игнорирует…",
+   "component": "js (`crates/js/src/dom.rs:6206-6227`, `:11619-11632`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-480": {
+   "status": "open",
+   "title": "`<iframe>` не имеет отдельного browsing context — `contentWindow`/`contentDocument` отсутствуют в шиме вовсе (`grep` — ноль совпадений); гэп упоминался походя в…",
+   "component": "js (`crates/js/src/dom.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-481": {
+   "status": "open",
+   "title": "`window.visualViewport` не реализован вовсе — `grep` ноль совпадений. 4 сабтеста `scrollIntoView-fixed-outside-of-viewport.html`. Найден P2, WPT-RUN-3 срез 4, 2…",
+   "component": "js (`crates/js/src/dom.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-482": {
+   "status": "open",
+   "title": "`HTMLElement.offsetParent`/`document.scrollingElement` отсутствуют вовсе (`grep` — ноль совпадений); `document.compatMode` (`dom.rs:4826`) — константа `'CSS1Com…",
+   "component": "js (`crates/js/src/dom.rs`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -7803,6 +7859,15 @@
   "js (`crates/js/src/dom.rs:5929` — `dispatchEvent` живого элемента; `dom.rs:3813` `_lumen_dispatch`, `dom.rs:3831` `_lumen_dispatch_bubble`, `dom.rs:3869` `_lumen_dispatch_rich`)": [
    "BUG-360"
   ],
+  "js (`crates/js/src/dom.rs:6190-6193`)": [
+   "BUG-476"
+  ],
+  "js (`crates/js/src/dom.rs:6196-6205`) + layout (`collect_scroll_containers`, `layout/src/lib.rs:1121`)": [
+   "BUG-475"
+  ],
+  "js (`crates/js/src/dom.rs:6206-6227`, `:11619-11632`)": [
+   "BUG-479"
+  ],
   "js (`crates/js/src/dom.rs:6603-6608`)": [
    "BUG-463"
   ],
@@ -7822,7 +7887,12 @@
    "BUG-462",
    "BUG-464",
    "BUG-471",
-   "BUG-474"
+   "BUG-474",
+   "BUG-477",
+   "BUG-478",
+   "BUG-480",
+   "BUG-481",
+   "BUG-482"
   ],
   "js (`crates/js/src/dom.rs`, `contentEditable`/`isContentEditable`)": [
    "BUG-344"
