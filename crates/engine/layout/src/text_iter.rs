@@ -145,6 +145,7 @@ mod tests {
 
     fn make_inline_run(rect: Rect, lines: Vec<Vec<InlineFrag>>) -> LayoutBox {
         LayoutBox {
+            origin: crate::box_tree::BoxOrigin::default(),
             node: NodeId::from_index(1),
             rect,
             style: std::sync::Arc::new(ComputedStyle::root()),
@@ -157,6 +158,7 @@ mod tests {
 
     fn make_block(rect: Rect, children: Vec<LayoutBox>) -> LayoutBox {
         LayoutBox {
+            origin: crate::box_tree::BoxOrigin::default(),
             node: NodeId::from_index(1),
             rect,
             style: std::sync::Arc::new(ComputedStyle::root()),
@@ -313,6 +315,7 @@ mod tests {
     #[test]
     fn skip_box_omitted() {
         let b = LayoutBox {
+            origin: crate::box_tree::BoxOrigin::default(),
             node: NodeId::from_index(1),
             rect: Rect { x: 0.0, y: 0.0, width: 100.0, height: 20.0 },
             style: std::sync::Arc::new(ComputedStyle::root()),

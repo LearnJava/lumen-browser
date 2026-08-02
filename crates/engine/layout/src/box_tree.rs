@@ -1363,6 +1363,7 @@ fn process_svg_node(
                     svg_paint_matrix: SvgTransform::identity(),
                 },
                 children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
+                origin: BoxOrigin { node: Some(child_id), role: BoxRole::Element },
             });
             // Recurse: incorrectly-nested siblings (HTML5 parser wraps them inside rect).
             collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, own_svg_size, flat, out, dark_mode, use_stack);
@@ -1380,6 +1381,7 @@ fn process_svg_node(
                     svg_paint_matrix: SvgTransform::identity(),
                 },
                 children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
+                origin: BoxOrigin { node: Some(child_id), role: BoxRole::Element },
             });
             collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, own_svg_size, flat, out, dark_mode, use_stack);
         }
@@ -1397,6 +1399,7 @@ fn process_svg_node(
                     svg_paint_matrix: SvgTransform::identity(),
                 },
                 children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
+                origin: BoxOrigin { node: Some(child_id), role: BoxRole::Element },
             });
             collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, own_svg_size, flat, out, dark_mode, use_stack);
         }
@@ -1414,6 +1417,7 @@ fn process_svg_node(
                     svg_paint_matrix: SvgTransform::identity(),
                 },
                 children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
+                origin: BoxOrigin { node: Some(child_id), role: BoxRole::Element },
             });
             collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, own_svg_size, flat, out, dark_mode, use_stack);
         }
@@ -1423,6 +1427,7 @@ fn process_svg_node(
                 node: child_id, rect: Rect::ZERO, style,
                 kind: BoxKind::SvgShape { shape: SvgShapeKind::Path { d }, svg_transform: svg_transform.clone(), svg_paint_matrix: SvgTransform::identity() },
                 children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
+                origin: BoxOrigin { node: Some(child_id), role: BoxRole::Element },
             });
             collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, own_svg_size, flat, out, dark_mode, use_stack);
         }
@@ -1453,6 +1458,7 @@ fn process_svg_node(
                     svg_transform: svg_transform.clone(),
                 },
                 children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
+                origin: BoxOrigin { node: Some(child_id), role: BoxRole::Element },
             });
             // Recurse for potential nested text/tspan/textPath elements.
             collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, own_svg_size, flat, out, dark_mode, use_stack);
@@ -1466,6 +1472,7 @@ fn process_svg_node(
                 node: child_id, rect: Rect::ZERO, style,
                 kind: BoxKind::Block,
                 children: group_children, col_span: 1, row_span: 1, svg_group_transform: Some(group_transform), scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
+                origin: BoxOrigin { node: Some(child_id), role: BoxRole::Element },
             });
         }
         "use" => {
@@ -1550,6 +1557,7 @@ fn process_svg_node(
                     children: use_children, col_span: 1, row_span: 1,
                     svg_group_transform: Some(combined),
                     scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
+                    origin: BoxOrigin { node: Some(child_id), role: BoxRole::Element },
                 });
             }
 
@@ -1570,6 +1578,7 @@ fn process_svg_node(
                     node: child_id, rect: Rect::ZERO, style,
                     kind: BoxKind::SvgShape { shape: SvgShapeKind::Path { d }, svg_transform: svg_transform.clone(), svg_paint_matrix: SvgTransform::identity() },
                     children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
+                origin: BoxOrigin { node: Some(child_id), role: BoxRole::Element },
                 });
             }
             // Mis-nested siblings (HTML5 parser wraps them inside the self-closed shape).
@@ -2048,6 +2057,68 @@ pub struct LayoutBox {
     /// `lay_out_incremental` passes — normal `lay_out` ignores this field.
     /// Set via `mark_dirty`; cleared via `clear_dirty` / `lay_out_incremental`.
     pub dirty: crate::incremental::DirtyBits,
+    /// Provenance for introspection (ADR-025 §1): where this box came from,
+    /// distinct from `node` above. `node` stays the hot-path "whose style
+    /// applies here" answer and is never `None`; `origin` is what
+    /// `explain_element`/`ProvenanceIndex` read and correctly says "no DOM
+    /// origin" instead of aliasing the document root.
+    pub origin: BoxOrigin,
+}
+
+/// Where a layout box came from — the identity of a box for all
+/// introspection purposes (ADR-025 §1). Replaces the `NodeId::from_index(0)`
+/// "no DOM origin" sentinel, which collided with the document root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BoxOrigin {
+    /// The DOM node this box belongs to, or `None` for boxes with no DOM
+    /// origin (anonymous boxes, generated content). Never a sentinel value —
+    /// use `None`, not `NodeId::from_index(0)`.
+    pub node: Option<NodeId>,
+    /// Why this box exists — disambiguates the many boxes one node can
+    /// produce (an element's principal box vs. an anonymous wrapper around
+    /// its inline children, for example).
+    pub role: BoxRole,
+}
+
+impl Default for BoxOrigin {
+    /// `node: None` + `BoxRole::Element` — used only as a placeholder for
+    /// construction sites that predate provenance tracking (test fixtures,
+    /// benchmark scaffolding). Production box constructors always set both
+    /// fields explicitly instead of relying on this default.
+    fn default() -> Self {
+        BoxOrigin { node: None, role: BoxRole::Element }
+    }
+}
+
+/// Disambiguates the many boxes one DOM node — or no node at all — can
+/// produce (ADR-025 §1). Paired with `BoxOrigin::node` as the identity of a
+/// box; `role` alone or `node` alone is never enough (an anonymous wrapper
+/// must never be reported as its parent element).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoxRole {
+    /// The principal box of an element.
+    Element,
+    /// Anonymous block-level wrapper (CSS 2.1 §9.2.1.1) or other
+    /// block-level box synthesised with no element of its own — table
+    /// fixup boxes, `appearance: base-select` scaffolding, drop-cap float
+    /// wrappers. `node` is the *containing* element; this role is what makes
+    /// the wrapper distinguishable from it.
+    AnonymousBlock,
+    /// Anonymous inline-level wrapper — `anon_inline_run`,
+    /// `anon_inline_block_row`, collapsed inline-block whitespace gaps.
+    /// `node` is the containing element or the source text node.
+    AnonymousInlineRun,
+    /// Pseudo-element box or segment (`::before`, `::after`,
+    /// `::first-letter`, `::first-line`, `::marker`'s content run).
+    Pseudo(PseudoKind),
+    /// List marker box (`::marker`'s own box, CSS Lists L3 §3).
+    ListMarker,
+    /// `content:` generated content with no DOM text/image node of its own.
+    GeneratedContent,
+    /// Scaffolding box with no rendered-page meaning at all — pre-navigation
+    /// placeholders and benchmark harnesses that need a `LayoutBox` value
+    /// before any real layout has run.
+    Placeholder,
 }
 
 /// Отрезок inline-контента с собственным стилем (до layout).
@@ -2107,6 +2178,20 @@ pub enum PseudoKind {
     /// Applied by `apply_first_letter_pseudo` via
     /// `compute_pseudo_element_style(node, "first-letter")`, which overrides `seg.style`.
     FirstLetter,
+    /// `::before` generated content (ADR-025 `BoxRole::Pseudo` tag only — not
+    /// produced by `collect_inline_segments`, which has no notion of `::before`
+    /// at the segment level).
+    Before,
+    /// `::after` generated content (`BoxRole::Pseudo` tag only, see `Before`).
+    After,
+    /// `::first-line` styled fragment (`BoxRole::Pseudo` tag only — applied by
+    /// `split_first_line_boxes`, which works on whole boxes, not segments).
+    FirstLine,
+    /// `::marker` list-marker content (`BoxRole::Pseudo` tag only — markers are
+    /// `BoxKind::Marker` boxes, tagged `BoxRole::ListMarker` instead; this
+    /// variant exists for the rare case a marker's content is itself an
+    /// inline run needing a `PseudoKind`, e.g. future nested-marker content).
+    Marker,
 }
 
 /// Позиционированный текстовый фрагмент в строке (после layout).
@@ -2499,6 +2584,7 @@ fn extract_first_letter_float(
             children: vec![],
             col_span: 1,
             row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
+            origin: BoxOrigin { node: Some(node), role: BoxRole::Pseudo(PseudoKind::FirstLetter) },
         };
         let mut outer_style = fl_style.clone();
         outer_style.display = Display::Block;
@@ -2511,6 +2597,7 @@ fn extract_first_letter_float(
             children: vec![inner],
             col_span: 1,
             row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
+            origin: BoxOrigin { node: Some(node), role: BoxRole::Pseudo(PseudoKind::FirstLetter) },
         });
     }
     None
@@ -2617,6 +2704,7 @@ fn extract_initial_letter(
             children: vec![],
             col_span: 1,
             row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
+            origin: BoxOrigin { node: Some(node), role: BoxRole::Pseudo(PseudoKind::FirstLetter) },
         };
 
         // Outer block: inline-start float reserving exactly `sink` text lines.
@@ -2638,6 +2726,7 @@ fn extract_initial_letter(
             children: vec![inner],
             col_span: 1,
             row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
+            origin: BoxOrigin { node: Some(node), role: BoxRole::Pseudo(PseudoKind::FirstLetter) },
         });
     }
     None
@@ -2926,6 +3015,9 @@ pub(crate) fn split_first_line_boxes(b: &mut LayoutBox) {
             scroll_x: 0.0,
             scroll_y: 0.0,
             dirty: Default::default(),
+            // Fragment of the same InlineRun, split after ::first-line — same
+            // provenance as the box it was split from, not a new box role.
+            origin: child.origin,
         };
         // Reuse the original box as the first-line box.
         child.style = Arc::new(*fls);
@@ -3688,7 +3780,15 @@ fn anon_style(parent: &ComputedStyle) -> ComputedStyle {
     s
 }
 
-fn anon_inline_run(node: NodeId, parent: &ComputedStyle, segs: Vec<InlineSegment>) -> LayoutBox {
+/// `role` disambiguates the many different reasons callers wrap segments in an
+/// anonymous inline run — a blockified flex/grid text item, a whitespace-flush
+/// gap, or `::before`/`::after` generated content — per ADR-025 §1.
+fn anon_inline_run(
+    node: NodeId,
+    parent: &ComputedStyle,
+    segs: Vec<InlineSegment>,
+    role: BoxRole,
+) -> LayoutBox {
     LayoutBox {
         node,
         rect: Rect::ZERO,
@@ -3697,6 +3797,7 @@ fn anon_inline_run(node: NodeId, parent: &ComputedStyle, segs: Vec<InlineSegment
         children: vec![],
         col_span: 1,
         row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
+        origin: BoxOrigin { node: Some(node), role },
     }
 }
 
@@ -3737,7 +3838,7 @@ fn build_anon_text_item(
     if segs.is_empty() {
         return None;
     }
-    let run = anon_inline_run(id, parent, segs);
+    let run = anon_inline_run(id, parent, segs, BoxRole::AnonymousInlineRun);
     let mut item_style = anon_style(parent);
     // The anonymous item is blockified regardless of the container's own display.
     item_style.display = Display::Block;
@@ -3753,6 +3854,7 @@ fn build_anon_text_item(
         scroll_x: 0.0,
         scroll_y: 0.0,
         dirty: Default::default(),
+        origin: BoxOrigin { node: Some(id), role: BoxRole::AnonymousBlock },
     })
 }
 
@@ -3823,6 +3925,7 @@ fn anon_inline_block_row(node: NodeId, parent: &ComputedStyle, items: Vec<Layout
         children: items,
         col_span: 1,
         row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
+        origin: BoxOrigin { node: Some(node), role: BoxRole::AnonymousInlineRun },
     }
 }
 
@@ -4141,24 +4244,33 @@ fn inject_pseudo(
                         new_segs.extend(std::mem::take(segments));
                         *segments = new_segs;
                     }
-                    _ => children.insert(0, anon_inline_run(parent_id, &ps, segs)),
+                    _ => children.insert(
+                        0,
+                        anon_inline_run(parent_id, &ps, segs, BoxRole::Pseudo(PseudoKind::Before)),
+                    ),
                 }
             } else {
                 match children.last_mut() {
                     Some(LayoutBox { kind: BoxKind::InlineRun { segments, .. }, .. }) => {
                         segments.extend(segs);
                     }
-                    _ => children.push(anon_inline_run(parent_id, &ps, segs)),
+                    _ => children.push(anon_inline_run(
+                        parent_id,
+                        &ps,
+                        segs,
+                        BoxRole::Pseudo(PseudoKind::After),
+                    )),
                 }
             }
         }
         _ => {
             // Block-level pseudo-element.
+            let pseudo_kind = if is_before { PseudoKind::Before } else { PseudoKind::After };
             let inner_segs = content_to_inline_segments(&ps, doc, parent_id, slot, viewport, counters, registry);
             let inner = if inner_segs.is_empty() {
                 vec![]
             } else {
-                vec![anon_inline_run(parent_id, &ps, inner_segs)]
+                vec![anon_inline_run(parent_id, &ps, inner_segs, BoxRole::Pseudo(pseudo_kind))]
             };
             let b = LayoutBox {
                 node: parent_id,
@@ -4168,6 +4280,7 @@ fn inject_pseudo(
                 children: inner,
                 col_span: 1,
                 row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
+                origin: BoxOrigin { node: Some(parent_id), role: BoxRole::Pseudo(pseudo_kind) },
             };
             if is_before {
                 children.insert(0, b);
@@ -4431,6 +4544,7 @@ fn inject_marker(
         children: vec![],
         col_span: 1,
         row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
+        origin: BoxOrigin { node: Some(parent_id), role: BoxRole::ListMarker },
     });
 }
 
@@ -4550,7 +4664,7 @@ fn build_base_select_box(
             source_char_offset: 0,
             bidi_level: 0,
         };
-        trigger_children.push(anon_inline_run(id, style, vec![seg]));
+        trigger_children.push(anon_inline_run(id, style, vec![seg], BoxRole::AnonymousInlineRun));
     }
 
     let mut trigger_style = anon_style(style);
@@ -4567,6 +4681,9 @@ fn build_base_select_box(
         scroll_x: 0.0,
         scroll_y: 0.0,
         dirty: Default::default(),
+        // Not GeneratedContent: this mirrors the `<select>`'s own selected-option
+        // label, not `content:` — closest is the anonymous UA-scaffolding wrapper.
+        origin: BoxOrigin { node: Some(id), role: BoxRole::AnonymousBlock },
     };
 
     LayoutBox {
@@ -4583,6 +4700,7 @@ fn build_base_select_box(
         scroll_x: 0.0,
         scroll_y: 0.0,
         dirty: Default::default(),
+        origin: BoxOrigin { node: Some(id), role: BoxRole::Element },
     }
 }
 
@@ -5061,6 +5179,7 @@ fn build_box_inner(
             scroll_x: 0.0,
             scroll_y: 0.0,
             dirty: Default::default(),
+            origin: BoxOrigin { node: Some(id), role: BoxRole::Element },
         };
     }
 
@@ -5359,7 +5478,7 @@ fn build_box_inner(
                         if !pending.is_empty() {
                             let mut segs = std::mem::take(&mut pending);
                             apply_first_letter_pseudo(&mut segs, doc, id, sheet, &style, viewport, dark_mode);
-                            let mut run = anon_inline_run(id, &style, segs);
+                            let mut run = anon_inline_run(id, &style, segs, BoxRole::AnonymousInlineRun);
                             if !first_line_assigned {
                                 if let BoxKind::InlineRun { first_line_style: ref mut fls, .. } = run.kind {
                                     *fls = first_line_style.clone();
@@ -5378,6 +5497,7 @@ fn build_box_inner(
                                 children: vec![],
                                 col_span: 1,
                                 row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
+                                origin: BoxOrigin { node: Some(id), role: BoxRole::AnonymousInlineRun },
                             });
                         }
                         row_items.push(build_box_or_reuse(doc, sheet, cid, &style, viewport, flat, counters, registry, dark_mode, prev_index));
@@ -5396,7 +5516,7 @@ fn build_box_inner(
                 if !pending.is_empty() {
                     let mut segs = std::mem::take(&mut pending);
                     apply_first_letter_pseudo(&mut segs, doc, id, sheet, &style, viewport, dark_mode);
-                    let mut run = anon_inline_run(id, &style, segs);
+                    let mut run = anon_inline_run(id, &style, segs, BoxRole::AnonymousInlineRun);
                     if !first_line_assigned
                         && let BoxKind::InlineRun { first_line_style: ref mut fls, .. } = run.kind
                     {
@@ -5525,6 +5645,7 @@ fn build_box_inner(
         col_span,
         row_span,
         svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
+        origin: BoxOrigin { node: Some(id), role: BoxRole::Element },
     }
 }
 
@@ -19168,6 +19289,7 @@ mod tests {
             scroll_x: 0.0,
             scroll_y: 0.0,
             dirty: Default::default(),
+            origin: super::BoxOrigin::default(),
         };
         let mut root_style = ComputedStyle::root();
         root_style.font_size = 100.0;
@@ -19184,6 +19306,7 @@ mod tests {
             scroll_x: 0.0,
             scroll_y: 0.0,
             dirty: Default::default(),
+            origin: super::BoxOrigin::default(),
         };
         super::apply_font_size_adjust(&mut root, &m);
         assert!((root.style.font_size - 62.5).abs() < 0.01, "root not adjusted: {}", root.style.font_size);
@@ -19223,6 +19346,7 @@ mod tests {
             scroll_x: 0.0,
             scroll_y: 0.0,
             dirty: Default::default(),
+            origin: super::BoxOrigin::default(),
         };
         super::apply_font_size_adjust(&mut b, &m);
         assert!((b.style.font_size - 37.5).abs() < 0.01, "used size {}", b.style.font_size);
@@ -19257,6 +19381,7 @@ mod tests {
             scroll_x: 0.0,
             scroll_y: 0.0,
             dirty: Default::default(),
+            origin: super::BoxOrigin::default(),
         };
         super::apply_font_size_adjust(&mut b, &m);
         assert!((b.style.line_height - 1.5).abs() < 0.001, "ratio must be unchanged");

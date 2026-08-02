@@ -98,6 +98,48 @@ stacking-деревом») невозможно сформулировать б�
 
 ## DEVX-7: provenance в display list (L, P1)
 
+**Прогресс (P1, 2026-08-02):** пункты 1–3 состава ниже закрыты —
+`BoxOrigin`/`BoxRole` в `lumen-layout` (`box_tree.rs`), заполнены во всех
+продакшн- и тестовых конструкторах `LayoutBox` по всему workspace (box_tree.rs,
+incremental.rs, mathml.rs, ruby.rs, shell/main.rs, shell/forms.rs,
+shell/animation_scheduler.rs + тестовые фикстуры anchor.rs/masonry.rs/table.rs/
+text_iter.rs/selection.rs/scroll_timeline.rs), сентинел `NodeId::from_index(0)`
+для «нет DOM-происхождения» убран (заменён на `origin.node: None`) на всех трёх
+найденных production-сайтах (box_tree.rs, mathml.rs, ruby.rs — исходный аудит
+ADR-025 нашёл только box_tree.rs). `graft_geometry`'s identity-гейт учитывает
+`origin.role` (два анонимных бокса на одном узле больше не грейфтятся друг в
+друга). Уточнение по ADR-025 §1 (разрешено правкой без нового ADR): `BoxRole`
+не включает отдельный `TableFixup` — аудит `table.rs` не нашёл ни одного сайта
+синтеза анонимных table-боксов (`_ => {}` в `collect_table_structure` молча
+игнорирует orphan-контент вместо генерации fixup-бокса; это отдельная, не
+задокументированная ранее находка про сам layout, не про provenance — не
+заведена багом в этом заходе, т.к. вне скоупа DEVX-7). `PseudoKind` расширен
+`Before`/`After`/`FirstLine`/`Marker` (было только `None`/`FirstLetter`) —
+переиспользуется как `BoxRole::Pseudo(PseudoKind)` тег, `anon_inline_run` теперь
+принимает явный `role: BoxRole` параметр вместо одного жёстко зашитого
+значения. Гейт: `dump_golden.py` пустой дифф (6 страниц × 2 дампа, включая
+table/grid/flex/transform) — чисто аддитивное поле, ничем ещё не читается,
+полный графический прогон признан избыточным для этого коммита (обоснование в
+теле коммита).
+
+**Остаётся (пункт 4):** `ProvenanceIndex`/`ProvenanceSpan` рядом с
+`DisplayList` в `lumen-paint`. Важная находка для следующего захода:
+**`DisplayList` — это `pub type DisplayList = Vec<DisplayCommand>` (алиас, не
+структура)** — код ADR-025 §3 (`struct ProvenanceIndex` «рядом» с `DisplayList`)
+предполагает структуру с полем `commands`, которой не существует. Варианты:
+(а) превратить `DisplayList` в структуру с `Deref<Target=Vec<DisplayCommand>>`
+(минимальный блэст-радиус, но `DisplayList::new()`/прямые присваивания из `Vec`
+по всему workspace потребуют правки — грубая оценка ~15 сайтов вне `display_list.rs`:
+shell/main.rs, shell/forms.rs, shell/animation_scheduler.rs, тесты driver/paint);
+(б) вернуть `(DisplayList, ProvenanceIndex)` кортежем из точек входа. Второй
+открытый вопрос: реальный рендер-путь шелла — **не** простой `walk`
+(`build_display_list`/`_with_selection`/`_with_anim`), а
+`fill_buckets`/`build_display_list_ordered*` (stacking-context bucket-сборка,
+`main.rs:6146`/`15983`/`16161`) — четырёхфазная пересборка `ScBucket{pre,
+root_bg, contents, post}` в финальный список делает in-flight span-tracking
+заметно сложнее, чем в линейном `walk`. Разбирать оба вопроса вместе, не
+начинать с одного `walk`-пути и не подменять реальный рендер-путь.
+
 Реализует §3 [ADR-025](../decisions/ADR-025-identity-propagation.md).
 
 **Зависит от:** ADR-025 принят. Включает расшивку перегруженной идентичности —

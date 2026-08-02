@@ -327,6 +327,7 @@ mod tests {
 
     fn make_box(id: u32, x: f32, y: f32, w: f32, h: f32) -> LayoutBox {
         LayoutBox {
+            origin: crate::box_tree::BoxOrigin::default(),
             node: node(id),
             rect: Rect { x, y, width: w, height: h },
             style: std::sync::Arc::new(ComputedStyle::root()),
