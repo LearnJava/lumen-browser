@@ -4409,6 +4409,92 @@ hit rate is the next slice's first job before writing any cache mechanism,
 not an assumption to carry forward. Standing pause terms unchanged: not
 abandoned, resume only on explicit request.
 
+## S35 — census key completeness check: S34's 77.7% ceiling confirmed honest (77.5%), `UsedSizeOverride` was not the gap it could have been
+
+Branch `p1-bug341-s35`. Resumed on explicit user request ("следующий срез S35").
+Before acting on S34's own recommendation ("re-measuring clone cost against
+the new hit rate is the next slice's first job"), checked a prerequisite S34's
+recommendation implicitly assumed but never verified: **does the S30/S31
+census's key still cover every real input to the call it is measuring?**
+
+S34 introduced a new `lay_out_inner` parameter, `used_size_override:
+Option<UsedSizeOverride>` (`lay_out_flex`'s three re-layout call sites now go
+through the new `lay_out_with_used_size` wrapper instead of mutating
+`b.style`). The S30/S31 census's key is `(node, available_width,
+available_height)`, plus a style-`Arc`-identity check on repeat
+(`repeat_key_same_style`) — neither is aware of `used_size_override`. This
+matters because a Step-1 probe call (`lay_out`, no override) and a final-pass
+call (`lay_out_with_used_size`, override carrying the item's *resolved*
+main/cross size) can now land on the exact same `(node, width, height)` key
+with the exact same style `Arc` (S34's whole point) while still being two
+genuinely different calls — a cache blind to the override could silently
+serve the wrong width/height/box-sizing whenever the override's resolved size
+differs from what the probe naturally produced. `docs/perf-method.md`'s own
+S31 lesson ("совпадение ключа кэша — не то же самое, что безопасность его
+переиспользовать; проверь, что вместе с ключом не меняется и то, что ключ не
+включает") applies here verbatim, one mechanism generation later — S34 added
+a new call-site input, and nothing forced the S30/S31 census to notice.
+
+**Fix (measurement-only, no cache mechanism written):** extended
+`LayoutKeyCensus` with a new field, `repeat_key_same_style_and_override` —
+of the calls S31's `repeat_key_same_style` already counts as safe by style
+identity, how many are *also* safe by `UsedSizeOverride` equality. Added
+`UsedSizeOverrideBits` (`crates/engine/layout/src/box_tree.rs`), a plain-data
+snapshot compared by value (`UsedSizeOverride` itself stays `PartialEq`/
+`Hash`-free — it does not need either for its one real caller, `lay_out_inner`'s
+local `s` binding; adding them there would be dead weight on the production
+struct for a diagnostic-only comparison). `record_layout_key_occurrence` now
+takes `used_size_override: Option<&UsedSizeOverride>` and stores/compares it
+in `LAYOUT_KEY_SEEN` alongside the existing style-`Arc` check.
+
+**Measured** (`bug341_s30_flex_key_census`, same real chrome document/fixture
+as S30/S31/S34, dev-release, `cargo test -p lumen-shell --profile dev-release
+bug341_s30_flex_key_census -- --ignored --nocapture`):
+
+```
+[s30-census] KEY/HOVER, all cycles: calls=1544 repeat_key_calls=1260 (81.6%)
+    repeat_key_same_style=979 (77.7% of repeats)
+    repeat_key_same_style_and_override=977 (77.5% of repeats, 99.8% of same_style)
+```
+
+**The concern did not materialize:** of S34's 979 same-style repeats, 977
+(99.8%) also match on `UsedSizeOverride` — the honest ceiling drops from
+77.7% to 77.5% of repeats, a 2-call difference on this fixture, not the
+"cache silently serves wrong geometry for a chunk of its claimed hits" outcome
+the missing check could have hidden. This is a real, checked result, not an
+assumption: the reason is structural, not coincidental — `lay_out_flex`'s
+Step-1 probe and final pass differ in *which wrapper* they call
+(`lay_out` vs. `lay_out_with_used_size`), but for the large majority of items
+the probe's naturally-produced width and the final pass's resolved-and-overridden
+width end up numerically identical anyway (the flex algorithm's grow/shrink
+step frequently leaves an item's hypothetical main size unchanged), so most
+same-style repeats were already going to carry a no-op-equivalent override
+too. S34's 77.7% headline number stands as the real, checked ceiling for
+whoever builds the next cache attempt — not an artifact of an incomplete
+census key.
+
+**Correctness:** `cargo test -p lumen-layout --lib`: 3470 passed, 2 failed —
+same pre-existing BUG-339 `FONT_CH_EX` pair, unchanged from S34's own baseline
+(diagnostic-only change; no production code path's behavior is touched).
+`cargo clippy -p lumen-layout --all-targets -- -D warnings` and
+`-p lumen-shell --all-targets -- -D warnings`: both clean (one `type_complexity`
+lint fixed by factoring `LAYOUT_KEY_SEEN`'s value into a named
+`LayoutCensusSeenEntry` type alias). No display-list-affecting code touched
+(the census reads already-computed call parameters; it does not change any
+layout output), so no graphic-tests/CPU-snapshot regen needed per
+`docs/graphic-tests.md`'s rule for changes that cannot move pixels.
+
+**Not attempted in this slice:** the actual "first job" S34 asked for —
+re-measuring *clone cost* (not just hit rate) against this now-confirmed
+~77.5%-of-repeats ceiling by resurrecting a cache mechanism shaped like S32's
+and re-running its interleaved-A/B wall-clock harness. That is real
+mechanism-building work (S32's own scope), not a census extension, and this
+slice's authorization ("следующий срез S35", a general resume) did not
+specifically request it the way S32's own resume ("build the cache or find
+another approach") did. Standing pause terms unchanged: not abandoned, next
+slice's first job is the clone-cost re-measurement against this confirmed
+number, resume only on explicit request.
+
 ## Repro
 
 ```bash
