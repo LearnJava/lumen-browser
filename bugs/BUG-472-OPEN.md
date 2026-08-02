@@ -179,3 +179,24 @@ the same map gap surfacing through `background-color`, plausibly a real
 rendering gap (dark-scheme UA stylesheet override not applied at all); not
 isolated further. `.ini` under `tests/wpt/metadata/css/css-color-adjust/`
 for both files.
+
+## Срез 23 (`css/fill-stroke`, 2026-08-03) — `fill`/`stroke`-and-friends SVG paint properties parse and store but never reach the map
+
+`grep -n '"fill"\|"stroke"\|"stroke-color"\|"fill-opacity"\|"stroke-width"'
+crates/engine/layout/src/selector_query.rs` returns zero hits, while
+`layout/src/style.rs:3926-3952` confirm `svg_fill`/`svg_fill_opacity`/
+`svg_stroke`/`svg_stroke_opacity`/`svg_stroke_width`/`svg_fill_rule`/
+`svg_stroke_linecap`/`svg_stroke_linejoin`/`svg_stroke_miterlimit`/
+`svg_stroke_dasharray`/`svg_stroke_dashoffset` are all real `ComputedStyle`
+fields — same "parsed-but-never-taught-to-the-map" shape as срезы 12/15/
+21/22. 220 subtests / 2 files, entirely `css/support/interpolation-
+testcommon.js`'s standard "is this computed-style key present at all"
+feature-detect, all failing `assert_true: Web Animations should be
+supported`/`'to'/'from' value should be supported expected true got
+false`: `animation/fill-interpolation.html` (48) and `animation/
+stroke-color-interpolation.html` (172, the largest single-file
+contribution to this bug to date). The category's other two properties,
+`text-decoration-fill`/`text-decoration-stroke`/`-webkit-text-stroke`, are
+a different and deeper gap — not parsed or stored at all, filed separately
+as [BUG-521](BUG-521-OPEN.md). `.ini` under
+`tests/wpt/metadata/css/fill-stroke/animation/` for both files.

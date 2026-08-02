@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-03",
  "counts": {
-  "open": 180,
+  "open": 183,
   "fixed": 309,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 489,
+ "total_bugs": 492,
  "phases": [
   {
    "id": "P0",
@@ -7971,6 +7971,27 @@
    "component": "css-parser/layout (первопричина не изолирована — один из `if()`/типизированный `attr()`/локальные переменные/вложенный `@layer`/`@container`/scoping в shadow-дереве внутри тела `@function`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-520": {
+   "status": "open",
+   "title": "Resource Timing (`performance.getEntriesByType('resource')`/`PerformanceObserver({type:'resource'})`) никогда не наполняется для реальных загрузок — нативный ху…",
+   "component": "js/network граница (`crates/js/src/dom.rs:11353` — `_lumen_record_resource_timing`, ни одного вызова вне `dom.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-521": {
+   "status": "open",
+   "title": "text-decoration-stroke\\",
+   "component": "css-parser/layout (`text-decoration-fill`/`text-decoration-stroke`/`-webkit-text-stroke` не распознаются нигде, `grep -rn \"text-decoration-fill\\",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-522": {
+   "status": "open",
+   "title": "Модуль Geometry Interfaces (`DOMMatrix(ReadOnly)`/`DOMPoint(ReadOnly)`/`DOMRect(ReadOnly)`/`DOMRectList`/`DOMQuad`/`WebKitCSSMatrix`) отсутствует целиком как гл…",
+   "component": "js (`crates/js/src/dom.rs` — ни одного `DOMMatrix`/`DOMPoint`/`DOMRect`/`DOMQuad`-конструктора нигде)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -8023,6 +8044,9 @@
   ],
   "css-parser/layout (`crates/engine/layout/src/style.rs::apply_declaration`, селекторный матчинг)": [
    "BUG-505"
+  ],
+  "css-parser/layout (`text-decoration-fill`/`text-decoration-stroke`/`-webkit-text-stroke` не распознаются нигде, `grep -rn \"text-decoration-fill\\": [
+   "BUG-521"
   ],
   "css-parser/layout (логические свойства не распознаются нигде, `grep -n \"overscroll-behavior-block\\": [
    "BUG-516"
@@ -8191,6 +8215,9 @@
   "js (`crates/js/src/dom.rs` — own-свойство `checked` в `_lumen_build_element`), shell (`forms.rs` — сбор формы и покраска читают атрибут)": [
    "BUG-444"
   ],
+  "js (`crates/js/src/dom.rs` — ни одного `DOMMatrix`/`DOMPoint`/`DOMRect`/`DOMQuad`-конструктора нигде)": [
+   "BUG-522"
+  ],
   "js (`crates/js/src/dom.rs`)": [
    "BUG-462",
    "BUG-464",
@@ -8254,6 +8281,9 @@
   ],
   "js/layout граница (`crates/js/src/v8_runtime.rs::_lumen_get_computed_style`, `crates/driver/src/session.rs:379`)": [
    "BUG-493"
+  ],
+  "js/network граница (`crates/js/src/dom.rs:11353` — `_lumen_record_resource_timing`, ни одного вызова вне `dom.rs`)": [
+   "BUG-520"
   ],
   "layout": [
    "BUG-001",
