@@ -87,3 +87,22 @@ shape.
 
 Committed `.ini` under `tests/wpt/metadata/css/css-cascade/` for the 15
 attributed files, `expected: FAIL`/`TIMEOUT` matching the actual run.
+
+## Срез 16 (`css/css-forms`, 2026-08-02) — same idiom, а new call site (`test_valid_selector`)
+
+`tests/wpt/css/support/parsing-testcommon.js::test_valid_selector` (shared
+helper, not specific to css-forms) does `document.head.append(style)` as its
+first step after the `document.querySelector(selector)` no-throw check —
+every "should be a valid selector" subtest in any file that uses this helper
+therefore throws on `document.head` being `undefined` before it ever reaches
+the actual selector-validity assertions this bug's fix would unblock. 3 files
+this slice: `parsing/checkmark-pseudo-element.html` (5 subtests),
+`parsing/picker-icon-pseudo-element.html` (5), `parsing/picker-select-
+pseudo-element.html` (11) — 21 subtests total. Confirms the 84-file `css/`
+grep estimate from срез 6 undercounts call sites that go through this shared
+test helper rather than inline `document.head.` usage — worth re-grepping
+`document\.head\.` **and** call sites of `test_valid_selector`/`test_valid_
+rule`/`test_invalid_rule` (`parsing-testcommon.js`, all four use the same
+`document.head.append(style)` pattern) before estimating blast radius again.
+`.ini` under `tests/wpt/metadata/css/css-forms/` for all 3 files, `expected:
+FAIL` per affected subtest.

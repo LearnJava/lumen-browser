@@ -74,3 +74,45 @@ DOMException в кодовой базе, например URL-парсинг).
 * Не является причиной провала самого `:fullscreen` (тест проверяет его
   отдельным assert'ом ниже throw-precondition) — `:fullscreen` как таковой в
   Lumen не проверялся этим прогоном (тест падает на precondition раньше).
+
+## Срез 16 (`css/css-forms`, 2026-08-02) — same mechanism, a new facet: structural/argument validity of pseudo-elements is unenforced too
+
+`css/support/parsing-testcommon.js::test_invalid_selector` asserts
+`document.querySelector(selector)` throws `SyntaxError` for selectors that
+are syntactically well-formed per grammar but semantically invalid — a
+combinator or another pseudo-element following a pseudo-element
+(`::checkmark *`, `::checkmark::checkmark`, `::before::checkmark`,
+`::checkmark::before`, `::slotted(*)::checkmark::slotted(*)`), and an
+out-of-range argument to a functional pseudo-element (`::picker(foo)`,
+`::picker()`, bare `::picker`). None of these throw in Lumen — 31 subtests
+across `parsing/checkmark-pseudo-element.html` (11),
+`parsing/picker-icon-pseudo-element.html` (11),
+`parsing/picker-select-pseudo-element.html` (9).
+
+Confirmed this is not `::checkmark`/`::picker`-specific by a live
+`--mcp-live-port` probe against `::before` (a pseudo-element that has been
+supported for the whole life of the project):
+`document.querySelector('::before *')` and
+`document.querySelector('::before::before')` both return normally (no
+throw) — same gap the fullscreen finding above already names architecturally
+("(2) синтаксически валидный, но неизвестный движку токен" was the described
+case; this adds a third: "(3) синтаксически валидный по грамматике каждого
+отдельного псевдо-элемента, но недопустимая структура/аргумент по правилам
+конкретного псевдо-элемента"). Source-confirmed for the argument-validity
+half: `crates/engine/css-parser/src/parser.rs:4539-4549`'s `"picker"` arm
+accepts *any* non-empty ident as the functional pseudo-element's argument
+(`PseudoElementKind::Picker(arg.to_ascii_lowercase())`, no check against the
+single spec-defined value `"select"`), so `::picker(foo)` parses
+successfully instead of being rejected at parse time — there is no
+combinator/pseudo-stacking check anywhere in the file either (`grep -n
+"PseudoElement" parser.rs` for validation/combinator/reject logic returns
+nothing).
+
+Same fix location as the rest of this bug (the JS-boundary throw needs to
+happen wherever `parse_selector_list`'s caller currently swallows a `None`/
+empty result into `false`/`[]`/no-op) — this slice doesn't change the "как
+чинить" plan, just widens what "invalid" needs to mean at that boundary:
+not just "unknown token", but also "known pseudo-element used in a
+structurally or argument-wise invalid way". `.ini` under
+`tests/wpt/metadata/css/css-forms/` for the 3 files, `expected: FAIL` per
+affected subtest.
