@@ -95,3 +95,12 @@ a `CSSNestedDeclarationsRule`, to scoped declarations) confirm the gap is
 independent of whether the prior rule in cascade order came from ordinary
 nesting or a dedicated nested-declarations rule. `.ini`:
 `tests/wpt/metadata/css/css-nesting/nesting-revert-rule.html.ini`.
+
+## Срез 21 (`css/css-env`, 2026-08-03)
+
+`env-revert-rule.html` — 1/1 subtest, same clean `assert_true: expected true
+got false` signature, this time testing `revert-rule` as an `env()`
+fallback value (`background-color: env(test, revert-rule)`) rather than a
+direct declaration or a `var()` fallback — a third distinct syntactic
+position for the same missing keyword. `.ini`:
+`tests/wpt/metadata/css/css-env/env-revert-rule.html.ini`.

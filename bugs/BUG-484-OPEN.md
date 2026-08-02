@@ -265,3 +265,30 @@ TimingFunction\|fn.*timing.*to_css"` returns zero hits, so even a correctly
 parsed value has nowhere to be re-serialized from). 40 subtests / 4 files
 this slice. `.ini` under `tests/wpt/metadata/css/css-easing/` for all
 4 files, `expected: FAIL` per subtest.
+
+## Срез 21 (`css/css-link-params`+`css-forced-color-adjust`+`css-size-adjust`+`css-env`+`css-overscroll-behavior`, 2026-08-03)
+
+9 files, 52 subtests, both established shapes at once and no new ones —
+**rejection (shape "should not set the property value")**:
+`css-link-params/link-parameters-invalid.html` (12, malformed `param(...)`
+accepted verbatim), `css-forced-color-adjust/parsing/forced-color-adjust-invalid.html`
+(6), `css-size-adjust/parsing/text-size-adjust-invalid.html` (4),
+`css-env/env-parsing.html` (5, malformed `env(name (), )` accepted),
+`css-env/indexed-env.tentative.html` (4, `env(test1 test2, green)`/`env(test
+-1, green)` — env()'s *indexed* second-argument grammar not validated,
+same underlying line as the rest), `css-overscroll-behavior/parsing/overscroll-behavior-invalid.html`
+(15, all four of `overscroll-behavior`/`-x`/`-y` plus the newly-unrecognized
+`-block`/`-inline` — see [BUG-516](BUG-516-OPEN.md) — accept `"normal"`/`"0"`/
+space-repeated keyword lists that must be rejected). **Canonicalization**:
+`css-size-adjust/parsing/text-size-adjust-valid.html` (1, `calc(10% + 5%)`
+not simplified to `calc(15%)`), `css-overscroll-behavior/parsing/overscroll-behavior-valid.html`
+(4, `"contain contain"`/`"none none"`/`"auto auto"`/`"chain chain"` not
+collapsed to the single-keyword canonical form). One instance is worth
+flagging separately: `css-env/seralization-round-tripping.tentative.html`
+(1) sets a *valid* `env(test)`, then calls `setProperty(..., "env()")` (an
+explicitly-invalid empty-argument form per spec) expecting the setter to
+reject it and keep the old value — instead the invalid call succeeds and
+clobbers the valid one, the same rejection-shape bug but observed through a
+round-trip assertion rather than a direct empty-string check. `.ini` under
+each category's own `tests/wpt/metadata/css/<category>/` for all 9 files,
+`expected: FAIL` per subtest.

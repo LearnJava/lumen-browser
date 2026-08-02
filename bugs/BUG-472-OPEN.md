@@ -147,3 +147,18 @@ contributes another 13 subtests of the same signature, restricted to
 largest single-slice addition to this bug since срез 12's CSS Logical
 Properties family. `.ini` under `tests/wpt/metadata/css/css-easing/` for
 both files, `expected: FAIL` per subtest.
+
+## Срез 21 (`css/css-overscroll-behavior`, 2026-08-03) — physical `overscroll-behavior-x`/`-y` parse and store correctly but never reach the map
+
+`grep -n "overscroll" crates/engine/layout/src/selector_query.rs` returns
+zero hits, while `style.rs:3644-3645`/`16347-16361` confirm
+`overscroll_behavior_x`/`_y` are real `ComputedStyle` fields, parsed and
+stored by `overscroll-behavior`/`-x`/`-y` declarations — same
+"parsed-but-never-taught-to-the-map" shape as срезы 12/15. 12 subtests / 2
+files: `inheritance.html` (4 — initial-value/does-not-inherit checks for
+`-x`/`-y`), `parsing/overscroll-behavior-computed.html` (8 — 4 values ×
+`-x`/`-y`). The logical `overscroll-behavior-block`/`-inline` half of these
+same two files is a *different*, deeper gap — the properties aren't
+recognized by the parser at all, not merely missing from this map — filed
+separately as [BUG-516](BUG-516-OPEN.md). `.ini` under
+`tests/wpt/metadata/css/css-overscroll-behavior/` for both files.
