@@ -2308,7 +2308,7 @@ pub enum BreakValue {
 ///
 /// Свойство НЕ наследуется (CSS Basic UI 3 §4.1) — сбрасывается на default в каждом
 /// `compute_style`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum BoxSizing {
     #[default]
     ContentBox,

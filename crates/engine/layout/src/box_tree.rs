@@ -116,7 +116,7 @@ type LayoutCensusKey = (NodeId, u32, Option<u32>);
 /// weight on the production struct for a comparison only this diagnostic
 /// needs). `f32` fields are compared via `to_bits`, matching the census's
 /// existing exact-bit-equality convention for `available_width`/`available_height`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 struct UsedSizeOverrideBits {
     width_bits: Option<u32>,
     height_bits: Option<u32>,
@@ -265,9 +265,115 @@ fn record_layout_key_occurrence(
 // S31 found broken (this alone does not remove the double-`lay_out()` call
 // itself — that is still Step-1 probe + final pass, unchanged — so it does
 // not reopen the cache question S28-S33 closed for CC-12's specific gate; see
-// BUG-341 S34 for the measured effect on style-identity stability).
+// BUG-341 S34 for the measured effect on style-identity stability). S35
+// confirmed the precondition holds even accounting for `UsedSizeOverride`
+// itself (99.8% of same-style repeats also match by override value). S36
+// re-builds the general cache S32 removed, keyed this time on
+// `UsedSizeOverrideBits` too (not just style `ptr_eq`) — see
+// `LayoutResultKey`'s own doc comment for why, and BUG-341 S36 for the
+// re-measured wall-clock result against this now-stable precondition.
 thread_local! {
     static CV_AUTO_TOUCHED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// BUG-341 S36 — the layout-result cache S32 built and S33 removed
+/// (net-negative at the time, 8.3% hit rate), resurrected now that S34/S35
+/// established the precondition it needs (a flex item's `style` `Arc` stays
+/// `ptr_eq`-stable across its Step-1 probe and final placement pass in 77.5%
+/// of repeat-key calls, not S31's original 23.5%). Same choke point as S32
+/// (`lay_out`'s wrapper), extended to also cover [`lay_out_with_used_size`]'s
+/// wrapper — a call site S32 predates (`UsedSizeOverride` did not exist yet)
+/// but which S35's census proved matters: a Step-1 probe (no override) and a
+/// final-pass call (override present) can land on the identical
+/// `(node, width, height)` key with the identical style `Arc` while still
+/// needing genuinely different results, so [`UsedSizeOverrideBits`] is part
+/// of this key, not just an extra guard checked after a hit — two calls that
+/// differ only by override must never collide into the same map slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct LayoutResultKey {
+    node: NodeId,
+    width_bits: u32,
+    height_bits: Option<u32>,
+    viewport_w_bits: u32,
+    viewport_h_bits: u32,
+    pcb_x_bits: u32,
+    pcb_y_bits: u32,
+    pcb_w_bits: u32,
+    pcb_h_bits: u32,
+    in_block_flow: bool,
+    measurer_ptr: usize,
+    hp_ptr: usize,
+    used_size_override: UsedSizeOverrideBits,
+}
+
+/// One cached [`lay_out`]/[`lay_out_with_used_size`] result — same shape as
+/// S32's own entry (style `Arc` for the `ptr_eq` correctness check, the
+/// origin the subtree's rects are expressed in so a hit can
+/// [`crate::incremental::translate_subtree`] to a different origin, and the
+/// laid-out subtree itself).
+struct LayoutResultEntry {
+    style: Arc<ComputedStyle>,
+    start_x: f32,
+    start_y: f32,
+    result: LayoutBox,
+}
+
+thread_local! {
+    static LAYOUT_RESULT_CACHE_ON: Cell<bool> = const { Cell::new(false) };
+    static LAYOUT_RESULT_CACHE: RefCell<HashMap<LayoutResultKey, LayoutResultEntry>> = RefCell::new(HashMap::new());
+}
+
+/// Enables/disables the BUG-341 S36 layout-result cache and clears its
+/// state — call once before a full (non-incremental) layout pass.
+pub fn set_layout_result_cache(on: bool) {
+    LAYOUT_RESULT_CACHE_ON.with(|c| c.set(on));
+    LAYOUT_RESULT_CACHE.with(|m| m.borrow_mut().clear());
+    CV_AUTO_TOUCHED.with(|c| c.set(false));
+    LAYOUT_RESULT_CACHE_STATS.with(|c| c.set(LayoutResultCacheStats::default()));
+}
+
+/// Whether the BUG-341 S36 layout-result cache is currently enabled.
+pub fn layout_result_cache_enabled() -> bool {
+    LAYOUT_RESULT_CACHE_ON.with(|c| c.get())
+}
+
+/// BUG-341 S36 — per-pass tally of what the cache-checked wrapper did,
+/// mirroring S32's own `LayoutResultCacheStats`. `poisoned` counts misses
+/// that were *not* stored afterward because [`CV_AUTO_TOUCHED`] fired for
+/// that call.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LayoutResultCacheStats {
+    /// Calls served from the cache instead of recomputed.
+    pub hits: u32,
+    /// Calls that missed and were computed normally, then cached.
+    pub misses: u32,
+    /// Calls that missed, were computed normally, and were *not* cached
+    /// because the computation touched `content-visibility: auto`.
+    pub poisoned: u32,
+}
+
+thread_local! {
+    static LAYOUT_RESULT_CACHE_STATS: Cell<LayoutResultCacheStats> = const { Cell::new(LayoutResultCacheStats { hits: 0, misses: 0, poisoned: 0 }) };
+}
+
+/// Returns the accumulated [`LayoutResultCacheStats`] and resets the tally.
+/// Call after a full layout pass with the cache enabled.
+pub fn take_layout_result_cache_stats() -> LayoutResultCacheStats {
+    LAYOUT_RESULT_CACHE_STATS.with(|c| c.replace(LayoutResultCacheStats::default()))
+}
+
+/// BUG-341 S36 — same pre-filters S32 used, checked before building a
+/// [`LayoutResultKey`] (which requires reading `b.style`/`b.kind` that a
+/// `Skip` box or an active subgrid dispatch shouldn't pay for or shouldn't
+/// trust). See S32's original doc comment (git history) for the full
+/// rationale — unchanged by S36.
+fn cacheable_for_layout_result_cache(b: &LayoutBox) -> bool {
+    if matches!(b.kind, BoxKind::Skip) {
+        return false;
+    }
+    let subgrid_active = SUBGRID_COL_CTX.with(|c| c.borrow().is_some())
+        || SUBGRID_ROW_CTX.with(|c| c.borrow().is_some());
+    !subgrid_active
 }
 
 /// Enables/disables incremental box-build reuse for subsequent
@@ -6953,9 +7059,9 @@ fn lay_out(
     // formatting context (flex/grid items, table cells, the document root), so
     // they inherit no enclosing floats. The block-flow normal-child recursion in
     // `lay_out_inner` is the one site that propagates a parent `FloatContext`.
-    lay_out_inner(
+    lay_out_cache_checked(
         b, start_x, start_y, available_width, available_height,
-        measurer, viewport, pcb, hp, in_block_flow, None, AlignValue::Auto, None,
+        measurer, viewport, pcb, hp, in_block_flow, None,
     );
 }
 
@@ -6977,10 +7083,113 @@ fn lay_out_with_used_size(
     in_block_flow: bool,
     used_size_override: UsedSizeOverride,
 ) {
+    lay_out_cache_checked(
+        b, start_x, start_y, available_width, available_height,
+        measurer, viewport, pcb, hp, in_block_flow, Some(used_size_override),
+    );
+}
+
+/// BUG-341 S36 — the layout-result cache's one choke point, shared by
+/// [`lay_out`] (`used_size_override: None`) and [`lay_out_with_used_size`]
+/// (`used_size_override: Some(..)`, `lay_out_flex`'s three re-layout call
+/// sites). Both wrappers pass `outer_floats: None, parent_justify_items:
+/// Auto` unconditionally into `lay_out_inner` — the block-flow normal-child
+/// recursion is the one `lay_out_inner` call site that threads real
+/// floats/justify-items and is therefore never intercepted here, same
+/// exclusion S32 established.
+#[allow(clippy::too_many_arguments)]
+fn lay_out_cache_checked(
+    b: &mut LayoutBox,
+    start_x: f32,
+    start_y: f32,
+    available_width: f32,
+    available_height: Option<f32>,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+    pcb: Rect,
+    hp: &dyn HyphenationProvider,
+    in_block_flow: bool,
+    used_size_override: Option<UsedSizeOverride>,
+) {
+    if layout_result_cache_enabled() && cacheable_for_layout_result_cache(b) {
+        let key = LayoutResultKey {
+            node: b.node,
+            width_bits: available_width.to_bits(),
+            height_bits: available_height.map(f32::to_bits),
+            viewport_w_bits: viewport.width.to_bits(),
+            viewport_h_bits: viewport.height.to_bits(),
+            pcb_x_bits: pcb.x.to_bits(),
+            pcb_y_bits: pcb.y.to_bits(),
+            pcb_w_bits: pcb.width.to_bits(),
+            pcb_h_bits: pcb.height.to_bits(),
+            in_block_flow,
+            measurer_ptr: measurer
+                .map(|m| m as *const dyn TextMeasurer as *const () as usize)
+                .unwrap_or(0),
+            hp_ptr: hp as *const dyn HyphenationProvider as *const () as usize,
+            used_size_override: UsedSizeOverrideBits::from(used_size_override.as_ref()),
+        };
+        let hit = LAYOUT_RESULT_CACHE.with(|c| {
+            c.borrow().get(&key).and_then(|e| {
+                if Arc::ptr_eq(&e.style, &b.style) && crate::incremental::kind_layout_eq(&e.result.kind, &b.kind) {
+                    Some((e.result.clone(), e.start_x, e.start_y))
+                } else {
+                    None
+                }
+            })
+        });
+        if let Some((mut result, cached_x, cached_y)) = hit {
+            crate::incremental::translate_subtree(&mut result, start_x - cached_x, start_y - cached_y);
+            *b = result;
+            LAYOUT_RESULT_CACHE_STATS.with(|c| {
+                let mut v = c.get();
+                v.hits += 1;
+                c.set(v);
+            });
+            return;
+        }
+
+        // Cache miss: compute normally, tracking whether the computation
+        // touched `content-visibility: auto` anywhere in this subtree (see
+        // `CV_AUTO_TOUCHED`'s doc comment).
+        let outer_touched = CV_AUTO_TOUCHED.with(|c| c.replace(false));
+        lay_out_inner(
+            b, start_x, start_y, available_width, available_height,
+            measurer, viewport, pcb, hp, in_block_flow, None, AlignValue::Auto,
+            used_size_override,
+        );
+        let touched_here = CV_AUTO_TOUCHED.with(|c| c.get());
+        CV_AUTO_TOUCHED.with(|c| c.set(outer_touched || touched_here));
+        if !touched_here {
+            LAYOUT_RESULT_CACHE.with(|c| {
+                c.borrow_mut().insert(
+                    key,
+                    LayoutResultEntry {
+                        style: Arc::clone(&b.style),
+                        start_x,
+                        start_y,
+                        result: b.clone(),
+                    },
+                );
+            });
+            LAYOUT_RESULT_CACHE_STATS.with(|c| {
+                let mut v = c.get();
+                v.misses += 1;
+                c.set(v);
+            });
+        } else {
+            LAYOUT_RESULT_CACHE_STATS.with(|c| {
+                let mut v = c.get();
+                v.poisoned += 1;
+                c.set(v);
+            });
+        }
+        return;
+    }
     lay_out_inner(
         b, start_x, start_y, available_width, available_height,
         measurer, viewport, pcb, hp, in_block_flow, None, AlignValue::Auto,
-        Some(used_size_override),
+        used_size_override,
     );
 }
 
@@ -20263,6 +20472,291 @@ mod tests {
         assert!(
             !incr_counters.clean_subtrees().contains(&text_node),
             "the mutated text node itself must not be marked clean",
+        );
+    }
+
+    // ── BUG-341 S36: layout-result cache differential tests ────────────────────
+    //
+    // Same mechanism S32 built and S33 removed (net-negative at the time),
+    // resurrected with `used_size_override` folded into the key (S34/S35
+    // established the precondition it needs — see `LayoutResultKey`'s own doc
+    // comment). Mirrors S32's own five differential tests, plus one new test
+    // for the override-collision hazard S36 exists to close.
+
+    /// Lays out `html`/`css` once with the cache enabled and once with it off;
+    /// asserts every box's rect matches within 0.5px and returns the cache
+    /// stats from the cached run.
+    fn cached_vs_uncached_geometry(html: &str, css: &str, vp: Size) -> super::LayoutResultCacheStats {
+        use lumen_dom::build_flat_tree;
+        use crate::counters::{build_counter_style_registry, precompute_counters};
+        use crate::style::ComputedStyle;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let flat = build_flat_tree(&doc);
+        let root_style = ComputedStyle::root();
+        let counters = precompute_counters(&doc, &sheet, vp, &flat, false);
+        let registry = build_counter_style_registry(&sheet);
+        let null_hp = lumen_core::ext::NullHyphenationProvider;
+        let init_pcb = super::Rect::new(0.0, 0.0, vp.width, vp.height);
+
+        let mut uncached = super::build_box(
+            &doc, &sheet, doc.root(), &root_style, vp, &flat, &counters, &registry, false, None,
+        );
+        super::lay_out(&mut uncached, 0.0, 0.0, vp.width, Some(vp.height), None, vp, init_pcb, &null_hp, false);
+
+        let mut cached = super::build_box(
+            &doc, &sheet, doc.root(), &root_style, vp, &flat, &counters, &registry, false, None,
+        );
+        super::set_layout_result_cache(true);
+        super::lay_out(&mut cached, 0.0, 0.0, vp.width, Some(vp.height), None, vp, init_pcb, &null_hp, false);
+        let stats = super::take_layout_result_cache_stats();
+        super::set_layout_result_cache(false);
+
+        fn collect_rects(b: &super::LayoutBox, out: &mut Vec<(lumen_dom::NodeId, super::Rect)>) {
+            out.push((b.node, b.rect));
+            for c in &b.children {
+                collect_rects(c, out);
+            }
+        }
+        let mut ra = Vec::new();
+        let mut rb = Vec::new();
+        collect_rects(&cached, &mut ra);
+        collect_rects(&uncached, &mut rb);
+        assert_eq!(ra.len(), rb.len(), "box count must match the uncached pass");
+        for ((na, xa), (nb, xb)) in ra.iter().zip(rb.iter()) {
+            assert_eq!(na, nb, "node order must match the uncached pass");
+            assert!(
+                (xa.x - xb.x).abs() < 0.5 && (xa.y - xb.y).abs() < 0.5
+                    && (xa.width - xb.width).abs() < 0.5 && (xa.height - xb.height).abs() < 0.5,
+                "rect mismatch for {na:?}: cached {xa:?} vs uncached {xb:?}",
+            );
+        }
+        stats
+    }
+
+    #[test]
+    fn layout_result_cache_matches_uncached_on_nested_column_flex() {
+        let html = r#"<div class="outer"><div class="mid"><div class="inner">
+            some reasonably long text content so intrinsic sizing has real work to do
+        </div></div></div>"#;
+        let css = r#"
+            .outer { display: flex; flex-direction: column; width: 400px; }
+            .mid { display: flex; flex-direction: column; }
+            .inner { display: flex; flex-direction: column; }
+        "#;
+        let stats = cached_vs_uncached_geometry(html, css, Size::new(800.0, 600.0));
+        assert_eq!(stats.poisoned, 0, "no content-visibility:auto in this fixture, should never poison");
+    }
+
+    #[test]
+    fn layout_result_cache_matches_uncached_on_grid_probe_pass() {
+        // S32 found this fixture (CSS Grid's "layout at temporary position to
+        // get intrinsic height" probe, `probe_x`/`probe_y` above) was the one
+        // natural case where the generic cache's `ptr_eq` guard held across
+        // two calls to the same node. S33 subsequently gave that exact case
+        // its own zero-overhead point-fix (`probe_reuse` above): the final
+        // placement pass now repositions the probe's already-computed
+        // `LayoutBox` directly instead of calling `lay_out` a second time, so
+        // there is no second call left for *this* generic cache to intercept
+        // — `hits == 0` here is S33's fix working as intended, not a S36
+        // regression. Kept as a geometry-parity check (cache on vs. off must
+        // still agree) rather than deleted, since it is still the closest
+        // thing to a grid-side regression guard this cache has.
+        let html = r#"<div class="grid"><div class="cell">
+            some reasonably long text content so intrinsic sizing has real work to do
+        </div></div>"#;
+        let css = r#"
+            .grid { display: grid; grid-template-columns: 1fr; width: 400px; }
+        "#;
+        let stats = cached_vs_uncached_geometry(html, css, Size::new(800.0, 600.0));
+        assert_eq!(stats.poisoned, 0, "no content-visibility:auto in this fixture, should never poison");
+    }
+
+    #[test]
+    fn layout_result_cache_hits_on_verbatim_repeat_call() {
+        // S33's grid point-fix means neither of the two fixtures above
+        // exercises an actual hit (flex items never repeat the same style
+        // `Arc` within one `lay_out_flex` call per S32; grid's own probe/final
+        // pair is now short-circuited before it reaches this cache at all).
+        // Proves the hit path itself — `Arc::ptr_eq` match,
+        // `translate_subtree` repositioning — is not simply dead code: two
+        // back-to-back `lay_out` calls on the very same box with unchanged
+        // style/constraints must be a hit, and the repositioned result must
+        // land at the second call's `(start_x, start_y)`, not the first's.
+        use crate::counters::{build_counter_style_registry, precompute_counters};
+        use crate::style::ComputedStyle;
+        use lumen_dom::build_flat_tree;
+
+        let html = "<div>hello there</div>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("div { width: 200px; }");
+        let flat = build_flat_tree(&doc);
+        let root_style = ComputedStyle::root();
+        let vp = Size::new(800.0, 600.0);
+        let counters = precompute_counters(&doc, &sheet, vp, &flat, false);
+        let registry = build_counter_style_registry(&sheet);
+        let null_hp = lumen_core::ext::NullHyphenationProvider;
+        let init_pcb = super::Rect::new(0.0, 0.0, vp.width, vp.height);
+
+        let mut tree = super::build_box(
+            &doc, &sheet, doc.root(), &root_style, vp, &flat, &counters, &registry, false, None,
+        );
+        let div = tree.children.last_mut().expect("html > body > div");
+        let div = div.children.last_mut().expect("body > div");
+
+        // Independent baseline: what an uncached call directly at (30, 40)
+        // produces (may not itself be (30, 40) — the div's own margin/border
+        // offsets the border-box origin from the call's `start_x`/`start_y`).
+        let mut baseline_tree = super::build_box(
+            &doc, &sheet, doc.root(), &root_style, vp, &flat, &counters, &registry, false, None,
+        );
+        let baseline_div = baseline_tree.children.last_mut().expect("html > body > div");
+        let baseline_div = baseline_div.children.last_mut().expect("body > div");
+        super::lay_out(baseline_div, 30.0, 40.0, 200.0, None, None, vp, init_pcb, &null_hp, false);
+
+        super::set_layout_result_cache(true);
+        super::lay_out(div, 0.0, 0.0, 200.0, None, None, vp, init_pcb, &null_hp, false);
+        super::lay_out(div, 30.0, 40.0, 200.0, None, None, vp, init_pcb, &null_hp, false);
+        let stats = super::take_layout_result_cache_stats();
+        super::set_layout_result_cache(false);
+
+        assert_eq!(stats, super::LayoutResultCacheStats { hits: 1, misses: 1, poisoned: 0 });
+        assert!(
+            (div.rect.x - baseline_div.rect.x).abs() < 0.5
+                && (div.rect.y - baseline_div.rect.y).abs() < 0.5
+                && (div.rect.width - baseline_div.rect.width).abs() < 0.5
+                && (div.rect.height - baseline_div.rect.height).abs() < 0.5,
+            "a hit must translate the cached subtree to match an uncached call at the same origin: \
+             cached {:?} vs baseline {:?}",
+            div.rect, baseline_div.rect,
+        );
+    }
+
+    #[test]
+    fn layout_result_cache_matches_uncached_when_style_mutates_between_calls() {
+        let html = r#"<div class="row"><div class="item">hello there</div></div>"#;
+        let css = r#"
+            .row { display: flex; width: 400px; }
+            .item { flex-basis: auto; width: 120px; }
+        "#;
+        let stats = cached_vs_uncached_geometry(html, css, Size::new(800.0, 600.0));
+        assert_eq!(stats.poisoned, 0, "no content-visibility:auto in this fixture, should never poison");
+    }
+
+    #[test]
+    fn layout_result_cache_refuses_to_cache_a_content_visibility_auto_subtree() {
+        crate::content_visibility::set_cv_scroll(0.0, 0.0);
+        crate::content_visibility::set_cv_relevant(std::collections::HashSet::new());
+        let html = r#"<div class="outer"><div class="cv">short text</div></div>"#;
+        let css = r#"
+            .outer { display: flex; flex-direction: column; width: 400px; }
+            .cv { content-visibility: auto; }
+        "#;
+        let stats = cached_vs_uncached_geometry(html, css, Size::new(800.0, 600.0));
+        assert_eq!(stats.hits, 0, "a content-visibility:auto subtree must never be served from cache");
+        assert!(stats.poisoned > 0, "the .cv node's own call must be recorded as poisoned, not silently cached");
+        crate::content_visibility::take_cv_skipped();
+    }
+
+    #[test]
+    fn layout_result_cache_refuses_when_subgrid_context_is_active() {
+        use crate::subgrid::{SubgridContext, SubgridContextGuard};
+        use crate::counters::{build_counter_style_registry, precompute_counters};
+        use crate::style::ComputedStyle;
+        use lumen_dom::build_flat_tree;
+        let html = "<div id=\"a\"></div>";
+        let doc = lumen_html_parser::parse(html);
+        let flat = build_flat_tree(&doc);
+        let sheet = lumen_css_parser::parse("");
+        let root_style = ComputedStyle::root();
+        let vp = Size::new(800.0, 600.0);
+        let counters = precompute_counters(&doc, &sheet, vp, &flat, false);
+        let registry = build_counter_style_registry(&sheet);
+        let b = super::build_box(
+            &doc, &sheet, doc.root(), &root_style, vp, &flat, &counters, &registry, false, None,
+        );
+        let _guard = SubgridContextGuard::set(
+            Some(SubgridContext::from_parent_tracks(&[100.0], 0.0)),
+            None,
+        );
+        assert!(
+            !super::cacheable_for_layout_result_cache(&b),
+            "must refuse to cache while a subgrid context is active",
+        );
+    }
+
+    #[test]
+    fn layout_result_cache_key_distinguishes_used_size_override_from_plain_probe() {
+        // BUG-341 S36's whole reason to exist: `lay_out`'s Step-1 probe and
+        // `lay_out_with_used_size`'s final pass can land on the identical
+        // `(node, width, height)` key with the identical style `Arc` (S34) —
+        // the key must still treat them as different cache slots, or the
+        // final pass would silently be served the probe's un-overridden
+        // geometry. Drives both wrappers directly on the same node/width so
+        // every other key field matches too; `#item`'s declared `width: 400px`
+        // makes the plain-probe result deterministic without relying on
+        // block-auto-width resolution semantics.
+        use crate::counters::{build_counter_style_registry, precompute_counters};
+        use crate::style::ComputedStyle;
+        use lumen_dom::build_flat_tree;
+
+        let html = r#"<div id="item">hello there</div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("#item { width: 400px; }");
+        let flat = build_flat_tree(&doc);
+        let root_style = ComputedStyle::root();
+        let vp = Size::new(800.0, 600.0);
+        let counters = precompute_counters(&doc, &sheet, vp, &flat, false);
+        let registry = build_counter_style_registry(&sheet);
+        let null_hp = lumen_core::ext::NullHyphenationProvider;
+        let init_pcb = super::Rect::new(0.0, 0.0, vp.width, vp.height);
+        let item_node = doc.find_by_id("item").expect("#item exists");
+
+        fn find_mut(b: &mut super::LayoutBox, node: lumen_dom::NodeId) -> &mut super::LayoutBox {
+            fn contains(b: &super::LayoutBox, node: lumen_dom::NodeId) -> bool {
+                b.node == node || b.children.iter().any(|c| contains(c, node))
+            }
+            if b.node == node {
+                return b;
+            }
+            for c in &mut b.children {
+                if contains(c, node) {
+                    return find_mut(c, node);
+                }
+            }
+            panic!("node not found in tree");
+        }
+
+        let mut tree = super::build_box(
+            &doc, &sheet, doc.root(), &root_style, vp, &flat, &counters, &registry, false, None,
+        );
+
+        super::set_layout_result_cache(true);
+        super::lay_out(
+            find_mut(&mut tree, item_node),
+            0.0, 0.0, 400.0, None, None, vp, init_pcb, &null_hp, false,
+        );
+        super::lay_out_with_used_size(
+            find_mut(&mut tree, item_node),
+            0.0, 0.0, 400.0, None, None, vp, init_pcb, &null_hp, false,
+            super::UsedSizeOverride { width: Some(250.0), height: None, box_sizing: None },
+        );
+        let stats = super::take_layout_result_cache_stats();
+        super::set_layout_result_cache(false);
+
+        assert_eq!(
+            stats.hits, 0,
+            "the override call must never be served from the plain probe's cache entry \
+             (same node/width/height/style, different used_size_override) — got {stats:?}",
+        );
+        assert_eq!(stats.misses, 2, "both calls must independently compute — got {stats:?}");
+
+        let item = find_mut(&mut tree, item_node);
+        assert!(
+            (item.rect.width - 250.0).abs() < 0.5,
+            "the used-size override must actually apply, not fall through to the probe's cached \
+             un-overridden width — got {:?}",
+            item.rect,
         );
     }
 }
