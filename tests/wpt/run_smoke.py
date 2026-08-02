@@ -37,6 +37,7 @@ import sys
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 TESTS_ROOT = os.path.join(REPO_ROOT, "tests", "wpt")
 METADATA_ROOT = os.path.join(TESTS_ROOT, "metadata")
+CERTS_ROOT = os.path.join(TESTS_ROOT, "certs")
 
 sys.path[:0] = [
     REPO_ROOT,
@@ -97,6 +98,24 @@ def run(binary: str, test_ids: list, extra_args: list = None) -> int:
         # (`restart_required` in testrunner.py), just not on a plain
         # FAIL/ERROR/TIMEOUT.
         "--no-restart-on-unexpected",
+        # `--ssl-type` left unset auto-detects: "openssl" if an `openssl`
+        # binary happens to be on PATH at run time, else silently "none".
+        # "none" makes `TestEnvironment._get_ports` (wptserve `config.py`)
+        # skip allocating an https port entirely — every `.https.`-only test
+        # (most of WebCryptoAPI, `ai`, part of FileAPI/accelerometer) then
+        # gets a literal "None" substituted into its `{{ports[https][0]}}`
+        # URL, which Lumen can't navigate to, so the executor's readiness
+        # poll just times out (`invalid port: "None"`, see
+        # docs/tasks/p2-wpt-runner-throughput.md WPT-RUN-2). Pinning
+        # "pregenerated" with a checked-in self-signed cert (tests/wpt/certs/,
+        # CN=127.0.0.1 + matching SAN, 100-year expiry — this project's
+        # offline-only rule rules out ACME/live reissuance) makes https
+        # port allocation deterministic across machines instead of depending
+        # on whether openssl happens to be installed.
+        "--ssl-type=pregenerated",
+        f"--ca-cert-path={os.path.join(CERTS_ROOT, 'ca-cert.pem')}",
+        f"--host-cert-path={os.path.join(CERTS_ROOT, 'host-cert.pem')}",
+        f"--host-key-path={os.path.join(CERTS_ROOT, 'host-key.pem')}",
     ] + list(extra_args or []) + list(test_ids)
 
     cmd_parser = wptcommandline.create_parser()

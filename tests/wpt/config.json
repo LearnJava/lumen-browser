@@ -3,7 +3,7 @@
     "http": [18300, 18301],
     "http-local": [null],
     "http-public": [null],
-    "https": [null, null],
+    "https": [18443, 18444],
     "https-local": [null],
     "https-public": [null],
     "ws": [null],

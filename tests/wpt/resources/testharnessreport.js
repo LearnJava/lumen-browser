@@ -14,6 +14,20 @@
 // *string* takes that path rather than the objects/arrays JSON-text
 // fallback — verified against a live BiDi response, not assumed.
 (function() {
+  // Tells `/resources/testdriver.js` (WPT-RUN-2, unmodified vendored file,
+  // always served concatenated with wptrunner's own
+  // `executors/message-queue.js` + `testdriver-extra.js` —
+  // `environment.py::get_routes`) this is the "main" test browsing context,
+  // so `test_driver_internal.*` calls queue actions onto
+  // `window.__wptrunner_message_queue` (drained by
+  // `LumenTestharnessExecutor`, `executorlumen.py`) instead of throwing
+  // ("Tried to run in a non-testharness window without a call to
+  // set_test_context"). Stock wptrunner's own `testharnessreport.js` (never
+  // served here — this file's route replaces it, see the BUG-301 gotcha in
+  // `CLAUDE.md`) sets the same flag; mirrored here since testdriver.js reads
+  // it regardless of which report script is paired with it.
+  window.__wptrunner_is_test_context = true;
+
   function test_url() {
     // No fragment: WPT test ids never include one.
     return location.pathname + location.search;
