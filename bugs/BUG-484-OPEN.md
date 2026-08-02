@@ -98,6 +98,24 @@ prediction: `parsing/all-invalid.html` (7 subtests, `e.style['all'] =
 1 (rejection) — `assert_equals: expected "" but got "<the invalid value>"`
 for each. Committed `.ini` under `tests/wpt/metadata/css/css-cascade/`.
 
+**WPT-RUN-3 срез 9 (`css/css-backgrounds`, 2026-08-02)** — largest
+extension yet: 34 files / ~300 subtests, dominating the `parsing/`
+subdirectory (`background-{attachment,clip,color,image,origin,position,
+position-x,position-y,repeat,size}-{valid,invalid}.html`,
+`border-{color,style,width}-shorthand.html`, `border-shorthand.html`,
+`background-shorthand-serialization.html`'s `assert_in_array` cases,
+`webkit-border-radius-valid.html`). Two new observations, both the same
+underlying `_lumen_make_style` Proxy: (1) `box-shadow-invalid.html`
+(40 subtests) and `background-image-invalid.html` (12, `cross-fade()`/
+`radial-gradient()` malformed-argument cases) confirm shape 1 extends to
+function-value grammars, not just simple tokens; (2)
+`webkit-border-radius-valid.html` additionally throws `"style is not
+iterable"` on 2 subtests that spread/iterate `element.style` — the same
+Proxy is also missing `Symbol.iterator`/`length`, the identical
+missing-trap class already documented on the *other* style-like Proxy in
+[BUG-483](BUG-483-OPEN.md) (`getComputedStyle`'s). Not a new bug, just
+confirms the class recurs on both Proxies independently.
+
 ## Что нужно
 
 Route `setProperty`/the bracket `set` trap through `css-parser`'s actual
@@ -114,4 +132,6 @@ a quick patch.
 Committed `.ini` under `tests/wpt/metadata/css/css-box/` for the 12
 attributed files (both `-invalid.html` and `-shorthand.html`, plus
 `margin-trim.html`/`padding-valid.html`), `expected: FAIL` per the actual
-run.
+run. Срез 9 added `.ini` under `tests/wpt/metadata/css/css-backgrounds/`
+for 34 more files (several shared with BUG-463/472/492/495 — one `.ini`
+header per file references every bug that owns a subtest in it).

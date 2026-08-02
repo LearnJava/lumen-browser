@@ -61,3 +61,16 @@ is expected to be small, but unverified.
 No dedicated `.ini` — see Симптом above; the affected subtests are already
 covered under BUG-472/BUG-493's `.ini` entry for
 `border-width-rounding.tentative.html`.
+
+**WPT-RUN-3 срез 9 (`css/css-backgrounds`, 2026-08-02)** found the first
+file where this bug is the sole, complete cause rather than a secondary
+factor: `parsing/background-shorthand-serialization.html` (11/11
+subtests) uses exactly the `element.style = 'background: ...;'` pattern
+for every single test case, then reads `element.style.background` back.
+Because the assignment is a silent no-op, every readback sees the
+element's untouched default (empty) style — the test title claims to be
+about shorthand *serialization*, but none of these subtests ever reach
+serialization logic at all. Committed `.ini` under
+`tests/wpt/metadata/css/css-backgrounds/parsing/
+background-shorthand-serialization.html.ini`, the bug's first dedicated
+`.ini` file.

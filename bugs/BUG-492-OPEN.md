@@ -45,8 +45,40 @@ Not scoped further this slice — only the one interpolation test file in
 directory (`css/css-backgrounds` or similar upstream location) is out of
 this slice's `--root css/css-borders` scope and untriaged.
 
+**WPT-RUN-3 срез 9 (`css/css-backgrounds`, 2026-08-02) found the real home
+category** — `css/css-backgrounds` is where upstream WPT actually puts the
+bulk of `border-image` tests, not `css/css-borders`: **25 files / 1646
+subtests**, by far the largest single-bug finding across the whole
+WPT-RUN-3 track so far. Every `border-image-{source,slice,width,outset,
+repeat}` longhand and the shorthand itself fail uniformly, split across
+three shapes already anticipated by sl.8's `## Симптом`:
+
+- **Interpolation/composition, 0 subtests passing per file** — the
+  `animations/border-image-{outset,slice,source,width}-{interpolation,
+  composition}.html` family (7 files, 1790 subtests alone —
+  `border-image-width-interpolation.html` is the single largest failing
+  file seen in the track to date at 558 subtests) — `CSS.supports(prop,
+  val)` returns `false` for every value, same `interpolation-testcommon.js`
+  `'from'/'to' value should be supported` assertion as sl.8, just now
+  hitting the properties' true test home.
+- **`parsing/border-image*-{computed,invalid,valid}.html`** (15 files) —
+  the same `computed_style_to_map`/`_lumen_make_style` symptoms BUG-472/484
+  already document for *implemented* properties, but here the root cause is
+  simpler: the property doesn't exist at all, so both paths trivially fail.
+- **Geometry/reset side effects** — `border-image-repeat_repeatnegx_none_50px.html`
+  (element height wrong because `border-image-width: 50px` never applies)
+  and `border-image-slice-shorthand-reset.html` (shorthand reset to initial
+  never happens because the shorthand itself is unrecognized).
+
+`discrete-no-interpolation.html` (35 of its 77 subtests) additionally
+confirms `border-image-repeat` specifically, shared with
+[BUG-463](BUG-463-OPEN.md) for the other 42 (WAAPI-not-supported) subtests
+in the same file.
+
 ## .ini
 
 Committed `.ini` for `border-image-width-interpolation-math-functions.html`
 under `tests/wpt/metadata/css/css-borders/`, header referencing both this bug
-and BUG-463.
+and BUG-463. Срез 9 added `.ini` under `tests/wpt/metadata/css/css-backgrounds/`
+for 25 more files (1646 subtests) — one file (`discrete-no-interpolation.html`)
+shares its header with BUG-463.

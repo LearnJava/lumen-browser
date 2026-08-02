@@ -50,8 +50,25 @@ FAIL Resolution of width is correct for ::before and ::after pseudo-elements
 свойств, которые в карте есть, см. существующие юнит-тесты
 `get_computed_style_*` в `dom.rs`).
 
+**WPT-RUN-3 срез 9 (`css/css-backgrounds`, 2026-08-02)** — 25 файлов / ~324
+сабтеста: весь `background-attachment`/`-clip`/`-color`/`-image`/`-origin`/
+`-position`/`-repeat`/`-size` computed-style кластер
+(`parsing/background-*-computed.html`, `parsing/background-computed.html`,
+numbered `background-33{1,2,3,5,6}.html`, `background-{size,clip,origin}-001.html`)
+плюс новая грань того же гэпа: даже **физические longhand'ы**, давно
+реализованные для рендеринга (`border-top-color`, `border-top-width`,
+`border-top-style`, `border-top-left-radius` и парные), отсутствуют в карте
+не только для составных значений border-shorthand'ов — `parsing/
+border-{color,radius,style,width}-computed.html`, все 4 файла падают на
+собственных физических longhand-именах, не только на shorthand'ах
+(`border-color`/`border-width`/`border-style`/`border-radius`). Подтверждает
+исходную гипотезу «рукописная карта ~64 записи» буквально — список
+недостающих ключей шире, чем предполагалось на срезе 3.
+
 ## .ini
 
 Committed `.ini` под `tests/wpt/metadata/css/cssom/` для всех 37
 атрибутированных файлов, `expected: FAIL`/`TIMEOUT` по фактическому
-результату прогона.
+результату прогона. Срез 9 добавил `.ini` под
+`tests/wpt/metadata/css/css-backgrounds/` для ещё 25 файлов (некоторые
+делят файл с BUG-463/BUG-495 — общий заголовок `.ini` ссылается на оба).
