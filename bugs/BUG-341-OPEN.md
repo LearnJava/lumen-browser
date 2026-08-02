@@ -1,6 +1,6 @@
 # BUG-341: `lay_out_flex` double-lays-out every item — general engine bug, ~300× over CC-12's 2ms chrome perf-gate budget
 
-**Статус:** OPEN — **на паузе с 2026-08-02 после S32** (see below; not a silent relaxation, an explicit user decision).
+**Статус:** OPEN — **на паузе с 2026-08-03 после S34** (see below; not a silent relaxation, an explicit user decision).
 **Компонент:** layout (`crates/engine/layout/src/box_tree.rs::lay_out_flex`) — **general flexbox algorithm bug, affects any nested-flexbox page**, not just chrome. Surfaced via the chrome document (`crates/shell/src/main.rs::relayout_chrome_host`, `docs/tasks/p1-css-chrome.md`) because CC-12 was the first hard perf budget + realistic flex-nesting-depth bench to exist.
 **Найден:** P1, CC-12 (перф-гейт хрома) 2026-07-25 — новый тест `crates/shell/src/main.rs::tests::cc12_chrome_perf_gate_hover_and_keystroke_cycles`. Root-caused: P1, 2026-07-25.
 
@@ -4305,6 +4305,110 @@ path that could actually remove the double-layout cost rather than merely
 detect-and-skip it after the fact. Standing pause terms unchanged: not
 abandoned, resume only on explicit request.
 
+## S34 — `SavedItemSizing`'s style-mutation dance removed; style-identity now stable for flex items (77.7% vs S31's 23.5%); CC-12 gate itself not moved
+
+Branch `p1-bug341-s34`. Resumed on explicit user request ("новый архитектурный
+срез") to attempt S33's own recommendation: eliminate `SavedItemSizing`'s
+capture/`Arc::make_mut`/restore dance around a flex item's `style` before its
+column/row/cross-stretch re-layout passes, replacing it with an explicit
+sizing override that never touches `b.style`'s `Arc`.
+
+**Investigation before writing code** (per `docs/perf-method.md` §1): audited
+every read of `s.width`/`s.height` inside `lay_out_inner`'s ~1600-line body.
+All of them read through one local binding, `let s = Arc::clone(&b.style)`,
+bound once near the top of the function — not `b.style` directly, and not
+re-bound anywhere downstream (confirmed by grepping every `b.style` occurrence
+in the function body: the only other ones are font-size/writing-mode/
+content-visibility reads, none width/height-related). This meant the override
+could be applied at a single interception point — where `s` is constructed —
+rather than needing to touch dozens of scattered read sites across every box
+kind's sizing branch (block, replaced, table, flex/grid container-own-size).
+Also confirmed `lay_out`/`lay_out_inner` are private to `box_tree.rs` (not
+`pub`, not re-exported), so the signature change's blast radius is one file.
+
+**Fix:** new `UsedSizeOverride { width: Option<f32>, height: Option<f32>,
+box_sizing: Option<BoxSizing> }`, threaded through a new `lay_out_inner`
+parameter and a new sibling wrapper `lay_out_with_used_size` (mirrors
+`lay_out`'s existing wrapper shape). When present, `lay_out_inner`'s `s`
+binding applies the override to a **locally cloned** `ComputedStyle` — used
+only for the duration of that one call — instead of the old
+`Arc::make_mut(&mut b.style)` + explicit `.restore()` afterward.
+`SavedItemSizing` (the struct and its `capture`/`restore` methods) is deleted;
+its three call sites in `lay_out_flex` (column final placement, row final
+placement, cross-stretch relayout of a nested column-flex item) now build a
+`UsedSizeOverride` matching exactly what each site used to mutate — including
+the pre-existing asymmetry that only two of the three force `box_sizing:
+border-box` (the row-direction final-placement site never did, and this
+refactor preserves that exactly rather than "fixing" it, since changing
+behavior was out of scope here). No other call site of `lay_out`/
+`lay_out_inner` passes an override, so every one of them is behaviorally
+unchanged (`None` → the pre-existing `Arc::clone` path, byte-identical).
+
+**Correctness:** `cargo test -p lumen-layout --lib`: 3470 passed, 2 failed —
+same pre-existing [[reference_bug339_font_ch_ex_flaky|BUG-339]] `FONT_CH_EX`
+pair (3469 before this slice's one new test). New gate test
+`incremental::tests::flex_item_used_size_override_shares_the_cascade_cache_style_allocation`
+covers all three former `SavedItemSizing` sites — asserts, by identity (not
+output, per the S9/S12 precedent this file already established), that each
+site's item ends layout with `style` still `Arc::ptr_eq` to the cascade
+cache's own allocation (`counters.styles()[&node]`), which was never true for
+any of them before this slice. `cargo clippy -p lumen-layout --all-targets --
+-D warnings`: clean. `python graphic_tests/dump_golden.py` (dev-release,
+`LUMEN_PROFILE=dev-release`): all 12 `--dump-layout`/`--dump-display-list`
+dumps match the committed golden byte-for-byte, including
+`65-flex-align-content.html` (the one flex-heavy fixture in the set) —
+confirms this is a real behavior-preserving refactor, not just passing
+existing assertions that happen not to probe the changed path.
+
+**Measured effect on style-identity stability** (re-ran S30/S31's own census,
+`cargo test -p lumen-shell --profile dev-release bug341_s30_flex_key_census --
+--ignored --nocapture`, same real chrome document/fixture as S30/S31):
+
+```
+[s30-census] HOVER/KEY, all cycles: calls=1544 repeat_key_calls=1260 (81.6%)
+                                     repeat_key_same_style=979 (77.7% of repeats)
+```
+
+vs. S31's `repeat_key_same_style=23.5%` (of repeats; 20.4% of all calls) —
+**same-style-on-repeat jumped from 23.5% to 77.7%** (63.4% of all calls, up
+from 20.4%), a >3× improvement. Not 100%: the remaining ~22% of repeat-key
+calls with a changed style are calls this slice's override does not touch —
+other in-place `Arc::make_mut` writers still exist in this file
+(`apply_font_size_adjust_to_style`, `apply_container_rules`, and a table-cell
+width-reset at what's now `box_tree.rs` ~8637, none of them flex-item sizing)
+plus genuine cross-cycle cascade changes (HOVER toggles `:hover` on ancestors,
+which legitimately changes style between cycles for some nodes). Both are
+expected, not a gap in this fix's own scope.
+
+**Net effect on CC-12 (BUG-341's actual target): none.** This was expected
+going in, not a surprise found after — S33 already established that removing
+`SavedItemSizing`'s mutation restores the *precondition* a style-identity-keyed
+cache would need, but building and wiring such a cache is a separate,
+unattempted architectural addition; this slice deliberately scoped itself to
+the precondition alone (matching S33's own framing: "the only remaining path
+that could actually remove the double-layout cost", not a claim that removing
+the mutation alone would). The `lay_out_flex` Step-1-probe-plus-final-pass
+double `lay_out()` call itself is completely unchanged — every flex item that
+needed prelayout before still gets exactly two full recursive layouts, this
+slice just stopped one of the two from clobbering the item's `style` pointer
+in the process. `cc12_chrome_perf_gate` was not re-run against a 2ms budget
+claim for this slice; the census above is a counter-based measurement per
+`docs/perf-method.md` §3 ("гейтится счётчиком, а не wall-clock" for a
+reuse-precondition claim), not a performance claim requiring wall-clock A/B.
+
+**Recommendation for whoever resumes:** the style-identity precondition a
+cache would need is now real for the large majority of flex-item repeat calls
+(77.7% vs S32's 8.3% hit rate that made the general cache net-negative) — a
+materially more favorable hit-rate/clone-cost trade-off than what S32 measured
+its cache against. Whether that is now enough to make a general
+`(node, constraints, style)`-keyed cache net-positive on `cc12_chrome_perf_gate`
+is an open, unanswered question — S32's clone-cost finding (91% of insertions
+never read back) was measured against the *old* 8.3% hit rate, not this one,
+so it does not automatically transfer; re-measuring clone cost against the new
+hit rate is the next slice's first job before writing any cache mechanism,
+not an assumption to carry forward. Standing pause terms unchanged: not
+abandoned, resume only on explicit request.
+
 ## Repro
 
 ```bash
@@ -4321,6 +4425,14 @@ cargo test -p lumen-shell --profile dev-release bug341_s21_cascade_index_census 
 cargo test -p lumen-shell --profile dev-release bug341_s27_walk_census -- --ignored --nocapture
 cargo test -p lumen-shell --profile dev-release bug341_s30_flex_key_census -- --ignored --nocapture
 ```
+
+S34 re-used `bug341_s30_flex_key_census` unchanged (no new shell-side test) —
+the census it already prints (`repeat_key_same_style`) is exactly what this
+slice needed to re-measure; see its own section above for the before/after
+numbers. The new gate this slice added,
+`flex_item_used_size_override_shares_the_cascade_cache_style_allocation`, is
+`cargo test -p lumen-layout` only (`crates/engine/layout/src/incremental.rs`),
+not in this list of `--ignored` `lumen-shell` benches.
 
 S33 removed `bug341_s32_layout_result_cache_share` along with the general
 cache mechanism it measured — see the S33 section above for why (no toggle

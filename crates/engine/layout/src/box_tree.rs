@@ -197,11 +197,16 @@ fn record_layout_key_occurrence(
 // the old general cache nor the new targeted fix moves CC-12's chrome-flex
 // gate at all — that gate's redundancy is 100% `lay_out_flex`, and no
 // cache-shaped mechanism keyed on style identity can reach it (five slices,
-// S28-S33, converge on the same wall). The real next lever is eliminating
-// `SavedItemSizing`'s style-mutation dance itself — thread the flex
-// placement pass's resolved size into `lay_out`/`lay_out_inner` as an
-// explicit parameter instead of writing it through `style` and restoring it
-// afterward — out of scope for a single slice, flagged for whoever resumes.
+// S28-S33, converge on the same wall). S34 removed `SavedItemSizing` and its
+// style-mutation dance entirely: `lay_out_flex`'s three re-layout call sites
+// now pass an explicit `UsedSizeOverride` into `lay_out_with_used_size`,
+// applied to a locally cloned `ComputedStyle` inside `lay_out_inner` — see
+// `UsedSizeOverride`'s doc comment. `b.style`'s `Arc` pointer is no longer
+// touched by flex item re-layout at all, restoring the `ptr_eq` precondition
+// S31 found broken (this alone does not remove the double-`lay_out()` call
+// itself — that is still Step-1 probe + final pass, unchanged — so it does
+// not reopen the cache question S28-S33 closed for CC-12's specific gate; see
+// BUG-341 S34 for the measured effect on style-identity stability).
 thread_local! {
     static CV_AUTO_TOUCHED: Cell<bool> = const { Cell::new(false) };
 }
@@ -6891,7 +6896,32 @@ fn lay_out(
     // `lay_out_inner` is the one site that propagates a parent `FloatContext`.
     lay_out_inner(
         b, start_x, start_y, available_width, available_height,
+        measurer, viewport, pcb, hp, in_block_flow, None, AlignValue::Auto, None,
+    );
+}
+
+/// Same as [`lay_out`], but resolves `b`'s own used width/height/box-sizing
+/// from `used_size_override` instead of from `b.style`'s declared values —
+/// see [`UsedSizeOverride`] for why this replaces the old
+/// capture-mutate-restore dance around `b.style` (BUG-341 S34).
+#[allow(clippy::too_many_arguments)]
+fn lay_out_with_used_size(
+    b: &mut LayoutBox,
+    start_x: f32,
+    start_y: f32,
+    available_width: f32,
+    available_height: Option<f32>,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+    pcb: Rect,
+    hp: &dyn HyphenationProvider,
+    in_block_flow: bool,
+    used_size_override: UsedSizeOverride,
+) {
+    lay_out_inner(
+        b, start_x, start_y, available_width, available_height,
         measurer, viewport, pcb, hp, in_block_flow, None, AlignValue::Auto,
+        Some(used_size_override),
     );
 }
 
@@ -6906,6 +6936,9 @@ fn lay_out(
 /// recursion. When `b`'s own `justify-self` is `auto`, it resolves to this value
 /// (the container default); every independent-formatting-context call site passes
 /// `AlignValue::Auto`, so those boxes fall back to the inline-start behaviour.
+///
+/// `used_size_override` — see [`UsedSizeOverride`]; `None` for every call site
+/// except `lay_out_with_used_size`'s wrapper (`lay_out_flex`'s re-layout passes).
 #[allow(clippy::too_many_arguments)]
 fn lay_out_inner(
     b: &mut LayoutBox,
@@ -6922,6 +6955,7 @@ fn lay_out_inner(
     in_block_flow: bool,
     outer_floats: Option<&FloatContext>,
     parent_justify_items: AlignValue,
+    used_size_override: Option<UsedSizeOverride>,
 ) {
     // DEVX-8a: `pcb` is the positioned containing block, threaded as a mandatory
     // parameter through every `lay_out`/`lay_out_inner` call — this is the choke
@@ -7034,14 +7068,35 @@ fn lay_out_inner(
         return;
     }
 
-    // BUG-341 S12: an `Arc` bump, not a 3.2 KB deep copy. The scope stays
-    // because its call count is the honest "boxes fully laid out this pass"
-    // counter (`lo_translate`'s count is the ones reused from `prev`), and
-    // because a future edit that reintroduces an owned clone here would show up
-    // as this line growing from ~0.1 ms back towards the 2.3 ms it was.
+    // BUG-341 S12: an `Arc` bump, not a 3.2 KB deep copy, on the (overwhelming
+    // majority) no-override path. The scope stays because its call count is the
+    // honest "boxes fully laid out this pass" counter (`lo_translate`'s count is
+    // the ones reused from `prev`), and because a future edit that reintroduces
+    // an owned clone here would show up as this line growing from ~0.1 ms back
+    // towards the 2.3 ms it was.
+    //
+    // BUG-341 S34: `used_size_override`, when present, is applied to a locally
+    // cloned `ComputedStyle` here instead of being burned into `b.style` — see
+    // [`UsedSizeOverride`]. `b.style`'s own `Arc` is never touched by this
+    // function, so its pointer identity survives this call unconditionally.
     let s = {
         let _prof = lumen_core::profile::scope_detail("lo_style_ref");
-        Arc::clone(&b.style)
+        match used_size_override {
+            Some(ov) => {
+                let mut owned = (*b.style).clone();
+                if let Some(bs) = ov.box_sizing {
+                    owned.box_sizing = bs;
+                }
+                if let Some(w) = ov.width {
+                    owned.width = Some(Length::Px(w));
+                }
+                if let Some(h) = ov.height {
+                    owned.height = Some(Length::Px(h));
+                }
+                Arc::new(owned)
+            }
+            None => Arc::clone(&b.style),
+        }
     };
     let em = s.font_size;
     let cb = available_width;
@@ -8055,7 +8110,7 @@ fn lay_out_inner(
 
                     lay_out_inner(child, eff_left, start_y, eff_w,
                             children_available_height, measurer, viewport, children_pcb, hp,
-                            !child_is_root_element, outer_for_child, s.justify_items);
+                            !child_is_root_element, outer_for_child, s.justify_items, None);
                     if matches!(child.kind, BoxKind::Skip) {
                         // Zero-height; does not break the collapsing chain.
                         continue;
@@ -9751,45 +9806,39 @@ fn lay_out_abs_children(
     }
 }
 
-/// Specified sizing declarations that `lay_out_flex` temporarily overwrites on a
-/// flex item before re-laying it out with its resolved used size.
+/// An explicit override for a box's own used width/height/box-sizing,
+/// threaded through `lay_out_inner` instead of being burned into `b.style`
+/// via `Arc::make_mut` and undone afterward — the role `SavedItemSizing`
+/// (removed, BUG-341 S34) used to play for `lay_out_flex`'s item re-layout.
 ///
-/// The item's used main (and stretched cross) size is communicated to `lay_out`
-/// by forcing `box_sizing: border-box` + an explicit px `width`/`height` on the
-/// item's own style — `lay_out`'s `available_height` argument is the *containing
-/// block* size for percentage resolution, not an override of the box's own size.
-/// That overwrite must be undone afterwards: the same subtree can be laid out
-/// more than once with different available space (a flex container's Step-1
-/// intrinsic probe runs with an indefinite main size, the final pass with the
-/// real one), and a px value burnt into the style by the first, wrong pass makes
-/// the second pass unable to recompute a percentage or a collapsed size —
-/// BUG-333 (all `.tab-row`s of the chrome sidebar ended up `h=0`), BUG-343.
-struct SavedItemSizing {
-    /// `style.width` as specified, before the used-size overwrite.
-    width: Option<Length>,
-    /// `style.height` as specified, before the used-size overwrite.
-    height: Option<Length>,
-    /// `style.box_sizing` as specified, before it was forced to `border-box`.
-    box_sizing: BoxSizing,
-}
-
-impl SavedItemSizing {
-    /// Snapshots the sizing declarations of `b` that the flex algorithm overwrites.
-    fn capture(b: &LayoutBox) -> Self {
-        Self {
-            width: b.style.width.clone(),
-            height: b.style.height.clone(),
-            box_sizing: b.style.box_sizing,
-        }
-    }
-
-    /// Puts the specified declarations back after the item has been laid out.
-    fn restore(self, b: &mut LayoutBox) {
-        let s = Arc::make_mut(&mut b.style);
-        s.width = self.width;
-        s.height = self.height;
-        s.box_sizing = self.box_sizing;
-    }
+/// `lay_out_inner` applies the override to a *locally cloned* `ComputedStyle`
+/// used only for the duration of that one call (see its `s` binding);
+/// `b.style`'s `Arc` is never mutated. This matters beyond avoiding a
+/// save/restore dance: BUG-341 S31 found that `SavedItemSizing`'s double
+/// `Arc::make_mut` (Step-1 probe never touched it, but the final placement
+/// pass did) meant a flex item's `b.style` pointer was *never* stable across
+/// two layout passes of the same item — the exact precondition a
+/// style-identity-keyed cache would need. With the override applied
+/// out-of-place, `b.style` keeps the same `Arc` across both passes whenever
+/// nothing else about the item's style changed, restoring that precondition.
+///
+/// `None` fields leave the corresponding style declaration exactly as
+/// authored — only fields the caller explicitly resolved are overridden.
+#[derive(Clone, Copy, Default)]
+struct UsedSizeOverride {
+    /// Resolved width in px (interpreted per `box_sizing`), or `None` to leave
+    /// `style.width` as declared.
+    width: Option<f32>,
+    /// Resolved height in px (interpreted per `box_sizing`), or `None` to leave
+    /// `style.height` as declared.
+    height: Option<f32>,
+    /// Forces `style.box_sizing`, or `None` to leave it as declared. Flex's
+    /// column/cross-stretch re-layout passes force `border-box` so the
+    /// resolved size (already border-box, per the flexbox algorithm) is used
+    /// verbatim instead of having padding+border added on top of it
+    /// (BUG-333/BUG-343); its row-direction pass does not, matching what
+    /// `SavedItemSizing`'s three call sites each did before this refactor.
+    box_sizing: Option<BoxSizing>,
 }
 
 /// CSS Flexbox L1 §9 — multi-line flex layout.
@@ -10160,17 +10209,13 @@ fn lay_out_flex(
                 // is used verbatim instead of having border+padding added on top of it
                 // for a content-box item (which double-counts the border). Mirrors the
                 // cross-axis stretch path below.
-                let saved = SavedItemSizing::capture(&children[i]);
-                let item_style = Arc::make_mut(&mut children[i].style);
-                item_style.box_sizing = BoxSizing::BorderBox;
-                item_style.height = Some(Length::Px(inner_main));
                 // BUG-294: pass the item's *margin-box* start (no margin pre-added).
                 // `lay_out_inner` unconditionally adds the box's own `margin_left`/
                 // `margin_top` to the `start_x`/`start_y` it receives, so pre-adding
                 // `m_l`/`m_t` here double-counts the margin. Every other call site in
                 // this file passes the bare margin-box origin and lets `lay_out_inner`
                 // apply the margin once.
-                lay_out(
+                lay_out_with_used_size(
                     &mut children[i],
                     content_x,
                     content_y + main_cursor,
@@ -10181,18 +10226,20 @@ fn lay_out_flex(
                     pcb,
                     hp,
                     false,
+                    UsedSizeOverride {
+                        height: Some(inner_main),
+                        box_sizing: Some(BoxSizing::BorderBox),
+                        ..Default::default()
+                    },
                 );
-                saved.restore(&mut children[i]);
                 main_cursor += outer_main + item_gap + jc_gap;
             } else {
                 let inner_main = (outer_main - m_l - m_r).max(0.0);
-                let saved = SavedItemSizing::capture(&children[i]);
-                Arc::make_mut(&mut children[i].style).width = Some(Length::Px(inner_main));
                 // CSS Flexbox §9.8: percentage cross sizes (e.g. height:100%) resolve
                 // against the flex container's definite cross size.
                 // BUG-294: margin-box start — `lay_out_inner` adds `m_l`/`m_t` itself
                 // (see the column arm above), so pre-adding them here double-counts.
-                lay_out(
+                lay_out_with_used_size(
                     &mut children[i],
                     content_x + main_cursor,
                     content_y + cross_cursor,
@@ -10203,8 +10250,11 @@ fn lay_out_flex(
                     pcb,
                     hp,
                     false,
+                    UsedSizeOverride {
+                        width: Some(inner_main),
+                        ..Default::default()
+                    },
                 );
-                saved.restore(&mut children[i]);
                 main_cursor += outer_main + item_gap + jc_gap;
             }
         }
@@ -10297,12 +10347,14 @@ fn lay_out_flex(
                             let rx = item.rect.x;
                             let ry = item.rect.y;
                             let rw = item.rect.width;
-                            let saved = SavedItemSizing::capture(item);
-                            let item_style = Arc::make_mut(&mut item.style);
-                            item_style.box_sizing = BoxSizing::BorderBox;
-                            item_style.height = Some(Length::Px(stretch_h));
-                            lay_out(item, rx, ry, rw, Some(stretch_h), measurer, viewport, pcb, hp, false);
-                            saved.restore(item);
+                            lay_out_with_used_size(
+                                item, rx, ry, rw, Some(stretch_h), measurer, viewport, pcb, hp, false,
+                                UsedSizeOverride {
+                                    height: Some(stretch_h),
+                                    box_sizing: Some(BoxSizing::BorderBox),
+                                    ..Default::default()
+                                },
+                            );
                         }
                     }
                     _ => {
