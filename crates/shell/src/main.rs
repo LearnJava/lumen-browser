@@ -27172,9 +27172,94 @@ mod tests {
     // `lay_out_grid` and confirmed via `grep` that `crates/chrome/` contains
     // no `display: grid` anywhere — so neither the removed general cache nor
     // the new targeted fix was ever reachable from *this* fixture, and this
-    // A/B harness has nothing left to measure a difference on. The real next
-    // lever for CC-12 is `SavedItemSizing`'s style-mutation dance itself
-    // (`crates/engine/layout/src/box_tree.rs`), not a cache shape.
+    // A/B harness had nothing left to measure a difference on at the time.
+    // S34 then removed `SavedItemSizing` (the style-mutation dance this
+    // comment pointed at as "the real next lever") in favor of
+    // `UsedSizeOverride`, restoring flex-item style-`Arc` stability across a
+    // Step-1 probe and final placement pass for 77.5% of repeat-key calls
+    // (S35's honest, override-aware re-measurement of S34's number) — the
+    // precondition S32's cache needed but did not have. S36 resurrects the
+    // general cache with `UsedSizeOverride` folded into its key (see
+    // `LayoutResultKey`'s own doc comment) and re-measures below.
+
+    /// BUG-341 S36: real wall-clock effect of the resurrected layout-result
+    /// cache (`lumen_layout::box_tree::set_layout_result_cache`) on the same
+    /// real chrome document/fixture S30-S35 used to measure the cache's
+    /// premise, reported honestly per `docs/perf-method.md` §1 ("key match is
+    /// not the same as wall-clock win — measure the real thing before
+    /// trusting the count"). S35 established a 77.5%-of-repeats ceiling for
+    /// this fixture; this measures whether that ceiling is now enough to make
+    /// the general cache net-positive, or whether clone cost still eats the
+    /// win the way it did at S32's 8.3% ceiling.
+    /// Run: `cargo test -p lumen-shell --profile dev-release
+    /// bug341_s36_layout_result_cache_share -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "manual perf measurement (BUG-341 S36) — see doc comment for run command"]
+    fn bug341_s36_layout_result_cache_share() {
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+        const WARMUP: usize = 10;
+        const SAMPLES: usize = 60;
+
+        for scenario in ["KEY", "HOVER"] {
+            let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+            let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
+            let mut typed = String::new();
+
+            let mut off_stats = lumen_paint::FrameStats::new();
+            let mut on_stats = lumen_paint::FrameStats::new();
+            let mut total_hits = 0u64;
+            let mut total_misses = 0u64;
+            let mut total_poisoned = 0u64;
+
+            for i in 0..WARMUP + SAMPLES {
+                let (model, hover) = if scenario == "KEY" {
+                    typed.push('a');
+                    (cc12_bench_model(&typed), None)
+                } else {
+                    (cc12_bench_model(""), if i % 2 == 0 { sidebar } else { None })
+                };
+                lumen_chrome::bind_model(&mut doc, &model);
+                lumen_layout::set_interactive_state(hover, None, None);
+
+                // Cache OFF, then cache ON, on the *same* document state this
+                // cycle — an A/B pair per cycle (docs/perf-method.md's own
+                // "interleaved A/B compared on min" rule), not two separate
+                // sequential blocks that would also capture drift/contention
+                // as if it were the cache's own effect.
+                let t = std::time::Instant::now();
+                let _ = lumen_layout::layout_measured_hyp(&doc, &sheet, viewport, &measurer, &hyp, false);
+                let off_ns = t.elapsed().as_nanos();
+
+                lumen_layout::box_tree::set_layout_result_cache(true);
+                let t = std::time::Instant::now();
+                let _ = lumen_layout::layout_measured_hyp(&doc, &sheet, viewport, &measurer, &hyp, false);
+                let on_ns = t.elapsed().as_nanos();
+                let stats = lumen_layout::box_tree::take_layout_result_cache_stats();
+                lumen_layout::box_tree::set_layout_result_cache(false);
+
+                if i >= WARMUP {
+                    off_stats.record(off_ns as f32 / 1e6);
+                    on_stats.record(on_ns as f32 / 1e6);
+                    total_hits += stats.hits as u64;
+                    total_misses += stats.misses as u64;
+                    total_poisoned += stats.poisoned as u64;
+                }
+                lumen_layout::clear_interactive_state();
+            }
+            let off_summary = off_stats.summary().expect("samples collected");
+            let on_summary = on_stats.summary().expect("samples collected");
+            eprintln!("{}", off_summary.display_with(&format!("BUG341_S36_{scenario}_CACHE_OFF")));
+            eprintln!("{}", on_summary.display_with(&format!("BUG341_S36_{scenario}_CACHE_ON")));
+            eprintln!(
+                "[s36-cache] {scenario} hits={total_hits} misses={total_misses} poisoned={total_poisoned} \
+                 hit_rate={:.1}%",
+                100.0 * total_hits as f64 / (total_hits + total_misses).max(1) as f64,
+            );
+        }
+    }
 
     /// Number of element nodes in `id`'s subtree, inclusive — the "how wide is
     /// this dirty root" column of the S17 census.

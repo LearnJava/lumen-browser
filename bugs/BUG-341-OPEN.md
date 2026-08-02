@@ -1,6 +1,6 @@
 # BUG-341: `lay_out_flex` double-lays-out every item — general engine bug, ~300× over CC-12's 2ms chrome perf-gate budget
 
-**Статус:** OPEN — **на паузе с 2026-08-03 после S34** (see below; not a silent relaxation, an explicit user decision).
+**Статус:** OPEN — **на паузе с 2026-08-03 после S36** (see below; not a silent relaxation, an explicit user decision).
 **Компонент:** layout (`crates/engine/layout/src/box_tree.rs::lay_out_flex`) — **general flexbox algorithm bug, affects any nested-flexbox page**, not just chrome. Surfaced via the chrome document (`crates/shell/src/main.rs::relayout_chrome_host`, `docs/tasks/p1-css-chrome.md`) because CC-12 was the first hard perf budget + realistic flex-nesting-depth bench to exist.
 **Найден:** P1, CC-12 (перф-гейт хрома) 2026-07-25 — новый тест `crates/shell/src/main.rs::tests::cc12_chrome_perf_gate_hover_and_keystroke_cycles`. Root-caused: P1, 2026-07-25.
 
@@ -4495,6 +4495,121 @@ another approach") did. Standing pause terms unchanged: not abandoned, next
 slice's first job is the clone-cost re-measurement against this confirmed
 number, resume only on explicit request.
 
+## S36 — clone-cost re-measurement: the resurrected general cache is still net-negative (23.1% wall-clock hit rate, ~11-27% slower), despite a 77.5% key-match ceiling
+
+Branch `p1-bug341-s36`. Picks up exactly the job S35 deferred: build a cache
+mechanism shaped like S32's own (S32 built it, S33 removed it as net-negative
+at an 8.3% hit rate) and re-measure its real wall-clock effect against the
+now-confirmed ~77.5%-of-repeats ceiling S34/S35 established.
+
+**Fix (mechanism, not measurement-only this time):** `LayoutResultKey`/
+`LayoutResultEntry`/`LAYOUT_RESULT_CACHE` (`crates/engine/layout/src/box_tree.rs`)
+— same shape as S32's own (style `Arc` `ptr_eq` + `kind_layout_eq` correctness
+check on hit, `translate_subtree` to reposition a hit to the new call's
+origin, `content-visibility:auto`/active-subgrid poisoning guards, same
+`cacheable_for_layout_result_cache` pre-filter), with one structural change
+S35 exists to motivate: `LayoutResultKey` now includes `used_size_override:
+UsedSizeOverrideBits`, so a Step-1 probe (`lay_out`, override `None`) and a
+final placement pass (`lay_out_with_used_size`, override `Some(..)`) landing
+on the identical `(node, width, height, style)` key can never collide into
+the same cache slot even when their resolved sizes happen to differ. Both
+wrappers now funnel through one choke point, `lay_out_cache_checked`, instead
+of `lay_out` alone owning the check (S32's structure) — `lay_out_with_used_size`
+needed the same interception point `lay_out` already had.
+
+**Correctness:** 7 new differential tests in `lumen-layout`
+(`box_tree::tests`, `layout_result_cache_*` prefix) — 5 mirror S32's own
+(nested column flex, grid probe pass, style-mutates-between-calls, refuses to
+cache a `content-visibility:auto` subtree, refuses while a subgrid context is
+active), plus two new to S36:
+`layout_result_cache_hits_on_verbatim_repeat_call` (proves the hit path
+itself — `Arc::ptr_eq` match, `translate_subtree` repositioning — actually
+fires and repositions correctly, since neither of S32's original two fixtures
+still exercises a hit on this codebase, see below) and
+`layout_result_cache_key_distinguishes_used_size_override_from_plain_probe`
+(drives `lay_out` then `lay_out_with_used_size` directly on the same node/
+width/style; asserts zero hits between them and that the override's resolved
+width — not the probe's — is what actually lands in the box). One inherited
+S32 fixture needed updating, not just renaming: the CSS Grid intrinsic-height
+probe/final pair — S32's one fixture that reliably hit — no longer hits at
+all, because S33's own point-fix (`probe_reuse` in `lay_out_grid`) now
+reuses the probe's `LayoutBox` directly and never calls `lay_out` a second
+time for that item, so there is no second call left for this generic cache
+to intercept. Confirmed not a S36 regression by reading S33's own fix inline
+(`crates/engine/layout/src/box_tree.rs:11270-11283`); kept as a
+geometry-parity-only check with a doc comment explaining why, rather than
+deleted. `cargo test -p lumen-layout --lib`: 3477 passed (3470 baseline + 7
+new), 2 failed — same pre-existing BUG-339 `FONT_CH_EX` pair, unchanged from
+S35's own baseline. `cargo clippy -p lumen-layout --all-targets -- -D
+warnings` and `-p lumen-shell --all-targets -- -D warnings`: both clean.
+
+**Measured** (`bug341_s36_layout_result_cache_share`, same real chrome
+document/fixture and interleaved-A/B-compared-on-min protocol as S32's own
+removed test, dev-release, `cargo test -p lumen-shell --profile dev-release
+bug341_s36_layout_result_cache_share -- --ignored --nocapture`):
+
+```
+BUG341_S36_KEY_CACHE_OFF   count=60 min=15.94ms p50=20.29ms p95=26.76ms
+BUG341_S36_KEY_CACHE_ON    count=60 min=20.26ms p50=26.01ms p95=31.48ms
+[s36-cache] KEY hits=4260 misses=14160 poisoned=0 hit_rate=23.1%
+
+BUG341_S36_HOVER_CACHE_OFF count=60 min=14.21ms p50=20.57ms p95=28.99ms
+BUG341_S36_HOVER_CACHE_ON  count=60 min=15.85ms p50=25.74ms p95=35.80ms
+[s36-cache] HOVER hits=4260 misses=14160 poisoned=0 hit_rate=23.1%
+```
+
+Cache ON is slower than cache OFF on both arms by min (docs/perf-method.md's
+own "compare on min" rule): KEY +27% (15.94→20.26ms), HOVER +12%
+(14.21→15.85ms). Reproduced twice (two concurrent invocations that raced on
+the same build lock, both printed above/logged) — numbers agree to within
+noise both times, not a one-off fluctuation.
+
+**The wall-clock hit rate (23.1%) is real, ~2.8× S32's 8.3%, and still not
+enough.** It is also honestly a different number from S35's 77.5%, not a
+contradiction of it: S35's census measured the share of *repeat-key calls*
+(a call whose `(node, width, height)` was already seen earlier in the same
+pass) that also match by style identity and override — a conditional
+statistic over an already-filtered population. This test's 23.1% is *all*
+calls that hit the cache, unconditional — the population S35 conditioned on
+(`repeat_key_calls`, 81.6% of `calls` per S30) is itself well under 100% of
+total calls, so the two numbers were never going to be directly comparable
+without doing that arithmetic explicitly, and this slice did not do it before
+running the A/B (worth flagging for whoever next inherits a census→cache
+slice: convert the census's conditional percentage into "share of all calls"
+*before* setting a wall-clock expectation, or the eventual real number will
+look like a shortfall it may not be against a correctly-scaled prediction).
+Regardless of how the two percentages reconcile, the wall-clock result is
+unambiguous on its own terms: 23.1% of calls served from cache, and the
+mechanism is still slower overall. The per-call fixed cost this cache pays on
+*every* call reaching `lay_out_cache_checked` (build an 11-field key,
+`to_bits()` on 8 floats, one `HashMap` lookup; on a miss, one more `HashMap`
+insert plus a full `LayoutBox` subtree clone before it can even be reused)
+apparently still exceeds what ~1-in-4 calls save by skipping `lay_out_inner`
+outright — the same shape of finding S32 made at 8.3%, just closer to
+break-even at 23.1%, not across it.
+
+**Not attempted:** profiling *which* piece of the per-call fixed cost
+dominates (key construction vs. `HashMap` lookup vs. clone-on-insert) — S32's
+own report already attributed its loss mostly to the clone (91% of insertions
+never read back), and this slice did not re-verify that attribution holds at
+the new hit rate before writing this section. A future slice wanting to push
+this further should profile that breakdown first, per `docs/perf-method.md`'s
+own "profile the path you'd actually change" rule, rather than assume S32's
+attribution transfers unchanged.
+
+**Left disabled by default** (`set_layout_result_cache`'s thread-local flag
+defaults to `false`, same as every mechanism S3-S35 built) — not wired into
+any pipeline. `docs/perf-method.md` gained the lesson: a hit-rate ceiling
+rising by an order of magnitude does not by itself prove a cache crosses
+net-positive, since the per-call fixed cost the hit rate has to outrun rises
+with total call volume, not with the hit count alone. Standing pause terms
+unchanged: BUG-341 is not abandoned, resume only on explicit user request;
+whoever resumes next should decide between (a) profiling the per-call fixed
+cost to see if it can be cut directly (the `to_bits()`/`HashMap` overhead is
+engine-independent of the flex/grid specifics that motivated S1-S35), or
+(b) treating the general-cache approach as exhausted for this codebase's
+current shape and looking for a different lever entirely.
+
 ## Repro
 
 ```bash
@@ -4510,6 +4625,7 @@ cargo test -p lumen-shell --profile dev-release bug341_s20_stage_census -- --ign
 cargo test -p lumen-shell --profile dev-release bug341_s21_cascade_index_census -- --ignored --nocapture
 cargo test -p lumen-shell --profile dev-release bug341_s27_walk_census -- --ignored --nocapture
 cargo test -p lumen-shell --profile dev-release bug341_s30_flex_key_census -- --ignored --nocapture
+cargo test -p lumen-shell --profile dev-release bug341_s36_layout_result_cache_share -- --ignored --nocapture
 ```
 
 S34 re-used `bug341_s30_flex_key_census` unchanged (no new shell-side test) —
