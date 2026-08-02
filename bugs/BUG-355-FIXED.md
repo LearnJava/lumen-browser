@@ -1,10 +1,11 @@
 # BUG-355: `graft_geometry` reuses a descendant's rect when an *ancestor's* geometry-affecting style changed — stale widths on the incremental restyle path
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-03
 **Компонент:** layout (`crates/engine/layout/src/incremental.rs::graft_geometry_with_cascade`,
 together with `lay_out`'s O(1) translate fast path for `DirtyBits::CLEAN` boxes)
 **Найден:** P1, 2026-07-27, while writing the differential test for BUG-341 S14
 (`mutation_incremental_restyle_hover_entering_from_nothing_matches_full`).
+**Исправлено:** P1, 2026-08-03.
 
 ## Симптом
 
@@ -67,3 +68,35 @@ today's reuse rate for the common colour-only interactions.
 
 Until then the incremental restyle path is correct only for interactions that leave every
 ancestor's box metrics unchanged, which is what both of Lumen's current stylesheets do.
+
+## Fix (P1, 2026-08-03)
+
+Took the "mark the subtree dirty outright" option from the suggested direction above, not
+the cheaper `lay_out`-fast-path signal: `graft_geometry_with_cascade` already knows
+`self_reusable` *before* it recurses into `new`'s children, so it now computes a new
+`force_descendants_dirty = !self_reusable && containing_block_style_changed(&new.style,
+&prev.style)` alongside the existing `all_clean` seed and, when true, calls
+`mark_subtree_dirty` on each child directly instead of grafting it — skipping the graft
+entirely rather than trying to have `lay_out` notice the resize after the fact.
+
+`containing_block_style_changed` is deliberately narrower than "any style difference":
+`width`/`min-width`/`max-width`, the four `padding-*`/`border-*-width` fields, `box-sizing`,
+`display`, `writing-mode`, `direction`. `height`/`min-height`/`max-height` are deliberately
+*excluded* — in the normal (horizontal) writing mode a box's height does not feed the width
+it hands its children, and including it regressed
+`graft_style_change_still_reuses_child_geometry` (the used-value-writeback shape: `lay_out`
+had written a used `height` back into `prev`'s style, and that alone must not force reuse
+of the child's untouched geometry — exactly what the BUG-341 S8/S13 slices already worked to
+keep fast). A vertical-writing-mode or percentage-height-child gap remains, noted in the
+function's own doc comment, since `writing_mode` itself is covered (a *change* in
+writing-mode does force children dirty) but a box whose writing mode was already vertical
+before and after does not get its `height` diff checked as a width driver.
+
+Verified against the report's own repro (added as
+`mutation_incremental_restyle_ancestor_padding_change_resizes_descendant`, `#card` with
+`box-sizing: border-box` so the padding delta is visible in the fixed border-box width) and
+by restoring `padding: 9px` to `.card:hover` in
+`mutation_incremental_restyle_hover_entering_from_nothing_matches_full` (previously left at
+a colour-only change specifically to dodge this bug — see that test's history). `cargo test
+-p lumen-layout`: 3478/3480 (2 pre-existing failures are the unrelated `ch`/`ex` flake,
+BUG-339, reproduced identically on `main` before this change).
