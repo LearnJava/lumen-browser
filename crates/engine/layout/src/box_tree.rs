@@ -37,7 +37,8 @@ use crate::anchor::{collect_anchors, InsetAreaKeyword};
 use crate::field_sizing::field_sizing_content_intrinsic;
 use crate::style::FieldSizing;
 use crate::TextMeasurer;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 // EE-3: when true, `lay_out` checks `b.dirty.is_clean()` and skips clean subtrees.
@@ -52,6 +53,76 @@ thread_local! {
     /// on around `layout_mutation_incremental_restyle` at the pipeline call
     /// sites, alongside `counters::set_incremental_restyle`.
     static INCREMENTAL_BOX_BUILD: Cell<bool> = const { Cell::new(false) };
+}
+
+/// BUG-341 S30 census: how often a hypothetical (node, incoming-constraints)
+/// layout-result cache — the "Fix scope note" idea `lay_out_flex`'s doc comment
+/// gestures at — would actually hit within one full (non-incremental) layout
+/// pass, measured *before* building the cache mechanism itself
+/// (`docs/perf-method.md` §1: "перепись перед первой правкой").
+///
+/// Thread-local, not a `Mutex` like `BOX_BUILD_STATS`'s S18/S20 siblings:
+/// `lay_out`/`lay_out_inner` never fan out over rayon (confirmed by grep —
+/// the only `rayon::` uses in this file are inside `build_box`'s flex/grid
+/// dispatch, a different stage), so there is no S15-style trap here.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LayoutKeyCensus {
+    /// Real (non-`Skip`, non-incremental-translate) `lay_out_inner` calls counted.
+    pub calls: u32,
+    /// Of those, calls whose `(NodeId, available_width, available_height)` key
+    /// had already been seen earlier in the same pass — a call a memoization
+    /// cache keyed this way could have served from cache instead of recomputing.
+    pub repeat_key_calls: u32,
+}
+
+/// `(node, available_width bits, available_height bits)` — the census key a
+/// hypothetical layout-result cache would use, per [`LayoutKeyCensus`].
+type LayoutCensusKey = (NodeId, u32, Option<u32>);
+
+thread_local! {
+    static LAYOUT_KEY_CENSUS_ON: Cell<bool> = const { Cell::new(false) };
+    static LAYOUT_KEY_CENSUS: Cell<LayoutKeyCensus> = const { Cell::new(LayoutKeyCensus { calls: 0, repeat_key_calls: 0 }) };
+    static LAYOUT_KEY_SEEN: RefCell<HashMap<LayoutCensusKey, u32>> = RefCell::new(HashMap::new());
+}
+
+/// Enables/disables the BUG-341 S30 layout-key census and clears its state —
+/// call once before a full layout pass, then read with [`take_layout_key_census`].
+pub fn set_layout_key_census(on: bool) {
+    LAYOUT_KEY_CENSUS_ON.with(|c| c.set(on));
+    LAYOUT_KEY_SEEN.with(|m| m.borrow_mut().clear());
+    LAYOUT_KEY_CENSUS.with(|c| c.set(LayoutKeyCensus::default()));
+}
+
+/// Returns the accumulated [`LayoutKeyCensus`] and resets the tally.
+pub fn take_layout_key_census() -> LayoutKeyCensus {
+    LAYOUT_KEY_SEEN.with(|m| m.borrow_mut().clear());
+    LAYOUT_KEY_CENSUS.with(|c| c.replace(LayoutKeyCensus::default()))
+}
+
+/// Records one real `lay_out_inner` invocation for the S30 census — see
+/// [`LayoutKeyCensus`]. Exact bit-equality on the constraints, not an epsilon
+/// compare: a real cache keyed this way would only ever hit on an exact
+/// re-derivation of the same numbers, so exact equality is the honest measure
+/// of its ceiling, not an approximation of it.
+fn record_layout_key_occurrence(node: NodeId, available_width: f32, available_height: Option<f32>) {
+    if !LAYOUT_KEY_CENSUS_ON.with(|c| c.get()) {
+        return;
+    }
+    let key = (node, available_width.to_bits(), available_height.map(f32::to_bits));
+    let repeat = LAYOUT_KEY_SEEN.with(|m| {
+        let mut seen = m.borrow_mut();
+        let count = seen.entry(key).or_insert(0);
+        *count += 1;
+        *count > 1
+    });
+    LAYOUT_KEY_CENSUS.with(|c| {
+        let mut v = c.get();
+        v.calls += 1;
+        if repeat {
+            v.repeat_key_calls += 1;
+        }
+        c.set(v);
+    });
 }
 
 /// Enables/disables incremental box-build reuse for subsequent
@@ -6797,6 +6868,8 @@ fn lay_out_inner(
         crate::incremental::translate_subtree(b, start_x - b.rect.x, start_y - b.rect.y);
         return;
     }
+
+    record_layout_key_occurrence(b.node, available_width, available_height);
 
     // CSS Values L4 §5.1.1 — publish this box's real `ch`/`ex` metrics (advance of
     // the "0" glyph and the x-height at the used font-size) so `Length::{Ch,Ex}`

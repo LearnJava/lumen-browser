@@ -27108,6 +27108,56 @@ mod tests {
         }
     }
 
+    /// BUG-341 S30 census: how much of `lay_out_flex`'s residual double-layout
+    /// (the "Fix scope note"/layout-result-cache idea, still unimplemented after
+    /// S1-S29 closed the *cascade* gap) is real redundant work a `(node,
+    /// constraints)`-keyed memoization cache could actually remove — measured
+    /// *before* building that cache, per `docs/perf-method.md` §1.
+    ///
+    /// Runs a full (non-incremental) `layout_measured_hyp` pass per cycle —
+    /// the S8 lesson: profile the path you'd actually change. `lay_out_flex`'s
+    /// Step-1 probe and final placement pass are both inside this path, and the
+    /// incremental cascade S3-S29 built does not touch `lay_out` itself once a
+    /// subtree is dirty.
+    /// Run: `cargo test -p lumen-shell --profile dev-release
+    /// bug341_s30_flex_key_census -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "manual census (BUG-341 S30) — see doc comment for run command"]
+    fn bug341_s30_flex_key_census() {
+        let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let hyp = KnuthLiangHyphenation::new();
+        let viewport = Size::new(1280.0, 800.0);
+
+        for scenario in ["KEY", "HOVER"] {
+            let (mut doc, sheet) = lumen_chrome::parse_document(chrome_preview::HTML);
+            let sidebar = doc.find_by_id(lumen_chrome::ids::SIDEBAR);
+            let mut typed = String::new();
+            for i in 0..5 {
+                let (model, hover) = if scenario == "KEY" {
+                    typed.push('a');
+                    (cc12_bench_model(&typed), None)
+                } else {
+                    (cc12_bench_model(""), if i % 2 == 0 { sidebar } else { None })
+                };
+                lumen_chrome::bind_model(&mut doc, &model);
+                lumen_layout::set_interactive_state(hover, None, None);
+                lumen_layout::box_tree::set_layout_key_census(true);
+                let (_layout, _counters) = lumen_layout::layout_measured_hyp_with_counters(
+                    &doc, &sheet, viewport, &measurer, &hyp, false,
+                );
+                let census = lumen_layout::box_tree::take_layout_key_census();
+                eprintln!(
+                    "[s30-census] {scenario} cycle={i} calls={} repeat_key_calls={} ({:.1}%)",
+                    census.calls,
+                    census.repeat_key_calls,
+                    100.0 * census.repeat_key_calls as f64 / census.calls.max(1) as f64,
+                );
+                lumen_layout::clear_interactive_state();
+            }
+        }
+    }
+
     /// Number of element nodes in `id`'s subtree, inclusive — the "how wide is
     /// this dirty root" column of the S17 census.
     fn census_subtree_elements(doc: &lumen_dom::Document, id: lumen_dom::NodeId) -> usize {
