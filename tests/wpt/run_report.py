@@ -22,6 +22,7 @@ Usage (from repo root, after `pip install -r tests/wpt/requirements.txt` in a
 venv — see tests/wpt/README.md):
 
     <venv>/python tests/wpt/run_report.py [--binary PATH] [--out PATH] [--all] [--root DIR] [--recursive]
+        [--processes N] [--offset N] [--limit N]
 
 On Windows Git Bash also set `MSYS2_ARG_CONV_EXCL='/dom'` (see README) so the
 leading-slash test ids aren't mangled into Windows paths.
@@ -285,17 +286,55 @@ def main() -> int:
         "(needed for categories organized into subdirectories, e.g. FileAPI; "
         "dom/nodes stays flat/168 either way unless this is passed)",
     )
+    parser.add_argument(
+        "--processes",
+        type=int,
+        default=None,
+        help="wptrunner --processes: run N Lumen instances concurrently, each on "
+        "its own free port (WebDriverBrowser.get_free_port). Default (unset) is "
+        "wptrunner's own default of 1 (see wptcommandline.check_args) — pass "
+        "explicitly to shard a large --all run across cores (WPT-RUN-3).",
+    )
+    parser.add_argument(
+        "--offset",
+        type=int,
+        default=0,
+        help="skip the first N test ids after selection (0-based) — with --limit, "
+        "slices a large --all corpus into resumable chunks across sessions "
+        "(WPT-RUN-3); ids are sorted, so a fixed (--offset, --limit) pair always "
+        "selects the same slice as long as the vendored corpus doesn't change",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="run at most N test ids (after --offset) instead of the whole "
+        "selection — see --offset",
+    )
     args = parser.parse_args()
 
     test_ids = (
         all_vendored_test_ids(args.root, args.recursive) if args.all else run_suite.curated_test_ids()
     )
+    total_selected = len(test_ids)
+    if args.offset or args.limit is not None:
+        end = None if args.limit is None else args.offset + args.limit
+        test_ids = test_ids[args.offset : end]
     if not test_ids:
         print("no tests selected", file=sys.stderr)
         return 1
 
     kind = f"all vendored ({args.root})" if args.all else "curated"
-    print(f"running {len(test_ids)} {kind} WPT tests against {args.binary}", file=sys.stderr)
+    slice_note = (
+        f" (slice [{args.offset}:{args.offset + len(test_ids)}] of {total_selected})"
+        if args.offset or args.limit is not None
+        else ""
+    )
+    print(
+        f"running {len(test_ids)} {kind} WPT tests{slice_note} against {args.binary}"
+        + (f" with --processes={args.processes}" if args.processes else ""),
+        file=sys.stderr,
+    )
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     with tempfile.NamedTemporaryFile(
@@ -303,8 +342,12 @@ def main() -> int:
     ) as tmp:
         json_path = tmp.name
 
+    extra_args = [f"--log-wptreport={json_path}"]
+    if args.processes:
+        extra_args.append(f"--processes={args.processes}")
+
     try:
-        rv = run_smoke.run(args.binary, test_ids, extra_args=[f"--log-wptreport={json_path}"])
+        rv = run_smoke.run(args.binary, test_ids, extra_args=extra_args)
         if not os.path.isfile(json_path) or os.path.getsize(json_path) == 0:
             print("wptrunner produced no report (crashed before suite_end?)", file=sys.stderr)
             return rv or 1
