@@ -405,7 +405,7 @@ style+layout+display-list и коммитит их в компоузитор ч�
 
 ---
 
-## DEVX-10: `explain_element(selector)` (S, P1)
+## DEVX-10: `explain_element(selector)` (S, P1) — ЗАКРЫТ (2026-08-02)
 
 **Зависит от:** `DEVX-7`.
 
@@ -424,6 +424,78 @@ style+layout+display-list и коммитит их в компоузитор ч�
 **DoD:** на подготовленной странице с элементом `0×0` внутри `overflow:hidden`
 инструмент показывает, на каком именно звене цепочка обрывается; на элементе
 внутри анонимного бокса не приписывает его paint родителю.
+
+**Итог (P1, 2026-08-02):** реализация — session-agnostic функция
+`crates/driver/src/explain.rs::explain_element(&LayoutBox, &Document, &str) ->
+ExplainElement`, не привязанная к конкретному `BrowserSession`-типу: и
+`InProcessSession`, и `WinitSession` держат `&LayoutBox`+`&Document` напрямую,
+поэтому оба зовут одну и ту же функцию без дублирования обхода.
+`LiveWindowSession` возвращает задокументированный `ExplainElement::default()`
+(SDC-2 MVP ещё не проводит layout-данные по каналу — тот же гэп, что у
+`layout_box_by_selector`, закрывается DEVX-14).
+
+Первое звено (`in_dom`) потребовало нового `lumen_layout::find_first_dom_node_by_selector`
+— DOM-уровневый поиск, использующий тот же полный CSS3-движок селекторов
+(`parse_selector_list`/`matches_complex`), что и `find_box_by_selector`, но не
+зависящий от layout-дерева: `find_box_by_selector` не может увидеть
+`display:none`-узел, потому что box-tree строит для него `LayoutBox { kind:
+BoxKind::Skip, .. }`, но `find_rec`'s ранний `if matches!(b.kind,
+BoxKind::Skip) { return None; }` не даёт его вернуть. Новая функция обходит
+`Document` напрямую, той же сигнатурой matcher'а — гарантирует, что "в DOM" и
+"в layout" никогда не расходятся из-за разных реализаций селектора.
+
+Второе-третье звено (`style_applied`/`in_layout`) читают `LayoutBox` найденный
+собственным DFS-обходом `find_principal_box` (по `NodeId` + `origin.role ==
+BoxRole::Element`, не через `find_box_by_selector` — та же причина: должен
+видеть `Skip`-боксы). Обход попутно копит root→target путь предков — нужен
+только эвристике ниже. `style_applied` истинно, если `LayoutBox` вообще
+материализован (даже `Skip`) — момент, где `compute_style` уже отработал, но
+разбор дерева решил не строить полноценный бокс. Узкое место (задокументировано
+в самой функции, не скрыто): узел, вложенный ВНУТРИ `display:none`-поддерева
+(не сам корень `display:none`), в box-tree не материализуется вовсе — box-tree
+не рекурсирует в детей `Skip`-узла. Для такого узла `style_applied` вернёт
+`false`, хотя каскад концептуально применился бы. Та же категория сужения, что
+у DEVX-8a (задокументированная, не общая точность).
+
+Звенья «команды/клип/слой» — единственные, что реально нужен `ProvenanceIndex`
+(DEVX-7): `provenance.spans_for(lb.origin)` — первый реальный потребитель,
+предсказанный в самом DEVX-7 коммите. Использование `lb.origin` НАПРЯМУЮ (а не
+собранного вручную `BoxOrigin{node, role: Element}`) — ключ к DoD-требованию
+«анонимный бокс не приписывается родителю»: `BoxOrigin` — это пара `(node,
+role)` (ADR-025 §1), поэтому `AnonymousInlineRun` с тем же `node`, что у
+родителя, но другим `role`, физически не попадает в `spans_for(lb.origin)`
+родителя. `commands_emitted` — сумма длин диапазонов собственных span'ов;
+`clip_depth` — максимум по ним; `layer` — всегда `Some(0)` при `in_layout`,
+потому что `InProcessCompositor` сейчас использует единственный слой
+(`BasicLayerTree::single_layer`) — честный, хоть и неинтересный сегодня ответ.
+
+Эвристика (`heuristic: Option<String>`) считается только когда
+`commands_emitted == 0` при `in_layout == true`: сначала проверяется
+нулевая геометрия (`rect.width/height <= 0`), затем — ближайший (снизу вверх по
+собранному пути предков) не-`visible` `overflow`-предок, чей rect не
+пересекается с rect-ом цели (простой AABB-тест, без учёта transform/rounded
+corners/`clip-path` — явно объявлено приближением в докстринге и в самой
+строке подсказки). Если ни одна причина не найдена — `None`, не пустая строка.
+
+MCP: `x-explain-element` — первый инструмент, реализующий ADR-024 L1 разметку
+буквально. `McpTool` получил новое поле `experimental: bool` с
+`#[serde(default, skip_serializing_if = "std::ops::Not::not")]` — все 8
+существующих инструментов явно проставлены `experimental: false` (не
+сериализуются, JSON-форма легаси-инструментов не изменилась), новый инструмент
+— `experimental: true` (сериализуется). Тест
+`tools_list_marks_only_explain_element_as_experimental` проверяет обе стороны.
+
+Тесты: `crates/driver/tests/cases/test_devx10_explain_element.rs` — 3 теста,
+включая оба DoD-сценария (`zero_size_inside_overflow_hidden_breaks_at_size_link`,
+`anonymous_inline_run_paint_not_attributed_to_parent_element`); 2 новых юнит-теста
+в `selector_query.rs` для `find_first_dom_node_by_selector`; 4 новых теста в
+`lumen-mcp` (список инструментов = 9, `experimental`-маркировка, вызов,
+ошибка без `selector`). Гейт: изменение чисто аддитивное и read-only — не
+трогает `box_tree.rs`'s конструкторы боксов и не трогает
+`build_display_list_ordered`'s эмиссию команд (только читает уже построенный
+`ProvenanceIndex`), поэтому `python graphic_tests/dump_golden.py` пустой дифф
+достаточен как доказательство display-list-нейтральности; полный графический
+прогон не потребовался.
 
 ---
 

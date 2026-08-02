@@ -108,6 +108,25 @@ headless pipeline without winit/wgpu/ffmpeg.
   `cargo build -p lumen-shell` (default features) ships a headless MCP that Just Works.
 
 
+- DEVX-10 (2026-08-02): `explain_element(selector)` — a single-query causal chain (DOM → style →
+  layout → size → stacking context → paint commands → clip depth → compositor layer), exposed as
+  `BrowserSession::explain_element` and MCP tool `x-explain-element` (ADR-024 L1 —
+  `experimental: true`, first tool to carry the marker; `McpTool` gained the field with
+  `skip_serializing_if`, so the 8 pre-existing tools' JSON shape is unchanged). Implementation is
+  session-agnostic (`crates/driver/src/explain.rs::explain_element(&LayoutBox, &Document, &str)`),
+  shared by `InProcessSession` and `WinitSession`; `LiveWindowSession` returns a documented default
+  (SDC-2 MVP gap, same as `layout_box_by_selector`). The DOM-existence link needed a new
+  `lumen_layout::find_first_dom_node_by_selector` — walks `Document` directly with the same full
+  CSS3 selector engine as `find_box_by_selector`, so it can see `display:none` nodes that
+  `find_box_by_selector` deliberately excludes (`BoxKind::Skip`). The paint/clip/layer links read
+  `ProvenanceIndex::spans_for(lb.origin)` (DEVX-7) — using `lb.origin` (the `(node, role)` pair,
+  ADR-025 §1) directly is what keeps an anonymous inline-run's paint from being folded into its
+  parent element's chain (DoD, proven by
+  `anonymous_inline_run_paint_not_attributed_to_parent_element` in
+  `crates/driver/tests/cases/test_devx10_explain_element.rs`). The `heuristic` field is a labelled
+  guess (zero geometry, or an overflow-clipping ancestor whose rect doesn't intersect the box's) —
+  computed only when `commands_emitted == 0`, and explicitly not treated as fact (ADR-024).
+
 - DEVX-2: non-pixel golden regression layer (`crates/driver/tests/cases/test_devx2_golden.rs`),
   modeled on `graphic_tests` but asserted through `BrowserSession` (`layout_box_by_selector`,
   `computed_style_snapshot`, `query_a11y`/`query_a11y_all`) instead of pixel diffing — runs via
@@ -153,4 +172,4 @@ headless pipeline without winit/wgpu/ffmpeg.
 
 ## Test counts
 
-12 unit tests in `crates/driver/src/session.rs`; 50 structural integration tests `test_00..49.rs`; 1 snapshot gate `snapshot_cpu` covering 57 pages; 7 (of which 2 under feature `v8`, on by default) `WinitSession` automation-command tests in `test_automation_commands.rs`; 6 (+3 under `--features v8`, +1 under its absence) `InProcessSession` automation-command tests in `test_devx5_headless_automation.rs`; 3 scripted-render regression tests in `scripted_render.rs` (feature `cpu-render` + `v8` — page scripts reaching layout, Canvas 2D pixels reaching the raster; BUG-429); 2 snapshot-delivery regression tests in `layout_snapshot_to_js.rs` (feature `v8` — `getComputedStyle`/`getBoundingClientRect` answering with real data after navigation, 4 fresh sessions each; BUG-382).
+12 unit tests in `crates/driver/src/session.rs`; 50 structural integration tests `test_00..49.rs`; 1 snapshot gate `snapshot_cpu` covering 57 pages; 7 (of which 2 under feature `v8`, on by default) `WinitSession` automation-command tests in `test_automation_commands.rs`; 6 (+3 under `--features v8`, +1 under its absence) `InProcessSession` automation-command tests in `test_devx5_headless_automation.rs`; 3 scripted-render regression tests in `scripted_render.rs` (feature `cpu-render` + `v8` — page scripts reaching layout, Canvas 2D pixels reaching the raster; BUG-429); 2 snapshot-delivery regression tests in `layout_snapshot_to_js.rs` (feature `v8` — `getComputedStyle`/`getBoundingClientRect` answering with real data after navigation, 4 fresh sessions each; BUG-382); 3 `explain_element` DoD tests in `test_devx10_explain_element.rs` (DEVX-10).

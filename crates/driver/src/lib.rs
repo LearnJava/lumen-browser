@@ -28,6 +28,7 @@ mod types;
 pub mod automation;
 pub mod context;
 pub mod determinism;
+pub mod explain;
 pub mod isolation;
 pub mod live_session;
 pub mod session;
@@ -36,7 +37,7 @@ pub mod gpu_session;
 
 pub use types::{
     A11yNode, A11yState, AxQuery, AutomationCommand, AutomationReply, BoxModel, ComputedProperties, ConsoleEntry, ConsoleLevel,
-    FingerprintProfile, InputCommand, NetworkEntry, NodeRef, ScrollDelta, Target, WaitCondition,
+    ExplainElement, FingerprintProfile, InputCommand, NetworkEntry, NodeRef, ScrollDelta, Target, WaitCondition,
 };
 pub use automation::{AutomationHandle, AutomationRequest};
 pub use live_session::LiveWindowSession;
@@ -123,6 +124,15 @@ pub trait BrowserSession {
     ///
     /// Возвращает пустой вектор, если ни один элемент не совпал.
     fn all_layout_boxes_by_selector(&self, selector: &str) -> Result<Vec<BoxModel>>;
+
+    /// Причинная цепочка для первого элемента, совпадающего с `selector`
+    /// (DEVX-10, ADR-024 L1 `x-explain-element`): DOM → style → layout →
+    /// size → stacking context → paint → clip → layer. См. [`ExplainElement`].
+    ///
+    /// Если элемент не найден в DOM, возвращается [`ExplainElement`] со всеми
+    /// полями по умолчанию (`in_dom: false`) — не `Ok(None)`, потому что сама
+    /// цепочка уже отвечает на вопрос "где она обрывается".
+    fn explain_element(&self, selector: &str) -> Result<ExplainElement>;
 
     /// Журнал сетевых запросов с момента последней навигации.
     fn network_log(&self) -> Result<Vec<NetworkEntry>>;

@@ -25,6 +25,14 @@ pub struct McpTool {
     pub description: String,
     /// JSON-schema аргументов инструмента.
     pub input_schema: Value,
+    /// ADR-024 L1 marker: `true` for wire-exposed introspection capabilities
+    /// that may change shape or vanish between commits (name carries the
+    /// `x-` prefix too). Omitted from the serialized JSON when `false` — the
+    /// pre-ADR-024 tools (`navigate`, `click`, …) keep their exact original
+    /// shape, since they're unpromoted L1 with legacy names, not L1 in the
+    /// new sense (ADR-024 §Decided questions, Q2).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub experimental: bool,
 }
 
 /// MCP JSON-RPC запрос.

@@ -269,6 +269,41 @@ fn node_matches(node: lumen_dom::NodeId, doc: &Document, selectors: &[ComplexSel
     selectors.iter().any(|sel| matches_complex(sel, doc, node))
 }
 
+// ──────────────── find_first_dom_node_by_selector ────────────────
+
+/// Returns the first DOM node matching `sel`, walking the DOM tree directly
+/// instead of the layout tree — so it finds nodes `find_box_by_selector`
+/// cannot (`display: none`, and anything else the box tree skips).
+///
+/// Uses the same full CSS3 selector engine as `find_box_by_selector`
+/// (`node_matches`/`matches_complex`), so the two never disagree on what
+/// counts as a match — needed by introspection tools like `explain_element`
+/// (DEVX-10) that must distinguish "not in the DOM" from "in the DOM but
+/// excluded from layout".
+pub fn find_first_dom_node_by_selector(doc: &Document, sel: &str) -> Option<lumen_dom::NodeId> {
+    let selectors = parse_selector_list(sel);
+    if selectors.is_empty() {
+        return None;
+    }
+    find_dom_rec(doc, doc.root(), &selectors)
+}
+
+fn find_dom_rec(
+    doc: &Document,
+    id: lumen_dom::NodeId,
+    selectors: &[ComplexSelector],
+) -> Option<lumen_dom::NodeId> {
+    if node_matches(id, doc, selectors) {
+        return Some(id);
+    }
+    for &child in &doc.get(id).children {
+        if let Some(found) = find_dom_rec(doc, child, selectors) {
+            return Some(found);
+        }
+    }
+    None
+}
+
 // ──────────────── computed_style_by_selector ────────────────
 
 /// Returns the computed style snapshot of the first matching `LayoutBox`.
@@ -1057,6 +1092,21 @@ mod tests {
     fn find_miss_returns_none() {
         let (doc, tree) = layout_tree("<div>text</div>", "");
         assert!(find_box_by_selector(&tree, &doc, "#nonexistent").is_none());
+    }
+
+    #[test]
+    fn find_first_dom_node_by_selector_finds_display_none() {
+        let (doc, _tree) = layout_tree(r#"<div id="hidden" style="display:none">x</div>"#, "");
+        // `find_box_by_selector` cannot see it — no layout box is built for
+        // `display: none` — but the node is still in the DOM.
+        assert!(find_box_by_selector(&_tree, &doc, "#hidden").is_none());
+        assert!(find_first_dom_node_by_selector(&doc, "#hidden").is_some());
+    }
+
+    #[test]
+    fn find_first_dom_node_by_selector_miss_returns_none() {
+        let (doc, _tree) = layout_tree("<div>text</div>", "");
+        assert!(find_first_dom_node_by_selector(&doc, "#nonexistent").is_none());
     }
 
     #[test]
