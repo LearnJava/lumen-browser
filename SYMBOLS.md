@@ -67,31 +67,31 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 ## lumen-bidi-server  (26 symbols)
 
 `crates/bidi-server/src/protocol.rs:179` **struct** `BidiState` — Connection-level BiDi state
-`crates/bidi-server/src/protocol.rs:248` **fn** `new` — Новое пустое состояние соединения (без живого окна — Phase 1 stub behavior)
-`crates/bidi-server/src/protocol.rs:254` **fn** `with_live_session` — State connected to a live shell window (SDC-2): real navigation,
-`crates/bidi-server/src/protocol.rs:293` **fn** `locale`
-`crates/bidi-server/src/protocol.rs:302` **fn** `timezone`
-`crates/bidi-server/src/protocol.rs:309` **fn** `is_offline`
-`crates/bidi-server/src/protocol.rs:316` **fn** `user_agent_for`
-`crates/bidi-server/src/protocol.rs:329` **fn** `viewport_for`
-`crates/bidi-server/src/protocol.rs:341` **fn** `cache_behavior`
-`crates/bidi-server/src/protocol.rs:348` **fn** `intercept_count`
-`crates/bidi-server/src/protocol.rs:357` **fn** `preload_scripts_for_context` — Return preload scripts that apply to `context_id`
-`crates/bidi-server/src/protocol.rs:369` **fn** `begin_download` — Register a new download and emit `browser.downloadWillBegin` if subscribed
-`crates/bidi-server/src/protocol.rs:396` **fn** `update_download` — Update download progress and emit `browser.downloadItemUpdated` if subscribed
-`crates/bidi-server/src/protocol.rs:421` **fn** `complete_download` — Mark download as completed and emit `browser.downloadItemCompleted` if subscribed
-`crates/bidi-server/src/protocol.rs:441` **fn** `abort_download` — Mark download as aborted and emit `browser.downloadItemAborted` if subscribed
-`crates/bidi-server/src/protocol.rs:464` **fn** `record_cookie_change` — Record a cookie change (add/update/remove) and emit `storage.cookie*` events
-`crates/bidi-server/src/protocol.rs:511` **fn** `fire_user_prompt` — Open a user-prompt dialog and emit `browsingContext.userPromptOpened` if subscribed
-`crates/bidi-server/src/protocol.rs:550` **fn** `open_prompt_count` — Number of currently open user prompts (for testing)
-`crates/bidi-server/src/protocol.rs:556` **fn** `cookie_count` — Number of cookies in the session (for testing)
-`crates/bidi-server/src/protocol.rs:562` **fn** `download_count` — Number of active download items
-`crates/bidi-server/src/protocol.rs:568` **fn** `preload_script_count` — Number of registered preload scripts
-`crates/bidi-server/src/protocol.rs:580` **fn** `record_response_body`
-`crates/bidi-server/src/protocol.rs:594` **struct** `DispatchResult` — Результат обработки одной команды
-`crates/bidi-server/src/protocol.rs:609` **fn** `dispatch` — Обработать одно BiDi-сообщение, вернуть фреймы для отправки клиенту
-`crates/bidi-server/src/server.rs:23` **fn** `spawn` — Spawn the BiDi server on `127.0.0.1:port`. Non-blocking — runs in a background thread
-`crates/bidi-server/src/transport.rs:20` **fn** `handle` — Handle one accepted TCP stream: WS upgrade → BiDi command loop
+`crates/bidi-server/src/protocol.rs:254` **fn** `new` — Новое пустое состояние соединения (без живого окна — Phase 1 stub behavior)
+`crates/bidi-server/src/protocol.rs:263` **fn** `with_live_session` — State connected to a live shell window (SDC-2): real navigation,
+`crates/bidi-server/src/protocol.rs:302` **fn** `locale`
+`crates/bidi-server/src/protocol.rs:311` **fn** `timezone`
+`crates/bidi-server/src/protocol.rs:318` **fn** `is_offline`
+`crates/bidi-server/src/protocol.rs:325` **fn** `user_agent_for`
+`crates/bidi-server/src/protocol.rs:338` **fn** `viewport_for`
+`crates/bidi-server/src/protocol.rs:350` **fn** `cache_behavior`
+`crates/bidi-server/src/protocol.rs:357` **fn** `intercept_count`
+`crates/bidi-server/src/protocol.rs:366` **fn** `preload_scripts_for_context` — Return preload scripts that apply to `context_id`
+`crates/bidi-server/src/protocol.rs:378` **fn** `begin_download` — Register a new download and emit `browser.downloadWillBegin` if subscribed
+`crates/bidi-server/src/protocol.rs:405` **fn** `update_download` — Update download progress and emit `browser.downloadItemUpdated` if subscribed
+`crates/bidi-server/src/protocol.rs:430` **fn** `complete_download` — Mark download as completed and emit `browser.downloadItemCompleted` if subscribed
+`crates/bidi-server/src/protocol.rs:450` **fn** `abort_download` — Mark download as aborted and emit `browser.downloadItemAborted` if subscribed
+`crates/bidi-server/src/protocol.rs:473` **fn** `record_cookie_change` — Record a cookie change (add/update/remove) and emit `storage.cookie*` events
+`crates/bidi-server/src/protocol.rs:520` **fn** `fire_user_prompt` — Open a user-prompt dialog and emit `browsingContext.userPromptOpened` if subscribed
+`crates/bidi-server/src/protocol.rs:559` **fn** `open_prompt_count` — Number of currently open user prompts (for testing)
+`crates/bidi-server/src/protocol.rs:565` **fn** `cookie_count` — Number of cookies in the session (for testing)
+`crates/bidi-server/src/protocol.rs:571` **fn** `download_count` — Number of active download items
+`crates/bidi-server/src/protocol.rs:577` **fn** `preload_script_count` — Number of registered preload scripts
+`crates/bidi-server/src/protocol.rs:589` **fn** `record_response_body`
+`crates/bidi-server/src/protocol.rs:603` **struct** `DispatchResult` — Результат обработки одной команды
+`crates/bidi-server/src/protocol.rs:618` **fn** `dispatch` — Обработать одно BiDi-сообщение, вернуть фреймы для отправки клиенту
+`crates/bidi-server/src/server.rs:27` **fn** `spawn` — Spawn the BiDi server on `127.0.0.1:port`. Non-blocking — runs in a background thread
+`crates/bidi-server/src/transport.rs:22` **fn** `handle` — Handle one accepted TCP stream: WS upgrade → BiDi command loop
 
 ## lumen-canvas  (98 symbols)
 
@@ -228,8 +228,10 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/chrome/src/model.rs:664` **fn** `bind_model` — Binds `model` into `doc`: `data-theme`/`data-layout`/`data-profile` on
 `crates/chrome/src/model.rs:726` **fn** `bind_model_tracked` — Like [`bind_model`], but also reports what the call actually changed, split
 
-## lumen-core  (287 symbols)
+## lumen-core  (289 symbols)
 
+`crates/core/src/auth.rs:20` **fn** `generate_token` — Generate a fresh per-run authentication token
+`crates/core/src/auth.rs:36` **fn** `tokens_match` — Constant-time token comparison
 `crates/core/src/capability.rs:7` **enum** `Capability`
 `crates/core/src/capability.rs:27` **struct** `CapabilityToken`
 `crates/core/src/color.rs:4` **enum** `ColorSpace` — Цветовое пространство изображения и canvas
@@ -1330,20 +1332,20 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 
 `crates/ipc/src/lib.rs:36` **type** `TabId` — Identifier for a tab in the shell's `--ipc-server` control channel (TAB-4)
 `crates/ipc/src/lib.rs:44` **enum** `IpcRequest` — A request sent over an IPC channel
-`crates/ipc/src/lib.rs:77` **enum** `IpcResponse` — A response sent back over an IPC channel
-`crates/ipc/src/lib.rs:119` **struct** `FetchRequest` — Parameters for a fetch request (Phase 1: GET-only, no custom headers/body)
-`crates/ipc/src/lib.rs:135` **struct** `FetchOk` — Successful HTTP response payload returned by the network service
-`crates/ipc/src/lib.rs:148` **struct** `FetchErr` — Error returned when a fetch fails
-`crates/ipc/src/lib.rs:161` **struct** `IpcChannel` — Bidirectional framing layer over any `Read + Write` stream
-`crates/ipc/src/lib.rs:167` **fn** `new` — Wrap an existing stream
-`crates/ipc/src/lib.rs:172` **fn** `send` — Serialize `msg` via bincode and write it with a 4-byte LE length prefix
-`crates/ipc/src/lib.rs:190` **fn** `recv` — Read one length-prefixed message and deserialize it
-`crates/ipc/src/lib.rs:207` **struct** `IpcServer` — TCP server that the network service uses to accept connections from the shell
-`crates/ipc/src/lib.rs:215` **fn** `bind` — Bind on an OS-assigned loopback port. Returns `(server, bound_port)`
-`crates/ipc/src/lib.rs:226` **fn** `accept` — Block until the shell connects and return the framing channel
-`crates/ipc/src/lib.rs:245` **struct** `IpcClient` — Client used by the shell to communicate with the network service
-`crates/ipc/src/lib.rs:251` **fn** `connect` — Connect to the network service listening on `127.0.0.1:port`
-`crates/ipc/src/lib.rs:261` **fn** `request` — Send a request and block until the matching response arrives
+`crates/ipc/src/lib.rs:86` **enum** `IpcResponse` — A response sent back over an IPC channel
+`crates/ipc/src/lib.rs:136` **struct** `FetchRequest` — Parameters for a fetch request (Phase 1: GET-only, no custom headers/body)
+`crates/ipc/src/lib.rs:152` **struct** `FetchOk` — Successful HTTP response payload returned by the network service
+`crates/ipc/src/lib.rs:165` **struct** `FetchErr` — Error returned when a fetch fails
+`crates/ipc/src/lib.rs:178` **struct** `IpcChannel` — Bidirectional framing layer over any `Read + Write` stream
+`crates/ipc/src/lib.rs:184` **fn** `new` — Wrap an existing stream
+`crates/ipc/src/lib.rs:189` **fn** `send` — Serialize `msg` via bincode and write it with a 4-byte LE length prefix
+`crates/ipc/src/lib.rs:207` **fn** `recv` — Read one length-prefixed message and deserialize it
+`crates/ipc/src/lib.rs:224` **struct** `IpcServer` — TCP server that the network service uses to accept connections from the shell
+`crates/ipc/src/lib.rs:232` **fn** `bind` — Bind on an OS-assigned loopback port. Returns `(server, bound_port)`
+`crates/ipc/src/lib.rs:243` **fn** `accept` — Block until the shell connects and return the framing channel
+`crates/ipc/src/lib.rs:262` **struct** `IpcClient` — Client used by the shell to communicate with the network service
+`crates/ipc/src/lib.rs:268` **fn** `connect` — Connect to the network service listening on `127.0.0.1:port`
+`crates/ipc/src/lib.rs:278` **fn** `request` — Send a request and block until the matching response arrives
 
 ## lumen-js  (398 symbols)
 
@@ -2554,9 +2556,9 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/text_iter.rs:37` **fn** `collect_visible_text` — Walk the layout tree and collect all visible text fragments with screen coordinates
 `crates/engine/layout/src/vertical.rs:44` **fn** `is_cjk` — CSS Writing Modes L4 §4 — codepoint ranges treated as CJK for
 
-## lumen-mcp  (25 symbols)
+## lumen-mcp  (26 symbols)
 
-`crates/mcp/src/live.rs:23` **fn** `spawn` — Spawn the live-window MCP server on `127.0.0.1:port`. Non-blocking — runs
+`crates/mcp/src/live.rs:27` **fn** `spawn` — Spawn the live-window MCP server on `127.0.0.1:port`. Non-blocking — runs
 `crates/mcp/src/protocol.rs:8` **struct** `McpResource` — MCP resource describing a read-only data snapshot
 `crates/mcp/src/protocol.rs:27` **struct** `McpTool` — MCP tool describing a callable action
 `crates/mcp/src/protocol.rs:46` **struct** `McpRequest` — MCP JSON-RPC запрос
@@ -2570,8 +2572,9 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/mcp/src/protocol.rs:143` **fn** `from_json` — Распарсить JSON в MCP сообщение
 `crates/mcp/src/protocol.rs:151` **fn** `to_json` — Сериализовать MCP сообщение в JSON
 `crates/mcp/src/server.rs:15` **struct** `McpServer` — MCP сервер для Lumen браузера
-`crates/mcp/src/server.rs:24` **fn** `new` — Создать новый MCP сервер
-`crates/mcp/src/server.rs:29` **fn** `run` — Основной цикл сервера: читать запросы и писать ответы
+`crates/mcp/src/server.rs:33` **fn** `new` — Создать новый MCP сервер без обязательной аутентификации (stdio-режим
+`crates/mcp/src/server.rs:40` **fn** `with_token` — Создать MCP сервер, требующий верный токен в параметрах `initialize`
+`crates/mcp/src/server.rs:45` **fn** `run` — Основной цикл сервера: читать запросы и писать ответы
 `crates/mcp/src/transport.rs:10` **trait** `Transport` — Абстракция транспорта для MCP сообщений
 `crates/mcp/src/transport.rs:22` **struct** `StdioTransport` — Stdio-транспорт (stdin/stdout)
 `crates/mcp/src/transport.rs:29` **fn** `new` — Создать новый stdio-транспорт
@@ -5663,4 +5666,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 5586 symbols in 24 crates*
+*Total: 5589 symbols in 24 crates*

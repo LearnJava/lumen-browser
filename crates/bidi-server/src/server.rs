@@ -20,22 +20,29 @@ use crate::transport;
 /// those commands fall back to their in-memory stub behavior.
 ///
 /// Returns `Err` if the port is unavailable. The server runs until process exit.
+///
+/// Prints a fresh per-run token to stderr next to the port line (ADR-024
+/// §Access model, DEVX-15) — every `session.new` must carry it in
+/// `capabilities.alwaysMatch.token`.
 pub fn spawn(port: u16, automation: AutomationHandle) -> std::io::Result<()> {
     let listener = TcpListener::bind(("127.0.0.1", port))?;
+    let token = lumen_core::auth::generate_token();
     eprintln!("[bidi] слушает ws://127.0.0.1:{port}");
+    eprintln!("[bidi] token: {token}");
     thread::Builder::new()
         .name("lumen-bidi".into())
-        .spawn(move || accept_loop(listener, automation))?;
+        .spawn(move || accept_loop(listener, automation, token))?;
     Ok(())
 }
 
 /// Accept incoming connections, spawning one thread per connection.
-fn accept_loop(listener: TcpListener, automation: AutomationHandle) {
+fn accept_loop(listener: TcpListener, automation: AutomationHandle, token: String) {
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
                 let automation = automation.clone();
-                thread::spawn(move || transport::handle(stream, automation));
+                let token = token.clone();
+                thread::spawn(move || transport::handle(stream, automation, Some(token)));
             }
             Err(e) => {
                 eprintln!("[bidi] accept error: {e}");

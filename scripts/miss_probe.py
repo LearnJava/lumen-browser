@@ -57,7 +57,7 @@ def main() -> int:
         rpc = None
         while time.monotonic() < dl:
             try:
-                rpc = mcp_rpc_factory(PORT)
+                rpc = mcp_rpc_factory(PORT, errpath)
                 break
             except OSError:
                 time.sleep(0.5)

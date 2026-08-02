@@ -35,6 +35,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -80,6 +81,33 @@ def wait_for_port(port: int, proc: subprocess.Popen, timeout: float) -> None:
     raise TimeoutError(f"BiDi port {port} did not open within {timeout}s")
 
 
+def read_token_and_drain(stderr) -> str:
+    """Read the ADR-024 §Access model (DEVX-15) `[bidi] token: <token>` line
+    the child prints to stderr, then keep draining the rest in a background
+    thread so unrelated stderr output cannot block the child."""
+    token: str | None = None
+    for _ in range(400):
+        line = stderr.readline()
+        if not line:
+            break
+        line = line.strip()
+        if line.startswith("[bidi] token: "):
+            token = line[len("[bidi] token: "):]
+            break
+    if token is None:
+        raise RuntimeError("lumen --bidi-port did not print [bidi] token")
+
+    def _drain() -> None:
+        try:
+            for _ in stderr:
+                pass
+        except Exception:
+            pass
+
+    threading.Thread(target=_drain, daemon=True).start()
+    return token
+
+
 async def _eval(session, ctx, expr, await_promise):
     """Evaluate `expr`, retrying past the off-thread JS-context install race
     (`script.evaluate` reports "JS context not available" until the new
@@ -100,8 +128,10 @@ async def _eval(session, ctx, expr, await_promise):
             raise
 
 
-async def verify(ws_url: str, page_url: str) -> None:
-    session = BidiSession.bidi_only(ws_url)
+async def verify(ws_url: str, page_url: str, token: str) -> None:
+    session = BidiSession.bidi_only(ws_url, requested_capabilities={
+        "alwaysMatch": {"token": token},
+    })
     await session.start()
     try:
         contexts = await session.browsing_context.get_tree()
@@ -155,10 +185,14 @@ def main() -> int:
                     "<script>window.__s6=1;</script></body></html>")
 
         port = get_free_port()
-        proc = subprocess.Popen([args.binary, "--bidi-port", str(port)])
+        proc = subprocess.Popen(
+            [args.binary, "--bidi-port", str(port)],
+            stderr=subprocess.PIPE, text=True,
+        )
         try:
             wait_for_port(port, proc, timeout=30)
-            asyncio.run(verify(f"ws://127.0.0.1:{port}", page))
+            token = read_token_and_drain(proc.stderr)
+            asyncio.run(verify(f"ws://127.0.0.1:{port}", page, token))
         except Exception as e:
             print(f"S6 FAILED: {e}", file=sys.stderr)
             return 1

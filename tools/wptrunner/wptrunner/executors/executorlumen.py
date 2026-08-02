@@ -108,8 +108,17 @@ class LumenBidiProtocol(Protocol):
         self.context_id = None
 
     def connect(self):
+        # ADR-024 §Access model (DEVX-15): `--bidi-port` requires
+        # `capabilities.alwaysMatch.token` on `session.new`. The token is only
+        # known once `self.browser`'s process has actually started (it's a
+        # fresh per-run value Lumen prints to stderr), so it cannot be part of
+        # the static `executor_kwargs()` capabilities dict — merge it in here.
+        capabilities = dict(self.capabilities or {})
+        always_match = dict(capabilities.get("alwaysMatch") or {})
+        always_match["token"] = self.browser.token
+        capabilities["alwaysMatch"] = always_match
         self.session = BidiSession.bidi_only(
-            self.browser.bidi_url, requested_capabilities=self.capabilities)
+            self.browser.bidi_url, requested_capabilities=capabilities)
         self.loop.run_until_complete(self.session.start(self.loop))
 
     def after_connect(self):

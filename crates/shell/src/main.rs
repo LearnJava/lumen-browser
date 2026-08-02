@@ -1540,8 +1540,11 @@ fn run_ipc_server(port: Option<u16>, event_sink: Arc<dyn EventSink>) -> ExitCode
         );
     }
 
-    // Контроллер парсит эту строку из stdout, чтобы узнать порт подключения.
+    // Контроллер парсит эти строки из stdout, чтобы узнать порт подключения и
+    // токен аутентификации (ADR-024 §Access model, DEVX-15).
+    let token = lumen_core::auth::generate_token();
     println!("LUMEN_IPC_PORT={bound_port}");
+    println!("LUMEN_IPC_TOKEN={token}");
     let _ = std::io::stdout().flush();
     eprintln!("lumen: IPC-сервер таб-команд запущен на 127.0.0.1:{bound_port} (TAB-5)");
 
@@ -1558,10 +1561,40 @@ fn run_ipc_server(port: Option<u16>, event_sink: Arc<dyn EventSink>) -> ExitCode
             }
         };
 
+        // Каждое новое соединение начинает неаутентифицированным — `Auth` с
+        // верным токеном должен быть первым сообщением.
+        let mut authenticated = false;
+
         // Внутренний цикл: обслуживаем запросы текущего подключения до разрыва
         // (`recv` вернёт Err при отключении клиента — ждём следующее подключение).
         while let Ok(req) = channel.recv::<IpcRequest>() {
+            if !authenticated {
+                match req {
+                    IpcRequest::Auth { token: provided } => {
+                        if lumen_core::auth::tokens_match(&token, &provided) {
+                            authenticated = true;
+                            if channel.send(&IpcResponse::AuthOk).is_err() {
+                                break;
+                            }
+                        } else {
+                            let _ = channel.send(&IpcResponse::AuthErr {
+                                message: "неверный токен".to_owned(),
+                            });
+                            break;
+                        }
+                    }
+                    _ => {
+                        let _ = channel.send(&IpcResponse::AuthErr {
+                            message: "нужна аутентификация: сначала отправьте Auth".to_owned(),
+                        });
+                        break;
+                    }
+                }
+                continue;
+            }
+
             let resp = match req {
+                IpcRequest::Auth { .. } => IpcResponse::AuthOk,
                 IpcRequest::Ping => IpcResponse::Pong,
                 IpcRequest::Shutdown => {
                     let _ = channel.send(&IpcResponse::Shutdown);
@@ -2110,13 +2143,15 @@ fn run_mcp_mode(mcp: McpMode) -> ExitCode {
                 return ExitCode::FAILURE;
             }
         };
+        let token = lumen_core::auth::generate_token();
         eprintln!("MCP listening on 127.0.0.1:{port}");
+        eprintln!("MCP token: {token}");
         match listener.accept() {
             Ok((stream, addr)) => {
                 eprintln!("MCP connection from {addr}");
                 match TcpTransport::from_stream(stream) {
                     Ok(transport) => {
-                        let mut server = McpServer::new(session, transport);
+                        let mut server = McpServer::with_token(session, transport, token);
                         let _ = server.run();
                     }
                     Err(e) => {

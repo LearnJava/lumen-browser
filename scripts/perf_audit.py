@@ -253,10 +253,29 @@ def _free_port() -> int:
     return port
 
 
+def _wait_for_mcp_token(stderr_log: Path, timeout_s: float = 20.0) -> str:
+    """Poll `stderr_log` for the ADR-024 §Access model (DEVX-15) token line.
+
+    The child's stderr is redirected straight to `stderr_log` (see
+    `LiveBrowser._spawn`), so polling the file is enough.
+    """
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            with open(stderr_log, encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    if line.startswith("[mcp] token: "):
+                        return line.strip()[len("[mcp] token: "):]
+        except OSError:
+            pass
+        time.sleep(0.1)
+    raise RuntimeError(f"lumen --mcp-live-port token not found in {stderr_log}")
+
+
 class Mcp:
     """Line-delimited JSON-RPC клиент к `--mcp-live-port` (паттерн scripts/scroll_perf.py)."""
 
-    def __init__(self, port: int, timeout: float) -> None:
+    def __init__(self, port: int, timeout: float, stderr_log: Path) -> None:
         last: Exception | None = None
         for _ in range(300):
             try:
@@ -271,6 +290,9 @@ class Mcp:
         self.sock.settimeout(timeout + 30)  # дольше самого длинного wait
         self._reader = self.sock.makefile("r", encoding="utf-8", newline="\n")
         self._id = 0
+        # ADR-024 §Access model (DEVX-15): mandatory first call.
+        token = _wait_for_mcp_token(stderr_log)
+        self.call("initialize", {"token": token})
 
     def call(self, method: str, params: dict) -> dict:
         """Один RPC; RuntimeError при error-ответе, OSError при мёртвом сокете."""
@@ -395,7 +417,7 @@ class LiveBrowser:
             [str(self.exe), "--mcp-live-port", str(port), "--maximized", "about:blank"],
             stdout=subprocess.DEVNULL, stderr=log, cwd=str(REPO_ROOT),
         )
-        self.mcp = Mcp(port, self.timeout)
+        self.mcp = Mcp(port, self.timeout, self.log_path)
         self.hung.watch_pid(self.proc.pid)
 
     def stderr_errors_since(self, pos: int) -> tuple[list[str], int]:

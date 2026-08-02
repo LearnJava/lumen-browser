@@ -10,6 +10,11 @@ description = "Lumen: foundational types and traits. Bottom of the dependency gr
 [dependencies]
 # Why this dependency (serde): serialization for network transport (MCP, BiDi) — permanent.
 serde = { version = "1.0", features = ["derive"] }
+# Why this dependency (getrandom): permanent. Minimal dep — delegates directly to
+# the OS CSPRNG (CryptGenRandom/getrandom syscall). Already used elsewhere in the
+# workspace (crates/js, crates/network) for the same purpose; here it backs
+# `auth::generate_token` (ADR-024 §Access model, DEVX-15).
+getrandom = "0.2"
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 # Why this dependency (tracy-client): opt-in visual profiler, provisional,
 # feature-gated — see the workspace Cargo.toml comment above the version pin.

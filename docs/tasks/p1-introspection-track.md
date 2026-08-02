@@ -806,10 +806,29 @@ whole-page `resource://layout`/`resource://network`, как и было в бр�
 
 ---
 
-## DEVX-15: аутентификация и модель доступа MCP/BiDi (M, P1/P3)
+## DEVX-15: аутентификация и модель доступа MCP/BiDi (M, P1/P3) — ЗАКРЫТ (2026-08-02)
 
 Реализует §Access model [ADR-024](../decisions/ADR-024-introspection-api-levels.md).
 **Гейт релиза, а не гейт дорожки.**
+
+**Итог (P1, 2026-08-02):** токен обязателен на всех четырёх TCP-портах.
+`lumen_core::auth::{generate_token, tokens_match}` (CSPRNG через `getrandom`,
+константное сравнение) — общий примитив, `lumen-core` уже нижний слой графа
+зависимостей. `McpServer` получил `with_token`/`authenticated`-гейт: любой
+метод кроме `initialize` отклоняется (`-32001`) до успешной аутентификации;
+`initialize` без токена/с неверным токеном не переводит соединение в
+authenticated. `BidiState::with_live_session` принимает `required_token`;
+`session_new` читает `capabilities.alwaysMatch.token` — стандартный слот
+vendor-capability в WebDriver — и не создаёт сессию (а значит, и browsing
+context) при несовпадении. `--ipc-server` получил новый вариант протокола
+`IpcRequest::Auth{token}`/`IpcResponse::AuthOk`/`AuthErr` — первое сообщение
+соединения обязано быть `Auth`, иначе любая команда отклоняется. stdio-режим
+MCP и internal-канал сетевого сервиса (PH1-4, дочерний процесс, а не
+TCP-порт для внешних потребителей) осознанно вне скоупа ADR-024 — их не
+может достать посторонний локальный процесс тем же путём. Escape hatch не
+заведён (Q1 ADR-024). Все перечисленные в «Ловушке» потребители правлены в
+этом же коммите — детали и полный список файлов в
+[`docs/automation.md`](../automation.md#access-model-mandatory-per-run-token-adr-024-devx-15).
 
 **Состав:** токен обязателен по умолчанию (автогенерация на запуск, печать в
 stderr рядом со строкой порта, приём как параметр MCP `initialize` и как

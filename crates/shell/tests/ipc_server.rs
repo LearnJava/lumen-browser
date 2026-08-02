@@ -1,28 +1,36 @@
 //! End-to-end test of the `--ipc-server` tab control channel (TAB-4/TAB-5).
 //!
-//! Spawns the real `lumen` binary in `--ipc-server` mode, reads the port it
-//! prints, then drives a full `CreateTab → NavigateTab → Screenshot → CloseTab
-//! → Shutdown` sequence over IPC and asserts a valid PNG comes back.
+//! Spawns the real `lumen` binary in `--ipc-server` mode, reads the port and
+//! auth token it prints, then drives a full `Auth → CreateTab → NavigateTab →
+//! Screenshot → CloseTab → Shutdown` sequence over IPC and asserts a valid
+//! PNG comes back (ADR-024 §Access model, DEVX-15: `Auth` is mandatory —
+//! there is no way to skip it).
 
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 
 use lumen_ipc::{IpcClient, IpcRequest, IpcResponse};
 
-/// Read the `LUMEN_IPC_PORT=<port>` line from the child's stdout, then keep a
-/// background thread draining the rest of stdout so the event-sink output the
-/// shell emits during a render cannot fill the pipe and block the child.
-fn read_port_and_drain(stdout: std::process::ChildStdout) -> u16 {
+/// Read the `LUMEN_IPC_PORT=<port>` and `LUMEN_IPC_TOKEN=<token>` lines from
+/// the child's stdout, then keep a background thread draining the rest of
+/// stdout so the event-sink output the shell emits during a render cannot
+/// fill the pipe and block the child.
+fn read_port_and_token_and_drain(stdout: std::process::ChildStdout) -> (u16, String) {
     let mut reader = BufReader::new(stdout);
-    let port = loop {
+    let mut port: Option<u16> = None;
+    let mut token: Option<String> = None;
+    while port.is_none() || token.is_none() {
         let mut line = String::new();
         if reader.read_line(&mut line).unwrap_or(0) == 0 {
-            panic!("child stdout closed before printing LUMEN_IPC_PORT");
+            panic!("child stdout closed before printing LUMEN_IPC_PORT/LUMEN_IPC_TOKEN");
         }
-        if let Some(rest) = line.trim().strip_prefix("LUMEN_IPC_PORT=") {
-            break rest.parse::<u16>().ok();
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("LUMEN_IPC_PORT=") {
+            port = rest.parse::<u16>().ok();
+        } else if let Some(rest) = trimmed.strip_prefix("LUMEN_IPC_TOKEN=") {
+            token = Some(rest.to_owned());
         }
-    };
+    }
     // Drain the remainder so the child never blocks on a full stdout pipe.
     std::thread::spawn(move || {
         let mut buf = String::new();
@@ -30,7 +38,10 @@ fn read_port_and_drain(stdout: std::process::ChildStdout) -> u16 {
             buf.clear();
         }
     });
-    port.expect("failed to parse LUMEN_IPC_PORT value")
+    (
+        port.expect("failed to parse LUMEN_IPC_PORT value"),
+        token.expect("failed to parse LUMEN_IPC_TOKEN value"),
+    )
 }
 
 #[test]
@@ -52,9 +63,15 @@ fn ipc_server_create_navigate_screenshot_close() {
         .spawn()
         .expect("spawn lumen --ipc-server");
 
-    let port = read_port_and_drain(child.stdout.take().expect("child stdout"));
+    let (port, token) = read_port_and_token_and_drain(child.stdout.take().expect("child stdout"));
 
     let mut client = IpcClient::connect(port).expect("connect to ipc-server");
+
+    // Auth → AuthOk (mandatory first message, ADR-024 §Access model)
+    match client.request(&IpcRequest::Auth { token }).unwrap() {
+        IpcResponse::AuthOk => {}
+        other => panic!("expected AuthOk, got {other:?}"),
+    }
 
     // CreateTab → TabCreated
     let tab_id = match client.request(&IpcRequest::CreateTab).unwrap() {
@@ -105,4 +122,54 @@ fn ipc_server_create_navigate_screenshot_close() {
     assert!(status.success(), "ipc-server exited with {status:?}");
 
     let _ = std::fs::remove_file(&html_path);
+}
+
+/// ADR-024 §Access model (DEVX-15): a connection that skips `Auth`, or sends
+/// the wrong token, must not be able to run any tab command. No escape
+/// hatch — every consumer of `--ipc-server` must send the real token.
+#[test]
+fn ipc_server_rejects_unauthenticated_and_wrong_token() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_lumen"))
+        .arg("--ipc-server")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn lumen --ipc-server");
+
+    let (port, token) = read_port_and_token_and_drain(child.stdout.take().expect("child stdout"));
+
+    // Skipping Auth entirely: the first command is rejected.
+    {
+        let mut client = IpcClient::connect(port).expect("connect to ipc-server");
+        match client.request(&IpcRequest::CreateTab).unwrap() {
+            IpcResponse::AuthErr { .. } => {}
+            other => panic!("expected AuthErr for unauthenticated CreateTab, got {other:?}"),
+        }
+    }
+
+    // Wrong token: also rejected.
+    {
+        let mut client = IpcClient::connect(port).expect("connect to ipc-server");
+        match client
+            .request(&IpcRequest::Auth { token: "wrong-token".to_owned() })
+            .unwrap()
+        {
+            IpcResponse::AuthErr { .. } => {}
+            other => panic!("expected AuthErr for wrong token, got {other:?}"),
+        }
+    }
+
+    // Correct token still works, and cleanly shuts the server down.
+    let mut client = IpcClient::connect(port).expect("connect to ipc-server");
+    match client.request(&IpcRequest::Auth { token }).unwrap() {
+        IpcResponse::AuthOk => {}
+        other => panic!("expected AuthOk, got {other:?}"),
+    }
+    match client.request(&IpcRequest::Shutdown).unwrap() {
+        IpcResponse::Shutdown => {}
+        other => panic!("expected Shutdown, got {other:?}"),
+    }
+
+    let status = child.wait().expect("wait for child exit");
+    assert!(status.success(), "ipc-server exited with {status:?}");
 }

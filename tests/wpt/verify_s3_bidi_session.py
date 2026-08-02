@@ -23,6 +23,7 @@ import os
 import socket
 import subprocess
 import sys
+import threading
 import time
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -59,8 +60,37 @@ def wait_for_port(host: str, port: int, proc: subprocess.Popen, timeout: float) 
     raise TimeoutError(f"BiDi port {port} did not open within {timeout}s")
 
 
-async def negotiate_session(ws_url: str) -> None:
-    session = BidiSession.bidi_only(ws_url)
+def read_token_and_drain(stderr) -> str:
+    """Read the ADR-024 §Access model (DEVX-15) `[bidi] token: <token>` line
+    the child prints to stderr, then keep draining the rest in a background
+    thread so unrelated stderr output cannot block the child."""
+    token: str | None = None
+    for _ in range(400):
+        line = stderr.readline()
+        if not line:
+            break
+        line = line.strip()
+        if line.startswith("[bidi] token: "):
+            token = line[len("[bidi] token: "):]
+            break
+    if token is None:
+        raise RuntimeError("lumen --bidi-port did not print [bidi] token")
+
+    def _drain() -> None:
+        try:
+            for _ in stderr:
+                pass
+        except Exception:
+            pass
+
+    threading.Thread(target=_drain, daemon=True).start()
+    return token
+
+
+async def negotiate_session(ws_url: str, token: str) -> None:
+    session = BidiSession.bidi_only(ws_url, requested_capabilities={
+        "alwaysMatch": {"token": token},
+    })
     await session.start()
     try:
         assert session.session_id, "session.new did not return a sessionId"
@@ -86,10 +116,14 @@ def main() -> int:
 
     host = "127.0.0.1"
     port = get_free_port()
-    proc = subprocess.Popen([args.binary, "--bidi-port", str(port)])
+    proc = subprocess.Popen(
+        [args.binary, "--bidi-port", str(port)],
+        stderr=subprocess.PIPE, text=True,
+    )
     try:
         wait_for_port(host, port, proc, timeout=30)
-        asyncio.run(negotiate_session(f"ws://{host}:{port}"))
+        token = read_token_and_drain(proc.stderr)
+        asyncio.run(negotiate_session(f"ws://{host}:{port}", token))
     except Exception as e:
         print(f"S3 FAILED: {e}", file=sys.stderr)
         return 1

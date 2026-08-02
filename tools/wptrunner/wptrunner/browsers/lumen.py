@@ -9,13 +9,28 @@ reuses `WebDriverBrowser` for process lifecycle (spawn, wait-for-port, kill)
 but overrides `make_command`/`url`/`executor_browser`, since there is no HTTP
 session endpoint and `binary` doubles as `webdriver_binary` — there is no
 separate driver process to point `--webdriver-binary` at.
+
+ADR-024 §Access model (DEVX-15): `--bidi-port` requires a per-run token, which
+Lumen prints to stderr as `[bidi] token: <token>` right after the port line —
+no escape hatch. `_TokenCapturingOutputHandler` taps `WebDriverBrowser`'s
+existing per-line output callback (`create_output_handler` is a documented
+subclass hook, not a vendor patch) to capture it; `LumenBrowser.token` exposes
+it, and `LumenBidiProtocol.connect()` (`executorlumen.py`) reads it to build
+`capabilities.alwaysMatch.token` for `session.new` dynamically — the token is
+only known once the process has actually started, so it cannot be baked into
+the static `executor_kwargs()` dict below.
 """
 
 import os
+import time
 
-from .base import ExecutorBrowser, WebDriverBrowser, get_timeout_multiplier, require_arg  # noqa: F401
+from .base import ExecutorBrowser, OutputHandler, WebDriverBrowser, get_timeout_multiplier, require_arg  # noqa: F401
 from ..executors import executor_kwargs as base_executor_kwargs
 from ..executors.executorlumen import LumenTestharnessExecutor  # noqa: F401
+
+#: Prefix of the stderr line `crates/bidi-server/src/server.rs::spawn` prints
+#: once per process (ADR-024 §Access model, DEVX-15).
+_TOKEN_LINE_PREFIX = b"[bidi] token: "
 
 #: Absolute path to Lumen's own `testharnessreport.js` (`tests/wpt/resources/`),
 #: four levels up from this plugin file
@@ -49,6 +64,10 @@ def browser_kwargs(logger, test_type, run_info_data, config, **kwargs):
 
 def executor_kwargs(logger, test_type, test_environment, run_info_data, **kwargs):
     executor_kwargs = base_executor_kwargs(test_type, test_environment, run_info_data, **kwargs)
+    # `capabilities.alwaysMatch.token` (ADR-024 §Access model, DEVX-15) is
+    # merged in dynamically by `LumenBidiProtocol.connect()` — the token is
+    # only known once the browser process has started, so it cannot live in
+    # this static, pre-launch dict.
     executor_kwargs["capabilities"] = {}
     return executor_kwargs
 
@@ -99,6 +118,23 @@ def env_extras(**kwargs):
     return []
 
 
+class _TokenCapturingOutputHandler(OutputHandler):
+    """`OutputHandler` that also stashes the ADR-024 §Access model (DEVX-15)
+    token line, in addition to its normal logging behavior. `__call__` runs
+    on every line regardless of `self.state` (even lines buffered before
+    `start()`), so the token is captured no later than a plain `OutputHandler`
+    would have logged the same line."""
+
+    def __init__(self, logger, command, **kwargs):
+        super().__init__(logger, command, **kwargs)
+        self.token = None
+
+    def __call__(self, line):
+        if self.token is None and line.startswith(_TOKEN_LINE_PREFIX):
+            self.token = line[len(_TOKEN_LINE_PREFIX):].decode("utf-8", "replace").strip()
+        super().__call__(line)
+
+
 class LumenBrowser(WebDriverBrowser):
     """Launches `lumen --bidi-port <port>` and waits for the BiDi WebSocket
     listener to come up. `binary` doubles as `webdriver_binary` — Lumen
@@ -109,6 +145,22 @@ class LumenBrowser(WebDriverBrowser):
 
     def make_command(self):
         return [self.binary, "--bidi-port", str(self.port)]
+
+    def create_output_handler(self, cmd):
+        return _TokenCapturingOutputHandler(self.logger, cmd)
+
+    @property
+    def token(self):
+        """Blocks (briefly) until `_TokenCapturingOutputHandler` has captured
+        the token line — printed synchronously before the BiDi accept loop
+        starts, so it is normally available immediately once the port itself
+        is reachable (which `start()` already waited for)."""
+        deadline = time.time() + 10
+        while self._output_handler.token is None and time.time() < deadline:
+            time.sleep(0.05)
+        if self._output_handler.token is None:
+            raise RuntimeError("lumen --bidi-port did not print [bidi] token")
+        return self._output_handler.token
 
     @property
     def url(self):
