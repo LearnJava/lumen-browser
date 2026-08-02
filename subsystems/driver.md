@@ -149,6 +149,47 @@ headless pipeline without winit/wgpu/ffmpeg.
   paint's `PropertyTrees` reachability check stay pipeline-only `debug_assert!`s, same narrowing
   spirit as DEVX-8a/8b/10 (`docs/tasks/p1-introspection-track.md` §DEVX-11).
 
+- DEVX-12 (2026-08-02): subtree scoping — 6 new `BrowserSession` methods bounding an operation to
+  one element's subtree instead of the whole page: `layout_snapshot_scoped`/`query_scoped`/
+  `screenshot_scoped`/`display_list_scoped` (read-only) and `relayout_scoped`/`eval_scoped`
+  (mutating), exposed as MCP tools `x-scope-layout`/`x-scope-query`/`x-scope-screenshot`/
+  `x-scope-display-list`/`x-scope-relayout`/`x-scope-eval` (ADR-024 L1, `experimental: true`). New
+  module `crates/driver/src/scope.rs` holds the two session-agnostic pure functions:
+  `display_list_scoped(&LayoutBox, &Document, sel)` — the first DEVX-7 provenance consumer across a
+  whole subtree rather than one node (`x-explain-element`'s scope) — walks every box in the
+  subtree, collects its `ProvenanceIndex::spans_for` spans, sorts by `range.start` before
+  concatenating (spans never overlap by construction, so this exactly restores original display-list
+  order, not an approximation), then reuses `lumen_paint::serialize_display_list`; and
+  `crop_screenshot(png, border_box)` — decode/crop(clamped to image bounds)/re-encode over the
+  existing `screenshot()` PNG, no renderer changes. `relayout_scoped` (`InProcessSession` only)
+  reuses `lumen_layout::incremental`'s `mark_dirty`/`lay_out_incremental` directly on the existing
+  `layout_root` (no rebuild from DOM) — cheaper than DEVX-9's full `relayout()`, but
+  `lay_out_incremental` alone re-lays-out from each box's *already-stored* `ComputedStyle`, so a
+  first implementation attempt was invisible to a plain `el.style.x = ...` JS mutation (caught by a
+  DoD test, not by inspection). Fix, scoped narrowly by explicit user decision to avoid resuming the
+  paused BUG-341 (whose `layout_mutation_incremental_restyle` is the general subtree-cascade
+  mechanism this would otherwise need, with the same anonymous-box/pseudo-element identity pitfall
+  ADR-025 exists for): a new private `recompute_own_style` recomputes `ComputedStyle` for **only**
+  the target node (`BoxRole::Element` match, mirrors `explain::find_principal_box`'s reasoning for
+  why anonymous boxes can't reuse `compute_style(doc, b.node, ..)` blindly), using the immediate
+  parent's already-correct `.style` as the inherited base — one `lumen_layout::compute_style` call,
+  not a cascade. Documented precondition (not runtime-checked, same style as
+  `lay_out_incremental`'s own doc comment): the DOM structure under the selector must be unchanged
+  since the last full layout, and inherited-property changes on the selector must not need to
+  cascade to its descendants. `eval_scoped` is `eval` + `relayout_scoped` instead of DEVX-9's full
+  relayout. Borrow-checker note for future edits here: the incremental pass runs through
+  `self.state.as_mut()` (not moved out of `self`) so `state.doc` (immutable, for the style
+  recompute) and `state.layout_root` (mutable) can coexist as disjoint struct fields; `state` is
+  only `self.state.take()`n afterward, once `commit_layout` (needs `&mut self`) is the only thing
+  left to call — taking it out earlier while a `MutexGuard` borrowed from `state.doc` is alive
+  triggers E0505 (the guard's type keeps the borrow alive for the whole `match`/`?` desugaring's
+  drop scope, not just the arm that runs). `layout_and_commit`'s tail (JS runtime rect/style push +
+  property trees + display list + compositor commit) is now a shared `commit_layout(&mut self,
+  &LayoutBox)`, called by both the full path and `relayout_scoped`. `WinitSession` implements the 4
+  reads; `relayout_scoped`/`eval_scoped` return a documented `Err` there — its `eval()` already runs
+  against a one-shot DOM snapshot (see DEVX-9 entry below), so there is no session-state mutation to
+  relay out. `LiveWindowSession`: all 6 are the SDC-2 MVP gap, same pattern as `layout_box_by_selector`.
+
 - DEVX-2: non-pixel golden regression layer (`crates/driver/tests/cases/test_devx2_golden.rs`),
   modeled on `graphic_tests` but asserted through `BrowserSession` (`layout_box_by_selector`,
   `computed_style_snapshot`, `query_a11y`/`query_a11y_all`) instead of pixel diffing — runs via
@@ -194,4 +235,4 @@ headless pipeline without winit/wgpu/ffmpeg.
 
 ## Test counts
 
-12 unit tests in `crates/driver/src/session.rs`; 50 structural integration tests `test_00..49.rs`; 1 snapshot gate `snapshot_cpu` covering 57 pages; 7 (of which 2 under feature `v8`, on by default) `WinitSession` automation-command tests in `test_automation_commands.rs`; 6 (+3 under `--features v8`, +1 under its absence) `InProcessSession` automation-command tests in `test_devx5_headless_automation.rs`; 3 scripted-render regression tests in `scripted_render.rs` (feature `cpu-render` + `v8` — page scripts reaching layout, Canvas 2D pixels reaching the raster; BUG-429); 2 snapshot-delivery regression tests in `layout_snapshot_to_js.rs` (feature `v8` — `getComputedStyle`/`getBoundingClientRect` answering with real data after navigation, 4 fresh sessions each; BUG-382); 3 `explain_element` DoD tests in `test_devx10_explain_element.rs` (DEVX-10); 3 `explain_page` DoD tests in `test_devx11_explain_page.rs` (DEVX-11).
+12 unit tests in `crates/driver/src/session.rs`; 50 structural integration tests `test_00..49.rs`; 1 snapshot gate `snapshot_cpu` covering 57 pages; 7 (of which 2 under feature `v8`, on by default) `WinitSession` automation-command tests in `test_automation_commands.rs`; 6 (+3 under `--features v8`, +1 under its absence) `InProcessSession` automation-command tests in `test_devx5_headless_automation.rs`; 3 scripted-render regression tests in `scripted_render.rs` (feature `cpu-render` + `v8` — page scripts reaching layout, Canvas 2D pixels reaching the raster; BUG-429); 2 snapshot-delivery regression tests in `layout_snapshot_to_js.rs` (feature `v8` — `getComputedStyle`/`getBoundingClientRect` answering with real data after navigation, 4 fresh sessions each; BUG-382); 3 `explain_element` DoD tests in `test_devx10_explain_element.rs` (DEVX-10); 3 `explain_page` DoD tests in `test_devx11_explain_page.rs` (DEVX-11); 9 subtree-scoping DoD tests in `test_devx12_subtree_scoping.rs` plus 2 `crop_screenshot` unit tests in `scope.rs` (DEVX-12).

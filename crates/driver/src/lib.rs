@@ -31,6 +31,7 @@ pub mod determinism;
 pub mod explain;
 pub mod isolation;
 pub mod live_session;
+pub mod scope;
 pub mod session;
 pub mod winit_session;
 pub mod gpu_session;
@@ -140,6 +141,36 @@ pub trait BrowserSession {
     /// depth, relayouts, timing). См. [`ExplainPage`].
     fn explain_page(&self) -> Result<ExplainPage>;
 
+    /// Box-model только поддерева первого элемента, совпадающего с `selector`
+    /// (DEVX-12, ADR-024 L1 `x-scope-layout`): сам элемент и все его потомки,
+    /// в порядке документа. Дополняет [`layout_snapshot`](BrowserSession::layout_snapshot)
+    /// (вся страница) для случаев, когда важна только одна её часть.
+    ///
+    /// Возвращает пустой вектор, если `selector` ничего не находит (совпадает
+    /// с [`layout_box_by_selector`](BrowserSession::layout_box_by_selector) —
+    /// в т.ч. когда элемент есть в DOM, но не имеет layout-бокса).
+    fn layout_snapshot_scoped(&self, selector: &str) -> Result<Vec<BoxModel>>;
+
+    /// PNG-снимок, обрезанный по border-box первого элемента, совпадающего с
+    /// `selector` (DEVX-12, ADR-024 L1 `x-scope-screenshot`).
+    ///
+    /// # Errors
+    /// `Err`, если `selector` ничего не находит, элемент не имеет layout-бокса,
+    /// либо его прямоугольник целиком вне области снимка — обрезанный снимок
+    /// «ничего» не является полезным ответом (в отличие от остальных scoped-
+    /// чтений, которые в этом случае просто пусты).
+    fn screenshot_scoped(&self, selector: &str) -> Result<Vec<u8>>;
+
+    /// Команды display list, приписанные (через provenance DEVX-7) поддереву
+    /// первого элемента, совпадающего с `selector` (DEVX-12, ADR-024 L1
+    /// `x-scope-display-list`): сам элемент и все его потомки, в исходном
+    /// порядке display list. Дополняет команд-счётчик одного узла из
+    /// `x-explain-element` фактическими командами всего региона страницы.
+    ///
+    /// # Errors
+    /// `Err`, если `selector` ничего не находит.
+    fn display_list_scoped(&self, selector: &str) -> Result<String>;
+
     /// Журнал сетевых запросов с момента последней навигации.
     fn network_log(&self) -> Result<Vec<NetworkEntry>>;
 
@@ -193,6 +224,53 @@ pub trait BrowserSession {
     /// Найти DOM-узлы по CSS-селектору. Возвращает пустой вектор, если
     /// ни один узел не совпал.
     fn query(&self, selector: &str) -> Result<Vec<NodeRef>>;
+
+    /// Найти DOM-узлы по CSS-селектору `selector` в границах поддерева
+    /// первого элемента, совпадающего с `root_selector` (DEVX-12, ADR-024 L1
+    /// `x-scope-query`) — эквивалент `Element.querySelectorAll` scoping (DOM
+    /// LS §4.2.6), в отличие от [`query`](BrowserSession::query), которая
+    /// всегда ищет по всему документу.
+    ///
+    /// Возвращает пустой вектор, если `root_selector` ничего не находит.
+    fn query_scoped(&self, root_selector: &str, selector: &str) -> Result<Vec<NodeRef>>;
+
+    /// Пересчитать layout только для поддерева первого элемента, совпадающего
+    /// с `selector` (DEVX-12), используя уже влитую механику
+    /// `lumen_layout::incremental` (`DirtyBits`/`mark_dirty`/`lay_out_incremental`,
+    /// срезы S16–S27) напрямую на уже существующем дереве — без пересборки из
+    /// DOM, в отличие от полного релейаута DEVX-9. Перед пересчётом геометрии
+    /// заново вычисляется `ComputedStyle` **только самого целевого узла**
+    /// (родительский `.style` — уже корректный inherited-базис), иначе мутация
+    /// вроде `el.style.width = '200px'` была бы не видна `lay_out_incremental`,
+    /// который использует уже сохранённый в дереве стиль. Полный каскад по
+    /// поддереву сознательно не делается — та же ловушка идентичности
+    /// anonymous-box/pseudo-element, что и у приостановленного BUG-341's
+    /// `layout_mutation_incremental_restyle`, эта задача его не возобновляет.
+    ///
+    /// **Предусловие (документированное, не проверяется в рантайме — тот же
+    /// стиль, что у `lay_out_incremental`'s собственного doc-комментария):**
+    /// (1) структура DOM (список детей) внутри `selector` не должна была
+    /// измениться с последнего полного layout — добавление/удаление/
+    /// перестановка элементов не отражаются; (2) наследуемые свойства,
+    /// изменившиеся на `selector`, не каскадируются на потомков (например,
+    /// смена `font-size` на самом `selector` не пересчитает em-размеры внутри
+    /// него) — только собственный стиль узла. Для структурных изменений или
+    /// изменений, которые должны каскадироваться, используйте полный релейаут
+    /// (происходит автоматически после `click`/`type_text`/
+    /// [`eval`](BrowserSession::eval)). Существует как перф-подсказка, а не
+    /// отдельный путь корректности — нарушение предпосылки даёт устаревшую
+    /// геометрию, не панику/UB.
+    ///
+    /// # Errors
+    /// `Err`, если `selector` ничего не находит в DOM или в layout-дереве,
+    /// либо сессия не инициализирована.
+    fn relayout_scoped(&mut self, selector: &str) -> Result<()>;
+
+    /// [`eval`](BrowserSession::eval), но вместо полного релейатута DEVX-9
+    /// вызывает [`relayout_scoped`](BrowserSession::relayout_scoped) для
+    /// `selector` (DEVX-12) — для вызывающих, которые знают, что `js`
+    /// мутирует только одно поддерево, и хотят более дешёвый пересчёт.
+    fn eval_scoped(&mut self, selector: &str, js: &str) -> Result<String>;
 
     // ── Isolation & Fingerprinting (Phase 1: 8E/8F) ─────────────────────────
 

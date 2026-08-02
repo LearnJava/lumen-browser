@@ -832,7 +832,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/dom/src/vtt.rs:391` **struct** `VideoTracks` — Сбор track-ов для всех элементов <video>
 `crates/engine/dom/src/vtt.rs:398` **fn** `collect_video_tracks` — Рекурсивно обходит документ и собирает <video> с их <track>
 
-## lumen-driver  (105 symbols)
+## lumen-driver  (107 symbols)
 
 `crates/driver/src/automation.rs:24` **type** `AutomationRequest` — One outstanding request to the live shell window: a command plus the
 `crates/driver/src/automation.rs:33` **type** `WakeFn` — A callback that interrupts a parked (`winit::event_loop::ControlFlow::Wait`)
@@ -895,9 +895,11 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/driver/src/isolation.rs:158` **fn** `idb_load` — Load the IndexedDB JSON snapshot for `origin`, or `None` if absent
 `crates/driver/src/isolation.rs:166` **fn** `cookie_jar` — Shared `Arc<CookieJar>` for this origin group
 `crates/driver/src/isolation.rs:171` **fn** `same_group` — Check whether two origins belong to the same origin group (same eTLD+1)
-`crates/driver/src/lib.rs:68` **trait** `BrowserSession` — Программный интерфейс к браузерному сеансу
+`crates/driver/src/lib.rs:69` **trait** `BrowserSession` — Программный интерфейс к браузерному сеансу
 `crates/driver/src/live_session.rs:43` **struct** `LiveWindowSession` — [`BrowserSession`] adapter that drives a live `lumen-shell` window through
 `crates/driver/src/live_session.rs:51` **fn** `new` — Bind a new session to `handle`, the sending half of a live window's
+`crates/driver/src/scope.rs:32` **fn** `display_list_scoped` — Display-list commands attributed (via DEVX-7 provenance) to `sel`'s
+`crates/driver/src/scope.rs:75` **fn** `crop_screenshot` — Crop a full-page PNG screenshot to `border_box` (DEVX-12)
 `crates/driver/src/session.rs:66` **struct** `InProcessSession` — Headless in-process сессия браузера
 `crates/driver/src/session.rs:126` **fn** `new` — Создать сессию с viewport 1024×720
 `crates/driver/src/session.rs:146` **fn** `with_viewport` — Создать сессию с заданным размером viewport (логические пиксели)
@@ -908,10 +910,10 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/driver/src/session.rs:251` **fn** `active_property_trees` — Active property trees snapshot from the compositor (PH1-7)
 `crates/driver/src/session.rs:263` **fn** `scroll_page_by` — Off-main-thread page scroll (PH1-7)
 `crates/driver/src/session.rs:283` **fn** `navigate_html` — Загрузить HTML-строку без навигации по URL. Используется для тестов
-`crates/driver/src/session.rs:581` **fn** `screenshot_cpu_rgba` — Детерминированный CPU-рендер текущей страницы в RGBA8 (tiny-skia)
-`crates/driver/src/session.rs:611` **fn** `screenshot_cpu_png` — Детерминированный CPU-рендер текущей страницы в PNG (tiny-skia)
-`crates/driver/src/session.rs:625` **fn** `display_list_for_compare` — Строит [`lumen_paint::DisplayList`] из текущего состояния страницы
-`crates/driver/src/session.rs:1757` **fn** `computed_style_json` — Возвращает полный набор computed-style свойств первого элемента,
+`crates/driver/src/session.rs:593` **fn** `screenshot_cpu_rgba` — Детерминированный CPU-рендер текущей страницы в RGBA8 (tiny-skia)
+`crates/driver/src/session.rs:623` **fn** `screenshot_cpu_png` — Детерминированный CPU-рендер текущей страницы в PNG (tiny-skia)
+`crates/driver/src/session.rs:637` **fn** `display_list_for_compare` — Строит [`lumen_paint::DisplayList`] из текущего состояния страницы
+`crates/driver/src/session.rs:1966` **fn** `computed_style_json` — Возвращает полный набор computed-style свойств первого элемента,
 `crates/driver/src/types.rs:15` **struct** `NodeRef` — Ссылка на DOM-узел, возвращаемая [`BrowserSession::query`]
 `crates/driver/src/types.rs:30` **enum** `Target` — Цель для команд [`BrowserSession::click`], [`type_text`](BrowserSession::type_text),
 `crates/driver/src/types.rs:41` **struct** `ScrollDelta` — Дельта скролла для [`BrowserSession::scroll`]
@@ -5659,4 +5661,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 5582 symbols in 24 crates*
+*Total: 5584 symbols in 24 crates*

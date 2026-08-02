@@ -601,7 +601,7 @@ list, не трогает конструирование боксов (`box_tree
 
 ---
 
-## DEVX-12: скоупинг операций на поддерево (M, P1)
+## DEVX-12: скоупинг операций на поддерево (M, P1) — ЗАКРЫТ (2026-08-02)
 
 **Зависит от:** `DEVX-7`, `DEVX-9`.
 
@@ -618,6 +618,62 @@ list, не трогает конструирование боксов (`box_tree
 доделывать BUG-341 под видом `DEVX-12`.
 
 **Уровень по ADR-024:** L1.
+
+**Закрыт (P1, 2026-08-02):** 6 новых методов `BrowserSession` —
+`layout_snapshot_scoped`/`query_scoped`/`screenshot_scoped`/`display_list_scoped`
+(read-only, чистый фильтр уже построенного дерева/DOM/display list по
+поддереву — не задевают BUG-341 вообще) и `relayout_scoped`/`eval_scoped`
+(мутирующие, задели границу — см. ниже). `display_list_scoped` — первый
+потребитель DEVX-7 provenance на уровне ЦЕЛОГО поддерева, а не одного узла
+(`x-explain-element`): для каждого бокса поддерева берутся его
+`ProvenanceIndex::spans_for` span'ы, сортировка по `range.start` перед
+конкатенацией восстанавливает исходный порядок display list (span'ы не
+пересекаются по построению, так что это точное восстановление, а не
+эвристика). `screenshot_scoped` — decode/crop/re-encode PNG поверх обычного
+`screenshot()` (новый модуль `crates/driver/src/scope.rs`), рендер-пайплайн
+не тронут.
+
+**Граница с BUG-341 — найдена в процессе, не заранее (как и предполагал сам
+бриф).** Первая версия `relayout_scoped` вызывала `mark_dirty`+
+`lay_out_incremental` без повторного каскада — DoD-тест
+(`eval_scoped("#box", "...style.width='200px'")`) показал, что геометрия не
+меняется: `lay_out_incremental` перекладывает по уже сохранённому в дереве
+`ComputedStyle`, а его никто не обновил. Полноценный фикс — пересчёт каскада
+по поддереву — это ровно механика приостановленного BUG-341
+(`layout_mutation_incremental_restyle`), с той же ловушкой идентичности
+anonymous-box/pseudo-element, которую решает ADR-025. По явному решению
+пользователя (2026-08-02) задача НЕ дотягивается до BUG-341, а сужена:
+`relayout_scoped` пересчитывает `ComputedStyle` только самого целевого узла
+(родительский `.style` — уже корректный inherited-базис, `compute_style`
+одного узла), потомки не трогаются. Документированное предусловие (в духе
+`lay_out_incremental`'s собственного doc-комментария, не runtime-проверка):
+структура DOM под `selector` не должна была измениться, и наследуемые
+изменения на `selector` не каскадируются на потомков — для таких случаев
+остаётся полный релейаут DEVX-9.
+
+**`WinitSession`:** 4 read-метода реализованы по образцу `InProcessSession`.
+`relayout_scoped`/`eval_scoped` — документированный `Err`: `WinitSession::eval`
+уже сегодня работает над one-shot DOM-снимком (не над `state`'s собственным
+DOM), так что мутировать state.layout_root там нечего — не гэп этой задачи,
+существовавший разрыв DEVX-9 никогда не закрывала для `WinitSession`.
+**`LiveWindowSession`:** все 6 — документированный гэп SDC-2 MVP, тот же
+паттерн, что у `layout_box_by_selector`.
+
+6 новых MCP-инструментов `x-scope-layout`/`x-scope-screenshot`/
+`x-scope-display-list`/`x-scope-query`/`x-scope-relayout`/`x-scope-eval`
+(ADR-024 L1, `experimental: true`).
+
+**Тесты:** 9 DoD-тестов `crates/driver/tests/cases/test_devx12_subtree_scoping.rs`
+(подтверждают исключение вне-поддеревных боксов/узлов, crop screenshot до
+border-box, provenance-фильтрация display list, видимость eval_scoped-мутации
+в `layout_box_by_selector`); 2 юнит-теста `crop_screenshot` в `scope.rs`; 8
+MCP-тестов (список инструментов = 16, x-scope-* помечены `experimental`,
+успешные вызовы + отсутствующие аргументы).
+
+**Гейт:** `cargo test -p lumen-driver --test all` 174/174 (включая
+`cases::snapshot_cpu`/`cases::snapshot_vs_edge` без изменений — аддитивный
+read-only слой + узко-точечный пересчёт стиля одного узла не двигают
+CPU-эталоны существующих страниц), `cargo test -p lumen-mcp` 25/25.
 
 ---
 
