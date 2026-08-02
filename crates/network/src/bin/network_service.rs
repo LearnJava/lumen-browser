@@ -84,6 +84,16 @@ fn main() {
                 let _ = conn.send(&IpcResponse::Shutdown);
                 break;
             }
+            // ADR-024 §Access model (DEVX-15): `Auth` belongs to the shell's
+            // `--ipc-server` channel, which requires a token. This channel
+            // (PH1-4, child process spawned by the shell itself) does not —
+            // reject it the same way the tab-control variants below are
+            // rejected, so the match stays exhaustive.
+            IpcRequest::Auth { .. } => {
+                let _ = conn.send(&IpcResponse::AuthErr {
+                    message: "lumen-network-service does not require authentication".to_string(),
+                });
+            }
             // TAB-4/5 tab-control variants belong to the shell's `--ipc-server`
             // channel, not the network service — reject them so the match stays
             // exhaustive and any future tab command surfaces as a clear error.
