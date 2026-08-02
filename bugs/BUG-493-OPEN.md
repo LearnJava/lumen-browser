@@ -160,3 +160,48 @@ generic "static markup, script runs during initial parse" idiom already
 established as this bug's dominant symptom in срез 10. `.ini` under
 `tests/wpt/metadata/css/css-logical/` for all 5 files, `expected: FAIL`
 per subtest.
+
+## Срез 15 (`css/css-easing`, 2026-08-02) — a clean, animation-free minimal repro of the `offsetWidth` sub-case, plus a new WAAPI-`currentTime` variant
+
+**`offsetWidth` sub-case, re-confirmed and isolated further**:
+`step-jump-{both,end,none,start}.html` (4 files, 24 subtests) each declare 7
+`.test` divs with `animation: ... paused; animation-delay:
+calc(var(--at) * -1s)` and a plain top-level `<script>checkLayout(".test")
+</script>` right after the markup — every `node.offsetWidth` read comes back
+`0` regardless of `--at`, including the case (`--at: 3.0`) where the
+animation has already finished and the expected value is simply the
+element's own static `width: 10px` declaration (not even an animated
+value). Re-verified with a minimal, animation-free scratch page
+(`.tmp/sync_width_probe.html`: one `<div class="box">` with a plain
+`width: 123px` rule, no `@keyframes`/no JS mutation at all, followed
+immediately by `<script>window.__result =
+document.getElementById('d1').offsetWidth;</script>`) via a headless
+`--mcp-port` probe: `window.__result` (captured during the page's own
+synchronous inline script) is `0`; the identical `offsetWidth` read via a
+*separate*, later `eval()` call is `123`. This isolates the mechanism
+completely from CSS Animations/`animation-delay`/`calc()`/`var()` — it is
+purely "no DOM geometry accessor forces a synchronous layout flush before
+reading", exactly as срез 12 established for `checkLayout`, now confirmed
+on a page with zero animation-related CSS at all.
+
+**New WAAPI-`currentTime` variant**: `step-timing-functions-output.html`
+(13 subtests), `cubic-bezier-timing-functions-output.html` (4), and
+`linear-timing-functions-output.html` (5) all follow the pattern `var anim =
+target.animate([...], {...}); anim.currentTime = N;
+assert_equals(getComputedStyle(target).left, "...")` — mutating a Web
+Animations API `currentTime` and reading `getComputedStyle()` back in the
+same synchronous script tick, no task boundary. Same architectural gap as
+the DOM-mutation case already on file (`d.style.x = ...; getComputedStyle
+(d).x` from срез 8), just triggered through `Animation.currentTime`'s
+setter instead of `CSSStyleDeclaration.setProperty`. In the two `*-output.html`
+files the empty-string result additionally crashes the test rather than
+just failing an assertion: `testcommon.js::pxToNum` does
+`String(str).match(/^(-?[\d.]+)px$/)[1]`, and matching an empty string
+against that regex returns `null`, so `null[1]` throws `Cannot read
+properties of null (reading '1')` — explaining the JS-exception-shaped
+failures instead of ordinary `assert_equals` messages seen on these two
+files.
+
+46 subtests / 6 files this slice, the largest single-slice addition to this
+bug to date. `.ini` under `tests/wpt/metadata/css/css-easing/` for all 6
+files, `expected: FAIL` per subtest.
