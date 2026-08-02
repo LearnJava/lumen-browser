@@ -3,7 +3,7 @@
 Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-497)
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-498)
 2. Добавь строку в таблицу ниже со ссылкой на файл
 
 **При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
@@ -509,6 +509,7 @@
 | [BUG-495](bugs/BUG-495-OPEN.md) | OPEN | css-parser/layout (`crates/engine/layout/src/style.rs::apply_declaration`, `selector_query.rs::computed_style_to_map`) | `background-position-x`/`background-position-y` (отдельные лонгхенды CSS Backgrounds/Borders Level 4) не реализованы вовсе — только шорткод `background-position` существует; `CSS.supports()` подтверждает, что это не просто гэп карты computed style (BUG-472), а отсутствие самого свойства. 5 файлов/214 сабтестов `css/css-backgrounds`. Найден P2, WPT-RUN-3 срез 9, 2026-08-02 |
 | [BUG-496](bugs/BUG-496-OPEN.md) | OPEN | js (`crates/js/src/dom.rs`, нет `dataset` нигде в `WEB_API_SHIM`) | `HTMLElement.dataset` (DOMStringMap) не реализован вовсе — `grep` ноль совпадений. Скрипт падает на первом же `element.dataset.x`, харнес зависает TIMEOUT с нулём сабтестов. Широкий по потенциальному охвату гэп (частый паттерн `data-*`-атрибутов), измерен пока на 1 файле `css/css-backgrounds`. Найден P2, WPT-RUN-3 срез 9, 2026-08-02 |
 | [BUG-497](bugs/BUG-497-OPEN.md) | OPEN | js (`crates/js/src/dom.rs:4257`, `_lumen_serialize_style`) | `CSSStyleDeclaration.cssText` не добавляет завершающую точку с запятой после последней (единственной) декларации — `"border-radius: 10px"` вместо спекового `"border-radius: 10px;"`. 1 сабтест `css/css-backgrounds`, дефект безусловный (не зависит от входных данных). Найден P2, WPT-RUN-3 срез 9, 2026-08-02 |
+| [BUG-498](bugs/BUG-498-FIXED.md) | FIXED 2026-08-02 | tooling (`tools/wptrunner/wptrunner/browsers/lumen.py::LumenBrowser.executor_browser`) | Регресс DEVX-15: `executor_browser()` не прокидывал `token` в `ExecutorBrowser`, из-за чего `executorlumen.py`'s `connect()` падал `AttributeError` на каждом тесте — 100% BiDi-прогонов wptrunner биты с мержа `5922237e8`. Найден P2, WPT-RUN-3 срез 10, 2026-08-02 |
 ---
 
 ## Ограничения Phase 0 (не баги — запланировано позже)
