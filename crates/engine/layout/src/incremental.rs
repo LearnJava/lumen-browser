@@ -625,7 +625,7 @@ fn used_value_writeback_only(new: &LayoutBox, prev: &LayoutBox) -> bool {
 /// found — `Contents`/`Table`/`TableRowGroup`/`SvgRoot`/`SvgShape`/`SvgText`
 /// were absent, and the chrome document's SVG icons alone kept `graft_geometry`
 /// returning `false` at the root on every single cycle.
-fn kind_layout_eq(a: &crate::box_tree::BoxKind, b: &crate::box_tree::BoxKind) -> bool {
+pub(crate) fn kind_layout_eq(a: &crate::box_tree::BoxKind, b: &crate::box_tree::BoxKind) -> bool {
     use crate::box_tree::BoxKind::{
         Audio, Block, Canvas, Contents, FlowRoot, FormControl, Iframe, Image, InlineBlockRow,
         InlineRun, InlineSpace, Marker, Skip, SvgRoot, SvgShape, SvgText, Table, TableRow,

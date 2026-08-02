@@ -1,6 +1,6 @@
 # BUG-341: `lay_out_flex` double-lays-out every item — general engine bug, ~300× over CC-12's 2ms chrome perf-gate budget
 
-**Статус:** OPEN — **на паузе с 2026-08-02 после S31** (see below; not a silent relaxation, an explicit user decision).
+**Статус:** OPEN — **на паузе с 2026-08-02 после S32** (see below; not a silent relaxation, an explicit user decision).
 **Компонент:** layout (`crates/engine/layout/src/box_tree.rs::lay_out_flex`) — **general flexbox algorithm bug, affects any nested-flexbox page**, not just chrome. Surfaced via the chrome document (`crates/shell/src/main.rs::relayout_chrome_host`, `docs/tasks/p1-css-chrome.md`) because CC-12 was the first hard perf budget + realistic flex-nesting-depth bench to exist.
 **Найден:** P1, CC-12 (перф-гейт хрома) 2026-07-25 — новый тест `crates/shell/src/main.rs::tests::cc12_chrome_perf_gate_hover_and_keystroke_cycles`. Root-caused: P1, 2026-07-25.
 
@@ -4064,6 +4064,139 @@ here again — a decision for whoever authorizes the next slice, not this one.
 --all-targets` and `cargo clippy -p lumen-shell --all-targets` both clean
 (`-D warnings`).
 
+## S32 — the layout-result cache built, correct, and net **negative** on the real fixture — not wired in, not recommended to enable
+
+Branch `p1-bug341-s32`. Resumed on explicit user request ("build the cache or
+find another approach") to actually build the `(node, constraints)`-keyed
+layout-result cache S30/S31 measured the premise for. Built it, proved it
+correct with differential tests, then measured it honestly on the real chrome
+fixture — the answer is a clean, honest **no**, for a specific, now-understood
+reason, not a vague "didn't help".
+
+**Mechanism** (`crates/engine/layout/src/box_tree.rs`): a `LayoutResultKey`
+(node, width/height bits, viewport bits, `pcb` bits, `in_block_flow`,
+`measurer`/`hp` pointer identity) → cached `LayoutBox` subtree, checked/stored
+inside the `lay_out()` thin wrapper — not `lay_out_inner`'s 1570-line body —
+because every flex/grid/table-item/root call goes through that wrapper with
+`outer_floats: None, parent_justify_items: Auto` hardcoded, and grepping
+confirmed exactly one other `lay_out_inner` call site (the block-flow
+recursion, which threads real floats/justify and is therefore never
+intercepted). A hit clones the cached subtree and
+[`crate::incremental::translate_subtree`]s it to the new `(start_x, start_y)`
+— `lay_out_flex`'s own Step-1-vs-final-pass origins commonly differ even when
+width/height don't, so requiring an exact origin match would have thrown away
+hits for nothing; reusing the already-tested EE-3 translate mechanism rather
+than inventing a second one.
+
+**Two correctness hazards found during design, both guarded, neither
+hypothetical:**
+- `content-visibility: auto`'s skip decision (`cv_should_skip`) depends on
+  scroll position/a cross-frame ratchet — state that lives outside the cascade
+  entirely, so it is *not* reflected in `b.style`, and a stale cached subtree
+  could serve the wrong skip/expand decision after a scroll change, even
+  within a single pass (a flex item's Step-1 probe and final pass commonly
+  place a child at two different `start_y` values). Guarded by `CV_AUTO_TOUCHED`,
+  a thread-local flag set whenever `content_visibility == Auto` is even
+  *checked* (not just when it skips) that poisons the enclosing cache entry —
+  `layout_result_cache_refuses_to_cache_a_content_visibility_auto_subtree`
+  proves the guard fires.
+- CSS Subgrid's `SUBGRID_COL_CTX`/`SUBGRID_ROW_CTX` (`subgrid.rs`) are a
+  thread-local *parameter* the parent grid sets immediately before one
+  specific `lay_out` call — invisible to the cache key, and a stale hit would
+  silently apply one parent's inherited track sizes to a different parent's
+  geometry. Guarded by `cacheable_for_layout_result_cache` refusing whenever
+  either context is active at entry (scoped per-call, not subtree-wide, since
+  the guard that sets these thread-locals already wraps exactly one call) —
+  `layout_result_cache_refuses_when_subgrid_context_is_active` proves it.
+
+**A real, surprising finding that changes the shape of this cache's ceiling:**
+`lay_out_flex`'s own final-placement pass always calls
+`Arc::make_mut(&mut children[i].style)` before laying an item out (to write
+the resolved main size), and `SavedItemSizing::restore` always calls
+`Arc::make_mut` again afterward (to put the declared values back) — and
+because the cascade cache (`CounterMap::styles`) already holds a second
+reference to every node's style `Arc`, both `make_mut` calls **always** clone,
+never mutate in place. This means **a flex item's own style `Arc` changes
+identity on every single visit to its container, regardless of value
+equality** — the exact node population S1's original root cause named
+(`lay_out_flex`'s Step-1-vs-final redundant pair) can **never** pass this
+cache's `ptr_eq` guard. `layout_result_cache_matches_uncached_on_nested_column_flex`
+(3-level nested column-flex differential test) confirms this directly:
+`hits == 0` even though the fixture's *uncached* pass still pays the real
+double-layout cost BUG-341 is about. A second differential test,
+`layout_result_cache_matches_uncached_on_grid_probe_pass`, confirms the
+mechanism does hit for a population that never goes through this
+capture/restore dance — CSS Grid's own intrinsic-height probe (`lay_out_grid`,
+"Layout at temporary position (y=0)") never mutates the item's style at all,
+so a single-column grid cell's probe and final pass share one style `Arc` and
+the cache serves the second call — proving the mechanism is not dead code, just
+scoped to a different, narrower population than flex's own redundancy.
+`cargo test -p lumen-layout`: 3472 passed, 2 failed (same pre-existing BUG-339
+pair), all 5 new tests green.
+
+**Real wall-clock measurement** (`bug341_s32_layout_result_cache_share`,
+new `lumen-shell` test, same real chrome document/`ChromeModel` fixture as
+S29-S31, dev-release, cache OFF and cache ON measured as an interleaved A/B
+pair *within* each of 60 sampled cycles per `docs/perf-method.md`'s own rule,
+not two separate sequential blocks):
+
+```
+BUG341_S32_KEY_CACHE_OFF   count=60 min=14.07ms p50=17.39ms p95=26.92ms
+BUG341_S32_KEY_CACHE_ON    count=60 min=20.29ms p50=24.45ms p95=37.20ms
+[s32-cache] KEY   hits=4080 misses=44880 poisoned=0 hit_rate=8.3%
+
+BUG341_S32_HOVER_CACHE_OFF count=60 min=13.61ms p50=17.87ms p95=30.84ms
+BUG341_S32_HOVER_CACHE_ON  count=60 min=19.67ms p50=23.73ms p95=35.10ms
+[s32-cache] HOVER hits=4080 misses=44880 poisoned=0 hit_rate=8.3%
+```
+
+**The cache is net negative: ~33-41% *slower* than plain full layout on the
+real chrome document**, not merely "no win" — worse than doing nothing, on
+both scenarios, at every percentile measured. Root cause, consistent with S4's
+own `index_by_node` precedent: the cache clones the *entire* matched subtree
+into the `HashMap` on every miss (needed so a later hit has something to
+serve), but only 8.3% of the 48,960 total calls this fixture makes ever became
+a hit — meaning roughly 91% of those clones (≈40,800 of 44,880 stores) were
+pure waste, a subtree cloned into a map that nothing ever read back, while the
+real flex-item redundancy S1 opened this bug for (the highest-value target)
+structurally cannot hit at all per the finding above. The 8.3% hit rate itself
+is lower than S31's 20.4% "same-style-among-repeats" ceiling: S31's census
+counted repeat-key-same-style matches wherever they occurred, most of which
+(per the finding above) belong to flex items whose style has *already*
+diverged again by the time a second occurrence would need to compare against
+it — the census's `ptr_eq` check happened at record-time, not accounting for
+`SavedItemSizing::restore`'s *second* `make_mut` after that; the 8.3% actual
+figure is the more honest number this slice adds.
+
+**Not wired into `layout_measured_hyp`/any production pipeline** — correctly
+so, given the measurement above. `cacheable_for_layout_result_cache`,
+`set_layout_result_cache`, and `layout_result_cache_enabled` are `pub`, gated
+off by default (same on/off thread-local-flag pattern as every other S3-S31
+mechanism), and the differential tests keep them exercised, but **do not
+enable this anywhere** — doing so would make chrome interactions slower, not
+faster, on the exact fixture BUG-341 exists to speed up.
+
+**Recommendation for whoever picks up the next slice:** this specific
+mechanism (whole-subtree-clone-into-a-map, checked at every `lay_out()` call)
+is not the right shape for `lay_out_flex`'s redundancy — the node population
+that redundancy actually touches is structurally excluded from it
+(`SavedItemSizing`'s `make_mut` dance). Two directions were not attempted this
+slice and would need their own scoped census-first work before a further
+attempt: (a) a cache keyed on *values* the flex algorithm computes just before
+the `make_mut` calls (the resolved main/cross size numbers themselves, computed
+once in the "compute hypothetical main sizes"/final-loop steps) rather than
+re-deriving them from a `style` comparison that the algorithm's own bookkeeping
+always defeats; (b) skip storing a clone speculatively and only pay the clone
+cost on a *second* sighting of a key that survives to a third — cheap to
+reason about but does not fit this codebase's actual repeat shape (S30/S31:
+most repeats are exactly two occurrences, not three+), so was not pursued
+further without evidence a 3+-occurrence population exists to serve. Given
+four consecutive slices (S28-S32) narrowing this same lever to progressively
+smaller (and now negative) numbers, and `docs/perf-method.md`'s own standing
+rule to report rather than force a result, this queue pauses here again —
+**same terms as every prior pause: not abandoned, resume only on explicit
+request.**
+
 ## Repro
 
 ```bash
@@ -4079,7 +4212,12 @@ cargo test -p lumen-shell --profile dev-release bug341_s20_stage_census -- --ign
 cargo test -p lumen-shell --profile dev-release bug341_s21_cascade_index_census -- --ignored --nocapture
 cargo test -p lumen-shell --profile dev-release bug341_s27_walk_census -- --ignored --nocapture
 cargo test -p lumen-shell --profile dev-release bug341_s30_flex_key_census -- --ignored --nocapture
+cargo test -p lumen-shell --profile dev-release bug341_s32_layout_result_cache_share -- --ignored --nocapture
 ```
+
+S32 added `bug341_s32_layout_result_cache_share`, a new measurement (not an
+extension of a prior one) — see its own section above for the numbers and why
+the cache is not enabled anywhere despite passing all differential tests.
 
 S30 added `bug341_s30_flex_key_census`, a new census (not an extension of a
 prior one) — see its own section above for what it measures.
