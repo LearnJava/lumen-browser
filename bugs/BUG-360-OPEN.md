@@ -151,3 +151,19 @@ P3 (`CLAUDE.md`, developer assignments).
 с нулём зарегистрированных `test()`. `.ini`:
 `tests/wpt/metadata/css/css-variables/test_variable_legal_values.html.ini`
 (`expected: TIMEOUT`).
+
+**WPT-RUN-3 срез 11 (`css/css-overflow`, 2026-08-02):** крупнейшее расширение
+на сегодня — 25 файлов, весь `check-layout-th.js`-протокол (`<body
+onload="checkLayout('.container')">`) целиком мёртв на этой категории.
+Диагностировано живой пробой: `--mcp-live-port` подтверждает, что
+`document.readyState` уже `"complete"`, `typeof window.checkLayout ===
+"function"`, атрибут `onload="checkLayout('.container')"` присутствует на
+`<body>` — но вручную вызванный `window.checkLayout('.container', false)`
+отрабатывает мгновенно (`0.01s`) без исключений, то есть сама функция
+рабочая, просто браузер никогда её не вызывает через content-атрибут. Все 25
+файлов — `scrollable-overflow-transform-{001..010}.html`,
+`scrollable-overflow-with-nested-elements-{001..005}.html`,
+`scrollable-overflow-{padding,padding-inline,padding-input,self-collapsing,
+textarea,zero-one-axis,float,empty-child-box,replaced-element-001}.html`.
+`.ini`: `expected: TIMEOUT` на уровне файла (ноль зарегистрированных
+`test()`).
