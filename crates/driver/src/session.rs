@@ -353,6 +353,20 @@ impl InProcessSession {
         let flat_tree = lumen_dom::build_flat_tree(&doc_guard);
         drop(doc_guard);
 
+        self.commit_layout(&layout_root);
+
+        Ok((layout_root, flat_tree))
+    }
+
+    /// Push a completed `layout_root` to the JS runtime and the compositor:
+    /// `getComputedStyle`/`getBoundingClientRect` rect+style snapshot (BUG-382),
+    /// property trees (PH1-7), and the page display list.
+    ///
+    /// Shared tail of [`Self::layout_and_commit`] (fresh layout from `doc`) and
+    /// [`Self::relayout_scoped`] (DEVX-12: subtree-only incremental relayout of
+    /// an already-existing tree) — extracted so the two paths can never drift
+    /// on how a `LayoutBox` becomes a committed display list.
+    fn commit_layout(&mut self, layout_root: &LayoutBox) {
         // BUG-382: hand the fresh layout to the JS runtime. `getComputedStyle()` and
         // `getBoundingClientRect()` answer from a snapshot the embedder pushes, never
         // by querying the layout engine — without this call every property read back
@@ -361,29 +375,27 @@ impl InProcessSession {
         // pushes live in `relayout()`/`apply_loaded_page`).
         #[cfg(feature = "v8")]
         if let Some(rt) = self.js_runtime.as_ref() {
-            rt.update_layout_rects(lumen_layout::collect_layout_rects(&layout_root));
-            rt.update_computed_styles(lumen_layout::collect_computed_styles(&layout_root));
+            rt.update_layout_rects(lumen_layout::collect_layout_rects(layout_root));
+            rt.update_computed_styles(lumen_layout::collect_computed_styles(layout_root));
             rt.update_viewport_size(self.viewport.width, self.viewport.height);
         }
 
         // Build property trees (PH1-7): four parallel trees (Transform / Scroll /
         // Effect / Clip) from the completed layout root. Committed to the in-process
         // compositor so that off-main-thread scroll can update offsets without relayout.
-        let property_trees = PropertyTrees::build(&layout_root);
+        let property_trees = PropertyTrees::build(layout_root);
 
         // Build the page display list and commit it together with the property trees
         // to the compositor (two-buffer model: pending → active on flush_pending).
-        let stacking_tree = StackingTree::build(&layout_root);
+        let stacking_tree = StackingTree::build(layout_root);
         let paint_order = PaintOrder::from_tree(&stacking_tree);
-        let (commands, _provenance) = lumen_paint::build_display_list_ordered(&layout_root, &stacking_tree, &paint_order);
+        let (commands, _provenance) = lumen_paint::build_display_list_ordered(layout_root, &stacking_tree, &paint_order);
         let viewport_rect = lumen_core::geom::Rect::new(0.0, 0.0, self.viewport.width, self.viewport.height);
         let layer_tree = BasicLayerTree::single_layer(viewport_rect, commands);
         self.compositor.commit(Arc::new(property_trees.clone()), Arc::new(layer_tree));
         // Flush immediately in the single-thread model so active trees are always
         // current after navigation (no separate compositor tick needed).
         self.compositor.flush_pending();
-
-        Ok((layout_root, flat_tree))
     }
 
     /// Re-run style+layout+paint for the current page after a DOM mutation
@@ -673,6 +685,18 @@ impl BrowserSession for InProcessSession {
         lumen_image::encode_png_rgba8(&image).map_err(|e| Error::Other(format!("PNG encoding: {e}")))
     }
 
+    fn screenshot_scoped(&self, selector: &str) -> Result<Vec<u8>> {
+        let state = self.state()?;
+        let doc = Self::lock_doc(state)?;
+        let Some(lb) = lumen_layout::find_box_by_selector(&state.layout_root, &doc, selector) else {
+            return Err(Error::Other(format!("screenshot_scoped: селектор не найден: {selector}")));
+        };
+        let border_box = lb.rect;
+        drop(doc);
+        let png = self.screenshot()?;
+        crate::scope::crop_screenshot(&png, border_box)
+    }
+
     fn a11y_tree(&self) -> Result<A11yNode> {
         let state = self.state()?;
         let doc = Self::lock_doc(state)?;
@@ -698,6 +722,24 @@ impl BrowserSession for InProcessSession {
         let mut out = Vec::new();
         collect_boxes(&state.layout_root, &doc, &mut out);
         Ok(out)
+    }
+
+    fn layout_snapshot_scoped(&self, selector: &str) -> Result<Vec<BoxModel>> {
+        let state = self.state()?;
+        let doc = Self::lock_doc(state)?;
+        let Some(lb) = lumen_layout::find_box_by_selector(&state.layout_root, &doc, selector) else {
+            return Ok(Vec::new());
+        };
+        let mut out = Vec::new();
+        collect_boxes(lb, &doc, &mut out);
+        Ok(out)
+    }
+
+    fn display_list_scoped(&self, selector: &str) -> Result<String> {
+        let state = self.state()?;
+        let doc = Self::lock_doc(state)?;
+        crate::scope::display_list_scoped(&state.layout_root, &doc, selector)
+            .ok_or_else(|| Error::Other(format!("display_list_scoped: селектор не найден: {selector}")))
     }
 
     fn computed_style(&self, selector: &str) -> Result<Option<ComputedProperties>> {
@@ -912,6 +954,138 @@ impl BrowserSession for InProcessSession {
             });
         }
         Ok(out)
+    }
+
+    fn query_scoped(&self, root_selector: &str, selector: &str) -> Result<Vec<NodeRef>> {
+        let state = self.state()?;
+        let doc = Self::lock_doc(state)?;
+        let Some(root_id) = lumen_layout::find_first_dom_node_by_selector(&doc, root_selector) else {
+            return Ok(Vec::new());
+        };
+        let ids = lumen_layout::query_all_within(&doc, root_id, selector);
+        let mut out = Vec::with_capacity(ids.len());
+        for id in ids {
+            let node = doc.get(id);
+            let tag_name = match &node.data {
+                NodeData::Element { name, .. } => name.local.to_string(),
+                _ => String::new(),
+            };
+            let text_content = collect_text(&doc, id);
+            let bounding_rect = find_layout_box(&state.layout_root, id)
+                .map(|lb| lb.rect)
+                .unwrap_or(Rect::ZERO);
+            out.push(NodeRef {
+                node_id: id.index() as u32,
+                tag_name,
+                text_content,
+                bounding_rect,
+            });
+        }
+        Ok(out)
+    }
+
+    fn relayout_scoped(&mut self, selector: &str) -> Result<()> {
+        let state = self.state()?;
+        let doc = Self::lock_doc(state)?;
+        let Some(node_id) = lumen_layout::find_first_dom_node_by_selector(&doc, selector) else {
+            return Err(Error::Other(format!("relayout_scoped: селектор не найден: {selector}")));
+        };
+        drop(doc);
+
+        let font = lumen_font::Font::parse(INTER_FONT)
+            .map_err(|e| Error::Other(format!("ошибка разбора Inter: {e}")))?;
+        let measurer = lumen_paint::FontMeasurer::new(&font)
+            .map_err(|e| Error::Other(format!("ошибка метрик Inter: {e}")))?;
+        let viewport = self.viewport;
+        let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
+        let hp = lumen_core::ext::NullHyphenationProvider;
+
+        // Do the incremental pass through `self.state.as_mut()` (not moved out)
+        // so `state.doc` (immutable borrow, for the style recompute) and
+        // `state.layout_root` (mutable borrow) can coexist as disjoint fields
+        // of the same struct — `commit_layout` below needs `&mut self`, which
+        // conflicts with holding either borrow, so it happens afterward, once
+        // this block (and its borrows of `state`) has ended.
+        {
+            let state = self.state.as_mut().ok_or_else(|| {
+                Error::Other("сессия не инициализирована — вызовите navigate() первым".into())
+            })?;
+
+            // `lay_out_incremental` alone re-lays-out using each box's
+            // *existing* `ComputedStyle` — it never re-runs the cascade, so a
+            // JS mutation like `el.style.width = '200px'` would otherwise be
+            // invisible to it (the box tree still holds the pre-mutation
+            // style). Recompute just the target's own style before marking it
+            // dirty — one node, its immediate parent's already-correct
+            // `.style` as the inherited base. Deliberately NOT a subtree-wide
+            // cascade: that needs the same anonymous-box/pseudo-element
+            // identity handling as the paused BUG-341's
+            // `layout_mutation_incremental_restyle`, which this task does not
+            // resume (see `relayout_scoped`'s doc comment on
+            // `BrowserSession`). Inherited-property changes on *descendants*
+            // (e.g. a `font-size` change cascading to children) are the
+            // documented precondition gap — use the full relayout for those.
+            let doc = Self::lock_arc_doc(&state.doc)?;
+            let recomputed = recompute_own_style(
+                &mut state.layout_root,
+                node_id,
+                &lumen_layout::ComputedStyle::root(),
+                &doc,
+                &state.stylesheet,
+                viewport,
+            );
+            drop(doc);
+            if !recomputed {
+                return Err(Error::Other(format!(
+                    "relayout_scoped: узел не найден в layout-дереве: {selector}"
+                )));
+            }
+
+            if !lumen_layout::mark_dirty(&mut state.layout_root, node_id) {
+                return Err(Error::Other(format!(
+                    "relayout_scoped: узел не найден в layout-дереве: {selector}"
+                )));
+            }
+            lumen_layout::lay_out_incremental(
+                &mut state.layout_root,
+                0.0,
+                0.0,
+                viewport.width,
+                Some(viewport.height),
+                Some(&measurer),
+                viewport,
+                init_pcb,
+                &hp,
+            );
+            state.layout_pass_count += 1;
+        }
+
+        let owned_state = self.state.take().ok_or_else(|| {
+            Error::Other("сессия не инициализирована — вызовите navigate() первым".into())
+        })?;
+        self.commit_layout(&owned_state.layout_root);
+        self.state = Some(owned_state);
+        Ok(())
+    }
+
+    #[cfg(feature = "v8")]
+    fn eval_scoped(&mut self, selector: &str, js: &str) -> Result<String> {
+        use lumen_core::ext::JsRuntime as _;
+        let rt = self.js_runtime.as_ref().ok_or_else(|| {
+            Error::Other(
+                "eval_scoped: V8 runtime не инициализирован (navigate() ещё не вызывался или V8 init упал)".into(),
+            )
+        })?;
+        let value = rt.eval(js).map_err(|e| Error::Other(format!("eval_scoped: {e}")))?;
+        // DEVX-12: subtree-only relayout instead of DEVX-9's full-page one —
+        // same "only on success" reasoning as `eval`.
+        self.relayout_scoped(selector)?;
+        Ok(value.to_json_string())
+    }
+
+    #[cfg(not(feature = "v8"))]
+    fn eval_scoped(&mut self, _selector: &str, _js: &str) -> Result<String> {
+        Err(Error::Other("eval_scoped требует пересборку с --features v8".into()))
     }
 
     fn layout_box_by_selector(&self, selector: &str) -> Result<Option<BoxModel>> {
@@ -1418,6 +1592,41 @@ fn find_layout_box(root: &LayoutBox, id: NodeId) -> Option<&LayoutBox> {
         }
     }
     None
+}
+
+/// DEVX-12: recompute one [`LayoutBox`]'s own `ComputedStyle` in place, using
+/// its parent's already-correct `.style` as the inherited base — `inherited`
+/// starts as [`lumen_layout::ComputedStyle::root()`] for the document root.
+///
+/// Restricted to `BoxRole::Element` boxes (mirrors
+/// `crate::explain::find_principal_box`'s reasoning): anonymous boxes reuse
+/// their parent's `node`, so calling `compute_style(doc, b.node, ..)` on one
+/// of those would recompute the *parent's* style a second time under the
+/// anonymous box's identity, not a style of its own. Descendants are left
+/// untouched — a full subtree cascade needs the same anonymous-box/pseudo-
+/// element identity handling as the paused BUG-341's
+/// `layout_mutation_incremental_restyle`, which `relayout_scoped` does not
+/// resume. Returns `false` if `target` has no `BoxRole::Element` box in this
+/// tree (mirrors `find_box_by_selector`'s `BoxKind::Skip` exclusion).
+fn recompute_own_style(
+    b: &mut LayoutBox,
+    target: NodeId,
+    inherited: &lumen_layout::ComputedStyle,
+    doc: &Document,
+    sheet: &lumen_css_parser::Stylesheet,
+    viewport: Size,
+) -> bool {
+    if b.node == target && b.origin.role == lumen_layout::BoxRole::Element {
+        b.style = Arc::new(lumen_layout::compute_style(doc, target, sheet, inherited, viewport, false));
+        return true;
+    }
+    let own_style = b.style.clone();
+    for child in &mut b.children {
+        if recompute_own_style(child, target, &own_style, doc, sheet, viewport) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Простой парсер CSS-селектора — поддерживает основные формы Phase 0.

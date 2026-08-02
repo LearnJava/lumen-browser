@@ -96,6 +96,27 @@ impl BrowserSession for LiveWindowSession {
         Ok(Vec::new())
     }
 
+    /// Not yet wired to the live window (SDC-2 MVP scope, same gap as
+    /// `layout_snapshot`) — always empty.
+    fn layout_snapshot_scoped(&self, _selector: &str) -> Result<Vec<BoxModel>> {
+        Ok(Vec::new())
+    }
+
+    /// Not yet wired to the live window (SDC-2 MVP scope, same gap as
+    /// `layout_snapshot`) — always `Err` (unlike the other scoped reads,
+    /// an empty screenshot/dump isn't a meaningfully distinct "not found"
+    /// answer, so this mirrors `screenshot_scoped`'s own not-found error
+    /// rather than silently returning nothing).
+    fn screenshot_scoped(&self, _selector: &str) -> Result<Vec<u8>> {
+        Err(Error::Other("screenshot_scoped: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
+    }
+
+    /// Not yet wired to the live window (SDC-2 MVP scope, same gap as
+    /// `layout_snapshot`) — always `Err`, see `screenshot_scoped`.
+    fn display_list_scoped(&self, _selector: &str) -> Result<String> {
+        Err(Error::Other("display_list_scoped: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
+    }
+
     /// Not yet wired to the live window (SDC-2 MVP scope) — always `None`.
     fn computed_style(&self, _selector: &str) -> Result<Option<ComputedProperties>> {
         Ok(None)
@@ -206,6 +227,25 @@ impl BrowserSession for LiveWindowSession {
             AutomationReply::Query(nodes) => Ok(nodes),
             other => Err(unexpected_reply("Query", &other)),
         }
+    }
+
+    /// Not yet wired to the live window (SDC-2 MVP scope): `AutomationCommand`
+    /// has no scoped-query variant yet — always empty. DEVX-14 tracks closing
+    /// this alongside the rest of the layout-data gaps.
+    fn query_scoped(&self, _root_selector: &str, _selector: &str) -> Result<Vec<NodeRef>> {
+        Ok(Vec::new())
+    }
+
+    /// Not yet wired to the live window (SDC-2 MVP scope, same gap as
+    /// `query_scoped`) — always `Err`.
+    fn relayout_scoped(&mut self, _selector: &str) -> Result<()> {
+        Err(Error::Other("relayout_scoped: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
+    }
+
+    /// Not yet wired to the live window (SDC-2 MVP scope, same gap as
+    /// `relayout_scoped`) — always `Err`.
+    fn eval_scoped(&mut self, _selector: &str, _js: &str) -> Result<String> {
+        Err(Error::Other("eval_scoped: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
     }
 
     // ── Isolation & Fingerprinting ───────────────────────────────────────────

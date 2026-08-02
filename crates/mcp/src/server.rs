@@ -312,6 +312,102 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                 }),
                 experimental: true,
             },
+            McpTool {
+                // ADR-024 L1 (`x-` prefix + `experimental: true`, DEVX-12):
+                // may change shape or vanish between commits. See
+                // `docs/tasks/p1-introspection-track.md` §DEVX-12.
+                name: "x-scope-layout".to_string(),
+                description: "EXPERIMENTAL (ADR-024 L1): box-model of a selector's subtree only \
+                    (the matched element plus every descendant), instead of the whole page. \
+                    Empty array if the selector matches nothing.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["selector"],
+                    "properties": {
+                        "selector": { "type": "string", "description": "CSS selector" }
+                    }
+                }),
+                experimental: true,
+            },
+            McpTool {
+                name: "x-scope-screenshot".to_string(),
+                description: "EXPERIMENTAL (ADR-024 L1): PNG screenshot cropped to a selector's \
+                    border-box, instead of the whole viewport. Errors if the selector matches \
+                    nothing or its box is fully outside the viewport.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["selector"],
+                    "properties": {
+                        "selector": { "type": "string", "description": "CSS selector" }
+                    }
+                }),
+                experimental: true,
+            },
+            McpTool {
+                name: "x-scope-display-list".to_string(),
+                description: "EXPERIMENTAL (ADR-024 L1): display-list commands attributed (via \
+                    DEVX-7 provenance) to a selector's subtree, in original paint order — the \
+                    text serialization of just that region instead of the whole page's display \
+                    list.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["selector"],
+                    "properties": {
+                        "selector": { "type": "string", "description": "CSS selector" }
+                    }
+                }),
+                experimental: true,
+            },
+            McpTool {
+                name: "x-scope-query".to_string(),
+                description: "EXPERIMENTAL (ADR-024 L1): find DOM elements by CSS selector, \
+                    restricted to the subtree of the first element matching `root_selector` — \
+                    Element.querySelectorAll scoping, instead of `query`'s whole-document \
+                    search.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["root_selector", "selector"],
+                    "properties": {
+                        "root_selector": { "type": "string", "description": "CSS selector for the subtree root" },
+                        "selector": { "type": "string", "description": "CSS selector to match within the subtree" }
+                    }
+                }),
+                experimental: true,
+            },
+            McpTool {
+                name: "x-scope-relayout".to_string(),
+                description: "EXPERIMENTAL (ADR-024 L1): re-run layout for a selector's subtree \
+                    only, reusing the merged DirtyBits/mark_dirty/lay_out_incremental mechanism \
+                    directly instead of a full-page relayout. Recomputes the selector's own style \
+                    (not its descendants') before laying out, so a direct `el.style.x = ...` \
+                    mutation is picked up. Precondition (not runtime-checked): the DOM structure \
+                    under the selector must be unchanged since the last full layout, and any \
+                    inherited-property change on the selector must not need to cascade to its \
+                    descendants — use a normal mutating tool (full relayout) for those.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["selector"],
+                    "properties": {
+                        "selector": { "type": "string", "description": "CSS selector" }
+                    }
+                }),
+                experimental: true,
+            },
+            McpTool {
+                name: "x-scope-eval".to_string(),
+                description: "EXPERIMENTAL (ADR-024 L1): like `eval`, but relayouts only the \
+                    given selector's subtree afterward (x-scope-relayout) instead of the whole \
+                    page — for scripts known to mutate only that subtree.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["selector", "code"],
+                    "properties": {
+                        "selector": { "type": "string", "description": "CSS selector to relayout after eval" },
+                        "code": { "type": "string", "description": "JavaScript code to execute" }
+                    }
+                }),
+                experimental: true,
+            },
         ];
 
         let response = json!({
@@ -521,6 +617,74 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                     Err(e) => return McpResponse::err(id.clone(), -32603, format!("Explain error: {e}")),
                 }
             }
+            "x-scope-layout" => {
+                let selector = match args.get("selector").and_then(|v| v.as_str()) {
+                    Some(s) => s,
+                    None => return McpResponse::err(id.clone(), -32602, "Missing selector argument"),
+                };
+                match self.session.layout_snapshot_scoped(selector) {
+                    Ok(boxes) => json!({ "boxes": boxes }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("ScopeLayout error: {e}")),
+                }
+            }
+            "x-scope-screenshot" => {
+                let selector = match args.get("selector").and_then(|v| v.as_str()) {
+                    Some(s) => s,
+                    None => return McpResponse::err(id.clone(), -32602, "Missing selector argument"),
+                };
+                match self.session.screenshot_scoped(selector) {
+                    Ok(png) => json!({ "png_base64": base64_encode(&png) }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("ScopeScreenshot error: {e}")),
+                }
+            }
+            "x-scope-display-list" => {
+                let selector = match args.get("selector").and_then(|v| v.as_str()) {
+                    Some(s) => s,
+                    None => return McpResponse::err(id.clone(), -32602, "Missing selector argument"),
+                };
+                match self.session.display_list_scoped(selector) {
+                    Ok(dump) => json!({ "display_list": dump }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("ScopeDisplayList error: {e}")),
+                }
+            }
+            "x-scope-query" => {
+                let root_selector = match args.get("root_selector").and_then(|v| v.as_str()) {
+                    Some(s) => s,
+                    None => return McpResponse::err(id.clone(), -32602, "Missing root_selector argument"),
+                };
+                let selector = match args.get("selector").and_then(|v| v.as_str()) {
+                    Some(s) => s,
+                    None => return McpResponse::err(id.clone(), -32602, "Missing selector argument"),
+                };
+                match self.session.query_scoped(root_selector, selector) {
+                    Ok(nodes) => json!({ "nodes": nodes }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("ScopeQuery error: {e}")),
+                }
+            }
+            "x-scope-relayout" => {
+                let selector = match args.get("selector").and_then(|v| v.as_str()) {
+                    Some(s) => s,
+                    None => return McpResponse::err(id.clone(), -32602, "Missing selector argument"),
+                };
+                match self.session.relayout_scoped(selector) {
+                    Ok(()) => json!({ "success": true }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("ScopeRelayout error: {e}")),
+                }
+            }
+            "x-scope-eval" => {
+                let selector = match args.get("selector").and_then(|v| v.as_str()) {
+                    Some(s) => s,
+                    None => return McpResponse::err(id.clone(), -32602, "Missing selector argument"),
+                };
+                let code = match args.get("code").and_then(|v| v.as_str()) {
+                    Some(c) => c,
+                    None => return McpResponse::err(id.clone(), -32602, "Missing code argument"),
+                };
+                match self.session.eval_scoped(selector, code) {
+                    Ok(result) => json!({ "success": true, "result": result }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("ScopeEval error: {e}")),
+                }
+            }
             _ => {
                 return McpResponse::err(id.clone(), -32601, format!("Unknown tool: {name}"));
             }
@@ -626,6 +790,18 @@ mod tests {
             Ok(vec![])
         }
 
+        fn layout_snapshot_scoped(&self, _sel: &str) -> lumen_core::error::Result<Vec<lumen_driver::BoxModel>> {
+            Ok(vec![])
+        }
+
+        fn screenshot_scoped(&self, _sel: &str) -> lumen_core::error::Result<Vec<u8>> {
+            Ok(b"PNG".to_vec())
+        }
+
+        fn display_list_scoped(&self, _sel: &str) -> lumen_core::error::Result<String> {
+            Ok(String::new())
+        }
+
         fn computed_style(&self, _sel: &str) -> lumen_core::error::Result<Option<lumen_driver::ComputedProperties>> {
             Ok(None)
         }
@@ -672,6 +848,18 @@ mod tests {
 
         fn query(&self, _sel: &str) -> lumen_core::error::Result<Vec<lumen_driver::NodeRef>> {
             Ok(vec![])
+        }
+
+        fn query_scoped(&self, _root_sel: &str, _sel: &str) -> lumen_core::error::Result<Vec<lumen_driver::NodeRef>> {
+            Ok(vec![])
+        }
+
+        fn relayout_scoped(&mut self, _sel: &str) -> lumen_core::error::Result<()> {
+            Ok(())
+        }
+
+        fn eval_scoped(&mut self, _sel: &str, _js: &str) -> lumen_core::error::Result<String> {
+            Ok("null".to_string())
         }
 
         fn layout_box_by_selector(&self, _sel: &str) -> lumen_core::error::Result<Option<lumen_driver::BoxModel>> {
@@ -766,13 +954,13 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_returns_ten_tools() {
+    fn tools_list_returns_sixteen_tools() {
         let mut server = McpServer::new(MockSession, VecTransport::new());
         let req = make_request("tools/list", serde_json::json!({}));
         let resp = run_one(&mut server, &req);
         assert!(resp.error.is_none());
         let tools = resp.result.unwrap()["tools"].as_array().cloned().unwrap_or_default();
-        assert_eq!(tools.len(), 10);
+        assert_eq!(tools.len(), 16);
         let names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap_or("")).collect();
         assert!(names.contains(&"navigate"));
         assert!(names.contains(&"new_tab"));
@@ -784,6 +972,12 @@ mod tests {
         assert!(names.contains(&"query"));
         assert!(names.contains(&"x-explain-element"));
         assert!(names.contains(&"x-explain-page"));
+        assert!(names.contains(&"x-scope-layout"));
+        assert!(names.contains(&"x-scope-screenshot"));
+        assert!(names.contains(&"x-scope-display-list"));
+        assert!(names.contains(&"x-scope-query"));
+        assert!(names.contains(&"x-scope-relayout"));
+        assert!(names.contains(&"x-scope-eval"));
     }
 
     /// ADR-024 L1: `x-explain-element`/`x-explain-page` must carry
@@ -844,6 +1038,72 @@ mod tests {
         assert!(resp.error.is_none());
         let result = resp.result.unwrap();
         assert_eq!(result["box_count"], 0);
+    }
+
+    #[test]
+    fn tools_call_scope_layout_ok() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request(
+            "tools/call",
+            serde_json::json!({ "name": "x-scope-layout", "arguments": { "selector": "#box" } }),
+        );
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_none());
+        assert!(resp.result.unwrap()["boxes"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn tools_call_scope_layout_missing_selector_errors() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request("tools/call", serde_json::json!({ "name": "x-scope-layout", "arguments": {} }));
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_some());
+    }
+
+    #[test]
+    fn tools_call_scope_query_ok() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request(
+            "tools/call",
+            serde_json::json!({ "name": "x-scope-query", "arguments": { "root_selector": "#a", "selector": "p" } }),
+        );
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_none());
+        assert!(resp.result.unwrap()["nodes"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn tools_call_scope_query_missing_root_selector_errors() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request(
+            "tools/call",
+            serde_json::json!({ "name": "x-scope-query", "arguments": { "selector": "p" } }),
+        );
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_some());
+    }
+
+    #[test]
+    fn tools_call_scope_relayout_ok() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request(
+            "tools/call",
+            serde_json::json!({ "name": "x-scope-relayout", "arguments": { "selector": "#box" } }),
+        );
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_none());
+        assert_eq!(resp.result.unwrap()["success"], true);
+    }
+
+    #[test]
+    fn tools_call_scope_eval_missing_code_errors() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request(
+            "tools/call",
+            serde_json::json!({ "name": "x-scope-eval", "arguments": { "selector": "#box" } }),
+        );
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_some());
     }
 
     #[test]

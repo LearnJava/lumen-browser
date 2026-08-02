@@ -734,6 +734,19 @@ impl BrowserSession for WinitSession {
             .map_err(|e| Error::Other(format!("PNG encoding: {e}")))
     }
 
+    fn screenshot_scoped(&self, selector: &str) -> Result<Vec<u8>> {
+        let state = self.state()?;
+        let border_box = {
+            let state = state.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+            let Some(lb) = lumen_layout::find_box_by_selector(&state.layout_root, &state.doc, selector) else {
+                return Err(Error::Other(format!("screenshot_scoped: селектор не найден: {selector}")));
+            };
+            lb.rect
+        };
+        let png = self.screenshot()?;
+        crate::scope::crop_screenshot(&png, border_box)
+    }
+
     fn a11y_tree(&self) -> Result<A11yNode> {
         let state = self.state()?;
         let state = state.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
@@ -763,6 +776,24 @@ impl BrowserSession for WinitSession {
         let mut out = Vec::new();
         collect_boxes(&state.layout_root, &state.doc, &mut out);
         Ok(out)
+    }
+
+    fn layout_snapshot_scoped(&self, selector: &str) -> Result<Vec<BoxModel>> {
+        let state = self.state()?;
+        let state = state.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+        let Some(lb) = lumen_layout::find_box_by_selector(&state.layout_root, &state.doc, selector) else {
+            return Ok(Vec::new());
+        };
+        let mut out = Vec::new();
+        collect_boxes(lb, &state.doc, &mut out);
+        Ok(out)
+    }
+
+    fn display_list_scoped(&self, selector: &str) -> Result<String> {
+        let state = self.state()?;
+        let state = state.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+        crate::scope::display_list_scoped(&state.layout_root, &state.doc, selector)
+            .ok_or_else(|| Error::Other(format!("display_list_scoped: селектор не найден: {selector}")))
     }
 
     fn computed_style(&self, selector: &str) -> Result<Option<ComputedProperties>> {
@@ -1115,10 +1146,56 @@ impl BrowserSession for WinitSession {
         ))
     }
 
+    /// Not implemented for `WinitSession` (DEVX-12): `eval()` above runs
+    /// against a one-shot DOM *snapshot*, not `state.layout_root`'s own DOM —
+    /// there is no mutation here for a subtree relayout to reflect, unlike
+    /// `InProcessSession` (DEVX-9's persistent runtime). Always `Err`.
+    fn relayout_scoped(&mut self, _selector: &str) -> Result<()> {
+        Err(Error::Other(
+            "relayout_scoped: не реализовано для WinitSession (eval() здесь не мутирует состояние сессии)".into(),
+        ))
+    }
+
+    /// Not implemented for `WinitSession` (DEVX-12) — same gap as
+    /// [`relayout_scoped`](Self::relayout_scoped). Always `Err`.
+    fn eval_scoped(&mut self, _selector: &str, _js: &str) -> Result<String> {
+        Err(Error::Other(
+            "eval_scoped: не реализовано для WinitSession (eval() здесь не мутирует состояние сессии)".into(),
+        ))
+    }
+
     fn query(&self, selector: &str) -> Result<Vec<NodeRef>> {
         let state = self.state()?;
         let state = state.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
         let ids = find_all_by_selector(&state.doc, selector);
+        let mut out = Vec::with_capacity(ids.len());
+        for id in ids {
+            let node = state.doc.get(id);
+            let tag_name = match &node.data {
+                NodeData::Element { name, .. } => name.local.to_string(),
+                _ => String::new(),
+            };
+            let text_content = collect_text(&state.doc, id);
+            let bounding_rect = find_layout_box(&state.layout_root, id)
+                .map(|lb| lb.rect)
+                .unwrap_or(lumen_core::geom::Rect::ZERO);
+            out.push(NodeRef {
+                node_id: id.index() as u32,
+                tag_name,
+                text_content,
+                bounding_rect,
+            });
+        }
+        Ok(out)
+    }
+
+    fn query_scoped(&self, root_selector: &str, selector: &str) -> Result<Vec<NodeRef>> {
+        let state = self.state()?;
+        let state = state.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+        let Some(root_id) = lumen_layout::find_first_dom_node_by_selector(&state.doc, root_selector) else {
+            return Ok(Vec::new());
+        };
+        let ids = lumen_layout::query_all_within(&state.doc, root_id, selector);
         let mut out = Vec::with_capacity(ids.len());
         for id in ids {
             let node = state.doc.get(id);
