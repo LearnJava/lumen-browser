@@ -3817,6 +3817,76 @@ follow-up since has deferred: the residual, non-doubled `lay_out_flex` cost and
 the cascade's own per-visited-node floor — a layout-result cache/memoization
 layer, not another cut to the restyle map.
 
+## S29 — before building the cache: re-ran the gate itself, on this session's
+machine it is not red
+
+Branch `p1-bug341-s29`. No pipeline code changed. S28's own queue pointed at
+the layout-result cache as the next lever, premised on "`CC12_KEY`'s p95 is
+still a coin flip" — this slice checked that premise first (`docs/perf-method.md`
+§1: "Прежде чем оптимизировать то, на что показывает старая заметка, перемерь
+саму заметку"), because the cache is the one item on this queue big enough that
+building it on a stale premise would cost far more than a census.
+
+`cc12_chrome_perf_gate_hover_and_keystroke_cycles`, 12 separate runs (not
+warmup iterations — 12 fresh process invocations, `cargo test ... --ignored
+--nocapture` each time), unmodified `main`-equivalent code, this machine, low
+background load (`wmic cpu get loadpercentage` ≈ 19%, no other cargo/rustc
+process running):
+
+```
+CC12_HOVER p95 (12 runs): 0.63 0.75 0.66 0.68 0.77 0.76 0.85 0.74 0.73 0.72 0.91 0.79 ms
+CC12_KEY   p95 (12 runs): 1.12 1.04 0.93 1.01 1.25 1.38 1.00 1.06 1.10 1.03 1.09 1.01 ms
+```
+
+**12 of 12 green**, both arms, against the 2 ms budget — not a coin flip on
+this hardware, and not close to the edge (`CC12_KEY`'s worst p95 of the twelve,
+1.38 ms, still leaves ~30% headroom; every other run leaves more). Compare
+against S27/S28's own documented range on their machine, `CC12_KEY` p95
+1.61–3.18 ms, red in half the rounds.
+
+**The counters, not just the wall-clock, were re-checked against S27/S28's
+own numbers** (`bug341_s27_walk_census`, extended with `confirmed=`/
+`confirm_misses=` in S28): `visited=55 recomputed=1 reused=9 clean_inserts=12
+skipped=12 confirmed=827 confirm_misses=0` on `KEY`, `visited=0` on `HOVER` —
+identical to S28's own figures. The mechanism has not changed; only the
+wall-clock has. This matches S1's own caveat, restated every few slices since:
+absolute milliseconds on this bug are machine-dependent (S1 measured ~3× higher
+than the reference machine's baseline in the other direction), and
+`docs/perf-method.md` §4 exists specifically because session-to-session
+wall-clock comparisons on this project have previously been dominated by
+contention noise, not code (S9: a parallel session inflated main's own p50 from
+71 ms to 109 ms).
+
+**Also checked, in case a stage census would tell a different story than the
+gate's own wall-clock**: `bug341_s20_stage_census` on this run shows `pass`
+(cascade+box-build+layout, excluding the harness-only `clone_tree` column the
+test's own doc comment says stopped describing production at S22) at
+0.5–0.96 ms for `KEY`, 0.25–0.51 ms for `HOVER` — consistent with the gate's
+own cycle time (which additionally includes `bind_model`/paint, both
+sub-millisecond per BUG-341's original diagnosis). No stage disagrees with the
+gate's verdict.
+
+**This does not mean BUG-341's remaining architectural gap is closed** — the
+residual `lay_out_flex` double-layout cases (column `Auto`/`Content`, row
+`Auto`/`Content` with explicit width) and the cascade's per-visited-node floor
+that S1–S28 named are still unmeasured-away, not fixed; they are just not, on
+this machine right now, large enough to fail a 2 ms wall-clock assert with the
+margin observed above. A slower or more contended machine (a CI runner, an
+older dev box, a session sharing the machine with another build) could still
+see this gate flip red without any code changing — the gate is a wall-clock
+assert on an architecture with a known, documented, unremoved cost floor, not
+proof that floor is gone.
+
+**Reported honestly rather than acted on unilaterally**: building the
+layout-result-cache/memoization layer the queue names is a large, multi-slice
+architectural undertaking (on the scale of S1-S28's incremental-cascade work,
+possibly larger, since it touches `lay_out_flex` directly rather than the
+cascade wrapped around it) — undertaking it now, when the gate it targets is
+passing with real margin on this machine, needs a decision this slice does not
+make for the user: whether the remaining gap is worth closing as headroom
+against slower hardware regardless, or whether the queue should pause again
+here given the concrete number it was chasing is not currently failing.
+
 ## Repro
 
 ```bash
