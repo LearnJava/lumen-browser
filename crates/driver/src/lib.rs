@@ -161,6 +161,16 @@ pub trait BrowserSession {
     /// чтений, которые в этом случае просто пусты).
     fn screenshot_scoped(&self, selector: &str) -> Result<Vec<u8>>;
 
+    /// Полный текстовый дамп display list текущей страницы (DEVX-14, ADR-024
+    /// L1 `resource://x-display-list`) — то же самое, что печатает CLI
+    /// `lumen --dump-display-list`, но через wire-протокол. Дополняет
+    /// [`display_list_scoped`](BrowserSession::display_list_scoped)
+    /// (одно поддерево) для случаев, когда нужна вся страница целиком.
+    ///
+    /// # Errors
+    /// `Err`, если страница не загружена (`navigate()` ещё не вызывался).
+    fn display_list(&self) -> Result<String>;
+
     /// Команды display list, приписанные (через provenance DEVX-7) поддереву
     /// первого элемента, совпадающего с `selector` (DEVX-12, ADR-024 L1
     /// `x-scope-display-list`): сам элемент и все его потомки, в исходном

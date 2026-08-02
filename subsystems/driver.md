@@ -190,6 +190,26 @@ headless pipeline without winit/wgpu/ffmpeg.
   against a one-shot DOM snapshot (see DEVX-9 entry below), so there is no session-state mutation to
   relay out. `LiveWindowSession`: all 6 are the SDC-2 MVP gap, same pattern as `layout_box_by_selector`.
 
+- DEVX-14 (2026-08-02): whole-page `display_list()` (new `BrowserSession` method, complements
+  DEVX-12's `display_list_scoped`) — `scope.rs` gained `display_list(&LayoutBox) -> String`, the
+  same `StackingTree`/`PaintOrder`/`build_display_list_ordered`/`serialize_display_list` pipeline as
+  `display_list_scoped` but without a selector or subtree filter; exposed as MCP resource
+  `resource://x-display-list` (ADR-024 L1). Also added MCP tool `x-computed-style` (`{selector}` →
+  computed CSS properties) over the pre-existing `BrowserSession::computed_style`, which had no wire
+  exposure before. Both wired for `InProcessSession`/`WinitSession`; `LiveWindowSession` documents the
+  gap (`AutomationCommand` has no display-list/computed-style variant). Separately, live-window
+  `layout_snapshot`/`network_log` are now real: two new `AutomationCommand::LayoutSnapshot`/
+  `NetworkLog` variants, answered by `lumen-shell`'s automation dispatch. `layout_snapshot` calls a
+  new `pub fn collect_boxes(&LayoutBox, &Document, &mut Vec<BoxModel>)` in `scope.rs` — pulled out of
+  `session.rs`/`winit_session.rs`'s identical private copies (not refactored to share, to avoid
+  touching either call site) so the shell gets the same margin-box math as a third caller instead of
+  a fourth duplicate. `network_log` reads `lumen-shell`'s `NetworkPanel::entries_clone()` — the same
+  `Arc<Mutex<NetworkLog>>` its DevTools network panel renders from, regardless of whether that panel
+  is open — mapping its richer `NetworkEntry` (method/url/status/blocked/failed/duration) down to the
+  driver's flatter one; `size_bytes` is always 0 since the panel-side type never tracked response
+  size. Scoped live-window reads (`layout_snapshot_scoped`, `explain_element`/`explain_page`,
+  `query_scoped`) are unaffected — still the same SDC-2 MVP gap as before this task.
+
 - DEVX-2: non-pixel golden regression layer (`crates/driver/tests/cases/test_devx2_golden.rs`),
   modeled on `graphic_tests` but asserted through `BrowserSession` (`layout_box_by_selector`,
   `computed_style_snapshot`, `query_a11y`/`query_a11y_all`) instead of pixel diffing — runs via
@@ -235,4 +255,4 @@ headless pipeline without winit/wgpu/ffmpeg.
 
 ## Test counts
 
-12 unit tests in `crates/driver/src/session.rs`; 50 structural integration tests `test_00..49.rs`; 1 snapshot gate `snapshot_cpu` covering 57 pages; 7 (of which 2 under feature `v8`, on by default) `WinitSession` automation-command tests in `test_automation_commands.rs`; 6 (+3 under `--features v8`, +1 under its absence) `InProcessSession` automation-command tests in `test_devx5_headless_automation.rs`; 3 scripted-render regression tests in `scripted_render.rs` (feature `cpu-render` + `v8` — page scripts reaching layout, Canvas 2D pixels reaching the raster; BUG-429); 2 snapshot-delivery regression tests in `layout_snapshot_to_js.rs` (feature `v8` — `getComputedStyle`/`getBoundingClientRect` answering with real data after navigation, 4 fresh sessions each; BUG-382); 3 `explain_element` DoD tests in `test_devx10_explain_element.rs` (DEVX-10); 3 `explain_page` DoD tests in `test_devx11_explain_page.rs` (DEVX-11); 9 subtree-scoping DoD tests in `test_devx12_subtree_scoping.rs` plus 2 `crop_screenshot` unit tests in `scope.rs` (DEVX-12).
+12 unit tests in `crates/driver/src/session.rs`; 50 structural integration tests `test_00..49.rs`; 1 snapshot gate `snapshot_cpu` covering 57 pages; 7 (of which 2 under feature `v8`, on by default) `WinitSession` automation-command tests in `test_automation_commands.rs`; 6 (+3 under `--features v8`, +1 under its absence) `InProcessSession` automation-command tests in `test_devx5_headless_automation.rs`; 3 scripted-render regression tests in `scripted_render.rs` (feature `cpu-render` + `v8` — page scripts reaching layout, Canvas 2D pixels reaching the raster; BUG-429); 2 snapshot-delivery regression tests in `layout_snapshot_to_js.rs` (feature `v8` — `getComputedStyle`/`getBoundingClientRect` answering with real data after navigation, 4 fresh sessions each; BUG-382); 3 `explain_element` DoD tests in `test_devx10_explain_element.rs` (DEVX-10); 3 `explain_page` DoD tests in `test_devx11_explain_page.rs` (DEVX-11); 9 subtree-scoping DoD tests in `test_devx12_subtree_scoping.rs` plus 2 `crop_screenshot` unit tests in `scope.rs` (DEVX-12); 4 wire-dump DoD tests in `test_devx14_wire_dumps.rs` (DEVX-14).

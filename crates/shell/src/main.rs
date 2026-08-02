@@ -113,8 +113,8 @@ use lumen_paint::{
 };
 use lumen_layout::Cursor as CssCursor;
 use lumen_driver::{
-    AutomationCommand, AutomationHandle, AutomationReply, AutomationRequest, ConsoleEntry,
-    ConsoleLevel as DriverConsoleLevel, WaitCondition,
+    AutomationCommand, AutomationHandle, AutomationReply, AutomationRequest, BoxModel, ConsoleEntry,
+    ConsoleLevel as DriverConsoleLevel, NetworkEntry as DriverNetworkEntry, WaitCondition,
 };
 use winit::application::ApplicationHandler;
 
@@ -13213,6 +13213,14 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         .collect();
                     let _ = reply_tx.send(AutomationReply::ConsoleLog(entries));
                 }
+                AutomationCommand::LayoutSnapshot => {
+                    let boxes = self.automation_layout_snapshot();
+                    let _ = reply_tx.send(AutomationReply::LayoutSnapshot(boxes));
+                }
+                AutomationCommand::NetworkLog => {
+                    let entries = self.automation_network_log();
+                    let _ = reply_tx.send(AutomationReply::NetworkLog(entries));
+                }
             }
         }
 
@@ -23649,6 +23657,40 @@ impl Lumen {
             let chrome = self.chrome_ax_nodes();
             let ax_tree = lumen_a11y::chrome::attach_chrome(ax_tree, chrome);
             Some(automation_ax_node(&ax_tree.root))
+        }
+
+        /// Box-model snapshot of the whole page for `AutomationCommand::LayoutSnapshot`
+        /// (DEVX-14, wires `resource://layout` to the live window).
+        ///
+        /// Empty if no page is loaded — mirrors `InProcessSession::layout_snapshot`'s
+        /// behavior on the equivalent state.
+        fn automation_layout_snapshot(&self) -> Vec<BoxModel> {
+            let Some(lb) = self.layout_box.as_ref() else { return Vec::new() };
+            let Some(source) = self.layout_source.as_ref() else { return Vec::new() };
+            let Ok(doc) = source.document.lock() else { return Vec::new() };
+            let mut out = Vec::new();
+            lumen_driver::scope::collect_boxes(lb, &doc, &mut out);
+            out
+        }
+
+        /// Network request log for `AutomationCommand::NetworkLog` (DEVX-14,
+        /// wires `resource://network` to the live window) — reads the same
+        /// shared `NetworkLog` the DevTools network panel renders from,
+        /// regardless of whether that panel is currently open.
+        ///
+        /// `size_bytes` is always 0: unlike `InProcessSession`'s network log,
+        /// the DevTools panel's `NetworkEntry` doesn't track response size.
+        fn automation_network_log(&self) -> Vec<DriverNetworkEntry> {
+            self.network_panel
+                .entries_clone()
+                .iter()
+                .map(|e| DriverNetworkEntry {
+                    url: e.url.clone(),
+                    method: e.method.clone(),
+                    status: e.status.unwrap_or(0),
+                    size_bytes: 0,
+                })
+                .collect()
         }
 
         /// Poll an `AutomationCommand::Wait` condition against current shell

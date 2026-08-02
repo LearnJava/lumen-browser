@@ -789,6 +789,12 @@ impl BrowserSession for WinitSession {
         Ok(out)
     }
 
+    fn display_list(&self) -> Result<String> {
+        let state = self.state()?;
+        let state = state.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+        Ok(crate::scope::display_list(&state.layout_root))
+    }
+
     fn display_list_scoped(&self, selector: &str) -> Result<String> {
         let state = self.state()?;
         let state = state.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;

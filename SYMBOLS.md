@@ -832,7 +832,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/dom/src/vtt.rs:391` **struct** `VideoTracks` — Сбор track-ов для всех элементов <video>
 `crates/engine/dom/src/vtt.rs:398` **fn** `collect_video_tracks` — Рекурсивно обходит документ и собирает <video> с их <track>
 
-## lumen-driver  (107 symbols)
+## lumen-driver  (109 symbols)
 
 `crates/driver/src/automation.rs:24` **type** `AutomationRequest` — One outstanding request to the live shell window: a command plus the
 `crates/driver/src/automation.rs:33` **type** `WakeFn` — A callback that interrupts a parked (`winit::event_loop::ControlFlow::Wait`)
@@ -896,10 +896,12 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/driver/src/isolation.rs:166` **fn** `cookie_jar` — Shared `Arc<CookieJar>` for this origin group
 `crates/driver/src/isolation.rs:171` **fn** `same_group` — Check whether two origins belong to the same origin group (same eTLD+1)
 `crates/driver/src/lib.rs:69` **trait** `BrowserSession` — Программный интерфейс к браузерному сеансу
-`crates/driver/src/live_session.rs:43` **struct** `LiveWindowSession` — [`BrowserSession`] adapter that drives a live `lumen-shell` window through
-`crates/driver/src/live_session.rs:51` **fn** `new` — Bind a new session to `handle`, the sending half of a live window's
-`crates/driver/src/scope.rs:32` **fn** `display_list_scoped` — Display-list commands attributed (via DEVX-7 provenance) to `sel`'s
-`crates/driver/src/scope.rs:75` **fn** `crop_screenshot` — Crop a full-page PNG screenshot to `border_box` (DEVX-12)
+`crates/driver/src/live_session.rs:46` **struct** `LiveWindowSession` — [`BrowserSession`] adapter that drives a live `lumen-shell` window through
+`crates/driver/src/live_session.rs:54` **fn** `new` — Bind a new session to `handle`, the sending half of a live window's
+`crates/driver/src/scope.rs:34` **fn** `collect_boxes` — Recursively flatten `lb`'s subtree into `out` as [`BoxModel`]s (DEVX-14)
+`crates/driver/src/scope.rs:66` **fn** `display_list` — Full-page display-list text dump (DEVX-14) — the same serialization
+`crates/driver/src/scope.rs:81` **fn** `display_list_scoped` — Display-list commands attributed (via DEVX-7 provenance) to `sel`'s
+`crates/driver/src/scope.rs:124` **fn** `crop_screenshot` — Crop a full-page PNG screenshot to `border_box` (DEVX-12)
 `crates/driver/src/session.rs:66` **struct** `InProcessSession` — Headless in-process сессия браузера
 `crates/driver/src/session.rs:126` **fn** `new` — Создать сессию с viewport 1024×720
 `crates/driver/src/session.rs:146` **fn** `with_viewport` — Создать сессию с заданным размером viewport (логические пиксели)
@@ -913,7 +915,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/driver/src/session.rs:593` **fn** `screenshot_cpu_rgba` — Детерминированный CPU-рендер текущей страницы в RGBA8 (tiny-skia)
 `crates/driver/src/session.rs:623` **fn** `screenshot_cpu_png` — Детерминированный CPU-рендер текущей страницы в PNG (tiny-skia)
 `crates/driver/src/session.rs:637` **fn** `display_list_for_compare` — Строит [`lumen_paint::DisplayList`] из текущего состояния страницы
-`crates/driver/src/session.rs:1966` **fn** `computed_style_json` — Возвращает полный набор computed-style свойств первого элемента,
+`crates/driver/src/session.rs:1971` **fn** `computed_style_json` — Возвращает полный набор computed-style свойств первого элемента,
 `crates/driver/src/types.rs:15` **struct** `NodeRef` — Ссылка на DOM-узел, возвращаемая [`BrowserSession::query`]
 `crates/driver/src/types.rs:30` **enum** `Target` — Цель для команд [`BrowserSession::click`], [`type_text`](BrowserSession::type_text),
 `crates/driver/src/types.rs:41` **struct** `ScrollDelta` — Дельта скролла для [`BrowserSession::scroll`]
@@ -934,7 +936,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/driver/src/types.rs:411` **enum** `FingerprintProfile` — Профиль отпечатка браузера (fingerprint profile) для BrowserSession
 `crates/driver/src/types.rs:433` **fn** `to_http_profile` — Map this session-level profile to the network [`HttpProfile`] that drives
 `crates/driver/src/types.rs:448` **enum** `AutomationCommand` — Command for automation API — sent to shell via IPC channel (SDC-1a)
-`crates/driver/src/types.rs:475` **enum** `AutomationReply` — Reply from automation API — returned from shell after command execution
+`crates/driver/src/types.rs:481` **enum** `AutomationReply` — Reply from automation API — returned from shell after command execution
 `crates/driver/src/winit_session.rs:66` **struct** `WinitSession` — Оконная сессия браузера
 `crates/driver/src/winit_session.rs:93` **fn** `new` — Создать сессию с viewport 1024×720
 `crates/driver/src/winit_session.rs:108` **fn** `with_viewport` — Создать сессию с заданным размером viewport (логические пиксели)
@@ -2556,17 +2558,17 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 
 `crates/mcp/src/live.rs:23` **fn** `spawn` — Spawn the live-window MCP server on `127.0.0.1:port`. Non-blocking — runs
 `crates/mcp/src/protocol.rs:8` **struct** `McpResource` — MCP resource describing a read-only data snapshot
-`crates/mcp/src/protocol.rs:21` **struct** `McpTool` — MCP tool describing a callable action
-`crates/mcp/src/protocol.rs:40` **struct** `McpRequest` — MCP JSON-RPC запрос
-`crates/mcp/src/protocol.rs:55` **fn** `new` — Создать новый MCP запрос
-`crates/mcp/src/protocol.rs:65` **fn** `with_id` — Создать запрос с ID для отслеживания ответа
-`crates/mcp/src/protocol.rs:73` **struct** `McpResponse` — MCP JSON-RPC ответ
-`crates/mcp/src/protocol.rs:88` **fn** `ok` — Создать успешный ответ
-`crates/mcp/src/protocol.rs:98` **fn** `err` — Создать ошибку
-`crates/mcp/src/protocol.rs:114` **struct** `McpError` — JSON-RPC ошибка
-`crates/mcp/src/protocol.rs:126` **enum** `McpMessage` — Размеченное MCP сообщение (запрос или ответ)
-`crates/mcp/src/protocol.rs:137` **fn** `from_json` — Распарсить JSON в MCP сообщение
-`crates/mcp/src/protocol.rs:145` **fn** `to_json` — Сериализовать MCP сообщение в JSON
+`crates/mcp/src/protocol.rs:27` **struct** `McpTool` — MCP tool describing a callable action
+`crates/mcp/src/protocol.rs:46` **struct** `McpRequest` — MCP JSON-RPC запрос
+`crates/mcp/src/protocol.rs:61` **fn** `new` — Создать новый MCP запрос
+`crates/mcp/src/protocol.rs:71` **fn** `with_id` — Создать запрос с ID для отслеживания ответа
+`crates/mcp/src/protocol.rs:79` **struct** `McpResponse` — MCP JSON-RPC ответ
+`crates/mcp/src/protocol.rs:94` **fn** `ok` — Создать успешный ответ
+`crates/mcp/src/protocol.rs:104` **fn** `err` — Создать ошибку
+`crates/mcp/src/protocol.rs:120` **struct** `McpError` — JSON-RPC ошибка
+`crates/mcp/src/protocol.rs:132` **enum** `McpMessage` — Размеченное MCP сообщение (запрос или ответ)
+`crates/mcp/src/protocol.rs:143` **fn** `from_json` — Распарсить JSON в MCP сообщение
+`crates/mcp/src/protocol.rs:151` **fn** `to_json` — Сериализовать MCP сообщение в JSON
 `crates/mcp/src/server.rs:15` **struct** `McpServer` — MCP сервер для Lumen браузера
 `crates/mcp/src/server.rs:24` **fn** `new` — Создать новый MCP сервер
 `crates/mcp/src/server.rs:29` **fn** `run` — Основной цикл сервера: читать запросы и писать ответы
@@ -5661,4 +5663,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 5584 symbols in 24 crates*
+*Total: 5586 symbols in 24 crates*

@@ -14,6 +14,12 @@ pub struct McpResource {
     pub description: String,
     /// MIME-тип контента (e.g. "image/png", "application/json").
     pub mime_type: String,
+    /// ADR-024 L1 marker: `true` for wire-exposed introspection capabilities
+    /// that may change shape or vanish between commits (uri carries the
+    /// `x-` prefix too, e.g. `resource://x-display-list`). Omitted from the
+    /// serialized JSON when `false` — same convention as [`McpTool::experimental`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub experimental: bool,
 }
 
 /// MCP tool describing a callable action.

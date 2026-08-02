@@ -17,9 +17,58 @@
 
 use lumen_core::error::{Error, Result};
 use lumen_core::geom::Rect;
-use lumen_dom::Document;
+use lumen_dom::{Document, NodeData};
 use lumen_layout::{LayoutBox, PaintOrder, StackingTree};
 use lumen_paint::ProvenanceIndex;
+
+use crate::BoxModel;
+
+/// Recursively flatten `lb`'s subtree into `out` as [`BoxModel`]s (DEVX-14).
+///
+/// Shared by every [`crate::BrowserSession::layout_snapshot`] implementation
+/// that already has a built `&LayoutBox`+`&Document` in hand — pulled out
+/// here (rather than left as the private per-module helper `InProcessSession`
+/// and `WinitSession` each carry) so `lumen-shell`'s live-window automation
+/// dispatch (DEVX-14, wiring `resource://layout` for `LiveWindowSession`) can
+/// reuse the exact same margin-box math instead of a fourth copy.
+pub fn collect_boxes(lb: &LayoutBox, doc: &Document, out: &mut Vec<BoxModel>) {
+    let tag_name = match &doc.get(lb.node).data {
+        NodeData::Element { name, .. } => name.local.to_string(),
+        _ => String::new(),
+    };
+    let r = lb.rect;
+    let mt = lb.style.margin_top.to_px_opt().unwrap_or(0.0);
+    let mr = lb.style.margin_right.to_px_opt().unwrap_or(0.0);
+    let mb = lb.style.margin_bottom.to_px_opt().unwrap_or(0.0);
+    let ml = lb.style.margin_left.to_px_opt().unwrap_or(0.0);
+    let margin_box = Rect {
+        x: r.x - ml,
+        y: r.y - mt,
+        width: r.width + ml + mr,
+        height: r.height + mt + mb,
+    };
+    out.push(BoxModel {
+        node_id: lb.node.index() as u32,
+        tag_name,
+        border_box: lb.rect,
+        margin_box,
+    });
+    for child in &lb.children {
+        collect_boxes(child, doc, out);
+    }
+}
+
+/// Full-page display-list text dump (DEVX-14) — the same serialization
+/// [`display_list_scoped`] uses, without filtering to a subtree. Mirrors
+/// what the CLI's `--dump-display-list` prints, for callers that already
+/// have a built `&LayoutBox` (no `&Document` needed — unlike the scoped
+/// variant, there's no selector to resolve).
+pub fn display_list(root: &LayoutBox) -> String {
+    let stacking_tree = StackingTree::build(root);
+    let order = PaintOrder::from_tree(&stacking_tree);
+    let (commands, _provenance) = lumen_paint::build_display_list_ordered(root, &stacking_tree, &order);
+    lumen_paint::serialize_display_list(&commands)
+}
 
 /// Display-list commands attributed (via DEVX-7 provenance) to `sel`'s
 /// subtree: the matched element's own box plus every descendant box, in
