@@ -9,13 +9,16 @@
 //! drive a real, visible window with the exact same API as headless tests.
 //!
 //! MVP scope (ROADMAP SDC-2): navigate/click/type/scroll/wait/eval/screenshot/
-//! query/a11y_tree/console_log are real round-trips to the live window
-//! (console_log added DEVX-1: reads the DevTools console buffer, cleared on
-//! each `navigate()`). The remaining `BrowserSession` methods (layout
-//! snapshots, computed style, network logs, fingerprint/clock/rng isolation
-//! controls) are not yet threaded through `AutomationCommand` — they return
-//! local, documented defaults so this type satisfies the trait without
-//! silently pretending to support features the live channel doesn't carry yet.
+//! query/a11y_tree/console_log/layout_snapshot/network_log are real
+//! round-trips to the live window (console_log added DEVX-1: reads the
+//! DevTools console buffer, cleared on each `navigate()`; layout_snapshot/
+//! network_log added DEVX-14: read the live window's layout tree and DevTools
+//! network panel log respectively). The remaining `BrowserSession` methods
+//! (scoped layout/display-list reads, computed style, fingerprint/clock/rng
+//! isolation controls) are not yet threaded through `AutomationCommand` —
+//! they return local, documented defaults so this type satisfies the trait
+//! without silently pretending to support features the live channel doesn't
+//! carry yet.
 
 use std::sync::Mutex;
 use std::time::Duration;
@@ -91,30 +94,47 @@ impl BrowserSession for LiveWindowSession {
         Ok(out)
     }
 
-    /// Not yet wired to the live window (SDC-2 MVP scope) — always empty.
+    /// Box-model snapshot of the whole page (DEVX-14) — round-trips through
+    /// `AutomationCommand::LayoutSnapshot` to the live window's layout tree.
     fn layout_snapshot(&self) -> Result<Vec<BoxModel>> {
-        Ok(Vec::new())
+        match self.execute(AutomationCommand::LayoutSnapshot)? {
+            AutomationReply::LayoutSnapshot(boxes) => Ok(boxes),
+            other => Err(unexpected_reply("LayoutSnapshot", &other)),
+        }
     }
 
-    /// Not yet wired to the live window (SDC-2 MVP scope, same gap as
-    /// `layout_snapshot`) — always empty.
+    /// Not yet wired to the live window: `AutomationCommand` has no scoped
+    /// layout-snapshot variant yet (SDC-2 MVP scope, DEVX-14 wired the
+    /// whole-page `layout_snapshot` but not this) — always empty.
     fn layout_snapshot_scoped(&self, _selector: &str) -> Result<Vec<BoxModel>> {
         Ok(Vec::new())
     }
 
-    /// Not yet wired to the live window (SDC-2 MVP scope, same gap as
-    /// `layout_snapshot`) — always `Err` (unlike the other scoped reads,
-    /// an empty screenshot/dump isn't a meaningfully distinct "not found"
-    /// answer, so this mirrors `screenshot_scoped`'s own not-found error
-    /// rather than silently returning nothing).
+    /// Not yet wired to the live window (SDC-2 MVP scope) — always `Err`
+    /// (unlike the other scoped reads, an empty screenshot/dump isn't a
+    /// meaningfully distinct "not found" answer, so this mirrors
+    /// `screenshot_scoped`'s own not-found error rather than silently
+    /// returning nothing).
     fn screenshot_scoped(&self, _selector: &str) -> Result<Vec<u8>> {
         Err(Error::Other("screenshot_scoped: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
     }
 
-    /// Not yet wired to the live window (SDC-2 MVP scope, same gap as
-    /// `layout_snapshot`) — always `Err`, see `screenshot_scoped`.
+    /// Not yet wired to the live window (SDC-2 MVP scope) — always `Err`,
+    /// see `screenshot_scoped`. Unlike `display_list_scoped`, the whole-page
+    /// [`display_list`](BrowserSession::display_list) has the same gap —
+    /// `AutomationCommand` carries no display-list variant at all yet
+    /// (DEVX-14 wired `layout_snapshot`/`network_log` only).
     fn display_list_scoped(&self, _selector: &str) -> Result<String> {
         Err(Error::Other("display_list_scoped: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
+    }
+
+    /// Not yet wired to the live window (SDC-2 MVP scope): `AutomationCommand`
+    /// carries no display-list variant yet — always `Err`. Unlike
+    /// `layout_snapshot`/`network_log`, DEVX-14 left this one a documented
+    /// gap rather than wiring it (the brief scoped live-window work to
+    /// `resource://layout`/`resource://network` only).
+    fn display_list(&self) -> Result<String> {
+        Err(Error::Other("display_list: не реализовано для LiveWindowSession (SDC-2 MVP)".into()))
     }
 
     /// Not yet wired to the live window (SDC-2 MVP scope) — always `None`.
@@ -139,22 +159,27 @@ impl BrowserSession for LiveWindowSession {
 
     /// Not yet wired to the live window (SDC-2 MVP scope, same gap as
     /// `layout_box_by_selector`) — always the all-default `ExplainElement`
-    /// (`in_dom: false`), not an error: the live channel has no layout data
-    /// to answer any link of the chain with yet (DEVX-14 tracks closing this).
+    /// (`in_dom: false`), not an error: `explain_element` needs per-selector
+    /// layout/provenance data, which `AutomationCommand` still doesn't carry
+    /// even after DEVX-14 wired the whole-page `layout_snapshot`.
     fn explain_element(&self, _selector: &str) -> Result<ExplainElement> {
         Ok(ExplainElement::default())
     }
 
     /// Not yet wired to the live window (SDC-2 MVP scope, same gap as
-    /// `explain_element`) — always the all-default `ExplainPage` (DEVX-14
-    /// tracks closing this).
+    /// `explain_element`) — always the all-default `ExplainPage`.
     fn explain_page(&self) -> Result<ExplainPage> {
         Ok(ExplainPage::default())
     }
 
-    /// Not yet wired to the live window (SDC-2 MVP scope) — always empty.
+    /// Network request log since the last `navigate()` (DEVX-14) —
+    /// round-trips through `AutomationCommand::NetworkLog` to the live
+    /// window's DevTools network panel log.
     fn network_log(&self) -> Result<Vec<NetworkEntry>> {
-        Ok(Vec::new())
+        match self.execute(AutomationCommand::NetworkLog)? {
+            AutomationReply::NetworkLog(entries) => Ok(entries),
+            other => Err(unexpected_reply("NetworkLog", &other)),
+        }
     }
 
     /// Captured JS console messages since the last `navigate()` (DEVX-1) —
@@ -230,8 +255,7 @@ impl BrowserSession for LiveWindowSession {
     }
 
     /// Not yet wired to the live window (SDC-2 MVP scope): `AutomationCommand`
-    /// has no scoped-query variant yet — always empty. DEVX-14 tracks closing
-    /// this alongside the rest of the layout-data gaps.
+    /// has no scoped-query variant yet — always empty.
     fn query_scoped(&self, _root_selector: &str, _selector: &str) -> Result<Vec<NodeRef>> {
         Ok(Vec::new())
     }

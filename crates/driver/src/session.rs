@@ -735,6 +735,11 @@ impl BrowserSession for InProcessSession {
         Ok(out)
     }
 
+    fn display_list(&self) -> Result<String> {
+        let state = self.state()?;
+        Ok(crate::scope::display_list(&state.layout_root))
+    }
+
     fn display_list_scoped(&self, selector: &str) -> Result<String> {
         let state = self.state()?;
         let doc = Self::lock_doc(state)?;

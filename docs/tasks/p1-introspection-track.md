@@ -768,6 +768,42 @@ SDC-2 MVP, зафиксирован в `docs/automation.md`).
 
 **Уровень по ADR-024:** L1 (`x-` префикс обязателен).
 
+**Закрыт (P1, 2026-08-02):** новый `resource://x-display-list` (whole-page
+дамп display list — тот же текст, что печатает `--dump-display-list`,
+через `BrowserSession::display_list()`, реализован через
+`lumen_driver::scope::display_list()`, дополняет DEVX-12's
+`display_list_scoped`) и новый инструмент `x-computed-style` (`{selector}`
+→ карта computed CSS свойств через уже существующий
+`BrowserSession::computed_style`, просто не выставленный наружу раньше).
+Оба реализованы для `InProcessSession`/`WinitSession`; для `LiveWindowSession`
+остаются документированным гэпом (`AutomationCommand` не несёт варианта ни
+для display list, ни для computed style — тот же класс гэпа, что у
+`x-explain-element`).
+
+Живое окно: `resource://layout`/`resource://network` подключены по-настоящему
+— два новых варианта `AutomationCommand::LayoutSnapshot`/`NetworkLog`,
+обрабатываемые в диспатче автоматизации шелла: `layout_snapshot` строит
+`Vec<BoxModel>` из `self.layout_box`/`self.layout_source.document` тем же
+кодом, что `InProcessSession`/`WinitSession` (вынесен в
+`lumen_driver::scope::collect_boxes`, чтобы не заводить четвёртую копию);
+`network_log` читает тот же `Arc<Mutex<NetworkLog>>`, из которого рендерится
+DevTools network panel (`entries_clone()`, не зависит от того, открыта ли
+панель) — `size_bytes` всегда 0, т.к. panel-side `NetworkEntry` не считает
+размер ответа (документированное ограничение, не тихая ошибка).
+Scoped-варианты (`layout_snapshot_scoped`, `explain_element`/`explain_page`,
+`query_scoped`) для живого окна остаются гэпом — эта задача расширяла только
+whole-page `resource://layout`/`resource://network`, как и было в брифе.
+
+4 новых теста `crates/driver/tests/cases/test_devx14_wire_dumps.rs` (whole-page
+дамп содержит команды из всей страницы в отличие от scoped-варианта; то же для
+`WinitSession`; `layout_snapshot`/`network_log` живого окна round-trip'ятся
+через фейковый automation-канал, тот же паттерн, что `fake_live_session` в
+`lumen-bidi-server`). 8 новых MCP-тестов (счётчик ресурсов 5→6, счётчик
+инструментов 16→17, experimental-маркировка нового ресурса, call/read для
+обоих новых surface). Гейт: `dump_golden.py` пустой дифф (12/12) — чисто
+аддитивный wire-слой поверх уже существующих данных, ничего не меняет в
+построении боксов/эмиссии команд.
+
 ---
 
 ## DEVX-15: аутентификация и модель доступа MCP/BiDi (M, P1/P3)

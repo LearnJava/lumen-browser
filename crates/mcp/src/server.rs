@@ -91,30 +91,45 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                 name: "screenshot".to_string(),
                 description: "PNG screenshot of the current viewport".to_string(),
                 mime_type: "image/png".to_string(),
+                experimental: false,
             },
             McpResource {
                 uri: "resource://a11y_tree".to_string(),
                 name: "a11y_tree".to_string(),
                 description: "Accessibility tree of the current page".to_string(),
                 mime_type: "application/json".to_string(),
+                experimental: false,
             },
             McpResource {
                 uri: "resource://layout".to_string(),
                 name: "layout".to_string(),
                 description: "Layout box model snapshot".to_string(),
                 mime_type: "application/json".to_string(),
+                experimental: false,
             },
             McpResource {
                 uri: "resource://console".to_string(),
                 name: "console".to_string(),
                 description: "Console log entries (log, warn, error)".to_string(),
                 mime_type: "application/json".to_string(),
+                experimental: false,
             },
             McpResource {
                 uri: "resource://network".to_string(),
                 name: "network".to_string(),
                 description: "Network request log".to_string(),
                 mime_type: "application/json".to_string(),
+                experimental: false,
+            },
+            // ADR-024 L1 (`x-` prefix + `experimental: true`, DEVX-14): whole-page
+            // display-list text dump, the same serialization `--dump-display-list`
+            // prints, mechanically exposed over the wire.
+            McpResource {
+                uri: "resource://x-display-list".to_string(),
+                name: "x-display-list".to_string(),
+                description: "Full-page display list text dump (paint commands, stacking order)".to_string(),
+                mime_type: "text/plain".to_string(),
+                experimental: true,
             },
         ];
 
@@ -408,6 +423,24 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                 }),
                 experimental: true,
             },
+            // ADR-024 L1 (`x-` prefix + `experimental: true`, DEVX-14): computed
+            // CSS properties of one element, mechanically exposed over the wire
+            // (already available in-process via `BrowserSession::computed_style`,
+            // just not previously reachable from an MCP client).
+            McpTool {
+                name: "x-computed-style".to_string(),
+                description: "EXPERIMENTAL (ADR-024 L1): computed CSS properties of the first \
+                    element matching `selector` (property name → resolved value). `null` if the \
+                    selector matches nothing or the match has no layout box.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["selector"],
+                    "properties": {
+                        "selector": { "type": "string", "description": "CSS selector" }
+                    }
+                }),
+                experimental: true,
+            },
         ];
 
         let response = json!({
@@ -468,6 +501,12 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                         McpResponse::ok(id.clone(), json!({ "contents": [{ "type": "text", "text": json_str, "mimeType": "application/json" }] }))
                     }
                     Err(e) => McpResponse::err(id.clone(), -32603, format!("Network log error: {e}")),
+                }
+            }
+            "resource://x-display-list" => {
+                match self.session.display_list() {
+                    Ok(dump) => McpResponse::ok(id.clone(), json!({ "contents": [{ "type": "text", "text": dump, "mimeType": "text/plain" }] })),
+                    Err(e) => McpResponse::err(id.clone(), -32603, format!("Display list error: {e}")),
                 }
             }
             _ => McpResponse::err(id.clone(), -32602, format!("Unknown resource: {uri}")),
@@ -685,6 +724,17 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                     Err(e) => return McpResponse::err(id.clone(), -32603, format!("ScopeEval error: {e}")),
                 }
             }
+            "x-computed-style" => {
+                let selector = match args.get("selector").and_then(|v| v.as_str()) {
+                    Some(s) => s,
+                    None => return McpResponse::err(id.clone(), -32602, "Missing selector argument"),
+                };
+                match self.session.computed_style(selector) {
+                    Ok(Some(props)) => json!({ "properties": props.properties }),
+                    Ok(None) => json!({ "properties": null }),
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("ComputedStyle error: {e}")),
+                }
+            }
             _ => {
                 return McpResponse::err(id.clone(), -32601, format!("Unknown tool: {name}"));
             }
@@ -796,6 +846,10 @@ mod tests {
 
         fn screenshot_scoped(&self, _sel: &str) -> lumen_core::error::Result<Vec<u8>> {
             Ok(b"PNG".to_vec())
+        }
+
+        fn display_list(&self) -> lumen_core::error::Result<String> {
+            Ok(String::new())
         }
 
         fn display_list_scoped(&self, _sel: &str) -> lumen_core::error::Result<String> {
@@ -938,29 +992,52 @@ mod tests {
     }
 
     #[test]
-    fn resources_list_returns_five_resources() {
+    fn resources_list_returns_six_resources() {
         let mut server = McpServer::new(MockSession, VecTransport::new());
         let req = make_request("resources/list", serde_json::json!({}));
         let resp = run_one(&mut server, &req);
         assert!(resp.error.is_none());
         let resources = resp.result.unwrap()["resources"].as_array().cloned().unwrap_or_default();
-        assert_eq!(resources.len(), 5);
+        assert_eq!(resources.len(), 6);
         let uris: Vec<_> = resources.iter().map(|r| r["uri"].as_str().unwrap_or("")).collect();
         assert!(uris.contains(&"resource://screenshot"));
         assert!(uris.contains(&"resource://a11y_tree"));
         assert!(uris.contains(&"resource://layout"));
         assert!(uris.contains(&"resource://console"));
         assert!(uris.contains(&"resource://network"));
+        assert!(uris.contains(&"resource://x-display-list"));
+    }
+
+    /// ADR-024 L1: `resource://x-display-list` must carry `"experimental": true`
+    /// in `resources/list`; the pre-ADR-024 resources must NOT carry the key at
+    /// all (`skip_serializing_if`) — same convention as the tools-list test below.
+    #[test]
+    fn resources_list_marks_only_x_prefixed_resources_as_experimental() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request("resources/list", serde_json::json!({}));
+        let resp = run_one(&mut server, &req);
+        let resources = resp.result.unwrap()["resources"].as_array().cloned().unwrap_or_default();
+        for resource in &resources {
+            let uri = resource["uri"].as_str().unwrap_or("");
+            if uri.starts_with("resource://x-") {
+                assert_eq!(resource["experimental"], true, "{uri} must be marked experimental");
+            } else {
+                assert!(
+                    resource.get("experimental").is_none(),
+                    "{uri} must not carry an experimental key (ADR-024: legacy resources keep their original shape)"
+                );
+            }
+        }
     }
 
     #[test]
-    fn tools_list_returns_sixteen_tools() {
+    fn tools_list_returns_seventeen_tools() {
         let mut server = McpServer::new(MockSession, VecTransport::new());
         let req = make_request("tools/list", serde_json::json!({}));
         let resp = run_one(&mut server, &req);
         assert!(resp.error.is_none());
         let tools = resp.result.unwrap()["tools"].as_array().cloned().unwrap_or_default();
-        assert_eq!(tools.len(), 16);
+        assert_eq!(tools.len(), 17);
         let names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap_or("")).collect();
         assert!(names.contains(&"navigate"));
         assert!(names.contains(&"new_tab"));
@@ -978,6 +1055,7 @@ mod tests {
         assert!(names.contains(&"x-scope-query"));
         assert!(names.contains(&"x-scope-relayout"));
         assert!(names.contains(&"x-scope-eval"));
+        assert!(names.contains(&"x-computed-style"));
     }
 
     /// ADR-024 L1: `x-explain-element`/`x-explain-page` must carry
@@ -1107,6 +1185,29 @@ mod tests {
     }
 
     #[test]
+    fn tools_call_computed_style_ok() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request(
+            "tools/call",
+            serde_json::json!({ "name": "x-computed-style", "arguments": { "selector": "#missing" } }),
+        );
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_none());
+        assert!(resp.result.unwrap()["properties"].is_null());
+    }
+
+    #[test]
+    fn tools_call_computed_style_missing_selector_errors() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request(
+            "tools/call",
+            serde_json::json!({ "name": "x-computed-style", "arguments": {} }),
+        );
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_some());
+    }
+
+    #[test]
     fn resources_read_screenshot_ok() {
         let mut server = McpServer::new(MockSession, VecTransport::new());
         let req = make_request(
@@ -1132,6 +1233,19 @@ mod tests {
         assert!(resp.error.is_none());
         let text = resp.result.unwrap()["contents"][0]["text"].as_str().unwrap().to_string();
         assert!(text.contains("document"));
+    }
+
+    #[test]
+    fn resources_read_x_display_list_ok() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request(
+            "resources/read",
+            serde_json::json!({ "uri": "resource://x-display-list" }),
+        );
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_none());
+        let contents = &resp.result.unwrap()["contents"];
+        assert_eq!(contents[0]["mimeType"], "text/plain");
     }
 
     #[test]

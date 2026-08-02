@@ -468,6 +468,12 @@ pub enum AutomationCommand {
     A11yTree,
     /// Read captured JS console messages since the last `Navigate` (DEVX-1).
     ConsoleLog,
+    /// Box-model snapshot of the whole page (DEVX-14, wires `resource://layout`
+    /// to the live window).
+    LayoutSnapshot,
+    /// Network request log since the last `Navigate` (DEVX-14, wires
+    /// `resource://network` to the live window).
+    NetworkLog,
 }
 
 /// Reply from automation API — returned from shell after command execution.
@@ -487,4 +493,8 @@ pub enum AutomationReply {
     A11yTree(Box<A11yNode>),
     /// `ConsoleLog` result: captured JS console messages (DEVX-1).
     ConsoleLog(Vec<ConsoleEntry>),
+    /// `LayoutSnapshot` result: whole-page box-model snapshot (DEVX-14).
+    LayoutSnapshot(Vec<BoxModel>),
+    /// `NetworkLog` result: network request log (DEVX-14).
+    NetworkLog(Vec<NetworkEntry>),
 }
