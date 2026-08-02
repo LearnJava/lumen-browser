@@ -1095,7 +1095,7 @@ pub type DisplayList = Vec<DisplayCommand>;
 /// touching the ~40-variant enum rebuilt every frame.
 #[derive(Debug, Clone, Default)]
 pub struct ProvenanceIndex {
-    spans: Vec<ProvenanceSpan>,
+    pub(crate) spans: Vec<ProvenanceSpan>,
 }
 
 impl ProvenanceIndex {
@@ -3154,7 +3154,10 @@ pub fn build_display_list_ordered_dpr(
         }
     }
     annotate_clip_depth(&out, &mut final_spans);
-    (out, ProvenanceIndex { spans: final_spans })
+    let index = ProvenanceIndex { spans: final_spans };
+    #[cfg(debug_assertions)]
+    crate::invariants::check(&out, &index, root);
+    (out, index)
 }
 
 /// Post-processes `spans` in place with `clip_depth` (ADR-025 §3): the number
@@ -4752,7 +4755,7 @@ fn emit_text_shadows(
 ///
 /// CSS Backgrounds L3 §3.8: border-box = b.rect; padding-box = rect без border-а;
 /// content-box = rect без border-а и padding-а. Text трактуется как border-box (Phase 0).
-fn background_clip_rect(b: &LayoutBox, clip: BackgroundClip) -> Rect {
+pub(crate) fn background_clip_rect(b: &LayoutBox, clip: BackgroundClip) -> Rect {
     let s = &b.style;
     match clip {
         BackgroundClip::BorderBox | BackgroundClip::Text => b.rect,
@@ -4792,7 +4795,7 @@ fn content_box_rect(b: &LayoutBox) -> Rect {
 }
 
 /// CSS Backgrounds L3 §3.10: clip для `background-color` — last layer's clip (или default).
-fn background_color_clip(b: &LayoutBox) -> BackgroundClip {
+pub(crate) fn background_color_clip(b: &LayoutBox) -> BackgroundClip {
     b.style.background_layers.last().map_or(BackgroundClip::BorderBox, |l| l.clip)
 }
 
@@ -6249,7 +6252,7 @@ fn emit_column_rules(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
 /// outline, box-shadow, content), но layout остаётся (`Skip` иной
 /// семантики). Children по-прежнему обходятся: visibility наследуется,
 /// но child может явно вернуть себя через `visibility: visible`.
-fn is_paint_visible(b: &LayoutBox) -> bool {
+pub(crate) fn is_paint_visible(b: &LayoutBox) -> bool {
     matches!(b.style.visibility, Visibility::Visible)
 }
 
@@ -6262,7 +6265,7 @@ fn is_paint_visible(b: &LayoutBox) -> bool {
 /// через клипанг — layout cascade clamp-ит в `[0.0, 1.0]`, но
 /// defensive check дешёвый. opacity > 0 && < 1 Phase 0 не обрабатывается
 /// (требует off-screen pass с per-pixel alpha multiply — P2 п.4+).
-fn is_opacity_subtree_painted(b: &LayoutBox) -> bool {
+pub(crate) fn is_opacity_subtree_painted(b: &LayoutBox) -> bool {
     b.style.opacity > 0.0
 }
 
@@ -6953,7 +6956,7 @@ fn emit_list_marker(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
 /// borders and background under `empty-cells: hide`. Applies only in the separated-
 /// borders model (`border-collapse: separate`) and only when the cell has no in-flow
 /// content. Under `border-collapse: collapse` the property has no effect.
-fn is_hidden_empty_cell(b: &LayoutBox) -> bool {
+pub(crate) fn is_hidden_empty_cell(b: &LayoutBox) -> bool {
     b.style.display == Display::TableCell
         && b.style.empty_cells == EmptyCells::Hide
         && b.style.border_collapse == BorderCollapse::Separate

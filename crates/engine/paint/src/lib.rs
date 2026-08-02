@@ -32,6 +32,7 @@ pub mod fallback;
 pub mod gap_decorations;
 pub mod fingerprint;
 pub mod hit_test;
+mod invariants;
 pub mod layer_cache;
 pub mod overlay_partition;
 #[cfg(feature = "backend-wgpu")]
