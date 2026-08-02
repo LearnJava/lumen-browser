@@ -36,6 +36,17 @@ src/dom.rs` даёт ноль совпадений — не сломанный �
 оценкой по частоте строк в логе) — полный список файлов см. в шапках
 committed `.ini` под `tests/wpt/metadata/css/cssom/`.
 
+**WPT-RUN-3 срез 6 (`css/css-cascade`, 2026-08-02)**: тот же root cause
+всплыл в 4 дополнительных файлах — `layer-stylesheet-multi-adoption.html`
+(`new CSSStyleSheet()` конструктор отсутствует), `layer-replaceSync-clears-
+stale.html` (то же — `CSSStyleSheet is not defined`), `layer-rules-
+cssom.html` (`CSSLayerBlockRule`/`CSSLayerStatementRule` — те же недостающие
+CSS Cascade Layers-специфичные подклассы `CSSRule`, `assert_implements:
+undefined` на каждом из 9 сабтестов), `unset-value-storage.html`
+(`document.styleSheets[0]` — `Cannot read properties of undefined (reading
+'0')`, тот же корень: `styleSheets` не массив, а `undefined`). Committed
+`.ini` под `tests/wpt/metadata/css/css-cascade/` для этих 4 файлов.
+
 ## Влияние вне WPT
 
 `document.styleSheets`/`CSSStyleSheet`/`CSSRule` — стандартный способ

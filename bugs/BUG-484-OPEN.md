@@ -92,6 +92,12 @@ WPT-RUN-3 slice that exercises `*-invalid.html`/`*-shorthand.html`/
 pattern is as widely used across `css/` as `computed-testcommon.js`, see
 [BUG-483](BUG-483-OPEN.md)).
 
+**WPT-RUN-3 срез 6 (`css/css-cascade`, 2026-08-02)** confirmed the
+prediction: `parsing/all-invalid.html` (7 subtests, `e.style['all'] =
+"..."` for various malformed `all`-shorthand values) fails on exactly shape
+1 (rejection) — `assert_equals: expected "" but got "<the invalid value>"`
+for each. Committed `.ini` under `tests/wpt/metadata/css/css-cascade/`.
+
 ## Что нужно
 
 Route `setProperty`/the bracket `set` trap through `css-parser`'s actual

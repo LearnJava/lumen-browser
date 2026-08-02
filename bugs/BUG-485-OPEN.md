@@ -1,0 +1,89 @@
+# BUG-485: `document.head` is entirely missing — no getter, no native binding
+
+**Статус:** OPEN
+**Дата:** 2026-08-02
+**Компонент:** js (`crates/js/src/dom.rs` — live `document` object literal, `~7159-7184`)
+**Найден:** WPT-RUN-3 срез 6 (`ROADMAP.md`) — массовый прогон `css/css-cascade`
+
+## Механизм
+
+The live `document` singleton object (`dom.rs:~7159`) defines `get body()`
+(backed by the native `_lumen_get_body` binding, registered in both the
+rquickjs path `dom.rs:560` and the V8 path `v8_runtime.rs:1136`), but there
+is no matching `get head()` anywhere, and no `_lumen_get_head`/equivalent
+native function exists in either engine's `dom.rs`/`v8_runtime.rs`. So
+`document.head` resolves via normal property lookup to plain `undefined` —
+not a thrown error, not `null` — because the property was never declared at
+all.
+
+Confirmed by source inspection (both engines grepped, zero hits for
+`_lumen_get_head`/`get head`) and cross-checked live via `--mcp-live-port`
+(`typeof document.head` → `"undefined"`).
+
+## Симптом
+
+`document.head` is the standard, spec-mandated (HTML LS §3.1.2) place WPT
+tests inject a `<style>` element to change the page's stylesheet dynamically
+— the single most common idiom in cascade/CSSOM tests:
+
+```js
+const styleElement = document.createElement('style');
+styleElement.textContent = testCase.style;
+document.head.appendChild(styleElement);   // or .append(styleElement)
+```
+
+`.appendChild`/`.append` on `undefined` throws a synchronous `TypeError:
+Cannot read properties of undefined (reading 'appendChild'|'append')`. In
+every file in this slice the injection loop sits at the **top level of the
+`<script>`**, outside any `test()`/`promise_test()` callback (tests are
+registered dynamically, one per stylesheet variant) — so the throw happens
+before a single test is registered with `testharness.js`. The harness then
+never calls `done()` and the run sits until the external timeout: this is
+why the symptom is **TIMEOUT**, not a clean `FAIL`, for every file that hits
+this pattern before its first `test()` call, and a `FAIL`/rejected-promise
+for files that only reach it inside a `promise_test()` body.
+
+## Масштаб находки
+
+**15 files in this slice (`css/css-cascade`)** — confirmed by grepping each
+failing file's source for `document.head.` and matching against its actual
+failure text (`Cannot read properties of undefined (reading 'appendChild'|
+'append')`, or `TIMEOUT` with the injection call sitting before the first
+`test()`):
+
+- **TIMEOUT** (throw happens before any test registers): `layer-basic.html`,
+  `layer-important.html`, `layer-vs-inline-style.html`,
+  `layer-keyframes-override.html`, `layer-counter-style-override.html`,
+  `layer-property-override.html`, `layer-import.html` — 7 files.
+- **FAIL / unhandled promise rejection** (throw happens inside a
+  `promise_test()`, so the harness survives and reports it): `import-
+  conditions.html` (26 subtests), `parsing/supports-import-parsing.html` (22),
+  `parsing/layer.html` (11), `parsing/layer-import-parsing.html` (13),
+  `layer-cssom-order-reverse.html` (4), `layer-cssom-order-reverse-at-
+  property.html` (2), `layer-font-face-override.html` (4), `layer-
+  statement-before-import.html` (7) — 8 files, 89 subtests.
+
+Not css-cascade-specific — `grep -rl 'document\.head\.' tests/wpt/css --
+include=*.html \| wc -l` → **84 files** in the vendored `css/` tree alone use
+this idiom, so it will recur in every future WPT-RUN-3 slice that dynamically
+injects a stylesheet. Second-highest-leverage fix in this slice after
+verifying scope (behind [BUG-471](BUG-471-OPEN.md)'s CSSOM stylesheet model,
+which is a larger undertaking; this one is a single accessor).
+
+## Что нужно
+
+Add `get head()` to the `document` object literal (`dom.rs:~7163`, right next
+to `get body()`), backed by a new native `_lumen_get_head` binding in both
+engines mirroring `_lumen_get_body`'s pattern (walk `documentElement`'s
+children for the first `<head>`, matching `_lumen_get_body`'s equivalent
+walk for `<body>`). Per HTML LS §3.1.2, `document.head` must also be
+settable-adjacent in that a document is only ever built with the standard
+`html > head, body` skeleton by the engine's own DOM construction, so a pure
+getter (no setter — spec doesn't define one for `head`, only `body` has a
+setter and even that isn't implemented here) is sufficient to match spec
+shape.
+
+## .ini
+
+Committed `.ini` under `tests/wpt/metadata/css/css-cascade/` for the 15
+attributed files, `expected: FAIL`/`TIMEOUT` matching the actual run.
