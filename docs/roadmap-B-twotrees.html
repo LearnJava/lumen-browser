@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-02",
  "counts": {
-  "open": 133,
+  "open": 137,
   "fixed": 307,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 440,
+ "total_bugs": 444,
  "phases": [
   {
    "id": "P0",
@@ -4521,7 +4521,7 @@
        "title": "WPT-RUN-3: шардирование + массовый прогон css/",
        "status": "planned",
        "size": "M",
-       "note": "Шардированный/параллельный прогон (34607 id последовательно ≈ сутки при наблюдаемом темпе) + массовый прогон `css/` с записью ожиданий в `.ini` и группировкой провалов в BUG-NNN по первопричине (существующая методология P2-wpt S5, вендоренные тесты НЕ ослабляются: движковый пробел = expected:FAIL + BUG-NNN). Зависит от WPT-RUN-1/2 — иначе прогон измеряет пробелы исполнителя, а не движок. Полезнее делать после DEVX-8a (инварианты локализуют часть падений), но это не блокирующая зависимость — ратчет ожиданий удержит прогон и без них. Зафиксировать в журнале, сколько id не добежало и почему (правило no-silent-caps). **Срез 1 (2026-08-02, шардирование) готов**: `run_report.py` получил `--processes`/`--offset`/`--limit` (wptrunner's `PathGroupedSource` группирует тесты по каталогу, поэтому параллелизм реально масштабируется на разнородном `css/`, не только на одном каталоге — проверено на `css/CSS2/floats`, 12 id, `--processes=1` и `--processes=4` дали идентичный результат: 3/3 harness OK, 54/68 сабтестов). Замер пропускной способности на срезе `--root css --recursive --offset 0 --limit 600` (353 отобранных id): `--processes=6` — 353 id за ~48с (~7.7 id/с) против ~0.55 id/с у прежней последовательной пробы (~14×) — пересматривает оценку \"сутки\" вниз до порядка **~75 минут** чистого времени wptrunner на весь корпус при сопоставимом темпе (не гарантия — начальный срез CSS1/CSS2 может быть легче среднего по корпусу; директории с testdriver/https будут медленнее). **Срез 2 (2026-08-02, массовый прогон + `.ini` + группировка) готов на `css/CSS2`**: 63 `testharness`-тестов (из 805 файловых id — остальное reftest/crashtest, `TEST-4`), полная поимённая триаж → 8 новых BUG-NNN (BUG-463…470) + 2 файла объяснены уже открытыми BUG-360/BUG-384, committed `.ini` на 58/63 файлов (0 unexpected подтверждён прогоном), 5 файлов намеренно не кластеризованы (см. `docs/wpt-status.md` → строка `css` за полным разбором). Остаток DoD — тот же массовый прогон + триаж на оставшихся ~34500 id `css/` (за пределами `CSS2`) — задел для среза 3"
+       "note": "Шардированный/параллельный прогон (34607 id последовательно ≈ сутки при наблюдаемом темпе) + массовый прогон `css/` с записью ожиданий в `.ini` и группировкой провалов в BUG-NNN по первопричине (существующая методология P2-wpt S5, вендоренные тесты НЕ ослабляются: движковый пробел = expected:FAIL + BUG-NNN). Зависит от WPT-RUN-1/2 — иначе прогон измеряет пробелы исполнителя, а не движок. Полезнее делать после DEVX-8a (инварианты локализуют часть падений), но это не блокирующая зависимость — ратчет ожиданий удержит прогон и без них. Зафиксировать в журнале, сколько id не добежало и почему (правило no-silent-caps). **Срез 1 (2026-08-02, шардирование) готов**: `run_report.py` получил `--processes`/`--offset`/`--limit` (wptrunner's `PathGroupedSource` группирует тесты по каталогу, поэтому параллелизм реально масштабируется на разнородном `css/`, не только на одном каталоге — проверено на `css/CSS2/floats`, 12 id, `--processes=1` и `--processes=4` дали идентичный результат: 3/3 harness OK, 54/68 сабтестов). Замер пропускной способности на срезе `--root css --recursive --offset 0 --limit 600` (353 отобранных id): `--processes=6` — 353 id за ~48с (~7.7 id/с) против ~0.55 id/с у прежней последовательной пробы (~14×) — пересматривает оценку \"сутки\" вниз до порядка **~75 минут** чистого времени wptrunner на весь корпус при сопоставимом темпе (не гарантия — начальный срез CSS1/CSS2 может быть легче среднего по корпусу; директории с testdriver/https будут медленнее). **Срез 2 (2026-08-02, массовый прогон + `.ini` + группировка) готов на `css/CSS2`**: 63 `testharness`-тестов (из 805 файловых id — остальное reftest/crashtest, `TEST-4`), полная поимённая триаж → 8 новых BUG-NNN (BUG-463…470) + 2 файла объяснены уже открытыми BUG-360/BUG-384, committed `.ini` на 58/63 файлов (0 unexpected подтверждён прогоном), 5 файлов намеренно не кластеризованы (см. `docs/wpt-status.md` → строка `css` за полным разбором). Остаток DoD — тот же массовый прогон + триаж на оставшихся ~34500 id `css/` (за пределами `CSS2`) — задел для среза 3. **Срез 3 (2026-08-02) готов на `css/cssom`**: 226 id, 188 testharness, 151/188 harness OK, 727/1448 сабтестов; поимённая триаж 178 непройденных файлов → 4 новых BUG-NNN (BUG-471…474, крупнейший — CSSOM-модель таблиц стилей/правил не подключена, 97 файлов) + 3 файла объяснены уже открытыми BUG-384/BUG-462, committed `.ini` на 171/178 файлов, 0 unexpected подтверждён прогоном (1476 проверок). Остаток DoD — тот же массовый прогон + триаж на оставшихся ~34300 id `css/` (все `css-*`-модули, `cssom-view`, `selectors` и т.д.) — задел на срез 4"
       }
      ]
     }
@@ -7642,6 +7642,34 @@
    "component": "js/layout (computed-style reflection)",
    "date": null,
    "debtor": false
+  },
+  "BUG-471": {
+   "status": "open",
+   "title": "CSSOM-модель таблиц стилей и правил не подключена к шиму вовсе: `document.styleSheets` — `undefined` (не пустой массив), `<style>`/`<link>.sheet` отсутствует, г…",
+   "component": "js (`crates/js/src/dom.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-472": {
+   "status": "open",
+   "title": "`getComputedStyle()` — не резолвер по запросу, а `HashMap`-lookup по карте, заполняемой один раз за проход layout рукописным списком ~64 свойств (`computed_styl…",
+   "component": "layout (`selector_query.rs::computed_style_to_map`) + js (`_lumen_get_computed_style`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-473": {
+   "status": "open",
+   "title": "`CSSStyleDeclaration.cssText` (инлайновый `style`) сериализуется наивной конкатенацией объявлений — не схлопывает лонгхенды в шорткод (`margin-top/right/bottom/…",
+   "component": "js (`crates/js/src/dom.rs` — `_lumen_make_style`/`_lumen_serialize_style`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-474": {
+   "status": "open",
+   "title": "`document.caretRangeFromPoint` (CSSOM View §7) не реализован вовсе (не путать с `caretPositionFromPoint`, который есть, но Phase-0 заглушкой). `grep -n caretRan…",
+   "component": "js (`crates/js/src/dom.rs`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -7781,6 +7809,9 @@
   "js (`crates/js/src/dom.rs:6770` — `_lumen_get_fonts()`)": [
    "BUG-467"
   ],
+  "js (`crates/js/src/dom.rs` — `_lumen_make_style`/`_lumen_serialize_style`)": [
+   "BUG-473"
+  ],
   "js (`crates/js/src/dom.rs` — live-DOM `Element` object literal)": [
    "BUG-351"
   ],
@@ -7789,7 +7820,9 @@
   ],
   "js (`crates/js/src/dom.rs`)": [
    "BUG-462",
-   "BUG-464"
+   "BUG-464",
+   "BUG-471",
+   "BUG-474"
   ],
   "js (`crates/js/src/dom.rs`, `contentEditable`/`isContentEditable`)": [
    "BUG-344"
@@ -7930,6 +7963,9 @@
   ],
   "layout (`crates/engine/layout/tests/snapshots/flex_*.txt`) + гейт `scripts/scoped-test.sh`": [
    "BUG-445"
+  ],
+  "layout (`selector_query.rs::computed_style_to_map`) + js (`_lumen_get_computed_style`)": [
+   "BUG-472"
   ],
   "layout (`style.rs` cascade, `rule_index.rs`)": [
    "BUG-284"
