@@ -206,3 +206,18 @@ duplicate-value collapsing (`"hidden hidden"` → `"hidden"`, `"auto auto"`
 → `"auto"`) all come back byte-identical to the input. `.ini` under
 `tests/wpt/metadata/css/css-logical/` for all 32 files, `expected: FAIL`
 per subtest.
+
+## Срез 14 (`css/css-color-hdr`, 2026-08-02) — rejection shape on a property that has zero implementation, not just zero validation
+
+`parsing.html` (1 file, 16 of its 29 subtests): every malformed
+`dynamic-range-limit`/`dynamic-range-limit-mix()` value (missing/negative/
+out-of-range percentages, invalid keywords like `"none"`/`"hdr"`/`"sdr"`,
+space-separated instead of comma-separated mix args) is stored verbatim
+instead of rejected — same shape-1 signature as every prior slice. The
+other 13 of 29 subtests in this file pass (their value happens to
+round-trip regardless of validation); `computed.html`/`inheritance.html`/
+`interpolation.html` fail on a distinct, more fundamental gap — the
+property isn't recognized *at all* (not merely unvalidated) — filed
+separately as [BUG-508](BUG-508-OPEN.md). `.ini` under
+`tests/wpt/metadata/css/css-color-hdr/parsing.html.ini`, `expected: FAIL`
+per subtest (all 16 attributable to this bug).
