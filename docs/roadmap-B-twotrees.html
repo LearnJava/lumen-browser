@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-03",
  "counts": {
-  "open": 172,
+  "open": 178,
   "fixed": 308,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 480,
+ "total_bugs": 486,
  "phases": [
   {
    "id": "P0",
@@ -7908,6 +7908,48 @@
    "component": "css-parser (`crates/engine/css-parser/src/parser.rs::skip_ws_and_comments`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-511": {
+   "status": "open",
+   "title": "link_parameters\" crates/` — ноль совпадений)",
+   "component": "css-parser/layout (свойство не распознаётся нигде, `grep -rn \"link-parameters\\",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-512": {
+   "status": "open",
+   "title": "forced_color_adjust\" crates/` — ноль совпадений)",
+   "component": "css-parser/layout (свойство не распознаётся нигде, `grep -rn \"forced-color-adjust\\",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-513": {
+   "status": "open",
+   "title": "text_size_adjust\" crates/` — ноль совпадений)",
+   "component": "css-parser/layout (свойство не распознаётся нигде, `grep -rln \"text.size.adjust\\",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-514": {
+   "status": "open",
+   "title": "Функция `env()` (CSS Environment Variables L1, безопасные зоны/`safe-area-inset-*`, отгружена везде) не реализована в парсинге стилей/каскаде вовсе. 5 файлов/22…",
+   "component": "css-parser (функция не распознаётся нигде, `grep -rn '\"env\"' crates/` — ноль CSS-релевантных совпадений)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-515": {
+   "status": "open",
+   "title": "`window.devicePixelRatio` не определён на одиночном окне по умолчанию — проставляется только опциональным multi-window API `getScreenDetails()`. 1 файл/1 сабтес…",
+   "component": "js (`crates/js/src/dom.rs` — `devicePixelRatio` никогда не проставляется на глобал вне `window_management.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-516": {
+   "status": "open",
+   "title": "overscroll-behavior-inline\" crates/engine/css-parser/src/lib.rs crates/engine/layout/src/style.rs` — ноль совпадений, физические `-x`/`-y` присутствуют)",
+   "component": "css-parser/layout (логические свойства не распознаются нигде, `grep -n \"overscroll-behavior-block\\",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -7933,6 +7975,9 @@
   "css-parser (нет обработки нигде в `css-parser`/`layout`)": [
    "BUG-487"
   ],
+  "css-parser (функция не распознаётся нигде, `grep -rn '\"env\"' crates/` — ноль CSS-релевантных совпадений)": [
+   "BUG-514"
+  ],
   "css-parser/layout": [
    "BUG-088",
    "BUG-092",
@@ -7952,8 +7997,20 @@
   "css-parser/layout (`crates/engine/layout/src/style.rs::apply_declaration`, селекторный матчинг)": [
    "BUG-505"
   ],
+  "css-parser/layout (логические свойства не распознаются нигде, `grep -n \"overscroll-behavior-block\\": [
+   "BUG-516"
+  ],
+  "css-parser/layout (свойство не распознаётся нигде, `grep -rln \"text.size.adjust\\": [
+   "BUG-513"
+  ],
   "css-parser/layout (свойство не распознаётся нигде, `grep -rn \"dynamic-range-limit\\": [
    "BUG-508"
+  ],
+  "css-parser/layout (свойство не распознаётся нигде, `grep -rn \"forced-color-adjust\\": [
+   "BUG-512"
+  ],
+  "css-parser/layout (свойство не распознаётся нигде, `grep -rn \"link-parameters\\": [
+   "BUG-511"
   ],
   "css-parser/layout (свойство не распознаётся нигде, `grep -rn \"wrap-flow\\": [
    "BUG-507"
@@ -8094,6 +8151,9 @@
   ],
   "js (`crates/js/src/dom.rs` — `_lumen_make_style`/`_lumen_serialize_style`)": [
    "BUG-473"
+  ],
+  "js (`crates/js/src/dom.rs` — `devicePixelRatio` никогда не проставляется на глобал вне `window_management.rs`)": [
+   "BUG-515"
   ],
   "js (`crates/js/src/dom.rs` — live-DOM `Element` object literal)": [
    "BUG-351"

@@ -174,3 +174,20 @@ cleanup — wptrunner reports `Test named '...' specified 1 'cleanup' function,
 and 1 failed`, and the parameterized loop's remaining 6 `test()` calls never
 run at all (`NOTRUN`, not `FAIL`) once the first one's exception propagates.
 `.ini` under `tests/wpt/metadata/css/css-nesting/` for all 6 files.
+
+## Срез 21 (`css/css-device-adapt` + `css/css-env` + `css/css-overscroll-behavior`, 2026-08-03)
+
+3 files, 4 subtests, all inside a `test()`/`promise_test()` callback (isolated
+`FAIL`, harness stays `OK`):
+`css-device-adapt/documentElement-clientWidth-on-minimum-scale-size.tentative.html`
+(`<div id="reference">`, 1 subtest); `css-env/env-in-custom-properties.tentative.html`
+(`<div id=child>`, 2 subtests); `css-overscroll-behavior/overscroll-behavior-keyboard-scroll-child-frame.html`
+(`<iframe id="iframe">`, 1 subtest — the file's 5 sibling tests in this
+category instead die on an unvendored `testdriver-vendor.js` helper
+(`waitForCompositorReady`/`waitForCompositorCommit` not defined anywhere in
+vendored resources — infra gap, not attributed, see `docs/wpt-status.md` →
+`css` row), so this is the only one of the six that reaches far enough to hit
+BUG-384 instead). `.ini` under
+`tests/wpt/metadata/css/css-device-adapt/`, `tests/wpt/metadata/css/css-env/`,
+`tests/wpt/metadata/css/css-overscroll-behavior/` for all 3 files, `expected:
+FAIL` per affected subtest.
