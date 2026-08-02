@@ -528,9 +528,22 @@ pub fn graft_geometry_with_cascade(
 
     let common = new.children.len().min(prev.children.len());
     let mut all_clean = self_reusable && new.children.len() == prev.children.len();
+    // BUG-355: this box's own geometry-affecting fields changed, so every
+    // in-flow child is about to be measured against a different containing
+    // block even though its own style is untouched — grafting it clean would
+    // let `lay_out`'s O(1) translate fast path keep its stale width. Skip the
+    // graft for these children entirely and mark them dirty outright, rather
+    // than let the recursive call below hand back a clean subtree that only
+    // this node's own re-layout would have known to reject.
+    let force_descendants_dirty =
+        !self_reusable && containing_block_style_changed(&new.style, &prev.style);
     for i in 0..common {
-        let child_clean =
-            graft_geometry_with_cascade(&mut new.children[i], &prev.children[i], prev_cascade);
+        let child_clean = if force_descendants_dirty {
+            mark_subtree_dirty(&mut new.children[i]);
+            false
+        } else {
+            graft_geometry_with_cascade(&mut new.children[i], &prev.children[i], prev_cascade)
+        };
         all_clean &= child_clean;
     }
 
@@ -577,6 +590,47 @@ pub fn graft_geometry_with_cascade(
     // dirty/new children laid out fresh).
     new.dirty = DirtyBits::SELF_SIZE | DirtyBits::HAS_DIRTY_DESCENDANT;
     false
+}
+
+/// Whether `new` and `prev` differ in a field that can resize the *width* this
+/// style's box hands to its in-flow children as their containing block:
+/// `width` and its min/max clamps, padding, border width, `box-sizing`,
+/// `display`, `writing-mode` or `direction`.
+///
+/// BUG-355: [`graft_geometry_with_cascade`] calls this only for a box that is
+/// not `self_reusable`, to decide whether its children may still be grafted
+/// clean. A child's own unchanged style says nothing about the containing
+/// block it is about to be measured against — only the parent's geometry
+/// fields do. Restricted to this narrow field list (rather than "any style
+/// difference") so the common colour-only `:hover`/`:focus` interaction, whose
+/// self-rejected node differs in no such field, keeps reusing its children's
+/// geometry exactly as before.
+///
+/// Deliberately excludes `height`/`min-height`/`max-height`: in the normal
+/// (horizontal) writing mode a box's height does not feed the *width* it
+/// hands its children, and [`graft_reuses_a_box_whose_prev_style_only_carries_used_values`]'s
+/// sibling gate `graft_style_change_still_reuses_child_geometry` covers the
+/// common case this would otherwise regress — a container's own height
+/// changing (e.g. `lay_out`'s used-value writeback, or a `:hover { height }`
+/// rule) while its children's declared widths stay untouched. A future slice
+/// handling percentage-height children or vertical writing modes would need
+/// to widen this, at the cost of that reuse.
+fn containing_block_style_changed(new: &crate::style::ComputedStyle, prev: &crate::style::ComputedStyle) -> bool {
+    new.width != prev.width
+        || new.min_width != prev.min_width
+        || new.max_width != prev.max_width
+        || new.padding_top != prev.padding_top
+        || new.padding_right != prev.padding_right
+        || new.padding_bottom != prev.padding_bottom
+        || new.padding_left != prev.padding_left
+        || new.border_top_width != prev.border_top_width
+        || new.border_right_width != prev.border_right_width
+        || new.border_bottom_width != prev.border_bottom_width
+        || new.border_left_width != prev.border_left_width
+        || new.box_sizing != prev.box_sizing
+        || new.display != prev.display
+        || new.writing_mode != prev.writing_mode
+        || new.direction != prev.direction
 }
 
 /// Whether `new` and `prev` differ *only* in the fields `lay_out` writes back
@@ -1450,13 +1504,12 @@ mod tests {
         // `.item:hover .icon` restyles a descendant, so dropping `.item` would
         // leave `.icon` with a stale style and a visibly wrong height.
         //
-        // `.card:hover` deliberately changes a *colour*, not `padding`: an
-        // ancestor whose own box metrics change leaves its clean-grafted
-        // descendants at their previous used width, which is BUG-355 — a
-        // pre-existing hole in `graft_geometry`, reproducible with every node
-        // in `dirty_roots` and therefore not about this narrowing at all. Put
-        // `padding: 9px` back here once BUG-355 is fixed; this test is the
-        // repro.
+        // `.card:hover` also changes `padding` (BUG-355, fixed): an ancestor
+        // whose own box metrics change must force its clean-grafted
+        // descendants back through layout instead of leaving them at their
+        // previous used width — `graft_geometry_with_cascade`'s
+        // `containing_block_style_changed` check is what this exercises here,
+        // on top of the S14 narrowing this test was originally written for.
         use lumen_css_parser::parse as parse_css;
         use lumen_html_parser::parse as parse_html;
         use crate::box_tree::{layout_measured_hyp_with_counters, layout_mutation_incremental_restyle};
@@ -1472,7 +1525,7 @@ mod tests {
             .card { padding: 3px; }
             .item { color: black; height: 20px; }
             .icon { height: 8px; }
-            .card:hover { color: navy; }
+            .card:hover { color: navy; padding: 9px; }
             .item:hover { color: blue; height: 30px; }
             .item:hover .icon { height: 16px; color: green; }
         "#;
@@ -1526,6 +1579,71 @@ mod tests {
                 && (ra.width - rb.width).abs() < 0.5 && (ra.height - rb.height).abs() < 0.5,
                 "rect mismatch for {na:?}: incr {ra:?} vs full {rb:?}");
         }
+    }
+
+    /// BUG-355: the bug report's own minimal repro. `.card:hover` changes only
+    /// `padding` (no colour, no other property) — the hovered element is the
+    /// *only* dirty root, and `<li>`'s own style is untouched, so before the
+    /// fix `graft_geometry_with_cascade` grafted it clean at its pre-hover
+    /// width instead of resizing it to the shrunk content box.
+    #[test]
+    fn mutation_incremental_restyle_ancestor_padding_change_resizes_descendant() {
+        use lumen_css_parser::parse as parse_css;
+        use lumen_html_parser::parse as parse_html;
+        use crate::box_tree::{layout_measured_hyp_with_counters, layout_mutation_incremental_restyle};
+        use crate::counters::{set_incremental_restyle, RestyleDelta};
+        use crate::style::{clear_interactive_state, restyle_root_set_for_state_change, set_interactive_state};
+        use lumen_core::ext::NullHyphenationProvider;
+
+        let html = r#"<div id="card" class="card"><ul><li id="a" class="item">x</li></ul></div>"#;
+        let css = r#"
+            #card { width: 400px; box-sizing: border-box; }
+            .card { padding: 3px; }
+            .card:hover { padding: 9px; }
+            .item { height: 20px; }
+        "#;
+        let doc = parse_html(html);
+        let sheet = parse_css(css);
+        let vp = Size::new(800.0, 600.0);
+        let card = doc.find_by_id("card").expect("#card must exist");
+        let li = doc.find_by_id("a").expect("#a must exist");
+
+        clear_interactive_state();
+        let (prev, prev_counters) = layout_measured_hyp_with_counters(
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false,
+        );
+
+        set_interactive_state(Some(card), None, None);
+        let state_index = crate::style::restyle_state_index(&doc, &sheet);
+        let dirty_roots = restyle_root_set_for_state_change(&doc, None, Some(card), &state_index);
+        let delta = RestyleDelta { prev_styles: prev_counters.styles().clone(), dirty_roots, content_dirty: crate::counters::ContentDirty::Nothing };
+        set_incremental_restyle(true);
+        let (incr, _incr_counters) = layout_mutation_incremental_restyle(
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, prev, delta,
+        );
+        set_incremental_restyle(false);
+
+        set_interactive_state(Some(card), None, None);
+        let full = crate::box_tree::layout_measured_hyp(&doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false);
+        clear_interactive_state();
+
+        let mut ia = Vec::new();
+        let mut fb = Vec::new();
+        collect_rects(&incr, &mut ia);
+        collect_rects(&full, &mut fb);
+        assert_eq!(ia.len(), fb.len(), "box count must match full layout");
+        for ((na, ra), (nb, rb)) in ia.iter().zip(fb.iter()) {
+            assert_eq!(na, nb, "node order must match");
+            assert!((ra.x - rb.x).abs() < 0.5 && (ra.y - rb.y).abs() < 0.5
+                && (ra.width - rb.width).abs() < 0.5 && (ra.height - rb.height).abs() < 0.5,
+                "rect mismatch for {na:?}: incr {ra:?} vs full {rb:?}");
+        }
+        let li_rect = ia.iter().find(|(n, _)| *n == li).expect("#a must be in the tree").1;
+        assert!(
+            (li_rect.width - 382.0).abs() < 0.5,
+            "shrunk content box (400 - 2*9 padding) must reach #a: got {}",
+            li_rect.width,
+        );
     }
 
     /// BUG-341 S24 gate: the pass must hand the graft the style `prev` was
