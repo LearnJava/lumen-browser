@@ -135,3 +135,50 @@ attributed files (both `-invalid.html` and `-shorthand.html`, plus
 run. Срез 9 added `.ini` under `tests/wpt/metadata/css/css-backgrounds/`
 for 34 more files (several shared with BUG-463/472/492/495 — one `.ini`
 header per file references every bug that owns a subtest in it).
+
+## Срез 10 (`css/css-variables`, 2026-08-02) — a fourth symptom shape: `cssText`
+getter is a raw attribute passthrough, not derived from the parsed model at all
+
+`cssText`'s getter (`dom.rs:4287`) is even more literal than `setProperty`'s
+storage: `get: function() { return _lumen_get_attr(nid, 'style') || ''; }` —
+it returns the **raw `style="…"` HTML-attribute text verbatim**, bypassing
+`getParsed()`/`_lumen_parse_style` entirely. This compounds the already-
+documented "no real declaration-block model" gap with three additional,
+directly-observable defects, all confirmed via WPT this slice:
+
+- **No per-property deduplication.** `style="background: var(--prop);
+  background: green;"` (two declarations for the same property, written
+  directly in markup — a real `CSSStyleDeclaration` keeps only the *last*
+  one per the CSS declaration-block model) round-trips through `cssText`
+  with both still present, instead of collapsing to `"background:
+  green;"`.
+- **No comment stripping.** `/* comment */` sequences inside a declaration
+  value are preserved verbatim instead of being stripped at parse time.
+- **No spacing/`!important` normalization.** `style="--var3:red"` (no space
+  after `:`, source as typed) reads back as `"--var3:red"` instead of the
+  canonical `"--var3: red;"` (space after `:`, trailing `;`); `style="--var4:red!important"`
+  similarly misses the space before `!important`.
+
+`variable-cssText.html`'s 6 failing subtests (`target6`…`target11`) are all
+instances of the first two defects. `variable-invalidation.html`'s "inline
+style test"/"inline style test important" (2 of its 4 subtests — the other
+2 are [BUG-471](BUG-471-OPEN.md)) are the third. `variable-reference-shorthands.html`'s
+5 failing subtests (`target1`/`target2`/`target3` `margin`/`margin-top`)
+and part of `variable-reference.html`'s failures are the **shorthand-not-
+expanded** symptom already documented above (setting `margin-top` after
+`margin: var(--prop)` never invalidates `margin`'s serializability — the
+flat key-value map has no concept of one declaration superseding another
+across shorthand/longhand boundaries). `var-parsing.html` (5 subtests) and
+8 of `variable-reference.html`'s subtests are the **invalid value accepted
+instead of rejected** symptom, specifically for malformed `var()` argument
+syntax (`var(--x ())`, `var(prop)` without `--`, `var(--prop 20px)`, `var(20px)`,
+…) — the inline-style setter never validates that a `var()` reference's
+argument list is even syntactically well-formed before storing it verbatim.
+
+## .ini (срез 10)
+
+Committed `.ini` under `tests/wpt/metadata/css/css-variables/` for
+`variable-cssText.html`, `var-parsing.html`, `variable-reference.html`
+(BUG-484 subtests only — the `.sheet.cssRules` one is BUG-471),
+`variable-reference-shorthands.html`, and `variable-invalidation.html`
+(2 of its 4 subtests — the other 2 cite BUG-471).

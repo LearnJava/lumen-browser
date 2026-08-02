@@ -169,4 +169,6 @@ class LumenBrowser(WebDriverBrowser):
         return f"ws://{self.host}:{self.port}"
 
     def executor_browser(self):
-        return ExecutorBrowser, {"bidi_url": self.url}
+        # BUG-498: `token` must be forwarded here — the executor process
+        # only sees this `ExecutorBrowser` view, never `self` directly.
+        return ExecutorBrowser, {"bidi_url": self.url, "token": self.token}

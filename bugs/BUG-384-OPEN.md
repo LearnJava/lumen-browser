@@ -100,3 +100,27 @@ TIMEOUT-кейс того же класса — `inheritance.sub.html` объя�
 любого `test()`, харнес зависает с нулём сабтестов. `.ini`:
 `tests/wpt/metadata/css/css-backgrounds/inheritance.sub.html.ini`
 (`expected: TIMEOUT`).
+
+**WPT-RUN-3 срез 10 (`css/css-variables`, 2026-08-02):** пять новых файлов,
+тот же механизм — голый идентификатор совпадает с `id` элемента,
+объявленного через `<tag id=x>`:
+`css-variable-change-style-001.html`/`-002.html` (`outer` — `<div id="outer">`),
+`revert-layer-in-fallback.html` (`child` — `<div id=child>`),
+`variable-cycles.html` (`main` — `<main id=main></main>`),
+`variables-substitute-guaranteed-invalid.html` (`target1`), `var-ident-function.html`
+(`target`). Two of these mask a *second* bug in a way worth noting for
+whoever unblocks BUG-384 next: `variable-cycles.html`'s underlying
+assertions (`getComputedStyle(element).getPropertyValue('--sanity')` etc.)
+all read custom properties, so once BUG-384 is fixed these tests will still
+fail via [BUG-499](BUG-499-OPEN.md) (custom properties never reach
+`getComputedStyle`), not pass outright; conversely
+`variables-substitute-guaranteed-invalid.html`'s three subtests all expect
+`""` for a guaranteed-invalid custom property, which BUG-499 already
+produces unconditionally — so those three would *pass by coincidence* the
+moment BUG-384 is fixed, without the engine actually having detected
+cycle/reference invalidity. Unlike `inheritance.sub.html` (bare reference at
+top level, harness-wide TIMEOUT), all five files here reference the bare
+identifier *inside* a `test()` callback, so `testharness.js`'s per-test
+try/catch contains the `ReferenceError` to that one subtest — harness status
+is `OK` with the affected subtests individually `FAIL`, not a file-wide
+TIMEOUT. `.ini` for all five: `expected: FAIL` per affected subtest.

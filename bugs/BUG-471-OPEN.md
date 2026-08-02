@@ -60,3 +60,13 @@ CSS-in-JS библиотеки с constructable stylesheets, dev-инструм�
 Committed `.ini` под `tests/wpt/metadata/css/cssom/` для всех 97
 атрибутированных файлов, `expected: FAIL`/`TIMEOUT` по фактическому
 результату прогона.
+
+**WPT-RUN-3 срез 10 (`css/css-variables`, 2026-08-02)** — 2 more subtests,
+same root cause: `variable-invalidation.html`'s "css rule test"/"css rule
+test important" both do `document.styleSheets[0].cssRules[0].style` —
+`Cannot read properties of undefined (reading '0')` (`styleSheets[0]` is
+`undefined`); `variable-reference.html`'s "Variable reference left open at
+end of stylesheet" does `document.getElementById(id).sheet.cssRules[0]` —
+same failure, `<style>`'s `.sheet` property. `.ini` for both files cites
+BUG-471 for these specific subtests (each file's remaining subtests are
+[BUG-484](BUG-484-OPEN.md) instead — see that bug's own extension).

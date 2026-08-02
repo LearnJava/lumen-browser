@@ -142,3 +142,12 @@ NAMED-ACCESS div:   undefined | window.myDiv:       undefined
 
 Не чинилось в этой сессии — P2-wpt вендорит и обследует, кодовые фиксы — полоса
 P3 (`CLAUDE.md`, developer assignments).
+
+**WPT-RUN-3 срез 10 (`css/css-variables`, 2026-08-02):** ещё один пример —
+`test_variable_legal_values.html` использует `<body onload="run()">`;
+`setup({explicit_done: true})` вызывается, но `run()` никогда не
+исполняется (тот же дефект: `on<type>`-атрибут не компилируется в
+обработчик), поэтому `done()` не вызывается вовсе — харнес зависает TIMEOUT
+с нулём зарегистрированных `test()`. `.ini`:
+`tests/wpt/metadata/css/css-variables/test_variable_legal_values.html.ini`
+(`expected: TIMEOUT`).
