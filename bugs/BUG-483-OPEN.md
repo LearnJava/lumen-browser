@@ -78,7 +78,29 @@ for any property key `_lumen_get_computed_style` resolves to a non-empty
 value, plus the fixed set of always-present keys like `getPropertyValue`/
 `length`/`item`/`cssText`).
 
+## Second symptom found (WPT-RUN-3 срез 6, `css/css-cascade`, 2026-08-02)
+
+The same stub Proxy also has no `Symbol.iterator`, and its `length`/`item`
+are hardcoded (`length` always `0`, `item()` always returns `''` —
+`dom.rs:12783-12784`) instead of reflecting the actual set of resolvable
+properties. `for (let property of getComputedStyle(el)) { ... }` — the
+standard CSSOM-style idiom for enumerating every computed property, used by
+`all-prop-revert-layer-noop.html` and `all-prop-revert-noop.html` (16
+variant ids total between them, `?include=0`…`7` each) — throws `TypeError:
+<obj> is not iterable` synchronously at the top level of each file's
+`<script>`, before any `test()` registers, so every variant reports
+`TIMEOUT` (`TestRunner hit external timeout`) rather than a clean `FAIL`.
+Same root artifact as the `has`-trap gap above (the Proxy target is a bare
+`{}`, so it has none of `CSSStyleDeclaration.prototype`'s real shape), just
+a different consumer pattern. A real fix — backing the Proxy (or replacing
+it with a concrete object) with the property's actual resolved index/name
+list — would close both gaps at once: give `length`/`item(i)`/
+`Symbol.iterator` the real per-node property list, and derive `has` from
+the same list.
+
 ## .ini
 
 Committed `.ini` under `tests/wpt/metadata/css/css-box/` for the 7
-attributed files, `expected: FAIL` per the actual run.
+attributed files, `expected: FAIL` per the actual run. `tests/wpt/metadata/
+css/css-cascade/` gets `expected: TIMEOUT` for the 16 `all-prop-revert-
+{layer-,}noop.html?include=N` variants (WPT-RUN-3 срез 6).
