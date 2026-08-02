@@ -124,3 +124,9 @@ identifier *inside* a `test()` callback, so `testharness.js`'s per-test
 try/catch contains the `ReferenceError` to that one subtest — harness status
 is `OK` with the affected subtests individually `FAIL`, not a file-wide
 TIMEOUT. `.ini` for all five: `expected: FAIL` per affected subtest.
+
+**WPT-RUN-3 срез 11 (`css/css-overflow`, 2026-08-02):** 18 files, same bare
+`id`-as-global-identifier pattern (`ref`, `div`, `container`, `container1`,
+`container2`, `target`, `scroller`, `horizontal`, `vertical`), all inside
+`test()`/`promise_test()` callbacks so each is an isolated `FAIL`, not a
+harness-wide `TIMEOUT`. `.ini`: `expected: FAIL` per affected subtest.

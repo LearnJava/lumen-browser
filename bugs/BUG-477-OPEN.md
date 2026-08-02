@@ -47,3 +47,10 @@ wired to `document.elementFromPoint`/`elementsFromPoint`.
 Committed `.ini` under `tests/wpt/metadata/css/cssom-view/` for files whose
 dominant/sole cause is this gap, `expected: FAIL`/`TIMEOUT` per the actual
 run.
+
+**WPT-RUN-3 срез 11 (`css/css-overflow`, 2026-08-02):** +5 files —
+`hit-test-border-radius-and-perspective{,-projection}.html`,
+`overflow-clip-hit-testing.html`,
+`scroll-markers/scroll-{marker,button}-elementFromPoint.html`. `.ini`
+committed under `tests/wpt/metadata/css/css-overflow/`, `expected: FAIL` per
+affected subtest.
