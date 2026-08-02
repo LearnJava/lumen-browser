@@ -124,3 +124,26 @@ compounded by [BUG-493](BUG-493-OPEN.md), but the map gap alone is
 sufficient: even a synchronous flush wouldn't produce a value for a key
 that was never inserted). `.ini` under `tests/wpt/metadata/css/css-logical/`
 for all 19 files, `expected: FAIL` per subtest.
+
+## Срез 15 (`css/css-easing`, 2026-08-02) — the whole `animation-timing-function`/`transition-timing-function` family is absent from the map
+
+`grep -n "animation-timing-function\|animation_timing_function\|\"animation-\|\"transition-" crates/engine/layout/src/selector_query.rs` returns **zero
+hits** — not one `animation-*`/`transition-*` key exists in
+`computed_style_to_map`, even though the property itself parses correctly
+into `ComputedStyle::animation_timing_functions`
+(`crates/engine/layout/src/style.rs:3711`, `"animation-timing-function" =>`
+handler at `style.rs:16562`, with passing unit tests for `linear()`/
+`cubic-bezier()`/`steps()` parsing) — same "parsed correctly, never taught
+to the resolved-value map" shape as `css-logical`'s срез 12 finding.
+`timing-functions-syntax-computed.html` (21 subtests, 100% of the file) is a
+pure, isolated repro: every one of 21 valid `animation-timing-function`
+values (keywords, `cubic-bezier()`, `steps()`, `linear, ease, linear` list
+form) fails identically on `assert_true: animation-timing-function doesn't
+seem to be supported in the computed style expected true got false` —
+`css/support/parsing-testcommon.js`'s standard feature-detect for "is this
+computed-style key present at all". `linear-timing-functions-syntax.html`
+contributes another 13 subtests of the same signature, restricted to
+`linear(...)` values specifically. 34 subtests / 2 files this slice — the
+largest single-slice addition to this bug since срез 12's CSS Logical
+Properties family. `.ini` under `tests/wpt/metadata/css/css-easing/` for
+both files, `expected: FAIL` per subtest.

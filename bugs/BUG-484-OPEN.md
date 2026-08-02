@@ -221,3 +221,47 @@ property isn't recognized *at all* (not merely unvalidated) — filed
 separately as [BUG-508](BUG-508-OPEN.md). `.ini` under
 `tests/wpt/metadata/css/css-color-hdr/parsing.html.ini`, `expected: FAIL`
 per subtest (all 16 attributable to this bug).
+
+## Срез 15 (`css/css-easing`, 2026-08-02) — both shapes recur for easing-function values, plus a fourth canonicalization variant (keyword-to-function aliasing)
+
+**Rejection (shape 1)**: `timing-functions-syntax-invalid.html` (13/13
+subtests, whole file) — `"auto"`, `"ease-in ease-out"` (two values where one
+is expected), out-of-arity `cubic-bezier(1, 2, 3)`/`cubic-bezier(1, 2, 3, 4,
+5)`, out-of-range `cubic-bezier(-0.1, 0.1, 0.5, 0.9)` (`x1`/`x3` must be in
+`[0, 1]` per spec), a list with one invalid member (`"initial,
+cubic-bezier(0, -2, 1, 3)"`), and invalid `steps()` argument combinations
+(`steps(1, jump-none)` — `jump-none` requires `n >= 2`; `steps(-100, ...)`/
+`steps(0, ...)` — `n` must be `>= 1` for `start`/`end`, `>= 2` for
+`jump-none`) are all stored verbatim instead of rejected. `step-timing-
+functions-syntax.html` (5 of 12) and `linear-timing-functions-syntax.html`
+(8 of ~24) contribute more instances of the identical shape (`steps(0,
+*)`, `linear()`/`linear(0)`/`linear(100%)` — arity-zero or single-stop
+`linear()` is invalid per spec, needs `>= 2` stops). **Canonicalization
+(shape 3)**: `timing-functions-syntax-valid.html` (3/21) —
+`cubic-bezier(calc(-2), calc(0.7 / 2), ...)` not simplified to `calc(0.35)`,
+`steps(calc(5 / 2), start)` not simplified to `steps(calc(2.5), start)`;
+`linear-timing-functions-syntax.html` (3 more) — whitespace inside
+`linear(...)` not stripped, `calc(50% - 50%)` not simplified to `calc(0%)`,
+`calc(0/0)` not evaluated. **New shape 4, keyword-to-function aliasing**:
+CSS Easing L1 defines `step-start`/`step-end` as pure serialization aliases
+of `steps(1, start)`/`steps(1)`, and `steps(N, end)`/`steps(N, jump-end)` as
+aliases of the shorter canonical `steps(N)` (the `end`/`jump-end` keyword is
+the *default* jump-position and must not round-trip) — none of this alias
+folding happens, so `e.style['animation-timing-function'] = "step-start"`
+serializes back as the literal input `"step-start"` instead of `"steps(1,
+start)"`, and `"steps(2, end)"`/`"steps(2, jump-end)"` stay as typed instead
+of collapsing to `"steps(2)"`. 6 occurrences across `step-timing-functions-
+syntax.html` (2) and both `timing-functions-syntax-valid.html`/
+`linear-timing-functions-syntax.html` combined with the `steps(2, jump-end)`
+instances already counted above. Root cause is the same one line for all
+four shapes: `_lumen_make_style`'s `setProperty` (`dom.rs:4264-4302`)
+stringifies and stores the raw input, never routing it through
+`css-parser`'s real `<easing-function>` grammar (which already exists and is
+correct for parsing — confirmed via `style.rs`'s passing
+`animation_timing_functions` unit tests covering `TimingFunction::Steps`/
+`Linear`/`CubicBezier` — but has no corresponding canonical-serializer
+counterpart anywhere in the layout crate, `grep -n "impl.*Display.*for
+TimingFunction\|fn.*timing.*to_css"` returns zero hits, so even a correctly
+parsed value has nowhere to be re-serialized from). 40 subtests / 4 files
+this slice. `.ini` under `tests/wpt/metadata/css/css-easing/` for all
+4 files, `expected: FAIL` per subtest.
