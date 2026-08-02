@@ -1,6 +1,6 @@
 # BUG-341: `lay_out_flex` double-lays-out every item — general engine bug, ~300× over CC-12's 2ms chrome perf-gate budget
 
-**Статус:** OPEN — **на паузе с 2026-08-02 после S30** (see below; not a silent relaxation, an explicit user decision).
+**Статус:** OPEN — **на паузе с 2026-08-02 после S31** (see below; not a silent relaxation, an explicit user decision).
 **Компонент:** layout (`crates/engine/layout/src/box_tree.rs::lay_out_flex`) — **general flexbox algorithm bug, affects any nested-flexbox page**, not just chrome. Surfaced via the chrome document (`crates/shell/src/main.rs::relayout_chrome_host`, `docs/tasks/p1-css-chrome.md`) because CC-12 was the first hard perf budget + realistic flex-nesting-depth bench to exist.
 **Найден:** P1, CC-12 (перф-гейт хрома) 2026-07-25 — новый тест `crates/shell/src/main.rs::tests::cc12_chrome_perf_gate_hover_and_keystroke_cycles`. Root-caused: P1, 2026-07-25.
 
@@ -53,6 +53,18 @@ The cache itself was **not** built this slice — same terms as every prior
 pause: the queue is not abandoned, only paused, resume on explicit request.
 This session's authorization was scoped to finishing and committing the S30
 census specifically, not to starting the multi-slice cache build it informs.
+
+**Update 2026-08-02 (fourth pause, after S31):** resumed on explicit user
+request to build the cache S30's census informed — see "S31" below. Before
+writing the mechanism, checked whether S30's repeat-key match also implied a
+style-stable call (a correctness precondition neither S30's census nor S1's
+original note checked). Finding: only **20.4%** of all calls are both a
+repeat key and style-stable — the real cache ceiling, a quarter of S30's
+headline 86.5%, because `lay_out_flex`'s own placement pass overwrites the
+item's style in place between the Step-1 probe and the final pass for the
+same node. The cache itself was **not** built this slice either — same terms
+as every prior pause, resume on explicit request, with the queue now pointing
+at a materially smaller and more precisely quantified target than before S31.
 
 ## Follow-up (P1, 2026-07-25, fourth session): profiled the *remaining* cost — the "layout-result cache" plan is insufficient; real fix is incremental **cascade** + layout
 
@@ -3980,6 +3992,78 @@ built.
 multi-slice architectural undertaking" every prior pause named — S30 only
 answers the premise question honestly, for whoever authorizes the next slice.
 
+## S31 — before building the cache: S30's 86.5% overstates it — only ~20% of
+repeat-key calls are actually safe to serve
+
+Branch `p1-bug341-s31`. Resumed on explicit user request specifically to build
+the layout-result cache S30 measured the premise for. Before writing the
+mechanism, checked one more thing S30 itself did not: whether a repeat
+`(node, available_width, available_height)` key also implies the *style* used
+to compute it was unchanged — a cache correctness precondition S30's own doc
+comment on the census key never claimed, and the original S1 "Fix scope note"
+never named either (`(node, incoming constraints — available width/height,
+measurer identity, dark_mode)`, no mention of style).
+
+**Why this matters:** `lay_out_flex`'s own final placement pass
+(`box_tree.rs`, the row/column arms around what is now line ~10064-10118)
+overwrites `children[i].style`'s `width`/`height`/`box_sizing` in place via
+`Arc::make_mut` — the exact **item nodes whose Step-1 probe and final pass are
+the redundant pair S1's root cause named** — between the Step-1 probe and the
+final placement call for that *same* item. A `(node, width, height)`-keyed
+cache with no style check would, on a repeat key, silently serve the Step-1
+result during the final pass even when the item's own style had just been
+overwritten with a different resolved width/height/box-sizing — a real
+correctness bug, not a hypothetical one, and it would have shipped invisibly
+(same shape as the S8 lesson: a reuse path that serves the wrong thing still
+looks "clean" if no differential test exercises the exact node it corrupts).
+
+**Mechanism:** extended the S30 census (`LayoutKeyCensus`, `box_tree.rs`) with
+`repeat_key_same_style`: the `LAYOUT_KEY_SEEN` map's value is now `(count,
+Arc<ComputedStyle>)` instead of a bare count, and every repeat compares the
+incoming call's `b.style` against the `Arc` stored for that key's *previous*
+occurrence via `Arc::ptr_eq` — exact identity, not deep equality, because the
+cascade hands out one `Arc` per node and only an in-place `Arc::make_mut`
+caller (exactly the flex placement pass above) ever diverges it; `ptr_eq` is
+therefore an exact test of "would a naive cache have served the right style
+here", not an approximation.
+
+**Measured** (`bug341_s30_flex_key_census`, extended print, dev-release, same
+5-cycle KEY/HOVER fixture as S30):
+
+```
+[s30-census] KEY/HOVER calls=2186 repeat_key_calls=1890 (86.5%) repeat_key_same_style=445 (23.5% of repeats)
+```
+
+Identical across all 5 cycles of both scenarios, same reason as S30 (fixed
+tree shape, fixed flex-nesting depth). **445 of 2186 total calls (20.4%) are
+both a repeat key *and* style-stable** — the real ceiling for a `(node,
+constraints)`-keyed cache guarded by a style check, versus the 86.5% S30
+reported for the key match alone. The other 1445 repeat-key calls (76.5% of
+S30's headline number) are exactly the case above: same constraints, changed
+style — cases a correct cache must recompute, not serve from cache.
+
+**What this does not answer:** same caveat as S30 — 20.4% of *calls* is not
+20.4% of *wall-clock*, and S4's own history on this bug (`index_by_node`'s
+whole-tree hash cost outweighing its skip-rate) is the standing warning that a
+real cache's own lookup/insert/clone overhead can turn a positive skip-rate
+negative in net cost. A cache serving only a fifth of calls has a
+correspondingly smaller wall-clock budget to recoup that overhead from than
+the 86.5% figure implied.
+
+**Not attempted in S31:** the cache itself — same as every prior slice on this
+lever, this one narrows the target before committing to the mechanism rather
+than builds it on the now-corrected number. Reported honestly per this bug's
+own standing rule rather than proceeding on the original 86.5% figure: the
+architectural payoff is real but roughly a quarter the size the premise census
+suggested, which changes whether building a multi-slice cache mechanism for a
+~20%-of-calls ceiling is still the right next lever versus the queue pausing
+here again — a decision for whoever authorizes the next slice, not this one.
+
+`cargo test -p lumen-layout`: 3467 passed, 2 failed (the pre-existing BUG-339
+`FONT_CH_EX` flaky pair, confirmed unrelated). `cargo clippy -p lumen-layout
+--all-targets` and `cargo clippy -p lumen-shell --all-targets` both clean
+(`-D warnings`).
+
 ## Repro
 
 ```bash
@@ -3999,6 +4083,11 @@ cargo test -p lumen-shell --profile dev-release bug341_s30_flex_key_census -- --
 
 S30 added `bug341_s30_flex_key_census`, a new census (not an extension of a
 prior one) — see its own section above for what it measures.
+
+S31 extended the same census (`bug341_s30_flex_key_census`'s test body, same
+command) rather than adding a new one: it now also prints
+`repeat_key_same_style=` — of S30's repeat-key calls, how many also kept the
+same style `Arc`, the correctness precondition a real cache would need.
 
 S28 extended `bug341_s27_walk_census`'s per-cycle `pass=` line with
 `confirmed=`/`confirm_misses=`, so the ordinal-restamp cost the section above
