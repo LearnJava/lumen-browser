@@ -73,10 +73,10 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-08-01",
+ "generated": "2026-08-02",
  "counts": {
-  "open": 125,
-  "fixed": 306,
+  "open": 124,
+  "fixed": 307,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -1773,9 +1773,9 @@
       {
        "id": "DEVX-7",
        "title": "DEVX-7: provenance в display list (ADR-025)",
-       "status": "planned",
+       "status": "done",
        "size": "L",
-       "note": "Provenance в display list: реализует §3 ADR-025. `BoxOrigin { node: Option<NodeId>, role: BoxRole }` в `lumen-layout` + заполнение во всех конструкторах `box_tree.rs` (включая `anon_inline_run`/`anon_inline_block_row`/table-fixup), снятие сентинела `NodeId::from_index(0)` («нет DOM-происхождения», коллизия с корнем документа), сохранение origin в `incremental::graft_geometry`, и `ProvenanceIndex` — побочная таблица спанов рядом с `DisplayList` с парными маркерами по образцу `PushClipRect`/`PopClip`. `DisplayCommand` НЕ меняется (~40 вариантов, список строится каждый кадр). Размер L из-за расшивки перегруженной идентичности, а не из-за самой таблицы. Гейт: побочная таблица display-list-нейтральна (пустой дифф `dump_golden.py`), правка конструирования боксов может двигать пиксели (анонимные боксы, `::first-letter`) → полный графический прогон + перегенерация CPU-эталонов. Бриф — docs/tasks/p1-introspection-track.md"
+       "note": "Provenance в display list: реализует §3 ADR-025. `BoxOrigin { node: Option<NodeId>, role: BoxRole }` в `lumen-layout` + заполнение во всех конструкторах `box_tree.rs` (включая `anon_inline_run`/`anon_inline_block_row`/table-fixup), снятие сентинела `NodeId::from_index(0)` («нет DOM-происхождения», коллизия с корнем документа), сохранение origin в `incremental::graft_geometry`, и `ProvenanceIndex` — побочная таблица спанов рядом с `DisplayList` с парными маркерами по образцу `PushClipRect`/`PopClip`. `DisplayCommand` НЕ меняется (~40 вариантов, список строится каждый кадр). Размер L из-за расшивки перегруженной идентичности, а не из-за самой таблицы. Гейт: побочная таблица display-list-нейтральна (пустой дифф `dump_golden.py`), правка конструирования боксов может двигать пиксели (анонимные боксы, `::first-letter`) → полный графический прогон + перегенерация CPU-эталонов. Бриф — docs/tasks/p1-introspection-track.md. **Закрыт (P1, 2026-08-02):** п.4 — `fill_buckets` пишет `RawSpan{sc, field, range}` локально в каждое поле `ScBucket`; `build_display_list_ordered_dpr` переводит их в глобальные индексы ровно в момент `out.append()` каждого поля и постфактум считает `clip_depth` одним линейным проходом по готовому списку. Уточнение по ADR-025 §1: НЕ только SC-owning боксы получают несколько span'ов — любой бокс с потомками распадается на lead/trail span (own-emission до и после рекурсии в children физически не смежны в общем `contents`/`post`), это общее свойство рекурсивного bucket-обхода, а не частный случай SC. `DisplayList`/`ProvenanceIndex` возвращаются кортежем из `build_display_list_ordered(_dpr)` (вариант (б) из находки — блэст-радиус ~7 сайтов вызова `_ordered`/`_ordered_dpr` против ~34 файлов, читающих `DisplayList` ниже по потоку); anim-путь (`ordered_with_anim_internal`) provenance не строит (не читается интроспекцией). DoD подтверждён тестом `provenance_distinguishes_element_anon_and_pseudo_boxes`. Пустой дифф `dump_golden.py` (12/12) — п.4 display-list-нейтрален, доп. графический прогон не требовался."
       },
       {
        "id": "DEVX-8a",
@@ -4377,7 +4377,7 @@
       {
        "id": "CC-18",
        "title": "CC-18: Плавающая панель управления",
-       "status": "planned",
+       "status": "done",
        "size": "M",
        "note": "Плавающая панель управления как штатная фича браузера (решение пользователя 2026-07-28, не обсуждается): перенести из макета `demo-bar` в продуктовый хром — перетаскиваемая панель поверх контента с переключателями профиля (Личный/Рабочий/Аноним/Гость), темы, раскладки вкладок (вертикальные/горизонтальные), экрана (Новая/Страница/История/Закладки/Настройки) и режима Фокус; 7 форм самой панели (Карточка/Компакт/Полоса/Док/Сетка/Панель/Мини), дабл-клик по шапке — сброс позиции, Ctrl+K — палитра. Генератор ассетов сейчас вырезает `demo-bar` как «не продукт» (scripts/gen_chrome_assets.py, strip_demo_bar_html) — вырезание отменяется, onclick-обработчики переезжают в Rust по образцу CC-5. Блокер: BUG-426, без него переключатели мертвы. После BUG-426",
        "bugs": [
@@ -7336,10 +7336,10 @@
    "debtor": false
   },
   "BUG-426": {
-   "status": "open",
-   "title": "Пять действий хрома сведены в пустую ветку `=> {}` (`SetProfile`, `ArchiveCard`, `ToggleSwitch`, `ToggleFocusTimer`, `ToggleFocus`, `SetDevtoolsTab`): профиль н…",
-   "component": "shell (`main.rs:9807` — `dispatch_chrome_action`), chrome, `scripts/gen_chrome_assets.py`",
-   "date": null,
+   "status": "fixed",
+   "title": "Шесть действий хрома сведены в пустую ветку `=> {}` (`SetProfile`, `ArchiveCard`, `ToggleSwitch`, `ToggleFocusTimer`, `ToggleFocus`, `SetDevtoolsTab`). Найден P…",
+   "component": "shell (`main.rs::dispatch_chrome_action`), chrome, `crates/chrome/src/model.rs`",
+   "date": "2026-08-01",
    "debtor": false
   },
   "BUG-427": {

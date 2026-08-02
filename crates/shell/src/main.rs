@@ -6144,7 +6144,7 @@ enum ChromeModalKind {
 fn paint_ordered(layout: &lumen_layout::LayoutBox) -> DisplayList {
     let tree = StackingTree::build(layout);
     let order = PaintOrder::from_tree(&tree);
-    build_display_list_ordered(layout, &tree, &order)
+    build_display_list_ordered(layout, &tree, &order).0
 }
 
 /// Outcome of a single fullscreen-resize poll tick (BUG-167).
