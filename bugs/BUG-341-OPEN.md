@@ -1,6 +1,6 @@
 # BUG-341: `lay_out_flex` double-lays-out every item — general engine bug, ~300× over CC-12's 2ms chrome perf-gate budget
 
-**Статус:** OPEN — **на паузе с 2026-07-28 после S27** (see below; not a silent relaxation, an explicit user decision).
+**Статус:** OPEN — **на паузе с 2026-08-02 после S28** (see below; not a silent relaxation, an explicit user decision).
 **Компонент:** layout (`crates/engine/layout/src/box_tree.rs::lay_out_flex`) — **general flexbox algorithm bug, affects any nested-flexbox page**, not just chrome. Surfaced via the chrome document (`crates/shell/src/main.rs::relayout_chrome_host`, `docs/tasks/p1-css-chrome.md`) because CC-12 was the first hard perf budget + realistic flex-nesting-depth bench to exist.
 **Найден:** P1, CC-12 (перф-гейт хрома) 2026-07-25 — новый тест `crates/shell/src/main.rs::tests::cc12_chrome_perf_gate_hover_and_keystroke_cycles`. Root-caused: P1, 2026-07-25.
 
@@ -22,9 +22,13 @@ State at pause (S27, merge `9eeda704b`, `CC12_HOVER`/`CC12_KEY` on the real
 Down from ~300× budget at the bug's filing to a coin flip on the KEY arm only.
 **CC-14 (flip default) may proceed now** — its parity checklist should account
 for the fact that a keystroke-triggered relayout still overshoots the 2 ms
-budget in roughly half of interactions on this bench. **S28 and the rest of the
-BUG-341 queue are not abandoned** — resume only on explicit user request; see
-`STATUS-P1.md` and memory `project_bug341_paused_cc14_unblocked_by_decision`.
+budget in roughly half of interactions on this bench.
+
+**Update 2026-08-02:** S28 (below) closed the two open counter-questions S27
+left — both resolved to "no code change" once measured. Paused again
+immediately after, same terms: **the rest of the BUG-341 queue is not
+abandoned** — resume only on explicit user request; see `STATUS-P1.md` and
+memory `project_bug341_paused_cc14_unblocked_by_decision`.
 
 ## Follow-up (P1, 2026-07-25, fourth session): profiled the *remaining* cost — the "layout-result cache" plan is insufficient; real fix is incremental **cascade** + layout
 
@@ -3745,6 +3749,74 @@ machine ran noisier than during S26. `dump_golden.py` 12/12 with no diff.
 - Both entries from S25's list (`clean_subtrees` built from scratch, `style_arc`
   misses on non-elements) stand unchanged and remain below the noise floor.
 
+## S28 — re-measured both queue items with a counter; neither clears the resolution bar
+
+Branch `p1-bug341-s28`. No pipeline code changed — this slice answers S27's two
+open questions with numbers, per S24's rule to decide before writing code, not
+after.
+
+### `CascadeStats::confirmed` — S27's own verdict reconfirmed, not re-litigated
+
+Extended the S27 census instrumentation (`[s27-census] ... pass=` line, lumen-
+shell) to also print `confirmed=`/`confirm_misses=`, rather than writing new
+mechanism: `confirm_clean_subtree` (`counters.rs:1013`) already carries the
+measurement that answers this — leaving ordinals stale and teaching
+`reuse`/`finish_pass` to tolerate it was priced at "~0.045 ms, ~6% of the pass,
+below the ~10-15% the A/B protocol on this machine resolves" in that function's
+own doc comment, written during S27. The S28 queue reflagged the same number
+because no counter existed yet to check it without re-deriving it from
+wall-clock; this census supplies that counter:
+
+```
+[s27-census] KEY cycle=1..5 entries=837 confirmed=827 confirm_misses=0
+[s27-census] KEY cycle=1..5 replay restamp=0.059-0.082ms (837 entries) vs bare=0.017-0.039ms (1763 nodes, no map ops)
+```
+
+827 of 837 entries are confirmed on every steady-state keystroke cycle (the
+walk itself recomputes 1, reuses 9) — restamping the map is most of the
+traversal's remaining per-node cost. `confirm_misses == 0` on every cycle:
+the spine still exactly under-approximates the delta, S27's own invariant
+holds five slices later. The replay's own map-touching cost (restamp minus
+bare) is ~0.02-0.05 ms — the same order of magnitude as the ~0.045 ms S27
+already measured and rejected, not a new, larger number that would reopen the
+question. **Verdict unchanged: below the protocol's resolution, do not attempt
+the subtree-versioning redesign.** S29 should read `confirm_clean_subtree`'s
+doc comment directly rather than treat this as still undecided.
+
+### Dense keying — the collection it would speed up did not shrink; the other three did
+
+S26 measured a bijective integer mix over `NodeId` saving ~0.035 ms across the
+828 lookups of one collection (`clean-subtree insert`) out of an original
+~4200 spread across four collections, and rejected shipping it as below
+resolution. S27's own follow-up note expected its spine walk to remove "most
+of those 4200" — re-measured here instead of assumed (S19's lesson: "perepis'
+the note before acting on it"). It removed the *other three* collections'
+lookups, by cutting `visited` from 1740 to 55, but not the fourth —
+`confirm_clean_subtree`'s per-element `styles.confirm` call, the exact
+collection S26 priced — which still runs once per skipped-subtree element,
+827 of them this cycle, because that call is what the ordinal invariant in the
+section above depends on. **The lookup count dense keying would speed up is
+unchanged from S26's own measurement (828 → 827), not reduced by S27** — S27
+shrank the walk, not the confirm path. S26's verdict therefore still applies
+unmodified: ~0.03 ms of savings on this exact collection is below the
+protocol's resolution. Closing this queue item — reopening it would need
+`confirm_clean_subtree` itself to go away first (the item above), which S28
+also declined.
+
+### What S29 should look at
+
+Both items S27 left open resolve to "no code change" once measured, on the
+same collection (`CascadeStyles::entries`) for the same reason (its ordinal
+invariant). There is no per-node microstructure left to cut on this path
+without touching that invariant — the running census (S20-S28) has driven
+every stage-local win it can find below this machine's own noise floor.
+`CC12_KEY`'s p95 is still a coin flip against the 2 ms budget (S27's own
+numbers, unchanged this slice — no pipeline code was touched). The remaining
+lever is the one S1's profile named twenty-seven slices ago and every
+follow-up since has deferred: the residual, non-doubled `lay_out_flex` cost and
+the cascade's own per-visited-node floor — a layout-result cache/memoization
+layer, not another cut to the restyle map.
+
 ## Repro
 
 ```bash
@@ -3758,7 +3830,12 @@ cargo test -p lumen-shell --profile dev-release bug341_s18_keystroke_box_build_c
 cargo test -p lumen-shell --profile dev-release bug341_s19_copy_census -- --ignored --nocapture
 cargo test -p lumen-shell --profile dev-release bug341_s20_stage_census -- --ignored --nocapture
 cargo test -p lumen-shell --profile dev-release bug341_s21_cascade_index_census -- --ignored --nocapture
+cargo test -p lumen-shell --profile dev-release bug341_s27_walk_census -- --ignored --nocapture
 ```
+
+S28 extended `bug341_s27_walk_census`'s per-cycle `pass=` line with
+`confirmed=`/`confirm_misses=`, so the ordinal-restamp cost the section above
+answers can be checked by rerunning this command rather than re-deriving it.
 
 S26 extended the same census once more: `precompute_counters` is now split into
 `cascade_prologue` / `cascade_walk` / `cascade_finish_pass` (plus `cascade_noop`

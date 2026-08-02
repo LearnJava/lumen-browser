@@ -27083,7 +27083,8 @@ mod tests {
                 );
                 eprintln!(
                     "[s27-census] {scenario} cycle={i} pass={:.3}ms walk={:.3}ms ({:.0}%) \
-                     visited={} recomputed={} reused={} clean_inserts={} skipped={} entries={}",
+                     visited={} recomputed={} reused={} clean_inserts={} skipped={} entries={} \
+                     confirmed={} confirm_misses={}",
                     pass_ns as f64 / 1e6,
                     cs.walk_ns as f64 / 1e6,
                     100.0 * cs.walk_ns as f64 / pass_ns as f64,
@@ -27093,6 +27094,11 @@ mod tests {
                     cs.clean_inserts,
                     cs.skipped_subtrees,
                     counters.styles().len(),
+                    // BUG-341 S28: the S27 restamp count, not printed by this census
+                    // before now — the S26 dense-keying note priced ~4200 NodeId lookups
+                    // per pass; `visited` + `confirmed` is what that traversal costs today.
+                    cs.confirmed,
+                    cs.confirm_misses,
                 );
                 state.prev_pristine_layout = Some(layout.clone());
                 state.prev_cascade_styles = counters.into_styles();
