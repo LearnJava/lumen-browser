@@ -1,6 +1,6 @@
 # lumen-dom ✅ (complete API for current scope)
 
-- Arena-based: `Vec<Node>` + `NodeId(u32)`. No `Rc/RefCell`, no cycles. **Invariant enforced** via `#[deny(clippy::rc_buffer)]` + `INVARIANT(10B/ADR-008)` doc comment in lib.rs.
+- Arena-based: `Vec<Node>` + `NodeId(u32)`. No `Rc/RefCell`, no cycles. **Invariant enforced** via `#[deny(clippy::rc_buffer)]` + `INVARIANT(10B/ADR-008)` doc comment in lib.rs. **Cycle guard (DEVX-8a, 2026-08-02):** unlike a recursively-owned tree, the arena's `parent: Option<NodeId>` + `children: Vec<NodeId>` links *can* represent a cycle (moving a node under its own descendant) — `Document::is_self_or_ancestor(candidate, node)` walks `parent` links from `node` up, and `append_child`/`insert_before`/`insert_after` each `debug_assert!` against it before mutating (zero cost outside `cfg(debug_assertions)`). Must run before any `detach()` in the same call — detaching the node being inserted can itself clear the very ancestor link the check is walking.
 - Types: `Document`, `Node` (parent + children + data), `NodeData` (Document / Doctype / Element / Text / Comment), `QualName`, `Namespace` (HTML/SVG/MathML/Xml/XmlNs/XLink), `Attribute`.
 - API: `create_element / create_text / create_comment / create_doctype`, `append_child`, `detach`, `get / get_mut`, `root`, `len`, **`base_href()`** (HTML5 §4.2.3 — extraction of `<base href>` for resolving relative URLs), **`find_first_element(predicate)`** (pre-order search for first element satisfying predicate).
 - `Display` impl prints tree with indentation — for debugging.

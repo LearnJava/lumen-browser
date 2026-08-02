@@ -593,7 +593,35 @@ impl PropertyTrees {
                 &mut trees,
             );
         }
+        #[cfg(debug_assertions)]
+        trees.clip.assert_every_node_reachable_from_root();
         trees
+    }
+}
+
+impl ClipTree {
+    /// DEVX-8a: every `ClipNode` must be reachable from the root by following
+    /// `parent` links. `walk` assigns each node's id as `nodes.len()` *before*
+    /// pushing it and only ever passes an already-pushed node's id down as the
+    /// next `clip_parent`, so `parent.raw() < id.raw()` holds for every
+    /// non-root node by construction — a violation means a future edit to
+    /// `walk` started handing out a parent id that doesn't exist yet (a
+    /// dangling reference) or reused an id (a cycle).
+    #[cfg(debug_assertions)]
+    fn assert_every_node_reachable_from_root(&self) {
+        for node in &self.nodes {
+            if node.id == PropertyTreeNodeId::ROOT {
+                debug_assert!(node.parent.is_none(), "DEVX-8a: ClipTree root must have no parent");
+                continue;
+            }
+            let parent = node.parent;
+            debug_assert!(
+                parent.is_some_and(|p| p.raw() < node.id.raw()),
+                "DEVX-8a: ClipNode {:?} not reachable from root (parent={:?})",
+                node.id,
+                parent
+            );
+        }
     }
 }
 

@@ -3103,6 +3103,8 @@ pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
     apply_anchor_positions(&mut root, viewport);
     // CSS Pseudo-elements L4 §3.1: split first formatted lines into own boxes (BB-1).
     split_first_line_boxes(&mut root);
+    #[cfg(debug_assertions)]
+    crate::invariants::check_geometry(&root);
     root
 }
 
@@ -3190,6 +3192,8 @@ pub fn layout_measured_hyp_with_counters(
         // CSS Pseudo-elements L4 §3.1: split first formatted lines into own boxes (BB-1).
         split_first_line_boxes(&mut root);
     }
+    #[cfg(debug_assertions)]
+    crate::invariants::check_geometry(&root);
     (root, counters)
 }
 
@@ -3223,6 +3227,8 @@ pub fn lay_out_incremental(
     lay_out(root, start_x, start_y, available_width, available_height, measurer, viewport, pcb, hp, false);
     INCREMENTAL_LAYOUT_MODE.with(|m| m.set(false));
     crate::incremental::clear_dirty(root);
+    #[cfg(debug_assertions)]
+    crate::invariants::check_geometry(root);
 }
 
 /// Streaming incremental layout (PH1-2b).
@@ -6765,6 +6771,17 @@ fn lay_out_inner(
     outer_floats: Option<&FloatContext>,
     parent_justify_items: AlignValue,
 ) {
+    // DEVX-8a: `pcb` is the positioned containing block, threaded as a mandatory
+    // parameter through every `lay_out`/`lay_out_inner` call — this is the choke
+    // point proving "every box resolves a containing block" without a second
+    // tree walk. A non-finite `pcb` means a caller propagated a bad rect (e.g.
+    // through an unresolved percentage or a NaN from an earlier pass).
+    debug_assert!(
+        pcb.x.is_finite() && pcb.y.is_finite() && pcb.width.is_finite() && pcb.height.is_finite(),
+        "DEVX-8a: non-finite containing block for node={:?}: pcb={:?}",
+        b.node,
+        pcb
+    );
     if matches!(b.kind, BoxKind::Skip) {
         b.rect = Rect::new(start_x, start_y, 0.0, 0.0);
         return;
