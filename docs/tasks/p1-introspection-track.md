@@ -382,6 +382,27 @@ transform, opacity, blend-mode, mask, collapsed table borders, SVG) —
 **Гейт:** может сдвинуть CPU-эталоны на скриптованных страницах → перегенерация
 в том же коммите, с глазной проверкой, что новые PNG корректны, а не мусор.
 
+**Закрыт (P1, 2026-08-02):** новый приватный `InProcessSession::relayout()`
+(вызывается в конце `click`/`type_text`/успешного `eval`) пересчитывает
+style+layout+display-list и коммитит их в компоузитор через общий с
+`run_pipeline` хвост `layout_and_commit` — специально выделен в отдельный
+метод, чтобы путь первого layout (`navigate()`) и путь релейаута после
+мутации никогда не разошлись в том, как строится `LayoutBox`/display list из
+`Document`. `SessionState` теперь хранит распарсенный `Stylesheet`
+(`Arc<lumen_css_parser::Stylesheet>`) рядом с `doc`, чтобы релейаут не
+перепарсивал CSS. Трейт `BrowserSession::eval` сменил сигнатуру `&self` →
+`&mut self` (нужно для `self.relayout()` внутри `InProcessSession::eval`) —
+затронуло всех трёх реализующих (`InProcessSession`/`WinitSession`/
+`LiveWindowSession`) и вызывающую сторону в `lumen-bidi-server`
+(`script_evaluate`/`eval_await_promise`), но замена была чисто механической:
+все существующие вызовы уже держали сессию как `&mut`. DoD подтверждён двумя
+новыми тестами в `crates/driver/tests/cases/test_devx9_relayout_after_mutation.rs`
+(`eval` меняет `style.width`, видно в `layout_box_by_selector` и в
+пиксельном срезе `screenshot_cpu_rgba`). Гейт: `cargo test -p lumen-driver
+--test all` 159/159 без изменений (включая `cases::snapshot_cpu` — эталоны
+не сдвинулись, `graphic_tests/*.html` не вызывают `click`/`type_text`/`eval`)
+— перегенерация CPU-эталонов не понадобилась.
+
 ---
 
 ## DEVX-10: `explain_element(selector)` (S, P1)

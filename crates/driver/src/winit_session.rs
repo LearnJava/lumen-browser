@@ -1053,7 +1053,7 @@ impl BrowserSession for WinitSession {
     }
 
     #[cfg(feature = "v8")]
-    fn eval(&self, js: &str) -> Result<String> {
+    fn eval(&mut self, js: &str) -> Result<String> {
         use lumen_core::ext::JsRuntime as _;
 
         let state = self.state()?;
@@ -1093,7 +1093,7 @@ impl BrowserSession for WinitSession {
     }
 
     #[cfg(not(feature = "v8"))]
-    fn eval(&self, _js: &str) -> Result<String> {
+    fn eval(&mut self, _js: &str) -> Result<String> {
         Err(Error::Other(
             "eval требует пересборку с --features v8".into(),
         ))

@@ -179,7 +179,7 @@ impl BrowserSession for LiveWindowSession {
         }
     }
 
-    fn eval(&self, js: &str) -> Result<String> {
+    fn eval(&mut self, js: &str) -> Result<String> {
         match self.execute(AutomationCommand::Eval(js.to_owned()))? {
             AutomationReply::Eval(json) => Ok(json),
             other => Err(unexpected_reply("Eval", &other)),

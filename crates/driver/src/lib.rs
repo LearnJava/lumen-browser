@@ -168,7 +168,11 @@ pub trait BrowserSession {
 
     /// Выполнить JS-код и вернуть результат как JSON-строку.
     /// Для in-process headless — QuickJS eval (если доступен).
-    fn eval(&self, js: &str) -> Result<String>;
+    ///
+    /// `&mut self`: in-process headless sessions re-layout after a successful
+    /// eval (DEVX-9) so that `layout_snapshot`/`layout_box_by_selector`/
+    /// `screenshot` reflect any DOM mutation the script made.
+    fn eval(&mut self, js: &str) -> Result<String>;
 
     /// Найти DOM-узлы по CSS-селектору. Возвращает пустой вектор, если
     /// ни один узел не совпал.

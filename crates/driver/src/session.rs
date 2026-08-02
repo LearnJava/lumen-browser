@@ -36,6 +36,9 @@ struct SessionState {
     /// JS-dispatched events (`click`/`type_text`) can mutate it via `eval`,
     /// mirroring the shell's `LayoutSource::document` (`crates/shell/src/main.rs`).
     doc: Arc<Mutex<Document>>,
+    /// Parsed CSS for this page, kept alongside `doc` so [`InProcessSession::relayout`]
+    /// (DEVX-9) can re-run style+layout after a DOM mutation without re-parsing.
+    stylesheet: Arc<lumen_css_parser::Stylesheet>,
     layout_root: LayoutBox,
     flat_tree: lumen_dom::FlatTree,
 }
@@ -313,14 +316,35 @@ impl InProcessSession {
 
         let doc_guard = Self::lock_arc_doc(&doc)?;
         let css = extract_style_blocks(&doc_guard);
-        let sheet = lumen_css_parser::parse(&css);
+        let sheet = Arc::new(lumen_css_parser::parse(&css));
+        drop(doc_guard);
 
+        let (layout_root, flat_tree) = self.layout_and_commit(&doc, &sheet)?;
+
+        self.current_url = url;
+        self.state = Some(SessionState { doc, stylesheet: sheet, layout_root, flat_tree });
+        Ok(())
+    }
+
+    /// Style + layout + display-list build + compositor commit for `doc`/`sheet`
+    /// at the session's current viewport.
+    ///
+    /// Shared tail of [`Self::run_pipeline`] (first layout after navigation) and
+    /// [`Self::relayout`] (DEVX-9: re-layout after a `click`/`type_text`/`eval`
+    /// DOM mutation) — extracted so the two paths can never drift apart on how a
+    /// `LayoutBox`/display list is produced from a `Document`.
+    fn layout_and_commit(
+        &mut self,
+        doc: &Arc<Mutex<Document>>,
+        sheet: &lumen_css_parser::Stylesheet,
+    ) -> Result<(LayoutBox, lumen_dom::FlatTree)> {
+        let doc_guard = Self::lock_arc_doc(doc)?;
         let font = lumen_font::Font::parse(INTER_FONT)
             .map_err(|e| Error::Other(format!("ошибка разбора Inter: {e}")))?;
         let measurer = lumen_paint::FontMeasurer::new(&font)
             .map_err(|e| Error::Other(format!("ошибка метрик Inter: {e}")))?;
 
-        let layout_root = lumen_layout::layout_measured(&doc_guard, &sheet, self.viewport, &measurer);
+        let layout_root = lumen_layout::layout_measured(&doc_guard, sheet, self.viewport, &measurer);
         let flat_tree = lumen_dom::build_flat_tree(&doc_guard);
         drop(doc_guard);
 
@@ -354,8 +378,31 @@ impl InProcessSession {
         // current after navigation (no separate compositor tick needed).
         self.compositor.flush_pending();
 
-        self.current_url = url;
-        self.state = Some(SessionState { doc, layout_root, flat_tree });
+        Ok((layout_root, flat_tree))
+    }
+
+    /// Re-run style+layout+paint for the current page after a DOM mutation
+    /// (DEVX-9): `click`/`type_text`/`eval` change the DOM through the V8
+    /// runtime, but before this the session's `layout_root`/`flat_tree` — and
+    /// therefore `layout_snapshot`/`layout_box_by_selector`/`screenshot` — kept
+    /// reflecting whatever the page looked like at `navigate()`. Closes the
+    /// `mutate → style → layout → paint → snapshot` cycle on the headless path.
+    ///
+    /// # Errors
+    /// Returns `Err` if the session is not initialized (`navigate()` not yet
+    /// called) — mirrors [`Self::state`].
+    fn relayout(&mut self) -> Result<()> {
+        let state = self.state()?;
+        let doc = Arc::clone(&state.doc);
+        let sheet = Arc::clone(&state.stylesheet);
+
+        let (layout_root, flat_tree) = self.layout_and_commit(&doc, &sheet)?;
+
+        let state = self.state.as_mut().ok_or_else(|| {
+            Error::Other("сессия не инициализирована — вызовите navigate() первым".into())
+        })?;
+        state.layout_root = layout_root;
+        state.flat_tree = flat_tree;
         Ok(())
     }
 
@@ -738,7 +785,10 @@ impl BrowserSession for InProcessSession {
                 }
             }
         }
-        Ok(())
+        // DEVX-9: the dispatch above (and the native default action just
+        // above it) can mutate the DOM — re-layout so `layout_snapshot`/
+        // `layout_box_by_selector`/`screenshot` reflect it immediately.
+        self.relayout()
     }
 
     fn type_text(&mut self, target: &Target, text: &str) -> Result<()> {
@@ -767,7 +817,10 @@ impl BrowserSession for InProcessSession {
             }
             node
         };
-        self.dispatch_type(node, text)
+        self.dispatch_type(node, text)?;
+        // DEVX-9: same reasoning as `click` — the per-char keydown/input/keyup
+        // dispatch above mutates `value` and can run page listeners.
+        self.relayout()
     }
 
     fn scroll(&mut self, _target: &Target, delta: ScrollDelta) -> Result<()> {
@@ -809,7 +862,7 @@ impl BrowserSession for InProcessSession {
     }
 
     #[cfg(feature = "v8")]
-    fn eval(&self, js: &str) -> Result<String> {
+    fn eval(&mut self, js: &str) -> Result<String> {
         use lumen_core::ext::JsRuntime as _;
         let rt = self.js_runtime.as_ref().ok_or_else(|| {
             Error::Other(
@@ -817,11 +870,16 @@ impl BrowserSession for InProcessSession {
             )
         })?;
         let value = rt.eval(js).map_err(|e| Error::Other(format!("eval: {e}")))?;
+        // DEVX-9: `js` may have mutated the DOM (geometry-affecting or not) —
+        // re-layout so subsequent `layout_snapshot`/`layout_box_by_selector`/
+        // `screenshot` calls see it. Only on success: a thrown script has an
+        // unknown DOM effect and re-laying-out over it is not this task's scope.
+        self.relayout()?;
         Ok(value.to_json_string())
     }
 
     #[cfg(not(feature = "v8"))]
-    fn eval(&self, _js: &str) -> Result<String> {
+    fn eval(&mut self, _js: &str) -> Result<String> {
         Err(Error::Other("eval требует пересборку с --features v8".into()))
     }
 
@@ -1058,7 +1116,7 @@ impl lumen_core::ext::BrowserSession for InProcessSession {
             "_lumen_deliver_lcp_entry({}, {}, {}, {})",
             element_id, size, start_ms, render_time_ms
         );
-        self.eval(&script)?;
+        <Self as BrowserSession>::eval(self, &script)?;
         Ok(())
     }
 
@@ -1067,7 +1125,7 @@ impl lumen_core::ext::BrowserSession for InProcessSession {
             "_lumen_deliver_layout_shift({}, {}, {})",
             value, session_id, had_input as u8
         );
-        self.eval(&script)?;
+        <Self as BrowserSession>::eval(self, &script)?;
         Ok(())
     }
 
@@ -1086,7 +1144,7 @@ impl lumen_core::ext::BrowserSession for InProcessSession {
             "_lumen_deliver_perf_entry({:?}, {:?}, {}, {}, {})",
             entry_type, name, start_ms, duration_ms, detail
         );
-        self.eval(&script)?;
+        <Self as BrowserSession>::eval(self, &script)?;
         Ok(())
     }
 }
@@ -2201,14 +2259,14 @@ mod tests {
     #[test]
     #[cfg(feature = "v8")]
     fn eval_returns_json_value() {
-        let s = make_session("<html><body></body></html>");
+        let mut s = make_session("<html><body></body></html>");
         assert_eq!(s.eval("1 + 1").expect("eval"), "2");
     }
 
     #[test]
     #[cfg(feature = "v8")]
     fn eval_without_navigate_errors() {
-        let s = InProcessSession::new();
+        let mut s = InProcessSession::new();
         let err = s.eval("1").expect_err("eval before navigate must fail");
         assert!(err.to_string().contains("V8"), "unexpected error: {err}");
     }
@@ -2216,7 +2274,7 @@ mod tests {
     #[test]
     #[cfg(feature = "v8")]
     fn eval_can_read_dom_via_shim() {
-        let s = make_session(r#"<html><body><div id="x">hi</div></body></html>"#);
+        let mut s = make_session(r#"<html><body><div id="x">hi</div></body></html>"#);
         assert_eq!(
             s.eval("document.getElementById('x').textContent").expect("eval"),
             "\"hi\""
