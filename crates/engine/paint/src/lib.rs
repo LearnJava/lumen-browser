@@ -345,6 +345,7 @@ pub use overlay_partition::{
     plan_overlays_nested, spatial_layer_close, NestedOverlayPlan, OverlayPlan, OverlaySpan,
 };
 pub use fingerprint::GpuFingerprint;
+pub use invariants::{count_paint_violations, PaintViolationCounts};
 pub use hit_test::{hit_test, HitTestResult};
 pub use layer_cache::{LayerCache, LayerKey};
 #[cfg(feature = "backend-wgpu")]

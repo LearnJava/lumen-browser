@@ -832,7 +832,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/dom/src/vtt.rs:391` **struct** `VideoTracks` — Сбор track-ов для всех элементов <video>
 `crates/engine/dom/src/vtt.rs:398` **fn** `collect_video_tracks` — Рекурсивно обходит документ и собирает <video> с их <track>
 
-## lumen-driver  (101 symbols)
+## lumen-driver  (105 symbols)
 
 `crates/driver/src/automation.rs:24` **type** `AutomationRequest` — One outstanding request to the live shell window: a command plus the
 `crates/driver/src/automation.rs:33` **type** `WakeFn` — A callback that interrupts a parked (`winit::event_loop::ControlFlow::Wait`)
@@ -876,7 +876,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/driver/src/determinism.rs:77` **fn** `for_snapshot` — Convenience constructor for snapshot testing
 `crates/driver/src/determinism.rs:89` **fn** `apply` — Apply this configuration to `session`
 `crates/driver/src/determinism.rs:103` **fn** `seed_from_url` — Returns a deterministic u64 seed derived from a URL string
-`crates/driver/src/explain.rs:21` **fn** `explain_element` — Runs the DEVX-10 causal chain for the first DOM node matching `sel`
+`crates/driver/src/explain.rs:23` **fn** `explain_element` — Runs the DEVX-10 causal chain for the first DOM node matching `sel`
+`crates/driver/src/explain.rs:73` **fn** `explain_page` — Runs the DEVX-11 page-level aggregate: invariant-firing counts by category
 `crates/driver/src/gpu_session.rs:21` **struct** `RenderedPage` — Rendered page result from GpuSession rendering operations
 `crates/driver/src/gpu_session.rs:53` **struct** `JsNavigateRequest` — Navigation request initiated by JS code (location.href=, history.pushState, etc)
 `crates/driver/src/gpu_session.rs:64` **trait** `GpuSession` — Extended `BrowserSession` trait for GPU and streaming operations
@@ -894,23 +895,23 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/driver/src/isolation.rs:158` **fn** `idb_load` — Load the IndexedDB JSON snapshot for `origin`, or `None` if absent
 `crates/driver/src/isolation.rs:166` **fn** `cookie_jar` — Shared `Arc<CookieJar>` for this origin group
 `crates/driver/src/isolation.rs:171` **fn** `same_group` — Check whether two origins belong to the same origin group (same eTLD+1)
-`crates/driver/src/lib.rs:67` **trait** `BrowserSession` — Программный интерфейс к браузерному сеансу
+`crates/driver/src/lib.rs:68` **trait** `BrowserSession` — Программный интерфейс к браузерному сеансу
 `crates/driver/src/live_session.rs:43` **struct** `LiveWindowSession` — [`BrowserSession`] adapter that drives a live `lumen-shell` window through
 `crates/driver/src/live_session.rs:51` **fn** `new` — Bind a new session to `handle`, the sending half of a live window's
-`crates/driver/src/session.rs:62` **struct** `InProcessSession` — Headless in-process сессия браузера
-`crates/driver/src/session.rs:122` **fn** `new` — Создать сессию с viewport 1024×720
-`crates/driver/src/session.rs:142` **fn** `with_viewport` — Создать сессию с заданным размером viewport (логические пиксели)
-`crates/driver/src/session.rs:178` **fn** `with_origin_isolation` — Create a session with per-origin-group isolation (Phase 1: 8E)
-`crates/driver/src/session.rs:201` **fn** `isolation_context` — Access the per-origin-group isolation context, if this session was
-`crates/driver/src/session.rs:206` **fn** `isolation_context_mut` — Mutable access to the per-origin-group isolation context
-`crates/driver/src/session.rs:216` **fn** `set_pending_js_tasks` — Установить количество pending JS microtask/callback для условия `JsIdle`
-`crates/driver/src/session.rs:247` **fn** `active_property_trees` — Active property trees snapshot from the compositor (PH1-7)
-`crates/driver/src/session.rs:259` **fn** `scroll_page_by` — Off-main-thread page scroll (PH1-7)
-`crates/driver/src/session.rs:279` **fn** `navigate_html` — Загрузить HTML-строку без навигации по URL. Используется для тестов
-`crates/driver/src/session.rs:576` **fn** `screenshot_cpu_rgba` — Детерминированный CPU-рендер текущей страницы в RGBA8 (tiny-skia)
-`crates/driver/src/session.rs:606` **fn** `screenshot_cpu_png` — Детерминированный CPU-рендер текущей страницы в PNG (tiny-skia)
-`crates/driver/src/session.rs:620` **fn** `display_list_for_compare` — Строит [`lumen_paint::DisplayList`] из текущего состояния страницы
-`crates/driver/src/session.rs:1745` **fn** `computed_style_json` — Возвращает полный набор computed-style свойств первого элемента,
+`crates/driver/src/session.rs:66` **struct** `InProcessSession` — Headless in-process сессия браузера
+`crates/driver/src/session.rs:126` **fn** `new` — Создать сессию с viewport 1024×720
+`crates/driver/src/session.rs:146` **fn** `with_viewport` — Создать сессию с заданным размером viewport (логические пиксели)
+`crates/driver/src/session.rs:182` **fn** `with_origin_isolation` — Create a session with per-origin-group isolation (Phase 1: 8E)
+`crates/driver/src/session.rs:205` **fn** `isolation_context` — Access the per-origin-group isolation context, if this session was
+`crates/driver/src/session.rs:210` **fn** `isolation_context_mut` — Mutable access to the per-origin-group isolation context
+`crates/driver/src/session.rs:220` **fn** `set_pending_js_tasks` — Установить количество pending JS microtask/callback для условия `JsIdle`
+`crates/driver/src/session.rs:251` **fn** `active_property_trees` — Active property trees snapshot from the compositor (PH1-7)
+`crates/driver/src/session.rs:263` **fn** `scroll_page_by` — Off-main-thread page scroll (PH1-7)
+`crates/driver/src/session.rs:283` **fn** `navigate_html` — Загрузить HTML-строку без навигации по URL. Используется для тестов
+`crates/driver/src/session.rs:581` **fn** `screenshot_cpu_rgba` — Детерминированный CPU-рендер текущей страницы в RGBA8 (tiny-skia)
+`crates/driver/src/session.rs:611` **fn** `screenshot_cpu_png` — Детерминированный CPU-рендер текущей страницы в PNG (tiny-skia)
+`crates/driver/src/session.rs:625` **fn** `display_list_for_compare` — Строит [`lumen_paint::DisplayList`] из текущего состояния страницы
+`crates/driver/src/session.rs:1757` **fn** `computed_style_json` — Возвращает полный набор computed-style свойств первого элемента,
 `crates/driver/src/types.rs:15` **struct** `NodeRef` — Ссылка на DOM-узел, возвращаемая [`BrowserSession::query`]
 `crates/driver/src/types.rs:30` **enum** `Target` — Цель для команд [`BrowserSession::click`], [`type_text`](BrowserSession::type_text),
 `crates/driver/src/types.rs:41` **struct** `ScrollDelta` — Дельта скролла для [`BrowserSession::scroll`]
@@ -922,13 +923,16 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/driver/src/types.rs:149` **struct** `ConsoleEntry` — Запись из консоли [`BrowserSession::console_log`]
 `crates/driver/src/types.rs:158` **enum** `ConsoleLevel` — Уровень console-сообщения
 `crates/driver/src/types.rs:174` **struct** `ExplainElement` — Causal chain answer for [`BrowserSession::explain_element`] (DEVX-10, ADR-024
-`crates/driver/src/types.rs:215` **struct** `ComputedProperties` — Значения вычисленных CSS-свойств элемента из [`BrowserSession::computed_style`]
-`crates/driver/src/types.rs:230` **enum** `InputCommand` — Команда для injection в event-loop браузера с целью создания нативных DOM-событий
-`crates/driver/src/types.rs:284` **enum** `AxQuery` — Запрос к accessibility-дереву для [`BrowserSession::query_a11y`] и [`query_a11y_all`](BrowserSession::query_a11y_all)
-`crates/driver/src/types.rs:320` **enum** `FingerprintProfile` — Профиль отпечатка браузера (fingerprint profile) для BrowserSession
-`crates/driver/src/types.rs:342` **fn** `to_http_profile` — Map this session-level profile to the network [`HttpProfile`] that drives
-`crates/driver/src/types.rs:357` **enum** `AutomationCommand` — Command for automation API — sent to shell via IPC channel (SDC-1a)
-`crates/driver/src/types.rs:384` **enum** `AutomationReply` — Reply from automation API — returned from shell after command execution
+`crates/driver/src/types.rs:221` **struct** `ExplainPage` — Page-level aggregate for [`BrowserSession::explain_page`] (DEVX-11, ADR-024
+`crates/driver/src/types.rs:271` **struct** `InvariantViolationCounts` — DEVX-8a (`lumen_layout::invariants`) and DEVX-8b (`lumen_paint::invariants`)
+`crates/driver/src/types.rs:290` **struct** `ExplainPagePhaseTimings` — Per-phase timing breakdown for one [`ExplainPage`] call — see that
+`crates/driver/src/types.rs:306` **struct** `ComputedProperties` — Значения вычисленных CSS-свойств элемента из [`BrowserSession::computed_style`]
+`crates/driver/src/types.rs:321` **enum** `InputCommand` — Команда для injection в event-loop браузера с целью создания нативных DOM-событий
+`crates/driver/src/types.rs:375` **enum** `AxQuery` — Запрос к accessibility-дереву для [`BrowserSession::query_a11y`] и [`query_a11y_all`](BrowserSession::query_a11y_all)
+`crates/driver/src/types.rs:411` **enum** `FingerprintProfile` — Профиль отпечатка браузера (fingerprint profile) для BrowserSession
+`crates/driver/src/types.rs:433` **fn** `to_http_profile` — Map this session-level profile to the network [`HttpProfile`] that drives
+`crates/driver/src/types.rs:448` **enum** `AutomationCommand` — Command for automation API — sent to shell via IPC channel (SDC-1a)
+`crates/driver/src/types.rs:475` **enum** `AutomationReply` — Reply from automation API — returned from shell after command execution
 `crates/driver/src/winit_session.rs:66` **struct** `WinitSession` — Оконная сессия браузера
 `crates/driver/src/winit_session.rs:93` **fn** `new` — Создать сессию с viewport 1024×720
 `crates/driver/src/winit_session.rs:108` **fn** `with_viewport` — Создать сессию с заданным размером viewport (логические пиксели)
@@ -1809,7 +1813,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/knowledge/src/store.rs:107` **fn** `unindex_semantic` — Remove a history entry's embedding from the semantic index, if present
 `crates/knowledge/src/store.rs:118` **fn** `search_semantic` — Semantic (embedding-similarity) search over history entries indexed
 
-## lumen-layout  (732 symbols)
+## lumen-layout  (734 symbols)
 
 `crates/engine/layout/src/anchor.rs:47` **enum** `AnchorSide` — Which edge or point of an anchor element the `anchor()` function references
 `crates/engine/layout/src/anchor.rs:76` **enum** `InsetAreaKeyword` — Single-axis `inset-area` keyword, as defined in §5.2 of the spec
@@ -2013,30 +2017,32 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/inert.rs:47` **fn** `is_inert` — Returns `true` if `node` or any of its ancestors carries the `inert`
 `crates/engine/layout/src/inert.rs:67` **struct** `InertRegion` — A rectangular region in the layout tree that belongs to an inert subtree
 `crates/engine/layout/src/inert.rs:87` **fn** `collect_inert_regions` — Walk the layout tree and return every inert root box as an [`InertRegion`]
-`crates/engine/layout/src/lib.rs:165` **struct** `SelectionHighlight` — Computed `::selection` highlight data — passed to the paint layer so it can
-`crates/engine/layout/src/lib.rs:181` **trait** `TextMeasurer` — Интерфейс измерения ширины символов для line wrapping
-`crates/engine/layout/src/lib.rs:248` **enum** `ClickableKind` — Classification of an interactive element found during layout-tree traversal
-`crates/engine/layout/src/lib.rs:269` **struct** `ClickableElement` — An interactive element with its screen-space bounding rect
-`crates/engine/layout/src/lib.rs:290` **fn** `collect_clickable_elements` — Collect all interactive elements from the layout tree in document order
-`crates/engine/layout/src/lib.rs:519` **struct** `StickyBox` — Snapshot of a `position: sticky` element captured after normal-flow layout
-`crates/engine/layout/src/lib.rs:552` **fn** `collect_sticky_boxes` — Collect all `position: sticky` elements from the layout tree in document order
-`crates/engine/layout/src/lib.rs:615` **fn** `compute_sticky_offset` — Compute the visual offset `(dx, dy)` in CSS px to apply to a sticky element
-`crates/engine/layout/src/lib.rs:688` **struct** `SnapPoint` — A single snap area inside a [`SnapContainer`]
-`crates/engine/layout/src/lib.rs:706` **struct** `SnapContainer` — A scroll container that participates in CSS Scroll Snap L1
-`crates/engine/layout/src/lib.rs:739` **fn** `collect_snap_containers` — Collect all scroll containers that participate in CSS Scroll Snap L1
-`crates/engine/layout/src/lib.rs:918` **fn** `find_snap_target` — Find the nearest snap target for a scroll gesture
-`crates/engine/layout/src/lib.rs:1017` **struct** `SnapTargets` — The snap areas a container is currently snapped to, one per axis
-`crates/engine/layout/src/lib.rs:1040` **fn** `find_snapped_nodes` — Determine which snap areas a container is snapped to at scroll offset `scroll`
-`crates/engine/layout/src/lib.rs:1090` **struct** `ScrollContainer` — A scrollable overflow container collected from the layout tree
-`crates/engine/layout/src/lib.rs:1122` **fn** `collect_scroll_containers` — Collect all `overflow: scroll` / `overflow: auto` containers from the layout tree
-`crates/engine/layout/src/lib.rs:1178` **fn** `overscroll_should_propagate` — CSS Overscroll Behavior L1 §3 — decide whether a scroll delta a container
-`crates/engine/layout/src/lib.rs:1226` **fn** `collect_computed_styles` — Walks the layout tree and returns a map of `NodeId index → CSS property map`
-`crates/engine/layout/src/lib.rs:1258` **fn** `collect_layout_rects` — Walks the layout tree and returns a map of `NodeId index → [x, y, width, height]`
-`crates/engine/layout/src/lib.rs:1292` **fn** `find_box_by_node` — Update the scroll position of a node in the layout tree
-`crates/engine/layout/src/lib.rs:1299` **fn** `set_scroll_position`
-`crates/engine/layout/src/lib.rs:1332` **fn** `collect_view_transition_names` — Find the innermost scroll container whose `clip_rect` contains `(x, y)`
-`crates/engine/layout/src/lib.rs:1369` **fn** `collect_view_transition_groups`
-`crates/engine/layout/src/lib.rs:1395` **fn** `find_scroll_container_at` — `x` and `y` are in CSS px, document-relative (same coordinate space as
+`crates/engine/layout/src/invariants.rs:113` **struct** `GeometryViolationCounts` — Non-panicking DEVX-8a violation tally, consumed by DEVX-11's `explain_page`
+`crates/engine/layout/src/invariants.rs:125` **fn** `count_geometry_violations` — Walks `root` counting DEVX-8a geometry violations by category — see
+`crates/engine/layout/src/lib.rs:166` **struct** `SelectionHighlight` — Computed `::selection` highlight data — passed to the paint layer so it can
+`crates/engine/layout/src/lib.rs:182` **trait** `TextMeasurer` — Интерфейс измерения ширины символов для line wrapping
+`crates/engine/layout/src/lib.rs:249` **enum** `ClickableKind` — Classification of an interactive element found during layout-tree traversal
+`crates/engine/layout/src/lib.rs:270` **struct** `ClickableElement` — An interactive element with its screen-space bounding rect
+`crates/engine/layout/src/lib.rs:291` **fn** `collect_clickable_elements` — Collect all interactive elements from the layout tree in document order
+`crates/engine/layout/src/lib.rs:520` **struct** `StickyBox` — Snapshot of a `position: sticky` element captured after normal-flow layout
+`crates/engine/layout/src/lib.rs:553` **fn** `collect_sticky_boxes` — Collect all `position: sticky` elements from the layout tree in document order
+`crates/engine/layout/src/lib.rs:616` **fn** `compute_sticky_offset` — Compute the visual offset `(dx, dy)` in CSS px to apply to a sticky element
+`crates/engine/layout/src/lib.rs:689` **struct** `SnapPoint` — A single snap area inside a [`SnapContainer`]
+`crates/engine/layout/src/lib.rs:707` **struct** `SnapContainer` — A scroll container that participates in CSS Scroll Snap L1
+`crates/engine/layout/src/lib.rs:740` **fn** `collect_snap_containers` — Collect all scroll containers that participate in CSS Scroll Snap L1
+`crates/engine/layout/src/lib.rs:919` **fn** `find_snap_target` — Find the nearest snap target for a scroll gesture
+`crates/engine/layout/src/lib.rs:1018` **struct** `SnapTargets` — The snap areas a container is currently snapped to, one per axis
+`crates/engine/layout/src/lib.rs:1041` **fn** `find_snapped_nodes` — Determine which snap areas a container is snapped to at scroll offset `scroll`
+`crates/engine/layout/src/lib.rs:1091` **struct** `ScrollContainer` — A scrollable overflow container collected from the layout tree
+`crates/engine/layout/src/lib.rs:1123` **fn** `collect_scroll_containers` — Collect all `overflow: scroll` / `overflow: auto` containers from the layout tree
+`crates/engine/layout/src/lib.rs:1179` **fn** `overscroll_should_propagate` — CSS Overscroll Behavior L1 §3 — decide whether a scroll delta a container
+`crates/engine/layout/src/lib.rs:1227` **fn** `collect_computed_styles` — Walks the layout tree and returns a map of `NodeId index → CSS property map`
+`crates/engine/layout/src/lib.rs:1259` **fn** `collect_layout_rects` — Walks the layout tree and returns a map of `NodeId index → [x, y, width, height]`
+`crates/engine/layout/src/lib.rs:1293` **fn** `find_box_by_node` — Update the scroll position of a node in the layout tree
+`crates/engine/layout/src/lib.rs:1300` **fn** `set_scroll_position`
+`crates/engine/layout/src/lib.rs:1333` **fn** `collect_view_transition_names` — Find the innermost scroll container whose `clip_rect` contains `(x, y)`
+`crates/engine/layout/src/lib.rs:1370` **fn** `collect_view_transition_groups`
+`crates/engine/layout/src/lib.rs:1396` **fn** `find_scroll_container_at` — `x` and `y` are in CSS px, document-relative (same coordinate space as
 `crates/engine/layout/src/line_break.rs:30` **fn** `break_opportunities` — Byte offsets inside `text` at which a soft wrap is allowed
 `crates/engine/layout/src/masonry.rs:33` **fn** `lay_out_masonry` — Greedy waterfall masonry placement algorithm (CSS Grid L3 §14)
 `crates/engine/layout/src/masonry.rs:64` **fn** `min_track_idx` — Returns the index of the track with the minimum running height
@@ -3770,7 +3776,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/webauthn.rs:69` **fn** `new` — Create an empty authenticator with no registered credentials
 `crates/network/src/webauthn.rs:74` **fn** `credential_count` — Number of credentials currently registered (test / introspection helper)
 
-## lumen-paint  (416 symbols)
+## lumen-paint  (418 symbols)
 
 `crates/engine/paint/src/atlas.rs:35` **struct** `AtlasKey` — Композитный ключ glyph-кэша. См. module-level docs
 `crates/engine/paint/src/atlas.rs:43` **fn** `new`
@@ -3964,6 +3970,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/gradient_math.rs:212` **fn** `atan2_det` — Deterministic `atan2(y, x)` returning radians in `(-π, π]`
 `crates/engine/paint/src/hit_test.rs:48` **struct** `HitTestResult` — Результат hit-теста
 `crates/engine/paint/src/hit_test.rs:77` **fn** `hit_test` — Hit-тест точки в viewport-координатах. `root` — layout-дерево из
+`crates/engine/paint/src/invariants.rs:232` **struct** `PaintViolationCounts` — Non-panicking DEVX-8b violation tally, consumed by DEVX-11's `explain_page`
+`crates/engine/paint/src/invariants.rs:251` **fn** `count_paint_violations` — Runs the DEVX-11 counting analogs of every DEVX-8b check over one
 `crates/engine/paint/src/layer_cache.rs:21` **struct** `LayerKey` — Layer identification key for cache lookup
 `crates/engine/paint/src/layer_cache.rs:31` **fn** `new` — Create a new layer cache key
 `crates/engine/paint/src/layer_cache.rs:38` **struct** `LayerEntry` — Metadata for a cached GPU layer texture
@@ -3999,14 +4007,14 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/lib.rs:166` **fn** `summary` — Считает перцентильную сводку. Возвращает `None` для пустой выборки
 `crates/engine/paint/src/lib.rs:197` **fn** `display_with` — Оборачивает сводку в [`Display`] с произвольным префиксом-меткой вместо
 `crates/engine/paint/src/lib.rs:204` **struct** `LabeledSummary` — [`Display`]-обёртка над [`FrameSummary`] с произвольной меткой-префиксом
-`crates/engine/paint/src/lib.rs:371` **struct** `FontMeasurer` — Реализация [`TextMeasurer`] на основе TTF-данных шрифта
-`crates/engine/paint/src/lib.rs:381` **fn** `new`
-`crates/engine/paint/src/lib.rs:580` **struct** `MultiFontMeasurer` — Многошрифтовый измеритель: поддерживает @font-face-загруженные шрифты
-`crates/engine/paint/src/lib.rs:590` **fn** `new` — Создаёт измеритель с bundled-шрифтом как fallback
-`crates/engine/paint/src/lib.rs:604` **fn** `register_family` — Регистрирует @font-face шрифт под именем `family` без unicode-range ограничений
-`crates/engine/paint/src/lib.rs:618` **fn** `register_family_with_ranges` — Регистрирует @font-face шрифт с `unicode-range` ограничением
-`crates/engine/paint/src/lib.rs:634` **fn** `family_count` — Количество зарегистрированных семей (для тестов)
-`crates/engine/paint/src/lib.rs:649` **fn** `resolve_font_stretch` — Resolves `font-stretch` percentage for the first matching family
+`crates/engine/paint/src/lib.rs:372` **struct** `FontMeasurer` — Реализация [`TextMeasurer`] на основе TTF-данных шрифта
+`crates/engine/paint/src/lib.rs:382` **fn** `new`
+`crates/engine/paint/src/lib.rs:581` **struct** `MultiFontMeasurer` — Многошрифтовый измеритель: поддерживает @font-face-загруженные шрифты
+`crates/engine/paint/src/lib.rs:591` **fn** `new` — Создаёт измеритель с bundled-шрифтом как fallback
+`crates/engine/paint/src/lib.rs:605` **fn** `register_family` — Регистрирует @font-face шрифт под именем `family` без unicode-range ограничений
+`crates/engine/paint/src/lib.rs:619` **fn** `register_family_with_ranges` — Регистрирует @font-face шрифт с `unicode-range` ограничением
+`crates/engine/paint/src/lib.rs:635` **fn** `family_count` — Количество зарегистрированных семей (для тестов)
+`crates/engine/paint/src/lib.rs:650` **fn** `resolve_font_stretch` — Resolves `font-stretch` percentage for the first matching family
 `crates/engine/paint/src/matrix_util.rs:19` **fn** `mat4_to_2d_affine` — Извлекает 2D-аффинные компоненты `[a, b, c, d, e, f]` из column-major
 `crates/engine/paint/src/overlay_partition.rs:76` **fn** `overlay_ranges` — Report the command index ranges of viewport-pinned **overlay** content in a
 `crates/engine/paint/src/overlay_partition.rs:124` **fn** `has_overlay` — `true` when `content` holds any viewport-pinned overlay content — i.e
@@ -5651,4 +5659,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 5574 symbols in 24 crates*
+*Total: 5582 symbols in 24 crates*

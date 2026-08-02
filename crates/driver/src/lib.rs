@@ -37,7 +37,8 @@ pub mod gpu_session;
 
 pub use types::{
     A11yNode, A11yState, AxQuery, AutomationCommand, AutomationReply, BoxModel, ComputedProperties, ConsoleEntry, ConsoleLevel,
-    ExplainElement, FingerprintProfile, InputCommand, NetworkEntry, NodeRef, ScrollDelta, Target, WaitCondition,
+    ExplainElement, ExplainPage, ExplainPagePhaseTimings, FingerprintProfile, InputCommand, InvariantViolationCounts,
+    NetworkEntry, NodeRef, ScrollDelta, Target, WaitCondition,
 };
 pub use automation::{AutomationHandle, AutomationRequest};
 pub use live_session::LiveWindowSession;
@@ -133,6 +134,11 @@ pub trait BrowserSession {
     /// полями по умолчанию (`in_dom: false`) — не `Ok(None)`, потому что сама
     /// цепочка уже отвечает на вопрос "где она обрывается".
     fn explain_element(&self, selector: &str) -> Result<ExplainElement>;
+
+    /// Page-level aggregate (DEVX-11, ADR-024 L1 `x-explain-page`): invariant-firing
+    /// counts by category plus telemetry (box counts, overflow, commands, clip
+    /// depth, relayouts, timing). См. [`ExplainPage`].
+    fn explain_page(&self) -> Result<ExplainPage>;
 
     /// Журнал сетевых запросов с момента последней навигации.
     fn network_log(&self) -> Result<Vec<NetworkEntry>>;

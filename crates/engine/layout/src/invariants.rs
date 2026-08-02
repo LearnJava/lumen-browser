@@ -99,6 +99,67 @@ fn check_containment(b: &LayoutBox) {
     }
 }
 
+/// Non-panicking DEVX-8a violation tally, consumed by DEVX-11's `explain_page`
+/// (`crates/driver/src/explain.rs`). Mirrors [`check_geometry`]'s two conditions,
+/// but counts every occurrence across the tree instead of aborting on the
+/// first one — a page-level introspection query must not crash the whole call
+/// because one node has a bug; it needs to *report* the bug as one of many
+/// comparable counters (`docs/tasks/p1-introspection-track.md`, DEVX-11).
+///
+/// Deliberately a separate walk from `check_geometry` rather than a shared
+/// refactor of it, so the already-gated panicking checks (DEVX-8a, validated
+/// against the full `graphic_tests`/`samples` corpus) stay untouched.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GeometryViolationCounts {
+    /// Boxes with a non-finite rect or scroll offset.
+    pub non_finite: usize,
+    /// In-flow, auto-width `Block` children whose border box escapes a plain
+    /// `display: block` parent's horizontally, with no overflow/positioning
+    /// escape hatch (see [`check_geometry`]'s doc comment for the exact
+    /// eligibility filter).
+    pub containment: usize,
+}
+
+/// Walks `root` counting DEVX-8a geometry violations by category — see
+/// [`GeometryViolationCounts`].
+pub fn count_geometry_violations(root: &LayoutBox) -> GeometryViolationCounts {
+    let mut counts = GeometryViolationCounts::default();
+    count_finite(root, &mut counts);
+    count_containment(root, &mut counts);
+    counts
+}
+
+fn count_finite(b: &LayoutBox, counts: &mut GeometryViolationCounts) {
+    let rect_ok =
+        b.rect.x.is_finite() && b.rect.y.is_finite() && b.rect.width.is_finite() && b.rect.height.is_finite();
+    let scroll_ok = b.scroll_x.is_finite() && b.scroll_y.is_finite();
+    if !rect_ok || !scroll_ok {
+        counts.non_finite += 1;
+    }
+    for child in &b.children {
+        count_finite(child, counts);
+    }
+}
+
+fn count_containment(b: &LayoutBox, counts: &mut GeometryViolationCounts) {
+    let parent_is_plain_block = matches!(b.kind, BoxKind::Block) && b.style.display == Display::Block;
+    let parent_unclipped_x = b.style.overflow_x == Overflow::Visible;
+    for child in &b.children {
+        if parent_is_plain_block
+            && parent_unclipped_x
+            && child.style.position == Position::Static
+            && child.style.width.is_none()
+            && child.svg_group_transform.is_none()
+            && matches!(child.kind, BoxKind::Block)
+            && !(child.rect.x + GEOMETRY_EPSILON >= b.rect.x
+                && child.rect.right() <= b.rect.right() + GEOMETRY_EPSILON)
+        {
+            counts.containment += 1;
+        }
+        count_containment(child, counts);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,5 +200,33 @@ mod tests {
              .p { position: absolute; left: 200px; top: 200px; width: 10px; height: 10px; }",
         );
         check_geometry(&root);
+    }
+
+    #[test]
+    fn count_geometry_violations_is_zero_on_a_clean_tree() {
+        let root = layout_html(
+            "<html><body><div><p>hello</p></div></body></html>",
+            "div { width: 200px; } p { margin: 4px; }",
+        );
+        assert_eq!(count_geometry_violations(&root), GeometryViolationCounts::default());
+    }
+
+    /// Same exemptions [`check_geometry`]'s own tests exercise (overflow-hidden,
+    /// absolutely-positioned) — the counting walk must agree they're clean, not
+    /// just the panicking one.
+    #[test]
+    fn count_geometry_violations_respects_the_same_exemptions_as_check_geometry() {
+        let overflow_hidden = layout_html(
+            "<html><body><div class=\"c\"><span class=\"w\">wide</span></div></body></html>",
+            ".c { width: 50px; overflow: hidden; } .w { width: 500px; display: block; }",
+        );
+        assert_eq!(count_geometry_violations(&overflow_hidden), GeometryViolationCounts::default());
+
+        let abs_positioned = layout_html(
+            "<html><body><div class=\"c\"><div class=\"p\">x</div></div></body></html>",
+            ".c { width: 50px; height: 50px; position: relative; } \
+             .p { position: absolute; left: 200px; top: 200px; width: 10px; height: 10px; }",
+        );
+        assert_eq!(count_geometry_violations(&abs_positioned), GeometryViolationCounts::default());
     }
 }

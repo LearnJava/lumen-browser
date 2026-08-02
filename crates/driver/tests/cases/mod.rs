@@ -76,6 +76,7 @@ mod test_devx2_golden;
 mod test_devx5_headless_automation;
 mod test_devx9_relayout_after_mutation;
 mod test_devx10_explain_element;
+mod test_devx11_explain_page;
 mod test_gpu_session;
 mod test_pages_integrity;
 mod test_stacking_order;

@@ -217,6 +217,129 @@ fn box_has_visible_self_paint(b: &LayoutBox) -> bool {
     clip.width > 0.0 && clip.height > 0.0
 }
 
+/// Non-panicking DEVX-8b violation tally, consumed by DEVX-11's `explain_page`
+/// (`crates/driver/src/explain.rs`). Same relationship to [`check`] as
+/// `lumen_layout::invariants::GeometryViolationCounts` has to `check_geometry`:
+/// a separate, defensive walk (never indexes with an out-of-bounds/inverted
+/// span the way `check_coverage`'s `assert!`-guarded version can rely on
+/// panicking first) that counts every occurrence instead of aborting on the
+/// first one, so a batch introspection query over many pages reports a bug
+/// instead of crashing on it. Deliberately not a refactor of the four
+/// panicking checks below — those are DEVX-8b's already-gated code path,
+/// validated against the full `graphic_tests`/`samples` corpus, and stay
+/// untouched.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PaintViolationCounts {
+    /// Display-list commands not covered by exactly one provenance span
+    /// (a gap, an overlap, or a malformed span range).
+    pub coverage: usize,
+    /// Clip/scroll-layer push/pop imbalance: pops with nothing open, plus
+    /// pushes still open at the end of the list.
+    pub clip_balance: usize,
+    /// Provenance spans whose origin node doesn't resolve to any box in the
+    /// layout tree that produced this display list.
+    pub origin_resolution: usize,
+    /// Boxes with a visible background/border but no provenance span of
+    /// their own (same `Block`/`FlowRoot`/`TableRow`/`Table`/`TableRowGroup`
+    /// scoping as [`check_visible_boxes_have_spans`]).
+    pub visible_missing_span: usize,
+}
+
+/// Runs the DEVX-11 counting analogs of every DEVX-8b check over one
+/// already-built display list and its provenance index — see
+/// [`PaintViolationCounts`].
+pub fn count_paint_violations(
+    out: &[DisplayCommand],
+    index: &ProvenanceIndex,
+    root: &LayoutBox,
+) -> PaintViolationCounts {
+    let known_nodes = collect_node_ids(root);
+    PaintViolationCounts {
+        coverage: count_coverage_violations(out, index),
+        clip_balance: count_clip_stack_violations(out),
+        origin_resolution: count_origin_violations(index, &known_nodes),
+        visible_missing_span: count_visible_missing_span(root, index),
+    }
+}
+
+/// Counting analog of [`check_coverage`]. Unlike `check_coverage`, must not
+/// panic on a malformed span (inverted or out-of-bounds range) — it tallies
+/// that as a violation and moves on instead of relying on an `assert!` to
+/// stop it from indexing out of bounds.
+fn count_coverage_violations(out: &[DisplayCommand], index: &ProvenanceIndex) -> usize {
+    let mut covers = vec![0u16; out.len()];
+    let mut malformed = 0usize;
+    for span in index.spans() {
+        if span.range.start >= span.range.end || span.range.end > out.len() {
+            malformed += 1;
+            continue;
+        }
+        for c in &mut covers[span.range.clone()] {
+            *c += 1;
+        }
+    }
+    malformed + covers.iter().filter(|&&c| c != 1).count()
+}
+
+/// Counting analog of [`check_clip_stack_balance`]. Same push/pop state
+/// machine, but a bad pop resets the running depth to `0` and tallies a
+/// violation instead of asserting — so one bad pop doesn't cascade into a
+/// wall of spurious "still open" violations at the end of the list.
+fn count_clip_stack_violations(out: &[DisplayCommand]) -> usize {
+    let mut clip_depth: i32 = 0;
+    let mut scroll_depth: i32 = 0;
+    let mut violations = 0usize;
+    for cmd in out {
+        match cmd {
+            DisplayCommand::PushClipRect { .. }
+            | DisplayCommand::PushClipRoundedRect { .. }
+            | DisplayCommand::PushClipPath { .. } => clip_depth += 1,
+            DisplayCommand::PopClip => {
+                clip_depth -= 1;
+                if clip_depth < 0 {
+                    violations += 1;
+                    clip_depth = 0;
+                }
+            }
+            DisplayCommand::PushScrollLayer { .. } => scroll_depth += 1,
+            DisplayCommand::PopScrollLayer => {
+                scroll_depth -= 1;
+                if scroll_depth < 0 {
+                    violations += 1;
+                    scroll_depth = 0;
+                }
+            }
+            _ => {}
+        }
+    }
+    violations + clip_depth as usize + scroll_depth as usize
+}
+
+/// Counting analog of [`check_origins_resolve`].
+fn count_origin_violations(index: &ProvenanceIndex, known_nodes: &HashSet<NodeId>) -> usize {
+    index
+        .spans()
+        .iter()
+        .filter(|span| span.origin.node.is_some_and(|n| !known_nodes.contains(&n)))
+        .count()
+}
+
+/// Counting analog of [`check_visible_boxes_have_spans`]. Reuses
+/// [`box_has_visible_self_paint`] directly — that predicate is already a
+/// standalone pure function shared with the panicking check, so there is no
+/// condition logic to keep in sync here, only the walk shape.
+fn count_visible_missing_span(root: &LayoutBox, index: &ProvenanceIndex) -> usize {
+    let mut n = if box_has_visible_self_paint(root) && index.spans_for(root.origin).next().is_none() {
+        1
+    } else {
+        0
+    };
+    for child in &root.children {
+        n += count_visible_missing_span(child, index);
+    }
+    n
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -309,5 +432,58 @@ mod tests {
         // Origin references node 2, which no box in the tree owns.
         let index = ProvenanceIndex { spans: vec![span(0..1, 2)] };
         check_origins_resolve(&index, &known);
+    }
+
+    #[test]
+    fn count_coverage_violations_accepts_a_full_exact_partition() {
+        let out = vec![DisplayCommand::PopClip; 4];
+        let index = ProvenanceIndex { spans: vec![span(0..2, 1), span(2..4, 2)] };
+        assert_eq!(count_coverage_violations(&out, &index), 0);
+    }
+
+    #[test]
+    fn count_coverage_violations_counts_a_gap_and_an_overlap() {
+        let out = vec![DisplayCommand::PopClip; 4];
+        // Command #3 is claimed by no span (gap); commands #0..2 are double-claimed (overlap).
+        let index = ProvenanceIndex { spans: vec![span(0..3, 1), span(0..2, 2)] };
+        assert_eq!(count_coverage_violations(&out, &index), 3);
+    }
+
+    #[test]
+    fn count_coverage_violations_counts_a_malformed_span_without_panicking() {
+        let out = vec![DisplayCommand::PopClip; 2];
+        let index = ProvenanceIndex { spans: vec![span(0..3, 1)] };
+        // 1 malformed span + 2 commands left with zero valid coverage (the
+        // malformed span is skipped rather than applied) — the malformed
+        // span doesn't get to also hide the coverage gap it caused.
+        assert_eq!(count_coverage_violations(&out, &index), 3);
+    }
+
+    #[test]
+    fn count_clip_stack_violations_accepts_a_balanced_stack() {
+        let out = vec![
+            DisplayCommand::PushClipRect { rect: Rect::new(0.0, 0.0, 10.0, 10.0) },
+            DisplayCommand::PopClip,
+        ];
+        assert_eq!(count_clip_stack_violations(&out), 0);
+    }
+
+    #[test]
+    fn count_clip_stack_violations_counts_an_unclosed_push_and_a_bad_pop() {
+        let out = vec![
+            DisplayCommand::PushClipRect { rect: Rect::new(0.0, 0.0, 10.0, 10.0) },
+            DisplayCommand::PushClipRect { rect: Rect::new(0.0, 0.0, 10.0, 10.0) },
+            DisplayCommand::PopClip,
+            DisplayCommand::PopClip,
+            DisplayCommand::PopClip, // no matching push
+        ];
+        assert_eq!(count_clip_stack_violations(&out), 1);
+    }
+
+    #[test]
+    fn count_origin_violations_counts_only_dangling_nodes() {
+        let known: HashSet<NodeId> = [NodeId::from_index(1)].into_iter().collect();
+        let index = ProvenanceIndex { spans: vec![span(0..1, 1), span(1..2, 2)] };
+        assert_eq!(count_origin_violations(&index, &known), 1);
     }
 }

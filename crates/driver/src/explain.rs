@@ -7,11 +7,13 @@
 //! walk. Reads [`ProvenanceIndex`](lumen_paint::ProvenanceIndex) (DEVX-7) for
 //! the paint/clip/layer links — see `docs/decisions/ADR-025-identity-propagation.md`.
 
+use std::time::Instant;
+
 use lumen_core::geom::Rect;
 use lumen_dom::{Document, NodeId};
 use lumen_layout::{BoxKind, BoxRole, LayoutBox, Overflow, PaintOrder, StackingTree};
 
-use crate::ExplainElement;
+use crate::{ExplainElement, ExplainPage, InvariantViolationCounts};
 
 /// Runs the DEVX-10 causal chain for the first DOM node matching `sel`.
 ///
@@ -60,6 +62,64 @@ pub fn explain_element(root: &LayoutBox, doc: &Document, sel: &str) -> ExplainEl
     }
 
     out
+}
+
+/// Runs the DEVX-11 page-level aggregate: invariant-firing counts by category
+/// plus telemetry (box counts, overflow, commands, clip depth). Every counter
+/// here is derived from the layout tree alone — no DOM lookup needed, unlike
+/// [`explain_element`]. `relayout_count` is left at `None`: it needs
+/// session-level state this session-agnostic function doesn't have, so
+/// callers ([`crate::session::InProcessSession`] etc.) fill it in afterward.
+pub fn explain_page(root: &LayoutBox) -> ExplainPage {
+    let mut out = ExplainPage::default();
+
+    let t0 = Instant::now();
+    let mut geometry_boxes = 0usize;
+    let mut anonymous_boxes = 0usize;
+    let mut overflow_elements = 0usize;
+    walk_telemetry(root, &mut geometry_boxes, &mut anonymous_boxes, &mut overflow_elements);
+    out.box_count = geometry_boxes;
+    out.anonymous_box_count = anonymous_boxes;
+    out.overflow_element_count = overflow_elements;
+    let geometry_violations = lumen_layout::count_geometry_violations(root);
+    out.phase_ns.tree_walk_ns = t0.elapsed().as_nanos() as u64;
+
+    let t1 = Instant::now();
+    let stacking_tree = StackingTree::build(root);
+    let order = PaintOrder::from_tree(&stacking_tree);
+    let (commands, provenance) = lumen_paint::build_display_list_ordered(root, &stacking_tree, &order);
+    let paint_violations = lumen_paint::count_paint_violations(&commands, &provenance, root);
+    out.command_count = commands.len();
+    out.max_clip_depth = provenance.spans().iter().map(|s| s.clip_depth).max().unwrap_or(0);
+    out.phase_ns.display_list_build_ns = t1.elapsed().as_nanos() as u64;
+
+    out.invariant_violations = InvariantViolationCounts {
+        geometry_non_finite: geometry_violations.non_finite,
+        geometry_containment: geometry_violations.containment,
+        paint_coverage: paint_violations.coverage,
+        paint_clip_balance: paint_violations.clip_balance,
+        paint_origin_resolution: paint_violations.origin_resolution,
+        paint_visible_missing_span: paint_violations.visible_missing_span,
+    };
+
+    out
+}
+
+/// Walks `b`'s subtree accumulating the three `explain_page` box counters in
+/// one pass: total boxes, anonymous boxes (`AnonymousBlock`/`AnonymousInlineRun`
+/// — `Pseudo` deliberately excluded, see [`ExplainPage::anonymous_box_count`]),
+/// and elements whose `overflow-x`/`overflow-y` isn't `visible`.
+fn walk_telemetry(b: &LayoutBox, boxes: &mut usize, anonymous: &mut usize, overflow: &mut usize) {
+    *boxes += 1;
+    if matches!(b.origin.role, BoxRole::AnonymousBlock | BoxRole::AnonymousInlineRun) {
+        *anonymous += 1;
+    }
+    if b.style.overflow_x != Overflow::Visible || b.style.overflow_y != Overflow::Visible {
+        *overflow += 1;
+    }
+    for child in &b.children {
+        walk_telemetry(child, boxes, anonymous, overflow);
+    }
 }
 
 /// Finds `target`'s own principal box (`BoxRole::Element`) by walking `b`
