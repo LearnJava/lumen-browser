@@ -73,6 +73,17 @@ pub struct LayoutKeyCensus {
     /// had already been seen earlier in the same pass — a call a memoization
     /// cache keyed this way could have served from cache instead of recomputing.
     pub repeat_key_calls: u32,
+    /// BUG-341 S31 — of `repeat_key_calls`, the ones whose `b.style` `Arc` is
+    /// also `ptr_eq` to the style used the *previous* time this exact key was
+    /// recorded. A `(node, constraints)`-keyed cache is only safe to serve on a
+    /// repeat when the style is unchanged too: `lay_out_flex`'s own placement
+    /// pass overwrites `children[i].style`'s `width`/`height`/`box_sizing`
+    /// in place (`Arc::make_mut`) between its Step-1 probe and the final
+    /// placement call for the *same* item, so a naive key match there would
+    /// serve a stale result. This field answers "of the calls S30 counted as
+    /// a hit, how many would actually be safe to serve" before the cache is
+    /// built, not after.
+    pub repeat_key_same_style: u32,
 }
 
 /// `(node, available_width bits, available_height bits)` — the census key a
@@ -81,12 +92,16 @@ type LayoutCensusKey = (NodeId, u32, Option<u32>);
 
 thread_local! {
     static LAYOUT_KEY_CENSUS_ON: Cell<bool> = const { Cell::new(false) };
-    static LAYOUT_KEY_CENSUS: Cell<LayoutKeyCensus> = const { Cell::new(LayoutKeyCensus { calls: 0, repeat_key_calls: 0 }) };
-    static LAYOUT_KEY_SEEN: RefCell<HashMap<LayoutCensusKey, u32>> = RefCell::new(HashMap::new());
+    static LAYOUT_KEY_CENSUS: Cell<LayoutKeyCensus> = const { Cell::new(LayoutKeyCensus { calls: 0, repeat_key_calls: 0, repeat_key_same_style: 0 }) };
+    // BUG-341 S31: the map's value is now `(occurrence count, style Arc from the
+    // most recent occurrence)` — S30 only needed the count, S31 also needs to
+    // compare the incoming call's style against the last-recorded one.
+    static LAYOUT_KEY_SEEN: RefCell<HashMap<LayoutCensusKey, (u32, Arc<ComputedStyle>)>> = RefCell::new(HashMap::new());
 }
 
-/// Enables/disables the BUG-341 S30 layout-key census and clears its state —
-/// call once before a full layout pass, then read with [`take_layout_key_census`].
+/// Enables/disables the BUG-341 S30/S31 layout-key census and clears its
+/// state — call once before a full layout pass, then read with
+/// [`take_layout_key_census`].
 pub fn set_layout_key_census(on: bool) {
     LAYOUT_KEY_CENSUS_ON.with(|c| c.set(on));
     LAYOUT_KEY_SEEN.with(|m| m.borrow_mut().clear());
@@ -99,27 +114,48 @@ pub fn take_layout_key_census() -> LayoutKeyCensus {
     LAYOUT_KEY_CENSUS.with(|c| c.replace(LayoutKeyCensus::default()))
 }
 
-/// Records one real `lay_out_inner` invocation for the S30 census — see
+/// Records one real `lay_out_inner` invocation for the S30/S31 census — see
 /// [`LayoutKeyCensus`]. Exact bit-equality on the constraints, not an epsilon
 /// compare: a real cache keyed this way would only ever hit on an exact
 /// re-derivation of the same numbers, so exact equality is the honest measure
-/// of its ceiling, not an approximation of it.
-fn record_layout_key_occurrence(node: NodeId, available_width: f32, available_height: Option<f32>) {
+/// of its ceiling, not an approximation of it. `style` is compared by `Arc`
+/// identity (S31): the cascade hands out one `Arc<ComputedStyle>` per node and
+/// only in-place `Arc::make_mut` callers (the flex placement pass) ever
+/// diverge it, so `ptr_eq` is exact, not approximate, for "has this box's
+/// style changed since the last time this key was recorded".
+fn record_layout_key_occurrence(
+    node: NodeId,
+    available_width: f32,
+    available_height: Option<f32>,
+    style: &Arc<ComputedStyle>,
+) {
     if !LAYOUT_KEY_CENSUS_ON.with(|c| c.get()) {
         return;
     }
     let key = (node, available_width.to_bits(), available_height.map(f32::to_bits));
-    let repeat = LAYOUT_KEY_SEEN.with(|m| {
+    let (repeat, same_style) = LAYOUT_KEY_SEEN.with(|m| {
         let mut seen = m.borrow_mut();
-        let count = seen.entry(key).or_insert(0);
-        *count += 1;
-        *count > 1
+        match seen.get_mut(&key) {
+            Some((count, prev_style)) => {
+                *count += 1;
+                let same_style = Arc::ptr_eq(prev_style, style);
+                *prev_style = Arc::clone(style);
+                (true, same_style)
+            }
+            None => {
+                seen.insert(key, (1, Arc::clone(style)));
+                (false, false)
+            }
+        }
     });
     LAYOUT_KEY_CENSUS.with(|c| {
         let mut v = c.get();
         v.calls += 1;
         if repeat {
             v.repeat_key_calls += 1;
+            if same_style {
+                v.repeat_key_same_style += 1;
+            }
         }
         c.set(v);
     });
@@ -6869,7 +6905,7 @@ fn lay_out_inner(
         return;
     }
 
-    record_layout_key_occurrence(b.node, available_width, available_height);
+    record_layout_key_occurrence(b.node, available_width, available_height, &b.style);
 
     // CSS Values L4 §5.1.1 — publish this box's real `ch`/`ex` metrics (advance of
     // the "0" glyph and the x-height at the used font-size) so `Length::{Ch,Ex}`
