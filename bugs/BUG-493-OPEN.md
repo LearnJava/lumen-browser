@@ -131,3 +131,32 @@ this gap. This is now confirmed as the dominant root cause across most of
 and with [BUG-499](BUG-499-OPEN.md) for custom-property reads specifically) —
 see files listed in that category's `.ini` headers for the full list; too
 numerous to enumerate here (roughly two dozen files).
+
+## Срез 12 (`css/css-logical`, 2026-08-02) — extends to `offsetWidth`/`clientWidth`, not just `getComputedStyle()`
+
+`logicalprops-{block,inline}-size{,-vlr}.html` (4 files, 32 subtests) call
+`checkLayout(".block"/".override"/".tablecell", false)` synchronously in a
+plain top-level `<script>` right after the page's own markup — the
+`check-layout-th.js` helper reads `node.offsetWidth`/`.clientWidth` (not
+`getComputedStyle()`) for each element. Every reading comes back `0`
+instead of the correct, already-laid-out value (e.g. `width expected 600
+but got 0`). Root-caused by reading the accessor chain directly:
+`offsetWidth`/`clientWidth`/`clientHeight` (`crates/js/src/dom.rs:6190-6195`)
+all resolve through `_lumen_get_bounding_rect(nid)` →
+`v8_runtime.rs:3021`, a lookup into `layout_rects: Arc<Mutex<HashMap<u32,
+[f32;4]>>>` — the exact same "externally-pushed snapshot, never
+synchronously refreshed on read" shape as `computed_styles`, just a
+different cache instance backing a different accessor family. Confirms
+this bug's mechanism is not specific to `getComputedStyle()`'s cache, but
+architectural: **no DOM geometry/style accessor in this engine forces a
+synchronous layout flush before reading**, matching this bug's title
+exactly. `logicalprops-with-variables-revert.html` (6 subtests) is a fifth
+file for the same reason: `getComputedStyle(el).getPropertyValue('padding-top'
+/'margin-left'/...)` — all **physical**, already-mapped properties (rules
+out [BUG-472](BUG-472-OPEN.md), which only explains missing *logical*
+property names) — read `""` instead of the value set by a stylesheet rule
+(`@layer`+`revert-layer`+`var()`) evaluated at page-parse time, the
+generic "static markup, script runs during initial parse" idiom already
+established as this bug's dominant symptom in срез 10. `.ini` under
+`tests/wpt/metadata/css/css-logical/` for all 5 files, `expected: FAIL`
+per subtest.

@@ -82,3 +82,15 @@ V8-callback не нужна и опасна — `ResolveModuleCallback` синх
 
 Владелец — P1/P3 (шелл + js). После фикса имеет смысл перепроверить
 вендоренные WPT-категории с `type="module"`.
+
+**WPT-RUN-3 срез 12 (`css/css-logical`, 2026-08-02)** — first WPT-RUN-3
+mass-run confirmation of the predicted 80-file blast radius: 11 files in
+this one category alone (`logical-box-border-{color,radius,shorthands,
+style,width}.html`, `logical-box-{inset,margin,padding,size}.html`,
+`logical-values-{float-clear,resize}.html`), all `<script type="module">
+import {...} from "./resources/test-box-properties.js"` (or
+`test-logical-values.js`) — the imported helper module (which defines
+`runTests`/`createBoxPropertyGroup`/etc., itself vendored and present on
+disk) never executes, so zero `test()` calls register and the harness
+times out. Committed `.ini` under `tests/wpt/metadata/css/css-logical/`
+for all 11 files (`expected: TIMEOUT`).

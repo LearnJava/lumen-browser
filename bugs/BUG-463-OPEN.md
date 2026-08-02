@@ -72,3 +72,18 @@ CSS2's float/clear/table. Три файла (`border-color-interpolation.html`,
 — `expected: FAIL` на затронутых сабтестах, флипнуть на `PASS` после переноса
 `animate`/`getAnimations` на `Element.prototype`. Срез 9 добавил `.ini` под
 `tests/wpt/metadata/css/css-backgrounds/` для тех же 16 файлов.
+
+**WPT-RUN-3 срез 12 (`css/css-logical`, 2026-08-02)** — same
+`interpolation-testcommon.js` feature-detect, 6 files/38 subtests:
+`animations/float-interpolation.html` (7 of 42 — the rest pass, this file
+isn't purely this bug), `animations/margin-block-interpolation.html`,
+`animations/margin-inline-interpolation.html`,
+`animations/padding-block-interpolation.html`,
+`animations/padding-inline-interpolation.html` (6 each), and
+`animations/caption-side-no-interpolation.html` (7 — this file initially
+showed as a harness-wide TIMEOUT in the first mass run, but a targeted
+re-run and the slice's own re-verification pass both show it completing
+normally with exactly this bug's symptom; the original TIMEOUT is noted
+in its `.ini` as a probable one-off scheduling flake, not a separate
+defect). `.ini` added under `tests/wpt/metadata/css/css-logical/` for
+these 6 files.

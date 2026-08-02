@@ -182,3 +182,27 @@ Committed `.ini` under `tests/wpt/metadata/css/css-variables/` for
 (BUG-484 subtests only — the `.sheet.cssRules` one is BUG-471),
 `variable-reference-shorthands.html`, and `variable-invalidation.html`
 (2 of its 4 subtests — the other 2 cite BUG-471).
+
+## Срез 12 (`css/css-logical`, 2026-08-02) — largest extension yet, all three shapes recur for CSS Logical Properties
+
+32 files / ~280 subtests, dominating the `parsing/` subdirectory of
+`css/css-logical` end to end. **Rejection (shape 1)**: every
+`*-invalid.html` file in the category (`block-size`, `inline-size`,
+`max-/min-block-/inline-size`, `border-block-/inline-{color,style,width}`,
+`inset`, `inset-block-inline`, `margin-block-inline`, `padding-block-inline`
+— 16 files) — invalid values like `"10px border-box"`, unitless lengths,
+malformed multi-token forms are all stored verbatim instead of rejected.
+**Shorthand expansion (shape 2)**: `inset-shorthand.html`,
+`margin-block-inline-shorthand.html`, `padding-block-inline-shorthand.html`,
+`inset-block-inline-shorthand.html` (4 files) — setting `e.style.inset =
+"1px 2px 3px 4px"` (or `margin-inline`/`padding-block`/`inset-block`/
+`inset-inline`) never populates the four (or two) physical/flow-relative
+longhands, all read back `""`. **Canonicalization (shape 3)**: every
+`*-valid.html` file (`border-block-/inline-{color,style,width}-valid`,
+`border-block-/inline-valid`, `inset-valid`, `inset-block-inline-valid`,
+`margin-block-inline-valid`, `padding-block-inline-valid` — 12 files) —
+`calc()` operand reordering, hex-to-`rgb()` color canonicalization,
+duplicate-value collapsing (`"hidden hidden"` → `"hidden"`, `"auto auto"`
+→ `"auto"`) all come back byte-identical to the input. `.ini` under
+`tests/wpt/metadata/css/css-logical/` for all 32 files, `expected: FAIL`
+per subtest.

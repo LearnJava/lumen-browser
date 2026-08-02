@@ -130,3 +130,12 @@ TIMEOUT. `.ini` for all five: `expected: FAIL` per affected subtest.
 `container2`, `target`, `scroller`, `horizontal`, `vertical`), all inside
 `test()`/`promise_test()` callbacks so each is an isolated `FAIL`, not a
 harness-wide `TIMEOUT`. `.ini`: `expected: FAIL` per affected subtest.
+
+**WPT-RUN-3 срез 12 (`css/css-logical`, 2026-08-02):** back to the
+harness-wide TIMEOUT shape (like `inheritance.sub.html` in срез 9) —
+`inheritance.html` reads `getComputedStyle(reference).borderTopWidth` as a
+bare top-level statement (line 45, before any `test()` call), referencing
+the markup element `<div id="reference">` by bare identifier;
+`ReferenceError` aborts the whole script before a single subtest
+registers. `.ini`: `tests/wpt/metadata/css/css-logical/inheritance.html.ini`
+(`expected: TIMEOUT`).
