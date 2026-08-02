@@ -156,3 +156,21 @@ paper over the typo via this mechanism; Lumen has no such fallback, so the
 typo is fully exposed as `ReferenceError: initial is not defined`). `.ini`
 under `tests/wpt/metadata/css/css-forms/` for all 3 files, `expected: FAIL`
 per affected subtest.
+
+## Срез 19 (`css/css-nesting`, 2026-08-03)
+
+6 files, 13 subtests — the largest single-slice cluster of this bug so far
+outside `css-overflow`. All follow the same shape: a `<div id=target>` /
+`<style id=style>` / `<div id=p>` referenced by its bare identifier inside a
+top-level `<script>` or a `test()` body, with no `document.getElementById`
+anywhere in the file. `block-skipping.html` is notable because it's testing
+an unrelated engine bug (`https://crbug.com/362674384`, "block ignored after
+lack of whitespace" in an external stylesheet) that this bug fully masks —
+the test never gets far enough to exercise its own subject.
+`set-selector-text.html` is the interesting case: the file-level status is
+`ERROR` (not `FAIL`), because `t.add_cleanup(() => { style.textContent = ''
+})` *also* references the same bare `style` identifier and throws in
+cleanup — wptrunner reports `Test named '...' specified 1 'cleanup' function,
+and 1 failed`, and the parameterized loop's remaining 6 `test()` calls never
+run at all (`NOTRUN`, not `FAIL`) once the first one's exception propagates.
+`.ini` under `tests/wpt/metadata/css/css-nesting/` for all 6 files.

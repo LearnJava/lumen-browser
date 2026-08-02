@@ -73,14 +73,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-08-02",
+ "generated": "2026-08-03",
  "counts": {
-  "open": 167,
+  "open": 172,
   "fixed": 308,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 475,
+ "total_bugs": 480,
  "phases": [
   {
    "id": "P0",
@@ -4491,7 +4491,7 @@
     {
      "id": "WPT-RUN",
      "title": "WPT-RUN: пропускная способность WPT-раннера",
-     "status": "active",
+     "status": "done",
      "size": "L",
      "note": "Дорожка пропускной способности WPT-раннера (владелец тулинга — P2; движковые баги по находкам — P3/P1). Превратить УЖЕ ВЕНДОРЕННЫЙ корпус в измеряемый: не вендорить новое (это WPT-VENDOR) и не писать новые тесты (это TEST), а снять три ограничения исполнителя. Повод: категория `css/` вендорена целиком (54350 файлов, 34607 id — рекорд корпуса), прогнана на 1.1% (382 id), и на этой пробе прошло 1294 из 2594 сабтестов — половина базовой блочной модели CSS1/CSS2 падает, а в BUGS.md на css-parser числится 13 багов из 429, т.е. счёт багов отражает, где искали, а не где они есть. Бриф — docs/tasks/p2-wpt-runner-throughput.md",
      "tasks": [
@@ -4508,13 +4508,6 @@
        "status": "done",
        "size": "M",
        "note": "Обе половины сделаны в минимальном исполнителе tests/wpt/ (tools/wptrunner не патчился): (1) `testdriver.js` — довендорен (repo-root `resources/testdriver.js`, `tests/wpt/VENDOR.md`, вынужденное расположение — так резолвит `environment.py`'s хардкод `repo_root`), `supports_testdriver=True`, poll-based drain `__wptrunner_message_queue` (`executorlumen.py`); реально исполняется `click` (`input.performActions`), остальные действия отклоняют промис теста явной ошибкой вместо блочного SKIP/зависания — DoD выполнен (доля SKIP по testdriver на пробе падает до нуля). (2) HTTPS-порт — `tests/wpt/config.json` https-порты `18443`/`18444` вместо `null`, `--ssl-type=pregenerated` с закоммиченным самоподписанным сертификатом (`tests/wpt/certs/`, README внутри); `.https.`-тест из WebCryptoAPI доезжает до настоящего TLS-хендшейка и получает `UnknownIssuer` вместо `invalid port: \"None\"` — DoD выполнен («содержательный результат», не «проходит»: доверие Lumen к тестовому CA — отдельная security-чувствительная Rust-задача вне скоупа Python-тулинга). Попутно найден и застабилизирован гейт: BUG-328 (HTMLCollection ownKeys/qux) регрессировал молча, `.ini` перепиннут в FAIL со ссылкой на баг"
-      },
-      {
-       "id": "WPT-RUN-3",
-       "title": "WPT-RUN-3: шардирование + массовый прогон css/",
-       "status": "planned",
-       "size": "M",
-       "note": "Шардированный/параллельный прогон (34607 id последовательно ≈ сутки при наблюдаемом темпе) + массовый прогон `css/` с записью ожиданий в `.ini` и группировкой провалов в BUG-NNN по первопричине (существующая методология P2-wpt S5, вендоренные тесты НЕ ослабляются: движковый пробел = expected:FAIL + BUG-NNN). Зависит от WPT-RUN-1/2 — иначе прогон измеряет пробелы исполнителя, а не движок. Полезнее делать после DEVX-8a (инварианты локализуют часть падений), но это не блокирующая зависимость — ратчет ожиданий удержит прогон и без них. Зафиксировать в журнале, сколько id не добежало и почему (правило no-silent-caps). **Срез 1 (2026-08-02, шардирование) готов**: `run_report.py` получил `--processes`/`--offset`/`--limit` (wptrunner's `PathGroupedSource` группирует тесты по каталогу, поэтому параллелизм реально масштабируется на разнородном `css/`, не только на одном каталоге — проверено на `css/CSS2/floats`, 12 id, `--processes=1` и `--processes=4` дали идентичный результат: 3/3 harness OK, 54/68 сабтестов). Замер пропускной способности на срезе `--root css --recursive --offset 0 --limit 600` (353 отобранных id): `--processes=6` — 353 id за ~48с (~7.7 id/с) против ~0.55 id/с у прежней последовательной пробы (~14×) — пересматривает оценку \"сутки\" вниз до порядка **~75 минут** чистого времени wptrunner на весь корпус при сопоставимом темпе (не гарантия — начальный срез CSS1/CSS2 может быть легче среднего по корпусу; директории с testdriver/https будут медленнее). **Срез 2 (2026-08-02, массовый прогон + `.ini` + группировка) готов на `css/CSS2`**: 63 `testharness`-тестов (из 805 файловых id — остальное reftest/crashtest, `TEST-4`), полная поимённая триаж → 8 новых BUG-NNN (BUG-463…470) + 2 файла объяснены уже открытыми BUG-360/BUG-384, committed `.ini` на 58/63 файлов (0 unexpected подтверждён прогоном), 5 файлов намеренно не кластеризованы (см. `docs/wpt-status.md` → строка `css` за полным разбором). Остаток DoD — тот же массовый прогон + триаж на оставшихся ~34500 id `css/` (за пределами `CSS2`) — задел для среза 3. **Срез 3 (2026-08-02) готов на `css/cssom`**: 226 id, 188 testharness, 151/188 harness OK, 727/1448 сабтестов; поимённая триаж 178 непройденных файлов → 4 новых BUG-NNN (BUG-471…474, крупнейший — CSSOM-модель таблиц стилей/правил не подключена, 97 файлов) + 3 файла объяснены уже открытыми BUG-384/BUG-462, committed `.ini` на 171/178 файлов, 0 unexpected подтверждён прогоном (1476 проверок). Остаток DoD — тот же массовый прогон + триаж на оставшихся ~34300 id `css/` (все `css-*`-модули, `cssom-view`, `selectors` и т.д.) — задел на срез 4. **Срез 4 (2026-08-02) готов на `css/cssom-view`**: 208 testharness id, 169/208 harness OK, 469/1694 сабтестов; поимённая триаж 178 непройденных файлов → 8 новых BUG-NNN (BUG-475…482) + 6 файлов объяснены уже открытыми BUG-384/BUG-462/BUG-368/BUG-472, committed `.ini` на 113/178 файлов, 0 unexpected passes подтверждён прогоном. 9 файлов пропущены (невендоренный `/dom/events/scrolling/scroll_support.js`), 56 намеренно без `.ini` (мелкие взаимно-независимые гэпы, не форсировались в атрибуцию — см. `docs/wpt-status.md` → строка `css`). Остаток DoD — тот же массовый прогон + триаж на `css-*`-модулях/`selectors`/прочем `css/` — задел на срез 5 **Срез 5 (2026-08-02) начат на `css/css-box`**: 83 testharness id, 42/83 harness OK, 671/957 сабтестов; поимённая триаж → 2 новых BUG-NNN (BUG-483 getComputedStyle Proxy без `has`-ловушки — универсальная находка, 456 файлов `css/` завязаны на тот же хелпер; BUG-484 инлайновый `style`-сеттер не валидирует/не разворачивает шорткоды/не канонизирует значения) + 3 уже открытых (BUG-360 мёртвый `onload=`, 41 файл; BUG-463 WAAPI `animate` не на прототипе, 2 файла). Committed `.ini` на 62/65 непройденных файлов, повторный прогон подтверждает 3 unexpected / 0 unexpected passes. Детали — docs/wpt-status.md, строка `css`. Остаток DoD — продолжение на прочих `css-*`-модулях/`selectors`/`cssom`-соседях — задел для среза 6. **Срез 6 (2026-08-02) готов на `css/css-cascade`**: 96 testharness id, 59/96 harness OK, 11/469 сабтестов; поимённая триаж 95 непройденных файлов → 3 новых BUG-NNN (BUG-485 `document.head` отсутствует вовсе — 15 файлов, минимум 84 во всём `css/`; BUG-486 `document.currentScript` отсутствует вовсе — 3 файла/55 сабтестов; BUG-487 CSS-wide keyword `revert-rule` не реализован — 6 файлов/18 сабтестов) + расширены 4 уже открытых (BUG-384 named access on Window — 36 файлов, крупнейший кластер; BUG-471 CSSOM-модель — +4 файла; BUG-483 — второй симптом, отсутствующий `Symbol.iterator`/`length`/`item` у Proxy — 17 файлов; BUG-484 — +1 файл). Committed `.ini` на 70/95 непройденных файлов, повторный прогон подтверждает 0 unexpected passes (остаток — намеренно некластеризованные файлы). 12 файлов оставлены без атрибуции: `idlharness.html` (невендоренный `/interfaces/*.idl`, инфраструктурный гэп, не движковый), `scope-implicit-external.html` (неясная причина — внешний `<link>`/`@import` не долетает до события `load`), 5 файлов с одинаковым паттерном \"`@scope` внутри `@container`/`@supports`/`@layer`/`@media`/`@starting-style` не скоупит\" (живая `--mcp-live-port`-проба дала другое значение, чем прогон wptrunner — не удалось воспроизвести уверенно), `inherit-initial.html` (4 сабтеста, `inherit` на корневом элементе), `presentational-hints-rollback.html` (8 сабтестов), `revert-val-003.html`/`revert-layer-008.html` (взаимодействие revert/`transitions`). Детали — docs/wpt-status.md, строка `css`. Остаток DoD — продолжение на прочих `css-*`-модулях/`selectors`/`cssom`-соседях — задел для среза 7. **Срез 7 (2026-08-02) готов на `css/css-display`**: 33 testharness id, 28/33 harness OK, 111/428 сабтестов; поимённая триаж 28 непройденных файлов → 3 новых BUG-NNN (BUG-488 — самая широкая находка WPT-RUN-3 на сегодня: `getComputedStyle()`/`getBoundingClientRect()` пусты для ЛЮБОГО inline-элемента, изолировано минимальной живой пробой независимо от `display:contents`; BUG-489 — `getComputedStyle()` пуст для самого элемента `display:contents`, его бокс убран `flatten_contents` без замены; BUG-490 — `getComputedStyle(el, pseudoElt)` полностью игнорирует второй аргумент) + расширены 5 уже открытых (BUG-483 — 5 файлов/135 сабтестов; BUG-484 — 5 файлов/146 сабтестов; BUG-384 — 2 файла; BUG-470, BUG-462, BUG-463, BUG-467 — по 1-2 файла). Committed `.ini` на 25/28 непройденных файлов, повторный прогон подтверждает 0 unexpected passes (4 unexpected остаются намеренно некластеризованными). 3 файла оставлены без атрибуции: `textarea-display.html` (живая проба через `--mcp-port` дала верное значение, прогон wptrunner — пустое; та же живая/wptrunner-расхождение, что у BUG-490, не разобрано до конца), `display-contents-blockify-dynamic.html` (3 сабтеста смешивают минимум два механизма — BUG-488 и что-то ещё на блочных контейнерах — плюс тест использует HTML с незакрытым `<span>`, полагающийся на error-recovery парсера), `accessibility/display-contents-role-and-label.html` (невендоренный `/wai-aria/scripts/aria-utils.js` — инфраструктурный гэп уровня WPT-RUN-1, не движковый). Детали — docs/wpt-status.md, строка `css`. Остаток DoD — продолжение на прочих `css-*`-модулях/`selectors`/`cssom`-соседях — задел для среза 8. **Срез 8 (2026-08-02) готов на `css/css-borders`**: 234 файла, 79 testharness id, 79/79 harness OK, 234/1553 сабтестов; гоча — наивный текстовый разбор `--processes=6`-интерлив-лога вводит в заблуждение (пойман на `box-shadow-offset-invalid.html`: сырой лог показывал 110/241, реально 0/4 — число принадлежало другому параллельному тесту), источник переключён на структурированный `--log-wptreport` JSON; поимённая триаж 66 непройденных файлов → 4 новых BUG-NNN (BUG-491 — CSS Borders/Box Decorations L4 (черновая спека) целиком не реализована: `corner-shape`, `border-shape`, отдельные лонгхенды `box-shadow-{offset,color,blur,spread,position}`, парные `border-*-radius`, `border-clip`, `hairline` — 44 файла, крупнейшая находка среза; BUG-492 — `border-image` (L3, зрелая спека) не реализован, 1 файл; BUG-493 — `getComputedStyle()` не форсирует синхронный флаш перед чтением, узел мутированный в том же скрипт-тике не виден вовсе; BUG-494 — `element.style = \"текст\"` молчаливый no-op, нет `[PutForwards=cssText]`) + расширены 5 уже открытых (BUG-484 — крупнейшее расширение, 25 файлов; BUG-477 — 4 файла; BUG-463 — 3 файла; BUG-472 — 2 файла). Committed `.ini` на 60/66 непройденных файлов (1309 сабтестов); повторный прогон **из самого worktree** (не корневого чекаута — иначе `--metadata` резолвится мимо новых `.ini`) подтверждает 7 unexpected / 0 unexpected passes. 6 файлов без атрибуции целиком + 2 сабтеста в одном файле — все на невендоренном `/resources/testdriver-actions.js` (`test_driver.Actions is not a constructor`), уже занесённом в задел WPT-RUN-2. Детали — docs/wpt-status.md, строка `css`. Остаток DoD — продолжение на прочих `css-*`-модулях/`selectors`/`cssom`-соседях — задел для среза 9. **Срез 9 (2026-08-02) готов на `css/css-backgrounds`**: 121 testharness id, 119/121 harness OK, 2654/6105 сабтестов; поимённая триаж 100 непройденных файлов + 2 TIMEOUT → 3 новых BUG-NNN (BUG-495 — `background-position-x`/`-y` лонгхенды не реализованы вовсе (не просто гэп карты, `CSS.supports()` тоже отвечает false), 5 файлов/214 сабтестов; BUG-496 — `HTMLElement.dataset` не реализован вовсе, харнес зависает TIMEOUT на первом же обращении; BUG-497 — `cssText` не добавляет завершающую `;`) + расширены 6 уже открытых, крупнейшее расширение трека: BUG-492 (border-image) — оказалось, что `css/css-backgrounds`, а не `css/css-borders` среза 8, есть настоящий дом этого свойства в апстриме: 25 файлов/1646 сабтестов, включая самый большой failing-файл трека (`border-image-width-interpolation.html`, 558 сабтестов); BUG-463 (WAAPI `animate`) — 16 файлов/952 сабтеста, весь `animations/`-поддиректорий; BUG-484 (инлайновый `style`-сеттер) — 34 файла/~300 сабтестов, включая новую грань — та же Proxy лишена `Symbol.iterator`/`length` (`webkit-border-radius-valid.html`, тот же класс, что уже задокументирован у BUG-483 на другом Proxy); BUG-472 (computed style карта) — 25 файлов/~324 сабтеста, включая физические `border-top-*`-лонгхенды, не только шорткоды; BUG-384 (named access) — ещё один harness TIMEOUT (`inheritance.sub.html`); BUG-494 (`element.style = \"текст\"` no-op) — первый файл, где это единственная и полная причина всех 11 сабтестов (`background-shorthand-serialization.html`). Committed `.ini` на 99/102 непройденных файлов (файлы = 100 с сабтест-провалами + 2 TIMEOUT), повторный прогон подтверждает 3 unexpected / 0 unexpected passes на полном 121-id срезе (6223/6226 expected). Гоча найдена и исправлена в этом же срезе: `BUGS.md` не содержал строк для BUG-491…494 (заведены файлами в срезе 8, но таблица забыта) — добавлены задним числом. 3 файла оставлены намеренно без атрибуции: `background-color-transition-colormix.html` (невендоренный `/web-animations/testcommon.js`, класс WPT-RUN-1/2), `border-width-transition-with-style-change.html` (транзишн-событий 0 вместо 4, причина не разобрана), `background-image-cors-no-reload.html` (CORS/`var()`-кеширование фонового изображения, причина не разобрана). Детали — docs/wpt-status.md, строка `css`. Остаток DoD — продолжение на прочих `css-*`-модулях/`selectors`/`cssom`-соседях — задел для среза 10. **Срез 10 (2026-08-02) готов на `css/css-variables`**: 273 файла, 59 testharness id, 45/59 harness OK, 100/516 сабтестов; поимённая триаж 49 непройденных файлов → доминирующий кластер [BUG-493](bugs/BUG-493-OPEN.md) (расширен, decisively подтверждён живой A/B-пробой `--mcp-port`: `getComputedStyle()` в синхронном top-level `<script>` сразу за статичной разметкой всегда читает пустой кэш — кэш заполняется только ПОСЛЕ `navigate()`, `offsetHeight` не форсирует; ~20 файлов) + новый [BUG-499](bugs/BUG-499-OPEN.md) (`getComputedStyle().getPropertyValue('--x')` всегда `\"\"` — карта не сериализует `custom_props` вовсе, 10+ файлов) + расширены [BUG-472](bugs/BUG-472-OPEN.md) (новые недостающие ключи: `border-spacing`/`box-shadow`/`text-shadow`/`perspective-origin`/`transition-duration`/весь `background-*` кроме `-color`/~40 SVG-атрибутов/шорткоды `margin`/`padding`/`border`), [BUG-484](bugs/BUG-484-OPEN.md) (четвёртая форма: `cssText`-геттер — сырой passthrough атрибута, без дедупликации/вырезания комментариев/раскрытия шорткодов; плюс невалидный `var()` принимается без проверки), [BUG-471](bugs/BUG-471-OPEN.md) (+2 сабтеста), [BUG-384](bugs/BUG-384-OPEN.md) (+5 файлов), [BUG-360](bugs/BUG-360-OPEN.md) (+1 файл) + новые [BUG-500](bugs/BUG-500-OPEN.md) (`ident()` CSS Values L5 не реализован), [BUG-501](bugs/BUG-501-OPEN.md) (`CSS.supports()` без фоллбека «обернуть в скобки», кастомные свойства никогда не «поддержаны»), [BUG-502](bugs/BUG-502-OPEN.md) (`sign()`/`round()`/`mod()`/`rem()`/`abs()` в `calc()` не реализованы), [BUG-503](bugs/BUG-503-OPEN.md) (`animationend`/`transitionend` не срабатывают для реальной анимации, 9 файлов TIMEOUT/NOTRUN). Committed `.ini` на все 49 непройденных файлов, повторный прогон **из самого worktree** подтверждает **0 unexpected passes**. 2 файла без атрибуции (`variable-animation-guaranteed-invalid.html` — checkLayout width 0 повсеместно, механизм не разобран; `variable-reference-refresh.html` — TIMEOUT, iframe `load` предположительно не срабатывает). Детали — docs/wpt-status.md, строка `css`. Остаток DoD — продолжение на прочих `css-*`-модулях/`selectors`/`cssom`-соседях — задел для среза 11. **Срез 11 (2026-08-02) готов на `css/css-overflow`**: 197 testharness id, 157/197 harness OK, 194/958 сабтестов; поимённая триаж → 2 новых [BUG-504](bugs/BUG-504-OPEN.md) (scrollable-overflow scrollWidth/scrollHeight игнорирует CSS transform, подтверждено чтением кода content_width/content_height в crates/engine/layout/src/lib.rs + живой пробой, 20 файлов) и [BUG-505](bugs/BUG-505-OPEN.md) (CSS Overflow L3-L5 свойства/псевдоэлементы text-overflow/line-clamp/block-ellipsis/overflow-clip-margin/scroll-axis-lock/scrollbar-gutter/-webkit-box/::scroll-marker/::scroll-button()/scroll-target-group практически не реализованы, 60 файлов) + расширены [BUG-360](bugs/BUG-360-OPEN.md) (крупнейшее расширение — весь check-layout-th.js-протокол <body onload=…> мёртв на этой категории, 25 файлов, диагностировано живой --mcp-live-port-пробой), [BUG-384](bugs/BUG-384-OPEN.md) (+18 файлов), [BUG-477](bugs/BUG-477-OPEN.md) (+5 файлов). Committed .ini на 128/183 непройденных файлов, повторный прогон подтверждает 0 unexpected passes. 55 файлов намеренно без атрибуции: 38 на известном гэпе исполнителя test_driver.Actions (WPT-RUN-2), 12 на невендоренном /dom/events/scrolling/scroll_support.js (класс WPT-RUN-1), 5 индивидуальных без ясной причины. Детали — docs/wpt-status.md, строка `css`. Остаток DoD — продолжение на прочих css-*-модулях/selectors/cssom-соседях — задел для среза 12."
       }
      ]
     }
@@ -7610,7 +7603,7 @@
   },
   "BUG-467": {
    "status": "open",
-   "title": "`document.fonts.ready` (FontFaceSet.ready) не реализован — свойство `ready` отсутствует на объекте `document.fonts`, `.then(...)` на `undefined` бросает синхрон…",
+   "title": "CSS Font Loading API практически не реализована: глобальные `FontFace`/`FontFaceSet`/`FontFaceSetLoadEvent` отсутствуют вовсе, `document.fonts` — урезанный read…",
    "component": "js (`crates/js/src/dom.rs:6770` — `_lumen_get_fonts()`)",
    "date": null,
    "debtor": false
@@ -7880,6 +7873,41 @@
    "component": "css-parser/layout (`crates/engine/layout/src/style.rs::apply_declaration`, селекторный матчинг)",
    "date": null,
    "debtor": false
+  },
+  "BUG-506": {
+   "status": "open",
+   "title": "Внешний `<script src=\"../other-category/support/helper.js\">` (относительный путь через границу каталога) не выполняется до зависимого инлайн-кода под реальным w…",
+   "component": "неясно — вероятно порядок загрузки скриптов в шелле или тайминг, специфичный для wptrunner/BiDi-навигации",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-507": {
+   "status": "open",
+   "title": "wrap-through\" crates/` — ноль совпадений)",
+   "component": "css-parser/layout (свойство не распознаётся нигде, `grep -rn \"wrap-flow\\",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-508": {
+   "status": "open",
+   "title": "dynamic_range_limit\" crates/` — ноль совпадений)",
+   "component": "css-parser/layout (свойство не распознаётся нигде, `grep -rn \"dynamic-range-limit\\",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-509": {
+   "status": "open",
+   "title": "Загрузка внешнего CSS всегда декодирует байты как UTF-8 lossy — алгоритм CSS Syntax \"determine the fallback encoding\" (BOM/`@charset`/HTTP `Content-Type` charse…",
+   "component": "shell (`crates/shell/src/main.rs::fetch_stylesheet_text`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-510": {
+   "status": "open",
+   "title": "Токенизатор пропускает пробелы по Unicode `White_Space` (`char::is_whitespace()`) вместо спекового набора из 5 ASCII-символов — U+000B/U+0085 ошибочно работают…",
+   "component": "css-parser (`crates/engine/css-parser/src/parser.rs::skip_ws_and_comments`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -7898,6 +7926,9 @@
    "BUG-115",
    "BUG-217",
    "BUG-502"
+  ],
+  "css-parser (`crates/engine/css-parser/src/parser.rs::skip_ws_and_comments`)": [
+   "BUG-510"
   ],
   "css-parser (нет обработки нигде в `css-parser`/`layout`)": [
    "BUG-487"
@@ -7920,6 +7951,12 @@
   ],
   "css-parser/layout (`crates/engine/layout/src/style.rs::apply_declaration`, селекторный матчинг)": [
    "BUG-505"
+  ],
+  "css-parser/layout (свойство не распознаётся нигде, `grep -rn \"dynamic-range-limit\\": [
+   "BUG-508"
+  ],
+  "css-parser/layout (свойство не распознаётся нигде, `grep -rn \"wrap-flow\\": [
+   "BUG-507"
   ],
   "css-parser/paint": [
    "BUG-016",
@@ -8481,6 +8518,9 @@
   "shell (`chrome_model_snapshot`, `panels/shields_panel.rs`, `panels/permission_panel.rs`), chrome (`ChromeModel::permissions`, `assets/chrome/chrome.html` `#permPopover`)": [
    "BUG-411"
   ],
+  "shell (`crates/shell/src/main.rs::fetch_stylesheet_text`)": [
+   "BUG-509"
+  ],
   "shell (`crates/shell/src/main.rs::parse_and_layout` — порядок фаз `parse → CSS → run_scripts_with_dom → images → layout`; `notify_dom_content_loaded` на `main.rs:5466`), js (`crates/js/src/dom.rs` — нативы читают снимок и не умеют его запросить)": [
    "BUG-443"
   ],
@@ -8568,6 +8608,9 @@
   ],
   "wptrunner-интеграция (`browsers/lumen.py` `env_options`)": [
    "BUG-301"
+  ],
+  "неясно — вероятно порядок загрузки скриптов в шелле или тайминг, специфичный для wptrunner/BiDi-навигации": [
+   "BUG-506"
   ]
  }
 }

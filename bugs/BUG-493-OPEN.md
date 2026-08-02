@@ -234,3 +234,20 @@ this bug's presence — only assertions against a literal or a value obtained
 outside the affected window surface it. 10 subtests / 1 file this slice.
 `.ini` under `tests/wpt/metadata/css/css-forms/appearance-base-basic.html.ini`,
 `expected: FAIL` per subtest.
+
+## Срез 19 (`css/css-nesting`, 2026-08-03)
+
+9 files, 12 subtests — plain top-level-script instances of the same gap, no
+new masking shape. Each file's first assertion reads `getComputedStyle()`
+(`color`/`zIndex`/a custom-property-via-`--x` combined with a standard
+property) synchronously right after the `<style>`+markup that defines the
+value, and gets `""` instead of the real computed value; every one of these
+files would pass if the same assertion ran from a second, separate `eval()`
+call (not verified per-file this slice, per the established mechanism —
+see [[project_wpt_run3_css_easing_slice15_landed]] et al.). Two files worth
+noting: `invalidation-003.html`/`invalidation-004.html` have a *second*
+assertion later in the same `test()` that would exercise
+[BUG-471](BUG-471-OPEN.md) (`document.styleSheets[0].rules[...]`) — never
+reached, since the first assertion throws first; `.ini` attributes both
+files to this bug only. `.ini` under `tests/wpt/metadata/css/css-nesting/`
+for all 9 files.
