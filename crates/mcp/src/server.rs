@@ -598,7 +598,7 @@ mod tests {
             Ok(())
         }
 
-        fn eval(&self, _js: &str) -> lumen_core::error::Result<String> {
+        fn eval(&mut self, _js: &str) -> lumen_core::error::Result<String> {
             Ok("null".to_string())
         }
 

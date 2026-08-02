@@ -88,11 +88,21 @@ headless pipeline without winit/wgpu/ffmpeg.
   shell): navigation still succeeds, only `click`/`type_text`/`eval` return `Err` for that
   page. `screenshot()` is cfg-gated: with `cpu-render` it calls `screenshot_cpu_png()` (no GPU
   adapter needed — this is what makes headless MCP `screenshot` work without a window);
-  without it, the old GPU `Renderer::new_headless` path is unchanged. None of this triggers a
-  relayout — `layout_root`/`flat_tree` stay fixed from `navigate()` time, so
-  `layout_snapshot`/`computed_style*`/`screenshot` don't reflect DOM mutations made via
-  `click`/`type_text`/`eval` (matches `WinitSession`'s existing limitation; full
-  interactive-JS-driven relayout is a separate, much larger slice). `crates/shell/Cargo.toml`:
+  without it, the old GPU `Renderer::new_headless` path is unchanged. **DEVX-9 (2026-08-02):**
+  `click`, `type_text`, and a successful `eval` now call the private `relayout()`, which
+  re-runs style+layout+display-list-build+compositor-commit via `layout_and_commit` — the same
+  helper `run_pipeline` uses for the first layout after `navigate()`, so the two paths can't
+  drift apart on how a `LayoutBox`/display list is produced from a `Document`. `SessionState`
+  keeps the parsed `Stylesheet` (`Arc<lumen_css_parser::Stylesheet>`) alongside `doc` so a
+  relayout doesn't need to re-parse CSS. `layout_snapshot`/`layout_box_by_selector`/
+  `computed_style*`/`screenshot` now reflect DOM mutations made via `click`/`type_text`/`eval`,
+  not just the state at `navigate()` — closing the `mutate → style → layout → paint → snapshot`
+  cycle the deterministic CPU gate (`cases::snapshot_cpu`/`scripted_render`) needs for pages
+  whose scripts change geometry. `BrowserSession::eval`'s receiver changed `&self` → `&mut self`
+  for this (all three implementers + `lumen-bidi-server`'s two call sites updated — mechanical,
+  every existing caller already held its session as `&mut`). `WinitSession` keeps the old
+  no-relayout behavior — DEVX-9 scoped to `InProcessSession` only (`docs/tasks/
+  p1-introspection-track.md`). `crates/shell/Cargo.toml`:
   `lumen-driver` is taken with its defaults plus an explicit `cpu-render`, and
   `lumen-driver`'s own defaults are `["cpu-render", "v8"]` — so a plain
   `cargo build -p lumen-shell` (default features) ships a headless MCP that Just Works.
@@ -135,7 +145,7 @@ headless pipeline without winit/wgpu/ffmpeg.
 - `screenshot_cpu_rgba/png` (feature `cpu-render`): renders through the deterministic tiny-skia CPU path for cross-OS pixel-identical snapshots.
 - **`run_pipeline` runs the page's inline classic `<script>` before layout** (BUG-429), mirroring the shell's `parse_and_layout` → `run_scripts_with_dom` → layout order: the document is wrapped in `Arc<Mutex<Document>>`, the V8 runtime is installed against it, `run_page_scripts` evaluates each inline script in document order and advances `readyState` to `interactive` → `complete`, and only then are the box tree and display list built. Moving the V8 install to the end (as it was) makes script-built DOM invisible to layout. Since S12b-23 `run_page_scripts` also evaluates inline `<script type="module">` bodies through `eval_module`, after the classic ones (HTML LS §8.1.3.1 — modules are deferred); their `import`s resolve only against modules registered on the runtime, since this path still must not fetch ([BUG-446](../bugs/BUG-446-OPEN.md)). External `<script src>` stays deliberately skipped — a deterministic offline path must not fetch; the count of skipped externals goes to stderr rather than being swallowed.
 - **`flush_canvas_updates` is a *drain*, not a read** — it returns each dirty `<canvas>` buffer exactly once and clears the dirty set. The live shell gets away with calling it per frame; `InProcessSession` has no frame loop, so it accumulates the drains into `canvas_images: Mutex<HashMap<u32, Arc<Image>>>` and hands the whole set to `render_to_image_cpu` on every screenshot (key `canvas:{nid}` — the same string `display_list.rs` puts in `DrawImage.src`). Draining straight into a local would blank the canvas on the second screenshot (BUG-429).
-- **`run_pipeline` publishes the layout snapshot into the V8 runtime right after `layout_measured`** (BUG-382): `getComputedStyle()`/`getBoundingClientRect()` answer from the map the embedder pushes (`update_layout_rects`/`update_computed_styles`), never by querying the layout engine. This session has no relayout path to piggyback on, so before the fix every property read back as `""` and every rect as all-zeros for the whole session. Any future path that re-lays out (a relayout after `click`/`type_text`, a viewport change) must re-publish, or JS silently keeps the stale geometry. Gate: `tests/cases/layout_snapshot_to_js.rs`.
+- **`run_pipeline` publishes the layout snapshot into the V8 runtime right after `layout_measured`** (BUG-382): `getComputedStyle()`/`getBoundingClientRect()` answer from the map the embedder pushes (`update_layout_rects`/`update_computed_styles`), never by querying the layout engine. This session has no relayout path to piggyback on, so before the fix every property read back as `""` and every rect as all-zeros for the whole session. Any future path that re-lays out (a relayout after `click`/`type_text`, a viewport change) must re-publish, or JS silently keeps the stale geometry — satisfied by construction since DEVX-9's `relayout()` shares `layout_and_commit` with `run_pipeline`, so the snapshot-push happens on both paths automatically. Gate: `tests/cases/layout_snapshot_to_js.rs`.
 - Decoded `<img>` pixels are still absent from that image set — the session fetches no subresources, so every image box paints the grey placeholder ([BUG-430](../bugs/BUG-430-OPEN.md)).
 - `SessionState.doc: Arc<Mutex<Document>>` (DEVX-5) — every read/write site locks it; the lock is never held across a `navigate()`/`self.` call that could re-enter (`resolve_target_node` and friends take `&Document` directly, not `&SessionState`, so they can run under an already-held lock without deadlocking).
 - `driver/tests/snapshot_cpu.rs` (feature `cpu-render`): pixel-compares all 57 graphic_tests pages against committed references in `graphic_tests/snapshots/cpu/`. Regenerate: `SAVE_CPU_SNAPSHOTS=1 cargo test -p lumen-driver --features cpu-render`.

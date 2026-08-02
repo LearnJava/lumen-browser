@@ -1111,7 +1111,7 @@ fn script_evaluate(id: i64, params: &JsonValue, state: &mut BidiState) -> Dispat
         .unwrap_or(false);
 
     let expression = params.get("expression").and_then(|v| v.as_str());
-    let result = match (expression, &state.live) {
+    let result = match (expression, &mut state.live) {
         (Some(expr), Some(live)) if await_promise => match eval_await_promise(live, expr) {
             Ok(rv) => rv,
             Err(e) => {
@@ -1212,7 +1212,7 @@ fn undefined_remote_value() -> JsonValue {
 /// object (`{type:"string", value:"{}"}`), matching the non-awaited path. This
 /// limitation is acceptable because the awaited-value use cases (`Promise.resolve`,
 /// sync `async` functions) settle purely on microtasks.
-fn eval_await_promise(live: &LiveWindowSession, expr: &str) -> Result<JsonValue, String> {
+fn eval_await_promise(live: &mut LiveWindowSession, expr: &str) -> Result<JsonValue, String> {
     // Round 1: evaluate the expression, record its settled outcome on a global.
     let setup = format!(
         "(function(){{\
