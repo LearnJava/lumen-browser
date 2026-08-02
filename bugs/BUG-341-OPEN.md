@@ -4197,6 +4197,114 @@ rule to report rather than force a result, this queue pauses here again —
 **same terms as every prior pause: not abandoned, resume only on explicit
 request.**
 
+## S33 — general cache removed (proven net-negative, S32); replaced with a targeted, zero-overhead `lay_out_grid` fix; BUG-341's actual target confirmed unreachable by any cache-shaped mechanism
+
+Branch `p1-bug341-s33`. Resumed on explicit user request ("build the cache or
+find another approach"). S32's general mechanism was net-negative and, per its
+own recommendation, two untried directions remained: (a) key the cache on the
+resolved size *values* instead of a `style` comparison the algorithm's own
+bookkeeping always defeats, (b) defer cloning to a key's second sighting.
+Direction (b) was checked against S32's own data first (before writing code,
+per `docs/perf-method.md` §1): the one real hit case this codebase has —
+CSS Grid's probe/final pair — occurs **exactly twice**, never three-plus times
+(confirmed by `layout_result_cache_matches_uncached_on_grid_probe_pass`'s own
+2-call fixture), so "clone only on second sighting, serve on third" would have
+zeroed out the *only* hit the mechanism ever produced — direction (b) doesn't
+fit this codebase's actual repeat shape and was dropped without writing it.
+Direction (a) is the real fix but is a sizing-API change (thread the flex
+placement pass's resolved size into `lay_out`/`lay_out_inner` as an explicit
+parameter instead of writing it through `style` via `SavedItemSizing`) — out
+of scope for one slice, and would not even move BUG-341's own target (see
+below), so also not attempted.
+
+**New finding that changes the shape of this whole investigation:**
+`grep -rln "display:\s*grid" crates/chrome/` returns nothing —
+**`crates/chrome/` contains no CSS Grid usage anywhere.** CC-12's gate
+document is 100% flex. This means S32's *one* real win (CSS Grid's
+probe/final pair sharing a style `Arc`) was **never reachable from BUG-341's
+own target in the first place** — not "small", literally zero, independent of
+hit rate or clone cost. Combined with S28-S32's already-established finding
+that flex items structurally cannot pass a style-`ptr_eq` guard
+(`SavedItemSizing`'s double `Arc::make_mut`), this closes the door
+definitively: **no cache-shaped mechanism keyed on style identity can reach
+CC-12's gate, regardless of implementation quality.** Five slices (S28-S33)
+converge on the same wall from different angles (build it, measure hit rate,
+measure clone cost, check the repeat-shape, check what the target document
+even uses) — this is now a structural conclusion, not an unproven hypothesis.
+
+**Given that, this slice removed the general S32 mechanism entirely**
+(`LayoutResultKey`, `LayoutResultEntry`, the cache-check block inside
+`lay_out()`, `cacheable_for_layout_result_cache`, `LayoutResultCacheStats`,
+`set_layout_result_cache`/`layout_result_cache_enabled`/
+`take_layout_result_cache_stats`) rather than leave a proven net-negative,
+gated-off mechanism sitting in the tree. `lay_out()` is back to a plain
+`lay_out_inner` wrapper, byte-identical to its pre-S28 form.
+
+**Replaced with a targeted, zero-overhead fix scoped to `lay_out_grid`
+itself** (`crates/engine/layout/src/box_tree.rs`, Step 4/Step 5): a grid
+item's probe result (Step 4, "Layout at temporary position (y=0)") is now
+directly reused for Step 5's final positioning pass instead of re-derived,
+for every non-subgrid item — not just the lucky cases a general cache could
+opportunistically hit. This is safe *by construction*, not by luck:
+`col_offsets`/`col_widths` are resolved once, before Step 4, and untouched
+until Step 5, so `cell_w` is bit-identical for both passes for a given item
+unconditionally (proven, not measured) — only the item's *position* differs
+(`translate_subtree` handles that, same mechanism S32 already used and
+tested). Subgrid items are excluded (their own recursive `lay_out_grid` reads
+a thread-local track context that genuinely differs between the two passes —
+same hazard S32's `cacheable_for_layout_result_cache` guarded against, now
+enforced locally by simply not attempting reuse for that arm).
+`CV_AUTO_TOUCHED` (kept, doc comment rewritten) still guards against
+`content-visibility: auto`'s scroll-dependent skip decision the same way,
+scoped to wrap just the probe call instead of every `lay_out()` call in the
+document — a real hazard proven, not assumed, by a new differential test
+(`grid_probe_reuse_refuses_a_content_visibility_auto_item`: a `.cv` item in a
+grid row far enough down to be skipped at its *real* position but not at
+Step 4's `y=0` probe position; asserts `cv_should_skip` actually recorded a
+skip, which only happens if the item was genuinely recomputed, not replayed
+from a stale probe).
+
+Because the mechanism now applies unconditionally (no thread-local toggle),
+there is no "cache on/off" A/B left to measure — `bug341_s32_layout_result_cache_share`
+(the chrome-fixture harness) was removed along with the mechanism it measured;
+a comment in its place in `crates/shell/src/main.rs` records why. Correctness
+was instead verified two ways: (1) `grid_probe_reuse_repositions_second_row_correctly`
++ `grid_probe_reuse_refuses_a_content_visibility_auto_item`, two new
+differential tests in `lumen-layout` (`cargo test -p lumen-layout`: 3469
+passed, 2 failed — same pre-existing BUG-339 pair, not a regression); (2)
+`python graphic_tests/dump_golden.py` (dev-release build) — all 12
+`--dump-layout`/`--dump-display-list` dumps across the fixed page set
+(including `35-grid-named-areas.html`, the one CSS Grid fixture in the set)
+match the committed golden reference byte-for-byte, proving display-list
+neutrality per `docs/graphic-tests.md`'s rule for changes that cannot move
+pixels. `cargo clippy -p lumen-layout --all-targets` and
+`-p lumen-shell --all-targets` both clean.
+
+**Net effect on CC-12 (BUG-341's actual target): none, by design** — the
+targeted fix only helps CSS Grid documents (real wins there, verified
+correct), and CC-12's chrome document uses no grid, so this slice does not
+move the gate at all, in either direction (no longer net-negative either,
+since the negative mechanism is gone). This is not a regression from where
+S27 left the gate; it is the honest floor of what a cache-shaped lever could
+ever contribute to *this specific* gate, now demonstrated conclusively rather
+than assumed.
+
+**Recommendation for whoever resumes:** stop pursuing cache/memoization
+shapes for CC-12 — five slices have now shown from every angle (hit rate,
+clone cost, repeat-shape, and finally "does the target even use the one
+pattern that helps") that this lever is exhausted for the flex-item
+redundancy. The real next lever is eliminating `SavedItemSizing`'s
+style-mutation dance itself: thread `lay_out_flex`'s resolved main/cross size
+into `lay_out`/`lay_out_inner` as an explicit override parameter instead of
+writing it through `style` (`Arc::make_mut`) and restoring it afterward. This
+is a sizing-API change touching a code path used by every box in the engine
+(percentages, aspect-ratio, replaced elements, table cells all read
+`style.width`/`style.height`), so it needs its own careful, scoped
+investigation — not a quick follow-up slice — but it is the only remaining
+path that could actually remove the double-layout cost rather than merely
+detect-and-skip it after the fact. Standing pause terms unchanged: not
+abandoned, resume only on explicit request.
+
 ## Repro
 
 ```bash
@@ -4212,8 +4320,12 @@ cargo test -p lumen-shell --profile dev-release bug341_s20_stage_census -- --ign
 cargo test -p lumen-shell --profile dev-release bug341_s21_cascade_index_census -- --ignored --nocapture
 cargo test -p lumen-shell --profile dev-release bug341_s27_walk_census -- --ignored --nocapture
 cargo test -p lumen-shell --profile dev-release bug341_s30_flex_key_census -- --ignored --nocapture
-cargo test -p lumen-shell --profile dev-release bug341_s32_layout_result_cache_share -- --ignored --nocapture
 ```
+
+S33 removed `bug341_s32_layout_result_cache_share` along with the general
+cache mechanism it measured — see the S33 section above for why (no toggle
+left to A/B, and `crates/chrome/` uses no CSS Grid so the fixture had nothing
+left to measure a difference on either way).
 
 S32 added `bug341_s32_layout_result_cache_share`, a new measurement (not an
 extension of a prior one) — see its own section above for the numbers and why
