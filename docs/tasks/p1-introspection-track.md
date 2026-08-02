@@ -499,7 +499,7 @@ MCP: `x-explain-element` — первый инструмент, реализую
 
 ---
 
-## DEVX-11: `explain_page()` (S, P1)
+## DEVX-11: `explain_page()` (S, P1) — ЗАКРЫТ (2026-08-02)
 
 **Зависит от:** `DEVX-8a`, `DEVX-10`. Смыкается с `DEVX-13`.
 
@@ -519,6 +519,85 @@ JSON, человеческий отчёт — производная над ни
 а не считать заново.
 
 **Уровень по ADR-024:** L1, имя `x-explain-page`.
+
+**Итог (P1, 2026-08-02):** реализация — session-agnostic
+`crates/driver/src/explain.rs::explain_page(&LayoutBox) -> ExplainPage`: один
+обход дерева считает `box_count`/`anonymous_box_count`/`overflow_element_count`
+(последний — `overflow-x`/`overflow-y` ≠ `visible`; «анонимный» намеренно узко —
+только `BoxRole::AnonymousBlock`/`AnonymousInlineRun`, `Pseudo` исключён как
+отдельная категория generated-content, не fixup-обёртки), затем один вызов
+`build_display_list_ordered` даёт `command_count`/`max_clip_depth` (максимум
+`clip_depth` по всем span'ам `ProvenanceIndex`).
+
+**Инвариантные счётчики — не рефактор паникующих DEVX-8a/8b-проверок, а
+отдельный обход рядом с ними.** `lumen_layout::count_geometry_violations`
+(`GeometryViolationCounts { non_finite, containment }`) и
+`lumen_paint::count_paint_violations` (`PaintViolationCounts { coverage,
+clip_balance, origin_resolution, visible_missing_span }`) написаны заново, а
+не выведены рефакторингом `check_geometry`/`check` — те уже гейтованы (0
+срабатываний на полном `graphic_tests`/`samples` корпусе) и трогать их ради
+переиспользования кода означало бы риск для уже провалидированного пути.
+Счётный вариант обязан НЕ паниковать даже на некорректных входных данных:
+`count_coverage_violations` явно отбраковывает malformed span (инвертированный
+или выходящий за границы диапазон) вместо индексации с паникой, на которую
+полагается `check_coverage`'s `assert!`-guard — иначе один битый span уронил бы
+весь batch/corpus-запрос вместо того, чтобы попасть в отчёт как находка.
+
+**`ExplainPage::invariant_violations` уже, чем буквальная постановка.**
+DEVX-8a — пять подпроверок; только геометрическая (в `lumen_layout::invariants`)
+имеет оформленный, независимо тестируемый API. Три прочих (`var()` в
+`style.rs::apply_declaration`, containing-block в `lay_out_inner`, DOM-цикл в
+`lumen-dom`'s `append_child`/`insert_before`/`insert_after`) — inline
+`debug_assert!` на горячих путях без отдельного модуля; заворачивать их в
+счётный вариант означало бы трогать код вне скоупа этой (S) задачи. Аналогично
+paint's `PropertyTrees::assert_every_node_reachable_from_root` — не в
+`invariants.rs`, не покрыт. Тот же дух сужения, что у DEVX-8a/8b/10 (каждый
+нашёл спецификацию шире факта и сузил её с объяснением, а не ослабил проверку).
+
+**`relayout_count` — не из BUG-341's box_tree.rs счётчиков.** Постановка
+задачи предлагала «часть счётчиков уже считается в box_tree.rs — выставить, а
+не считать заново», имея в виду `BoxCopyStats`/`take_box_probe_ns` и подобные
+BUG-341 S18-S27 диагностические атомики. Решено НЕ использовать их: это
+process-wide `AtomicU64`-census, включаемый флагом
+(`set_box_time_diagnostics`/`set_box_build_diagnostics`), задокументированный
+как «не должен работать одновременно с другим проходом layout» и
+взаимодействующий с другими census-механизмами того же трека — включение его
+по умолчанию для read-only introspection-вызова означало бы побочный эффект
+на процесс-wide состояние и потенциальную коллизию с приостановленной
+(решение пользователя 2026-07-28) работой BUG-341. Вместо этого —
+локальный, всегда включённый счётчик: новое поле
+`InProcessSession::SessionState::layout_pass_count`, инкрементируемое в общем
+хвосте `layout_and_commit` (`navigate()` → `1`, каждый DEVX-9 `relayout()` →
+`+1`). `WinitSession`/`LiveWindowSession` оставляют `relayout_count: None` —
+задокументированные гэпы (`WinitSession`'s `click`/`type_text`/`eval` вообще
+не релейаутят после мутации, DEVX-9 закрыл цикл только для
+`InProcessSession`; `LiveWindowSession` — SDC-2 MVP-заглушка, тот же гэп что у
+`explain_element`).
+
+**«Время по фазам» — не время оригинального style/layout/paint прохода,
+построившего дерево, а время самого вызова `explain_page`.** Для уже
+построенного дерева эти данные не существуют; повторный прогон полного
+пайплайна ради их получения одновременно нарушил бы контракт
+read-only-интроспекции и удвоил бы реальную стоимость layout. `phase_ns`
+считает две фазы этого самого вызова (`tree_walk_ns`, `display_list_build_ns`)
+— по-прежнему осмысленно в тех же двух режимах сравнения (диф против
+предыдущего вызова на той же странице, профиль по корпусу — засечь выброс по
+стоимости самой интроспекции).
+
+MCP: `x-explain-page` — второй инструмент, помеченный
+`"experimental": true` (ADR-024 L1).
+
+Тесты: 6 новых юнит-тестов в `lumen-layout`/`lumen-paint`'s `invariants.rs`
+(нулевой счёт на чистом дереве/списке, счёт на синтетическом
+gap+overlap/malformed span/несбалансированном клипе); 3 DoD-теста в
+`crates/driver/tests/cases/test_devx11_explain_page.rs` (телеметрия считает
+anonymous-inline-run и overflow-элемент; нулевые инварианты на обычной
+странице; `relayout_count` `1`→`2` после `eval`-мутации); 2 новых теста в
+`lumen-mcp` (список инструментов = 10, `x-explain-page` помечен
+`experimental`, успешный вызов). Гейт: `graphic_tests/dump_golden.py` —
+чисто аддитивный read-only слой поверх уже построенных `LayoutBox`/display
+list, не трогает конструирование боксов (`box_tree.rs`) или эмиссию команд
+(`build_display_list_ordered`) — полный графический прогон не требовался.
 
 ---
 

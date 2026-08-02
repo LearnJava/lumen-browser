@@ -207,6 +207,97 @@ pub struct ExplainElement {
     pub heuristic: Option<String>,
 }
 
+/// Page-level aggregate for [`BrowserSession::explain_page`] (DEVX-11, ADR-024
+/// L1 `x-explain-page`): invariant-firing counts by category **plus**
+/// telemetry — box counts, overflow, commands, clip depth, relayouts, timing.
+///
+/// **Design constraint (DEVX-11):** every field here is a machine-readable
+/// counter meant for *comparison*, not for standalone human reading — "17
+/// overflow elements" means nothing in isolation. Meaning shows up in two
+/// modes: diffing two runs of the same page, or profiling across a corpus.
+/// This is why `explain_page` and DEVX-13 (structural tree diff) are one
+/// ratchet: a counter diff plus a structural diff.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ExplainPage {
+    /// Total number of `LayoutBox` nodes in the tree, inclusive of the root.
+    pub box_count: usize,
+    /// Boxes with `BoxRole::AnonymousBlock` or `BoxRole::AnonymousInlineRun`
+    /// — synthesised wrappers with no element of their own. Deliberately
+    /// excludes `BoxRole::Pseudo` (`::before`/`::after`/…): those are
+    /// generated content tied to a real selector match, a different category
+    /// from an anonymous flow-fixup wrapper.
+    pub anonymous_box_count: usize,
+    /// Boxes with `overflow-x` and/or `overflow-y` other than `visible`.
+    pub overflow_element_count: usize,
+    /// Total display-list commands for the page.
+    pub command_count: usize,
+    /// Maximum clip-stack depth across every provenance span in the page.
+    /// `0` when the page produced no clips at all.
+    pub max_clip_depth: u16,
+    /// Number of full style+layout passes since the last navigation —
+    /// `navigate()`'s initial layout counts as `1`. `None` when the session
+    /// backing this query doesn't track the count ([`WinitSession`](crate::WinitSession),
+    /// [`LiveWindowSession`](crate::LiveWindowSession) — a documented gap,
+    /// same shape as [`ExplainElement::layer`] always being `Some(0)`).
+    pub relayout_count: Option<u64>,
+    /// DEVX-8a/8b invariant-firing counts by category — see
+    /// [`InvariantViolationCounts`]. All-zero on every page this track has
+    /// been validated against; a nonzero count here is a real engine bug,
+    /// not a false positive (same "don't loosen the check" rule as the
+    /// panicking invariants these counts mirror).
+    pub invariant_violations: InvariantViolationCounts,
+    /// Wall-clock cost of computing this `explain_page` snapshot itself, by
+    /// phase — **not** the cost of the original style/layout/paint pass that
+    /// built the tree being inspected (that data doesn't exist for an
+    /// already-built tree, and re-running the full pipeline here would both
+    /// falsify "read-only observability" and double real layout cost). Still
+    /// meaningful for the same two comparison modes as every other field:
+    /// diff against a previous `explain_page` call on the same page, or
+    /// profile across a corpus, to spot an introspection-cost outlier.
+    pub phase_ns: ExplainPagePhaseTimings,
+}
+
+/// DEVX-8a (`lumen_layout::invariants`) and DEVX-8b (`lumen_paint::invariants`)
+/// violation counts, aggregated into [`ExplainPage`]. Narrower than the full
+/// DEVX-8a/8b composition — see `docs/tasks/p1-introspection-track.md` §DEVX-11:
+/// only the two invariant *modules* with an organized, independently testable
+/// counting API are represented as categories here. DEVX-8a's other three
+/// sub-checks (unresolved `var()` in `style.rs`, containing-block in
+/// `lay_out_inner`, DOM-cycle guard in `lumen-dom`) and paint's `PropertyTrees`
+/// reachability check remain pipeline-only `debug_assert!`s with no counting
+/// variant — adding one for each would need touching hot-path code outside
+/// this track's scope, the same kind of narrowing DEVX-8a/8b/10 each did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InvariantViolationCounts {
+    /// DEVX-8a: boxes with a non-finite rect or scroll offset.
+    pub geometry_non_finite: usize,
+    /// DEVX-8a: in-flow block children escaping their parent's border box
+    /// horizontally without an overflow/positioning escape hatch.
+    pub geometry_containment: usize,
+    /// DEVX-8b: display-list commands not covered by exactly one provenance span.
+    pub paint_coverage: usize,
+    /// DEVX-8b: clip/scroll-layer push/pop imbalance.
+    pub paint_clip_balance: usize,
+    /// DEVX-8b: provenance spans whose origin node doesn't resolve.
+    pub paint_origin_resolution: usize,
+    /// DEVX-8b: boxes with visible background/border but no provenance span.
+    pub paint_visible_missing_span: usize,
+}
+
+/// Per-phase timing breakdown for one [`ExplainPage`] call — see that
+/// struct's doc comment for what "phase" means here.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExplainPagePhaseTimings {
+    /// Nanoseconds walking the layout tree to build the box/anonymous/overflow
+    /// counters and run the DEVX-8a geometry-violation count.
+    pub tree_walk_ns: u64,
+    /// Nanoseconds building the display list + provenance index (needed for
+    /// `command_count`, `max_clip_depth`, and the DEVX-8b paint-violation
+    /// count) — the same call `explain_element` makes per-element, here made
+    /// once for the whole page.
+    pub display_list_build_ns: u64,
+}
+
 /// Значения вычисленных CSS-свойств элемента из [`BrowserSession::computed_style`].
 ///
 /// Ключи — lowercase имена CSS-свойств (`"color"`, `"font-size"`, …),

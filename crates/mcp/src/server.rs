@@ -296,6 +296,22 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                 }),
                 experimental: true,
             },
+            McpTool {
+                // ADR-024 L1 (`x-` prefix + `experimental: true`, DEVX-11):
+                // may change shape or vanish between commits. See
+                // `docs/tasks/p1-introspection-track.md` §DEVX-11.
+                name: "x-explain-page".to_string(),
+                description: "EXPERIMENTAL (ADR-024 L1): page-level aggregate — DEVX-8a/8b \
+                    invariant-firing counts by category plus telemetry (box counts, anonymous \
+                    boxes, overflow elements, display-list commands, max clip depth, relayout \
+                    count, timing). Counters are for comparison (diff against a previous run of \
+                    the same page, or a corpus profile), not standalone reading.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+                experimental: true,
+            },
         ];
 
         let response = json!({
@@ -496,6 +512,15 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                     Err(e) => return McpResponse::err(id.clone(), -32603, format!("Explain error: {e}")),
                 }
             }
+            "x-explain-page" => {
+                match self.session.explain_page() {
+                    Ok(explain) => match serde_json::to_value(&explain) {
+                        Ok(v) => v,
+                        Err(e) => return McpResponse::err(id.clone(), -32603, format!("Explain serialization error: {e}")),
+                    },
+                    Err(e) => return McpResponse::err(id.clone(), -32603, format!("Explain error: {e}")),
+                }
+            }
             _ => {
                 return McpResponse::err(id.clone(), -32601, format!("Unknown tool: {name}"));
             }
@@ -661,6 +686,10 @@ mod tests {
             Ok(lumen_driver::ExplainElement::default())
         }
 
+        fn explain_page(&self) -> lumen_core::error::Result<lumen_driver::ExplainPage> {
+            Ok(lumen_driver::ExplainPage::default())
+        }
+
         fn fingerprint_profile(&self) -> lumen_driver::FingerprintProfile {
             lumen_driver::FingerprintProfile::Standard
         }
@@ -737,13 +766,13 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_returns_nine_tools() {
+    fn tools_list_returns_ten_tools() {
         let mut server = McpServer::new(MockSession, VecTransport::new());
         let req = make_request("tools/list", serde_json::json!({}));
         let resp = run_one(&mut server, &req);
         assert!(resp.error.is_none());
         let tools = resp.result.unwrap()["tools"].as_array().cloned().unwrap_or_default();
-        assert_eq!(tools.len(), 9);
+        assert_eq!(tools.len(), 10);
         let names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap_or("")).collect();
         assert!(names.contains(&"navigate"));
         assert!(names.contains(&"new_tab"));
@@ -754,22 +783,23 @@ mod tests {
         assert!(names.contains(&"eval"));
         assert!(names.contains(&"query"));
         assert!(names.contains(&"x-explain-element"));
+        assert!(names.contains(&"x-explain-page"));
     }
 
-    /// ADR-024 L1: `x-explain-element` must carry `"experimental": true` in
-    /// `tools/list`; the pre-ADR-024 tools must NOT carry the key at all
-    /// (`skip_serializing_if`) — their wire shape must stay exactly as it was
-    /// before this task.
+    /// ADR-024 L1: `x-explain-element`/`x-explain-page` must carry
+    /// `"experimental": true` in `tools/list`; the pre-ADR-024 tools must NOT
+    /// carry the key at all (`skip_serializing_if`) — their wire shape must
+    /// stay exactly as it was before this task.
     #[test]
-    fn tools_list_marks_only_explain_element_as_experimental() {
+    fn tools_list_marks_only_x_prefixed_tools_as_experimental() {
         let mut server = McpServer::new(MockSession, VecTransport::new());
         let req = make_request("tools/list", serde_json::json!({}));
         let resp = run_one(&mut server, &req);
         let tools = resp.result.unwrap()["tools"].as_array().cloned().unwrap_or_default();
         for tool in &tools {
             let name = tool["name"].as_str().unwrap_or("");
-            if name == "x-explain-element" {
-                assert_eq!(tool["experimental"], true, "x-explain-element must be marked experimental");
+            if name.starts_with("x-") {
+                assert_eq!(tool["experimental"], true, "{name} must be marked experimental");
             } else {
                 assert!(
                     tool.get("experimental").is_none(),
@@ -801,6 +831,19 @@ mod tests {
         );
         let resp = run_one(&mut server, &req);
         assert!(resp.error.is_some());
+    }
+
+    #[test]
+    fn tools_call_explain_page_ok() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request(
+            "tools/call",
+            serde_json::json!({ "name": "x-explain-page", "arguments": {} }),
+        );
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_none());
+        let result = resp.result.unwrap();
+        assert_eq!(result["box_count"], 0);
     }
 
     #[test]

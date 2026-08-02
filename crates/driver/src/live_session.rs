@@ -25,7 +25,7 @@ use lumen_core::error::{Error, Result};
 use crate::{
     A11yNode, AutomationCommand, AutomationHandle, AutomationReply, AxQuery, BoxModel,
     BrowserSession, ComputedProperties, ComputedStyleSnapshot, ConsoleEntry, ExplainElement,
-    FingerprintProfile, NetworkEntry, NodeRef, ScrollDelta, Target, WaitCondition,
+    ExplainPage, FingerprintProfile, NetworkEntry, NodeRef, ScrollDelta, Target, WaitCondition,
 };
 
 /// Default timeout for a single automation round-trip to the live window.
@@ -122,6 +122,13 @@ impl BrowserSession for LiveWindowSession {
     /// to answer any link of the chain with yet (DEVX-14 tracks closing this).
     fn explain_element(&self, _selector: &str) -> Result<ExplainElement> {
         Ok(ExplainElement::default())
+    }
+
+    /// Not yet wired to the live window (SDC-2 MVP scope, same gap as
+    /// `explain_element`) — always the all-default `ExplainPage` (DEVX-14
+    /// tracks closing this).
+    fn explain_page(&self) -> Result<ExplainPage> {
+        Ok(ExplainPage::default())
     }
 
     /// Not yet wired to the live window (SDC-2 MVP scope) — always empty.

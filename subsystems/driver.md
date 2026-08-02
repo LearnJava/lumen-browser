@@ -127,6 +127,28 @@ headless pipeline without winit/wgpu/ffmpeg.
   guess (zero geometry, or an overflow-clipping ancestor whose rect doesn't intersect the box's) —
   computed only when `commands_emitted == 0`, and explicitly not treated as fact (ADR-024).
 
+- DEVX-11 (2026-08-02): `explain_page()` — page-level aggregate (invariant-firing counts by
+  category plus telemetry), exposed as `BrowserSession::explain_page` and MCP tool `x-explain-page`
+  (ADR-024 L1 — `experimental: true`). Implementation is session-agnostic
+  (`crates/driver/src/explain.rs::explain_page(&LayoutBox) -> ExplainPage`), one tree walk for
+  `box_count`/`anonymous_box_count`/`overflow_element_count` plus one `build_display_list_ordered`
+  call for `command_count`/`max_clip_depth`; `relayout_count` is filled in afterward by
+  `InProcessSession` (new `SessionState::layout_pass_count`, incremented in `layout_and_commit`'s
+  shared tail — `1` after `navigate()`, `+1` per DEVX-9 `relayout()` call) — `WinitSession`/
+  `LiveWindowSession` leave it `None` (documented gaps: `WinitSession` doesn't relayout after
+  mutation at all yet, `LiveWindowSession` is the SDC-2 MVP stub). Invariant counts reuse new
+  non-panicking counting APIs added alongside DEVX-8a/8b's existing `debug_assert!`-only checks —
+  `lumen_layout::count_geometry_violations`/`GeometryViolationCounts` and
+  `lumen_paint::count_paint_violations`/`PaintViolationCounts` — deliberately separate walks from
+  the panicking `check_geometry`/`check` (not a refactor of them), so a violation on one page in a
+  batch/corpus query gets *reported*, not turned into a process abort; `paint`'s coverage counter is
+  additionally defensive against a malformed span range that the panicking version relies on an
+  `assert!` to stop before indexing. `ExplainPage::invariant_violations` covers only the two
+  invariant modules with an organized per-category counting API — DEVX-8a's other three sub-checks
+  (`var()` in `style.rs`, containing-block in `lay_out_inner`, DOM-cycle guard in `lumen-dom`) and
+  paint's `PropertyTrees` reachability check stay pipeline-only `debug_assert!`s, same narrowing
+  spirit as DEVX-8a/8b/10 (`docs/tasks/p1-introspection-track.md` §DEVX-11).
+
 - DEVX-2: non-pixel golden regression layer (`crates/driver/tests/cases/test_devx2_golden.rs`),
   modeled on `graphic_tests` but asserted through `BrowserSession` (`layout_box_by_selector`,
   `computed_style_snapshot`, `query_a11y`/`query_a11y_all`) instead of pixel diffing — runs via
@@ -172,4 +194,4 @@ headless pipeline without winit/wgpu/ffmpeg.
 
 ## Test counts
 
-12 unit tests in `crates/driver/src/session.rs`; 50 structural integration tests `test_00..49.rs`; 1 snapshot gate `snapshot_cpu` covering 57 pages; 7 (of which 2 under feature `v8`, on by default) `WinitSession` automation-command tests in `test_automation_commands.rs`; 6 (+3 under `--features v8`, +1 under its absence) `InProcessSession` automation-command tests in `test_devx5_headless_automation.rs`; 3 scripted-render regression tests in `scripted_render.rs` (feature `cpu-render` + `v8` — page scripts reaching layout, Canvas 2D pixels reaching the raster; BUG-429); 2 snapshot-delivery regression tests in `layout_snapshot_to_js.rs` (feature `v8` — `getComputedStyle`/`getBoundingClientRect` answering with real data after navigation, 4 fresh sessions each; BUG-382); 3 `explain_element` DoD tests in `test_devx10_explain_element.rs` (DEVX-10).
+12 unit tests in `crates/driver/src/session.rs`; 50 structural integration tests `test_00..49.rs`; 1 snapshot gate `snapshot_cpu` covering 57 pages; 7 (of which 2 under feature `v8`, on by default) `WinitSession` automation-command tests in `test_automation_commands.rs`; 6 (+3 under `--features v8`, +1 under its absence) `InProcessSession` automation-command tests in `test_devx5_headless_automation.rs`; 3 scripted-render regression tests in `scripted_render.rs` (feature `cpu-render` + `v8` — page scripts reaching layout, Canvas 2D pixels reaching the raster; BUG-429); 2 snapshot-delivery regression tests in `layout_snapshot_to_js.rs` (feature `v8` — `getComputedStyle`/`getBoundingClientRect` answering with real data after navigation, 4 fresh sessions each; BUG-382); 3 `explain_element` DoD tests in `test_devx10_explain_element.rs` (DEVX-10); 3 `explain_page` DoD tests in `test_devx11_explain_page.rs` (DEVX-11).

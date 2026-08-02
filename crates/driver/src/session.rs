@@ -19,7 +19,7 @@ use lumen_paint::hit_test;
 
 use crate::{
     A11yNode, AxQuery, BoxModel, BrowserSession, ComputedProperties, ComputedStyleSnapshot,
-    ConsoleEntry, ExplainElement, FingerprintProfile, NetworkEntry, NodeRef, ScrollDelta, Target,
+    ConsoleEntry, ExplainElement, ExplainPage, FingerprintProfile, NetworkEntry, NodeRef, ScrollDelta, Target,
     WaitCondition,
     context::SessionContext,
     isolation::OriginIsolationContext,
@@ -42,6 +42,10 @@ struct SessionState {
     stylesheet: Arc<lumen_css_parser::Stylesheet>,
     layout_root: LayoutBox,
     flat_tree: lumen_dom::FlatTree,
+    /// Full style+layout passes since this state was created by `navigate()`
+    /// (DEVX-11 `explain_page`'s `relayout_count`) — `1` for the initial
+    /// pipeline run, incremented once per [`InProcessSession::relayout`] call.
+    layout_pass_count: u64,
 }
 
 /// Headless in-process сессия браузера.
@@ -323,7 +327,7 @@ impl InProcessSession {
         let (layout_root, flat_tree) = self.layout_and_commit(&doc, &sheet)?;
 
         self.current_url = url;
-        self.state = Some(SessionState { doc, stylesheet: sheet, layout_root, flat_tree });
+        self.state = Some(SessionState { doc, stylesheet: sheet, layout_root, flat_tree, layout_pass_count: 1 });
         Ok(())
     }
 
@@ -404,6 +408,7 @@ impl InProcessSession {
         })?;
         state.layout_root = layout_root;
         state.flat_tree = flat_tree;
+        state.layout_pass_count += 1;
         Ok(())
     }
 
@@ -986,6 +991,13 @@ impl BrowserSession for InProcessSession {
         let state = self.state()?;
         let doc = Self::lock_doc(state)?;
         Ok(crate::explain::explain_element(&state.layout_root, &doc, selector))
+    }
+
+    fn explain_page(&self) -> Result<ExplainPage> {
+        let state = self.state()?;
+        let mut out = crate::explain::explain_page(&state.layout_root);
+        out.relayout_count = Some(state.layout_pass_count);
+        Ok(out)
     }
 
     // ── Isolation & Fingerprinting (Task 8E, Phase 1) ────────────────────────

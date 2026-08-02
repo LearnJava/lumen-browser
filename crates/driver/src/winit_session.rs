@@ -23,7 +23,7 @@ use lumen_paint::compositor::{BasicLayerTree, Compositor, ThreadedCompositor};
 
 use crate::{
     A11yNode, AxQuery, BoxModel, BrowserSession, ComputedProperties, ComputedStyleSnapshot,
-    ConsoleEntry, ExplainElement, FingerprintProfile, InputCommand, NetworkEntry, NodeRef,
+    ConsoleEntry, ExplainElement, ExplainPage, FingerprintProfile, InputCommand, NetworkEntry, NodeRef,
     ScrollDelta, Target, WaitCondition, context::SessionContext,
 };
 
@@ -865,6 +865,16 @@ impl BrowserSession for WinitSession {
         let state = self.state()?;
         let state = state.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
         Ok(crate::explain::explain_element(&state.layout_root, &state.doc, selector))
+    }
+
+    /// `relayout_count` stays `None` — unlike `InProcessSession`, `WinitSession`
+    /// doesn't track a layout-pass counter (its `click`/`type_text`/`eval` don't
+    /// relayout at all yet, DEVX-9 only closed that cycle for `InProcessSession`).
+    /// Documented gap, same shape as `explain_element`'s `layer` field.
+    fn explain_page(&self) -> Result<ExplainPage> {
+        let state = self.state()?;
+        let state = state.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+        Ok(crate::explain::explain_page(&state.layout_root))
     }
 
     fn network_log(&self) -> Result<Vec<NetworkEntry>> {
