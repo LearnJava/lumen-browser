@@ -63,6 +63,16 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   JSON result global, tolerating the transient "JS context not available"
   BiDi error while the new document's JS runtime is still installing.
 - `tests/wpt/resources/testharness.js` — vendored upstream client-side test harness.
+- `tests/wpt/resources/check-layout-th.js` — vendored upstream self-checking
+  layout helper (`WPT-RUN-1`, `ROADMAP.md`): reads `data-expected-*`
+  attributes and asserts them, giving `expected width = 342, actual = 318`
+  diagnostics for free. The single most-referenced out-of-category helper in
+  `css/` (1119 files — `tests/wpt/find_missing_resources.py --root css`).
+- `tests/wpt/find_missing_resources.py` — static scan for out-of-category
+  `src=`/`href=`/`url()` references a category's test files 404 on, without
+  running a single test (a live `--all --root css --recursive` run doesn't
+  finish — see `docs/wpt-status.md` row `css`). Use before vendoring more
+  helpers to find the next highest-ROI gap.
 - `tests/wpt/resources/testharnessreport.js` — **ours** (S4) — on harness
   completion, serializes `[url, harness_status, message, stack, subtests]` to
   JSON on `window.__lumen_wpt_results`, polled by `do_test` above.
