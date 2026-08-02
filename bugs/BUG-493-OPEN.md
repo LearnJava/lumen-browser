@@ -205,3 +205,32 @@ files.
 46 subtests / 6 files this slice, the largest single-slice addition to this
 bug to date. `.ini` under `tests/wpt/metadata/css/css-easing/` for all 6
 files, `expected: FAIL` per subtest.
+
+## Срез 16 (`css/css-forms`, 2026-08-02) — new masking facet: comparing two empty reads against each other passes falsely
+
+`appearance-base-basic.html` (10 subtests, one per form-control element)
+compares `getComputedStyle(el).X` against `getComputedStyle(document.body).X`
+for five inherited properties (`color`, `font-size`, `font-family`,
+`font-weight`, `font-style`), all read inside the same synchronous top-level
+`<script>` right after the page's markup — no task boundary, the exact idiom
+this bug already covers. Both sides of each `assert_equals` return `""`
+(cache not yet populated), so all five inherited-property assertions **pass
+by accident** instead of failing — only the sixth assertion in the same
+`test()`, `assert_equals(style.boxSizing, "border-box", ...)`, compares
+against a *literal* rather than another empty read, and that's the one that
+actually surfaces as `FAIL` (`expected "border-box" but got ""`). Live
+`--mcp-live-port` A/B probe against the same markup confirms: same-tick read
+→ `"content-box"` for `boxSizing` (not the empty string wptrunner's log
+shows) is what a *populated* cache would answer wrong-but-non-empty (`appearance:
+base`'s box-sizing reset isn't implemented — a separate, un-filed gap, out of
+scope here since it's masked underneath this bug); a *post-navigate* separate
+`eval()` reads `"content-box"` consistently too, confirming the wptrunner-vs-
+probe discrepancy is entirely explained by this bug's synchronous-read
+mechanism, not a second bug. This is the same failure-masking shape already
+noted for the WAAPI-`currentTime` variant in срез 15, generalized: **any**
+assertion in this bug's window that happens to compare two equally-empty
+reads to each other, rather than to a literal, silently passes and hides
+this bug's presence — only assertions against a literal or a value obtained
+outside the affected window surface it. 10 subtests / 1 file this slice.
+`.ini` under `tests/wpt/metadata/css/css-forms/appearance-base-basic.html.ini`,
+`expected: FAIL` per subtest.

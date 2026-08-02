@@ -139,3 +139,20 @@ the markup element `<div id="reference">` by bare identifier;
 `ReferenceError` aborts the whole script before a single subtest
 registers. `.ini`: `tests/wpt/metadata/css/css-logical/inheritance.html.ini`
 (`expected: TIMEOUT`).
+
+**WPT-RUN-3 срез 16 (`css/css-forms`, 2026-08-02):** 3 files, the bare
+identifier referenced *inside* a `test()` callback (each an isolated `FAIL`,
+harness stays `OK`) — `checkbox-checkmark-animation.html` and
+`radio-checkmark-animation.html` both write `#checkbox`/`#radio` in the
+markup then reference the bare `checkbox`/`radio` identifier synchronously
+inside their single `test()` body (`ReferenceError: checkbox/radio is not
+defined`). `input-text-base-appearance-computed-style.html` is a distinct
+variant worth flagging: the test source itself has an upstream typo —
+`const intial = document.getElementById('initial');` (missing the second
+`i`) declares an unused, misspelled local, while the function below
+(`testProperties`) references the *correctly*-spelled `initial` as a bare
+identifier, relying entirely on named access to resolve it (real browsers
+paper over the typo via this mechanism; Lumen has no such fallback, so the
+typo is fully exposed as `ReferenceError: initial is not defined`). `.ini`
+under `tests/wpt/metadata/css/css-forms/` for all 3 files, `expected: FAIL`
+per affected subtest.
