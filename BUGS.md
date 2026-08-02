@@ -3,7 +3,7 @@
 Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-498)
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-503)
 2. Добавь строку в таблицу ниже со ссылкой на файл
 
 **При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
@@ -510,6 +510,11 @@
 | [BUG-496](bugs/BUG-496-OPEN.md) | OPEN | js (`crates/js/src/dom.rs`, нет `dataset` нигде в `WEB_API_SHIM`) | `HTMLElement.dataset` (DOMStringMap) не реализован вовсе — `grep` ноль совпадений. Скрипт падает на первом же `element.dataset.x`, харнес зависает TIMEOUT с нулём сабтестов. Широкий по потенциальному охвату гэп (частый паттерн `data-*`-атрибутов), измерен пока на 1 файле `css/css-backgrounds`. Найден P2, WPT-RUN-3 срез 9, 2026-08-02 |
 | [BUG-497](bugs/BUG-497-OPEN.md) | OPEN | js (`crates/js/src/dom.rs:4257`, `_lumen_serialize_style`) | `CSSStyleDeclaration.cssText` не добавляет завершающую точку с запятой после последней (единственной) декларации — `"border-radius: 10px"` вместо спекового `"border-radius: 10px;"`. 1 сабтест `css/css-backgrounds`, дефект безусловный (не зависит от входных данных). Найден P2, WPT-RUN-3 срез 9, 2026-08-02 |
 | [BUG-498](bugs/BUG-498-FIXED.md) | FIXED 2026-08-02 | tooling (`tools/wptrunner/wptrunner/browsers/lumen.py::LumenBrowser.executor_browser`) | Регресс DEVX-15: `executor_browser()` не прокидывал `token` в `ExecutorBrowser`, из-за чего `executorlumen.py`'s `connect()` падал `AttributeError` на каждом тесте — 100% BiDi-прогонов wptrunner биты с мержа `5922237e8`. Найден P2, WPT-RUN-3 срез 10, 2026-08-02 |
+| [BUG-499](bugs/BUG-499-OPEN.md) | OPEN | layout/js (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`, `crates/js/src/v8_runtime.rs::_lumen_get_computed_style`) | `getComputedStyle().getPropertyValue('--custom-prop')` всегда возвращает `""` — карта computed-style никогда не сериализует `ComputedStyle::custom_props`, независимо от свежести кэша (не то же самое, что BUG-493) и от того, зарегистрировано ли свойство. Подтверждено живой пробой (`--mcp-port`, раздельные eval-вызовы). 10+ файлов `css/css-variables`. Найден P2, WPT-RUN-3 срез 10, 2026-08-02 |
+| [BUG-500](bugs/BUG-500-OPEN.md) | OPEN | css-parser/layout | `ident()` (CSS Values and Units L5, draft) не реализован вовсе — `grep` ноль совпадений. 1 файл, замаскирован BUG-384 в этом срезе. Найден P2, WPT-RUN-3 срез 10, 2026-08-02 |
+| [BUG-501](bugs/BUG-501-OPEN.md) | OPEN | js/css-parser (`crates/js/src/dom.rs::CSS.supports`, `crates/engine/css-parser/src/parser.rs::SupportsCondition::evaluate`) | `CSS.supports()` — однoаргументная форма не реализует спековый фоллбек «обернуть в скобки и повторить», а кастомные свойства никогда не считаются «поддержанными» ни в какой форме (проверка идёт по фиксированному списку `SUPPORTED_PROPERTIES`, значение полностью игнорируется). Подтверждено живой пробой. 2 файла/5 сабтестов `css/css-variables`. Найден P2, WPT-RUN-3 срез 10, 2026-08-02 |
+| [BUG-502](bugs/BUG-502-OPEN.md) | OPEN | css-parser | `sign()`/`round()`/`mod()`/`rem()`/`abs()` (CSS Values and Units L4 §11, `calc()`-функции) не реализованы вовсе — `grep` ноль совпадений. 1 файл/36 сабтестов `css/css-variables`. Найден P2, WPT-RUN-3 срез 10, 2026-08-02 |
+| [BUG-503](bugs/BUG-503-OPEN.md) | OPEN | js/engine граница (диспетчеризация animation-событий, точное место не изолировано) | `animationend`/предположительно `transitionend` никогда не срабатывают для реальной (не сконструированной вручную) CSS-анимации/transition — `async_test`, ожидающие событие, зависают TIMEOUT. 9 файлов `css/css-variables`. Найден P2, WPT-RUN-3 срез 10, 2026-08-02 |
 ---
 
 ## Ограничения Phase 0 (не баги — запланировано позже)

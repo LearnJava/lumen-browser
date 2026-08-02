@@ -88,3 +88,46 @@ Committed `.ini` for the `outline-width: ...` subtests of
 the same file are [BUG-472](../bugs/BUG-472-OPEN.md) instead — same `.ini`
 file, single header referencing both bugs since `wptmanifest` `.ini` doesn't
 support per-subtest attribution comments).
+
+## Срез 10 (`css/css-variables`, 2026-08-02) — massively broader blast radius, confirmed decisively
+
+This slice's mass run against `css/css-variables` (a category whose ~50-year-old
+Microsoft-authored test files overwhelmingly use the pattern "static markup +
+a plain top-level `<script>` immediately after it that calls
+`getComputedStyle()`, no `createElement`, no explicit relayout trick") showed
+the *same* empty-string symptom on dozens of files — proving this bug's
+mechanism is not limited to same-tick create+mutate+read (the original
+`border-width-rounding.tentative.html` finding), but applies equally to the
+much more common "static element, script runs during initial page parse"
+case. Root-caused decisively via a live `--mcp-port` A/B probe:
+
+```js
+// probe-cv2.html: <div id="t1" style="--x: 20px; width: var(--x);">, followed
+// immediately by an inline <script> (i.e. exactly the WPT idiom above):
+<script>
+  window.__capturedWidth = getComputedStyle(document.getElementById('t1')).getPropertyValue('width');
+</script>
+```
+
+```
+window.__capturedWidth (read via a LATER, separate eval() call)     → ""      (captured DURING the page's own synchronous inline script)
+getComputedStyle(...).getPropertyValue("width") (separate eval call, AFTER navigate() returned) → "20px"  (correct — var() substitution genuinely works once the cache is populated)
+```
+
+This proves the `computed_styles` cache is populated only as a **post-navigation**
+step in the `InProcessSession`/`--mcp-port` path (i.e., *after* `navigate()`
+— and therefore after all of the page's own inline `<script>` tags have
+already run) — never synchronously in response to layout completing during
+the page's own script execution, and *not* by `document.documentElement.offsetHeight`
+either (`variable-animation-from-to.html` explicitly forces this before its
+assertions and still reads `""` for a standard, map-present property).
+Consequently, **any** WPT test — in `css/css-variables` or any other
+category — that reads `getComputedStyle()` synchronously from a `<script>`
+block executed at initial parse time, without an explicit macrotask/event
+boundary (e.g. `load`, a later separate script, `setTimeout`), will observe
+this gap. This is now confirmed as the dominant root cause across most of
+`css/css-variables`'s failures this slice (compounding with
+[BUG-472](BUG-472-OPEN.md) for properties additionally missing from the map,
+and with [BUG-499](BUG-499-OPEN.md) for custom-property reads specifically) —
+see files listed in that category's `.ini` headers for the full list; too
+numerous to enumerate here (roughly two dozen files).

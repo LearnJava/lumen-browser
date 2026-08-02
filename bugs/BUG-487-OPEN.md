@@ -69,3 +69,19 @@ reference point for how origin/layer-scoped rollback is already wired.
 Committed `.ini` under `tests/wpt/metadata/css/css-cascade/` for all 6
 files (4 pure + 2 mixed, `expected: FAIL` on the whole file since the mixed
 files have zero passing subtests either way).
+
+## Срез 10 (`css/css-variables`, 2026-08-02)
+
+Two more files exercise `revert-rule` (`revert-rule-in-fallback.html`,
+`revert-rule-to-var.html`, `var(--unknown, revert-rule)` as a `var()`
+fallback rather than a direct declaration value) but their observed
+failures this slice are entirely masked by
+[BUG-501](BUG-501-OPEN.md) (`CSS.supports()` rejects the unparenthesized
+one-arg condition text `revert-rule` is guarded behind, before any
+`getComputedStyle` assertion runs). Whether `revert-rule` itself works
+correctly as a `var()` fallback once BUG-501 is fixed is unmeasured — given
+this bug's own finding that `revert-rule` has zero implementation anywhere,
+the working assumption is these two files will keep failing (now on a
+`getComputedStyle` mismatch instead of `assert_true`) until this bug is
+fixed too. `.ini` for both files attributes to BUG-501 (the directly
+observed cause); re-check against this bug once BUG-501 lands.

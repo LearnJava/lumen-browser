@@ -72,3 +72,27 @@ Committed `.ini` под `tests/wpt/metadata/css/cssom/` для всех 37
 результату прогона. Срез 9 добавил `.ini` под
 `tests/wpt/metadata/css/css-backgrounds/` для ещё 25 файлов (некоторые
 делят файл с BUG-463/BUG-495 — общий заголовок `.ini` ссылается на оба).
+
+**WPT-RUN-3 срез 10 (`css/css-variables`, 2026-08-02)** — confirmed missing
+keys (full list, checked against `computed_style_to_map` source directly,
+`selector_query.rs:625-945`): `border-spacing`, `box-shadow`, `text-shadow`,
+`perspective-origin`, `transition-duration`, and the entire
+`background-attachment`/`-clip`/`-image`/`-origin`/`-position`/`-repeat`/
+`-size` family (only `background-color` is present — `background` itself, as
+well as `margin`/`padding`/`border`/`border-radius` shorthands, are likewise
+absent; only their physical longhands are in the map). Most of these
+co-occur with [BUG-493](BUG-493-OPEN.md) in the same files (a file testing
+`border-spacing` via `var()` substitution fails at the BUG-493 layer before
+this gap is even reachable — the whole per-node cache entry is empty, not
+just this one key) — flagged here as the *compounding, still-present-after-
+BUG-493-is-fixed* cause for: `variable-substitution-basic.html`
+(`border-spacing`), `variable-substitution-background-properties.html` (7 of
+its 8 properties besides `background-color`), `variable-substitution-shadow-properties.html`
+(`box-shadow`/`text-shadow`), `variable-substitution-shorthands.html`
+(`transition-duration`, 1 of its 51 subtests), `variable-reference-perspective-origin.html`
+(`perspective-origin`), `missing-closing-nested-fallback.html` (`box-shadow`,
+sole cause — this file doesn't hit BUG-493). `variable-presentation-attribute.html`
+additionally exposes a **wider, SVG-specific gap**: none of ~40 SVG
+presentation properties it tests (`stroke-width`, `fill`, `clip-rule`,
+`dominant-baseline`, `alignment-baseline`, …) are in the map at all — same
+mechanism, unmeasured beyond this one file.
