@@ -14385,6 +14385,16 @@ fn apply_declaration(
         decl.value.as_str()
     };
 
+    // DEVX-8a: `val` is the value about to reach property-specific parsing —
+    // `var()`/`env()` expansion above must have fully resolved it (`expand_vars`
+    // loops until `find_var_open` finds none, or bails to `None` and returns
+    // early above). A literal `var(` surviving to here means the expansion loop
+    // has a bug, not that this declaration is "still using variables".
+    debug_assert!(
+        !val.contains("var("),
+        "DEVX-8a: unresolved var() reached property parser: {prop}={val}"
+    );
+
     // CSS Cascade L4 §7: CSS-wide keywords (inherit / initial / unset /
     // revert) применимы к любому свойству. Делается ДО property-specific
     // парсинга, чтобы не дублировать проверку в 30+ branch-ах. font-size

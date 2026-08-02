@@ -24,6 +24,7 @@ pub mod content_visibility;
 pub mod field_sizing;
 pub mod hyphenation;
 pub mod counters;
+mod invariants;
 pub mod font_palette;
 pub mod image_gating;
 pub mod image_set;

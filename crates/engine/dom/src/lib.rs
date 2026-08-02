@@ -1312,9 +1312,29 @@ impl Document {
         })
     }
 
+    /// DEVX-8a: true if `candidate` is `node` itself or one of `node`'s
+    /// ancestors, walking up `parent` links. Used to guard `append_child` /
+    /// `insert_before` / `insert_after` against creating a DOM cycle (moving a
+    /// node under one of its own descendants).
+    fn is_self_or_ancestor(&self, candidate: NodeId, node: NodeId) -> bool {
+        let mut cur = Some(node);
+        while let Some(n) = cur {
+            if n == candidate {
+                return true;
+            }
+            cur = self.nodes[n.index()].parent;
+        }
+        false
+    }
+
     /// Append `child` as the last child of `parent`. If `child` already has a parent, it is detached first.
     pub fn append_child(&mut self, parent: NodeId, child: NodeId) {
         debug_assert!(parent != child, "cannot append a node to itself");
+        debug_assert!(
+            !self.is_self_or_ancestor(child, parent),
+            "DEVX-8a: append_child(parent={parent:?}, child={child:?}) would create a DOM cycle: \
+             child is already an ancestor of parent"
+        );
         self.detach(child);
         self.nodes[child.index()].parent = Some(parent);
         self.nodes[parent.index()].children.push(child);
@@ -1326,11 +1346,16 @@ impl Document {
     /// other than detaching any previous parent of `new_node`). If `reference` is
     /// the last child, `new_node` is appended.
     pub fn insert_after(&mut self, reference: NodeId, new_node: NodeId) {
+        let parent = self.nodes[reference.index()].parent;
+        if let Some(p) = parent {
+            debug_assert!(
+                !self.is_self_or_ancestor(new_node, p),
+                "DEVX-8a: insert_after(reference={reference:?}, new_node={new_node:?}) would create \
+                 a DOM cycle: new_node is already an ancestor of reference's parent"
+            );
+        }
         self.detach(new_node);
-        let parent = match self.nodes[reference.index()].parent {
-            Some(p) => p,
-            None => return,
-        };
+        let Some(parent) = parent else { return };
         let siblings = &mut self.nodes[parent.index()].children;
         let pos = siblings.iter().position(|&n| n == reference).unwrap_or(siblings.len() - 1);
         siblings.insert(pos + 1, new_node);
@@ -1359,11 +1384,16 @@ impl Document {
     /// If `reference` has no parent, `new_node` is left without a parent. If
     /// `new_node` already has a parent it is detached first.
     pub fn insert_before(&mut self, new_node: NodeId, reference: NodeId) {
+        let parent = self.nodes[reference.index()].parent;
+        if let Some(p) = parent {
+            debug_assert!(
+                !self.is_self_or_ancestor(new_node, p),
+                "DEVX-8a: insert_before(new_node={new_node:?}, reference={reference:?}) would create \
+                 a DOM cycle: new_node is already an ancestor of reference's parent"
+            );
+        }
         self.detach(new_node);
-        let parent = match self.nodes[reference.index()].parent {
-            Some(p) => p,
-            None => return,
-        };
+        let Some(parent) = parent else { return };
         let siblings = &mut self.nodes[parent.index()].children;
         let pos = siblings
             .iter()
