@@ -2824,6 +2824,90 @@ mod tests {
         }
     }
 
+    /// BUG-341 S34 gate — by identity, not by output.
+    ///
+    /// `SavedItemSizing`'s removal is meant to keep a flex item's `style` `Arc`
+    /// pointer-identical to the cascade cache's own allocation across its
+    /// whole layout, unlike the old capture/`Arc::make_mut`/restore dance
+    /// (whose `make_mut` always minted a private copy, since the cascade cache
+    /// holds a second reference — S31's finding). Covers all three sites the
+    /// old type had: column final placement, row final placement, and the
+    /// cross-stretch nested-column-flex re-layout.
+    #[test]
+    fn flex_item_used_size_override_shares_the_cascade_cache_style_allocation() {
+        use lumen_css_parser::parse as parse_css;
+        use lumen_html_parser::parse as parse_html;
+        use crate::box_tree::layout_measured_hyp_with_counters;
+
+        fn find(b: &LayoutBox, id: NodeId) -> Option<&LayoutBox> {
+            if b.node == id && !matches!(b.kind, BoxKind::Skip) {
+                return Some(b);
+            }
+            b.children.iter().find_map(|c| find(c, id))
+        }
+
+        let vp = Size::new(800.0, 600.0);
+
+        // Column final placement (`is_column` arm) — box_tree.rs's
+        // `flex_column_explicit_height_grows_items` fixture (BUG-104).
+        {
+            let doc = parse_html(r#"<div id="col"><div id="a"></div><div id="b"></div></div>"#);
+            let sheet = parse_css(
+                "body{margin:0} \
+                 #col{display:flex;flex-direction:column;height:300px;width:100px} \
+                 #a{flex:1} #b{flex:1}",
+            );
+            let (tree, counters) = layout_measured_hyp_with_counters(
+                &doc, &sheet, vp, &FixedMeasurer, &lumen_core::ext::NullHyphenationProvider, false,
+            );
+            let a = doc.find_by_id("a").expect("#a exists");
+            let a_box = find(&tree, a).expect("#a has a box");
+            assert!(
+                std::sync::Arc::ptr_eq(&a_box.style, &counters.styles()[&a]),
+                "column-direction final placement must not clone the item's style"
+            );
+        }
+
+        // Row final placement (`else` arm) — two `flex:1` items resolve a
+        // grown width different from their natural (auto) one.
+        {
+            let doc = parse_html(r#"<div id="row"><div id="a"></div><div id="b"></div></div>"#);
+            let sheet = parse_css(
+                "body{margin:0} #row{display:flex;width:400px} #a{flex:1} #b{flex:1}",
+            );
+            let (tree, counters) = layout_measured_hyp_with_counters(
+                &doc, &sheet, vp, &FixedMeasurer, &lumen_core::ext::NullHyphenationProvider, false,
+            );
+            let a = doc.find_by_id("a").expect("#a exists");
+            let a_box = find(&tree, a).expect("#a has a box");
+            assert!(
+                std::sync::Arc::ptr_eq(&a_box.style, &counters.styles()[&a]),
+                "row-direction final placement must not clone the item's style"
+            );
+        }
+
+        // Cross-stretch relayout of a nested column-flex item — box_tree.rs's
+        // `flex_nested_stretch_after_indefinite_pass_fills_row` fixture (BUG-209).
+        {
+            let doc = parse_html(r#"<div id="outer"><div id="cell"><div id="col">x</div></div></div>"#);
+            let sheet = parse_css(
+                "body{margin:0} \
+                 #outer{display:flex;flex-direction:column;height:300px;width:400px} \
+                 #cell{flex:1;display:flex} \
+                 #col{flex:1;display:flex;flex-direction:column}",
+            );
+            let (tree, counters) = layout_measured_hyp_with_counters(
+                &doc, &sheet, vp, &FixedMeasurer, &lumen_core::ext::NullHyphenationProvider, false,
+            );
+            let col = doc.find_by_id("col").expect("#col exists");
+            let col_box = find(&tree, col).expect("#col has a box");
+            assert!(
+                std::sync::Arc::ptr_eq(&col_box.style, &counters.styles()[&col]),
+                "cross-stretch nested-column-flex relayout must not clone the item's style"
+            );
+        }
+    }
+
     #[test]
     fn incr_cascade_matches_full_interactive_rules() {
         // Same steady-state reuse check, but against a doc with
