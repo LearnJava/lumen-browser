@@ -168,7 +168,7 @@ cargo test  -p lumen-js                                        # rquickjs-суи
 
 | id | Модули | Σ строк | Σ тестов |
 |---|---|---:|---:|
-| **S12b-B15** | `web_codecs` (669/8), `decorators` (714/10) | 1383 | 18 |
+| **S12b-B15** | `web_codecs` (669/8), `decorators` (714/10) — закрыт 2026-08-04 | 1383 | 18 |
 | **S12b-B16** | `intl_bindings` (740/19), `media_devices` (845/24) | 1585 | 43 |
 | **S12b-B17** | `wasm/mod` (849/0), `sw_worker` (877/6) | 1726 | 6 |
 | **S12b-B18** | `es2026_proposals` (908/15), `shared_worker` (957/9) | 1865 | 24 |

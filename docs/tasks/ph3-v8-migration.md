@@ -2953,7 +2953,54 @@ token_unique` is the one `file_input` test that stayed) + 1 integration
 clean.
 
 Полоса 2 (S12b-B7…B14) is now complete — 8/8 batches, all medium modules
-migrated. Next in queue: S12b-B15 (`web_codecs`/`decorators`, Полоса 3 first
+migrated.
+
+### S12b-B15 (`web_codecs`, `decorators` — Полоса 3 first batch)
+
+First batch of Полоса 3 (large modules). Both modules already carried a
+finished V8 port from the S5-S7 hand-port sweep — `install_webcodecs_bindings_v8`
+(`web_codecs.rs`, wired via plain `install_v8!` in `v8_runtime.rs:4283`) and
+`install_decorator_shim_v8`/`maybe_transform_decorators_v8` (`decorators.rs`,
+wired at `v8_runtime.rs:4196` + the eval-hook call site `v8_runtime.rs:4629`)
+— so this batch was pure group-A removal, no new porting work. No tests hid
+in `dom.rs` or `crates/js/tests/cases/*.rs` (grepped both).
+
+`web_codecs` (8 tests): removed the rquickjs `install_webcodecs_bindings` and
+`use rquickjs::Ctx`; ported the 8 `#[cfg(test)]` tests to
+`#[cfg(all(test, feature = "v8-backend"))]` against a bare `V8JsRuntime::new()`
+plus a minimal hand-rolled `DOMException` stub (the shim's error classes
+`extends DOMException`) — the `webhid.rs` bare-context template, not full
+`install_dom`.
+
+`decorators` (10 tests): removed the rquickjs `install_decorator_shim`,
+`maybe_transform_decorators`, and `use rquickjs::{Ctx, Function}`; gated the
+now-V8-only `DECORATOR_SHIM` const `#[cfg(feature = "v8-backend")]` (matches
+B14's `XHR_SHIM` precedent — once the only caller is v8-gated, the const goes
+dead under the default build without the same gate). Ported all 10 tests to
+`V8JsRuntime::new()` (no DOM needed — the shim only touches `Symbol`/
+`Object`/`Error`, all native V8 builtins).
+
+Two extra rquickjs call-site removals outside the two module files, both in
+`lib.rs`'s `QuickJsRuntime::install_dom`: `web_codecs::install_webcodecs_bindings`
+was called **twice** in the same closure (once after `media_devices`, once
+again ~170 lines later after `webgpu` — a pre-existing duplicate-install
+quirk, not introduced by this batch; both call sites removed since the
+function no longer exists). `decorators::install_decorator_shim` had one call
+site (removed). `decorators::maybe_transform_decorators` had two call sites
+outside `install_dom` — `QuickJsRuntime::eval_module` and the `JsRuntime for
+QuickJsRuntime` `eval()` impl — both removed; the QuickJS eval path no longer
+pre-processes `@decorator` syntax (consistent with the shim itself no longer
+being installed under QuickJS).
+
+`cargo test -p lumen-js --features v8-backend`: 2584 lib + 68 integration
+(unchanged — both modules' tests already ran under `--features v8-backend`
+before this batch via `#[cfg(test)]`; converting them to `V8JsRuntime` ports
+them in place without changing the total). `cargo test -p lumen-js` (default):
+769 lib (down from 787, -18: the 8+10 tests moved to V8-only) + 1 integration
+(unchanged). Both clippy passes (`--all-targets`, default and
+`--features v8-backend`) clean.
+
+Next in queue: S12b-B16 (`intl_bindings`/`media_devices`, Полоса 3 second
 batch, large modules).
 
 ---

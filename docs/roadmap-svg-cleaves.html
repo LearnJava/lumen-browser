@@ -1141,9 +1141,9 @@
         {
          "id": "P3-v8-s12b-b15",
          "title": "S12b-B15: снос rquickjs, крупные модули (1/12)",
-         "status": "queued",
+         "status": "done",
          "size": "M",
-         "note": "Полоса 3 (1383/18): web_codecs, decorators"
+         "note": "Полоса 3 (1383/18): web_codecs, decorators — ЗАКРЫТ 2026-08-04 (ветка p1-s12b-b15): оба модуля уже имели готовый V8-порт с волны S5-S7 (install_webcodecs_bindings_v8, install_decorator_shim_v8/maybe_transform_decorators_v8), батч свёлся к чистому сносу rquickjs-версий + переносу 18 тестов (8+10) на V8JsRuntime. Заодно снесены 2 вызова install_webcodecs_bindings в lib.rs (был дубль-вызов в install_dom) и 2 вызова maybe_transform_decorators (eval/eval_module QuickJsRuntime). Детали — docs/tasks/ph3-v8-migration.md §S12b-B15"
         },
         {
          "id": "P3-v8-s12b-b16",
