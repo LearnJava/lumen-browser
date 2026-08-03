@@ -15,19 +15,11 @@
 //!
 //! Spec: <https://w3c.github.io/long-animation-frames/>
 
-use rquickjs::Ctx;
-
-/// Install Long Animation Frames API into the QuickJS context.
+/// Install Long Animation Frames API into the JS context.
 ///
-/// Must be called after `install_dom_api` so that `PerformanceObserver`,
-/// `_perf_entries`, and `_perf_observer_notify` are already in scope.
-pub fn install_long_animation_frames_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(LOAF_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_long_animation_frames_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// Evaluated via [`lumen_core::ext::JsRuntime::eval`]. Must be called after DOM
+/// install so that `PerformanceObserver`, `_perf_entries`, and
+/// `_perf_observer_notify` are already in scope.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_long_animation_frames_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -36,6 +28,7 @@ pub(crate) fn install_long_animation_frames_bindings_v8(rt: &crate::v8_runtime::
 }
 
 /// JS shim for the W3C Long Animation Frames API.
+#[cfg(feature = "v8-backend")]
 const LOAF_SHIM: &str = r#"(function() {
   'use strict';
 
@@ -181,15 +174,11 @@ const LOAF_SHIM: &str = r#"(function() {
 
 // ─── tests ───────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
-    use rquickjs::{Context, Runtime};
-
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
     /// Minimal performance infrastructure required to test observer delivery.
     const PERF_STUB: &str = r#"
@@ -217,63 +206,51 @@ mod tests {
         };
     "#;
 
-    fn with_loaf<F>(f: F)
-    where
-        F: FnOnce(&rquickjs::Ctx),
-    {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            super::install_long_animation_frames_bindings(&ctx).expect("LoAF install failed");
-            f(&ctx);
-        });
+    fn with_loaf(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        super::install_long_animation_frames_bindings_v8(&rt).expect("LoAF install failed");
+        f(&rt);
     }
 
-    fn with_loaf_and_perf<F>(f: F)
-    where
-        F: FnOnce(&rquickjs::Ctx),
-    {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            ctx.eval::<(), _>(PERF_STUB).expect("perf stub install failed");
-            super::install_long_animation_frames_bindings(&ctx).expect("LoAF install failed");
-            f(&ctx);
-        });
+    fn with_loaf_and_perf(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(PERF_STUB).expect("perf stub install failed");
+        super::install_long_animation_frames_bindings_v8(&rt).expect("LoAF install failed");
+        f(&rt);
     }
 
     #[test]
     fn loaf_timing_class_exists() {
-        with_loaf(|ctx| {
-            let ok: bool = ctx
+        with_loaf(|rt| {
+            let ok = rt
                 .eval("typeof PerformanceLongAnimationFrameTiming === 'function'")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn script_timing_class_exists() {
-        with_loaf(|ctx| {
-            let ok: bool = ctx
-                .eval("typeof PerformanceScriptTiming === 'function'")
-                .unwrap();
-            assert!(ok);
+        with_loaf(|rt| {
+            let ok = rt.eval("typeof PerformanceScriptTiming === 'function'").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn deliver_binding_exists() {
-        with_loaf(|ctx| {
-            let ok: bool = ctx
+        with_loaf(|rt| {
+            let ok = rt
                 .eval("typeof _lumen_deliver_long_animation_frame === 'function'")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn loaf_entry_fields() {
-        with_loaf(|ctx| {
-            ctx.eval::<(), _>(
+        with_loaf(|rt| {
+            rt.eval(
                 "var e = new PerformanceLongAnimationFrameTiming({\
                     startTime: 1000, duration: 80, renderStart: 1010,\
                     styleAndLayoutStart: 1020, firstUIEventTimestamp: 990,\
@@ -281,43 +258,36 @@ mod tests {
                 });",
             )
             .unwrap();
-            let entry_type: String = ctx.eval("e.entryType").unwrap();
-            assert_eq!(entry_type, "long-animation-frame");
-            let name: String = ctx.eval("e.name").unwrap();
-            assert_eq!(name, "long-animation-frame");
-            let start: f64 = ctx.eval("e.startTime").unwrap();
-            assert!((start - 1000.0).abs() < 1e-6);
-            let dur: f64 = ctx.eval("e.duration").unwrap();
-            assert!((dur - 80.0).abs() < 1e-6);
-            let rs: f64 = ctx.eval("e.renderStart").unwrap();
-            assert!((rs - 1010.0).abs() < 1e-6);
-            let sal: f64 = ctx.eval("e.styleAndLayoutStart").unwrap();
-            assert!((sal - 1020.0).abs() < 1e-6);
-            let ui: f64 = ctx.eval("e.firstUIEventTimestamp").unwrap();
-            assert!((ui - 990.0).abs() < 1e-6);
+            assert_eq!(rt.eval("e.entryType").unwrap(), JsValue::String("long-animation-frame".into()));
+            assert_eq!(rt.eval("e.name").unwrap(), JsValue::String("long-animation-frame".into()));
+            assert_eq!(rt.eval("e.startTime").unwrap(), JsValue::Number(1000.0));
+            assert_eq!(rt.eval("e.duration").unwrap(), JsValue::Number(80.0));
+            assert_eq!(rt.eval("e.renderStart").unwrap(), JsValue::Number(1010.0));
+            assert_eq!(rt.eval("e.styleAndLayoutStart").unwrap(), JsValue::Number(1020.0));
+            assert_eq!(rt.eval("e.firstUIEventTimestamp").unwrap(), JsValue::Number(990.0));
         });
     }
 
     #[test]
     fn blocking_duration_auto_computed() {
-        with_loaf(|ctx| {
+        with_loaf(|rt| {
             // 80ms frame → blockingDuration = 80 - 50 = 30
-            let bd: f64 = ctx
-                .eval("new PerformanceLongAnimationFrameTiming({duration:80}).blockingDuration")
-                .unwrap();
-            assert!((bd - 30.0).abs() < 1e-6, "expected 30, got {bd}");
+            assert_eq!(
+                rt.eval("new PerformanceLongAnimationFrameTiming({duration:80}).blockingDuration").unwrap(),
+                JsValue::Number(30.0)
+            );
             // 40ms frame (below threshold) → blockingDuration = 0
-            let bd2: f64 = ctx
-                .eval("new PerformanceLongAnimationFrameTiming({duration:40}).blockingDuration")
-                .unwrap();
-            assert!((bd2 - 0.0).abs() < 1e-6, "expected 0, got {bd2}");
+            assert_eq!(
+                rt.eval("new PerformanceLongAnimationFrameTiming({duration:40}).blockingDuration").unwrap(),
+                JsValue::Number(0.0)
+            );
         });
     }
 
     #[test]
     fn script_timing_fields() {
-        with_loaf(|ctx| {
-            ctx.eval::<(), _>(
+        with_loaf(|rt| {
+            rt.eval(
                 "var s = new PerformanceScriptTiming({\
                     startTime: 500, duration: 30,\
                     invoker: 'BUTTON#btn.onclick',\
@@ -332,25 +302,19 @@ mod tests {
                 });",
             )
             .unwrap();
-            let et: String = ctx.eval("s.entryType").unwrap();
-            assert_eq!(et, "script");
-            let invoker: String = ctx.eval("s.invoker").unwrap();
-            assert_eq!(invoker, "BUTTON#btn.onclick");
-            let it: String = ctx.eval("s.invokerType").unwrap();
-            assert_eq!(it, "event-listener");
-            let url: String = ctx.eval("s.sourceURL").unwrap();
-            assert_eq!(url, "https://example.com/app.js");
-            let fn_name: String = ctx.eval("s.sourceFunctionName").unwrap();
-            assert_eq!(fn_name, "handleClick");
-            let pos: i32 = ctx.eval("s.sourceCharPosition").unwrap();
-            assert_eq!(pos, 1234);
+            assert_eq!(rt.eval("s.entryType").unwrap(), JsValue::String("script".into()));
+            assert_eq!(rt.eval("s.invoker").unwrap(), JsValue::String("BUTTON#btn.onclick".into()));
+            assert_eq!(rt.eval("s.invokerType").unwrap(), JsValue::String("event-listener".into()));
+            assert_eq!(rt.eval("s.sourceURL").unwrap(), JsValue::String("https://example.com/app.js".into()));
+            assert_eq!(rt.eval("s.sourceFunctionName").unwrap(), JsValue::String("handleClick".into()));
+            assert_eq!(rt.eval("s.sourceCharPosition").unwrap(), JsValue::Number(1234.0));
         });
     }
 
     #[test]
     fn scripts_array_populated_from_json() {
-        with_loaf(|ctx| {
-            ctx.eval::<(), _>(
+        with_loaf(|rt| {
+            rt.eval(
                 r#"var e = new PerformanceLongAnimationFrameTiming({
                     duration: 80,
                     scripts: [
@@ -360,39 +324,34 @@ mod tests {
                 });"#,
             )
             .unwrap();
-            let len: i32 = ctx.eval("e.scripts.length").unwrap();
-            assert_eq!(len, 2);
-            let inv0: String = ctx.eval("e.scripts[0].invoker").unwrap();
-            assert_eq!(inv0, "setTimeout");
-            let inv1: String = ctx.eval("e.scripts[1].invoker").unwrap();
-            assert_eq!(inv1, "BUTTON.onclick");
-            let is_script_timing: bool = ctx
-                .eval("e.scripts[0] instanceof PerformanceScriptTiming")
-                .unwrap();
-            assert!(is_script_timing);
+            assert_eq!(rt.eval("e.scripts.length").unwrap(), JsValue::Number(2.0));
+            assert_eq!(rt.eval("e.scripts[0].invoker").unwrap(), JsValue::String("setTimeout".into()));
+            assert_eq!(rt.eval("e.scripts[1].invoker").unwrap(), JsValue::String("BUTTON.onclick".into()));
+            assert_eq!(
+                rt.eval("e.scripts[0] instanceof PerformanceScriptTiming").unwrap(),
+                JsValue::Bool(true)
+            );
         });
     }
 
     #[test]
     fn deliver_creates_entry_in_perf_buffer() {
-        with_loaf_and_perf(|ctx| {
-            ctx.eval::<(), _>(
-                "_lumen_deliver_long_animation_frame(2000, 75, 2010, 2020, 0, -1, null);",
-            )
-            .unwrap();
-            let len: i32 = ctx.eval("_perf_entries.length").unwrap();
-            assert_eq!(len, 1);
-            let et: String = ctx.eval("_perf_entries[0].entryType").unwrap();
-            assert_eq!(et, "long-animation-frame");
-            let dur: f64 = ctx.eval("_perf_entries[0].duration").unwrap();
-            assert!((dur - 75.0).abs() < 1e-6);
+        with_loaf_and_perf(|rt| {
+            rt.eval("_lumen_deliver_long_animation_frame(2000, 75, 2010, 2020, 0, -1, null);")
+                .unwrap();
+            assert_eq!(rt.eval("_perf_entries.length").unwrap(), JsValue::Number(1.0));
+            assert_eq!(
+                rt.eval("_perf_entries[0].entryType").unwrap(),
+                JsValue::String("long-animation-frame".into())
+            );
+            assert_eq!(rt.eval("_perf_entries[0].duration").unwrap(), JsValue::Number(75.0));
         });
     }
 
     #[test]
     fn deliver_notifies_observer() {
-        with_loaf_and_perf(|ctx| {
-            ctx.eval::<(), _>(
+        with_loaf_and_perf(|rt| {
+            rt.eval(
                 r#"var got = [];
                    var po = new PerformanceObserver(function(list) {
                        got = got.concat(list.getEntries());
@@ -401,28 +360,26 @@ mod tests {
                    _lumen_deliver_long_animation_frame(3000, 60, 0, 0, 0, -1, null);"#,
             )
             .unwrap();
-            let len: i32 = ctx.eval("got.length").unwrap();
-            assert_eq!(len, 1, "observer should have received 1 entry");
-            let et: String = ctx.eval("got[0].entryType").unwrap();
-            assert_eq!(et, "long-animation-frame");
+            assert_eq!(rt.eval("got.length").unwrap(), JsValue::Number(1.0), "observer should have received 1 entry");
+            assert_eq!(rt.eval("got[0].entryType").unwrap(), JsValue::String("long-animation-frame".into()));
         });
     }
 
     #[test]
     fn deliver_with_scripts_json() {
-        with_loaf_and_perf(|ctx| {
-            ctx.eval::<(), _>(
+        with_loaf_and_perf(|rt| {
+            rt.eval(
                 r#"_lumen_deliver_long_animation_frame(
                     4000, 90, 0, 0, 0, -1,
                     '[{"startTime":4005,"duration":40,"invoker":"fetch.then","invokerType":"resolve-promise"}]'
                 );"#,
             )
             .unwrap();
-            let scripts_len: i32 =
-                ctx.eval("_perf_entries[0].scripts.length").unwrap();
-            assert_eq!(scripts_len, 1);
-            let inv: String = ctx.eval("_perf_entries[0].scripts[0].invoker").unwrap();
-            assert_eq!(inv, "fetch.then");
+            assert_eq!(rt.eval("_perf_entries[0].scripts.length").unwrap(), JsValue::Number(1.0));
+            assert_eq!(
+                rt.eval("_perf_entries[0].scripts[0].invoker").unwrap(),
+                JsValue::String("fetch.then".into())
+            );
         });
     }
 }

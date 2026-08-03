@@ -1017,26 +1017,11 @@ impl QuickJsRuntime {
                 eprintln!("View Transitions bindings init failed: {}", e);
             }
 
-            // Install Long Animation Frames API (W3C LoAF §3–4) — after DOM so that
-            // PerformanceObserver and _perf_entries are in scope.
-            // Phase 0: PerformanceLongAnimationFrameTiming + PerformanceScriptTiming classes
-            // and _lumen_deliver_long_animation_frame delivery binding.
-            // Phase 1: shell rendering loop auto-reports frames > 50 ms.
-            if let Err(e) = long_animation_frames::install_long_animation_frames_bindings(&ctx) {
-                eprintln!("Long Animation Frames API init failed: {}", e);
-            }
-
             // Install MediaRecorder API stub (W3C MediaStream Recording L2) — pure JS implementation.
             // Phase 0: MediaRecorder state machine (inactive/recording/paused), mimeType reflection,
             // ondataavailable fires empty Blob on stop. BlobEvent class. isTypeSupported() → false.
             if let Err(e) = media_stream_recording::init_media_stream_recording(&ctx) {
                 eprintln!("MediaRecorder API init failed: {}", e);
-            }
-
-            // Install Screen Wake Lock API (W3C Screen Wake Lock Level 1) — after DOM/navigator.
-            // Phase 0: in-memory sentinel with auto-release on visibilitychange → hidden.
-            if let Err(e) = wake_lock::install_wake_lock_bindings(&ctx) {
-                eprintln!("Screen Wake Lock API init failed: {}", e);
             }
 
             // Install W3C Web Audio API Level 1 — AudioContext, AudioNode hierarchy, AudioParam.
@@ -1057,10 +1042,6 @@ impl QuickJsRuntime {
             // Phase 1 (future): FFmpeg or libav1 bindings for actual encoding/decoding.
             if let Err(e) = web_codecs::install_webcodecs_bindings(&ctx) {
                 eprintln!("WebCodecs API init failed: {}", e);
-            }
-
-            if let Err(e) = form_validation::install_form_validation_bindings(&ctx) {
-                eprintln!("Form Constraint Validation API init failed: {}", e);
             }
 
             // Install WebAssembly API (W3C WebAssembly JavaScript Interface §7) — after DOM.

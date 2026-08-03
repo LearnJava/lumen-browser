@@ -24,9 +24,9 @@
 
 use std::sync::{Arc, OnceLock, RwLock};
 
-use rquickjs::{Ctx, Function};
-
-use lumen_core::ext::{NullWakeLockProvider, WakeLockProvider};
+#[cfg(feature = "v8-backend")]
+use lumen_core::ext::NullWakeLockProvider;
+use lumen_core::ext::WakeLockProvider;
 
 // ── Provider registry ─────────────────────────────────────────────────────────
 
@@ -44,6 +44,7 @@ pub fn set_wake_lock_provider(p: Arc<dyn WakeLockProvider>) {
     *provider_lock().write().unwrap() = Some(p);
 }
 
+#[cfg(feature = "v8-backend")]
 fn get_provider() -> Arc<dyn WakeLockProvider> {
     provider_lock()
         .read()
@@ -54,41 +55,10 @@ fn get_provider() -> Arc<dyn WakeLockProvider> {
 
 // ── Native binding installation ───────────────────────────────────────────────
 
-fn install_native_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    let globals = ctx.globals();
-
-    // __lumen_wake_lock_request() → bool
-    {
-        let p = get_provider();
-        globals.set(
-            "__lumen_wake_lock_request",
-            Function::new(ctx.clone(), move || -> bool { p.acquire() })?,
-        )?;
-    }
-
-    // __lumen_wake_lock_release()
-    {
-        let p = get_provider();
-        globals.set(
-            "__lumen_wake_lock_release",
-            Function::new(ctx.clone(), move || {
-                p.release();
-            })?,
-        )?;
-    }
-
-    Ok(())
-}
-
 /// Install the Screen Wake Lock API bindings into the JS context.
-pub fn install_wake_lock_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    install_native_bindings(ctx)?;
-    ctx.eval::<(), _>(WAKE_LOCK_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_wake_lock_bindings`] (Ph3 V8 migration S5-S7 batch 2):
-/// both natives go through the compat layer, the JS shim evaluates unchanged.
+///
+/// Evaluated via [`lumen_core::ext::JsRuntime::eval`]; both natives go through
+/// the V8 compat layer.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_wake_lock_bindings_v8(
     rt: &crate::v8_runtime::V8JsRuntime,
@@ -118,6 +88,7 @@ pub(crate) fn install_wake_lock_bindings_v8(
 ///
 /// Calls `__lumen_wake_lock_request` / `__lumen_wake_lock_release` to drive
 /// real OS power-management (no sleep while a sentinel is active).
+#[cfg(feature = "v8-backend")]
 const WAKE_LOCK_SHIM: &str = r#"(function() {
   'use strict';
 
@@ -243,20 +214,16 @@ const WAKE_LOCK_SHIM: &str = r#"(function() {
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
     use super::*;
-    use rquickjs::{Context, Runtime};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
-
-    fn install(ctx: &rquickjs::Ctx) {
+    fn install(rt: &V8JsRuntime) {
         // Minimal stubs needed by the shim.
-        ctx.eval::<(), _>(
+        rt.eval(
             r#"
             var navigator = globalThis.navigator || {};
             globalThis.navigator = navigator;
@@ -271,126 +238,102 @@ mod tests {
             "#,
         )
         .unwrap();
-        install_wake_lock_bindings(ctx).unwrap();
+        install_wake_lock_bindings_v8(rt).unwrap();
     }
 
     #[test]
     fn navigator_wake_lock_exists() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval("typeof navigator.wakeLock !== 'undefined' && typeof navigator.wakeLock.request === 'function'")
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install(&rt);
+        let ok = rt
+            .eval("typeof navigator.wakeLock !== 'undefined' && typeof navigator.wakeLock.request === 'function'")
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]
     fn wake_lock_sentinel_class_and_initial_state() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var s = new WakeLockSentinel('screen');
-                    typeof WakeLockSentinel === 'function'
-                      && s.type === 'screen'
-                      && s.released === false
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install(&rt);
+        let ok = rt
+            .eval(
+                r#"
+                var s = new WakeLockSentinel('screen');
+                typeof WakeLockSentinel === 'function'
+                  && s.type === 'screen'
+                  && s.released === false
+                "#,
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]
     fn release_sets_released_synchronously() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            // release() sets `released` synchronously before returning the Promise.
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var s = new WakeLockSentinel('screen');
-                    s.release();
-                    s.released === true
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install(&rt);
+        // release() sets `released` synchronously before returning the Promise.
+        let ok = rt
+            .eval(
+                r#"
+                var s = new WakeLockSentinel('screen');
+                s.release();
+                s.released === true
+                "#,
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]
     fn onrelease_fires_via_fire_release() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var s = new WakeLockSentinel('screen');
-                    var fired = false;
-                    s.onrelease = function(e) { fired = e.type === 'release'; };
-                    s._fireRelease();
-                    fired
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install(&rt);
+        let ok = rt
+            .eval(
+                r#"
+                var s = new WakeLockSentinel('screen');
+                var fired = false;
+                s.onrelease = function(e) { fired = e.type === 'release'; };
+                s._fireRelease();
+                fired
+                "#,
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]
     fn request_screen_returns_promise() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval("navigator.wakeLock.request('screen') instanceof Promise")
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install(&rt);
+        let ok = rt.eval("navigator.wakeLock.request('screen') instanceof Promise").unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]
     fn request_unknown_type_returns_rejected_promise() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            // Returns a rejected Promise (still a Promise, not a thrown exception).
-            let ok: bool = ctx
-                .eval("navigator.wakeLock.request('video') instanceof Promise")
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install(&rt);
+        // Returns a rejected Promise (still a Promise, not a thrown exception).
+        let ok = rt.eval("navigator.wakeLock.request('video') instanceof Promise").unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]
     fn native_wake_lock_request_binding_exists() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval("typeof __lumen_wake_lock_request === 'function'")
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install(&rt);
+        let ok = rt.eval("typeof __lumen_wake_lock_request === 'function'").unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]
     fn native_wake_lock_release_binding_exists() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval("typeof __lumen_wake_lock_release === 'function'")
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install(&rt);
+        let ok = rt.eval("typeof __lumen_wake_lock_release === 'function'").unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]
@@ -402,38 +345,32 @@ mod tests {
     #[test]
     fn request_calls_native_and_succeeds() {
         set_wake_lock_provider(Arc::new(NullWakeLockProvider));
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            // __lumen_wake_lock_request() returns true (NullProvider always succeeds).
-            let ok: bool = ctx
-                .eval("__lumen_wake_lock_request() === true")
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install(&rt);
+        // __lumen_wake_lock_request() returns true (NullProvider always succeeds).
+        let ok = rt.eval("__lumen_wake_lock_request() === true").unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]
     fn add_event_listener_and_remove() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var s = new WakeLockSentinel('screen');
-                    var count = 0;
-                    var fn1 = function() { count++; };
-                    s.addEventListener('release', fn1);
-                    s._fireRelease();
-                    s.removeEventListener('release', fn1);
-                    s._fireRelease();
-                    count === 1
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install(&rt);
+        let ok = rt
+            .eval(
+                r#"
+                var s = new WakeLockSentinel('screen');
+                var count = 0;
+                var fn1 = function() { count++; };
+                s.addEventListener('release', fn1);
+                s._fireRelease();
+                s.removeEventListener('release', fn1);
+                s._fireRelease();
+                count === 1
+                "#,
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]
@@ -441,21 +378,19 @@ mod tests {
         // _WakeLock is private to the IIFE; test release-all behaviour through
         // the public API: both sentinels should be `released` after calling
         // release() on each (equivalent effect to _releaseAll).
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var s1 = new WakeLockSentinel('screen');
-                    var s2 = new WakeLockSentinel('screen');
-                    s1.release();
-                    s2.release();
-                    s1.released === true && s2.released === true
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install(&rt);
+        let ok = rt
+            .eval(
+                r#"
+                var s1 = new WakeLockSentinel('screen');
+                var s2 = new WakeLockSentinel('screen');
+                s1.release();
+                s2.release();
+                s1.released === true && s2.released === true
+                "#,
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 }
