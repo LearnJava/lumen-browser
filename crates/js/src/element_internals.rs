@@ -1,24 +1,18 @@
-/// ElementInternals + CustomStateSet (WHATWG HTML §4.13.2)
-/// Phase 0: JS-shim without real a11y integration.
-/// `element.attachInternals()` returns an ElementInternals with a CustomStateSet,
-/// validity API (setValidity/checkValidity/reportValidity), and ARIA reflection.
-/// `CustomStateSet.add/delete/clear` reflect each active state into a
-/// `data-lumen-state-<name>` attribute on the host element via `_lumen_set_attr`/
-/// `_lumen_remove_attr`, which `:state(<name>)` (`crates/engine/css-parser`,
-/// `crates/engine/layout/src/style.rs`) matches directly — layout never calls
-/// into the JS engine during selector matching. Native binding
-/// `_lumen_element_internals_get_states(nid)` additionally exposes the active
-/// states of a given node id back to Rust for debugging/introspection.
-use rquickjs::Ctx;
+//! ElementInternals + CustomStateSet (WHATWG HTML §4.13.2)
+//! Phase 0: JS-shim without real a11y integration.
+//! `element.attachInternals()` returns an ElementInternals with a CustomStateSet,
+//! validity API (setValidity/checkValidity/reportValidity), and ARIA reflection.
+//! `CustomStateSet.add/delete/clear` reflect each active state into a
+//! `data-lumen-state-<name>` attribute on the host element via `_lumen_set_attr`/
+//! `_lumen_remove_attr`, which `:state(<name>)` (`crates/engine/css-parser`,
+//! `crates/engine/layout/src/style.rs`) matches directly — layout never calls
+//! into the JS engine during selector matching. Native binding
+//! `_lumen_element_internals_get_states(nid)` additionally exposes the active
+//! states of a given node id back to Rust for debugging/introspection.
 
 /// Install ElementInternals and CustomStateSet bindings into the JS context.
-pub fn install_element_internals_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(ELEMENT_INTERNALS_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_element_internals_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+///
+/// Evaluated via [`lumen_core::ext::JsRuntime::eval`].
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_element_internals_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -26,6 +20,7 @@ pub(crate) fn install_element_internals_bindings_v8(rt: &crate::v8_runtime::V8Js
     Ok(())
 }
 
+#[cfg(feature = "v8-backend")]
 const ELEMENT_INTERNALS_SHIM: &str = r#"
 (function() {
   'use strict';
@@ -212,82 +207,75 @@ const ELEMENT_INTERNALS_SHIM: &str = r#"
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
-    use super::*;
-    use rquickjs::{Context, Runtime};
-
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
     /// Set up minimal DOM stubs + ElementInternals bindings.
-    fn with_element_internals_api(f: impl FnOnce(&rquickjs::Ctx)) {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            ctx.eval::<(), _>(
-                r#"
-                var window = globalThis;
+    fn with_element_internals_api(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(
+            r#"
+            var window = globalThis;
 
-                function Event(type, init) {
-                  this.type = type;
-                  this.bubbles = !!(init && init.bubbles);
-                  this.cancelable = !!(init && init.cancelable);
-                  this._defaultPrevented = false;
-                }
-                Event.prototype.preventDefault = function() { this._defaultPrevented = true; };
-                window.Event = Event;
+            function Event(type, init) {
+              this.type = type;
+              this.bubbles = !!(init && init.bubbles);
+              this.cancelable = !!(init && init.cancelable);
+              this._defaultPrevented = false;
+            }
+            Event.prototype.preventDefault = function() { this._defaultPrevented = true; };
+            window.Event = Event;
 
-                function Element() {}
-                Element.prototype.dispatchEvent = function(ev) { return true; };
-                window.Element = Element;
+            function Element() {}
+            Element.prototype.dispatchEvent = function(ev) { return true; };
+            window.Element = Element;
 
-                // Sentinel-attribute stubs, tracked in window.__attrs (mirrors dom.rs
-                // `_lumen_set_attr`/`_lumen_remove_attr` for the `:state()` reflection test).
-                window.__attrs = {};
-                window._lumen_set_attr = function(nid, name, value) { window.__attrs[nid + ':' + name] = value; };
-                window._lumen_remove_attr = function(nid, name) { delete window.__attrs[nid + ':' + name]; };
+            // Sentinel-attribute stubs, tracked in window.__attrs (mirrors dom.rs
+            // `_lumen_set_attr`/`_lumen_remove_attr` for the `:state()` reflection test).
+            window.__attrs = {};
+            window._lumen_set_attr = function(nid, name, value) { window.__attrs[nid + ':' + name] = value; };
+            window._lumen_remove_attr = function(nid, name) { delete window.__attrs[nid + ':' + name]; };
 
-                // Factory: element with Element prototype
-                window.makeEl = function(nid) {
-                  var el = Object.create(Element.prototype);
-                  el.__nid__ = nid;
-                  el._listeners = {};
-                  el.dispatchEvent = function(ev) {
-                    var hs = this._listeners[ev.type] || [];
-                    hs.forEach(function(h) { h(ev); });
-                    return !ev._defaultPrevented;
-                  };
-                  el.addEventListener = function(type, fn) {
-                    if (!this._listeners[type]) this._listeners[type] = [];
-                    this._listeners[type].push(fn);
-                  };
-                  return el;
-                };
-                "#,
-            )
-            .unwrap();
-            install_element_internals_bindings(&ctx).unwrap();
-            f(&ctx);
-        });
+            // Factory: element with Element prototype
+            window.makeEl = function(nid) {
+              var el = Object.create(Element.prototype);
+              el.__nid__ = nid;
+              el._listeners = {};
+              el.dispatchEvent = function(ev) {
+                var hs = this._listeners[ev.type] || [];
+                hs.forEach(function(h) { h(ev); });
+                return !ev._defaultPrevented;
+              };
+              el.addEventListener = function(type, fn) {
+                if (!this._listeners[type]) this._listeners[type] = [];
+                this._listeners[type].push(fn);
+              };
+              return el;
+            };
+            "#,
+        )
+        .unwrap();
+        super::install_element_internals_bindings_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
     fn element_internals_class_exists() {
-        with_element_internals_api(|ctx| {
-            let ok: bool = ctx
+        with_element_internals_api(|rt| {
+            let ok = rt
                 .eval("typeof window.ElementInternals === 'function'")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn custom_state_set_add_has_delete_clear() {
-        with_element_internals_api(|ctx| {
-            let ok: bool = ctx
+        with_element_internals_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var el = makeEl();
@@ -305,14 +293,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn custom_state_set_delete_of_absent_state_does_not_touch_attr() {
-        with_element_internals_api(|ctx| {
-            let ok: bool = ctx
+        with_element_internals_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var el = makeEl(7);
@@ -322,14 +310,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn set_validity_marks_invalid_and_check_validity_fires_event() {
-        with_element_internals_api(|ctx| {
-            let ok: bool = ctx
+        with_element_internals_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var el = makeEl();
@@ -343,14 +331,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn set_validity_empty_resets_to_valid() {
-        with_element_internals_api(|ctx| {
-            let ok: bool = ctx
+        with_element_internals_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var el = makeEl();
@@ -361,7 +349,7 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
@@ -370,8 +358,8 @@ mod tests {
         // `internals.states.add/delete/clear` must push `data-lumen-state-<name>`
         // via `_lumen_set_attr`/`_lumen_remove_attr` — the `:state(name)` layout
         // matcher (`crates/engine/layout/src/style.rs`) reads only this attribute.
-        with_element_internals_api(|ctx| {
-            let ok: bool = ctx
+        with_element_internals_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var el = makeEl(42);
@@ -388,14 +376,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn attach_internals_returns_same_instance() {
-        with_element_internals_api(|ctx| {
-            let ok: bool = ctx
+        with_element_internals_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var el = makeEl();
@@ -405,7 +393,7 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 }

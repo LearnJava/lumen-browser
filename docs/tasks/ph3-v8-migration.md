@@ -2648,6 +2648,35 @@ rquickjs suite did not go red from this batch (988 passed). Both clippy passes c
 
 Next in queue: S12b-B9 (`element_internals`/`video_pip`/`media_session`, Полоса 2 third batch).
 
+**S12b-B9** (2026-08-04): ninth batch of queue group A (`docs/tasks/p1-s12b-cleanup-queue.md`
+§3, Полоса 2 third batch), 3 medium modules: `element_internals` (7 tests), `video_pip` (11),
+`media_session` (15) — 33 total, all ported in place to `#[cfg(all(test, feature =
+"v8-backend"))]` against a bare `V8JsRuntime::new()`. Step-2 grep (`grep -n "<file_stem>_"
+dom.rs`) found no hidden per-module tests for any of the 3 — same negative result as B7/B8.
+
+All three shims are pure `ctx.eval(SHIM)` with no rquickjs native bindings, so the port is a
+mechanical swap of the harness only. `element_internals`'s test stubs (`Event`/`Element`/
+`_lumen_set_attr`/`_lumen_remove_attr`/`makeEl`) and `video_pip`'s (`EventTarget`/`Event`/
+`document.createElement`) carried over unchanged, just re-expressed via `rt.eval(...)` instead
+of `ctx.eval::<(), _>(...)`. `media_session` needed only a bare `navigator`/`window` stub.
+`video_pip`'s promise-returning assertions (`requestPictureInPicture()`/`exitPictureInPicture()`
+`instanceof Promise`) stayed synchronous — no `.then()`/microtask draining needed, matching the
+`webusb`-style pattern from B7 rather than the two-`eval()`-call pattern B8 needed for resolved
+values.
+
+`empty_line_after_doc_comments` hit twice: `element_internals.rs` and `video_pip.rs` both had a
+`///`-block module header immediately followed by a blank line then the first function's doc
+comment — converted both headers to `//!`. `media_session.rs` already used `//!`, no fix needed.
+
+`cargo test -p lumen-js --features v8-backend`: 2584 lib (unchanged — in-place porting only, same
+reasoning as B7/B8: the old rquickjs `mod tests` were plain `#[cfg(test)]` with no feature gate,
+so they already ran under `--features v8-backend` before this batch) + 68 integration (unchanged).
+`cargo test -p lumen-js` (default): 955 lib (down from 988, the 33 ported `mod tests`) + 5
+integration (unchanged). rquickjs suite did not go red from this batch (955 passed). Both clippy
+passes clean.
+
+Next in queue: S12b-B10 (`long_animation_frames`/`form_validation`/`wake_lock`, Полоса 2 fourth batch).
+
 ---
 
 ## Risks (Rev 2)
