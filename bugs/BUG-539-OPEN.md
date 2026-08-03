@@ -99,3 +99,20 @@ getComputedStyle(el)` guard. Systemic-reach warning from срез 29 holds:
 none of these are re-attributed to a per-property missing-implementation
 gap without re-checking after the `has` trap lands. `.ini` under each
 category's own `tests/wpt/metadata/css/<category>/`.
+
+## Срез 31 (`css-fonts`/`css-transforms`/`css-ui`/`css-text`/`css-flexbox`, 2026-08-03) — ~800 subtests, dozens of properties
+
+Same pattern confirmed on five more categories, this time dominated by
+`css-fonts` (`font`, `font-family`, `font-weight`, `font-style`,
+`font-stretch`, `font-width`, `font-synthesis`, `font-feature-settings`,
+`font-variant-numeric`/`-ligatures`/`-east-asian`, `font-variation-settings`,
+`font-palette` — the single largest file, `variations/font-palette.html`,
+309 subtests alone), `css-transforms` (`scale`, `rotate`, `translate`,
+`transform-origin`, `perspective-origin`), `css-text` (`white-space`,
+`text-wrap`, `text-transform`, `text-indent`, `text-fit`, `text-spacing`,
+`letter-spacing`, `word-spacing`, `tab-size`, `hyphenate-limit-chars`,
+`text-autospace`), `css-ui` (`cursor`, `caret-color`, `outline-style`), and
+`css-flexbox` (`flex`, `flex-basis`, `flex-wrap`). Not re-attributed to a
+per-property gap without re-checking after the `has` trap lands — same
+caution as all prior slices. `.ini` under each category's own
+`tests/wpt/metadata/css/<category>/`.

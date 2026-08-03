@@ -159,3 +159,11 @@ CSSOM constructor used by the test's own feature-detection helper, not the
 feature under test. `.ini` under
 `tests/wpt/metadata/css/css-conditional/container-queries/` (top-level
 `expected: ERROR`, no subtest section — none ran).
+
+## Срез 31 (`css-fonts`/`css-ui`, 2026-08-03)
+
++5 files, 92 subtests: `Cannot read properties of undefined (reading
+'cssRules')` — code reaching for `document.styleSheets[i].cssRules` (or a
+`<style>`/`<link>.sheet.cssRules`) on `undefined`, same root cause as every
+prior slice. `.ini` under `tests/wpt/metadata/css/css-fonts/` and
+`tests/wpt/metadata/css/css-ui/`.

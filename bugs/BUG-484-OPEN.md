@@ -401,3 +401,15 @@ across `color-valid-*.html`), and smaller shares in `css/css-contain`,
 transitions`, `css/filter-effects` round out the slice — same three shapes
 throughout, no new ones. `.ini` under each category's own
 `tests/wpt/metadata/css/<category>/`.
+
+## Срез 31 (`css-fonts`/`css-transforms`/`css-text`/`css-flexbox`/`css-ui`, 2026-08-03)
+
+Shape-3 (serialization not canonicalized) confirmed on 42 more files/~560
+subtests: `css-fonts` (13 files/363 subtests — `font`/`font-family`/
+`font-weight`/`font-stretch` shorthand+longhand round-tripping), `css-
+transforms` (8/84 — `transform`/`scale`/`rotate`/`translate` value
+serialization), `css-text` (11/78 — `text-decoration`/`letter-spacing`/
+`white-space` shorthand), `css-flexbox` (5/27 — `flex` shorthand), `css-ui`
+(5/10). Same mechanism as every prior slice (`_lumen_make_style` stores the
+raw string instead of parsing+canonicalizing). `.ini` under each category's
+own `tests/wpt/metadata/css/<category>/`.

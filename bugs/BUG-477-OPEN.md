@@ -54,3 +54,10 @@ run.
 `scroll-markers/scroll-{marker,button}-elementFromPoint.html`. `.ini`
 committed under `tests/wpt/metadata/css/css-overflow/`, `expected: FAIL` per
 affected subtest.
+
+**WPT-RUN-3 срез 31 (`css/css-transforms`+`css/css-flexbox`, 2026-08-03):**
++18 files/89 subtests — `document.elementFromPoint is not a function`,
+mostly hit-testing assertions inside 3D-transform and abspos-in-flex-item
+tests that use it to verify paint order/stacking. `.ini` under
+`tests/wpt/metadata/css/css-transforms/` and
+`tests/wpt/metadata/css/css-flexbox/`.
