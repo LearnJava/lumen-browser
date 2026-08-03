@@ -10,16 +10,8 @@
 //! connected in a future phase. Native binding `_lumen_sensor_read(type)`
 //! is prepared for Phase 1 OS integration.
 
-use rquickjs::Ctx;
-
-/// Install Generic Sensor API bindings into the JS context.
-pub fn install_generic_sensor_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(GENERIC_SENSOR_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_generic_sensor_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// V8 port of the former rquickjs `install_generic_sensor_bindings` (Ph3 V8 migration S5-S7):
+/// identical JS shim, evaluated via [`lumen_core::ext::JsRuntime::eval`].
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_generic_sensor_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -27,6 +19,7 @@ pub(crate) fn install_generic_sensor_bindings_v8(rt: &crate::v8_runtime::V8JsRun
     Ok(())
 }
 
+#[cfg(feature = "v8-backend")]
 const GENERIC_SENSOR_SHIM: &str = r#"
 (function() {
   // ── Minimal EventTarget mixin ──────────────────────────────────────────────
@@ -237,148 +230,138 @@ const GENERIC_SENSOR_SHIM: &str = r#"
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
-    use lumen_core::JsRuntime as _;
-    use lumen_dom::Document;
-    use std::sync::{Arc, Mutex};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_rt() -> crate::QuickJsRuntime {
-        let rt = crate::QuickJsRuntime::new().unwrap();
-        let doc = Arc::new(Mutex::new(Document::new()));
-        rt.install_dom(doc, "about:blank", None, None, None, None, None, None, None, None, false)
-            .unwrap();
-        rt
+    fn with_generic_sensor(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        super::install_generic_sensor_bindings_v8(&rt).unwrap();
+        f(&rt);
     }
 
-    fn check(rt: &crate::QuickJsRuntime, expr: &str) {
-        match rt.eval(expr) {
-            Ok(lumen_core::JsValue::Bool(true)) => (),
-            other => panic!("assertion failed for `{expr}`: {other:?}"),
-        }
+    fn check(rt: &V8JsRuntime, expr: &str) {
+        assert_eq!(rt.eval(expr).unwrap(), JsValue::Bool(true), "assertion failed for `{expr}`");
     }
 
     #[test]
     fn accelerometer_class_exists() {
-        let rt = make_rt();
-        check(&rt, "typeof Accelerometer === 'function'");
+        with_generic_sensor(|rt| check(rt, "typeof Accelerometer === 'function'"));
     }
 
     #[test]
     fn gyroscope_class_exists() {
-        let rt = make_rt();
-        check(&rt, "typeof Gyroscope === 'function'");
+        with_generic_sensor(|rt| check(rt, "typeof Gyroscope === 'function'"));
     }
 
     #[test]
     fn sensor_start_sets_activated() {
-        let rt = make_rt();
-        check(
-            &rt,
-            r#"const s = new Accelerometer(); s.start(); s.activated === true"#,
-        );
+        with_generic_sensor(|rt| {
+            check(
+                rt,
+                "var s = new Accelerometer(); s.start(); s.activated === true",
+            );
+        });
     }
 
     #[test]
     fn sensor_stop_clears_activated() {
-        let rt = make_rt();
-        check(
-            &rt,
-            r#"const s = new Gyroscope(); s.start(); s.stop(); s.activated === false"#,
-        );
+        with_generic_sensor(|rt| {
+            check(
+                rt,
+                "var s = new Gyroscope(); s.start(); s.stop(); s.activated === false",
+            );
+        });
     }
 
     #[test]
     fn accelerometer_readings_null_before_start() {
-        let rt = make_rt();
-        check(
-            &rt,
-            r#"const s = new Accelerometer(); s.x === null && s.y === null && s.z === null"#,
-        );
+        with_generic_sensor(|rt| {
+            check(
+                rt,
+                "var s = new Accelerometer(); s.x === null && s.y === null && s.z === null",
+            );
+        });
     }
 
     #[test]
     fn linear_acceleration_sensor_exists() {
-        let rt = make_rt();
-        check(&rt, "typeof LinearAccelerationSensor === 'function'");
+        with_generic_sensor(|rt| check(rt, "typeof LinearAccelerationSensor === 'function'"));
     }
 
     #[test]
     fn gravity_sensor_exists() {
-        let rt = make_rt();
-        check(&rt, "typeof GravitySensor === 'function'");
+        with_generic_sensor(|rt| check(rt, "typeof GravitySensor === 'function'"));
     }
 
     #[test]
     fn magnetometer_exists() {
-        let rt = make_rt();
-        check(&rt, "typeof Magnetometer === 'function'");
+        with_generic_sensor(|rt| check(rt, "typeof Magnetometer === 'function'"));
     }
 
     #[test]
     fn ambient_light_sensor_exists() {
-        let rt = make_rt();
-        check(&rt, "typeof AmbientLightSensor === 'function'");
+        with_generic_sensor(|rt| check(rt, "typeof AmbientLightSensor === 'function'"));
     }
 
     #[test]
     fn absolute_orientation_sensor_exists() {
-        let rt = make_rt();
-        check(&rt, "typeof AbsoluteOrientationSensor === 'function'");
+        with_generic_sensor(|rt| check(rt, "typeof AbsoluteOrientationSensor === 'function'"));
     }
 
     #[test]
     fn relative_orientation_sensor_exists() {
-        let rt = make_rt();
-        check(&rt, "typeof RelativeOrientationSensor === 'function'");
+        with_generic_sensor(|rt| check(rt, "typeof RelativeOrientationSensor === 'function'"));
     }
 
     #[test]
     fn orientation_sensor_quaternion_null_before_reading() {
-        let rt = make_rt();
-        check(
-            &rt,
-            r#"const s = new AbsoluteOrientationSensor(); s.quaternion === null"#,
-        );
+        with_generic_sensor(|rt| {
+            check(
+                rt,
+                "var s = new AbsoluteOrientationSensor(); s.quaternion === null",
+            );
+        });
     }
 
     #[test]
     fn sensor_error_event_class_exists() {
-        let rt = make_rt();
-        check(&rt, "typeof SensorErrorEvent === 'function'");
+        with_generic_sensor(|rt| check(rt, "typeof SensorErrorEvent === 'function'"));
     }
 
     #[test]
     fn sensor_has_reading_false_initially() {
-        let rt = make_rt();
-        check(
-            &rt,
-            r#"const s = new Accelerometer({frequency: 60}); s.hasReading === false && s.timestamp === null"#,
-        );
+        with_generic_sensor(|rt| {
+            check(
+                rt,
+                "var s = new Accelerometer({frequency: 60}); s.hasReading === false && s.timestamp === null",
+            );
+        });
     }
 
     #[test]
     fn populate_matrix_with_float32_array() {
-        let rt = make_rt();
-        check(
-            &rt,
-            r#"
-            const s = new AbsoluteOrientationSensor();
-            s._hasReading = true;
-            s._quaternion = [0, 0, 0, 1];
-            const m = new Float32Array(16);
-            s.populateMatrix(m);
-            m[0] === 1 && m[5] === 1 && m[10] === 1 && m[15] === 1
-            "#,
-        );
+        with_generic_sensor(|rt| {
+            check(
+                rt,
+                r#"
+                var s = new AbsoluteOrientationSensor();
+                s._hasReading = true;
+                s._quaternion = [0, 0, 0, 1];
+                var m = new Float32Array(16);
+                s.populateMatrix(m);
+                m[0] === 1 && m[5] === 1 && m[10] === 1 && m[15] === 1
+                "#,
+            );
+        });
     }
 
     #[test]
     fn lumen_sensor_deliver_reading_is_function() {
-        let rt = make_rt();
-        check(
-            &rt,
-            "typeof globalThis._lumen_sensor_deliver_reading === 'function'",
-        );
+        with_generic_sensor(|rt| {
+            check(rt, "typeof globalThis._lumen_sensor_deliver_reading === 'function'");
+        });
     }
 }

@@ -1025,14 +1025,6 @@ impl QuickJsRuntime {
                 eprintln!("View Transitions bindings init failed: {}", e);
             }
 
-            // Install Gamepad API (W3C Gamepad L2 §4) — after DOM so `navigator`,
-            // `Promise`, and `Event` are available.
-            // Phase 0: navigator.getGamepads() returns 4 null slots; no hardware polling.
-            // Shell integration (P3) calls _lumen_gamepad_connect/disconnect to notify.
-            if let Err(e) = gamepad::install_gamepad_bindings(&ctx) {
-                eprintln!("Gamepad bindings init failed: {}", e);
-            }
-
             // Install MediaSession API (W3C Media Session §5) — after DOM so `navigator`,
             // `Promise`, and `Event` are available.
             // Phase 0: metadata/playbackState stored in JS; OS forwarding via
@@ -1100,13 +1092,6 @@ impl QuickJsRuntime {
                 eprintln!("WebAssembly bindings init failed: {}", e);
             }
 
-            // Phase 0: W3C Generic Sensor API — Accelerometer, Gyroscope, LinearAccelerationSensor,
-            // GravitySensor, AbsoluteOrientationSensor, RelativeOrientationSensor, Magnetometer,
-            // AmbientLightSensor. start() activates sensor; no readings until Phase 1 OS integration.
-            if let Err(e) = generic_sensor::install_generic_sensor_bindings(&ctx) {
-                eprintln!("Generic Sensor API init failed: {}", e);
-            }
-
             // Install XMLHttpRequest API (WHATWG XHR Standard §4) — after DOM so fetch(),
             // FormData, Blob, TextDecoder/Encoder, ProgressEvent infra, and the
             // _lumen_fetch_sync* native bindings are all present.
@@ -1143,12 +1128,6 @@ impl QuickJsRuntime {
             // Must come after file_input (depends on __lumen_file_read_text/base64 bindings).
             if let Err(e) = filesystem_access::install_filesystem_access(&ctx) {
                 eprintln!("File System Access API init failed: {}", e);
-            }
-
-            // WICG Shared Storage API — window.sharedStorage (Privacy Sandbox).
-            // Phase 0: in-memory key-value store. Phase 1: SQLite per-origin partition.
-            if let Err(e) = shared_storage::install_shared_storage(&ctx) {
-                eprintln!("Shared Storage API init failed: {}", e);
             }
 
             // WICG Idle Detection API — window.IdleDetector.
