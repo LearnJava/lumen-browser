@@ -28,14 +28,13 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::{
-    Arc, OnceLock, RwLock,
-    atomic::{AtomicU64, Ordering},
-};
+use std::sync::{Arc, OnceLock, RwLock};
+#[cfg(feature = "v8-backend")]
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use rquickjs::{Ctx, Function};
-
-use lumen_core::ext::{ScreenCaptureConfig, ScreenCaptureHandle, ScreenCaptureProvider};
+#[cfg(feature = "v8-backend")]
+use lumen_core::ext::ScreenCaptureConfig;
+use lumen_core::ext::{ScreenCaptureHandle, ScreenCaptureProvider};
 
 // ── Process-global provider ──────────────────────────────────────────────────
 
@@ -54,12 +53,14 @@ pub fn set_screen_capture_provider(p: Arc<dyn ScreenCaptureProvider>) {
 }
 
 /// Return the currently installed provider, or `None` when none is registered.
+#[cfg(feature = "v8-backend")]
 fn get_provider() -> Option<Arc<dyn ScreenCaptureProvider>> {
     provider_lock().read().ok()?.clone()
 }
 
 // ── Per-JS-thread capture handle storage ────────────────────────────────────
 
+#[cfg(feature = "v8-backend")]
 static NEXT_HANDLE_ID: AtomicU64 = AtomicU64::new(1);
 
 thread_local! {
@@ -76,139 +77,11 @@ thread_local! {
 
 /// Install `__lumen_screen_capture_*` natives into the JS context.
 ///
-/// Call `set_screen_capture_provider` before this function in tests.
-/// In production the provider is set once at shell startup.
-pub fn install_screen_capture_bindings(ctx: &Ctx<'_>) -> rquickjs::Result<()> {
-    let provider = get_provider();
-    let g = ctx.globals();
-
-    // __lumen_screen_capture_list_sources() → JSON array of source descriptors
-    {
-        let p = provider.clone();
-        g.set(
-            "__lumen_screen_capture_list_sources",
-            Function::new(ctx.clone(), move || -> String {
-                let Some(ref prov) = p else {
-                    return "[]".to_owned();
-                };
-                let sources = prov.enumerate_sources();
-                let mut out = String::from('[');
-                for (i, s) in sources.iter().enumerate() {
-                    if i > 0 {
-                        out.push(',');
-                    }
-                    out.push_str(&format!(
-                        r#"{{"source_id":{:?},"label":{:?},"kind":{:?},"width":{},"height":{}}}"#,
-                        s.source_id, s.label, s.kind, s.width, s.height
-                    ));
-                }
-                out.push(']');
-                out
-            }),
-        )?;
-    }
-
-    // __lumen_screen_capture_start(source_id) → handle_id (f64) or -1 on error
-    {
-        let p = provider.clone();
-        g.set(
-            "__lumen_screen_capture_start",
-            Function::new(ctx.clone(), move |source_id: String| -> f64 {
-                let Some(ref prov) = p else {
-                    return -1.0;
-                };
-                let config = ScreenCaptureConfig {
-                    source_id: if source_id.is_empty() {
-                        None
-                    } else {
-                        Some(source_id)
-                    },
-                    ..ScreenCaptureConfig::default()
-                };
-                match prov.capture(config) {
-                    Ok(handle) => {
-                        let id = NEXT_HANDLE_ID.fetch_add(1, Ordering::Relaxed);
-                        CAPTURES.with(|c| c.borrow_mut().insert(id, handle));
-                        id as f64
-                    }
-                    Err(_) => -1.0,
-                }
-            }),
-        )?;
-    }
-
-    // __lumen_screen_capture_info(handle_id) → JSON {width, height, source_id, label}
-    g.set(
-        "__lumen_screen_capture_info",
-        Function::new(ctx.clone(), |handle_id: f64| -> String {
-            CAPTURES.with(|c| {
-                let map = c.borrow();
-                if let Some(h) = map.get(&(handle_id as u64)) {
-                    format!(
-                        r#"{{"width":{},"height":{},"source_id":{:?},"label":{:?}}}"#,
-                        h.width(),
-                        h.height(),
-                        h.source_id(),
-                        h.label(),
-                    )
-                } else {
-                    "{}".to_owned()
-                }
-            })
-        }),
-    )?;
-
-    // __lumen_screen_capture_read_frame(handle_id) → JSON {width,height,data:[u8,…]} or ""
-    g.set(
-        "__lumen_screen_capture_read_frame",
-        Function::new(ctx.clone(), |handle_id: f64| -> String {
-            CAPTURES.with(|c| {
-                let mut map = c.borrow_mut();
-                if let Some(h) = map.get_mut(&(handle_id as u64)) {
-                    match h.read_frame() {
-                        Some(frame) => {
-                            let mut out = format!(
-                                r#"{{"width":{},"height":{},"data":["#,
-                                frame.width, frame.height
-                            );
-                            for (i, &b) in frame.data.iter().enumerate() {
-                                if i > 0 {
-                                    out.push(',');
-                                }
-                                out.push_str(&b.to_string());
-                            }
-                            out.push_str("]}");
-                            out
-                        }
-                        None => String::new(),
-                    }
-                } else {
-                    String::new()
-                }
-            })
-        }),
-    )?;
-
-    // __lumen_screen_capture_stop(handle_id)
-    g.set(
-        "__lumen_screen_capture_stop",
-        Function::new(ctx.clone(), |handle_id: f64| {
-            CAPTURES.with(|c| {
-                let mut map = c.borrow_mut();
-                if let Some(mut h) = map.remove(&(handle_id as u64)) {
-                    h.stop();
-                }
-            });
-        }),
-    )?;
-
-    Ok(())
-}
-
-/// V8 port of [`install_screen_capture_bindings`] (Ph3 V8 migration S5-S7 batch
-/// 2): all five natives go through the compat layer, same provider snapshot and
-/// thread-local `CAPTURES` map (sound for the same reason as
-/// [`crate::media_capture::install_media_capture_bindings_v8`]).
+/// Call `set_screen_capture_provider` before this function in tests. In
+/// production the provider is set once at shell startup. All five natives go
+/// through the V8 compat layer and share the thread-local `CAPTURES` map —
+/// sound for the same reason as
+/// [`crate::media_capture::install_media_capture_bindings_v8`].
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_screen_capture_bindings_v8(
     rt: &crate::v8_runtime::V8JsRuntime,
@@ -319,13 +192,32 @@ pub(crate) fn install_screen_capture_bindings_v8(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
     use super::*;
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::JsValue;
+    use lumen_core::ext::JsRuntime as _;
     use lumen_core::ext::{
         NullScreenCaptureProvider, ScreenCaptureError, ScreenSourceDescriptor, VideoFrame,
     };
-    use rquickjs::{Context, Runtime};
+    use std::sync::Mutex;
+
+    /// Serializes tests against the process-global `PROVIDER`/`NEXT_HANDLE_ID` —
+    /// parallel tests would otherwise clobber each other's provider between
+    /// `set_screen_capture_provider` and the following `install_*` snapshot.
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn guard() -> std::sync::MutexGuard<'static, ()> {
+        TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn as_id(v: JsValue) -> f64 {
+        match v {
+            JsValue::Number(n) => n,
+            other => panic!("expected a number, got {other:?}"),
+        }
+    }
 
     // ── Mock provider ────────────────────────────────────────────────────────
 
@@ -379,143 +271,149 @@ mod tests {
         }
     }
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
-
-    fn install_mock(ctx: &Context, fail: bool) {
+    fn install_mock(rt: &V8JsRuntime, fail: bool) {
         set_screen_capture_provider(Arc::new(MockProvider { fail }));
-        ctx.with(|ctx| install_screen_capture_bindings(&ctx).unwrap());
+        install_screen_capture_bindings_v8(rt).unwrap();
     }
 
     #[test]
     fn install_succeeds() {
-        let (_rt, ctx) = make_ctx();
-        install_mock(&ctx, false);
+        let _g = guard();
+        let rt = V8JsRuntime::new().unwrap();
+        install_mock(&rt, false);
     }
 
     #[test]
     fn list_sources_returns_json_array() {
-        let (_rt, ctx) = make_ctx();
-        install_mock(&ctx, false);
-        ctx.with(|ctx| {
-            let json: String = ctx.eval("__lumen_screen_capture_list_sources()").unwrap();
-            assert!(json.starts_with('['), "expected JSON array: {json}");
-            assert!(json.contains("mock-screen-0"), "expected source_id: {json}");
-            assert!(json.contains("monitor"), "expected kind: {json}");
-        });
+        let _g = guard();
+        let rt = V8JsRuntime::new().unwrap();
+        install_mock(&rt, false);
+        let ok = rt
+            .eval(
+                r#"
+                var json = __lumen_screen_capture_list_sources();
+                json.charAt(0) === '[' && json.indexOf('mock-screen-0') >= 0 && json.indexOf('monitor') >= 0
+                "#,
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]
     fn start_returns_positive_id() {
-        let (_rt, ctx) = make_ctx();
-        install_mock(&ctx, false);
-        ctx.with(|ctx| {
-            let id: f64 = ctx.eval("__lumen_screen_capture_start('')").unwrap();
-            assert!(id >= 1.0, "expected positive handle id, got {id}");
-        });
+        let _g = guard();
+        let rt = V8JsRuntime::new().unwrap();
+        install_mock(&rt, false);
+        let id = as_id(rt.eval("__lumen_screen_capture_start('')").unwrap());
+        assert!(id >= 1.0, "expected positive handle id, got {id}");
     }
 
     #[test]
     fn start_fails_when_provider_denies() {
-        let (_rt, ctx) = make_ctx();
-        install_mock(&ctx, true);
-        ctx.with(|ctx| {
-            let id: f64 = ctx.eval("__lumen_screen_capture_start('')").unwrap();
-            assert_eq!(id, -1.0, "expected -1 on capture failure, got {id}");
-        });
+        let _g = guard();
+        let rt = V8JsRuntime::new().unwrap();
+        install_mock(&rt, true);
+        let id = rt.eval("__lumen_screen_capture_start('')").unwrap();
+        assert_eq!(id, JsValue::Number(-1.0), "expected -1 on capture failure");
     }
 
     #[test]
     fn info_returns_json() {
-        let (_rt, ctx) = make_ctx();
-        install_mock(&ctx, false);
-        ctx.with(|ctx| {
-            let id: f64 = ctx.eval("__lumen_screen_capture_start('')").unwrap();
-            assert!(id >= 1.0);
-            let code = format!("__lumen_screen_capture_info({id})");
-            let info: String = ctx.eval(code.as_str()).unwrap();
-            assert!(info.contains("\"width\":4"), "expected width in info: {info}");
-            assert!(info.contains("mock-screen-0"), "expected source_id in info: {info}");
-            assert!(info.contains("Mock Screen"), "expected label in info: {info}");
-        });
+        let _g = guard();
+        let rt = V8JsRuntime::new().unwrap();
+        install_mock(&rt, false);
+        let ok = rt
+            .eval(
+                r#"
+                var id = __lumen_screen_capture_start('');
+                var info = __lumen_screen_capture_info(id);
+                info.indexOf('"width":4') >= 0 && info.indexOf('mock-screen-0') >= 0 && info.indexOf('Mock Screen') >= 0
+                "#,
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]
     fn read_frame_returns_json_with_data() {
-        let (_rt, ctx) = make_ctx();
-        install_mock(&ctx, false);
-        ctx.with(|ctx| {
-            let id: f64 = ctx.eval("__lumen_screen_capture_start('')").unwrap();
-            let code = format!("__lumen_screen_capture_read_frame({id})");
-            let json: String = ctx.eval(code.as_str()).unwrap();
-            assert!(!json.is_empty(), "read_frame must return non-empty string");
-            assert!(json.contains("\"width\":4"), "expected width in frame: {json}");
-            assert!(json.contains("\"height\":2"), "expected height in frame: {json}");
-            assert!(json.contains("255"), "expected pixel data in frame: {json}");
-        });
+        let _g = guard();
+        let rt = V8JsRuntime::new().unwrap();
+        install_mock(&rt, false);
+        let ok = rt
+            .eval(
+                r#"
+                var id = __lumen_screen_capture_start('');
+                var json = __lumen_screen_capture_read_frame(id);
+                json.length > 0
+                  && json.indexOf('"width":4') >= 0
+                  && json.indexOf('"height":2') >= 0
+                  && json.indexOf('255') >= 0
+                "#,
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]
     fn stop_removes_handle() {
-        let (_rt, ctx) = make_ctx();
-        install_mock(&ctx, false);
-        ctx.with(|ctx| {
-            let id: f64 = ctx.eval("__lumen_screen_capture_start('')").unwrap();
-            let stop = format!("__lumen_screen_capture_stop({id})");
-            ctx.eval::<(), _>(stop.as_str()).unwrap();
-            let info = format!("__lumen_screen_capture_info({id})");
-            let result: String = ctx.eval(info.as_str()).unwrap();
-            assert_eq!(result, "{}", "info after stop must be empty: {result}");
-        });
+        let _g = guard();
+        let rt = V8JsRuntime::new().unwrap();
+        install_mock(&rt, false);
+        let info = rt
+            .eval(
+                r#"
+                var id = __lumen_screen_capture_start('');
+                __lumen_screen_capture_stop(id);
+                __lumen_screen_capture_info(id)
+                "#,
+            )
+            .unwrap();
+        assert_eq!(info, JsValue::String("{}".to_string()), "info after stop must be empty");
     }
 
     #[test]
     fn read_frame_empty_after_stop() {
-        let (_rt, ctx) = make_ctx();
-        install_mock(&ctx, false);
-        ctx.with(|ctx| {
-            let id: f64 = ctx.eval("__lumen_screen_capture_start('')").unwrap();
-            let stop = format!("__lumen_screen_capture_stop({id})");
-            ctx.eval::<(), _>(stop.as_str()).unwrap();
-            let code = format!("__lumen_screen_capture_read_frame({id})");
-            let frame: String = ctx.eval(code.as_str()).unwrap();
-            assert!(frame.is_empty(), "read_frame after stop must be empty: {frame}");
-        });
+        let _g = guard();
+        let rt = V8JsRuntime::new().unwrap();
+        install_mock(&rt, false);
+        let frame = rt
+            .eval(
+                r#"
+                var id = __lumen_screen_capture_start('');
+                __lumen_screen_capture_stop(id);
+                __lumen_screen_capture_read_frame(id)
+                "#,
+            )
+            .unwrap();
+        assert_eq!(frame, JsValue::String(String::new()), "read_frame after stop must be empty");
     }
 
     #[test]
     fn null_provider_list_sources_returns_empty_array() {
-        let (_rt, ctx) = make_ctx();
+        let _g = guard();
+        let rt = V8JsRuntime::new().unwrap();
         set_screen_capture_provider(Arc::new(NullScreenCaptureProvider));
-        ctx.with(|ctx| {
-            install_screen_capture_bindings(&ctx).unwrap();
-            let json: String = ctx.eval("__lumen_screen_capture_list_sources()").unwrap();
-            assert_eq!(json, "[]", "null provider must enumerate empty: {json}");
-        });
+        install_screen_capture_bindings_v8(&rt).unwrap();
+        let json = rt.eval("__lumen_screen_capture_list_sources()").unwrap();
+        assert_eq!(json, JsValue::String("[]".to_string()), "null provider must enumerate empty");
     }
 
     #[test]
     fn null_provider_start_returns_minus_one() {
-        let (_rt, ctx) = make_ctx();
+        let _g = guard();
+        let rt = V8JsRuntime::new().unwrap();
         set_screen_capture_provider(Arc::new(NullScreenCaptureProvider));
-        ctx.with(|ctx| {
-            install_screen_capture_bindings(&ctx).unwrap();
-            let id: f64 = ctx.eval("__lumen_screen_capture_start('')").unwrap();
-            assert_eq!(id, -1.0, "null provider must return -1: {id}");
-        });
+        install_screen_capture_bindings_v8(&rt).unwrap();
+        let id = rt.eval("__lumen_screen_capture_start('')").unwrap();
+        assert_eq!(id, JsValue::Number(-1.0), "null provider must return -1");
     }
 
     #[test]
     fn start_with_explicit_source_id_succeeds() {
-        let (_rt, ctx) = make_ctx();
-        install_mock(&ctx, false);
-        ctx.with(|ctx| {
-            let id: f64 =
-                ctx.eval("__lumen_screen_capture_start('mock-screen-0')").unwrap();
-            assert!(id >= 1.0, "expected positive handle with explicit source_id: {id}");
-        });
+        let _g = guard();
+        let rt = V8JsRuntime::new().unwrap();
+        install_mock(&rt, false);
+        let id = as_id(rt.eval("__lumen_screen_capture_start('mock-screen-0')").unwrap());
+        assert!(id >= 1.0, "expected positive handle with explicit source_id, got {id}");
     }
 }
