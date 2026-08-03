@@ -262,3 +262,24 @@ subtests — the other is BUG-536), `transition-base-response-002.html`,
 `transition-important.html`, `transition-reparented.html`,
 `transitions-retarget.html`. `.ini` under
 `tests/wpt/metadata/css/css-transitions/`.
+
+## Срез 29 (`css/css-shadow` + `css/css-scroll-snap` + `css/css-animations`, 2026-08-03)
+
+~85 subtests (plus a large share of the 216 `promise_test: Unhandled
+rejection with value: object "ReferenceError: … is not defined"` cluster —
+the same mechanism wrapped by a `promise_test`'s rejection handler instead
+of surfacing as a synchronous throw). `css-shadow`: `host` (shadow host
+`<div id="host">`, the single most common id in this category —
+`font-face-*.html`, `host-dom-001.html`,
+`host-functional-descendant-invalidation.html`, and others), same masking
+shape as prior slices — the test's *actual* subject (`::part`, `:host()`,
+`@font-face` in a shadow tree) is never reached. `css-scroll-snap`: `target`
+(`multicol-002.html`, both fragment-geometry subtests) and `scroller`
+(`ignore-snap-points-orthogonal-to-snap-axis.html`,
+`no-snap-position.html`). `css-animations`: `test_sheet` (a `<style
+id=test_sheet>` referenced bare in `parsing/keyframe-selectors.html`'s 14
+selector-validity subtests) and `target`/`target1`/`target2`-shaped ids in
+`animation-base-response-00{2,4}.html`/`computed-style-animation-parsing
+.html`. `.ini` under `tests/wpt/metadata/css/css-shadow/`,
+`tests/wpt/metadata/css/css-scroll-snap/`,
+`tests/wpt/metadata/css/css-animations/`.

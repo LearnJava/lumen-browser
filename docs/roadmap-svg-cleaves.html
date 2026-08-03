@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-03",
  "counts": {
-  "open": 201,
+  "open": 202,
   "fixed": 309,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 510,
+ "total_bugs": 511,
  "phases": [
   {
    "id": "P0",
@@ -8100,6 +8100,13 @@
    "component": "layout/paint (`offset-path` applied via paint-only `resolve_motion_transform`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-543": {
+   "status": "open",
+   "title": "Custom element constructors never run — neither on upgrade of a pre-existing element (`_lumen_ce_upgrade_element` only sets a flag and calls `connectedCallback`…",
+   "component": "js (`crates/js/src/dom.rs:7463` — `_lumen_ce_upgrade_element`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -8337,6 +8344,9 @@
   ],
   "js (`crates/js/src/dom.rs:6770` — `_lumen_get_fonts()`)": [
    "BUG-467"
+  ],
+  "js (`crates/js/src/dom.rs:7463` — `_lumen_ce_upgrade_element`)": [
+   "BUG-543"
   ],
   "js (`crates/js/src/dom.rs` — `Range` global at `~6958`, no `StaticRange`)": [
    "BUG-533"

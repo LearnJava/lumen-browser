@@ -1,11 +1,13 @@
-# BUG-536: CSS Transitions produce no JS-observable effect — no `Animation`/`CSSTransition` object, no lifecycle events, no live interpolated value
+# BUG-536: CSS Transitions/Animations produce no JS-observable effect — no `Animation`/`CSSTransition`/`CSSAnimation` object, no lifecycle events, no live interpolated value
 
 **Статус:** OPEN
 **Дата:** 2026-08-03
-**Компонент:** js/layout (CSS Transitions runtime — no obvious owner file yet,
+**Компонент:** js/layout (CSS Transitions/Animations runtime — no obvious owner file yet,
 see "Что нужно" below)
 **Найден:** WPT-RUN-3 срез 27 (`ROADMAP.md`) — массовый прогон `css/css-transitions`
-(120 testharness id, `run_report.py --all --root css/css-transitions --recursive --processes=6`)
+(120 testharness id, `run_report.py --all --root css/css-transitions --recursive --processes=6`);
+confirmed to extend to CSS Animations (not just Transitions) срез 29 — массовый
+прогон `css/css-animations`
 
 ## Симптом
 
@@ -72,6 +74,32 @@ Not exclusive to this category: [BUG-533](BUG-533-OPEN.md) (`css-highlight
 -api`, срез 26) already noted one file whose harness hung on a related
 throw-during-cleanup path; this is the first slice to isolate the CSS
 Transitions-specific JS surface as a whole.
+
+## Расширение (срез 29, `css/css-animations`)
+
+Identical mechanism, confirmed for the CSS Animations spec, not just CSS
+Transitions: `Element.getAnimations()`/`document.getAnimations()` return
+nothing for a running CSS (declarative, `animation-name`-triggered)
+animation, so every `CSSAnimation-*.tentative.html`/`KeyframeEffect-*
+.tentative.html`/`AnimationEffect-*.tentative.html` test that indexes into
+the result cascades into the same `TypeError: Cannot read properties of
+undefined (reading 'effect'|'ready'|'pending'|'finish'|'cancel'|'finished'|
+'play'|'playState'|'pause'|'reverse'|'timeline')` family — **162 subtests**
+this slice (78 `.effect`, 36 `.ready`, 17 `.pending`, 10 `.finish`, 6
+`.cancel`, plus smaller counts for the rest). Same root cause as the
+Transitions case: CSS-triggered animations (as opposed to JS-authored
+`element.animate()`, which is the separate, already-tracked BUG-463 gap)
+never get an `Animation`/`CSSAnimation` object wired into the
+`getAnimations()` result.
+
+Also affects `animation-range`/`animation-range-start`/`animation-range-end`/
+`animation-name`/`animation` "doesn't seem to be supported in the computed
+style" failures **only insofar as those tests also call `getAnimations()`**
+— most of that specific message pattern is instead [BUG-539](BUG-539-OPEN.md)
+(computed-style `has`-trap), not this bug; the two are easy to conflate
+because both surface on the same test files. Kept separate in this slice's
+`.ini` attribution by matching on the actual thrown message, not the test
+file.
 
 ## Что нужно
 

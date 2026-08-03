@@ -130,3 +130,13 @@ already covered by [BUG-485](BUG-485-OPEN.md) (shared
 `test_valid_selector`/`test_invalid_selector` helper's
 `document.head.append(style)`). `.ini` under
 `tests/wpt/metadata/css/css-highlight-api/`.
+
+## Срез 29 (`css/css-shadow`, 2026-08-03)
+
+`host-context-parsing.html` — 48 subtests, all "should be an invalid
+selector" cases for `:host-context` used malformed (bare, empty
+parens, comma-separated, or with a compound-selector-list argument like
+`.a + .b`): `document.querySelector(selector)` never throws
+`SyntaxError`/`DOMException`. Same shape as every prior slice of this bug —
+the parser accepts a structurally invalid pseudo-class argument rather than
+rejecting it. `.ini` under `tests/wpt/metadata/css/css-shadow/`.
