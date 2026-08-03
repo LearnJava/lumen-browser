@@ -1,23 +1,17 @@
-/// Launch Handler API (WICG Web App Launch Handler).
-///
-/// Phase 0: in-memory queue + consumer callback infrastructure.
-/// - `window.launchQueue` — `LaunchQueue` singleton
-/// - `LaunchQueue.setConsumer(callback)` — registers a handler for launch params
-/// - `LaunchParams` — `{targetURL, files[]}` object delivered to the consumer
-///
-/// Native bindings:
-/// - `_lumen_deliver_launch_params(targetURL, files_json)` — called by shell to
-///   deliver a new launch (Phase 1: actual OS file associations / URL activation).
-use rquickjs::Ctx;
+//! Launch Handler API (WICG Web App Launch Handler).
+//!
+//! Phase 0: in-memory queue + consumer callback infrastructure.
+//! - `window.launchQueue` — `LaunchQueue` singleton
+//! - `LaunchQueue.setConsumer(callback)` — registers a handler for launch params
+//! - `LaunchParams` — `{targetURL, files[]}` object delivered to the consumer
+//!
+//! Native bindings:
+//! - `_lumen_deliver_launch_params(targetURL, files_json)` — called by shell to
+//!   deliver a new launch (Phase 1: actual OS file associations / URL activation).
 
-/// Install Launch Handler API bindings into the JS context.
-pub fn install_launch_handler_api(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(LAUNCH_HANDLER_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_launch_handler_api`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// V8 port of the former rquickjs `install_launch_handler_api` (Ph3 V8 migration
+/// S5-S7, rquickjs side removed in S12b-B3): identical JS shim, evaluated via
+/// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_launch_handler_api_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -25,6 +19,7 @@ pub(crate) fn install_launch_handler_api_v8(rt: &crate::v8_runtime::V8JsRuntime)
     Ok(())
 }
 
+#[cfg(feature = "v8-backend")]
 const LAUNCH_HANDLER_SHIM: &str = r#"
 (function() {
   'use strict';
@@ -109,60 +104,50 @@ const LAUNCH_HANDLER_SHIM: &str = r#"
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
     use super::*;
-    use rquickjs::{Context, Runtime};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
-
-    fn with_lh(f: impl FnOnce(&rquickjs::Ctx)) {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            ctx.eval::<(), _>("var window = globalThis;").unwrap();
-            install_launch_handler_api(&ctx).unwrap();
-            f(&ctx);
-        });
+    fn with_lh(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval("var window = globalThis;").unwrap();
+        install_launch_handler_api_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
     fn launch_queue_exists() {
-        with_lh(|ctx| {
-            let ok: bool = ctx
+        with_lh(|rt| {
+            let ok = rt
                 .eval("typeof launchQueue === 'object' && launchQueue !== null")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn set_consumer_is_function() {
-        with_lh(|ctx| {
-            let ok: bool = ctx
-                .eval("typeof launchQueue.setConsumer === 'function'")
-                .unwrap();
-            assert!(ok);
+        with_lh(|rt| {
+            let ok = rt.eval("typeof launchQueue.setConsumer === 'function'").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn launch_params_constructor_exported() {
-        with_lh(|ctx| {
-            let ok: bool = ctx
-                .eval("typeof LaunchParams === 'function'")
-                .unwrap();
-            assert!(ok);
+        with_lh(|rt| {
+            let ok = rt.eval("typeof LaunchParams === 'function'").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn set_consumer_rejects_non_function() {
-        with_lh(|ctx| {
-            let ok: bool = ctx
+        with_lh(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var threw = false;
@@ -172,14 +157,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn consumer_receives_delivered_params() {
-        with_lh(|ctx| {
-            let ok: bool = ctx
+        with_lh(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var received = null;
@@ -189,14 +174,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn params_queued_before_consumer_drained_on_set() {
-        with_lh(|ctx| {
-            let ok: bool = ctx
+        with_lh(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     _lumen_deliver_launch_params('https://example.com/early', '[]');
@@ -206,14 +191,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn files_parsed_from_json() {
-        with_lh(|ctx| {
-            let ok: bool = ctx
+        with_lh(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var received = null;
@@ -223,14 +208,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn null_target_url_when_omitted() {
-        with_lh(|ctx| {
-            let ok: bool = ctx
+        with_lh(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var received = null;
@@ -240,17 +225,15 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn window_alias_works() {
-        with_lh(|ctx| {
-            let ok: bool = ctx
-                .eval("typeof window.launchQueue === 'object'")
-                .unwrap();
-            assert!(ok);
+        with_lh(|rt| {
+            let ok = rt.eval("typeof window.launchQueue === 'object'").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 }

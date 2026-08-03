@@ -13,15 +13,8 @@
 //! `_lumen_storage_get_directory()` are wired for Phase 1 (real OS metrics and
 //! sandboxed FS paths).
 
-use rquickjs::Ctx;
-
-/// Install StorageManager API bindings into the JS context.
-pub fn install_storage_manager_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(STORAGE_MANAGER_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_storage_manager_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
+/// V8 port of the former rquickjs `install_storage_manager_bindings` (Ph3 V8
+/// migration S5-S7, rquickjs side removed in S12b-B3): identical JS shim,
 /// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_storage_manager_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
@@ -30,6 +23,7 @@ pub(crate) fn install_storage_manager_bindings_v8(rt: &crate::v8_runtime::V8JsRu
     Ok(())
 }
 
+#[cfg(feature = "v8-backend")]
 const STORAGE_MANAGER_SHIM: &str = r#"
 (function() {
   'use strict';
@@ -111,66 +105,50 @@ const STORAGE_MANAGER_SHIM: &str = r#"
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
     use super::*;
-    use rquickjs::{Context, Runtime};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
-
-    fn with_storage_manager(f: impl FnOnce(&rquickjs::Ctx)) {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            ctx.eval::<(), _>(
-                r#"
-                var window = globalThis;
-                var navigator = {};
-                "#,
-            )
-            .unwrap();
-            install_storage_manager_bindings(&ctx).unwrap();
-            f(&ctx);
-        });
+    fn with_storage_manager(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval("var window = globalThis; var navigator = {};").unwrap();
+        install_storage_manager_bindings_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
     fn storage_manager_exists_on_navigator() {
-        with_storage_manager(|ctx| {
-            let ok: bool = ctx
+        with_storage_manager(|rt| {
+            let ok = rt
                 .eval("typeof navigator.storage === 'object' && navigator.storage !== null")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn storage_manager_class_exported() {
-        with_storage_manager(|ctx| {
-            let ok: bool = ctx
-                .eval("typeof window.StorageManager === 'function'")
-                .unwrap();
-            assert!(ok);
+        with_storage_manager(|rt| {
+            let ok = rt.eval("typeof window.StorageManager === 'function'").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn estimate_returns_promise() {
-        with_storage_manager(|ctx| {
-            let ok: bool = ctx
-                .eval("navigator.storage.estimate() instanceof Promise")
-                .unwrap();
-            assert!(ok);
+        with_storage_manager(|rt| {
+            let ok = rt.eval("navigator.storage.estimate() instanceof Promise").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn storage_manager_has_all_methods() {
-        with_storage_manager(|ctx| {
-            let ok: bool = ctx
+        with_storage_manager(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var sm = navigator.storage;
@@ -181,54 +159,46 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn persist_returns_promise() {
-        with_storage_manager(|ctx| {
-            let ok: bool = ctx
-                .eval("navigator.storage.persist() instanceof Promise")
-                .unwrap();
-            assert!(ok);
+        with_storage_manager(|rt| {
+            let ok = rt.eval("navigator.storage.persist() instanceof Promise").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn persisted_returns_promise() {
-        with_storage_manager(|ctx| {
-            let ok: bool = ctx
-                .eval("navigator.storage.persisted() instanceof Promise")
-                .unwrap();
-            assert!(ok);
+        with_storage_manager(|rt| {
+            let ok = rt.eval("navigator.storage.persisted() instanceof Promise").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn get_directory_returns_promise() {
-        with_storage_manager(|ctx| {
-            let ok: bool = ctx
-                .eval("navigator.storage.getDirectory() instanceof Promise")
-                .unwrap();
-            assert!(ok);
+        with_storage_manager(|rt| {
+            let ok = rt.eval("navigator.storage.getDirectory() instanceof Promise").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn file_system_directory_handle_exported() {
-        with_storage_manager(|ctx| {
-            let ok: bool = ctx
-                .eval("typeof window.FileSystemDirectoryHandle === 'function'")
-                .unwrap();
-            assert!(ok);
+        with_storage_manager(|rt| {
+            let ok = rt.eval("typeof window.FileSystemDirectoryHandle === 'function'").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn file_system_directory_handle_constructor() {
-        with_storage_manager(|ctx| {
-            let ok: bool = ctx
+        with_storage_manager(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var dir = new FileSystemDirectoryHandle('test', 'directory');
@@ -239,14 +209,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn file_system_directory_handle_defaults() {
-        with_storage_manager(|ctx| {
-            let ok: bool = ctx
+        with_storage_manager(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var dir = new FileSystemDirectoryHandle();
@@ -254,7 +224,7 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 }

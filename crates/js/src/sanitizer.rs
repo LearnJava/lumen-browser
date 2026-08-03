@@ -4,15 +4,9 @@
 //! `sanitizer.sanitizeFor(element, string)` removes <script> tags and event handlers,
 //! `element.setHTML(html, {sanitizer})` sets innerHTML via sanitizer.
 
-use rquickjs::Ctx;
-
-pub fn install_sanitizer_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(SANITIZER_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_sanitizer_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// V8 port of the former rquickjs `install_sanitizer_bindings` (Ph3 V8 migration S5-S7,
+/// rquickjs side removed in S12b-B3): identical JS shim, evaluated via
+/// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_sanitizer_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -20,6 +14,7 @@ pub(crate) fn install_sanitizer_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime)
     Ok(())
 }
 
+#[cfg(feature = "v8-backend")]
 const SANITIZER_SHIM: &str = r#"
 // Sanitizer API (Phase 0 stub)
 // Simple sanitizer that removes <script> tags and event handler attributes
@@ -116,115 +111,121 @@ if (typeof window !== 'undefined') {
 }
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
-    use lumen_core::JsRuntime as _;
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
     use lumen_dom::Document;
     use std::sync::{Arc, Mutex};
 
-    fn make_rt() -> crate::QuickJsRuntime {
-        let rt = crate::QuickJsRuntime::new().unwrap();
+    fn with_sanitizer(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
         let doc = Arc::new(Mutex::new(Document::new()));
+        // `install_dom` already installs the Sanitizer shim via `install_v8!`
+        // (v8_runtime.rs) — calling `install_sanitizer_bindings_v8` again would
+        // re-declare the shim's top-level `const`s (not IIFE-wrapped) in the
+        // same global scope and fail with "already been declared".
         rt.install_dom(doc, "about:blank", None, None, None, None, None, None, None, None, false)
             .unwrap();
-        rt
+        f(&rt);
     }
 
     #[test]
     fn sanitizer_class_exists() {
-        let rt = make_rt();
-        match rt.eval("typeof Sanitizer === 'function'") {
-            Ok(lumen_core::JsValue::Bool(true)) => (),
-            other => panic!("Sanitizer class check failed: {other:?}"),
-        }
+        with_sanitizer(|rt| {
+            let ok = rt.eval("typeof Sanitizer === 'function'").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
     }
 
     #[test]
     fn sanitizer_can_be_instantiated() {
-        let rt = make_rt();
-        match rt.eval("typeof new Sanitizer() === 'object'") {
-            Ok(lumen_core::JsValue::Bool(true)) => (),
-            other => panic!("Sanitizer instantiation check failed: {other:?}"),
-        }
+        with_sanitizer(|rt| {
+            let ok = rt.eval("typeof new Sanitizer() === 'object'").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
     }
 
     #[test]
     fn sanitizer_has_sanitizefor_method() {
-        let rt = make_rt();
-        match rt.eval("const s = new Sanitizer(); typeof s.sanitizeFor === 'function'") {
-            Ok(lumen_core::JsValue::Bool(true)) => (),
-            other => panic!("sanitizeFor method check failed: {other:?}"),
-        }
+        with_sanitizer(|rt| {
+            let ok = rt
+                .eval("const s = new Sanitizer(); typeof s.sanitizeFor === 'function'")
+                .unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
     }
 
     #[test]
     fn sanitizefor_removes_script_tags() {
-        let rt = make_rt();
-        match rt.eval(
-            "const s = new Sanitizer(); const div = document.createElement('div'); \
-             const frag = s.sanitizeFor(div, '<p>hello</p><script>alert(\"xss\")</script>'); \
-             const c = document.createElement('div'); c.appendChild(frag); \
-             !c.innerHTML.includes('script')",
-        ) {
-            Ok(lumen_core::JsValue::Bool(true)) => (),
-            other => panic!("script tag removal check failed: {other:?}"),
-        }
+        with_sanitizer(|rt| {
+            let ok = rt
+                .eval(
+                    "const s = new Sanitizer(); const div = document.createElement('div'); \
+                     const frag = s.sanitizeFor(div, '<p>hello</p><script>alert(\"xss\")</script>'); \
+                     const c = document.createElement('div'); c.appendChild(frag); \
+                     !c.innerHTML.includes('script')",
+                )
+                .unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
     }
 
     #[test]
     fn sanitizefor_removes_event_handlers() {
-        let rt = make_rt();
-        match rt.eval(
-            "const s = new Sanitizer(); const div = document.createElement('div'); \
-             const frag = s.sanitizeFor(div, '<button onclick=\"bad()\">click</button>'); \
-             const c = document.createElement('div'); c.appendChild(frag); \
-             !c.innerHTML.includes('onclick')",
-        ) {
-            Ok(lumen_core::JsValue::Bool(true)) => (),
-            other => panic!("event handler removal check failed: {other:?}"),
-        }
+        with_sanitizer(|rt| {
+            let ok = rt
+                .eval(
+                    "const s = new Sanitizer(); const div = document.createElement('div'); \
+                     const frag = s.sanitizeFor(div, '<button onclick=\"bad()\">click</button>'); \
+                     const c = document.createElement('div'); c.appendChild(frag); \
+                     !c.innerHTML.includes('onclick')",
+                )
+                .unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
     }
 
     #[test]
     fn sanitizefor_throws_on_missing_element() {
-        let rt = make_rt();
-        match rt.eval(
-            "const s = new Sanitizer(); \
-             try { s.sanitizeFor(null, '<p>test</p>'); false } \
-             catch (e) { e instanceof TypeError }",
-        ) {
-            Ok(lumen_core::JsValue::Bool(true)) => (),
-            other => panic!("missing element error check failed: {other:?}"),
-        }
+        with_sanitizer(|rt| {
+            let ok = rt
+                .eval(
+                    "const s = new Sanitizer(); \
+                     try { s.sanitizeFor(null, '<p>test</p>'); false } \
+                     catch (e) { e instanceof TypeError }",
+                )
+                .unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
     }
 
     #[test]
     fn sanitizefor_throws_on_non_string_html() {
-        let rt = make_rt();
-        match rt.eval(
-            "const s = new Sanitizer(); const div = document.createElement('div'); \
-             try { s.sanitizeFor(div, 123); false } \
-             catch (e) { e instanceof TypeError }",
-        ) {
-            Ok(lumen_core::JsValue::Bool(true)) => (),
-            other => panic!("non-string html error check failed: {other:?}"),
-        }
+        with_sanitizer(|rt| {
+            let ok = rt
+                .eval(
+                    "const s = new Sanitizer(); const div = document.createElement('div'); \
+                     try { s.sanitizeFor(div, 123); false } \
+                     catch (e) { e instanceof TypeError }",
+                )
+                .unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
     }
 
     #[test]
     fn sanitizefor_returns_document_fragment() {
-        let rt = make_rt();
-        match rt.eval(
-            "const s = new Sanitizer(); const div = document.createElement('div'); \
-             const result = s.sanitizeFor(div, '<p>test</p>'); \
-             typeof result === 'object'",
-        ) {
-            Ok(lumen_core::JsValue::Bool(true)) => (),
-            other => panic!("DocumentFragment return check failed: {other:?}"),
-        }
+        with_sanitizer(|rt| {
+            let ok = rt
+                .eval(
+                    "const s = new Sanitizer(); const div = document.createElement('div'); \
+                     const result = s.sanitizeFor(div, '<p>test</p>'); \
+                     typeof result === 'object'",
+                )
+                .unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
     }
-
-    // Note: setHTML method is installed on Element.prototype but QuickJS doesn't
-    // automatically inherit methods from prototype in all contexts, so this test is skipped.
-    // The method works correctly when used after DOM setup.
 }

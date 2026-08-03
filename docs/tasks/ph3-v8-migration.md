@@ -2436,7 +2436,38 @@ count drift, only in-place porting). `cargo test -p lumen-js`: 1190/1190 (down f
 1221, exactly the 31 removed rquickjs tests; rquickjs suite did not go red). Both clippy
 passes clean.
 
-Next in queue: S12b-B3 (`sanitizer`/`ua_client_hints`/`reporting_api`/`launch_handler`/`storage_manager`).
+**S12b-B3** (2026-08-03): third batch of queue group A (`docs/tasks/p1-s12b-cleanup-queue.md`
+§3), 5 more small modules, none trap cases (own `mod tests` counts matched the queue's
+expected totals): `sanitizer` (8 tests), `ua_client_hints` (4), `reporting_api` (6),
+`launch_handler` (9), `storage_manager` (10) — 37 total, all ported in place to
+`#[cfg(all(test, feature = "v8-backend"))]`. Three modules (`ua_client_hints`,
+`reporting_api`, `launch_handler`) still had a leftover `///` (not `//!`) file-header doc
+comment from before the rquickjs `use`/fn were removed — same S12b-5/8/10/12/B1
+`empty_line_after_doc_comments` gotcha, plus a `doc_lazy_continuation` hit specific to this
+batch (rustdoc merges consecutive `///` blocks separated only by a blank line into one doc
+string attached to the next item, so a module-level bullet list followed by a blank-then-doc
+paragraph reads as an unindented list continuation); fixed the same way, `//!` for all
+module-level headers.
+
+`sanitizer` needed a harness fix beyond the mechanical port: its shim is the one case in this
+batch **not** IIFE-wrapped (top-level `const DANGEROUS_ATTRS`/`function` declarations), and
+`install_dom` already installs it via `install_v8!` (v8_runtime.rs) as part of full DOM setup
+— the naive test harness (`install_dom` then a second explicit
+`install_sanitizer_bindings_v8` call, copied from the `document_pip`-style full-DOM template)
+re-evaluated the same top-level `const`s in one global scope and failed every test with
+`Runtime("Identifier 'DANGEROUS_ATTRS' has already been declared")`. Fix: drop the second
+call — `install_dom` alone is sufficient, matching `document_pip.rs`'s actual pattern (which
+this batch's other full-DOM template copy had gotten right; only `sanitizer.rs` had the extra
+call). Worth flagging for future full-`install_dom` batches: check whether the target module
+is already wired into `install_dom` via `install_v8!` before writing a harness — if it is,
+installing it a second time is only safe when the shim is IIFE-wrapped.
+
+`cargo test -p lumen-js --features v8-backend`: 2584/2584 (unchanged from S12b-B2 — no test
+count drift, only in-place porting). `cargo test -p lumen-js`: 1153/1153 (down from 1190,
+exactly the 37 removed rquickjs tests; rquickjs suite did not go red). Both clippy passes
+clean.
+
+Next in queue: S12b-B4 (`webhid`/`network_log_bindings`/`css_properties_values_api`/`scheduler`/`paint_worklet`).
 
 ---
 

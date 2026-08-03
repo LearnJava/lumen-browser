@@ -874,12 +874,6 @@ impl QuickJsRuntime {
                 eprintln!("WebCodecs API init failed: {}", e);
             }
 
-            // Install User-Agent Client Hints (W3C UA-CH §4–6) — after navigator shim.
-            // Phase 0: navigator.userAgentData with static Chrome 114 / Windows 10 profile.
-            if let Err(e) = ua_client_hints::install_ua_client_hints_bindings(&ctx) {
-                eprintln!("UA Client Hints init failed: {}", e);
-            }
-
             // Install HTMLVideoElement stubs — after DOM so document.createElement is available.
             if let Err(e) = video_bindings::install_video_bindings(&ctx) {
                 eprintln!("Video bindings init failed: {}", e);
@@ -1143,14 +1137,6 @@ impl QuickJsRuntime {
                 eprintln!("Long Animation Frames API init failed: {}", e);
             }
 
-            // Install Sanitizer API (W3C Sanitizer API §3) — after DOM so `document`,
-            // `Element`, and DOM methods are available.
-            // Phase 0: Simple removal of <script> tags and event handler attributes.
-            // Config options are not used.
-            if let Err(e) = sanitizer::install_sanitizer_bindings(&ctx) {
-                eprintln!("Sanitizer bindings init failed: {}", e);
-            }
-
             // Install MediaRecorder API stub (W3C MediaStream Recording L2) — pure JS implementation.
             // Phase 0: MediaRecorder state machine (inactive/recording/paused), mimeType reflection,
             // ondataavailable fires empty Blob on stop. BlobEvent class. isTypeSupported() → false.
@@ -1163,11 +1149,6 @@ impl QuickJsRuntime {
             // ifAvailable, steal, and AbortSignal. navigator.locks → LockManager.
             if let Err(e) = web_locks::install_web_locks_bindings(&ctx) {
                 eprintln!("Web Locks API init failed: {}", e);
-            }
-
-            // Install Reporting API (W3C Reporting API L1) — observer + _lumen_deliver_report.
-            if let Err(e) = reporting_api::install_reporting_api_bindings(&ctx) {
-                eprintln!("Reporting API init failed: {}", e);
             }
 
             // Install Screen Wake Lock API (W3C Screen Wake Lock Level 1) — after DOM/navigator.
@@ -1238,13 +1219,6 @@ impl QuickJsRuntime {
                 eprintln!("Web MIDI API init failed: {}", e);
             }
 
-            // Phase 0: WHATWG Storage §9 — navigator.storage singleton.
-            // estimate() → {usage:0, quota:10GiB}; persist/persisted → true; getDirectory() → OPFS stub.
-            // Phase 1: _lumen_storage_estimate/persist/get_directory wire real OS metrics + sandboxed FS.
-            if let Err(e) = storage_manager::install_storage_manager_bindings(&ctx) {
-                eprintln!("StorageManager API init failed: {}", e);
-            }
-
             // Install XMLHttpRequest API (WHATWG XHR Standard §4) — after DOM so fetch(),
             // FormData, Blob, TextDecoder/Encoder, ProgressEvent infra, and the
             // _lumen_fetch_sync* native bindings are all present.
@@ -1289,12 +1263,6 @@ impl QuickJsRuntime {
             // Phase 1: _lumen_get_screen_details() native binding for OS multi-screen enumeration.
             if let Err(e) = window_management::install_window_management_api(&ctx) {
                 eprintln!("Window Management API init failed: {}", e);
-            }
-
-            // WICG Launch Handler — window.launchQueue, LaunchParams, setConsumer().
-            // Phase 0: in-memory queue. Phase 1: _lumen_deliver_launch_params() from shell.
-            if let Err(e) = launch_handler::install_launch_handler_api(&ctx) {
-                eprintln!("Launch Handler API init failed: {}", e);
             }
 
             // WICG Shared Storage API — window.sharedStorage (Privacy Sandbox).

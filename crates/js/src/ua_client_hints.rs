@@ -1,20 +1,14 @@
-/// User-Agent Client Hints (W3C UA-CH §4–6)
-/// Phase 0: static Chrome 114 profile — all values are fixed.
-/// `navigator.userAgentData` exposes low-entropy values directly.
-/// `getHighEntropyValues(hints)` returns Promise<UADataValues> with static fields.
-use rquickjs::Ctx;
+//! User-Agent Client Hints (W3C UA-CH §4–6)
+//! Phase 0: static Chrome 114 profile — all values are fixed.
+//! `navigator.userAgentData` exposes low-entropy values directly.
+//! `getHighEntropyValues(hints)` returns Promise<UADataValues> with static fields.
 
-/// Install User-Agent Client Hints bindings into the JS context.
+/// V8 port of the former rquickjs `install_ua_client_hints_bindings` (Ph3 V8 migration
+/// S5-S7, rquickjs side removed in S12b-B3): identical JS shim, evaluated via
+/// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 ///
 /// Adds `navigator.userAgentData` (a `NavigatorUAData` instance) and exports
 /// `NavigatorUAData` on `globalThis`. Phase 0: static Chrome 114 / Windows 10 profile.
-pub fn install_ua_client_hints_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(UA_CLIENT_HINTS_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_ua_client_hints_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_ua_client_hints_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -22,6 +16,7 @@ pub(crate) fn install_ua_client_hints_bindings_v8(rt: &crate::v8_runtime::V8JsRu
     Ok(())
 }
 
+#[cfg(feature = "v8-backend")]
 const UA_CLIENT_HINTS_SHIM: &str = r#"
 (function() {
   // NavigatorUABrandVersion — one entry in the brands / fullVersionList arrays.
@@ -124,57 +119,35 @@ const UA_CLIENT_HINTS_SHIM: &str = r#"
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
     use super::*;
-    use rquickjs::{Context, Runtime};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
-
-    fn with_ua_hints_api(f: impl FnOnce(&rquickjs::Ctx)) {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            ctx.eval::<(), _>(
-                r#"
-                var window = globalThis;
-                var navigator = {};
-                globalThis.navigator = navigator;
-                function DOMException(message, name) {
-                  Error.call(this, message);
-                  this.message = message;
-                  this.name = name || 'Error';
-                }
-                DOMException.prototype = Object.create(Error.prototype);
-                DOMException.prototype.constructor = DOMException;
-                globalThis.DOMException = DOMException;
-                "#,
-            )
+    fn with_ua_hints_api(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval("var window = globalThis; var navigator = {}; globalThis.navigator = navigator;")
             .unwrap();
-            install_ua_client_hints_bindings(&ctx).unwrap();
-            f(&ctx);
-        });
+        install_ua_client_hints_bindings_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
     fn navigator_ua_data_exists() {
-        with_ua_hints_api(|ctx| {
-            let ok: bool = ctx
-                .eval(
-                    "typeof navigator.userAgentData === 'object' && navigator.userAgentData !== null",
-                )
+        with_ua_hints_api(|rt| {
+            let ok = rt
+                .eval("typeof navigator.userAgentData === 'object' && navigator.userAgentData !== null")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn low_entropy_brands_mobile_platform() {
-        with_ua_hints_api(|ctx| {
-            let ok: bool = ctx
+        with_ua_hints_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var d = navigator.userAgentData;
@@ -184,37 +157,28 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn get_high_entropy_values_returns_promise() {
-        with_ua_hints_api(|ctx| {
-            let ok: bool = ctx
+        with_ua_hints_api(|rt| {
+            let ok = rt
                 .eval(
                     "navigator.userAgentData.getHighEntropyValues(['platformVersion']) instanceof Promise",
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn get_high_entropy_values_resolves_with_platform_version() {
-        let (rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            ctx.eval::<(), _>(
-                r#"
-                var window = globalThis;
-                var navigator = {};
-                globalThis.navigator = navigator;
-                "#,
-            )
-            .unwrap();
-            install_ua_client_hints_bindings(&ctx).unwrap();
-            // Schedule the .then() callback — it runs as a microtask.
-            ctx.eval::<(), _>(
+        with_ua_hints_api(|rt| {
+            // V8 auto-drains microtasks between separate `eval` calls, so the
+            // `.then()` callback below has already run by the time we read `_result`.
+            rt.eval(
                 r#"
                 var _result = null;
                 navigator.userAgentData
@@ -223,11 +187,7 @@ mod tests {
                 "#,
             )
             .unwrap();
-        });
-        // Drain QuickJS microtask queue so the .then() callback executes.
-        while rt.execute_pending_job().unwrap_or(false) {}
-        ctx.with(|ctx| {
-            let ok: bool = ctx
+            let ok = rt
                 .eval(
                     r#"
                     _result !== null &&
@@ -237,7 +197,7 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 }
