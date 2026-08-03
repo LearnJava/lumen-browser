@@ -1,23 +1,17 @@
-/// URL Pattern API (WHATWG URLPattern §3).
-///
-/// Pure JavaScript implementation of URLPattern: `new URLPattern(...)` with methods
-/// `.test(input)` and `.exec(input)`. Supports wildcard `*`, named groups `:name`,
-/// and optional patterns in curly braces.
-use rquickjs::Ctx;
+//! URL Pattern API (WHATWG URLPattern §3).
+//!
+//! Pure JavaScript implementation of URLPattern: `new URLPattern(...)` with methods
+//! `.test(input)` and `.exec(input)`. Supports wildcard `*`, named groups `:name`,
+//! and optional patterns in curly braces.
 
-/// Install URL Pattern API into the JS context.
+/// V8 port of the former rquickjs `install_url_pattern_api` (Ph3 V8 migration S5-S7,
+/// rquickjs side removed in S12b-B6): identical JS shim, evaluated via
+/// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 ///
 /// Defines `globalThis.URLPattern` class with:
 /// - Constructor: `new URLPattern({pathname, search, hash, hostname})`
 /// - Method `test(input)`: returns `true` if input matches all patterns
 /// - Method `exec(input)`: returns object with named groups if match, `null` otherwise
-pub fn install_url_pattern_api(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(URL_PATTERN_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_url_pattern_api`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_url_pattern_api_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -26,6 +20,7 @@ pub(crate) fn install_url_pattern_api_v8(rt: &crate::v8_runtime::V8JsRuntime) ->
 }
 
 /// JavaScript shim: URLPattern class with pattern parsing and matching.
+#[cfg(feature = "v8-backend")]
 const URL_PATTERN_SHIM: &str = r#"(function() {
   'use strict';
 
@@ -209,24 +204,22 @@ const URL_PATTERN_SHIM: &str = r#"(function() {
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
-    use super::*;
-    use rquickjs::{Context, Runtime};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
+    fn with_url_pattern(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        super::install_url_pattern_api_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
     fn test_url_pattern_basic() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_url_pattern_api(&ctx).unwrap();
-
-            let result: bool = ctx
+        with_url_pattern(|rt| {
+            let result = rt
                 .eval(
                     r#"
                     const pattern = new URLPattern({pathname: '/users/:id'});
@@ -234,17 +227,14 @@ mod tests {
                 "#,
                 )
                 .unwrap();
-            assert!(result);
+            assert_eq!(result, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn test_url_pattern_exec() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_url_pattern_api(&ctx).unwrap();
-
-            let result: String = ctx
+        with_url_pattern(|rt| {
+            let result = rt
                 .eval(
                     r#"
                     const pattern = new URLPattern({pathname: '/users/:id'});
@@ -253,17 +243,14 @@ mod tests {
                 "#,
                 )
                 .unwrap();
-            assert_eq!(result, "456");
+            assert_eq!(result, JsValue::String("456".to_string()));
         });
     }
 
     #[test]
     fn test_url_pattern_no_match() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_url_pattern_api(&ctx).unwrap();
-
-            let result: bool = ctx
+        with_url_pattern(|rt| {
+            let result = rt
                 .eval(
                     r#"
                     const pattern = new URLPattern({pathname: '/users/:id'});
@@ -272,17 +259,14 @@ mod tests {
                 "#,
                 )
                 .unwrap();
-            assert!(!result);
+            assert_eq!(result, JsValue::Bool(false));
         });
     }
 
     #[test]
     fn test_url_pattern_wildcard() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_url_pattern_api(&ctx).unwrap();
-
-            let result: bool = ctx
+        with_url_pattern(|rt| {
+            let result = rt
                 .eval(
                     r#"
                     const pattern = new URLPattern({pathname: '/api/*'});
@@ -290,17 +274,14 @@ mod tests {
                 "#,
                 )
                 .unwrap();
-            assert!(result);
+            assert_eq!(result, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn test_url_pattern_multiple_groups() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_url_pattern_api(&ctx).unwrap();
-
-            let result: String = ctx
+        with_url_pattern(|rt| {
+            let result = rt
                 .eval(
                     r#"
                     const pattern = new URLPattern({pathname: '/users/:user_id/posts/:post_id'});
@@ -309,7 +290,7 @@ mod tests {
                 "#,
                 )
                 .unwrap();
-            assert_eq!(result, "match");
+            assert_eq!(result, JsValue::String("match".to_string()));
         });
     }
 }

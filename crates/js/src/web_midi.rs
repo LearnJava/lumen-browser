@@ -10,16 +10,9 @@
 //! `_lumen_midi_deliver_message(port_id, data_bytes)` is prepared for
 //! Phase 1 (OS MIDI integration via CoreMIDI / WinMM / ALSA).
 
-use rquickjs::Ctx;
-
-/// Install Web MIDI API bindings into the JS context.
-pub fn install_web_midi_api(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(WEB_MIDI_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_web_midi_api`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// V8 port of the former rquickjs `install_web_midi_api` (Ph3 V8 migration S5-S7,
+/// rquickjs side removed in S12b-B6): identical JS shim, evaluated via
+/// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_web_midi_api_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -27,6 +20,7 @@ pub(crate) fn install_web_midi_api_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lu
     Ok(())
 }
 
+#[cfg(feature = "v8-backend")]
 const WEB_MIDI_SHIM: &str = r#"
 (function() {
   'use strict';
@@ -167,57 +161,50 @@ const WEB_MIDI_SHIM: &str = r#"
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
-    use super::*;
-    use rquickjs::{Context, Runtime};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
-
-    fn with_midi_api(f: impl FnOnce(&rquickjs::Ctx)) {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            ctx.eval::<(), _>(
-                r#"
-                var window = globalThis;
-                var navigator = {};
-                globalThis.navigator = navigator;
-                "#,
-            )
-            .unwrap();
-            install_web_midi_api(&ctx).unwrap();
-            f(&ctx);
-        });
+    fn with_midi_api(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(
+            r#"
+            var window = globalThis;
+            var navigator = {};
+            globalThis.navigator = navigator;
+            "#,
+        )
+        .unwrap();
+        super::install_web_midi_api_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
     fn midi_request_midi_access_exists() {
-        with_midi_api(|ctx| {
-            let ok: bool = ctx
+        with_midi_api(|rt| {
+            let ok = rt
                 .eval("typeof navigator.requestMIDIAccess === 'function'")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn midi_request_midi_access_returns_promise() {
-        with_midi_api(|ctx| {
-            let ok: bool = ctx
+        with_midi_api(|rt| {
+            let ok = rt
                 .eval("navigator.requestMIDIAccess() instanceof Promise")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn midi_access_has_inputs_and_outputs() {
-        with_midi_api(|ctx| {
-            let ok: bool = ctx
+        with_midi_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var p = navigator.requestMIDIAccess();
@@ -231,87 +218,87 @@ mod tests {
                 )
                 .unwrap();
             // Promise is microtask-based; we just verify it doesn't throw
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn midi_access_class_exported() {
-        with_midi_api(|ctx| {
-            let ok: bool = ctx
+        with_midi_api(|rt| {
+            let ok = rt
                 .eval("typeof window.MIDIAccess === 'function'")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn midi_input_class_exported() {
-        with_midi_api(|ctx| {
-            let ok: bool = ctx
+        with_midi_api(|rt| {
+            let ok = rt
                 .eval("typeof window.MIDIInput === 'function'")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn midi_output_class_exported() {
-        with_midi_api(|ctx| {
-            let ok: bool = ctx
+        with_midi_api(|rt| {
+            let ok = rt
                 .eval("typeof window.MIDIOutput === 'function'")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn midi_message_event_class_exported() {
-        with_midi_api(|ctx| {
-            let ok: bool = ctx
+        with_midi_api(|rt| {
+            let ok = rt
                 .eval("typeof window.MIDIMessageEvent === 'function'")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn midi_connection_event_class_exported() {
-        with_midi_api(|ctx| {
-            let ok: bool = ctx
+        with_midi_api(|rt| {
+            let ok = rt
                 .eval("typeof window.MIDIConnectionEvent === 'function'")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn midi_port_map_class_exported() {
-        with_midi_api(|ctx| {
-            let ok: bool = ctx
+        with_midi_api(|rt| {
+            let ok = rt
                 .eval("typeof window.MIDIPortMap === 'function'")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn midi_access_sysex_enabled_false_by_default() {
-        with_midi_api(|ctx| {
-            let ok: bool = ctx
+        with_midi_api(|rt| {
+            let ok = rt
                 .eval("new window.MIDIAccess(false).sysexEnabled === false")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn midi_deliver_binding_exists() {
-        with_midi_api(|ctx| {
-            let ok: bool = ctx
+        with_midi_api(|rt| {
+            let ok = rt
                 .eval("typeof globalThis._lumen_midi_deliver_message === 'function'")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 }

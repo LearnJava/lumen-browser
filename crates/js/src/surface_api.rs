@@ -20,19 +20,12 @@
 //!
 //! Must be called **after** `install_dom_api` and `install_navigator_bindings`.
 
-use rquickjs::Ctx;
-
-/// Install Layer 1 surface API protection into the JS context.
+/// V8 port of the former rquickjs `install_surface_api_protection` (Ph3 V8 migration
+/// S5-S7, rquickjs side removed in S12b-B6): identical JS shim, evaluated via
+/// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 ///
 /// Seals automation-detection properties and adds standard browser
 /// compatibility shims. Must be called after `install_dom_api`.
-pub fn install_surface_api_protection(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(SURFACE_API_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_surface_api_protection`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_surface_api_protection_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -40,6 +33,7 @@ pub(crate) fn install_surface_api_protection_v8(rt: &crate::v8_runtime::V8JsRunt
     Ok(())
 }
 
+#[cfg(feature = "v8-backend")]
 const SURFACE_API_SHIM: &str = r#"(function() {
   // ── Seal navigator.webdriver ────────────────────────────────────────────────
   // Selenium/WebDriver sets navigator.webdriver = true.  We explicitly define
@@ -182,144 +176,117 @@ const SURFACE_API_SHIM: &str = r#"(function() {
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
-    use super::*;
-    use rquickjs::{Context, Runtime};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
-
-    fn install(ctx: &rquickjs::Ctx) {
-        ctx.eval::<(), _>("var navigator = { language: 'en-US' }; var globalThis = {};")
+    fn with_surface_api(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval("var navigator = { language: 'en-US' }; var globalThis = {};")
             .unwrap();
-        install_surface_api_protection(ctx).unwrap();
+        super::install_surface_api_protection_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
     fn webdriver_is_undefined() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let v: bool = ctx
+        with_surface_api(|rt| {
+            let v = rt
                 .eval("typeof navigator.webdriver === 'undefined'")
                 .unwrap();
-            assert!(v, "navigator.webdriver must be undefined");
+            assert_eq!(v, JsValue::Bool(true), "navigator.webdriver must be undefined");
         });
     }
 
     #[test]
     fn webdriver_absent_in_navigator() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
+        with_surface_api(|rt| {
             // navigator.webdriver must be completely absent — not even enumerable.
-            let v: bool = ctx
-                .eval("!('webdriver' in navigator)")
-                .unwrap();
-            assert!(v, "webdriver must not be a property of navigator");
+            let v = rt.eval("!('webdriver' in navigator)").unwrap();
+            assert_eq!(v, JsValue::Bool(true), "webdriver must not be a property of navigator");
         });
     }
 
     #[test]
     fn appname_is_netscape() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let v: String = ctx.eval("navigator.appName").unwrap();
-            assert_eq!(v, "Netscape");
+        with_surface_api(|rt| {
+            let v = rt.eval("navigator.appName").unwrap();
+            assert_eq!(v, JsValue::String("Netscape".to_string()));
         });
     }
 
     #[test]
     fn vendor_is_google_inc() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let v: String = ctx.eval("navigator.vendor").unwrap();
-            assert_eq!(v, "Google Inc.");
+        with_surface_api(|rt| {
+            let v = rt.eval("navigator.vendor").unwrap();
+            assert_eq!(v, JsValue::String("Google Inc.".to_string()));
         });
     }
 
     #[test]
     fn product_is_gecko() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let v: String = ctx.eval("navigator.product").unwrap();
-            assert_eq!(v, "Gecko");
+        with_surface_api(|rt| {
+            let v = rt.eval("navigator.product").unwrap();
+            assert_eq!(v, JsValue::String("Gecko".to_string()));
         });
     }
 
     #[test]
     fn plugins_exists_with_length_zero() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let v: bool = ctx
+        with_surface_api(|rt| {
+            let v = rt
                 .eval("typeof navigator.plugins === 'object' && navigator.plugins.length === 0")
                 .unwrap();
-            assert!(v, "navigator.plugins must be an object with length 0");
+            assert_eq!(v, JsValue::Bool(true), "navigator.plugins must be an object with length 0");
         });
     }
 
     #[test]
     fn mime_types_exists_with_length_zero() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let v: bool = ctx
+        with_surface_api(|rt| {
+            let v = rt
                 .eval("typeof navigator.mimeTypes === 'object' && navigator.mimeTypes.length === 0")
                 .unwrap();
-            assert!(v, "navigator.mimeTypes must be an object with length 0");
+            assert_eq!(v, JsValue::Bool(true), "navigator.mimeTypes must be an object with length 0");
         });
     }
 
     #[test]
     fn playwright_global_is_undefined() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let v: bool = ctx
+        with_surface_api(|rt| {
+            let v = rt
                 .eval("typeof globalThis.__playwright === 'undefined'")
                 .unwrap();
-            assert!(v, "__playwright must be undefined");
+            assert_eq!(v, JsValue::Bool(true), "__playwright must be undefined");
         });
     }
 
     #[test]
     fn phantom_global_is_undefined() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let v: bool = ctx
+        with_surface_api(|rt| {
+            let v = rt
                 .eval("typeof globalThis.callPhantom === 'undefined'")
                 .unwrap();
-            assert!(v, "callPhantom must be undefined");
+            assert_eq!(v, JsValue::Bool(true), "callPhantom must be undefined");
         });
     }
 
     #[test]
     fn selenium_global_is_undefined() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let v: bool = ctx
+        with_surface_api(|rt| {
+            let v = rt
                 .eval("typeof globalThis.__selenium_unwrapped === 'undefined'")
                 .unwrap();
-            assert!(v, "__selenium_unwrapped must be undefined");
+            assert_eq!(v, JsValue::Bool(true), "__selenium_unwrapped must be undefined");
         });
     }
 
     #[test]
     fn install_succeeds_without_navigator() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_surface_api_protection(&ctx)
-                .expect("must not crash when navigator is absent");
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        super::install_surface_api_protection_v8(&rt)
+            .expect("must not crash when navigator is absent");
     }
 }

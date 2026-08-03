@@ -2546,6 +2546,44 @@ suite did not go red from this batch. Both clippy passes clean.
 
 Next in queue: S12b-B6 (`iframe_element`/`url_pattern`/`web_midi`/`surface_api`/`scroll_timeline`).
 
+**S12b-B6** (2026-08-04): sixth batch of queue group A (`docs/tasks/p1-s12b-cleanup-queue.md`
+§3, Полоса 1 last batch), 5 small modules: `iframe_element` (10 tests), `url_pattern` (5),
+`web_midi` (11), `surface_api` (11), `scroll_timeline` (14) — 51 total, all ported in place to
+`#[cfg(all(test, feature = "v8-backend"))]` against a bare `V8JsRuntime::new()` (no full
+`install_dom`), swapping `ctx.eval::<T,_>(...)`/`Context::full` boilerplate for `rt.eval(...)` +
+`JsValue::{Bool,String,Number}` comparisons. Step-2 grep (`grep -n "<file_stem>_" dom.rs`) found
+no hidden tests for any of the 5 in `dom.rs` itself.
+
+`surface_api` repeated the S12b-B5 `speech`/`speech_api.rs` trap: its own `mod tests` had 11
+tests, but a **19-test integration suite** in `crates/js/tests/cases/no_automation_markers.rs`
+also builds `QuickJsRuntime::install_dom` — only 4 of the 19 (`navigator_app_name_is_netscape`,
+`navigator_vendor_is_google`, `navigator_plugins_is_object`, `navigator_mime_types_is_object`)
+actually depend on `surface_api`'s properties; the other 15 (webdriver/playwright/cdc_/phantom/
+domAutomation absence, `isTrusted`) hold regardless of which engine installs DOM, since those
+markers are never defined by any install fn (asserting absence, not presence). Ported the whole
+file to `V8JsRuntime` + `#![cfg(feature = "v8-backend")]` anyway (matching the S12b-B5 precedent
+verbatim, `lumen_js::QuickJsRuntime` → `lumen_js::v8_runtime::V8JsRuntime`) rather than
+partial-splitting the file — keeps one file, one engine, and the 15 engine-agnostic assertions
+now validate against the default (V8) build per `CLAUDE.md`'s "validate JS work against the
+default build" instruction instead of the rollback path. Confirmed by the intermediate
+`cargo test -p lumen-js --features v8-backend` run: exactly 4 failures
+(`navigator_{app_name,vendor,plugins,mime_types}_*`), matching the predicted surface_api-only
+dependency before the file-level fix.
+
+No `empty_line_after_doc_comments` hits except `url_pattern.rs` (leftover `///` file-header
+before the rquickjs `use`/fn block, blank line before the next doc — same S12b-5/8/10/12/B1/B4/B5
+shape) — fixed by converting the header to `//!`. The other 4 modules already used `//!`
+module-doc, no fix needed there.
+
+`cargo test -p lumen-js --features v8-backend`: 2584 lib (unchanged — in-place porting only) +
+68 integration (unchanged — `no_automation_markers.rs`'s 19 tests already ran against
+`QuickJsRuntime` in this binary before the batch, now against `V8JsRuntime`, same count).
+`cargo test -p lumen-js` (default): 1055 lib (down from 1106, the 51 ported `mod tests`) + 5
+integration (down from 24, the 19 `no_automation_markers.rs` tests now v8-only). rquickjs suite
+did not go red from this batch. Both clippy passes clean.
+
+Next in queue: S12b-B7 (`web_locks`/`webusb`/`close_watcher`, Полоса 2 first batch).
+
 ---
 
 ## Risks (Rev 2)

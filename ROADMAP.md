@@ -682,7 +682,7 @@ FIXED/DEBTOR → `done`, IN PROGRESS → `active`), CSS-тиров (см. выш
 | P3-v8-s12b-b3 | P3 | P3-v8-s12b | done | S | | Полоса 1 (1235/37): sanitizer, ua_client_hints, reporting_api, launch_handler, storage_manager | S12b-B3: снос rquickjs, мелкие модули (3/6) |
 | P3-v8-s12b-b4 | P3 | P3-v8-s12b | done | S | | Полоса 1 (1369/35): webhid, network_log_bindings, css_properties_values_api, scheduler, paint_worklet | S12b-B4: снос rquickjs, мелкие модули (4/6) |
 | P3-v8-s12b-b5 | P3 | P3-v8-s12b | done | S | | Полоса 1 (1539/22): presentation_api, screen_orientation, window_management, navigation_api, speech | S12b-B5: снос rquickjs, мелкие модули (5/6) |
-| P3-v8-s12b-b6 | P3 | P3-v8-s12b | queued | S | | Полоса 1 (1599/51): iframe_element, url_pattern, web_midi, surface_api, scroll_timeline | S12b-B6: снос rquickjs, мелкие модули (6/6) |
+| P3-v8-s12b-b6 | P3 | P3-v8-s12b | done | S | | Полоса 1 (1599/51): iframe_element, url_pattern, web_midi, surface_api, scroll_timeline | S12b-B6: снос rquickjs, мелкие модули (6/6) |
 | P3-v8-s12b-b7 | P3 | P3-v8-s12b | queued | S | | Полоса 2 (1039/22): web_locks, webusb, close_watcher | S12b-B7: снос rquickjs, средние модули (1/8) |
 | P3-v8-s12b-b8 | P3 | P3-v8-s12b | queued | S | | Полоса 2 (1139/45): gamepad, generic_sensor, shared_storage | S12b-B8: снос rquickjs, средние модули (2/8) |
 | P3-v8-s12b-b9 | P3 | P3-v8-s12b | queued | S | | Полоса 2 (1244/33): element_internals, video_pip, media_session | S12b-B9: снос rquickjs, средние модули (3/8) |
