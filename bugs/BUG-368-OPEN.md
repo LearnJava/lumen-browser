@@ -119,3 +119,18 @@ reg!("_lumen_set_inner_html", move |node_id: u32, html: String| {
 5. Тест-верификация — только по дереву: `el.innerHTML = '<i>y</i>'` →
    `el.children.length === 1 && el.firstElementChild.tagName === 'I'`, плюс
    графический тест на видимый рендер вставленной разметки.
+
+## Срез 26 (`css/css-ruby`, 2026-08-03) — первое прямое попадание реального WPT-теста
+
+`position-relative.html` строит ruby-разметку через
+`container.innerHTML = '<ruby style="position:relative">base<rt>annotation</ruby>'`,
+затем читает `document.querySelector('rt').getBoundingClientRect()` — падает
+с `Cannot read properties of undefined (reading 'getBoundingClientRect')`,
+потому что `querySelector('rt')` возвращает `null`: подтверждено живой
+пробой (`--mcp-port`) — `container.innerHTML = '<ruby>base<rt>annotation</ruby>'`
+не создаёт вовсе НИ ОДНОГО элемента (ни `<ruby>`, ни `<rt>`), тогда как те же
+теги через `document.createElement('ruby')`/`createElement('rt')` +
+`appendChild` создаются и находятся `querySelector` без проблем — узкий
+случай общего дефекта, не специфика ruby. 3 файла/сабтеста
+(`position-relative.html`) добавлены к масштабу. `.ini`
+`tests/wpt/metadata/css/css-ruby/position-relative.html`, `expected: FAIL`.

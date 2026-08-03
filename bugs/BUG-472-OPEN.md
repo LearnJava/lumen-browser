@@ -227,3 +227,12 @@ Same "parsed-but-never-taught-to-the-map" shape. 45 subtests/5 files:
 
 Same "parsed-but-never-taught-to-the-map" shape, 4 subtests
 (`inheritance.html`). `.ini` under `tests/wpt/metadata/css/css-scrollbars/`.
+
+## Срез 26 (`css/css-ruby` + `css/css-page`, 2026-08-03) — `ruby-*`, `page`
+
+Same shape, two categories: `css-ruby/inheritance.html` (8 subtests —
+`ruby-align`/`ruby-position`/`ruby-merge`/`ruby-overhang`, all four "has
+initial value"/"inherits" pairs); `css-page/inheritance.html` (2) +
+`css-page/parsing/page-computed.html` (6) — the `page` property. `.ini`
+under `tests/wpt/metadata/css/css-ruby/` and
+`tests/wpt/metadata/css/css-page/`.

@@ -251,3 +251,14 @@ assertion later in the same `test()` that would exercise
 reached, since the first assertion throws first; `.ini` attributes both
 files to this bug only. `.ini` under `tests/wpt/metadata/css/css-nesting/`
 for all 9 files.
+
+## Срез 26 (`css/css-ruby`, 2026-08-03)
+
+`br-clear-all-000.html`/`br-clear-all-001.html`/`br-clear-all-002.html` —
+same `check-layout-th.js` idiom (`checkLayout("#container")` called
+synchronously right after the static markup). Confirmed via
+`lumen --dump-layout` on the same markup that `#container`'s real computed
+height is non-trivial (a forced layout pass produces a real, if imperfect,
+box), while the JS-side same-tick read the test relies on gets `0` — the
+established same-tick-cache signature, not a float/clear layout bug. 1
+subtest/file, 3 files. `.ini` under `tests/wpt/metadata/css/css-ruby/`.

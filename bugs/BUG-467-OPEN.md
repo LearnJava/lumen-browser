@@ -108,3 +108,11 @@ worktree подтверждает 0 unexpected / 0 unexpected passes (79/79 expe
 подключены) — если `document.fonts` когда-нибудь станет реактивным на
 добавление/удаление `@font-face`-правил через CSSOM, то потребуется тот же
 фундамент, что и для BUG-471.
+
+## Срез 26 (`css/css-ruby`, 2026-08-03)
+
+`line-spacing.html` — `document.fonts.load("16px Ahem").then(...)` at top
+level, before any `test()` registers: TIMEOUT (`document.fonts.load` is one
+of the missing Maplike/loading members this bug already documents). `.ini`
+under `tests/wpt/metadata/css/css-ruby/line-spacing.html.ini`,
+`expected: TIMEOUT`.
