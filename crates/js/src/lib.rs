@@ -636,19 +636,11 @@ impl QuickJsRuntime {
     /// Assigns a virtual `lumen://inline-N` specifier for relative-import resolution.
     /// Drains pending microtasks after evaluation so Promise continuations run.
     pub fn eval_module(&self, source: &str) -> JsResult<()> {
-        // Pre-process TC39 decorator syntax (Phase 0 transformer) so the
-        // registry and the evaluated module agree on the source.
-        let source = self.run(|inner| {
-            inner.ctx.with(|ctx: Ctx<'_>| {
-                decorators::maybe_transform_decorators(&ctx, source)
-                    .unwrap_or_else(|| source.to_owned())
-            })
-        });
         // Strip import-attribute clauses (TC39 Stage 3) and record declared
         // module types; inline scripts resolve specifiers against the page URL.
         let source = self
-            .preprocess_import_attributes("", &source)
-            .unwrap_or(source);
+            .preprocess_import_attributes("", source)
+            .unwrap_or_else(|| source.to_owned());
         // Unique sequential inline specifier; use page URL as import.meta.url.
         let page_url = self.module_page_url.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let specifier = {
@@ -815,14 +807,6 @@ impl QuickJsRuntime {
                 eprintln!("MediaDevices bindings init failed: {}", e);
             }
 
-            // Install W3C WebCodecs API (https://www.w3.org/TR/webcodecs/) — after DOM.
-            // Phase 0: VideoEncoder/Decoder + AudioEncoder/Decoder + EncodedVideoChunk/AudioChunk stubs.
-            // configure() rejects with NotSupportedError; no codec support in Phase 0.
-            // Phase 1 (future): FFmpeg or libav1 bindings for actual encoding/decoding.
-            if let Err(e) = web_codecs::install_webcodecs_bindings(&ctx) {
-                eprintln!("WebCodecs API init failed: {}", e);
-            }
-
             // Install HTMLVideoElement stubs — after DOM so document.createElement is available.
             if let Err(e) = video_bindings::install_video_bindings(&ctx) {
                 eprintln!("Video bindings init failed: {}", e);
@@ -955,13 +939,6 @@ impl QuickJsRuntime {
                 eprintln!("ES2026 proposals shim init failed: {}", e);
             }
 
-            // Install TC39 Decorators (Stage 3) Phase 0 — `@decorator` source
-            // transformer (`__lumen_transform_decorators`, used by the eval entry
-            // points) + Symbol.ClassDecorator / Symbol.MethodDecorator symbols.
-            if let Err(e) = decorators::install_decorator_shim(&ctx) {
-                eprintln!("Decorator shim init failed: {}", e);
-            }
-
             // Install CSS View Transitions API (CSS View Transitions L1 §4) — after DOM
             // so `document` is defined and Promise/queueMicrotask are available.
             if let Err(e) = view_transitions::install_view_transition_bindings(
@@ -988,14 +965,6 @@ impl QuickJsRuntime {
             // Phase 0: no GPU; all create* ops in-memory only; submit/draw/dispatch are no-ops.
             if let Err(e) = webgpu::install_webgpu_bindings(&ctx) {
                 eprintln!("WebGPU API init failed: {}", e);
-            }
-
-            // Install W3C WebCodecs API (https://www.w3.org/TR/webcodecs/) — after DOM.
-            // Phase 0: VideoEncoder/Decoder + AudioEncoder/Decoder + EncodedVideoChunk/AudioChunk stubs.
-            // configure() rejects with NotSupportedError; no codec support in Phase 0.
-            // Phase 1 (future): FFmpeg or libav1 bindings for actual encoding/decoding.
-            if let Err(e) = web_codecs::install_webcodecs_bindings(&ctx) {
-                eprintln!("WebCodecs API init failed: {}", e);
             }
 
             // Install WebAssembly API (W3C WebAssembly JavaScript Interface §7) — after DOM.
@@ -1759,11 +1728,7 @@ impl Default for QuickJsRuntime {
 impl JsRuntime for QuickJsRuntime {
     fn eval(&self, script: &str) -> JsResult<JsValue> {
         self.run(|inner| inner.ctx.with(|ctx| {
-            // Pre-process TC39 decorator syntax (Phase 0 transformer); QuickJS
-            // itself rejects `@dec` with a SyntaxError.
-            let transformed = decorators::maybe_transform_decorators(&ctx, script);
-            let code = transformed.as_deref().unwrap_or(script);
-            let val: Value = ctx.eval(code).map_err(|e| rq_err(&ctx, e))?;
+            let val: Value = ctx.eval(script).map_err(|e| rq_err(&ctx, e))?;
             from_rq(&ctx, val)
         }))
     }

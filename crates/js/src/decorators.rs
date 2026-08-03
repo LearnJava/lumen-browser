@@ -28,21 +28,9 @@
 //!
 //! `// CSS: n/a` — no layout/paint wiring needed.
 
-use rquickjs::{Ctx, Function};
-
-/// Install the decorator transformer shim and well-known symbols into `ctx`.
-///
-/// Defines the globals `__lumen_transform_decorators`,
-/// `__lumen_apply_class_decorators`, `__lumen_apply_method_decorators`,
-/// `__lumen_apply_field_decorators`, plus `Symbol.ClassDecorator` and
-/// `Symbol.MethodDecorator`. Pure JS; safe to call on a bare context.
-pub fn install_decorator_shim(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(DECORATOR_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_decorator_shim`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// V8 port of the former rquickjs `install_decorator_shim` (Ph3 V8 migration
+/// S5-S7, rquickjs side removed in S12b-B15): identical JS shim, evaluated
+/// via [`lumen_core::ext::JsRuntime::eval`].
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_decorator_shim_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -50,22 +38,8 @@ pub(crate) fn install_decorator_shim_v8(rt: &crate::v8_runtime::V8JsRuntime) -> 
     Ok(())
 }
 
-/// Pre-process `source` through the JS decorator transformer.
-///
-/// Returns `Some(transformed)` only when decorator syntax was found and
-/// rewritten. Returns `None` when the source contains no `@` (fast path),
-/// when the shim is not installed (bare contexts), or when nothing changed —
-/// the caller then evaluates the original source as-is.
-pub fn maybe_transform_decorators(ctx: &Ctx<'_>, source: &str) -> Option<String> {
-    if !source.contains('@') {
-        return None;
-    }
-    let f: Function = ctx.globals().get("__lumen_transform_decorators").ok()?;
-    let out: String = f.call((source,)).ok()?;
-    if out == source { None } else { Some(out) }
-}
-
-/// V8 port of [`maybe_transform_decorators`] (Ph3 V8 migration S12b-23).
+/// V8 port of the former rquickjs `maybe_transform_decorators` (Ph3 V8
+/// migration S12b-23, rquickjs side removed in S12b-B15).
 ///
 /// The transformer is a plain JS global installed by
 /// [`install_decorator_shim_v8`], so it is reachable through
@@ -95,6 +69,7 @@ pub(crate) fn maybe_transform_decorators_v8(
 
 /// The combined shim: well-known symbols, runtime apply-helpers and the
 /// tokenizer-based source transformer.
+#[cfg(feature = "v8-backend")]
 const DECORATOR_SHIM: &str = r##"(function(global) {
   'use strict';
 
@@ -507,208 +482,183 @@ const DECORATOR_SHIM: &str = r##"(function(global) {
 })(globalThis);
 "##;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
     use super::*;
-    use rquickjs::{Context, Runtime};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
+    fn rt_with_shim() -> V8JsRuntime {
+        let rt = V8JsRuntime::new().unwrap();
+        install_decorator_shim_v8(&rt).unwrap();
+        rt
     }
 
     /// Transform `src` like the eval hook does, then evaluate; the script's
     /// last expression must be a boolean.
-    fn eval_decorated(ctx: &rquickjs::Ctx, src: &str) -> bool {
-        let code = maybe_transform_decorators(ctx, src).unwrap_or_else(|| src.to_owned());
-        ctx.eval::<bool, _>(code.as_str()).unwrap()
+    fn eval_decorated(rt: &V8JsRuntime, src: &str) -> bool {
+        let code = maybe_transform_decorators_v8(rt, src).unwrap_or_else(|| src.to_owned());
+        match rt.eval(&code).unwrap() {
+            JsValue::Bool(b) => b,
+            other => panic!("expected bool, got {other:?}"),
+        }
     }
 
     #[test]
     fn well_known_symbols_defined() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_decorator_shim(&ctx).unwrap();
-            let ok: bool = ctx
-                .eval(
-                    "typeof Symbol.ClassDecorator === 'symbol' \
-                     && typeof Symbol.MethodDecorator === 'symbol'",
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = rt_with_shim();
+        let ok = rt
+            .eval(
+                "typeof Symbol.ClassDecorator === 'symbol' \
+                 && typeof Symbol.MethodDecorator === 'symbol'",
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]
     fn class_decorator_side_effect_and_context() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_decorator_shim(&ctx).unwrap();
-            let ok = eval_decorated(
-                &ctx,
-                r#"
-                function seal(cls, c) {
-                  if (c.kind !== 'class' || c.name !== 'A') throw new Error('bad ctx');
-                  if (c[Symbol.ClassDecorator] !== true) throw new Error('no tag');
-                  cls.sealed = true;
-                }
-                @seal class A {}
-                A.sealed === true
-                "#,
-            );
-            assert!(ok);
-        });
+        let rt = rt_with_shim();
+        let ok = eval_decorated(
+            &rt,
+            r#"
+            function seal(cls, c) {
+              if (c.kind !== 'class' || c.name !== 'A') throw new Error('bad ctx');
+              if (c[Symbol.ClassDecorator] !== true) throw new Error('no tag');
+              cls.sealed = true;
+            }
+            @seal class A {}
+            A.sealed === true
+            "#,
+        );
+        assert!(ok);
     }
 
     #[test]
     fn class_decorator_factory_replaces_class() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_decorator_shim(&ctx).unwrap();
-            let ok = eval_decorated(
-                &ctx,
-                r#"
-                function tag(v) {
-                  return function(cls) {
-                    return class extends cls { tagged() { return v; } };
-                  };
-                }
-                @tag(7) class B { base() { return 1; } }
-                var b = new B();
-                b.tagged() === 7 && b.base() === 1
-                "#,
-            );
-            assert!(ok);
-        });
+        let rt = rt_with_shim();
+        let ok = eval_decorated(
+            &rt,
+            r#"
+            function tag(v) {
+              return function(cls) {
+                return class extends cls { tagged() { return v; } };
+              };
+            }
+            @tag(7) class B { base() { return 1; } }
+            var b = new B();
+            b.tagged() === 7 && b.base() === 1
+            "#,
+        );
+        assert!(ok);
     }
 
     #[test]
     fn multiple_class_decorators_apply_bottom_up() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_decorator_shim(&ctx).unwrap();
-            let ok = eval_decorated(
-                &ctx,
-                r#"
-                var order = [];
-                function A() { order.push('A'); }
-                function B() { order.push('B'); }
-                @A @B class C {}
-                order.join('') === 'BA'
-                "#,
-            );
-            assert!(ok);
-        });
+        let rt = rt_with_shim();
+        let ok = eval_decorated(
+            &rt,
+            r#"
+            var order = [];
+            function A() { order.push('A'); }
+            function B() { order.push('B'); }
+            @A @B class C {}
+            order.join('') === 'BA'
+            "#,
+        );
+        assert!(ok);
     }
 
     #[test]
     fn method_decorator_wraps_method() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_decorator_shim(&ctx).unwrap();
-            let ok = eval_decorated(
-                &ctx,
-                r#"
-                function twice(fn, c) {
-                  if (c.kind !== 'method' || c.static !== false) throw new Error('bad ctx');
-                  if (c[Symbol.MethodDecorator] !== true) throw new Error('no tag');
-                  return function() { return fn.apply(this, arguments) * 2; };
-                }
-                class D { @twice val() { return 21; } }
-                new D().val() === 42
-                "#,
-            );
-            assert!(ok);
-        });
+        let rt = rt_with_shim();
+        let ok = eval_decorated(
+            &rt,
+            r#"
+            function twice(fn, c) {
+              if (c.kind !== 'method' || c.static !== false) throw new Error('bad ctx');
+              if (c[Symbol.MethodDecorator] !== true) throw new Error('no tag');
+              return function() { return fn.apply(this, arguments) * 2; };
+            }
+            class D { @twice val() { return 21; } }
+            new D().val() === 42
+            "#,
+        );
+        assert!(ok);
     }
 
     #[test]
     fn static_method_decorator() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_decorator_shim(&ctx).unwrap();
-            let ok = eval_decorated(
-                &ctx,
-                r#"
-                function up(fn, c) {
-                  if (!c.static) throw new Error('expected static');
-                  return function() { return fn.call(this).toUpperCase(); };
-                }
-                class E { static greet() { return 'hi'; } @up static shout() { return 'ab'; } }
-                E.shout() === 'AB' && E.greet() === 'hi'
-                "#,
-            );
-            assert!(ok);
-        });
+        let rt = rt_with_shim();
+        let ok = eval_decorated(
+            &rt,
+            r#"
+            function up(fn, c) {
+              if (!c.static) throw new Error('expected static');
+              return function() { return fn.call(this).toUpperCase(); };
+            }
+            class E { static greet() { return 'hi'; } @up static shout() { return 'ab'; } }
+            E.shout() === 'AB' && E.greet() === 'hi'
+            "#,
+        );
+        assert!(ok);
     }
 
     #[test]
     fn field_decorator_transforms_initial_value() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_decorator_shim(&ctx).unwrap();
-            let ok = eval_decorated(
-                &ctx,
-                r#"
-                function plus10(v, c) {
-                  if (c.kind !== 'field') throw new Error('bad ctx');
-                  return function(init) { return init + 10; };
-                }
-                class F { @plus10 x = 5; plain = 1; }
-                var f = new F();
-                f.x === 15 && f.plain === 1
-                "#,
-            );
-            assert!(ok);
-        });
+        let rt = rt_with_shim();
+        let ok = eval_decorated(
+            &rt,
+            r#"
+            function plus10(v, c) {
+              if (c.kind !== 'field') throw new Error('bad ctx');
+              return function(init) { return init + 10; };
+            }
+            class F { @plus10 x = 5; plain = 1; }
+            var f = new F();
+            f.x === 15 && f.plain === 1
+            "#,
+        );
+        assert!(ok);
     }
 
     #[test]
     fn field_decorator_without_initializer() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_decorator_shim(&ctx).unwrap();
-            let ok = eval_decorated(
-                &ctx,
-                r#"
-                function def42(v, c) {
-                  return function(init) { return init === undefined ? 42 : init; };
-                }
-                class G { @def42 y; }
-                new G().y === 42
-                "#,
-            );
-            assert!(ok);
-        });
+        let rt = rt_with_shim();
+        let ok = eval_decorated(
+            &rt,
+            r#"
+            function def42(v, c) {
+              return function(init) { return init === undefined ? 42 : init; };
+            }
+            class G { @def42 y; }
+            new G().y === 42
+            "#,
+        );
+        assert!(ok);
     }
 
     #[test]
     fn at_sign_in_strings_and_comments_is_untouched() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_decorator_shim(&ctx).unwrap();
-            let src = r#"
-                // contact: admin@example.com
-                var s = "user@host"; var t = `a@${s}@b`;
-                class H { m() { return s; } }
-                new H().m() === "user@host"
-            "#;
-            assert!(
-                maybe_transform_decorators(&ctx, src).is_none(),
-                "source without decorators must pass through unchanged"
-            );
-            let ok: bool = ctx.eval(src).unwrap();
-            assert!(ok);
-        });
+        let rt = rt_with_shim();
+        let src = r#"
+            // contact: admin@example.com
+            var s = "user@host"; var t = `a@${s}@b`;
+            class H { m() { return s; } }
+            new H().m() === "user@host"
+        "#;
+        assert!(
+            maybe_transform_decorators_v8(&rt, src).is_none(),
+            "source without decorators must pass through unchanged"
+        );
+        let ok = rt.eval(src).unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]
     fn no_at_sign_fast_path() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_decorator_shim(&ctx).unwrap();
-            assert!(maybe_transform_decorators(&ctx, "class I {}").is_none());
-        });
+        let rt = rt_with_shim();
+        assert!(maybe_transform_decorators_v8(&rt, "class I {}").is_none());
     }
 }
