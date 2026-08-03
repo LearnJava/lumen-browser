@@ -148,7 +148,7 @@ cargo test  -p lumen-js                                        # rquickjs-суи
 | **S12b-B11** | `navigator_bindings` (491/16), `media_capture` (507/8), `screen_capture` (521/11) | 1519 | 35 |
 | **S12b-B12** | `geolocation` (535/17), ~~`esm`~~ (543/17, pulled — see below), `idle_detection` (560/17) | 1638 | 51 |
 | **S12b-B13** | `broadcast_channel` (562/14), `webrtc_stub` (588/17), `credentials` (623/12) | 1773 | 43 |
-| **S12b-B14** | `xhr` (655/17), `file_input` (657/18) | 1312 | 35 |
+| **S12b-B14** | `xhr` (655/17), `file_input` (657/18) — закрыт 2026-08-04 | 1312 | 35 |
 
 `broadcast_channel`, `geolocation`, `idle_detection`, `file_input`, `media_capture`,
 `screen_capture` — модули с натив-состоянием в `V8JsRuntime` (поля/аксессоры добавлены

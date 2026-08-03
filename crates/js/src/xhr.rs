@@ -28,20 +28,9 @@
 //! - `timeout` enforcement via real wall-clock (currently a no-op guard)
 //! - Per-request cookie / credential injection based on `withCredentials`
 
-use rquickjs::Ctx;
-
-/// Install the XMLHttpRequest API into the QuickJS context.
-///
-/// Must be called **after** `dom::install_dom_api` so that `fetch`,
-/// `Promise`, `FormData`, `Blob`, `TextDecoder/Encoder`, `setTimeout`,
-/// `ProgressEvent`, and the `_lumen_fetch_*` native bindings are present.
-pub fn install_xhr_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(XHR_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_xhr_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// V8 port of the former rquickjs `install_xhr_bindings` (Ph3 V8 migration S5-S7,
+/// rquickjs side removed in S12b-B14): identical JS shim, evaluated via
+/// [`lumen_core::ext::JsRuntime::eval`].
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_xhr_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -49,6 +38,7 @@ pub(crate) fn install_xhr_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lu
     Ok(())
 }
 
+#[cfg(feature = "v8-backend")]
 const XHR_SHIM: &str = r#"
 (function() {
 'use strict';
@@ -401,10 +391,11 @@ if (typeof window !== 'undefined') {
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
-    use crate::QuickJsRuntime;
-    use lumen_core::{JsRuntime, JsValue};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
     use lumen_dom::{Document, QualName};
     use std::sync::{Arc, Mutex};
 
@@ -417,8 +408,8 @@ mod tests {
         Arc::new(Mutex::new(doc))
     }
 
-    fn rt() -> QuickJsRuntime {
-        let r = QuickJsRuntime::new().unwrap();
+    fn rt() -> V8JsRuntime {
+        let r = V8JsRuntime::new().unwrap();
         r.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false)
             .unwrap();
         r
