@@ -94,3 +94,17 @@ normally with exactly this bug's symptom; the original TIMEOUT is noted
 in its `.ini` as a probable one-off scheduling flake, not a separate
 defect). `.ini` added under `tests/wpt/metadata/css/css-logical/` for
 these 6 files.
+
+## Срез 24 (`css/css-content`, 2026-08-03) — `content` interpolation/animation
+
+Same missing-from-prototype shape. `content-animation.html` (1 subtest,
+discrete-animation feature-detect) and `content-no-interpolation.html` (7
+subtests, WAAPI keyframe interpolation feature-detect) both fail
+`assert_true: Web Animations should be supported`. `.ini` under
+`tests/wpt/metadata/css/css-content/` for both files.
+
+## Срез 24 (`css/compositing`, 2026-08-03) — `isolation`
+
+`isolation/animation/isolation-no-interpolation.html` (7 subtests), same
+missing-from-prototype shape. `.ini` under
+`tests/wpt/metadata/css/compositing/isolation/animation/`.

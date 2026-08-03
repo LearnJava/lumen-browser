@@ -313,3 +313,30 @@ order), `block-step-size-valid.html` (1, `"0"` not canonicalized to
 `"0px"`). `.ini` under `tests/wpt/metadata/css/css-rhythm/` and
 `tests/wpt/metadata/css/css-mixins/` for all 9 files, `expected: FAIL` per
 subtest.
+
+## Срез 24 (`css/css-scroll-anchoring` + `css/css-content`, 2026-08-03)
+
+Two more forms: `overflow-anchor`'s invalid-value rejection (2 subtests,
+`css-scroll-anchoring/parsing/overflow-anchor-invalid.html`) and `content`'s
+own invalid-value rejection (70 subtests, `content-invalid.html` — the
+largest single-file contribution to this bug's invalid-value form to date)
+plus a new canonicalization gap: `content: counter(name, DECIMAL)` (a valid
+but non-lowercase `<counter-style>` keyword) round-trips verbatim instead of
+serializing as `counter(name)` per the spec's implied-default omission rule
+(8 subtests, `content-valid.html`). `.ini` under
+`tests/wpt/metadata/css/css-scroll-anchoring/parsing/` and
+`tests/wpt/metadata/css/css-content/parsing/`.
+
+## Срез 24 (`css/compositing`, 2026-08-03)
+
+Three more invalid-value files (7 subtests total):
+`background-blend-mode-invalid.html` (2), `isolation-invalid.html` (2),
+`mix-blend-mode-invalid.html` (3). `.ini` under
+`tests/wpt/metadata/css/compositing/parsing/`.
+
+## Срез 24 (`css/css-scrollbars`, 2026-08-03)
+
+Two more files (16 subtests): `scrollbar-color-parsing.html` (5, plus a new
+canonicalization gap -- `#FF0000` doesn't serialize to `rgb(255, 0, 0)`) and
+`scrollbar-width-parsing.html` (11, invalid-value rejection only). `.ini`
+under `tests/wpt/metadata/css/css-scrollbars/`.

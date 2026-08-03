@@ -72,3 +72,11 @@ origin `(sx, sy)`; область вне холста заполняется п�
 
 `.tmp/probe-color.html` из ветки `p2-wpt-vendor-html-canvas`, запуск
 `lumen.exe --dump-layout .tmp/probe-color.html`, строки `C1`/`C3`.
+
+## Срез 24 (`css/compositing`, 2026-08-03)
+
+Same mechanism, new price tag: `canvas-composite-modes.html` (15/15
+`globalCompositeOperation` subtests) all fail `assert_equals: length of
+ImageData expected 4 but got 16` -- `getImageData(0, 0, 1, 1)` on a small
+test canvas returns the *whole* canvas's bytes instead of the requested
+1x1 region. `.ini` under `tests/wpt/metadata/css/compositing/`.

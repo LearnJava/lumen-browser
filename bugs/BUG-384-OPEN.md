@@ -216,3 +216,17 @@ subtest in the file), bare `light` again (1,
 `color-scheme-system-colors.html`). `.ini` under
 `tests/wpt/metadata/css/css-mixins/` and
 `tests/wpt/metadata/css/css-color-adjust/` for all 12 files.
+
+## Срез 24 (`css/css-scroll-anchoring` + `css/css-content`, 2026-08-03)
+
+13 more subtests: `css-scroll-anchoring` (12 subtests/2 files — the
+`contenteditable-near-cursor.tentative.html` `editable`/
+`scroll-padding-affects-anchoring.html` `scroller` bare-id cases, plus the
+`scroll-anchoring-editing-content-change.html` cluster where the bare-id
+`anchor`/`first` ReferenceError inside a `t.add_cleanup` callback turns the
+whole file `ERROR` and NOTRUNs its two remaining parameterized cases — same
+masking shape as `set-selector-text.html` (срез 19) and
+`function-attr.html` (срез 22)) and `css-content`
+(`element-replacement-dynamic-002.html`'s bare-id `wrapper`, 1 subtest).
+`.ini` under `tests/wpt/metadata/css/css-scroll-anchoring/` and
+`tests/wpt/metadata/css/css-content/`.

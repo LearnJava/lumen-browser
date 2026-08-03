@@ -179,3 +179,11 @@ meta-строк, что и у BUG-519's файлов) — найдены тол�
 после коммита `.ini`, подтверждающим 0 unexpected passes. `.ini` под
 `tests/wpt/metadata/css/css-rhythm/computedstyle/` для обоих файлов,
 `expected: TIMEOUT` на уровне файла.
+
+## Срез 24 (`css/css-scrollbars`, 2026-08-03)
+
+9 more files, all `setup({explicit_done:true})` + `<body onload="performTest()">`:
+`scrollbar-color-003/004/005.html`, `scrollbar-width-001/002/003/004/015/016.html`.
+Harness never reports (0 subtests registered), each pays the full ~10s
+wptrunner timeout. `.ini` under `tests/wpt/metadata/css/css-scrollbars/`,
+`expected: TIMEOUT` file-level only (no subtests to suppress).
