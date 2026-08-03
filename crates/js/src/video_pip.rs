@@ -1,32 +1,25 @@
-/// Video Picture-in-Picture API (W3C Picture-in-Picture Level 1).
-///
-/// Installs:
-/// - `HTMLVideoElement.prototype.requestPictureInPicture()` → `Promise<PictureInPictureWindow>`
-/// - `HTMLVideoElement.prototype.disablePictureInPicture` attribute
-/// - `document.exitPictureInPicture()` → `Promise<void>`
-/// - `document.pictureInPictureElement` getter → current PiP video element or null
-/// - `document.pictureInPictureEnabled` getter → true
-/// - `PictureInPictureWindow` class with `width`, `height`, `onresize`, `resize` event
-///
-/// Events fired on the video element:
-/// - `enterpictureinpicture` — when video enters PiP mode
-/// - `leavepictureinpicture` — when video leaves PiP mode
-///
-/// Phase 0: in-memory state only; `_lumen_pip_enter(nid)` / `_lumen_pip_exit(nid)` bindings
-/// prepared for shell Phase 1 (OS-level floating window via winit child window or overlay).
-use rquickjs::Ctx;
+//! Video Picture-in-Picture API (W3C Picture-in-Picture Level 1).
+//!
+//! Installs:
+//! - `HTMLVideoElement.prototype.requestPictureInPicture()` → `Promise<PictureInPictureWindow>`
+//! - `HTMLVideoElement.prototype.disablePictureInPicture` attribute
+//! - `document.exitPictureInPicture()` → `Promise<void>`
+//! - `document.pictureInPictureElement` getter → current PiP video element or null
+//! - `document.pictureInPictureEnabled` getter → true
+//! - `PictureInPictureWindow` class with `width`, `height`, `onresize`, `resize` event
+//!
+//! Events fired on the video element:
+//! - `enterpictureinpicture` — when video enters PiP mode
+//! - `leavepictureinpicture` — when video leaves PiP mode
+//!
+//! Phase 0: in-memory state only; `_lumen_pip_enter(nid)` / `_lumen_pip_exit(nid)` bindings
+//! prepared for shell Phase 1 (OS-level floating window via winit child window or overlay).
 
 /// Install Video Picture-in-Picture API into the JS context.
 ///
-/// Must be called **after** `video_bindings::install_video_bindings` so that
-/// `patchVideoElement` has already run on existing `<video>` elements.
-pub fn install_video_pip_api(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(VIDEO_PIP_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_video_pip_api`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// Evaluated via [`lumen_core::ext::JsRuntime::eval`]. Must be called **after**
+/// `video_bindings`'s install so that `patchVideoElement` has already run on
+/// existing `<video>` elements.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_video_pip_api_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -35,6 +28,7 @@ pub(crate) fn install_video_pip_api_v8(rt: &crate::v8_runtime::V8JsRuntime) -> l
 }
 
 /// JavaScript shim: W3C Picture-in-Picture Level 1.
+#[cfg(feature = "v8-backend")]
 const VIDEO_PIP_SHIM: &str = r#"(function() {
   'use strict';
 
@@ -205,20 +199,16 @@ const VIDEO_PIP_SHIM: &str = r#"(function() {
   };
 })();"#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
-    use super::*;
-    use rquickjs::{Context, Runtime};
-
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
     /// Minimal DOM + EventTarget stubs so the shim can run without the full DOM bridge.
-    fn install_minimal_dom(ctx: &rquickjs::Ctx) {
-        ctx.eval::<(), _>(r#"
+    fn install_minimal_dom(rt: &V8JsRuntime) {
+        rt.eval(
+            r#"
 class EventTarget {
   constructor() { this._listeners = {}; }
   addEventListener(type, fn) {
@@ -265,150 +255,164 @@ var document = {
   },
   dispatchEvent: function() {},
 };
-"#).unwrap();
+"#,
+        )
+        .unwrap();
     }
 
     #[test]
     fn install_succeeds_without_document() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_video_pip_api(&ctx).expect("install should succeed without document");
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        super::install_video_pip_api_v8(&rt).expect("install should succeed without document");
     }
 
     #[test]
     fn install_succeeds_with_minimal_dom() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_video_pip_api(&ctx).expect("install should succeed with minimal dom");
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install_minimal_dom(&rt);
+        super::install_video_pip_api_v8(&rt).expect("install should succeed with minimal dom");
     }
 
     #[test]
     fn picture_in_picture_window_class_exists() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_video_pip_api(&ctx).unwrap();
-            let result: bool = ctx
-                .eval("typeof PictureInPictureWindow === 'function'")
-                .unwrap();
-            assert!(result, "PictureInPictureWindow class should be exported on globalThis");
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install_minimal_dom(&rt);
+        super::install_video_pip_api_v8(&rt).unwrap();
+        let result = rt
+            .eval("typeof PictureInPictureWindow === 'function'")
+            .unwrap();
+        assert_eq!(
+            result,
+            JsValue::Bool(true),
+            "PictureInPictureWindow class should be exported on globalThis"
+        );
     }
 
     #[test]
     fn picture_in_picture_window_has_width_height() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_video_pip_api(&ctx).unwrap();
-            let result: bool = ctx
-                .eval(r#"
+        let rt = V8JsRuntime::new().unwrap();
+        install_minimal_dom(&rt);
+        super::install_video_pip_api_v8(&rt).unwrap();
+        let result = rt
+            .eval(
+                r#"
 var w = new PictureInPictureWindow(320, 240);
 w.width === 320 && w.height === 240
-"#)
-                .unwrap();
-            assert!(result, "PictureInPictureWindow should expose width/height");
-        });
+"#,
+            )
+            .unwrap();
+        assert_eq!(
+            result,
+            JsValue::Bool(true),
+            "PictureInPictureWindow should expose width/height"
+        );
     }
 
     #[test]
     fn request_picture_in_picture_returns_promise() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_video_pip_api(&ctx).unwrap();
-            let result: bool = ctx
-                .eval(r#"
+        let rt = V8JsRuntime::new().unwrap();
+        install_minimal_dom(&rt);
+        super::install_video_pip_api_v8(&rt).unwrap();
+        let result = rt
+            .eval(
+                r#"
 var el = document.createElement('video');
 el.requestPictureInPicture() instanceof Promise
-"#)
-                .unwrap();
-            assert!(result, "requestPictureInPicture() should return a Promise");
-        });
+"#,
+            )
+            .unwrap();
+        assert_eq!(
+            result,
+            JsValue::Bool(true),
+            "requestPictureInPicture() should return a Promise"
+        );
     }
 
     #[test]
     fn document_exit_picture_in_picture_is_function() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_video_pip_api(&ctx).unwrap();
-            let result: bool = ctx
-                .eval("typeof document.exitPictureInPicture === 'function'")
-                .unwrap();
-            assert!(result, "document.exitPictureInPicture should be a function");
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install_minimal_dom(&rt);
+        super::install_video_pip_api_v8(&rt).unwrap();
+        let result = rt
+            .eval("typeof document.exitPictureInPicture === 'function'")
+            .unwrap();
+        assert_eq!(
+            result,
+            JsValue::Bool(true),
+            "document.exitPictureInPicture should be a function"
+        );
     }
 
     #[test]
     fn document_picture_in_picture_element_initially_null() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_video_pip_api(&ctx).unwrap();
-            let result: bool = ctx
-                .eval("document.pictureInPictureElement === null")
-                .unwrap();
-            assert!(result, "pictureInPictureElement should be null initially");
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install_minimal_dom(&rt);
+        super::install_video_pip_api_v8(&rt).unwrap();
+        let result = rt.eval("document.pictureInPictureElement === null").unwrap();
+        assert_eq!(
+            result,
+            JsValue::Bool(true),
+            "pictureInPictureElement should be null initially"
+        );
     }
 
     #[test]
     fn document_picture_in_picture_enabled_is_true() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_video_pip_api(&ctx).unwrap();
-            let result: bool = ctx
-                .eval("document.pictureInPictureEnabled === true")
-                .unwrap();
-            assert!(result, "pictureInPictureEnabled should be true");
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install_minimal_dom(&rt);
+        super::install_video_pip_api_v8(&rt).unwrap();
+        let result = rt.eval("document.pictureInPictureEnabled === true").unwrap();
+        assert_eq!(result, JsValue::Bool(true), "pictureInPictureEnabled should be true");
     }
 
     #[test]
     fn disable_picture_in_picture_attribute() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_video_pip_api(&ctx).unwrap();
-            let result: bool = ctx
-                .eval(r#"
+        let rt = V8JsRuntime::new().unwrap();
+        install_minimal_dom(&rt);
+        super::install_video_pip_api_v8(&rt).unwrap();
+        let result = rt
+            .eval(
+                r#"
 var el = document.createElement('video');
 el.disablePictureInPicture === false
-"#)
-                .unwrap();
-            assert!(result, "disablePictureInPicture should be false by default");
-        });
+"#,
+            )
+            .unwrap();
+        assert_eq!(
+            result,
+            JsValue::Bool(true),
+            "disablePictureInPicture should be false by default"
+        );
     }
 
     #[test]
     fn lumen_pip_deliver_resize_is_function() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_video_pip_api(&ctx).unwrap();
-            let result: bool = ctx
-                .eval("typeof _lumen_pip_deliver_resize === 'function'")
-                .unwrap();
-            assert!(result, "_lumen_pip_deliver_resize should be a global function");
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install_minimal_dom(&rt);
+        super::install_video_pip_api_v8(&rt).unwrap();
+        let result = rt
+            .eval("typeof _lumen_pip_deliver_resize === 'function'")
+            .unwrap();
+        assert_eq!(
+            result,
+            JsValue::Bool(true),
+            "_lumen_pip_deliver_resize should be a global function"
+        );
     }
 
     #[test]
     fn exit_pip_rejects_when_no_active_pip() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_video_pip_api(&ctx).unwrap();
-            // exitPictureInPicture returns a Promise that rejects when no PiP is active.
-            let result: bool = ctx
-                .eval("document.exitPictureInPicture() instanceof Promise")
-                .unwrap();
-            assert!(result, "exitPictureInPicture() should return a Promise");
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install_minimal_dom(&rt);
+        super::install_video_pip_api_v8(&rt).unwrap();
+        // exitPictureInPicture returns a Promise that rejects when no PiP is active.
+        let result = rt
+            .eval("document.exitPictureInPicture() instanceof Promise")
+            .unwrap();
+        assert_eq!(
+            result,
+            JsValue::Bool(true),
+            "exitPictureInPicture() should return a Promise"
+        );
     }
 }

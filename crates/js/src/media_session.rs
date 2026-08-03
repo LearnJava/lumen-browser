@@ -22,8 +22,6 @@
 //!   - `setCameraActive(active)` / `setMicrophoneActive(active)` (L2 §5.4)
 //! - `window.MediaMetadata` exported as global
 
-use rquickjs::Ctx;
-
 /// Install MediaSession API shim into the JS context.
 ///
 /// Adds `navigator.mediaSession` with all W3C Media Session §5 methods and
@@ -31,15 +29,8 @@ use rquickjs::Ctx;
 /// are stored in JS state; `_lumen_take_media_session_update()` returns a JSON
 /// snapshot for shell/OS integration.
 ///
-/// Must be called **after** `install_dom_api` so that `navigator`, `Event`,
-/// and `JSON` are already defined.
-pub fn install_media_session_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(MEDIA_SESSION_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_media_session_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// Evaluated via [`lumen_core::ext::JsRuntime::eval`]. Must be called **after**
+/// DOM install so that `navigator`, `Event`, and `JSON` are already defined.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_media_session_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -48,6 +39,7 @@ pub(crate) fn install_media_session_bindings_v8(rt: &crate::v8_runtime::V8JsRunt
 }
 
 /// JavaScript shim implementing the MediaSession API (W3C Media Session §5).
+#[cfg(feature = "v8-backend")]
 const MEDIA_SESSION_SHIM: &str = r#"(function() {
   'use strict';
   if (typeof navigator === 'undefined') return;
@@ -184,147 +176,127 @@ const MEDIA_SESSION_SHIM: &str = r#"(function() {
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
-    use rquickjs::{Context, Runtime};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
-
-    fn with_media_session(f: impl FnOnce(&rquickjs::Ctx)) {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            ctx.eval::<(), _>(
-                r#"
-                var window = globalThis;
-                var navigator = {};
-                globalThis.navigator = navigator;
-                "#,
-            )
-            .unwrap();
-            super::install_media_session_bindings(&ctx).unwrap();
-            f(&ctx);
-        });
+    fn with_media_session(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(
+            r#"
+            var window = globalThis;
+            var navigator = {};
+            globalThis.navigator = navigator;
+            "#,
+        )
+        .unwrap();
+        super::install_media_session_bindings_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
     fn media_session_installed() {
-        with_media_session(|ctx| {
-            let ok: bool = ctx
+        with_media_session(|rt| {
+            let ok = rt
                 .eval("typeof navigator.mediaSession === 'object' && navigator.mediaSession !== null")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn media_metadata_class_exists() {
-        with_media_session(|ctx| {
-            let ok: bool = ctx
-                .eval("typeof window.MediaMetadata === 'function'")
-                .unwrap();
-            assert!(ok);
+        with_media_session(|rt| {
+            let ok = rt.eval("typeof window.MediaMetadata === 'function'").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn playback_state_default_none() {
-        with_media_session(|ctx| {
-            let state: String = ctx
-                .eval("navigator.mediaSession.playbackState")
-                .unwrap();
-            assert_eq!(state, "none");
+        with_media_session(|rt| {
+            let state = rt.eval("navigator.mediaSession.playbackState").unwrap();
+            assert_eq!(state, JsValue::String("none".to_string()));
         });
     }
 
     #[test]
     fn playback_state_setter() {
-        with_media_session(|ctx| {
-            ctx.eval::<(), _>("navigator.mediaSession.playbackState = 'playing';")
-                .unwrap();
-            let state: String = ctx
-                .eval("navigator.mediaSession.playbackState")
-                .unwrap();
-            assert_eq!(state, "playing");
+        with_media_session(|rt| {
+            rt.eval("navigator.mediaSession.playbackState = 'playing';").unwrap();
+            let state = rt.eval("navigator.mediaSession.playbackState").unwrap();
+            assert_eq!(state, JsValue::String("playing".to_string()));
         });
     }
 
     #[test]
     fn invalid_playback_state_ignored() {
-        with_media_session(|ctx| {
-            ctx.eval::<(), _>("navigator.mediaSession.playbackState = 'invalid_value';")
-                .unwrap();
-            let state: String = ctx
-                .eval("navigator.mediaSession.playbackState")
-                .unwrap();
-            assert_eq!(state, "none");
+        with_media_session(|rt| {
+            rt.eval("navigator.mediaSession.playbackState = 'invalid_value';").unwrap();
+            let state = rt.eval("navigator.mediaSession.playbackState").unwrap();
+            assert_eq!(state, JsValue::String("none".to_string()));
         });
     }
 
     #[test]
     fn metadata_null_initially() {
-        with_media_session(|ctx| {
-            let null_meta: bool = ctx
-                .eval("navigator.mediaSession.metadata === null")
-                .unwrap();
-            assert!(null_meta);
+        with_media_session(|rt| {
+            let null_meta = rt.eval("navigator.mediaSession.metadata === null").unwrap();
+            assert_eq!(null_meta, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn media_metadata_creation() {
-        with_media_session(|ctx| {
-            let title: String = ctx
-                .eval(r#"
+        with_media_session(|rt| {
+            let title = rt
+                .eval(
+                    r#"
                   var m = new window.MediaMetadata({
                     title: 'Test Song',
                     artist: 'Test Artist',
                     album: 'Test Album'
                   });
                   m.title
-                "#)
+                "#,
+                )
                 .unwrap();
-            assert_eq!(title, "Test Song");
+            assert_eq!(title, JsValue::String("Test Song".to_string()));
         });
     }
 
     #[test]
     fn metadata_setter() {
-        with_media_session(|ctx| {
-            ctx.eval::<(), _>(
+        with_media_session(|rt| {
+            rt.eval(
                 r#"navigator.mediaSession.metadata = new window.MediaMetadata({
                     title: 'Hello',
                     artist: 'World'
                 });"#,
             )
             .unwrap();
-            let artist: String = ctx
-                .eval("navigator.mediaSession.metadata.artist")
-                .unwrap();
-            assert_eq!(artist, "World");
+            let artist = rt.eval("navigator.mediaSession.metadata.artist").unwrap();
+            assert_eq!(artist, JsValue::String("World".to_string()));
         });
     }
 
     #[test]
     fn set_action_handler_stores_callback() {
-        with_media_session(|ctx| {
-            ctx.eval::<(), _>(
-                "navigator.mediaSession.setActionHandler('play', function() {});",
-            )
-            .unwrap();
+        with_media_session(|rt| {
+            rt.eval("navigator.mediaSession.setActionHandler('play', function() {});")
+                .unwrap();
             // No error means it worked; the handler is stored internally.
-            let ok: bool = ctx.eval("true").unwrap();
-            assert!(ok);
+            let ok = rt.eval("true").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn fire_media_action_calls_handler() {
-        with_media_session(|ctx| {
-            ctx.eval::<(), _>(
+        with_media_session(|rt| {
+            rt.eval(
                 r#"
                 globalThis._played = false;
                 navigator.mediaSession.setActionHandler('play', function() {
@@ -333,17 +305,16 @@ mod tests {
                 "#,
             )
             .unwrap();
-            ctx.eval::<(), _>("globalThis._lumen_fire_media_action('play');")
-                .unwrap();
-            let played: bool = ctx.eval("globalThis._played").unwrap();
-            assert!(played);
+            rt.eval("globalThis._lumen_fire_media_action('play');").unwrap();
+            let played = rt.eval("globalThis._played").unwrap();
+            assert_eq!(played, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn set_action_handler_null_removes_callback() {
-        with_media_session(|ctx| {
-            ctx.eval::<(), _>(
+        with_media_session(|rt| {
+            rt.eval(
                 r#"
                 globalThis._pausedCount = 0;
                 navigator.mediaSession.setActionHandler('pause', function() {
@@ -354,15 +325,15 @@ mod tests {
                 "#,
             )
             .unwrap();
-            let count: u32 = ctx.eval("globalThis._pausedCount").unwrap();
-            assert_eq!(count, 0);
+            let count = rt.eval("globalThis._pausedCount").unwrap();
+            assert_eq!(count, JsValue::Number(0.0));
         });
     }
 
     #[test]
     fn set_position_state_stores_values() {
-        with_media_session(|ctx| {
-            ctx.eval::<(), _>(
+        with_media_session(|rt| {
+            rt.eval(
                 r#"navigator.mediaSession.setPositionState({
                     duration: 300,
                     playbackRate: 1.5,
@@ -371,49 +342,47 @@ mod tests {
             )
             .unwrap();
             // No error means success; internal _positionState updated.
-            let ok: bool = ctx.eval("true").unwrap();
-            assert!(ok);
+            let ok = rt.eval("true").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn take_media_session_update_returns_snapshot() {
-        with_media_session(|ctx| {
-            ctx.eval::<(), _>(
+        with_media_session(|rt| {
+            rt.eval(
                 r#"navigator.mediaSession.playbackState = 'playing';
                 navigator.mediaSession.metadata = new window.MediaMetadata({ title: 'X' });"#,
             )
             .unwrap();
-            let has_update: bool = ctx
+            let has_update = rt
                 .eval("globalThis._lumen_take_media_session_update() !== null")
                 .unwrap();
-            assert!(has_update);
+            assert_eq!(has_update, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn take_media_session_update_null_when_no_change() {
-        with_media_session(|ctx| {
+        with_media_session(|rt| {
             // Prime: consume first update.
-            ctx.eval::<(), _>("globalThis._lumen_take_media_session_update();")
-                .unwrap();
+            rt.eval("globalThis._lumen_take_media_session_update();").unwrap();
             // Second call with no change should return null.
-            let null_update: bool = ctx
+            let null_update = rt
                 .eval("globalThis._lumen_take_media_session_update() === null")
                 .unwrap();
-            assert!(null_update);
+            assert_eq!(null_update, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn set_camera_active() {
-        with_media_session(|ctx| {
-            ctx.eval::<(), _>("navigator.mediaSession.setCameraActive(true);")
-                .unwrap();
-            let has_update: bool = ctx
+        with_media_session(|rt| {
+            rt.eval("navigator.mediaSession.setCameraActive(true);").unwrap();
+            let has_update = rt
                 .eval("globalThis._lumen_take_media_session_update() !== null")
                 .unwrap();
-            assert!(has_update);
+            assert_eq!(has_update, JsValue::Bool(true));
         });
     }
 }

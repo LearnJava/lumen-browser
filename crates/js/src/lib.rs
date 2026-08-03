@@ -845,14 +845,6 @@ impl QuickJsRuntime {
                 eprintln!("Video bindings init failed: {}", e);
             }
 
-            // Install Video Picture-in-Picture API (W3C PiP L1 §3) — after video_bindings.
-            // Phase 0: video.requestPictureInPicture() → Promise<PictureInPictureWindow>,
-            // document.exitPictureInPicture(), pictureInPictureElement, pictureInPictureEnabled.
-            // Shell integration (P3) connects _lumen_pip_enter/_lumen_pip_exit to OS float window.
-            if let Err(e) = video_pip::install_video_pip_api(&ctx) {
-                eprintln!("Video Picture-in-Picture API init failed: {}", e);
-            }
-
             // Install HTMLAudioElement stubs (HTML spec §4.8.10) — after DOM/video.
             if let Err(e) = audio_element::install_audio_element_bindings(&ctx) {
                 eprintln!("Audio element bindings init failed: {}", e);
@@ -1025,14 +1017,6 @@ impl QuickJsRuntime {
                 eprintln!("View Transitions bindings init failed: {}", e);
             }
 
-            // Install MediaSession API (W3C Media Session §5) — after DOM so `navigator`,
-            // `Promise`, and `Event` are available.
-            // Phase 0: metadata/playbackState stored in JS; OS forwarding via
-            // _lumen_take_media_session_update() is a P3 shell integration task.
-            if let Err(e) = media_session::install_media_session_bindings(&ctx) {
-                eprintln!("MediaSession bindings init failed: {}", e);
-            }
-
             // Install Long Animation Frames API (W3C LoAF §3–4) — after DOM so that
             // PerformanceObserver and _perf_entries are in scope.
             // Phase 0: PerformanceLongAnimationFrameTiming + PerformanceScriptTiming classes
@@ -1077,11 +1061,6 @@ impl QuickJsRuntime {
 
             if let Err(e) = form_validation::install_form_validation_bindings(&ctx) {
                 eprintln!("Form Constraint Validation API init failed: {}", e);
-            }
-
-            // element.attachInternals() + CustomStateSet, incl. :state() sentinel-attribute reflection.
-            if let Err(e) = element_internals::install_element_internals_bindings(&ctx) {
-                eprintln!("ElementInternals API init failed: {}", e);
             }
 
             // Install WebAssembly API (W3C WebAssembly JavaScript Interface §7) — after DOM.

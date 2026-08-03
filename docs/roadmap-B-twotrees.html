@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-04",
  "counts": {
-  "open": 209,
+  "open": 211,
   "fixed": 309,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 518,
+ "total_bugs": 520,
  "phases": [
   {
    "id": "P0",
@@ -1117,7 +1117,7 @@
         {
          "id": "P3-v8-s12b-b9",
          "title": "S12b-B9: снос rquickjs, средние модули (3/8)",
-         "status": "queued",
+         "status": "done",
          "size": "S",
          "note": "Полоса 2 (1244/33): element_internals, video_pip, media_session"
         },
@@ -8483,6 +8483,20 @@
    "component": "js (`crates/js/src/audio_bindings.rs` vs `crates/js/src/web_audio.rs`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-551": {
+   "status": "open",
+   "title": "`Element.prototype.getClientRects()` missing entirely -- only `getBoundingClientRect()` exists; `getClientRects` is defined only on `Range` (`dom.rs:6944`) and…",
+   "component": "js (`crates/js/src/dom.rs` -- element wrapper factory)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-552": {
+   "status": "open",
+   "title": "`document.compatMode`/`characterSet`/`contentType`/`documentURI` are wired up ONLY inside the detached-document constructor (`createHTMLDocument()` etc.) -- the…",
+   "component": "js (`crates/js/src/dom.rs:4780-4827` -- `_lumen_build_detached_document`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -8703,6 +8717,9 @@
   "js (`crates/js/src/dom.rs:4264-4302`)": [
    "BUG-484"
   ],
+  "js (`crates/js/src/dom.rs:4780-4827` -- `_lumen_build_detached_document`)": [
+   "BUG-552"
+  ],
   "js (`crates/js/src/dom.rs:5929` — `dispatchEvent` живого элемента; `dom.rs:3813` `_lumen_dispatch`, `dom.rs:3831` `_lumen_dispatch_bubble`, `dom.rs:3869` `_lumen_dispatch_rich`)": [
    "BUG-360"
   ],
@@ -8726,6 +8743,9 @@
   ],
   "js (`crates/js/src/dom.rs:7463` — `_lumen_ce_upgrade_element`)": [
    "BUG-543"
+  ],
+  "js (`crates/js/src/dom.rs` -- element wrapper factory)": [
+   "BUG-551"
   ],
   "js (`crates/js/src/dom.rs` — `Range` global at `~6958`, no `StaticRange`)": [
    "BUG-533"
