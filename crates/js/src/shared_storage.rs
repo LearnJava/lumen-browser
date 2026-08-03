@@ -28,18 +28,10 @@
 //! `_lumen_shared_storage_get` / etc. for SQLite-backed cross-origin isolation.
 //! Worklet execution via a dedicated JS realm.
 
-use rquickjs::Ctx;
-
-/// Install the Shared Storage API on `globalThis`.
+/// V8 port of the former rquickjs `install_shared_storage` (Ph3 V8 migration S5-S7):
+/// identical JS shim, evaluated via [`lumen_core::ext::JsRuntime::eval`].
 ///
 /// Must run after the DOM shim so that `window` is available.
-pub fn install_shared_storage(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(SHARED_STORAGE_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_shared_storage`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_shared_storage_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -47,6 +39,7 @@ pub(crate) fn install_shared_storage_v8(rt: &crate::v8_runtime::V8JsRuntime) -> 
     Ok(())
 }
 
+#[cfg(feature = "v8-backend")]
 const SHARED_STORAGE_SHIM: &str = r#"(function(global) {
   'use strict';
 
@@ -186,204 +179,168 @@ const SHARED_STORAGE_SHIM: &str = r#"(function(global) {
 })(typeof globalThis !== 'undefined' ? globalThis : this);
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
-    use rquickjs::{Context, Runtime};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn setup() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        ctx.with(|ctx| {
-            super::install_shared_storage(&ctx).unwrap();
-        });
-        (rt, ctx)
+    fn with_shared_storage(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        super::install_shared_storage_v8(&rt).unwrap();
+        f(&rt);
     }
 
-    // Helper: run setup JS that stores a Promise result into a global, then
-    // explicitly drains the microtask queue so .then() callbacks execute,
-    // and finally reads the global from a second eval.
-    fn promise_result<'js>(ctx: &rquickjs::Ctx<'js>, setup_js: &str, global: &str) -> String {
-        ctx.eval::<(), _>(setup_js).unwrap();
-        loop {
-            if !ctx.execute_pending_job() {
-                break;
-            }
-        }
-        ctx.eval::<String, _>(global).unwrap()
+    // V8 auto-drains microtasks between separate `eval` calls (S12b-B8 finding,
+    // matches ua_client_hints.rs), so a `.then()` scheduled in one `eval` has
+    // already run by the time the next `eval` reads the global it wrote to.
+    fn promise_result(rt: &V8JsRuntime, setup_js: &str, global: &str) -> JsValue {
+        rt.eval(setup_js).unwrap();
+        rt.eval(global).unwrap()
     }
 
     #[test]
     fn shared_storage_exists() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let ok: bool = ctx.eval("typeof sharedStorage !== 'undefined'").unwrap();
-            assert!(ok);
+        with_shared_storage(|rt| {
+            let ok = rt.eval("typeof sharedStorage !== 'undefined'").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
         });
-        drop(ctx); drop(rt);
     }
 
     #[test]
     fn shared_storage_set_returns_promise() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let ok: bool = ctx.eval("sharedStorage.set('k', 'v') instanceof Promise").unwrap();
-            assert!(ok);
+        with_shared_storage(|rt| {
+            let ok = rt.eval("sharedStorage.set('k', 'v') instanceof Promise").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
         });
-        drop(ctx); drop(rt);
     }
 
     #[test]
     fn shared_storage_get_after_set() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            // Use global __t so the .then() callback (running after microtask drain)
-            // persists the value for the next eval.
-            let val = promise_result(&ctx,
+        with_shared_storage(|rt| {
+            let val = promise_result(rt,
                 "sharedStorage.set('key1','hello'); globalThis.__t='none'; sharedStorage.get('key1').then(function(x){globalThis.__t=x!==undefined?x:'undef';});",
                 "globalThis.__t");
-            assert_eq!(val, "hello");
+            assert_eq!(val, JsValue::String("hello".to_string()));
         });
-        drop(ctx); drop(rt);
     }
 
     #[test]
     fn shared_storage_append() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let val = promise_result(&ctx,
+        with_shared_storage(|rt| {
+            let val = promise_result(rt,
                 "sharedStorage.set('k','foo'); sharedStorage.append('k','bar'); globalThis.__t=''; sharedStorage.get('k').then(function(x){globalThis.__t=x||'';});",
                 "globalThis.__t");
-            assert_eq!(val, "foobar");
+            assert_eq!(val, JsValue::String("foobar".to_string()));
         });
-        drop(ctx); drop(rt);
     }
 
     #[test]
     fn shared_storage_delete() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let val = promise_result(&ctx,
+        with_shared_storage(|rt| {
+            let val = promise_result(rt,
                 "sharedStorage.set('k','v'); sharedStorage.delete('k'); globalThis.__t='found'; sharedStorage.get('k').then(function(x){globalThis.__t=x===undefined?'not-found':'found';});",
                 "globalThis.__t");
-            assert_eq!(val, "not-found");
+            assert_eq!(val, JsValue::String("not-found".to_string()));
         });
-        drop(ctx); drop(rt);
     }
 
     #[test]
     fn shared_storage_clear() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let len = promise_result(&ctx,
+        with_shared_storage(|rt| {
+            let len = promise_result(rt,
                 "sharedStorage.set('a','1'); sharedStorage.set('b','2'); sharedStorage.clear(); globalThis.__n='-1'; sharedStorage.length.then(function(x){globalThis.__n=String(x);});",
                 "globalThis.__n");
-            assert_eq!(len, "0");
+            assert_eq!(len, JsValue::String("0".to_string()));
         });
-        drop(ctx); drop(rt);
     }
 
     #[test]
     fn shared_storage_length() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let len = promise_result(&ctx,
+        with_shared_storage(|rt| {
+            let len = promise_result(rt,
                 "sharedStorage.clear(); sharedStorage.set('x','1'); sharedStorage.set('y','2'); globalThis.__n='-1'; sharedStorage.length.then(function(x){globalThis.__n=String(x);});",
                 "globalThis.__n");
-            assert_eq!(len, "2");
+            assert_eq!(len, JsValue::String("2".to_string()));
         });
-        drop(ctx); drop(rt);
     }
 
     #[test]
     fn shared_storage_ignore_if_present() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let val = promise_result(&ctx,
+        with_shared_storage(|rt| {
+            let val = promise_result(rt,
                 "sharedStorage.set('k','first'); sharedStorage.set('k','second',{ignoreIfPresent:true}); globalThis.__t=''; sharedStorage.get('k').then(function(x){globalThis.__t=x||'';});",
                 "globalThis.__t");
-            assert_eq!(val, "first");
+            assert_eq!(val, JsValue::String("first".to_string()));
         });
-        drop(ctx); drop(rt);
     }
 
     #[test]
     fn shared_storage_remaining_budget() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let ok: bool = ctx.eval("sharedStorage.remainingBudget() instanceof Promise").unwrap();
-            assert!(ok);
-            let budget = promise_result(&ctx,
+        with_shared_storage(|rt| {
+            let ok = rt.eval("sharedStorage.remainingBudget() instanceof Promise").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+            let budget = promise_result(rt,
                 "globalThis.__b='-1'; sharedStorage.remainingBudget().then(function(x){globalThis.__b=String(x);});",
                 "globalThis.__b");
-            assert_eq!(budget, "12");
+            assert_eq!(budget, JsValue::String("12".to_string()));
         });
-        drop(ctx); drop(rt);
     }
 
     #[test]
     fn shared_storage_worklet_exists() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let ok: bool = ctx.eval("sharedStorage.worklet !== undefined").unwrap();
-            assert!(ok);
-            let ok2: bool = ctx.eval("sharedStorage.worklet.addModule('ops.js') instanceof Promise").unwrap();
-            assert!(ok2);
+        with_shared_storage(|rt| {
+            let ok = rt.eval("sharedStorage.worklet !== undefined").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+            let ok2 = rt.eval("sharedStorage.worklet.addModule('ops.js') instanceof Promise").unwrap();
+            assert_eq!(ok2, JsValue::Bool(true));
         });
-        drop(ctx); drop(rt);
     }
 
     #[test]
     fn shared_storage_run_returns_promise() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let ok: bool = ctx.eval("sharedStorage.run('myOp') instanceof Promise").unwrap();
-            assert!(ok);
+        with_shared_storage(|rt| {
+            let ok = rt.eval("sharedStorage.run('myOp') instanceof Promise").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
         });
-        drop(ctx); drop(rt);
     }
 
     #[test]
     fn shared_storage_select_url_returns_first() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let url = promise_result(&ctx,
+        with_shared_storage(|rt| {
+            let url = promise_result(rt,
                 "globalThis.__u=''; sharedStorage.selectURL('ad',[{url:'https://a.test/'},{url:'https://b.test/'}]).then(function(x){globalThis.__u=x;});",
                 "globalThis.__u");
-            assert_eq!(url, "https://a.test/");
+            assert_eq!(url, JsValue::String("https://a.test/".to_string()));
         });
-        drop(ctx); drop(rt);
     }
 
     #[test]
     fn shared_storage_keys_async_iter() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
+        with_shared_storage(|rt| {
             // Verify keys() returns an async iterator (has a .next function),
             // and that two sequential next() calls yield two keys.
-            ctx.eval::<(), _>(
+            rt.eval(
                 "sharedStorage.clear(); sharedStorage.set('aa','1'); sharedStorage.set('bb','2');"
             ).unwrap();
-            // keys() should return an object with a .next method.
-            let has_next: bool = ctx.eval(
-                "typeof sharedStorage.keys().next === 'function'"
-            ).unwrap();
-            assert!(has_next, "keys() should return an async iterator");
-            // Two sequential next() calls: collect values via globals.
-            ctx.eval::<(), _>(
+            let has_next = rt.eval("typeof sharedStorage.keys().next === 'function'").unwrap();
+            assert_eq!(has_next, JsValue::Bool(true), "keys() should return an async iterator");
+            // Two sequential next() calls: collect values via globals, one eval per
+            // call so each `.then()` gets a chance to run before the next is read.
+            rt.eval(
                 "globalThis.__k1=''; globalThis.__k2=''; \
                  var __ki = sharedStorage.keys(); \
                  __ki.next().then(function(r){globalThis.__k1=r.done?'done':r.value;});"
             ).unwrap();
-            loop { if !ctx.execute_pending_job() { break; } }
-            ctx.eval::<(), _>(
+            let k1 = rt.eval("globalThis.__k1").unwrap();
+            rt.eval(
                 "__ki.next().then(function(r){globalThis.__k2=r.done?'done':r.value;});"
             ).unwrap();
-            loop { if !ctx.execute_pending_job() { break; } }
-            let k1: String = ctx.eval("globalThis.__k1").unwrap();
-            let k2: String = ctx.eval("globalThis.__k2").unwrap();
+            let k2 = rt.eval("globalThis.__k2").unwrap();
+            let k1 = match k1 { JsValue::String(s) => s, other => panic!("expected string, got {other:?}") };
+            let k2 = match k2 { JsValue::String(s) => s, other => panic!("expected string, got {other:?}") };
             assert!(!k1.is_empty() && k1 != "done", "first key should be non-empty, got: {k1}");
             assert!(!k2.is_empty() && k2 != "done", "second key should be non-empty, got: {k2}");
         });
-        drop(ctx); drop(rt);
     }
 }

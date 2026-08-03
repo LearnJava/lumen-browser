@@ -17,24 +17,13 @@
 //! - `window.Gamepad`, `window.GamepadButton`, `window.GamepadHapticActuator`,
 //!   `window.GamepadEvent` exported as globals
 
-use rquickjs::Ctx;
-
-/// Install Gamepad API shim into the JS context.
+/// V8 port of the former rquickjs `install_gamepad_bindings` (Ph3 V8 migration S5-S7):
+/// identical JS shim, evaluated via [`lumen_core::ext::JsRuntime::eval`].
 ///
 /// Adds `navigator.getGamepads()` and all W3C Gamepad §4 interfaces.
 /// Phase 0: returns 4 null slots (no hardware polling). The event infrastructure
 /// (`gamepadconnected`/`gamepaddisconnected`) is present but never fires
 /// until a future shell integration polls actual hardware.
-///
-/// Must be called **after** `install_dom_api` so that `navigator`, `Promise`,
-/// and `Event` are already defined.
-pub fn install_gamepad_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(GAMEPAD_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_gamepad_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_gamepad_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -43,6 +32,7 @@ pub(crate) fn install_gamepad_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -
 }
 
 /// JavaScript shim implementing the Gamepad API (W3C Gamepad Level 2 §4).
+#[cfg(feature = "v8-backend")]
 const GAMEPAD_SHIM: &str = r#"(function() {
   'use strict';
   if (typeof navigator === 'undefined') return;
@@ -152,215 +142,194 @@ const GAMEPAD_SHIM: &str = r#"(function() {
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
-    use rquickjs::{Context, Runtime};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
-
-    fn with_gamepad_api(f: impl FnOnce(&rquickjs::Ctx)) {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            // Minimal stubs so the shim doesn't fail.
-            ctx.eval::<(), _>(
-                r#"
-                var window = globalThis;
-                var navigator = { getGamepads: function(){ return [null,null,null,null]; } };
-                globalThis.navigator = navigator;
-                function Event(t,i){ this.type=t; this.bubbles=(i&&i.bubbles)||false; this.cancelable=(i&&i.cancelable)||false; }
-                Event.prototype.constructor = Event;
-                window.dispatchEvent = function(){};
-                "#,
-            )
-            .unwrap();
-            super::install_gamepad_bindings(&ctx).unwrap();
-            f(&ctx);
-        });
+    fn with_gamepad_api(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        // Minimal stubs so the shim doesn't fail.
+        rt.eval(
+            r#"
+            var window = globalThis;
+            var navigator = { getGamepads: function(){ return [null,null,null,null]; } };
+            globalThis.navigator = navigator;
+            function Event(t,i){ this.type=t; this.bubbles=(i&&i.bubbles)||false; this.cancelable=(i&&i.cancelable)||false; }
+            Event.prototype.constructor = Event;
+            window.dispatchEvent = function(){};
+            "#,
+        )
+        .unwrap();
+        super::install_gamepad_bindings_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
     fn gamepad_api_installed() {
-        with_gamepad_api(|ctx| {
-            let ok: bool = ctx
+        with_gamepad_api(|rt| {
+            let ok = rt
                 .eval("typeof navigator.getGamepads === 'function'")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn get_gamepads_returns_four_slots() {
-        with_gamepad_api(|ctx| {
-            let len: u32 = ctx.eval("navigator.getGamepads().length").unwrap();
-            assert_eq!(len, 4);
+        with_gamepad_api(|rt| {
+            let len = rt.eval("navigator.getGamepads().length").unwrap();
+            assert_eq!(len, JsValue::Number(4.0));
         });
     }
 
     #[test]
     fn get_gamepads_all_null_initially() {
-        with_gamepad_api(|ctx| {
-            let all_null: bool = ctx
+        with_gamepad_api(|rt| {
+            let all_null = rt
                 .eval("navigator.getGamepads().every(function(g){ return g === null; })")
                 .unwrap();
-            assert!(all_null);
+            assert_eq!(all_null, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn gamepad_class_exists() {
-        with_gamepad_api(|ctx| {
-            let ok: bool = ctx.eval("typeof window.Gamepad === 'function'").unwrap();
-            assert!(ok);
+        with_gamepad_api(|rt| {
+            let ok = rt.eval("typeof window.Gamepad === 'function'").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn gamepad_button_class_exists() {
-        with_gamepad_api(|ctx| {
-            let ok: bool = ctx
+        with_gamepad_api(|rt| {
+            let ok = rt
                 .eval("typeof window.GamepadButton === 'function'")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn gamepad_haptic_actuator_class_exists() {
-        with_gamepad_api(|ctx| {
-            let ok: bool = ctx
+        with_gamepad_api(|rt| {
+            let ok = rt
                 .eval("typeof window.GamepadHapticActuator === 'function'")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn gamepad_event_class_exists() {
-        with_gamepad_api(|ctx| {
-            let ok: bool = ctx
+        with_gamepad_api(|rt| {
+            let ok = rt
                 .eval("typeof window.GamepadEvent === 'function'")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn gamepad_button_shape() {
-        with_gamepad_api(|ctx| {
-            let pressed: bool = ctx
+        with_gamepad_api(|rt| {
+            let pressed = rt
                 .eval("new window.GamepadButton(false, false, 0).pressed")
                 .unwrap();
-            assert!(!pressed);
-            let value: f64 = ctx
+            assert_eq!(pressed, JsValue::Bool(false));
+            let value = rt
                 .eval("new window.GamepadButton(true, false, 0.75).value")
                 .unwrap();
-            assert!((value - 0.75).abs() < 1e-6);
+            assert_eq!(value, JsValue::Number(0.75));
         });
     }
 
     #[test]
     fn gamepad_haptic_actuator_play_effect_returns_promise() {
-        with_gamepad_api(|ctx| {
-            let ok: bool = ctx
+        with_gamepad_api(|rt| {
+            let ok = rt
                 .eval("new window.GamepadHapticActuator('vibration').playEffect('dual-rumble', {}) instanceof Promise")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn gamepad_connect_helper_exists() {
-        with_gamepad_api(|ctx| {
-            let ok: bool = ctx
+        with_gamepad_api(|rt| {
+            let ok = rt
                 .eval("typeof globalThis._lumen_gamepad_connect === 'function'")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn gamepad_disconnect_helper_exists() {
-        with_gamepad_api(|ctx| {
-            let ok: bool = ctx
+        with_gamepad_api(|rt| {
+            let ok = rt
                 .eval("typeof globalThis._lumen_gamepad_disconnect === 'function'")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn gamepad_connect_fills_slot() {
-        with_gamepad_api(|ctx| {
-            ctx.eval::<(), _>(
+        with_gamepad_api(|rt| {
+            rt.eval(
                 "globalThis._lumen_gamepad_connect(0, 'Xbox Controller (STANDARD GAMEPAD)', 'standard');",
             )
             .unwrap();
-            let connected: bool = ctx
+            let connected = rt
                 .eval("navigator.getGamepads()[0] !== null && navigator.getGamepads()[0].connected === true")
                 .unwrap();
-            assert!(connected);
+            assert_eq!(connected, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn gamepad_disconnect_clears_slot() {
-        with_gamepad_api(|ctx| {
-            ctx.eval::<(), _>(
-                "globalThis._lumen_gamepad_connect(1, 'TestPad', 'standard');",
-            )
-            .unwrap();
-            ctx.eval::<(), _>("globalThis._lumen_gamepad_disconnect(1);")
+        with_gamepad_api(|rt| {
+            rt.eval("globalThis._lumen_gamepad_connect(1, 'TestPad', 'standard');")
                 .unwrap();
-            let null_slot: bool = ctx
-                .eval("navigator.getGamepads()[1] === null")
-                .unwrap();
-            assert!(null_slot);
+            rt.eval("globalThis._lumen_gamepad_disconnect(1);").unwrap();
+            let null_slot = rt.eval("navigator.getGamepads()[1] === null").unwrap();
+            assert_eq!(null_slot, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn gamepad_has_17_buttons() {
-        with_gamepad_api(|ctx| {
-            ctx.eval::<(), _>(
-                "globalThis._lumen_gamepad_connect(0, 'TestPad', 'standard');",
-            )
-            .unwrap();
-            let count: u32 = ctx
-                .eval("navigator.getGamepads()[0].buttons.length")
+        with_gamepad_api(|rt| {
+            rt.eval("globalThis._lumen_gamepad_connect(0, 'TestPad', 'standard');")
                 .unwrap();
-            assert_eq!(count, 17);
+            let count = rt.eval("navigator.getGamepads()[0].buttons.length").unwrap();
+            assert_eq!(count, JsValue::Number(17.0));
         });
     }
 
     #[test]
     fn gamepad_has_four_axes() {
-        with_gamepad_api(|ctx| {
-            ctx.eval::<(), _>(
-                "globalThis._lumen_gamepad_connect(0, 'TestPad', 'standard');",
-            )
-            .unwrap();
-            let count: u32 = ctx
-                .eval("navigator.getGamepads()[0].axes.length")
+        with_gamepad_api(|rt| {
+            rt.eval("globalThis._lumen_gamepad_connect(0, 'TestPad', 'standard');")
                 .unwrap();
-            assert_eq!(count, 4);
+            let count = rt.eval("navigator.getGamepads()[0].axes.length").unwrap();
+            assert_eq!(count, JsValue::Number(4.0));
         });
     }
 
     #[test]
     fn gamepad_vibration_actuator_present() {
-        with_gamepad_api(|ctx| {
-            ctx.eval::<(), _>(
-                "globalThis._lumen_gamepad_connect(0, 'TestPad', 'standard');",
-            )
-            .unwrap();
-            let has_actuator: bool = ctx
+        with_gamepad_api(|rt| {
+            rt.eval("globalThis._lumen_gamepad_connect(0, 'TestPad', 'standard');")
+                .unwrap();
+            let has_actuator = rt
                 .eval("navigator.getGamepads()[0].vibrationActuator !== null")
                 .unwrap();
-            assert!(has_actuator);
+            assert_eq!(has_actuator, JsValue::Bool(true));
         });
     }
 }

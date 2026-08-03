@@ -684,7 +684,7 @@ FIXED/DEBTOR → `done`, IN PROGRESS → `active`), CSS-тиров (см. выш
 | P3-v8-s12b-b5 | P3 | P3-v8-s12b | done | S | | Полоса 1 (1539/22): presentation_api, screen_orientation, window_management, navigation_api, speech | S12b-B5: снос rquickjs, мелкие модули (5/6) |
 | P3-v8-s12b-b6 | P3 | P3-v8-s12b | done | S | | Полоса 1 (1599/51): iframe_element, url_pattern, web_midi, surface_api, scroll_timeline | S12b-B6: снос rquickjs, мелкие модули (6/6) |
 | P3-v8-s12b-b7 | P3 | P3-v8-s12b | done | S | | Полоса 2 (1039/22): web_locks, webusb, close_watcher | S12b-B7: снос rquickjs, средние модули (1/8) |
-| P3-v8-s12b-b8 | P3 | P3-v8-s12b | queued | S | | Полоса 2 (1139/45): gamepad, generic_sensor, shared_storage | S12b-B8: снос rquickjs, средние модули (2/8) |
+| P3-v8-s12b-b8 | P3 | P3-v8-s12b | done | S | | Полоса 2 (1139/45): gamepad, generic_sensor, shared_storage | S12b-B8: снос rquickjs, средние модули (2/8) |
 | P3-v8-s12b-b9 | P3 | P3-v8-s12b | queued | S | | Полоса 2 (1244/33): element_internals, video_pip, media_session | S12b-B9: снос rquickjs, средние модули (3/8) |
 | P3-v8-s12b-b10 | P3 | P3-v8-s12b | queued | S | | Полоса 2 (1321/29): long_animation_frames, form_validation, wake_lock | S12b-B10: снос rquickjs, средние модули (4/8) |
 | P3-v8-s12b-b11 | P3 | P3-v8-s12b | queued | S | | Полоса 2 (1519/35): navigator_bindings, media_capture, screen_capture | S12b-B11: снос rquickjs, средние модули (5/8) |

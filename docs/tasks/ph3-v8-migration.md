@@ -2613,6 +2613,41 @@ rquickjs suite did not go red from this batch. Both clippy passes clean.
 
 Next in queue: S12b-B8 (`gamepad`/`generic_sensor`/`shared_storage`, Полоса 2 second batch).
 
+**S12b-B8** (2026-08-04): eighth batch of queue group A (`docs/tasks/p1-s12b-cleanup-queue.md`
+§3, Полоса 2 second batch), 3 medium modules: `gamepad` (16 tests), `generic_sensor` (16),
+`shared_storage` (13) — 45 total, all ported in place to `#[cfg(all(test, feature =
+"v8-backend"))]` against a bare `V8JsRuntime::new()`. Step-2 grep (`grep -n "<file_stem>_"
+dom.rs`) found no hidden per-module tests for any of the 3.
+
+`gamepad`'s shim needs `navigator`/`Event`/`window.dispatchEvent` stubs (same shape as the old
+rquickjs test), evaluated via one `rt.eval(...)` before `install_gamepad_bindings_v8`.
+`generic_sensor` is fully self-contained (`Promise`/`Float32Array`/`Float64Array` only, no
+`navigator`/`Event` dependency) — its old rquickjs test used a full `QuickJsRuntime::install_dom`
+harness for no reason the shim needs; the V8 port drops that in favor of a bare runtime, matching
+the shim's actual dependencies. `shared_storage` is likewise self-contained (`Promise` +
+`Symbol.asyncIterator` only).
+
+`shared_storage`'s old rquickjs tests resolved promises via `ctx.execute_pending_job()` draining
+in a loop; V8 has no equivalent exposed through `JsRuntime`, so promise-returning assertions
+(`get`/`append`/`delete`/`length`/`remainingBudget`/`selectURL`/the two-`next()`-call async-iterator
+check) follow the two-`eval()`-call pattern already established in `ua_client_hints.rs`: schedule
+the `.then()` in one `rt.eval()`, read the global it wrote in a second `rt.eval()` — V8's default
+microtask policy drains the queue automatically between separate top-level script evaluations, no
+manual drain needed.
+
+No `empty_line_after_doc_comments` hits: all 3 modules already used `//!` or had their doc header
+absorbed into the (now `#[cfg(feature = "v8-backend")]`-gated) function doc comment directly above
+`install_*_v8`.
+
+`cargo test -p lumen-js --features v8-backend`: 2584 lib (unchanged — in-place porting only, same
+as B7's reasoning: the old rquickjs `mod tests` were plain `#[cfg(test)]` with no feature gate, so
+they already ran under `--features v8-backend` before this batch; net swap is zero) + 68
+integration (unchanged, no integration-suite modules in this batch). `cargo test -p lumen-js`
+(default): 988 lib (down from 1033, the 45 ported `mod tests`) + 5 integration (unchanged).
+rquickjs suite did not go red from this batch (988 passed). Both clippy passes clean.
+
+Next in queue: S12b-B9 (`element_internals`/`video_pip`/`media_session`, Полоса 2 third batch).
+
 ---
 
 ## Risks (Rev 2)
