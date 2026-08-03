@@ -2768,6 +2768,56 @@ red from this batch (891 passed). Both clippy passes clean.
 
 Next in queue: S12b-B12 (`geolocation`/`esm`/`idle_detection`, Полоса 2 sixth batch).
 
+### S12b-B12 (`geolocation`, `idle_detection` — `esm` pulled from batch)
+
+`geolocation.rs` (17 tests) and `idle_detection.rs` (17 tests) both fit the
+group-A procedure cleanly: `install_*_bindings_v8` already existed for both
+(`geolocation.rs:36`, `idle_detection.rs` post-edit), neither has any test
+hiding in `dom.rs`. Ported 1:1 against a bare `V8JsRuntime::new()` +
+module-local `navigator`/timer/`EventTarget` stubs (same shape as the
+rquickjs harness each module already had) — `JsValue::Bool`/`Number`/`String`
+comparisons replacing rquickjs's typed `ctx.eval::<T, _>`. `idle_detection`'s
+two promise-based tests (`request_permission_returns_granted`,
+`start_rejects_threshold_below_60s`) used the two-step-`eval` pattern
+(`promise_result` helper, same shape as `shared_storage.rs`) instead of
+`execute_pending_job` — V8 checkpoints microtasks at the `eval()` boundary,
+not mid-script. Removed both rquickjs installers, their calls from
+`QuickJsRuntime::install_dom` (`lib.rs`), and gated `GEO_SHIM`/
+`IDLE_DETECTION_SHIM`/`user_idle_ms` (both OS variants) behind
+`#[cfg(feature = "v8-backend")]` — same dead-code fallout pattern as B7-B11
+(these were referenced only by the deleted rquickjs installer plus the
+feature-gated V8 path).
+
+**`esm.rs` does not fit the group-A procedure and was pulled from the batch**
+(§7 policy: don't force-fit mid-session, re-queue instead). Unlike every
+other module so far, `esm.rs`'s rquickjs-specific surface (`impl Resolver for
+LumenResolver`, `impl Loader for LumenLoader`, both rquickjs trait impls) is
+not installed via a `install_*_bindings(ctx)` call from
+`QuickJsRuntime::install_dom` — it is wired directly into
+`QuickJsRuntime::new()`/`js_thread_main()` (`lib.rs`) as the runtime's core
+module-loading plumbing: `rt.set_loader(resolver, loader)`, plus four
+`QuickJsRuntime` struct fields (`module_registry`, `module_page_url`,
+`module_import_map`, `module_types`) and three methods
+(`register_module_source`, `set_import_map`, `preprocess_import_attributes`)
+that read them. `ImportMap`/`resolve_specifier_with`/`new_registry` etc. are
+engine-agnostic and already shared with `v8_esm.rs` (`crate::esm::ImportMap`,
+`crate::esm::resolve_specifier_with` — see `v8_esm.rs:32`), so those stay
+regardless. Removing the rquickjs `Resolver`/`Loader` impls would require
+gutting `QuickJsRuntime`'s ES-module support wholesale (the struct fields,
+`js_thread_main`'s `set_loader` call, the three methods above) — that is the
+same shape of change as `S12b-F2` (deleting `QuickJsRuntime` itself), not a
+standalone batch item, so it belongs there rather than being force-fit here.
+`esm` is **not** re-added to Group A's Полоса 2 queue; treat its rquickjs
+removal as implicit in F2 and skip it as a separate line item when F2 lands.
+
+`cargo test -p lumen-js --features v8-backend`: 2584 lib (unchanged, in-place
+porting) + 68 integration (unchanged). `cargo test -p lumen-js` (default):
+857 lib (down from 891, the 34 ported `mod tests`) + 5 integration
+(unchanged). rquickjs suite did not go red (857 passed). Both clippy passes
+clean.
+
+Next in queue: S12b-B13 (`broadcast_channel`/`webrtc_stub`/`credentials`, Полоса 2 seventh batch).
+
 ---
 
 ## Risks (Rev 2)

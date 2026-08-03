@@ -833,13 +833,6 @@ impl QuickJsRuntime {
                 eprintln!("Audio element bindings init failed: {}", e);
             }
 
-            // Install Geolocation API stub (W3C Geolocation L2, §7.7) — after DOM/navigator.
-            // Default: PERMISSION_DENIED. Shell may reinitialise with fake coords via
-            // install_geolocation_bindings when FingerprintProfile enables them.
-            if let Err(e) = geolocation::install_geolocation_bindings(&ctx, None) {
-                eprintln!("Geolocation bindings init failed: {}", e);
-            }
-
             // Install Contact Picker API stub (W3C Contact Picker API) — after DOM/navigator.
             // Phase 0: navigator.contacts.select() always rejects with NotSupportedError;
             // navigator.contacts.getProperties() returns Promise<['name', 'email', 'tel']>.
@@ -1071,14 +1064,6 @@ impl QuickJsRuntime {
             // Must come after file_input (depends on __lumen_file_read_text/base64 bindings).
             if let Err(e) = filesystem_access::install_filesystem_access(&ctx) {
                 eprintln!("File System Access API init failed: {}", e);
-            }
-
-            // WICG Idle Detection API — window.IdleDetector.
-            // Phase 1: __lumen_idle_get_idle_ms() → Win32 GetLastInputInfo on Windows;
-            // returns 0 on other platforms. IdleDetector.start() polls via setInterval
-            // and fires 'change' when userState transitions active ↔ idle.
-            if let Err(e) = idle_detection::install_idle_detection_bindings(&ctx) {
-                eprintln!("Idle Detection API init failed: {}", e);
             }
 
             Ok(())
