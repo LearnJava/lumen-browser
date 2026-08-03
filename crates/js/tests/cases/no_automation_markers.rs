@@ -1,6 +1,6 @@
 //! ADR-007 Layer 1 runtime audit (9A.1, 9A.2).
 //!
-//! Verifies at runtime — via `QuickJsRuntime` with the full DOM shim installed —
+//! Verifies at runtime — via `V8JsRuntime` with the full DOM shim installed —
 //! that no automation-detection markers are present in the Lumen JS environment.
 //!
 //! These are **negative tests**: we assert *absence*, not presence.
@@ -16,21 +16,26 @@
 //! | `__selenium_*` / `__webdriver_*` | Selenium                   |
 //! | `callPhantom` / `_phantom`      | PhantomJS                   |
 //! | `domAutomation*`                | WebDriver DOM injector      |
+//!
+//! Ported from `QuickJsRuntime` to `V8JsRuntime` in S12b-B6: the rquickjs side of
+//! `surface_api.rs` was removed, so `navigator.appName`/`.vendor`/`.plugins`/`.mimeTypes`
+//! are only installed under V8.
+#![cfg(feature = "v8-backend")]
 
 use std::sync::{Arc, Mutex};
 
 use lumen_dom::Document;
-use lumen_js::QuickJsRuntime;
+use lumen_js::v8_runtime::V8JsRuntime;
 
-fn make_rt() -> QuickJsRuntime {
-    let rt = QuickJsRuntime::new().unwrap();
+fn make_rt() -> V8JsRuntime {
+    let rt = V8JsRuntime::new().unwrap();
     let doc = Arc::new(Mutex::new(Document::new()));
     rt.install_dom(doc, "about:blank", None, None, None, None, None, None, None, None, false)
         .unwrap();
     rt
 }
 
-fn bool_eval(rt: &QuickJsRuntime, script: &str) -> bool {
+fn bool_eval(rt: &V8JsRuntime, script: &str) -> bool {
     use lumen_core::JsRuntime;
     match rt.eval(script) {
         Ok(lumen_core::JsValue::Bool(b)) => b,

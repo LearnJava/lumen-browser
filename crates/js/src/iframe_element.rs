@@ -16,9 +16,9 @@
 //! - `contentDocument` getter → `null` (no sub-document in Phase 0)
 //! - `contentWindow` getter → `null` (no sub-document in Phase 0)
 
-use rquickjs::Ctx;
-
-/// Install HTMLIFrameElement stubs into the JS context.
+/// V8 port of the former rquickjs `install_iframe_element_bindings` (Ph3 V8 migration
+/// S5-S7, rquickjs side removed in S12b-B6): identical JS shim, evaluated via
+/// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 ///
 /// Patches existing `<iframe>` elements and intercepts `document.createElement('iframe')`
 /// so that pages can read/write iframe properties without throwing.
@@ -27,13 +27,6 @@ use rquickjs::Ctx;
 /// nested document navigation). This matches spec behaviour for cross-origin iframes.
 ///
 /// Must be called **after** `dom::install_dom_api`.
-pub fn install_iframe_element_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(IFRAME_ELEMENT_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_iframe_element_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_iframe_element_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -42,6 +35,7 @@ pub(crate) fn install_iframe_element_bindings_v8(rt: &crate::v8_runtime::V8JsRun
 }
 
 /// JavaScript shim: HTMLIFrameElement stub properties.
+#[cfg(feature = "v8-backend")]
 const IFRAME_ELEMENT_SHIM: &str = r#"(function() {
   'use strict';
 
@@ -112,20 +106,16 @@ const IFRAME_ELEMENT_SHIM: &str = r#"(function() {
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
-    use super::*;
-    use rquickjs::{Context, Runtime};
-
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
     /// Minimal DOM stubs for testing without the full DOM bridge.
-    fn install_minimal_dom(ctx: &rquickjs::Ctx) {
-        ctx.eval::<(), _>(
+    fn with_minimal_dom(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(
             r#"
 var document = {
   querySelectorAll: function() { return []; },
@@ -143,34 +133,27 @@ var document = {
 "#,
         )
         .unwrap();
+        super::install_iframe_element_bindings_v8(&rt)
+            .expect("install should succeed with minimal dom");
+        f(&rt);
     }
 
     #[test]
     fn install_succeeds_without_document() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_iframe_element_bindings(&ctx)
-                .expect("install should succeed without document");
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        super::install_iframe_element_bindings_v8(&rt)
+            .expect("install should succeed without document");
     }
 
     #[test]
     fn install_succeeds_with_minimal_dom() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_iframe_element_bindings(&ctx)
-                .expect("install should succeed with minimal dom");
-        });
+        with_minimal_dom(|_rt| {});
     }
 
     #[test]
     fn src_getter_setter() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_iframe_element_bindings(&ctx).unwrap();
-            let result: bool = ctx
+        with_minimal_dom(|rt| {
+            let result = rt
                 .eval(
                     r#"
 var el = document.createElement('iframe');
@@ -179,17 +162,14 @@ el.src === 'https://example.com'
 "#,
                 )
                 .unwrap();
-            assert!(result, "src getter/setter should reflect attribute");
+            assert_eq!(result, JsValue::Bool(true), "src getter/setter should reflect attribute");
         });
     }
 
     #[test]
     fn content_document_is_null() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_iframe_element_bindings(&ctx).unwrap();
-            let result: bool = ctx
+        with_minimal_dom(|rt| {
+            let result = rt
                 .eval(
                     r#"
 var el = document.createElement('iframe');
@@ -197,17 +177,14 @@ el.contentDocument === null
 "#,
                 )
                 .unwrap();
-            assert!(result, "contentDocument should be null in Phase 0");
+            assert_eq!(result, JsValue::Bool(true), "contentDocument should be null in Phase 0");
         });
     }
 
     #[test]
     fn content_window_is_null() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_iframe_element_bindings(&ctx).unwrap();
-            let result: bool = ctx
+        with_minimal_dom(|rt| {
+            let result = rt
                 .eval(
                     r#"
 var el = document.createElement('iframe');
@@ -215,17 +192,14 @@ el.contentWindow === null
 "#,
                 )
                 .unwrap();
-            assert!(result, "contentWindow should be null in Phase 0");
+            assert_eq!(result, JsValue::Bool(true), "contentWindow should be null in Phase 0");
         });
     }
 
     #[test]
     fn name_getter_setter() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_iframe_element_bindings(&ctx).unwrap();
-            let result: bool = ctx
+        with_minimal_dom(|rt| {
+            let result = rt
                 .eval(
                     r#"
 var el = document.createElement('iframe');
@@ -234,17 +208,14 @@ el.name === 'myframe'
 "#,
                 )
                 .unwrap();
-            assert!(result, "name getter/setter should reflect attribute");
+            assert_eq!(result, JsValue::Bool(true), "name getter/setter should reflect attribute");
         });
     }
 
     #[test]
     fn width_height_reflect_attributes() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_iframe_element_bindings(&ctx).unwrap();
-            let result: bool = ctx
+        with_minimal_dom(|rt| {
+            let result = rt
                 .eval(
                     r#"
 var el = document.createElement('iframe');
@@ -254,17 +225,14 @@ el.width === '600' && el.height === '400'
 "#,
                 )
                 .unwrap();
-            assert!(result, "width/height should reflect attributes");
+            assert_eq!(result, JsValue::Bool(true), "width/height should reflect attributes");
         });
     }
 
     #[test]
     fn sandbox_reflects_attribute() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_iframe_element_bindings(&ctx).unwrap();
-            let result: bool = ctx
+        with_minimal_dom(|rt| {
+            let result = rt
                 .eval(
                     r#"
 var el = document.createElement('iframe');
@@ -273,17 +241,14 @@ el.sandbox === 'allow-scripts allow-same-origin'
 "#,
                 )
                 .unwrap();
-            assert!(result, "sandbox should reflect attribute");
+            assert_eq!(result, JsValue::Bool(true), "sandbox should reflect attribute");
         });
     }
 
     #[test]
     fn get_svg_document_returns_null() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_iframe_element_bindings(&ctx).unwrap();
-            let result: bool = ctx
+        with_minimal_dom(|rt| {
+            let result = rt
                 .eval(
                     r#"
 var el = document.createElement('iframe');
@@ -291,17 +256,14 @@ el.getSVGDocument() === null
 "#,
                 )
                 .unwrap();
-            assert!(result, "getSVGDocument() should return null in Phase 0");
+            assert_eq!(result, JsValue::Bool(true), "getSVGDocument() should return null in Phase 0");
         });
     }
 
     #[test]
     fn src_default_is_empty_string() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_iframe_element_bindings(&ctx).unwrap();
-            let result: bool = ctx
+        with_minimal_dom(|rt| {
+            let result = rt
                 .eval(
                     r#"
 var el = document.createElement('iframe');
@@ -309,7 +271,7 @@ el.src === ''
 "#,
                 )
                 .unwrap();
-            assert!(result, "src should default to empty string");
+            assert_eq!(result, JsValue::Bool(true), "src should default to empty string");
         });
     }
 }

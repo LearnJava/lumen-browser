@@ -865,12 +865,6 @@ impl QuickJsRuntime {
                 eprintln!("Audio element bindings init failed: {}", e);
             }
 
-            // Install HTMLIFrameElement stubs (HTML spec §4.8.5) — after DOM.
-            // Phase 0: contentDocument/contentWindow return null (no sub-document navigation).
-            if let Err(e) = iframe_element::install_iframe_element_bindings(&ctx) {
-                eprintln!("IFrame element bindings init failed: {}", e);
-            }
-
             // Install Geolocation API stub (W3C Geolocation L2, §7.7) — after DOM/navigator.
             // Default: PERMISSION_DENIED. Shell may reinitialise with fake coords via
             // install_geolocation_bindings when FingerprintProfile enables them.
@@ -890,11 +884,6 @@ impl QuickJsRuntime {
             // PaymentRequest.canMakePayment() always returns Promise<false>.
             if let Err(e) = payment_request::init_payment_request(&ctx) {
                 eprintln!("Payment Request API init failed: {}", e);
-            }
-
-            // Install Layer 1 surface API protection (ADR-007 Layer 1, 9A) — after navigator.
-            if let Err(e) = surface_api::install_surface_api_protection(&ctx) {
-                eprintln!("Surface API protection init failed: {}", e);
             }
 
             // Install Web Worker bindings (WHATWG Web Workers §4) — after DOM so
@@ -1034,12 +1023,6 @@ impl QuickJsRuntime {
                 eprintln!("Decorator shim init failed: {}", e);
             }
 
-            // Install URL Pattern API (WHATWG URLPattern §3) — pure JS implementation.
-            // Provides new URLPattern({pathname, search, hash, hostname}) with .test() and .exec().
-            if let Err(e) = url_pattern::install_url_pattern_api(&ctx) {
-                eprintln!("URL Pattern API init failed: {}", e);
-            }
-
             // Install CloseWatcher API (WICG) — after DOM so `document` and `Event` exist.
             // Provides `new CloseWatcher()` with requestClose()/destroy()/close events and
             // Escape-key intercept on the topmost watcher.
@@ -1070,15 +1053,6 @@ impl QuickJsRuntime {
             // _lumen_take_media_session_update() is a P3 shell integration task.
             if let Err(e) = media_session::install_media_session_bindings(&ctx) {
                 eprintln!("MediaSession bindings init failed: {}", e);
-            }
-
-            // Install CSS Scroll-Driven Animations Level 1 (W3C §3–4) — after DOM.
-            // Provides `ScrollTimeline` / `ViewTimeline` classes and
-            // `_lumen_deliver_scroll_progress(py, px)` for shell to push viewport
-            // progress into all active root-viewport ScrollTimeline instances.
-            // Phase 1: `animation-timeline: scroll()` parsed in ComputedStyle (P4).
-            if let Err(e) = scroll_timeline::install_scroll_timeline_bindings(&ctx) {
-                eprintln!("Scroll-Driven Animations bindings init failed: {}", e);
             }
 
             // Install Long Animation Frames API (W3C LoAF §3–4) — after DOM so that
@@ -1152,13 +1126,6 @@ impl QuickJsRuntime {
             // AmbientLightSensor. start() activates sensor; no readings until Phase 1 OS integration.
             if let Err(e) = generic_sensor::install_generic_sensor_bindings(&ctx) {
                 eprintln!("Generic Sensor API init failed: {}", e);
-            }
-
-            // Phase 0: W3C Web MIDI L1 — navigator.requestMIDIAccess() resolves with empty
-            // MIDIAccess (no hardware). Phase 1 wires _lumen_midi_deliver_message to
-            // CoreMIDI / WinMM / ALSA backends.
-            if let Err(e) = web_midi::install_web_midi_api(&ctx) {
-                eprintln!("Web MIDI API init failed: {}", e);
             }
 
             // Install XMLHttpRequest API (WHATWG XHR Standard §4) — after DOM so fetch(),

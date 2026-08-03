@@ -18,19 +18,12 @@
 //!
 //! Spec: <https://www.w3.org/TR/scroll-animations-1/>
 
-use rquickjs::Ctx;
-
-/// Install CSS Scroll-Driven Animations L1 JS API into the QuickJS context.
+/// V8 port of the former rquickjs `install_scroll_timeline_bindings` (Ph3 V8 migration
+/// S5-S7, rquickjs side removed in S12b-B6): identical JS shim, evaluated via
+/// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 ///
 /// Must be called **after** `install_dom_api` so that `document` and `Event`
 /// are available.
-pub fn install_scroll_timeline_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(SCROLL_TIMELINE_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_scroll_timeline_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_scroll_timeline_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -39,6 +32,7 @@ pub(crate) fn install_scroll_timeline_bindings_v8(rt: &crate::v8_runtime::V8JsRu
 }
 
 /// JavaScript shim implementing the W3C CSS Scroll-Driven Animations Level 1 API.
+#[cfg(feature = "v8-backend")]
 const SCROLL_TIMELINE_SHIM: &str = r#"(function() {
   'use strict';
 
@@ -145,183 +139,169 @@ const SCROLL_TIMELINE_SHIM: &str = r#"(function() {
 
 // ─── tests ───────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
-    use rquickjs::{Context, Runtime};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
-
-    fn with_scroll_timeline<F>(f: F)
-    where
-        F: FnOnce(&rquickjs::Ctx),
-    {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            super::install_scroll_timeline_bindings(&ctx)
-                .expect("scroll_timeline install failed");
-            f(&ctx);
-        });
+    fn with_scroll_timeline(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        super::install_scroll_timeline_bindings_v8(&rt).expect("scroll_timeline install failed");
+        f(&rt);
     }
 
     #[test]
     fn scroll_timeline_class_exists() {
-        with_scroll_timeline(|ctx| {
-            let ok: bool = ctx.eval("typeof ScrollTimeline === 'function'").unwrap();
-            assert!(ok);
+        with_scroll_timeline(|rt| {
+            let ok = rt.eval("typeof ScrollTimeline === 'function'").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn view_timeline_class_exists() {
-        with_scroll_timeline(|ctx| {
-            let ok: bool = ctx.eval("typeof ViewTimeline === 'function'").unwrap();
-            assert!(ok);
+        with_scroll_timeline(|rt| {
+            let ok = rt.eval("typeof ViewTimeline === 'function'").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn deliver_binding_exists() {
-        with_scroll_timeline(|ctx| {
-            let ok: bool = ctx
+        with_scroll_timeline(|rt| {
+            let ok = rt
                 .eval("typeof _lumen_deliver_scroll_progress === 'function'")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn scroll_timeline_default_axis() {
-        with_scroll_timeline(|ctx| {
-            let axis: String = ctx
-                .eval("new ScrollTimeline().axis")
-                .unwrap();
-            assert_eq!(axis, "block");
+        with_scroll_timeline(|rt| {
+            let axis = rt.eval("new ScrollTimeline().axis").unwrap();
+            assert_eq!(axis, JsValue::String("block".to_string()));
         });
     }
 
     #[test]
     fn scroll_timeline_custom_axis() {
-        with_scroll_timeline(|ctx| {
-            let axis: String = ctx
-                .eval("new ScrollTimeline({axis:'inline'}).axis")
-                .unwrap();
-            assert_eq!(axis, "inline");
+        with_scroll_timeline(|rt| {
+            let axis = rt.eval("new ScrollTimeline({axis:'inline'}).axis").unwrap();
+            assert_eq!(axis, JsValue::String("inline".to_string()));
         });
     }
 
     #[test]
     fn current_time_null_before_delivery() {
-        with_scroll_timeline(|ctx| {
-            let is_null: bool = ctx
+        with_scroll_timeline(|rt| {
+            let is_null = rt
                 .eval("new ScrollTimeline().currentTime === null")
                 .unwrap();
-            assert!(is_null);
+            assert_eq!(is_null, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn deliver_updates_block_current_time() {
-        with_scroll_timeline(|ctx| {
-            ctx.eval::<(), _>(
+        with_scroll_timeline(|rt| {
+            rt.eval(
                 "var tl = new ScrollTimeline({axis:'block'}); \
                  _lumen_deliver_scroll_progress(0.5, 0.25);",
             )
             .unwrap();
-            let ct: f64 = ctx.eval("tl.currentTime").unwrap();
-            assert!((ct - 50.0).abs() < 1e-6, "expected 50.0, got {ct}");
+            let ct = rt.eval("tl.currentTime").unwrap();
+            assert_eq!(ct, JsValue::Number(50.0));
         });
     }
 
     #[test]
     fn deliver_updates_inline_current_time() {
-        with_scroll_timeline(|ctx| {
-            ctx.eval::<(), _>(
+        with_scroll_timeline(|rt| {
+            rt.eval(
                 "var tl = new ScrollTimeline({axis:'inline'}); \
                  _lumen_deliver_scroll_progress(0.5, 0.25);",
             )
             .unwrap();
-            let ct: f64 = ctx.eval("tl.currentTime").unwrap();
-            assert!((ct - 25.0).abs() < 1e-6, "expected 25.0, got {ct}");
+            let ct = rt.eval("tl.currentTime").unwrap();
+            assert_eq!(ct, JsValue::Number(25.0));
         });
     }
 
     #[test]
     fn deliver_updates_y_axis_current_time() {
-        with_scroll_timeline(|ctx| {
-            ctx.eval::<(), _>(
+        with_scroll_timeline(|rt| {
+            rt.eval(
                 "var tl = new ScrollTimeline({axis:'y'}); \
                  _lumen_deliver_scroll_progress(1.0, 0.0);",
             )
             .unwrap();
-            let ct: f64 = ctx.eval("tl.currentTime").unwrap();
-            assert!((ct - 100.0).abs() < 1e-6, "expected 100.0, got {ct}");
+            let ct = rt.eval("tl.currentTime").unwrap();
+            assert_eq!(ct, JsValue::Number(100.0));
         });
     }
 
     #[test]
     fn deliver_does_not_update_view_timeline() {
-        with_scroll_timeline(|ctx| {
-            ctx.eval::<(), _>(
+        with_scroll_timeline(|rt| {
+            rt.eval(
                 "var vt = new ViewTimeline(); \
                  _lumen_deliver_scroll_progress(0.8, 0.3);",
             )
             .unwrap();
-            let is_null: bool = ctx.eval("vt.currentTime === null").unwrap();
-            assert!(is_null, "ViewTimeline.currentTime should stay null (P4 wires it)");
+            let is_null = rt.eval("vt.currentTime === null").unwrap();
+            assert_eq!(is_null, JsValue::Bool(true), "ViewTimeline.currentTime should stay null (P4 wires it)");
         });
     }
 
     #[test]
     fn deliver_does_not_update_element_scroll_timeline() {
         // source !== null → element-specific scroll container, not root viewport.
-        with_scroll_timeline(|ctx| {
-            ctx.eval::<(), _>(
+        with_scroll_timeline(|rt| {
+            rt.eval(
                 "var tl = new ScrollTimeline({source: {}}); \
                  _lumen_deliver_scroll_progress(0.6, 0.2);",
             )
             .unwrap();
-            let is_null: bool = ctx.eval("tl.currentTime === null").unwrap();
-            assert!(is_null, "element-specific timeline should not be updated by root delivery");
+            let is_null = rt.eval("tl.currentTime === null").unwrap();
+            assert_eq!(is_null, JsValue::Bool(true), "element-specific timeline should not be updated by root delivery");
         });
     }
 
     #[test]
     fn multiple_timelines_all_updated() {
-        with_scroll_timeline(|ctx| {
-            ctx.eval::<(), _>(
+        with_scroll_timeline(|rt| {
+            rt.eval(
                 "var tl1 = new ScrollTimeline({axis:'block'}); \
                  var tl2 = new ScrollTimeline({axis:'block'}); \
                  _lumen_deliver_scroll_progress(0.75, 0.0);",
             )
             .unwrap();
-            let ct1: f64 = ctx.eval("tl1.currentTime").unwrap();
-            let ct2: f64 = ctx.eval("tl2.currentTime").unwrap();
-            assert!((ct1 - 75.0).abs() < 1e-6);
-            assert!((ct2 - 75.0).abs() < 1e-6);
+            let ct1 = rt.eval("tl1.currentTime").unwrap();
+            let ct2 = rt.eval("tl2.currentTime").unwrap();
+            assert_eq!(ct1, JsValue::Number(75.0));
+            assert_eq!(ct2, JsValue::Number(75.0));
         });
     }
 
     #[test]
     fn view_timeline_subject_property() {
-        with_scroll_timeline(|ctx| {
-            ctx.eval::<(), _>("var obj = {id:42}; var vt = new ViewTimeline({subject:obj});")
+        with_scroll_timeline(|rt| {
+            rt.eval("var obj = {id:42}; var vt = new ViewTimeline({subject:obj});")
                 .unwrap();
-            let id: i32 = ctx.eval("vt.subject.id").unwrap();
-            assert_eq!(id, 42);
+            let id = rt.eval("vt.subject.id").unwrap();
+            assert_eq!(id, JsValue::Number(42.0));
         });
     }
 
     #[test]
     fn view_timeline_is_instance_of_scroll_timeline() {
-        with_scroll_timeline(|ctx| {
-            let ok: bool = ctx
+        with_scroll_timeline(|rt| {
+            let ok = rt
                 .eval("new ViewTimeline() instanceof ScrollTimeline")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 }
