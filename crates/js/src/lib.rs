@@ -819,12 +819,6 @@ impl QuickJsRuntime {
                 eprintln!("CSS Properties & Values API init failed: {}", e);
             }
 
-            // Install CSS Typed OM (CSS Typed Object Model L1) — after DOM so that Element.prototype is available.
-            // Enables element.attributeStyleMap, element.computedStyleMap(), CSSStyleValue, CSSUnitValue, CSSKeywordValue.
-            if let Err(e) = typed_om_api::install_typed_om_api(&ctx) {
-                eprintln!("CSS Typed OM init failed: {}", e);
-            }
-
             // Install CSS Paint Worklet API stub (Houdini) — after DOM/CSS so that CSS object is available.
             // Phase 0: registerPaint() registers worklet definitions; Phase 1 (future): worker execution.
             // Enables CSS.paintWorklet.addModule() and registerPaint() calls.
@@ -877,13 +871,6 @@ impl QuickJsRuntime {
             // operations reject with NotSupportedError (no BLE support).
             if let Err(e) = bluetooth::install_bluetooth_bindings(&ctx) {
                 eprintln!("Bluetooth bindings init failed: {}", e);
-            }
-
-            // Install WebSerial API (W3C Serial API L1) — after DOM/navigator so that
-            // Promise, DOMException, and navigator are available. Phase 0: requestPort()
-            // rejects NotSupportedError; getPorts() returns [].
-            if let Err(e) = serial::install_serial_bindings(&ctx) {
-                eprintln!("WebSerial bindings init failed: {}", e);
             }
 
             // Install W3C WebCodecs API (https://www.w3.org/TR/webcodecs/) — after DOM.
@@ -1151,15 +1138,6 @@ impl QuickJsRuntime {
                 eprintln!("MediaSession bindings init failed: {}", e);
             }
 
-            // Install CSS Scroll Snap L2 events (W3C CSS Scroll Snap §4) — after DOM
-            // so `Event` is available. Provides SnapChangeEvent and native bindings
-            // _lumen_fire_snap_changing/changed for shell to emit snap events.
-            // Phase 0: event infrastructure complete; shell integration (P2/P3)
-            // calls bindings when snap-points change via layout.
-            if let Err(e) = scroll_snap_events::install_scroll_snap_events_bindings(&ctx) {
-                eprintln!("Scroll Snap events bindings init failed: {}", e);
-            }
-
             // Install CSS Scroll-Driven Animations Level 1 (W3C §3–4) — after DOM.
             // Provides `ScrollTimeline` / `ViewTimeline` classes and
             // `_lumen_deliver_scroll_progress(py, px)` for shell to push viewport
@@ -1248,13 +1226,6 @@ impl QuickJsRuntime {
             // Phase 1 (future): FFmpeg or libav1 bindings for actual encoding/decoding.
             if let Err(e) = web_codecs::install_webcodecs_bindings(&ctx) {
                 eprintln!("WebCodecs API init failed: {}", e);
-            }
-
-            // Install WebXR Device API (W3C WebXR Device API §5) — after DOM/navigator.
-            // Phase 0: isSessionSupported() → false, requestSession() → NotSupportedError.
-            // XRSession/XRFrame/XRReferenceSpace/XRView stubs exported on window.
-            if let Err(e) = webxr::install_webxr_bindings(&ctx) {
-                eprintln!("WebXR Device API init failed: {}", e);
             }
 
             if let Err(e) = form_validation::install_form_validation_bindings(&ctx) {

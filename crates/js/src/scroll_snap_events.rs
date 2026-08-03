@@ -11,22 +11,10 @@
 //! - `_lumen_fire_snap_changing(nid, snapTargetBlock, snapTargetInline)` — fire snapChanging
 //! - `_lumen_fire_snap_changed(nid, snapTargetBlock, snapTargetInline)` — fire snapChanged
 
-use rquickjs::Ctx;
-
-/// Install CSS Scroll Snap L2 events into the JS context.
-///
-/// Adds `SnapChangeEvent` class and native bindings for shell to fire snap events.
-/// Phase 0: shell must call `_lumen_fire_snap_changing/changed` when the DOM
-/// scroll snap state changes via layout calculations (apply_page_y_snap).
-///
-/// Must be called **after** `install_dom_api` so that `Event` is already defined.
-pub fn install_scroll_snap_events_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(SCROLL_SNAP_EVENTS_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_scroll_snap_events_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// V8 port of the former rquickjs `install_scroll_snap_events_bindings` (Ph3 V8
+/// migration S5-S7): identical JS shim, evaluated via
+/// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`. Must run
+/// **after** DOM install so that `Event` is already defined.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_scroll_snap_events_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -35,6 +23,7 @@ pub(crate) fn install_scroll_snap_events_bindings_v8(rt: &crate::v8_runtime::V8J
 }
 
 /// JavaScript shim implementing CSS Scroll Snap L2 events.
+#[cfg(feature = "v8-backend")]
 const SCROLL_SNAP_EVENTS_SHIM: &str = r#"(function() {
   'use strict';
 
@@ -95,85 +84,3 @@ const SCROLL_SNAP_EVENTS_SHIM: &str = r#"(function() {
   };
 })();
 "#;
-
-#[cfg(test)]
-mod tests {
-    use rquickjs::{Context, Runtime};
-
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
-
-    fn with_scroll_snap_events<F>(f: F)
-    where
-        F: FnOnce(&rquickjs::Ctx),
-    {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            if let Err(e) = super::install_scroll_snap_events_bindings(&ctx) {
-                panic!("Failed to install scroll snap events: {}", e);
-            }
-            f(&ctx);
-        });
-    }
-
-    #[test]
-    fn snap_change_event_class_exists() {
-        with_scroll_snap_events(|ctx| {
-            let result: bool = ctx
-                .eval("typeof SnapChangeEvent === 'function'")
-                .unwrap();
-            assert!(result);
-        });
-    }
-
-    #[test]
-    fn snap_change_event_constructor_with_props() {
-        with_scroll_snap_events(|ctx| {
-            // Test that SnapChangeEvent constructor accepts properties.
-            let result: bool = ctx
-                .eval("new SnapChangeEvent('snapchanging', { snapTargetBlock: 'center' }) !== undefined")
-                .unwrap();
-            assert!(result);
-        });
-    }
-
-    #[test]
-    fn lumen_fire_snap_changing_exists() {
-        with_scroll_snap_events(|ctx| {
-            let result: bool = ctx
-                .eval("typeof globalThis._lumen_fire_snap_changing === 'function'")
-                .unwrap();
-            assert!(result);
-        });
-    }
-
-    #[test]
-    fn lumen_fire_snap_changed_exists() {
-        with_scroll_snap_events(|ctx| {
-            let result: bool = ctx
-                .eval("typeof globalThis._lumen_fire_snap_changed === 'function'")
-                .unwrap();
-            assert!(result);
-        });
-    }
-
-    #[test]
-    fn snap_change_event_with_init_props() {
-        with_scroll_snap_events(|ctx| {
-            // Verify that SnapChangeEvent can be created with init object.
-            ctx.eval::<(), _>(
-                "var ev = new SnapChangeEvent('snapchanging', { \
-                   snapTargetBlock: 'end', \
-                   snapTargetInline: 'start' \
-                 }); \
-                 globalThis.__test_ok = true;"
-            )
-            .unwrap();
-            let ok: bool = ctx.eval("globalThis.__test_ok").unwrap();
-            assert!(ok);
-        });
-    }
-}
