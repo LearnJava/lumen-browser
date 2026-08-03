@@ -1145,9 +1145,9 @@
         {
          "id": "P3-v8-s12b-b13",
          "title": "S12b-B13: снос rquickjs, средние модули (7/8)",
-         "status": "queued",
+         "status": "done",
          "size": "S",
-         "note": "Полоса 2 (1773/43): broadcast_channel, webrtc_stub, credentials"
+         "note": "Полоса 2 (1773/43): broadcast_channel, webrtc_stub, credentials — ЗАКРЫТ 2026-08-04 (ветка p1-s12b-b13): все 43 теста перенесены (14 broadcast_channel + 17 webrtc_stub + 12 credentials, из которых 5 fedcm_* портированы на V8, 7 остались engine-agnostic), плюс отдельный капкан — 4 скрытых теста в crates/js/tests/cases/webauthn_credentials.rs (интеграционный крейт, не dom.rs). Детали — docs/tasks/ph3-v8-migration.md §S12b-B13"
         },
         {
          "id": "P3-v8-s12b-b14",
