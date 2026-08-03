@@ -2882,6 +2882,80 @@ did not go red (821+1 passed). Both clippy passes clean.
 
 Next in queue: S12b-B14 (`xhr`/`file_input`, Полоса 2 eighth/final batch).
 
+### S12b-B14 (`xhr`, `file_input` — Полоса 2 final batch)
+
+Last batch of Полоса 2. Both modules fit the group-A procedure cleanly:
+`install_xhr_bindings_v8`/`install_file_input_bindings_v8` already existed
+(`xhr.rs:44`, `file_input.rs:107`), both wired through the plain `install_v8!`
+macro in `v8_runtime.rs` (no extra native-state args, despite the queue's
+blanket note that `file_input` "needs full `install_dom`" — like B12's
+`geolocation`/`idle_detection`, that turned out unnecessary in practice). No
+tests hid in `dom.rs` or `crates/js/tests/cases/*.rs` (grepped both).
+
+`xhr` (17 tests) ported 1:1 against `V8JsRuntime::new()` + full `install_dom`
+(the shim needs `Event`/`DOMException`/`FormData`/`Blob`/`TextEncoder`/
+`TextDecoder` — same shape as `broadcast_channel`'s S12b-B13 harness). None of
+the existing tests call `.send()` (no fetch-triggering coverage existed even
+under rquickjs), so no fetch provider was needed in the harness.
+
+`file_input` (18 tests) split like `credentials` did in B13: 4 of its tests
+(`register_file_token_unique`, `to_base64_empty`/`_hello`/`_binary`) have no
+`rquickjs`/engine dependency at all. Of those, only `register_file_token_unique`
+stayed in the plain ungated `mod tests` — `register_file_token`/
+`clear_file_registry` are still called unconditionally by production code
+(`crates/shell/src/main.rs`, `filesystem_access.rs`) regardless of engine.
+`to_base64`/`read_file_bytes_for_token` are **not** in that position: their
+only remaining caller after this batch is the V8 install path, so leaving them
+ungated left them as dead code in the default (rquickjs) build (`-D
+dead_code`, caught by the batch gate's default clippy pass). Fixed by gating
+both fns `#[cfg(feature = "v8-backend")]` and moving the `to_base64_*` tests
+into the new `mod v8_tests` alongside the JS-shim tests — a variant of the B4
+`network_log_bindings` precedent ("gate previously-pure-Rust tests behind
+`v8-backend` too, once their only production caller is v8-gated"), but
+triggered by a compile error instead of applied proactively; worth checking
+for on every future batch where a JS-shim install fn is the sole remaining
+caller of a helper that pure-Rust tests also exercise directly. The other 14
+`file_input` tests (JS-shim + native-binding tests) ported to
+`V8JsRuntime::new()` + local stubs (`Blob`/`_lumen_*`/`btoa`/`atob`), mirroring
+the original rquickjs harness exactly (`webhid.rs`-style bare-context
+template, not full `install_dom`).
+
+**Wrong-worktree-path near-miss:** mid-batch, all three file edits were made
+via the repo-root absolute path (`D:\RustProjects\lumen-browser\crates\js\...`)
+instead of the `p1-work` pool-slot path
+(`.claude\worktrees\p1-work\crates\js\...`) — both resolve to real files since
+the root working tree is itself a live `git worktree` (on `main`), so nothing
+errored until `git status` on root showed the 3 files dirty on `main`. Caught
+before commit: saved the diff (`git diff -- <3 files> > patch`), `git checkout
+--` reverted root to clean `main`, then `git apply --directory=.claude/
+worktrees/p1-work patch` replayed the same change onto the correct branch.
+Costs one extra clippy+test round-trip if caught late (as here) since the
+first gate run silently validated the *unedited* root files, not the intended
+change — matches `feedback_worktree_edit_absolute_path` from prior sessions;
+the fix is to prefix every edit-tool path with the pool-slot worktree root
+explicitly, not just `cd` there for Bash commands.
+
+Removed: 2 rquickjs `install_*_bindings` functions (`xhr::install_xhr_bindings`,
+`file_input::install_file_input_bindings`), `file_input`'s standalone
+`install_native_bindings` helper, `use rquickjs::…` from both module files, and
+both calls from `QuickJsRuntime::install_dom` (`lib.rs`). `XHR_SHIM` gated
+`#[cfg(feature = "v8-backend")]` (only the V8 path reads it now); `FILE_INPUT_SHIM`
+likewise. `register_file_token`/`clear_file_registry` stay ungated — shell and
+`filesystem_access.rs` call them regardless of engine.
+
+`cargo test -p lumen-js --features v8-backend`: 2584 lib + 68 integration
+(unchanged — both modules' tests already ran under `--features v8-backend`
+before this batch via `#[cfg(test)]`; converting them to `V8JsRuntime` ports
+them in place without changing the total). `cargo test -p lumen-js` (default):
+787 lib (down from 821, -34: the 17+17 tests moved to V8-only — `register_file_
+token_unique` is the one `file_input` test that stayed) + 1 integration
+(unchanged). rquickjs suite did not go red (787+1 passed). Both clippy passes
+clean.
+
+Полоса 2 (S12b-B7…B14) is now complete — 8/8 batches, all medium modules
+migrated. Next in queue: S12b-B15 (`web_codecs`/`decorators`, Полоса 3 first
+batch, large modules).
+
 ---
 
 ## Risks (Rev 2)

@@ -31,8 +31,6 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 
-use rquickjs::{Ctx, Function, Object};
-
 // ── File token registry ───────────────────────────────────────────────────────
 
 static NEXT_TOKEN: AtomicU64 = AtomicU64::new(1);
@@ -65,6 +63,7 @@ pub fn clear_file_registry() {
     registry().clear();
 }
 
+#[cfg(feature = "v8-backend")]
 fn read_file_bytes_for_token(token: u64) -> Option<Vec<u8>> {
     let path = registry().get(&token).cloned()?;
     std::fs::read(&path).ok()
@@ -72,6 +71,7 @@ fn read_file_bytes_for_token(token: u64) -> Option<Vec<u8>> {
 
 // ── Base64 encoder (no external dependency) ───────────────────────────────────
 
+#[cfg(feature = "v8-backend")]
 fn to_base64(bytes: &[u8]) -> String {
     const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
@@ -96,55 +96,15 @@ fn to_base64(bytes: &[u8]) -> String {
     out
 }
 
-// ── Native binding registration ───────────────────────────────────────────────
-
-fn install_native_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    let g: Object = ctx.globals();
-
-    // __lumen_file_read_text(token: f64) → String
-    // Reads the registered file and returns its contents as a UTF-8 string (lossy).
-    g.set(
-        "__lumen_file_read_text",
-        Function::new(ctx.clone(), move |token: f64| -> String {
-            let t = token as u64;
-            read_file_bytes_for_token(t)
-                .map(|b| String::from_utf8_lossy(&b).into_owned())
-                .unwrap_or_default()
-        }),
-    )?;
-
-    // __lumen_file_read_base64(token: f64) → String
-    // Reads the registered file and returns its contents as RFC 4648 base64.
-    // JS side calls atob() to recover binary data for ArrayBuffer construction.
-    g.set(
-        "__lumen_file_read_base64",
-        Function::new(ctx.clone(), move |token: f64| -> String {
-            let t = token as u64;
-            read_file_bytes_for_token(t)
-                .map(|b| to_base64(&b))
-                .unwrap_or_default()
-        }),
-    )?;
-
-    Ok(())
-}
-
 // ── Public install function ───────────────────────────────────────────────────
 
-/// Install File / FileList classes, native read bindings, and `_lumen_deliver_file_list`
-/// into the JS context.
+/// V8 port of the former rquickjs `install_file_input_bindings` (Ph3 V8 migration
+/// S5-S7 batch 2, rquickjs side removed in S12b-B14): both natives go through the
+/// compat layer, the JS shim evaluates unchanged.
 ///
 /// Must run after `dom::install_dom_bindings` (needs `_lumen_make_element`,
 /// `_lumen_set_attr`, `_lumen_get_attr`, `_lumen_dispatch_bubble`, and `Blob`
 /// — `File.prototype` extends `Blob.prototype`).
-pub fn install_file_input_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    install_native_bindings(ctx)?;
-    ctx.eval::<(), _>(FILE_INPUT_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_file_input_bindings`] (Ph3 V8 migration S5-S7 batch 2):
-/// both natives go through the compat layer, the JS shim evaluates unchanged.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_file_input_bindings_v8(
     rt: &crate::v8_runtime::V8JsRuntime,
@@ -172,6 +132,7 @@ pub(crate) fn install_file_input_bindings_v8(
     Ok(())
 }
 
+#[cfg(feature = "v8-backend")]
 const FILE_INPUT_SHIM: &str = r#"
 (function() {
 'use strict';
@@ -350,190 +311,6 @@ window._lumen_make_element = function(nid) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rquickjs::{Context, Runtime};
-
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
-
-    /// Install minimal DOM stubs then File/FileList bindings.
-    fn with_file_input(f: impl FnOnce(&rquickjs::Ctx)) {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            ctx.eval::<(), _>(r#"
-                var window = globalThis;
-                var _lumen_listeners = {};
-                // Minimal Blob stand-in — real Blob (dom.rs::WEB_API_SHIM) isn't
-                // installed in this isolated harness, but File.prototype now
-                // extends Blob.prototype (W3C File API §4: `interface File : Blob`).
-                function Blob(blobParts, options) {}
-                function _lumen_set_attr(nid, name, val) {}
-                function _lumen_get_attr(nid, name) { return undefined; }
-                function _lumen_dispatch_bubble(nid, type) {}
-                function _lumen_make_element(nid) { return {__nid__: nid}; }
-                window._lumen_make_element = _lumen_make_element;
-                // btoa/atob stubs for tests (real versions live in dom.rs)
-                function btoa(str) {
-                  var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-                  var result = '', i = 0;
-                  while (i < str.length) {
-                    var b0 = str.charCodeAt(i++);
-                    var b1 = i < str.length ? str.charCodeAt(i++) : 0;
-                    var b2 = i < str.length ? str.charCodeAt(i++) : 0;
-                    var n = (b0 << 16) | (b1 << 8) | b2;
-                    result += chars[(n >> 18) & 63] + chars[(n >> 12) & 63]
-                            + chars[(n >> 6) & 63] + chars[n & 63];
-                  }
-                  var pad = str.length % 3;
-                  if (pad === 1) result = result.slice(0, -2) + '==';
-                  else if (pad === 2) result = result.slice(0, -1) + '=';
-                  return result;
-                }
-                function atob(b64) {
-                  var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-                  var result = '', buf = 0, bits = 0;
-                  for (var i = 0; i < b64.length; i++) {
-                    var v = chars.indexOf(b64[i]);
-                    if (v < 0) continue;
-                    buf = (buf << 6) | v; bits += 6;
-                    if (bits >= 8) { bits -= 8; result += String.fromCharCode((buf >> bits) & 0xff); }
-                  }
-                  return result;
-                }
-                window.btoa = btoa; window.atob = atob;
-            "#).unwrap();
-            install_file_input_bindings(&ctx).unwrap();
-            f(&ctx);
-        });
-    }
-
-    #[test]
-    fn file_class_exists() {
-        with_file_input(|ctx| {
-            let ok: bool = ctx.eval("typeof File === 'function'").unwrap();
-            assert!(ok);
-        });
-    }
-
-    #[test]
-    fn file_name_and_size() {
-        with_file_input(|ctx| {
-            let ok: bool = ctx.eval(
-                "var f = new File(['hello'], 'test.txt', {type:'text/plain', lastModified:12345}); \
-                 f.name === 'test.txt' && f.size === 5 && f.type === 'text/plain' && f.lastModified === 12345"
-            ).unwrap();
-            assert!(ok);
-        });
-    }
-
-    #[test]
-    fn file_content_stored_from_bits() {
-        with_file_input(|ctx| {
-            let ok: bool = ctx.eval(
-                "var f = new File(['abc'], 'a.txt'); f._content === 'abc'"
-            ).unwrap();
-            assert!(ok, "bits should be joined into _content");
-        });
-    }
-
-    #[test]
-    fn file_text_returns_promise() {
-        with_file_input(|ctx| {
-            let ok: bool = ctx.eval(
-                "var f = new File(['abc'], 'a.txt'); f.text() instanceof Promise"
-            ).unwrap();
-            assert!(ok);
-        });
-    }
-
-    #[test]
-    fn filelist_length_and_item() {
-        with_file_input(|ctx| {
-            let ok: bool = ctx.eval(
-                "var f = new File([], 'x.png'); \
-                 var fl = new FileList([f]); \
-                 fl.length === 1 && fl.item(0) === f && fl[0] === f && fl.item(1) === null"
-            ).unwrap();
-            assert!(ok);
-        });
-    }
-
-    #[test]
-    fn filelist_empty() {
-        with_file_input(|ctx| {
-            let ok: bool = ctx.eval(
-                "var fl = new FileList([]); fl.length === 0 && fl.item(0) === null"
-            ).unwrap();
-            assert!(ok);
-        });
-    }
-
-    #[test]
-    fn deliver_file_list_token_stored() {
-        with_file_input(|ctx| {
-            ctx.eval::<(), _>(
-                "_lumen_deliver_file_list(42, '[{\"name\":\"photo.jpg\",\"token\":99,\"size\":2048,\"mime_type\":\"image/jpeg\",\"last_modified_ms\":1000}]')"
-            ).unwrap();
-            let ok: bool = ctx.eval(
-                "_lumen_file_lists[42] instanceof FileList && \
-                 _lumen_file_lists[42].length === 1 && \
-                 _lumen_file_lists[42][0].name === 'photo.jpg' && \
-                 _lumen_file_lists[42][0].size === 2048 && \
-                 _lumen_file_lists[42][0]._token === 99"
-            ).unwrap();
-            assert!(ok);
-        });
-    }
-
-    #[test]
-    fn deliver_file_list_empty_json() {
-        with_file_input(|ctx| {
-            ctx.eval::<(), _>("_lumen_deliver_file_list(7, '[]')").unwrap();
-            let ok: bool = ctx.eval("_lumen_file_lists[7].length === 0").unwrap();
-            assert!(ok);
-        });
-    }
-
-    #[test]
-    fn filelist_iterator() {
-        with_file_input(|ctx| {
-            let ok: bool = ctx.eval(
-                "var fl = new FileList([new File([], 'a'), new File([], 'b')]); \
-                 var names = []; \
-                 for (var f of fl) { names.push(f.name); } \
-                 names[0] === 'a' && names[1] === 'b' && names.length === 2"
-            ).unwrap();
-            assert!(ok);
-        });
-    }
-
-    #[test]
-    fn make_element_files_getter() {
-        with_file_input(|ctx| {
-            ctx.eval::<(), _>(
-                "_lumen_get_attr = function(nid, name) { \
-                   if (nid === 99 && name === 'type') return 'file'; \
-                   return undefined; \
-                 };"
-            ).unwrap();
-            let ok: bool = ctx.eval(
-                "var el = _lumen_make_element(99); \
-                 el.files instanceof FileList && el.files.length === 0"
-            ).unwrap();
-            assert!(ok, "files getter should return empty FileList for type=file input");
-
-            ctx.eval::<(), _>(
-                "_lumen_deliver_file_list(99, '[{\"name\":\"doc.pdf\",\"token\":55,\"size\":512,\"mime_type\":\"application/pdf\",\"last_modified_ms\":0}]')"
-            ).unwrap();
-            let ok2: bool = ctx.eval(
-                "_lumen_make_element(99).files.length === 1 && \
-                 _lumen_make_element(99).files[0].name === 'doc.pdf'"
-            ).unwrap();
-            assert!(ok2);
-        });
-    }
 
     #[test]
     fn register_file_token_unique() {
@@ -542,25 +319,218 @@ mod tests {
         assert_ne!(t1, t2, "tokens must be unique");
         assert!(t1 > 0 && t2 > 0);
     }
+}
+
+/// JS-shim tests (S12b-B14): moved out of `mod tests` because they depend on
+/// [`install_file_input_bindings_v8`] to evaluate `FILE_INPUT_SHIM`, unlike the
+/// rest of `mod tests` which exercises plain Rust functions engine-agnostically.
+/// `to_base64_*` moved here too: `to_base64`/`read_file_bytes_for_token` are now
+/// `#[cfg(feature = "v8-backend")]`-gated (their only remaining caller is the V8
+/// install path), so testing them unconditionally would be dead code under the
+/// default (rquickjs) build.
+#[cfg(all(test, feature = "v8-backend"))]
+mod v8_tests {
+    use super::*;
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
+
+    #[test]
+    fn to_base64_empty() {
+        assert_eq!(to_base64(b""), "");
+    }
+
+    #[test]
+    fn to_base64_hello() {
+        assert_eq!(to_base64(b"hello"), "aGVsbG8=");
+    }
+
+    #[test]
+    fn to_base64_binary() {
+        assert_eq!(to_base64(b"\x00\x01\x02"), "AAEC");
+    }
+
+    /// Minimal DOM stubs the shim needs (`Blob`, `_lumen_*`, `btoa`/`atob`) — mirrors
+    /// the rquickjs harness this replaces, not the real `dom.rs::WEB_API_SHIM`.
+    const STUBS: &str = r#"
+        var window = globalThis;
+        var _lumen_listeners = {};
+        function Blob(blobParts, options) {}
+        function _lumen_set_attr(nid, name, val) {}
+        function _lumen_get_attr(nid, name) { return undefined; }
+        function _lumen_dispatch_bubble(nid, type) {}
+        function _lumen_make_element(nid) { return {__nid__: nid}; }
+        window._lumen_make_element = _lumen_make_element;
+        function btoa(str) {
+          var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+          var result = '', i = 0;
+          while (i < str.length) {
+            var b0 = str.charCodeAt(i++);
+            var b1 = i < str.length ? str.charCodeAt(i++) : 0;
+            var b2 = i < str.length ? str.charCodeAt(i++) : 0;
+            var n = (b0 << 16) | (b1 << 8) | b2;
+            result += chars[(n >> 18) & 63] + chars[(n >> 12) & 63]
+                    + chars[(n >> 6) & 63] + chars[n & 63];
+          }
+          var pad = str.length % 3;
+          if (pad === 1) result = result.slice(0, -2) + '==';
+          else if (pad === 2) result = result.slice(0, -1) + '=';
+          return result;
+        }
+        function atob(b64) {
+          var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+          var result = '', buf = 0, bits = 0;
+          for (var i = 0; i < b64.length; i++) {
+            var v = chars.indexOf(b64[i]);
+            if (v < 0) continue;
+            buf = (buf << 6) | v; bits += 6;
+            if (bits >= 8) { bits -= 8; result += String.fromCharCode((buf >> bits) & 0xff); }
+          }
+          return result;
+        }
+        window.btoa = btoa; window.atob = atob;
+    "#;
+
+    fn with_file_input() -> V8JsRuntime {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(STUBS).unwrap();
+        install_file_input_bindings_v8(&rt).unwrap();
+        rt
+    }
+
+    fn js_bool(rt: &V8JsRuntime, expr: &str) -> bool {
+        match rt.eval(expr).unwrap() {
+            JsValue::Bool(b) => b,
+            other => panic!("expected bool, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn file_class_exists() {
+        let rt = with_file_input();
+        assert!(js_bool(&rt, "typeof File === 'function'"));
+    }
+
+    #[test]
+    fn file_name_and_size() {
+        let rt = with_file_input();
+        assert!(js_bool(
+            &rt,
+            "var f = new File(['hello'], 'test.txt', {type:'text/plain', lastModified:12345}); \
+             f.name === 'test.txt' && f.size === 5 && f.type === 'text/plain' && f.lastModified === 12345"
+        ));
+    }
+
+    #[test]
+    fn file_content_stored_from_bits() {
+        let rt = with_file_input();
+        assert!(
+            js_bool(&rt, "var f = new File(['abc'], 'a.txt'); f._content === 'abc'"),
+            "bits should be joined into _content"
+        );
+    }
+
+    #[test]
+    fn file_text_returns_promise() {
+        let rt = with_file_input();
+        assert!(js_bool(
+            &rt,
+            "var f = new File(['abc'], 'a.txt'); f.text() instanceof Promise"
+        ));
+    }
+
+    #[test]
+    fn filelist_length_and_item() {
+        let rt = with_file_input();
+        assert!(js_bool(
+            &rt,
+            "var f = new File([], 'x.png'); \
+             var fl = new FileList([f]); \
+             fl.length === 1 && fl.item(0) === f && fl[0] === f && fl.item(1) === null"
+        ));
+    }
+
+    #[test]
+    fn filelist_empty() {
+        let rt = with_file_input();
+        assert!(js_bool(
+            &rt,
+            "var fl = new FileList([]); fl.length === 0 && fl.item(0) === null"
+        ));
+    }
+
+    #[test]
+    fn deliver_file_list_token_stored() {
+        let rt = with_file_input();
+        rt.eval(
+            "_lumen_deliver_file_list(42, '[{\"name\":\"photo.jpg\",\"token\":99,\"size\":2048,\"mime_type\":\"image/jpeg\",\"last_modified_ms\":1000}]')"
+        ).unwrap();
+        assert!(js_bool(
+            &rt,
+            "_lumen_file_lists[42] instanceof FileList && \
+             _lumen_file_lists[42].length === 1 && \
+             _lumen_file_lists[42][0].name === 'photo.jpg' && \
+             _lumen_file_lists[42][0].size === 2048 && \
+             _lumen_file_lists[42][0]._token === 99"
+        ));
+    }
+
+    #[test]
+    fn deliver_file_list_empty_json() {
+        let rt = with_file_input();
+        rt.eval("_lumen_deliver_file_list(7, '[]')").unwrap();
+        assert!(js_bool(&rt, "_lumen_file_lists[7].length === 0"));
+    }
+
+    #[test]
+    fn filelist_iterator() {
+        let rt = with_file_input();
+        assert!(js_bool(
+            &rt,
+            "var fl = new FileList([new File([], 'a'), new File([], 'b')]); \
+             var names = []; \
+             for (var f of fl) { names.push(f.name); } \
+             names[0] === 'a' && names[1] === 'b' && names.length === 2"
+        ));
+    }
+
+    #[test]
+    fn make_element_files_getter() {
+        let rt = with_file_input();
+        rt.eval(
+            "_lumen_get_attr = function(nid, name) { \
+               if (nid === 99 && name === 'type') return 'file'; \
+               return undefined; \
+             };"
+        ).unwrap();
+        assert!(
+            js_bool(
+                &rt,
+                "var el = _lumen_make_element(99); \
+                 el.files instanceof FileList && el.files.length === 0"
+            ),
+            "files getter should return empty FileList for type=file input"
+        );
+
+        rt.eval(
+            "_lumen_deliver_file_list(99, '[{\"name\":\"doc.pdf\",\"token\":55,\"size\":512,\"mime_type\":\"application/pdf\",\"last_modified_ms\":0}]')"
+        ).unwrap();
+        assert!(js_bool(
+            &rt,
+            "_lumen_make_element(99).files.length === 1 && \
+             _lumen_make_element(99).files[0].name === 'doc.pdf'"
+        ));
+    }
 
     #[test]
     fn native_read_text_returns_empty_for_unknown_token() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            ctx.eval::<(), _>(r#"
-                var window = globalThis;
-                function Blob(blobParts, options) {}
-                function _lumen_set_attr() {} function _lumen_get_attr() {}
-                function _lumen_dispatch_bubble() {}
-                function _lumen_make_element(n) { return {}; }
-                window._lumen_make_element = _lumen_make_element;
-                function atob(s) { return ''; } function btoa(s) { return ''; }
-                window.atob = atob; window.btoa = btoa;
-            "#).unwrap();
-            install_file_input_bindings(&ctx).unwrap();
-            let result: String = ctx.eval("__lumen_file_read_text(999999)").unwrap();
-            assert_eq!(result, "", "unknown token should return empty string");
-        });
+        let rt = with_file_input();
+        let result = rt.eval("__lumen_file_read_text(999999)").unwrap();
+        assert_eq!(
+            result,
+            JsValue::String(String::new()),
+            "unknown token should return empty string"
+        );
     }
 
     #[test]
@@ -574,24 +544,11 @@ mod tests {
         }
         let token = register_file_token(tmp.to_str().unwrap());
 
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            ctx.eval::<(), _>(r#"
-                var window = globalThis;
-                function Blob(blobParts, options) {}
-                function _lumen_set_attr() {} function _lumen_get_attr() {}
-                function _lumen_dispatch_bubble() {}
-                function _lumen_make_element(n) { return {}; }
-                window._lumen_make_element = _lumen_make_element;
-                function atob(s) { return ''; } function btoa(s) { return ''; }
-                window.atob = atob; window.btoa = btoa;
-            "#).unwrap();
-            install_file_input_bindings(&ctx).unwrap();
-            let result: String = ctx
-                .eval(format!("__lumen_file_read_text({})", token))
-                .unwrap();
-            assert_eq!(result, "hello lumen");
-        });
+        let rt = with_file_input();
+        let result = rt
+            .eval(&format!("__lumen_file_read_text({})", token))
+            .unwrap();
+        assert_eq!(result, JsValue::String("hello lumen".into()));
         let _ = std::fs::remove_file(&tmp);
     }
 
@@ -607,51 +564,25 @@ mod tests {
         let token = register_file_token(tmp.to_str().unwrap());
         let expected_b64 = to_base64(b"\x00\x01\x02\xff");
 
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            ctx.eval::<(), _>(r#"
-                var window = globalThis;
-                function Blob(blobParts, options) {}
-                function _lumen_set_attr() {} function _lumen_get_attr() {}
-                function _lumen_dispatch_bubble() {}
-                function _lumen_make_element(n) { return {}; }
-                window._lumen_make_element = _lumen_make_element;
-                function atob(s) { return ''; } function btoa(s) { return ''; }
-                window.atob = atob; window.btoa = btoa;
-            "#).unwrap();
-            install_file_input_bindings(&ctx).unwrap();
-            let result: String = ctx
-                .eval(format!("__lumen_file_read_base64({})", token))
-                .unwrap();
-            assert_eq!(result, expected_b64);
-        });
+        let rt = with_file_input();
+        let result = rt
+            .eval(&format!("__lumen_file_read_base64({})", token))
+            .unwrap();
+        assert_eq!(result, JsValue::String(expected_b64));
         let _ = std::fs::remove_file(&tmp);
     }
 
     #[test]
     fn file_stream_getreader() {
-        with_file_input(|ctx| {
-            let ok: bool = ctx.eval(
+        let rt = with_file_input();
+        assert!(
+            js_bool(
+                &rt,
                 "var f = new File(['XY'], 'x.bin'); \
                  var s = f.stream(); \
                  typeof s === 'object' && typeof s.getReader === 'function'"
-            ).unwrap();
-            assert!(ok, "stream() should return an object with getReader");
-        });
-    }
-
-    #[test]
-    fn to_base64_empty() {
-        assert_eq!(to_base64(b""), "");
-    }
-
-    #[test]
-    fn to_base64_hello() {
-        assert_eq!(to_base64(b"hello"), "aGVsbG8=");
-    }
-
-    #[test]
-    fn to_base64_binary() {
-        assert_eq!(to_base64(b"\x00\x01\x02"), "AAEC");
+            ),
+            "stream() should return an object with getReader"
+        );
     }
 }

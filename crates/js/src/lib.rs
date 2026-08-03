@@ -1006,15 +1006,6 @@ impl QuickJsRuntime {
                 eprintln!("WebAssembly bindings init failed: {}", e);
             }
 
-            // Install XMLHttpRequest API (WHATWG XHR Standard §4) — after DOM so fetch(),
-            // FormData, Blob, TextDecoder/Encoder, ProgressEvent infra, and the
-            // _lumen_fetch_sync* native bindings are all present.
-            // Phase 0: open/send/abort/getResponseHeader/getAllResponseHeaders, readystatechange
-            // and load/error/progress/abort events.  Reuses the fetch HTTP stack.
-            if let Err(e) = xhr::install_xhr_bindings(&ctx) {
-                eprintln!("XMLHttpRequest API init failed: {}", e);
-            }
-
             // W3C DOM Parsing and Serialization — DOMParser + XMLSerializer.
             // After DOM and _lumen_get_attr_names / _lumen_get_children / _lumen_is_text_node
             // bindings are registered.  DOMParser.parseFromString() creates independent
@@ -1029,13 +1020,6 @@ impl QuickJsRuntime {
             // Must come after dom_parser (document.createElementNS already defined).
             if let Err(e) = svg::install_svg_bindings(&ctx) {
                 eprintln!("SVG DOM API init failed: {}", e);
-            }
-
-            // W3C File API — File/FileList classes, _lumen_deliver_file_list(nid, json).
-            // Called from shell after OS file dialog closes with selected paths.
-            // Must come after SVG bindings (svg install already after dom_parser).
-            if let Err(e) = file_input::install_file_input_bindings(&ctx) {
-                eprintln!("File API init failed: {}", e);
             }
 
             // W3C File System Access API — showOpenFilePicker/showSaveFilePicker/showDirectoryPicker.
