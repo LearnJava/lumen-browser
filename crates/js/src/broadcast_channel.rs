@@ -17,7 +17,6 @@
 //! Cross-thread delivery (e.g. main thread ↔ Web Worker) works because the hub
 //! is a `static` shared by all runtimes in the process.
 
-use rquickjs::{Ctx, Function};
 use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -143,49 +142,7 @@ pub fn drain(registry: &BroadcastRegistry) -> Vec<(u32, String)> {
     out
 }
 
-/// Install the `_lumen_bc_*` native bindings and the `BroadcastChannel` JS class.
-///
-/// Must be called after the core DOM shim so that `Event`, `MessageEvent`,
-/// `DOMException`, and `JSON` are available.
-pub fn install_broadcast_channel_bindings(
-    ctx: &Ctx<'_>,
-    registry: &BroadcastRegistry,
-) -> rquickjs::Result<()> {
-    macro_rules! reg {
-        ($name:expr, $f:expr) => {
-            ctx.globals().set($name, Function::new(ctx.clone(), $f)?)?;
-        };
-    }
-
-    // _lumen_bc_register(name: String) → u32
-    {
-        let r = Arc::clone(registry);
-        reg!("_lumen_bc_register", move |name: String| -> u32 {
-            register(&r, &name)
-        });
-    }
-
-    // _lumen_bc_post(id: u32, name: String, json: String)
-    reg!(
-        "_lumen_bc_post",
-        move |id: u32, name: String, json: String| {
-            post(&name, id, &json);
-        }
-    );
-
-    // _lumen_bc_close(id: u32, name: String)
-    {
-        let r = Arc::clone(registry);
-        reg!("_lumen_bc_close", move |id: u32, name: String| {
-            close(&r, id, &name);
-        });
-    }
-
-    ctx.eval::<(), _>(BROADCAST_CHANNEL_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_broadcast_channel_bindings`] (Ph3 V8 migration S5-S7
+/// V8 port of the rquickjs `_lumen_bc_*` installer (removed S12b-B13; Ph3 V8 migration S5-S7
 /// batch 3): the three natives capture a clone of `rt`'s registry (accessed
 /// via [`crate::v8_runtime::V8JsRuntime::broadcast_registry`]), the JS shim is
 /// unchanged. Must be called after the core DOM install.
@@ -228,6 +185,7 @@ pub(crate) fn install_broadcast_channel_bindings_v8(
 /// Depends on `MessageEvent` and `DOMException` (defined earlier in the DOM shim)
 /// and the `_lumen_bc_register` / `_lumen_bc_post` / `_lumen_bc_close` native
 /// bindings installed above.
+#[cfg(feature = "v8-backend")]
 const BROADCAST_CHANNEL_SHIM: &str = r#"(function() {
   // Registry: channel-instance id (u32) → BroadcastChannel instance.
   var _bcRegistry = {};
@@ -338,15 +296,15 @@ const BROADCAST_CHANNEL_SHIM: &str = r#"(function() {
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
-    use crate::QuickJsRuntime;
-    use lumen_core::JsRuntime;
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
     use lumen_dom::Document;
     use std::sync::{Arc, Mutex};
 
-    fn runtime() -> QuickJsRuntime {
-        let rt = QuickJsRuntime::new().unwrap();
+    fn runtime() -> V8JsRuntime {
+        let rt = V8JsRuntime::new().unwrap();
         let doc = Arc::new(Mutex::new(Document::new()));
         rt.install_dom(doc, "", None, None, None, None, None, None, None, None, false).unwrap();
         rt

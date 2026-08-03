@@ -928,28 +928,6 @@ impl QuickJsRuntime {
                 eprintln!("Cookie-banner bindings init failed: {}", e);
             }
 
-            // Install WebRTC mDNS-only stub (9D.5) — after DOM so Promise and setTimeout
-            // are available.  Fires a single .local candidate; never leaks real IP.
-            if let Err(e) = webrtc_stub::install_webrtc_bindings(&ctx) {
-                eprintln!("WebRTC bindings init failed: {}", e);
-            }
-
-            // Install Broadcast Channel API (WHATWG HTML §9.5) — after DOM so
-            // MessageEvent and DOMException are available for delivery.
-            if let Err(e) = broadcast_channel::install_broadcast_channel_bindings(
-                &ctx,
-                &self.broadcast_channels,
-            ) {
-                eprintln!("BroadcastChannel bindings init failed: {}", e);
-            }
-
-            // Install navigator.credentials (WebAuthn / passkeys) — after DOM so
-            // atob/btoa, TextEncoder, Promise, DOMException, Uint8Array exist, and
-            // after the _lumen_webauthn_* native bindings are registered.
-            if let Err(e) = credentials::install_credentials_bindings(&ctx) {
-                eprintln!("Credentials bindings init failed: {}", e);
-            }
-
             // Install the ECMA-402 Intl shim (§91 i18n) — last, after window so
             // `window.Intl` can be re-exported. Defers to a native Intl if the
             // host QuickJS build ever provides one.

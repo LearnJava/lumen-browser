@@ -1,10 +1,13 @@
 //! End-to-end test of `navigator.credentials` (WebAuthn) through the real
-//! QuickJS runtime and JS shim.
+//! V8 runtime and JS shim (ported from QuickJS S12b-B13 — the rquickjs-side
+//! `credentials::install_credentials_bindings` installer was removed since a
+//! V8 port already existed; the default build no longer exposes this API).
 //!
 //! Uses a canned [`CredentialProvider`] double (no `lumen-network` dependency):
 //! we only verify the JS marshalling — that `create()` / `get()` build the packed
 //! request correctly, parse the response JSON, and surface a spec-shaped
 //! `PublicKeyCredential` with the right ArrayBuffers, accessors, and prototypes.
+#![cfg(feature = "v8-backend")]
 
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -22,7 +25,8 @@ use lumen_core::ext::{
 };
 use lumen_core::JsRuntime;
 use lumen_dom::Document;
-use lumen_js::{set_credential_provider, QuickJsRuntime};
+use lumen_js::v8_runtime::V8JsRuntime;
+use lumen_js::set_credential_provider;
 
 /// Records the last request it saw and returns canned, easily-recognisable bytes.
 struct CannedAuthenticator {
@@ -56,15 +60,15 @@ impl CredentialProvider for CannedAuthenticator {
     }
 }
 
-fn make_rt() -> QuickJsRuntime {
-    let rt = QuickJsRuntime::new().unwrap();
+fn make_rt() -> V8JsRuntime {
+    let rt = V8JsRuntime::new().unwrap();
     let doc = Arc::new(Mutex::new(Document::new()));
     rt.install_dom(doc, "https://example.com/login", None, None, None, None, None, None, None, None, false)
         .unwrap();
     rt
 }
 
-fn bool_eval(rt: &QuickJsRuntime, script: &str) -> bool {
+fn bool_eval(rt: &V8JsRuntime, script: &str) -> bool {
     match rt.eval(script) {
         Ok(lumen_core::JsValue::Bool(b)) => b,
         Ok(other) => panic!("expected bool from `{script}`, got {other:?}"),
@@ -72,7 +76,7 @@ fn bool_eval(rt: &QuickJsRuntime, script: &str) -> bool {
     }
 }
 
-fn str_eval(rt: &QuickJsRuntime, script: &str) -> String {
+fn str_eval(rt: &V8JsRuntime, script: &str) -> String {
     match rt.eval(script) {
         Ok(lumen_core::JsValue::String(s)) => s,
         Ok(other) => panic!("expected string from `{script}`, got {other:?}"),
@@ -103,7 +107,10 @@ fn create_returns_public_key_credential() {
     set_credential_provider(canned.clone());
     let rt = make_rt();
 
-    // Run create(), stash the resolved credential, drain microtasks.
+    // Run create(), stash the resolved credential. V8 checkpoints microtasks
+    // at the eval() boundary (not mid-script), so the .then() callback has
+    // already run by the time the assertions below eval() again — no
+    // `_lumen_drain_microtasks()` call needed (two-step pattern).
     rt.eval(
         r#"
         globalThis.__cred = null;
@@ -115,7 +122,6 @@ fn create_returns_public_key_credential() {
             pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
             authenticatorSelection: { userVerification: 'required' }
         }}).then(function(c){ globalThis.__cred = c; }, function(e){ globalThis.__err = e.name; });
-        _lumen_drain_microtasks();
         "#,
     )
     .unwrap();
@@ -174,7 +180,6 @@ fn get_returns_assertion() {
             allowCredentials: [{ type: 'public-key', id: new Uint8Array([1,2,3]).buffer }],
             userVerification: 'required'
         }}).then(function(a){ globalThis.__a = a; }, function(e){ globalThis.__aerr = e.name; });
-        _lumen_drain_microtasks();
         "#,
     )
     .unwrap();
@@ -206,7 +211,6 @@ fn create_without_public_key_rejects_not_supported() {
         navigator.credentials.create({ password: {} }).then(
             function(){ globalThis.__e2 = 'resolved'; },
             function(e){ globalThis.__e2 = e.name; });
-        _lumen_drain_microtasks();
         "#,
     )
     .unwrap();

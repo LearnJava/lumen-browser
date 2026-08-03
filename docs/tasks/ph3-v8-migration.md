@@ -2818,6 +2818,70 @@ clean.
 
 Next in queue: S12b-B13 (`broadcast_channel`/`webrtc_stub`/`credentials`, Полоса 2 seventh batch).
 
+### S12b-B13 (`broadcast_channel`, `webrtc_stub`, `credentials`)
+
+All three modules fit the group-A procedure cleanly: `install_*_bindings_v8`
+already existed for each (`broadcast_channel.rs:150`, `webrtc_stub.rs:34`,
+`credentials.rs:74`), no test hid in `dom.rs` (a `webauthn_credentials`-family
+grep against `dom.rs` returned nothing). `broadcast_channel` (14 tests) ported
+1:1 against `V8JsRuntime::new()` + full `install_dom` (mirrors the pre-existing
+`v8_trusted_types` pattern in `dom.rs` — the shim needs `MessageEvent`/
+`DOMException` from the core DOM shim); its `pump_broadcast_channels()` twin on
+`V8JsRuntime` already existed and is synchronous (`eval` per drain), so no
+microtask handling was needed. `webrtc_stub` (17 tests) ported 1:1 against a
+bare `V8JsRuntime::new()` + module-local synchronous `setTimeout`/
+`queueMicrotask` stubs (same shape as the rquickjs original's `install_stubs`
+harness — the shim's `_defer` helper snapshots `typeof queueMicrotask`/
+`typeof setTimeout` once at install time, so both engines just fall through to
+a same-tick call either way); its one real-Promise test
+(`create_offer_resolves_to_offer_type`) used the two-step-`eval` pattern
+instead of `execute_pending_job`.
+
+`credentials` (12 tests) split differently from every module so far: 7 of its
+tests exercise plain Rust functions (`create`/`get`/`base64url_encode`/etc.)
+with **no** `rquickjs` dependency at all — those stayed untouched in the
+existing engine-agnostic `mod tests`. Only the 5 `fedcm_*` tests evaluated the
+shim through a bare `rquickjs::Ctx` (`with_credentials_shim` helper) — those
+moved to a new `mod v8_fedcm` (`#[cfg(all(test, feature = "v8-backend"))]`)
+against a bare `V8JsRuntime::new()` + the same `window`/`navigator`/`atob`/
+`btoa`/`TextEncoder` stubs. **New hiding spot found**: a fourth test cluster
+lived in `crates/js/tests/cases/webauthn_credentials.rs` — a *separate
+integration-test crate*, not `dom.rs` and not `credentials.rs`'s own `mod
+tests` (same class of trap as S12b-B5/B6's dom.rs-adjacent hides, but one level
+further out — grep step 2 of the procedure only covers `dom.rs`, not
+`tests/cases/*.rs`; both need checking for modules that ship an end-to-end
+integration test). Unlike `v8_smoke.rs`/`v8_eval.rs` (feature-gated from
+inception), this file had no `#![cfg(feature = "v8-backend")]` guard — it ran
+unconditionally against `QuickJsRuntime`, so removing
+`credentials::install_credentials_bindings` broke it outright (`navigator
+.credentials` no longer installed under any engine). Fixed by porting all 4
+tests to `V8JsRuntime` + full `install_dom` and adding the
+`#![cfg(feature = "v8-backend")]` guard used by the file's siblings; the two
+`_lumen_drain_microtasks()` calls (both after a `.then()` scheduling a
+same-tick resolve/reject) became no-ops removed under the two-step-`eval`
+pattern, same as B12/S12b-24.
+
+Removed: 3 rquickjs `install_*_bindings` functions, their calls in
+`QuickJsRuntime::install_dom` (`lib.rs`), and `use rquickjs::…` from all three
+module files; `BROADCAST_CHANNEL_SHIM`/`WEBRTC_SHIM`/`CREDENTIALS_SHIM` gated
+`#[cfg(feature = "v8-backend")]` (now read only by the V8 path). `broadcast_channel`'s
+`register`/`post`/`close`/`drain` helpers and `credentials`'s native-binding
+functions (`create`/`get`/`uvpa_available`) stay ungated — both engines' native
+registrations call them (rquickjs's in `dom.rs`'s `install_primitives` for the
+WebAuthn natives specifically, out of scope for this batch — removed wholesale
+with `install_primitives` itself in `S12b-F3`).
+
+`cargo test -p lumen-js --features v8-backend`: 2584 lib + 68 integration
+(unchanged — `rquickjs` isn't feature-gated, so these 36 lib tests + 4
+integration tests already ran under `--features v8-backend` before this batch;
+converting them to `V8JsRuntime` ports them in place without changing the
+total). `cargo test -p lumen-js` (default): 821 lib (down from 857, -36: the
+14+17+5 tests moved to V8-only) + 1 integration (down from 5, -4:
+`webauthn_credentials.rs` now empties under the default build). rquickjs suite
+did not go red (821+1 passed). Both clippy passes clean.
+
+Next in queue: S12b-B14 (`xhr`/`file_input`, Полоса 2 eighth/final batch).
+
 ---
 
 ## Risks (Rev 2)
