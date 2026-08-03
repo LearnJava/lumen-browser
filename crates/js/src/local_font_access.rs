@@ -10,19 +10,9 @@
 //! Phase 1: `_lumen_local_fonts_query()` native binding will enumerate fonts
 //! installed on the OS and return a JSON array of font descriptors.
 
-use rquickjs::Ctx;
-
-/// Install Local Font Access API shim into the JS context.
-///
-/// Adds `navigator.fonts` (`FontAccessManager`) and the `FontData` class.
-/// Must be called after navigator is already defined on `globalThis`.
-pub fn install_local_font_access_api(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(LOCAL_FONT_ACCESS_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_local_font_access_api`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// V8 port of the former rquickjs `install_local_font_access_api` (Ph3 V8 migration S5-S7,
+/// rquickjs side removed in S12b-B2): identical JS shim, evaluated via
+/// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_local_font_access_api_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -30,6 +20,7 @@ pub(crate) fn install_local_font_access_api_v8(rt: &crate::v8_runtime::V8JsRunti
     Ok(())
 }
 
+#[cfg(feature = "v8-backend")]
 const LOCAL_FONT_ACCESS_SHIM: &str = r#"(function() {
   'use strict';
   if (typeof navigator === 'undefined') return;
@@ -87,76 +78,68 @@ const LOCAL_FONT_ACCESS_SHIM: &str = r#"(function() {
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
     use super::*;
-    use rquickjs::{Context, Runtime};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
-
-    fn with_local_fonts(f: impl FnOnce(&rquickjs::Ctx)) {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            ctx.eval::<(), _>(
-                "var window = globalThis; \
-                 var navigator = {}; \
-                 function Blob(parts) { this._parts = parts || []; } \
-                 globalThis.Blob = Blob;",
-            )
-            .unwrap();
-            install_local_font_access_api(&ctx).unwrap();
-            f(&ctx);
-        });
+    fn with_local_fonts(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(
+            "var window = globalThis; \
+             var navigator = {}; \
+             function Blob(parts) { this._parts = parts || []; } \
+             globalThis.Blob = Blob;",
+        )
+        .unwrap();
+        install_local_font_access_api_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
     fn fonts_exists_on_navigator() {
-        with_local_fonts(|ctx| {
-            let ok: bool = ctx
+        with_local_fonts(|rt| {
+            let ok = rt
                 .eval("typeof navigator.fonts === 'object' && navigator.fonts !== null")
                 .unwrap();
-            assert!(ok, "navigator.fonts should be an object");
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn font_access_manager_class_exported() {
-        with_local_fonts(|ctx| {
-            let ok: bool = ctx
+        with_local_fonts(|rt| {
+            let ok = rt
                 .eval("typeof window.FontAccessManager === 'function'")
                 .unwrap();
-            assert!(ok, "FontAccessManager should be exported on window");
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn font_data_class_exported() {
-        with_local_fonts(|ctx| {
-            let ok: bool = ctx
-                .eval("typeof window.FontData === 'function'")
-                .unwrap();
-            assert!(ok, "FontData should be exported on window");
+        with_local_fonts(|rt| {
+            let ok = rt.eval("typeof window.FontData === 'function'").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn query_returns_promise() {
-        with_local_fonts(|ctx| {
-            let ok: bool = ctx
+        with_local_fonts(|rt| {
+            let ok = rt
                 .eval("navigator.fonts.query() instanceof Promise")
                 .unwrap();
-            assert!(ok, "query() should return a Promise");
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn query_phase0_resolves_empty_array() {
-        with_local_fonts(|ctx| {
-            let ok: bool = ctx
+        with_local_fonts(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var resolved = null;
@@ -166,14 +149,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok, "query should be a function");
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn font_data_constructor_fields() {
-        with_local_fonts(|ctx| {
-            let ok: bool = ctx
+        with_local_fonts(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var fd = new FontData({
@@ -189,14 +172,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok, "FontData should expose postscriptName/fullName/family/style");
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn font_data_defaults_empty_strings() {
-        with_local_fonts(|ctx| {
-            let ok: bool = ctx
+        with_local_fonts(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var fd = new FontData({});
@@ -205,14 +188,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok, "FontData fields should default to empty strings");
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn font_data_blob_returns_promise() {
-        with_local_fonts(|ctx| {
-            let ok: bool = ctx
+        with_local_fonts(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var fd = new FontData({ postscriptName: 'Test' });
@@ -220,7 +203,7 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok, "FontData.blob() should return a Promise");
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 }

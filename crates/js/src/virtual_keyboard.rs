@@ -1,24 +1,18 @@
-/// Virtual Keyboard API (W3C Virtual Keyboard API).
-///
-/// Phase 0: geometry reporting stubs + event infrastructure.
-/// - `navigator.virtualKeyboard.show()` — request VK visibility
-/// - `navigator.virtualKeyboard.hide()` — request VK hide
-/// - `navigator.virtualKeyboard.boundingRect` → DOMRect (0,0,0,0 in Phase 0)
-/// - `navigator.virtualKeyboard.overlaysContent` — boolean getter/setter
-/// - `geometrychange` event fires when keyboard geometry changes
-///
-/// Native bindings `_lumen_vk_show()` / `_lumen_vk_hide()` are no-op hooks
-/// for shell Phase 1 (platform virtual keyboard integration).
-use rquickjs::Ctx;
+//! Virtual Keyboard API (W3C Virtual Keyboard API).
+//!
+//! Phase 0: geometry reporting stubs + event infrastructure.
+//! - `navigator.virtualKeyboard.show()` — request VK visibility
+//! - `navigator.virtualKeyboard.hide()` — request VK hide
+//! - `navigator.virtualKeyboard.boundingRect` → DOMRect (0,0,0,0 in Phase 0)
+//! - `navigator.virtualKeyboard.overlaysContent` — boolean getter/setter
+//! - `geometrychange` event fires when keyboard geometry changes
+//!
+//! Native bindings `_lumen_vk_show()` / `_lumen_vk_hide()` are no-op hooks
+//! for shell Phase 1 (platform virtual keyboard integration).
 
-/// Install Virtual Keyboard API bindings into the JS context.
-pub fn install_virtual_keyboard_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(VIRTUAL_KEYBOARD_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_virtual_keyboard_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// V8 port of the former rquickjs `install_virtual_keyboard_bindings` (Ph3 V8 migration
+/// S5-S7, rquickjs side removed in S12b-B2): identical JS shim, evaluated via
+/// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_virtual_keyboard_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -26,6 +20,7 @@ pub(crate) fn install_virtual_keyboard_bindings_v8(rt: &crate::v8_runtime::V8JsR
     Ok(())
 }
 
+#[cfg(feature = "v8-backend")]
 const VIRTUAL_KEYBOARD_SHIM: &str = r#"
 (function() {
   // Phase 0 native hooks — no-op; shell installs real handlers in Phase 1.
@@ -126,88 +121,82 @@ const VIRTUAL_KEYBOARD_SHIM: &str = r#"
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
     use super::*;
-    use rquickjs::{Context, Runtime};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
-
-    fn with_vk(f: impl FnOnce(&rquickjs::Ctx)) {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            ctx.eval::<(), _>(
-                r#"
-                var window = globalThis;
-                var navigator = {};
-                // Minimal DOMRect stub for test environment.
-                globalThis.DOMRect = function(x, y, w, h) {
-                    this.x = x || 0; this.y = y || 0;
-                    this.width = w || 0; this.height = h || 0;
-                };
-                globalThis.Event = function(type) { this.type = type; this.defaultPrevented = false; };
-                "#,
-            )
-            .unwrap();
-            install_virtual_keyboard_bindings(&ctx).unwrap();
-            f(&ctx);
-        });
+    fn with_vk(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(
+            r#"
+            var window = globalThis;
+            var navigator = {};
+            // Minimal DOMRect stub for test environment.
+            globalThis.DOMRect = function(x, y, w, h) {
+                this.x = x || 0; this.y = y || 0;
+                this.width = w || 0; this.height = h || 0;
+            };
+            globalThis.Event = function(type) { this.type = type; this.defaultPrevented = false; };
+            "#,
+        )
+        .unwrap();
+        install_virtual_keyboard_bindings_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
     fn virtual_keyboard_exists() {
-        with_vk(|ctx| {
-            let ok: bool = ctx
+        with_vk(|rt| {
+            let ok = rt
                 .eval("typeof navigator.virtualKeyboard === 'object' && navigator.virtualKeyboard !== null")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn show_and_hide_are_functions() {
-        with_vk(|ctx| {
-            let ok: bool = ctx
+        with_vk(|rt| {
+            let ok = rt
                 .eval(
                     "typeof navigator.virtualKeyboard.show === 'function' && \
                      typeof navigator.virtualKeyboard.hide === 'function'",
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn overlays_content_defaults_false() {
-        with_vk(|ctx| {
-            let ok: bool = ctx
+        with_vk(|rt| {
+            let ok = rt
                 .eval("navigator.virtualKeyboard.overlaysContent === false")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn overlays_content_setter() {
-        with_vk(|ctx| {
-            let ok: bool = ctx
+        with_vk(|rt| {
+            let ok = rt
                 .eval(
                     "navigator.virtualKeyboard.overlaysContent = true; \
                      navigator.virtualKeyboard.overlaysContent === true",
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn geometry_change_event_fires() {
-        with_vk(|ctx| {
-            let ok: bool = ctx
+        with_vk(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var fired = false;
@@ -219,7 +208,7 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 }
