@@ -3,15 +3,9 @@
 //! Phase 0 stub: EyeDropper with native platform color picker integration
 //! (PowerShell ColorDialog on Windows, zenity on Linux, osascript on macOS)
 
-use rquickjs::Ctx;
-
-pub fn install_eye_dropper_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(EYE_DROPPER_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_eye_dropper_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// V8 port of the former rquickjs `install_eye_dropper_bindings` (Ph3 V8 migration S5-S7,
+/// rquickjs side removed in S12b-B2): identical JS shim, evaluated via
+/// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_eye_dropper_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -29,6 +23,7 @@ pub extern "C" fn _lumen_eye_dropper_open() -> *const u8 {
 }
 
 /// JavaScript shim: Eye Dropper API (Phase 0)
+#[cfg(feature = "v8-backend")]
 const EYE_DROPPER_SHIM: &str = r#"
 (function() {
   // EyeDropper class
@@ -93,129 +88,92 @@ const EYE_DROPPER_SHIM: &str = r#"
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
-    use rquickjs::{Context, Runtime};
+    use super::*;
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
+    fn with_eye_dropper(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        install_eye_dropper_bindings_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
-    fn test_eye_dropper_constructor() -> rquickjs::Result<()> {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            super::install_eye_dropper_bindings(&ctx)?;
-
-            ctx.eval::<(), _>(
-                r#"
-                const dropper = new EyeDropper();
-                if (!dropper) throw new Error("Failed to create EyeDropper");
-                "#,
-            )?;
-            Ok(())
-        })
+    fn test_eye_dropper_constructor() {
+        with_eye_dropper(|rt| {
+            let ok = rt
+                .eval("(function() { const dropper = new EyeDropper(); return !!dropper; })()")
+                .unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
     }
 
     #[test]
-    fn test_eye_dropper_open_returns_promise() -> rquickjs::Result<()> {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            super::install_eye_dropper_bindings(&ctx)?;
-
-            ctx.eval::<(), _>(
-                r#"
-                const dropper = new EyeDropper();
-                const result = dropper.open();
-                if (!(result instanceof Promise)) {
-                  throw new Error("open() must return a Promise");
-                }
-                "#,
-            )?;
-            Ok(())
-        })
+    fn test_eye_dropper_open_returns_promise() {
+        with_eye_dropper(|rt| {
+            let ok = rt
+                .eval("new EyeDropper().open() instanceof Promise")
+                .unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
     }
 
     #[test]
-    fn test_eye_dropper_open_accepts_options() -> rquickjs::Result<()> {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            super::install_eye_dropper_bindings(&ctx)?;
-
-            ctx.eval::<(), _>(
-                r#"
-                const dropper = new EyeDropper();
-
-                // Test that open() accepts options parameter
-                const promise = dropper.open({});
-                if (!(promise instanceof Promise)) {
-                  throw new Error("open() must accept options and return a Promise");
-                }
-                "#,
-            )?;
-            Ok(())
-        })
+    fn test_eye_dropper_open_accepts_options() {
+        with_eye_dropper(|rt| {
+            let ok = rt
+                .eval("new EyeDropper().open({}) instanceof Promise")
+                .unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
     }
 
     #[test]
-    fn test_eye_dropper_global_export() -> rquickjs::Result<()> {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            super::install_eye_dropper_bindings(&ctx)?;
-
-            ctx.eval::<(), _>(
-                r#"
-                if (typeof window !== 'undefined' && !window.EyeDropper) {
-                  throw new Error("EyeDropper not exported to window");
-                }
-                if (typeof globalThis !== 'undefined' && !globalThis.EyeDropper) {
-                  throw new Error("EyeDropper not exported to globalThis");
-                }
-                "#,
-            )?;
-            Ok(())
-        })
+    fn test_eye_dropper_global_export() {
+        with_eye_dropper(|rt| {
+            let ok = rt
+                .eval(
+                    r#"
+                    (typeof window === 'undefined' || !!window.EyeDropper) &&
+                    (typeof globalThis === 'undefined' || !!globalThis.EyeDropper)
+                    "#,
+                )
+                .unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
     }
 
     #[test]
-    fn test_eye_dropper_options_constructor() -> rquickjs::Result<()> {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            super::install_eye_dropper_bindings(&ctx)?;
-
-            ctx.eval::<(), _>(
-                r#"
-                const dropper = new EyeDropper({ /* future options */ });
-                if (!dropper) throw new Error("Failed to create EyeDropper with options");
-                "#,
-            )?;
-            Ok(())
-        })
+    fn test_eye_dropper_options_constructor() {
+        with_eye_dropper(|rt| {
+            let ok = rt
+                .eval("(function() { const dropper = new EyeDropper({}); return !!dropper; })()")
+                .unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
     }
 
     #[test]
-    fn test_eye_dropper_resolve_value() -> rquickjs::Result<()> {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            super::install_eye_dropper_bindings(&ctx)?;
-
-            ctx.eval::<(), _>(
-                r#"
-                const dropper = new EyeDropper();
-                dropper.open().then(result => {
-                  // Should have sRGBHex property
-                  if (!result.hasOwnProperty('sRGBHex')) {
-                    throw new Error("Result must have sRGBHex property");
-                  }
-                  if (typeof result.sRGBHex !== 'string') {
-                    throw new Error("sRGBHex must be a string");
-                  }
-                });
-                "#,
-            )?;
-            Ok(())
-        })
+    fn test_eye_dropper_resolve_value() {
+        with_eye_dropper(|rt| {
+            let ok = rt
+                .eval(
+                    r#"
+                    (function() {
+                        const dropper = new EyeDropper();
+                        dropper.open().then(result => {
+                            if (!result.hasOwnProperty('sRGBHex')) throw new Error('missing sRGBHex');
+                            if (typeof result.sRGBHex !== 'string') throw new Error('sRGBHex not a string');
+                        });
+                        return true;
+                    })()
+                    "#,
+                )
+                .unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
     }
 }

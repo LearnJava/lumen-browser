@@ -2421,7 +2421,22 @@ included); default-feature `cargo test -p lumen-js` — 1221/1221, all green (th
 rquickjs-only tests from the 5 modules' own `mod tests` blocks are gone, as expected). Both
 clippy passes clean.
 
-Next in queue: S12b-B2 (`soft_navigation`/`bluetooth`/`eye_dropper`/`virtual_keyboard`/`local_font_access`).
+**S12b-B2** (2026-08-03): second batch of queue group A (`docs/tasks/p1-s12b-cleanup-queue.md`
+§3), 5 more small modules, none of them own-file trap cases (own `mod tests` count already
+matched the queue's expected total for all five, so no tests needed backfilling from
+`dom.rs`): `soft_navigation` (5 tests), `bluetooth` (7), `eye_dropper` (6), `virtual_keyboard`
+(5), `local_font_access` (8) — 31 tests total, all ported in place to
+`#[cfg(all(test, feature = "v8-backend"))]` against a bare `V8JsRuntime::new()` (no full
+`install_dom`), with `bluetooth`/`virtual_keyboard` re-declaring the minimal
+`EventTarget`/`Event`/`DOMException`/`DOMRect` stubs their shims need directly in the test
+setup script, same as the original rquickjs harness did.
+
+`cargo test -p lumen-js --features v8-backend`: 2584/2584 (unchanged from S12b-B1 — no test
+count drift, only in-place porting). `cargo test -p lumen-js`: 1190/1190 (down from
+1221, exactly the 31 removed rquickjs tests; rquickjs suite did not go red). Both clippy
+passes clean.
+
+Next in queue: S12b-B3 (`sanitizer`/`ua_client_hints`/`reporting_api`/`launch_handler`/`storage_manager`).
 
 ---
 

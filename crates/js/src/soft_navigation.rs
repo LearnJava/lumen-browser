@@ -13,19 +13,9 @@
 //! performance entries) so that `performance.getEntriesByType('soft-navigation')`
 //! works correctly.
 
-use rquickjs::Ctx;
-
-/// Install Soft Navigation Timing API stubs into the JS context.
-///
-/// Must run after the DOM shim so that `performance` and `PerformanceObserver`
-/// are already defined.
-pub fn install_soft_navigation_api(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(SOFT_NAVIGATION_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_soft_navigation_api`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// V8 port of the former rquickjs `install_soft_navigation_api` (Ph3 V8 migration S5-S7,
+/// rquickjs side removed in S12b-B2): identical JS shim, evaluated via
+/// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_soft_navigation_api_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -33,6 +23,7 @@ pub(crate) fn install_soft_navigation_api_v8(rt: &crate::v8_runtime::V8JsRuntime
     Ok(())
 }
 
+#[cfg(feature = "v8-backend")]
 const SOFT_NAVIGATION_SHIM: &str = r#"(function() {
   'use strict';
 
@@ -97,39 +88,33 @@ const SOFT_NAVIGATION_SHIM: &str = r#"(function() {
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
     use super::*;
-    use rquickjs::{Context, Runtime};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
-
-    fn install_prereqs(ctx: &rquickjs::Ctx) {
-        install_soft_navigation_api(ctx).unwrap();
+    fn with_soft_navigation(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        install_soft_navigation_api_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
     fn soft_nav_entry_class_exists() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            let ok: bool = ctx
+        with_soft_navigation(|rt| {
+            let ok = rt
                 .eval("typeof PerformanceSoftNavigationEntry === 'function'")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn soft_nav_entry_constructor() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            let ok: bool = ctx
+        with_soft_navigation(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var e = new PerformanceSoftNavigationEntry({name: '/about', startTime: 100, duration: 50});
@@ -140,22 +125,17 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn deliver_soft_nav_inserts_entry() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            // Run setup and assertion in a single eval so shared vars are visible
-            let ok: bool = ctx
+        with_soft_navigation(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var _perf = { _perf_entries: [], _observers: [] };
-                    var _origPerf = typeof performance !== 'undefined' ? performance : null;
-                    // Temporarily override performance for this test
                     var savedPerf = globalThis.performance;
                     globalThis.performance = _perf;
                     _lumen_deliver_soft_nav('/home', 0, 0);
@@ -167,16 +147,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn deliver_soft_nav_notifies_observer() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            let ok: bool = ctx
+        with_soft_navigation(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var _perf2 = { _perf_entries: [], _observers: [] };
@@ -193,16 +171,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn soft_nav_entry_to_json() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            let ok: bool = ctx
+        with_soft_navigation(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var e = new PerformanceSoftNavigationEntry({name: '/x', startTime: 5, duration: 10});
@@ -211,7 +187,7 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 }

@@ -866,13 +866,6 @@ impl QuickJsRuntime {
                 eprintln!("Screen Orientation bindings init failed: {}", e);
             }
 
-            // Install Web Bluetooth API (W3C Web Bluetooth §3–4) — after DOM/navigator so that
-            // Promise, DOMException, and navigator are available. Phase 0: all device
-            // operations reject with NotSupportedError (no BLE support).
-            if let Err(e) = bluetooth::install_bluetooth_bindings(&ctx) {
-                eprintln!("Bluetooth bindings init failed: {}", e);
-            }
-
             // Install W3C WebCodecs API (https://www.w3.org/TR/webcodecs/) — after DOM.
             // Phase 0: VideoEncoder/Decoder + AudioEncoder/Decoder + EncodedVideoChunk/AudioChunk stubs.
             // configure() rejects with NotSupportedError; no codec support in Phase 0.
@@ -1080,12 +1073,6 @@ impl QuickJsRuntime {
                 eprintln!("Decorator shim init failed: {}", e);
             }
 
-            // Install Soft Navigation Timing API — PerformanceSoftNavigationEntry,
-            // _lumen_deliver_soft_nav(url, startTime, durationMs) binding.
-            if let Err(e) = soft_navigation::install_soft_navigation_api(&ctx) {
-                eprintln!("Soft Navigation API init failed: {}", e);
-            }
-
             // Install URL Pattern API (WHATWG URLPattern §3) — pure JS implementation.
             // Provides new URLPattern({pathname, search, hash, hostname}) with .test() and .exec().
             if let Err(e) = url_pattern::install_url_pattern_api(&ctx) {
@@ -1164,24 +1151,11 @@ impl QuickJsRuntime {
                 eprintln!("Sanitizer bindings init failed: {}", e);
             }
 
-            // Install Eye Dropper API (W3C Color WG) — pure JS implementation with native binding stub.
-            // Phase 0: EyeDropper.open() returns Promise<{sRGBHex}> with AbortSignal support.
-            // Platform integration (P3) implements _lumen_eye_dropper_open for each OS.
-            if let Err(e) = eye_dropper::install_eye_dropper_bindings(&ctx) {
-                eprintln!("Eye Dropper API init failed: {}", e);
-            }
-
             // Install MediaRecorder API stub (W3C MediaStream Recording L2) — pure JS implementation.
             // Phase 0: MediaRecorder state machine (inactive/recording/paused), mimeType reflection,
             // ondataavailable fires empty Blob on stop. BlobEvent class. isTypeSupported() → false.
             if let Err(e) = media_stream_recording::init_media_stream_recording(&ctx) {
                 eprintln!("MediaRecorder API init failed: {}", e);
-            }
-
-            // Install Virtual Keyboard API (W3C VK API) — after navigator.
-            // Phase 0: geometry stubs + geometrychange event infrastructure.
-            if let Err(e) = virtual_keyboard::install_virtual_keyboard_bindings(&ctx) {
-                eprintln!("Virtual Keyboard API init failed: {}", e);
             }
 
             // Install Web Locks API (W3C Web Locks Level 1) — after DOM/navigator.
@@ -1315,12 +1289,6 @@ impl QuickJsRuntime {
             // Phase 1: _lumen_get_screen_details() native binding for OS multi-screen enumeration.
             if let Err(e) = window_management::install_window_management_api(&ctx) {
                 eprintln!("Window Management API init failed: {}", e);
-            }
-
-            // WICG Local Font Access — navigator.fonts (FontAccessManager) + FontData class.
-            // Phase 0: query() resolves with []. Phase 1: _lumen_local_fonts_query() native binding.
-            if let Err(e) = local_font_access::install_local_font_access_api(&ctx) {
-                eprintln!("Local Font Access API init failed: {}", e);
             }
 
             // WICG Launch Handler — window.launchQueue, LaunchParams, setConsumer().

@@ -1,14 +1,9 @@
-/// Web Bluetooth API stub (W3C Web Bluetooth §3-4)
-/// Phase 0: navigator.bluetooth.requestDevice() and all device operations reject (no BLE support)
-use rquickjs::Ctx;
+//! Web Bluetooth API stub (W3C Web Bluetooth §3-4)
+//! Phase 0: navigator.bluetooth.requestDevice() and all device operations reject (no BLE support)
 
-pub fn install_bluetooth_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(BLUETOOTH_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_bluetooth_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// V8 port of the former rquickjs `install_bluetooth_bindings` (Ph3 V8 migration S5-S7,
+/// rquickjs side removed in S12b-B2): identical JS shim, evaluated via
+/// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_bluetooth_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -17,6 +12,7 @@ pub(crate) fn install_bluetooth_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime)
 }
 
 /// JavaScript shim: Web Bluetooth stub (Phase 0 - all operations reject with NotSupportedError)
+#[cfg(feature = "v8-backend")]
 const BLUETOOTH_SHIM: &str = r#"
 (function() {
   // BluetoothRemoteGATTServer class
@@ -96,54 +92,48 @@ const BLUETOOTH_SHIM: &str = r#"
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
     use super::*;
-    use rquickjs::{Context, Runtime};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
-
-    fn with_bluetooth_api(f: impl FnOnce(&rquickjs::Ctx)) {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            ctx.eval::<(), _>(
-                r#"
-                var window = globalThis;
-                var navigator = {};
-                globalThis.navigator = navigator;
-                // Minimal EventTarget stub
-                function EventTarget() {}
-                EventTarget.prototype.addEventListener = function() {};
-                EventTarget.prototype.removeEventListener = function() {};
-                EventTarget.prototype.dispatchEvent = function() {};
-                globalThis.EventTarget = EventTarget;
-                // Minimal Event stub
-                function Event(type, init) {
-                  this.type = type;
-                  this.bubbles = (init && init.bubbles) || false;
-                  this.cancelable = (init && init.cancelable) || false;
-                }
-                Event.prototype.constructor = Event;
-                globalThis.Event = Event;
-                // Minimal DOMException
-                function DOMException(message, name) {
-                  Error.call(this, message);
-                  this.message = message;
-                  this.name = name || 'Error';
-                }
-                DOMException.prototype = Object.create(Error.prototype);
-                DOMException.prototype.constructor = DOMException;
-                globalThis.DOMException = DOMException;
-                "#,
-            )
-            .unwrap();
-            super::install_bluetooth_bindings(&ctx).unwrap();
-            f(&ctx);
-        });
+    fn with_bluetooth_api(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(
+            r#"
+            var window = globalThis;
+            var navigator = {};
+            globalThis.navigator = navigator;
+            // Minimal EventTarget stub
+            function EventTarget() {}
+            EventTarget.prototype.addEventListener = function() {};
+            EventTarget.prototype.removeEventListener = function() {};
+            EventTarget.prototype.dispatchEvent = function() {};
+            globalThis.EventTarget = EventTarget;
+            // Minimal Event stub
+            function Event(type, init) {
+              this.type = type;
+              this.bubbles = (init && init.bubbles) || false;
+              this.cancelable = (init && init.cancelable) || false;
+            }
+            Event.prototype.constructor = Event;
+            globalThis.Event = Event;
+            // Minimal DOMException
+            function DOMException(message, name) {
+              Error.call(this, message);
+              this.message = message;
+              this.name = name || 'Error';
+            }
+            DOMException.prototype = Object.create(Error.prototype);
+            DOMException.prototype.constructor = DOMException;
+            globalThis.DOMException = DOMException;
+            "#,
+        )
+        .unwrap();
+        install_bluetooth_bindings_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
@@ -153,36 +143,36 @@ mod tests {
 
     #[test]
     fn bluetooth_navigator_bluetooth_exists() {
-        with_bluetooth_api(|ctx| {
-            let ok: bool = ctx.eval("typeof navigator.bluetooth === 'object'").unwrap();
-            assert!(ok);
+        with_bluetooth_api(|rt| {
+            let ok = rt.eval("typeof navigator.bluetooth === 'object'").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn bluetooth_get_availability_is_async() {
-        with_bluetooth_api(|ctx| {
-            let result: bool = ctx
+        with_bluetooth_api(|rt| {
+            let ok = rt
                 .eval("navigator.bluetooth.getAvailability() instanceof Promise")
                 .unwrap();
-            assert!(result);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn bluetooth_device_class_exists() {
-        with_bluetooth_api(|ctx| {
-            let ok: bool = ctx
+        with_bluetooth_api(|rt| {
+            let ok = rt
                 .eval("typeof window.BluetoothDevice === 'function'")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn bluetooth_device_has_properties() {
-        with_bluetooth_api(|ctx| {
-            let ok: bool = ctx
+        with_bluetooth_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     const device = new BluetoothDevice('id123', 'Test Device', ['180a']);
@@ -193,27 +183,27 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn bluetooth_gatt_server_class_exists() {
-        with_bluetooth_api(|ctx| {
-            let ok: bool = ctx
+        with_bluetooth_api(|rt| {
+            let ok = rt
                 .eval("typeof window.BluetoothRemoteGATTServer === 'function'")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn bluetooth_request_device_is_async() {
-        with_bluetooth_api(|ctx| {
-            let result: bool = ctx
+        with_bluetooth_api(|rt| {
+            let ok = rt
                 .eval("navigator.bluetooth.requestDevice({ filters: [] }) instanceof Promise")
                 .unwrap();
-            assert!(result);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 }
