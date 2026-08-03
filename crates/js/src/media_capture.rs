@@ -33,11 +33,13 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock, RwLock, atomic::{AtomicU64, Ordering}};
+use std::sync::{Arc, OnceLock, RwLock};
+#[cfg(feature = "v8-backend")]
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use rquickjs::{Ctx, Function};
-
-use lumen_core::ext::{AudioCaptureConfig, AudioCaptureHandle, AudioCaptureProvider};
+#[cfg(feature = "v8-backend")]
+use lumen_core::ext::AudioCaptureConfig;
+use lumen_core::ext::{AudioCaptureHandle, AudioCaptureProvider};
 
 // ── Process-global provider ──────────────────────────────────────────────────
 
@@ -56,12 +58,14 @@ pub fn set_audio_capture_provider(p: Arc<dyn AudioCaptureProvider>) {
 }
 
 /// Return the currently installed provider, or `None` when none is registered.
+#[cfg(feature = "v8-backend")]
 fn get_provider() -> Option<Arc<dyn AudioCaptureProvider>> {
     provider_lock().read().ok()?.clone()
 }
 
 // ── Per-JS-thread capture handle storage ────────────────────────────────────
 
+#[cfg(feature = "v8-backend")]
 static NEXT_HANDLE_ID: AtomicU64 = AtomicU64::new(1);
 
 thread_local! {
@@ -79,147 +83,12 @@ thread_local! {
 /// Install `__lumen_*` audio capture natives into the JS context.
 ///
 /// The provider registered via [`set_audio_capture_provider`] at the time of this
-/// call is captured by value into the JS closures.  In production the provider is
-/// set once at shell startup and never changes, so the snapshot is always correct.
-/// In tests, call `set_audio_capture_provider` **before** calling this function.
-pub fn install_media_capture_bindings(ctx: &Ctx<'_>) -> rquickjs::Result<()> {
-    // Snapshot the current provider so closures don't read the global on every call.
-    // This avoids races in tests where multiple test threads share the OnceLock.
-    let provider = get_provider();
-    let g = ctx.globals();
-
-    // __lumen_enumerate_audio_devices() → JSON string
-    {
-        let p = provider.clone();
-        g.set(
-            "__lumen_enumerate_audio_devices",
-            Function::new(ctx.clone(), move || -> String {
-                let Some(ref prov) = p else {
-                    return "[]".to_owned();
-                };
-                let devs = prov.enumerate_devices();
-                let mut out = String::from('[');
-                for (i, d) in devs.iter().enumerate() {
-                    if i > 0 {
-                        out.push(',');
-                    }
-                    out.push_str(&format!(
-                        r#"{{"device_id":{:?},"group_id":{:?},"kind":{:?},"label":{:?},"is_default":{}}}"#,
-                        d.device_id, d.group_id, d.kind, d.label, d.is_default
-                    ));
-                }
-                out.push(']');
-                out
-            }),
-        )?;
-    }
-
-    // __lumen_start_audio_capture(device_id, sample_rate, channel_count) → handle_id (f64) or -1
-    {
-        let p = provider.clone();
-        g.set(
-            "__lumen_start_audio_capture",
-            Function::new(
-                ctx.clone(),
-                move |device_id: String, sample_rate: f64, channel_count: f64| -> f64 {
-                    let Some(ref prov) = p else {
-                        return -1.0;
-                    };
-                    let config = AudioCaptureConfig {
-                        device_id: if device_id.is_empty() { None } else { Some(device_id) },
-                        sample_rate: if sample_rate > 0.0 { Some(sample_rate as u32) } else { None },
-                        channel_count: if channel_count > 0.0 {
-                            Some(channel_count as u32)
-                        } else {
-                            None
-                        },
-                        ..AudioCaptureConfig::default()
-                    };
-                    match prov.capture(config) {
-                        Ok(handle) => {
-                            let id = NEXT_HANDLE_ID.fetch_add(1, Ordering::Relaxed);
-                            CAPTURES.with(|c| c.borrow_mut().insert(id, handle));
-                            id as f64
-                        }
-                        Err(_) => -1.0,
-                    }
-                },
-            ),
-        )?;
-    }
-
-    // __lumen_audio_capture_info(handle_id) → JSON string {sample_rate, channel_count, device_id, label}
-    g.set(
-        "__lumen_audio_capture_info",
-        Function::new(ctx.clone(), |handle_id: f64| -> String {
-            CAPTURES.with(|c| {
-                let map = c.borrow();
-                if let Some(h) = map.get(&(handle_id as u64)) {
-                    format!(
-                        r#"{{"sample_rate":{},"channel_count":{},"device_id":{:?},"label":{:?}}}"#,
-                        h.sample_rate(),
-                        h.channel_count(),
-                        h.device_id(),
-                        h.device_label(),
-                    )
-                } else {
-                    "{}".to_owned()
-                }
-            })
-        }),
-    )?;
-
-    // __lumen_read_audio_pcm(handle_id, max_samples) → JSON array string "[f32, …]"
-    g.set(
-        "__lumen_read_audio_pcm",
-        Function::new(ctx.clone(), |handle_id: f64, max_samples: f64| -> String {
-            CAPTURES.with(|c| {
-                let mut map = c.borrow_mut();
-                if let Some(h) = map.get_mut(&(handle_id as u64)) {
-                    let samples = h.read_pcm_f32();
-                    let limit = (max_samples as usize).min(samples.len());
-                    if limit == 0 {
-                        return "[]".to_owned();
-                    }
-                    let mut out = String::from('[');
-                    for (i, &s) in samples[..limit].iter().enumerate() {
-                        if i > 0 {
-                            out.push(',');
-                        }
-                        // Use fixed precision to avoid "NaN"/"Inf" that would break JSON.parse
-                        let clamped = s.clamp(-1.0, 1.0);
-                        out.push_str(&format!("{clamped:.7}"));
-                    }
-                    out.push(']');
-                    out
-                } else {
-                    "[]".to_owned()
-                }
-            })
-        }),
-    )?;
-
-    // __lumen_stop_audio_capture(handle_id)
-    g.set(
-        "__lumen_stop_audio_capture",
-        Function::new(ctx.clone(), |handle_id: f64| {
-            CAPTURES.with(|c| {
-                let mut map = c.borrow_mut();
-                if let Some(mut h) = map.remove(&(handle_id as u64)) {
-                    h.stop();
-                }
-            });
-        }),
-    )?;
-
-    Ok(())
-}
-
-/// V8 port of [`install_media_capture_bindings`] (Ph3 V8 migration S5-S7 batch
-/// 2): all five natives go through the compat layer, same provider snapshot and
-/// thread-local `CAPTURES` map (sound because both engines dispatch every JS
-/// call — including trampoline-invoked natives — from the one dedicated JS
-/// thread; see slice S1's threading model).
+/// call is snapshotted into the native closures so they don't re-read the global
+/// on every call; in tests, call `set_audio_capture_provider` **before** this
+/// function. All five natives go through the V8 compat layer and share the
+/// thread-local `CAPTURES` map — sound because every JS call, including
+/// trampoline-invoked natives, dispatches from the one dedicated JS thread
+/// (see slice S1's threading model).
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_media_capture_bindings_v8(
     rt: &crate::v8_runtime::V8JsRuntime,
@@ -338,11 +207,30 @@ pub(crate) fn install_media_capture_bindings_v8(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
     use super::*;
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::JsValue;
+    use lumen_core::ext::JsRuntime as _;
     use lumen_core::ext::{AudioCaptureError, AudioDeviceDescriptor};
-    use rquickjs::{Context, Runtime};
+    use std::sync::Mutex;
+
+    /// Serializes tests against the process-global `PROVIDER`/`NEXT_HANDLE_ID` —
+    /// parallel tests would otherwise clobber each other's provider between
+    /// `set_audio_capture_provider` and the following `install_*` snapshot.
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn guard() -> std::sync::MutexGuard<'static, ()> {
+        TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn as_id(v: JsValue) -> f64 {
+        match v {
+            JsValue::Number(n) => n,
+            other => panic!("expected a number, got {other:?}"),
+        }
+    }
 
     // ── Mock provider ────────────────────────────────────────────────────────
 
@@ -396,110 +284,120 @@ mod tests {
         }
     }
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
-
-    fn install_with_mock(ctx: &Context, fail: bool) {
+    fn install_with_mock(rt: &V8JsRuntime, fail: bool) {
         set_audio_capture_provider(Arc::new(MockProvider { fail }));
-        ctx.with(|ctx| install_media_capture_bindings(&ctx).unwrap());
+        install_media_capture_bindings_v8(rt).unwrap();
     }
 
     #[test]
     fn install_succeeds() {
-        let (_rt, ctx) = make_ctx();
-        install_with_mock(&ctx, false);
+        let _g = guard();
+        let rt = V8JsRuntime::new().unwrap();
+        install_with_mock(&rt, false);
     }
 
     #[test]
     fn enumerate_returns_json_array() {
-        let (_rt, ctx) = make_ctx();
-        install_with_mock(&ctx, false);
-        ctx.with(|ctx| {
-            let json: String = ctx.eval("__lumen_enumerate_audio_devices()").unwrap();
-            assert!(json.starts_with('['), "expected JSON array, got: {json}");
-            assert!(json.contains("mock-0"));
-        });
+        let _g = guard();
+        let rt = V8JsRuntime::new().unwrap();
+        install_with_mock(&rt, false);
+        let ok = rt
+            .eval(
+                r#"
+                var json = __lumen_enumerate_audio_devices();
+                json.charAt(0) === '[' && json.indexOf('mock-0') >= 0
+                "#,
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]
     fn start_capture_returns_positive_id() {
-        let (_rt, ctx) = make_ctx();
-        install_with_mock(&ctx, false);
-        ctx.with(|ctx| {
-            let id: f64 = ctx.eval("__lumen_start_audio_capture('', 0, 0)").unwrap();
-            assert!(id >= 1.0, "expected positive handle id, got {id}");
-        });
+        let _g = guard();
+        let rt = V8JsRuntime::new().unwrap();
+        install_with_mock(&rt, false);
+        let id = as_id(rt.eval("__lumen_start_audio_capture('', 0, 0)").unwrap());
+        assert!(id >= 1.0, "expected positive handle id, got {id}");
     }
 
     #[test]
     fn start_capture_fails_when_no_provider_or_denied() {
-        let (_rt, ctx) = make_ctx();
-        install_with_mock(&ctx, true);
-        ctx.with(|ctx| {
-            let id: f64 = ctx.eval("__lumen_start_audio_capture('', 0, 0)").unwrap();
-            assert_eq!(id, -1.0, "expected -1 on capture failure");
-        });
+        let _g = guard();
+        let rt = V8JsRuntime::new().unwrap();
+        install_with_mock(&rt, true);
+        let id = rt.eval("__lumen_start_audio_capture('', 0, 0)").unwrap();
+        assert_eq!(id, JsValue::Number(-1.0), "expected -1 on capture failure");
     }
 
     #[test]
     fn capture_info_returns_json() {
-        let (_rt, ctx) = make_ctx();
-        install_with_mock(&ctx, false);
-        ctx.with(|ctx| {
-            let id: f64 = ctx.eval("__lumen_start_audio_capture('', 0, 0)").unwrap();
-            assert!(id >= 1.0);
-            let code = format!("__lumen_audio_capture_info({id})");
-            let info: String = ctx.eval(code.as_str()).unwrap();
-            assert!(info.contains("44100"), "expected sample_rate in info: {info}");
-            assert!(info.contains("mock-0"), "expected device_id in info: {info}");
-        });
+        let _g = guard();
+        let rt = V8JsRuntime::new().unwrap();
+        install_with_mock(&rt, false);
+        let ok = rt
+            .eval(
+                r#"
+                var id = __lumen_start_audio_capture('', 0, 0);
+                var info = __lumen_audio_capture_info(id);
+                info.indexOf('44100') >= 0 && info.indexOf('mock-0') >= 0
+                "#,
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]
     fn read_pcm_returns_json_array() {
-        let (_rt, ctx) = make_ctx();
-        install_with_mock(&ctx, false);
-        ctx.with(|ctx| {
-            let id: f64 = ctx.eval("__lumen_start_audio_capture('', 0, 0)").unwrap();
-            let code = format!("__lumen_read_audio_pcm({id}, 4096)");
-            let json: String = ctx.eval(code.as_str()).unwrap();
-            assert!(json.starts_with('['), "expected JSON array: {json}");
-            // MockHandle has 3 pending samples
-            let arr: Vec<f32> = serde_json::from_str(&json).unwrap_or_default();
-            assert_eq!(arr.len(), 3, "expected 3 samples, got {}", arr.len());
-        });
+        let _g = guard();
+        let rt = V8JsRuntime::new().unwrap();
+        install_with_mock(&rt, false);
+        // MockHandle has 3 pending samples.
+        let len = rt
+            .eval(
+                r#"
+                var id = __lumen_start_audio_capture('', 0, 0);
+                var json = __lumen_read_audio_pcm(id, 4096);
+                JSON.parse(json).length
+                "#,
+            )
+            .unwrap();
+        assert_eq!(len, JsValue::Number(3.0));
     }
 
     #[test]
     fn stop_removes_handle() {
-        let (_rt, ctx) = make_ctx();
-        install_with_mock(&ctx, false);
-        ctx.with(|ctx| {
-            let id: f64 = ctx.eval("__lumen_start_audio_capture('', 0, 0)").unwrap();
-            let stop_code = format!("__lumen_stop_audio_capture({id})");
-            ctx.eval::<(), _>(stop_code.as_str()).unwrap();
-            // After stop, info should return empty object
-            let info_code = format!("__lumen_audio_capture_info({id})");
-            let info: String = ctx.eval(info_code.as_str()).unwrap();
-            assert_eq!(info, "{}", "expected empty info after stop: {info}");
-        });
+        let _g = guard();
+        let rt = V8JsRuntime::new().unwrap();
+        install_with_mock(&rt, false);
+        let info = rt
+            .eval(
+                r#"
+                var id = __lumen_start_audio_capture('', 0, 0);
+                __lumen_stop_audio_capture(id);
+                __lumen_audio_capture_info(id)
+                "#,
+            )
+            .unwrap();
+        assert_eq!(info, JsValue::String("{}".to_string()), "expected empty info after stop");
     }
 
     #[test]
     fn read_pcm_max_samples_respected() {
-        let (_rt, ctx) = make_ctx();
-        install_with_mock(&ctx, false);
-        ctx.with(|ctx| {
-            let id: f64 = ctx.eval("__lumen_start_audio_capture('', 0, 0)").unwrap();
-            // Mock has 3 samples; request only 2
-            let code = format!("__lumen_read_audio_pcm({id}, 2)");
-            let json: String = ctx.eval(code.as_str()).unwrap();
-            let arr: Vec<f32> = serde_json::from_str(&json).unwrap_or_default();
-            assert_eq!(arr.len(), 2, "max_samples=2 should cap at 2");
-        });
+        let _g = guard();
+        let rt = V8JsRuntime::new().unwrap();
+        install_with_mock(&rt, false);
+        // Mock has 3 samples; request only 2.
+        let len = rt
+            .eval(
+                r#"
+                var id = __lumen_start_audio_capture('', 0, 0);
+                var json = __lumen_read_audio_pcm(id, 2);
+                JSON.parse(json).length
+                "#,
+            )
+            .unwrap();
+        assert_eq!(len, JsValue::Number(2.0), "max_samples=2 should cap at 2");
     }
 
     // NullAudioCaptureProvider → enumerate returns [] is tested in lumen-core::audio_capture_tests.

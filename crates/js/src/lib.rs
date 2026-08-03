@@ -808,23 +808,6 @@ impl QuickJsRuntime {
             )
             .map_err(|e| rq_err(&ctx, e))?;
 
-            // Install navigator/screen/timezone normalization (ADR-007 Layer 4, 9D.6) — after DOM.
-            if let Err(e) = navigator_bindings::install_navigator_bindings(&ctx) {
-                eprintln!("Navigator bindings init failed: {}", e);
-            }
-
-            // Install native audio capture bridge (__lumen_*_audio_capture natives).
-            // Must run before MediaDevices shim so getUserMedia can find the natives.
-            if let Err(e) = media_capture::install_media_capture_bindings(&ctx) {
-                eprintln!("MediaCapture bindings init failed: {}", e);
-            }
-
-            // Install native screen capture bridge (__lumen_screen_capture_* natives).
-            // Must run before MediaDevices shim so getDisplayMedia can find the natives (PH3-17).
-            if let Err(e) = screen_capture::install_screen_capture_bindings(&ctx) {
-                eprintln!("ScreenCapture bindings init failed: {}", e);
-            }
-
             // Install MediaDevices API (W3C Media Capture §4) — after DOM/navigator so that
             // Promise, DOMException, and navigator are available. Phase 1: getUserMedia
             // resolves with a live MediaStream when AudioCaptureProvider is installed.

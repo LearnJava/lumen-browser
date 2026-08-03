@@ -687,7 +687,7 @@ FIXED/DEBTOR → `done`, IN PROGRESS → `active`), CSS-тиров (см. выш
 | P3-v8-s12b-b8 | P3 | P3-v8-s12b | done | S | | Полоса 2 (1139/45): gamepad, generic_sensor, shared_storage | S12b-B8: снос rquickjs, средние модули (2/8) |
 | P3-v8-s12b-b9 | P3 | P3-v8-s12b | done | S | | Полоса 2 (1244/33): element_internals, video_pip, media_session | S12b-B9: снос rquickjs, средние модули (3/8) |
 | P3-v8-s12b-b10 | P3 | P3-v8-s12b | done | S | | Полоса 2 (1321/29): long_animation_frames, form_validation, wake_lock | S12b-B10: снос rquickjs, средние модули (4/8) |
-| P3-v8-s12b-b11 | P3 | P3-v8-s12b | queued | S | | Полоса 2 (1519/35): navigator_bindings, media_capture, screen_capture | S12b-B11: снос rquickjs, средние модули (5/8) |
+| P3-v8-s12b-b11 | P3 | P3-v8-s12b | done | S | | Полоса 2 (1519/35): navigator_bindings, media_capture, screen_capture | S12b-B11: снос rquickjs, средние модули (5/8) |
 | P3-v8-s12b-b12 | P3 | P3-v8-s12b | queued | S | | Полоса 2 (1638/51): geolocation, esm, idle_detection — модули с натив-состоянием в V8JsRuntime | S12b-B12: снос rquickjs, средние модули (6/8) |
 | P3-v8-s12b-b13 | P3 | P3-v8-s12b | queued | S | | Полоса 2 (1773/43): broadcast_channel, webrtc_stub, credentials | S12b-B13: снос rquickjs, средние модули (7/8) |
 | P3-v8-s12b-b14 | P3 | P3-v8-s12b | queued | S | | Полоса 2 (1312/35): xhr, file_input | S12b-B14: снос rquickjs, средние модули (8/8) |
