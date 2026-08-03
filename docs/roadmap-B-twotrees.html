@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-04",
  "counts": {
-  "open": 211,
+  "open": 213,
   "fixed": 309,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 520,
+ "total_bugs": 522,
  "phases": [
   {
    "id": "P0",
@@ -2021,7 +2021,7 @@
        "id": "css-specs-t4",
        "title": "CSS модули — Tier 4 (Advanced/future)",
        "status": "active",
-       "note": "8✅ 13🟡 0⬜ 0🚫 из 21 модулей CSS-SPECS.md (Tier 4)"
+       "note": "7✅ 14🟡 0⬜ 0🚫 из 21 модулей CSS-SPECS.md (Tier 4)"
       }
      ]
     },
@@ -8497,6 +8497,20 @@
    "component": "js (`crates/js/src/dom.rs:4780-4827` -- `_lumen_build_detached_document`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-553": {
+   "status": "open",
+   "title": "CSS Gap Decorations shipped under non-spec property names (`gap-rule*` instead of `column-rule*`/`row-rule*`/`rule*`), row axis entirely missing, `<gap-rule-lis…",
+   "component": "css-parser/layout (`crates/engine/layout/src/style.rs`), paint (`crates/engine/paint/src/gap_decorations.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-554": {
+   "status": "open",
+   "title": "CSS Typed OM: only `CSSStyleValue`/`CSSUnitValue`/`CSSKeywordValue`/partial `CSSNumericValue`/`StylePropertyMap.get` exist (139-line file) -- `CSS.<unit>()` fac…",
+   "component": "js (`crates/js/src/typed_om_api.rs`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -8564,6 +8578,9 @@
   ],
   "css-parser/layout (`crates/engine/layout/src/style.rs::apply_declaration`, селекторный матчинг)": [
    "BUG-505"
+  ],
+  "css-parser/layout (`crates/engine/layout/src/style.rs`), paint (`crates/engine/paint/src/gap_decorations.rs`)": [
+   "BUG-553"
   ],
   "css-parser/layout (`text-decoration-fill`/`text-decoration-stroke`/`-webkit-text-stroke` не распознаются нигде, `grep -rn \"text-decoration-fill\\": [
    "BUG-521"
@@ -8795,6 +8812,9 @@
   ],
   "js (`crates/js/src/surface_api.rs` рядом с `navigator.doNotTrack`, строки 116-121) + network (`crates/network/src/http/headers.rs::build_request_headers`)": [
    "BUG-397"
+  ],
+  "js (`crates/js/src/typed_om_api.rs`)": [
+   "BUG-554"
   ],
   "js (`crates/js/src/v8_runtime.rs::_lumen_create_element`/`_lumen_create_element_ns`, `v8_compat.rs::IntoJsReturn for u32`)": [
    "BUG-457"
