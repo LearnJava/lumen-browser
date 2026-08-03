@@ -23,7 +23,6 @@
 //! [`set_navigator_profile`]. When unset, the defaults reproduce the historical
 //! hardcoded mid-tier device values, so behaviour is unchanged without a config.
 
-use rquickjs::Ctx;
 use std::sync::{OnceLock, RwLock};
 
 /// High-entropy `navigator` / `screen` / timezone values exposed to JavaScript.
@@ -107,34 +106,32 @@ pub fn current_navigator_profile() -> NavigatorProfile {
 /// `Date.prototype.getTimezoneOffset` to return the profile's offset, so
 /// timezone cannot be inferred from JS date arithmetic.
 ///
-/// Must be called after `install_dom_api`.
-pub fn install_navigator_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    install_navigator_bindings_with(ctx, &current_navigator_profile())
-}
-
-/// Install the navigator shim using an explicit [`NavigatorProfile`], ignoring
-/// the process-global. Used by tests and callers that want full control.
-pub fn install_navigator_bindings_with(
-    ctx: &Ctx,
-    profile: &NavigatorProfile,
-) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(build_navigator_shim(profile))?;
-    Ok(())
-}
-
-/// V8 port of [`install_navigator_bindings`] (Ph3 V8 migration S5-S7): identical JS
-/// shim, evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// Must be called after `install_dom_api`. V8 port of the former rquickjs
+/// `install_navigator_bindings` (Ph3 V8 migration S5-S7): identical JS shim,
+/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_navigator_bindings_v8(
     rt: &crate::v8_runtime::V8JsRuntime,
 ) -> lumen_core::JsResult<()> {
+    install_navigator_bindings_v8_with(rt, &current_navigator_profile())
+}
+
+/// Install the navigator shim using an explicit [`NavigatorProfile`], ignoring
+/// the process-global. Used by tests that want full control without racing
+/// other tests over the global profile slot.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_navigator_bindings_v8_with(
+    rt: &crate::v8_runtime::V8JsRuntime,
+    profile: &NavigatorProfile,
+) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
-    rt.eval(&build_navigator_shim(&current_navigator_profile()))?;
+    rt.eval(&build_navigator_shim(profile))?;
     Ok(())
 }
 
 /// Render a JS array literal from a locale list, falling back to `["en-US"]`
 /// when empty. Each entry is JSON-escaped to stay injection-safe.
+#[cfg(feature = "v8-backend")]
 fn languages_literal(languages: &[String]) -> String {
     let mut langs: Vec<&str> = languages.iter().map(String::as_str).collect();
     if langs.is_empty() {
@@ -145,6 +142,7 @@ fn languages_literal(languages: &[String]) -> String {
 }
 
 /// Escape a string for safe embedding as a JS/JSON string literal (with quotes).
+#[cfg(feature = "v8-backend")]
 fn json_string(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
@@ -164,6 +162,7 @@ fn json_string(s: &str) -> String {
 }
 
 /// Build the navigator/screen/timezone shim source for the given profile.
+#[cfg(feature = "v8-backend")]
 fn build_navigator_shim(p: &NavigatorProfile) -> String {
     let languages = languages_literal(&p.languages);
     let primary_language = json_string(p.languages.first().map_or("en-US", String::as_str));
@@ -248,145 +247,108 @@ fn build_navigator_shim(p: &NavigatorProfile) -> String {
     )
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
     use super::*;
-    use rquickjs::{Context, Runtime};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::JsValue;
+    use lumen_core::ext::JsRuntime as _;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
-
-    fn install_nav(ctx: &rquickjs::Ctx) {
-        ctx.eval::<(), _>("var navigator = { language: 'en-US' };").unwrap();
+    fn make_rt() -> V8JsRuntime {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval("var navigator = { language: 'en-US' };").unwrap();
+        rt
     }
 
     #[test]
     fn install_succeeds() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_nav(&ctx);
-            install_navigator_bindings(&ctx).expect("install should succeed");
-        });
+        let rt = make_rt();
+        install_navigator_bindings_v8(&rt).expect("install should succeed");
     }
 
     #[test]
     fn install_succeeds_without_navigator() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_navigator_bindings(&ctx).expect("install should succeed even without navigator");
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install_navigator_bindings_v8(&rt)
+            .expect("install should succeed even without navigator");
     }
 
     #[test]
     fn hardware_concurrency_is_two() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_nav(&ctx);
-            install_navigator_bindings_with(&ctx, &NavigatorProfile::default()).unwrap();
-            let v: f64 = ctx.eval("navigator.hardwareConcurrency").unwrap();
-            assert_eq!(v as u32, 2);
-        });
+        let rt = make_rt();
+        install_navigator_bindings_v8_with(&rt, &NavigatorProfile::default()).unwrap();
+        let v = rt.eval("navigator.hardwareConcurrency").unwrap();
+        assert_eq!(v, JsValue::Number(2.0));
     }
 
     #[test]
     fn device_memory_is_eight() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_nav(&ctx);
-            install_navigator_bindings_with(&ctx, &NavigatorProfile::default()).unwrap();
-            let v: f64 = ctx.eval("navigator.deviceMemory").unwrap();
-            assert_eq!(v as u32, 8);
-        });
+        let rt = make_rt();
+        install_navigator_bindings_v8_with(&rt, &NavigatorProfile::default()).unwrap();
+        let v = rt.eval("navigator.deviceMemory").unwrap();
+        assert_eq!(v, JsValue::Number(8.0));
     }
 
     #[test]
     fn platform_is_win32() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_nav(&ctx);
-            install_navigator_bindings_with(&ctx, &NavigatorProfile::default()).unwrap();
-            let v: String = ctx.eval("navigator.platform").unwrap();
-            assert_eq!(v, "Win32");
-        });
+        let rt = make_rt();
+        install_navigator_bindings_v8_with(&rt, &NavigatorProfile::default()).unwrap();
+        let v = rt.eval("navigator.platform").unwrap();
+        assert_eq!(v, JsValue::String("Win32".to_string()));
     }
 
     #[test]
     fn languages_is_array_en() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_nav(&ctx);
-            install_navigator_bindings_with(&ctx, &NavigatorProfile::default()).unwrap();
-            let first: String = ctx.eval("navigator.languages[0]").unwrap();
-            let second: String = ctx.eval("navigator.languages[1]").unwrap();
-            assert_eq!(first, "en-US");
-            assert_eq!(second, "en");
-        });
+        let rt = make_rt();
+        install_navigator_bindings_v8_with(&rt, &NavigatorProfile::default()).unwrap();
+        let ok = rt
+            .eval("navigator.languages[0] === 'en-US' && navigator.languages[1] === 'en'")
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]
     fn screen_width_and_height() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_nav(&ctx);
-            install_navigator_bindings_with(&ctx, &NavigatorProfile::default()).unwrap();
-            let w: f64 = ctx.eval("screen.width").unwrap();
-            let h: f64 = ctx.eval("screen.height").unwrap();
-            assert_eq!(w as u32, 1920);
-            assert_eq!(h as u32, 1080);
-        });
+        let rt = make_rt();
+        install_navigator_bindings_v8_with(&rt, &NavigatorProfile::default()).unwrap();
+        let ok = rt.eval("screen.width === 1920 && screen.height === 1080").unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]
     fn screen_avail_dimensions_match() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_nav(&ctx);
-            install_navigator_bindings_with(&ctx, &NavigatorProfile::default()).unwrap();
-            let eq: bool = ctx
-                .eval("screen.availWidth === screen.width && screen.availHeight === screen.height")
-                .unwrap();
-            assert!(eq, "availWidth/availHeight must equal width/height");
-        });
+        let rt = make_rt();
+        install_navigator_bindings_v8_with(&rt, &NavigatorProfile::default()).unwrap();
+        let eq = rt
+            .eval("screen.availWidth === screen.width && screen.availHeight === screen.height")
+            .unwrap();
+        assert_eq!(eq, JsValue::Bool(true), "availWidth/availHeight must equal width/height");
     }
 
     #[test]
     fn screen_color_depth_is_24() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_nav(&ctx);
-            install_navigator_bindings_with(&ctx, &NavigatorProfile::default()).unwrap();
-            let cd: f64 = ctx.eval("screen.colorDepth").unwrap();
-            let pd: f64 = ctx.eval("screen.pixelDepth").unwrap();
-            assert_eq!(cd as u32, 24);
-            assert_eq!(pd as u32, 24);
-        });
+        let rt = make_rt();
+        install_navigator_bindings_v8_with(&rt, &NavigatorProfile::default()).unwrap();
+        let ok = rt.eval("screen.colorDepth === 24 && screen.pixelDepth === 24").unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]
     fn screen_orientation_landscape() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_nav(&ctx);
-            install_navigator_bindings_with(&ctx, &NavigatorProfile::default()).unwrap();
-            let ty: String = ctx.eval("screen.orientation.type").unwrap();
-            let angle: f64 = ctx.eval("screen.orientation.angle").unwrap();
-            assert_eq!(ty, "landscape-primary");
-            assert_eq!(angle as i32, 0);
-        });
+        let rt = make_rt();
+        install_navigator_bindings_v8_with(&rt, &NavigatorProfile::default()).unwrap();
+        let ok = rt
+            .eval("screen.orientation.type === 'landscape-primary' && screen.orientation.angle === 0")
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]
     fn timezone_offset_is_zero() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_nav(&ctx);
-            install_navigator_bindings_with(&ctx, &NavigatorProfile::default()).unwrap();
-            let offset: f64 = ctx.eval("new Date().getTimezoneOffset()").unwrap();
-            assert_eq!(offset as i32, 0, "getTimezoneOffset must return 0 (UTC)");
-        });
+        let rt = make_rt();
+        install_navigator_bindings_v8_with(&rt, &NavigatorProfile::default()).unwrap();
+        let offset = rt.eval("new Date().getTimezoneOffset()").unwrap();
+        assert_eq!(offset, JsValue::Number(0.0), "getTimezoneOffset must return 0 (UTC)");
     }
 
     // ── custom profile (9F.1) ────────────────────────────────────────────────
@@ -406,65 +368,53 @@ mod tests {
 
     #[test]
     fn custom_profile_applies_all_fields() {
-        let (_rt, ctx) = make_ctx();
+        let rt = make_rt();
         let p = custom_profile();
-        ctx.with(|ctx| {
-            install_nav(&ctx);
-            install_navigator_bindings_with(&ctx, &p).unwrap();
-            let hc: f64 = ctx.eval("navigator.hardwareConcurrency").unwrap();
-            let dm: f64 = ctx.eval("navigator.deviceMemory").unwrap();
-            let plat: String = ctx.eval("navigator.platform").unwrap();
-            let lang0: String = ctx.eval("navigator.languages[0]").unwrap();
-            let lang2: String = ctx.eval("navigator.languages[2]").unwrap();
-            let primary: String = ctx.eval("navigator.language").unwrap();
-            let w: f64 = ctx.eval("screen.width").unwrap();
-            let h: f64 = ctx.eval("screen.height").unwrap();
-            let cd: f64 = ctx.eval("screen.colorDepth").unwrap();
-            let tz: f64 = ctx.eval("new Date().getTimezoneOffset()").unwrap();
-            assert_eq!(hc as u32, 8);
-            assert_eq!(dm as u32, 16);
-            assert_eq!(plat, "Linux x86_64");
-            assert_eq!(lang0, "de-DE");
-            assert_eq!(lang2, "en");
-            assert_eq!(primary, "de-DE");
-            assert_eq!(w as u32, 2560);
-            assert_eq!(h as u32, 1440);
-            assert_eq!(cd as u32, 30);
-            assert_eq!(tz as i32, -120);
-        });
+        install_navigator_bindings_v8_with(&rt, &p).unwrap();
+        let ok = rt
+            .eval(
+                r#"
+                navigator.hardwareConcurrency === 8
+                  && navigator.deviceMemory === 16
+                  && navigator.platform === 'Linux x86_64'
+                  && navigator.languages[0] === 'de-DE'
+                  && navigator.languages[2] === 'en'
+                  && navigator.language === 'de-DE'
+                  && screen.width === 2560
+                  && screen.height === 1440
+                  && screen.colorDepth === 30
+                  && new Date().getTimezoneOffset() === -120
+                "#,
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]
     fn empty_languages_falls_back_to_en_us() {
-        let (_rt, ctx) = make_ctx();
+        let rt = make_rt();
         let p = NavigatorProfile {
             languages: Vec::new(),
             ..Default::default()
         };
-        ctx.with(|ctx| {
-            install_nav(&ctx);
-            install_navigator_bindings_with(&ctx, &p).unwrap();
-            let lang0: String = ctx.eval("navigator.languages[0]").unwrap();
-            let primary: String = ctx.eval("navigator.language").unwrap();
-            assert_eq!(lang0, "en-US");
-            assert_eq!(primary, "en-US");
-        });
+        install_navigator_bindings_v8_with(&rt, &p).unwrap();
+        let ok = rt
+            .eval("navigator.languages[0] === 'en-US' && navigator.language === 'en-US'")
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]
     fn language_with_quote_is_escaped_safely() {
         // A malicious/odd locale containing a quote must not break the shim.
-        let (_rt, ctx) = make_ctx();
+        let rt = make_rt();
         let p = NavigatorProfile {
             languages: vec!["en\"-X".to_string()],
             ..Default::default()
         };
-        ctx.with(|ctx| {
-            install_nav(&ctx);
-            install_navigator_bindings_with(&ctx, &p).unwrap();
-            let lang0: String = ctx.eval("navigator.languages[0]").unwrap();
-            assert_eq!(lang0, "en\"-X");
-        });
+        install_navigator_bindings_v8_with(&rt, &p).unwrap();
+        let v = rt.eval("navigator.languages[0]").unwrap();
+        assert_eq!(v, JsValue::String("en\"-X".to_string()));
     }
 
     #[test]

@@ -2712,6 +2712,62 @@ red from this batch (926 passed). Both clippy passes clean.
 
 Next in queue: S12b-B11 (`navigator_bindings`/`media_capture`/`screen_capture`, Полоса 2 fifth batch).
 
+**S12b-B11** (2026-08-04): eleventh batch of queue group A (`docs/tasks/p1-s12b-cleanup-queue.md`
+§3, Полоса 2 fifth batch), 3 medium modules: `navigator_bindings` (16 tests), `media_capture` (8),
+`screen_capture` (11) — 35 total, all ported in place to `#[cfg(all(test, feature =
+"v8-backend"))]`. Step-2 grep (`grep -n "<file_stem>_" dom.rs`) found no hidden per-module tests
+for any of the 3.
+
+`navigator_bindings` is a pure `ctx.eval(SHIM)` shim; the rquickjs side additionally exposed a
+test-only `install_navigator_bindings_with(ctx, profile)` (bypasses the process-global
+`NavigatorProfile` to avoid a global-state race between parallel profile tests) with no V8
+equivalent — added `install_navigator_bindings_v8_with(rt, profile)` alongside the existing
+`install_navigator_bindings_v8` (which now delegates to it with `current_navigator_profile()`) so
+the custom-profile tests (`custom_profile_applies_all_fields`, `empty_languages_falls_back_to_en_us`,
+`language_with_quote_is_escaped_safely`) have the same isolation on V8.
+
+`media_capture` and `screen_capture` are the second and third Полоса-2 modules with native
+bindings left to delete on the rquickjs side (after `wake_lock` in B10) — both bridge a
+process-global `Arc<dyn *Provider>` plus a thread-local `CAPTURES: HashMap<u64, Box<dyn
+*Handle>>` to five `__lumen_*` natives each. Removed the rquickjs `install_*_bindings`
+(`rquickjs::Function::new` closures) from both, keeping only the already-present
+`install_*_bindings_v8` (`v8_compat::into_v8_fn{0,1,2,3}` + `register_native`). `get_provider()`
+and `NEXT_HANDLE_ID` (plus the `AudioCaptureConfig`/`ScreenCaptureConfig` and
+`atomic::{AtomicU64, Ordering}` imports) became `#[cfg(feature = "v8-backend")]`-only in both
+files — same dead-code/unused-import fallout as `wake_lock` in B10, for the same reason (both were
+referenced solely from the deleted rquickjs installer and the feature-gated V8 installer/tests).
+
+Porting the id-returning tests surfaced a pre-existing race, latent under rquickjs and load-bearing
+under V8: `NEXT_HANDLE_ID` is a single process-global `AtomicU64` (not thread-local) shared by every
+test in the module, and `PROVIDER` is a process-global `RwLock` set immediately before each
+`install_*_bindings_v8` call snapshots it — with `cargo test`'s default parallel threads, a
+V8JsRuntime's slower construction widened the window enough that a concurrently-running test's
+`set_*_provider` call could land between another test's `set_*_provider` and its `install_*`
+snapshot, or the shared counter could hand out ids >1 for a supposedly-first capture. Under
+rquickjs this either didn't reproduce or was masked; the original tests already hedged the id
+non-determinism with `assert!(id >= 1.0)` (never `== 1.0`) but had no guard against the provider
+race. Fixed both: ported the `assert!(id >= 1.0)` semantics as-is (a stray `assert_eq!(id,
+JsValue::Number(1.0))` in the first draft failed reproducibly at `id: Number(5.0)`), and added a
+per-module `static TEST_LOCK: Mutex<()>` + `guard()` serializing every test that touches
+`PROVIDER`/`NEXT_HANDLE_ID` — the same pattern already used by `documentpip_bindings.rs`/
+`download_bindings.rs`/`network_log_bindings.rs`/`pip_bindings.rs`/`pointer_lock.rs`/
+`video_bindings.rs` for analogous global-state races. 3 reruns of the full filtered suite after the
+fix: stable, 0 flakes.
+
+Removing the three rquickjs installers also removed their calls from `QuickJsRuntime::install_dom`
+(`lib.rs`) — under the rquickjs (opt-in rollback) path, `navigator`/`screen` fingerprint
+normalization, timezone offset patching, and the two native capture bridges are no longer wired at
+all; the V8 (default) path is unaffected, its `install_dom` call site in `v8_runtime.rs` was
+already separate and unchanged. Consistent with every earlier Group-A batch — rquickjs sheds
+Web-API surface batch by batch on its way to full deletion (F1-F4).
+
+`cargo test -p lumen-js --features v8-backend`: 2584 lib (unchanged — in-place porting only, same
+reasoning as B7-B10) + 68 integration (unchanged). `cargo test -p lumen-js` (default): 891 lib
+(down from 926, the 35 ported `mod tests`) + 5 integration (unchanged). rquickjs suite did not go
+red from this batch (891 passed). Both clippy passes clean.
+
+Next in queue: S12b-B12 (`geolocation`/`esm`/`idle_detection`, Полоса 2 sixth batch).
+
 ---
 
 ## Risks (Rev 2)
