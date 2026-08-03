@@ -1,7 +1,6 @@
 //! CSS Properties & Values API (Houdini) — custom property registration
 //! Implements CSS.registerProperty(), @property at-rule parsing, and initial-value fallback in compute_style.
 
-use rquickjs::Ctx;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
@@ -59,15 +58,10 @@ pub struct RegisteredProperty {
     pub initial_value: String,
 }
 
-/// Install CSS.registerProperty bindings into the JS context.
-/// Uses a pure JS shim that stores properties in a global Map.
-pub fn install_css_properties_values_api(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(CSS_PROPERTIES_VALUES_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_css_properties_values_api`] (Ph3 V8 migration S5-S7): identical JS shim,
+/// V8 port of the former rquickjs `install_css_properties_values_api` (Ph3 V8
+/// migration S5-S7, rquickjs side removed in S12b-B4): identical JS shim,
 /// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// Uses a pure JS shim that stores properties in a global Map.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_css_properties_values_api_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -77,6 +71,7 @@ pub(crate) fn install_css_properties_values_api_v8(rt: &crate::v8_runtime::V8JsR
 
 /// Pure-JS CSS Properties & Values API shim.
 /// Defines CSS.registerProperty() and provides interface to Rust-backed registry.
+#[cfg(feature = "v8-backend")]
 const CSS_PROPERTIES_VALUES_SHIM: &str = r#"(function(global) {
   'use strict';
 

@@ -680,7 +680,7 @@ FIXED/DEBTOR → `done`, IN PROGRESS → `active`), CSS-тиров (см. выш
 | P3-v8-s12b-b1 | P3 | P3-v8-s12b | done | S | | Батч удаления rquickjs, полоса 1 (831 стр / 13 тестов): trusted_types, typed_om_api, serial, scroll_snap_events, webxr. Процедура и ловушки — docs/tasks/p1-s12b-cleanup-queue.md §2–3 | S12b-B1: снос rquickjs, мелкие модули (1/6) |
 | P3-v8-s12b-b2 | P3 | P3-v8-s12b | done | S | | Батч удаления rquickjs, полоса 1 (1108 стр / 31 тест): soft_navigation, bluetooth, eye_dropper, virtual_keyboard, local_font_access. Процедура и ловушки — docs/tasks/p1-s12b-cleanup-queue.md §2–3 | S12b-B2: снос rquickjs, мелкие модули (2/6) |
 | P3-v8-s12b-b3 | P3 | P3-v8-s12b | done | S | | Полоса 1 (1235/37): sanitizer, ua_client_hints, reporting_api, launch_handler, storage_manager | S12b-B3: снос rquickjs, мелкие модули (3/6) |
-| P3-v8-s12b-b4 | P3 | P3-v8-s12b | queued | S | | Полоса 1 (1369/35): webhid, network_log_bindings, css_properties_values_api, scheduler, paint_worklet | S12b-B4: снос rquickjs, мелкие модули (4/6) |
+| P3-v8-s12b-b4 | P3 | P3-v8-s12b | done | S | | Полоса 1 (1369/35): webhid, network_log_bindings, css_properties_values_api, scheduler, paint_worklet | S12b-B4: снос rquickjs, мелкие модули (4/6) |
 | P3-v8-s12b-b5 | P3 | P3-v8-s12b | queued | S | | Полоса 1 (1539/22): presentation_api, screen_orientation, window_management, navigation_api, speech | S12b-B5: снос rquickjs, мелкие модули (5/6) |
 | P3-v8-s12b-b6 | P3 | P3-v8-s12b | queued | S | | Полоса 1 (1599/51): iframe_element, url_pattern, web_midi, surface_api, scroll_timeline | S12b-B6: снос rquickjs, мелкие модули (6/6) |
 | P3-v8-s12b-b7 | P3 | P3-v8-s12b | queued | S | | Полоса 2 (1039/22): web_locks, webusb, close_watcher | S12b-B7: снос rquickjs, средние модули (1/8) |

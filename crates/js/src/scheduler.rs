@@ -14,16 +14,9 @@
 //! **Phase 0**: scheduling deferred via `queueMicrotask` (user-blocking) or
 //! `setTimeout` (user-visible / background). No integration with browser rendering.
 
-use rquickjs::Ctx;
-
-/// Install the Scheduler API, TaskController, and TaskSignal into the JS context.
-pub fn install_scheduler_api(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(SCHEDULER_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_scheduler_api`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// V8 port of the former rquickjs `install_scheduler_api` (Ph3 V8 migration
+/// S5-S7, rquickjs side removed in S12b-B4): identical JS shim, evaluated via
+/// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_scheduler_api_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -31,6 +24,7 @@ pub(crate) fn install_scheduler_api_v8(rt: &crate::v8_runtime::V8JsRuntime) -> l
     Ok(())
 }
 
+#[cfg(feature = "v8-backend")]
 const SCHEDULER_SHIM: &str = r#"(function() {
   'use strict';
 
@@ -170,19 +164,16 @@ const SCHEDULER_SHIM: &str = r#"(function() {
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
     use super::*;
-    use rquickjs::{Context, Runtime};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
-
-    fn install(ctx: &rquickjs::Ctx) {
-        ctx.eval::<(), _>(
+    fn with_scheduler_api(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(
             r#"
             if (typeof DOMException === 'undefined') {
                 function DOMException(msg, name) {
@@ -196,15 +187,14 @@ mod tests {
             "#,
         )
         .unwrap();
-        install_scheduler_api(ctx).unwrap();
+        install_scheduler_api_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
     fn scheduler_and_classes_exist() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
+        with_scheduler_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     typeof scheduler === 'object'
@@ -215,38 +205,32 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn post_task_returns_promise() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
+        with_scheduler_api(|rt| {
+            let ok = rt
                 .eval("scheduler.postTask(function(){ return 1; }) instanceof Promise")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn scheduler_yield_returns_promise() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx.eval("scheduler.yield() instanceof Promise").unwrap();
-            assert!(ok);
+        with_scheduler_api(|rt| {
+            let ok = rt.eval("scheduler.yield() instanceof Promise").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn task_controller_signal_initial_state() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
+        with_scheduler_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var c = new TaskController({ priority: 'user-blocking' });
@@ -256,16 +240,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn task_signal_set_priority_fires_prioritychange_synchronously() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
+        with_scheduler_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var c = new TaskController({ priority: 'user-visible' });
@@ -282,7 +264,7 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 }

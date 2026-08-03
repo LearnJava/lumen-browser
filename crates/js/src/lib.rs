@@ -158,8 +158,8 @@ pub use audio_element::set_audio_playback_provider;
 pub use wake_lock::set_wake_lock_provider;
 pub use video_gif_store::{set_video_gif_store, VideoGifStore};
 pub use text_track_store::{set_text_track_store, CueData, TextTrackData, TextTrackStore};
-pub use css_properties_values_api::{install_css_properties_values_api, RegisteredProperty, RegisteredPropertiesMap, get_registered_properties};
-pub use paint_worklet::{install_paint_worklet_api, PaintWorkletDef, PaintWorkletRegistry, get_paint_worklet_registry};
+pub use css_properties_values_api::{RegisteredProperty, RegisteredPropertiesMap, get_registered_properties};
+pub use paint_worklet::{PaintWorkletDef, PaintWorkletRegistry, get_paint_worklet_registry};
 pub use dom::{FullscreenRequest, HistoryUrlUpdate, NavigateRequest, PrintRequest};
 /// BUG-341 S7: page-side DOM-mutation tracker outcome, feeding
 /// `lumen_layout::style::restyle_root_set_for_node_change`. V8-only (see
@@ -813,19 +813,6 @@ impl QuickJsRuntime {
                 eprintln!("Navigator bindings init failed: {}", e);
             }
 
-            // Install CSS Properties & Values API (Houdini) — after DOM/navigator so that CSS object is available.
-            // Enables CSS.registerProperty() for custom property definitions.
-            if let Err(e) = css_properties_values_api::install_css_properties_values_api(&ctx) {
-                eprintln!("CSS Properties & Values API init failed: {}", e);
-            }
-
-            // Install CSS Paint Worklet API stub (Houdini) — after DOM/CSS so that CSS object is available.
-            // Phase 0: registerPaint() registers worklet definitions; Phase 1 (future): worker execution.
-            // Enables CSS.paintWorklet.addModule() and registerPaint() calls.
-            if let Err(e) = paint_worklet::install_paint_worklet_api(&ctx) {
-                eprintln!("Paint Worklet API init failed: {}", e);
-            }
-
             // Install native audio capture bridge (__lumen_*_audio_capture natives).
             // Must run before MediaDevices shim so getUserMedia can find the natives.
             if let Err(e) = media_capture::install_media_capture_bindings(&ctx) {
@@ -843,13 +830,6 @@ impl QuickJsRuntime {
             // resolves with a live MediaStream when AudioCaptureProvider is installed.
             if let Err(e) = media_devices::install_media_devices_bindings(&ctx) {
                 eprintln!("MediaDevices bindings init failed: {}", e);
-            }
-
-            // Install WebHID API (W3C WebHID §3–5) — after DOM/navigator so that
-            // Promise, DOMException, and navigator are available. Phase 0: all device
-            // operations reject with NotSupportedError (no USB/HID support).
-            if let Err(e) = webhid::install_webhid_bindings(&ctx) {
-                eprintln!("WebHID bindings init failed: {}", e);
             }
 
             // Install WebUSB API (W3C WebUSB §2–3) — after DOM/navigator so that
@@ -1020,12 +1000,6 @@ impl QuickJsRuntime {
                 eprintln!("BroadcastChannel bindings init failed: {}", e);
             }
 
-            // Install _lumen_log_network_request(method, url, status, duration_ms)
-            // — lets page scripts record requests in the DevTools Network panel.
-            if let Err(e) = network_log_bindings::install_network_log_bindings(&ctx) {
-                eprintln!("Network-log bindings init failed: {}", e);
-            }
-
             // Install navigator.credentials (WebAuthn / passkeys) — after DOM so
             // atob/btoa, TextEncoder, Promise, DOMException, Uint8Array exist, and
             // after the _lumen_webauthn_* native bindings are registered.
@@ -1155,12 +1129,6 @@ impl QuickJsRuntime {
             // Phase 0: in-memory sentinel with auto-release on visibilitychange → hidden.
             if let Err(e) = wake_lock::install_wake_lock_bindings(&ctx) {
                 eprintln!("Screen Wake Lock API init failed: {}", e);
-            }
-
-            // Install W3C Scheduler API Level 1 — scheduler.postTask / yield, TaskController/Signal.
-            // Phase 0: user-blocking → queueMicrotask, user-visible → setTimeout(0), background → setTimeout(200).
-            if let Err(e) = scheduler::install_scheduler_api(&ctx) {
-                eprintln!("Scheduler API init failed: {}", e);
             }
 
             // Install W3C Web Audio API Level 1 — AudioContext, AudioNode hierarchy, AudioParam.
