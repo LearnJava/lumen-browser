@@ -1,14 +1,10 @@
-/// WebUSB API stub (W3C WebUSB §2-3)
-/// Phase 0: navigator.usb.requestDevice() and all device operations reject (no USB support)
-use rquickjs::Ctx;
+//! WebUSB API stub (W3C WebUSB §2-3).
+//!
+//! Phase 0: `navigator.usb.requestDevice()` and all device operations reject (no USB support).
 
-pub fn install_webusb_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(WEBUSB_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_webusb_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// V8 port of the former rquickjs `install_webusb_bindings` (Ph3 V8 migration S5-S7,
+/// rquickjs side removed in S12b-B7): identical JS shim, evaluated via
+/// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_webusb_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -17,6 +13,7 @@ pub(crate) fn install_webusb_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) ->
 }
 
 /// JavaScript shim: WebUSB stub (Phase 0 - all operations reject with NotSupportedError)
+#[cfg(feature = "v8-backend")]
 const WEBUSB_SHIM: &str = r#"
 (function() {
   // USBConnectionEvent class
@@ -206,94 +203,85 @@ const WEBUSB_SHIM: &str = r#"
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
-    use super::*;
-    use rquickjs::{Context, Runtime};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
-
-    fn with_webusb_api(f: impl FnOnce(&rquickjs::Ctx)) {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            // Minimal stubs so the shim doesn't fail.
-            ctx.eval::<(), _>(
-                r#"
-                var window = globalThis;
-                var navigator = {};
-                globalThis.navigator = navigator;
-                // Minimal EventTarget stub
-                function EventTarget() {}
-                EventTarget.prototype.addEventListener = function() {};
-                EventTarget.prototype.removeEventListener = function() {};
-                EventTarget.prototype.dispatchEvent = function() {};
-                globalThis.EventTarget = EventTarget;
-                // Minimal Event stub
-                function Event(type, init) {
-                  this.type = type;
-                  this.bubbles = (init && init.bubbles) || false;
-                  this.cancelable = (init && init.cancelable) || false;
-                }
-                Event.prototype.constructor = Event;
-                globalThis.Event = Event;
-                // Minimal DOMException
-                function DOMException(message, name) {
-                  Error.call(this, message);
-                  this.message = message;
-                  this.name = name || 'Error';
-                }
-                DOMException.prototype = Object.create(Error.prototype);
-                DOMException.prototype.constructor = DOMException;
-                globalThis.DOMException = DOMException;
-                "#,
-            )
-            .unwrap();
-            super::install_webusb_bindings(&ctx).unwrap();
-            f(&ctx);
-        });
+    fn with_webusb_api(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        // Minimal stubs so the shim doesn't fail.
+        rt.eval(
+            r#"
+            var window = globalThis;
+            var navigator = {};
+            globalThis.navigator = navigator;
+            // Minimal EventTarget stub
+            function EventTarget() {}
+            EventTarget.prototype.addEventListener = function() {};
+            EventTarget.prototype.removeEventListener = function() {};
+            EventTarget.prototype.dispatchEvent = function() {};
+            globalThis.EventTarget = EventTarget;
+            // Minimal Event stub
+            function Event(type, init) {
+              this.type = type;
+              this.bubbles = (init && init.bubbles) || false;
+              this.cancelable = (init && init.cancelable) || false;
+            }
+            Event.prototype.constructor = Event;
+            globalThis.Event = Event;
+            // Minimal DOMException
+            function DOMException(message, name) {
+              Error.call(this, message);
+              this.message = message;
+              this.name = name || 'Error';
+            }
+            DOMException.prototype = Object.create(Error.prototype);
+            DOMException.prototype.constructor = DOMException;
+            globalThis.DOMException = DOMException;
+            "#,
+        )
+        .unwrap();
+        super::install_webusb_bindings_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
     fn webusb_shim_defined() {
-        assert!(!WEBUSB_SHIM.is_empty());
+        assert!(!super::WEBUSB_SHIM.is_empty());
     }
 
     #[test]
     fn webusb_navigator_usb_exists() {
-        with_webusb_api(|ctx| {
-            let ok: bool = ctx.eval("typeof navigator.usb === 'object'").unwrap();
-            assert!(ok);
+        with_webusb_api(|rt| {
+            let v = rt.eval("typeof navigator.usb === 'object'").unwrap();
+            assert_eq!(v, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn webusb_get_devices_is_async() {
-        with_webusb_api(|ctx| {
-            let result: bool = ctx
+        with_webusb_api(|rt| {
+            let v = rt
                 .eval("navigator.usb.getDevices() instanceof Promise")
                 .unwrap();
-            assert!(result);
+            assert_eq!(v, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn webusb_device_class_exists() {
-        with_webusb_api(|ctx| {
-            let ok: bool = ctx
-                .eval("typeof window.USBDevice === 'function'")
-                .unwrap();
-            assert!(ok);
+        with_webusb_api(|rt| {
+            let v = rt.eval("typeof window.USBDevice === 'function'").unwrap();
+            assert_eq!(v, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn webusb_device_has_properties() {
-        with_webusb_api(|ctx| {
-            let ok: bool = ctx
+        with_webusb_api(|rt| {
+            let v = rt
                 .eval(
                     r#"
             const dev = new window.USBDevice(0x1234, 0x5678, "TestDev");
@@ -304,14 +292,14 @@ mod tests {
             "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(v, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn webusb_request_device_is_async() {
-        with_webusb_api(|ctx| {
-            let ok: bool = ctx
+        with_webusb_api(|rt| {
+            let v = rt
                 .eval(
                     r#"
             navigator.usb.requestDevice instanceof Function &&
@@ -319,29 +307,27 @@ mod tests {
             "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(v, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn webusb_manager_extends_event_target() {
-        with_webusb_api(|ctx| {
-            let ok: bool = ctx
-                .eval("navigator.usb instanceof EventTarget")
-                .unwrap();
-            assert!(ok);
+        with_webusb_api(|rt| {
+            let v = rt.eval("navigator.usb instanceof EventTarget").unwrap();
+            assert_eq!(v, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn webusb_transfer_result_classes_exist() {
-        with_webusb_api(|ctx| {
-            let ok: bool = ctx
+        with_webusb_api(|rt| {
+            let v = rt
                 .eval(
                     "typeof window.USBTransferInResult === 'function' && typeof window.USBTransferOutResult === 'function'"
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(v, JsValue::Bool(true));
         });
     }
 }
