@@ -5,24 +5,9 @@
 //! Phase 0: `.lock()` requires a natively bound `_lumen_set_fullscreen` to integrate
 //! with shell; orientation type is static 'portrait-primary' for now.
 
-use rquickjs::Ctx;
-
-/// Install Screen Orientation API shim into the JS context.
-///
-/// Adds `screen.orientation` object with `type`, `angle`, `lock()`, `unlock()`,
-/// and `onchange` event support. All orientation types (portrait-primary,
-/// landscape-primary, etc.) map to simple stubs. Lock/unlock methods return
-/// Promises; actual fullscreen integration is handled by shell bindings.
-///
-/// Must be called **after** `install_dom_api` so that `screen`, `Promise`,
-/// `DOMException`, and `EventTarget` already exist.
-pub fn install_screen_orientation_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(SCREEN_ORIENTATION_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_screen_orientation_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// V8 port of the former rquickjs `install_screen_orientation_bindings` (Ph3 V8 migration
+/// S5-S7, rquickjs side removed in S12b-B5): identical JS shim, evaluated via
+/// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_screen_orientation_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -31,6 +16,7 @@ pub(crate) fn install_screen_orientation_bindings_v8(rt: &crate::v8_runtime::V8J
 }
 
 /// JavaScript shim implementing the Screen Orientation API.
+#[cfg(feature = "v8-backend")]
 const SCREEN_ORIENTATION_SHIM: &str = r#"(function() {
   'use strict';
   if (typeof screen === 'undefined') return;
@@ -141,91 +127,70 @@ const SCREEN_ORIENTATION_SHIM: &str = r#"(function() {
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
     use super::*;
-    use rquickjs::{Runtime, Context};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
-
-    fn install_prereqs(ctx: &rquickjs::Ctx) {
-        ctx.eval::<(), _>(
+    fn with_screen_orientation(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(
             "var screen = { __proto__: {} }; \
              function Event(type) { this.type = type; }",
         )
         .unwrap();
+        install_screen_orientation_bindings_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
     fn screen_orientation_initial_state() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_screen_orientation_bindings(&ctx).unwrap();
-
-            let result = ctx
-                .eval::<bool, _>(
+        with_screen_orientation(|rt| {
+            let result = rt
+                .eval(
                     "screen.orientation.type === 'portrait-primary' && screen.orientation.angle === 0",
                 )
                 .unwrap();
-            assert!(result, "Initial orientation should be portrait-primary at angle 0");
+            assert_eq!(result, JsValue::Bool(true), "Initial orientation should be portrait-primary at angle 0");
         });
     }
 
     #[test]
     fn screen_orientation_has_lock_method() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_screen_orientation_bindings(&ctx).unwrap();
-
-            let has_lock: bool = ctx.eval("typeof screen.orientation.lock === 'function'").unwrap();
-            assert!(has_lock, "lock method should exist");
+        with_screen_orientation(|rt| {
+            let has_lock = rt.eval("typeof screen.orientation.lock === 'function'").unwrap();
+            assert_eq!(has_lock, JsValue::Bool(true), "lock method should exist");
         });
     }
 
     #[test]
     fn screen_orientation_has_unlock_method() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_screen_orientation_bindings(&ctx).unwrap();
-
-            let has_unlock: bool = ctx
+        with_screen_orientation(|rt| {
+            let has_unlock = rt
                 .eval("typeof screen.orientation.unlock === 'function'")
                 .unwrap();
-            assert!(has_unlock, "unlock method should exist");
+            assert_eq!(has_unlock, JsValue::Bool(true), "unlock method should exist");
         });
     }
 
     #[test]
     fn screen_orientation_lock_returns_promise() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_screen_orientation_bindings(&ctx).unwrap();
-
-            let is_promise: bool = ctx
+        with_screen_orientation(|rt| {
+            let is_promise = rt
                 .eval(
                     "screen.orientation.lock('portrait-primary') instanceof Promise",
                 )
                 .unwrap();
-            assert!(is_promise, "lock should return a Promise");
+            assert_eq!(is_promise, JsValue::Bool(true), "lock should return a Promise");
         });
     }
 
     #[test]
     fn screen_orientation_event_listener() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_screen_orientation_bindings(&ctx).unwrap();
-
-            let fired: bool = ctx
+        with_screen_orientation(|rt| {
+            let fired = rt
                 .eval(
                     r#"
                       var event_fired = false;
@@ -237,18 +202,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(fired, "change event listener should fire");
+            assert_eq!(fired, JsValue::Bool(true), "change event listener should fire");
         });
     }
 
     #[test]
     fn screen_orientation_onchange_handler() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_screen_orientation_bindings(&ctx).unwrap();
-
-            let fired: bool = ctx
+        with_screen_orientation(|rt| {
+            let fired = rt
                 .eval(
                     r#"
                       var onchange_fired = false;
@@ -260,39 +221,31 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(fired, "onchange handler should be called");
+            assert_eq!(fired, JsValue::Bool(true), "onchange handler should be called");
         });
     }
 
     #[test]
     fn screen_orientation_updates_on_event() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_screen_orientation_bindings(&ctx).unwrap();
-
-            let type_ok: bool = ctx
+        with_screen_orientation(|rt| {
+            let type_ok = rt
                 .eval(
                     "screen.orientation._fireChangeEvent('landscape-primary', 90); screen.orientation.type === 'landscape-primary'"
                 )
                 .unwrap();
-            let angle_ok: bool = ctx
+            let angle_ok = rt
                 .eval("screen.orientation.angle === 90")
                 .unwrap();
-            assert!(type_ok, "type should update");
-            assert!(angle_ok, "angle should update");
+            assert_eq!(type_ok, JsValue::Bool(true), "type should update");
+            assert_eq!(angle_ok, JsValue::Bool(true), "angle should update");
         });
     }
 
     #[test]
     fn screen_orientation_class_exported() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_screen_orientation_bindings(&ctx).unwrap();
-
-            let exists: bool = ctx.eval("typeof ScreenOrientation === 'function'").unwrap();
-            assert!(exists, "ScreenOrientation class should be exported to globalThis");
+        with_screen_orientation(|rt| {
+            let exists = rt.eval("typeof ScreenOrientation === 'function'").unwrap();
+            assert_eq!(exists, JsValue::Bool(true), "ScreenOrientation class should be exported to globalThis");
         });
     }
 }

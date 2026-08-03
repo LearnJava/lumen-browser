@@ -839,13 +839,6 @@ impl QuickJsRuntime {
                 eprintln!("WebUSB bindings init failed: {}", e);
             }
 
-            // Install Screen Orientation API (W3C Screen Orientation §3–4) — after DOM/screen so that
-            // screen.orientation is available. Phase 0: orientation is static 'portrait-primary';
-            // lock/unlock methods exist but actual fullscreen integration is a P3 shell task.
-            if let Err(e) = screen_orientation::install_screen_orientation_bindings(&ctx) {
-                eprintln!("Screen Orientation bindings init failed: {}", e);
-            }
-
             // Install W3C WebCodecs API (https://www.w3.org/TR/webcodecs/) — after DOM.
             // Phase 0: VideoEncoder/Decoder + AudioEncoder/Decoder + EncodedVideoChunk/AudioChunk stubs.
             // configure() rejects with NotSupportedError; no codec support in Phase 0.
@@ -1047,12 +1040,6 @@ impl QuickJsRuntime {
                 eprintln!("URL Pattern API init failed: {}", e);
             }
 
-            // Install Navigation API (HTML LS §7.8) — pure JS implementation.
-            // Provides window.navigation singleton with currentEntry, navigate(), back(), forward(), traverseTo().
-            if let Err(e) = navigation_api::install_navigation_api(&ctx) {
-                eprintln!("Navigation API init failed: {}", e);
-            }
-
             // Install CloseWatcher API (WICG) — after DOM so `document` and `Event` exist.
             // Provides `new CloseWatcher()` with requestClose()/destroy()/close events and
             // Escape-key intercept on the topmost watcher.
@@ -1067,14 +1054,6 @@ impl QuickJsRuntime {
                 Arc::clone(&self.view_transition_events),
             ) {
                 eprintln!("View Transitions bindings init failed: {}", e);
-            }
-
-            // Install Web Speech API (W3C Web Speech §3–4) — after DOM so `window`,
-            // `Promise`, `setTimeout`, and `Event` are available.
-            // Phase 0: SpeechSynthesis dispatches to OS TTS (SAPI/espeak/say);
-            // SpeechRecognition always rejects with service-not-allowed.
-            if let Err(e) = speech::install_speech_bindings(&ctx) {
-                eprintln!("Speech bindings init failed: {}", e);
             }
 
             // Install Gamepad API (W3C Gamepad L2 §4) — after DOM so `navigator`,
@@ -1160,11 +1139,6 @@ impl QuickJsRuntime {
                 eprintln!("ElementInternals API init failed: {}", e);
             }
 
-            // Phase 0: navigator.presentation + PresentationRequest/Connection stubs.
-            if let Err(e) = presentation_api::install_presentation_api(&ctx) {
-                eprintln!("Presentation API init failed: {}", e);
-            }
-
             // Install WebAssembly API (W3C WebAssembly JavaScript Interface §7) — after DOM.
             // Phase 0: compile/instantiate return resolved Promises with empty Module/Instance;
             // validate() checks the 4-byte WASM magic header. No actual WASM execution.
@@ -1223,14 +1197,6 @@ impl QuickJsRuntime {
             // Must come after file_input (depends on __lumen_file_read_text/base64 bindings).
             if let Err(e) = filesystem_access::install_filesystem_access(&ctx) {
                 eprintln!("File System Access API init failed: {}", e);
-            }
-
-            // W3C Multi-Screen Window Placement Level 1 — screen.isExtended,
-            // navigator.getScreenDetails() → Promise<ScreenDetails>, ScreenDetailed class.
-            // Phase 0: single-screen stub (isExtended=false, one ScreenDetailed mirroring screen).
-            // Phase 1: _lumen_get_screen_details() native binding for OS multi-screen enumeration.
-            if let Err(e) = window_management::install_window_management_api(&ctx) {
-                eprintln!("Window Management API init failed: {}", e);
             }
 
             // WICG Shared Storage API — window.sharedStorage (Privacy Sandbox).

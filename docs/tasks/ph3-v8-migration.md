@@ -2503,7 +2503,48 @@ build (7 `webhid` + 8 `network_log_bindings` + 0 `css_properties_values_api`, al
 ungated + 5 `scheduler` + 5 of `paint_worklet`'s 8 — its 3 registry tests stayed ungated).
 rquickjs suite did not go red from this batch. Both clippy passes clean.
 
-Next in queue: S12b-B5 (`presentation_api`/`screen_orientation`/`window_management`/`navigation_api`/`speech`).
+**S12b-B5** (2026-08-03): fifth batch of queue group A (`docs/tasks/p1-s12b-cleanup-queue.md`
+§3), 5 small modules: `presentation_api` (6 tests), `screen_orientation` (8), `window_management`
+(8), `navigation_api` (0), `speech` (0 in its own `mod tests`) — 22 total, all ported in place to
+`#[cfg(all(test, feature = "v8-backend"))]` against a bare `V8JsRuntime::new()` (no full
+`install_dom`), reusing each module's existing rquickjs prereq-eval string almost verbatim
+(swap `ctx.eval::<bool,_>(...)`/`Context::full` boilerplate for `rt.eval(...)` +
+`JsValue::Bool` comparisons).
+
+`speech` was the batch's actual trap: its own `mod tests` had 0 tests, but a **hidden
+25-test integration suite** lives in `crates/js/tests/cases/speech_api.rs`, built against
+`QuickJsRuntime::install_dom` (not caught by the `dom.rs` file-stem grep from §2 step 2 — the
+tests live in a *separate integration test file*, not `dom.rs`). Deleting
+`speech::install_speech_bindings`'s call out of `QuickJsRuntime::install_dom` silently broke
+all 25 (`speechSynthesis is not defined` etc.) on the next full-suite run, after clippy had
+already gone green — the gate order (clippy before test) doesn't catch this, only
+`cargo test -p lumen-js --features v8-backend` does. Ported by swapping
+`QuickJsRuntime`/`lumen_js::QuickJsRuntime` for `V8JsRuntime`/`lumen_js::v8_runtime::V8JsRuntime`
+(same `install_dom` signature, mirrors the QuickJS one per its own doc comment) and adding
+`#![cfg(feature = "v8-backend")]` at the file top (mirrors `v8_eval.rs`/`v8_smoke.rs`) so the
+default build's `tests/cases/mod.rs` aggregation empties it out instead of trying to compile
+against a type that no longer installs the API. **Lesson for remaining batches:** step 2 of
+§2 must also `grep -rl "<file_stem>" crates/js/tests/cases/` in addition to `dom.rs` — any
+module with a dedicated integration-test file is exactly this trap.
+
+`platform_speak_async`/`platform_speak_blocking` (the OS-TTS thread helpers in `speech.rs`,
+shared by both engines' install fns) went dead-code once the rquickjs install fn calling them
+was removed — gated all of them behind `#[cfg(feature = "v8-backend")]` too (per-target-OS
+`cfg` combined via `all(...)`), otherwise `cargo clippy -p lumen-js --all-targets -- -D
+warnings` (no `v8-backend`) fails on unused-function.
+
+`navigation_api.rs` hit the S12b-5/8/10/12/B1/B4 `empty_line_after_doc_comments` gotcha
+(leftover `///` file-header before the rquickjs `use`/fn removal, with a blank line before the
+next doc block) — fixed by converting the header to `//!` module-doc.
+
+`cargo test -p lumen-js --features v8-backend`: 2584 lib + 68 integration, all green (lib
+count unchanged from S12b-B4 — in-place porting only; integration count unchanged too, since
+`speech_api.rs`'s 25 tests already existed in this binary before the batch, only the *default*
+binary lost them). `cargo test -p lumen-js` (default): 1106 lib (down from 1128, the 22 ported
+`mod tests`) + 24 integration (down from 49, the 25 `speech_api.rs` tests now v8-only). rquickjs
+suite did not go red from this batch. Both clippy passes clean.
+
+Next in queue: S12b-B6 (`iframe_element`/`url_pattern`/`web_midi`/`surface_api`/`scroll_timeline`).
 
 ---
 

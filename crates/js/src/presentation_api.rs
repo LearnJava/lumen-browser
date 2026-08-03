@@ -13,16 +13,9 @@
 //!
 //! Phase 0: no-op — no actual display discovery or projection. All connections are stubs.
 
-use rquickjs::Ctx;
-
-/// Install the Presentation API bindings into the JS context.
-pub fn install_presentation_api(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(PRESENTATION_API_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_presentation_api`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// V8 port of the former rquickjs `install_presentation_api` (Ph3 V8 migration S5-S7,
+/// rquickjs side removed in S12b-B5): identical JS shim, evaluated via
+/// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_presentation_api_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -31,6 +24,7 @@ pub(crate) fn install_presentation_api_v8(rt: &crate::v8_runtime::V8JsRuntime) -
 }
 
 /// JavaScript shim implementing W3C Presentation API Level 1 (Phase 0).
+#[cfg(feature = "v8-backend")]
 const PRESENTATION_API_SHIM: &str = r#"(function() {
   'use strict';
 
@@ -172,19 +166,16 @@ const PRESENTATION_API_SHIM: &str = r#"(function() {
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
     use super::*;
-    use rquickjs::{Context, Runtime};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
-
-    fn install(ctx: &rquickjs::Ctx) {
-        ctx.eval::<(), _>(
+    fn with_presentation_api(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(
             r#"
             globalThis.navigator = globalThis.navigator || {};
             if (typeof DOMException === 'undefined') {
@@ -198,39 +189,34 @@ mod tests {
             "#,
         )
         .unwrap();
-        install_presentation_api(ctx).unwrap();
+        install_presentation_api_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
     fn navigator_presentation_exists() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
+        with_presentation_api(|rt| {
+            let ok = rt
                 .eval("typeof navigator.presentation !== 'undefined'")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn presentation_request_start_returns_rejected_promise() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
+        with_presentation_api(|rt| {
+            let ok = rt
                 .eval("new PresentationRequest(['https://example.com']).start() instanceof Promise")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn default_request_getter_setter() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
+        with_presentation_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var req = new PresentationRequest(['https://example.com']);
@@ -239,28 +225,24 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn presentation_availability_value_false() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
+        with_presentation_api(|rt| {
+            let ok = rt
                 .eval("new PresentationAvailability().value === false")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn get_availability_resolves_with_false_value() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
+        with_presentation_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var req = new PresentationRequest(['https://example.com/cast']);
@@ -269,16 +251,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn presentation_connection_state_lifecycle() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
+        with_presentation_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var conn = new PresentationConnection('conn-1', 'https://example.com');
@@ -292,7 +272,7 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 }

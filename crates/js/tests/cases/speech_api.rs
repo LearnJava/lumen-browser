@@ -3,21 +3,25 @@
 //! Verifies that `speechSynthesis`, `SpeechSynthesisUtterance`, `SpeechSynthesisVoice`,
 //! `SpeechRecognition`, and `webkitSpeechRecognition` are properly installed in the
 //! full DOM environment.
+//!
+//! Ported from `QuickJsRuntime` to `V8JsRuntime` in S12b-B5: the rquickjs side of
+//! `speech.rs` was removed, so `speechSynthesis` etc. are only installed under V8.
+#![cfg(feature = "v8-backend")]
 
 use lumen_core::JsRuntime as _;
 use lumen_dom::Document;
-use lumen_js::QuickJsRuntime;
+use lumen_js::v8_runtime::V8JsRuntime;
 use std::sync::{Arc, Mutex};
 
-fn make_rt() -> QuickJsRuntime {
-    let rt = QuickJsRuntime::new().unwrap();
+fn make_rt() -> V8JsRuntime {
+    let rt = V8JsRuntime::new().unwrap();
     let doc = Arc::new(Mutex::new(Document::new()));
     rt.install_dom(doc, "about:blank", None, None, None, None, None, None, None, None, false)
         .unwrap();
     rt
 }
 
-fn bool_eval(rt: &QuickJsRuntime, script: &str) -> bool {
+fn bool_eval(rt: &V8JsRuntime, script: &str) -> bool {
     match rt.eval(script) {
         Ok(lumen_core::JsValue::Bool(b)) => b,
         Ok(other) => panic!("expected bool from `{script}`, got {other:?}"),
@@ -25,7 +29,7 @@ fn bool_eval(rt: &QuickJsRuntime, script: &str) -> bool {
     }
 }
 
-fn str_eval(rt: &QuickJsRuntime, script: &str) -> String {
+fn str_eval(rt: &V8JsRuntime, script: &str) -> String {
     match rt.eval(script) {
         Ok(lumen_core::JsValue::String(s)) => s,
         Ok(other) => panic!("expected string from `{script}`, got {other:?}"),
@@ -33,7 +37,7 @@ fn str_eval(rt: &QuickJsRuntime, script: &str) -> String {
     }
 }
 
-fn num_eval(rt: &QuickJsRuntime, script: &str) -> f64 {
+fn num_eval(rt: &V8JsRuntime, script: &str) -> f64 {
     match rt.eval(script) {
         Ok(lumen_core::JsValue::Number(n)) => n,
         Ok(other) => panic!("expected number from `{script}`, got {other:?}"),
