@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-03",
  "counts": {
-  "open": 197,
+  "open": 201,
   "fixed": 309,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 506,
+ "total_bugs": 510,
  "phases": [
   {
    "id": "P0",
@@ -8072,6 +8072,34 @@
    "component": "js/layout (CSS Transitions runtime — owner file not yet located)",
    "date": null,
    "debtor": false
+  },
+  "BUG-537": {
+   "status": "open",
+   "title": "`getComputedStyle().getPropertyValue(...)` never exposes `background-image` (or any `background-*` longhand except `-color`), `object-fit`, `object-position`, `…",
+   "component": "layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-538": {
+   "status": "open",
+   "title": "`text-box-trim`/`text-box-edge` (CSS Inline L3, shorthand `text-box`) are not implemented at all — no `ComputedStyle` field, not tracked in `CSS-SPECS.md`. Inli…",
+   "component": "css-parser/layout (`ComputedStyle` — no field exists)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-539": {
+   "status": "open",
+   "title": "`'<prop>' in getComputedStyle(el)` is unconditionally `false` for every property, implemented or not — the returned `Proxy` has a `get` trap but no `has` trap,…",
+   "component": "js (`crates/js/src/dom.rs:12772` — `window.getComputedStyle`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-540": {
+   "status": "open",
+   "title": "`getBoundingClientRect()` ignores the `offset-path` motion-path transform — confirmed via `--dump-layout` that the box's layout rect stays untransformed while `…",
+   "component": "layout/paint (`offset-path` applied via paint-only `resolve_motion_transform`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -8120,6 +8148,9 @@
    "BUG-213",
    "BUG-465",
    "BUG-500"
+  ],
+  "css-parser/layout (`ComputedStyle` — no field exists)": [
+   "BUG-538"
   ],
   "css-parser/layout (`block-step*` не распознаётся нигде, `grep -n \"\\\"block-step\" crates/engine/css-parser/src/lib.rs crates/engine/layout/src/style.rs` — ноль совпадений)": [
    "BUG-517"
@@ -8276,6 +8307,9 @@
   ],
   "js (`crates/js/src/dom.rs:12772-12805`)": [
    "BUG-483"
+  ],
+  "js (`crates/js/src/dom.rs:12772` — `window.getComputedStyle`)": [
+   "BUG-539"
   ],
   "js (`crates/js/src/dom.rs:15412-15556` — WAAPI `Animation` шим)": [
    "BUG-530"
@@ -8508,6 +8542,9 @@
   "layout (`crates/engine/layout/src/lib.rs::content_width`/`content_height`)": [
    "BUG-504"
   ],
+  "layout (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`)": [
+   "BUG-537"
+  ],
   "layout (`crates/engine/layout/src/style.rs::restyle_root_set_for_node_change`)": [
    "BUG-349"
   ],
@@ -8568,6 +8605,9 @@
    "BUG-198",
    "BUG-230",
    "BUG-239"
+  ],
+  "layout/paint (`offset-path` applied via paint-only `resolve_motion_transform`)": [
+   "BUG-540"
   ],
   "layout/paint/shell": [
    "BUG-242"
