@@ -1039,6 +1039,307 @@
          "status": "planned",
          "size": "M",
          "note": "Финальный срез, строго после остальных S12b-* (включая S12b-22..24) и после того как все ~119 файлов `crates/js/src` без rquickjs. Убрать: `rquickjs`-зависимость из `crates/js/Cargo.toml` (сейчас жёсткая, не optional — в этом крейте нет даже фичи `quickjs`), фичу `quickjs` из `crates/shell/Cargo.toml` (в `crates/driver/Cargo.toml` её уже нет — снята в S12b-22), `QuickJsRuntime`/`QuickPersistentJs`/`__lum_args__` (`lib.rs:188,2098,2126`), конструирования `QuickPersistentJs` в `main.rs` (`:3035-3040`, `:7195`, `:18888`); упростить ~84 гейта `any(feature=\"quickjs\", feature=\"v8\")` в `main.rs` обратно в безусловный код. Доксинк: закрыть ADR-018/`docs/tasks/ph3-v8-migration.md`, обновить CLAUDE.md (убрать формулировку про rollback-путь и «Phase 2 delivered: QuickJS»), CAPABILITIES.md, `subsystems/js.md`/`shell.md`/`driver.md`, ROADMAP.md. DoD: `rquickjs` отсутствует в Cargo.lock"
+        },
+        {
+         "id": "P3-v8-s12b-b1",
+         "title": "S12b-B1: снос rquickjs, мелкие модули (1/6)",
+         "status": "queued",
+         "size": "S",
+         "note": "Батч удаления rquickjs, полоса 1 (831 стр / 13 тестов): trusted_types, typed_om_api, serial, scroll_snap_events, webxr. Процедура и ловушки — docs/tasks/p1-s12b-cleanup-queue.md §2–3"
+        },
+        {
+         "id": "P3-v8-s12b-b2",
+         "title": "S12b-B2: снос rquickjs, мелкие модули (2/6)",
+         "status": "queued",
+         "size": "S",
+         "note": "Полоса 1 (1108/31): soft_navigation, bluetooth, eye_dropper, virtual_keyboard, local_font_access"
+        },
+        {
+         "id": "P3-v8-s12b-b3",
+         "title": "S12b-B3: снос rquickjs, мелкие модули (3/6)",
+         "status": "queued",
+         "size": "S",
+         "note": "Полоса 1 (1235/37): sanitizer, ua_client_hints, reporting_api, launch_handler, storage_manager"
+        },
+        {
+         "id": "P3-v8-s12b-b4",
+         "title": "S12b-B4: снос rquickjs, мелкие модули (4/6)",
+         "status": "queued",
+         "size": "S",
+         "note": "Полоса 1 (1369/35): webhid, network_log_bindings, css_properties_values_api, scheduler, paint_worklet"
+        },
+        {
+         "id": "P3-v8-s12b-b5",
+         "title": "S12b-B5: снос rquickjs, мелкие модули (5/6)",
+         "status": "queued",
+         "size": "S",
+         "note": "Полоса 1 (1539/22): presentation_api, screen_orientation, window_management, navigation_api, speech"
+        },
+        {
+         "id": "P3-v8-s12b-b6",
+         "title": "S12b-B6: снос rquickjs, мелкие модули (6/6)",
+         "status": "queued",
+         "size": "S",
+         "note": "Полоса 1 (1599/51): iframe_element, url_pattern, web_midi, surface_api, scroll_timeline"
+        },
+        {
+         "id": "P3-v8-s12b-b7",
+         "title": "S12b-B7: снос rquickjs, средние модули (1/8)",
+         "status": "queued",
+         "size": "S",
+         "note": "Полоса 2 (1039/22): web_locks, webusb, close_watcher"
+        },
+        {
+         "id": "P3-v8-s12b-b8",
+         "title": "S12b-B8: снос rquickjs, средние модули (2/8)",
+         "status": "queued",
+         "size": "S",
+         "note": "Полоса 2 (1139/45): gamepad, generic_sensor, shared_storage"
+        },
+        {
+         "id": "P3-v8-s12b-b9",
+         "title": "S12b-B9: снос rquickjs, средние модули (3/8)",
+         "status": "queued",
+         "size": "S",
+         "note": "Полоса 2 (1244/33): element_internals, video_pip, media_session"
+        },
+        {
+         "id": "P3-v8-s12b-b10",
+         "title": "S12b-B10: снос rquickjs, средние модули (4/8)",
+         "status": "queued",
+         "size": "S",
+         "note": "Полоса 2 (1321/29): long_animation_frames, form_validation, wake_lock"
+        },
+        {
+         "id": "P3-v8-s12b-b11",
+         "title": "S12b-B11: снос rquickjs, средние модули (5/8)",
+         "status": "queued",
+         "size": "S",
+         "note": "Полоса 2 (1519/35): navigator_bindings, media_capture, screen_capture"
+        },
+        {
+         "id": "P3-v8-s12b-b12",
+         "title": "S12b-B12: снос rquickjs, средние модули (6/8)",
+         "status": "queued",
+         "size": "S",
+         "note": "Полоса 2 (1638/51): geolocation, esm, idle_detection — модули с натив-состоянием в V8JsRuntime"
+        },
+        {
+         "id": "P3-v8-s12b-b13",
+         "title": "S12b-B13: снос rquickjs, средние модули (7/8)",
+         "status": "queued",
+         "size": "S",
+         "note": "Полоса 2 (1773/43): broadcast_channel, webrtc_stub, credentials"
+        },
+        {
+         "id": "P3-v8-s12b-b14",
+         "title": "S12b-B14: снос rquickjs, средние модули (8/8)",
+         "status": "queued",
+         "size": "S",
+         "note": "Полоса 2 (1312/35): xhr, file_input"
+        },
+        {
+         "id": "P3-v8-s12b-b15",
+         "title": "S12b-B15: снос rquickjs, крупные модули (1/12)",
+         "status": "queued",
+         "size": "M",
+         "note": "Полоса 3 (1383/18): web_codecs, decorators"
+        },
+        {
+         "id": "P3-v8-s12b-b16",
+         "title": "S12b-B16: снос rquickjs, крупные модули (2/12)",
+         "status": "queued",
+         "size": "M",
+         "note": "Полоса 3 (1585/43): intl_bindings, media_devices"
+        },
+        {
+         "id": "P3-v8-s12b-b17",
+         "title": "S12b-B17: снос rquickjs, крупные модули (3/12)",
+         "status": "queued",
+         "size": "M",
+         "note": "Полоса 3 (1726/6): wasm/mod, sw_worker"
+        },
+        {
+         "id": "P3-v8-s12b-b18",
+         "title": "S12b-B18: снос rquickjs, крупные модули (4/12)",
+         "status": "queued",
+         "size": "M",
+         "note": "Полоса 3 (1865/24): es2026_proposals, shared_worker"
+        },
+        {
+         "id": "P3-v8-s12b-b19",
+         "title": "S12b-B19: снос rquickjs, крупные модули (5/12)",
+         "status": "queued",
+         "size": "M",
+         "note": "Полоса 3 (1878/39): notifications_bindings, web_audio"
+        },
+        {
+         "id": "P3-v8-s12b-b20",
+         "title": "S12b-B20: снос rquickjs, крупные модули (6/12)",
+         "status": "queued",
+         "size": "M",
+         "note": "Полоса 3 (1042/33): filesystem_access"
+        },
+        {
+         "id": "P3-v8-s12b-b21",
+         "title": "S12b-B21: снос rquickjs, крупные модули (7/12)",
+         "status": "queued",
+         "size": "M",
+         "note": "Полоса 3 (2117/31): webgl_canvas, audio_element"
+        },
+        {
+         "id": "P3-v8-s12b-b22",
+         "title": "S12b-B22: снос rquickjs, крупные модули (8/12)",
+         "status": "queued",
+         "size": "M",
+         "note": "Полоса 3 (2308/27): video_bindings, webassembly"
+        },
+        {
+         "id": "P3-v8-s12b-b23",
+         "title": "S12b-B23: снос rquickjs, крупные модули (9/12)",
+         "status": "queued",
+         "size": "M",
+         "note": "Полоса 3 (1208/19): dom_parser"
+        },
+        {
+         "id": "P3-v8-s12b-b24",
+         "title": "S12b-B24: снос rquickjs, крупные модули (10/12)",
+         "status": "queued",
+         "size": "M",
+         "note": "Полоса 3 (1226/30): temporal_api"
+        },
+        {
+         "id": "P3-v8-s12b-b25",
+         "title": "S12b-B25: снос rquickjs, крупные модули (11/12)",
+         "status": "queued",
+         "size": "M",
+         "note": "Полоса 3 (1231/20): svg"
+        },
+        {
+         "id": "P3-v8-s12b-b26",
+         "title": "S12b-B26: снос rquickjs, крупные модули (12/12)",
+         "status": "queued",
+         "size": "M",
+         "note": "Полоса 3 (1313/23): offscreen_canvas — пометка S8 «не портирован» устарела, порт есть (offscreen_canvas.rs:488)"
+        },
+        {
+         "id": "P3-v8-s12b-b27",
+         "title": "S12b-B27: снос rquickjs, worker",
+         "status": "queued",
+         "size": "M",
+         "note": "Полоса 4 (1497/26): worker — 11 ссылок из v8_runtime.rs, состояние воркеров в рантайме"
+        },
+        {
+         "id": "P3-v8-s12b-b28",
+         "title": "S12b-B28: снос rquickjs, tc39_proposals",
+         "status": "queued",
+         "size": "M",
+         "note": "Полоса 4 (1606/51): tc39_proposals — самая большая тест-суита; часть предложений V8 умеет нативно"
+        },
+        {
+         "id": "P3-v8-s12b-b29",
+         "title": "S12b-B29: снос rquickjs, webgpu",
+         "status": "queued",
+         "size": "M",
+         "note": "Полоса 4 (2503/29): webgpu — гейт гонять и с фичей webgpu (lumen-paint/backend-wgpu)"
+        },
+        {
+         "id": "P3-v8-s12b-b30",
+         "title": "S12b-B30: снос rquickjs, canvas2d",
+         "status": "queued",
+         "size": "M",
+         "note": "Полоса 4 (2691/31): canvas2d — V8-версия заинлайнена в v8_runtime.rs, flush_canvas_updates не трогать"
+        },
+        {
+         "id": "P3-v8-s12b-b31",
+         "title": "S12b-B31: снос rquickjs, subtle_crypto",
+         "status": "queued",
+         "size": "M",
+         "note": "Полоса 4 (2717/39): subtle_crypto — V8-биндинги в v8_runtime.rs:3804+"
+        },
+        {
+         "id": "P3-v8-s12b-g0",
+         "title": "S12b-G0: триаж модулей без V8-порта",
+         "status": "queued",
+         "size": "M",
+         "note": "Триаж 13 модулей, установленных ТОЛЬКО под QuickJS (contacts, background_sync, periodic_sync, storage_buckets, push_api, background_fetch, payment_request, media_stream_recording, view_transitions, cookie_store, cookie_banner, webgl_bindings, audio_bindings): под дефолтным V8 этих Web API нет вовсе. Решение порт/снос по каждому + BUG-NNN на регрессы + правка CAPABILITIES.md. Ничего не удалять"
+        },
+        {
+         "id": "P3-v8-s12b-g1",
+         "title": "S12b-G1: порт модулей без V8 (1/7)",
+         "status": "queued",
+         "size": "S",
+         "note": "После G0. Порт на V8 + снос rquickjs: contacts (110/4), background_sync (160/5)"
+        },
+        {
+         "id": "P3-v8-s12b-g2",
+         "title": "S12b-G2: порт модулей без V8 (2/7)",
+         "status": "queued",
+         "size": "S",
+         "note": "После G0. periodic_sync (164/4), storage_buckets (238/8)"
+        },
+        {
+         "id": "P3-v8-s12b-g3",
+         "title": "S12b-G3: порт модулей без V8 (3/7)",
+         "status": "queued",
+         "size": "S",
+         "note": "После G0. push_api (255/7), background_fetch (257/6)"
+        },
+        {
+         "id": "P3-v8-s12b-g4",
+         "title": "S12b-G4: порт модулей без V8 (4/7)",
+         "status": "queued",
+         "size": "S",
+         "note": "После G0. payment_request (286/6), media_stream_recording (297/8)"
+        },
+        {
+         "id": "P3-v8-s12b-g5",
+         "title": "S12b-G5: порт модулей без V8 (5/7)",
+         "status": "queued",
+         "size": "M",
+         "note": "После G0. view_transitions (329/11) — отделить JS API от движкового механизма P2-viewtrans, cookie_store (383/8)"
+        },
+        {
+         "id": "P3-v8-s12b-g6",
+         "title": "S12b-G6: порт модулей без V8 (6/7)",
+         "status": "queued",
+         "size": "M",
+         "note": "После G0. cookie_banner (451/16), webgl_bindings (564/21) — проверить, не вытеснен ли webgl_canvas.rs"
+        },
+        {
+         "id": "P3-v8-s12b-g7",
+         "title": "S12b-G7: порт модулей без V8 (7/7)",
+         "status": "queued",
+         "size": "M",
+         "note": "После G0. audio_bindings (1120/29) — проверить, не вытеснен ли web_audio.rs"
+        },
+        {
+         "id": "P3-v8-s12b-f1",
+         "title": "S12b-F1: снять фичу quickjs в shell",
+         "status": "queued",
+         "size": "M",
+         "note": "Строго после всех B*/G*. lumen-shell: убрать фичу quickjs (crates/shell/Cargo.toml:28) и ветки конструирования QuickJS-рантайма, упростить any(quickjs, v8)-гейты до безусловных"
+        },
+        {
+         "id": "P3-v8-s12b-f2",
+         "title": "S12b-F2: удалить QuickJsRuntime",
+         "status": "queued",
+         "size": "M",
+         "note": "После F1. lumen-js/lib.rs: удалить QuickJsRuntime, QuickPersistentJs, install_dom, rq_err (lib.rs:2211), костыль __lum_args__, use rquickjs (lib.rs:144)"
+        },
+        {
+         "id": "P3-v8-s12b-f3",
+         "title": "S12b-F3: удалить install_primitives из dom.rs",
+         "status": "queued",
+         "size": "M",
+         "note": "После F2. dom.rs: удалить install_primitives (dom.rs:460-3196, 2736 строк) и use rquickjs (dom.rs:16); тесты dom.rs уже на V8 после S12b-24, порта не требуется"
+        },
+        {
+         "id": "P3-v8-s12b-f4",
+         "title": "S12b-F4: убрать зависимость rquickjs",
+         "status": "queued",
+         "size": "S",
+         "note": "После F3. Убрать rquickjs из crates/js/Cargo.toml:42, поправить description крейта, обновить docs/plan/tech-stack.md, CAPABILITIES.md, subsystems/js.md, ADR-018; rquickjs исчезает из Cargo.lock"
         }
        ]
       },
