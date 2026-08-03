@@ -108,3 +108,14 @@ subtests, WAAPI keyframe interpolation feature-detect) both fail
 `isolation/animation/isolation-no-interpolation.html` (7 subtests), same
 missing-from-prototype shape. `.ini` under
 `tests/wpt/metadata/css/compositing/isolation/animation/`.
+
+## Срез 27 (`css/css-transitions`, 2026-08-03)
+
+Three files, 136 subtests, same missing-from-prototype shape:
+`animations/text-shadow-interpolation.html` (42/168 failing subtests),
+`animations/vertical-align-interpolation.html` (42/182),
+`animations/z-index-interpolation.html` (52/250) — in each file the
+majority of subtests (the plain numeric-interpolation cases) already pass;
+only the ones that also probe the raw Web Animations path fail this
+specific feature-detect. `.ini` under
+`tests/wpt/metadata/css/css-transitions/animations/`.

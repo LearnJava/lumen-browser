@@ -351,3 +351,20 @@ back as `"spaces"`), `ruby-position-invalid.html` (5) — none of the four
 (4), `parsing/page-invalid.html` (5), `parsing/size-invalid.html` (14),
 `parsing/page-orientation-invalid.tentative.html` (4). `.ini` under
 `tests/wpt/metadata/css/css-ruby/` and `tests/wpt/metadata/css/css-page/`.
+
+## Срез 27 (`css/css-transitions`, 2026-08-03)
+
+Six files, ~48 subtests, both established shapes plus a new alias-folding
+instance: **rejection** — `parsing/transition-behavior.html` (10 of its 25
+failing subtests — `allow-discrete`-related `transition`/`transition
+-behavior` setter values accepted verbatim), `parsing/transition-delay
+-invalid.html` (5), `parsing/transition-duration-invalid.html` (5),
+`parsing/transition-property-valid.html` (1, a rejection case embedded in
+an otherwise-valid file). **Canonicalization** — `parsing/transition-valid
+.html` (3, shorthand component order not canonicalized: `"1s -3s cubic
+-bezier(...) top"` should serialize as `"top 1s cubic-bezier(...) -3s"`);
+`parsing/transition-timing-function-valid.html` (4, the same `step-start`/
+`step-end`/`steps(N, end)`/`steps(N, jump-end)` keyword-to-function alias
+gap already documented for `animation-timing-function` in срез 15 — same
+missing serializer, different shorthand). `.ini` under
+`tests/wpt/metadata/css/css-transitions/parsing/`.

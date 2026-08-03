@@ -250,3 +250,15 @@ bare-id pattern (`h1`) but hit at **top level** (`r1.setStart(h1, 0)` before
 the first `test()`), so this one is TIMEOUT rather than FAIL. `.ini` under
 `tests/wpt/metadata/css/css-page/` and
 `tests/wpt/metadata/css/css-highlight-api/`.
+
+## Срез 27 (`css/css-transitions`, 2026-08-03)
+
+Ten files, one bare-id subtest each (`box`/`outer`/`target`/`div`/`inner`
+depending on the file's own markup): `after-change-style-inherited-try
+-fallback.html`, `display-none-no-animations.html`, `inherit-height
+-transition.html`, `pseudo-elements-002.html`, `retargetted-transition-with
+-box-sizing.html`, `starting-style-name-defining-rules.html` (1 of its 2
+subtests — the other is BUG-536), `transition-base-response-002.html`,
+`transition-important.html`, `transition-reparented.html`,
+`transitions-retarget.html`. `.ini` under
+`tests/wpt/metadata/css/css-transitions/`.
