@@ -116,3 +116,17 @@ not just "unknown token", but also "known pseudo-element used in a
 structurally or argument-wise invalid way". `.ini` under
 `tests/wpt/metadata/css/css-forms/` for the 3 files, `expected: FAIL` per
 affected subtest.
+
+## Срез 26 (`css/css-highlight-api`, 2026-08-03)
+
+Same shape, a new pseudo-element: `highlight-pseudo-parsing.html`'s
+"should be an invalid selector" subtests (`"::highlight"` with no argument,
+`"::before::highlight(foo)"`, `"::highlight(foo).a"`,
+`"::highlight(foo)::after"`, `"::highlight(foo):hover"`,
+`":not(::highlight(foo)))"` — 6 subtests) all fail to throw
+`SyntaxError`/`DOMException` from `document.querySelector(selector)`. The
+file's "should be a valid selector" subtests fail for the unrelated reason
+already covered by [BUG-485](BUG-485-OPEN.md) (shared
+`test_valid_selector`/`test_invalid_selector` helper's
+`document.head.append(style)`). `.ini` under
+`tests/wpt/metadata/css/css-highlight-api/`.

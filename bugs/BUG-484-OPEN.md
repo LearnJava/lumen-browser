@@ -340,3 +340,14 @@ Two more files (16 subtests): `scrollbar-color-parsing.html` (5, plus a new
 canonicalization gap -- `#FF0000` doesn't serialize to `rgb(255, 0, 0)`) and
 `scrollbar-width-parsing.html` (11, invalid-value rejection only). `.ini`
 under `tests/wpt/metadata/css/css-scrollbars/`.
+
+## Срез 26 (`css/css-ruby` + `css/css-page`, 2026-08-03)
+
+Same shape, two categories: `css-ruby/parsing/ruby-align-invalid.html` (4),
+`ruby-merge-invalid.html` (6), `ruby-overhang-invalid.html` (11) +
+`ruby-overhang-valid.html` (1, canonicalization: `"none"` should serialize
+back as `"spaces"`), `ruby-position-invalid.html` (5) — none of the four
+`ruby-*` longhands reject any string; `css-page/page-rule-declarations-002.html`
+(4), `parsing/page-invalid.html` (5), `parsing/size-invalid.html` (14),
+`parsing/page-orientation-invalid.tentative.html` (4). `.ini` under
+`tests/wpt/metadata/css/css-ruby/` and `tests/wpt/metadata/css/css-page/`.

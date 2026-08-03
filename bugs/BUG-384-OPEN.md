@@ -230,3 +230,23 @@ masking shape as `set-selector-text.html` (срез 19) and
 (`element-replacement-dynamic-002.html`'s bare-id `wrapper`, 1 subtest).
 `.ini` under `tests/wpt/metadata/css/css-scroll-anchoring/` and
 `tests/wpt/metadata/css/css-content/`.
+
+## Срез 26 (`css/css-ruby` + `css/css-page` + `css/css-highlight-api`, 2026-08-03)
+
+`css-ruby/line-break-around-ruby-001.html` — bare-id `container` referenced
+inside `runTests()`, itself called at top level before any `test()`
+registers (`getComputedStyle(container.firstElementChild)` throws first) —
+TIMEOUT, 1 file.
+
+`css-page/parsing/margin-rules-002.html` — four `<style id="...">` elements
+(`nothing`/`propertiesAfter`/`propertiesBefore`/`propertiesBetween`)
+referenced as bare identifiers, 4 subtests;
+`parsing/page-orientation-computed.tentative.html` — bare-id `elm`, 1
+subtest. `css-highlight-api/highlight-pseudo-computed.html` — bare-id
+`target`/`h1`/`h2` (12 subtests, the file's entire failure set — the
+`::highlight()` pseudo-element computed-style logic these tests actually
+target is never reached); `highlight-pseudo-from-font-computed.html` — same
+bare-id pattern (`h1`) but hit at **top level** (`r1.setStart(h1, 0)` before
+the first `test()`), so this one is TIMEOUT rather than FAIL. `.ini` under
+`tests/wpt/metadata/css/css-page/` and
+`tests/wpt/metadata/css/css-highlight-api/`.

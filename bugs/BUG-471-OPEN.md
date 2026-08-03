@@ -128,3 +128,19 @@ category's largest single-file finding), `at-property-cssom.html` (39),
 (file-level `TIMEOUT` — `document.styleSheets[0].cssRules[0].style` at
 top-level script scope, before any `test()` registers). `.ini` under
 `tests/wpt/metadata/css/css-properties-values-api/` for all 6 files.
+
+## Срез 26 (`css/css-page`, 2026-08-03)
+
+Dominant finding of the category: `document.getElementById("sheet").sheet`/
+`document.styleSheets` both `undefined`, hit at **top level** in most files
+(`var sheet = document.getElementById("sheet").sheet; ... sheet.rules[0]`)
+→ TIMEOUT before the first `test()` registers. 10 files this slice:
+`cssom/margin-001.html` (4 subtests, harness OK — throw happens inside
+`test()` here), `cssom/margin-002.html`/`margin-003.html` (top-level,
+TIMEOUT), `cssom/page-001.html` (4, harness OK), `cssom/page-002.html`
+(top-level, TIMEOUT), `page-rule-declarations-000/001/003/004.html`
+(`document.styleSheets.length` at top level, TIMEOUT ×4),
+`parsing/nested-rules-001.html`, `parsing/page-rules-001.html` (partial —
+also hits [BUG-485](BUG-485-OPEN.md)'s `document.head.append` on other
+subtests), `parsing/size-valid.html`. `.ini` under
+`tests/wpt/metadata/css/css-page/`.

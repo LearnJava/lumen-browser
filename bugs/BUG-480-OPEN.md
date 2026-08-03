@@ -59,3 +59,13 @@ both build their entire test body inside `<iframe id=iframe srcdoc="...">` —
 same gap, srcdoc-based sub-document never runs. Both file-level `TIMEOUT`
 (zero subtests registered). `.ini` under
 `tests/wpt/metadata/css/css-properties-values-api/` for both files.
+
+## Срез 26 (`css/css-highlight-api`, 2026-08-03)
+
+`HighlightRegistry-highlightsFromPoint.html`'s "returns empty array when
+called on a display:none iframe document" subtest does
+`iframe.contentWindow.document` — `contentWindow` is `null`, so the read
+throws `Cannot read properties of null (reading 'document')` before the
+test ever reaches `highlightsFromPoint()` (the other 6 subtests in the same
+file fail on the unrelated [BUG-534](BUG-534-OPEN.md)). 1 subtest. `.ini`
+under `tests/wpt/metadata/css/css-highlight-api/`.

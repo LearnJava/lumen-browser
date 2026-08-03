@@ -106,3 +106,18 @@ rule`/`test_invalid_rule` (`parsing-testcommon.js`, all four use the same
 `document.head.append(style)` pattern) before estimating blast radius again.
 `.ini` under `tests/wpt/metadata/css/css-forms/` for all 3 files, `expected:
 FAIL` per affected subtest.
+
+## Срез 26 (`css/css-counter-styles` + `css/css-highlight-api` + `css/css-page`, 2026-08-03) — two more call sites
+
+`support/counter-style-testcommon.js` (shared helper, all 10
+`counter-style-at-rule/*.html` files this slice) — same
+`document.head.appendChild(style)` idiom, at top level before the first
+`test()` in every case, so all 10 are TIMEOUT rather than FAIL.
+`highlight-pseudo-parsing.html`'s "should be a valid selector" subtests (6)
+go through `parsing-testcommon.js`'s `test_valid_selector` (the срез-16 call
+site) again. `css-page/parsing/margin-rules-001.html` (15) and
+`parsing/page-rules-001.html` (8) go through the sibling
+`test_valid_rule`/`test_invalid_rule` helpers in the same file. `.ini` under
+`tests/wpt/metadata/css/css-counter-styles/`,
+`tests/wpt/metadata/css/css-highlight-api/`, and
+`tests/wpt/metadata/css/css-page/`.

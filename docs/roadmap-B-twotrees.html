@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-03",
  "counts": {
-  "open": 183,
+  "open": 196,
   "fixed": 309,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 492,
+ "total_bugs": 505,
  "phases": [
   {
    "id": "P0",
@@ -7992,6 +7992,97 @@
    "component": "js (`crates/js/src/dom.rs` — ни одного `DOMMatrix`/`DOMPoint`/`DOMRect`/`DOMQuad`-конструктора нигде)",
    "date": null,
    "debtor": false
+  },
+  "BUG-523": {
+   "status": "open",
+   "title": "`Element.scrollTop`/`scrollLeft` сеттер лишь кладёт запрос в очередь `pending_scrolls`, которую шелл разбирает по своему графику (кадр/event-loop) — синхронное…",
+   "component": "js/shell граница (`crates/js/src/dom.rs:6196-6205` сеттеры, `crates/js/src/v8_runtime.rs:3106` `_lumen_request_scroll`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-524": {
+   "status": "open",
+   "title": "CSS Scroll Anchoring (`overflow-anchor`) не реализован целиком — модуль отсутствует, а не частично сломан. Заведено по политике трека (как BUG-507/BUG-517) отде…",
+   "component": "css-parser + layout (`overflow-anchor` не парсится вовсе, `grep -rn \"overflow-anchor\" crates/engine/css-parser/src/` — ноль совпадений; в layout нет алгоритма выбора/подстройки якоря, единственное упоминание — doc-comment `layout/src/style.rs:896`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-525": {
+   "status": "open",
+   "title": "`document.scrollingElement` всегда `undefined` (подтверждено живой пробой и грепом; единственные упоминания — doc-comment фоллбэка в `crates/js/src/scroll_timel…",
+   "component": "js (`crates/js/src/dom.rs` — `document.scrollingElement` нигде не определён)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-526": {
+   "status": "open",
+   "title": "`MediaQueryList.media` не сериализует по спеке (Media Queries §Serializing a media query list) — просто эхо сырой входной строки без нормализации пробелов, заме…",
+   "component": "js (`crates/js/src/dom.rs:10537-10543` — `MediaQueryList` конструктор)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-527": {
+   "status": "open",
+   "title": "Boolean-context медиа-фичи (`(feature)` без `: value`) не поддержаны вовсе — `split_once(':')` даёт `Unsupported` для ЛЮБОЙ фичи без двоеточия, даже когда её va…",
+   "component": "css-parser (`crates/engine/css-parser/src/parser.rs:2291-2400` `parse_media_feature`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-528": {
+   "status": "open",
+   "title": "Список медиа-запросов через запятую, где КАЖДАЯ клауза не распарсилась, матчится как `@media all` вместо `not all` — невалидные клаузы, похоже, не попадают в `s…",
+   "component": "css-parser (`crates/engine/css-parser/src/parser.rs:1664-1672` `MediaQuery::matches`, empty-clauses fallback)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-529": {
+   "status": "open",
+   "title": "`window.innerWidth`/`innerHeight`/`outerWidth`/`outerHeight` отсутствуют целиком (ноль совпадений в `crates/js/src/*.rs`, подтверждено живой пробой — все четыре…",
+   "component": "js (`crates/js/src/dom.rs` — `Window`-шим)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-530": {
+   "status": "open",
+   "title": "`Animation.pause()` + `currentTime =` сик никогда не переприменяет интерполированный стиль — `_applyAtP` (единственное место, реально пишущее стиль на `eff.targ…",
+   "component": "js (`crates/js/src/dom.rs:15412-15556` — WAAPI `Animation` шим)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-531": {
+   "status": "open",
+   "title": "`CSS.registerProperty()` не валидирует `syntax`/`initialValue` вовсе — ни грамматику syntax-строки (data-type имена, `\\",
+   "component": "js (`crates/js/src/css_properties_values_api.rs:95-137` — `CSS_PROPERTIES_VALUES_SHIM`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-532": {
+   "status": "open",
+   "title": "CSS `zoom` (css-viewport) не реализовано вовсе — ноль совпадений `\"zoom\"` в парсере/`ComputedStyle`. `zoom/parsing/zoom-valid.html`: 9 `test_valid_value` проход…",
+   "component": "css-parser/layout (`crates/engine/css-parser/src/*.rs`, `crates/engine/layout/src/style.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-533": {
+   "status": "open",
+   "title": "`StaticRange` constructor entirely missing on both engines (`Range` exists, `StaticRange` doesn't) — `new StaticRange(...)` throws `ReferenceError`. 30 files ac…",
+   "component": "js (`crates/js/src/dom.rs` — `Range` global at `~6958`, no `StaticRange`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-534": {
+   "status": "open",
+   "title": "CSS Custom Highlight API is a Phase-0 ad-hoc shim, not the spec's Setlike/Maplike interfaces: `Highlight` has no `.size`/`.add`/`.delete`/`.has`/`.clear`/iterat…",
+   "component": "js (`crates/js/src/highlight_api.rs` — `HIGHLIGHT_API_SHIM`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-535": {
+   "status": "open",
+   "title": "`ruby-position: alternate` has no layout effect — stacked `<rtc>` annotations never flip over/under across siblings, despite `ruby-position`'s plain `over`/`und…",
+   "component": "layout (ruby box layout)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -8014,6 +8105,12 @@
   "css-parser (`@mixin`/`@apply`/`@contents` не распознаются нигде, `grep -rn \"MixinRule\\": [
    "BUG-518"
   ],
+  "css-parser (`crates/engine/css-parser/src/parser.rs:1664-1672` `MediaQuery::matches`, empty-clauses fallback)": [
+   "BUG-528"
+  ],
+  "css-parser (`crates/engine/css-parser/src/parser.rs:2291-2400` `parse_media_feature`)": [
+   "BUG-527"
+  ],
   "css-parser (`crates/engine/css-parser/src/parser.rs::skip_ws_and_comments`)": [
    "BUG-510"
   ],
@@ -8022,6 +8119,9 @@
   ],
   "css-parser (функция не распознаётся нигде, `grep -rn '\"env\"' crates/` — ноль CSS-релевантных совпадений)": [
    "BUG-514"
+  ],
+  "css-parser + layout (`overflow-anchor` не парсится вовсе, `grep -rn \"overflow-anchor\" crates/engine/css-parser/src/` — ноль совпадений; в layout нет алгоритма выбора/подстройки якоря, единственное упоминание — doc-comment `layout/src/style.rs:896`)": [
+   "BUG-524"
   ],
   "css-parser/layout": [
    "BUG-088",
@@ -8034,6 +8134,9 @@
   ],
   "css-parser/layout (`block-step*` не распознаётся нигде, `grep -n \"\\\"block-step\" crates/engine/css-parser/src/lib.rs crates/engine/layout/src/style.rs` — ноль совпадений)": [
    "BUG-517"
+  ],
+  "css-parser/layout (`crates/engine/css-parser/src/*.rs`, `crates/engine/layout/src/style.rs`)": [
+   "BUG-532"
   ],
   "css-parser/layout (`crates/engine/layout/src/style.rs::apply_declaration`)": [
    "BUG-492"
@@ -8173,11 +8276,20 @@
   "js (`crates/js/src/close_watcher.rs`, `CLOSE_WATCHER_SHIM`)": [
    "BUG-340"
   ],
+  "js (`crates/js/src/css_properties_values_api.rs:95-137` — `CSS_PROPERTIES_VALUES_SHIM`)": [
+   "BUG-531"
+  ],
+  "js (`crates/js/src/dom.rs:10537-10543` — `MediaQueryList` конструктор)": [
+   "BUG-526"
+  ],
   "js (`crates/js/src/dom.rs:12772-12802`, `WEB_API_SHIM`)": [
    "BUG-490"
   ],
   "js (`crates/js/src/dom.rs:12772-12805`)": [
    "BUG-483"
+  ],
+  "js (`crates/js/src/dom.rs:15412-15556` — WAAPI `Animation` шим)": [
+   "BUG-530"
   ],
   "js (`crates/js/src/dom.rs:4257`, `_lumen_serialize_style`)": [
    "BUG-497"
@@ -8203,11 +8315,20 @@
   "js (`crates/js/src/dom.rs:6770` — `_lumen_get_fonts()`)": [
    "BUG-467"
   ],
+  "js (`crates/js/src/dom.rs` — `Range` global at `~6958`, no `StaticRange`)": [
+   "BUG-533"
+  ],
+  "js (`crates/js/src/dom.rs` — `Window`-шим)": [
+   "BUG-529"
+  ],
   "js (`crates/js/src/dom.rs` — `_lumen_make_style`/`_lumen_serialize_style`)": [
    "BUG-473"
   ],
   "js (`crates/js/src/dom.rs` — `devicePixelRatio` никогда не проставляется на глобал вне `window_management.rs`)": [
    "BUG-515"
+  ],
+  "js (`crates/js/src/dom.rs` — `document.scrollingElement` нигде не определён)": [
+   "BUG-525"
   ],
   "js (`crates/js/src/dom.rs` — live-DOM `Element` object literal)": [
    "BUG-351"
@@ -8236,6 +8357,9 @@
   ],
   "js (`crates/js/src/dom.rs`, нет `dataset` нигде в `WEB_API_SHIM`)": [
    "BUG-496"
+  ],
+  "js (`crates/js/src/highlight_api.rs` — `HIGHLIGHT_API_SHIM`)": [
+   "BUG-534"
   ],
   "js (`crates/js/src/surface_api.rs` рядом с `navigator.doNotTrack`, строки 116-121) + network (`crates/network/src/http/headers.rs::build_request_headers`)": [
    "BUG-397"
@@ -8284,6 +8408,9 @@
   ],
   "js/network граница (`crates/js/src/dom.rs:11353` — `_lumen_record_resource_timing`, ни одного вызова вне `dom.rs`)": [
    "BUG-520"
+  ],
+  "js/shell граница (`crates/js/src/dom.rs:6196-6205` сеттеры, `crates/js/src/v8_runtime.rs:3106` `_lumen_request_scroll`)": [
+   "BUG-523"
   ],
   "layout": [
    "BUG-001",
@@ -8409,6 +8536,9 @@
   ],
   "layout (float positioning, CSS2.1 §9.5.1)": [
    "BUG-469"
+  ],
+  "layout (ruby box layout)": [
+   "BUG-535"
   ],
   "layout (процентная резолюция против containing block)": [
    "BUG-468"
