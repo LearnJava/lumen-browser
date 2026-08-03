@@ -368,3 +368,14 @@ an otherwise-valid file). **Canonicalization** — `parsing/transition-valid
 gap already documented for `animation-timing-function` in срез 15 — same
 missing serializer, different shorthand). `.ini` under
 `tests/wpt/metadata/css/css-transitions/parsing/`.
+
+## Срез 29 (`css/css-scroll-snap` + `css/css-animations`, 2026-08-03)
+
+Same canonicalization gap, confirmed via `parsing/scroll-margin-valid.html`
+(`test_valid_value("scroll-margin-top", "0", "0px")` — verbatim-stored `"0"`
+never canonicalizes to `"0px"`, 18 subtests across the file's
+`scroll-margin-*` longhands) and `parsing/animation-range-shorthand.html`/
+`animation-range-{start,end}-computed.html` (`"normal"`/`"normal normal"`
+not expanded into the two-longhand canonical form, 34 subtests). `.ini`
+under `tests/wpt/metadata/css/css-scroll-snap/parsing/` and
+`tests/wpt/metadata/css/css-animations/parsing/`.

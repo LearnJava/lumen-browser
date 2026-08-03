@@ -37,3 +37,11 @@ when in no-quirks mode (Lumen doesn't implement quirks mode compatMode
 switching, so the simple `documentElement`-always case likely applies),
 `null` before it's connected to a browsing context. Small, self-contained
 fix — no dependency on BUG-523/BUG-524.
+
+## Срез 29 (`css/css-scroll-snap`, 2026-08-03)
+
+Same gap, confirmed again independently in a different category:
+`snap-area-capturing-add-scroll-container.html` (19 subtests, `.scrollTo`)
+and `scroll-initial-target/scroll-initial-target-root.tentative.html` (2,
+`.scrollTop`) both do `const document_scroller = document.scrollingElement;`
+at top level. `.ini` under `tests/wpt/metadata/css/css-scroll-snap/`.

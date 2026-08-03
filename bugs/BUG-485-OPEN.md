@@ -121,3 +121,31 @@ site) again. `css-page/parsing/margin-rules-001.html` (15) and
 `tests/wpt/metadata/css/css-counter-styles/`,
 `tests/wpt/metadata/css/css-highlight-api/`, and
 `tests/wpt/metadata/css/css-page/`.
+
+## Срез 29 (`css/css-shadow` + `css/css-scroll-snap` + `css/css-animations`, 2026-08-03) — largest single-slice count, ~182 subtests
+
+Re-confirmed live via a minimal `--dump-layout` probe (`document.head` →
+`undefined` while `document.body`/`document.documentElement`/
+`document.querySelector('head')` all resolve correctly — rules out a general
+element-lookup regression, isolates the accessor itself). Two call-site
+shapes: `test_valid_selector`/`test_invalid_selector` in
+`parsing-testcommon.js` (`.append`, srez-16/26 call site, dominant here too
+— 172 subtests, mostly `css-shadow`'s `host-context-parsing.html` and
+similar) and a direct `document.head.appendChild(originalStyleElement)` in
+`css-animations/animation-style-element-replaced-with-keyframes-rule-of-
+same-name.html` (`.appendChild`, 10 subtests, a new call-site shape not
+previously catalogued in this bug — worth re-grepping
+`document\.head\.appendChild` separately from `\.append\(` before the next
+blast-radius estimate).
+
+Systemic note for whoever fixes this: because
+`test_valid_selector`/`test_invalid_selector` is the single most common
+building block for CSS selector-parsing WPT tests across the *entire*
+vendored `css/` corpus, this bug likely also explains a share of
+"selector should be valid/invalid" failures already attributed to other
+causes in earlier slices (1-28) that used the same helper without isolating
+`document.head` specifically — re-verify old findings after this lands,
+same caution as [BUG-539](BUG-539-OPEN.md)'s note about its own systemic
+reach. `.ini` under `tests/wpt/metadata/css/css-shadow/`,
+`tests/wpt/metadata/css/css-scroll-snap/`,
+`tests/wpt/metadata/css/css-animations/`.

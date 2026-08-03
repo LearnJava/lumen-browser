@@ -66,3 +66,16 @@ fixed special-cased members (`getPropertyValue`, `length`, `item`,
 `nid` — needs a native query (`_lumen_computed_style_has(nid, prop)` or
 exposing the full key set) since the JS side has no visibility into the
 Rust-side whitelist today.
+
+## Срез 29 (`css/css-scroll-snap` + `css/css-animations`, 2026-08-03)
+
+Systemic-reach warning above confirmed across two more categories: ~190
+subtests total via the same `"<prop> doesn't seem to be supported in the
+computed style"` message — `animation-range`/`-start`/`-end` (94),
+`animation-name`/`animation` (41), `scroll-padding`/`-block`/`-inline`/
+`-top`/`-right`/`-bottom`/`-left` (all 8 logical/physical variants, 58),
+`scroll-snap-type`/`scroll-snap-align` (17). Not re-attributing any of
+these to a missing-property implementation without re-checking after this
+lands — same caution the bug's own title states. `.ini` under
+`tests/wpt/metadata/css/css-scroll-snap/` and
+`tests/wpt/metadata/css/css-animations/`.
