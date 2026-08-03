@@ -413,3 +413,20 @@ serialization), `css-text` (11/78 — `text-decoration`/`letter-spacing`/
 (5/10). Same mechanism as every prior slice (`_lumen_make_style` stores the
 raw string instead of parsing+canonicalizing). `.ini` under each category's
 own `tests/wpt/metadata/css/<category>/`.
+
+## Срез 33 (`css/css-sizing`, 2026-08-03)
+
+115 subtests, all three established shapes: rejection dominates
+(`parsing/{width,height,box-sizing,min-width,max-width,min-height,
+max-height,aspect-ratio,contain-intrinsic-size}-invalid.html`), plus a
+shape-3 keyword-alias instance in the `flex` shorthand
+(`stretch/parsing.html`, 3 subtests — `e.style.flex = "1 0 stretch"` should
+expand `flex-basis`/`flex-grow`/`flex-shrink` but stores the raw string,
+same class as the `step-start`/`steps(N, end)` alias gap already documented
+for `animation-timing-function`/`transition-timing-function`). Note for the
+triage script: this bug's message shapes appear in the subtest **name**
+(`"... should not set the property value"` / `"... should be canonical"`),
+not always in `message` — match against `name`, not just `message`, or
+files like `parsing/width-invalid.html` under-attribute (message there is
+just `assert_equals: expected "" but got "none"`, no bug-identifying text at
+all outside the name). `.ini` under `tests/wpt/metadata/css/css-sizing/`.

@@ -126,3 +126,9 @@ Font Loading API, not just `document.fonts`'s read side. Several more
 undefined (reading 'then')` chained off a `document.fonts.*` call — same
 family, not yet individually re-counted per file. `.ini` under
 `tests/wpt/metadata/css/css-fonts/`.
+
+## Срез 33 (`css/css-sizing`, 2026-08-03)
+
+11 more files (`stretch/*`, `keyword-sizes-on-inline-block.html`, etc), all
+the `document.fonts.ready.then(() => checkLayout(...))` idiom. `.ini` under
+`tests/wpt/metadata/css/css-sizing/`, file-level `expected: TIMEOUT`.

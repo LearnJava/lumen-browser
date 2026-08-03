@@ -187,3 +187,12 @@ meta-строк, что и у BUG-519's файлов) — найдены тол�
 Harness never reports (0 subtests registered), each pays the full ~10s
 wptrunner timeout. `.ini` under `tests/wpt/metadata/css/css-scrollbars/`,
 `expected: TIMEOUT` file-level only (no subtests to suppress).
+
+## Срез 33 (`css/css-sizing`, 2026-08-03)
+
+48 more files (`stretch/*`, `keyword-sizes-on-*`, `contain-intrinsic-size/*`)
+— largest single-slice extension yet, dominating this category's TIMEOUT
+cluster (48 of 69). Root-caused via `--processes 1 --limit 3` on a
+sub-sample + grep for `onload\s*=` in the vendored source, same method as
+срез 32. `.ini` under `tests/wpt/metadata/css/css-sizing/`, file-level
+`expected: TIMEOUT`.

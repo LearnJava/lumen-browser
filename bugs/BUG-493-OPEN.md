@@ -262,3 +262,54 @@ height is non-trivial (a forced layout pass produces a real, if imperfect,
 box), while the JS-side same-tick read the test relies on gets `0` — the
 established same-tick-cache signature, not a float/clear layout bug. 1
 subtest/file, 3 files. `.ini` under `tests/wpt/metadata/css/css-ruby/`.
+
+## Срез 33 (`css/css-sizing`, 2026-08-03) — a whole feature test suite
+(`contain-intrinsic-size/auto-*.html`, "Last Remembered Size") turned out to
+be this bug wearing a costume, not a missing feature
+
+Largest single-slice addition yet: 578 subtests. Two file families, both
+confirmed by inspecting the actual assertion code rather than the failure
+message alone (important — the naive read is misleading here):
+
+**`contain-intrinsic-size/auto-{006,008,009,011,014,015,016,017,018}.html`**
+("Last Remembered Size" — CSS Sizing 4's `contain-intrinsic-size: auto
+<fallback>` + `ResizeObserver`-driven size ratchet) produce messages like
+`"Sizing normally - clientWidth expected 100 but got 0"`, which reads like
+"the Last Remembered Size feature isn't implemented". It **is not that** —
+`auto-006.html`'s `promise_test` does
+`target.classList.remove("skip-contents"); checkSize(100, 50, "Sizing
+normally");` with the assertion **synchronously immediately after** the
+class mutation, no `await`/task boundary — exactly this bug's dominant
+symptom (`checkSize` calls `target.clientWidth`/`clientHeight`, both
+confirmed by срез 12 to share the same unflushed-cache mechanism as
+`getComputedStyle`). Before attributing this cluster, a plain-code repro was
+built and probed live (`--mcp-live-port`, `.tmp/repro_maxcontent.html`): a
+`div#target{width:max-content}` containing `div#contents`, mutate
+`#contents`'s size synchronously, read `#target.clientWidth` in the same
+eval call — stays at the pre-mutation value, confirming the mechanism
+without any Last-Remembered-Size-specific CSS at all. **Do not file a
+separate "Last Remembered Size unimplemented" bug for this shape in a future
+slice** — verify whether the failing assertion has a task boundary
+(`await`/`requestAnimationFrame`/promise resolution) between the mutation
+and the read first; only a genuinely async-scheduled read that still gets a
+stale value would indicate a real Last-Remembered-Size gap.
+
+**`aspect-ratio/abspos-aspect-ratio-border.html` +
+`aspect-ratio-automatic-minimum.html`** (9 subtests) — same mechanism, the
+other established idiom (срез 10): static markup + a plain top-level
+`<script>` that calls `test(() => { var d = dims(id); assert_equals(d.w,
+400, ...) })` synchronously at parse time, reading `offsetWidth`/
+`offsetHeight` with no mutation involved at all — every one of the nine
+`aspect-ratio`+abspos/border/padding combinations resolves to `0` for
+exactly this reason, not because `aspect-ratio` is unhonored on absolutely-
+positioned boxes (which would be a real, separate layout bug worth its own
+report — ruled out only by checking `dims()`'s call site has zero task
+boundary before it, same discipline as above).
+
+`.ini` under `tests/wpt/metadata/css/css-sizing/contain-intrinsic-size/` and
+`tests/wpt/metadata/css/css-sizing/aspect-ratio/`. Five files/~10 subtests
+this slice did NOT fit this bug (`auto-004.html`'s `expected 1 but got 50`,
+`replaced-element-transferred-size-flex.html`'s three subtests,
+`replaced-element-028.html`, `quirks-mode-003.html`) — left as unclustered
+residual, genuinely distinct numeric mismatches rather than empty/zero
+reads.

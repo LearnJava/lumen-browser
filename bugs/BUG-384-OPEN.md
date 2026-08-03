@@ -301,3 +301,12 @@ break/css-color/selectors, several hundred subtests) surfaced wrapped in
 `promise_test: Unhandled rejection` rather than the bare-message shape this
 slice's classifier matched on — left unattributed/residual this slice, same
 masking risk as always, re-triage candidate once this lands.
+
+## Срез 33 (`css/css-sizing`, 2026-08-03)
+
+7 subtests across 4 files, two shapes: plain `t1 is not defined`/`iframe is
+not defined` (`contain-intrinsic-size/{auto-013,forget-on-disconnect-in-iframe}.html`,
+same shape as prior slices) plus a new one — `outer is not defined`/`inner
+is not defined` in `intrinsic-percent-non-replaced-006.html`, same mechanism
+(elements with `id="outer"`/`id="inner"` referenced as bare globals). `.ini`
+under `tests/wpt/metadata/css/css-sizing/`.
