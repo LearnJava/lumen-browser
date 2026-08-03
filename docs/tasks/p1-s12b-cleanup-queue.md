@@ -42,28 +42,31 @@ done | sort -t'|' -k1 -n
 нет вообще.** Проверено: `grep -rn "<модуль>::" crates/js/src/v8_runtime.rs crates/js/src/dom.rs`
 → 0 совпадений, при этом `lib.rs` (`QuickJsRuntime::install_dom`) их вызывает:
 
-| Модуль | Строк | Тестов | Точка установки под QuickJS |
-|---|---:|---:|---|
-| `contacts.rs` | 110 | 4 | `lib.rs:937` |
-| `background_sync.rs` | 160 | 5 | `lib.rs:995` |
-| `periodic_sync.rs` | 164 | 4 | `lib.rs:1002` |
-| `storage_buckets.rs` | 238 | 8 | `lib.rs:1024` |
-| `push_api.rs` | 255 | 7 | `lib.rs:1009` |
-| `background_fetch.rs` | 257 | 6 | `lib.rs:988` |
-| `payment_request.rs` | 286 | 6 | `lib.rs:944` |
-| `media_stream_recording.rs` | 297 | 8 | `lib.rs:1199` |
-| `view_transitions.rs` | 329 | 11 | `lib.rs:170` (re-export) |
-| `cookie_store.rs` | 383 | 8 | `lib.rs:1016` |
-| `cookie_banner.rs` | 451 | 16 | `lib.rs:1030` |
-| `webgl_bindings.rs` | 564 | 21 | — (проверить, не вытеснен ли `webgl_canvas.rs`) |
-| `audio_bindings.rs` | 1120 | 29 | `lib.rs:765` (`new_session_seed`) |
+| Модуль | Строк | Тестов | Точка установки под QuickJS | Решение (G0, 2026-08-03) |
+|---|---:|---:|---|---|
+| `contacts.rs` | 110 | 4 | `lib.rs:937` | **порт** — [BUG-549](../../bugs/BUG-549-OPEN.md) |
+| `background_sync.rs` | 160 | 5 | `lib.rs:995` | **порт** — [BUG-549](../../bugs/BUG-549-OPEN.md) |
+| `periodic_sync.rs` | 164 | 4 | `lib.rs:1002` | **порт** — [BUG-549](../../bugs/BUG-549-OPEN.md) |
+| `storage_buckets.rs` | 238 | 8 | `lib.rs:1024` | **порт** — [BUG-547](../../bugs/BUG-547-OPEN.md), CAPABILITIES.md overclaim |
+| `push_api.rs` | 255 | 7 | `lib.rs:1009` | **порт** — [BUG-549](../../bugs/BUG-549-OPEN.md) |
+| `background_fetch.rs` | 257 | 6 | `lib.rs:988` | **порт** — [BUG-549](../../bugs/BUG-549-OPEN.md) |
+| `payment_request.rs` | 286 | 6 | `lib.rs:944` | **порт** — [BUG-549](../../bugs/BUG-549-OPEN.md) |
+| `media_stream_recording.rs` | 297 | 8 | `lib.rs:1199` | **порт** — [BUG-549](../../bugs/BUG-549-OPEN.md) |
+| `view_transitions.rs` | 329 | 11 | `lib.rs:1123` | **порт** — [BUG-545](../../bugs/BUG-545-OPEN.md), ROADMAP «done»/CAPABILITIES overclaim; JS-триггер отделён от движкового механизма (см. ниже) |
+| `cookie_store.rs` | 383 | 8 | `lib.rs:1016` | **порт** — [BUG-546](../../bugs/BUG-546-OPEN.md), CAPABILITIES.md overclaim |
+| `cookie_banner.rs` | 451 | 16 | `lib.rs:1030` | **порт** — [BUG-548](../../bugs/BUG-548-OPEN.md), пользовательский тумблер `ToggleCookieBannerDismiss` сейчас no-op |
+| `webgl_bindings.rs` | 564 | 21 | — | **снос, не порт** — мёртвый код на ОБОИХ движках (`install_webgl_bindings` не вызывается вообще нигде вне своих тестов), вытеснен `webgl_canvas.rs` (функциональный WebGL, V8-портирован, сохраняет ADR-007 fingerprint-нормализацию). Бага не заведено — не регресс, просто устаревший модуль; удаление — обычный batch группы A следующего среза |
+| `audio_bindings.rs` | 1120 | 29 | `lib.rs:765` (`new_session_seed`) | **снос, не порт** — [BUG-550](../../bugs/BUG-550-OPEN.md): уже затенён `web_audio.rs` (устанавливается позже в том же контексте, `globalThis.AudioContext` переписывается) ещё ДО V8-перехода; не регресс миграции. Функциональный пробел (доп. типы узлов + ADR-007 audio-noise) — отдельное решение, не в объёме S12b |
 
 Т.е. `navigator.contacts`, `cookieStore`, `PaymentRequest`, `MediaRecorder`,
-`document.startViewTransition` и др. в дефолтной сборке отсутствуют. Это не «долг
-удаления», а функциональный регресс V8-перехода — группа **G** ниже.
+`document.startViewTransition` и др. в дефолтной сборке отсутствуют. Для 11 из 13
+модулей это настоящий функциональный регресс V8-перехода (баги
+BUG-545…BUG-549 заведены выше); `webgl_bindings.rs` и `audio_bindings.rs` — исключение,
+уже мёртвый/затенённый код на обоих движках, в порте не нуждается (детали в таблице).
 `view_transitions` при этом отдельно живёт на стороне движка (CSS View Transitions,
-`P2-viewtrans` = done) — G0 обязан разделить «JS API» и «движковый механизм», прежде
-чем что-то трогать.
+`P2-viewtrans` = done в ROADMAP, хотя фактически JS-триггер сейчас недоступен под V8) —
+G0 разделил «JS API» (`view_transitions.rs`, нуждается в порте) и «движковый механизм»
+(рендер-пайплайн, V8-агностичен, не тронут).
 
 ---
 
@@ -201,9 +204,36 @@ cargo test  -p lumen-js                                        # rquickjs-суи
 `CAPABILITIES.md` там, где заявлено больше, чем есть. Модули со вердиктом «снос»
 переезжают в группу A следующим батчем.
 
+**Закрыт (P1, 2026-08-03):** 11 из 13 модулей — вердикт «порт», реальный
+функциональный регресс V8-перехода: BUG-545 (`view_transitions` —
+`document.startViewTransition` отсутствует, хотя `ROADMAP.md` помечает
+`P2-viewtrans` done и `CAPABILITIES.md` числит его ✅; движковый механизм
+кросс-фейда сам по себе не задет, отделён от JS-триггера), BUG-546/547
+(`cookie_store`/`storage_buckets` — оба заявлены ✅ в `CAPABILITIES.md`,
+правка внесена: понижены до 🟡 с пометкой «QuickJS-only»), BUG-548
+(`cookie_banner` — пользовательский тумблер `KeyCommand::ToggleCookieBannerDismiss`
+сейчас no-op под V8, уже был самодокументирован комментарием в
+`shell/src/main.rs:19230` как известный, но не заведённый в трекер пробел),
+BUG-549 (7 Phase-0 заглушек одним багом — `contacts`/`background_sync`/
+`periodic_sync`/`push_api`/`background_fetch`/`payment_request`/
+`media_stream_recording`: в `CAPABILITIES.md` не заявлены, но под QuickJS
+были feature-detectable — `'X' in window` `true`-then-reject, под V8 —
+`false`). 2 модуля — вердикт «снос», НЕ регресс миграции: `webgl_bindings.rs`
+мёртв на обоих движках (`install_webgl_bindings` не вызывается вообще нигде
+вне своих тестов, полностью вытеснен функциональным `webgl_canvas.rs`, баг
+не заведён — нечего чинить); `audio_bindings.rs` (BUG-550) был уже затенён
+`web_audio.rs` внутри QuickJS ДО V8-перехода — оба шима пишут в один
+`globalThis.AudioContext` через присваивание (не `class`-декларацию), и
+`web_audio` устанавливается вторым в том же `install_dom`, так что более
+богатая версия `audio_bindings` (доп. типы узлов + ADR-007 antifingerprint
+audio-noise) никогда не была доступна странице ни на одном движке —
+находка, не связанная с S12b как таковым. Оба переезжают в группу A
+(удаление, без порта) — таблица G1…G7 ниже обновлена.
+
 ### S12b-G1…G7 — порты
 
-Порядок и состав — после G0; предварительная нарезка по 2 модуля:
+Состав после G0 (`webgl_bindings`/`audio_bindings` исключены — см. решение
+«снос» в §1, оба ушли в группу A):
 
 | id | Модули |
 |---|---|
@@ -212,8 +242,9 @@ cargo test  -p lumen-js                                        # rquickjs-суи
 | **S12b-G3** | `push_api` (255/7), `background_fetch` (257/6) |
 | **S12b-G4** | `payment_request` (286/6), `media_stream_recording` (297/8) |
 | **S12b-G5** | `view_transitions` (329/11), `cookie_store` (383/8) |
-| **S12b-G6** | `cookie_banner` (451/16), `webgl_bindings` (564/21) |
-| **S12b-G7** | `audio_bindings` (1120/29) |
+| **S12b-G6** | `cookie_banner` (451/16) |
+| **S12b-Asnos1** | `webgl_bindings` (564/21) — снос без порта, обычная процедура группы A §2 (модуль уже не установлен ни у одного движка, шаг 1 её процедуры пропускается — порта не было и не нужен) |
+| **S12b-Asnos2** | `audio_bindings` (1120/29) — снос без порта, та же процедура; см. BUG-550 про непортированный функциональный пробел |
 
 Процедура порта: `install_<модуль>_v8` рядом с оригиналом, регистрация через `install_v8!`
 в `v8_runtime.rs::install_dom` (сейчас там 89 вызовов), тесты против `V8JsRuntime`.

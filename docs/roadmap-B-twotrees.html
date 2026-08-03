@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-03",
  "counts": {
-  "open": 203,
+  "open": 209,
   "fixed": 309,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 512,
+ "total_bugs": 518,
  "phases": [
   {
    "id": "P0",
@@ -1278,9 +1278,17 @@
         {
          "id": "P3-v8-s12b-g0",
          "title": "S12b-G0: триаж модулей без V8-порта",
-         "status": "queued",
+         "status": "done",
          "size": "M",
-         "note": "Триаж 13 модулей, установленных ТОЛЬКО под QuickJS (contacts, background_sync, periodic_sync, storage_buckets, push_api, background_fetch, payment_request, media_stream_recording, view_transitions, cookie_store, cookie_banner, webgl_bindings, audio_bindings): под дефолтным V8 этих Web API нет вовсе. Решение порт/снос по каждому + BUG-NNN на регрессы + правка CAPABILITIES.md. Ничего не удалять"
+         "note": "Триаж 13 модулей, установленных ТОЛЬКО под QuickJS (contacts, background_sync, periodic_sync, storage_buckets, push_api, background_fetch, payment_request, media_stream_recording, view_transitions, cookie_store, cookie_banner, webgl_bindings, audio_bindings): под дефолтным V8 этих Web API нет вовсе. Решение порт/снос по каждому + BUG-NNN на регрессы + правка CAPABILITIES.md. Ничего не удалять. **Закрыт (P1, 2026-08-03):** 11/13 — вердикт «порт», реальный функциональный регресс V8-перехода (BUG-545 `view_transitions`/`startViewTransition` — ROADMAP числит `P2-viewtrans` done, но JS-триггер отсутствует под V8, движковый кросс-фейд не задет; BUG-546/547 `cookie_store`/`storage_buckets` — CAPABILITIES.md заявлял ✅ безусловно, понижены до 🟡; BUG-548 `cookie_banner` — пользовательский тумблер уже no-op под V8, был самодокументирован в коде, но не заведён; BUG-549 — 7 Phase-0-заглушек одним багом: contacts/background_sync/periodic_sync/push_api/background_fetch/payment_request/media_stream_recording, под QuickJS были feature-detectable, под V8 не существуют). 2/13 — вердикт «снос, не порт», НЕ регресс миграции: `webgl_bindings.rs` мёртв на обоих движках (не вызывается нигде вне тестов, вытеснен функциональным `webgl_canvas.rs`, бага не заведено); `audio_bindings.rs` (BUG-550) был уже затенён `web_audio.rs` внутри QuickJS ДО V8-перехода (оба шима пишут в один `globalThis.AudioContext`, `web_audio` ставится вторым и переписывает) — его богатая версия (доп. AudioNode-типы + ADR-007 audio-antifingerprint noise) не была доступна странице ни на одном движке. Оба переезжают в группу A (снос без порта) следующим срезом. Полная таблица решений и обновлённый G1…G7/A-снос план — `docs/tasks/p1-s12b-cleanup-queue.md` §1/§4",
+         "bugs": [
+          "BUG-545",
+          "BUG-546",
+          "BUG-547",
+          "BUG-548",
+          "BUG-549",
+          "BUG-550"
+         ]
         },
         {
          "id": "P3-v8-s12b-g1",
@@ -8431,6 +8439,48 @@
    "status": "open",
    "title": "`Element.prototype.animate`/`getAnimations` don't exist — both are wired as own-instance properties (`_obj.animate = function(...)`) instead of on the shared pr…",
    "component": "js (`crates/js/src/dom.rs:6602` — `_lumen_make_element` element factory)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-545": {
+   "status": "open",
+   "title": "`document.startViewTransition()` does not exist under the default V8 build (QuickJS-only install) — SPA View Transitions is dead despite `ROADMAP.md` marking `P…",
+   "component": "js (`crates/js/src/view_transitions.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-546": {
+   "status": "open",
+   "title": "`cookieStore` global does not exist under the default V8 build (QuickJS-only install) — `CAPABILITIES.md`'s Storage bullet claims it ✅ unconditionally. Найден P…",
+   "component": "js (`crates/js/src/cookie_store.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-547": {
+   "status": "open",
+   "title": "`navigator.storageBuckets` does not exist under the default V8 build (QuickJS-only install) — `CAPABILITIES.md`'s Storage bullet spells out the full API surface…",
+   "component": "js (`crates/js/src/storage_buckets.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-548": {
+   "status": "open",
+   "title": "Cookie-banner auto-dismiss (privacy feature, user-toggleable via `KeyCommand::ToggleCookieBannerDismiss`) is a silent no-op under the default V8 build — `V8JsRu…",
+   "component": "js+shell (`crates/js/src/cookie_banner.rs`, `crates/shell/src/main.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-549": {
+   "status": "open",
+   "title": "7 Phase-0 stub Web APIs (`navigator.contacts`, `ServiceWorkerRegistration.prototype.{sync,periodicSync,pushManager,backgroundFetch}`, `PaymentRequest`, `MediaRe…",
+   "component": "js — `crates/js/src/{contacts,background_sync,periodic_sync,push_api,background_fetch,payment_request,media_stream_recording}.rs`",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-550": {
+   "status": "open",
+   "title": "`audio_bindings.rs`'s richer AudioContext (extra node types + ADR-007 anti-fingerprint audio noise) was already shadowed/dead under QuickJS before the V8 migrat…",
+   "component": "js (`crates/js/src/audio_bindings.rs` vs `crates/js/src/web_audio.rs`)",
    "date": null,
    "debtor": false
   }
