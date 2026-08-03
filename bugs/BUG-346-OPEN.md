@@ -121,3 +121,26 @@ src="../resources/utils.js">` (один уровень вверх, без цеп
 из `utils.js` никогда не определяется, харнес зависает TIMEOUT на каждом файле
 (0 сабтестов зарегистрировано). `.ini` под
 `tests/wpt/metadata/css/css-properties-values-api/animation/` для всех 60 файлов.
+
+## Срез 30 (`css/css-typed-om`, 2026-08-03) — largest single-category weight yet, .ini NOT committed
+
+245 of the category's ~360 harness-executed files reference `<script
+src="../resources/testhelper.js">` (one level up) — same literal-`..`-not-
+collapsed 404 as every prior slice, confirmed via the run log
+(`.../stylevalue-subclasses/../resources/testhelper.js: network error: HTTP
+404`). Downstream, every one of `testhelper.js`'s own exported helpers
+(`createDivWithStyle`, `createComputedStyleMap`, `createDeclaredStyleMap`,
+`createInlineStyleMap`, `assert_style_value_equals`, and 8 more) throws
+`ReferenceError: <name> is not defined` the first time a test calls it — 985
+subtests across the 245 files.
+
+**Not attributed with a committed `.ini` this slice.** `css/css-typed-om`
+itself is "P3 territory" per `CSS-SPECS.md` (CSS Typed OM not yet targeted),
+so even a fixed `..` resolve would very likely just expose the *next* layer
+of failure (`CSSRGB`/`CSSMathMax`/`CSS.deg`/`idl_test` — the category's own
+unimplemented globals, confirmed present in the same run log, unrelated to
+this bug) rather than flip these files to PASS. Disentangling "masked by
+BUG-346" from "genuinely-expected Typed-OM gap" per subtest is a bigger job
+than this slice's budget — left as a dedicated follow-up (WPT-RUN-3 срез
+31+) rather than either over-attributing to this bug or silently leaving
+the category's `.ini` gap unexplained.

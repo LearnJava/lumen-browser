@@ -117,3 +117,18 @@ the WPT-visible symptom, not the fix.
 Committed `.ini` under `tests/wpt/metadata/css/css-transitions/` for all
 attributable files this slice (see `docs/wpt-status.md` → row `css` for the
 full breakdown alongside BUG-483/484/463/384's shares of the same run).
+
+## Срез 30 (spread across 10 categories, 2026-08-03) — first confirmation for Web Animations interpolation tests, not just CSS Transitions
+
+43 files / ~2500 subtests, dominated by a new message shape:
+`assert_true: Web Animations should be supported expected true got false` —
+every `*-interpolation*.html`/`animation/*.html` file across `css-values`
+(10), `filter-effects` (10), `css-shapes` (5), `css-anchor-position` (4),
+`css-align` (4), `css-text-decor` (3), `css-break` (3), `css-color` (2),
+`css-tables` (1), `css-contain` (1) gates its per-property interpolation
+assertions on a `document.timeline`-backed support check before running —
+same root as CSS Transitions (no JS-observable `Animation` object), just
+reached via the Web Animations API entry point instead of a CSS-Transitions-
+triggered one. Confirms the bug's title ("CSS Transitions/**Animations**")
+rather than being a distinct API gap — not re-scoped, no new bug filed.
+`.ini` under each category's own `tests/wpt/metadata/css/<category>/`.

@@ -140,3 +140,25 @@ parens, comma-separated, or with a compound-selector-list argument like
 `SyntaxError`/`DOMException`. Same shape as every prior slice of this bug —
 the parser accepts a structurally invalid pseudo-class argument rather than
 rejecting it. `.ini` under `tests/wpt/metadata/css/css-shadow/`.
+
+## Срез 30 (`css/css-pseudo` + `css/css-view-transitions` + `css/selectors`, 2026-08-03)
+
+Largest extension yet — 14 files/695 subtests, dominated by
+`css-view-transitions/parsing/pseudo-elements-invalid.html` alone (675 of
+the 695): every malformed `::view-transition-group()`/`-image-pair()`/
+`-old()`/`-new()` argument (missing/empty `*`-or-ident argument, invalid
+nesting after `::before`/`::after`, disallowed combinators) is silently
+accepted instead of throwing `SyntaxError` from
+`document.querySelector`/`matches`. Same shape, smaller counts:
+`css-pseudo/parsing/highlight-pseudos.html` (24, `::highlight()` argument
+validity), `highlight-pseudos-search-text.tentative.html` (27,
+`::search-text()`), `tree-abiding-pseudo-elements.html` (22, structural
+validity of `::before`/`::after`/`::marker`/`::placeholder` combined with
+other pseudo-classes), `css-view-transitions/parsing/pseudo-elements-
+invalid-with-classes.html` (20, `::view-transition-group(*.class)` variant),
+and 9 `css/selectors/parsing/parse-*.html` files (`:has()`, `:is()`/
+`:where()`, `::part()`, `::slotted()`, `:state()`, `:not()`, heading
+selectors — 66 subtests combined) covering invalid nesting/argument shapes
+for each. `.ini` under `tests/wpt/metadata/css/css-pseudo/`,
+`tests/wpt/metadata/css/css-view-transitions/`,
+`tests/wpt/metadata/css/selectors/`.

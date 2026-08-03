@@ -79,3 +79,23 @@ these to a missing-property implementation without re-checking after this
 lands — same caution the bug's own title states. `.ini` under
 `tests/wpt/metadata/css/css-scroll-snap/` and
 `tests/wpt/metadata/css/css-animations/`.
+
+## Срез 30 (spread across 13 categories, 2026-08-03) — largest single-slice weight to date, ~4300 subtests
+
+117 files across `css-color` (20, `color`/`opacity`/`background-color`/
+`light-dark()` computed-style checks — `inheritance.html` alone: property
+`color` 2 subtests, `opacity` 2, plus the category's own
+`inheritance-testcommon.js`-driven files), `css-values` (7,
+`object-position`/`scale`/`filter` computed values), `css-anchor-position`
+(12, `position-area` — `position-area-computed.html` alone: 632 of its own
+subtests, the single largest file this slice), `css-shapes` (14,
+`shape-outside`/`clip-path`), `css-text-decor` (15), `css-align` (16),
+`css-break` (7), `css-tables` (6), `css-writing-modes` (6), `filter-effects`
+(6, `backdrop-filter`), `css-contain` (4), `css-conditional` (2),
+`css-view-transitions` (2) — every file via the same
+`"<prop> doesn't seem to be supported in the computed style"` message from
+`computed-testcommon.js`/`inheritance-testcommon.js`'s shared `in
+getComputedStyle(el)` guard. Systemic-reach warning from срез 29 holds:
+none of these are re-attributed to a per-property missing-implementation
+gap without re-checking after the `has` trap lands. `.ini` under each
+category's own `tests/wpt/metadata/css/<category>/`.

@@ -80,3 +80,24 @@ beyond `css/css-variables` unmeasured.
 Committed `.ini` for both files, `expected: FAIL` on all 5 subtests, header
 citing BUG-501 as the observed cause (BUG-384 noted as a second, currently-
 invisible layer in `revert-rule-to-var.html`'s single test).
+
+## Срез 30 (`css/css-conditional`, 2026-08-03) — largest extension, gap 1 alone this time
+
+164 files, all `container-queries/*.html`, all whole-file `ERROR`/0
+subtests: `support/cq-testcommon.js`'s
+`assert_implements_size_container_queries()`/
+`assert_implements_scroll_state_container_queries()` guard every test with
+`assert_implements(CSS.supports("container-type:size"))` /
+`CSS.supports("container-type:scroll-state")` — a bare `prop:value` string,
+no wrapping parens. `container-type` itself is recognized (`SUPPORTED_
+PROPERTIES` in `crates/engine/css-parser/src/lib.rs` lists it, and
+`ContainerType::Size` exists end-to-end in `layout/src/style.rs`), so this
+is gap 1 in isolation — `parse_supports_atom`
+(`crates/engine/css-parser/src/parser.rs:2107`) requires the input to start
+with `(` and returns `SupportsCondition::Unknown` (→ `false`) otherwise,
+never reaching the property-name check at all. 110 files fail on the
+`size` guard, 54 on the `scroll-state` guard (`container-type:scroll-state`
+is *not* in `SUPPORTED_PROPERTIES` either, so that guard would still fail
+post-fix — a second, narrower gap, not investigated further this slice).
+`.ini` under `tests/wpt/metadata/css/css-conditional/container-queries/`
+(top-level `expected: ERROR`, no subtest section — none ran).

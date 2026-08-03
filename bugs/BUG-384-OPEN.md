@@ -283,3 +283,21 @@ selector-validity subtests) and `target`/`target1`/`target2`-shaped ids in
 .html`. `.ini` under `tests/wpt/metadata/css/css-shadow/`,
 `tests/wpt/metadata/css/css-scroll-snap/`,
 `tests/wpt/metadata/css/css-animations/`.
+
+## Срез 30 (`css/css-anchor-position` + `css/selectors`, 2026-08-03)
+
+5 more whole-file harness errors, same bare-identifier shape:
+`anchor-scroll-js-expose.html` (`scroller`), `anchor-transition-001.html`
+(`target`), `anchor-transition-002.html` (`anchor2`),
+`container-queries/at-container-anchored-serialization.html` (`testSheet`),
+`selectors/nth-of-type-namespace.html` (`container`) — each script errors
+synchronously on the bare id before any `test()` registers, so the whole
+file reports `ERROR`/`0 subtests` rather than a per-subtest FAIL. `.ini`
+under `tests/wpt/metadata/css/css-anchor-position/` and
+`tests/wpt/metadata/css/selectors/` (top-level `expected: ERROR`, no
+subtest section — none ran). A much larger set of same-shaped
+`ReferenceError`s this slice (`main`/`light`/`style`/`host` bare ids, css-
+break/css-color/selectors, several hundred subtests) surfaced wrapped in
+`promise_test: Unhandled rejection` rather than the bare-message shape this
+slice's classifier matched on — left unattributed/residual this slice, same
+masking risk as always, re-triage candidate once this lands.
