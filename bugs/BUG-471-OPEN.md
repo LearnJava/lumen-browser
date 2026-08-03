@@ -144,3 +144,18 @@ TIMEOUT), `cssom/page-001.html` (4, harness OK), `cssom/page-002.html`
 also hits [BUG-485](BUG-485-OPEN.md)'s `document.head.append` on other
 subtests), `parsing/size-valid.html`. `.ini` under
 `tests/wpt/metadata/css/css-page/`.
+
+## Срез 30 (`css/css-conditional`, 2026-08-03)
+
+20 files, all `container-queries/*.html` testing `style()` container
+queries: `new CSSStyleSheet()` — the constructor itself — throws
+`ReferenceError: CSSStyleSheet is not defined` at the top of the test file
+(`support/cq-testcommon.js::assert_implements_style_container_queries`),
+so every one of these errors out with 0 subtests run, before the test's own
+`@container STYLE(...)` logic is ever exercised. Notably, the underlying
+`style()` container-query *feature* itself is implemented and marked ✅ in
+`CSS-SPECS.md` (`§T3 Container Queries`) — this bug's gap is purely the
+CSSOM constructor used by the test's own feature-detection helper, not the
+feature under test. `.ini` under
+`tests/wpt/metadata/css/css-conditional/container-queries/` (top-level
+`expected: ERROR`, no subtest section — none ran).

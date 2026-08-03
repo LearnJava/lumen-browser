@@ -379,3 +379,25 @@ never canonicalizes to `"0px"`, 18 subtests across the file's
 not expanded into the two-longhand canonical form, 34 subtests). `.ini`
 under `tests/wpt/metadata/css/css-scroll-snap/parsing/` and
 `tests/wpt/metadata/css/css-animations/parsing/`.
+
+## Срез 30 (`css/css-align` + `css/css-anchor-position` + `css/css-color` + others, 2026-08-03)
+
+Largest extension yet — 99 files / ~2300 subtests, `css/css-align`
+dominating with the clearest shape-2 (shorthand-not-expanded) evidence to
+date: every `place-content`/`place-items`/`place-self` shorthand getter
+returns `""` instead of the expected expanded longhand pair
+(`align-content`+`justify-content`, etc — `place-content-shorthand-002.html`
+alone: 216 subtests; `place-items-shorthand-002.html`: 374;
+`place-self-shorthand-002.html`: 360), and every `parse-{align,justify}-
+{content,items,self}-00{1..5}.html` file across `content-distribution/`,
+`default-alignment/`, `self-alignment/` fails its "computed style is not
+what is should"/"specified value is not what it should" assertions the
+same way (shape 1 rejection + shape 3 canonicalization combined, ~700
+subtests). `css/css-anchor-position` (3 files, `container-type`/`position-
+try-fallbacks`/`position-visibility` parsing), `css/css-color` (`color()`/
+`hsl()`/alpha-color valid-value canonicalization, several hundred subtests
+across `color-valid-*.html`), and smaller shares in `css/css-contain`,
+`css/css-shapes`, `css/css-tables`, `css/css-values`, `css/css-view-
+transitions`, `css/filter-effects` round out the slice — same three shapes
+throughout, no new ones. `.ini` under each category's own
+`tests/wpt/metadata/css/<category>/`.
