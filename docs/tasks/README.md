@@ -156,6 +156,7 @@ git worktree remove .claude/worktrees/<kebab-name>
 | [ph3-gpu-process-sandbox.md](ph3-gpu-process-sandbox.md) | GPU process / sandbox |
 | [ph3-gc-js-dom.md](ph3-gc-js-dom.md) | GC integration JS ↔ DOM (cross-boundary cycles) |
 | [ph3-v8-migration.md](ph3-v8-migration.md) | Migrate JS engine to V8 (rusty_v8) |
+| [p1-s12b-cleanup-queue.md](p1-s12b-cleanup-queue.md) | Очередь S12b — добивание rquickjs из `crates/js` (43 батча по сессии, P1) |
 | [ph3-cdp-shim.md](ph3-cdp-shim.md) | lumen-cdp-shim (Chrome DevTools Protocol subset) |
 | [ph3-ai-module.md](ph3-ai-module.md) | AI module (lumen-ai) + semantic bookmarks |
 
