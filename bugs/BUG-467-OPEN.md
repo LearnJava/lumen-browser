@@ -116,3 +116,13 @@ level, before any `test()` registers: TIMEOUT (`document.fonts.load` is one
 of the missing Maplike/loading members this bug already documents). `.ini`
 under `tests/wpt/metadata/css/css-ruby/line-spacing.html.ini`,
 `expected: TIMEOUT`.
+
+## Срез 31 (`css/css-fonts`, 2026-08-03)
+
++2 files/100 subtests: global `FontFace` constructor is `undefined`
+(`new FontFace(...)` throws `ReferenceError`) — the imperative half of the
+Font Loading API, not just `document.fonts`'s read side. Several more
+`css-fonts` files this slice TIMEOUT on `Cannot read properties of
+undefined (reading 'then')` chained off a `document.fonts.*` call — same
+family, not yet individually re-counted per file. `.ini` under
+`tests/wpt/metadata/css/css-fonts/`.
