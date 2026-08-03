@@ -1,7 +1,6 @@
 //! CSS Paint Worklet API stub (Houdini) — Phase 0
 //! Implements CSS.paintWorklet.addModule() and paint() invocation registration.
 
-use rquickjs::Ctx;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
@@ -56,15 +55,10 @@ pub struct PaintWorkletDef {
     pub input_properties: Vec<String>,
 }
 
-/// Install CSS.paintWorklet bindings into the JS context.
-/// Uses a pure JS shim that stores worklet definitions in a global registry.
-pub fn install_paint_worklet_api(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(PAINT_WORKLET_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_paint_worklet_api`] (Ph3 V8 migration S5-S7): identical JS shim,
+/// V8 port of the former rquickjs `install_paint_worklet_api` (Ph3 V8
+/// migration S5-S7, rquickjs side removed in S12b-B4): identical JS shim,
 /// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// Uses a pure JS shim that stores worklet definitions in a global registry.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_paint_worklet_api_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -74,6 +68,7 @@ pub(crate) fn install_paint_worklet_api_v8(rt: &crate::v8_runtime::V8JsRuntime) 
 
 /// Pure-JS CSS Paint Worklet API shim.
 /// Defines CSS.paintWorklet.addModule() and registerPaint().
+#[cfg(feature = "v8-backend")]
 const PAINT_WORKLET_SHIM: &str = r#"(function(global) {
   'use strict';
 
@@ -170,51 +165,43 @@ mod tests {
 
     // ── JS integration tests ──────────────────────────────────────────────────
 
-    fn make_ctx() -> (rquickjs::Runtime, rquickjs::Context) {
-        let rt = rquickjs::Runtime::new().unwrap();
-        let ctx = rquickjs::Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
+    #[cfg(feature = "v8-backend")]
+    fn with_paint_worklet_api(f: impl FnOnce(&crate::v8_runtime::V8JsRuntime)) {
+        use crate::v8_runtime::V8JsRuntime;
+        use lumen_core::ext::JsRuntime as _;
 
-    fn install(ctx: &rquickjs::Ctx) {
-        ctx.eval::<(), _>(
-            r#"
-            if (!globalThis.CSS) { globalThis.CSS = {}; }
-            if (typeof Promise === 'undefined') {
-                globalThis.Promise = {
-                    resolve: function(v) {
-                        return { then: function(fn) { fn(v); return this; } };
-                    }
-                };
-            }
-            "#,
-        )
-        .unwrap();
-        install_paint_worklet_api(ctx).unwrap();
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval("if (!globalThis.CSS) { globalThis.CSS = {}; }").unwrap();
+        install_paint_worklet_api_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
+    #[cfg(feature = "v8-backend")]
     fn js_css_paintworklet_exists_and_has_add_module() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
+        use lumen_core::ext::JsRuntime as _;
+        use lumen_core::JsValue;
+
+        with_paint_worklet_api(|rt| {
+            let ok = rt
                 .eval(
                     "typeof CSS !== 'undefined' && typeof CSS.paintWorklet !== 'undefined' \
                      && typeof CSS.paintWorklet.addModule === 'function'",
                 )
                 .unwrap();
-            assert!(ok, "CSS.paintWorklet.addModule must be a function");
+            assert_eq!(ok, JsValue::Bool(true), "CSS.paintWorklet.addModule must be a function");
         });
     }
 
     #[test]
+    #[cfg(feature = "v8-backend")]
     fn js_add_module_returns_promise_like_object() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
+        use lumen_core::ext::JsRuntime as _;
+        use lumen_core::JsValue;
+
+        with_paint_worklet_api(|rt| {
             // addModule() must return a thenable (Promise-like) — spec §4.2.
-            let ok: bool = ctx
+            let ok = rt
                 .eval(
                     r#"
                     var p = CSS.paintWorklet.addModule('https://example.com/paint.js');
@@ -222,17 +209,19 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok, "addModule must return a thenable");
+            assert_eq!(ok, JsValue::Bool(true), "addModule must return a thenable");
         });
     }
 
     #[test]
+    #[cfg(feature = "v8-backend")]
     fn js_register_paint_stores_worklet_in_registry() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
+        use lumen_core::ext::JsRuntime as _;
+        use lumen_core::JsValue;
+
+        with_paint_worklet_api(|rt| {
             // registerPaint() must store the worklet definition in _lumen_paint_worklets.
-            let ok: bool = ctx
+            let ok = rt
                 .eval(
                     r#"
                     class MyPainter {
@@ -244,17 +233,19 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok, "registerPaint must store worklet in _lumen_paint_worklets");
+            assert_eq!(ok, JsValue::Bool(true), "registerPaint must store worklet in _lumen_paint_worklets");
         });
     }
 
     #[test]
+    #[cfg(feature = "v8-backend")]
     fn js_register_paint_non_string_name_throws() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
+        use lumen_core::ext::JsRuntime as _;
+        use lumen_core::JsValue;
+
+        with_paint_worklet_api(|rt| {
             // registerPaint with a non-string name must throw TypeError.
-            let threw: bool = ctx
+            let threw = rt
                 .eval(
                     r#"
                     var threw = false;
@@ -267,16 +258,18 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(threw, "registerPaint(non-string) must throw TypeError");
+            assert_eq!(threw, JsValue::Bool(true), "registerPaint(non-string) must throw TypeError");
         });
     }
 
     #[test]
+    #[cfg(feature = "v8-backend")]
     fn js_register_paint_stores_input_properties() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let props_len: i32 = ctx
+        use lumen_core::ext::JsRuntime as _;
+        use lumen_core::JsValue;
+
+        with_paint_worklet_api(|rt| {
+            let props_len = rt
                 .eval(
                     r#"
                     class Painter {
@@ -288,7 +281,7 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert_eq!(props_len, 3, "inputProperties must have 3 entries");
+            assert_eq!(props_len, JsValue::Number(3.0), "inputProperties must have 3 entries");
         });
     }
 }

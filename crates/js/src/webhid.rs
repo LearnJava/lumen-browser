@@ -1,14 +1,9 @@
-/// WebHID API stub (W3C WebHID §3-5)
-/// Phase 0: navigator.hid.requestDevice() and all device operations reject (no USB/HID support)
-use rquickjs::Ctx;
+//! WebHID API stub (W3C WebHID §3-5)
+//! Phase 0: navigator.hid.requestDevice() and all device operations reject (no USB/HID support)
 
-pub fn install_webhid_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(WEBHID_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_webhid_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// V8 port of the former rquickjs `install_webhid_bindings` (Ph3 V8 migration S5-S7,
+/// rquickjs side removed in S12b-B4): identical JS shim, evaluated via
+/// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_webhid_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -17,6 +12,7 @@ pub(crate) fn install_webhid_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) ->
 }
 
 /// JavaScript shim: WebHID stub (Phase 0 - all operations reject with NotSupportedError)
+#[cfg(feature = "v8-backend")]
 const WEBHID_SHIM: &str = r#"
 (function() {
   // HIDConnectionEvent class
@@ -131,55 +127,48 @@ const WEBHID_SHIM: &str = r#"
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
     use super::*;
-    use rquickjs::{Context, Runtime};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
-
-    fn with_webhid_api(f: impl FnOnce(&rquickjs::Ctx)) {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            // Minimal stubs so the shim doesn't fail.
-            ctx.eval::<(), _>(
-                r#"
-                var window = globalThis;
-                var navigator = {};
-                globalThis.navigator = navigator;
-                // Minimal EventTarget stub
-                function EventTarget() {}
-                EventTarget.prototype.addEventListener = function() {};
-                EventTarget.prototype.removeEventListener = function() {};
-                EventTarget.prototype.dispatchEvent = function() {};
-                globalThis.EventTarget = EventTarget;
-                // Minimal Event stub
-                function Event(type, init) {
-                  this.type = type;
-                  this.bubbles = (init && init.bubbles) || false;
-                  this.cancelable = (init && init.cancelable) || false;
-                }
-                Event.prototype.constructor = Event;
-                globalThis.Event = Event;
-                // Minimal DOMException
-                function DOMException(message, name) {
-                  Error.call(this, message);
-                  this.message = message;
-                  this.name = name || 'Error';
-                }
-                DOMException.prototype = Object.create(Error.prototype);
-                DOMException.prototype.constructor = DOMException;
-                globalThis.DOMException = DOMException;
-                "#,
-            )
-            .unwrap();
-            super::install_webhid_bindings(&ctx).unwrap();
-            f(&ctx);
-        });
+    fn with_webhid_api(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(
+            r#"
+            var window = globalThis;
+            var navigator = {};
+            globalThis.navigator = navigator;
+            // Minimal EventTarget stub
+            function EventTarget() {}
+            EventTarget.prototype.addEventListener = function() {};
+            EventTarget.prototype.removeEventListener = function() {};
+            EventTarget.prototype.dispatchEvent = function() {};
+            globalThis.EventTarget = EventTarget;
+            // Minimal Event stub
+            function Event(type, init) {
+              this.type = type;
+              this.bubbles = (init && init.bubbles) || false;
+              this.cancelable = (init && init.cancelable) || false;
+            }
+            Event.prototype.constructor = Event;
+            globalThis.Event = Event;
+            // Minimal DOMException
+            function DOMException(message, name) {
+              Error.call(this, message);
+              this.message = message;
+              this.name = name || 'Error';
+            }
+            DOMException.prototype = Object.create(Error.prototype);
+            DOMException.prototype.constructor = DOMException;
+            globalThis.DOMException = DOMException;
+            "#,
+        )
+        .unwrap();
+        install_webhid_bindings_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
@@ -189,36 +178,36 @@ mod tests {
 
     #[test]
     fn webhid_navigator_hid_exists() {
-        with_webhid_api(|ctx| {
-            let ok: bool = ctx.eval("typeof navigator.hid === 'object'").unwrap();
-            assert!(ok);
+        with_webhid_api(|rt| {
+            let ok = rt.eval("typeof navigator.hid === 'object'").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn webhid_get_devices_is_async() {
-        with_webhid_api(|ctx| {
-            let result: bool = ctx
+        with_webhid_api(|rt| {
+            let ok = rt
                 .eval("navigator.hid.getDevices() instanceof Promise")
                 .unwrap();
-            assert!(result);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn webhid_device_class_exists() {
-        with_webhid_api(|ctx| {
-            let ok: bool = ctx
+        with_webhid_api(|rt| {
+            let ok = rt
                 .eval("typeof window.HIDDevice === 'function'")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn webhid_device_has_properties() {
-        with_webhid_api(|ctx| {
-            let ok: bool = ctx
+        with_webhid_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
             const dev = new window.HIDDevice(0x1234, 0x5678, "TestDev");
@@ -229,14 +218,14 @@ mod tests {
             "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn webhid_request_device_is_async() {
-        with_webhid_api(|ctx| {
-            let ok: bool = ctx
+        with_webhid_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
             navigator.hid.requestDevice instanceof Function &&
@@ -244,17 +233,15 @@ mod tests {
             "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn webhid_manager_extends_event_target() {
-        with_webhid_api(|ctx| {
-            let ok: bool = ctx
-                .eval("navigator.hid instanceof EventTarget")
-                .unwrap();
-            assert!(ok);
+        with_webhid_api(|rt| {
+            let ok = rt.eval("navigator.hid instanceof EventTarget").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 }

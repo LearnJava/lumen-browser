@@ -2467,7 +2467,43 @@ count drift, only in-place porting). `cargo test -p lumen-js`: 1153/1153 (down f
 exactly the 37 removed rquickjs tests; rquickjs suite did not go red). Both clippy passes
 clean.
 
-Next in queue: S12b-B4 (`webhid`/`network_log_bindings`/`css_properties_values_api`/`scheduler`/`paint_worklet`).
+**S12b-B4** (2026-08-03): fourth batch of queue group A (`docs/tasks/p1-s12b-cleanup-queue.md`
+§3), 5 more small modules, none trap cases (own `mod tests` counts matched the queue's
+expected totals): `webhid` (7 tests), `network_log_bindings` (8), `css_properties_values_api`
+(7), `scheduler` (5), `paint_worklet` (8) — 35 total. `css_properties_values_api`'s 7 tests
+turned out to already be pure-Rust (`RegisteredPropertiesMap`/`RegisteredProperty` struct
+tests, no `rquickjs` import in `mod tests` at all — the module's only rquickjs dependency was
+the production `install_css_properties_values_api` fn), so they needed no porting, only the
+production-side removal; `paint_worklet` split similarly (3 pure-Rust registry tests kept
+as-is, 5 JS-integration tests ported). The other three ported in place to
+`#[cfg(all(test, feature = "v8-backend"))]` against a bare `V8JsRuntime::new()` (no full
+`install_dom`), `webhid` re-declaring the same minimal `EventTarget`/`Event`/`DOMException`
+stubs its shim needs, matching `bluetooth.rs`'s S12b-B2 harness; `network_log_bindings`
+mirrored `download_bindings.rs`'s existing template exactly (register the native directly, no
+DOM stubs needed) — including gating its 2 already-pure-Rust queue tests
+(`enqueue_and_take_roundtrips`/`take_clears_queue`) behind `v8-backend` too, matching that
+template's precedent rather than leaving them ungated.
+
+Confirmed before touching `scheduler.rs` that it is **not** shadowed by `dom.rs`'s own
+simpler `var scheduler` shim (WEB_API_SHIM installs first, `scheduler::install_scheduler_api`
+overwrites `globalThis.scheduler` after — same order holds for both engines, `install_dom`
+evaluates `WEB_API_SHIM` before running `install_v8!(scheduler::install_scheduler_api_v8)`),
+so this is not a G0-style dead/shadowed-module case like `webgl_bindings`/`audio_bindings`.
+
+`webhid` hit the S12b-5/8/10/12/B1 `empty_line_after_doc_comments` gotcha (leftover `///`
+file-header before the rquickjs `use`/fn removal) — fixed with `//!`.
+
+`cargo test -p lumen-js --features v8-backend`: 2584/2584 (unchanged from S12b-B3 — no test
+count drift, only in-place porting). `cargo test -p lumen-js`: 1128/1128 modulo one
+pre-existing, unrelated flake — `screen_capture::tests::null_provider_list_sources_returns_empty_array`
+fails under the default parallel run (global provider-singleton race across concurrently
+running tests) but passes in isolation and under `--test-threads=1` (full suite 1128/1128
+serial); down from 1153, exactly the 25 rquickjs tests actually removed from the default
+build (7 `webhid` + 8 `network_log_bindings` + 0 `css_properties_values_api`, already
+ungated + 5 `scheduler` + 5 of `paint_worklet`'s 8 — its 3 registry tests stayed ungated).
+rquickjs suite did not go red from this batch. Both clippy passes clean.
+
+Next in queue: S12b-B5 (`presentation_api`/`screen_orientation`/`window_management`/`navigation_api`/`speech`).
 
 ---
 

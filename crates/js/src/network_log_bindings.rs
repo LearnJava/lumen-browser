@@ -20,7 +20,6 @@
 //! engine's network thread never sees (e.g. `fetch` served from cache, or a
 //! synthetic XHR in a test page).
 
-use rquickjs::{Ctx, Function};
 use std::sync::{Mutex, OnceLock};
 
 /// A single network request logged by JS, awaiting the shell's drain.
@@ -64,52 +63,13 @@ pub fn take_network_log_records() -> Vec<NetworkLogRecord> {
     std::mem::take(&mut *queue().lock().unwrap())
 }
 
-/// Install the `_lumen_log_network_request(method, url, status, duration_ms)`
-/// native binding.
+/// V8 port of the former rquickjs `install_network_log_bindings` (Ph3 V8
+/// migration S5-S7 batch 2, rquickjs side removed in S12b-B4): the native goes
+/// through the compat layer (`into_v8_fn4` + `register_native`), the
+/// convenience shim evaluates unchanged.
 ///
 /// `status` ≤ 0 → unknown (`None`); `duration_ms` < 0 → unknown (`None`). A
 /// blank URL is ignored so a stray call cannot enqueue a junk row.
-pub fn install_network_log_bindings(ctx: &Ctx<'_>) -> rquickjs::Result<()> {
-    let f = Function::new(
-        ctx.clone(),
-        move |method: String, url: String, status: f64, duration_ms: f64| {
-            let url = url.trim();
-            if url.is_empty() {
-                return;
-            }
-            let method = method.trim();
-            let method = if method.is_empty() {
-                "GET".to_string()
-            } else {
-                method.to_uppercase()
-            };
-            let status = if status >= 1.0 && status <= f64::from(u16::MAX) {
-                Some(status as u16)
-            } else {
-                None
-            };
-            let duration_ms = if duration_ms >= 0.0 {
-                Some(duration_ms as u64)
-            } else {
-                None
-            };
-            enqueue(method, url.to_string(), status, duration_ms);
-        },
-    )?;
-    ctx.globals().set("_lumen_log_network_request", f)?;
-    // Convenience shim: tolerate missing status / duration arguments.
-    ctx.eval::<(), _>(
-        "globalThis._lumen_net_log = function(method, url, status, ms) { \
-           _lumen_log_network_request(String(method == null ? 'GET' : method), String(url), \
-             Number(status == null ? 0 : status), Number(ms == null ? -1 : ms)); \
-         };",
-    )?;
-    Ok(())
-}
-
-/// V8 port of [`install_network_log_bindings`] (Ph3 V8 migration S5-S7 batch 2):
-/// the native goes through the compat layer (`into_v8_fn4` + `register_native`),
-/// the convenience shim evaluates unchanged.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_network_log_bindings_v8(
     rt: &crate::v8_runtime::V8JsRuntime,
@@ -152,13 +112,12 @@ pub(crate) fn install_network_log_bindings_v8(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
     use super::*;
-    use crate::QuickJsRuntime;
-    use lumen_core::JsRuntime;
-    use lumen_dom::Document;
-    use std::sync::{Arc, Mutex, MutexGuard};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use std::sync::{Mutex, MutexGuard};
 
     /// Serializes tests: the record queue is process-global, so parallel tests
     /// would otherwise observe each other's enqueues.
@@ -170,11 +129,9 @@ mod tests {
         g
     }
 
-    fn runtime() -> QuickJsRuntime {
-        let rt = QuickJsRuntime::new().unwrap();
-        let doc = Arc::new(Mutex::new(Document::new()));
-        rt.install_dom(doc, "", None, None, None, None, None, None, None, None, false)
-            .unwrap();
+    fn runtime() -> V8JsRuntime {
+        let rt = V8JsRuntime::new().unwrap();
+        install_network_log_bindings_v8(&rt).unwrap();
         rt
     }
 
