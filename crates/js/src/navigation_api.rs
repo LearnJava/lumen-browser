@@ -1,20 +1,12 @@
-/// Navigation API (HTML LS §7.8).
-///
-/// Provides `window.navigation` singleton with `currentEntry`, `entries()`,
-/// `navigate()`, `back()`, `forward()`, `traverseTo()` methods and events
-/// `navigate`, `navigatesuccess`, `navigateerror`, `currententrychange`.
-use rquickjs::Ctx;
+//! Navigation API (HTML LS §7.8).
+//!
+//! Provides `window.navigation` singleton with `currentEntry`, `entries()`,
+//! `navigate()`, `back()`, `forward()`, `traverseTo()` methods and events
+//! `navigate`, `navigatesuccess`, `navigateerror`, `currententrychange`.
 
-/// Install Navigation API into the JS context.
-///
-/// Defines `globalThis.window.navigation` (or `globalThis.navigation`) singleton.
-pub fn install_navigation_api(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(NAVIGATION_API_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_navigation_api`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// V8 port of the former rquickjs `install_navigation_api` (Ph3 V8 migration S5-S7,
+/// rquickjs side removed in S12b-B5): identical JS shim, evaluated via
+/// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_navigation_api_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -23,6 +15,7 @@ pub(crate) fn install_navigation_api_v8(rt: &crate::v8_runtime::V8JsRuntime) -> 
 }
 
 /// JavaScript shim: Navigation singleton with history entries and event handling.
+#[cfg(feature = "v8-backend")]
 const NAVIGATION_API_SHIM: &str = r#"(function() {
   'use strict';
 

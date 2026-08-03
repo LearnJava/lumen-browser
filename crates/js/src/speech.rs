@@ -18,12 +18,11 @@
 //! continues immediately.  Events (`start`, `end`) fire with estimated timing based on
 //! text length / utterance rate.
 
-use rquickjs::{Ctx, Function};
-
 /// Speak `text` using the platform TTS engine, fire-and-forget.
 ///
 /// The background thread is detached — Lumen does not wait for completion.
 /// Errors (engine not installed, permission denied, etc.) are silently swallowed.
+#[cfg(feature = "v8-backend")]
 fn platform_speak_async(text: String) {
     std::thread::Builder::new()
         .name("lumen-tts".into())
@@ -32,7 +31,7 @@ fn platform_speak_async(text: String) {
 }
 
 /// Blocking platform TTS call — run on a background thread.
-#[cfg(target_os = "windows")]
+#[cfg(all(feature = "v8-backend", target_os = "windows"))]
 fn platform_speak_blocking(text: &str) {
     // Pass text through an env-var to avoid any PowerShell quoting/injection issues.
     let _ = std::process::Command::new("powershell")
@@ -50,7 +49,7 @@ fn platform_speak_blocking(text: &str) {
         .status();
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(feature = "v8-backend", target_os = "linux"))]
 fn platform_speak_blocking(text: &str) {
     // Try espeak first; fall back to spd-say if not found.
     let ok = std::process::Command::new("espeak")
@@ -63,39 +62,17 @@ fn platform_speak_blocking(text: &str) {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(feature = "v8-backend", target_os = "macos"))]
 fn platform_speak_blocking(text: &str) {
     let _ = std::process::Command::new("say").arg(text).status();
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+#[cfg(all(feature = "v8-backend", not(any(target_os = "windows", target_os = "linux", target_os = "macos"))))]
 fn platform_speak_blocking(_text: &str) {}
 
-/// Install the Web Speech API into `ctx`.
-///
-/// Registers one native binding:
-/// - `_lumen_speech_speak(text)` — dispatches platform TTS (fire-and-forget).
-///
-/// Then evaluates `SPEECH_SHIM` which defines `speechSynthesis`, `SpeechSynthesisUtterance`,
-/// `SpeechSynthesisVoice`, `SpeechRecognition`, and `webkitSpeechRecognition` on `window`.
-///
-/// Must be called **after** `dom::install_dom_api` so that `window`, `Promise`,
-/// `setTimeout`, and `Event` are already defined.
-pub fn install_speech_bindings(ctx: &Ctx<'_>) -> rquickjs::Result<()> {
-    // Native binding: fire-and-forget TTS.  Only the text content is passed;
-    // rate/pitch/volume are handled by the platform TTS engine's defaults.
-    ctx.globals().set(
-        "_lumen_speech_speak",
-        Function::new(ctx.clone(), |text: String| {
-            platform_speak_async(text);
-        })?,
-    )?;
-    ctx.eval::<(), _>(SPEECH_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_speech_bindings`] (Ph3 V8 migration S5-S7 batch 2): the
-/// native goes through the compat layer, the JS shim evaluates unchanged.
+/// V8 port of the former rquickjs `install_speech_bindings` (Ph3 V8 migration S5-S7
+/// batch 2, rquickjs side removed in S12b-B5): the native goes through the compat
+/// layer, the JS shim evaluates unchanged.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_speech_bindings_v8(
     rt: &crate::v8_runtime::V8JsRuntime,
@@ -112,6 +89,7 @@ pub(crate) fn install_speech_bindings_v8(
 }
 
 /// JavaScript shim: Web Speech API (W3C Web Speech §3–4).
+#[cfg(feature = "v8-backend")]
 const SPEECH_SHIM: &str = r#"(function() {
 'use strict';
 

@@ -11,20 +11,9 @@
 //! Phase 1: `_lumen_get_screen_details()` native binding will query the OS for all
 //! connected screens and call the callback with a JSON array of screen descriptors.
 
-use rquickjs::Ctx;
-
-/// Install Window Management API shim into the JS context.
-///
-/// Adds `screen.isExtended`, `navigator.getScreenDetails()`, and the `ScreenDetails` /
-/// `ScreenDetailed` classes. Must be called **after** `install_navigator_bindings` so
-/// that `screen`, `navigator`, `Promise`, and `DOMException` already exist.
-pub fn install_window_management_api(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(WINDOW_MANAGEMENT_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_window_management_api`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// V8 port of the former rquickjs `install_window_management_api` (Ph3 V8 migration S5-S7,
+/// rquickjs side removed in S12b-B5): identical JS shim, evaluated via
+/// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_window_management_api_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -33,6 +22,7 @@ pub(crate) fn install_window_management_api_v8(rt: &crate::v8_runtime::V8JsRunti
 }
 
 /// JavaScript shim implementing the W3C Multi-Screen Window Placement Level 1 API.
+#[cfg(feature = "v8-backend")]
 const WINDOW_MANAGEMENT_SHIM: &str = r#"(function() {
   'use strict';
   if (typeof screen === 'undefined' || typeof navigator === 'undefined') return;
@@ -147,20 +137,17 @@ const WINDOW_MANAGEMENT_SHIM: &str = r#"(function() {
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
     use super::*;
-    use rquickjs::{Context, Runtime};
-
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
     /// Install minimal prereqs: screen + navigator + Promise + DOMException.
-    fn install_prereqs(ctx: &rquickjs::Ctx) {
-        ctx.eval::<(), _>(
+    fn with_window_management(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(
             "var screen = { \
                width: 1920, height: 1080, \
                availWidth: 1920, availHeight: 1080, \
@@ -173,61 +160,48 @@ mod tests {
              globalThis.devicePixelRatio = 1;",
         )
         .unwrap();
+        install_window_management_api_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
     fn screen_is_extended_false() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_window_management_api(&ctx).unwrap();
-            let v: bool = ctx.eval("screen.isExtended === false").unwrap();
-            assert!(v, "screen.isExtended should be false in Phase 0");
+        with_window_management(|rt| {
+            let v = rt.eval("screen.isExtended === false").unwrap();
+            assert_eq!(v, JsValue::Bool(true), "screen.isExtended should be false in Phase 0");
         });
     }
 
     #[test]
     fn screen_detailed_class_exported() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_window_management_api(&ctx).unwrap();
-            let v: bool = ctx.eval("typeof ScreenDetailed === 'function'").unwrap();
-            assert!(v, "ScreenDetailed should be exported on globalThis");
+        with_window_management(|rt| {
+            let v = rt.eval("typeof ScreenDetailed === 'function'").unwrap();
+            assert_eq!(v, JsValue::Bool(true), "ScreenDetailed should be exported on globalThis");
         });
     }
 
     #[test]
     fn screen_details_class_exported() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_window_management_api(&ctx).unwrap();
-            let v: bool = ctx.eval("typeof ScreenDetails === 'function'").unwrap();
-            assert!(v, "ScreenDetails should be exported on globalThis");
+        with_window_management(|rt| {
+            let v = rt.eval("typeof ScreenDetails === 'function'").unwrap();
+            assert_eq!(v, JsValue::Bool(true), "ScreenDetails should be exported on globalThis");
         });
     }
 
     #[test]
     fn get_screen_details_returns_promise() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_window_management_api(&ctx).unwrap();
-            let v: bool = ctx
+        with_window_management(|rt| {
+            let v = rt
                 .eval("navigator.getScreenDetails() instanceof Promise")
                 .unwrap();
-            assert!(v, "getScreenDetails() should return a Promise");
+            assert_eq!(v, JsValue::Bool(true), "getScreenDetails() should return a Promise");
         });
     }
 
     #[test]
     fn screen_detailed_has_required_fields() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_window_management_api(&ctx).unwrap();
-            let v: bool = ctx
+        with_window_management(|rt| {
+            let v = rt
                 .eval(
                     r#"
                     var s = new ScreenDetailed({
@@ -244,17 +218,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(v, "ScreenDetailed should expose all required fields");
+            assert_eq!(v, JsValue::Bool(true), "ScreenDetailed should expose all required fields");
         });
     }
 
     #[test]
     fn screen_details_current_screen() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_window_management_api(&ctx).unwrap();
-            let v: bool = ctx
+        with_window_management(|rt| {
+            let v = rt
                 .eval(
                     r#"
                     var s1 = new ScreenDetailed({ width: 1920, height: 1080, isPrimary: true, label: 'A' });
@@ -264,17 +235,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(v, "ScreenDetails.currentScreen should point to first screen");
+            assert_eq!(v, JsValue::Bool(true), "ScreenDetails.currentScreen should point to first screen");
         });
     }
 
     #[test]
     fn screen_details_event_listener() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_window_management_api(&ctx).unwrap();
-            let v: bool = ctx
+        with_window_management(|rt| {
+            let v = rt
                 .eval(
                     r#"
                     var sd = new ScreenDetails([], 0);
@@ -285,29 +253,24 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(v, "addEventListener should store listeners");
+            assert_eq!(v, JsValue::Bool(true), "addEventListener should store listeners");
         });
     }
 
     #[test]
     fn get_screen_details_resolves_with_screen_details() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_window_management_api(&ctx).unwrap();
-            // Promise resolves synchronously for Phase 0 stubs via Promise.resolve().
-            let v: bool = ctx
+        with_window_management(|rt| {
+            // Promise resolves via the V8 microtask queue after eval returns.
+            let v = rt
                 .eval(
                     r#"
                     var result = null;
                     navigator.getScreenDetails().then(function(sd) { result = sd; });
-                    // PromiseJobs are flushed by QuickJS after eval returns,
-                    // but we can check the type was registered.
                     typeof navigator.getScreenDetails === 'function'
                     "#,
                 )
                 .unwrap();
-            assert!(v, "navigator.getScreenDetails should be a function");
+            assert_eq!(v, JsValue::Bool(true), "navigator.getScreenDetails should be a function");
         });
     }
 }
