@@ -832,13 +832,6 @@ impl QuickJsRuntime {
                 eprintln!("MediaDevices bindings init failed: {}", e);
             }
 
-            // Install WebUSB API (W3C WebUSB §2–3) — after DOM/navigator so that
-            // Promise, DOMException, and navigator are available. Phase 0: all device
-            // operations reject with NotSupportedError (no USB support).
-            if let Err(e) = webusb::install_webusb_bindings(&ctx) {
-                eprintln!("WebUSB bindings init failed: {}", e);
-            }
-
             // Install W3C WebCodecs API (https://www.w3.org/TR/webcodecs/) — after DOM.
             // Phase 0: VideoEncoder/Decoder + AudioEncoder/Decoder + EncodedVideoChunk/AudioChunk stubs.
             // configure() rejects with NotSupportedError; no codec support in Phase 0.
@@ -1023,13 +1016,6 @@ impl QuickJsRuntime {
                 eprintln!("Decorator shim init failed: {}", e);
             }
 
-            // Install CloseWatcher API (WICG) — after DOM so `document` and `Event` exist.
-            // Provides `new CloseWatcher()` with requestClose()/destroy()/close events and
-            // Escape-key intercept on the topmost watcher.
-            if let Err(e) = close_watcher::install_close_watcher(&ctx) {
-                eprintln!("CloseWatcher init failed: {}", e);
-            }
-
             // Install CSS View Transitions API (CSS View Transitions L1 §4) — after DOM
             // so `document` is defined and Promise/queueMicrotask are available.
             if let Err(e) = view_transitions::install_view_transition_bindings(
@@ -1069,13 +1055,6 @@ impl QuickJsRuntime {
             // ondataavailable fires empty Blob on stop. BlobEvent class. isTypeSupported() → false.
             if let Err(e) = media_stream_recording::init_media_stream_recording(&ctx) {
                 eprintln!("MediaRecorder API init failed: {}", e);
-            }
-
-            // Install Web Locks API (W3C Web Locks Level 1) — after DOM/navigator.
-            // Phase 0: in-memory per-context FIFO lock queue; supports exclusive/shared modes,
-            // ifAvailable, steal, and AbortSignal. navigator.locks → LockManager.
-            if let Err(e) = web_locks::install_web_locks_bindings(&ctx) {
-                eprintln!("Web Locks API init failed: {}", e);
             }
 
             // Install Screen Wake Lock API (W3C Screen Wake Lock Level 1) — after DOM/navigator.

@@ -8,16 +8,9 @@
 //! Supported options: `mode` ('exclusive'|'shared'), `ifAvailable`, `steal`, `signal`.
 //! `Lock` objects are plain `{name, mode}` objects passed to the callback.
 
-use rquickjs::Ctx;
-
-/// Install the Web Locks API bindings into the JS context.
-pub fn install_web_locks_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(WEB_LOCKS_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_web_locks_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// V8 port of the former rquickjs `install_web_locks_bindings` (Ph3 V8 migration S5-S7,
+/// rquickjs side removed in S12b-B7): identical JS shim, evaluated via
+/// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_web_locks_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -26,6 +19,7 @@ pub(crate) fn install_web_locks_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime)
 }
 
 /// JavaScript shim implementing W3C Web Locks Level 1 (Phase 0).
+#[cfg(feature = "v8-backend")]
 const WEB_LOCKS_SHIM: &str = r#"(function() {
   'use strict';
 
@@ -204,74 +198,50 @@ const WEB_LOCKS_SHIM: &str = r#"(function() {
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
-    use super::*;
-    use rquickjs::{Context, Runtime};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
-
-    fn with_web_locks(f: impl FnOnce(&rquickjs::Ctx)) {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            // Minimal stubs needed by the shim
-            ctx.eval::<(), _>(
-                r#"
-                var window = globalThis;
-                function DOMException(msg, name) {
-                    var e = new Error(msg);
-                    e.name = name || 'Error';
-                    return e;
-                }
-                globalThis.DOMException = DOMException;
-                "#,
-            )
-            .unwrap();
-            install_web_locks_bindings(&ctx).unwrap();
-            f(&ctx);
-        });
+    fn with_web_locks(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        super::install_web_locks_bindings_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
     fn lock_manager_class_exists() {
-        with_web_locks(|ctx| {
-            let ok: bool = ctx
-                .eval("typeof LockManager === 'function'")
-                .unwrap();
-            assert!(ok);
+        with_web_locks(|rt| {
+            let v = rt.eval("typeof LockManager === 'function'").unwrap();
+            assert_eq!(v, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn navigator_locks_is_lock_manager() {
-        with_web_locks(|ctx| {
-            let ok: bool = ctx
-                .eval("navigator.locks instanceof LockManager")
-                .unwrap();
-            assert!(ok);
+        with_web_locks(|rt| {
+            let v = rt.eval("navigator.locks instanceof LockManager").unwrap();
+            assert_eq!(v, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn request_returns_promise() {
-        with_web_locks(|ctx| {
-            let ok: bool = ctx
+        with_web_locks(|rt| {
+            let v = rt
                 .eval(
                     "typeof navigator.locks.request('mylock', function(l) { return Promise.resolve(); }) === 'object'",
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(v, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn request_callback_receives_lock_object() {
-        with_web_locks(|ctx| {
-            let ok: bool = ctx
+        with_web_locks(|rt| {
+            let v = rt
                 .eval(
                     r#"
                     var sawName = false;
@@ -285,14 +255,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(v, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn query_returns_promise_with_snapshot() {
-        with_web_locks(|ctx| {
-            let ok: bool = ctx
+        with_web_locks(|rt| {
+            let v = rt
                 .eval(
                     r#"
                     var p = navigator.locks.query();
@@ -300,14 +270,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(v, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn if_available_calls_callback_with_null_when_held() {
-        with_web_locks(|ctx| {
-            let ok: bool = ctx
+        with_web_locks(|rt| {
+            let v = rt
                 .eval(
                     r#"
                     var gotNull = false;
@@ -325,7 +295,7 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(v, JsValue::Bool(true));
         });
     }
 }

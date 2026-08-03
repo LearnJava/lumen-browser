@@ -11,18 +11,11 @@
 //!
 //! Reference: <https://wicg.github.io/close-watcher/>
 
-use rquickjs::Ctx;
-
-/// Install `CloseWatcher` class + Escape key handler into the JS context.
+/// V8 port of the former rquickjs `install_close_watcher` (Ph3 V8 migration S5-S7,
+/// rquickjs side removed in S12b-B7): identical JS shim, evaluated via
+/// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 ///
 /// Must be called after DOM is installed (needs `document`, `window`, `Event`).
-pub fn install_close_watcher(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(CLOSE_WATCHER_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_close_watcher`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_close_watcher_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -30,6 +23,7 @@ pub(crate) fn install_close_watcher_v8(rt: &crate::v8_runtime::V8JsRuntime) -> l
     Ok(())
 }
 
+#[cfg(feature = "v8-backend")]
 const CLOSE_WATCHER_SHIM: &str = r#"
 (function() {
   'use strict';
@@ -169,20 +163,16 @@ const CLOSE_WATCHER_SHIM: &str = r#"
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
-    use super::*;
-    use rquickjs::{Context, Runtime};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
-
-    fn setup(ctx: &rquickjs::Ctx) {
+    fn with_close_watcher(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
         // Minimal stubs for DOM primitives used by the shim.
-        ctx.eval::<(), _>(
+        rt.eval(
             r#"
             var document = { addEventListener: function(t,cb,cap) {
                 if (typeof this._listeners === 'undefined') this._listeners = [];
@@ -201,25 +191,22 @@ mod tests {
             "#,
         )
         .unwrap();
-        install_close_watcher(ctx).unwrap();
+        super::install_close_watcher_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
     fn close_watcher_class_exists() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            setup(&ctx);
-            let ok: bool = ctx.eval("typeof CloseWatcher === 'function'").unwrap();
-            assert!(ok);
+        with_close_watcher(|rt| {
+            let v = rt.eval("typeof CloseWatcher === 'function'").unwrap();
+            assert_eq!(v, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn new_close_watcher_has_methods() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            setup(&ctx);
-            let ok: bool = ctx
+        with_close_watcher(|rt| {
+            let v = rt
                 .eval(
                     "(function() { \
                        var cw = new CloseWatcher(); \
@@ -230,16 +217,14 @@ mod tests {
                      })()",
                 )
                 .unwrap();
-            assert!(ok, "CloseWatcher must expose requestClose/destroy/close/addEventListener");
+            assert_eq!(v, JsValue::Bool(true), "CloseWatcher must expose requestClose/destroy/close/addEventListener");
         });
     }
 
     #[test]
     fn request_close_fires_cancel_then_close() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            setup(&ctx);
-            let seq: String = ctx
+        with_close_watcher(|rt| {
+            let v = rt
                 .eval(
                     "(function() { \
                        var cw = new CloseWatcher(); \
@@ -251,16 +236,14 @@ mod tests {
                      })()",
                 )
                 .unwrap();
-            assert_eq!(seq, "cancel,close");
+            assert_eq!(v, JsValue::String("cancel,close".to_string()));
         });
     }
 
     #[test]
     fn prevent_default_on_cancel_blocks_close() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            setup(&ctx);
-            let got_close: bool = ctx
+        with_close_watcher(|rt| {
+            let v = rt
                 .eval(
                     "(function() { \
                        var cw = new CloseWatcher(); \
@@ -272,16 +255,14 @@ mod tests {
                      })()",
                 )
                 .unwrap();
-            assert!(!got_close, "prevented cancel must block close");
+            assert_eq!(v, JsValue::Bool(false), "prevented cancel must block close");
         });
     }
 
     #[test]
     fn destroy_fires_no_events() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            setup(&ctx);
-            let fired: bool = ctx
+        with_close_watcher(|rt| {
+            let v = rt
                 .eval(
                     "(function() { \
                        var cw = new CloseWatcher(); \
@@ -293,16 +274,14 @@ mod tests {
                      })()",
                 )
                 .unwrap();
-            assert!(!fired, "destroy() must not fire cancel or close");
+            assert_eq!(v, JsValue::Bool(false), "destroy() must not fire cancel or close");
         });
     }
 
     #[test]
     fn onclose_setter_works() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            setup(&ctx);
-            let fired: bool = ctx
+        with_close_watcher(|rt| {
+            let v = rt
                 .eval(
                     "(function() { \
                        var cw = new CloseWatcher(); \
@@ -313,16 +292,14 @@ mod tests {
                      })()",
                 )
                 .unwrap();
-            assert!(fired, "onclose setter must register close handler");
+            assert_eq!(v, JsValue::Bool(true), "onclose setter must register close handler");
         });
     }
 
     #[test]
     fn close_after_destroy_is_noop() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            setup(&ctx);
-            let ok: bool = ctx
+        with_close_watcher(|rt| {
+            let v = rt
                 .eval(
                     "(function() { \
                        var cw = new CloseWatcher(); \
@@ -332,17 +309,15 @@ mod tests {
                      })()",
                 )
                 .unwrap();
-            assert!(ok, "requestClose() after destroy() must not throw");
+            assert_eq!(v, JsValue::Bool(true), "requestClose() after destroy() must not throw");
         });
     }
 
     #[test]
     fn multiple_watchers_stack_order() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            setup(&ctx);
+        with_close_watcher(|rt| {
             // Two watchers; requestClose on the second (top) must not affect the first.
-            let only_second_closed: bool = ctx
+            let v = rt
                 .eval(
                     "(function() { \
                        var cw1 = new CloseWatcher(); \
@@ -355,7 +330,7 @@ mod tests {
                      })()",
                 )
                 .unwrap();
-            assert!(only_second_closed, "requestClose on top watcher must not close the one below");
+            assert_eq!(v, JsValue::Bool(true), "requestClose on top watcher must not close the one below");
         });
     }
 }

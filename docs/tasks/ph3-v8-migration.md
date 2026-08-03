@@ -2584,6 +2584,35 @@ did not go red from this batch. Both clippy passes clean.
 
 Next in queue: S12b-B7 (`web_locks`/`webusb`/`close_watcher`, Полоса 2 first batch).
 
+**S12b-B7** (2026-08-04): seventh batch of queue group A (`docs/tasks/p1-s12b-cleanup-queue.md`
+§3, Полоса 2 first batch), 3 medium modules: `web_locks` (6 tests), `webusb` (8), `close_watcher`
+(8) — 22 total, all ported in place to `#[cfg(all(test, feature = "v8-backend"))]` against a bare
+`V8JsRuntime::new()`, swapping `ctx.eval::<T,_>(...)`/`Context::full` boilerplate for
+`rt.eval(...)` + `JsValue::{Bool,String}` comparisons. Step-2 grep (`grep -n "<file_stem>_" dom.rs`)
+found no hidden per-module tests for any of the 3 — the one `webusb`-adjacent hit in `dom.rs`
+(`event_target_dependent_navigator_usb_installed`) is a generic EventTarget-install-order test
+already validating V8, not part of `webusb.rs`'s own suite.
+
+`web_locks`'s shim self-installs `navigator = {}` when absent, so its V8 harness needs no stub
+eval at all (`install_web_locks_bindings_v8` called directly on a bare runtime) — none of its 6
+tests exercise the `DOMException`-dependent abort path either, so the old rquickjs test's
+`DOMException` stub had no V8 equivalent to carry over. `webusb` and `close_watcher` both still
+needed the same minimal-stub-`eval()`-before-install pattern as the rquickjs tests (webusb:
+`window`/`navigator`/`EventTarget`/`Event`/`DOMException`; close_watcher: `document`/`window`/
+`Event`), just re-expressed via `rt.eval(...)` instead of `ctx.eval::<(), _>(...)`.
+
+No `empty_line_after_doc_comments` hits: `web_locks.rs` already had a `//!` module header with no
+following blank-line-then-doc-comment shape; `webusb.rs`'s former `///`-then-`use` header was
+converted to `//!` as part of the same edit that removed the rquickjs fn (no separate fix needed);
+`close_watcher.rs` already used `//!`.
+
+`cargo test -p lumen-js --features v8-backend`: 2584 lib (unchanged — in-place porting only) + 68
+integration (unchanged, no integration-suite modules in this batch). `cargo test -p lumen-js`
+(default): 1033 lib (down from 1055, the 22 ported `mod tests`) + 5 integration (unchanged).
+rquickjs suite did not go red from this batch. Both clippy passes clean.
+
+Next in queue: S12b-B8 (`gamepad`/`generic_sensor`/`shared_storage`, Полоса 2 second batch).
+
 ---
 
 ## Risks (Rev 2)
