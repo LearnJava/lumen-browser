@@ -1,18 +1,13 @@
-/// HTML Form Constraint Validation API (WHATWG HTML §4.10.21)
-/// ValidityState with all 11 flags, element.checkValidity/reportValidity/setCustomValidity,
-/// element.validity/validationMessage/willValidate, form.checkValidity/reportValidity.
-/// Phase 0: full ValidityState infrastructure; validation checks: valueMissing, customError,
-/// typeMismatch (email/url), patternMismatch, tooLong, tooShort, rangeUnderflow, rangeOverflow.
-use rquickjs::Ctx;
+//! HTML Form Constraint Validation API (WHATWG HTML §4.10.21)
+//!
+//! ValidityState with all 11 flags, element.checkValidity/reportValidity/setCustomValidity,
+//! element.validity/validationMessage/willValidate, form.checkValidity/reportValidity.
+//! Phase 0: full ValidityState infrastructure; validation checks: valueMissing, customError,
+//! typeMismatch (email/url), patternMismatch, tooLong, tooShort, rangeUnderflow, rangeOverflow.
 
 /// Install Form Constraint Validation API bindings into the JS context.
-pub fn install_form_validation_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(FORM_VALIDATION_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_form_validation_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+///
+/// Evaluated via [`lumen_core::ext::JsRuntime::eval`].
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_form_validation_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -20,6 +15,7 @@ pub(crate) fn install_form_validation_bindings_v8(rt: &crate::v8_runtime::V8JsRu
     Ok(())
 }
 
+#[cfg(feature = "v8-backend")]
 const FORM_VALIDATION_SHIM: &str = r#"
 (function() {
   'use strict';
@@ -202,106 +198,99 @@ const FORM_VALIDATION_SHIM: &str = r#"
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
-    use super::*;
-    use rquickjs::{Context, Runtime};
-
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
     /// Set up a minimal DOM environment + form validation API for testing.
-    fn with_form_validation_api(f: impl FnOnce(&rquickjs::Ctx)) {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            ctx.eval::<(), _>(
-                r#"
-                var window = globalThis;
+    fn with_form_validation_api(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(
+            r#"
+            var window = globalThis;
 
-                // Minimal Event stub
-                function Event(type, init) {
-                  this.type = type;
-                  this.bubbles = !!(init && init.bubbles);
-                  this.cancelable = !!(init && init.cancelable);
-                  this._defaultPrevented = false;
-                }
-                Event.prototype.preventDefault = function() { this._defaultPrevented = true; };
-                window.Event = Event;
+            // Minimal Event stub
+            function Event(type, init) {
+              this.type = type;
+              this.bubbles = !!(init && init.bubbles);
+              this.cancelable = !!(init && init.cancelable);
+              this._defaultPrevented = false;
+            }
+            Event.prototype.preventDefault = function() { this._defaultPrevented = true; };
+            window.Event = Event;
 
-                // DOMException stub
-                function DOMException(msg, name) {
-                  this.message = msg;
-                  this.name = name || 'Error';
-                }
-                window.DOMException = DOMException;
+            // DOMException stub
+            function DOMException(msg, name) {
+              this.message = msg;
+              this.name = name || 'Error';
+            }
+            window.DOMException = DOMException;
 
-                // Minimal element factory
-                function makeElement(tag, attrs) {
-                  var el = {
-                    tagName: tag.toUpperCase(),
-                    type: '',
-                    value: '',
-                    required: false,
-                    disabled: false,
-                    checked: false,
-                    maxLength: -1,
-                    minLength: -1,
-                    _customValidationMessage: '',
-                    _listeners: {},
-                    getAttribute: function(name) { return attrs && attrs[name] !== undefined ? attrs[name] : null; },
-                    dispatchEvent: function(ev) {
-                      var handlers = this._listeners[ev.type] || [];
-                      handlers.forEach(function(h) { h(ev); });
-                      return !ev._defaultPrevented;
-                    },
-                    addEventListener: function(type, fn) {
-                      if (!this._listeners[type]) this._listeners[type] = [];
-                      this._listeners[type].push(fn);
-                    },
-                  };
-                  return el;
-                }
+            // Minimal element factory
+            function makeElement(tag, attrs) {
+              var el = {
+                tagName: tag.toUpperCase(),
+                type: '',
+                value: '',
+                required: false,
+                disabled: false,
+                checked: false,
+                maxLength: -1,
+                minLength: -1,
+                _customValidationMessage: '',
+                _listeners: {},
+                getAttribute: function(name) { return attrs && attrs[name] !== undefined ? attrs[name] : null; },
+                dispatchEvent: function(ev) {
+                  var handlers = this._listeners[ev.type] || [];
+                  handlers.forEach(function(h) { h(ev); });
+                  return !ev._defaultPrevented;
+                },
+                addEventListener: function(type, fn) {
+                  if (!this._listeners[type]) this._listeners[type] = [];
+                  this._listeners[type].push(fn);
+                },
+              };
+              return el;
+            }
 
-                // Element prototypes — the mixin targets
-                function HTMLInputElement() {}
-                function HTMLTextAreaElement() {}
-                function HTMLSelectElement() {}
-                function HTMLButtonElement() {}
-                function HTMLFormElement() {}
-                window.HTMLInputElement    = HTMLInputElement;
-                window.HTMLTextAreaElement = HTMLTextAreaElement;
-                window.HTMLSelectElement   = HTMLSelectElement;
-                window.HTMLButtonElement   = HTMLButtonElement;
-                window.HTMLFormElement     = HTMLFormElement;
+            // Element prototypes — the mixin targets
+            function HTMLInputElement() {}
+            function HTMLTextAreaElement() {}
+            function HTMLSelectElement() {}
+            function HTMLButtonElement() {}
+            function HTMLFormElement() {}
+            window.HTMLInputElement    = HTMLInputElement;
+            window.HTMLTextAreaElement = HTMLTextAreaElement;
+            window.HTMLSelectElement   = HTMLSelectElement;
+            window.HTMLButtonElement   = HTMLButtonElement;
+            window.HTMLFormElement     = HTMLFormElement;
 
-                // Assign prototype to element instances
-                window.makeInput = function(attrs) {
-                  var el = makeElement('INPUT', attrs || {});
-                  Object.setPrototypeOf(el, HTMLInputElement.prototype);
-                  return el;
-                };
-                window.makeTextarea = function() {
-                  var el = makeElement('TEXTAREA', {});
-                  Object.setPrototypeOf(el, HTMLTextAreaElement.prototype);
-                  return el;
-                };
-                window.makeForm = function() {
-                  var el = {
-                    tagName: 'FORM',
-                    elements: [],
-                  };
-                  Object.setPrototypeOf(el, HTMLFormElement.prototype);
-                  return el;
-                };
-                "#,
-            )
-            .unwrap();
-            install_form_validation_bindings(&ctx).unwrap();
-            f(&ctx);
-        });
+            // Assign prototype to element instances
+            window.makeInput = function(attrs) {
+              var el = makeElement('INPUT', attrs || {});
+              Object.setPrototypeOf(el, HTMLInputElement.prototype);
+              return el;
+            };
+            window.makeTextarea = function() {
+              var el = makeElement('TEXTAREA', {});
+              Object.setPrototypeOf(el, HTMLTextAreaElement.prototype);
+              return el;
+            };
+            window.makeForm = function() {
+              var el = {
+                tagName: 'FORM',
+                elements: [],
+              };
+              Object.setPrototypeOf(el, HTMLFormElement.prototype);
+              return el;
+            };
+            "#,
+        )
+        .unwrap();
+        super::install_form_validation_bindings_v8(&rt).unwrap();
+        f(&rt);
     }
 
     /// BUG-072: the real `install_dom` environment does NOT define
@@ -311,36 +300,30 @@ mod tests {
     /// the whole install. The `typeof` guards must let it install cleanly.
     #[test]
     fn installs_without_form_element_constructors() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            // Minimal environment: window only, no HTML*Element constructors —
-            // mirrors the real install_dom globals.
-            ctx.eval::<(), _>("var window = globalThis;").unwrap();
-            install_form_validation_bindings(&ctx)
-                .expect("shim must install without throwing when element constructors are absent");
-            // ValidityState is still exported (the part that survives regardless),
-            // and HTMLFormElement.prototype methods are guarded by typeof.
-            let ok: bool = ctx
-                .eval("typeof window.ValidityState === 'function'")
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        // Minimal environment: window only, no HTML*Element constructors —
+        // mirrors the real install_dom globals.
+        rt.eval("var window = globalThis;").unwrap();
+        super::install_form_validation_bindings_v8(&rt)
+            .expect("shim must install without throwing when element constructors are absent");
+        // ValidityState is still exported (the part that survives regardless),
+        // and HTMLFormElement.prototype methods are guarded by typeof.
+        let ok = rt.eval("typeof window.ValidityState === 'function'").unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]
     fn validity_state_class_exists() {
-        with_form_validation_api(|ctx| {
-            let ok: bool = ctx
-                .eval("typeof window.ValidityState === 'function'")
-                .unwrap();
-            assert!(ok);
+        with_form_validation_api(|rt| {
+            let ok = rt.eval("typeof window.ValidityState === 'function'").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn validity_state_valid_when_no_flags() {
-        with_form_validation_api(|ctx| {
-            let ok: bool = ctx
+        with_form_validation_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var vs = new ValidityState({});
@@ -351,14 +334,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn check_validity_fires_invalid_event_when_required_empty() {
-        with_form_validation_api(|ctx| {
-            let ok: bool = ctx
+        with_form_validation_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var el = makeInput();
@@ -371,14 +354,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn set_custom_validity_sets_custom_error_flag() {
-        with_form_validation_api(|ctx| {
-            let ok: bool = ctx
+        with_form_validation_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var el = makeInput();
@@ -387,14 +370,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn set_custom_validity_empty_clears_error() {
-        with_form_validation_api(|ctx| {
-            let ok: bool = ctx
+        with_form_validation_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var el = makeInput();
@@ -404,14 +387,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn form_check_validity_iterates_controls() {
-        with_form_validation_api(|ctx| {
-            let ok: bool = ctx
+        with_form_validation_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var form = makeForm();
@@ -426,7 +409,7 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 }

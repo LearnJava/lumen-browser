@@ -2677,6 +2677,41 @@ passes clean.
 
 Next in queue: S12b-B10 (`long_animation_frames`/`form_validation`/`wake_lock`, Полоса 2 fourth batch).
 
+**S12b-B10** (2026-08-04): tenth batch of queue group A (`docs/tasks/p1-s12b-cleanup-queue.md`
+§3, Полоса 2 fourth batch), 3 medium modules: `long_animation_frames` (10 tests),
+`form_validation` (7), `wake_lock` (12) — 29 total, all ported in place to `#[cfg(all(test,
+feature = "v8-backend"))]` against a bare `V8JsRuntime::new()`. Step-2 grep
+(`grep -n "<file_stem>_" dom.rs`) found no hidden per-module tests for `long_animation_frames`
+and `form_validation`, but `wake_lock` had 3 (`wake_lock_request_resolves`,
+`wake_lock_release_marks_released`, `wake_lock_unsupported_type_rejects`, `dom.rs:16590-16621`)
+— already `#[cfg(feature = "v8-backend")]`-gated V8 coverage from an earlier slice, not
+rquickjs-side, so left untouched (same negative-ish result shape as `pip_bindings` in the
+procedure note, but here the hidden tests were already V8, nothing to port).
+
+`long_animation_frames` and `form_validation` are pure `ctx.eval(SHIM)` shims, mechanical harness
+swap only. `wake_lock` is the first module in Полоса 2 with native bindings
+(`__lumen_wake_lock_request`/`__lumen_wake_lock_release`) still to delete on the rquickjs side:
+removed `install_native_bindings` (`rquickjs::Function::new` closures) and the rquickjs
+`install_wake_lock_bindings`, keeping only `install_wake_lock_bindings_v8` (already present since
+S5-S7, registers both natives via `v8_compat::into_v8_fn0` then evals the shim). `get_provider()`
+and the `NullWakeLockProvider` import became `#[cfg(feature = "v8-backend")]`-only — they were
+referenced solely from the deleted rquickjs installer and the (already feature-gated) V8 installer
+and tests; clippy caught the resulting dead-code/unused-import once the rquickjs side was gone.
+
+`empty_line_after_doc_comments`: `form_validation.rs` had an `///`-block header
+(`use rquickjs::Ctx;` immediately after, no blank line) — since the `///` doc-comment target
+(`use rquickjs::Ctx;`) was deleted along with the rquickjs installer, the header would have
+docced the crate-doc-less `pub(crate) fn install_form_validation_bindings_v8` instead of nothing;
+converted to `//!` for correctness rather than to dodge a lint (no blank line meant no lint hit
+either way). `long_animation_frames.rs` and `wake_lock.rs` already used `//!`.
+
+`cargo test -p lumen-js --features v8-backend`: 2584 lib (unchanged — in-place porting only, same
+reasoning as B7-B9) + 68 integration (unchanged). `cargo test -p lumen-js` (default): 926 lib
+(down from 955, the 29 ported `mod tests`) + 5 integration (unchanged). rquickjs suite did not go
+red from this batch (926 passed). Both clippy passes clean.
+
+Next in queue: S12b-B11 (`navigator_bindings`/`media_capture`/`screen_capture`, Полоса 2 fifth batch).
+
 ---
 
 ## Risks (Rev 2)
