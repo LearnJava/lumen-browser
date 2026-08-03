@@ -15,21 +15,12 @@
 //! ```
 //! while keeping IP addresses private (§12 Unique Features — anti-fingerprinting).
 
-use rquickjs::Ctx;
-
-/// Install the WebRTC mDNS-only stub into the JS context.
-///
-/// Defines `RTCPeerConnection`, `RTCSessionDescription`, and `RTCIceCandidate`
-/// on `globalThis`.  Must be called **after** `dom::install_dom_api` so that
-/// `setTimeout`, `Promise`, and `queueMicrotask` are already available.
-///
-/// No native Rust bindings are needed — the stub is a pure JS shim.
-pub fn install_webrtc_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(WEBRTC_SHIM)
-}
-
-/// V8 port of [`install_webrtc_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// V8 port of the rquickjs WebRTC mDNS-only stub installer (removed S12b-B13; Ph3 V8
+/// migration S5-S7): identical JS shim, evaluated via
+/// [`lumen_core::ext::JsRuntime::eval`]. Defines `RTCPeerConnection`,
+/// `RTCSessionDescription`, and `RTCIceCandidate` on `globalThis`. Must be called
+/// **after** DOM install so that `setTimeout`, `Promise`, and `queueMicrotask` are
+/// already available. No native Rust bindings are needed — the stub is a pure JS shim.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_webrtc_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -43,6 +34,7 @@ pub(crate) fn install_webrtc_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) ->
 /// where `<uuid>` is a random UUID v4 and `<port>` is a random ephemeral port.
 /// Both are generated once per page load to be stable within a session but
 /// uncorrelated with the real network interface.
+#[cfg(feature = "v8-backend")]
 const WEBRTC_SHIM: &str = r#"(function() {
   'use strict';
 
@@ -276,20 +268,22 @@ const WEBRTC_SHIM: &str = r#"(function() {
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
     use super::*;
-    use rquickjs::{Context, Runtime};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
+    fn make_rt() -> V8JsRuntime {
+        V8JsRuntime::new().unwrap()
     }
 
     /// Synchronous setTimeout + minimal stubs for tests that need deferred callbacks.
-    fn install_stubs(ctx: &rquickjs::Ctx) {
-        ctx.eval::<(), _>(
+    /// Must run before [`install_webrtc_bindings_v8`] — the shim's `_defer` helper
+    /// snapshots `typeof queueMicrotask`/`typeof setTimeout` once at install time.
+    fn install_stubs(rt: &V8JsRuntime) {
+        rt.eval(
             "function setTimeout(fn, d) { fn(); return 0; } \
              function clearTimeout(id) {} \
              function queueMicrotask(fn) { fn(); }",
@@ -297,292 +291,268 @@ mod tests {
         .unwrap();
     }
 
+    fn js_str(rt: &V8JsRuntime, expr: &str) -> String {
+        match rt.eval(expr).unwrap() {
+            JsValue::String(s) => s,
+            other => panic!("expected string, got {other:?}"),
+        }
+    }
+
+    fn js_bool(rt: &V8JsRuntime, expr: &str) -> bool {
+        match rt.eval(expr).unwrap() {
+            JsValue::Bool(b) => b,
+            other => panic!("expected bool, got {other:?}"),
+        }
+    }
+
     #[test]
     fn install_succeeds() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_webrtc_bindings(&ctx).expect("install must succeed");
-        });
+        let rt = make_rt();
+        install_webrtc_bindings_v8(&rt).expect("install must succeed");
     }
 
     #[test]
     fn rtcpeerconnection_is_function() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_webrtc_bindings(&ctx).unwrap();
-            let ty: String = ctx.eval("typeof RTCPeerConnection").unwrap();
-            assert_eq!(ty, "function");
-        });
+        let rt = make_rt();
+        install_webrtc_bindings_v8(&rt).unwrap();
+        assert_eq!(js_str(&rt, "typeof RTCPeerConnection"), "function");
     }
 
     #[test]
     fn rtcsessiondescription_is_function() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_webrtc_bindings(&ctx).unwrap();
-            let ty: String = ctx.eval("typeof RTCSessionDescription").unwrap();
-            assert_eq!(ty, "function");
-        });
+        let rt = make_rt();
+        install_webrtc_bindings_v8(&rt).unwrap();
+        assert_eq!(js_str(&rt, "typeof RTCSessionDescription"), "function");
     }
 
     #[test]
     fn rtcicecandidate_is_function() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_webrtc_bindings(&ctx).unwrap();
-            let ty: String = ctx.eval("typeof RTCIceCandidate").unwrap();
-            assert_eq!(ty, "function");
-        });
+        let rt = make_rt();
+        install_webrtc_bindings_v8(&rt).unwrap();
+        assert_eq!(js_str(&rt, "typeof RTCIceCandidate"), "function");
     }
 
     #[test]
     fn rtcsessiondescription_has_type_and_sdp() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_webrtc_bindings(&ctx).unwrap();
-            let ty: String = ctx
-                .eval("new RTCSessionDescription({type:'offer',sdp:'v=0'}).type")
-                .unwrap();
-            let sdp: String = ctx
-                .eval("new RTCSessionDescription({type:'offer',sdp:'v=0'}).sdp")
-                .unwrap();
-            assert_eq!(ty, "offer");
-            assert_eq!(sdp, "v=0");
-        });
+        let rt = make_rt();
+        install_webrtc_bindings_v8(&rt).unwrap();
+        assert_eq!(
+            js_str(&rt, "new RTCSessionDescription({type:'offer',sdp:'v=0'}).type"),
+            "offer"
+        );
+        assert_eq!(
+            js_str(&rt, "new RTCSessionDescription({type:'offer',sdp:'v=0'}).sdp"),
+            "v=0"
+        );
     }
 
     #[test]
     fn rtcicecandidate_has_candidate_string() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_webrtc_bindings(&ctx).unwrap();
-            let cand: String = ctx
-                .eval("new RTCIceCandidate({candidate:'candidate:1 1 UDP 123 x.local 9 typ host'}).candidate")
-                .unwrap();
-            assert!(cand.contains("candidate:"));
-        });
+        let rt = make_rt();
+        install_webrtc_bindings_v8(&rt).unwrap();
+        let cand = js_str(
+            &rt,
+            "new RTCIceCandidate({candidate:'candidate:1 1 UDP 123 x.local 9 typ host'}).candidate",
+        );
+        assert!(cand.contains("candidate:"));
     }
 
     #[test]
     fn create_offer_returns_thenable() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_webrtc_bindings(&ctx).unwrap();
-            let ty: String = ctx
-                .eval("typeof new RTCPeerConnection().createOffer().then")
-                .unwrap();
-            assert_eq!(ty, "function", "createOffer() must return a thenable");
-        });
+        let rt = make_rt();
+        install_webrtc_bindings_v8(&rt).unwrap();
+        assert_eq!(
+            js_str(&rt, "typeof new RTCPeerConnection().createOffer().then"),
+            "function",
+            "createOffer() must return a thenable"
+        );
     }
 
     #[test]
     fn create_offer_resolves_to_offer_type() {
-        let (rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            install_webrtc_bindings(&ctx).unwrap();
-            // Schedule Promise callback — result is written to a global.
-            ctx.eval::<(), _>(
-                "var _offer_type = ''; \
-                 new RTCPeerConnection().createOffer() \
-                   .then(function(o) { _offer_type = o.type; });",
-            )
-            .unwrap();
-        });
-        // Drain Promise microtask queue so the .then callback runs.
-        while rt.execute_pending_job().unwrap_or(false) {}
-        ctx.with(|ctx| {
-            let ty: String = ctx.eval("_offer_type").unwrap();
-            assert_eq!(ty, "offer", "createOffer Promise must resolve with type='offer'");
-        });
+        let rt = make_rt();
+        install_stubs(&rt);
+        install_webrtc_bindings_v8(&rt).unwrap();
+        // Two-step eval: V8 checkpoints microtasks at the eval() boundary, not
+        // mid-script — schedule the .then() callback in one eval(), read the
+        // result in the next.
+        rt.eval(
+            "var _offer_type = ''; \
+             new RTCPeerConnection().createOffer() \
+               .then(function(o) { _offer_type = o.type; });",
+        )
+        .unwrap();
+        assert_eq!(
+            js_str(&rt, "_offer_type"),
+            "offer",
+            "createOffer Promise must resolve with type='offer'"
+        );
     }
 
     #[test]
     fn set_local_description_returns_thenable() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_webrtc_bindings(&ctx).unwrap();
-            let ty: String = ctx
-                .eval(
-                    "typeof new RTCPeerConnection() \
-                       .setLocalDescription(new RTCSessionDescription({type:'offer',sdp:'v=0'})) \
-                       .then",
-                )
-                .unwrap();
-            assert_eq!(ty, "function", "setLocalDescription() must return a thenable");
-        });
+        let rt = make_rt();
+        install_webrtc_bindings_v8(&rt).unwrap();
+        assert_eq!(
+            js_str(
+                &rt,
+                "typeof new RTCPeerConnection() \
+                   .setLocalDescription(new RTCSessionDescription({type:'offer',sdp:'v=0'})) \
+                   .then",
+            ),
+            "function",
+            "setLocalDescription() must return a thenable"
+        );
     }
 
     #[test]
     fn onicecandidate_fires_mdns_candidate() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            install_webrtc_bindings(&ctx).unwrap();
-            // synchronous setTimeout means _gatherMdns runs inline.
-            let fired: bool = ctx
-                .eval(
-                    "(function() { \
-                       var fired = false; \
-                       var pc = new RTCPeerConnection(); \
-                       pc.onicecandidate = function(e) { \
-                         if (e.candidate && e.candidate.candidate) fired = true; \
-                       }; \
-                       pc.setLocalDescription(new RTCSessionDescription({type:'offer',sdp:'v=0'})); \
-                       return fired; \
-                     })()",
-                )
-                .unwrap();
-            assert!(fired, "onicecandidate must fire with a candidate object");
-        });
+        let rt = make_rt();
+        install_stubs(&rt);
+        install_webrtc_bindings_v8(&rt).unwrap();
+        // synchronous setTimeout means _gatherMdns runs inline.
+        let fired = js_bool(
+            &rt,
+            "(function() { \
+               var fired = false; \
+               var pc = new RTCPeerConnection(); \
+               pc.onicecandidate = function(e) { \
+                 if (e.candidate && e.candidate.candidate) fired = true; \
+               }; \
+               pc.setLocalDescription(new RTCSessionDescription({type:'offer',sdp:'v=0'})); \
+               return fired; \
+             })()",
+        );
+        assert!(fired, "onicecandidate must fire with a candidate object");
     }
 
     #[test]
     fn mdns_candidate_ends_with_local() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            install_webrtc_bindings(&ctx).unwrap();
-            let cand: String = ctx
-                .eval(
-                    "(function() { \
-                       var c = ''; \
-                       var pc = new RTCPeerConnection(); \
-                       pc.onicecandidate = function(e) { \
-                         if (e.candidate && e.candidate.candidate) \
-                           c = e.candidate.candidate; \
-                       }; \
-                       pc.setLocalDescription(new RTCSessionDescription({type:'offer',sdp:'v=0'})); \
-                       return c; \
-                     })()",
-                )
-                .unwrap();
-            assert!(
-                cand.contains(".local"),
-                "candidate must use a .local mDNS address, got: {cand}"
-            );
-        });
+        let rt = make_rt();
+        install_stubs(&rt);
+        install_webrtc_bindings_v8(&rt).unwrap();
+        let cand = js_str(
+            &rt,
+            "(function() { \
+               var c = ''; \
+               var pc = new RTCPeerConnection(); \
+               pc.onicecandidate = function(e) { \
+                 if (e.candidate && e.candidate.candidate) \
+                   c = e.candidate.candidate; \
+               }; \
+               pc.setLocalDescription(new RTCSessionDescription({type:'offer',sdp:'v=0'})); \
+               return c; \
+             })()",
+        );
+        assert!(
+            cand.contains(".local"),
+            "candidate must use a .local mDNS address, got: {cand}"
+        );
     }
 
     #[test]
     fn mdns_candidate_no_real_ip() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            install_webrtc_bindings(&ctx).unwrap();
-            let cand: String = ctx
-                .eval(
-                    "(function() { \
-                       var c = ''; \
-                       var pc = new RTCPeerConnection(); \
-                       pc.onicecandidate = function(e) { \
-                         if (e.candidate && e.candidate.candidate) \
-                           c = e.candidate.candidate; \
-                       }; \
-                       pc.setLocalDescription(new RTCSessionDescription({type:'offer',sdp:'v=0'})); \
-                       return c; \
-                     })()",
-                )
-                .unwrap();
-            // Must not contain a bare IPv4 address (x.x.x.x).
-            let has_ip = cand
-                .split_whitespace()
-                .any(|tok| tok.split('.').count() == 4 && tok.chars().all(|c| c.is_ascii_digit() || c == '.'));
-            assert!(!has_ip, "candidate must not expose a real IP, got: {cand}");
-        });
+        let rt = make_rt();
+        install_stubs(&rt);
+        install_webrtc_bindings_v8(&rt).unwrap();
+        let cand = js_str(
+            &rt,
+            "(function() { \
+               var c = ''; \
+               var pc = new RTCPeerConnection(); \
+               pc.onicecandidate = function(e) { \
+                 if (e.candidate && e.candidate.candidate) \
+                   c = e.candidate.candidate; \
+               }; \
+               pc.setLocalDescription(new RTCSessionDescription({type:'offer',sdp:'v=0'})); \
+               return c; \
+             })()",
+        );
+        // Must not contain a bare IPv4 address (x.x.x.x).
+        let has_ip = cand
+            .split_whitespace()
+            .any(|tok| tok.split('.').count() == 4 && tok.chars().all(|c| c.is_ascii_digit() || c == '.'));
+        assert!(!has_ip, "candidate must not expose a real IP, got: {cand}");
     }
 
     #[test]
     fn null_candidate_fires_at_end_of_gathering() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            install_webrtc_bindings(&ctx).unwrap();
-            let null_fired: bool = ctx
-                .eval(
-                    "(function() { \
-                       var got_null = false; \
-                       var pc = new RTCPeerConnection(); \
-                       pc.onicecandidate = function(e) { \
-                         if (e.candidate === null) got_null = true; \
-                       }; \
-                       pc.setLocalDescription(new RTCSessionDescription({type:'offer',sdp:'v=0'})); \
-                       return got_null; \
-                     })()",
-                )
-                .unwrap();
-            assert!(null_fired, "null candidate must fire to signal end-of-gathering");
-        });
+        let rt = make_rt();
+        install_stubs(&rt);
+        install_webrtc_bindings_v8(&rt).unwrap();
+        let null_fired = js_bool(
+            &rt,
+            "(function() { \
+               var got_null = false; \
+               var pc = new RTCPeerConnection(); \
+               pc.onicecandidate = function(e) { \
+                 if (e.candidate === null) got_null = true; \
+               }; \
+               pc.setLocalDescription(new RTCSessionDescription({type:'offer',sdp:'v=0'})); \
+               return got_null; \
+             })()",
+        );
+        assert!(null_fired, "null candidate must fire to signal end-of-gathering");
     }
 
     #[test]
     fn close_does_not_throw() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_webrtc_bindings(&ctx).unwrap();
-            let ok: bool = ctx
-                .eval(
-                    "(function() { \
-                       try { new RTCPeerConnection().close(); return true; } \
-                       catch(e) { return false; } \
-                     })()",
-                )
-                .unwrap();
-            assert!(ok, "close() must not throw");
-        });
+        let rt = make_rt();
+        install_webrtc_bindings_v8(&rt).unwrap();
+        let ok = js_bool(
+            &rt,
+            "(function() { \
+               try { new RTCPeerConnection().close(); return true; } \
+               catch(e) { return false; } \
+             })()",
+        );
+        assert!(ok, "close() must not throw");
     }
 
     #[test]
     fn signaling_state_after_set_local_offer() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            install_webrtc_bindings(&ctx).unwrap();
-            let state: String = ctx
-                .eval(
-                    "(function() { \
-                       var pc = new RTCPeerConnection(); \
-                       pc.setLocalDescription(new RTCSessionDescription({type:'offer',sdp:'v=0'})); \
-                       return pc.signalingState; \
-                     })()",
-                )
-                .unwrap();
-            assert_eq!(state, "have-local-offer");
-        });
+        let rt = make_rt();
+        install_stubs(&rt);
+        install_webrtc_bindings_v8(&rt).unwrap();
+        let state = js_str(
+            &rt,
+            "(function() { \
+               var pc = new RTCPeerConnection(); \
+               pc.setLocalDescription(new RTCSessionDescription({type:'offer',sdp:'v=0'})); \
+               return pc.signalingState; \
+             })()",
+        );
+        assert_eq!(state, "have-local-offer");
     }
 
     #[test]
     fn add_event_listener_icecandidate() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            install_webrtc_bindings(&ctx).unwrap();
-            let fired: bool = ctx
-                .eval(
-                    "(function() { \
-                       var fired = false; \
-                       var pc = new RTCPeerConnection(); \
-                       pc.addEventListener('icecandidate', function(e) { \
-                         if (e.candidate && e.candidate.candidate) fired = true; \
-                       }); \
-                       pc.setLocalDescription(new RTCSessionDescription({type:'offer',sdp:'v=0'})); \
-                       return fired; \
-                     })()",
-                )
-                .unwrap();
-            assert!(fired, "addEventListener('icecandidate') must also receive the candidate");
-        });
+        let rt = make_rt();
+        install_stubs(&rt);
+        install_webrtc_bindings_v8(&rt).unwrap();
+        let fired = js_bool(
+            &rt,
+            "(function() { \
+               var fired = false; \
+               var pc = new RTCPeerConnection(); \
+               pc.addEventListener('icecandidate', function(e) { \
+                 if (e.candidate && e.candidate.candidate) fired = true; \
+               }); \
+               pc.setLocalDescription(new RTCSessionDescription({type:'offer',sdp:'v=0'})); \
+               return fired; \
+             })()",
+        );
+        assert!(fired, "addEventListener('icecandidate') must also receive the candidate");
     }
 
     #[test]
     fn feature_detection_pattern() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_webrtc_bindings(&ctx).unwrap();
-            let supported: bool = ctx
-                .eval("typeof RTCPeerConnection === 'function' && typeof RTCSessionDescription === 'function'")
-                .unwrap();
-            assert!(supported, "WebRTC feature detection must pass");
-        });
+        let rt = make_rt();
+        install_webrtc_bindings_v8(&rt).unwrap();
+        let supported = js_bool(
+            &rt,
+            "typeof RTCPeerConnection === 'function' && typeof RTCSessionDescription === 'function'",
+        );
+        assert!(supported, "WebRTC feature detection must pass");
     }
 }

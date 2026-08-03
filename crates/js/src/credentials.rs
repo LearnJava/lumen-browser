@@ -31,7 +31,6 @@
 use lumen_core::ext::{
     CredentialProvider, WebAuthnCreateRequest, WebAuthnGetRequest,
 };
-use rquickjs::Ctx;
 use std::sync::{Arc, OnceLock, RwLock};
 
 /// Process-global credential provider, installed once by the shell.
@@ -58,18 +57,11 @@ fn provider() -> Option<Arc<dyn CredentialProvider>> {
     slot().read().ok().and_then(|g| g.clone())
 }
 
-/// Install the `navigator.credentials` JS shim.
-///
-/// Must run after `install_dom_api` (requires `navigator`, `atob`/`btoa`,
-/// `Promise`, `DOMException`, `Uint8Array`) and after the `_lumen_webauthn_*`
-/// native bindings are registered.
-pub fn install_credentials_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(CREDENTIALS_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_credentials_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// V8 port of the rquickjs `navigator.credentials` JS shim installer (removed
+/// S12b-B13; Ph3 V8 migration S5-S7): identical JS shim, evaluated via
+/// [`lumen_core::ext::JsRuntime::eval`]. Must run after DOM install (requires
+/// `navigator`, `atob`/`btoa`, `Promise`, `DOMException`, `Uint8Array`) and after
+/// the `_lumen_webauthn_*` native bindings are registered.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_credentials_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -253,6 +245,7 @@ fn b64url_decode(s: &str) -> Vec<u8> {
 }
 
 /// JavaScript shim: `navigator.credentials` (WebAuthn) + `PublicKeyCredential`.
+#[cfg(feature = "v8-backend")]
 const CREDENTIALS_SHIM: &str = r#"(function(){
   if (typeof navigator === 'undefined') return;
 
@@ -478,77 +471,8 @@ mod tests {
         // always rejects with NotSupportedError since SMS-based OTP requires platform integration.
     }
 
-    // ── FedCM tests ─────────────────────────────────────────────────────────────
-
-    fn with_credentials_shim(f: impl FnOnce(&rquickjs::Ctx)) {
-        use rquickjs::{Context, Runtime};
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        ctx.with(|ctx| {
-            // Minimal globals required by CREDENTIALS_SHIM; atob/btoa stubs let
-            // the shim install without triggering WebAuthn code paths.
-            ctx.eval::<(), _>(r#"
-                var window = globalThis;
-                var navigator = {};
-                function atob(s) { return s; }
-                function btoa(s) { return s; }
-                function TextEncoder() {}
-                TextEncoder.prototype.encode = function(s) { return new Uint8Array(0); };
-            "#).unwrap();
-            ctx.eval::<(), _>(CREDENTIALS_SHIM).unwrap();
-            f(&ctx);
-        });
-    }
-
-    #[test]
-    fn fedcm_identity_credential_class_exists() {
-        with_credentials_shim(|ctx| {
-            let ok: bool = ctx
-                .eval("typeof window.IdentityCredential === 'function'")
-                .unwrap();
-            assert!(ok, "IdentityCredential should be exported on window");
-        });
-    }
-
-    #[test]
-    fn fedcm_identity_provider_class_exists() {
-        with_credentials_shim(|ctx| {
-            let ok: bool = ctx
-                .eval("typeof window.IdentityProvider === 'function'")
-                .unwrap();
-            assert!(ok, "IdentityProvider should be exported on window");
-        });
-    }
-
-    #[test]
-    fn fedcm_identity_provider_get_user_info_returns_promise() {
-        with_credentials_shim(|ctx| {
-            let ok: bool = ctx
-                .eval("IdentityProvider.getUserInfo({configURL:'https://idp.test', clientId:'c'}) instanceof Promise")
-                .unwrap();
-            assert!(ok, "IdentityProvider.getUserInfo() should return a Promise");
-        });
-    }
-
-    #[test]
-    fn fedcm_credentials_get_identity_returns_promise() {
-        with_credentials_shim(|ctx| {
-            let ok: bool = ctx
-                .eval("navigator.credentials.get({identity:{providers:[{configURL:'https://idp.test',clientId:'c'}]}}) instanceof Promise")
-                .unwrap();
-            assert!(ok, "credentials.get({{identity:...}}) should return a Promise");
-        });
-    }
-
-    #[test]
-    fn fedcm_identity_credential_constructor_throws() {
-        with_credentials_shim(|ctx| {
-            let throws: bool = ctx
-                .eval("(function(){ try { new IdentityCredential(); return false; } catch(e) { return e instanceof TypeError; } })()")
-                .unwrap();
-            assert!(throws, "IdentityCredential constructor should throw TypeError");
-        });
-    }
+    // FedCM tests (`IdentityCredential`/`IdentityProvider`, JS-shim-dependent) moved
+    // to the `v8_fedcm` module below (removed S12b-B13; ported to V8).
 
     #[test]
     fn create_without_provider_rejects_not_allowed() {
@@ -619,5 +543,96 @@ mod tests {
         assert!(gout.contains("\"ok\":true"), "{gout}");
         assert!(gout.contains("\"signature\":\"Bwg\""));
         assert!(gout.contains("\"userHandle\":\"CQ\""));
+    }
+}
+
+/// FedCM tests (S12b-B13): moved out of `mod tests` because they depend on
+/// [`install_credentials_bindings_v8`] to evaluate `CREDENTIALS_SHIM`, unlike the
+/// rest of `mod tests` which exercises plain Rust functions engine-agnostically.
+#[cfg(all(test, feature = "v8-backend"))]
+mod v8_fedcm {
+    use super::*;
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
+
+    /// Minimal globals required by `CREDENTIALS_SHIM`; atob/btoa stubs let the
+    /// shim install without triggering WebAuthn code paths.
+    fn with_credentials_shim() -> V8JsRuntime {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(
+            r#"
+                var window = globalThis;
+                var navigator = {};
+                function atob(s) { return s; }
+                function btoa(s) { return s; }
+                function TextEncoder() {}
+                TextEncoder.prototype.encode = function(s) { return new Uint8Array(0); };
+            "#,
+        )
+        .unwrap();
+        install_credentials_bindings_v8(&rt).unwrap();
+        rt
+    }
+
+    fn js_bool(rt: &V8JsRuntime, expr: &str) -> bool {
+        match rt.eval(expr).unwrap() {
+            JsValue::Bool(b) => b,
+            other => panic!("expected bool, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fedcm_identity_credential_class_exists() {
+        let rt = with_credentials_shim();
+        assert!(
+            js_bool(&rt, "typeof window.IdentityCredential === 'function'"),
+            "IdentityCredential should be exported on window"
+        );
+    }
+
+    #[test]
+    fn fedcm_identity_provider_class_exists() {
+        let rt = with_credentials_shim();
+        assert!(
+            js_bool(&rt, "typeof window.IdentityProvider === 'function'"),
+            "IdentityProvider should be exported on window"
+        );
+    }
+
+    #[test]
+    fn fedcm_identity_provider_get_user_info_returns_promise() {
+        let rt = with_credentials_shim();
+        assert!(
+            js_bool(
+                &rt,
+                "IdentityProvider.getUserInfo({configURL:'https://idp.test', clientId:'c'}) instanceof Promise"
+            ),
+            "IdentityProvider.getUserInfo() should return a Promise"
+        );
+    }
+
+    #[test]
+    fn fedcm_credentials_get_identity_returns_promise() {
+        let rt = with_credentials_shim();
+        assert!(
+            js_bool(
+                &rt,
+                "navigator.credentials.get({identity:{providers:[{configURL:'https://idp.test',clientId:'c'}]}}) instanceof Promise"
+            ),
+            "credentials.get({{identity:...}}) should return a Promise"
+        );
+    }
+
+    #[test]
+    fn fedcm_identity_credential_constructor_throws() {
+        let rt = with_credentials_shim();
+        assert!(
+            js_bool(
+                &rt,
+                "(function(){ try { new IdentityCredential(); return false; } catch(e) { return e instanceof TypeError; } })()"
+            ),
+            "IdentityCredential constructor should throw TypeError"
+        );
     }
 }
