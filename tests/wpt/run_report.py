@@ -357,14 +357,17 @@ def main() -> int:
         with open(args.out, "w", encoding="utf-8") as f:
             f.write(out_html)
     finally:
-        try:
-            if os.path.isfile(json_path):
-                os.remove(json_path)
-        except OSError:
-            # Windows can keep a brief handle on the file mozlog just closed
-            # (AV scan / delayed release); it's scratch space under `.tmp/`,
-            # leaving one stray file behind isn't worth failing the report over.
-            pass
+        if os.environ.get("LUMEN_KEEP_WPTREPORT_JSON"):
+            print(f"kept wptreport json: {json_path}", file=sys.stderr)
+        else:
+            try:
+                if os.path.isfile(json_path):
+                    os.remove(json_path)
+            except OSError:
+                # Windows can keep a brief handle on the file mozlog just closed
+                # (AV scan / delayed release); it's scratch space under `.tmp/`,
+                # leaving one stray file behind isn't worth failing the report over.
+                pass
 
     results = report.get("results", [])
     total = len(results)
