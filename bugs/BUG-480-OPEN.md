@@ -69,3 +69,28 @@ throws `Cannot read properties of null (reading 'document')` before the
 test ever reaches `highlightsFromPoint()` (the other 6 subtests in the same
 file fail on the unrelated [BUG-534](BUG-534-OPEN.md)). 1 subtest. `.ini`
 under `tests/wpt/metadata/css/css-highlight-api/`.
+
+## Срез 33 (`css/css-sizing/responsive-iframe`, 2026-08-03) — whole feature
+directory, plus a flaky harness/subtest TIMEOUT-shape boundary
+
+6 files, all relying on cross-frame `postMessage`/`contentWindow` for the
+Responsive Iframe API (`frame-sizing`). New methodological finding: the same
+file can surface as a **harness-level** TIMEOUT (0 subtests recorded) on one
+run and as an **OK harness with a subtest-level TIMEOUT** on the next —
+observed on 5 of the 6 files across three consecutive verify runs of the
+identical `.ini`. The two shapes are not different bugs, just which side of
+wptrunner's per-test timeout the process happened to land on under parallel
+load; a `.ini` pinned to a single status flags spuriously as unexpected on
+the other run. Fixed by using wptmanifest's list-expected syntax on both the
+file-level and subtest-level line, e.g. `expected: [OK, TIMEOUT]` /
+`expected: [PASS, TIMEOUT]` (confirmed the parser resolves this correctly
+via `wptrunner.manifestexpected.get_manifest(...).get_test(id).get('expected')`
+→ a Python list, matched against either observed status). Apply this pattern
+to any future slice's iframe/postMessage-dependent TIMEOUT cluster instead
+of re-diagnosing it as a regression. `responsive-iframe-request-resize-error.html`
+additionally surfaces `window.requestResize is not a function` (a second,
+narrower gap — the Responsive Iframe API's parent-side control method is
+entirely unimplemented, not just the browsing-context container) once it
+gets far enough to register subtests; folded under this bug's umbrella since
+the whole `responsive-iframe/` feature area is unimplemented, not filed
+separately. `.ini` under `tests/wpt/metadata/css/css-sizing/responsive-iframe/`.

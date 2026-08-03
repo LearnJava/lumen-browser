@@ -61,3 +61,17 @@ HTML LS §3.2.6.6 «The `dataset` IDL attribute» + WebIDL `DOMStringMap`:
 [BUG-310](BUG-310-FIXED.md). Заглушку `svg.rs:265` при этом **удалить**, а не оставить рядом:
 две реализации одного имени — ровно та ситуация, из-за которой SVG-сабтест сейчас падает не
 по своей причине.
+
+## Срез 33 (`css/css-sizing`, 2026-08-03)
+
+4 files (`contain-intrinsic-size/{auto-007,contain-intrinsic-size-{009,032,033}}.html`)
+TIMEOUT via this bug, root-caused live (`--mcp-live-port`, `resource://console`):
+`test.dataset.expectedClientHeight = ...` throws `Cannot set properties of
+undefined (setting 'expectedClientHeight')` before any `test()`/`checkLayout()`
+registers, so wptrunner waits out the full timeout with zero subtests.
+Confirmed via a fresh-element probe that `dataset` is `undefined` on every
+tag (`div`/`select`/`button`/`input`/`canvas`/…), not select-specific — this
+bug's blast radius is any WPT file that uses `element.dataset` inside a
+synchronous top-level `<script>` before test registration, independent of
+element type. `.ini` under `tests/wpt/metadata/css/css-sizing/`, file-level
+`expected: TIMEOUT`.

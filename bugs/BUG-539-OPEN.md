@@ -116,3 +116,18 @@ Same pattern confirmed on five more categories, this time dominated by
 per-property gap without re-checking after the `has` trap lands — same
 caution as all prior slices. `.ini` under each category's own
 `tests/wpt/metadata/css/<category>/`.
+
+## Срез 33 (`css/css-sizing`, 2026-08-03) — new detection route: the
+unmessaged `assert_true` in `inheritance-testcommon.js`
+
+91 files via the usual `"<prop> doesn't seem to be supported in the computed
+style"` message shape, plus 8 more (`inheritance-00{1,2}.html`,
+`aspect-ratio/inheritance.html`) via a message-less variant: `css/support/
+inheritance-testcommon.js`'s `assert_not_inherited`/`assert_inherited`
+helpers call `assert_true(property in getComputedStyle(target))` with **no**
+message argument, so the failure surfaces as a bare `assert_true: expected
+true got false` with the identifying text only in the subtest *name*
+(`"Property <prop> does not inherit"` / `"... inherits"`), not the message.
+Any slice's mass-triage script that keys off `st["message"]` alone will
+under-attribute this shape — match `st["name"]` too. `.ini` under
+`tests/wpt/metadata/css/css-sizing/`.

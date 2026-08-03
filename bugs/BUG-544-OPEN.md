@@ -69,3 +69,12 @@ lives — `this` still binds to the calling element either way). Worth
 auditing whether other WAAPI-Level-1-adjacent methods added the same way
 elsewhere in `_lumen_make_element` have the identical gap before treating
 this as fully closed.
+
+## Срез 33 (`css/css-sizing`, 2026-08-03)
+
+Largest single-slice contribution yet: 565 subtests across 10 files, all in
+`animation/*-interpolation.html` + `contain-intrinsic-size/animation/*`
+(the CSS Values interpolation test suite drives every case through
+`element.animate([...])`/`getAnimations()` before sampling). `.ini` under
+`tests/wpt/metadata/css/css-sizing/animation/` and
+`tests/wpt/metadata/css/css-sizing/contain-intrinsic-size/animation/`.
