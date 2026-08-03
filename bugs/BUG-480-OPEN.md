@@ -51,3 +51,11 @@ future task doesn't have to rediscover it from scratch.
 Committed `.ini` under `tests/wpt/metadata/css/cssom-view/` for files whose
 dominant/sole cause is this gap, `expected: TIMEOUT`/`FAIL`/`NOTRUN` per the
 actual run.
+
+## Срез 25 (`css/css-properties-values-api`, 2026-08-03)
+
+`at-property-viewport-units.html` and `at-property-viewport-units-dynamic.html`
+both build their entire test body inside `<iframe id=iframe srcdoc="...">` —
+same gap, srcdoc-based sub-document never runs. Both file-level `TIMEOUT`
+(zero subtests registered). `.ini` under
+`tests/wpt/metadata/css/css-properties-values-api/` for both files.
