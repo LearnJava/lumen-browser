@@ -144,3 +144,22 @@ BUG-346" from "genuinely-expected Typed-OM gap" per subtest is a bigger job
 than this slice's budget — left as a dedicated follow-up (WPT-RUN-3 срез
 31+) rather than either over-attributing to this bug or silently leaving
 the category's `.ini` gap unexplained.
+
+## Срез 37 (`css/css-typed-om`, 2026-08-04) — follow-up disentangled and `.ini` committed
+
+Re-ran with the structured wptreport JSON (333 of 374 files reference
+`../resources/`, slightly more than slice 30's file-count estimate).
+Classified every failing subtest by its literal error message: 1151
+subtest failures plus 32 of 33 zero-subtest harness TIMEOUTs match
+`<name> is not defined` for one of `testhelper.js`'s 15 exports (or a
+harness-level TIMEOUT on a file whose *only* script tag besides
+testharness.js/report.js is the broken `../resources/testhelper.js`,
+confirmed by `stylevalue-normalization/normalize-image.html` — its own
+`test()` bodies call `CSSStyleValue.parse()`, not any `testhelper.js`
+helper, yet it still zero-registers, so the failed script load itself
+blocks harness completion here, not merely undefined identifiers) — both
+patterns attributed to this bug. The remaining 185 subtest failures and 1
+TIMEOUT (`idlharness.html`, unrelated — `/resources/idlharness.js` simply
+unvendored) are genuine Typed-OM API gaps, filed separately as
+[BUG-554](BUG-554-OPEN.md). `.ini` committed for all affected files under
+`tests/wpt/metadata/css/css-typed-om/`.
