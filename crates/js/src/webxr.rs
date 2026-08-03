@@ -1,16 +1,10 @@
-/// WebXR Device API stub (W3C WebXR Device API §5)
-/// Phase 0: navigator.xr.isSessionSupported() → Promise<false>,
-/// requestSession() → reject NotSupportedError. XRSession/XRFrame/XRReferenceSpace/XRView stubs.
-use rquickjs::Ctx;
+//! WebXR Device API stub (W3C WebXR Device API §5)
+//! Phase 0: navigator.xr.isSessionSupported() → Promise<false>,
+//! requestSession() → reject NotSupportedError. XRSession/XRFrame/XRReferenceSpace/XRView stubs.
 
-/// Install WebXR Device API bindings into the JS context.
-pub fn install_webxr_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(WEBXR_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_webxr_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// V8 port of the former rquickjs `install_webxr_bindings` (Ph3 V8 migration S5-S7):
+/// identical JS shim, evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of
+/// `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_webxr_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -18,6 +12,7 @@ pub(crate) fn install_webxr_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> 
     Ok(())
 }
 
+#[cfg(feature = "v8-backend")]
 const WEBXR_SHIM: &str = r#"
 (function() {
   // XRView stub — represents a single view (eye) within an XR frame
@@ -122,89 +117,3 @@ const WEBXR_SHIM: &str = r#"
   window.XRSystem = XRSystem;
 })();
 "#;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use rquickjs::{Context, Runtime};
-
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
-
-    fn with_webxr(f: impl FnOnce(&rquickjs::Ctx)) {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            ctx.eval::<(), _>(
-                r#"
-                var window = globalThis;
-                var navigator = {};
-                globalThis.navigator = navigator;
-                function EventTarget() {}
-                EventTarget.prototype.addEventListener = function() {};
-                EventTarget.prototype.removeEventListener = function() {};
-                EventTarget.prototype.dispatchEvent = function() { return true; };
-                globalThis.EventTarget = EventTarget;
-                function Event(type) { this.type = type; }
-                globalThis.Event = Event;
-                function DOMException(message, name) {
-                  Error.call(this, message);
-                  this.message = message;
-                  this.name = name || 'Error';
-                }
-                DOMException.prototype = Object.create(Error.prototype);
-                DOMException.prototype.constructor = DOMException;
-                globalThis.DOMException = DOMException;
-                "#,
-            )
-            .unwrap();
-            install_webxr_bindings(&ctx).unwrap();
-            f(&ctx);
-        });
-    }
-
-    #[test]
-    fn webxr_navigator_xr_exists() {
-        with_webxr(|ctx| {
-            let ok: bool = ctx.eval("typeof navigator.xr === 'object'").unwrap();
-            assert!(ok);
-        });
-    }
-
-    #[test]
-    fn webxr_is_session_supported_returns_promise_false() {
-        with_webxr(|ctx| {
-            let ok: bool = ctx
-                .eval("navigator.xr.isSessionSupported('immersive-vr') instanceof Promise")
-                .unwrap();
-            assert!(ok);
-        });
-    }
-
-    #[test]
-    fn webxr_request_session_returns_promise() {
-        with_webxr(|ctx| {
-            let ok: bool = ctx
-                .eval("navigator.xr.requestSession('immersive-vr') instanceof Promise")
-                .unwrap();
-            assert!(ok);
-        });
-    }
-
-    #[test]
-    fn webxr_stub_classes_exist() {
-        with_webxr(|ctx| {
-            let ok: bool = ctx
-                .eval(
-                    "typeof window.XRSession === 'function' && \
-                     typeof window.XRFrame === 'function' && \
-                     typeof window.XRReferenceSpace === 'function' && \
-                     typeof window.XRView === 'function'",
-                )
-                .unwrap();
-            assert!(ok);
-        });
-    }
-}

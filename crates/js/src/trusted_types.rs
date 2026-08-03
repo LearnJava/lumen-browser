@@ -11,15 +11,7 @@
 //! Phase 0: no sink enforcement — DOM sinks (innerHTML etc.) keep accepting plain
 //! strings; trusted values stringify transparently when assigned.
 
-use rquickjs::Ctx;
-
-/// Installs `window.trustedTypes`, the three trusted value classes and
-/// `TrustedTypePolicy` into the global scope of the given QuickJS context.
-pub fn install_trusted_types_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(TRUSTED_TYPES_SHIM)?;
-    Ok(())
-}
-
+#[cfg(feature = "v8-backend")]
 pub(crate) const TRUSTED_TYPES_SHIM: &str = r#"
 // Trusted Types API (W3C TT L2, Phase 0: no sink enforcement).
 (function () {

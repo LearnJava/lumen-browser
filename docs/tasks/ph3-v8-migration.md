@@ -2386,6 +2386,43 @@ under a nested `mod v8_*`, gated on `v8-backend`. The remaining rquickjs-removal
 `QuickJsRuntime`/`QuickPersistentJs` themselves, the 119-file sweep, `Cargo.toml` feature cleanup)
 lives in the parent `P3-v8-s12b` task, not this one.
 
+### S12b-B1 — first group-A deletion batch (2026-08-03, branch p1-s12b-b1)
+
+First batch of the `docs/tasks/p1-s12b-cleanup-queue.md` §3 group-A sweep (5 small modules,
+831 combined lines): `trusted_types`, `typed_om_api`, `serial`, `scroll_snap_events`, `webxr`.
+All five already had a V8-side install path (`trusted_types` inlined straight into
+`v8_runtime.rs` per the S12b-24-trusted-types pattern; the other four via `install_*_v8` +
+`install_v8!`), so this was pure deletion, no port.
+
+Three of the five (`typed_om_api`, `serial`, `scroll_snap_events`) were the queue-flagged
+"trap" modules whose own-file test count undercounts real coverage — confirmed live: `serial`
+and `webxr` each had 4 own-file rquickjs tests, but `dom.rs`'s S12b-24 sanity sweep
+(`mod v8_css_storage_nav_misc`) only carried over 1 apiece (the `typeof navigator.X === 'object'`
+smoke check). `scroll_snap_events` had 5 own-file tests and **zero** in `dom.rs` — nothing had
+ported it at all. Per §2 step 2, ported the missing 10 tests into
+`dom.rs::mod v8_css_storage_nav_misc` before deleting anything (test count: +10 net, not
+reduced — `serial_get_ports_returns_promise`/`serial_request_port_returns_promise`/
+`serial_port_class_exists`, `webxr_is_session_supported_returns_promise_false`/
+`webxr_request_session_returns_promise`/`webxr_stub_classes_exist`, and all 5
+`scroll_snap_events` tests renamed to their original names). `typed_om_api` needed no test
+porting — its coverage already lived fully in `dom.rs::mod v8_perf_typedom_node` from S12b-24.
+
+Removed per module: the rquickjs `install_*` fn, `use rquickjs::Ctx`, the own-file `mod tests`
+(rquickjs-only harness, now redundant), and the call from `QuickJsRuntime::install_dom` (`lib.rs`,
+4 call sites — `typed_om_api`/`serial`/`scroll_snap_events`/`webxr`; `trusted_types`'s call lived
+in `dom.rs::install_primitives` instead, not `lib.rs`). Gated each SHIM const
+`#[cfg(feature = "v8-backend")]` since only the V8 install path reads it now (`empty_line_after_doc_comments`
+clippy hit on `serial.rs`/`webxr.rs`'s now-orphaned `///` module header — same S12b-5/8/10/12
+gotcha, fixed by switching to `//!`). `pub mod` declarations kept in `lib.rs` (V8 fn/consts still
+live there, per §2 step 7).
+
+`cargo test -p lumen-js --features v8-backend` — 2584/2584, all green (the 10 ported tests
+included); default-feature `cargo test -p lumen-js` — 1221/1221, all green (the 4+4+5
+rquickjs-only tests from the 5 modules' own `mod tests` blocks are gone, as expected). Both
+clippy passes clean.
+
+Next in queue: S12b-B2 (`soft_navigation`/`bluetooth`/`eye_dropper`/`virtual_keyboard`/`local_font_access`).
+
 ---
 
 ## Risks (Rev 2)

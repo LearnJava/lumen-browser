@@ -13,17 +13,7 @@
 //! - `StylePropertyMap` — element.attributeStyleMap (mutable)
 //! - `ComputedStylePropertyMap` — element.computedStyleMap() (read-only)
 
-use rquickjs::Ctx;
-
-/// Install CSS Typed OM API bindings.
-/// Installs JS class definitions and integrates into Element prototype.
-pub fn install_typed_om_api(ctx: &Ctx) -> rquickjs::Result<()> {
-    // Install CSSStyleValue class hierarchy and property maps
-    ctx.eval::<(), _>(TYPED_OM_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_typed_om_api`] (Ph3 V8 migration S5-S7): identical JS shim,
+/// V8 port of the former rquickjs `install_typed_om_api` (Ph3 V8 migration S5-S7): identical JS shim,
 /// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_typed_om_api_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
@@ -34,6 +24,7 @@ pub(crate) fn install_typed_om_api_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lu
 
 /// Pure-JS CSS Typed OM L1 shim.
 /// Defines CSSStyleValue hierarchy and StylePropertyMap / ComputedStylePropertyMap classes.
+#[cfg(feature = "v8-backend")]
 const TYPED_OM_SHIM: &str = r#"(function(global) {
   'use strict';
 

@@ -3112,9 +3112,6 @@ fn install_primitives(
     // SubtleCrypto: generateKey/importKey/exportKey/sign/verify/encrypt/decrypt
     crate::subtle_crypto::install_subtle_bindings(ctx)?;
 
-    // Trusted Types API: trustedTypes.createPolicy(), TrustedHTML/Script/ScriptURL
-    crate::trusted_types::install_trusted_types_bindings(ctx)?;
-
     // D-6: Extension system — chrome.runtime.sendMessage() native binding.
     // Phase 0: no-op; the message is logged to stderr for debugging.
     // Phase 1: shell wires a real IPC channel between content scripts and extension background.
@@ -16862,9 +16859,90 @@ mod tests {
         }
 
         #[test]
+        fn serial_get_ports_returns_promise() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(&rt, "navigator.serial.getPorts() instanceof Promise"));
+        }
+
+        #[test]
+        fn serial_request_port_returns_promise() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(&rt, "navigator.serial.requestPort({filters:[]}) instanceof Promise"));
+        }
+
+        #[test]
+        fn serial_port_class_exists() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(&rt, "typeof window.SerialPort === 'function'"));
+        }
+
+        #[test]
         fn event_target_dependent_navigator_xr_installed() {
             let rt = v8_runtime_with_dom(make_doc());
             assert!(bool_eval(&rt, "typeof navigator.xr === 'object'"));
+        }
+
+        #[test]
+        fn webxr_is_session_supported_returns_promise_false() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(&rt, "navigator.xr.isSessionSupported('immersive-vr') instanceof Promise"));
+        }
+
+        #[test]
+        fn webxr_request_session_returns_promise() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(&rt, "navigator.xr.requestSession('immersive-vr') instanceof Promise"));
+        }
+
+        #[test]
+        fn webxr_stub_classes_exist() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(&rt,
+                "typeof window.XRSession === 'function' && \
+                 typeof window.XRFrame === 'function' && \
+                 typeof window.XRReferenceSpace === 'function' && \
+                 typeof window.XRView === 'function'"
+            ));
+        }
+
+        // ── CSS Scroll Snap L2 events (SnapChangeEvent) ──────────────────────────
+
+        #[test]
+        fn snap_change_event_class_exists() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(&rt, "typeof SnapChangeEvent === 'function'"));
+        }
+
+        #[test]
+        fn snap_change_event_constructor_with_props() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(&rt,
+                "new SnapChangeEvent('snapchanging', { snapTargetBlock: 'center' }) !== undefined"
+            ));
+        }
+
+        #[test]
+        fn lumen_fire_snap_changing_exists() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(&rt, "typeof globalThis._lumen_fire_snap_changing === 'function'"));
+        }
+
+        #[test]
+        fn lumen_fire_snap_changed_exists() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(&rt, "typeof globalThis._lumen_fire_snap_changed === 'function'"));
+        }
+
+        #[test]
+        fn snap_change_event_with_init_props() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(&rt,
+                "var ev = new SnapChangeEvent('snapchanging', { \
+                   snapTargetBlock: 'end', \
+                   snapTargetInline: 'start' \
+                 }); \
+                 ev instanceof SnapChangeEvent"
+            ));
         }
 
         #[test]
