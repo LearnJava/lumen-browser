@@ -20,15 +20,13 @@
 //! |---|---|---|
 //! | `__lumen_idle_get_idle_ms` | `() → number` | Milliseconds since last user input |
 
-use rquickjs::{Ctx, Function};
-
 // ── OS idle-time query ────────────────────────────────────────────────────────
 
 /// Returns milliseconds elapsed since the last user-input event.
 ///
 /// On Windows, queries `GetLastInputInfo` + `GetTickCount` (Win32).
 /// On other platforms returns 0 so the idle state always stays `'active'`.
-#[cfg(target_os = "windows")]
+#[cfg(all(feature = "v8-backend", target_os = "windows"))]
 fn user_idle_ms() -> u64 {
     use std::mem;
 
@@ -63,37 +61,19 @@ fn user_idle_ms() -> u64 {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(feature = "v8-backend", not(target_os = "windows")))]
 fn user_idle_ms() -> u64 {
     0
 }
 
 // ── Native binding installation ───────────────────────────────────────────────
 
-fn install_native_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    let globals = ctx.globals();
-
-    // __lumen_idle_get_idle_ms() → number (milliseconds since last user input)
-    globals.set(
-        "__lumen_idle_get_idle_ms",
-        Function::new(ctx.clone(), || -> f64 { user_idle_ms() as f64 })?,
-    )?;
-
-    Ok(())
-}
-
-/// Install Idle Detection API bindings into the JS context.
+/// Install Idle Detection API bindings into the JS context (Ph3 V8 migration
+/// S5-S7 batch 2): the native goes through the compat layer, the JS shim
+/// evaluates unchanged.
 ///
 /// Must run after the DOM shim so that `window`, `EventTarget`, `Promise`,
 /// `setInterval`, and `clearInterval` are available.
-pub fn install_idle_detection_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    install_native_bindings(ctx)?;
-    ctx.eval::<(), _>(IDLE_DETECTION_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_idle_detection_bindings`] (Ph3 V8 migration S5-S7 batch
-/// 2): the native goes through the compat layer, the JS shim evaluates unchanged.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_idle_detection_bindings_v8(
     rt: &crate::v8_runtime::V8JsRuntime,
@@ -111,6 +91,7 @@ pub(crate) fn install_idle_detection_bindings_v8(
 ///
 /// Polls `__lumen_idle_get_idle_ms()` every `max(30_000, threshold/2)` ms
 /// and dispatches a `'change'` event when `userState` transitions.
+#[cfg(feature = "v8-backend")]
 const IDLE_DETECTION_SHIM: &str = r#"
 (function(global) {
   'use strict';
@@ -199,107 +180,104 @@ const IDLE_DETECTION_SHIM: &str = r#"
 })(typeof globalThis !== 'undefined' ? globalThis : this);
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
     use super::*;
-    use rquickjs::{Context, Runtime};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
+    // V8 auto-drains microtasks between separate `eval` calls (S12b-B8 finding),
+    // so a `.then()`/`.catch()` scheduled in one `eval` has already run by the
+    // time the next `eval` reads the global it wrote to.
+    fn promise_result(rt: &V8JsRuntime, setup_js: &str, global: &str) -> JsValue {
+        rt.eval(setup_js).unwrap();
+        rt.eval(global).unwrap()
     }
 
-    fn with_idle_api(f: impl FnOnce(&rquickjs::Ctx)) {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            // Minimal DOM shim: window + EventTarget + Event + timer stubs.
-            ctx.eval::<(), _>(
-                r#"
-                var window = globalThis;
-                if (typeof EventTarget === 'undefined') {
-                  class EventTarget {
-                    constructor() { this._listeners = {}; }
-                    addEventListener(type, fn) {
-                      if (!this._listeners[type]) this._listeners[type] = [];
-                      this._listeners[type].push(fn);
-                    }
-                    removeEventListener(type, fn) {
-                      if (!this._listeners[type]) return;
-                      this._listeners[type] =
-                        this._listeners[type].filter(function(f){ return f !== fn; });
-                    }
-                    dispatchEvent(event) {
-                      var list = this._listeners[event.type] || [];
-                      list.forEach(function(fn){ fn(event); });
-                      return true;
-                    }
-                  }
-                  globalThis.EventTarget = EventTarget;
+    fn with_idle_api(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        // Minimal DOM shim: window + EventTarget + Event + timer stubs.
+        rt.eval(
+            r#"
+            var window = globalThis;
+            if (typeof EventTarget === 'undefined') {
+              class EventTarget {
+                constructor() { this._listeners = {}; }
+                addEventListener(type, fn) {
+                  if (!this._listeners[type]) this._listeners[type] = [];
+                  this._listeners[type].push(fn);
                 }
-                if (typeof Event === 'undefined') {
-                  function Event(type) { this.type = type; }
-                  globalThis.Event = Event;
+                removeEventListener(type, fn) {
+                  if (!this._listeners[type]) return;
+                  this._listeners[type] =
+                    this._listeners[type].filter(function(f){ return f !== fn; });
                 }
-                // Timer stubs — record registered intervals so tests can fire them manually.
-                var __timers = [];
-                var __timer_id = 0;
-                function setInterval(fn, ms) {
-                  var id = ++__timer_id;
-                  __timers.push({ id: id, fn: fn, ms: ms, cleared: false });
-                  return id;
+                dispatchEvent(event) {
+                  var list = this._listeners[event.type] || [];
+                  list.forEach(function(fn){ fn(event); });
+                  return true;
                 }
-                function clearInterval(id) {
-                  var t = __timers.find(function(t){ return t.id === id; });
-                  if (t) t.cleared = true;
-                }
-                globalThis.setInterval   = setInterval;
-                globalThis.clearInterval = clearInterval;
-                // Fire the first non-cleared timer once.
-                globalThis.__fire_timer = function() {
-                  var t = __timers.find(function(t){ return !t.cleared; });
-                  if (t) t.fn();
-                };
-                "#,
-            )
-            .unwrap();
-            install_idle_detection_bindings(&ctx).unwrap();
-            f(&ctx);
-        });
+              }
+              globalThis.EventTarget = EventTarget;
+            }
+            if (typeof Event === 'undefined') {
+              function Event(type) { this.type = type; }
+              globalThis.Event = Event;
+            }
+            // Timer stubs — record registered intervals so tests can fire them manually.
+            var __timers = [];
+            var __timer_id = 0;
+            function setInterval(fn, ms) {
+              var id = ++__timer_id;
+              __timers.push({ id: id, fn: fn, ms: ms, cleared: false });
+              return id;
+            }
+            function clearInterval(id) {
+              var t = __timers.find(function(t){ return t.id === id; });
+              if (t) t.cleared = true;
+            }
+            globalThis.setInterval   = setInterval;
+            globalThis.clearInterval = clearInterval;
+            // Fire the first non-cleared timer once.
+            globalThis.__fire_timer = function() {
+              var t = __timers.find(function(t){ return !t.cleared; });
+              if (t) t.fn();
+            };
+            "#,
+        )
+        .unwrap();
+        install_idle_detection_bindings_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
     fn idle_detector_class_exists() {
-        with_idle_api(|ctx| {
-            let ok: bool = ctx
+        with_idle_api(|rt| {
+            let ok = rt
                 .eval("typeof window.IdleDetector === 'function'")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn request_permission_returns_granted() {
-        with_idle_api(|ctx| {
-            ctx.eval::<(), _>(
+        with_idle_api(|rt| {
+            let ok = promise_result(
+                rt,
                 "var __perm = null; \
                  IdleDetector.requestPermission().then(function(v) { __perm = v; });",
-            )
-            .unwrap();
-            loop {
-                if !ctx.execute_pending_job() {
-                    break;
-                }
-            }
-            let ok: bool = ctx.eval("__perm === 'granted'").unwrap();
-            assert!(ok);
+                "__perm === 'granted'",
+            );
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn initial_state_is_null() {
-        with_idle_api(|ctx| {
-            let ok: bool = ctx
+        with_idle_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var d = new IdleDetector();
@@ -307,14 +285,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn start_resolves_and_sets_active_state() {
-        with_idle_api(|ctx| {
-            let ok: bool = ctx
+        with_idle_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var d = new IdleDetector();
@@ -323,14 +301,15 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn start_rejects_threshold_below_60s() {
-        with_idle_api(|ctx| {
-            ctx.eval::<(), _>(
+        with_idle_api(|rt| {
+            let ok = promise_result(
+                rt,
                 r#"
                 var __rejected = false;
                 var d = new IdleDetector();
@@ -338,22 +317,16 @@ mod tests {
                   __rejected = e instanceof RangeError;
                 });
                 "#,
-            )
-            .unwrap();
-            loop {
-                if !ctx.execute_pending_job() {
-                    break;
-                }
-            }
-            let ok: bool = ctx.eval("__rejected").unwrap();
-            assert!(ok);
+                "__rejected",
+            );
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn stop_resets_state_to_null() {
-        with_idle_api(|ctx| {
-            let ok: bool = ctx
+        with_idle_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var d = new IdleDetector();
@@ -363,14 +336,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn stop_clears_interval_timer() {
-        with_idle_api(|ctx| {
-            let ok: bool = ctx
+        with_idle_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var d = new IdleDetector();
@@ -381,14 +354,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn idle_detector_supports_add_event_listener() {
-        with_idle_api(|ctx| {
-            let ok: bool = ctx
+        with_idle_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var d = new IdleDetector();
@@ -397,14 +370,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn default_threshold_is_accepted() {
-        with_idle_api(|ctx| {
-            let ok: bool = ctx
+        with_idle_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var d = new IdleDetector();
@@ -413,35 +386,35 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn native_idle_binding_exists_and_returns_number() {
-        with_idle_api(|ctx| {
-            let ok: bool = ctx
+        with_idle_api(|rt| {
+            let ok = rt
                 .eval(
                     "typeof __lumen_idle_get_idle_ms === 'function' && \
                      typeof __lumen_idle_get_idle_ms() === 'number'",
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn native_idle_ms_is_non_negative() {
-        with_idle_api(|ctx| {
-            let ok: bool = ctx.eval("__lumen_idle_get_idle_ms() >= 0").unwrap();
-            assert!(ok);
+        with_idle_api(|rt| {
+            let ok = rt.eval("__lumen_idle_get_idle_ms() >= 0").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn change_event_fires_when_mock_idle_exceeds_threshold() {
-        with_idle_api(|ctx| {
-            ctx.eval::<(), _>(
+        with_idle_api(|rt| {
+            rt.eval(
                 r#"
                 // Override native binding: simulate 2 minutes of idle.
                 globalThis.__lumen_idle_get_idle_ms = function() { return 120000; };
@@ -455,17 +428,17 @@ mod tests {
                 "#,
             )
             .unwrap();
-            let ok: bool = ctx
+            let ok = rt
                 .eval("changeCount === 1 && d.userState === 'idle'")
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn change_event_fires_on_return_to_active() {
-        with_idle_api(|ctx| {
-            ctx.eval::<(), _>(
+        with_idle_api(|rt| {
+            rt.eval(
                 r#"
                 var idleMs = 120000;
                 globalThis.__lumen_idle_get_idle_ms = function() { return idleMs; };
@@ -481,7 +454,7 @@ mod tests {
                 "#,
             )
             .unwrap();
-            let ok: bool = ctx
+            let ok = rt
                 .eval(
                     "changes.length === 2 && \
                      changes[0] === 'idle' && \
@@ -489,14 +462,14 @@ mod tests {
                      d.userState === 'active'",
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn no_change_event_when_state_unchanged() {
-        with_idle_api(|ctx| {
-            ctx.eval::<(), _>(
+        with_idle_api(|rt| {
+            rt.eval(
                 r#"
                 globalThis.__lumen_idle_get_idle_ms = function() { return 0; };
 
@@ -510,15 +483,15 @@ mod tests {
                 "#,
             )
             .unwrap();
-            let count: i32 = ctx.eval("changeCount").unwrap();
-            assert_eq!(count, 0, "no change event when state does not transition");
+            let count = rt.eval("changeCount").unwrap();
+            assert_eq!(count, JsValue::Number(0.0), "no change event when state does not transition");
         });
     }
 
     #[test]
     fn poll_interval_is_half_threshold() {
-        with_idle_api(|ctx| {
-            let ok: bool = ctx
+        with_idle_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var d = new IdleDetector();
@@ -529,14 +502,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn poll_interval_minimum_is_30s() {
-        with_idle_api(|ctx| {
-            let ok: bool = ctx
+        with_idle_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var d = new IdleDetector();
@@ -547,7 +520,7 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 

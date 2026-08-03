@@ -1138,9 +1138,9 @@
         {
          "id": "P3-v8-s12b-b12",
          "title": "S12b-B12: снос rquickjs, средние модули (6/8)",
-         "status": "queued",
+         "status": "done",
          "size": "S",
-         "note": "Полоса 2 (1638/51): geolocation, esm, idle_detection — модули с натив-состоянием в V8JsRuntime"
+         "note": "Полоса 2 (1638/51): geolocation, esm, idle_detection — модули с натив-состоянием в V8JsRuntime. ЗАКРЫТ 2026-08-04 (ветка p1-s12b-b12): geolocation+idle_detection перенесены (34 теста), esm исключён из батча — его rquickjs-сторона вшита в конструктор QuickJsRuntime, снос переезжает в S12b-F2. Детали — docs/tasks/ph3-v8-migration.md §S12b-B12"
         },
         {
          "id": "P3-v8-s12b-b13",
@@ -1351,7 +1351,7 @@
          "title": "S12b-F2: удалить QuickJsRuntime",
          "status": "queued",
          "size": "M",
-         "note": "После F1. lumen-js/lib.rs: удалить QuickJsRuntime, QuickPersistentJs, install_dom, rq_err (lib.rs:2211), костыль __lum_args__, use rquickjs (lib.rs:144)"
+         "note": "После F1. lumen-js/lib.rs: удалить QuickJsRuntime, QuickPersistentJs, install_dom, rq_err (lib.rs:2211), костыль __lum_args__, use rquickjs (lib.rs:144); заодно esm.rs — impl Resolver/Loader для LumenResolver/LumenLoader (вшиты в QuickJsRuntime::new()/js_thread_main, исключены из S12b-B12)"
         },
         {
          "id": "P3-v8-s12b-f3",

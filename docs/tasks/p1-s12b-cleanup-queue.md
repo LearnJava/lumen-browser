@@ -146,14 +146,23 @@ cargo test  -p lumen-js                                        # rquickjs-суи
 | **S12b-B9** | `element_internals` (411/7), `video_pip` (414/11), `media_session` (419/15) | 1244 | 33 |
 | **S12b-B10** | `long_animation_frames` (428/10), `form_validation` (432/7), `wake_lock` (461/12) | 1321 | 29 |
 | **S12b-B11** | `navigator_bindings` (491/16), `media_capture` (507/8), `screen_capture` (521/11) | 1519 | 35 |
-| **S12b-B12** | `geolocation` (535/17), `esm` (543/17), `idle_detection` (560/17) | 1638 | 51 |
+| **S12b-B12** | `geolocation` (535/17), ~~`esm`~~ (543/17, pulled — see below), `idle_detection` (560/17) | 1638 | 51 |
 | **S12b-B13** | `broadcast_channel` (562/14), `webrtc_stub` (588/17), `credentials` (623/12) | 1773 | 43 |
 | **S12b-B14** | `xhr` (655/17), `file_input` (657/18) | 1312 | 35 |
 
-`esm` (S12b-23 портировал ESM на V8), `broadcast_channel`, `geolocation`, `idle_detection`,
-`file_input`, `media_capture`, `screen_capture` — модули с натив-состоянием в
-`V8JsRuntime` (поля/аксессоры добавлены в S5–S7 батче 3). Их V8-тесты требуют не голого
-контекста, а полного `install_dom`.
+`broadcast_channel`, `geolocation`, `idle_detection`, `file_input`, `media_capture`,
+`screen_capture` — модули с натив-состоянием в `V8JsRuntime` (поля/аксессоры добавлены
+в S5–S7 батче 3). Их V8-тесты требуют не голого контекста, а полного `install_dom`.
+(На практике `geolocation`/`idle_detection` в S12b-B12 хватило голого `V8JsRuntime::new()`
++ локальных стабов — общий `install_dom` не понадобился.)
+
+**`esm` исключён из S12b-B12** (закрыт 2026-08-04) — не подходит под процедуру группы A:
+его rquickjs-сторона (`impl Resolver`/`impl Loader` для `LumenResolver`/`LumenLoader`)
+не ставится через `install_dom`, а вшита в конструктор `QuickJsRuntime::new()`/
+`js_thread_main` (`lib.rs`) как основа ES-модульной подсистемы движка — снос требует
+той же по масштабу правки, что и снос самого `QuickJsRuntime` (`S12b-F2`). Подробности
+и обоснование — findings-запись S12b-B12 в `ph3-v8-migration.md`. `esm` больше не строка
+очереди группы A — его rquickjs-часть уходит вместе с `QuickJsRuntime` в `S12b-F2`.
 
 ### Полоса 3 — крупные, 1–2 штуки на батч
 
@@ -262,7 +271,7 @@ audio-noise) никогда не была доступна странице ни
 | id | Что | Ориентир |
 |---|---|---|
 | **S12b-F1** | `lumen-shell`: убрать фичу `quickjs` и ветки конструирования QuickJS-рантайма (`crates/shell/Cargo.toml:28`), упростить `any(quickjs, v8)`-гейты до безусловных | shell собирается без `quickjs`, `--features quickjs` больше не существует |
-| **S12b-F2** | `lumen-js/lib.rs`: удалить `QuickJsRuntime`, `QuickPersistentJs`, `QuickJsRuntime::install_dom`, `rq_err` (`lib.rs:2211`), `__lum_args__`-костыль, `use rquickjs::…` (`lib.rs:144`) | 2574 строки файла, 29 тестов; V8-путь не тронут |
+| **S12b-F2** | `lumen-js/lib.rs`: удалить `QuickJsRuntime`, `QuickPersistentJs`, `QuickJsRuntime::install_dom`, `rq_err` (`lib.rs:2211`), `__lum_args__`-костыль, `use rquickjs::…` (`lib.rs:144`); заодно — `esm.rs`: `impl Resolver`/`impl Loader` для `LumenResolver`/`LumenLoader` (rquickjs-специфика, вшита в `QuickJsRuntime::new()`/`js_thread_main`, исключена из S12b-B12 — см. §3 Полоса 2) | 2574 строки файла, 29 тестов; V8-путь не тронут; `esm.rs`'s `ImportMap`/`resolve_specifier_with` остаются — общие с `v8_esm.rs` |
 | **S12b-F3** | `dom.rs`: удалить `install_primitives` (`dom.rs:460–3196`, 2736 строк) и `use rquickjs::{Ctx, Function, Result as QjResult}` (`dom.rs:16`) | тесты `dom.rs` уже на V8 (S12b-24) — порта не требуется, только проверка, что 1128 тестов зелёные |
 | **S12b-F4** | `crates/js/Cargo.toml`: убрать `rquickjs` (строка 42), поправить `description` крейта («QuickJS implementation of the JsRuntime trait»), обновить `docs/plan/tech-stack.md`, `CAPABILITIES.md`, `subsystems/js.md`, `ADR-018`; `rquickjs` исчезает из `Cargo.lock` | `grep -rn rquickjs` по репозиторию — только исторические ADR/findings |
 
