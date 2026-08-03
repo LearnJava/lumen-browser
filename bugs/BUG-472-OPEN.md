@@ -200,3 +200,30 @@ contribution to this bug to date). The category's other two properties,
 a different and deeper gap — not parsed or stored at all, filed separately
 as [BUG-521](BUG-521-OPEN.md). `.ini` under
 `tests/wpt/metadata/css/fill-stroke/animation/` for both files.
+
+## Срез 24 (`css/css-scroll-anchoring` + `css/css-content`, 2026-08-03) — `overflow-anchor`, `quotes`, `bookmark-level`/`-state`, `content` never reach the map
+
+Same "parsed-but-never-taught-to-the-map" shape (`computed_style_to_map`
+doesn't cover these keys), though `overflow-anchor` is a special case — it
+isn't parsed at all (filed separately as
+[BUG-524](BUG-524-OPEN.md)), so its "doesn't seem to be supported" failure
+is really BUG-524, not this bug (kept off this bug's file count). Real
+BUG-472 extensions this slice: `quotes`/`bookmark-level`/`bookmark-state`
+(`css-content/inheritance.html`, 6 subtests) and `content` itself
+(`css-content/computed-value.html` + `css-content/parsing/content-computed.html`,
+42 subtests) — `content` is a real, working property (generates pseudo-
+element content), just never surfaced through `getComputedStyle()`. `.ini`
+under `tests/wpt/metadata/css/css-content/` for these files.
+
+## Срез 24 (`css/compositing`, 2026-08-03) — `background-blend-mode`, `isolation`, `mix-blend-mode`
+
+Same "parsed-but-never-taught-to-the-map" shape. 45 subtests/5 files:
+`inheritance.html` (6), `parsing/background-blend-mode-computed{,-multiple}.html`
+(19+7), `parsing/isolation-computed.html` (2),
+`parsing/mix-blend-mode-computed.html` (16). `.ini` under
+`tests/wpt/metadata/css/compositing/`.
+
+## Срез 24 (`css/css-scrollbars`, 2026-08-03) — `scrollbar-color`, `scrollbar-width`
+
+Same "parsed-but-never-taught-to-the-map" shape, 4 subtests
+(`inheritance.html`). `.ini` under `tests/wpt/metadata/css/css-scrollbars/`.
