@@ -112,3 +112,19 @@ subtest, so wptrunner reports `TIMEOUT` with zero subtests rather than a
 FAIL list) — its very first line is `let [ss] = document.styleSheets`,
 destructuring `undefined`. `.ini` under `tests/wpt/metadata/css/css-nesting/`
 for all 6 files.
+
+## Срез 25 (`css/css-properties-values-api`, 2026-08-03)
+
+Confirmed live with a minimal `--mcp-live-port` probe (not just static grep):
+`document.styleSheets` — `typeof` `"undefined"`; a freshly created and
+`document.body.append()`-ed `<style>` node's `.sheet` — also `typeof`
+`"undefined"`. 6 files/168 subtests, all via the category's shared
+`resources/utils.js::with_style_node`/`with_at_property` helper
+(`node.sheet.rules[0]` inside a `try`-free callback, so the throw surfaces
+as the assertion failure, not a crash): `at-property.html` (106, the
+category's largest single-file finding), `at-property-cssom.html` (39),
+`at-property-stylesheets.html` (5), `at-property-typedom.html` (2),
+`determine-registration.html` (15), `registered-property-cssom.html`
+(file-level `TIMEOUT` — `document.styleSheets[0].cssRules[0].style` at
+top-level script scope, before any `test()` registers). `.ini` under
+`tests/wpt/metadata/css/css-properties-values-api/` for all 6 files.

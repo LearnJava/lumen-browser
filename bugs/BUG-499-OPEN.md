@@ -98,3 +98,12 @@ spec (encode the expected pass/fail outcome as the property's own string
 value) that happens to make this bug's `""` result indistinguishable from a
 genuine `'FAIL'`. `.ini`:
 `tests/wpt/metadata/css/css-nesting/nested-declarations-matching.html.ini`.
+
+## Срез 25 (`css/css-properties-values-api`, 2026-08-03)
+
+`registered-property-initial.html` (29 subtests) and `registered-property-computation.html`
+(5 subtests): both call `getComputedStyle(target).getPropertyValue(name)`
+directly on the registered custom property's own name (not a standard
+property substituted via `var()`) — the exact mechanism this bug documents.
+`.ini` under `tests/wpt/metadata/css/css-properties-values-api/` for both
+files.
