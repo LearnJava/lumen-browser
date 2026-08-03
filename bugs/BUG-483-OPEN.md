@@ -104,3 +104,12 @@ Committed `.ini` under `tests/wpt/metadata/css/css-box/` for the 7
 attributed files, `expected: FAIL` per the actual run. `tests/wpt/metadata/
 css/css-cascade/` gets `expected: TIMEOUT` for the 16 `all-prop-revert-
 {layer-,}noop.html?include=N` variants (WPT-RUN-3 срез 6).
+
+## Срез 27 (`css/css-transitions`, 2026-08-03)
+
+Same shape, six `parsing/transition{,-behavior,-delay,-duration,-property,
+-timing-function}-computed.html` files, 49 subtests total — every
+`transition-*` longhand's "doesn't seem to be supported in the computed
+style" feature-detect fails identically, confirming the `has`-trap gap is
+generic across the whole property surface, not specific to any one CSS
+module. `.ini` under `tests/wpt/metadata/css/css-transitions/parsing/`.
