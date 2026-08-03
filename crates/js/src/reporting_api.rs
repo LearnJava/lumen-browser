@@ -1,22 +1,16 @@
-/// Reporting API (W3C Reporting API Level 1).
-///
-/// Phase 0: observer infrastructure + report delivery binding.
-/// - `new ReportingObserver(callback, opts?)` — observe report types
-/// - `.observe()` / `.disconnect()` / `.takeRecords()`
-/// - `Report {type, url, body}` — report object
-/// - `_lumen_deliver_report(type, url, body_json)` — shell binding to inject reports
-///
-/// Phase 1: integration with CSP, deprecation, intervention, crash reports from shell.
-use rquickjs::Ctx;
+//! Reporting API (W3C Reporting API Level 1).
+//!
+//! Phase 0: observer infrastructure + report delivery binding.
+//! - `new ReportingObserver(callback, opts?)` — observe report types
+//! - `.observe()` / `.disconnect()` / `.takeRecords()`
+//! - `Report {type, url, body}` — report object
+//! - `_lumen_deliver_report(type, url, body_json)` — shell binding to inject reports
+//!
+//! Phase 1: integration with CSP, deprecation, intervention, crash reports from shell.
 
-/// Install Reporting API bindings into the JS context.
-pub fn install_reporting_api_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(REPORTING_API_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_reporting_api_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// V8 port of the former rquickjs `install_reporting_api_bindings` (Ph3 V8 migration
+/// S5-S7, rquickjs side removed in S12b-B3): identical JS shim, evaluated via
+/// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_reporting_api_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -24,6 +18,7 @@ pub(crate) fn install_reporting_api_bindings_v8(rt: &crate::v8_runtime::V8JsRunt
     Ok(())
 }
 
+#[cfg(feature = "v8-backend")]
 const REPORTING_API_SHIM: &str = r#"
 (function() {
   // Global observer registry — list of active {callback, types, queue} objects.
@@ -132,49 +127,39 @@ const REPORTING_API_SHIM: &str = r#"
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
     use super::*;
-    use rquickjs::{Context, Runtime};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
-
-    fn with_api(f: impl FnOnce(&rquickjs::Ctx)) {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_reporting_api_bindings(&ctx).unwrap();
-            f(&ctx);
-        });
+    fn with_api(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        install_reporting_api_bindings_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
     fn reporting_observer_exists() {
-        with_api(|ctx| {
-            let ok: bool = ctx
-                .eval("typeof ReportingObserver === 'function'")
-                .unwrap();
-            assert!(ok);
+        with_api(|rt| {
+            let ok = rt.eval("typeof ReportingObserver === 'function'").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn report_class_exists() {
-        with_api(|ctx| {
-            let ok: bool = ctx
-                .eval("typeof Report === 'function'")
-                .unwrap();
-            assert!(ok);
+        with_api(|rt| {
+            let ok = rt.eval("typeof Report === 'function'").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn observe_disconnect_take_records() {
-        with_api(|ctx| {
-            let ok: bool = ctx
+        with_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var received = [];
@@ -190,14 +175,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn take_records_returns_queued() {
-        with_api(|ctx| {
-            let ok: bool = ctx
+        with_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var obs = new ReportingObserver(function() {}, {});
@@ -209,14 +194,14 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn type_filter_excludes_unmatched() {
-        with_api(|ctx| {
-            let ok: bool = ctx
+        with_api(|rt| {
+            let ok = rt
                 .eval(
                     r#"
                     var received = [];
@@ -230,17 +215,15 @@ mod tests {
                     "#,
                 )
                 .unwrap();
-            assert!(ok);
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 
     #[test]
     fn deliver_report_binding_exists() {
-        with_api(|ctx| {
-            let ok: bool = ctx
-                .eval("typeof _lumen_deliver_report === 'function'")
-                .unwrap();
-            assert!(ok);
+        with_api(|rt| {
+            let ok = rt.eval("typeof _lumen_deliver_report === 'function'").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 }
