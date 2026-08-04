@@ -719,13 +719,6 @@ impl QuickJsRuntime {
             None
         };
         self.run(|inner| inner.ctx.with(|ctx| {
-            // Install Canvas 2D native bindings (HTML LS §4.12.4). The JS-side
-            // getContext('2d') shim lives in dom.rs::_lumen_make_element and
-            // calls these `_lumen_canvas2d_*` functions keyed by node index.
-            if let Err(e) = canvas2d::install_canvas2d_bindings(&ctx) {
-                eprintln!("Canvas 2D bindings init failed: {}", e);
-            }
-
             // Install AudioContext stub with per-session fingerprint noise (ADR-007 Layer 4, 9D.3).
             let audio_seed = audio_bindings::new_session_seed();
             if let Err(e) = audio_bindings::install_audio_bindings(&ctx, audio_seed) {

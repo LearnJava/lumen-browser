@@ -3597,6 +3597,64 @@ surface from the rollback path one module at a time.
 
 Next in queue: S12b-B30 (`canvas2d`, Полоса 4).
 
+### S12b-B30: `canvas2d` (2026-08-04, branch `p1-s12b-b30`)
+
+The module already had a ready V8 port (`install_canvas2d_bindings_v8`, S8) —
+all state (`CANVASES`/`DIRTY`/`GRADIENTS`/`PATTERNS`/`PATHS`/`TRANSFERRED`) is
+module-level `thread_local!`, not a `V8JsRuntime` field, so no new runtime
+plumbing was needed. The batch removed the rquickjs installer
+(`install_canvas2d_bindings`, ~1000 lines) and its `lib.rs` call site, and
+ported 26 of the 31 old rquickjs tests into a new `tests_v8` module. The other
+5 (`parse_canvas_font_size`/`measure_text_width` × 3 + `present_rgba_writes_
+pixels_and_marks_dirty`) are pure Rust with no JS engine involved at all —
+kept once in the plain `mod tests`, matching the `offscreen_canvas` (S12b-B26)
+precedent of not duplicating engine-agnostic coverage.
+
+No bridge bugs found. Two porting notes:
+
+1. `V8JsRuntime::new()` spawns a dedicated OS thread per runtime, so a bare
+   rquickjs-style peek at `CANVASES`/`DIRTY` from the test's own thread would
+   read an empty, unrelated `thread_local!` instance. Dirty-buffer assertions
+   route through the already-public `V8JsRuntime::flush_canvas_updates()`
+   (added earlier for the shell's per-frame canvas upload). Assertions with no
+   JS-visible getter native (`line_width`, `global_alpha`, `text_align`,
+   `text_baseline` — the clamp/store logic lives in the native itself, not the
+   JS shim) needed a new escape hatch: `V8JsRuntime::run_for_test` (`#[cfg(
+   test)]`, `v8_runtime.rs`), a generic "run this closure on the JS thread"
+   helper mirroring `flush_canvas_updates`'s pattern but not tied to one field.
+2. Removing the rquickjs installer left most of `canvas2d.rs`'s private
+   helpers (`with_canvas`, `bitmaprenderer_transfer_native`, gradient/pattern/
+   path registries and their id counters, hex decoding, `render_text_to_
+   canvas`) reachable *only* from the now-`v8-backend`-gated
+   `install_canvas2d_bindings_v8` — under a hypothetical build with neither
+   `quickjs` nor `v8-backend`, they're dead code. Gated all of them (and their
+   now-conditionally-used imports/`thread_local!` entries) under `#[cfg(
+   feature = "v8-backend")]` to keep `cargo clippy -p lumen-js --all-targets
+   -- -D warnings` (no features) clean *for this module*. Three items
+   (`BUNDLED_FONT`, `parse_canvas_font_size`, `measure_text_width`) can't be
+   gated the same way — they're needed unconditionally by the pure-Rust tests
+   — so they stay flagged dead under that exact no-features build, same as
+   `offscreen_canvas.rs`'s own `with_offscreen_canvas` already is (verified:
+   11 pre-existing errors on `main` before this batch, all in `offscreen_
+   canvas.rs`/`worker.rs`, none of them fixed by their own S12b-B26/B27
+   batches). This whole "no-features" build config is a temporary artifact of
+   the two-backend transition and disappears once S12b-F1..F4 drop the
+   `quickjs` feature entirely — not something this batch can fully close.
+
+`cargo test -p lumen-js` (default, no features): 376 lib (down from 402,
+-26 — the 26 ported rquickjs tests are gone, the 5 pure ones stay).
+`cargo test -p lumen-js --features v8-backend`: 2568 lib (unchanged — 31
+old tests [rquickjs, always compiled] become 31 new [5 pure + 26 `tests_v8`],
+net zero). `cargo clippy -p lumen-js --all-targets --features v8-backend --
+-D warnings` clean. `cargo clippy -p lumen-js --all-targets -- -D warnings`
+(no features): pre-existing 11 baseline errors (`offscreen_canvas.rs`/
+`worker.rs`) plus the 3 unavoidable canvas2d items noted above — no new
+category introduced. `lumen-shell` checked under default (wgpu+v8) and
+rollback (`backend-femtovg,quickjs`) — both green; the rollback build no
+longer installs Canvas 2D bindings into the QuickJS runtime.
+
+Next in queue: S12b-B31 (`subtle_crypto`, Полоса 4, final batch of group A).
+
 ---
 
 ## Risks (Rev 2)

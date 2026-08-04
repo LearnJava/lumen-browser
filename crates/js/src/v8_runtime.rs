@@ -755,6 +755,16 @@ impl V8JsRuntime {
         self.pointer_capture_nid.lock().unwrap_or_else(|e| e.into_inner()).take()
     }
 
+    /// Test-only: run `f` on the JS thread and return its result. Gives module
+    /// test suites (e.g. `canvas2d::tests_v8`) a way to inspect `thread_local!`
+    /// state that has no JS-visible getter native — the JS thread owns its own
+    /// thread-local instance, distinct from the test's calling thread. Mirrors
+    /// [`Self::flush_canvas_updates`], generalized.
+    #[cfg(test)]
+    pub(crate) fn run_for_test<R: Send>(&self, f: impl FnOnce() -> R + Send) -> R {
+        self.run(move |_inner| f())
+    }
+
     /// Drain dirty `<canvas>` 2D buffers for GPU re-upload. Mirrors
     /// [`crate::QuickJsRuntime::flush_canvas_updates`]. Must run on the JS
     /// thread since `canvas2d`'s `CANVASES`/`DIRTY` registries are `thread_local!`.
