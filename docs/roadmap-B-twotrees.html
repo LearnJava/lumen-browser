@@ -2901,9 +2901,14 @@
       {
        "id": "WPT-VENDOR-import-maps",
        "title": "WPT: вендорить + прогнать категорию `import-maps`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-04: вендорена + прогнана целиком (`--all --root import-maps --recursive`, ~5 мин) — **35/57 harness OK, 9/81 сабтестов**. Самодостаточная категория (0 `.https.`, 0 `testdriver.js`), но весь провал объясняется тремя уже открытыми дефектами: доминирующий [BUG-446](bugs/BUG-446-OPEN.md) (граф модулей не подгружается — любой относительный `import`/`import()` внутри уже загруженного модуля падает `module not found`, вне зависимости от import-карты — `set_import_map` переименовывает спецификатор, но загружать переименованный URL по-прежнему некому), часть `not-overridden/*`/`*-integrity.html` — [BUG-485](bugs/BUG-485-OPEN.md)/[BUG-565](bugs/BUG-565-OPEN.md) (`document.head` всегда `undefined`), `script-supports-importmap.html` — [BUG-572](bugs/BUG-572-OPEN.md) (`HTMLScriptElement.supports` отсутствует). Проверено отдельно: 2 «прошедших» сабтеста `static-integrity.html` — ложноположительные (модуль не грузится по BUG-446 независимо от корректности integrity-хэша, импорт-карт-специфичная проверка `integrity` не подтверждена рабочей). Новых багов не заведено — перепрогнать категорию после фикса BUG-446",
+       "bugs": [
+        "BUG-446",
+        "BUG-485/BUG-565",
+        "BUG-572 (все переподтверждены)"
+       ]
       },
       {
        "id": "WPT-VENDOR-inert",
@@ -9529,9 +9534,6 @@
   ],
   "shell (`crates/shell/src/main.rs::parse_and_layout` — порядок фаз `parse → CSS → run_scripts_with_dom → images → layout`; `notify_dom_content_loaded` на `main.rs:5466`), js (`crates/js/src/dom.rs` — нативы читают снимок и не умеют его запросить)": [
    "BUG-443"
-  ],
-  "shell (`crates/shell/src/main.rs` — `run_scripts_with_dom`, `resolve_script_sources`), js (`crates/js/src/v8_esm.rs` — реестр исходников)": [
-   "BUG-446"
   ],
   "shell (`main.rs::handle_click_at`, ветка `FormClickAction::SubmitForm`), js (`dom.rs` — `WEB_API_SHIM`)": [
    "BUG-437"
