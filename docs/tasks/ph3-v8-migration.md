@@ -3519,6 +3519,50 @@ backend-femtovg,backend-wgpu,quickjs` (pure rollback build).
 
 Next in queue: S12b-B28 (`tc39_proposals`, Полоса 4).
 
+### S12b-B28: `tc39_proposals` (2026-08-04, branch `p1-s12b-b28`)
+
+The module already had a ready V8 port (`install_tc39_proposals_v8`, S5-S7) —
+a pure-JS shim for 11 TC39 Stage-4 proposals (`Object.groupBy`/`Map.groupBy`,
+Set methods, `Promise.withResolvers`/`Promise.try`, `Array.fromAsync`,
+Iterator Helpers, `Uint8Array` Base64/Hex, `RegExp.escape`, `Error.isError`,
+`Atomics.pause`/`Atomics.waitAsync`), each section gated by a native-support
+check. The batch removed the rquickjs wrapper (`install_tc39_proposals`) +
+its `lib.rs` call site and ported all 51 `mod tests` to `tests_v8`, following
+the `setup()`/`bool_eval`/`string_eval`/`number_eval` helper pattern from
+B24/B25.
+
+**Finding**: `typeof Atomics.waitAsync === 'function'` is already true
+natively under V8 (QuickJS never had it), so the shim's own
+`typeof Atomics.waitAsync !== 'function'` guard never installs its FIFO
+async-waiter bookkeeping under the default engine — that ~100-line branch of
+`TC39_PROPOSALS_SHIM` is dead code under V8, mirroring B24's Temporal
+finding. Two of the 51 ported tests (`atomics_wait_async_notify_resolves_ok`,
+`atomics_wait_async_bigint64_roundtrip`) originally asserted that a
+`Atomics.notify()`-driven `res.value.then(...)` had settled by the time a
+*second*, separate `eval()` call read the resulting global — the pattern
+that reliably observes microtask-queue drains between top-level `eval()`
+calls elsewhere in this migration (B18/B19/B26). It does not hold here:
+V8's *native* `Atomics.waitAsync` schedules its continuation as a
+platform foreground task (not a plain microtask), and this crate's
+`V8JsRuntime` never pumps `v8::Platform::PumpMessageLoop` — confirmed with a
+throwaway diagnostic test showing even a `setTimeout`-based promise never
+settles across two `eval()` calls here (and `setTimeout` itself is only
+defined once the DOM shim installs it, not in a bare `V8JsRuntime`). Both
+tests were narrowed to assert only the synchronous return values (`res.async`
+flag, `Atomics.notify()`'s wake count) computed before any task/microtask
+would need to run — still exercises the real API surface, but no longer
+depends on task-queue pumping this harness doesn't do. Whether V8's own
+native `waitAsync` promise eventually settles is V8's own well-tested
+behavior, not code this crate owns.
+
+No bridge bugs found. `cargo test -p lumen-js --features v8-backend`: 2569
+lib (unchanged — 51 new `tests_v8` tests exactly replace 51 old rquickjs
+`mod tests`). `cargo test -p lumen-js` (default, no features): 427 lib (down
+from 478, -51). `cargo clippy --workspace --all-targets -- -D warnings`
+clean (unifies `v8-backend` via `lumen-shell`'s dependency edge).
+
+Next in queue: S12b-B29 (`webgpu`, Полоса 4).
+
 ---
 
 ## Risks (Rev 2)
