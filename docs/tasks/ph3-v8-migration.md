@@ -3312,6 +3312,39 @@ build); `--dump-layout samples/page.html` runs clean under the default build.
 
 Next in queue: S12b-B22 (`video_bindings`, `webassembly`, Полоса 3 eighth batch).
 
+### S12b-B22: video_bindings, webassembly (Полоса 3, 8/12)
+
+`webassembly.rs` had **no rquickjs code left to remove** — its rquickjs twin
+(`install_webassembly_bindings`) and all call sites were already deleted in
+S12b-B17, with full `tests_v8` parity (13 tests) landed then too. This batch
+found that ahead-of-schedule state, verified it (`grep rquickjs
+webassembly.rs` — zero hits outside two historical doc-comment mentions), and
+left it untouched.
+
+`video_bindings.rs` had the batch's only real work: its V8 port
+(`install_video_bindings_v8`) already existed (Ph3 S5-S7 batch 3), so this
+reduced to deleting `install_video_bindings`/`install_native_bindings`
+(rquickjs, ~250 lines) + the `use rquickjs::{Ctx, Function, Object}` import,
+one call site in `lib.rs` (`QuickJsRuntime::new()`, "Install HTMLVideoElement
+stubs" block), and porting its 12 `mod tests` to a new `tests_v8` module
+verbatim (same helper-fn pattern as B21's `with_audio()`: build the runtime,
+install the minimal `document` stub, then call the V8 installer — order
+doesn't matter here since, unlike `audio_element`'s `new Audio()` global, the
+video shim only patches existing `<video>` elements + intercepts future
+`document.createElement`, no global constructor). `get_text_track_store`/
+`get_video_gif_store` imports and the `VIDEO_SHIM` const, now reachable only
+from the `#[cfg(feature = "v8-backend")]` installer, were gated the same way
+to keep the default (no-`v8-backend`) build warning-free.
+
+No bridge bugs found. `cargo test -p lumen-js --features v8-backend`: 2576
+lib (unchanged — 12 new `tests_v8` tests exactly replace the 12 old rquickjs
+`mod tests` tests; `webassembly.rs` contributed nothing new since B17).
+`cargo test -p lumen-js` (default): 574 lib (down from 586, -12). Both
+clippy passes (default and `--features v8-backend`) clean; `lumen-shell`
+checked clean under default (`v8`) and `--features quickjs` (rollback build).
+
+Next in queue: S12b-B23 (`dom_parser`, Полоса 3 ninth batch).
+
 ---
 
 ## Risks (Rev 2)
