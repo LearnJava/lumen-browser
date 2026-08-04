@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-05",
  "counts": {
-  "open": 282,
+  "open": 283,
   "fixed": 315,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 597,
+ "total_bugs": 598,
  "phases": [
   {
    "id": "P0",
@@ -2992,9 +2992,13 @@
       {
        "id": "WPT-VENDOR-jpegxl",
        "title": "WPT: вендорить + прогнать категорию `jpegxl`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root jpegxl --recursive`, ~2 мин) — **2/13 harness OK, 0/11 сабтестов**. Категория состоит на 2/3 из reftest-пар (33 пары, `Unsupported test type reftest`, run_report.py даёт 0/0) — весь сигнал из 13 testharness-файлов. Все провалы объясняются известными причинами: декодер `jxl.rs::decode_jxl` — Phase-0 заглушка, всегда `Err` (движок уже документирует это в CAPABILITIES.md), что и объясняет большинство TIMEOUT на прямых fixture-тестах (`alpha-vardct.html`, `html-img.html`, `modular-lossy.html` и т.п.); `html-preload-image.html` FAIL — переподтверждение [BUG-485](bugs/BUG-485-OPEN.md)/[BUG-565](bugs/BUG-565-OPEN.md) (`document.head` отсутствует целиком); два `.https.`-файла ERROR/TIMEOUT на известном TLS-гэпе тестового сертификата, с побочной контаминацией — переподтверждение [BUG-380](bugs/BUG-380-OPEN.md) (browsing context переиспользуется, `AssertionError: Got results from X, expected Y`). Живой пробой (`--mcp-live-port`) обнаружен новый **[BUG-630](bugs/BUG-630-OPEN.md)**: `<img>` не эмитит НИ `load`, НИ `error` — проверено на валидном декодируемом PNG (не только на JXL), то есть баг общий и не зависит от формата; `HTMLImageElement.prototype` вообще не имеет `complete`/`naturalWidth`/`naturalHeight`/`onload`/`onerror` (только атрибутная рефлексия, `dom.rs:10864-10875`), а движковый декод (`main.rs::decode_image` и парные lazy/background-image пути) логирует и молча роняет и `Ok`, и `Err`-ветку без диспатча события. Это фундаментальный гэп: любой WPT-тест, ожидающий `<img>` `load`/`error` (стандартная идиома), зависает до внешнего таймаута wptrunner независимо от корректности остального движка",
+       "bugs": [
+        "BUG-630 (переподтверждены BUG-485/565",
+        "BUG-380)"
+       ]
       },
       {
        "id": "WPT-VENDOR-js",
@@ -8817,6 +8821,13 @@
    "component": "js (`crates/js/src/reporting_api.rs` -- `REPORTING_API_SHIM`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-630": {
+   "status": "open",
+   "title": "`<img>` never fires `load`/`error`, for ANY image format (not just JPEG XL) -- confirmed live with a valid, correctly-decoding PNG: `load`/`error` don't fire wi…",
+   "component": "js (`crates/js/src/dom.rs:10864-10875` -- `HTMLImageElement.prototype` reflection), shell (`crates/shell/src/main.rs:4892-4904,10630-10635,5507-5512` -- decode call sites)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -9042,6 +9053,9 @@
   ],
   "js (`crates/js/src/dom.rs:10537-10543` — `MediaQueryList` конструктор)": [
    "BUG-526"
+  ],
+  "js (`crates/js/src/dom.rs:10864-10875` -- `HTMLImageElement.prototype` reflection), shell (`crates/shell/src/main.rs:4892-4904,10630-10635,5507-5512` -- decode call sites)": [
+   "BUG-630"
   ],
   "js (`crates/js/src/dom.rs:12772-12802`, `WEB_API_SHIM`)": [
    "BUG-490"
