@@ -5749,10 +5749,12 @@ mod tests {
     }
 
     #[test]
-    fn font_family_default_empty() {
+    fn font_family_default_is_document_serif() {
+        // BUG-128: дефолт документа — UA `serif`, а не пустой список (пустой
+        // зарезервирован за chrome UI, см. `style::DEFAULT_FONT_FAMILY`).
         let root = lay("<p>x</p>", "");
         let p = first_element_child(&root);
-        assert!(p.style.font_family.is_empty());
+        assert_eq!(p.style.font_family, vec!["serif".to_string()]);
     }
 
     #[test]

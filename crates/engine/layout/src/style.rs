@@ -6624,7 +6624,7 @@ impl ComputedStyle {
             font_weight: FontWeight::NORMAL,
             font_variant_caps: FontVariantCaps::Normal,
             font_stretch: FontStretch::NORMAL,
-            font_family: Vec::new(),
+            font_family: default_font_family(),
             font_variation_settings: Vec::new(),
             font_feature_settings: Vec::new(),
             font_palette: FontPalette::Normal,
@@ -11337,7 +11337,7 @@ fn apply_quirks_table_reset(doc: &Document, node: NodeId, style: &mut ComputedSt
     }
     style.font_size = ROOT_FONT_SIZE;
     style.line_height = 1.2;
-    style.font_family = Vec::new();
+    style.font_family = default_font_family();
     style.font_style = FontStyle::Normal;
     style.font_variant_caps = FontVariantCaps::Normal;
     style.font_weight = FontWeight::NORMAL;
@@ -11941,6 +11941,30 @@ fn relative_bolder(parent: FontWeight) -> FontWeight {
 /// Корневой font-size в CSS — 16px на момент Phase 0 (без `<html>`-стилей и
 /// настроек пользователя). Используется как базис для `rem`.
 pub const ROOT_FONT_SIZE: f32 = 16.0;
+
+/// Дефолтное `font-family` документа (UA stylesheet, BUG-128).
+///
+/// HTML не задаёт конкретного значения — это «default font» настройки
+/// браузера, и у Edge / Chrome / Firefox она равна `serif` (на Windows —
+/// Times New Roman). Раньше корневой стиль нёс ПУСТОЙ список, а пустой
+/// список в рендере (`Renderer::resolve_face_id`) зарезервирован за chrome
+/// UI (bundled Golos Text, DS-4) — то есть страница без объявленного
+/// `font-family` рисовалась шрифтом браузерного интерфейса.
+///
+/// Generic-имя резолвится в системный face на этапе рендера и измерения
+/// (`FontProvider::pick_generic_face`, `GenericFaceSet`), поэтому здесь
+/// хранится именно CSS-generic, а не конкретное имя семейства: платформенная
+/// таблица кандидатов живёт в `lumen_core::ext::generic_family_candidates`.
+///
+/// Инвариант, на который опирается рендер: у контента `font_family` НИКОГДА
+/// не пуст, пустой список бывает только у chrome-овых `DrawText`.
+pub const DEFAULT_FONT_FAMILY: &str = "serif";
+
+/// Дефолтный список `font-family` документа — см. [`DEFAULT_FONT_FAMILY`].
+#[must_use]
+pub fn default_font_family() -> Vec<String> {
+    vec![DEFAULT_FONT_FAMILY.to_string()]
+}
 
 thread_local! {
     /// CSS Container Queries L1 §6.2 — nearest container dimensions for `cq*` unit resolution.
@@ -29586,7 +29610,30 @@ mod tests {
     #[test]
     fn ua_monospace_does_not_leak_to_other_elements() {
         let s = first_child_style("<p>x</p>", "");
-        assert!(s.font_family.is_empty(), "<p> не должен получать UA font-family");
+        assert_eq!(
+            s.font_family,
+            default_font_family(),
+            "<p> не должен получать UA font-family: monospace — только дефолт документа"
+        );
+    }
+
+    /// BUG-128: дефолт документа — `serif`, а НЕ пустой список. Пустой список
+    /// в рендере зарезервирован за chrome UI (bundled Golos Text, DS-4), так
+    /// что страница без объявленного `font-family` рисовалась бы шрифтом
+    /// интерфейса вместо системного serif-а.
+    #[test]
+    fn document_default_font_family_is_serif() {
+        assert_eq!(ComputedStyle::root().font_family, vec!["serif".to_string()]);
+        let s = first_child_style("<p>x</p>", "");
+        assert_eq!(s.font_family, vec!["serif".to_string()]);
+    }
+
+    /// `font-family: initial` откатывает к дефолту документа, а не к пустому
+    /// списку (тот же инвариант, вход через ключевое слово CSS-wide).
+    #[test]
+    fn font_family_initial_keyword_restores_document_default() {
+        let s = first_child_style("<p>x</p>", "p { font-family: Arial; font-family: initial; }");
+        assert_eq!(s.font_family, default_font_family());
     }
 
     #[test]

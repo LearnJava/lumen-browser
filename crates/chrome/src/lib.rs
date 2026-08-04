@@ -64,7 +64,18 @@ fn find(doc: &lumen_dom::Document, id: &'static str) -> Result<lumen_dom::NodeId
 /// equal specificity still overrides it (e.g. a future `.omni-field`
 /// exception for editable text). `user-select` is an inherited property, so
 /// setting it on `html` covers every chrome element by default.
-const UA_DEFAULTS: &str = "html{user-select:none}";
+///
+/// The second rule pins the chrome UI font (BUG-128). Chrome text used to
+/// reach paint with an EMPTY `font-family` list, and both render backends
+/// read an empty list as «this is chrome» → bundled Golos Text (DS-4). Since
+/// the document default became `serif` (the UA default of Edge/Chrome/
+/// Firefox, needed for page-content font parity), an empty list no longer
+/// happens on the layout path, so the chrome document names its own face
+/// explicitly. `"Golos Text"` is a reserved family in both backends: it
+/// resolves straight to the bundled face without the system `FontProvider`,
+/// so chrome typography stays byte-identical to the pre-BUG-128 rendering
+/// and stays independent of what is installed on the machine.
+const UA_DEFAULTS: &str = "html{user-select:none}html{font-family:'Golos Text'}";
 
 /// Parses `html` (the chrome asset's contents — a runtime host passes
 /// [`crate`]-external `chrome_preview::HTML`, the same bytes `build.rs`
