@@ -836,13 +836,6 @@ impl QuickJsRuntime {
                 eprintln!("Cookie-banner bindings init failed: {}", e);
             }
 
-            // Install TC39 Stage 4 proposal shims — Object.groupBy/Map.groupBy, Set
-            // methods, Promise.withResolvers, Promise.try, Array.fromAsync, Iterator
-            // helpers. Each shim no-ops if the engine already has native support.
-            if let Err(e) = tc39_proposals::install_tc39_proposals(&ctx) {
-                eprintln!("TC39 proposals shim init failed: {}", e);
-            }
-
             // Install CSS View Transitions API (CSS View Transitions L1 §4) — after DOM
             // so `document` is defined and Promise/queueMicrotask are available.
             if let Err(e) = view_transitions::install_view_transition_bindings(
