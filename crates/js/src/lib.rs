@@ -773,20 +773,6 @@ impl QuickJsRuntime {
                 eprintln!("Payment Request API init failed: {}", e);
             }
 
-            // Install Background Fetch API stub (W3C Background Fetch L1, Phase 0) — after DOM
-            // so Promise is available. Provides registration.backgroundFetch.fetch(id, reqs, opts)
-            // / get(id) / getIds(). Phase 0: in-memory; shell _lumen_bg_fetch_* wiring is Phase 1.
-            if let Err(e) = background_fetch::init_background_fetch(&ctx) {
-                eprintln!("Background Fetch API init failed: {}", e);
-            }
-
-            // Install Push API stub (W3C Push API L1, Phase 0) — after DOM so Promise is
-            // available. Provides registration.pushManager.subscribe() / getSubscription() /
-            // permissionState(). Phase 0: static endpoint, in-memory subscriptions.
-            if let Err(e) = push_api::init_push_api(&ctx) {
-                eprintln!("Push API init failed: {}", e);
-            }
-
             // Install Cookie Store API (WHATWG Cookie Store API, Phase 0) — after DOM so
             // Promise and document.cookie are available. Provides window.cookieStore with
             // get/getAll/set/delete and CookieChangeEvent. Phase 0: in-memory store.

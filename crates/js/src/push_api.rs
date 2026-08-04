@@ -9,18 +9,21 @@
 //! Phase 0: Push subscriptions are stored in-memory per registration.
 //! The actual endpoint is static and placeholder.
 
-use rquickjs::Ctx;
-
-/// Install the Push API stub into the JS context.
+/// V8 port of the former rquickjs `init_push_api` (Ph3 V8 migration S12b-G3,
+/// rquickjs side removed in the same batch): identical JS shim, evaluated via
+/// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 ///
 /// Defines `PushManager` class on ServiceWorkerRegistration.prototype.
 /// Must be called **after** worker registration is set up.
-pub fn init_push_api(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(PUSH_API_SHIM)?;
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_push_api_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
+    use lumen_core::ext::JsRuntime as _;
+    rt.eval(PUSH_API_SHIM)?;
     Ok(())
 }
 
 /// JavaScript shim implementing W3C Push API L1 (Phase 0).
+#[cfg(feature = "v8-backend")]
 const PUSH_API_SHIM: &str = r#"(function() {
   // PushSubscription implementation
   var PushSubscription = function(endpoint, keys) {
@@ -136,120 +139,108 @@ const PUSH_API_SHIM: &str = r#"(function() {
   globalThis.PushManager = PushManager;
 })();"#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
-    use rquickjs::{Runtime, Context, Ctx};
+    use super::*;
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().expect("Runtime::new");
-        let ctx = Context::full(&rt).expect("Context::full");
-        (rt, ctx)
-    }
-
-    fn install_stubs(ctx: &Ctx) {
-        ctx.eval::<(), _>(
-            "globalThis.ServiceWorkerRegistration = function() {}; \
-             globalThis.TypeError = TypeError; \
-             globalThis.ArrayBuffer = ArrayBuffer; \
-             globalThis._lumen_push_subscribe = function() {}; \
-             globalThis._lumen_push_unsubscribe = function() {};"
-        ).expect("install stubs");
+    fn with_push_api(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(
+            "var ServiceWorkerRegistration = function() {}; \
+             var _lumen_push_subscribe = function() {}; \
+             var _lumen_push_unsubscribe = function() {};",
+        )
+        .unwrap();
+        install_push_api_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
     fn test_push_manager_exists() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_push_api(&ctx).expect("init push api");
-            let result: String = ctx.eval(
-                "typeof PushManager === 'function' ? 'exists' : 'missing'"
-            ).expect("eval");
-            assert_eq!(result, "exists");
+        with_push_api(|rt| {
+            let result = rt
+                .eval("typeof PushManager === 'function' ? 'exists' : 'missing'")
+                .unwrap();
+            assert_eq!(result, JsValue::String("exists".to_string()));
         });
     }
 
     #[test]
     fn test_push_subscription_exists() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_push_api(&ctx).expect("init push api");
-            let result: String = ctx.eval(
-                "typeof PushSubscription === 'function' ? 'exists' : 'missing'"
-            ).expect("eval");
-            assert_eq!(result, "exists");
+        with_push_api(|rt| {
+            let result = rt
+                .eval("typeof PushSubscription === 'function' ? 'exists' : 'missing'")
+                .unwrap();
+            assert_eq!(result, JsValue::String("exists".to_string()));
         });
     }
 
     #[test]
     fn test_subscribe_returns_promise() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_push_api(&ctx).expect("init push api");
-            let result: String = ctx.eval(
-                "var pm = new PushManager({}); \
-                 typeof pm.subscribe({userVisibleOnly: true}) === 'object' ? 'promise' : 'not_promise'"
-            ).expect("eval");
-            assert_eq!(result, "promise");
+        with_push_api(|rt| {
+            let result = rt
+                .eval(
+                    "var pm = new PushManager({}); \
+                     typeof pm.subscribe({userVisibleOnly: true}) === 'object' ? 'promise' : 'not_promise'",
+                )
+                .unwrap();
+            assert_eq!(result, JsValue::String("promise".to_string()));
         });
     }
 
     #[test]
     fn test_get_subscription_returns_promise() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_push_api(&ctx).expect("init push api");
-            let result: String = ctx.eval(
-                "var pm = new PushManager({}); \
-                 typeof pm.getSubscription() === 'object' ? 'promise' : 'not_promise'"
-            ).expect("eval");
-            assert_eq!(result, "promise");
+        with_push_api(|rt| {
+            let result = rt
+                .eval(
+                    "var pm = new PushManager({}); \
+                     typeof pm.getSubscription() === 'object' ? 'promise' : 'not_promise'",
+                )
+                .unwrap();
+            assert_eq!(result, JsValue::String("promise".to_string()));
         });
     }
 
     #[test]
     fn test_permission_state_returns_promise() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_push_api(&ctx).expect("init push api");
-            let result: String = ctx.eval(
-                "var pm = new PushManager({}); \
-                 typeof pm.permissionState() === 'object' ? 'promise' : 'not_promise'"
-            ).expect("eval");
-            assert_eq!(result, "promise");
+        with_push_api(|rt| {
+            let result = rt
+                .eval(
+                    "var pm = new PushManager({}); \
+                     typeof pm.permissionState() === 'object' ? 'promise' : 'not_promise'",
+                )
+                .unwrap();
+            assert_eq!(result, JsValue::String("promise".to_string()));
         });
     }
 
     #[test]
     fn test_push_subscription_get_key() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_push_api(&ctx).expect("init push api");
-            let result: String = ctx.eval(
-                "var sub = new PushSubscription('https://test', {'p256dh': new ArrayBuffer(65)}); \
-                 var key = sub.getKey('p256dh'); \
-                 key instanceof ArrayBuffer ? 'buffer' : 'not_buffer'"
-            ).expect("eval");
-            assert_eq!(result, "buffer");
+        with_push_api(|rt| {
+            let result = rt
+                .eval(
+                    "var sub = new PushSubscription('https://test', {'p256dh': new ArrayBuffer(65)}); \
+                     var key = sub.getKey('p256dh'); \
+                     key instanceof ArrayBuffer ? 'buffer' : 'not_buffer'",
+                )
+                .unwrap();
+            assert_eq!(result, JsValue::String("buffer".to_string()));
         });
     }
 
     #[test]
     fn test_service_worker_registration_has_push_manager() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_push_api(&ctx).expect("init push api");
-            let result: String = ctx.eval(
-                "var reg = new ServiceWorkerRegistration(); \
-                 typeof reg.pushManager === 'object' ? 'yes' : 'no'"
-            ).expect("eval");
-            assert_eq!(result, "yes");
+        with_push_api(|rt| {
+            let result = rt
+                .eval(
+                    "var reg = new ServiceWorkerRegistration(); \
+                     typeof reg.pushManager === 'object' ? 'yes' : 'no'",
+                )
+                .unwrap();
+            assert_eq!(result, JsValue::String("yes".to_string()));
         });
     }
 }
