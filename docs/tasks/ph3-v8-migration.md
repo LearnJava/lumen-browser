@@ -3270,6 +3270,50 @@ Next in queue: S12b-B21 (`webgl_canvas`, `audio_element`, Полоса 3 seventh
 
 ---
 
+### S12b-B21 (`webgl_canvas`, `audio_element` — Полоса 3 seventh batch)
+
+Both modules already had complete V8 ports from an earlier slice
+(`install_webgl_canvas_v8`, `install_audio_element_bindings_v8` since S8 /
+S5-S7 batch 3), so the batch reduced to deleting the two rquickjs twins
+(`install_webgl_canvas`, `install_audio_element_bindings` +
+`install_native_bindings`), their `lib.rs` `install_dom` call sites, and
+porting their 31 tests (13 `webgl_canvas` + 18 `audio_element`, the latter
+including the one pure-Rust `set_provider_function_exists` check) to V8.
+
+In `webgl_canvas.rs`, everything reachable only through
+`install_webgl_canvas_v8` (the `CONTEXTS`/`NEXT_ID` thread-local registry,
+`with_ctx`, `WEBGL_SHIM`) was gated behind `#[cfg(feature = "v8-backend")]`
+to avoid `dead_code` under a default (non-v8) build; the `pub use webgl::{...}`
+backend-constant re-export stayed unconditional since it's a `pub` item with
+no other caller either way. In `audio_element.rs`, `get_provider` (the only
+caller of which was the deleted rquickjs installer plus the still-gated V8
+one) got the same treatment; `provider_lock`/`set_audio_playback_provider`
+stayed unconditional — the shell calls the latter before either engine's
+runtime exists.
+
+No engine-behavior hazards this batch (unlike B19/B20's microtask-draining
+picker/promise findings) — neither module drives a blocking native dialog or
+depends on cross-eval promise resolution order. One adaptation: the V8 test
+helper for `audio_element` (`with_audio()`) installs the DOM stub *before*
+calling `install_audio_element_bindings_v8`, not after like the old rquickjs
+`install_all()` did — the V8 installer registers natives and evals the shim
+in one call, and the shim's `document`-interception (createElement patch,
+`new Audio()` global) only runs when `document` already exists, so the two
+calls can no longer be split.
+
+`cargo test -p lumen-js --features v8-backend`: 2576 lib (unchanged — the 31
+new `tests_v8` tests exactly replace the 31 old rquickjs `mod tests` tests).
+`cargo test -p lumen-js` (default): 586 lib (down from 617, -31). Both
+clippy passes (`--all-targets`, default and `--features v8-backend`) clean;
+`lumen-shell` checked clean under default (`v8`),
+`--no-default-features --features backend-femtovg,quickjs,v8`, and
+`--no-default-features --features backend-femtovg,quickjs` (pure rollback
+build); `--dump-layout samples/page.html` runs clean under the default build.
+
+Next in queue: S12b-B22 (`video_bindings`, `webassembly`, Полоса 3 eighth batch).
+
+---
+
 ## Risks (Rev 2)
 
 | Risk | Likelihood | Mitigation |

@@ -37,8 +37,6 @@
 
 use std::sync::{Arc, OnceLock, RwLock};
 
-use rquickjs::{Ctx, Function, Object};
-
 use lumen_core::ext::AudioPlaybackProvider;
 
 // ── Provider registry ─────────────────────────────────────────────────────────
@@ -57,233 +55,19 @@ pub fn set_audio_playback_provider(p: Arc<dyn AudioPlaybackProvider>) {
     *provider_lock().write().unwrap() = Some(p);
 }
 
+#[cfg(feature = "v8-backend")]
 fn get_provider() -> Option<Arc<dyn AudioPlaybackProvider>> {
     provider_lock().read().unwrap().clone()
 }
 
-// ── Public install function ───────────────────────────────────────────────────
-
-/// Install `HTMLAudioElement` Phase 1 bindings into the JS context.
-///
-/// Registers the `__lumen_audio_*` native functions and the JS shim that patches
-/// `<audio>` elements with real play/pause/seek/timeupdate support.
+/// Install `HTMLAudioElement` Phase 1 bindings into a V8 runtime (Ph3 V8
+/// migration S5-S7 batch 3; the rquickjs twin was removed in S12b-B21):
+/// state is the process-global [`AudioPlaybackProvider`] (installed once via
+/// `set_audio_playback_provider`, backend-agnostic), so no new
+/// `V8JsRuntime` plumbing is needed — each native captures its own
+/// `get_provider()` clone. The JS shim is unchanged.
 ///
 /// Must be called **after** `dom::install_dom_api`.
-pub fn install_audio_element_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    install_native_bindings(ctx)?;
-    ctx.eval::<(), _>(AUDIO_ELEMENT_SHIM)?;
-    Ok(())
-}
-
-// ── Native binding registration ───────────────────────────────────────────────
-
-fn install_native_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    let g: Object = ctx.globals();
-
-    // __lumen_audio_alloc() → f64
-    {
-        let p = get_provider();
-        g.set(
-            "__lumen_audio_alloc",
-            Function::new(ctx.clone(), move || -> f64 {
-                p.as_ref().map_or(0.0, |p| p.alloc_handle() as f64)
-            }),
-        )?;
-    }
-
-    // __lumen_audio_free(handle)
-    {
-        let p = get_provider();
-        g.set(
-            "__lumen_audio_free",
-            Function::new(ctx.clone(), move |handle: f64| {
-                if let Some(p) = &p {
-                    p.free_handle(handle as u64);
-                }
-            }),
-        )?;
-    }
-
-    // __lumen_audio_load(handle, url)
-    {
-        let p = get_provider();
-        g.set(
-            "__lumen_audio_load",
-            Function::new(ctx.clone(), move |handle: f64, url: String| {
-                if let Some(p) = &p {
-                    p.load(handle as u64, &url);
-                }
-            }),
-        )?;
-    }
-
-    // __lumen_audio_play(handle)
-    {
-        let p = get_provider();
-        g.set(
-            "__lumen_audio_play",
-            Function::new(ctx.clone(), move |handle: f64| {
-                if let Some(p) = &p {
-                    p.play(handle as u64);
-                }
-            }),
-        )?;
-    }
-
-    // __lumen_audio_pause(handle)
-    {
-        let p = get_provider();
-        g.set(
-            "__lumen_audio_pause",
-            Function::new(ctx.clone(), move |handle: f64| {
-                if let Some(p) = &p {
-                    p.pause(handle as u64);
-                }
-            }),
-        )?;
-    }
-
-    // __lumen_audio_stop(handle)
-    {
-        let p = get_provider();
-        g.set(
-            "__lumen_audio_stop",
-            Function::new(ctx.clone(), move |handle: f64| {
-                if let Some(p) = &p {
-                    p.stop(handle as u64);
-                }
-            }),
-        )?;
-    }
-
-    // __lumen_audio_seek(handle, secs)
-    {
-        let p = get_provider();
-        g.set(
-            "__lumen_audio_seek",
-            Function::new(ctx.clone(), move |handle: f64, secs: f64| {
-                if let Some(p) = &p {
-                    p.seek(handle as u64, secs);
-                }
-            }),
-        )?;
-    }
-
-    // __lumen_audio_set_volume(handle, vol)
-    {
-        let p = get_provider();
-        g.set(
-            "__lumen_audio_set_volume",
-            Function::new(ctx.clone(), move |handle: f64, vol: f64| {
-                if let Some(p) = &p {
-                    p.set_volume(handle as u64, vol);
-                }
-            }),
-        )?;
-    }
-
-    // __lumen_audio_set_rate(handle, rate)
-    {
-        let p = get_provider();
-        g.set(
-            "__lumen_audio_set_rate",
-            Function::new(ctx.clone(), move |handle: f64, rate: f64| {
-                if let Some(p) = &p {
-                    p.set_playback_rate(handle as u64, rate);
-                }
-            }),
-        )?;
-    }
-
-    // __lumen_audio_current_time(handle) → f64
-    {
-        let p = get_provider();
-        g.set(
-            "__lumen_audio_current_time",
-            Function::new(ctx.clone(), move |handle: f64| -> f64 {
-                p.as_ref().map_or(0.0, |p| p.current_time(handle as u64))
-            }),
-        )?;
-    }
-
-    // __lumen_audio_duration(handle) → f64  (NaN = unknown)
-    {
-        let p = get_provider();
-        g.set(
-            "__lumen_audio_duration",
-            Function::new(ctx.clone(), move |handle: f64| -> f64 {
-                p.as_ref().map_or(f64::NAN, |p| p.duration(handle as u64))
-            }),
-        )?;
-    }
-
-    // __lumen_audio_paused(handle) → bool
-    {
-        let p = get_provider();
-        g.set(
-            "__lumen_audio_paused",
-            Function::new(ctx.clone(), move |handle: f64| -> bool {
-                p.as_ref().is_none_or(|p| p.is_paused(handle as u64))
-            }),
-        )?;
-    }
-
-    // __lumen_audio_ended(handle) → bool
-    {
-        let p = get_provider();
-        g.set(
-            "__lumen_audio_ended",
-            Function::new(ctx.clone(), move |handle: f64| -> bool {
-                p.as_ref().is_some_and(|p| p.is_ended(handle as u64))
-            }),
-        )?;
-    }
-
-    // __lumen_audio_ready_state(handle) → f64 (0–4)
-    {
-        let p = get_provider();
-        g.set(
-            "__lumen_audio_ready_state",
-            Function::new(ctx.clone(), move |handle: f64| -> f64 {
-                p.as_ref()
-                    .map_or(0.0, |p| p.ready_state(handle as u64) as f64)
-            }),
-        )?;
-    }
-
-    // __lumen_audio_has_error(handle) → bool
-    {
-        let p = get_provider();
-        g.set(
-            "__lumen_audio_has_error",
-            Function::new(ctx.clone(), move |handle: f64| -> bool {
-                p.as_ref().is_some_and(|p| p.has_error(handle as u64))
-            }),
-        )?;
-    }
-
-    // __lumen_audio_can_play_type(mime) → String
-    {
-        let p = get_provider();
-        g.set(
-            "__lumen_audio_can_play_type",
-            Function::new(ctx.clone(), move |mime: String| -> String {
-                p.as_ref()
-                    .map_or("", |p| p.can_play_type(&mime))
-                    .to_owned()
-            }),
-        )?;
-    }
-
-    Ok(())
-}
-
-/// V8 port of [`install_audio_element_bindings`] (Ph3 V8 migration S5-S7
-/// batch 3): state is the process-global [`AudioPlaybackProvider`]
-/// (installed once via `set_audio_playback_provider`, backend-agnostic), so
-/// no new `V8JsRuntime` plumbing is needed — each native captures its own
-/// `get_provider()` clone exactly like the rquickjs original. The JS shim is
-/// unchanged.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_audio_element_bindings_v8(
     rt: &crate::v8_runtime::V8JsRuntime,
@@ -443,6 +227,7 @@ pub(crate) fn install_audio_element_bindings_v8(
 ///
 /// Uses `__lumen_audio_*` native bindings for real playback; falls back
 /// gracefully when the provider is absent (headless/CI mode — same as Phase 0).
+#[cfg(feature = "v8-backend")]
 const AUDIO_ELEMENT_SHIM: &str = r#"(function() {
   'use strict';
 
@@ -795,25 +580,22 @@ const AUDIO_ELEMENT_SHIM: &str = r#"(function() {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
-mod tests {
+/// V8 test coverage for the `HTMLAudioElement` shim (the rquickjs twin was
+/// removed in S12b-B21; this module ports its 16 tests to V8 verbatim).
+#[cfg(all(test, feature = "v8-backend"))]
+mod tests_v8 {
     use std::sync::Arc;
 
-    use rquickjs::{Context, Runtime};
+    use lumen_core::ext::{JsRuntime as _, NullAudioPlaybackProvider};
+    use lumen_core::JsValue;
 
-    use lumen_core::ext::NullAudioPlaybackProvider;
+    use crate::v8_runtime::V8JsRuntime;
 
     use super::*;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
-
     /// Minimal DOM stub sufficient for the shim to run without errors.
-    fn install_dom_stub(ctx: &Ctx) {
-        ctx.eval::<(), _>(
+    fn install_dom_stub(rt: &V8JsRuntime) {
+        rt.eval(
             r#"
 var _events = [];
 function Event(name) { this.type = name; }
@@ -841,227 +623,178 @@ var document = {
         .unwrap();
     }
 
-    fn install_all(ctx: &Ctx) {
+    /// The DOM stub must be installed *before* the bindings: `install_audio_element_bindings_v8`
+    /// registers natives AND evals the shim in one call, and the shim's `document`-interception
+    /// (createElement patch, `new Audio()`) only runs when `document` already exists.
+    fn with_audio() -> V8JsRuntime {
+        let rt = V8JsRuntime::new().unwrap();
+        install_dom_stub(&rt);
         set_audio_playback_provider(Arc::new(NullAudioPlaybackProvider));
-        install_native_bindings(ctx).unwrap();
-        install_dom_stub(ctx);
-        ctx.eval::<(), _>(AUDIO_ELEMENT_SHIM).unwrap();
+        super::install_audio_element_bindings_v8(&rt).unwrap();
+        rt
+    }
+
+    fn bool_eval(rt: &V8JsRuntime, expr: &str) -> bool {
+        matches!(rt.eval(expr).unwrap(), JsValue::Bool(true))
     }
 
     #[test]
     fn install_bindings_succeeds() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| install_all(&ctx));
+        let _rt = with_audio();
     }
 
     #[test]
     fn alloc_returns_nonzero_handle() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            set_audio_playback_provider(Arc::new(NullAudioPlaybackProvider));
-            install_native_bindings(&ctx).unwrap();
-            let h: f64 = ctx.eval("__lumen_audio_alloc()").unwrap();
-            assert!(h > 0.0);
-        });
+        let rt = with_audio();
+        match rt.eval("__lumen_audio_alloc()").unwrap() {
+            JsValue::Number(n) => assert!(n > 0.0),
+            other => panic!("expected number, got {other:?}"),
+        }
     }
 
     #[test]
     fn play_returns_promise() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_all(&ctx);
-            let ok: bool = ctx
-                .eval("var el = document.createElement('audio'); el.play() instanceof Promise")
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = with_audio();
+        let ok = bool_eval(
+            &rt,
+            "var el = document.createElement('audio'); el.play() instanceof Promise",
+        );
+        assert!(ok);
     }
 
     #[test]
     fn paused_initially_true() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_all(&ctx);
-            let ok: bool = ctx
-                .eval("var el = document.createElement('audio'); el.paused === true")
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = with_audio();
+        let ok = bool_eval(
+            &rt,
+            "var el = document.createElement('audio'); el.paused === true",
+        );
+        assert!(ok);
     }
 
     #[test]
     fn volume_range_error() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_all(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"var el = document.createElement('audio');
+        let rt = with_audio();
+        let ok = bool_eval(
+            &rt,
+            r#"var el = document.createElement('audio');
 var threw = false;
 try { el.volume = 2; } catch(e) { threw = true; }
 threw"#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        );
+        assert!(ok);
     }
 
     #[test]
     fn muted_getter_setter() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_all(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    "var el = document.createElement('audio'); el.muted = true; el.muted === true",
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = with_audio();
+        let ok = bool_eval(
+            &rt,
+            "var el = document.createElement('audio'); el.muted = true; el.muted === true",
+        );
+        assert!(ok);
     }
 
     #[test]
     fn can_play_type_mp3_probably() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_all(&ctx);
-            let r: String = ctx
-                .eval("document.createElement('audio').canPlayType('audio/mpeg')")
-                .unwrap();
-            assert_eq!(r, "probably");
-        });
+        let rt = with_audio();
+        let r = rt
+            .eval("document.createElement('audio').canPlayType('audio/mpeg')")
+            .unwrap();
+        assert_eq!(r, JsValue::String("probably".into()));
     }
 
     #[test]
     fn can_play_type_unknown_empty() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_all(&ctx);
-            let r: String = ctx
-                .eval("document.createElement('audio').canPlayType('video/x-custom')")
-                .unwrap();
-            assert_eq!(r, "");
-        });
+        let rt = with_audio();
+        let r = rt
+            .eval("document.createElement('audio').canPlayType('video/x-custom')")
+            .unwrap();
+        assert_eq!(r, JsValue::String(String::new()));
     }
 
     #[test]
     fn duration_infinity_no_provider() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            // No provider — shim falls back gracefully.
-            install_dom_stub(&ctx);
-            ctx.eval::<(), _>(AUDIO_ELEMENT_SHIM).unwrap();
-            let ok: bool = ctx
-                .eval(
-                    "var el = document.createElement('audio'); el.duration === Infinity",
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        // No provider — natives never registered, shim falls back gracefully.
+        let rt = V8JsRuntime::new().unwrap();
+        install_dom_stub(&rt);
+        rt.eval(super::AUDIO_ELEMENT_SHIM).unwrap();
+        let ok = bool_eval(
+            &rt,
+            "var el = document.createElement('audio'); el.duration === Infinity",
+        );
+        assert!(ok);
     }
 
     #[test]
     fn ready_state_zero_null_provider() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_all(&ctx);
-            let rs: f64 = ctx
-                .eval("document.createElement('audio').readyState")
-                .unwrap();
-            // NullAudioPlaybackProvider always returns 0.
-            assert_eq!(rs, 0.0);
-        });
+        let rt = with_audio();
+        let rs = rt
+            .eval("document.createElement('audio').readyState")
+            .unwrap();
+        // NullAudioPlaybackProvider always returns 0.
+        assert_eq!(rs, JsValue::Number(0.0));
     }
 
     #[test]
     fn playback_rate_setter() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_all(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    "var el = document.createElement('audio'); el.playbackRate = 2.0; el.playbackRate === 2.0",
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = with_audio();
+        let ok = bool_eval(
+            &rt,
+            "var el = document.createElement('audio'); el.playbackRate = 2.0; el.playbackRate === 2.0",
+        );
+        assert!(ok);
     }
 
     #[test]
     fn loop_setter() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_all(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    "var el = document.createElement('audio'); el.loop = true; el.loop === true",
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = with_audio();
+        let ok = bool_eval(
+            &rt,
+            "var el = document.createElement('audio'); el.loop = true; el.loop === true",
+        );
+        assert!(ok);
     }
 
     #[test]
     fn seek_fires_seeking_seeked() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_all(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"_events = [];
+        let rt = with_audio();
+        let ok = bool_eval(
+            &rt,
+            r#"_events = [];
 var el = document.createElement('audio');
 el.currentTime = 5;
 _events.indexOf('seeking') >= 0 && _events.indexOf('seeked') >= 0"#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        );
+        assert!(ok);
     }
 
     #[test]
     fn audio_global_constructor() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_all(&ctx);
-            let ok: bool = ctx.eval("typeof Audio === 'function'").unwrap();
-            assert!(ok);
-        });
+        let rt = with_audio();
+        let ok = bool_eval(&rt, "typeof Audio === 'function'");
+        assert!(ok);
     }
 
     #[test]
     fn new_audio_with_src() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_all(&ctx);
-            let ok: bool = ctx
-                .eval("var a = new Audio('test.mp3'); a.src === 'test.mp3'")
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = with_audio();
+        let ok = bool_eval(&rt, "var a = new Audio('test.mp3'); a.src === 'test.mp3'");
+        assert!(ok);
     }
 
     #[test]
     fn buffered_empty_before_load() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_all(&ctx);
-            let ok: bool = ctx
-                .eval("document.createElement('audio').buffered.length === 0")
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = with_audio();
+        let ok = bool_eval(&rt, "document.createElement('audio').buffered.length === 0");
+        assert!(ok);
     }
 
     #[test]
     fn error_null_when_no_error() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_all(&ctx);
-            let ok: bool = ctx
-                .eval("document.createElement('audio').error === null")
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = with_audio();
+        let ok = bool_eval(&rt, "document.createElement('audio').error === null");
+        assert!(ok);
     }
 
     #[test]
