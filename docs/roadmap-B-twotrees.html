@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-04",
  "counts": {
-  "open": 226,
+  "open": 229,
   "fixed": 309,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 535,
+ "total_bugs": 538,
  "phases": [
   {
    "id": "P0",
@@ -8293,6 +8293,27 @@
    "component": "js (`crates/js/src/dom.rs` -- `HTMLTitleElement` registered as a tag-constructor name, `dom.rs:4614`/`4648`, with zero prototype members ever defined)",
    "date": null,
    "debtor": false
+  },
+  "BUG-568": {
+   "status": "open",
+   "title": "`document.write()`/`.writeln()` do not exist -- `TypeError: document.write is not a function` on every call, not a broken stub. Low direct count in this categor…",
+   "component": "js (`crates/js/src/dom.rs` -- `Document` wrapper has no `write`/`writeln` member at all)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-569": {
+   "status": "open",
+   "title": "`img.decode()` does not exist -- `TypeError: img.decode is not a function` on every `HTMLImageElement` instance; image pipeline decodes synchronously today with…",
+   "component": "js (`crates/js/src/dom.rs` -- `HTMLImageElement` wrapper has no `decode` member)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-570": {
+   "status": "open",
+   "title": "`new VTTCue(...)`/`new TextTrackCue(...)`/`new TrackEvent(...)` all throw `ReferenceError: <Name> is not defined` -- cue *data* is real and wired end-to-end (pa…",
+   "component": "js (`crates/js/src/dom.rs` -- `VTTCue`/`TextTrackCue`/`TrackEvent` never installed as globals; `crates/js/src/text_track_store.rs` implements the cue data model but only names the interfaces in doc comments)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -8570,8 +8591,17 @@
   "js (`crates/js/src/dom.rs::_lumen_get_fonts`, ~line 6779)": [
    "BUG-564"
   ],
+  "js (`crates/js/src/dom.rs` -- `Document` wrapper has no `write`/`writeln` member at all)": [
+   "BUG-568"
+  ],
+  "js (`crates/js/src/dom.rs` -- `HTMLImageElement` wrapper has no `decode` member)": [
+   "BUG-569"
+  ],
   "js (`crates/js/src/dom.rs` -- `HTMLTitleElement` registered as a tag-constructor name, `dom.rs:4614`/`4648`, with zero prototype members ever defined)": [
    "BUG-567"
+  ],
+  "js (`crates/js/src/dom.rs` -- `VTTCue`/`TextTrackCue`/`TrackEvent` never installed as globals; `crates/js/src/text_track_store.rs` implements the cue data model but only names the interfaces in doc comments)": [
+   "BUG-570"
   ],
   "js (`crates/js/src/dom.rs` -- `_lumen_build_element`, `_obj`)": [
    "BUG-556"
