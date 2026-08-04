@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-04",
  "counts": {
-  "open": 225,
+  "open": 228,
   "fixed": 313,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 538,
+ "total_bugs": 541,
  "phases": [
   {
    "id": "P0",
@@ -8296,6 +8296,27 @@
    "component": "js (`crates/js/src/dom.rs` -- `VTTCue`/`TextTrackCue`/`TrackEvent` never installed as globals; `crates/js/src/text_track_store.rs` implements the cue data model but only names the interfaces in doc comments)",
    "date": null,
    "debtor": false
+  },
+  "BUG-571": {
+   "status": "open",
+   "title": "A `<script>` created via `document.createElement`/`createElementNS` and inserted into a live document (classic or module, inline or `src`, any insertion method)…",
+   "component": "shell (`crates/shell/src/main.rs::collect_scripts_ordered`/`run_scripts_with_dom`), js (`crates/js/src/dom.rs` -- `HTMLScriptElement` reflection only, no insertion hook)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-572": {
+   "status": "open",
+   "title": "`HTMLScriptElement.supports(type)` does not exist at all (`TypeError`). The classification logic already exists as `is_classic_script_type()` (`crates/shell/src…",
+   "component": "js (`crates/js/src/dom.rs` -- `HTMLScriptElement` has no `supports` static, only prototype reflection)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-573": {
+   "status": "open",
+   "title": "`Range.prototype.createContextualFragment` does not exist (`TypeError`). The `Range` shim implements a subset of the interface; this DOM-Parsing-spec method was…",
+   "component": "js (`crates/js/src/dom.rs::_lumen_make_range` object literal, `dom.rs:6870-6944`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -8573,11 +8594,17 @@
   "js (`crates/js/src/dom.rs::_lumen_get_fonts`, ~line 6779)": [
    "BUG-564"
   ],
+  "js (`crates/js/src/dom.rs::_lumen_make_range` object literal, `dom.rs:6870-6944`)": [
+   "BUG-573"
+  ],
   "js (`crates/js/src/dom.rs` -- `Document` wrapper has no `write`/`writeln` member at all)": [
    "BUG-568"
   ],
   "js (`crates/js/src/dom.rs` -- `HTMLImageElement` wrapper has no `decode` member)": [
    "BUG-569"
+  ],
+  "js (`crates/js/src/dom.rs` -- `HTMLScriptElement` has no `supports` static, only prototype reflection)": [
+   "BUG-572"
   ],
   "js (`crates/js/src/dom.rs` -- `HTMLTitleElement` registered as a tag-constructor name, `dom.rs:4614`/`4648`, with zero prototype members ever defined)": [
    "BUG-567"
@@ -9079,6 +9106,9 @@
   ],
   "shell (`crates/shell/src/main.rs::apply_loaded_page`), js (`crates/js/src/dom.rs:12769` `window.getComputedStyle`)": [
    "BUG-555"
+  ],
+  "shell (`crates/shell/src/main.rs::collect_scripts_ordered`/`run_scripts_with_dom`), js (`crates/js/src/dom.rs` -- `HTMLScriptElement` reflection only, no insertion hook)": [
+   "BUG-571"
   ],
   "shell (`crates/shell/src/main.rs::fetch_stylesheet_text`)": [
    "BUG-509"
