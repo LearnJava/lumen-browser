@@ -310,3 +310,65 @@ same shape as prior slices) plus a new one — `outer is not defined`/`inner
 is not defined` in `intrinsic-percent-non-replaced-006.html`, same mechanism
 (elements with `id="outer"`/`id="inner"` referenced as bare globals). `.ini`
 under `tests/wpt/metadata/css/css-sizing/`.
+
+## Срез 43 (`css/css-anchor-position`, 2026-08-04) — two new manifestation shapes
+
+28 of the 31 files left individually untriaged after срез 42's mass run
+(TIMEOUT cluster, harness-level, 0 subtests). All confirmed by direct
+`--mcp-live-port` probe (`eval` the bare identifier after `document_ready`),
+not by message-text pattern-matching alone — see method note below.
+
+**23 files, plain top-level throw** (same shape as every prior slice —
+bare id referenced before any `test()` call, harness times out at the
+default ~10s file timeout with 0 registered tests): `anchor-name-in-shadow.html`
+(`anchor_host`/`host`), `anchor-position-writing-modes-001.html` (`container`),
+`anchor-position-writing-modes-002.html` (`template`),
+`auto-inset-margin-getComputedStyle.html` (`insetValidAnchor`),
+`position-area-align-justify-wm-dir.html`, `position-area-align-justify.html`,
+`position-area-anchor-outside.html`, `position-area-anchor-partially-outside.html`,
+`position-area-basic.html`, `position-area-in-grid.html`,
+`position-area-with-insets.html`, `position-area-wm-dir.html` (all 8:
+`anchored`), `position-area-fixed.html` (`sizer`), `transform-010.html`
+through `transform-017.html` (7 files, skipping `-014`; all: `anchor`),
+`try-tactic-basic.html`, `try-tactic-margin.html`, `try-tactic-wm.html`
+(all 3: `target` — these three's `<style>` block also declares
+`@position-try` rules, [BUG-562](BUG-562-OPEN.md)'s subject, but that's inert
+CSS the parser silently skips; the JS-side throw that actually produces the
+TIMEOUT is this bug, confirmed by checking which identifier the runtime
+error names).
+
+**2 files, new shape — inside a `window.onload = function() {...}` handler**
+(not the `<body onload="...">` HTML-attribute form [BUG-360](BUG-360-OPEN.md)
+covers — this is a JS-side property assignment, confirmed separately to work
+correctly via a minimal probe page; the throw happens *inside* the handler
+body once it runs): `last-successful-iframe.html` (bare `iframe`, thrown from
+`iframe.contentWindow` on the first line of the handler — all 3
+`promise_test()` registrations that would follow never happen),
+`position-area-scrolling-003.tentative.html` (same shape, bare `iframe`).
+Both were silent in the plain `--dump-layout` scan (that tool only captures
+synchronous parse-time script errors, not ones thrown later from an event
+handler) — caught only by a live probe that let `load` actually fire first.
+
+**3 files, new shape — inside `<script type="module">` top-level `await`**
+(module top-level is strict-mode by spec, same missing-property mechanism as
+sloppy-mode scripts, just inside a module's top-level rather than a classic
+script's): `anchor-position-dynamic-001.html`/`-002.html`/`-003.html` (bare
+`container`). Also silent in the `--dump-layout` scan — module evaluation
+errors don't surface through the same synchronous error-reporting path this
+tool hooks. `anchor-position-dynamic-003.html` already had a blanket-pinned
+`.ini` from срез 30 with no individual attribution; the other two are new.
+
+**Method note:** a `--dump-layout` script-error scan is a fast first pass
+(covers the 23 top-level cases in one ~6s batch over all 30 files) but has
+two blind spots demonstrated here — event-handler-body throws and module
+top-level throws — neither shows up in that tool's synchronous error log.
+Confirming "no error" requires a live `--mcp-live-port` probe (`wait
+{condition: document_ready}` then `eval` the specific bare identifier) before
+concluding a file's TIMEOUT has some other cause; two of five apparently
+error-free files in this slice turned out to be this same bug once probed
+live, and all five in fact were.
+
+`.ini` for all 28 files under `tests/wpt/metadata/css/css-anchor-position/`
+(top-level `expected: TIMEOUT`, already correct since срез 30 — this slice
+only replaced the generic "not individually clustered" header comment with a
+per-file citation of this bug).

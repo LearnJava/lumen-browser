@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-04",
  "counts": {
-  "open": 222,
+  "open": 223,
   "fixed": 309,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 531,
+ "total_bugs": 532,
  "phases": [
   {
    "id": "P0",
@@ -8247,6 +8247,13 @@
    "component": "js (`crates/js/src/dom.rs:4260-4298` `_lumen_make_style`; `dom.rs:4241-4255` `_lumen_parse_style`/`_lumen_serialize_style`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-564": {
+   "status": "open",
+   "title": "`document.fonts.ready` is missing entirely (`FontFaceSet` object literal has `length`/`item`/`entries`/`forEach`/iterator but no `ready`) -- `document.fonts.rea…",
+   "component": "js (`crates/js/src/dom.rs::_lumen_get_fonts`, ~line 6779)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -8517,6 +8524,9 @@
   ],
   "js (`crates/js/src/dom.rs:7463` — `_lumen_ce_upgrade_element`)": [
    "BUG-543"
+  ],
+  "js (`crates/js/src/dom.rs::_lumen_get_fonts`, ~line 6779)": [
+   "BUG-564"
   ],
   "js (`crates/js/src/dom.rs` -- `_lumen_build_element`, `_obj`)": [
    "BUG-556"
