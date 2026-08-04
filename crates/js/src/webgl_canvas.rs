@@ -1,8 +1,8 @@
 //! Functional `canvas.getContext('webgl')` bindings (task #28, §7F).
 //!
 //! Wires the WebGL 1.0 JS API to [`lumen_paint::SoftwareWebGl`], the CPU
-//! "GPU pipeline" backend. Unlike the fingerprint-only shim in
-//! [`crate::webgl_bindings`], the context returned here is *functional*:
+//! "GPU pipeline" backend. Unlike a fingerprint-only shim, the context
+//! returned here is *functional*:
 //! `createBuffer`/`bindBuffer`/`bufferData`, `createShader`/`compileShader`/
 //! `createProgram`/`linkProgram`/`useProgram`, `vertexAttribPointer`/
 //! `enableVertexAttribArray`, `uniform4f`, `clearColor`/`clear`, `viewport`,
