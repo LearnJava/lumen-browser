@@ -86,6 +86,33 @@ slice; whoever picks this up should diff `ComputedStyle`'s field list
 against `computed_style_to_map`'s insert calls once, rather than fix
 properties one WPT-failure at a time.
 
+## Addendum 2026-08-04 (WPT-VENDOR-html-rendering): `aspect-ratio` — same gap, sixth confirmed property
+
+`grep -n 'aspect.ratio' selector_query.rs` returns nothing, while
+`ComputedStyle.aspect_ratio` is fully parsed and stored
+(`style.rs:3593` field, `style.rs:15679-15681` `parse_aspect_ratio_value`
+call site). Live probe (`--mcp-live-port`) on a **block-level** `<div
+style="aspect-ratio: 2 / 1; width: 100px;">` — deliberately avoiding
+[BUG-488](BUG-488-OPEN.md)'s inline-element gap — in the same
+`getComputedStyle` call as `width`/`display`/`color` (all three resolve
+correctly: `100px`/`block`/`rgb(0, 0, 0)`) shows `aspect-ratio` alone
+comes back `""` via both `getPropertyValue('aspect-ratio')` and the
+camelCase `.aspectRatio` accessor. Matches this bug's mechanism exactly,
+not a separate defect — same fix (`computed_style_to_map` needs an
+`aspect-ratio` arm serializing the `Option<(f32, f32)>` as `"W / H"`, or
+the literal string `"auto"` when `None`).
+
+Symptom in the vendored corpus:
+`html/rendering/replaced-elements/attributes-for-embedded-content-and-images/resources/aspect-ratio.js`'s
+`test_computed_style_aspect_ratio()` (used by 4 files, 16 subtests) reads
+`getComputedStyle(elem).aspectRatio` and gets `""` against every expected
+`"auto W / H"`/`"auto"` value — but note the harness there also creates
+each element via `document.createElement` + `appendChild` right before
+reading, so a naive re-triage must first rule out BUG-488 (inline) and
+BUG-443/555 (parse-time timing) before crediting this bug; the isolated
+probe above rules both out for this specific property by using a
+pre-existing block element read well after `document_ready`.
+
 ## Как исправить (не входит в объём P2)
 
 Add the missing longhands to `computed_style_to_map`, following the existing

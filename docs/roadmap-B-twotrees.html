@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-04",
  "counts": {
-  "open": 254,
+  "open": 257,
   "fixed": 315,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 569,
+ "total_bugs": 572,
  "phases": [
   {
    "id": "P0",
@@ -2795,9 +2795,14 @@
       {
        "id": "WPT-VENDOR-html-rendering",
        "title": "WPT: прогнать срез `html/rendering`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). Срез категории `html`, вынесен из `WPT-VENDOR-html` 2026-07-28 (полный прогон категории — 40+ часов, не помещается в сессию). 150 `testharness`-id (6 `testdriver`) плюс 296 `reftest`, которые минимальный исполнитель не поддерживает (S8). Дерево уже вендорено"
+       "note": "Скоуп: ⬜ (кандидат). Срез категории `html`, вынесен из `WPT-VENDOR-html` 2026-07-28. Дерево уже вендорено. DONE 2026-08-04: прогнан целиком (`--processes=4`, ~2 мин) — **115/149 harness OK, 187/1053 сабтестов** (296 `reftest` вне охвата минимального исполнителя, как и предсказывала строка). Основная масса из 900+ unexpected — не новые находки, а концентрированный ценник уже известных сквозных дефектов: [BUG-367](bugs/BUG-367-OPEN.md) (`localName`/`prefix` отсутствуют — `<undefined type=submit>` во всех тест-именах и телах ассертов button-layout/computed-style.html, 167/167 сабтестов одного файла), [BUG-488](bugs/BUG-488-OPEN.md) (`getComputedStyle` пуст для ЛЮБОГО inline-элемента — `<span>`/`<a>`), [BUG-351](bugs/BUG-351-OPEN.md) (`outerHTML` отсутствует на живом DOM), [BUG-478](bugs/BUG-478-OPEN.md)/[522](bugs/BUG-522-OPEN.md)/[551](bugs/BUG-551-OPEN.md)/[580](bugs/BUG-580-OPEN.md) (`Element.getClientRects` отсутствует), [BUG-414](bugs/BUG-414-OPEN.md) (`dataset` отсутствует — 12 хитов в iframe-frameborder.html), [BUG-368](bugs/BUG-368-OPEN.md) (`innerHTML` текстовая заглушка — `table_tr`-инъекция в table-attribute.html даёт `getElementById`=null, каскадный ERROR/NOTRUN на 8 сабтестов той же категории). Три новых бага, все подтверждены живой пробой `--mcp-live-port` поверх сигнала прогона: [BUG-602](bugs/BUG-602-OPEN.md) (легаси `align` — вообще нет IDL-рефлексии ни на одном элементе, отдельно от table `align`→`text-align` presentational hint, который работает), [BUG-603](bugs/BUG-603-OPEN.md) (`bgcolor` presentational hint применяется только из начального парсинга и никогда не переприменяется на рантайменый `setAttribute`, плюс `background`/`bordercolor`/`cellspacing` не реализованы вовсе), [BUG-604](bugs/BUG-604-OPEN.md) (нет UA shadow tree у `<video>`/`<audio>`/`<select>`/`<details>` — дочерний контент рендерится напрямую вместо ожидаемого no-slot/slot-контракта). Отдельно расширен [BUG-537](bugs/BUG-537-OPEN.md) новым шестым свойством: `aspect-ratio` пропущен в whitelist `computed_style_to_map`, изолировано на блочном элементе, чтобы исключить BUG-488/443/555",
+       "bugs": [
+        "BUG-602",
+        "BUG-603",
+        "BUG-604"
+       ]
       },
       {
        "id": "WPT-VENDOR-html-misc",
@@ -8548,6 +8553,27 @@
    "status": "open",
    "title": "`DOMTokenList` constructor not exposed on `window` -- `instanceof DOMTokenList` throws `ReferenceError` even though the underlying object (`classList`/`focusGro…",
    "component": "js (`crates/js/src/dom.rs`, `DOMTokenList (classList)` section ~line 1191)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-602": {
+   "status": "open",
+   "title": "Legacy `align` content attribute has no IDL reflection anywhere (`el.align` is `undefined` on any element -- `legend`/`table`/`img`/`hr`/etc.); only `getAttribu…",
+   "component": "js (`crates/js/src/dom.rs` — IDL reflection table from BUG-383)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-603": {
+   "status": "open",
+   "title": "Two defects: (1) `bgcolor` presentational hint only applies from the initial HTML parse, never re-applied on a later `setAttribute` (confirmed live: static `bgc…",
+   "component": "layout (`crates/engine/layout/src/style.rs::apply_bgcolor_presentational_hint` + attribute-mutation restyle invalidation)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-604": {
+   "status": "open",
+   "title": "No UA (user-agent) shadow tree for `<video>`/`<audio>`/`<select>`/`<details>` -- light-DOM children appended to `<video>`/`<audio>` render directly instead of b…",
+   "component": "layout/dom (no internal shadow-root construction for these 4 interfaces)",
    "date": null,
    "debtor": false
   }
