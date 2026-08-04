@@ -317,6 +317,10 @@ pub struct V8JsRuntime {
     pending_nav_intercepted: Arc<Mutex<Vec<(bool, bool)>>>,
     /// Fullscreen requests emitted by `element.requestFullscreen()` / `document.exitFullscreen()`.
     fullscreen_requests: Arc<Mutex<Vec<crate::dom::FullscreenRequest>>>,
+    /// CSS View Transitions L1 events emitted by `document.startViewTransition` (Ph3
+    /// V8 migration S12b-G5). Mirrors [`crate::QuickJsRuntime`]'s field of the same
+    /// name; drained by the shell in `about_to_wait` via `take_view_transition_events()`.
+    view_transition_events: Arc<Mutex<Vec<crate::view_transitions::ViewTransitionEvent>>>,
     /// Print requests emitted by `window.print()`.
     print_requests: Arc<Mutex<Vec<crate::dom::PrintRequest>>>,
     /// Focus requests queued by JS via `_lumen_request_focus` / `_lumen_request_blur`.
@@ -403,6 +407,7 @@ impl V8JsRuntime {
             pending_navigation_updates: Arc::new(Mutex::new(Vec::new())),
             pending_nav_intercepted: Arc::new(Mutex::new(Vec::new())),
             fullscreen_requests: Arc::new(Mutex::new(Vec::new())),
+            view_transition_events: Arc::new(Mutex::new(Vec::new())),
             print_requests: Arc::new(Mutex::new(Vec::new())),
             pending_focus_requests: Arc::new(Mutex::new(Vec::new())),
             pointer_capture_nid: Arc::new(Mutex::new(None)),
@@ -730,6 +735,14 @@ impl V8JsRuntime {
     /// Mirrors [`crate::QuickJsRuntime::take_fullscreen_requests`].
     pub fn take_fullscreen_requests(&self) -> Vec<FullscreenRequest> {
         std::mem::take(&mut *self.fullscreen_requests.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// Drain CSS View Transition events queued by `document.startViewTransition()` natives.
+    /// Mirrors [`crate::QuickJsRuntime::take_view_transition_events`].
+    pub fn take_view_transition_events(&self) -> Vec<crate::view_transitions::ViewTransitionEvent> {
+        std::mem::take(
+            &mut *self.view_transition_events.lock().unwrap_or_else(|e| e.into_inner()),
+        )
     }
 
     /// Drain JS dialog focus requests queued by `_lumen_request_focus`/`_lumen_request_blur`.
@@ -4202,6 +4215,7 @@ impl V8JsRuntime {
         install_v8!(compute_pressure::install_compute_pressure_bindings_v8);
         install_v8!(contacts::install_contacts_manager_v8);
         install_v8!(content_index::install_content_index_api_v8);
+        install_v8!(cookie_store::install_cookie_store_v8);
         install_v8!(credentials::install_credentials_bindings_v8);
         install_v8!(csp::install_csp_bindings_v8);
         install_v8!(css_properties_values_api::install_css_properties_values_api_v8);
@@ -4286,6 +4300,15 @@ impl V8JsRuntime {
         install_v8!(url_pattern::install_url_pattern_api_v8);
         install_v8!(video_bindings::install_video_bindings_v8);
         install_v8!(video_pip::install_video_pip_api_v8);
+        // CSS View Transitions L1 (BUG-545): takes `view_transition_events` by ref since
+        // the native closures need the runtime-instance Arc, not just `&self` (mirrors the
+        // `geolocation`/`pointer_capture` extra-arg calls above, not the plain `install_v8!` macro).
+        if let Err(e) = crate::view_transitions::install_view_transition_bindings_v8(
+            self,
+            Arc::clone(&self.view_transition_events),
+        ) {
+            eprintln!("v8: view_transitions::install_view_transition_bindings_v8 failed: {e}");
+        }
         install_v8!(virtual_keyboard::install_virtual_keyboard_bindings_v8);
         install_v8!(wake_lock::install_wake_lock_bindings_v8);
         install_v8!(web_audio::install_web_audio_api_v8);
