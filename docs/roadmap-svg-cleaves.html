@@ -57,8 +57,8 @@
 {
  "generated": "2026-08-04",
  "counts": {
-  "open": 228,
-  "fixed": 313,
+  "open": 227,
+  "fixed": 314,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -681,9 +681,9 @@
       {
        "id": "P3-v8-s12b",
        "title": "V8 S12b: rquickjs removal",
-       "status": "active",
+       "status": "done",
        "size": "XL",
-       "note": "Удалить rquickjs целиком: QuickJsRuntime/QuickPersistentJs, install_* дубли в crates/js/src (119 файлов). Проскоуплено 2026-07-14 (ветка p1-v8-s12b, только доксинк, кода не менялось): 2336 #[test] завязаны на удаление (1047 в dom.rs::mod tests, ~1250 в bare-rquickjs::Context тестах уже портированных на v8 модулей S5-S10) — каждый файл требует портировать/обосновать свои тесты перед удалением. Реальный размер — десятки под-срезов, не один сеанс. План разбивки — docs/tasks/ph3-v8-migration.md, раздел Findings log 'S12b — scoping only'. __lum_args__ (lib.rs:2126), quickjs Cargo-фича из shell/Cargo.toml, rquickjs из crates/js/Cargo.toml; упростить `any(quickjs,v8)`-гейты обратно в безусловные. DoD: rquickjs отсутствует в Cargo.lock",
+       "note": "ЗАКРЫТ 2026-08-04. Удалить rquickjs целиком: QuickJsRuntime/QuickPersistentJs, install_* дубли в crates/js/src (119 файлов). Проскоуплено 2026-07-14 (ветка p1-v8-s12b, только доксинк, кода не менялось): 2336 #[test] завязаны на удаление (1047 в dom.rs::mod tests, ~1250 в bare-rquickjs::Context тестах уже портированных на v8 модулей S5-S10) — каждый файл требовал портировать/обосновать свои тесты перед удалением. Разбито на десятки под-срезов (S12b-1..24, Asnos1-2, G1-G6, F1-F4) — план в docs/tasks/ph3-v8-migration.md. __lum_args__ (lib.rs:2126), quickjs Cargo-фича из shell/Cargo.toml, rquickjs из crates/js/Cargo.toml удалены; `any(quickjs,v8)`-гейты упрощены обратно в безусловные (F1). DoD выполнен: rquickjs отсутствует в Cargo.lock (S12b-F4)",
        "tasks": [
         {
          "id": "P3-v8-s12b-1",
@@ -1035,10 +1035,10 @@
         },
         {
          "id": "P3-v8-s12b-25",
-         "title": "V8 S12b-25: финальная чистка Cargo.toml/фич/доков",
-         "status": "planned",
+         "title": "V8 S12b-25: финальная чистка Cargo.toml/фич/доков (поглощена F1-F4)",
+         "status": "done",
          "size": "M",
-         "note": "Финальный срез, строго после остальных S12b-* (включая S12b-22..24) и после того как все ~119 файлов `crates/js/src` без rquickjs. Убрать: `rquickjs`-зависимость из `crates/js/Cargo.toml` (сейчас жёсткая, не optional — в этом крейте нет даже фичи `quickjs`), фичу `quickjs` из `crates/shell/Cargo.toml` (в `crates/driver/Cargo.toml` её уже нет — снята в S12b-22), `QuickJsRuntime`/`QuickPersistentJs`/`__lum_args__` (`lib.rs:188,2098,2126`), конструирования `QuickPersistentJs` в `main.rs` (`:3035-3040`, `:7195`, `:18888`); упростить ~84 гейта `any(feature=\"quickjs\", feature=\"v8\")` в `main.rs` обратно в безусловный код. Доксинк: закрыть ADR-018/`docs/tasks/ph3-v8-migration.md`, обновить CLAUDE.md (убрать формулировку про rollback-путь и «Phase 2 delivered: QuickJS»), CAPABILITIES.md, `subsystems/js.md`/`shell.md`/`driver.md`, ROADMAP.md. DoD: `rquickjs` отсутствует в Cargo.lock"
+         "note": "Поглощён срезами S12b-F1..F4 (2026-08-04), заведёнными позже как более мелкая разбивка того же финального скоупа: F1 снял фичу `quickjs` из `crates/shell/Cargo.toml` и `QuickPersistentJs`-конструирования в `main.rs`; F2 удалил `QuickJsRuntime`/`QuickPersistentJs`/`__lum_args__` из `lib.rs`; F3 удалил `install_primitives`/`use rquickjs` из `dom.rs`; F4 убрал `rquickjs`-зависимость из `crates/js/Cargo.toml` и синхронизировал ADR-018/CAPABILITIES.md/subsystems/js.md/CLAUDE.md. DoD «rquickjs отсутствует в Cargo.lock» выполнен (см. S12b-F4). Эта строка — дубликат более старого плана, отдельной работы не потребовалось"
         }
        ]
       },
@@ -8130,10 +8130,10 @@
    "debtor": false
   },
   "BUG-547": {
-   "status": "open",
+   "status": "fixed",
    "title": "`navigator.storageBuckets` does not exist under the default V8 build (QuickJS-only install) — `CAPABILITIES.md`'s Storage bullet spells out the full API surface…",
    "component": "js (`crates/js/src/storage_buckets.rs`)",
-   "date": null,
+   "date": "2026-08-04",
    "debtor": false
   },
   "BUG-548": {

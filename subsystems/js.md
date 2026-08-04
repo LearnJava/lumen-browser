@@ -1,13 +1,13 @@
 # lumen-js
 
 Crate providing the `JsRuntime` implementation. **V8 (`rusty_v8` 150.1.0) is the ONLY
-shell-reachable engine since S12b-F1 (2026-08-04) removed the `quickjs` shell feature.**
+engine since S12b-F1 (2026-08-04) removed the `quickjs` shell feature.**
 `QuickJsRuntime` itself was deleted in S12b-F2 (2026-08-04, same day); `dom.rs::install_primitives`
-(2736 lines, the rquickjs native-registration entry point) was deleted in S12b-F3 (2026-08-04) —
-`rquickjs` is now only a `Cargo.toml` dependency with no call site in `lumen-js`, removed outright
-in the last remaining slice, F4 (`docs/tasks/ph3-v8-migration.md`). Historical entries below
-predating F1/F2 still describe `QuickJsRuntime`/`--features quickjs` as they were at the time —
-read dates.
+(2736 lines, the rquickjs native-registration entry point) was deleted in S12b-F3 (2026-08-04);
+`rquickjs`/`rquickjs-core`/`rquickjs-sys` were removed from `Cargo.toml`/`Cargo.lock` outright in
+the last slice, S12b-F4 (2026-08-04) — the crate now has zero QuickJS code or dependency. Historical
+entries below predating F1/F2 still describe `QuickJsRuntime`/`--features quickjs` as they were at
+the time — read dates.
 
 > **Coverage note (2026-07-02):** the code wires **~90 Web-API modules**; this file curates
 > only the highlights with implementation detail. For the full shipped-API list use

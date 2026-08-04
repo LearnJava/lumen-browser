@@ -3,8 +3,9 @@
 ## Status
 
 Superseded by [ADR-018](ADR-018-v8-cutover.md) (2026-07-14) — V8 is now the default JS engine
-(`lumen-shell`'s `v8` feature). `quickjs` remains available as an explicit rollback feature until the
-`rquickjs` implementation is removed entirely (S12b, `docs/tasks/ph3-v8-migration.md`).
+(`lumen-shell`'s `v8` feature). The `quickjs` rollback feature and the `rquickjs` implementation were
+removed entirely by S12b (`docs/tasks/ph3-v8-migration.md`, closed 2026-08-04) — V8 is now the only
+JS engine.
 
 ## Date
 
