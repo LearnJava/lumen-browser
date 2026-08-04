@@ -7351,6 +7351,10 @@ pub fn compute_style(
     if let Some(fw) = ua_font_weight(doc, node) {
         style.font_weight = fw;
     }
+    // UA stylesheet: <pre>/<code>/<kbd>/<samp>/<tt> → font-family: monospace.
+    if let Some(fam) = ua_font_family(doc, node) {
+        style.font_family = fam;
+    }
     // UA stylesheet: text-decoration для <del>/<s> (line-through),
     // <ins>/<u>/<a href> (underline). HTML5 §15.3.7.
     apply_ua_text_decoration(doc, node, &mut style);
@@ -10731,6 +10735,27 @@ fn ua_font_style(doc: &Document, node: NodeId) -> Option<FontStyle> {
     };
     match name.local.as_str() {
         "em" | "i" | "cite" | "dfn" | "address" | "var" => Some(FontStyle::Italic),
+        _ => None,
+    }
+}
+
+/// Эмулирует UA stylesheet для `font-family`: HTML §15.3.2 задаёт
+/// `font-family: monospace` для `<pre>` / `<code>` / `<kbd>` / `<samp>` /
+/// `<tt>` (плюс исторические `<listing>` / `<xmp>` / `<plaintext>`,
+/// которые уже получают `white-space: pre` рядом).
+///
+/// Возвращает `Some(["monospace"])` для них, `None` для остальных
+/// (= наследовать как обычно). Generic-имя резолвится в конкретный системный
+/// шрифт на этапе рендера/измерения (BUG-128); до этого моноширинные элементы
+/// рисовались пропорциональным Inter-ом.
+fn ua_font_family(doc: &Document, node: NodeId) -> Option<Vec<String>> {
+    let NodeData::Element { name, .. } = &doc.get(node).data else {
+        return None;
+    };
+    match name.local.as_str() {
+        "pre" | "code" | "kbd" | "samp" | "tt" | "listing" | "xmp" | "plaintext" => {
+            Some(vec!["monospace".to_string()])
+        }
         _ => None,
     }
 }
@@ -29532,6 +29557,42 @@ mod tests {
             }
         };
         compute_style(&doc, node, &sheet, &root_style, Size::new(800.0, 600.0), false)
+    }
+
+    // ── BUG-128: UA `font-family: monospace` для <pre>/<code>/… ───────────
+
+    /// Computes the style of the first child of `<body>` in `html`.
+    fn first_child_style(html: &str, css: &str) -> ComputedStyle {
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root_style = ComputedStyle::root();
+        let body = doc.body().unwrap();
+        let node = doc.get(body).children[0];
+        compute_style(&doc, node, &sheet, &root_style, Size::new(800.0, 600.0), false)
+    }
+
+    #[test]
+    fn ua_monospace_for_pre_and_code() {
+        for tag in ["pre", "code", "kbd", "samp", "tt"] {
+            let s = first_child_style(&format!("<{tag}>x</{tag}>"), "");
+            assert_eq!(
+                s.font_family,
+                vec!["monospace".to_string()],
+                "<{tag}> должен получать UA font-family: monospace"
+            );
+        }
+    }
+
+    #[test]
+    fn ua_monospace_does_not_leak_to_other_elements() {
+        let s = first_child_style("<p>x</p>", "");
+        assert!(s.font_family.is_empty(), "<p> не должен получать UA font-family");
+    }
+
+    #[test]
+    fn author_font_family_overrides_ua_monospace() {
+        let s = first_child_style("<code>x</code>", "code { font-family: Arial; }");
+        assert_eq!(s.font_family, vec!["Arial".to_string()]);
     }
 
     // ── BUG-114: `font` shorthand expands font-size/line-height ───────────

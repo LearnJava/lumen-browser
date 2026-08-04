@@ -5390,6 +5390,8 @@ fn parse_and_layout(
     // url()-семьи добавятся позже через FontLoaded + relayout_with_web_fonts.
     let mut measurer = lumen_paint::MultiFontMeasurer::new(&font)
         .map_err(|e| format!("ошибка метрик шрифта: {e}"))?;
+    // BUG-128: системные face-ы generic-семейств — те же, что выберет рендер.
+    measurer.set_generic_faces(generic_font_faces());
     for rule in &sheet.font_faces {
         if !rule.family.is_empty()
             && let Some(bytes) = font_registry.face_bytes_for_family(&rule.family)
@@ -6102,6 +6104,49 @@ fn relayout_page(
     compute_layout(&src.document, &src.stylesheet, viewport, hp, dark_mode, web_fonts)
 }
 
+/// Процесс-глобальные метрики системных шрифтов для CSS generic-семейств
+/// (BUG-128).
+///
+/// Строится один раз поверх общего системного индекса
+/// ([`lumen_font::shared_system_index`]) и переиспользуется всеми
+/// пересборками измерителя: сам скан директорий шрифтов страница делает в
+/// любом случае (рендер резолвит face-ы через тот же индекс), а чтение и
+/// парсинг 6 выбранных файлов не должно повторяться на каждый relayout.
+fn generic_font_faces() -> Arc<lumen_paint::GenericFaceSet> {
+    static SHARED: std::sync::OnceLock<Arc<lumen_paint::GenericFaceSet>> =
+        std::sync::OnceLock::new();
+    SHARED
+        .get_or_init(|| {
+            Arc::new(lumen_paint::GenericFaceSet::from_provider(
+                lumen_font::shared_system_index().as_ref(),
+            ))
+        })
+        .clone()
+}
+
+/// Измеритель для страницы: bundled Inter + @font-face-семьи + системные
+/// face-ы generic-семейств.
+///
+/// Единая точка сборки для всех layout-путей (полный / инкрементальный /
+/// restyle) — иначе generic-семейства меряются по-разному в зависимости от
+/// того, есть ли на странице web-шрифты.
+fn page_measurer(
+    font: &lumen_font::Font<'static>,
+    web_fonts: &[LoadedWebFont],
+) -> lumen_paint::MultiFontMeasurer {
+    let mut measurer = lumen_paint::MultiFontMeasurer::new(font)
+        .expect("MultiFontMeasurer из bundled Inter");
+    for wf in web_fonts {
+        measurer.register_family_with_ranges(
+            &wf.family,
+            wf.bytes.clone(),
+            wf.unicode_range.clone(),
+        );
+    }
+    measurer.set_generic_faces(generic_font_faces());
+    measurer
+}
+
 /// Ядро style+layout+display-list по immutable-снапшоту документа и стилей.
 ///
 /// Вынесено из [`relayout_page`], чтобы одну и ту же работу можно было вызвать и
@@ -6120,24 +6165,9 @@ fn compute_layout(
     web_fonts: &[LoadedWebFont],
 ) -> (DisplayList, lumen_layout::LayoutBox) {
     let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
-    if web_fonts.is_empty() {
-        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
-        let doc = document.lock().unwrap();
-        let layout = lumen_layout::layout_measured_hyp(&doc, stylesheet, viewport, &measurer, hp, dark_mode);
-        drop(doc);
-        let dl = paint_ordered(&layout);
-        return (dl, layout);
-    }
-    // PH3-19: build MultiFontMeasurer from accumulated web fonts for FOUT relayout.
-    let mut measurer = lumen_paint::MultiFontMeasurer::new(&font)
-        .expect("MultiFontMeasurer из bundled Inter");
-    for wf in web_fonts {
-        measurer.register_family_with_ranges(
-            &wf.family,
-            wf.bytes.clone(),
-            wf.unicode_range.clone(),
-        );
-    }
+    // PH3-19: измеритель включает накопленные web-шрифты (FOUT relayout);
+    // BUG-128: и системные face-ы generic-семейств.
+    let measurer = page_measurer(&font, web_fonts);
     let doc = document.lock().unwrap();
     let layout = lumen_layout::layout_measured_hyp(&doc, stylesheet, viewport, &measurer, hp, dark_mode);
     drop(doc);
@@ -6176,25 +6206,7 @@ fn compute_layout_incremental(
     prev: &lumen_layout::LayoutBox,
 ) -> (DisplayList, lumen_layout::LayoutBox) {
     let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
-    if web_fonts.is_empty() {
-        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
-        let doc = document.lock().unwrap();
-        let layout = lumen_layout::layout_mutation_incremental(
-            &doc, stylesheet, viewport, &measurer, hp, dark_mode, prev,
-        );
-        drop(doc);
-        let dl = paint_ordered(&layout);
-        return (dl, layout);
-    }
-    let mut measurer = lumen_paint::MultiFontMeasurer::new(&font)
-        .expect("MultiFontMeasurer из bundled Inter");
-    for wf in web_fonts {
-        measurer.register_family_with_ranges(
-            &wf.family,
-            wf.bytes.clone(),
-            wf.unicode_range.clone(),
-        );
-    }
+    let measurer = page_measurer(&font, web_fonts);
     let doc = document.lock().unwrap();
     let layout = lumen_layout::layout_mutation_incremental(
         &doc, stylesheet, viewport, &measurer, hp, dark_mode, prev,
@@ -6247,25 +6259,7 @@ fn compute_layout_incremental_restyle(
     delta: lumen_layout::counters::RestyleDelta<'_>,
 ) -> (DisplayList, lumen_layout::LayoutBox, lumen_layout::CounterMap) {
     let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
-    if web_fonts.is_empty() {
-        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
-        let doc = document.lock().unwrap();
-        let (layout, counters) = lumen_layout::box_tree::layout_mutation_incremental_restyle(
-            &doc, stylesheet, viewport, &measurer, hp, dark_mode, prev, delta,
-        );
-        drop(doc);
-        let dl = paint_ordered(&layout);
-        return (dl, layout, counters);
-    }
-    let mut measurer = lumen_paint::MultiFontMeasurer::new(&font)
-        .expect("MultiFontMeasurer из bundled Inter");
-    for wf in web_fonts {
-        measurer.register_family_with_ranges(
-            &wf.family,
-            wf.bytes.clone(),
-            wf.unicode_range.clone(),
-        );
-    }
+    let measurer = page_measurer(&font, web_fonts);
     let doc = document.lock().unwrap();
     let (layout, counters) = lumen_layout::box_tree::layout_mutation_incremental_restyle(
         &doc, stylesheet, viewport, &measurer, hp, dark_mode, prev, delta,

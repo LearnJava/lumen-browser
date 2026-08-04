@@ -433,6 +433,7 @@ impl<'a> TextMeasurer for FontMeasurer<'a> {
 // ── MultiFontMeasurer ────────────────────────────────────────────────────────
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Cached variable-font data for HVAR advance width variation.
 ///
@@ -557,6 +558,82 @@ impl OwnedFontMetrics {
     }
 }
 
+/// Метрики системных шрифтов, подобранных под CSS generic-семейства
+/// (`serif` / `sans-serif` / `monospace` / `cursive` / `fantasy` /
+/// `system-ui`, CSS Fonts L4 §3.1).
+///
+/// BUG-128: рендер резолвит generic-имена в реальные системные face-ы
+/// ([`lumen_core::ext::FontProvider::pick_generic_face`]), а layout мерил
+/// их bundled-Inter-ом — ширины строк не совпадали с нарисованными глифами.
+/// Этот набор даёт измерителю те же метрики, что видит рендер.
+///
+/// Строится ОДИН раз (скан системного индекса + чтение файлов шрифтов —
+/// десятки мегабайт I/O), затем шарится между пересборками
+/// [`MultiFontMeasurer`] через `Arc`: измеритель пересоздаётся на каждом
+/// relayout, а этот набор — нет.
+pub struct GenericFaceSet {
+    /// `(generic-имя, метрики выбранного face-а)`. Generic-и, для которых на
+    /// машине не нашлось ни одного кандидата, в набор не попадают.
+    faces: Vec<(&'static str, OwnedFontMetrics)>,
+}
+
+impl GenericFaceSet {
+    /// Резолвит все generic-семейства через провайдер и парсит метрики
+    /// выбранных face-ов.
+    ///
+    /// Берётся regular-начертание (weight 400, normal, stretch 100):
+    /// [`TextMeasurer`] не получает weight/style, поэтому измеритель
+    /// принципиально одно-начертательный (то же и для @font-face-семей).
+    /// Битые/нечитаемые файлы тихо пропускаются — generic просто останется
+    /// нерезолвленным и упадёт на bundled Inter, как до BUG-128.
+    pub fn from_provider(provider: &dyn lumen_core::ext::FontProvider) -> Self {
+        use lumen_core::ext::{FontStyle as CssFontStyle, GENERIC_FAMILIES, NORMAL_STRETCH_PERCENT};
+        let mut faces = Vec::new();
+        for generic in GENERIC_FAMILIES {
+            let Some(rec) = provider.pick_generic_face(
+                generic,
+                400,
+                CssFontStyle::Normal,
+                NORMAL_STRETCH_PERCENT,
+            ) else {
+                continue;
+            };
+            let bytes = match provider.read_face_bytes(&rec.path) {
+                Some(mem) => mem.to_vec(),
+                None => match std::fs::read(&rec.path) {
+                    Ok(b) => b,
+                    Err(_) => continue,
+                },
+            };
+            if let Ok(metrics) = OwnedFontMetrics::from_bytes(&bytes) {
+                faces.push((generic, metrics));
+            }
+        }
+        Self { faces }
+    }
+
+    /// Пустой набор — для тестов и путей без системного провайдера
+    /// (детерминированный CPU-рендер, headless-драйвер).
+    pub fn empty() -> Self {
+        Self { faces: Vec::new() }
+    }
+
+    /// Сколько generic-семейств удалось резолвить. 0 — на машине не нашлось
+    /// ни одного кандидата (или провайдер пуст).
+    pub fn resolved_count(&self) -> usize {
+        self.faces.len()
+    }
+
+    /// Метрики face-а для generic-имени; `None` — имя не generic либо не
+    /// резолвилось.
+    fn metrics(&self, family: &str) -> Option<&OwnedFontMetrics> {
+        self.faces
+            .iter()
+            .find(|(name, _)| family.eq_ignore_ascii_case(name))
+            .map(|(_, m)| m)
+    }
+}
+
 /// Один @font-face face-слот с опциональным `unicode-range` ограничением.
 ///
 /// CSS Fonts L4 §5.1: несколько @font-face с одним family name, но разными
@@ -584,6 +661,9 @@ pub struct MultiFontMeasurer {
     /// Загруженные @font-face семьи: ключ = lowercase family name, значение = список face-слотов.
     /// Один family может иметь несколько слотов с разными unicode-range диапазонами.
     faces: HashMap<String, Vec<FontFaceSlot>>,
+    /// Системные face-ы для CSS generic-семейств (BUG-128). `None` — путь без
+    /// системного провайдера: generic-и меряются bundled Inter-ом.
+    generics: Option<Arc<GenericFaceSet>>,
 }
 
 impl MultiFontMeasurer {
@@ -592,7 +672,23 @@ impl MultiFontMeasurer {
         Ok(Self {
             fallback: FontMeasurer::new(fallback_font)?,
             faces: HashMap::new(),
+            generics: None,
         })
+    }
+
+    /// Подключает системные face-ы generic-семейств (BUG-128).
+    ///
+    /// Набор строится один раз на процесс и передаётся сюда `Arc`-ом при
+    /// каждой пересборке измерителя — парсинг метрик не повторяется.
+    /// Без вызова generic-имена меряются bundled Inter-ом (поведение до
+    /// BUG-128).
+    pub fn set_generic_faces(&mut self, generics: Arc<GenericFaceSet>) {
+        self.generics = Some(generics);
+    }
+
+    /// Метрики generic-семейства, если оно резолвлено системным набором.
+    fn generic_metrics(&self, family: &str) -> Option<&OwnedFontMetrics> {
+        self.generics.as_ref()?.metrics(family)
     }
 
     /// Регистрирует @font-face шрифт под именем `family` без unicode-range ограничений.
@@ -699,6 +795,13 @@ impl TextMeasurer for MultiFontMeasurer {
                     }
                 }
             }
+            // BUG-128: generic-имя — мерим системным face-ом, который выберет
+            // рендер, а не bundled Inter-ом.
+            if let Some(m) = self.generic_metrics(family)
+                && let Some(w) = m.try_char_width(ch, font_size_px)
+            {
+                return w;
+            }
         }
         self.fallback.char_width(ch, font_size_px)
     }
@@ -721,6 +824,12 @@ impl TextMeasurer for MultiFontMeasurer {
                         return w;
                     }
                 }
+            }
+            // BUG-128: см. `char_width_with_families`.
+            if let Some(m) = self.generic_metrics(family)
+                && let Some(w) = m.try_char_width_varied(ch, font_size_px, axes)
+            {
+                return w;
             }
         }
         self.fallback.char_width(ch, font_size_px)
@@ -745,6 +854,74 @@ mod multi_font_tests {
     use lumen_layout::TextMeasurer;
 
     static INTER: &[u8] = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
+
+    /// Путь к bundled JetBrains Mono — «системный» моноширинный шрифт для
+    /// generic-тестов (метрики заведомо отличаются от пропорционального Inter).
+    const MONO_PATH: &str =
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../../../assets/fonts/JetBrainsMono-Regular.ttf");
+
+    /// Провайдер, у которого «установлен» ровно первый платформенный кандидат
+    /// на `monospace`, и указывает он на bundled JetBrains Mono.
+    struct MonoOnlyProvider;
+
+    impl lumen_core::ext::FontProvider for MonoOnlyProvider {
+        fn lookup_family(&self, family: &str) -> Vec<std::path::PathBuf> {
+            let first = lumen_core::ext::generic_family_candidates("monospace")[0];
+            if family.eq_ignore_ascii_case(first) {
+                vec![std::path::PathBuf::from(MONO_PATH)]
+            } else {
+                Vec::new()
+            }
+        }
+        fn list_families(&self) -> Vec<String> {
+            vec![lumen_core::ext::generic_family_candidates("monospace")[0].to_string()]
+        }
+    }
+
+    #[test]
+    fn generic_monospace_measured_with_system_face_not_inter() {
+        let font = inter_font();
+        let generics = Arc::new(GenericFaceSet::from_provider(&MonoOnlyProvider));
+        assert_eq!(generics.resolved_count(), 1, "резолвиться должен только monospace");
+
+        let mut m = MultiFontMeasurer::new(&font).unwrap();
+        let families = vec!["monospace".to_string()];
+        // До подключения набора generic мерится bundled Inter-ом —
+        // пропорциональным, значит 'i' уже 'W'.
+        let inter_i = m.char_width_with_families('i', 16.0, &families);
+        let inter_w = m.char_width_with_families('W', 16.0, &families);
+        assert!(inter_i < inter_w, "Inter пропорционален: {inter_i} vs {inter_w}");
+
+        m.set_generic_faces(generics);
+        let mono_i = m.char_width_with_families('i', 16.0, &families);
+        let mono_w = m.char_width_with_families('W', 16.0, &families);
+        assert!(
+            (mono_i - mono_w).abs() < 0.01,
+            "system monospace face: advance должен совпадать, {mono_i} vs {mono_w}"
+        );
+    }
+
+    #[test]
+    fn unresolved_generic_falls_back_to_inter() {
+        let font = inter_font();
+        let mut m = MultiFontMeasurer::new(&font).unwrap();
+        let families = vec!["serif".to_string()];
+        let before = m.char_width_with_families('W', 16.0, &families);
+        // MonoOnlyProvider не знает ни одного serif-кандидата → generic
+        // остаётся нерезолвленным, измеритель обязан вести себя как раньше.
+        m.set_generic_faces(Arc::new(GenericFaceSet::from_provider(&MonoOnlyProvider)));
+        assert!((m.char_width_with_families('W', 16.0, &families) - before).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn empty_generic_set_keeps_inter_metrics() {
+        let font = inter_font();
+        let mut m = MultiFontMeasurer::new(&font).unwrap();
+        let families = vec!["monospace".to_string()];
+        let before = m.char_width_with_families('W', 16.0, &families);
+        m.set_generic_faces(Arc::new(GenericFaceSet::empty()));
+        assert!((m.char_width_with_families('W', 16.0, &families) - before).abs() < f32::EPSILON);
+    }
 
     fn inter_font() -> lumen_font::Font<'static> {
         lumen_font::Font::parse(INTER).expect("Inter TTF должен парситься")

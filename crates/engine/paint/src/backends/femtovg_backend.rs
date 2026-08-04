@@ -62,6 +62,30 @@ use crate::display_list::{BlendMode, CornerRadii, DisplayCommand, ResolvedClipSh
 use crate::gradient_math::{conic_sample_t, sample_gradient_color};
 use crate::matrix_util::mat4_to_2d_affine;
 
+// ─── Font family resolution ──────────────────────────────────────────────────
+
+/// Резолвит одну CSS-family в системный face.
+///
+/// Generic-имя (`serif`/`sans-serif`/`monospace`/`cursive`/`fantasy`/
+/// `system-ui`) идёт через таблицу платформенных кандидатов (BUG-128),
+/// конкретное — напрямую через `pick_face`. Близнец
+/// `Renderer::pick_family_face` в wgpu-бэкенде: оба текстовых пути обязаны
+/// выбирать один и тот же face, иначе femtovg и wgpu рисуют страницу разными
+/// шрифтами.
+fn pick_family_face(
+    provider: &Arc<dyn FontProvider>,
+    family: &str,
+    weight: u16,
+    style: lumen_core::ext::FontStyle,
+    stretch: u16,
+) -> Option<lumen_core::ext::FaceRecord> {
+    if lumen_core::ext::is_generic_family(family) {
+        provider.pick_generic_face(family, weight, style, stretch)
+    } else {
+        provider.pick_face(family, weight, style, stretch)
+    }
+}
+
 // ─── Color conversion ────────────────────────────────────────────────────────
 
 /// Конвертирует CSS `Color` (u8 каналы 0-255) в femtovg `Color` (f32 0-1).
@@ -2780,7 +2804,9 @@ impl FemtovgBackend {
     /// resolve to the DS-4 chrome faces without touching the provider) →
     /// bundled Inter → curated system fallbacks (emoji/CJK/RTL/Indic/Thai).
     /// Generic keywords (serif/sans-serif/monospace/cursive/fantasy/system-ui)
-    /// are skipped — they fall through to Inter which covers Latin well enough.
+    /// resolve through the platform candidate table (BUG-128,
+    /// [`pick_family_face`]); when no candidate is installed they fall through
+    /// to Inter as before.
     /// An empty `families` list — every chrome `DrawText` call site, since
     /// chrome never resolves CSS font-family — defaults to bundled Golos Text.
     /// Returns at least `[inter_id]` when no provider is set.
@@ -2847,14 +2873,7 @@ impl FemtovgBackend {
                     _ => {}
                 }
                 let Some(provider) = provider.as_ref() else { continue };
-                let lc = fam.to_ascii_lowercase();
-                if matches!(
-                    lc.as_str(),
-                    "serif" | "sans-serif" | "monospace" | "cursive" | "fantasy" | "system-ui"
-                ) {
-                    continue;
-                }
-                if let Some(rec) = provider.pick_face(fam, weight, core_style, stretch)
+                if let Some(rec) = pick_family_face(provider, fam, weight, core_style, stretch)
                     && let Some(id) = self.load_font_by_path(&rec.path.clone(), provider)
                     && !ids.contains(&id)
                 {
@@ -3059,14 +3078,7 @@ impl FemtovgBackend {
             FontStyle::Oblique => lumen_core::ext::FontStyle::Oblique,
         };
         for fam in families {
-            let lc = fam.to_ascii_lowercase();
-            if matches!(
-                lc.as_str(),
-                "serif" | "sans-serif" | "monospace" | "cursive" | "fantasy" | "system-ui"
-            ) {
-                continue;
-            }
-            let Some(rec) = provider.pick_face(fam, weight, core_style, stretch) else {
+            let Some(rec) = pick_family_face(&provider, fam, weight, core_style, stretch) else {
                 continue;
             };
             let Some(bytes) = provider
