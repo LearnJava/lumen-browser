@@ -3038,9 +3038,9 @@
       {
        "id": "WPT-VENDOR-layout-instability",
        "title": "WPT: вендорить + прогнать категорию `layout-instability`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root layout-instability --recursive`, ~5:49) — **53/82 harness OK, 17/82 сабтестов**. API де-факто не работает: `PerformanceObserver.supportedEntryTypes`/JS-хук `_lumen_deliver_layout_shift` объявлены в шиме, но Rust-триггер `deliver_layout_shift` (`crates/shell/src/main.rs`) помечен `#[allow(dead_code)]` и нигде не вызывается из реального layout/reflow — сдвиги никогда не долетают до наблюдателя (28 TIMEOUT на `ScoreWatcher`, ожидающем недостижимое событие); `window.LayoutShift` и запись `layoutShift`/`toJSON()` не реализованы вовсе (5 FAIL `assert_implements: Layout Instability is not supported`). Остальные 29 FAIL — известные маски: 23 BUG-384 (named access на Window, `target`/`sticky`/`multicol`/… не определены), 2 BUG-525 (`document.scrollingElement` отсутствует), 4 `test_driver.Actions` (экшен не реализован executor'ом, как и `send_keys` — см. CLAUDE.md). Новых багов не заведено — первый проход объявленного, но не подключённого к движку API"
       },
       {
        "id": "WPT-VENDOR-loading",
