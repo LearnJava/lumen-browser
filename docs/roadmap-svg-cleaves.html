@@ -55,14 +55,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-08-04",
+ "generated": "2026-08-05",
  "counts": {
-  "open": 270,
+  "open": 276,
   "fixed": 315,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 585,
+ "total_bugs": 591,
  "phases": [
   {
    "id": "P0",
@@ -2895,9 +2895,19 @@
       {
        "id": "WPT-VENDOR-inert",
        "title": "WPT: вендорить + прогнать категорию `inert`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root inert --recursive`, ~1:55) — **17/29 harness OK, 19/82 сабтестов**. Доминирующие маскеры — [BUG-384](bugs/BUG-384-OPEN.md) (именованный доступ на window) и [BUG-462](bugs/BUG-462-OPEN.md)/[BUG-574](bugs/BUG-574-OPEN.md) (`Node.contains` отсутствует, ломает клик вендоренного `testdriver.js`); 6 файлов дополнительно падают из-за невендоренного `/resources/testdriver-actions.js` (тот же класс гэпа, что и невендоренные `common/*.js`-хелперы в других категориях); iframe-тесты переподтверждают [BUG-480](bugs/BUG-480-OPEN.md). Шесть новых багов, все подтверждены живой пробой: [BUG-618](bugs/BUG-618-OPEN.md) (`.inert`-геттер закрыт устаревшей Phase-0-заглушкой, всегда `false` на разметочном атрибуте), [BUG-619](bugs/BUG-619-OPEN.md) (inert не распространяется с shadow-хоста на не-слотированных детей shadow root), [BUG-620](bugs/BUG-620-OPEN.md) (`Selection`/`Range.toString()` всегда `\"\"`, когда общий контейнер — Element, не Text; причина найдена в `range_text()`), [BUG-621](bugs/BUG-621-OPEN.md) (`label.focus()` не делегирует на `label.control`), [BUG-622](bugs/BUG-622-OPEN.md) (`document.defaultView` отсутствует), [BUG-623](bugs/BUG-623-OPEN.md) (легаси `window.find()` отсутствует, низкий приоритет)",
+       "bugs": [
+        "BUG-618",
+        "BUG-619",
+        "BUG-620",
+        "BUG-621",
+        "BUG-622",
+        "BUG-623 (переподтверждены BUG-384",
+        "BUG-462/574",
+        "BUG-480)"
+       ]
       },
       {
        "id": "WPT-VENDOR-input-device-capabilities",
@@ -8685,6 +8695,48 @@
    "component": "js (`crates/js/src/dom.rs` `getContext` factory ~line 3083, `crates/js/src/offscreen_canvas.rs::getContext` ~line 454)",
    "date": null,
    "debtor": false
+  },
+  "BUG-618": {
+   "status": "open",
+   "title": "`HTMLElement.prototype.inert` getter always reads `false` on freshly-parsed `<div inert>` markup -- a stale Phase-0 stub in `inert.rs` (private `_inert` instanc…",
+   "component": "js (`crates/js/src/inert.rs::install_inert_api_v8`, installed at `v8_runtime.rs:4307` after `WEB_API_SHIM`'s reflection entry `dom.rs:10729`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-619": {
+   "status": "open",
+   "title": "`inert` on a shadow host doesn't propagate to shadow-tree children that aren't slotted -- the ancestor-inert walk uses a plain light-DOM `_lumen_get_parent`, wh…",
+   "component": "js (`crates/js/src/dom.rs::_lumen_is_focusable`, ancestor walk `dom.rs:10415-10419`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-620": {
+   "status": "open",
+   "title": "`Selection`/`Range.prototype.toString()` always return `\"\"` when the shared start/end container is an Element rather than a Text node (e.g. after `selectAllChil…",
+   "component": "dom (`crates/engine/dom/src/lib.rs::range_text`, same-container fast path `lib.rs:3264-3271`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-621": {
+   "status": "open",
+   "title": "`<label>.focus()` doesn't delegate to `label.control` (the labeled form control) per HTML LS §6.6.3 -- `focus()` only checks `_lumen_is_focusable(nid)` on the l…",
+   "component": "js (`crates/js/src/dom.rs::HTMLElement.prototype.focus`, `dom.rs:10510-10520`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-622": {
+   "status": "open",
+   "title": "`document.defaultView` is missing entirely (`'defaultView' in document === false`, not a broken getter) -- should return `window`. Confirmed live. 1 file direct…",
+   "component": "js (`crates/js/src/dom.rs`, live `document` object literal ~line 6989)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-623": {
+   "status": "open",
+   "title": "`window.find()` (legacy, non-standard text-search API, supported by Firefox/Safari) missing entirely -- `typeof window.find === \"undefined\"`. Confirmed live. 2…",
+   "component": "js (`crates/js/src/dom.rs`, `window` object)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -9064,6 +9116,9 @@
   ],
   "js (`crates/js/src/dom.rs`, `contentEditable`/`isContentEditable`)": [
    "BUG-344"
+  ],
+  "js (`crates/js/src/dom.rs`, `window` object)": [
+   "BUG-623"
   ],
   "js (`crates/js/src/dom.rs`, нет `dataset` нигде в `WEB_API_SHIM`)": [
    "BUG-496"
