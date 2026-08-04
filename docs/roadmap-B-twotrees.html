@@ -3003,9 +3003,9 @@
       {
        "id": "WPT-VENDOR-js",
        "title": "WPT: вендорить + прогнать категорию `js`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root js --recursive`, ~38 с) — **25/26 harness OK, 110/130 сабтестов**. Все 13 unexpected объясняются известным: `HostEnsureCanAddPrivateElement.window.html`/`Promise-incumbent-global.sub.html` — [BUG-480](bugs/BUG-480-OPEN.md) (`<iframe>` без browsing context; `window.frames` — самоссылочная заглушка, `frames[0]` = `undefined`); 11 `builtins/weakrefs/*.optional.*` — невендоренный `/common/gc.js` + нестандартный `FinalizationRegistry.prototype.cleanupSome` (удалён из спеки до Stage 4, не реализован ни в одном движке включая V8). Новых багов нет"
       },
       {
        "id": "WPT-VENDOR-js-self-profiling",
