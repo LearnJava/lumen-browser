@@ -837,17 +837,6 @@ impl QuickJsRuntime {
                 eprintln!("Worker bindings init failed: {}", e);
             }
 
-            // Install Web Notifications API (W3C Notifications API L1) — after DOM so
-            // Event, Promise, and queueMicrotask are already defined.
-            // Default permission: "denied" (privacy-first; shell can override per origin).
-            if let Err(e) = notifications_bindings::install_notifications_bindings(
-                &ctx,
-                Arc::clone(&self.pending_notifications),
-                false,
-            ) {
-                eprintln!("Notifications bindings init failed: {}", e);
-            }
-
             // Install Background Fetch API stub (W3C Background Fetch L1, Phase 0) — after DOM
             // so Promise is available. Provides registration.backgroundFetch.fetch(id, reqs, opts)
             // / get(id) / getIds(). Phase 0: in-memory; shell _lumen_bg_fetch_* wiring is Phase 1.
@@ -924,12 +913,6 @@ impl QuickJsRuntime {
             // ondataavailable fires empty Blob on stop. BlobEvent class. isTypeSupported() → false.
             if let Err(e) = media_stream_recording::init_media_stream_recording(&ctx) {
                 eprintln!("MediaRecorder API init failed: {}", e);
-            }
-
-            // Install W3C Web Audio API Level 1 — AudioContext, AudioNode hierarchy, AudioParam.
-            // Phase 0: no DSP; graph operations in-memory only; decodeAudioData returns silent buffer.
-            if let Err(e) = web_audio::install_web_audio_api(&ctx) {
-                eprintln!("Web Audio API init failed: {}", e);
             }
 
             // Install W3C WebGPU API — navigator.gpu, GPUAdapter/Device/Buffer/Texture/Pipeline stubs.
