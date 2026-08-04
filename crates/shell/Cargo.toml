@@ -25,20 +25,11 @@ path = "src/main.rs"
 # fastest default combination: wgpu (probed) + V8.
 default = ["backend-femtovg", "backend-wgpu", "v8"]
 
-# Enable QuickJS JavaScript engine (rquickjs). Kept as an opt-in rollback path
-# after the S12 cutover (`docs/tasks/ph3-v8-migration.md`); full removal of the
-# rquickjs implementation is deferred to the follow-up S12b slice. Without
-# either `quickjs` or `v8` the shell falls back to `NullJsRuntime`, which
-# silently ignores all inline scripts.
-quickjs = ["dep:lumen-js", "lumen-js/webgpu"]
-
 # Enable the V8 JavaScript engine (rusty_v8), Ph3 V8 migration (docs/tasks/ph3-v8-migration.md).
-# Default engine as of the S12 cutover (ADR-018). `quickjs` and `v8` may both be
-# compiled in at once (both sets of natives build), but only one engine actually
-# runs: `quickjs` takes priority at compile time over `v8` via #[cfg] guards in
-# main.rs, so the (non-default) `quickjs` feature is only useful for A/B rollback
-# testing: `cargo run -p lumen-shell --features quickjs` (with default `v8` still on,
-# quickjs wins) or `--no-default-features --features backend-femtovg,backend-wgpu,quickjs`.
+# The only JS engine since the S12b-F1 slice removed the `quickjs` rollback
+# feature (rquickjs itself is deleted engine-flag-by-flag in the following
+# S12b-F2..F4 slices). Without `v8` the shell falls back to `NullJsRuntime`,
+# which silently ignores all inline scripts.
 v8 = ["dep:lumen-js", "lumen-js/v8-backend"]
 
 # femtovg rendering backend — the runtime fallback used only when the wgpu
