@@ -4004,6 +4004,58 @@ errors; default `--all-targets -- -D warnings` matches the pre-existing
 18-error baseline (`offscreen_canvas.rs`/`worker.rs`/`canvas2d.rs`
 dead-code, unrelated to this batch), zero new errors.
 
+### S12b-Asnos2: `audio_bindings` removal (2026-08-04, branch `p1-s12b-asnos2`)
+
+Second of the two G-triage removal-only entries. Unlike `webgl_bindings`,
+`audio_bindings.rs` (1120 lines, 29 tests, `install_audio_bindings` —
+`BaseAudioContext`/`AudioContext`/`OfflineAudioContext` plus the extra node
+types `ConvolverNode`/`WaveShaperNode`/`IIRFilterNode`/
+`ChannelSplitterNode`/`ChannelMergerNode`/`MediaStreamAudioSourceNode`/
+`MediaStreamAudioDestinationNode`/`AudioWorklet` stub/`AudioListener`, plus
+ADR-007 Layer 4 anti-fingerprint LCG noise) **was** called from
+`QuickJsRuntime::install_dom` (`lib.rs:715-718`) right up to this batch —
+[BUG-550](../../bugs/BUG-550-FIXED.md)'s "already dead code on both
+engines" premise turned out stale before this batch even started: `S12b-B19`
+(landed the same day BUG-550 was filed, `46dfe6774`, *after* BUG-550) removed
+the *other* shim, `web_audio::install_web_audio_api` (the rquickjs twin of
+the now V8-only `web_audio::install_web_audio_api_v8`), because *it* had a
+V8 port and qualified for the standard group-A removal procedure.
+`web_audio` had been installed *second* in `QuickJsRuntime::install_dom`,
+silently overwriting `globalThis.AudioContext` set by `audio_bindings` —
+that's the shadow BUG-550 documented. Once B19 deleted the shadower (not
+the shadowed), `audio_bindings` became the *sole* remaining `AudioContext`
+installer on the `--features quickjs` (no `v8-backend`) rollback build —
+live, not dead, there. Flagged to the user before touching code; user
+decision 2026-08-04: delete anyway per the original plan, accepting that
+the quickjs-only rollback build loses `AudioContext` entirely (no shim at
+all, on either the rich or the simple side) until `QuickJsRuntime` itself
+is deleted in `S12b-F2`, next in this same batch sequence. No V8 port ever
+existed for `audio_bindings` and none was written — `web_audio.rs` remains
+the sole `AudioContext` provider on the default (V8) build, unaffected by
+this deletion (it never had a dependency on `audio_bindings`, one-directional
+shadow only).
+
+Deleted `crates/js/src/audio_bindings.rs` outright, dropped `pub mod
+audio_bindings;` from `lib.rs`, and removed the `install_audio_bindings`
+call block (`lib.rs:715-718`, the `audio_seed`/`new_session_seed()` +
+`install_audio_bindings` two-liner plus its comment) from
+`QuickJsRuntime::install_dom`. `grep -rn "audio_bindings" crates/` after
+deletion: zero hits — no tests lived outside the module's own file (unlike
+the `pip_bindings`/`typed_om_api` trap), no doc-comment cross-references to
+fix (unlike `webgl_canvas.rs`'s intra-doc link in Asnos1).
+
+`cargo test -p lumen-js` (default): 276→247 (-29, all in the deleted
+module). `cargo test -p lumen-js --features v8-backend`: 2547→2518 (-29,
+same delta — `audio_bindings`'s tests never ran against V8, no port
+existed). Both clippy passes clean: `--features v8-backend --all-targets --
+-D warnings` zero errors; default `--all-targets -- -D warnings` matches
+the pre-existing 18-error baseline (`offscreen_canvas.rs`/`worker.rs`/
+`canvas2d.rs` dead-code, unrelated to this batch), zero new errors.
+`cargo check -p lumen-shell` (default, v8) and `--no-default-features
+--features backend-femtovg,backend-wgpu,quickjs` (rollback) both clean.
+Closes [BUG-550](../../bugs/BUG-550-FIXED.md) (premise corrected in the
+bug file itself, not just here).
+
 ---
 
 ## Risks (Rev 2)

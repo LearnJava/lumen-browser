@@ -1,6 +1,6 @@
 # BUG-550: `audio_bindings.rs`'s richer AudioContext (extra node types + ADR-007 anti-fingerprint noise) was already dead code under QuickJS, before the V8 migration — not a V8 regression, a pre-existing install-order shadow bug
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-04
 **Дата:** 2026-08-03
 **Компонент:** js (`crates/js/src/audio_bindings.rs` vs `crates/js/src/web_audio.rs`)
 **Найден:** P1, S12b-G0 триаж (13 модулей без V8-порта)
@@ -62,3 +62,21 @@ Two independent decisions, out of scope for a single fix:
    wanted, they need to be merged into `web_audio.rs` (the surviving,
    V8-ported module) as new functionality — not simply re-enabled, since
    they were never live to begin with.
+
+## Фикс
+
+**Закрыт 2026-08-04 (P1, S12b-Asnos2).** Stale-premise correction found
+while executing the deletion: `S12b-B19` (landed later the same day this
+bug was filed, `46dfe6774`) removed exactly the shadowing installer
+(`web_audio::install_web_audio_api`, the rquickjs twin) as part of its own
+group-A procedure, since `web_audio` already had a V8 port. That left
+`audio_bindings::install_audio_bindings` (`lib.rs:715-718` pre-deletion) as
+the *sole* remaining `AudioContext` installer on the `--features quickjs`
+(no `v8-backend`) rollback build — no longer shadowed, no longer dead code
+there. User decision 2026-08-04: delete anyway per the original S12b-Asnos2
+plan, accepting that the quickjs-only rollback build temporarily loses
+`AudioContext` entirely until `QuickJsRuntime` itself is deleted in
+`S12b-F2` (next in the same batch sequence). `crates/js/src/audio_bindings.rs`
+(1120 lines, 29 tests) removed outright; `pub mod audio_bindings;` and the
+install call site (`lib.rs`) removed. Details — `docs/tasks/ph3-v8-migration.md`
+§S12b-Asnos2.
