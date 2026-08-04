@@ -4192,12 +4192,14 @@ impl V8JsRuntime {
         install_v8!(async_context::install_async_context_v8);
         install_v8!(attribution_reporting::install_attribution_reporting_api_v8);
         install_v8!(audio_element::install_audio_element_bindings_v8);
+        install_v8!(background_sync::install_background_sync_v8);
         install_v8!(badging::install_badging_bindings_v8);
         install_v8!(battery_bindings::install_battery_bindings_v8);
         install_v8!(bluetooth::install_bluetooth_bindings_v8);
         install_v8!(broadcast_channel::install_broadcast_channel_bindings_v8);
         install_v8!(close_watcher::install_close_watcher_v8);
         install_v8!(compute_pressure::install_compute_pressure_bindings_v8);
+        install_v8!(contacts::install_contacts_manager_v8);
         install_v8!(content_index::install_content_index_api_v8);
         install_v8!(credentials::install_credentials_bindings_v8);
         install_v8!(csp::install_csp_bindings_v8);

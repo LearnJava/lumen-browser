@@ -3707,6 +3707,45 @@ B5…B31). Next in queue: group G (modules with **no** V8 port at all — G1…G
 
 ---
 
+### S12b-G1: `contacts`, `background_sync` (2026-08-04, branch `p1-s12b-g1`)
+
+First group G batch (real port, not deletion — neither module had a `_v8`
+variant before this). Both are pure `ctx.eval(SHIM)` Phase-0 stubs with no
+native `Function::new` registrations, so the port is the "no natives" fast
+path from `p1-s12b-cleanup-queue.md` §4: replace `rquickjs::Ctx::eval` with
+`lumen_core::ext::JsRuntime::eval`, gate the install fn + shim const behind
+`#[cfg(feature = "v8-backend")]`, register via `install_v8!` in
+`v8_runtime.rs::install_dom` (alphabetical slot: `background_sync` before
+`badging`, `contacts` between `compute_pressure` and `content_index`), then
+remove the rquickjs `init_*` call sites from `lib.rs::install_dom` (`contacts`
+was at `lib.rs:772`, `background_sync` at `:793`). `background_sync.rs`
+references two natives (`_lumen_sw_sync_register`/`_lumen_sw_get_tags`)
+guarded by `typeof … === 'function'` — grep confirms neither is registered
+anywhere in the codebase (rquickjs or V8 side), so the guard always takes the
+JS-only fallback; ported as-is, no native binding needed. 9 tests (4 contacts
++ 5 background_sync) ported to `#[cfg(all(test, feature = "v8-backend"))]`
+against bare `V8JsRuntime::new()` + local stubs (`navigator`/`DOMException`
+for contacts, `ServiceWorkerRegistration`/the two native stubs for
+background_sync) — no `install_dom` needed, same shape as `badging.rs`'s
+template. No bridge bugs found; this closes 2 of the 7 modules tracked by
+[BUG-549](../../bugs/BUG-549-OPEN.md) (remaining 5 land in G3/G4 per the
+queue doc — bug stays OPEN until all 7 are ported).
+
+`cargo test -p lumen-js --features v8-backend`: 2568→2568 lib total this run
+(9 new module tests; full-suite count matches the pre-batch B31 baseline
+since these two modules previously contributed 0 V8 tests). `cargo test
+-p lumen-js` (default, no features): 376→367 lib (-9, the ported rquickjs
+tests removed). `cargo clippy -p lumen-js --all-targets --features
+v8-backend -- -D warnings` clean. `cargo clippy -p lumen-js --all-targets --
+-D warnings` (no features): same pre-existing baseline errors from
+`offscreen_canvas.rs`/`worker.rs`/`canvas2d.rs` (B26/B27/B30, unrelated to
+this batch) — zero new errors from `contacts.rs`/`background_sync.rs`, since
+both the install fn and the shim const are `#[cfg(feature = "v8-backend")]`
+and every reference to them (including the `mod tests`) is likewise feature-
+gated.
+
+---
+
 ## Risks (Rev 2)
 
 | Risk | Likelihood | Mitigation |

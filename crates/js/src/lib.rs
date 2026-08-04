@@ -766,13 +766,6 @@ impl QuickJsRuntime {
             )
             .map_err(|e| rq_err(&ctx, e))?;
 
-            // Install Contact Picker API stub (W3C Contact Picker API) — after DOM/navigator.
-            // Phase 0: navigator.contacts.select() always rejects with NotSupportedError;
-            // navigator.contacts.getProperties() returns Promise<['name', 'email', 'tel']>.
-            if let Err(e) = contacts::init_contacts_manager(&ctx) {
-                eprintln!("Contact Picker API init failed: {}", e);
-            }
-
             // Install Payment Request API stub (W3C Payment Request API) — after DOM/window.
             // Phase 0: PaymentRequest.show() always rejects with NotSupportedError;
             // PaymentRequest.canMakePayment() always returns Promise<false>.
@@ -785,13 +778,6 @@ impl QuickJsRuntime {
             // / get(id) / getIds(). Phase 0: in-memory; shell _lumen_bg_fetch_* wiring is Phase 1.
             if let Err(e) = background_fetch::init_background_fetch(&ctx) {
                 eprintln!("Background Fetch API init failed: {}", e);
-            }
-
-            // Install Background Sync API stub (W3C Background Sync L2, Phase 0) — after DOM
-            // so Promise is available. Provides registration.sync.register(tag) / getTags().
-            // Phase 0: tags stored in-memory; actual sync-on-next-navigation wiring is P2/P3.
-            if let Err(e) = background_sync::init_background_sync(&ctx) {
-                eprintln!("Background Sync API init failed: {}", e);
             }
 
             // Install Periodic Background Sync API stub (W3C PBSync, Phase 0) — after DOM so
