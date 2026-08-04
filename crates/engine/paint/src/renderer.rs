@@ -185,6 +185,53 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
 }
 "#;
 
+/// WGSL `sdf_rrect` — shared by every shader that needs a rounded-rect contour
+/// (`RRECT_SHADER_SRC` fills one, `RRECT_CLIP_SHADER_SRC` clips a layer to one).
+/// Prepended to those sources at pipeline-build time: WGSL has no `#include`,
+/// and a second hand-copied SDF is exactly how BUG-277 slice 4's edge-band bug
+/// would come back on one path only.
+const SDF_RRECT_WGSL: &str = r#"
+/// SDF for an axis-aligned rounded rectangle with per-corner elliptical radii.
+/// `p`         = position relative to rect center.
+/// `half_size` = half-dimensions of the rect.
+/// `radii_x`   = horizontal corner radii (tl, tr, br, bl).
+/// `radii_y`   = vertical  corner radii (tl, tr, br, bl).
+///
+/// Screen y-axis is DOWN: p.y < 0 = top half, p.y > 0 = bottom half.
+/// Radii arrive already reduced by the CSS Backgrounds L3 §5.5 overlap factor
+/// (`CornerRadii::clamped_to_box` on the CPU side) — the shader must NOT clamp
+/// them again per axis: `border-radius: 100px 0 0 0` on a 100px-wide box is a
+/// legal corner ellipse wider than the half-box.
+///
+/// Outside the corner bands the exact axis-aligned box SDF applies; only inside
+/// a corner band on BOTH axes does the ellipse term kick in. Elliptical corners
+/// use a first-order approximation: (|q/r| - 1) * min(rx,ry), which is exact on
+/// the ellipse surface and has unit gradient near the boundary; for circular
+/// corners (rx == ry) it is identical to the standard Quilez SDF and joins the
+/// box branch continuously at the tangent lines.
+fn sdf_rrect(p: vec2<f32>, half_size: vec2<f32>, radii_x: vec4<f32>, radii_y: vec4<f32>) -> f32 {
+    // Select corner radii based on quadrant (y-down screen space).
+    var rx: f32 = radii_x.x; // top-left (default)
+    var ry: f32 = radii_y.x;
+    if p.x >= 0.0 && p.y <= 0.0 { rx = radii_x.y; ry = radii_y.y; } // top-right
+    if p.x >= 0.0 && p.y >  0.0 { rx = radii_x.z; ry = radii_y.z; } // bottom-right
+    if p.x <  0.0 && p.y >  0.0 { rx = radii_x.w; ry = radii_y.w; } // bottom-left
+    // Offsets from the box edges (standard box-SDF form, negative = inside).
+    let d = abs(p) - half_size;
+    // Position relative to the corner ellipse centre: q > 0 on an axis means the
+    // point lies inside that corner band.
+    let q = d + vec2<f32>(rx, ry);
+    // Straight region on at least one axis (or a degenerate radius) — the nearest
+    // boundary is a flat edge, so the plain box SDF is exact.
+    if q.x <= 0.0 || q.y <= 0.0 || rx < 0.001 || ry < 0.001 {
+        return length(max(d, vec2<f32>(0.0))) + min(max(d.x, d.y), 0.0);
+    }
+    // Both axes inside the corner band: first-order ellipse SDF approximation.
+    let k = length(q / vec2<f32>(rx, ry));
+    return (k - 1.0) * min(rx, ry);
+}
+"#;
+
 /// SDF rounded-rect shader with elliptical per-corner radii.
 /// Per-vertex data carries the rect's center, half-size, and two vec4s for
 /// horizontal (x) and vertical (y) corner radii, enabling `border-radius: H/V`.
@@ -243,46 +290,6 @@ fn vs_main(in: VIn) -> VOut {
     out.radii_x   = in.radii_x;
     out.radii_y   = in.radii_y;
     return out;
-}
-
-/// SDF for an axis-aligned rounded rectangle with per-corner elliptical radii.
-/// `p`         = position relative to rect center.
-/// `half_size` = half-dimensions of the rect.
-/// `radii_x`   = horizontal corner radii (tl, tr, br, bl).
-/// `radii_y`   = vertical  corner radii (tl, tr, br, bl).
-///
-/// Screen y-axis is DOWN: p.y < 0 = top half, p.y > 0 = bottom half.
-/// Radii arrive already reduced by the CSS Backgrounds L3 §5.5 overlap factor
-/// (`CornerRadii::clamped_to_box` on the CPU side) — the shader must NOT clamp
-/// them again per axis: `border-radius: 100px 0 0 0` on a 100px-wide box is a
-/// legal corner ellipse wider than the half-box.
-///
-/// Outside the corner bands the exact axis-aligned box SDF applies; only inside
-/// a corner band on BOTH axes does the ellipse term kick in. Elliptical corners
-/// use a first-order approximation: (|q/r| - 1) * min(rx,ry), which is exact on
-/// the ellipse surface and has unit gradient near the boundary; for circular
-/// corners (rx == ry) it is identical to the standard Quilez SDF and joins the
-/// box branch continuously at the tangent lines.
-fn sdf_rrect(p: vec2<f32>, half_size: vec2<f32>, radii_x: vec4<f32>, radii_y: vec4<f32>) -> f32 {
-    // Select corner radii based on quadrant (y-down screen space).
-    var rx: f32 = radii_x.x; // top-left (default)
-    var ry: f32 = radii_y.x;
-    if p.x >= 0.0 && p.y <= 0.0 { rx = radii_x.y; ry = radii_y.y; } // top-right
-    if p.x >= 0.0 && p.y >  0.0 { rx = radii_x.z; ry = radii_y.z; } // bottom-right
-    if p.x <  0.0 && p.y >  0.0 { rx = radii_x.w; ry = radii_y.w; } // bottom-left
-    // Offsets from the box edges (standard box-SDF form, negative = inside).
-    let d = abs(p) - half_size;
-    // Position relative to the corner ellipse centre: q > 0 on an axis means the
-    // point lies inside that corner band.
-    let q = d + vec2<f32>(rx, ry);
-    // Straight region on at least one axis (or a degenerate radius) — the nearest
-    // boundary is a flat edge, so the plain box SDF is exact.
-    if q.x <= 0.0 || q.y <= 0.0 || rx < 0.001 || ry < 0.001 {
-        return length(max(d, vec2<f32>(0.0))) + min(max(d.x, d.y), 0.0);
-    }
-    // Both axes inside the corner band: first-order ellipse SDF approximation.
-    let k = length(q / vec2<f32>(rx, ry));
-    return (k - 1.0) * min(rx, ry);
 }
 
 @fragment
@@ -516,6 +523,65 @@ struct VOut {
     // Off-screen layers accumulate premultiplied-alpha content (ALPHA_BLENDING onto clear).
     // Apply opacity to both rgb and alpha so premultiplied invariant is preserved.
     return vec4<f32>(c.rgb * in.alpha, c.a * in.alpha);
+}
+"#;
+
+/// CSS Overflow L3 §2 / Backgrounds L3 §5.3 — rounded-clip composite shader.
+///
+/// Composites an offscreen level onto its parent through a rounded-rect
+/// contour: the scissor rect can only cut a box, so the corners of an
+/// `overflow: hidden` box with `border-radius` are carved here instead
+/// (`PushClipRoundedRect` → level, `PopClip` → this pass).
+///
+/// Bindings mirror `COMPOSITE_SHADER_SRC` (group 0 = layer texture + sampler),
+/// so the per-level `OffscreenLayer::bind_group` is reused as-is. Vertices
+/// carry NDC position + UV (no viewport uniform needed) plus the CSS-px screen
+/// position and the rounded-rect parameters for `sdf_rrect`.
+/// Blend: PREMULTIPLIED_ALPHA_BLENDING — the level content is premultiplied and
+/// the shader scales rgb and a by the same coverage, preserving the invariant.
+const RRECT_CLIP_SHADER_SRC: &str = r#"
+@group(0) @binding(0) var t_layer: texture_2d<f32>;
+@group(0) @binding(1) var s_layer: sampler;
+
+struct VIn {
+    @location(0) pos:       vec2<f32>,
+    @location(1) uv:        vec2<f32>,
+    @location(2) world_pos: vec2<f32>,
+    @location(3) center:    vec2<f32>,
+    @location(4) half_size: vec2<f32>,
+    @location(5) radii_x:   vec4<f32>,
+    @location(6) radii_y:   vec4<f32>,
+};
+struct VOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) uv:        vec2<f32>,
+    @location(1) world_pos: vec2<f32>,
+    @location(2) center:    vec2<f32>,
+    @location(3) half_size: vec2<f32>,
+    @location(4) radii_x:   vec4<f32>,
+    @location(5) radii_y:   vec4<f32>,
+};
+
+@vertex fn vs_main(in: VIn) -> VOut {
+    var o: VOut;
+    o.clip      = vec4<f32>(in.pos, 0.0, 1.0);
+    o.uv        = in.uv;
+    o.world_pos = in.world_pos;
+    o.center    = in.center;
+    o.half_size = in.half_size;
+    o.radii_x   = in.radii_x;
+    o.radii_y   = in.radii_y;
+    return o;
+}
+
+@fragment fn fs_main(in: VOut) -> @location(0) vec4<f32> {
+    let d = sdf_rrect(in.world_pos - in.center, in.half_size, in.radii_x, in.radii_y);
+    // Same sub-pixel AA ramp as the rounded-rect fill, so a clipped child edge
+    // lands on the same coverage as the container's own painted contour.
+    let cov = 1.0 - smoothstep(-0.5, 0.5, d);
+    if cov <= 0.0 { discard; }
+    let c = textureSample(t_layer, s_layer, in.uv);
+    return vec4<f32>(c.rgb * cov, c.a * cov);
 }
 "#;
 
@@ -1186,6 +1252,30 @@ struct CompositeVertex {
     alpha: f32,
 }
 
+/// Вершина composite-пасса скруглённого клипа (`RRECT_CLIP_SHADER_SRC`).
+/// Как `CompositeVertex` (NDC + UV, без viewport-uniform), плюс параметры
+/// контура для `sdf_rrect`: они одинаковы для всех 6 вершин quad-а.
+/// Layout: pos(8) + uv(8) + world_pos(8) + center(8) + half_size(8)
+/// + radii_x(16) + radii_y(16) = 72 bytes.
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct RRectClipVertex {
+    /// Position in NDC (clip-space), same convention as `CompositeVertex::pos`.
+    pos: [f32; 2],
+    /// UV into the offscreen level texture.
+    uv: [f32; 2],
+    /// Screen position in CSS pixels — the space `center`/`half_size` live in.
+    world_pos: [f32; 2],
+    /// Center of the clip contour in CSS pixels.
+    center: [f32; 2],
+    /// Half-dimensions of the clip rect: (width/2, height/2).
+    half_size: [f32; 2],
+    /// Horizontal corner radii in CSS pixels: [tl, tr, br, bl].
+    radii_x: [f32; 4],
+    /// Vertical corner radii in CSS pixels: [tl, tr, br, bl].
+    radii_y: [f32; 4],
+}
+
 /// CSS Masking L1 §4 — вершина mask-composite пайплайна.
 /// `pos` — pixel-space (convert to NDC via viewport uniform).
 /// `uv_mask` — UV [0,1]×[0,1] в пределах одной плитки mask-изображения.
@@ -1794,6 +1884,11 @@ pub struct Renderer {
     /// использовании (`composite_pipeline()`), не при старте окна.
     composite_pipeline: OnceCell<wgpu::RenderPipeline>,
     composite_bgl: wgpu::BindGroupLayout,
+    /// CSS Overflow L3 §2 — composite-пайплайн скруглённого клипа
+    /// (`PushClipRoundedRect` → offscreen-уровень, `PopClip` → этот пасс).
+    /// Разделяет `composite_bgl` с обычным композитом: та же пара
+    /// {текстура уровня, sampler}. BUG-406: компиляция ленивая.
+    rrect_clip_pipeline: OnceCell<wgpu::RenderPipeline>,
     /// BUG-406: ленивая компиляция — `OnceCell` заполняется при первом
     /// использовании (`blend_pipeline()`), не при старте окна.
     blend_pipeline: OnceCell<wgpu::RenderPipeline>,
@@ -2617,7 +2712,7 @@ impl Renderer {
         // ── RRect (SDF rounded-rect) pipeline ─────────────────────────────
         let rrect_shader = timed_shader(&device, wgpu::ShaderModuleDescriptor {
             label: Some("rrect-shader"),
-            source: wgpu::ShaderSource::Wgsl(RRECT_SHADER_SRC.into()),
+            source: wgpu::ShaderSource::Wgsl(format!("{SDF_RRECT_WGSL}{RRECT_SHADER_SRC}").into()),
         });
         let rrect_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("rrect-layout"),
@@ -3269,6 +3364,7 @@ impl Renderer {
             last_content_key: None,
             layer_cache: crate::layer_cache::LayerCache::new(),
             composite_pipeline: OnceCell::new(),
+            rrect_clip_pipeline: OnceCell::new(),
             composite_bgl,
             blend_pipeline: OnceCell::new(),
             blend_bgl,
@@ -3571,6 +3667,75 @@ impl Renderer {
                     format: self.surface_format,
                     // Premultiplied-alpha blend: off-screen layers store premultiplied content.
                     // Shader multiplies rgb*opacity so "one * src + (1-src.a) * dst" is correct.
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        })
+    }
+
+    /// Пайплайн композита уровня в родителя ЧЕРЕЗ скруглённый контур
+    /// (CSS Overflow L3 §2: `overflow: hidden` на боксе с `border-radius`).
+    ///
+    /// Отличия от `build_composite_pipeline`: свой шейдер с `sdf_rrect` и
+    /// вершинный layout `RRectClipVertex` (7 атрибутов вместо 3). Bind group
+    /// layout общий — `composite_bgl`, поэтому композитить можно готовым
+    /// `OffscreenLayer::bind_group`.
+    ///
+    /// BUG-406: компилируется лениво, при первом реальном использовании —
+    /// страница без скруглённого `overflow` за него не платит.
+    fn build_rrect_clip_pipeline(&self) -> wgpu::RenderPipeline {
+        let shader = timed_shader(&self.device, wgpu::ShaderModuleDescriptor {
+            label: Some("rrect-clip-shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                format!("{SDF_RRECT_WGSL}{RRECT_CLIP_SHADER_SRC}").into(),
+            ),
+        });
+        let layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("rrect-clip-layout"),
+            bind_group_layouts: &[&self.composite_bgl],
+            push_constant_ranges: &[],
+        });
+        timed_pipeline(&self.device, &wgpu::RenderPipelineDescriptor {
+            label: Some("rrect-clip-pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<RRectClipVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0,  shader_location: 0 },
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 8,  shader_location: 1 },
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 16, shader_location: 2 },
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 24, shader_location: 3 },
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 32, shader_location: 4 },
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 40, shader_location: 5 },
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 56, shader_location: 6 },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: self.surface_format,
+                    // Как у composite: содержимое уровня премультиплировано,
+                    // шейдер домножает rgb и a на одно покрытие.
                     blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -4025,6 +4190,10 @@ impl Renderer {
     /// первом обращении и кэширует на весь срок жизни рендера.
     fn composite_pipeline(&self) -> &wgpu::RenderPipeline {
         self.composite_pipeline.get_or_init(|| self.build_composite_pipeline())
+    }
+    /// Ленивый доступ к пайплайну скруглённого клипа (BUG-406, BUG-277 срез 5).
+    fn rrect_clip_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.rrect_clip_pipeline.get_or_init(|| self.build_rrect_clip_pipeline())
     }
     /// Ленивый доступ к `blend`-пайплайну (BUG-406): компилирует его при
     /// первом обращении и кэширует на весь срок жизни рендера.
@@ -5998,6 +6167,13 @@ impl Renderer {
             ml_v_start: u32,
             ml_v_end: u32,
         }
+        // CSS Overflow L3 §2 — rounded-clip composite plan.
+        // `from_level` = offscreen level holding the clipped subtree;
+        // `v_start` = first of 6 vertices in `rrect_clip_vertices`.
+        struct RRectClipCompositePlan {
+            from_level: usize,
+            v_start: u32,
+        }
         enum RenderPlanItem {
             Draw(DrawBatchPlan),
             Composite(CompositePlan),
@@ -6005,6 +6181,7 @@ impl Renderer {
             FilterComposite(FilterCompositePlan),
             BackdropFilterComposite(BackdropFilterCompositePlan),
             MaskLayerComposite(MaskLayerCompositePlan),
+            RRectClipComposite(RRectClipCompositePlan),
         }
 
         let mut render_plan: Vec<RenderPlanItem> = Vec::new();
@@ -6024,6 +6201,21 @@ impl Renderer {
             rect: Rect,
         }
         let mut mask_params_stack: Vec<MaskPushInfo> = Vec::new();
+        // Accumulated vertex data for rounded-clip composite passes.
+        let mut rrect_clip_vertices: Vec<RRectClipVertex> = Vec::new();
+        // CSS Overflow L3 §2 — параметры скруглённого клипа, открывшего
+        // offscreen-уровень: контур в экранных CSS px + метка в `render_plan`.
+        struct RRectClipLevel {
+            rect: Rect,
+            radii: CornerRadii,
+            plan_mark: usize,
+        }
+        // По записи на КАЖДЫЙ push клипа (`PushClipRect`/`PushClipRoundedRect`/
+        // `PushClipPath`), чтобы `PopClip` знал, открывал ли его парный push
+        // уровень. `None` — обычный scissor-клип, как раньше.
+        // Инвариант: стек двигается ровно теми же командами, что и `clip_stack`,
+        // за вычетом `PushScrollLayer`/`PopScrollLayer` (у них своя пара).
+        let mut clip_level_stack: Vec<Option<RRectClipLevel>> = Vec::new();
         // Stack for PushMaskLayer: (rect, mode). Popped by PopMaskLayer.
         let mut mask_layer_stack: Vec<(Rect, MaskMode)> = Vec::new();
 
@@ -6738,8 +6930,17 @@ impl Renderer {
                         None => in_screen,
                     };
                     clip_stack.push(new);
+                    clip_level_stack.push(None);
                 }
-                DisplayCommand::PushClipRoundedRect { rect, radii: _ } => {
+                // CSS Overflow L3 §2 — `overflow: hidden` на боксе с
+                // `border-radius`: bbox по-прежнему идёт в scissor (дешёвое
+                // отсечение), но углы им не вырезать, поэтому поддерево
+                // рисуется в offscreen-уровень, а `PopClip` композитит его
+                // через тот же SDF-контур, каким рисуется сам бокс.
+                // Фолбэк на прежний bbox-клип (уровень НЕ открывается):
+                // радиусов нет; ИЛИ трансформ не axis-aligned — контур в
+                // экранных координатах тогда уже не rounded-rect.
+                DisplayCommand::PushClipRoundedRect { rect, radii } => {
                     let scrolled = translate_rect(*rect, dx, dy);
                     let in_screen = apply_transform_to_clip(scrolled, transform_stack.last());
                     let new = match clip_stack.last() {
@@ -6747,6 +6948,37 @@ impl Renderer {
                         None => in_screen,
                     };
                     clip_stack.push(new);
+                    let scale = axis_aligned_scale(transform_stack.last());
+                    match scale {
+                        Some((sx, sy)) if radii.iter().any(|r| *r > 0.0) => {
+                            // Радиусы приходят круговыми ([tl, tr, br, bl]);
+                            // axis-aligned scale делает их эллиптическими.
+                            let r = |i: usize| radii[i].max(0.0);
+                            let radii = CornerRadii {
+                                tl: r(0) * sx, tl_y: r(0) * sy,
+                                tr: r(1) * sx, tr_y: r(1) * sy,
+                                br: r(2) * sx, br_y: r(2) * sy,
+                                bl: r(3) * sx, bl_y: r(3) * sy,
+                            };
+                            flush_batch!();
+                            let plan_mark = render_plan.len();
+                            current_level += 1;
+                            while level_first.len() <= current_level {
+                                level_first.push(true);
+                            }
+                            level_first[current_level] = true;
+                            while level_bounds.len() <= current_level {
+                                level_bounds.push(LevelBounds::Empty);
+                            }
+                            level_bounds[current_level] = LevelBounds::Empty;
+                            clip_level_stack.push(Some(RRectClipLevel {
+                                rect: in_screen,
+                                radii,
+                                plan_mark,
+                            }));
+                        }
+                        _ => clip_level_stack.push(None),
+                    }
                 }
                 // BUG-140: wgpu-fallback клиппит shape-клип bounding box-ом
                 // (scissor не умеет произвольные формы; точная форма — в
@@ -6760,9 +6992,73 @@ impl Renderer {
                         None => in_screen,
                     };
                     clip_stack.push(new);
+                    clip_level_stack.push(None);
                 }
                 DisplayCommand::PopClip => {
                     clip_stack.pop();
+                    // Парный push открыл уровень под скруглённый клип —
+                    // закрыть его composite-пассом через SDF-контур.
+                    if let Some(Some(clip)) = clip_level_stack.pop() {
+                        flush_batch!();
+                        // viewport-cull: пустой/за-экранный уровень невидим —
+                        // выбросить из плана и контент, и композит (как в
+                        // PopOpacity: клип только УБИРАЕТ пиксели).
+                        let child_now = if bbox_scissor_disabled() {
+                            LevelBounds::Unbounded
+                        } else {
+                            level_bounds
+                                .get(current_level)
+                                .copied()
+                                .unwrap_or(LevelBounds::Unbounded)
+                        };
+                        let invisible = match child_now {
+                            LevelBounds::Empty => true,
+                            LevelBounds::Rect { x0, y0, x1, y1 } => {
+                                x1 * dpr_f32 <= 0.0
+                                    || y1 * dpr_f32 <= 0.0
+                                    || x0 * dpr_f32 >= surface_w as f32
+                                    || y0 * dpr_f32 >= surface_h as f32
+                            }
+                            LevelBounds::Unbounded => false,
+                        };
+                        if invisible {
+                            render_plan.truncate(clip.plan_mark);
+                            current_level -= 1;
+                            continue;
+                        }
+                        let v_start = rrect_clip_vertices.len() as u32;
+                        push_rrect_clip_quad(
+                            &mut rrect_clip_vertices,
+                            clip.rect,
+                            clip.radii,
+                            viewport_css_w,
+                            viewport_css_h,
+                        );
+                        render_plan.push(RenderPlanItem::RRectClipComposite(
+                            RRectClipCompositePlan { from_level: current_level, v_start },
+                        ));
+                        let child = level_bounds
+                            .get(current_level)
+                            .copied()
+                            .unwrap_or(LevelBounds::Unbounded);
+                        current_level -= 1;
+                        // Композит красит родителя не шире bbox ребёнка,
+                        // пересечённого с самим клипом.
+                        if current_level > 0
+                            && let Some(lb) = level_bounds.get_mut(current_level)
+                        {
+                            match child {
+                                LevelBounds::Empty => {}
+                                LevelBounds::Rect { x0, y0, x1, y1 } => lb.add_rect(
+                                    x0.max(clip.rect.x),
+                                    y0.max(clip.rect.y),
+                                    x1.min(clip.rect.x + clip.rect.width),
+                                    y1.min(clip.rect.y + clip.rect.height),
+                                ),
+                                LevelBounds::Unbounded => *lb = LevelBounds::Unbounded,
+                            }
+                        }
+                    }
                 }
                 DisplayCommand::PushOpacity { alpha, .. } => {
                     flush_batch!();
@@ -8044,6 +8340,18 @@ impl Renderer {
             self.queue.write_buffer(&buf, 0, as_bytes(&mask_layer_vertices));
             Some(buf)
         };
+        let rrect_clip_vbuf = if rrect_clip_vertices.is_empty() {
+            None
+        } else {
+            let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("rrect-clip-vbuf"),
+                size: std::mem::size_of_val(rrect_clip_vertices.as_slice()) as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.queue.write_buffer(&buf, 0, as_bytes(&rrect_clip_vertices));
+            Some(buf)
+        };
         let grad_vbuf = if grad_vertices.is_empty() {
             None
         } else {
@@ -8101,6 +8409,7 @@ impl Renderer {
             RenderPlanItem::FilterComposite(c) => m.max(c.from_level),
             RenderPlanItem::BackdropFilterComposite(c) => m.max(c.from_level),
             RenderPlanItem::MaskLayerComposite(c) => m.max(c.from_level),
+            RenderPlanItem::RRectClipComposite(c) => m.max(c.from_level),
         });
         if max_level > 0 {
             self.ensure_layer_textures(max_level, surface_w, surface_h);
@@ -8288,8 +8597,8 @@ impl Renderer {
 
         // BUG-274: поэлементный CPU-учёт encode-фазы (LUMEN_FRAME_LOG=2) —
         // суммарное время и число элементов по каждому типу RenderPlanItem.
-        let mut t_plan: [std::time::Duration; 6] = Default::default();
-        let mut n_plan: [u32; 6] = [0; 6];
+        let mut t_plan: [std::time::Duration; 7] = Default::default();
+        let mut n_plan: [u32; 7] = [0; 7];
         // BUG-274: разбивка Draw-пасса — begin_render_pass / запись ops / drop(pass).
         let mut t_draw_sub: [std::time::Duration; 3] = Default::default();
 
@@ -8318,6 +8627,7 @@ impl Renderer {
                 RenderPlanItem::FilterComposite(_) => 3,
                 RenderPlanItem::BackdropFilterComposite(_) => 4,
                 RenderPlanItem::MaskLayerComposite(_) => 5,
+                RenderPlanItem::RRectClipComposite(_) => 6,
             };
             match item {
                 RenderPlanItem::Draw(batch) => {
@@ -8506,6 +8816,42 @@ impl Renderer {
                             pass.draw(comp.comp_v_start..comp.comp_v_start + 6, 0..1);
                         }
                     }
+                }
+                // CSS Overflow L3 §2 — rounded-clip composite (BUG-277 срез 5).
+                // Composites the level onto its parent through the container's
+                // rounded contour: scissor cut the bbox, the SDF cuts the corners.
+                RenderPlanItem::RRectClipComposite(plan) => {
+                    let Some(vb) = &rrect_clip_vbuf else { continue };
+                    if plan.from_level == 0 { continue; }
+                    let target_view = if plan.from_level == 1 {
+                        &frame_view
+                    } else {
+                        &self.layer_textures[plan.from_level - 2].view
+                    };
+                    let src_bg = &self.layer_textures[plan.from_level - 1].bind_group;
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("rrect-clip-composite-pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: target_view,
+                            resolve_target: None,
+                            depth_slice: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Load,
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                            view: dv,
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                            stencil_ops: None,
+                        }),
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+                    pass.set_pipeline(self.rrect_clip_pipeline());
+                    pass.set_bind_group(0, src_bg, &[]);
+                    pass.set_vertex_buffer(0, vb.slice(..));
+                    pass.draw(plan.v_start..plan.v_start + 6, 0..1);
                 }
                 // CSS Masking L1 §4 — mask composite.
                 // Composites the offscreen element layer onto the parent using the
@@ -9303,9 +9649,10 @@ impl Renderer {
             let ms = |d: std::time::Duration| d.as_secs_f64() * 1e3;
             eprintln!(
                 "[frame:wgpu]   plan: draw {}x{:.1}ms comp {}x{:.1}ms mask {}x{:.1}ms \
-                 filt {}x{:.1}ms bdrop {}x{:.1}ms mlayer {}x{:.1}ms",
+                 filt {}x{:.1}ms bdrop {}x{:.1}ms mlayer {}x{:.1}ms rclip {}x{:.1}ms",
                 n_plan[0], ms(t_plan[0]), n_plan[1], ms(t_plan[1]), n_plan[2], ms(t_plan[2]),
                 n_plan[3], ms(t_plan[3]), n_plan[4], ms(t_plan[4]), n_plan[5], ms(t_plan[5]),
+                n_plan[6], ms(t_plan[6]),
             );
             eprintln!(
                 "[frame:wgpu]   draw-sub: begin {:.1}ms ops {:.1}ms end {:.1}ms |                  textures_created {} pool {}",
@@ -9902,6 +10249,67 @@ fn push_circle_quad(out: &mut Vec<CircleVertex>, rect: Rect, color: [f32; 4]) {
 /// внутри квада, а не мировые координаты.
 fn apply_affine_to_circle_verts(verts: &mut [CircleVertex], m: &Mat4) {
     apply_affine_to_verts(verts, m);
+}
+
+/// Emits 6 `RRectClipVertex` (two triangles) for the rounded-clip composite of
+/// one offscreen level: the quad covers exactly the clip rect, `uv` samples the
+/// level texture at the same screen position, and the contour parameters are
+/// constant across the quad so the fragment shader can evaluate `sdf_rrect`.
+///
+/// `vw`/`vh` — viewport in CSS px (`surface / dpr`), the space the level's own
+/// vertices were mapped from, so `uv = css / viewport` hits the same texel.
+/// Radii go through the same [`CornerRadii::clamped_to_box`] as the fill path —
+/// the clip contour must not drift from the container's painted contour.
+fn push_rrect_clip_quad(
+    out: &mut Vec<RRectClipVertex>,
+    rect: Rect,
+    radii: CornerRadii,
+    vw: f32,
+    vh: f32,
+) {
+    let x0 = rect.x;
+    let y0 = rect.y;
+    let x1 = rect.x + rect.width;
+    let y1 = rect.y + rect.height;
+    let center = [(x0 + x1) * 0.5, (y0 + y1) * 0.5];
+    let half_size = [rect.width * 0.5, rect.height * 0.5];
+    let radii = radii.clamped_to_box(rect.width, rect.height);
+    let radii_x = [radii.tl,   radii.tr,   radii.br,   radii.bl  ];
+    let radii_y = [radii.tl_y, radii.tr_y, radii.br_y, radii.bl_y];
+    let v = |px: f32, py: f32| RRectClipVertex {
+        pos: [px / vw * 2.0 - 1.0, 1.0 - py / vh * 2.0],
+        uv: [px / vw, py / vh],
+        world_pos: [px, py],
+        center,
+        half_size,
+        radii_x,
+        radii_y,
+    };
+    out.extend_from_slice(&[
+        v(x0, y0), v(x1, y0), v(x1, y1),
+        v(x0, y0), v(x1, y1), v(x0, y1),
+    ]);
+}
+
+/// Per-axis scale of an accumulated transform, or `None` if it rotates/skews.
+///
+/// A rounded clip is only a rounded rect in screen space while the transform
+/// keeps the axes: `PushClipRoundedRect` under a rotation falls back to the
+/// bbox-only scissor clip (the historic behaviour) instead of masking with a
+/// contour that no longer matches the box.
+fn axis_aligned_scale(m: Option<&Mat4>) -> Option<(f32, f32)> {
+    let Some(m) = m else { return Some((1.0, 1.0)) };
+    if !m.is_2d_affine() {
+        return None;
+    }
+    // Column-major 2D affine: pos.x = m[0]·x + m[4]·y + m[12].
+    // Off-diagonal terms m[1] (shear y-from-x) and m[4] (shear x-from-y)
+    // must vanish for the box to stay axis-aligned.
+    const EPS: f32 = 1e-4;
+    if m.0[1].abs() > EPS || m.0[4].abs() > EPS {
+        return None;
+    }
+    Some((m.0[0].abs(), m.0[5].abs()))
 }
 
 /// Emits 6 `RRectVertex` (two triangles) for a rounded rect quad.
@@ -11770,6 +12178,66 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// BUG-277 срез 5 — quad скруглённого клипа кладёт NDC/UV/мировую позицию
+    /// в одну и ту же точку экрана: uv промахнётся мимо текселя уровня, если
+    /// конвертации разъедутся (уровень рисуется тем же viewport-маппингом).
+    #[test]
+    fn push_rrect_clip_quad_maps_ndc_uv_and_world() {
+        let mut out = Vec::new();
+        let rect = lumen_core::geom::Rect::new(100.0, 50.0, 200.0, 100.0);
+        let radii = CornerRadii {
+            tl: 10.0, tr: 10.0, br: 10.0, bl: 10.0,
+            tl_y: 10.0, tr_y: 10.0, br_y: 10.0, bl_y: 10.0,
+        };
+        push_rrect_clip_quad(&mut out, rect, radii, 1000.0, 500.0);
+        assert_eq!(out.len(), 6);
+        for v in &out {
+            let [wx, wy] = v.world_pos;
+            assert!((v.uv[0] - wx / 1000.0).abs() < 1e-6, "uv.x != world.x/vw");
+            assert!((v.uv[1] - wy / 500.0).abs() < 1e-6, "uv.y != world.y/vh");
+            assert!((v.pos[0] - (v.uv[0] * 2.0 - 1.0)).abs() < 1e-6, "ndc.x != uv.x*2-1");
+            assert!((v.pos[1] - (1.0 - v.uv[1] * 2.0)).abs() < 1e-6, "ndc.y != 1-uv.y*2");
+            assert_eq!(v.center, [200.0, 100.0]);
+            assert_eq!(v.half_size, [100.0, 50.0]);
+        }
+    }
+
+    /// BUG-277 срез 5 — контур клипа обязан пройти тот же §5.5-клэмп, что и
+    /// заливка бокса: иначе `border-radius: 999px` обрежет детей эллипсом,
+    /// а сам бокс останется стадионом (расхождение маски и фона).
+    #[test]
+    fn push_rrect_clip_quad_applies_css_overlap_clamp() {
+        let mut out = Vec::new();
+        let rect = lumen_core::geom::Rect::new(0.0, 0.0, 300.0, 140.0);
+        let radii = CornerRadii {
+            tl: 999.0, tr: 999.0, br: 999.0, bl: 999.0,
+            tl_y: 999.0, tr_y: 999.0, br_y: 999.0, bl_y: 999.0,
+        };
+        push_rrect_clip_quad(&mut out, rect, radii, 1024.0, 720.0);
+        for v in &out {
+            for r in v.radii_x.iter().chain(v.radii_y.iter()) {
+                assert!((r - 70.0).abs() < 1e-4, "radius = {r}, ожидалось 70 (§5.5)");
+            }
+        }
+    }
+
+    /// BUG-277 срез 5 — скруглённый клип открывает offscreen-уровень только
+    /// когда контур остаётся rounded-rect в экранных координатах: поворот и
+    /// скос уводят его в произвольную форму, там остаётся bbox-фолбэк.
+    #[test]
+    fn axis_aligned_scale_rejects_rotation_and_keeps_scale() {
+        assert_eq!(axis_aligned_scale(None), Some((1.0, 1.0)));
+        let t = Mat4::translate_3d(10.0, 20.0, 0.0);
+        assert_eq!(axis_aligned_scale(Some(&t)), Some((1.0, 1.0)));
+        let s = Mat4::scale_2d(2.0, 3.0);
+        let (sx, sy) = axis_aligned_scale(Some(&s)).expect("scale is axis-aligned");
+        assert!((sx - 2.0).abs() < 1e-6 && (sy - 3.0).abs() < 1e-6);
+        let r = Mat4::rotate_z(std::f32::consts::FRAC_PI_4);
+        assert_eq!(axis_aligned_scale(Some(&r)), None, "поворот — не axis-aligned");
+        let r3 = Mat4::rotate_x(std::f32::consts::FRAC_PI_2);
+        assert_eq!(axis_aligned_scale(Some(&r3)), None, "3D — не 2D-аффинное");
     }
 
     /// `apply_affine_to_rrect_verts` propagates projected z through the 3D
