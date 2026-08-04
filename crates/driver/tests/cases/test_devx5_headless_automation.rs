@@ -123,10 +123,19 @@ fn eval_reads_back_dom_state_after_click_and_type() {
         .expect("eval failed");
     assert_eq!(checked, "\"checked\"");
 
+    // BUG-441: typing sets the control's *current* value, which `el.value`
+    // reads; the `value` content attribute is the default value and stays
+    // untouched (HTML LS §4.10.5.5 dirty value flag) — before the fix
+    // `type_text` wrote the attribute, so this read used to go through it.
     let value = session
-        .eval("document.getElementById('name').getAttribute('value')")
+        .eval("document.getElementById('name').value")
         .expect("eval failed");
     assert_eq!(value, "\"Lumen\"");
+
+    let attr = session
+        .eval("document.getElementById('name').getAttribute('value')")
+        .expect("eval failed");
+    assert_eq!(attr, "null");
 }
 
 #[cfg(feature = "v8")]

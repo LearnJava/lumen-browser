@@ -1510,6 +1510,12 @@ fn collect_text_content(doc: &Document, node_id: NodeId) -> String {
 /// Used by `field-sizing: content` to determine the intrinsic size of the control.
 /// Newlines are preserved (each `\n` becomes a line for height computation).
 fn collect_textarea_content(doc: &Document, node_id: NodeId) -> String {
+    // BUG-441: what a textarea *shows* is its current value — the child text is
+    // only the default, replaced as soon as the user types or a script assigns
+    // `el.value` (HTML LS §4.10.11).
+    if let Some(dirty) = doc.dirty_value(node_id) {
+        return dirty.to_owned();
+    }
     let mut text = String::new();
     let node = doc.get(node_id);
     for child_id in node.children.iter() {
@@ -4257,6 +4263,60 @@ fn anon_inline_block_row(node: NodeId, parent: &ComputedStyle, items: Vec<Layout
     }
 }
 
+/// Inline-сегменты для текста, у которого нет DOM-узла-источника: значение
+/// `<textarea>`, набранное пользователем или присвоенное скриптом (BUG-441).
+///
+/// Повторяет ветки [`collect_inline_segments`] для текстового узла, но берёт
+/// строку не из DOM: при `white-space`, сохраняющем переводы строки (UA-стиль
+/// `<textarea>` — `pre-wrap`), строка режется по `\n` на сегменты с
+/// `forced_break` между ними; иначе отдаётся одним сегментом. `source_node` —
+/// сам контрол: собственного текстового узла у значения нет.
+fn control_value_segments(
+    node: NodeId,
+    value_text: &str,
+    style: &ComputedStyle,
+) -> Vec<InlineSegment> {
+    let mut out = Vec::new();
+    let mut push = |text: String, forced_break: bool, byte_offset: u32| {
+        out.push(InlineSegment {
+            text,
+            style: style.clone(),
+            pre_space: 0.0,
+            post_space: 0.0,
+            is_element_box: false,
+            img_src: None,
+            img_is_lazy: false,
+            img_width: 0.0,
+            forced_break,
+            pseudo_kind: PseudoKind::None,
+            source_node: node,
+            source_char_offset: byte_offset,
+            bidi_level: 0,
+        });
+    };
+    if !style.white_space.preserves_newlines() {
+        let text = style.text_transform.apply(&strip_invisible_controls(value_text));
+        if !text.is_empty() {
+            push(text, false, 0);
+        }
+        return out;
+    }
+    let mut byte_offset: u32 = 0;
+    for (i, line) in value_text.split('\n').enumerate() {
+        if i > 0 {
+            push(String::new(), true, byte_offset);
+            byte_offset += 1; // the \n character
+        }
+        // BUG-120: invisible controls must not occupy advance width.
+        let text = style.text_transform.apply(&strip_invisible_controls(line));
+        if !text.is_empty() {
+            push(text, false, byte_offset);
+        }
+        byte_offset += line.len() as u32;
+    }
+    out
+}
+
 /// Рекурсивно собирает `InlineSegment`-ы из поддерева inline-контента.
 ///
 /// `need_first_letter` — starts `true` for the first call on a block container; set to `false`
@@ -5429,16 +5489,18 @@ fn build_box_inner(
                                     .and_then(|v| v.trim().parse::<f32>().ok())
                                     .unwrap_or(100.0);
                                 let default_val = (min + max) / 2.0;
-                                let value = node.get_attr("value")
-                                    .and_then(|v| v.trim().parse::<f32>().ok())
+                                let value = doc.control_value(id)
+                                    .trim()
+                                    .parse::<f32>()
+                                    .ok()
                                     .unwrap_or(default_val)
                                     .clamp(min, max);
                                 FormControlKind::Range { value, min, max }
                             } else {
                                 let checked = node.get_attr("checked").is_some();
-                                let value_text = node.get_attr("value")
-                                    .unwrap_or("")
-                                    .to_owned();
+                                // BUG-441: the painted text is the control's
+                                // current value; `value=` is only its default.
+                                let value_text = doc.control_value(id).into_owned();
                                 let placeholder = node.get_attr("placeholder")
                                     .unwrap_or("")
                                     .to_owned();
@@ -5512,11 +5574,37 @@ fn build_box_inner(
     }
 
     let mut children = Vec::new();
+    // BUG-441: a `<textarea>` renders its *current* value. Unlike `<input>`,
+    // whose text the form-control painter draws from `FormControlKind`, a
+    // textarea's text is ordinary inline content laid out from its DOM
+    // children — and those children are only its *default* value (HTML LS
+    // §4.10.11). Once the control has a runtime value, that value is laid out
+    // in their place, so typing and `el.value = …` reach the screen without
+    // rewriting the markup they came from.
+    let textarea_runtime_value: Option<String> = match &kind {
+        BoxKind::FormControl { kind: FormControlKind::Textarea { value_text } }
+            if doc.dirty_value(id).is_some() =>
+        {
+            Some(value_text.clone())
+        }
+        _ => None,
+    };
+    if let Some(value_text) = &textarea_runtime_value {
+        children.push(anon_inline_run(
+            id,
+            &style,
+            control_value_segments(id, value_text, &style),
+            BoxRole::AnonymousInlineRun,
+        ));
+    }
     if matches!(kind, BoxKind::Block | BoxKind::FlowRoot | BoxKind::Contents | BoxKind::FormControl { .. } | BoxKind::TableRow | BoxKind::Table | BoxKind::TableRowGroup | BoxKind::SvgRoot { .. }) {
         // CSS: :host, ::slotted — P4 wires shadow-scoped styles here
         // HTML5 §4.11.1 — <details>: when `open` attribute absent, only <summary> is rendered.
         // P3 wires: clicking <summary> should toggle `open` attribute + relayout.
-        let dom_children: Vec<NodeId> = if is_details_element(doc, id)
+        let dom_children: Vec<NodeId> = if textarea_runtime_value.is_some() {
+            // The default value's text nodes are replaced by the run above.
+            Vec::new()
+        } else if is_details_element(doc, id)
             && doc.get(id).get_attr("open").is_none()
         {
             flat.children_of(doc, id)
@@ -13382,6 +13470,112 @@ mod tests {
             ),
             (186.0, 156.0),
         );
+    }
+
+    /// BUG-441 — a form control renders its *current* value: the runtime
+    /// («dirty») value once it has one, the `value=` attribute / child text
+    /// only until then. Before the fix the box tree read the attribute, so a
+    /// field the user typed into or a script assigned kept painting the old
+    /// text (`el.value = 'ZZ'` → screen still empty).
+    #[test]
+    fn form_control_paints_runtime_value_over_the_default() {
+        let html = r#"<input id="i" value="default"><textarea id="t">seed</textarea>"#;
+        let mut doc = lumen_html_parser::parse(html);
+        // Find the two controls by tag — the arena is small and ordered.
+        let (mut input, mut textarea) = (None, None);
+        for i in 0..doc.node_count() {
+            let id = lumen_dom::NodeId::from_index(i);
+            match doc.get(id).element_name().map(|q| q.local.as_str()) {
+                Some("input") => input = Some(id),
+                Some("textarea") => textarea = Some(id),
+                _ => {}
+            }
+        }
+        let (input, textarea) = (input.expect("<input>"), textarea.expect("<textarea>"));
+
+        let sheet = lumen_css_parser::parse("");
+        let defaults = collect_form_control_values(&super::layout(
+            &doc,
+            &sheet,
+            Size::new(800.0, 600.0),
+        ));
+        assert_eq!(defaults, vec!["default".to_string(), "seed".to_string()]);
+
+        doc.set_control_value(input, "typed");
+        doc.set_control_value(textarea, "edited");
+        let runtime = collect_form_control_values(&super::layout(
+            &doc,
+            &sheet,
+            Size::new(800.0, 600.0),
+        ));
+        assert_eq!(runtime, vec!["typed".to_string(), "edited".to_string()]);
+    }
+
+    /// BUG-441 — a textarea's text is inline content laid out from its DOM
+    /// children, so the runtime value has to replace those children in the box
+    /// tree; otherwise `el.value = …` updated `FormControlKind::Textarea`
+    /// (which the painter ignores) while the screen kept the markup text.
+    #[test]
+    fn textarea_lays_out_runtime_value_instead_of_child_text() {
+        let html = "<textarea>seed</textarea>";
+        let mut doc = lumen_html_parser::parse(html);
+        let ta = (0..doc.node_count())
+            .map(lumen_dom::NodeId::from_index)
+            .find(|&id| {
+                doc.get(id).element_name().map(|q| q.local.as_str()) == Some("textarea")
+            })
+            .expect("<textarea>");
+        let sheet = lumen_css_parser::parse("");
+
+        let before = concat_inline_text(&super::layout(&doc, &sheet, Size::new(800.0, 600.0)));
+        assert_eq!(before, "seed");
+
+        doc.set_control_value(ta, "line1\nline2");
+        let after = concat_inline_text(&super::layout(&doc, &sheet, Size::new(800.0, 600.0)));
+        // The forced break between the two lines contributes an empty segment.
+        assert_eq!(after, "line1line2");
+        // The child text node is untouched — it is the default value.
+        assert_eq!(doc.dirty_value(ta), Some("line1\nline2"));
+    }
+
+    /// Concatenated text of every inline segment in the tree.
+    fn concat_inline_text(root: &super::LayoutBox) -> String {
+        let mut out = String::new();
+        fn walk(b: &super::LayoutBox, out: &mut String) {
+            if let super::BoxKind::InlineRun { segments, .. } = &b.kind {
+                for s in segments {
+                    out.push_str(&s.text);
+                }
+            }
+            for child in &b.children {
+                walk(child, out);
+            }
+        }
+        walk(root, &mut out);
+        out
+    }
+
+    /// Painted text of every `<input>`/`<textarea>` box, in tree order.
+    fn collect_form_control_values(root: &super::LayoutBox) -> Vec<String> {
+        let mut out = Vec::new();
+        fn walk(b: &super::LayoutBox, out: &mut Vec<String>) {
+            if let super::BoxKind::FormControl { kind } = &b.kind {
+                match kind {
+                    super::FormControlKind::Input { value_text, .. } => {
+                        out.push(value_text.clone())
+                    }
+                    super::FormControlKind::Textarea { value_text } => {
+                        out.push(value_text.clone())
+                    }
+                    _ => {}
+                }
+            }
+            for child in &b.children {
+                walk(child, out);
+            }
+        }
+        walk(root, &mut out);
+        out
     }
 
     /// An author-specified CSS `width`/`height` keeps its ordinary `border-box`

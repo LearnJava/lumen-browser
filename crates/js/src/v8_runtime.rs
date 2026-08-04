@@ -1511,6 +1511,51 @@ impl V8JsRuntime {
             }
             dirty.store(true, Ordering::Relaxed);
         });
+        // ── Form-control runtime value (BUG-441) ────────────────────────────
+        // `el.value` is NOT the `value` content attribute: the attribute only
+        // seeds the control's value and then stays put as its *default*
+        // (HTML LS §4.10.5.5). The current value lives in the document, where
+        // layout and form submission read it, so a script assignment reaches
+        // the screen and the submitted data instead of dying in a JS shadow.
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_get_dirty_value",
+            move |node_id: u32| -> Option<String> {
+                let doc = d.lock().unwrap();
+                let nid = NodeId::from_index(node_id as usize);
+                doc.dirty_value(nid).map(|s| s.to_string())
+            }
+        );
+        let d = Arc::clone(&doc);
+        let dirty = Arc::clone(&dom_dirty);
+        let touched = Arc::clone(&dom_touched);
+        reg!(
+            "_lumen_set_dirty_value",
+            move |node_id: u32, value: String| {
+                let mut doc = d.lock().unwrap();
+                let nid = NodeId::from_index(node_id as usize);
+                let changed = doc.dirty_value(nid) != Some(value.as_str());
+                doc.set_control_value(nid, value);
+                if changed {
+                    // The value drives `:placeholder-shown` / `:in-range` and
+                    // the painted text — same restyle trigger as an attribute.
+                    record_dom_touch(&touched, nid);
+                    dirty.store(true, Ordering::Relaxed);
+                }
+            }
+        );
+        let d = Arc::clone(&doc);
+        let dirty = Arc::clone(&dom_dirty);
+        let touched = Arc::clone(&dom_touched);
+        reg!("_lumen_clear_dirty_value", move |node_id: u32| {
+            let mut doc = d.lock().unwrap();
+            let nid = NodeId::from_index(node_id as usize);
+            if doc.dirty_value(nid).is_some() {
+                doc.clear_control_value(nid);
+                record_dom_touch(&touched, nid);
+                dirty.store(true, Ordering::Relaxed);
+            }
+        });
         let d = Arc::clone(&doc);
         reg!(
             "_lumen_get_attr_names",

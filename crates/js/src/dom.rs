@@ -1158,16 +1158,21 @@ function _lumen_dispatch_capture_event(nid, type) {
 
 // Called from shell for keydown / keyup / keypress events.
 // mod: same bit-mask as _lumen_dispatch_mouse_event
-// Engine → shim: sync the JS-side value shadow of a form control after the
-// engine performed its own native text-editing default action (BUG-436).
+// Engine → shim: publish a form control's new value after the engine performed
+// its own native text-editing default action (BUG-436).
 //
-// `el.value` reads `_input_values[nid]` first and only falls back to the
-// `value` content attribute, so a field the page had ever assigned through
-// script would keep reporting the stale script value after the user typed
-// into it. The shell calls this right after it writes the new value into the
-// DOM and before it dispatches `input`, so a listener reading `this.value`
-// sees exactly what the field now renders.
+// Since BUG-441 the current value of an `<input>`/`<textarea>` lives in the
+// document itself, so this writes there — the same slot `el.value = …` writes
+// and both layout and form submission read. The shell calls it right after its
+// own edit and before it dispatches `input`, so a listener reading `this.value`
+// sees exactly what the field now renders. `_input_values` is kept in step for
+// the remaining control kinds that still shadow their value in JS.
 function _lumen_set_field_value(nid, value) {
+    var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
+    if (tag === 'INPUT' || tag === 'TEXTAREA') {
+        _lumen_set_dirty_value(nid, String(value));
+        return;
+    }
     _input_values[nid] = String(value);
 }
 
@@ -3258,13 +3263,31 @@ function _lumen_build_element(nid) {
         //
         // `value` and `checked`, by contrast, are NOT plain reflection: they are
         // the *current* value/checkedness, which the content attribute only seeds
-        // (HTML LS §4.10.5.4 «dirty value flag»). They stay here, keyed by nid in
-        // `_input_values` so they survive wrapper re-creation. The content
+        // (HTML LS §4.10.5.4 «dirty value flag»). They stay here as accessors,
+        // keyed by nid so they survive wrapper re-creation. The content
         // attribute behind each one is reachable as `defaultValue`/`defaultChecked`
         // from the reflection table.
+        //
+        // Where the current value is *stored* differs: for `<input>`/`<textarea>`
+        // it is document-side (`Document::dirty_values`, BUG-441) because layout
+        // and form submission read it from there; the rest still use the JS-side
+        // `_input_values` map, and `checked` still rides the content attribute
+        // (BUG-444 — same modelling defect, not yet fixed).
         get value() {
+            var tag0 = (_lumen_get_tag_name(nid) || '').toUpperCase();
+            // BUG-441: for the two text-entry controls the current value lives
+            // in the document (`Document::dirty_values`), the one place layout
+            // and form submission read — not in a JS-side shadow they cannot
+            // see. Everything else keeps the `_input_values` map.
+            if (tag0 === 'INPUT' || tag0 === 'TEXTAREA') {
+                var dv = _lumen_u2n(_lumen_get_dirty_value(nid));
+                if (dv !== null) return String(dv);
+                if (tag0 === 'TEXTAREA') return _lumen_get_text_content(nid);
+                var dav = _lumen_u2n(_lumen_get_attr(nid, 'value'));
+                return dav !== null ? dav : '';
+            }
             if (_input_values[nid] !== undefined) return _input_values[nid];
-            var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
+            var tag = tag0;
             // HTML LS §4.10.10: an <option> with no `value` attribute takes its
             // value from its text; §4.10.7: a <select>'s value is that of its
             // first selected option. Both are needed for `select.value` and
@@ -3286,6 +3309,14 @@ function _lumen_build_element(nid) {
         set value(v) {
             var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
             if (tag === 'SELECT') { _lumen_select_set_value(nid, String(v)); return; }
+            // BUG-441: raise the control's dirty value flag in the document, so
+            // the field re-renders with the new text and submits it. The
+            // `value` content attribute is left alone on purpose — it is the
+            // default value `defaultValue`/`form.reset()` restore.
+            if (tag === 'INPUT' || tag === 'TEXTAREA') {
+                _lumen_set_dirty_value(nid, String(v));
+                return;
+            }
             _input_values[nid] = String(v);
         },
         // BUG-442: presence must go through `_lumen_has_attr` — on the default (V8)
@@ -11825,6 +11856,10 @@ HTMLFormElement.prototype.reset = function() {
         if (tag !== 'INPUT' && tag !== 'TEXTAREA') continue;
         // Dropping the dirty value restores `value` to its default, which the
         // getter derives from the content attribute (or the child text).
+        // The document-side store is the one layout and submission read
+        // (BUG-441); `_input_values` is cleared too for controls that predate
+        // the wrapper, so nothing stale survives the reset.
+        _lumen_clear_dirty_value(cn);
         delete _input_values[cn];
         delete _lumen_selection_state[cn];
         delete _lumen_indeterminate[cn];
@@ -12854,6 +12889,9 @@ function _lumen_gc_collect(nids) {
             }
         }
         delete _input_values[nid];
+        // BUG-441: the control's runtime value lives document-side; a dead node
+        // must not keep its slot in that map either.
+        _lumen_clear_dirty_value(nid);
         delete _canvas2d_ctxs[nid];
         delete _lumen_element_wrappers[nid];
         // BUG-383 per-nid form state.
@@ -28522,6 +28560,53 @@ mod tests {
             rt.eval("document.getElementById('inp').value = 'hello world'").unwrap();
             assert!(bool_eval(&rt,
                 "document.getElementById('inp').value === 'hello world'"));
+        }
+
+        // BUG-441: `el.value = …` used to live in a JS-side map only, so the
+        // field kept rendering (and submitting) its old text. The assignment
+        // must land in the document's runtime value store — what layout paints
+        // and `collect_dom_form_fields` collects — while the `value` content
+        // attribute keeps holding the *default* value.
+        #[test]
+        fn input_value_assignment_reaches_document() {
+            let doc = make_form_doc();
+            let rt = v8_runtime_with_dom(Arc::clone(&doc));
+            rt.eval("document.getElementById('inp').setAttribute('value', 'default')")
+                .unwrap();
+            rt.eval("document.getElementById('inp').value = 'ZZ'").unwrap();
+
+            let nid = test_nid(&rt, "inp");
+            let d = doc.lock().unwrap();
+            assert_eq!(d.control_value(nid), "ZZ");
+            assert_eq!(d.get(nid).get_attr("value"), Some("default"));
+        }
+
+        // The same store is what `form.reset()` drops, restoring the default.
+        #[test]
+        fn form_reset_drops_document_side_value() {
+            let doc = make_form_doc();
+            let rt = v8_runtime_with_dom(Arc::clone(&doc));
+            rt.eval("document.getElementById('inp').setAttribute('value', 'default')")
+                .unwrap();
+            rt.eval("document.getElementById('inp').value = 'typed'").unwrap();
+            rt.eval("document.getElementById('f').reset()").unwrap();
+
+            let nid = test_nid(&rt, "inp");
+            assert!(bool_eval(&rt, "document.getElementById('inp').value === 'default'"));
+            let d = doc.lock().unwrap();
+            assert_eq!(d.dirty_value(nid), None);
+            assert_eq!(d.control_value(nid), "default");
+        }
+
+        /// `NodeId` of the element with `id`, read back through the shim.
+        fn test_nid(rt: &V8JsRuntime, id: &str) -> lumen_dom::NodeId {
+            let v = rt
+                .eval(&format!("document.getElementById('{id}').__nid__"))
+                .unwrap();
+            match v {
+                lumen_core::JsValue::Number(n) => lumen_dom::NodeId::from_index(n as usize),
+                other => panic!("expected a numeric __nid__, got {other:?}"),
+            }
         }
 
         #[test]

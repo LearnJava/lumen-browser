@@ -14,8 +14,9 @@
 ///    when `style.field_sizing == FieldSizing::Content` for `"input"` / `"textarea"`.
 /// 5. In `lay_out_box`, at the `is_replaced && s.width.is_none()` branch, call
 ///    `field_sizing_content_intrinsic` and use the result as the border-box size.
-///    The `value_text` for `<input>` is `doc.get(node).get_attr("value").unwrap_or("")`;
-///    for `<textarea>` it is the concatenated text content of child text nodes.
+///    The `value_text` for both `<input>` and `<textarea>` is
+///    `doc.control_value(node)` — the control's current value, not the `value=`
+///    attribute / child text, which are only its default (BUG-441).
 use crate::box_tree::measure_text_w;
 use crate::TextMeasurer;
 
@@ -39,8 +40,8 @@ const FIELD_VERT_PAD_PX: f32 = 1.0;
 ///   `height = line_count * line_height_px + 2 * FIELD_VERT_PAD_PX`.
 /// - All other tags: `(0.0, 0.0)` — not a text-entry control.
 ///
-/// `value_text` for `<input>` is the `value` attribute; for `<textarea>` it is the
-/// text content (lines delimited by `'\n'`).
+/// `value_text` is the control's current value (`Document::control_value`);
+/// for `<textarea>` its lines are delimited by `'\n'`.
 ///
 /// `line_height_px` should be the resolved CSS `line-height` for the element
 /// (typically `style.font_size * 1.2` when `line-height: normal`).

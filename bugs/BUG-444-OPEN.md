@@ -34,7 +34,7 @@ HTML LS §4.10.5.5 различает две величины: **checkedness** (
 Rust. Отдельное JS-хранилище (как `_input_values` для `value`) эти три пути не
 увидят.
 
-Это тот же дефект модели, что и [BUG-441](BUG-441-OPEN.md) — там он про
+Это тот же дефект модели, что и [BUG-441](BUG-441-FIXED.md) — там он про
 `value`, здесь про `checked`; чинить их логично одной правкой.
 
 ## Обход, который уже стоит
@@ -50,13 +50,21 @@ BUG-383 добавил `_lumen_default_checked` — снимок значени�
 
 ## Как чинить
 
-Завести runtime-хранилище состояния формы, которое читают **и** вёрстка, **и**
-сбор формы, **и** JS: `value` (BUG-441) и `checkedness` (этот баг) в одном
-месте на стороне Rust, а content-атрибуты оставить значениями по умолчанию, как
-того требует спека. У шелла уже есть `FormState` (`crates/shell/src/forms.rs`) —
-скорее всего, расширять надо его, а не заводить третье хранилище.
+Механизм уже заведён: [BUG-441](BUG-441-FIXED.md) (исправлен 2026-08-04) добавил
+в `Document` хранилище `dirty_values` для `value` — `HashMap<NodeId, String>`,
+где наличие записи и есть dirty value flag, с доступом через
+`control_value`/`set_control_value`/`clear_control_value`. Его читают и вёрстка,
+и `collect_dom_form_fields`, и `element_validity`, и JS-шим через нативы
+`_lumen_{get,set,clear}_dirty_value`.
+
+Для checkedness нужен такой же сосед — `dirty_checkedness: HashMap<NodeId, bool>`
+рядом с `dirty_values` — плюс перевод всех читателей `checked`-атрибута
+(покраска чекбокса в шелле, `collect_fields_in`, `:checked` в `style.rs`,
+геттер/сеттер `checked` в шиме) на него. Content-атрибут остаётся значением
+по умолчанию, как того требует спека, и `_lumen_default_checked`-обход из
+BUG-383 после этого снимается.
 
 ## Связанные
 
-* [BUG-441](BUG-441-OPEN.md) — то же самое для `value`.
+* [BUG-441](BUG-441-FIXED.md) — то же самое для `value`.
 * [BUG-383](BUG-383-FIXED.md) — правка, которая вскрыла дефект и поставила обход.
