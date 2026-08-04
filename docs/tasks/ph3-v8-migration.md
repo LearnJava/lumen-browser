@@ -3844,6 +3844,76 @@ v8-backend -- -D warnings` clean. `cargo clippy -p lumen-js --all-targets --
 (`offscreen_canvas.rs`/`worker.rs`/`canvas2d.rs`) — zero new errors from
 `payment_request.rs`/`media_stream_recording.rs`.
 
+### S12b-G5: `view_transitions`, `cookie_store` (2026-08-04, branch `p1-s12b-g5`)
+
+Fifth group G batch — the two remaining modules before the group's final
+slot G6 (`cookie_banner`). Unlike G1-G4, the two modules are not uniform:
+`cookie_store` is the familiar no-natives fast path (`_lumen_cookie_store_set`/
+`_delete` referenced behind a `typeof` guard, never registered on either
+engine, ported as-is: `rquickjs::Ctx::eval` → `lumen_core::ext::JsRuntime::eval`,
+`install_cookie_store_v8` wired via the plain `install_v8!` macro between
+`content_index` and `credentials`). `view_transitions` is not — it owns 3
+real natives (`_lumen_vt_begin`/`_lumen_vt_end`/`_lumen_vt_cancel`) that push
+into an `Arc<Mutex<Vec<ViewTransitionEvent>>>` the shell drains every
+`about_to_wait` to drive the CSS cross-fade, so the "no natives" fast path
+doesn't apply. Ported using the stateful-module pattern established by
+`fullscreen_requests`/`pointer_capture_nid`: a new `view_transition_events`
+field on `V8JsRuntime` (mirrors `crate::QuickJsRuntime`'s field of the same
+name), a `pub fn take_view_transition_events()` accessor mirroring
+`take_fullscreen_requests`, and `install_view_transition_bindings_v8(rt,
+events)` registering the 3 natives via `V8JsRuntime::register_native` +
+`v8_compat::into_v8_fn0` (the helper `register_native` exists precisely for
+"standalone module ports that need `Function::new`-style natives", per its
+own doc comment) — called as an extra-arg site in `install_dom` (between
+`video_pip` and `virtual_keyboard`), the same shape as the `pointer_capture`/
+`geolocation` calls, not the bare `install_v8!` macro, because the closures
+need the runtime-instance `Arc`, not just `&self`.
+
+Found in the same batch, not part of the original G0 triage write-up: the
+shell's V8 wrapper (`V8PersistentJs::take_view_transition_events` in
+`crates/shell/src/main.rs`) was a hardcoded `Vec::new()` stub with a comment
+("View Transitions bindings not ported to V8 yet") — the second half of
+BUG-545. Fixed by routing it through the new `V8JsRuntime::take_view_transition_events()`,
+mirroring the QuickJS wrapper's implementation one function above it.
+
+19 tests ported to `#[cfg(all(test, feature = "v8-backend"))]`: 11
+`view_transitions` (harness: bare `V8JsRuntime::new()` + `var document = {};`
++ `install_view_transition_bindings_v8(&rt, Arc::clone(&events))`, `events`
+returned alongside `rt` so tests can inspect the queue directly instead of
+going through a drain-native) and 8 `cookie_store` (harness matches
+`push_api`/`periodic_sync`: `ServiceWorkerRegistration` + native stubs, then
+`install_cookie_store_v8`). No bridge bugs found. Both rquickjs install
+functions and their `lib.rs::install_dom` call sites removed (`cookie_store`
+was at `lib.rs:772`, `view_transitions` at `:784`) — same accepted
+QuickJS-behavior-change side effect as every prior G batch; the
+`view_transition_events`/`take_view_transition_events` field+method on
+`QuickJsRuntime` itself were left in place (dead once the install call is
+gone, but shared shell-side plumbing, not rquickjs-specific — removing them
+isn't in scope for a "delete the install call" step).
+
+Closes [BUG-545](../../bugs/BUG-545-FIXED.md) (`view_transitions` — real
+functional regression, not a stub-native: `P2-viewtrans`'s engine cross-fade
+mechanism was already fine, only the JS trigger and the shell's V8-side
+drain stub were missing) and [BUG-546](../../bugs/BUG-546-FIXED.md)
+(`cookie_store` — `CAPABILITIES.md` claimed ✅ unconditionally). Both
+`CAPABILITIES.md` entries raised from their 🟡 QuickJS-only caveat back to
+the main ✅ list.
+
+`cargo test -p lumen-js --features v8-backend`: +19 new module tests (11 +
+8), full suite 2568 passing. `cargo test -p lumen-js` (default, no
+features): 328→309 lib (-19, the ported rquickjs tests removed). `cargo
+clippy -p lumen-js --all-targets --features v8-backend -- -D warnings`
+clean. `cargo clippy -p lumen-js --all-targets -- -D warnings` (no
+features): identical baseline to pre-batch main (`offscreen_canvas.rs`/
+`worker.rs`/`canvas2d.rs`) — zero new errors from `cookie_store.rs`/
+`view_transitions.rs` (the `use std::sync::{Arc, Mutex}` import needed
+`#[cfg(feature = "v8-backend")]` gating too, since it's now only used inside
+the V8 install fn and its tests, not unconditionally as under rquickjs).
+`cargo check -p lumen-shell` (default, v8) and `cargo check -p lumen-shell
+--no-default-features --features backend-femtovg,backend-wgpu,quickjs`
+(rollback) both clean, plus `cargo clippy -p lumen-shell -- -D warnings`
+(default) clean.
+
 ---
 
 ## Risks (Rev 2)

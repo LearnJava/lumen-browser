@@ -11,15 +11,20 @@
 //! `cookieStore.set()` also writes to `document.cookie` (one-way sync).
 //! `CookieStoreManager` on `ServiceWorkerRegistration` — stub (Phase 0).
 
-use rquickjs::Ctx;
-
-/// Install the Cookie Store API into the JS context.
-pub fn init_cookie_store(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(COOKIE_STORE_SHIM)?;
+/// V8 port of the former rquickjs `init_cookie_store` (Ph3 V8 migration
+/// S12b-G5, rquickjs side removed in the same batch): identical JS shim,
+/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_cookie_store_v8(
+    rt: &crate::v8_runtime::V8JsRuntime,
+) -> lumen_core::JsResult<()> {
+    use lumen_core::ext::JsRuntime as _;
+    rt.eval(COOKIE_STORE_SHIM)?;
     Ok(())
 }
 
 /// JavaScript shim implementing WHATWG Cookie Store API (Phase 0).
+#[cfg(feature = "v8-backend")]
 const COOKIE_STORE_SHIM: &str = r#"(function() {
   // ── CookieChangeEvent ───────────────────────────────────────────────────────
   function CookieChangeEvent(type, init) {
@@ -248,136 +253,115 @@ const COOKIE_STORE_SHIM: &str = r#"(function() {
   }
 })();"#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
-    use rquickjs::{Runtime, Context, Ctx};
+    use super::*;
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().expect("Runtime::new");
-        let ctx = Context::full(&rt).expect("Context::full");
-        (rt, ctx)
-    }
-
-    fn install_stubs(ctx: &Ctx) {
-        ctx.eval::<(), _>(
+    fn with_cookie_store(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(
             "globalThis.ServiceWorkerRegistration = function() {}; \
              globalThis._lumen_cookie_store_set = function() {}; \
-             globalThis._lumen_cookie_store_delete = function() {};"
-        ).expect("install stubs");
+             globalThis._lumen_cookie_store_delete = function() {};",
+        )
+        .unwrap();
+        install_cookie_store_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
     fn cookie_store_exists() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_cookie_store(&ctx).expect("init");
-            let r: String = ctx.eval("typeof cookieStore === 'object' ? 'ok' : 'missing'")
-                .expect("eval");
-            assert_eq!(r, "ok");
+        with_cookie_store(|rt| {
+            let r = rt
+                .eval("typeof cookieStore === 'object' ? 'ok' : 'missing'")
+                .unwrap();
+            assert_eq!(r, JsValue::String("ok".to_string()));
         });
     }
 
     #[test]
     fn cookie_store_get_returns_promise() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_cookie_store(&ctx).expect("init");
-            let r: String = ctx.eval(
-                "typeof cookieStore.get('x') === 'object' ? 'promise' : 'not_promise'"
-            ).expect("eval");
-            assert_eq!(r, "promise");
+        with_cookie_store(|rt| {
+            let r = rt
+                .eval("typeof cookieStore.get('x') === 'object' ? 'promise' : 'not_promise'")
+                .unwrap();
+            assert_eq!(r, JsValue::String("promise".to_string()));
         });
     }
 
     #[test]
     fn cookie_store_set_and_get_all() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_cookie_store(&ctx).expect("init");
-            ctx.eval::<(), _>("cookieStore.set('session', 'abc123');").expect("set");
+        with_cookie_store(|rt| {
+            rt.eval("cookieStore.set('session', 'abc123');").unwrap();
             // Verify internal store is synchronously updated
-            let count: i32 = ctx.eval(
-                "Object.keys(cookieStore._cookies).length"
-            ).expect("eval");
-            assert_eq!(count, 1);
+            let count = rt.eval("Object.keys(cookieStore._cookies).length").unwrap();
+            assert_eq!(count, JsValue::Number(1.0));
         });
     }
 
     #[test]
     fn cookie_store_delete_removes_cookie() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_cookie_store(&ctx).expect("init");
-            ctx.eval::<(), _>("cookieStore.set('tok', 'xyz');").expect("set");
-            ctx.eval::<(), _>("cookieStore.delete('tok');").expect("delete");
+        with_cookie_store(|rt| {
+            rt.eval("cookieStore.set('tok', 'xyz');").unwrap();
+            rt.eval("cookieStore.delete('tok');").unwrap();
             // Verify internal store is synchronously updated
-            let count: i32 = ctx.eval(
-                "Object.keys(cookieStore._cookies).length"
-            ).expect("eval");
-            assert_eq!(count, 0);
+            let count = rt.eval("Object.keys(cookieStore._cookies).length").unwrap();
+            assert_eq!(count, JsValue::Number(0.0));
         });
     }
 
     #[test]
     fn cookie_change_event_fires_on_set() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_cookie_store(&ctx).expect("init");
-            let r: String = ctx.eval(
+        with_cookie_store(|rt| {
+            rt.eval(
                 "var fired = false; \
                  cookieStore.onchange = function(e) { fired = e.changed.length > 0; }; \
-                 cookieStore.set('k', 'v'); \
-                 fired ? 'yes' : 'no'"
-            ).expect("eval");
-            assert_eq!(r, "yes");
+                 cookieStore.set('k', 'v');",
+            )
+            .unwrap();
+            let r = rt.eval("fired ? 'yes' : 'no'").unwrap();
+            assert_eq!(r, JsValue::String("yes".to_string()));
         });
     }
 
     #[test]
     fn cookie_store_manager_on_sw_registration() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_cookie_store(&ctx).expect("init");
-            let r: String = ctx.eval(
-                "var reg = new ServiceWorkerRegistration(); \
-                 typeof reg.cookies === 'object' ? 'ok' : 'missing'"
-            ).expect("eval");
-            assert_eq!(r, "ok");
+        with_cookie_store(|rt| {
+            let r = rt
+                .eval(
+                    "var reg = new ServiceWorkerRegistration(); \
+                     typeof reg.cookies === 'object' ? 'ok' : 'missing'",
+                )
+                .unwrap();
+            assert_eq!(r, JsValue::String("ok".to_string()));
         });
     }
 
     #[test]
     fn cookie_store_get_nonexistent_returns_promise() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_cookie_store(&ctx).expect("init");
+        with_cookie_store(|rt| {
             // get on empty store returns a Promise object (null resolves asynchronously)
-            let r: String = ctx.eval(
-                "typeof cookieStore.get('nonexistent') === 'object' ? 'promise' : 'not_promise'"
-            ).expect("eval");
-            assert_eq!(r, "promise");
+            let r = rt
+                .eval(
+                    "typeof cookieStore.get('nonexistent') === 'object' ? 'promise' : 'not_promise'",
+                )
+                .unwrap();
+            assert_eq!(r, JsValue::String("promise".to_string()));
         });
     }
 
     #[test]
     fn cookie_store_internal_state_after_set() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_cookie_store(&ctx).expect("init");
-            ctx.eval::<(), _>("cookieStore.set('foo', 'bar');").expect("set");
+        with_cookie_store(|rt| {
+            rt.eval("cookieStore.set('foo', 'bar');").unwrap();
             // Value is immediately accessible via internal store
-            let v: String = ctx.eval(
-                "cookieStore._cookies['foo'] ? cookieStore._cookies['foo'].value : 'missing'"
-            ).expect("eval");
-            assert_eq!(v, "bar");
+            let v = rt
+                .eval("cookieStore._cookies['foo'] ? cookieStore._cookies['foo'].value : 'missing'")
+                .unwrap();
+            assert_eq!(v, JsValue::String("bar".to_string()));
         });
     }
 }

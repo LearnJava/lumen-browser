@@ -3657,8 +3657,15 @@ impl PersistentJs for V8PersistentJs {
             .collect()
     }
     fn take_view_transition_events(&self) -> Vec<ViewTransitionEvent> {
-        // View Transitions bindings not ported to V8 yet (slice S5–S7).
-        Vec::new()
+        self.rt
+            .take_view_transition_events()
+            .into_iter()
+            .map(|ev| match ev {
+                lumen_js::ViewTransitionEvent::Begin => ViewTransitionEvent::Begin,
+                lumen_js::ViewTransitionEvent::End => ViewTransitionEvent::End,
+                lumen_js::ViewTransitionEvent::Cancel => ViewTransitionEvent::Cancel,
+            })
+            .collect()
     }
     fn take_print_requests(&self) -> Vec<lumen_js::PrintRequest> {
         self.rt.take_print_requests()

@@ -766,26 +766,10 @@ impl QuickJsRuntime {
             )
             .map_err(|e| rq_err(&ctx, e))?;
 
-            // Install Cookie Store API (WHATWG Cookie Store API, Phase 0) — after DOM so
-            // Promise and document.cookie are available. Provides window.cookieStore with
-            // get/getAll/set/delete and CookieChangeEvent. Phase 0: in-memory store.
-            if let Err(e) = cookie_store::init_cookie_store(&ctx) {
-                eprintln!("Cookie Store API init failed: {}", e);
-            }
-
             // Install cookie-banner auto-dismiss shim (7C.3) — last, after full DOM.
             let cb_enabled = self.cookie_banner_dismiss.load(Ordering::Relaxed);
             if let Err(e) = cookie_banner::install(&ctx, cb_enabled) {
                 eprintln!("Cookie-banner bindings init failed: {}", e);
-            }
-
-            // Install CSS View Transitions API (CSS View Transitions L1 §4) — after DOM
-            // so `document` is defined and Promise/queueMicrotask are available.
-            if let Err(e) = view_transitions::install_view_transition_bindings(
-                &ctx,
-                Arc::clone(&self.view_transition_events),
-            ) {
-                eprintln!("View Transitions bindings init failed: {}", e);
             }
 
             Ok(())
