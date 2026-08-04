@@ -56,7 +56,6 @@ pub mod view_transitions;
 pub mod bluetooth;
 pub mod subtle_crypto;
 pub mod temporal_api;
-pub mod webgl_bindings;
 pub mod webgl_canvas;
 pub mod webrtc_stub;
 pub mod webhid;

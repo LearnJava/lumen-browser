@@ -3971,6 +3971,39 @@ pre-existing 18-error baseline (`offscreen_canvas.rs`/`worker.rs`/
 `cargo check -p lumen-shell` (default, v8) and `--no-default-features
 --features backend-femtovg,backend-wgpu,quickjs` (rollback) both clean.
 
+### S12b-Asnos1: `webgl_bindings` removal (2026-08-04, branch `p1-s12b-asnos1`)
+
+First of the two G-triage removal-only entries (`S12b-Asnos1`/`S12b-Asnos2`,
+carved out of the stale `S12b-G7` `ROADMAP.md` row, which still described
+`audio_bindings` as needing a "check whether shadowed by `web_audio.rs`"
+investigation that the 2026-08-03 G0 triage had already completed and
+answered — see `docs/tasks/p1-s12b-cleanup-queue.md` §4). `webgl_bindings.rs`
+(564 lines, 21 tests, `install_webgl_bindings` fingerprint-only WebGL shim)
+is dead code on **both** engines: `grep -rn "webgl_bindings::" crates/js/src`
+found zero call sites outside the module's own tests — not registered in
+`QuickJsRuntime::install_dom` (`lib.rs`), not registered in
+`v8_runtime.rs::install_dom`, no V8 port ever existed. Fully superseded by
+the functional `webgl_canvas.rs` (`install_webgl_canvas_v8`, wired through
+`SoftwareWebGl`), which already carries the ADR-007 fingerprint
+normalization this module provided. No bug filed — not a migration
+regression, just a stale module nobody wired up.
+
+Deleted `crates/js/src/webgl_bindings.rs` outright (no V8 side existed to
+keep), dropped `pub mod webgl_bindings;` from `lib.rs`, and rewrote the
+dangling intra-doc link `[crate::webgl_bindings]` in `webgl_canvas.rs`'s
+module doc comment to plain prose. No `install_*` call site existed on
+either engine to remove.
+
+`cargo test -p lumen-js` (default): 297→276 (-21, all in the deleted
+module — verified against the pre-change tree via `git stash`).
+`cargo test -p lumen-js --features v8-backend`: 2547 passing, 0 failed
+(2568→2547, -21, same delta — the module was untested-by-omission on V8,
+i.e. its 21 tests only ever ran against the rquickjs side). Both clippy
+passes clean: `--features v8-backend --all-targets -- -D warnings` zero
+errors; default `--all-targets -- -D warnings` matches the pre-existing
+18-error baseline (`offscreen_canvas.rs`/`worker.rs`/`canvas2d.rs`
+dead-code, unrelated to this batch), zero new errors.
+
 ---
 
 ## Risks (Rev 2)
