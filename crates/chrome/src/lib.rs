@@ -64,6 +64,12 @@ fn find(doc: &lumen_dom::Document, id: &'static str) -> Result<lumen_dom::NodeId
 /// equal specificity still overrides it (e.g. a future `.omni-field`
 /// exception for editable text). `user-select` is an inherited property, so
 /// setting it on `html` covers every chrome element by default.
+///
+/// No `font-family` default is needed here even though BUG-128 ч.2 changed the
+/// document default from an empty list to `serif`: the asset's own
+/// `body{font-family:var(--font-ui)}` wins over anything this rule could say,
+/// and every chrome element inherits from `<body>`. Verified by
+/// `ua_defaults_need_no_font_family_because_the_asset_sets_its_own`.
 const UA_DEFAULTS: &str = "html{user-select:none}";
 
 /// Parses `html` (the chrome asset's contents — a runtime host passes
@@ -185,6 +191,30 @@ mod tests {
             profile_name.style.user_select,
             lumen_layout::UserSelect::None,
             "chrome UI text must be non-selectable by default (CC-CSS-6)"
+        );
+    }
+
+    /// BUG-128 ч.2 guard: the chrome document is laid out by the ordinary
+    /// engine, so it starts from `lumen_layout::ComputedStyle::root()` — whose
+    /// default `font-family` became `serif`. Chrome is insulated from that only
+    /// because the asset itself declares `body{font-family:var(--font-ui)}`;
+    /// drop that declaration and every chrome label would silently switch to
+    /// Times New Roman. Probed on `<body>` because what IT computes to is what
+    /// every element inheriting a family gets.
+    #[test]
+    fn ua_defaults_need_no_font_family_because_the_asset_sets_its_own() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/chrome/chrome.html");
+        let html = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+        let (doc, sheet) = parse_document(&html);
+        let body = doc.body().expect("chrome asset must have a <body>");
+        let root = lumen_layout::layout(&doc, &sheet, lumen_core::geom::Size::new(1280.0, 800.0));
+        let body_box =
+            lumen_layout::find_box_by_node(&root, body).expect("<body> must have a layout box");
+        assert_eq!(
+            body_box.style.font_family.first().map(String::as_str),
+            Some("Inter"),
+            "chrome must resolve its own --font-ui stack, not the document default `serif`"
         );
     }
 
