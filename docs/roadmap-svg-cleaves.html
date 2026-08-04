@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-04",
  "counts": {
-  "open": 237,
+  "open": 251,
   "fixed": 315,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 552,
+ "total_bugs": 566,
  "phases": [
   {
    "id": "P0",
@@ -2723,23 +2723,44 @@
       {
        "id": "WPT-VENDOR-html-browsers",
        "title": "WPT: прогнать срез `html/browsers`",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Скоуп: ⬜ (кандидат). Срез категории `html`, вынесен из `WPT-VENDOR-html` 2026-07-28 (полный прогон категории — 40+ часов, не помещается в сессию). 759 `testharness`-id (15 `testdriver`). Дерево уже вендорено. Ожидаемо упрётся в задокументированный предел «`<iframe>` без browsing context» и в BUG-359 (`window.open` не резолвит относительный URL) — оценить долю до прогона"
+       "note": "Скоуп: ⬜ (кандидат). Срез категории `html`, вынесен из `WPT-VENDOR-html` 2026-07-28 (полный прогон категории — 40+ часов, не помещается в сессию). Дерево уже вендорено. DONE 2026-08-04: прогнан целиком по 15 под-срезам (все 8 подкаталогов `offline`/`origin`/`sandboxing`/`the-window-object`/`the-windowproxy-exotic-object`/`windows`/`history`/`browsing-the-web`, последний — ещё на 8 своих подкаталогов, `--processes=4`; серийная оценка 5+ ч не подтвердилась, реальный параллельный прогон занял ~50 мин суммарно) — **173/586 harness OK, 69/950 сабтестов**. Предсказание строки подтвердилось частично: `<iframe>` без browsing context и BUG-359 действительно доминируют (`sandboxing` 19/19 unexpected, большая часть `browsing-the-web`/`windows`/`the-window-object` — тот же класс), но шесть новых багов нашлись вне этого предела: BUG-585 (`Origin` WebIDL глобал `Origin.from()` отсутствует целиком, 181 сабтест в самодостаточном `origin/api/`), BUG-586 (`document.domain` не реализован — геттер `undefined`, сеттер не валидирует и не бросает `SecurityError`), BUG-587 (WindowProxy `[[DefineOwnProperty]]` не защищает unforgeable-свойства `window`/`document`/`location`/`top`), BUG-588 (`window.frameElement` отсутствует целиком, `undefined` вместо `null` даже на топ-уровне без единого iframe), BUG-589 (`window` — не полноценный WebIDL exotic object: нет `Symbol.toStringTag`, `[object Object]` вместо `[object Window]`/`[object WindowProperties]`; indexed `[[DefineOwnProperty]]`/`[[Set]]` не отклоняет несуществующие числовые индексы в strict mode), BUG-590 (`document.createEvent` отсутствует; `dispatchEvent(new CustomEvent(\"beforeunload\"))` не вызывает обработчик). Попутно подтверждены (без новых номеров): BUG-376 (`location.protocol=` и другие компоненты не бросают/не навигируют — 47 хитов в `history`), известный класс «common/-хелперы не вендорены» (`get_host_info`/`RemoteContext`/`token`/`addIframe`/`openWindow` и т.п.), известный TLS-гэп `UnknownIssuer` (`offline`). Один воркер `--processes=4` уронился на гонке `--bidi-port`-токена при старте (`history`-прогон) — харнесс-флейк, не баг движка",
+       "bugs": [
+        "BUG-585",
+        "BUG-586",
+        "BUG-587",
+        "BUG-588",
+        "BUG-589",
+        "BUG-590"
+       ]
       },
       {
        "id": "WPT-VENDOR-html-webappapis",
        "title": "WPT: прогнать срез `html/webappapis`",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Скоуп: ⬜ (кандидат). Срез категории `html`, вынесен из `WPT-VENDOR-html` 2026-07-28 (полный прогон категории — 40+ часов, не помещается в сессию). 353 `testharness`-id (7 `testdriver`, 13 `.https.`). Дерево уже вендорено. Таймеры, structured clone, обработка ошибок, `navigator`"
+       "note": "Скоуп: ⬜ (кандидат). Срез категории `html`, вынесен из `WPT-VENDOR-html` 2026-07-28. Дерево уже вендорено. DONE 2026-08-04: прогнан целиком (`--processes=4`, ~7 мин) — **187/320 harness OK, 471/1069 сабтестов**. Крупнейшая находка — BUG-591 (новый): глобальный pipeline отчёта об ошибках (`window.onerror`/`'error'`/`<body onerror>`/`unhandledrejection`/`PromiseRejectionEvent`) не подключен вовсе — V8 ловит исключения локально `TryCatch`-ем, но никогда не всплывает в page script; объясняет 35+ файлов `scripting/events/*`, `scripting/processing-model-2/*`, `animation-frames/*`, `microtask-queuing/*`. Второй кластер — BUG-568 расширен с `write`/`writeln` (найден раньше в другом срезе) на `open`/`close`: весь `dynamic-markup-insertion/` (~55 файлов) падает на одном и том же корне — `document.write/writeln/open/close` целиком отсутствуют на `Document`. BUG-592 (новый) — `setHTMLUnsafe`/`getHTML`/`Document.parseHTMLUnsafe` реализованы только на `Element`, `ShadowRoot` и статический `Document.parseHTMLUnsafe` отсутствуют. BUG-593 (новый) — `structuredClone` не умеет `Blob`/`File`/`ImageData`/`Error` (было задокументировано комментарием в коде, но не заведено багом). `form is not defined` (4 хита) — уже известный BUG-360 (мёртвые inline-обработчики), новой находки не даёт",
+       "bugs": [
+        "BUG-568 (расширен)",
+        "BUG-591",
+        "BUG-592",
+        "BUG-593"
+       ]
       },
       {
        "id": "WPT-VENDOR-html-editing",
        "title": "WPT: прогнать срез `html/editing`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). Срез категории `html`, вынесен из `WPT-VENDOR-html` 2026-07-28 (полный прогон категории — 40+ часов, не помещается в сессию). 216 `testharness`-id, из них 181 с `testdriver` — по предсказателю доли ожидается стена SKIP; сверить флаг по `MANIFEST.json`, а не грепом (готча `fledge`). Дерево уже вендорено"
+       "note": "Скоуп: ⬜ (кандидат). Срез категории `html`, вынесен из `WPT-VENDOR-html` 2026-07-28. Дерево уже вендорено. DONE 2026-08-04: прогнан целиком (`--processes=4`, 7 мин 50 с) — **51/203 harness OK, 241/631 сабтестов**. Предсказание строки (216 id, 181 с `testdriver` → стена SKIP) не подтвердилось: `testdriver`-флаг здесь не даёт SKIP вовсе — та же инверсия, что на `fledge`/`font-access` (флаг про `<script src=…testdriver.js>`, а не про то, использует ли тест `test_driver.Actions`), реальный прогон платит полным TIMEOUT почти за каждый `dnd/`-тест. Пять новых багов: BUG-594 (`hidden` — плоский boolean вместо тройного enum `\"\"`/`hidden`/`until-found`, `until-found` режим — reveal-алгоритм и событие `beforematch` — не реализован вовсе, 13 файлов `the-hidden-attribute/`), BUG-595 (`autocorrect`/`writingSuggestions` глобальные атрибуты отсутствуют целиком — `'writingSuggestions' in el` === `false`), BUG-596 (легаси `initEvent`/`initUIEvent`/`initMouseEvent` отсутствуют на `Event`/`UIEvent`/`MouseEvent` целиком — самодостаточный `dnd/synthetic/001.html`, 15/16 сабтестов), BUG-597 (три независимых дефекта drag-поверхности: конструктор `DragEvent` синтезирует новый `DataTransfer` вместо `null` при отсутствующем/`null` `dataTransfer` и не валидирует тип аргумента; `draggable`-геттер игнорирует дефолт `true` у `<a href>`/`<img>`; `window`/`document` не имеют ни одного из 7 `ondrag*` `GlobalEventHandlers`), BUG-598 (`DataTransfer.types` — `.slice()` на каждый доступ вместо кэша `FrozenArray`, `dt.types === dt.types` всегда `false`). Крупнейший класс TIMEOUT (весь `dnd/drop/`, файлы `029.html`/`030.html` с 55 вариантами каждый) — уже известный BUG-346 (URL `resolve()` не схлопывает `..`, относительный путь `../resources/test-helper.js` уходит 404). Часть `the-hidden-attribute/` сигнала замаскирована уже известным BUG-384 (именованный доступ на `window`)",
+       "bugs": [
+        "BUG-594",
+        "BUG-595",
+        "BUG-596",
+        "BUG-597",
+        "BUG-598"
+       ]
       },
       {
        "id": "WPT-VENDOR-html-interaction",
@@ -8271,8 +8292,8 @@
   },
   "BUG-568": {
    "status": "open",
-   "title": "`document.write()`/`.writeln()` do not exist -- `TypeError: document.write is not a function` on every call, not a broken stub. Low direct count in this categor…",
-   "component": "js (`crates/js/src/dom.rs` -- `Document` wrapper has no `write`/`writeln` member at all)",
+   "title": "`document.write()`/`.writeln()`/`.open()`/`.close()` do not exist -- `TypeError` on every call, not a broken stub. Low direct count in the originating category…",
+   "component": "js (`crates/js/src/dom.rs` -- `Document` wrapper has no `write`/`writeln`/`open`/`close` member at all)",
    "date": null,
    "debtor": false
   },
@@ -8385,6 +8406,104 @@
    "status": "open",
    "title": "Interest Invokers API (`interestfor`, `InterestEvent` -- hover/focus analogue of BUG-582's `command`/`commandfor`) not implemented at all, entirely `.tentative.…",
    "component": "js (`crates/js/src/dom.rs` -- no `interestFor`/`InterestEvent` anywhere)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-585": {
+   "status": "open",
+   "title": "`Origin` WebIDL global (`Origin.from()`, tuple/opaque origin) not implemented at all. 181 subtests, all `html/browsers/origin/api/` (self-contained category). K…",
+   "component": "js (`crates/js/src/dom.rs` -- no `Origin` global constructor anywhere)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-586": {
+   "status": "open",
+   "title": "`document.domain` not implemented: getter is `undefined` instead of a string, setter never validates against the document's origin so cases required to throw `S…",
+   "component": "js (`crates/js/src/dom.rs` -- no `\"domain\"` getter/setter on `document`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-587": {
+   "status": "open",
+   "title": "WindowProxy `[[DefineOwnProperty]]` doesn't enforce the \"unforgeable\" restriction on same-origin own properties `window`/`document`/`location`/`top` -- both com…",
+   "component": "js/V8 host-object layer (WindowProxy own-property trap, no `[[DefineOwnProperty]]` unforgeable-property guard)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-588": {
+   "status": "open",
+   "title": "`window.frameElement` missing entirely -- always `undefined` instead of `null` even for the top-level window (no iframe involved), independent of the iframe-bro…",
+   "component": "js (`crates/js/src/dom.rs`/`v8_runtime.rs` -- no `frameElement` anywhere)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-589": {
+   "status": "open",
+   "title": "`window` is not a proper WebIDL exotic object: no `Symbol.toStringTag` (`[object Object]` instead of `[object Window]`/`[object WindowProperties]`, same class a…",
+   "component": "js/V8 host-object layer (`window` global + \"WindowProperties\" prototype; `Symbol.toStringTag` pattern from `dom.rs:11143-11165` not applied to `window`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-590": {
+   "status": "open",
+   "title": "`document.createEvent` missing entirely; `window.dispatchEvent(new CustomEvent(\"beforeunload\"))` doesn't invoke the `onbeforeunload`/listener handler (only engi…",
+   "component": "js (`crates/js/src/dom.rs` -- no `createEvent` anywhere; `beforeunload` dispatch path)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-591": {
+   "status": "open",
+   "title": "Global uncaught-exception/unhandled-rejection reporting pipeline entirely unwired -- `window.onerror`, `'error'` listeners, `<body onerror>`, and `window.onunha…",
+   "component": "js/V8 host layer (`v8_runtime.rs` -- local `TryCatch` never bridges back to page script; `dom.rs` -- `reportError()` only callable manually, `PromiseRejectionEvent`/`'unhandledrejection'` don't exist at all)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-592": {
+   "status": "open",
+   "title": "`setHTMLUnsafe`/`getHTML` (WHATWG HTML LS §14.5) implemented only on `Element`, missing on `ShadowRoot` (separate hand-rolled object literal) and as `Document.p…",
+   "component": "js (`dom.rs:1315-1366` `_lumen_make_shadow_root` -- no `setHTMLUnsafe`/`getHTML`; no `Document.parseHTMLUnsafe` static anywhere)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-593": {
+   "status": "open",
+   "title": "`structuredClone` cannot clone `Blob`/`File`/`ImageData`/`Error` -- throws `DataCloneError` instead of round-tripping. 19 subtests, `structured-clone.any.html`.…",
+   "component": "js (`dom.rs:10176-10260` `structuredClone` -- own doc comment already says \"Not handled: Blob/File/ImageData/Error\", never filed until now)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-594": {
+   "status": "open",
+   "title": "`hidden` reflects as plain boolean instead of the `\"\"`/`\"hidden\"`/`\"until-found\"` tristate enum -- `hidden=\"until-found\"` mode (reveal algorithm, `beforematch`…",
+   "component": "js (`dom.rs:10724-10735`, `hidden` reflection entry)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-595": {
+   "status": "open",
+   "title": "`autocorrect`/`writingSuggestions` global content attributes missing entirely -- `'writingSuggestions' in element` === `false` on every element. `autocorrect/*`…",
+   "component": "js (`dom.rs:10724-10735`, global-attributes reflection table)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-596": {
+   "status": "open",
+   "title": "Legacy `initEvent`/`initUIEvent`/`initMouseEvent` missing entirely. Self-contained `dnd/synthetic/001.html`, 15/16 subtests fail. Найден P2, WPT-VENDOR-html-edi…",
+   "component": "js (`Event`/`UIEvent`/`MouseEvent` prototypes -- no `init*Event` anywhere)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-597": {
+   "status": "open",
+   "title": "`DragEvent` constructor defaults `dataTransfer` to a synthesized object instead of `null` and doesn't validate its type; `draggable` ignores the `<a>`/`<img>` d…",
+   "component": "js (`dom.rs:781-790` `DragEvent`; `dom.rs:2776-2782` `draggable`; `dom.rs:7639` `window`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-598": {
+   "status": "open",
+   "title": "`types` getter `.slice()`s a fresh array on every access instead of caching a `FrozenArray` until the data store changes -- `dt.types === dt.types` always `fals…",
+   "component": "js (`dom.rs:737-739` `DataTransfer.prototype.types` getter)",
    "date": null,
    "debtor": false
   }
@@ -8691,7 +8810,7 @@
   "js (`crates/js/src/dom.rs::_lumen_make_range` object literal, `dom.rs:6870-6944`)": [
    "BUG-573"
   ],
-  "js (`crates/js/src/dom.rs` -- `Document` wrapper has no `write`/`writeln` member at all)": [
+  "js (`crates/js/src/dom.rs` -- `Document` wrapper has no `write`/`writeln`/`open`/`close` member at all)": [
    "BUG-568"
   ],
   "js (`crates/js/src/dom.rs` -- `HTMLImageElement` wrapper has no `decode` member)": [
