@@ -1,8 +1,9 @@
 # BUG-379 — защита от детекта автоматизации сама является отпечатком: 15 маркеров (`__playwright`, `__webdriver_evaluate`, `__selenium_*`, `_phantom`, `domAutomationController`, …) присутствуют own-свойствами `window` с `configurable:false`, тогда как в Chrome/Firefox их нет ни одного
 
 **Статус:** OPEN
-**Компонент:** js (`crates/js/src/surface_api.rs:163-181` — список `_automationGlobals` и цикл `Object.defineProperty(globalThis, _g, {get, set, configurable:false, enumerable:false})`; устанавливается на обоих движках: `crates/js/src/lib.rs:944` и `crates/js/src/v8_runtime.rs:3950`)
+**Компонент:** js (`crates/js/src/surface_api.rs:163-181` — список `_automationGlobals` и цикл `Object.defineProperty(globalThis, _g, {get, set, configurable:false, enumerable:false})`; устанавливается на единственном оставшемся движке V8: `crates/js/src/v8_runtime.rs:4311`)
 **Найден:** P2, WPT-VENDOR-fledge (2026-07-28), проба `--dump-layout` вне WPT (`.tmp/fledge-probe.html`, `.tmp/fledge-probe2.html`)
+**Актуализировано:** P1, 2026-08-04 (P3-v8-post-audit) — на момент находки шим ставился и на rquickjs (`lib.rs:944`), тот путь удалён целиком в S12b-F2/F3; дефект замысла не зависел от движка
 
 ## Симптом
 
@@ -62,7 +63,9 @@ data-свойства с объектами. То есть маркеры отл
 
 - Приватность — заявленная ценность проекта, а здесь механизм анти-фингерпринта
   **добавляет** уникальный признак вместо того, чтобы убрать.
-- Затрагивает обе JS-ветки (V8 по умолчанию и rquickjs), т.е. любую сборку.
+- Затрагивает единственную оставшуюся JS-ветку (V8), т.е. любую сборку — на
+  момент находки задевало обе ветки (V8 и rquickjs), rquickjs с тех пор снесён
+  целиком (S12b-F2/F3).
 - Сочетается с BUG-378: даже убрав эти 15 имён, страница опознаёт Lumen по 592
   перечисляемым `_lumen_*`. Чинить имеет смысл вместе — по отдельности каждый
   фикс не даёт наблюдаемого эффекта.
