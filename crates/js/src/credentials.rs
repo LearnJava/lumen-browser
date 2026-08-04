@@ -4,8 +4,8 @@
 //! and `.get()` plus `PublicKeyCredential`, `OTPCredential`, and `IdentityCredential`
 //! classes.
 //! WebAuthn operations marshal requests to the native bindings `_lumen_webauthn_create` /
-//! `_lumen_webauthn_get` (registered in [`crate::dom::install_dom_api`]), which forward
-//! to the process-global [`CredentialProvider`] installed by the shell via
+//! `_lumen_webauthn_get` (registered by the V8 install path, `v8_runtime.rs::install_dom`),
+//! which forward to the process-global [`CredentialProvider`] installed by the shell via
 //! [`set_credential_provider`]. With no provider installed (headless tests, dump
 //! modes), WebAuthn operations reject with `NotAllowedError` — the privacy-preserving
 //! "no authenticator" default.
@@ -28,9 +28,9 @@
 //!
 //! Mirrors the process-global pattern of [`crate::clipboard`].
 
-use lumen_core::ext::{
-    CredentialProvider, WebAuthnCreateRequest, WebAuthnGetRequest,
-};
+use lumen_core::ext::CredentialProvider;
+#[cfg(any(test, feature = "v8-backend"))]
+use lumen_core::ext::{WebAuthnCreateRequest, WebAuthnGetRequest};
 use std::sync::{Arc, OnceLock, RwLock};
 
 /// Process-global credential provider, installed once by the shell.
@@ -53,6 +53,11 @@ pub fn set_credential_provider(provider: Arc<dyn CredentialProvider>) {
 }
 
 /// Clone the installed provider, if any.
+///
+/// `create`/`get` below (and this) are only reachable from the V8 native
+/// registration or from the engine-agnostic `mod tests` — the QuickJS
+/// registration they also used to back was removed in S12b-F3.
+#[cfg(any(test, feature = "v8-backend"))]
 fn provider() -> Option<Arc<dyn CredentialProvider>> {
     slot().read().ok().and_then(|g| g.clone())
 }
@@ -75,6 +80,7 @@ pub(crate) fn install_credentials_bindings_v8(rt: &crate::v8_runtime::V8JsRuntim
 /// userName | userDisplayName | challenge | origin | algsCsv | uv(1/0) |
 /// excludeCsv`. `algsCsv` is comma-separated decimal COSE ids; `excludeCsv` is
 /// comma-separated base64url credential IDs.
+#[cfg(any(test, feature = "v8-backend"))]
 pub(crate) fn create(packed: String) -> String {
     let Some(provider) = provider() else {
         return error_json("NotAllowedError");
@@ -125,6 +131,7 @@ pub(crate) fn create(packed: String) -> String {
 ///
 /// `packed` fields (`|`-separated), each base64url: `rpId | challenge | origin |
 /// allowCsv | uv(1/0)`. `allowCsv` is comma-separated base64url credential IDs.
+#[cfg(any(test, feature = "v8-backend"))]
 pub(crate) fn get(packed: String) -> String {
     let Some(provider) = provider() else {
         return error_json("NotAllowedError");
@@ -160,21 +167,27 @@ pub(crate) fn get(packed: String) -> String {
 
 /// Native binding `_lumen_webauthn_uvpa()` →
 /// `isUserVerifyingPlatformAuthenticatorAvailable()`.
+///
+/// Unlike `create`/`get`, not exercised by `mod tests` — V8-only.
+#[cfg(feature = "v8-backend")]
 pub(crate) fn uvpa_available() -> bool {
     provider().is_some_and(|p| p.is_user_verifying_platform_authenticator_available())
 }
 
 /// Build the `{ "ok": false, "error": <DOMException name> }` rejection payload.
+#[cfg(any(test, feature = "v8-backend"))]
 fn error_json(dom_exception: &str) -> String {
     format!("{{\"ok\":false,\"error\":\"{}\"}}", dom_exception)
 }
 
 /// Append `,"name":"<base64url(bytes)>"` to a JSON object being built.
+#[cfg(any(test, feature = "v8-backend"))]
 fn push_b64_field(s: &mut String, name: &str, bytes: &[u8]) {
     s.push_str(&format!(",\"{}\":\"{}\"", name, base64url_encode(bytes)));
 }
 
 /// Parse a comma-separated list of decimal integers (COSE algorithm ids).
+#[cfg(any(test, feature = "v8-backend"))]
 fn parse_i64_csv(s: &str) -> Vec<i64> {
     s.split(',')
         .filter(|p| !p.is_empty())
@@ -183,6 +196,7 @@ fn parse_i64_csv(s: &str) -> Vec<i64> {
 }
 
 /// Parse a comma-separated list of base64url credential IDs into raw bytes.
+#[cfg(any(test, feature = "v8-backend"))]
 fn parse_b64_csv(s: &str) -> Vec<Vec<u8>> {
     s.split(',')
         .filter(|p| !p.is_empty())
@@ -191,11 +205,13 @@ fn parse_b64_csv(s: &str) -> Vec<Vec<u8>> {
 }
 
 /// Decode base64url bytes, then lossily interpret as UTF-8 (for text fields).
+#[cfg(any(test, feature = "v8-backend"))]
 fn b64url_to_string(s: &str) -> String {
     String::from_utf8_lossy(&b64url_decode(s)).into_owned()
 }
 
 /// Base64url encode without padding (RFC 4648 §5).
+#[cfg(any(test, feature = "v8-backend"))]
 fn base64url_encode(data: &[u8]) -> String {
     const ALPHABET: &[u8; 64] =
         b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
@@ -218,6 +234,7 @@ fn base64url_encode(data: &[u8]) -> String {
 }
 
 /// Decode a base64url string (padding and `+`/`/` variants tolerated).
+#[cfg(any(test, feature = "v8-backend"))]
 fn b64url_decode(s: &str) -> Vec<u8> {
     fn val(c: u8) -> Option<u32> {
         match c {

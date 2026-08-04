@@ -18,7 +18,7 @@
 //! Mirrors [`download_bindings`](crate::download_bindings): the binding closures
 //! have no access to the shell's window state, so they record intent in a
 //! `static` the shell owns the draining of — no extra `Arc` threaded through the
-//! already-large `install_primitives` signature.
+//! already-large `v8_runtime.rs::install_dom` signature.
 
 use std::sync::{Mutex, OnceLock};
 

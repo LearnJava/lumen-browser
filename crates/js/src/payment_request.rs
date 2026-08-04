@@ -14,7 +14,7 @@
 /// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 ///
 /// Defines `window.PaymentRequest` constructor and related types.
-/// Must be called **after** `dom::install_dom_api` so that `window` is already present.
+/// Must be called **after** `v8_runtime.rs::install_dom` so that `window` is already present.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_payment_request_v8(
     rt: &crate::v8_runtime::V8JsRuntime,

@@ -4215,6 +4215,91 @@ Next in queue: S12b-F3 (`dom.rs`: delete `install_primitives`, 2736 lines,
 and `use rquickjs`; `esm.rs`'s `LumenResolver`/`LumenLoader` are already gone
 as of F2, so F3's own scope note about excluding them is now moot).
 
+### S12b-F3 (`dom.rs`: delete `install_primitives` and `use rquickjs`)
+
+Deleted `install_primitives` (`dom.rs:461-3189`, 2736 lines including its
+`#[allow(...)]` attribute) and the `use rquickjs::{Ctx, Function, Result as
+QjResult};` import. `install_primitives`'s only caller, `install_dom_api`
+(`dom.rs:257-359`, `pub fn` taking `&Ctx<'_>` and returning `QjResult<()>`),
+was already dead in practice after F2 removed `QuickJsRuntime` — nothing in
+`lib.rs` or anywhere else called it — but stayed invisible to `dead_code`
+because a real `pub fn` is exempt from that lint (external crates could in
+principle call it). Deleting `install_primitives` left `install_dom_api`
+uncompilable (its body was one call into the deleted function plus a
+`ctx.eval::<(), _>(WEB_API_SHIM)`), so it went too, along with the
+now-unreachable rquickjs-only `HistoryState`/`HistoryEntry` history-stack
+types it alone constructed (`v8_runtime.rs` carries its own independent
+`HistoryState`).
+
+**The real work was the cascade.** Once `install_primitives`/`install_dom_api`
+were gone, everything they alone kept "live" for the `dead_code` lint's
+reachability analysis surfaced as newly dead — about 30 items across
+`dom.rs`, `credentials.rs`, and `clipboard.rs`. Sorted each into one of three
+buckets by checking actual callers (`grep`, cross-checked against the
+compiler's own `--all-targets` output, not just grep — JS-shim string
+literals inside `WEB_API_SHIM` false-positive-match plain identifier greps):
+
+1. **Zero callers anywhere** (`dom.rs`: `namespace_uri`, `set_text_content`,
+   `remove_attribute`, `_parse_style_string`, `_serialize_style_map`,
+   `_camel_to_kebab` — each had a same-named independent twin in
+   `v8_runtime.rs`, so nothing else needed them) — deleted outright.
+2. **Used only by `dom.rs`'s own `mod tests`**, which itself only
+   glob-imports the module scope (`use super::*`) under `#[cfg(feature =
+   "v8-backend")]` (a pre-existing gate, not new) — `find_element_by_tag`,
+   `find_first_matching`, `collect_text_content`, `collect_text_inner`,
+   `set_attribute`, `cache_meta_method`, plus their supporting imports
+   (`Arc`, `Mutex`, `IdbBackend`, `Attribute`, `Document`, `NodeData`,
+   `NodeId`, `QualName`) — regated `#[cfg(all(test, feature =
+   "v8-backend"))]` (plain `#[cfg(test)]` isn't enough: under `test` without
+   `v8-backend`, `mod tests`'s own glob-import doesn't fire, so the plain gate
+   still left them unreachable in that specific config and the lint still
+   fired). `WEB_API_SHIM` itself got `#[cfg(feature = "v8-backend")]` — its
+   only real Rust-code consumer is `v8_runtime.rs::install_dom`.
+3. **Used by both the V8 native registration *and* an engine-agnostic
+   `mod tests`** in `credentials.rs` (`create`/`get`/`provider` plus their
+   b64/JSON helpers — WebAuthn `_lumen_webauthn_create`/`_lumen_webauthn_get`
+   used to also be registered from `install_primitives`) and `clipboard.rs`
+   (`read_text`/`write_text`) — gated `#[cfg(any(test, feature =
+   "v8-backend"))]` so both the always-compiled test suite and the V8 build
+   keep them. One function, `credentials::uvpa_available`, looked like the
+   same pattern but has no test caller at all — gating it `any(test, ...)`
+   left it newly dead under `test` alone, so it got the narrower
+   `#[cfg(feature = "v8-backend")]` instead. Also split
+   `use lumen_core::ext::{CredentialProvider, WebAuthnCreateRequest,
+   WebAuthnGetRequest}` in `credentials.rs`: `CredentialProvider` stays
+   ungated (used unconditionally by `set_credential_provider`, a real `pub
+   fn`), the other two moved to the same `any(test, v8-backend)` gate as the
+   functions that use them.
+
+Also fixed ~15 stale doc-comment references to the now-deleted
+`dom::install_dom_api`/`dom::install_primitives` across `audio_element.rs`,
+`battery_bindings.rs`, `clipboard.rs`, `credentials.rs`, `dom_parser.rs`,
+`download_bindings.rs`, `iframe_element.rs`, `navigator_bindings.rs`,
+`network_log_bindings.rs`, `payment_request.rs`, `pip_bindings.rs`,
+`scroll_timeline.rs`, `surface_api.rs` — all "must be called after X"
+ordering notes, repointed at `v8_runtime.rs::install_dom`. Left the handful of
+purely historical porting-context comments in `v8_runtime.rs` itself alone
+(they correctly describe what code was ported *from*, past tense).
+
+Verification: `cargo test -p lumen-js --features v8-backend` — 2479 lib + 68
+`tests/all.rs` integration (unchanged; this slice deletes, doesn't move,
+tests — they were already on `V8JsRuntime` after S12b-24).
+`cargo test -p lumen-js` (default) — 208 lib, all passing. `cargo clippy -p
+lumen-js --all-targets --features v8-backend -- -D warnings` — clean (0
+errors, was already 0 pre-slice; the cascade above is what kept it that way).
+`cargo clippy -p lumen-js --all-targets -- -D warnings` (default,
+no-features — the decaying rquickjs-only path, not required to reach zero,
+but tracked against `main`'s baseline) — 18 errors, **zero delta** from
+`main`'s 18: verified by diffing the sorted `file:line` location sets of both
+runs, not just the count (a same-count coincidence would have hidden a
+swap of one real regression for one accidental fix). `cargo check -p
+lumen-shell` and `cargo clippy -p lumen-shell --all-targets -- -D warnings`
+(default v8-backend build) both clean.
+
+Next in queue: S12b-F4 (remove `rquickjs` from `crates/js/Cargo.toml`, fix
+crate description, update `docs/plan/tech-stack.md`/`CAPABILITIES.md`/
+`subsystems/js.md`/ADR-018; `rquickjs` disappears from `Cargo.lock`).
+
 ---
 
 ## Risks (Rev 2)

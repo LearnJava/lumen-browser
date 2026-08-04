@@ -7,7 +7,7 @@
 //! rejected `Promise`, matching Chrome's behavior when the API is removed via
 //! Permissions Policy.
 //!
-//! Must be called **after** `dom::install_dom_api` (requires `navigator` to exist).
+//! Must be called **after** `v8_runtime.rs::install_dom` (requires `navigator` to exist).
 
 /// V8 port of the former rquickjs `install_battery_bindings` (Ph3 V8 migration S5-S7,
 /// rquickjs side removed in S12b-4): identical JS shim, evaluated via
