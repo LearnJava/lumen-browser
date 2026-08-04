@@ -900,18 +900,8 @@ impl QuickJsRuntime {
                 eprintln!("WebGPU API init failed: {}", e);
             }
 
-            // W3C DOM Parsing and Serialization — DOMParser + XMLSerializer.
-            // After DOM and _lumen_get_attr_names / _lumen_get_children / _lumen_is_text_node
-            // bindings are registered.  DOMParser.parseFromString() creates independent
-            // virtual documents (pure-JS nodes, not backed by Rust lumen_dom).
-            // XMLSerializer.serializeToString() handles both virtual and native nodes.
-            if let Err(e) = dom_parser::install_dom_parser(&ctx) {
-                eprintln!("DOMParser/XMLSerializer init failed: {}", e);
-            }
-
             // W3C SVG 2 — SVGElement/SVGSVGElement class hierarchy, getBBox() stubs,
             // SVGRect/SVGPoint/SVGLength/SVGMatrix types, createElementNS SVG wiring.
-            // Must come after dom_parser (document.createElementNS already defined).
             if let Err(e) = svg::install_svg_bindings(&ctx) {
                 eprintln!("SVG DOM API init failed: {}", e);
             }

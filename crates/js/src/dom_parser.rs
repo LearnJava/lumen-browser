@@ -24,20 +24,12 @@
 //! - XML error-document on parse failure for XML MIME types
 //! - `serializeToString` for `ProcessingInstruction` / `DocumentType` nodes
 
-use rquickjs::Ctx;
-
-/// Install DOMParser and XMLSerializer into the JS context.
+/// Install DOMParser and XMLSerializer into a V8 runtime (Ph3 V8 migration
+/// S5-S7; the rquickjs twin was removed in S12b-B23).
 ///
 /// Must be called after `dom::install_dom_api` so that `_lumen_is_text_node`,
 /// `_lumen_get_tag_name`, `_lumen_get_children`, `_lumen_get_attr`,
 /// `_lumen_get_attr_names`, and `_lumen_get_text_content` are registered.
-pub fn install_dom_parser(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(DOM_PARSER_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_dom_parser`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_dom_parser_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -45,6 +37,7 @@ pub(crate) fn install_dom_parser_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lume
     Ok(())
 }
 
+#[cfg(feature = "v8-backend")]
 const DOM_PARSER_SHIM: &str = r#"
 (function() {
 'use strict';
@@ -891,318 +884,293 @@ if (typeof window !== 'undefined') {
 })();
 "#;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use rquickjs::{Context, Runtime};
+#[cfg(all(test, feature = "v8-backend"))]
+mod tests_v8 {
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
+    use crate::v8_runtime::V8JsRuntime;
+
+    use super::*;
+
+    fn setup() -> V8JsRuntime {
+        let rt = V8JsRuntime::new().unwrap();
+        // Minimal stubs for window / navigator / document
+        rt.eval(
+            r#"
+            var window = globalThis;
+            var navigator = {};
+            var document = {};
+            "#,
+        )
+        .unwrap();
+        install_dom_parser_v8(&rt).unwrap();
+        rt
     }
 
-    fn setup(f: impl FnOnce(&rquickjs::Ctx)) {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            // Minimal stubs for window / navigator / document
-            ctx.eval::<(), _>(
-                r#"
-                var window = globalThis;
-                var navigator = {};
-                var document = {};
-                "#,
-            )
-            .unwrap();
-            install_dom_parser(&ctx).unwrap();
-            f(&ctx);
-        });
+    fn bool_eval(rt: &V8JsRuntime, expr: &str) -> bool {
+        matches!(rt.eval(expr).unwrap(), JsValue::Bool(true))
+    }
+
+    fn string_eval(rt: &V8JsRuntime, expr: &str) -> String {
+        match rt.eval(expr).unwrap() {
+            JsValue::String(s) => s,
+            other => panic!("expected string, got {other:?}"),
+        }
+    }
+
+    fn number_eval(rt: &V8JsRuntime, expr: &str) -> f64 {
+        match rt.eval(expr).unwrap() {
+            JsValue::Number(n) => n,
+            other => panic!("expected number, got {other:?}"),
+        }
     }
 
     #[test]
     fn dom_parser_class_exists() {
-        setup(|ctx| {
-            let ok: bool = ctx.eval("typeof DOMParser === 'function'").unwrap();
-            assert!(ok);
-        });
+        let rt = setup();
+        assert!(bool_eval(&rt, "typeof DOMParser === 'function'"));
     }
 
     #[test]
     fn xml_serializer_class_exists() {
-        setup(|ctx| {
-            let ok: bool = ctx.eval("typeof XMLSerializer === 'function'").unwrap();
-            assert!(ok);
-        });
+        let rt = setup();
+        assert!(bool_eval(&rt, "typeof XMLSerializer === 'function'"));
     }
 
     #[test]
     fn dom_parser_constructor() {
-        setup(|ctx| {
-            let ok: bool = ctx
-                .eval("new DOMParser() instanceof DOMParser")
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = setup();
+        assert!(bool_eval(&rt, "new DOMParser() instanceof DOMParser"));
     }
 
     #[test]
     fn parse_from_string_returns_document() {
-        setup(|ctx| {
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var p = new DOMParser();
-                    var doc = p.parseFromString('<p>hello</p>', 'text/html');
-                    doc !== null && typeof doc === 'object' && doc.nodeType === 9
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = setup();
+        let ok = bool_eval(
+            &rt,
+            r#"
+            var p = new DOMParser();
+            var doc = p.parseFromString('<p>hello</p>', 'text/html');
+            doc !== null && typeof doc === 'object' && doc.nodeType === 9
+            "#,
+        );
+        assert!(ok);
     }
 
     #[test]
     fn parse_from_string_has_body() {
-        setup(|ctx| {
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var doc = new DOMParser().parseFromString('<p>hello</p>', 'text/html');
-                    doc.body !== null && doc.body.nodeType === 1
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = setup();
+        let ok = bool_eval(
+            &rt,
+            r#"
+            var doc = new DOMParser().parseFromString('<p>hello</p>', 'text/html');
+            doc.body !== null && doc.body.nodeType === 1
+            "#,
+        );
+        assert!(ok);
     }
 
     #[test]
     fn parse_from_string_query_selector() {
-        setup(|ctx| {
-            let text: String = ctx
-                .eval(
-                    r#"
-                    var doc = new DOMParser().parseFromString(
-                        '<div><p class="x">hello</p></div>', 'text/html');
-                    var p = doc.querySelector('.x');
-                    p ? p.textContent : ''
-                    "#,
-                )
-                .unwrap();
-            assert_eq!(text, "hello");
-        });
+        let rt = setup();
+        let text = string_eval(
+            &rt,
+            r#"
+            var doc = new DOMParser().parseFromString(
+                '<div><p class="x">hello</p></div>', 'text/html');
+            var p = doc.querySelector('.x');
+            p ? p.textContent : ''
+            "#,
+        );
+        assert_eq!(text, "hello");
     }
 
     #[test]
     fn parse_from_string_attributes() {
-        setup(|ctx| {
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var doc = new DOMParser().parseFromString(
-                        '<a href="https://example.com" id="lnk">click</a>', 'text/html');
-                    var a = doc.getElementById('lnk');
-                    a !== null && a.getAttribute('href') === 'https://example.com'
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = setup();
+        let ok = bool_eval(
+            &rt,
+            r#"
+            var doc = new DOMParser().parseFromString(
+                '<a href="https://example.com" id="lnk">click</a>', 'text/html');
+            var a = doc.getElementById('lnk');
+            a !== null && a.getAttribute('href') === 'https://example.com'
+            "#,
+        );
+        assert!(ok);
     }
 
     #[test]
     fn parse_from_string_nested_structure() {
-        setup(|ctx| {
-            let count: i32 = ctx
-                .eval(
-                    r#"
-                    var doc = new DOMParser().parseFromString(
-                        '<ul><li>a</li><li>b</li><li>c</li></ul>', 'text/html');
-                    doc.querySelectorAll('li').length
-                    "#,
-                )
-                .unwrap();
-            assert_eq!(count, 3);
-        });
+        let rt = setup();
+        let count = number_eval(
+            &rt,
+            r#"
+            var doc = new DOMParser().parseFromString(
+                '<ul><li>a</li><li>b</li><li>c</li></ul>', 'text/html');
+            doc.querySelectorAll('li').length
+            "#,
+        );
+        assert_eq!(count, 3.0);
     }
 
     #[test]
     fn xml_serializer_round_trip() {
-        setup(|ctx| {
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var doc = new DOMParser().parseFromString(
-                        '<div id="x">hello</div>', 'text/html');
-                    var el = doc.getElementById('x');
-                    var s = new XMLSerializer().serializeToString(el);
-                    s.indexOf('id="x"') !== -1 && s.indexOf('hello') !== -1
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = setup();
+        let ok = bool_eval(
+            &rt,
+            r#"
+            var doc = new DOMParser().parseFromString(
+                '<div id="x">hello</div>', 'text/html');
+            var el = doc.getElementById('x');
+            var s = new XMLSerializer().serializeToString(el);
+            s.indexOf('id="x"') !== -1 && s.indexOf('hello') !== -1
+            "#,
+        );
+        assert!(ok);
     }
 
     #[test]
     fn xml_serializer_constructor() {
-        setup(|ctx| {
-            let ok: bool = ctx
-                .eval("new XMLSerializer() instanceof XMLSerializer")
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = setup();
+        assert!(bool_eval(
+            &rt,
+            "new XMLSerializer() instanceof XMLSerializer"
+        ));
     }
 
     #[test]
     fn parse_from_string_text_content() {
-        setup(|ctx| {
-            let text: String = ctx
-                .eval(
-                    r#"
-                    var doc = new DOMParser().parseFromString(
-                        '<html><body><h1>Title</h1><p>Paragraph</p></body></html>',
-                        'text/html'
-                    );
-                    doc.body.textContent
-                    "#,
-                )
-                .unwrap();
-            assert!(text.contains("Title"));
-            assert!(text.contains("Paragraph"));
-        });
+        let rt = setup();
+        let text = string_eval(
+            &rt,
+            r#"
+            var doc = new DOMParser().parseFromString(
+                '<html><body><h1>Title</h1><p>Paragraph</p></body></html>',
+                'text/html'
+            );
+            doc.body.textContent
+            "#,
+        );
+        assert!(text.contains("Title"));
+        assert!(text.contains("Paragraph"));
     }
 
     #[test]
     fn parse_from_string_xml_mime() {
-        setup(|ctx| {
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var doc = new DOMParser().parseFromString(
-                        '<root><item>1</item></root>', 'application/xml');
-                    doc !== null && doc.nodeType === 9
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = setup();
+        let ok = bool_eval(
+            &rt,
+            r#"
+            var doc = new DOMParser().parseFromString(
+                '<root><item>1</item></root>', 'application/xml');
+            doc !== null && doc.nodeType === 9
+            "#,
+        );
+        assert!(ok);
     }
 
     #[test]
     fn parse_from_string_invalid_mime_throws() {
-        setup(|ctx| {
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    try {
-                      new DOMParser().parseFromString('x', 'text/csv');
-                      false
-                    } catch(e) {
-                      e instanceof TypeError
-                    }
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = setup();
+        let ok = bool_eval(
+            &rt,
+            r#"
+            try {
+              new DOMParser().parseFromString('x', 'text/csv');
+              false
+            } catch(e) {
+              e instanceof TypeError
+            }
+            "#,
+        );
+        assert!(ok);
     }
 
     #[test]
     fn document_create_element() {
-        setup(|ctx| {
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var doc = new DOMParser().parseFromString('', 'text/html');
-                    var el = doc.createElement('span');
-                    el.nodeType === 1 && el.tagName === 'SPAN'
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = setup();
+        let ok = bool_eval(
+            &rt,
+            r#"
+            var doc = new DOMParser().parseFromString('', 'text/html');
+            var el = doc.createElement('span');
+            el.nodeType === 1 && el.tagName === 'SPAN'
+            "#,
+        );
+        assert!(ok);
     }
 
     #[test]
     fn element_inner_html_set_get() {
-        setup(|ctx| {
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var doc = new DOMParser().parseFromString('<div></div>', 'text/html');
-                    var div = doc.querySelector('div');
-                    div.innerHTML = '<span>hi</span>';
-                    div.querySelector('span') !== null &&
-                    div.querySelector('span').textContent === 'hi'
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = setup();
+        let ok = bool_eval(
+            &rt,
+            r#"
+            var doc = new DOMParser().parseFromString('<div></div>', 'text/html');
+            var div = doc.querySelector('div');
+            div.innerHTML = '<span>hi</span>';
+            div.querySelector('span') !== null &&
+            div.querySelector('span').textContent === 'hi'
+            "#,
+        );
+        assert!(ok);
     }
 
     #[test]
     fn serializer_void_elements() {
-        setup(|ctx| {
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var doc = new DOMParser().parseFromString(
-                        '<img src="x.png" alt="img"><br>', 'text/html');
-                    var s = new XMLSerializer().serializeToString(doc.body || doc);
-                    s.indexOf('<img') !== -1
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = setup();
+        let ok = bool_eval(
+            &rt,
+            r#"
+            var doc = new DOMParser().parseFromString(
+                '<img src="x.png" alt="img"><br>', 'text/html');
+            var s = new XMLSerializer().serializeToString(doc.body || doc);
+            s.indexOf('<img') !== -1
+            "#,
+        );
+        assert!(ok);
     }
 
     #[test]
     fn document_get_elements_by_tag_name() {
-        setup(|ctx| {
-            let count: i32 = ctx
-                .eval(
-                    r#"
-                    var doc = new DOMParser().parseFromString(
-                        '<p>a</p><p>b</p><p>c</p>', 'text/html');
-                    doc.getElementsByTagName('p').length
-                    "#,
-                )
-                .unwrap();
-            assert_eq!(count, 3);
-        });
+        let rt = setup();
+        let count = number_eval(
+            &rt,
+            r#"
+            var doc = new DOMParser().parseFromString(
+                '<p>a</p><p>b</p><p>c</p>', 'text/html');
+            doc.getElementsByTagName('p').length
+            "#,
+        );
+        assert_eq!(count, 3.0);
     }
 
     #[test]
     fn document_get_elements_by_class_name() {
-        setup(|ctx| {
-            let count: i32 = ctx
-                .eval(
-                    r#"
-                    var doc = new DOMParser().parseFromString(
-                        '<p class="a b">1</p><p class="a">2</p><p class="b">3</p>', 'text/html');
-                    doc.getElementsByClassName('a').length
-                    "#,
-                )
-                .unwrap();
-            assert_eq!(count, 2);
-        });
+        let rt = setup();
+        let count = number_eval(
+            &rt,
+            r#"
+            var doc = new DOMParser().parseFromString(
+                '<p class="a b">1</p><p class="a">2</p><p class="b">3</p>', 'text/html');
+            doc.getElementsByClassName('a').length
+            "#,
+        );
+        assert_eq!(count, 2.0);
     }
 
     #[test]
     fn exported_on_window() {
-        setup(|ctx| {
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    typeof window.DOMParser === 'function' &&
-                    typeof window.XMLSerializer === 'function'
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = setup();
+        let ok = bool_eval(
+            &rt,
+            r#"
+            typeof window.DOMParser === 'function' &&
+            typeof window.XMLSerializer === 'function'
+            "#,
+        );
+        assert!(ok);
     }
 }
