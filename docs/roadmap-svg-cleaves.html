@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-04",
  "counts": {
-  "open": 223,
+  "open": 226,
   "fixed": 309,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 532,
+ "total_bugs": 535,
  "phases": [
   {
    "id": "P0",
@@ -2722,10 +2722,10 @@
       },
       {
        "id": "WPT-VENDOR-html-semantics",
-       "title": "WPT: прогнать срез `html/semantics`",
-       "status": "planned",
+       "title": "WPT: разложить срез `html/semantics` на подсрезы",
+       "status": "done",
        "size": "L",
-       "note": "Скоуп: ⬜ (кандидат). Срез категории `html`, вынесен из `WPT-VENDOR-html` 2026-07-28 (полный прогон категории — 40+ часов, не помещается в сессию). 2223 `testharness`-id (314 `testdriver`), второй по размеру. Дерево уже вендорено. Самая широкая движковая поверхность после `canvas`: формы, встроенный контент, табличная модель, скриптинг"
+       "note": "Скоуп: ⬜ (кандидат). Срез категории `html`, вынесен из `WPT-VENDOR-html` 2026-07-28 (полный прогон категории — 40+ часов, не помещается в сессию). Дерево уже вендорено. DONE 2026-08-04: сам срез (2223 `testharness`-id, 314 `testdriver`) прогнан целиком оценивается в ~13 ч по формуле `(files − testdriver) × ~25 с` — той же, что развела `WPT-VENDOR-html` на `html-semantics`/`html-browsers`/… — и снова не помещается в сессию, поэтому без единого прогона разложен на подсрезы по 18 подкаталогам `html/semantics/`: `WPT-VENDOR-html-semantics-embedded-content` (708 id, 14 testdriver — крупнейший), `WPT-VENDOR-html-semantics-scripting-1` (520 id, 0 testdriver), `WPT-VENDOR-html-semantics-forms` (446 id, 116 testdriver), `WPT-VENDOR-html-semantics-document-metadata` (105 id, 0 testdriver — прогнан в этой же сессии, см. строку ниже), `WPT-VENDOR-html-semantics-misc` (444 id, остаток 15 мелких подкаталогов + 2 корневых файла) — ни один подкаталог не выброшен молча"
       },
       {
        "id": "WPT-VENDOR-html-browsers",
@@ -8254,6 +8254,27 @@
    "component": "js (`crates/js/src/dom.rs::_lumen_get_fonts`, ~line 6779)",
    "date": null,
    "debtor": false
+  },
+  "BUG-565": {
+   "status": "open",
+   "title": "`document.head` is always `undefined` -- never wired up, unlike its `body`/`documentElement` siblings. `document.head.append/appendChild/prepend(...)` throws `T…",
+   "component": "js (`crates/js/src/dom.rs` -- live `Document` object literal, ~line 7140: `get body()`/`get documentElement()` exist, `get head()` does not)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-566": {
+   "status": "open",
+   "title": "pragma\" crates/engine/html-parser/src/*.rs crates/shell/src/*.rs` and `grep -rln '\"refresh\"' crates/engine/ crates/js/` both zero hits)",
+   "component": "engine (no pragma-directive processing anywhere -- `grep -rn \"http.equiv\\",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-567": {
+   "status": "open",
+   "title": "`HTMLTitleElement.prototype.text` does not exist (contrast `document.title`, which has a real getter/setter) -- reading/writing `<title>.text` is `undefined`. A…",
+   "component": "js (`crates/js/src/dom.rs` -- `HTMLTitleElement` registered as a tag-constructor name, `dom.rs:4614`/`4648`, with zero prototype members ever defined)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -8380,6 +8401,9 @@
   ],
   "encoding": [
    "BUG-162"
+  ],
+  "engine (no pragma-directive processing anywhere -- `grep -rn \"http.equiv\\": [
+   "BUG-566"
   ],
   "font": [
    "BUG-059",
@@ -8528,11 +8552,17 @@
   "js (`crates/js/src/dom.rs::_lumen_get_fonts`, ~line 6779)": [
    "BUG-564"
   ],
+  "js (`crates/js/src/dom.rs` -- `HTMLTitleElement` registered as a tag-constructor name, `dom.rs:4614`/`4648`, with zero prototype members ever defined)": [
+   "BUG-567"
+  ],
   "js (`crates/js/src/dom.rs` -- `_lumen_build_element`, `_obj`)": [
    "BUG-556"
   ],
   "js (`crates/js/src/dom.rs` -- element wrapper factory)": [
    "BUG-551"
+  ],
+  "js (`crates/js/src/dom.rs` -- live `Document` object literal, ~line 7140: `get body()`/`get documentElement()` exist, `get head()` does not)": [
+   "BUG-565"
   ],
   "js (`crates/js/src/dom.rs` — `Range` global at `~6958`, no `StaticRange`)": [
    "BUG-533"
