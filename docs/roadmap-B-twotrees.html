@@ -2894,9 +2894,9 @@
       {
        "id": "WPT-VENDOR-images",
        "title": "WPT: вендорить + прогнать категорию `images`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-04: категория уже была вендорена целиком раньше как разделяемая фикстур-директория (`WPT-RUN-3` slice 22, `tests/wpt/images/`) — сверка с пиновым апстрим-клоном (`35be3b44`) подтвердила побайтовое совпадение файлового набора, довендоривать нечего. `images/` состоит из 90 растровых/векторных фикстур + одного `wptserve`-хендлера, **ни одного собственного тестового файла** — `grep -c '\"images/' MANIFEST.json` = 0, `run_report.py --all --root images --recursive` даёт `no tests selected` мгновенно. Новых багов не заведено"
       },
       {
        "id": "WPT-VENDOR-import-maps",
@@ -5495,7 +5495,7 @@
   },
   "BUG-128": {
    "status": "open",
-   "title": "font-parity (serif vs sans, Inter vs Edge) — общий должник многих тестов. TEST-79 6.76% внесён в KNOWN_DEBTORS (прогон 2026-06-23)",
+   "title": "font-parity (serif vs sans, Inter vs Edge) — общий должник многих тестов. TEST-79 6.76% внесён в KNOWN_DEBTORS (прогон 2026-06-23). **Механизм резолва починен 2…",
    "component": "font",
    "date": null,
    "debtor": true
