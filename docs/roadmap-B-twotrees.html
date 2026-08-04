@@ -2937,9 +2937,15 @@
       {
        "id": "WPT-VENDOR-input-events",
        "title": "WPT: вендорить + прогнать категорию `input-events`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root input-events --recursive`, ~1 мин) — **30/33 harness OK, 106/1728 сабтестов**. Весь провал объясняется уже открытыми дефектами, живой пробой (`--mcp-live-port`) подтверждён доминирующий: [BUG-368](bugs/BUG-368-OPEN.md) (`innerHTML`-сеттер — текстовая заглушка: `div.innerHTML = '<p>a<span>b[]</span>c</p>'` кладёт ОДИН текстовый узел вместо разбора разметки) объясняет львиную долю TypeError-каскада (`firstChild`/`nextSibling`/`parentNode`/… на `null`/`undefined`) во всех `input-events-get-target-ranges-*`-тестах, которые парсят курсорные маркеры `[]`/`{}` внутри вставленной через `innerHTML` разметки. Остальной провал — [BUG-574](bugs/BUG-574-OPEN.md) (`elementDocument.contains is not a function` внутри `testdriver.js`'s `getPointerInteractablePaintTree`, блокирует `test_driver.send_keys`/`.click()`), [BUG-533](bugs/BUG-533-OPEN.md) (`StaticRange` не определён), и два TIMEOUT (`*-delete-document.html`) — живой пробой подтверждён [BUG-480](bugs/BUG-480-OPEN.md) (`<iframe>` без отдельного browsing context: `frame.srcdoc =`/`frame.src =` не эмитит `load`, `contentDocument` остаётся `null`, поэтому `await` на `load`-событии висит до внешнего таймаута wptrunner). Отдельно — два известных класса невендоренной инфраструктуры, не баги движка: `test_driver.Actions is not a constructor` (346 сабтестов) — `/resources/testdriver-actions.js` не довендорен; `EditorTestUtils is not defined` (8 сабтестов) — внекатегорийный хелпер `../editing/include/editor-test-utils.js` не довендорен; третий TIMEOUT (`idlharness.window.html`) — невендоренные `/resources/WebIDLParser.js`+`idlharness.js`, тот же класс, что `input-device-capabilities`. Новых багов не заведено",
+       "bugs": [
+        "BUG-368",
+        "BUG-574",
+        "BUG-533",
+        "BUG-480 (все переподтверждены)"
+       ]
       },
       {
        "id": "WPT-VENDOR-installedapp",
@@ -9086,17 +9092,11 @@
   "js (`crates/js/src/dom.rs` -- no `command`/`commandFor` reflection, no `CommandEvent`, no invoke-action dispatch anywhere)": [
    "BUG-582"
   ],
-  "js (`crates/js/src/dom.rs` -- no `contains` on any node prototype)": [
-   "BUG-574"
-  ],
   "js (`crates/js/src/dom.rs` -- no `interestFor`/`InterestEvent` anywhere)": [
    "BUG-584"
   ],
   "js (`crates/js/src/dom.rs` -- only `tagName`/`nodeName` reflected, no `localName`)": [
    "BUG-575"
-  ],
-  "js (`crates/js/src/dom.rs` — `Range` global at `~6958`, no `StaticRange`)": [
-   "BUG-533"
   ],
   "js (`crates/js/src/dom.rs` — `Window`-шим)": [
    "BUG-529"
