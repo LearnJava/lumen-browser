@@ -246,21 +246,13 @@ pub struct QuickJsRuntime {
     /// Maps NodeId index (u32) → CSS property name → resolved CSS value string.
     /// Read by `_lumen_get_computed_style(nid, prop)` from JS (`getComputedStyle`).
     computed_styles: Arc<Mutex<HashMap<u32, HashMap<String, String>>>>,
-    /// Live Web Worker threads spawned by `new Worker(url)` on this page.
-    /// Maps worker ID → `WorkerHandle` (sender channel + join handle).
-    /// Shared with the native bindings installed by `worker::install_worker_bindings`.
-    workers: worker::WorkerRegistry,
     /// Outbound message queue: (worker_id, json) pairs posted by worker threads.
     /// Drained by `pump_workers()` and delivered to the matching JS `Worker` instance.
+    /// Never populated under QuickJS: `worker::install_worker_bindings` (the
+    /// only writer) was removed in S12b-B27 along with the rest of the
+    /// QuickJS Worker implementation. Kept only because `pump_workers()` is a
+    /// trait method the shell calls unconditionally; always drains empty.
     worker_messages: worker::WorkerMessageQueue,
-    /// Monotonically increasing counter used to assign unique IDs to new workers.
-    worker_next_id: Arc<Mutex<u32>>,
-    /// Shared blob URL → script text store for `importScripts()` in worker threads.
-    ///
-    /// Populated by `_lumen_register_worker_blob` (called from the WORKER_SHIM
-    /// `URL.createObjectURL` wrapper for text/* blobs).  Worker threads read this
-    /// store via `_lumen_import_scripts_resolve` to load blob: URLs synchronously.
-    worker_blob_store: worker::WorkerBlobStore,
     /// Whether to auto-dismiss cookie consent banners on each page load (7C.3).
     ///
     /// Defaults to `true`. Shell sets this from the user's `cookie_banner_dismiss`
@@ -507,10 +499,7 @@ impl QuickJsRuntime {
             pending_page_scrolls: Arc::new(Mutex::new(Vec::new())),
             page_scroll_y: Arc::new(Mutex::new(0.0)),
             computed_styles: Arc::new(Mutex::new(HashMap::new())),
-            workers: Arc::new(Mutex::new(HashMap::new())),
             worker_messages: Arc::new(Mutex::new(Vec::new())),
-            worker_next_id: Arc::new(Mutex::new(1)),
-            worker_blob_store: Arc::new(Mutex::new(HashMap::new())),
             cookie_banner_dismiss: AtomicBool::new(true),
             pending_notifications: Arc::new(Mutex::new(Vec::new())),
             deterministic: AtomicBool::new(false),
@@ -737,11 +726,6 @@ impl QuickJsRuntime {
                 eprintln!("Canvas 2D bindings init failed: {}", e);
             }
 
-            // Install OffscreenCanvas bindings (HTML LS §4.12.14).
-            if let Err(e) = offscreen_canvas::install_offscreen_canvas_bindings(&ctx) {
-                eprintln!("OffscreenCanvas bindings init failed: {}", e);
-            }
-
             // Install AudioContext stub with per-session fingerprint noise (ADR-007 Layer 4, 9D.3).
             let audio_seed = audio_bindings::new_session_seed();
             if let Err(e) = audio_bindings::install_audio_bindings(&ctx, audio_seed) {
@@ -801,19 +785,6 @@ impl QuickJsRuntime {
             // PaymentRequest.canMakePayment() always returns Promise<false>.
             if let Err(e) = payment_request::init_payment_request(&ctx) {
                 eprintln!("Payment Request API init failed: {}", e);
-            }
-
-            // Install Web Worker bindings (WHATWG Web Workers §4) — after DOM so
-            // TextDecoder and _object_url_store are available for blob-URL resolution.
-            // blob_store is shared with worker threads for importScripts() support.
-            if let Err(e) = worker::install_worker_bindings(
-                &ctx,
-                &self.workers,
-                &self.worker_messages,
-                &self.worker_next_id,
-                &self.worker_blob_store,
-            ) {
-                eprintln!("Worker bindings init failed: {}", e);
             }
 
             // Install Background Fetch API stub (W3C Background Fetch L1, Phase 0) — after DOM
