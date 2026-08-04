@@ -302,8 +302,10 @@ pub fn install_dom_api(
     idb_backend: Option<Arc<dyn IdbBackend>>,
     sw_backend: Option<Arc<dyn SwBackend>>,
     cache_backend: Option<Arc<dyn CacheBackend>>,
-    // Live SW worker threads registry (PH3-20). When `Some`,
-    // `_lumen_sw_activate_script` spawns a QuickJS thread for each activating SW.
+    // Live SW worker threads registry (PH3-20). Unused on this (rquickjs)
+    // install path since S12b-B17 — `_lumen_sw_activate_script` here is a
+    // no-op (see its registration below); only the V8 path
+    // (`v8_runtime.rs`) still spawns a worker thread per activating SW.
     sw_worker_store: Option<lumen_core::ext::SwWorkerStore>,
     scroll_states: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
     pending_scrolls: Arc<Mutex<Vec<(u32, f32, f32)>>>,
@@ -1086,21 +1088,18 @@ fn install_primitives(
 
         // _lumen_sw_activate_script(origin, scope, script_text) — PH3-20: SW fetch interception.
         // Called from the _sw_run_lifecycle JS shim when a SW finishes the activate phase.
-        // Spawns a dedicated QuickJS thread for the SW and registers it in sw_worker_store.
+        // The rquickjs-backed `spawn_sw_worker` was removed in S12b-B17 (only
+        // `spawn_sw_worker_v8`, wired in v8_runtime.rs, remains) — under the
+        // QuickJS rollback path this native is now a no-op, so SW fetch
+        // interception is unavailable there. Not a regression to fix: QuickJS
+        // is a decaying opt-in rollback path (see CLAUDE.md), not a target for
+        // new work.
         {
-            let sws = sw_worker_store.clone();
-            let cbe_sw = cache_backend.clone();
-            reg!("_lumen_sw_activate_script", move |origin: String, scope: String, text: String| {
-                if let (Some(store), Some(cache)) = (sws.as_ref(), cbe_sw.as_ref()) {
-                    let handle = crate::sw_worker::spawn_sw_worker(
-                        origin.clone(),
-                        scope.clone(),
-                        text,
-                        Arc::clone(cache),
-                    );
-                    store.lock().unwrap().insert((origin, scope), handle);
-                }
-            });
+            let _ = &sw_worker_store;
+            reg!(
+                "_lumen_sw_activate_script",
+                move |_origin: String, _scope: String, _text: String| {}
+            );
         }
 
         // Dispatch helpers: use SQLite backend when provided, fall back to in-memory map.
