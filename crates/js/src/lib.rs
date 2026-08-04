@@ -766,13 +766,6 @@ impl QuickJsRuntime {
             )
             .map_err(|e| rq_err(&ctx, e))?;
 
-            // Install Payment Request API stub (W3C Payment Request API) — after DOM/window.
-            // Phase 0: PaymentRequest.show() always rejects with NotSupportedError;
-            // PaymentRequest.canMakePayment() always returns Promise<false>.
-            if let Err(e) = payment_request::init_payment_request(&ctx) {
-                eprintln!("Payment Request API init failed: {}", e);
-            }
-
             // Install Cookie Store API (WHATWG Cookie Store API, Phase 0) — after DOM so
             // Promise and document.cookie are available. Provides window.cookieStore with
             // get/getAll/set/delete and CookieChangeEvent. Phase 0: in-memory store.
@@ -793,13 +786,6 @@ impl QuickJsRuntime {
                 Arc::clone(&self.view_transition_events),
             ) {
                 eprintln!("View Transitions bindings init failed: {}", e);
-            }
-
-            // Install MediaRecorder API stub (W3C MediaStream Recording L2) — pure JS implementation.
-            // Phase 0: MediaRecorder state machine (inactive/recording/paused), mimeType reflection,
-            // ondataavailable fires empty Blob on stop. BlobEvent class. isTypeSupported() → false.
-            if let Err(e) = media_stream_recording::init_media_stream_recording(&ctx) {
-                eprintln!("MediaRecorder API init failed: {}", e);
             }
 
             Ok(())

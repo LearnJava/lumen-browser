@@ -9,18 +9,23 @@
 //! - `.canMakePayment()` — returns Promise<false>
 //! - `.abort()` — returns Promise<void>, rejected with InvalidStateError if not showing
 
-use rquickjs::Ctx;
-
-/// Install the Payment Request API stub into the JS context.
+/// V8 port of the former rquickjs `init_payment_request` (Ph3 V8 migration
+/// S12b-G4, rquickjs side removed in the same batch): identical JS shim,
+/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 ///
 /// Defines `window.PaymentRequest` constructor and related types.
 /// Must be called **after** `dom::install_dom_api` so that `window` is already present.
-pub fn init_payment_request(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(PAYMENT_REQUEST_SHIM)?;
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_payment_request_v8(
+    rt: &crate::v8_runtime::V8JsRuntime,
+) -> lumen_core::JsResult<()> {
+    use lumen_core::ext::JsRuntime as _;
+    rt.eval(PAYMENT_REQUEST_SHIM)?;
     Ok(())
 }
 
 /// JavaScript shim implementing the W3C Payment Request API (Phase 0).
+#[cfg(feature = "v8-backend")]
 const PAYMENT_REQUEST_SHIM: &str = r#"(function() {
   if (typeof window === 'undefined') return;
 
@@ -104,183 +109,125 @@ const PAYMENT_REQUEST_SHIM: &str = r#"(function() {
   }
 })();"#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
-    use rquickjs::{Context, Ctx, Runtime};
+    use super::*;
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().expect("Runtime::new");
-        let ctx = Context::full(&rt).expect("Context::full");
-        (rt, ctx)
-    }
-
-    fn install_stubs(ctx: &Ctx) {
-        ctx.eval::<(), _>(
-            r#"
-            globalThis.window = globalThis;
-            globalThis.DOMException = function(msg, name) {
-              this.message = msg;
-              this.name = name;
-            };
-            "#,
+    fn with_payment_request(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(
+            "globalThis.window = globalThis; \
+             globalThis.DOMException = function(msg, name) { this.message = msg; this.name = name; };",
         )
-        .expect("install stubs");
+        .unwrap();
+        install_payment_request_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
     fn test_payment_request_constructor() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_payment_request(&ctx).expect("init payment request");
-            let result: String = ctx
+        with_payment_request(|rt| {
+            let result = rt
                 .eval(
-                    r#"
-                (function() {
-                  try {
-                    var pr = new PaymentRequest(
-                      [{supportedMethods: 'basic-card'}],
-                      {total: {label: 'Total', amount: {currency: 'USD', value: '10'}}}
-                    );
-                    return typeof pr === 'object' ? 'created' : 'failed';
-                  } catch (e) {
-                    return 'error: ' + e.message;
-                  }
-                })()
-                "#,
+                    "(function() { \
+                       try { \
+                         var pr = new PaymentRequest( \
+                           [{supportedMethods: 'basic-card'}], \
+                           {total: {label: 'Total', amount: {currency: 'USD', value: '10'}}} \
+                         ); \
+                         return typeof pr === 'object' ? 'created' : 'failed'; \
+                       } catch (e) { \
+                         return 'error: ' + e.message; \
+                       } \
+                     })()",
                 )
-                .expect("eval");
-            assert_eq!(result, "created");
+                .unwrap();
+            assert_eq!(result, JsValue::String("created".to_string()));
         });
     }
 
     #[test]
     fn test_show_returns_promise() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_payment_request(&ctx).expect("init payment request");
-            let result: String = ctx
+        with_payment_request(|rt| {
+            let result = rt
                 .eval(
-                    r#"
-                (function() {
-                  var pr = new PaymentRequest(
-                    [{supportedMethods: 'basic-card'}],
-                    {total: {label: 'Total', amount: {currency: 'USD', value: '10'}}}
-                  );
-                  return pr.show() instanceof Promise ? 'promise' : 'not_promise';
-                })()
-                "#,
+                    "var pr = new PaymentRequest( \
+                       [{supportedMethods: 'basic-card'}], \
+                       {total: {label: 'Total', amount: {currency: 'USD', value: '10'}}} \
+                     ); \
+                     pr.show() instanceof Promise ? 'promise' : 'not_promise'",
                 )
-                .expect("eval");
-            assert_eq!(result, "promise");
+                .unwrap();
+            assert_eq!(result, JsValue::String("promise".to_string()));
         });
     }
 
+    // In a synchronous eval we can't await the rejection; mirrors the original
+    // rquickjs test which only verified the returned value is a Promise.
     #[test]
     fn test_show_rejects_with_not_supported() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_payment_request(&ctx).expect("init payment request");
-            let result: String = ctx
+        with_payment_request(|rt| {
+            let result = rt
                 .eval(
-                    r#"
-                (function() {
-                  var pr = new PaymentRequest(
-                    [{supportedMethods: 'basic-card'}],
-                    {total: {label: 'Total', amount: {currency: 'USD', value: '10'}}}
-                  );
-                  var show_promise = pr.show();
-                  var error_name = '';
-                  show_promise.catch(function(e) {
-                    error_name = e.name;
-                  });
-                  // In synchronous context, we can't wait for the promise
-                  // Just verify it's a promise and will reject
-                  return show_promise instanceof Promise ? 'is_promise' : 'not_promise';
-                })()
-                "#,
+                    "var pr = new PaymentRequest( \
+                       [{supportedMethods: 'basic-card'}], \
+                       {total: {label: 'Total', amount: {currency: 'USD', value: '10'}}} \
+                     ); \
+                     var show_promise = pr.show(); \
+                     show_promise.catch(function(e) {}); \
+                     show_promise instanceof Promise ? 'is_promise' : 'not_promise'",
                 )
-                .expect("eval");
-            assert_eq!(result, "is_promise");
+                .unwrap();
+            assert_eq!(result, JsValue::String("is_promise".to_string()));
         });
     }
 
     #[test]
     fn test_can_make_payment_returns_false() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_payment_request(&ctx).expect("init payment request");
-            let result: String = ctx
+        with_payment_request(|rt| {
+            let result = rt
                 .eval(
-                    r#"
-                (function() {
-                  var pr = new PaymentRequest(
-                    [{supportedMethods: 'basic-card'}],
-                    {total: {label: 'Total', amount: {currency: 'USD', value: '10'}}}
-                  );
-                  var can_pay_promise = pr.canMakePayment();
-                  var result_value = null;
-                  can_pay_promise.then(function(val) {
-                    result_value = val;
-                  });
-                  // In synchronous context, just verify it returns a promise
-                  return can_pay_promise instanceof Promise ? 'is_promise' : 'not_promise';
-                })()
-                "#,
+                    "var pr = new PaymentRequest( \
+                       [{supportedMethods: 'basic-card'}], \
+                       {total: {label: 'Total', amount: {currency: 'USD', value: '10'}}} \
+                     ); \
+                     var can_pay_promise = pr.canMakePayment(); \
+                     can_pay_promise.then(function(val) {}); \
+                     can_pay_promise instanceof Promise ? 'is_promise' : 'not_promise'",
                 )
-                .expect("eval");
-            assert_eq!(result, "is_promise");
+                .unwrap();
+            assert_eq!(result, JsValue::String("is_promise".to_string()));
         });
     }
 
     #[test]
     fn test_abort_rejects_when_not_interactive() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_payment_request(&ctx).expect("init payment request");
-            let result: String = ctx
+        with_payment_request(|rt| {
+            let result = rt
                 .eval(
-                    r#"
-                (function() {
-                  var pr = new PaymentRequest(
-                    [{supportedMethods: 'basic-card'}],
-                    {total: {label: 'Total', amount: {currency: 'USD', value: '10'}}}
-                  );
-                  var abort_promise = pr.abort();
-                  var error_name = '';
-                  abort_promise.catch(function(e) {
-                    error_name = e.name;
-                  });
-                  // Just verify it returns a promise
-                  return abort_promise instanceof Promise ? 'is_promise' : 'not_promise';
-                })()
-                "#,
+                    "var pr = new PaymentRequest( \
+                       [{supportedMethods: 'basic-card'}], \
+                       {total: {label: 'Total', amount: {currency: 'USD', value: '10'}}} \
+                     ); \
+                     var abort_promise = pr.abort(); \
+                     abort_promise.catch(function(e) {}); \
+                     abort_promise instanceof Promise ? 'is_promise' : 'not_promise'",
                 )
-                .expect("eval");
-            assert_eq!(result, "is_promise");
+                .unwrap();
+            assert_eq!(result, JsValue::String("is_promise".to_string()));
         });
     }
 
     #[test]
     fn test_payment_response_exists() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_payment_request(&ctx).expect("init payment request");
-            let result: String = ctx
-                .eval(
-                    r#"
-                (function() {
-                  return typeof PaymentResponse === 'function' ? 'exists' : 'missing';
-                })()
-                "#,
-                )
-                .expect("eval");
-            assert_eq!(result, "exists");
+        with_payment_request(|rt| {
+            let result = rt
+                .eval("typeof PaymentResponse === 'function' ? 'exists' : 'missing'")
+                .unwrap();
+            assert_eq!(result, JsValue::String("exists".to_string()));
         });
     }
 }

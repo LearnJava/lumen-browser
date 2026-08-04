@@ -4236,6 +4236,7 @@ impl V8JsRuntime {
         install_v8!(media_capture::install_media_capture_bindings_v8);
         install_v8!(media_devices::install_media_devices_bindings_v8);
         install_v8!(media_session::install_media_session_bindings_v8);
+        install_v8!(media_stream_recording::install_media_stream_recording_v8);
         install_v8!(navigation_api::install_navigation_api_v8);
         install_v8!(navigator_bindings::install_navigator_bindings_v8);
         install_v8!(network_log_bindings::install_network_log_bindings_v8);
@@ -4245,6 +4246,7 @@ impl V8JsRuntime {
             eprintln!("v8: notifications_bindings::install_notifications_bindings_v8 failed: {e}");
         }
         install_v8!(paint_worklet::install_paint_worklet_api_v8);
+        install_v8!(payment_request::install_payment_request_v8);
         install_v8!(periodic_sync::install_periodic_sync_v8);
         install_v8!(permissions_policy::install_permissions_policy_bindings_v8);
         install_v8!(pip_bindings::install_pip_bindings_v8);

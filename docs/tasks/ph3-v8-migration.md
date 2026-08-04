@@ -3816,6 +3816,34 @@ v8-backend -- -D warnings` clean. `cargo clippy -p lumen-js --all-targets --
 (`offscreen_canvas.rs`/`worker.rs`/`canvas2d.rs`) — zero new errors from
 `push_api.rs`/`background_fetch.rs`.
 
+### S12b-G4: `payment_request`, `media_stream_recording` (2026-08-04, branch `p1-s12b-g4`)
+
+Fourth group G batch, same "no natives" fast path as G1-G3. Neither module
+references any native binding — both are pure `ctx.eval(SHIM)`. Port:
+`rquickjs::Ctx::eval` → `lumen_core::ext::JsRuntime::eval`, install fn + shim
+const gated `#[cfg(feature = "v8-backend")]`, registered via `install_v8!` in
+`v8_runtime.rs::install_dom` (`media_stream_recording` between
+`media_session` and `navigation_api`; `payment_request` between
+`paint_worklet` and `periodic_sync`), rquickjs `init_*` call sites removed
+from `lib.rs::install_dom`. 14 tests (6 payment_request + 8
+media_stream_recording) ported to `#[cfg(all(test, feature = "v8-backend"))]`
+against bare `V8JsRuntime::new()` — `payment_request` needs a `window =
+globalThis` alias plus a `DOMException` stub (shim checks `typeof window ===
+'undefined'` and constructs `DOMException`), `media_stream_recording` needs
+`Blob`/`DOMException`/`Date.now()` stubs (matches the original rquickjs test
+harnesses). No bridge bugs found. Closes the last 2 of the 7 modules tracked
+by [BUG-549](../../bugs/BUG-549-OPEN.md) — group G's port work is done (bug
+resolution/CAPABILITIES.md update deferred to a follow-up, not part of this
+batch's scope).
+
+`cargo test -p lumen-js --features v8-backend`: +14 new module tests. `cargo
+test -p lumen-js` (default, no features): 342→328 lib (-14, the ported
+rquickjs tests removed). `cargo clippy -p lumen-js --all-targets --features
+v8-backend -- -D warnings` clean. `cargo clippy -p lumen-js --all-targets --
+-D warnings` (no features): identical 18-error baseline to pre-batch main
+(`offscreen_canvas.rs`/`worker.rs`/`canvas2d.rs`) — zero new errors from
+`payment_request.rs`/`media_stream_recording.rs`.
+
 ---
 
 ## Risks (Rev 2)
