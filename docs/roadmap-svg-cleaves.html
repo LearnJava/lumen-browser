@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-05",
  "counts": {
-  "open": 276,
+  "open": 277,
   "fixed": 315,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 591,
+ "total_bugs": 592,
  "phases": [
   {
    "id": "P0",
@@ -8737,6 +8737,13 @@
    "component": "js (`crates/js/src/dom.rs`, `window` object)",
    "date": null,
    "debtor": false
+  },
+  "BUG-624": {
+   "status": "open",
+   "title": "**Движковый хром меряется не тем шрифтом, которым рисуется.** `relayout_chrome_host` строит семейство-слепой `lumen_paint::FontMeasurer` (bundled Inter): дефолт…",
+   "component": "shell (`main.rs::relayout_chrome_host`), chrome (`assets/chrome/chrome.html` — `--font-ui`/`--font-mono`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -9577,6 +9584,9 @@
   ],
   "shell (`main.rs::inject_char` + новые `edit_focused_field`/`typeable_field`, обработчик `AutomationCommand::Type`, ветка ввода в `handle_key`), js (`dom.rs` — `_lumen_set_field_value`)": [
    "BUG-436"
+  ],
+  "shell (`main.rs::relayout_chrome_host`), chrome (`assets/chrome/chrome.html` — `--font-ui`/`--font-mono`)": [
+   "BUG-624"
   ],
   "shell (`main.rs::render_source_to_png`) + js (`flush_canvas_updates`)": [
    "BUG-428"
