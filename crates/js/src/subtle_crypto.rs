@@ -32,20 +32,24 @@
 //! side-channels are introduced — all operations are constant-time via the
 //! upstream crates (`p256`, `hmac`, `aes-gcm`).
 
+#[cfg(any(feature = "v8-backend", test))]
 use std::cell::{Cell, RefCell};
+#[cfg(any(feature = "v8-backend", test))]
 use std::collections::HashMap;
 
-use rquickjs::{Ctx, Function};
-
 // RSA imports
+#[cfg(any(feature = "v8-backend", test))]
 use rsa::pkcs8::{DecodePrivateKey as _, DecodePublicKey as _, EncodePrivateKey as _, EncodePublicKey as _};
+#[cfg(any(feature = "v8-backend", test))]
 use rsa::traits::{PrivateKeyParts as _, PublicKeyParts as _};
 // p256 SEC1 encoding trait for ECDH public key export
+#[cfg(any(feature = "v8-backend", test))]
 use p256::elliptic_curve::sec1::ToEncodedPoint as _;
 
 // ─── key registry ─────────────────────────────────────────────────────────────
 
 /// Inner key material, one variant per algorithm family.
+#[cfg(any(feature = "v8-backend", test))]
 pub(crate) enum KeyMaterial {
     /// HMAC-SHA256/384/512: raw key bytes + hash name.
     Hmac { hash: String, raw: Vec<u8> },
@@ -86,6 +90,7 @@ pub(crate) enum KeyMaterial {
 }
 
 /// Full metadata + material for one CryptoKey.
+#[cfg(any(feature = "v8-backend", test))]
 pub(crate) struct CryptoKeyEntry {
     /// "secret", "public", or "private".
     pub key_type: &'static str,
@@ -97,6 +102,7 @@ pub(crate) struct CryptoKeyEntry {
     pub material: KeyMaterial,
 }
 
+#[cfg(any(feature = "v8-backend", test))]
 thread_local! {
     /// Per-thread CryptoKey registry.
     static CRYPTO_KEYS: RefCell<HashMap<u32, CryptoKeyEntry>> = RefCell::new(HashMap::new());
@@ -104,6 +110,7 @@ thread_local! {
     static NEXT_KEY_ID: Cell<u32> = const { Cell::new(1) };
 }
 
+#[cfg(any(feature = "v8-backend", test))]
 fn alloc_key(entry: CryptoKeyEntry) -> u32 {
     let id = NEXT_KEY_ID.with(|c| {
         let v = c.get();
@@ -114,6 +121,7 @@ fn alloc_key(entry: CryptoKeyEntry) -> u32 {
     id
 }
 
+#[cfg(any(feature = "v8-backend", test))]
 fn with_key<R>(id: u32, f: impl FnOnce(&CryptoKeyEntry) -> R, default: R) -> R {
     CRYPTO_KEYS.with(|ks| match ks.borrow().get(&id) {
         Some(e) => f(e),
@@ -123,8 +131,10 @@ fn with_key<R>(id: u32, f: impl FnOnce(&CryptoKeyEntry) -> R, default: R) -> R {
 
 // ─── base64url helpers ────────────────────────────────────────────────────────
 
+#[cfg(any(feature = "v8-backend", test))]
 const B64URL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
+#[cfg(any(feature = "v8-backend", test))]
 fn b64url_encode(data: &[u8]) -> String {
     let mut out = String::with_capacity((data.len() * 4).div_ceil(3));
     for chunk in data.chunks(3) {
@@ -143,6 +153,7 @@ fn b64url_encode(data: &[u8]) -> String {
     out
 }
 
+#[cfg(any(feature = "v8-backend", test))]
 fn b64url_decode(s: &str) -> Option<Vec<u8>> {
     // allow padding characters
     let s = s.trim_end_matches('=');
@@ -171,6 +182,7 @@ fn b64url_decode(s: &str) -> Option<Vec<u8>> {
 
 // ─── tiny JSON extraction helpers ────────────────────────────────────────────
 
+#[cfg(any(feature = "v8-backend", test))]
 fn json_str_field<'a>(json: &'a str, key: &str) -> Option<&'a str> {
     let needle = format!("\"{key}\"");
     let pos = json.find(needle.as_str())?;
@@ -181,6 +193,7 @@ fn json_str_field<'a>(json: &'a str, key: &str) -> Option<&'a str> {
     Some(&inner[..end])
 }
 
+#[cfg(any(feature = "v8-backend", test))]
 fn json_num_field(json: &str, key: &str) -> Option<u32> {
     let needle = format!("\"{key}\"");
     let pos = json.find(needle.as_str())?;
@@ -192,6 +205,7 @@ fn json_num_field(json: &str, key: &str) -> Option<u32> {
 
 /// Extract a JSON `"key":[1,2,3,...]` array-of-u8 field from a JSON string.
 /// Returns an empty `Vec` if the field is absent or malformed.
+#[cfg(any(feature = "v8-backend", test))]
 fn json_bytes_field(json: &str, key: &str) -> Vec<u8> {
     let needle = format!("\"{key}\"");
     let pos = match json.find(needle.as_str()) {
@@ -221,6 +235,7 @@ fn json_bytes_field(json: &str, key: &str) -> Vec<u8> {
 
 /// Generate a new key for the given algorithm JSON.
 /// Returns: `"{id}"` for symmetric keys, `"{pub_id},{priv_id}"` for key pairs.
+#[cfg(any(feature = "v8-backend", test))]
 pub(crate) fn generate_key(alg_json: &str, extractable: bool, usages_json: &str) -> String {
     let name = json_str_field(alg_json, "name").unwrap_or("").to_ascii_uppercase();
     match name.as_str() {
@@ -426,6 +441,7 @@ pub(crate) fn generate_key(alg_json: &str, extractable: bool, usages_json: &str)
 /// `format` is "raw", "spki", "pkcs8", or "jwk".
 /// `alg_json` describes the algorithm.
 /// Returns key id as decimal string, or "err:..." on failure.
+#[cfg(any(feature = "v8-backend", test))]
 pub(crate) fn import_key(
     format: &str,
     key_data: Vec<u8>,
@@ -962,6 +978,7 @@ pub(crate) fn import_key(
 
 /// Export a key to bytes (raw/spki/pkcs8) or JWK JSON string.
 /// Returns the serialised bytes, or empty Vec on error (check error via "err:" prefix in return str).
+#[cfg(any(feature = "v8-backend", test))]
 pub(crate) fn export_key(format: &str, key_id: u32) -> Result<Vec<u8>, &'static str> {
     CRYPTO_KEYS.with(|ks| {
         let store = ks.borrow();
@@ -1139,6 +1156,7 @@ pub(crate) fn export_key(format: &str, key_id: u32) -> Result<Vec<u8>, &'static 
 }
 
 /// Map RSA algorithm name to JWK "alg" string based on hash.
+#[cfg(any(feature = "v8-backend", test))]
 fn rsa_jwk_alg(alg_name: &str, algorithm_json: &str) -> String {
     let hash = json_str_field(algorithm_json, "name")
         .filter(|n| n.starts_with("SHA"))
@@ -1168,6 +1186,7 @@ fn rsa_jwk_alg(alg_name: &str, algorithm_json: &str) -> String {
 /// Sign `data` with the key identified by `key_id`.
 /// `alg_json` provides algorithm params (e.g. hash name for ECDSA).
 /// Returns signature bytes, or empty Vec on error.
+#[cfg(any(feature = "v8-backend", test))]
 pub(crate) fn sign_data(alg_json: &str, key_id: u32, data: &[u8]) -> Vec<u8> {
     CRYPTO_KEYS.with(|ks| {
         let store = ks.borrow();
@@ -1214,6 +1233,7 @@ pub(crate) fn sign_data(alg_json: &str, key_id: u32, data: &[u8]) -> Vec<u8> {
 }
 
 /// Dispatch RSA signing to the appropriate scheme.
+#[cfg(any(feature = "v8-backend", test))]
 fn rsa_sign(
     alg_name: &str,
     hash: &str,
@@ -1284,6 +1304,7 @@ fn rsa_sign(
 
 /// Verify a signature produced by `sign_data`.
 /// Returns `true` if the signature is valid, `false` otherwise.
+#[cfg(any(feature = "v8-backend", test))]
 pub(crate) fn verify_signature(alg_json: &str, key_id: u32, sig: &[u8], data: &[u8]) -> bool {
     CRYPTO_KEYS.with(|ks| {
         let store = ks.borrow();
@@ -1339,6 +1360,7 @@ pub(crate) fn verify_signature(alg_json: &str, key_id: u32, sig: &[u8], data: &[
 }
 
 /// Dispatch RSA signature verification to the appropriate scheme.
+#[cfg(any(feature = "v8-backend", test))]
 fn rsa_verify(
     alg_name: &str,
     hash: &str,
@@ -1407,6 +1429,7 @@ fn rsa_verify(
 /// Encrypt `plaintext` using AES-GCM.
 /// `iv` must be exactly 12 bytes; `aad` is optional additional data.
 /// Returns ciphertext || tag (tag is 16 bytes at the end), or empty Vec on error.
+#[cfg(any(feature = "v8-backend", test))]
 pub(crate) fn aes_gcm_encrypt(key_id: u32, iv: &[u8], aad: &[u8], plaintext: &[u8]) -> Vec<u8> {
     use aes_gcm::{AeadInPlace, KeyInit, Nonce};
     if iv.len() != 12 {
@@ -1448,6 +1471,7 @@ pub(crate) fn aes_gcm_encrypt(key_id: u32, iv: &[u8], aad: &[u8], plaintext: &[u
 
 /// Decrypt AES-GCM ciphertext (last 16 bytes are the authentication tag).
 /// Returns plaintext or empty Vec on authentication failure.
+#[cfg(any(feature = "v8-backend", test))]
 pub(crate) fn aes_gcm_decrypt(key_id: u32, iv: &[u8], aad: &[u8], ciphertext: &[u8]) -> Vec<u8> {
     use aes_gcm::{AeadInPlace, KeyInit, Nonce, Tag};
     if iv.len() != 12 || ciphertext.len() < 16 {
@@ -1489,6 +1513,7 @@ pub(crate) fn aes_gcm_decrypt(key_id: u32, iv: &[u8], aad: &[u8], ciphertext: &[
 ///
 /// `iv` must be exactly 16 bytes.  Returns ciphertext (padded to 16-byte
 /// boundary), or an empty `Vec` on error.
+#[cfg(any(feature = "v8-backend", test))]
 pub(crate) fn aes_cbc_encrypt(key_id: u32, iv: &[u8], plaintext: &[u8]) -> Vec<u8> {
     use aes::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
     if iv.len() != 16 {
@@ -1521,6 +1546,7 @@ pub(crate) fn aes_cbc_encrypt(key_id: u32, iv: &[u8], plaintext: &[u8]) -> Vec<u
 ///
 /// `iv` must be exactly 16 bytes; `ciphertext` length must be a multiple of 16.
 /// Returns plaintext, or an empty `Vec` on padding/key error.
+#[cfg(any(feature = "v8-backend", test))]
 pub(crate) fn aes_cbc_decrypt(key_id: u32, iv: &[u8], ciphertext: &[u8]) -> Vec<u8> {
     use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
     if iv.len() != 16 || !ciphertext.len().is_multiple_of(16) {
@@ -1558,6 +1584,7 @@ pub(crate) fn aes_cbc_decrypt(key_id: u32, iv: &[u8], ciphertext: &[u8]) -> Vec<
 /// `counter_block` must be 16 bytes (the full 128-bit counter block).
 /// `length_bits` is the bit-width of the counter portion (rightmost bits, 1–128).
 /// Returns the processed data, or an empty `Vec` on error.
+#[cfg(any(feature = "v8-backend", test))]
 pub(crate) fn aes_ctr_crypt(
     key_id: u32,
     counter_block: &[u8],
@@ -1609,6 +1636,7 @@ pub(crate) fn aes_ctr_crypt(
 /// Encrypt `plaintext` using RSA-OAEP with the stored hash.
 /// `label` is optional additional data (usually empty).
 /// Returns ciphertext or empty Vec on error.
+#[cfg(any(feature = "v8-backend", test))]
 pub(crate) fn rsa_oaep_encrypt(key_id: u32, label: &[u8], plaintext: &[u8]) -> Vec<u8> {
     CRYPTO_KEYS.with(|ks| {
         let store = ks.borrow();
@@ -1631,6 +1659,7 @@ pub(crate) fn rsa_oaep_encrypt(key_id: u32, label: &[u8], plaintext: &[u8]) -> V
 }
 
 /// Decrypt RSA-OAEP ciphertext.
+#[cfg(any(feature = "v8-backend", test))]
 pub(crate) fn rsa_oaep_decrypt(key_id: u32, label: &[u8], ciphertext: &[u8]) -> Vec<u8> {
     CRYPTO_KEYS.with(|ks| {
         let store = ks.borrow();
@@ -1652,6 +1681,7 @@ pub(crate) fn rsa_oaep_decrypt(key_id: u32, label: &[u8], ciphertext: &[u8]) -> 
     })
 }
 
+#[cfg(any(feature = "v8-backend", test))]
 fn rsa_oaep_encrypt_with_hash(
     key: &rsa::RsaPublicKey,
     hash: &str,
@@ -1676,6 +1706,7 @@ fn rsa_oaep_encrypt_with_hash(
     }
 }
 
+#[cfg(any(feature = "v8-backend", test))]
 fn rsa_oaep_decrypt_with_hash(
     key: &rsa::RsaPrivateKey,
     hash: &str,
@@ -1704,6 +1735,7 @@ fn rsa_oaep_decrypt_with_hash(
 /// `private_key_id` — own private ECDH key; `peer_public_key_id` — the peer's
 /// public ECDH key already stored in the registry.  Returns the raw X coordinate
 /// (32 bytes), or empty Vec on error.
+#[cfg(any(feature = "v8-backend", test))]
 pub(crate) fn ecdh_derive_bits(private_key_id: u32, peer_public_key_id: u32, length_bytes: usize) -> Vec<u8> {
     CRYPTO_KEYS.with(|ks| {
         let store = ks.borrow();
@@ -1746,6 +1778,7 @@ pub(crate) fn ecdh_derive_bits(private_key_id: u32, peer_public_key_id: u32, len
 /// `hash` must be one of `"SHA-256"`, `"SHA-384"`, `"SHA-512"` (case-sensitive
 /// uppercase, as stored in the algorithm JSON).  Falls back to SHA-256 for any
 /// other value.
+#[cfg(any(feature = "v8-backend", test))]
 fn hmac_hash(key: &[u8], data: &[u8], hash: &str) -> Vec<u8> {
     use hmac::Mac;
     match hash {
@@ -1776,6 +1809,7 @@ fn hmac_hash(key: &[u8], data: &[u8], hash: &str) -> Vec<u8> {
 /// Derive `dk_len` bytes from a password using PBKDF2-HMAC (RFC 2898 §5.2).
 ///
 /// `hash` selects the underlying PRF: `"SHA-256"`, `"SHA-384"`, or `"SHA-512"`.
+#[cfg(any(feature = "v8-backend", test))]
 fn pbkdf2_derive(password: &[u8], salt: &[u8], iterations: usize, dk_len: usize, hash: &str) -> Vec<u8> {
     // PBKDF2: DK = T_1 || T_2 || … || T_ceil(dkLen/hLen)
     // T_i = U_1 XOR U_2 XOR … XOR U_c
@@ -1817,6 +1851,7 @@ fn pbkdf2_derive(password: &[u8], salt: &[u8], iterations: usize, dk_len: usize,
 /// Derive `length` bytes from IKM using HKDF extract-then-expand (RFC 5869).
 ///
 /// `hash` selects the underlying PRF: `"SHA-256"`, `"SHA-384"`, or `"SHA-512"`.
+#[cfg(any(feature = "v8-backend", test))]
 fn hkdf_derive(ikm: &[u8], salt: &[u8], info: &[u8], length: usize, hash: &str) -> Vec<u8> {
     // Extract: PRK = HMAC-hash(salt, IKM)
     // If salt is absent (empty), use a zero-filled string of HashLen octets.
@@ -1865,6 +1900,7 @@ fn hkdf_derive(ikm: &[u8], salt: &[u8], info: &[u8], length: usize, hash: &str) 
 /// JS shim from `Array.from(new Uint8Array(...))`.
 ///
 /// Returns the derived bytes, or an empty `Vec` on error.
+#[cfg(any(feature = "v8-backend", test))]
 pub(crate) fn derive_bits(alg_json: &str, key_id: u32, length_bits: u32) -> Vec<u8> {
     let name_raw = json_str_field(alg_json, "name").unwrap_or("").to_ascii_uppercase();
     let hash = json_str_field(alg_json, "hash")
@@ -1902,6 +1938,7 @@ pub(crate) fn derive_bits(alg_json: &str, key_id: u32, length_bits: u32) -> Vec<
 
 /// Return JSON string with key metadata: `{type, algorithm, extractable, usages}`.
 /// Returns empty string if key id is not found.
+#[cfg(any(feature = "v8-backend", test))]
 pub(crate) fn key_info(key_id: u32) -> String {
     with_key(
         key_id,
@@ -1916,134 +1953,6 @@ pub(crate) fn key_info(key_id: u32) -> String {
         },
         String::new(),
     )
-}
-
-// ─── JS bindings installer ────────────────────────────────────────────────────
-
-/// Install all `_lumen_subtle_*` native bindings into the JS context.
-pub(crate) fn install_subtle_bindings(ctx: &Ctx<'_>) -> rquickjs::Result<()> {
-    macro_rules! reg {
-        ($name:expr, $fn:expr) => {
-            ctx.globals().set($name, Function::new(ctx.clone(), $fn)?)?;
-        };
-    }
-
-    reg!(
-        "_lumen_subtle_generate_key",
-        |alg_json: String, extractable: bool, usages_json: String| -> String {
-            generate_key(&alg_json, extractable, &usages_json)
-        }
-    );
-
-    reg!(
-        "_lumen_subtle_import_key",
-        |format: String, key_data: Vec<u8>, alg_json: String, extractable: bool, usages_json: String| -> String {
-            import_key(&format, key_data, &alg_json, extractable, &usages_json)
-        }
-    );
-
-    reg!(
-        "_lumen_subtle_export_key",
-        |format: String, key_id: u32| -> Vec<u8> {
-            export_key(&format, key_id).unwrap_or_default()
-        }
-    );
-
-    reg!(
-        "_lumen_subtle_export_key_or_err",
-        |format: String, key_id: u32| -> String {
-            match export_key(&format, key_id) {
-                Ok(bytes) => {
-                    // Return as "ok:<hex>" or "ok:<json>" depending on whether bytes
-                    // look like printable JSON (starts with '{' or '[').
-                    if bytes.first() == Some(&b'{') || bytes.first() == Some(&b'[') {
-                        format!("ok:{}", String::from_utf8_lossy(&bytes))
-                    } else {
-                        let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-                        format!("hex:{hex}")
-                    }
-                }
-                Err(e) => format!("err:{e}"),
-            }
-        }
-    );
-
-    reg!(
-        "_lumen_subtle_sign",
-        |alg_json: String, key_id: u32, data: Vec<u8>| -> Vec<u8> {
-            sign_data(&alg_json, key_id, &data)
-        }
-    );
-
-    reg!(
-        "_lumen_subtle_verify",
-        |alg_json: String, key_id: u32, sig: Vec<u8>, data: Vec<u8>| -> bool {
-            verify_signature(&alg_json, key_id, &sig, &data)
-        }
-    );
-
-    reg!(
-        "_lumen_subtle_encrypt",
-        |key_id: u32, iv: Vec<u8>, aad: Vec<u8>, plaintext: Vec<u8>| -> Vec<u8> {
-            aes_gcm_encrypt(key_id, &iv, &aad, &plaintext)
-        }
-    );
-
-    reg!(
-        "_lumen_subtle_decrypt",
-        |key_id: u32, iv: Vec<u8>, aad: Vec<u8>, ciphertext: Vec<u8>| -> Vec<u8> {
-            aes_gcm_decrypt(key_id, &iv, &aad, &ciphertext)
-        }
-    );
-
-    reg!(
-        "_lumen_subtle_key_info",
-        |key_id: u32| -> String { key_info(key_id) }
-    );
-
-    reg!(
-        "_lumen_subtle_aes_cbc_encrypt",
-        |key_id: u32, iv: Vec<u8>, plaintext: Vec<u8>| -> Vec<u8> {
-            aes_cbc_encrypt(key_id, &iv, &plaintext)
-        }
-    );
-
-    reg!(
-        "_lumen_subtle_aes_cbc_decrypt",
-        |key_id: u32, iv: Vec<u8>, ciphertext: Vec<u8>| -> Vec<u8> {
-            aes_cbc_decrypt(key_id, &iv, &ciphertext)
-        }
-    );
-
-    reg!(
-        "_lumen_subtle_aes_ctr_crypt",
-        |key_id: u32, counter: Vec<u8>, length: u32, data: Vec<u8>| -> Vec<u8> {
-            aes_ctr_crypt(key_id, &counter, length, &data)
-        }
-    );
-
-    reg!(
-        "_lumen_subtle_derive_bits",
-        |alg_json: String, key_id: u32, length_bits: u32| -> Vec<u8> {
-            derive_bits(&alg_json, key_id, length_bits)
-        }
-    );
-
-    reg!(
-        "_lumen_subtle_rsa_oaep_encrypt",
-        |key_id: u32, label: Vec<u8>, plaintext: Vec<u8>| -> Vec<u8> {
-            rsa_oaep_encrypt(key_id, &label, &plaintext)
-        }
-    );
-
-    reg!(
-        "_lumen_subtle_rsa_oaep_decrypt",
-        |key_id: u32, label: Vec<u8>, ciphertext: Vec<u8>| -> Vec<u8> {
-            rsa_oaep_decrypt(key_id, &label, &ciphertext)
-        }
-    );
-
-    Ok(())
 }
 
 // ─── tests ────────────────────────────────────────────────────────────────────

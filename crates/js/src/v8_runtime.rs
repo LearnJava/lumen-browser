@@ -3811,9 +3811,8 @@ impl V8JsRuntime {
     }
 
     // SubtleCrypto: generateKey/importKey/exportKey/sign/verify/encrypt/decrypt
-    // Bindings mirror `crate::subtle_crypto::install_subtle_bindings` (the rquickjs
-    // installer) call-for-call; the underlying key store and algorithm functions are
-    // plain Rust (no `Ctx` dependency), so this is a wrapper-only port.
+    // The underlying key store and algorithm functions in `crate::subtle_crypto`
+    // are plain Rust (no JS-engine dependency), so this is a thin wrapper.
     {
         reg!(
             "_lumen_subtle_generate_key",

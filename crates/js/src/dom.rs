@@ -3108,9 +3108,6 @@ fn install_primitives(
         );
     }
 
-    // SubtleCrypto: generateKey/importKey/exportKey/sign/verify/encrypt/decrypt
-    crate::subtle_crypto::install_subtle_bindings(ctx)?;
-
     // D-6: Extension system — chrome.runtime.sendMessage() native binding.
     // Phase 0: no-op; the message is logged to stderr for debugging.
     // Phase 1: shell wires a real IPC channel between content scripts and extension background.
