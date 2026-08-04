@@ -110,6 +110,8 @@ It is **not** the right gate for changes that cannot alter the display list — 
 
 If you claim a change is display-list-neutral, **show it**: an empty `dump_golden.py` diff (or unchanged `--dump-display-list` on the affected pages) is the evidence. Without that evidence, run the full pipeline — "it's only a refactor" is exactly how pixel regressions land.
 
+**Since BUG-128 (2026-08-04) the dump goldens depend on the machine's installed fonts.** `--dump-layout`/`--dump-display-list` run through the shell's real `FontProvider`, and a CSS generic family (`serif`, `sans-serif`, `monospace`, …) — including the generic tail of a list like `Arial, sans-serif` — now resolves to a system face, so text widths in the goldens encode *this* machine's fonts (Windows: Times New Roman / Arial / Consolas). The deterministic CPU snapshot gate is **not** affected: `lumen-driver` renders and measures without a `FontProvider`, so `graphic_tests/snapshots/cpu/` stays reproducible everywhere. If the golden gate ever moves to a machine without the Windows core fonts, expect width-only diffs on pages that use generic families, and re-baseline there rather than "fixing" the engine.
+
 ## Run rules
 
 0. **Test-run history lives in `graphic_tests/results/*.json`.** JSON result files are committed to git (`.gitignore` excludes only `*.html` reports). After every full `--continue-on-fail` run: `git add graphic_tests/results/<timestamp>.json && git commit -m "тесты: прогон YYYY-MM-DD"`. Do NOT write manual "Прогон..." tables in `BUGS.md` — the JSON is the source of truth. Delta vs previous run is printed automatically by `run.py`. KNOWN_DEBTORS (Phase 2 tests) live in `KNOWN_DEBTORS` dict in `run.py`; BUGS.md carries only BUG-NNN entries.
