@@ -1,6 +1,6 @@
 # BUG-549: 7 Phase-0 stub Web APIs are entirely undefined under the default V8 build (were present-but-rejecting under QuickJS)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-04
 **Дата:** 2026-08-03
 **Компонент:** js — `crates/js/src/{contacts,background_sync,periodic_sync,push_api,background_fetch,payment_request,media_stream_recording}.rs`
 **Найден:** P1, S12b-G0 триаж (13 модулей без V8-порта)
@@ -42,12 +42,17 @@ offering it and getting a rejection. Lowest individual severity of the
 S12b-G findings since none of the seven ever did real work even under
 QuickJS, but the surface area (7 distinct globals) is the largest.
 
-## Фикс (не сделан)
+## Фикс
 
-Port per the standard S12b-G group procedure
-(`docs/tasks/p1-s12b-cleanup-queue.md` §4, slots S12b-G1/G3/G4): each is a
-pure `ctx.eval(SHIM)` with no native bindings — replace
-`rquickjs::Ctx::eval` with `lumen_core::ext::JsRuntime::eval` per module and
-register via `install_v8!`, per the doc's "Модули без нативов" fast path.
-Combined budget ≈1600 lines / 40 tests across all seven — fits comfortably
-in the existing G1/G3/G4 batch pairs already planned.
+Ported per the standard S12b-G group procedure
+(`docs/tasks/p1-s12b-cleanup-queue.md` §4): each module was a pure
+`ctx.eval(SHIM)` with no native bindings — `rquickjs::Ctx::eval` replaced
+with `lumen_core::ext::JsRuntime::eval`, registered via `install_v8!` in
+`v8_runtime.rs::install_dom`. Landed across four batches: S12b-G1
+(`contacts`, `background_sync`), S12b-G2 (`periodic_sync`), S12b-G3
+(`push_api`, `background_fetch`), S12b-G4 (`payment_request`,
+`media_stream_recording`) — all four merged 2026-08-04. All seven globals
+are now present under the default V8 build with the same Phase-0
+stub behavior as before (constructs successfully, operations reject/no-op),
+restoring the presence-detection idiom. Details — `docs/tasks/ph3-v8-migration.md`
+§§S12b-G1…G4.

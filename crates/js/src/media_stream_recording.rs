@@ -6,15 +6,21 @@
 //! (fires empty Blob on stop). `BlobEvent` class.
 //! `MediaRecorder.isTypeSupported()` → false.
 
-use rquickjs::Ctx;
-
-/// Install the MediaRecorder API stub into the JS context.
-pub fn init_media_stream_recording(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(MEDIA_STREAM_RECORDING_SHIM)?;
+/// V8 port of the former rquickjs `init_media_stream_recording` (Ph3 V8
+/// migration S12b-G4, rquickjs side removed in the same batch): identical JS
+/// shim, evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of
+/// `rquickjs::Ctx::eval`.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_media_stream_recording_v8(
+    rt: &crate::v8_runtime::V8JsRuntime,
+) -> lumen_core::JsResult<()> {
+    use lumen_core::ext::JsRuntime as _;
+    rt.eval(MEDIA_STREAM_RECORDING_SHIM)?;
     Ok(())
 }
 
 /// JavaScript shim implementing W3C MediaStream Recording L2 (Phase 0).
+#[cfg(feature = "v8-backend")]
 const MEDIA_STREAM_RECORDING_SHIM: &str = r#"(function() {
   'use strict';
 
@@ -152,18 +158,16 @@ const MEDIA_STREAM_RECORDING_SHIM: &str = r#"(function() {
   globalThis.MediaRecorder = MediaRecorder;
 })();"#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
-    use rquickjs::{Context, Runtime};
+    use super::*;
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().expect("Runtime::new");
-        let ctx = Context::full(&rt).expect("Context::full");
-        (rt, ctx)
-    }
-
-    fn install_stubs(ctx: &rquickjs::Ctx) {
-        ctx.eval::<(), _>(
+    fn with_media_recorder(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(
             "globalThis.Blob = function(parts, opts) { \
                this.parts = parts || []; \
                this.type = (opts && opts.type) || ''; \
@@ -174,100 +178,79 @@ mod tests {
              }; \
              globalThis.Date = { now: function() { return 0; } };",
         )
-        .expect("install stubs");
+        .unwrap();
+        install_media_stream_recording_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
     fn media_recorder_class_exists() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_media_stream_recording(&ctx).expect("init");
-            let res: String = ctx
+        with_media_recorder(|rt| {
+            let res = rt
                 .eval("typeof MediaRecorder === 'function' ? 'yes' : 'no'")
-                .expect("eval");
-            assert_eq!(res, "yes");
+                .unwrap();
+            assert_eq!(res, JsValue::String("yes".to_string()));
         });
     }
 
     #[test]
     fn blob_event_class_exists() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_media_stream_recording(&ctx).expect("init");
-            let res: String = ctx
+        with_media_recorder(|rt| {
+            let res = rt
                 .eval("typeof BlobEvent === 'function' ? 'yes' : 'no'")
-                .expect("eval");
-            assert_eq!(res, "yes");
+                .unwrap();
+            assert_eq!(res, JsValue::String("yes".to_string()));
         });
     }
 
     #[test]
     fn is_type_supported_returns_false() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_media_stream_recording(&ctx).expect("init");
-            let res: bool = ctx
+        with_media_recorder(|rt| {
+            let res = rt
                 .eval("MediaRecorder.isTypeSupported('video/webm')")
-                .expect("eval");
-            assert!(!res);
+                .unwrap();
+            assert_eq!(res, JsValue::Bool(false));
         });
     }
 
     #[test]
     fn initial_state_is_inactive() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_media_stream_recording(&ctx).expect("init");
-            let res: String = ctx
-                .eval("var r = new MediaRecorder({}); r.state")
-                .expect("eval");
-            assert_eq!(res, "inactive");
+        with_media_recorder(|rt| {
+            let res = rt.eval("var r = new MediaRecorder({}); r.state").unwrap();
+            assert_eq!(res, JsValue::String("inactive".to_string()));
         });
     }
 
     #[test]
     fn start_changes_state_to_recording() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_media_stream_recording(&ctx).expect("init");
-            let res: String = ctx
+        with_media_recorder(|rt| {
+            let res = rt
                 .eval("var r = new MediaRecorder({}); r.start(); r.state")
-                .expect("eval");
-            assert_eq!(res, "recording");
+                .unwrap();
+            assert_eq!(res, JsValue::String("recording".to_string()));
         });
     }
 
     #[test]
     fn stop_fires_dataavailable_and_stop_events() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_media_stream_recording(&ctx).expect("init");
-            let res: String = ctx
+        with_media_recorder(|rt| {
+            let res = rt
                 .eval(
                     "var r = new MediaRecorder({}); \
                      var got = []; \
                      r.ondataavailable = function(e) { got.push('data:' + (e.data instanceof Blob ? 'blob' : 'bad')); }; \
                      r.onstop = function() { got.push('stop'); }; \
-                     r.start(); r.stop(); got.join(',');"
+                     r.start(); r.stop(); got.join(',');",
                 )
-                .expect("eval");
-            assert_eq!(res, "data:blob,stop");
+                .unwrap();
+            assert_eq!(res, JsValue::String("data:blob,stop".to_string()));
         });
     }
 
     #[test]
     fn pause_and_resume_state_transitions() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_media_stream_recording(&ctx).expect("init");
-            let res: String = ctx
+        with_media_recorder(|rt| {
+            let res = rt
                 .eval(
                     "var r = new MediaRecorder({}); \
                      r.start(); \
@@ -275,23 +258,20 @@ mod tests {
                      var s1 = r.state; \
                      r.resume(); \
                      var s2 = r.state; \
-                     s1 + ',' + s2"
+                     s1 + ',' + s2",
                 )
-                .expect("eval");
-            assert_eq!(res, "paused,recording");
+                .unwrap();
+            assert_eq!(res, JsValue::String("paused,recording".to_string()));
         });
     }
 
     #[test]
     fn mime_type_reflected_from_options() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_media_stream_recording(&ctx).expect("init");
-            let res: String = ctx
+        with_media_recorder(|rt| {
+            let res = rt
                 .eval("var r = new MediaRecorder({}, {mimeType: 'video/webm'}); r.mimeType")
-                .expect("eval");
-            assert_eq!(res, "video/webm");
+                .unwrap();
+            assert_eq!(res, JsValue::String("video/webm".to_string()));
         });
     }
 }
