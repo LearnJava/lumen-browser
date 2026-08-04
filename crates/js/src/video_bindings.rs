@@ -34,265 +34,17 @@
 //! | `__lumen_video_can_play_type` | `(mime: String) → String` | canPlayType probe |
 //! | `__lumen_texttracks_json` | `(nid: f64) → String` | JSON of parsed `<track>` cues |
 
-use rquickjs::{Ctx, Function, Object};
-
+#[cfg(feature = "v8-backend")]
 use crate::text_track_store::get_text_track_store;
+#[cfg(feature = "v8-backend")]
 use crate::video_gif_store::get_video_gif_store;
 
-/// Install HTMLVideoElement Phase 1 bindings into the JS context.
-///
-/// Registers the `__lumen_video_*` native functions and the JS shim that
-/// patches `<video>` elements.  Must be called **after** `dom::install_dom_api`.
-pub fn install_video_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    install_native_bindings(ctx)?;
-    ctx.eval::<(), _>(VIDEO_SHIM)?;
-    Ok(())
-}
-
-// ── Native binding registration ───────────────────────────────────────────────
-
-fn install_native_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    let g: Object = ctx.globals();
-
-    // __lumen_video_load(nid, src) — queue GIF decode request for the shell.
-    {
-        let store = get_video_gif_store();
-        g.set(
-            "__lumen_video_load",
-            Function::new(ctx.clone(), move |nid: f64, src: String| {
-                if let Some(s) = &store {
-                    s.pending_loads.lock().unwrap().push((nid as u32, src));
-                }
-            }),
-        )?;
-    }
-
-    // __lumen_video_ready(nid) → bool — true once the shell stored the entry.
-    {
-        let store = get_video_gif_store();
-        g.set(
-            "__lumen_video_ready",
-            Function::new(ctx.clone(), move |nid: f64| -> bool {
-                store
-                    .as_ref()
-                    .map(|s| s.playback.lock().unwrap().contains_key(&(nid as u32)))
-                    .unwrap_or(false)
-            }),
-        )?;
-    }
-
-    // __lumen_video_play(nid, now_ms) — start/resume playback.
-    {
-        let store = get_video_gif_store();
-        g.set(
-            "__lumen_video_play",
-            Function::new(ctx.clone(), move |nid: f64, now_ms: f64| {
-                if let Some(s) = &store
-                    && let Some(e) = s.playback.lock().unwrap().get_mut(&(nid as u32))
-                    && e.paused
-                {
-                    e.play_epoch_ms = Some(now_ms as u64);
-                    e.paused = false;
-                }
-            }),
-        )?;
-    }
-
-    // __lumen_video_pause(nid, now_ms) — pause, snapshot position.
-    {
-        let store = get_video_gif_store();
-        g.set(
-            "__lumen_video_pause",
-            Function::new(ctx.clone(), move |nid: f64, now_ms: f64| {
-                if let Some(s) = &store
-                    && let Some(e) = s.playback.lock().unwrap().get_mut(&(nid as u32))
-                {
-                    e.freeze(now_ms as u64);
-                    e.paused = true;
-                }
-            }),
-        )?;
-    }
-
-    // __lumen_video_seek(nid, secs, now_ms) — seek to a position.
-    {
-        let store = get_video_gif_store();
-        g.set(
-            "__lumen_video_seek",
-            Function::new(ctx.clone(), move |nid: f64, secs: f64, now_ms: f64| {
-                if let Some(s) = &store
-                    && let Some(e) = s.playback.lock().unwrap().get_mut(&(nid as u32))
-                {
-                    let target_ms = (secs * 1000.0).max(0.0) as u64;
-                    e.position_ms = target_ms;
-                    if !e.paused {
-                        e.play_epoch_ms = Some(now_ms as u64);
-                    }
-                }
-            }),
-        )?;
-    }
-
-    // __lumen_video_current_time(nid, now_ms) → f64 — position in seconds.
-    {
-        let store = get_video_gif_store();
-        g.set(
-            "__lumen_video_current_time",
-            Function::new(ctx.clone(), move |nid: f64, now_ms: f64| -> f64 {
-                store
-                    .as_ref()
-                    .and_then(|s| {
-                        s.playback
-                            .lock()
-                            .unwrap()
-                            .get(&(nid as u32))
-                            .map(|e| e.current_ms(now_ms as u64) as f64 / 1000.0)
-                    })
-                    .unwrap_or(0.0)
-            }),
-        )?;
-    }
-
-    // __lumen_video_duration(nid) → f64 — total duration in seconds.
-    {
-        let store = get_video_gif_store();
-        g.set(
-            "__lumen_video_duration",
-            Function::new(ctx.clone(), move |nid: f64| -> f64 {
-                store
-                    .as_ref()
-                    .and_then(|s| {
-                        s.playback
-                            .lock()
-                            .unwrap()
-                            .get(&(nid as u32))
-                            .map(|e| e.duration_secs())
-                    })
-                    .unwrap_or(f64::INFINITY)
-            }),
-        )?;
-    }
-
-    // __lumen_video_paused(nid) → bool.
-    {
-        let store = get_video_gif_store();
-        g.set(
-            "__lumen_video_paused",
-            Function::new(ctx.clone(), move |nid: f64| -> bool {
-                store
-                    .as_ref()
-                    .and_then(|s| {
-                        s.playback
-                            .lock()
-                            .unwrap()
-                            .get(&(nid as u32))
-                            .map(|e| e.paused)
-                    })
-                    .unwrap_or(true)
-            }),
-        )?;
-    }
-
-    // __lumen_video_ended(nid, now_ms) → bool.
-    {
-        let store = get_video_gif_store();
-        g.set(
-            "__lumen_video_ended",
-            Function::new(ctx.clone(), move |nid: f64, now_ms: f64| -> bool {
-                store
-                    .as_ref()
-                    .and_then(|s| {
-                        s.playback
-                            .lock()
-                            .unwrap()
-                            .get(&(nid as u32))
-                            .map(|e| e.is_ended(now_ms as u64))
-                    })
-                    .unwrap_or(false)
-            }),
-        )?;
-    }
-
-    // __lumen_video_width(nid) → f64 — GIF pixel width.
-    {
-        let store = get_video_gif_store();
-        g.set(
-            "__lumen_video_width",
-            Function::new(ctx.clone(), move |nid: f64| -> f64 {
-                store
-                    .as_ref()
-                    .and_then(|s| {
-                        s.playback
-                            .lock()
-                            .unwrap()
-                            .get(&(nid as u32))
-                            .map(|e| f64::from(e.width))
-                    })
-                    .unwrap_or(0.0)
-            }),
-        )?;
-    }
-
-    // __lumen_video_height(nid) → f64 — GIF pixel height.
-    {
-        let store = get_video_gif_store();
-        g.set(
-            "__lumen_video_height",
-            Function::new(ctx.clone(), move |nid: f64| -> f64 {
-                store
-                    .as_ref()
-                    .and_then(|s| {
-                        s.playback
-                            .lock()
-                            .unwrap()
-                            .get(&(nid as u32))
-                            .map(|e| f64::from(e.height))
-                    })
-                    .unwrap_or(0.0)
-            }),
-        )?;
-    }
-
-    // __lumen_video_can_play_type(mime) → String — "maybe" for image/gif, "" otherwise.
-    {
-        g.set(
-            "__lumen_video_can_play_type",
-            Function::new(ctx.clone(), |mime: String| -> String {
-                let m = mime.trim().to_ascii_lowercase();
-                let base = m.split(';').next().unwrap_or("").trim();
-                if base == "image/gif" {
-                    "maybe".to_string()
-                } else {
-                    String::new()
-                }
-            }),
-        )?;
-    }
-
-    // __lumen_texttracks_json(nid) → String — JSON snapshot of this video's
-    // parsed `<track>` cues (populated by the shell). "[]" when none.
-    {
-        let store = get_text_track_store();
-        g.set(
-            "__lumen_texttracks_json",
-            Function::new(ctx.clone(), move |nid: f64| -> String {
-                store
-                    .as_ref()
-                    .map(|s| s.tracks_json(nid as u32))
-                    .unwrap_or_else(|| "[]".to_string())
-            }),
-        )?;
-    }
-
-    Ok(())
-}
-
-/// V8 port of [`install_video_bindings`] (Ph3 V8 migration S5-S7 batch 3):
-/// state is the process-global [`VideoGifStore`](crate::video_gif_store::VideoGifStore)
-/// (installed once via `set_video_gif_store`, backend-agnostic), so no new
-/// `V8JsRuntime` plumbing is needed — each native captures its own
-/// `get_video_gif_store()` clone exactly like the rquickjs original. The JS
-/// shim is unchanged.
+/// V8 port of `install_video_bindings` (Ph3 V8 migration S5-S7 batch 3; the
+/// rquickjs twin was removed in S12b-B22): state is the process-global
+/// [`VideoGifStore`](crate::video_gif_store::VideoGifStore) (installed once
+/// via `set_video_gif_store`, backend-agnostic), so no new `V8JsRuntime`
+/// plumbing is needed — each native captures its own `get_video_gif_store()`
+/// clone exactly like the rquickjs original. The JS shim is unchanged.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_video_bindings_v8(
     rt: &crate::v8_runtime::V8JsRuntime,
@@ -495,6 +247,7 @@ pub(crate) fn install_video_bindings_v8(
 /// Uses `__lumen_video_*` native bindings for GIF-backed playback.  Falls
 /// back to Phase 0 behaviour when the store is absent (headless/CI) or when
 /// the `src` is not a `.gif` URL.
+#[cfg(feature = "v8-backend")]
 const VIDEO_SHIM: &str = r#"(function() {
   'use strict';
 
@@ -865,28 +618,30 @@ const VIDEO_SHIM: &str = r#"(function() {
 })();
 "#;
 
-#[cfg(test)]
-mod tests {
+/// V8 test coverage for the `HTMLVideoElement` shim (the rquickjs twin was
+/// removed in S12b-B22; this module ports its 12 tests to V8 verbatim).
+#[cfg(all(test, feature = "v8-backend"))]
+mod tests_v8 {
+    use std::sync::{Arc, Mutex};
+
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
+
+    use crate::v8_runtime::V8JsRuntime;
+
     use super::*;
-    use rquickjs::{Context, Runtime};
-    use std::sync::Mutex;
 
     /// Serializes tests that install and read the process-global
-    /// [`crate::video_gif_store`] singleton.  Without this guard, parallel
-    /// tests race: one test's `set_video_gif_store` overwrites the global
-    /// between another test's own `set` and the `install`/`load` that captures
-    /// it, so the load lands in the wrong store (BUG-166).
+    /// [`crate::video_gif_store`] / [`crate::text_track_store`] singletons.
+    /// Without this guard, parallel tests race: one test's `set_*_store`
+    /// overwrites the global between another test's own `set` and the
+    /// `install`/`load` that captures it, so the load lands in the wrong
+    /// store (BUG-166).
     static STORE_GUARD: Mutex<()> = Mutex::new(());
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
-
     /// Minimal DOM stubs so the shim can run without the full DOM bridge.
-    fn install_minimal_dom(ctx: &rquickjs::Ctx) {
-        ctx.eval::<(), _>(
+    fn install_minimal_dom(rt: &V8JsRuntime) {
+        rt.eval(
             r#"
 var document = {
   querySelectorAll: function() { return []; },
@@ -906,146 +661,100 @@ var document = {
         .unwrap();
     }
 
+    fn with_video() -> V8JsRuntime {
+        let rt = V8JsRuntime::new().unwrap();
+        install_minimal_dom(&rt);
+        install_video_bindings_v8(&rt).unwrap();
+        rt
+    }
+
+    fn bool_eval(rt: &V8JsRuntime, expr: &str) -> bool {
+        matches!(rt.eval(expr).unwrap(), JsValue::Bool(true))
+    }
+
     #[test]
     fn install_succeeds_without_document() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_video_bindings(&ctx).expect("install should succeed without document");
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install_video_bindings_v8(&rt).expect("install should succeed without document");
     }
 
     #[test]
     fn install_succeeds_with_minimal_dom() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_video_bindings(&ctx).expect("install should succeed with minimal dom");
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install_minimal_dom(&rt);
+        install_video_bindings_v8(&rt).expect("install should succeed with minimal dom");
     }
 
     #[test]
     fn play_returns_promise() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_video_bindings(&ctx).unwrap();
-            let result: bool = ctx
-                .eval(
-                    r#"
-var el = document.createElement('video');
-var p = el.play();
-p instanceof Promise
-"#,
-                )
-                .unwrap();
-            assert!(result, "play() should return a Promise");
-        });
+        let rt = with_video();
+        let ok = bool_eval(
+            &rt,
+            "var el = document.createElement('video'); el.play() instanceof Promise",
+        );
+        assert!(ok, "play() should return a Promise");
     }
 
     #[test]
     fn duration_infinity_without_gif() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_video_bindings(&ctx).unwrap();
-            let result: bool = ctx
-                .eval(
-                    r#"
-var el = document.createElement('video');
-el.duration === Infinity
-"#,
-                )
-                .unwrap();
-            assert!(result, "duration should be Infinity when no GIF loaded");
-        });
+        let rt = with_video();
+        let ok = bool_eval(
+            &rt,
+            "var el = document.createElement('video'); el.duration === Infinity",
+        );
+        assert!(ok, "duration should be Infinity when no GIF loaded");
     }
 
     #[test]
     fn paused_initially_true() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_video_bindings(&ctx).unwrap();
-            let result: bool = ctx
-                .eval(
-                    r#"
-var el = document.createElement('video');
-el.paused === true
-"#,
-                )
-                .unwrap();
-            assert!(result, "paused should initially be true");
-        });
+        let rt = with_video();
+        let ok = bool_eval(
+            &rt,
+            "var el = document.createElement('video'); el.paused === true",
+        );
+        assert!(ok, "paused should initially be true");
     }
 
     #[test]
     fn ready_state_with_no_src() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_video_bindings(&ctx).unwrap();
-            let result: bool = ctx
-                .eval(
-                    r#"
-var el = document.createElement('video');
-el.readyState === 4
-"#,
-                )
-                .unwrap();
-            assert!(result, "readyState should be 4 with no src");
-        });
+        let rt = with_video();
+        let ok = bool_eval(
+            &rt,
+            "var el = document.createElement('video'); el.readyState === 4",
+        );
+        assert!(ok, "readyState should be 4 with no src");
     }
 
     #[test]
     fn can_play_type_gif() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_video_bindings(&ctx).unwrap();
-            let result: bool = ctx
-                .eval(
-                    r#"
-var el = document.createElement('video');
-el.canPlayType('image/gif') === 'maybe'
-"#,
-                )
-                .unwrap();
-            assert!(result, "canPlayType('image/gif') should return 'maybe'");
-        });
+        let rt = with_video();
+        let ok = bool_eval(
+            &rt,
+            "var el = document.createElement('video'); el.canPlayType('image/gif') === 'maybe'",
+        );
+        assert!(ok, "canPlayType('image/gif') should return 'maybe'");
     }
 
     #[test]
     fn can_play_type_mp4_empty() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_video_bindings(&ctx).unwrap();
-            let result: bool = ctx
-                .eval(
-                    r#"
-var el = document.createElement('video');
-el.canPlayType('video/mp4') === ''
-"#,
-                )
-                .unwrap();
-            assert!(result, "canPlayType('video/mp4') should return ''");
-        });
+        let rt = with_video();
+        let ok = bool_eval(
+            &rt,
+            "var el = document.createElement('video'); el.canPlayType('video/mp4') === ''",
+        );
+        assert!(ok, "canPlayType('video/mp4') should return ''");
     }
 
     #[test]
     fn native_video_load_registers_pending() {
         use crate::video_gif_store::set_video_gif_store;
-        use std::sync::Arc;
         let _guard = STORE_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         let store = Arc::new(crate::video_gif_store::VideoGifStore::default());
         set_video_gif_store(store.clone());
 
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_video_bindings(&ctx).unwrap();
-            ctx.eval::<(), _>("__lumen_video_load(99, 'test.gif');")
-                .unwrap();
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install_video_bindings_v8(&rt).unwrap();
+        rt.eval("__lumen_video_load(99, 'test.gif');").unwrap();
 
         let loads = store.pending_loads.lock().unwrap();
         assert!(!loads.is_empty(), "load should be queued");
@@ -1057,7 +766,6 @@ el.canPlayType('video/mp4') === ''
         use crate::text_track_store::{
             set_text_track_store, CueData, TextTrackData, TextTrackStore,
         };
-        use std::sync::Arc;
         let _guard = STORE_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         let tstore = Arc::new(TextTrackStore::default());
         tstore.tracks.lock().unwrap().insert(
@@ -1077,13 +785,10 @@ el.canPlayType('video/mp4') === ''
         );
         set_text_track_store(tstore);
 
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_video_bindings(&ctx).unwrap();
-            let ok: bool = ctx
-                .eval(
-                    r#"
+        let rt = with_video();
+        let ok = bool_eval(
+            &rt,
+            r#"
 var el = document.createElement('video');
 var tt = el.textTracks;
 tt.length === 1
@@ -1097,49 +802,34 @@ tt.length === 1
   && tt[0].activeCues.length === 1
   && tt.getTrackById('') === tt[0]
 "#,
-                )
-                .unwrap();
-            assert!(ok, "textTracks should expose the shell-parsed cues");
-        });
+        );
+        assert!(ok, "textTracks should expose the shell-parsed cues");
     }
 
     #[test]
     fn text_tracks_empty_without_store_entry() {
         use crate::text_track_store::{set_text_track_store, TextTrackStore};
-        use std::sync::Arc;
         let _guard = STORE_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         // Fresh empty store so a prior test's nid=42 entry can't leak in.
         set_text_track_store(Arc::new(TextTrackStore::default()));
 
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_video_bindings(&ctx).unwrap();
-            let len: i32 = ctx
-                .eval(
-                    r#"
-var el = document.createElement('video');
-el.textTracks.length
-"#,
-                )
-                .unwrap();
-            assert_eq!(len, 0, "no store entry → empty TextTrackList");
-        });
+        let rt = with_video();
+        let len = rt
+            .eval("document.createElement('video').textTracks.length")
+            .unwrap();
+        assert_eq!(len, JsValue::Number(0.0), "no store entry → empty TextTrackList");
     }
 
     #[test]
     fn native_video_ready_false_before_decode() {
         use crate::video_gif_store::set_video_gif_store;
-        use std::sync::Arc;
         let _guard = STORE_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         let store = Arc::new(crate::video_gif_store::VideoGifStore::default());
         set_video_gif_store(store.clone());
 
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_video_bindings(&ctx).unwrap();
-            let ready: bool = ctx.eval("__lumen_video_ready(55)").unwrap();
-            assert!(!ready, "should not be ready before decode");
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install_video_bindings_v8(&rt).unwrap();
+        let ready = rt.eval("__lumen_video_ready(55)").unwrap();
+        assert_eq!(ready, JsValue::Bool(false), "should not be ready before decode");
     }
 }

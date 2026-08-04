@@ -789,11 +789,6 @@ impl QuickJsRuntime {
             )
             .map_err(|e| rq_err(&ctx, e))?;
 
-            // Install HTMLVideoElement stubs — after DOM so document.createElement is available.
-            if let Err(e) = video_bindings::install_video_bindings(&ctx) {
-                eprintln!("Video bindings init failed: {}", e);
-            }
-
             // Install Contact Picker API stub (W3C Contact Picker API) — after DOM/navigator.
             // Phase 0: navigator.contacts.select() always rejects with NotSupportedError;
             // navigator.contacts.getProperties() returns Promise<['name', 'email', 'tel']>.
