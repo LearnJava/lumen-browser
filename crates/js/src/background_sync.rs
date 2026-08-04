@@ -8,18 +8,23 @@
 //! Phase 0: Sync tags are stored in-memory per registration. The `sync` event
 //! fires on next navigation (or explicitly via _lumen_sw_fire_sync).
 
-use rquickjs::Ctx;
-
-/// Install the Background Sync API stub into the JS context.
+/// V8 port of the former rquickjs `init_background_sync` (Ph3 V8 migration
+/// S12b-G1, rquickjs side removed in the same batch): identical JS shim,
+/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 ///
 /// Defines `SyncManager` class on ServiceWorkerRegistration.prototype.
 /// Must be called **after** worker registration is set up.
-pub fn init_background_sync(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(BACKGROUND_SYNC_SHIM)?;
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_background_sync_v8(
+    rt: &crate::v8_runtime::V8JsRuntime,
+) -> lumen_core::JsResult<()> {
+    use lumen_core::ext::JsRuntime as _;
+    rt.eval(BACKGROUND_SYNC_SHIM)?;
     Ok(())
 }
 
 /// JavaScript shim implementing W3C Background Sync L2 (Phase 0).
+#[cfg(feature = "v8-backend")]
 const BACKGROUND_SYNC_SHIM: &str = r#"(function() {
   // SyncManager implementation
   var SyncManager = function(registration) {
@@ -71,90 +76,76 @@ const BACKGROUND_SYNC_SHIM: &str = r#"(function() {
   globalThis.SyncManager = SyncManager;
 })();"#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
-    use rquickjs::{Runtime, Context, Ctx};
+    use super::*;
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().expect("Runtime::new");
-        let ctx = Context::full(&rt).expect("Context::full");
-        (rt, ctx)
-    }
-
-    fn install_stubs(ctx: &Ctx) {
-        ctx.eval::<(), _>(
-            "globalThis.ServiceWorkerRegistration = function() {}; \
-             globalThis.TypeError = TypeError; \
-             globalThis._lumen_sw_sync_register = function() {}; \
-             globalThis._lumen_sw_get_tags = function() { return []; };"
-        ).expect("install stubs");
+    fn with_background_sync(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(
+            "var ServiceWorkerRegistration = function() {}; \
+             var _lumen_sw_sync_register = function() {}; \
+             var _lumen_sw_get_tags = function() { return []; };",
+        )
+        .unwrap();
+        install_background_sync_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
-    fn test_sync_manager_exists() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_background_sync(&ctx).expect("init background sync");
-            let result: String = ctx.eval(
-                "typeof SyncManager === 'function' ? 'exists' : 'missing'"
-            ).expect("eval");
-            assert_eq!(result, "exists");
+    fn sync_manager_exists() {
+        with_background_sync(|rt| {
+            let result = rt
+                .eval("typeof SyncManager === 'function' ? 'exists' : 'missing'")
+                .unwrap();
+            assert_eq!(result, JsValue::String("exists".to_string()));
         });
     }
 
     #[test]
-    fn test_register_returns_promise() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_background_sync(&ctx).expect("init background sync");
-            let result: String = ctx.eval(
-                "var sm = new SyncManager({}); \
-                 typeof sm.register('test-tag') === 'object' ? 'promise' : 'not_promise'"
-            ).expect("eval");
-            assert_eq!(result, "promise");
+    fn register_returns_promise() {
+        with_background_sync(|rt| {
+            let result = rt
+                .eval(
+                    "var sm = new SyncManager({}); \
+                     typeof sm.register('test-tag') === 'object' ? 'promise' : 'not_promise'",
+                )
+                .unwrap();
+            assert_eq!(result, JsValue::String("promise".to_string()));
         });
     }
 
     #[test]
-    fn test_get_tags_returns_promise() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_background_sync(&ctx).expect("init background sync");
-            let result: String = ctx.eval(
-                "var sm = new SyncManager({}); \
-                 typeof sm.getTags() === 'object' ? 'promise' : 'not_promise'"
-            ).expect("eval");
-            assert_eq!(result, "promise");
+    fn get_tags_returns_promise() {
+        with_background_sync(|rt| {
+            let result = rt
+                .eval(
+                    "var sm = new SyncManager({}); \
+                     typeof sm.getTags() === 'object' ? 'promise' : 'not_promise'",
+                )
+                .unwrap();
+            assert_eq!(result, JsValue::String("promise".to_string()));
         });
     }
 
     #[test]
-    fn test_sync_manager_stores_tags() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_background_sync(&ctx).expect("init background sync");
-            ctx.eval::<(), _>("var sm = new SyncManager({}); sm.tags.push('test-tag');").expect("setup");
-            let result: bool = ctx.eval(
-                "new SyncManager({}).tags.length >= 0"
-            ).expect("eval");
-            assert!(result);  // Just verify tags array is accessible
+    fn sync_manager_stores_tags() {
+        with_background_sync(|rt| {
+            let result = rt.eval("new SyncManager({}).tags.length >= 0").unwrap();
+            assert_eq!(result, JsValue::Bool(true));
         });
     }
 
     #[test]
-    fn test_service_worker_registration_has_sync_method() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_background_sync(&ctx).expect("init background sync");
-            let result: String = ctx.eval(
-                "typeof ServiceWorkerRegistration.prototype.sync === 'function' ? 'yes' : 'no'"
-            ).expect("eval");
-            assert_eq!(result, "yes");
+    fn service_worker_registration_has_sync_method() {
+        with_background_sync(|rt| {
+            let result = rt
+                .eval("typeof ServiceWorkerRegistration.prototype.sync === 'function' ? 'yes' : 'no'")
+                .unwrap();
+            assert_eq!(result, JsValue::String("yes".to_string()));
         });
     }
 }
