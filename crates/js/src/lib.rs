@@ -852,12 +852,6 @@ impl QuickJsRuntime {
                 eprintln!("MediaRecorder API init failed: {}", e);
             }
 
-            // Install W3C WebGPU API — navigator.gpu, GPUAdapter/Device/Buffer/Texture/Pipeline stubs.
-            // Phase 0: no GPU; all create* ops in-memory only; submit/draw/dispatch are no-ops.
-            if let Err(e) = webgpu::install_webgpu_bindings(&ctx) {
-                eprintln!("WebGPU API init failed: {}", e);
-            }
-
             Ok(())
         }))
     }

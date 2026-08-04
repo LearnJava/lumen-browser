@@ -47,477 +47,10 @@
 //! texture, the frame is read back (`texture_read_rgba`) and pushed into the page `<canvas>`'s
 //! 2D buffer (`canvas:{nid}`), so the GPU-rendered image actually appears on the page.
 
-use rquickjs::Ctx;
-
-/// Install the WebGPU API bindings into the JS context.
-///
-/// With the `webgpu` feature the real native bridge (`_lumen_webgpu_*`) is registered
-/// **before** the shim is evaluated, so the shim's `typeof _lumen_webgpu_... === 'function'`
-/// probes see it and route adapter-info / WGSL-validation to the real GPU device.
-/// Without the feature only the in-memory JS shim (Phase 0) is installed.
-pub fn install_webgpu_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    #[cfg(feature = "webgpu")]
-    install_webgpu_natives(ctx)?;
-    ctx.eval::<(), _>(WEBGPU_SHIM)?;
-    Ok(())
-}
-
-/// Native backing for `_lumen_webgpu_buffer_read`: maps the GPU buffer range and returns
-/// its bytes as a `Uint8Array`, or JS `null` when the read fails / no GPU is present.
-///
-/// A free function (not a closure) so the single `'js` lifetime ties `ctx` to the
-/// returned [`rquickjs::Value`] — inferred closure HRTB lifetimes cannot express this.
-#[cfg(feature = "webgpu")]
-fn webgpu_buffer_read_native<'js>(
-    ctx: Ctx<'js>,
-    id: f64,
-    offset: f64,
-    size: f64,
-) -> rquickjs::Result<rquickjs::Value<'js>> {
-    match lumen_paint::webgpu_compute::buffer_read(id as u64, offset as u64, size as u64) {
-        Some(bytes) => Ok(rquickjs::TypedArray::new(ctx, bytes)?.into_value()),
-        None => Ok(rquickjs::Value::new_null(ctx)),
-    }
-}
-
-/// Registers the native WebGPU bridge functions backed by a real wgpu device
-/// (`lumen_paint::webgpu_compute`). Stage 1: adapter info + WGSL validation.
-/// Stage 2 (sub-step 1): GPUBuffer create/write/read/destroy + copy submit.
-#[cfg(feature = "webgpu")]
-fn install_webgpu_natives(ctx: &Ctx) -> rquickjs::Result<()> {
-    use lumen_paint::webgpu_compute;
-    let g = ctx.globals();
-
-    // _lumen_webgpu_adapter_info() → JSON `{vendor,architecture,device,description}` for
-    // a real GPU adapter, or "" when no GPU is available (shim then keeps the stub info).
-    g.set(
-        "_lumen_webgpu_adapter_info",
-        rquickjs::Function::new(ctx.clone(), || -> String {
-            match webgpu_compute::adapter_info() {
-                Some(i) => serde_json::json!({
-                    "vendor": i.vendor,
-                    "architecture": i.architecture,
-                    "device": i.device,
-                    "description": i.description,
-                })
-                .to_string(),
-                None => String::new(),
-            }
-        }),
-    )?;
-
-    // _lumen_webgpu_validate_shader(code) → "" if the WGSL is valid (or no GPU), else the
-    // real compilation error text for GPUShaderModule.getCompilationInfo().
-    g.set(
-        "_lumen_webgpu_validate_shader",
-        rquickjs::Function::new(ctx.clone(), |code: String| -> String {
-            webgpu_compute::validate_wgsl(&code).unwrap_or_default()
-        }),
-    )?;
-
-    // ── GPUBuffer bridge (Stage 2, sub-step 1) ───────────────────────────────
-    // These back the JS GPUBuffer with a real wgpu::Buffer addressed by an opaque
-    // numeric handle. Each returns a sentinel (0 / false / null) when no GPU is
-    // available, so the shim transparently falls back to the Phase 0 in-memory path.
-
-    // _lumen_webgpu_buffer_create(size, usage, mappedAtCreation) → handle (0 = failed/no GPU).
-    g.set(
-        "_lumen_webgpu_buffer_create",
-        rquickjs::Function::new(ctx.clone(), |size: f64, usage: u32, mapped: bool| -> f64 {
-            webgpu_compute::buffer_create(size as u64, usage, mapped).unwrap_or(0) as f64
-        }),
-    )?;
-
-    // _lumen_webgpu_buffer_write(handle, offset, bytes) → true on success.
-    g.set(
-        "_lumen_webgpu_buffer_write",
-        rquickjs::Function::new(
-            ctx.clone(),
-            |id: f64, offset: f64, data: rquickjs::TypedArray<'_, u8>| -> bool {
-                match data.as_bytes() {
-                    Some(bytes) => webgpu_compute::buffer_write(id as u64, offset as u64, bytes),
-                    None => false,
-                }
-            },
-        ),
-    )?;
-
-    // _lumen_webgpu_buffer_read(handle, offset, size) → Uint8Array of bytes, or null.
-    // Free function (not a closure) so a single `'js` ties `ctx` to the returned Value.
-    g.set(
-        "_lumen_webgpu_buffer_read",
-        rquickjs::Function::new(ctx.clone(), webgpu_buffer_read_native)?,
-    )?;
-
-    // _lumen_webgpu_buffer_destroy(handle).
-    g.set(
-        "_lumen_webgpu_buffer_destroy",
-        rquickjs::Function::new(ctx.clone(), |id: f64| {
-            webgpu_compute::buffer_destroy(id as u64);
-        }),
-    )?;
-
-    // ── Compute pipeline bridge (Stage 2, sub-step 2) ────────────────────────
-    // Real wgpu shader modules / compute pipelines / bind-group layouts / bind groups,
-    // each addressed by an opaque numeric handle. Each returns 0 when no GPU is available,
-    // so the shim transparently falls back to the Phase 0 no-op compute path.
-
-    // _lumen_webgpu_shader_create(code) → handle (0 = failed/no GPU).
-    g.set(
-        "_lumen_webgpu_shader_create",
-        rquickjs::Function::new(ctx.clone(), |code: String| -> f64 {
-            webgpu_compute::shader_create(&code).unwrap_or(0) as f64
-        }),
-    )?;
-
-    // _lumen_webgpu_compute_pipeline_create(shaderHandle, entryPoint) → handle (0 = failed).
-    g.set(
-        "_lumen_webgpu_compute_pipeline_create",
-        rquickjs::Function::new(ctx.clone(), |shader: f64, entry: String| -> f64 {
-            webgpu_compute::compute_pipeline_create(shader as u64, &entry).unwrap_or(0) as f64
-        }),
-    )?;
-
-    // _lumen_webgpu_pipeline_bind_group_layout(pipelineHandle, group) → layout handle.
-    g.set(
-        "_lumen_webgpu_pipeline_bind_group_layout",
-        rquickjs::Function::new(ctx.clone(), |pipeline: f64, group: u32| -> f64 {
-            webgpu_compute::pipeline_bind_group_layout(pipeline as u64, group).unwrap_or(0) as f64
-        }),
-    )?;
-
-    // _lumen_webgpu_bind_group_create(layoutHandle, entriesJson) → bind-group handle.
-    // entriesJson: [{binding, buffer, offset, size}] (size 0 = whole buffer). JSON is parsed
-    // here (lumen-js owns serde_json); lumen-paint receives already-decoded entries.
-    g.set(
-        "_lumen_webgpu_bind_group_create",
-        rquickjs::Function::new(ctx.clone(), |layout: f64, entries: String| -> f64 {
-            let Ok(parsed) = serde_json::from_str::<Vec<serde_json::Value>>(&entries) else {
-                return 0.0;
-            };
-            let mut decoded = Vec::with_capacity(parsed.len());
-            for e in &parsed {
-                let u = |k: &str| e.get(k).and_then(serde_json::Value::as_u64);
-                let (Some(binding), Some(buffer)) = (u("binding"), u("buffer")) else {
-                    return 0.0;
-                };
-                decoded.push(webgpu_compute::BufferBindEntry {
-                    binding: binding as u32,
-                    buffer,
-                    offset: u("offset").unwrap_or(0),
-                    size: u("size").unwrap_or(0),
-                });
-            }
-            webgpu_compute::bind_group_create(layout as u64, &decoded).unwrap_or(0) as f64
-        }),
-    )?;
-
-    // _lumen_webgpu_compute_pipeline_destroy(handle).
-    g.set(
-        "_lumen_webgpu_compute_pipeline_destroy",
-        rquickjs::Function::new(ctx.clone(), |id: f64| {
-            webgpu_compute::compute_pipeline_destroy(id as u64);
-        }),
-    )?;
-
-    // ── Render pipeline + texture bridge (Stage 3, sub-step 1) ───────────────
-    // Real wgpu textures (offscreen render targets) and render pipelines, each addressed by
-    // an opaque numeric handle. Returns 0 when no GPU is available → the shim keeps the
-    // Phase 0 stub path. Canvas present (showing the texture on the page) is the next sub-step.
-
-    // _lumen_webgpu_texture_create(width, height, format, usage) → handle (0 = failed/no GPU).
-    g.set(
-        "_lumen_webgpu_texture_create",
-        rquickjs::Function::new(
-            ctx.clone(),
-            |width: f64, height: f64, format: String, usage: u32| -> f64 {
-                webgpu_compute::texture_create(width as u32, height as u32, &format, usage)
-                    .unwrap_or(0) as f64
-            },
-        ),
-    )?;
-
-    // _lumen_webgpu_texture_destroy(handle).
-    g.set(
-        "_lumen_webgpu_texture_destroy",
-        rquickjs::Function::new(ctx.clone(), |id: f64| {
-            webgpu_compute::texture_destroy(id as u64);
-        }),
-    )?;
-
-    // _lumen_webgpu_render_pipeline_create(configJson) → handle (0 = failed/no GPU).
-    // configJson: { vs, vsEntry, fs, fsEntry, format, topology,
-    //               buffers: [{ arrayStride, instance, attributes: [{format, offset, shaderLocation}] }] }
-    g.set(
-        "_lumen_webgpu_render_pipeline_create",
-        rquickjs::Function::new(ctx.clone(), |config: String| -> f64 {
-            let Ok(cfg) = serde_json::from_str::<serde_json::Value>(&config) else {
-                return 0.0;
-            };
-            let u = |k: &str| cfg.get(k).and_then(serde_json::Value::as_u64);
-            let s = |k: &str| cfg.get(k).and_then(serde_json::Value::as_str).unwrap_or("");
-            let (Some(vs), Some(fs)) = (u("vs"), u("fs")) else {
-                return 0.0;
-            };
-            // Decode the vertex buffer layouts.
-            let mut buffers = Vec::new();
-            if let Some(bufs) = cfg.get("buffers").and_then(serde_json::Value::as_array) {
-                for b in bufs {
-                    let mut attributes = Vec::new();
-                    if let Some(attrs) = b.get("attributes").and_then(serde_json::Value::as_array) {
-                        for a in attrs {
-                            let Some(fmt) = a.get("format").and_then(serde_json::Value::as_str)
-                            else {
-                                return 0.0;
-                            };
-                            attributes.push(webgpu_compute::VertexAttr {
-                                format: fmt.to_string(),
-                                offset: a
-                                    .get("offset")
-                                    .and_then(serde_json::Value::as_u64)
-                                    .unwrap_or(0),
-                                shader_location: a
-                                    .get("shaderLocation")
-                                    .and_then(serde_json::Value::as_u64)
-                                    .unwrap_or(0) as u32,
-                            });
-                        }
-                    }
-                    buffers.push(webgpu_compute::VertexBufferLayout {
-                        array_stride: b
-                            .get("arrayStride")
-                            .and_then(serde_json::Value::as_u64)
-                            .unwrap_or(0),
-                        instance_step: b
-                            .get("instance")
-                            .and_then(serde_json::Value::as_bool)
-                            .unwrap_or(false),
-                        attributes,
-                    });
-                }
-            }
-            webgpu_compute::render_pipeline_create(
-                vs,
-                s("vsEntry"),
-                fs,
-                s("fsEntry"),
-                s("format"),
-                s("topology"),
-                &buffers,
-            )
-            .unwrap_or(0) as f64
-        }),
-    )?;
-
-    // _lumen_webgpu_render_pipeline_bind_group_layout(pipelineHandle, group) → layout handle.
-    g.set(
-        "_lumen_webgpu_render_pipeline_bind_group_layout",
-        rquickjs::Function::new(ctx.clone(), |pipeline: f64, group: u32| -> f64 {
-            webgpu_compute::render_pipeline_bind_group_layout(pipeline as u64, group).unwrap_or(0)
-                as f64
-        }),
-    )?;
-
-    // _lumen_webgpu_render_pipeline_destroy(handle).
-    g.set(
-        "_lumen_webgpu_render_pipeline_destroy",
-        rquickjs::Function::new(ctx.clone(), |id: f64| {
-            webgpu_compute::render_pipeline_destroy(id as u64);
-        }),
-    )?;
-
-    // _lumen_webgpu_submit(opsJson) → true on success. opsJson is a JSON array of
-    // command-encoder ops recorded on the JS side: copyBufferToBuffer + computePass.
-    g.set(
-        "_lumen_webgpu_submit",
-        rquickjs::Function::new(ctx.clone(), |ops_json: String| -> bool {
-            let Ok(ops) = serde_json::from_str::<Vec<serde_json::Value>>(&ops_json) else {
-                return false;
-            };
-            let mut decoded = Vec::with_capacity(ops.len());
-            for op in &ops {
-                let kind = op.get("op").and_then(|v| v.as_str()).unwrap_or("");
-                match kind {
-                    "copyB2B" => {
-                        let f = |k: &str| op.get(k).and_then(serde_json::Value::as_u64);
-                        let (Some(src), Some(src_offset), Some(dst), Some(dst_offset), Some(size)) =
-                            (f("src"), f("srcOffset"), f("dst"), f("dstOffset"), f("size"))
-                        else {
-                            return false;
-                        };
-                        decoded.push(webgpu_compute::GpuOp::CopyBufferToBuffer {
-                            src,
-                            src_offset,
-                            dst,
-                            dst_offset,
-                            size,
-                        });
-                    }
-                    "computePass" => {
-                        let Some(cmds) = op.get("cmds").and_then(|v| v.as_array()) else {
-                            return false;
-                        };
-                        let mut commands = Vec::with_capacity(cmds.len());
-                        for c in cmds {
-                            let ck = c.get("c").and_then(|v| v.as_str()).unwrap_or("");
-                            match ck {
-                                "setPipeline" => {
-                                    let Some(p) =
-                                        c.get("pipeline").and_then(serde_json::Value::as_u64)
-                                    else {
-                                        return false;
-                                    };
-                                    commands.push(webgpu_compute::ComputeCmd::SetPipeline(p));
-                                }
-                                "setBindGroup" => {
-                                    let (Some(index), Some(bind_group)) = (
-                                        c.get("index").and_then(serde_json::Value::as_u64),
-                                        c.get("bindGroup").and_then(serde_json::Value::as_u64),
-                                    ) else {
-                                        return false;
-                                    };
-                                    commands.push(webgpu_compute::ComputeCmd::SetBindGroup {
-                                        index: index as u32,
-                                        bind_group,
-                                    });
-                                }
-                                "dispatch" => {
-                                    let g = |k: &str| {
-                                        c.get(k).and_then(serde_json::Value::as_u64).unwrap_or(1)
-                                            as u32
-                                    };
-                                    commands.push(webgpu_compute::ComputeCmd::Dispatch {
-                                        x: g("x"),
-                                        y: g("y"),
-                                        z: g("z"),
-                                    });
-                                }
-                                _ => return false,
-                            }
-                        }
-                        decoded.push(webgpu_compute::GpuOp::ComputePass { commands });
-                    }
-                    "renderPass" => {
-                        let f = |k: &str| op.get(k).and_then(serde_json::Value::as_u64);
-                        let Some(color_texture) = f("colorTexture") else {
-                            return false;
-                        };
-                        // clear: null → LoadOp::Load; [r,g,b,a] → LoadOp::Clear.
-                        let clear = op.get("clear").and_then(|c| c.as_array()).map(|arr| {
-                            let g = |i: usize| arr.get(i).and_then(serde_json::Value::as_f64).unwrap_or(0.0);
-                            [g(0), g(1), g(2), g(3)]
-                        });
-                        let Some(cmds) = op.get("cmds").and_then(|v| v.as_array()) else {
-                            return false;
-                        };
-                        let mut commands = Vec::with_capacity(cmds.len());
-                        for c in cmds {
-                            let ck = c.get("c").and_then(|v| v.as_str()).unwrap_or("");
-                            let cu = |k: &str| c.get(k).and_then(serde_json::Value::as_u64);
-                            let ci = |k: &str| c.get(k).and_then(serde_json::Value::as_i64);
-                            match ck {
-                                "setPipeline" => {
-                                    let Some(p) = cu("pipeline") else { return false };
-                                    commands.push(webgpu_compute::RenderCmd::SetPipeline(p));
-                                }
-                                "setBindGroup" => {
-                                    let (Some(index), Some(bind_group)) =
-                                        (cu("index"), cu("bindGroup"))
-                                    else {
-                                        return false;
-                                    };
-                                    commands.push(webgpu_compute::RenderCmd::SetBindGroup {
-                                        index: index as u32,
-                                        bind_group,
-                                    });
-                                }
-                                "setVertexBuffer" => {
-                                    let Some(buffer) = cu("buffer") else { return false };
-                                    commands.push(webgpu_compute::RenderCmd::SetVertexBuffer {
-                                        slot: cu("slot").unwrap_or(0) as u32,
-                                        buffer,
-                                        offset: cu("offset").unwrap_or(0),
-                                        size: cu("size").unwrap_or(0),
-                                    });
-                                }
-                                "setIndexBuffer" => {
-                                    let Some(buffer) = cu("buffer") else { return false };
-                                    commands.push(webgpu_compute::RenderCmd::SetIndexBuffer {
-                                        buffer,
-                                        format_u16: c
-                                            .get("u16")
-                                            .and_then(serde_json::Value::as_bool)
-                                            .unwrap_or(false),
-                                        offset: cu("offset").unwrap_or(0),
-                                        size: cu("size").unwrap_or(0),
-                                    });
-                                }
-                                "draw" => {
-                                    commands.push(webgpu_compute::RenderCmd::Draw {
-                                        vertex_count: cu("vertexCount").unwrap_or(0) as u32,
-                                        instance_count: cu("instanceCount").unwrap_or(1) as u32,
-                                        first_vertex: cu("firstVertex").unwrap_or(0) as u32,
-                                        first_instance: cu("firstInstance").unwrap_or(0) as u32,
-                                    });
-                                }
-                                "drawIndexed" => {
-                                    commands.push(webgpu_compute::RenderCmd::DrawIndexed {
-                                        index_count: cu("indexCount").unwrap_or(0) as u32,
-                                        instance_count: cu("instanceCount").unwrap_or(1) as u32,
-                                        first_index: cu("firstIndex").unwrap_or(0) as u32,
-                                        base_vertex: ci("baseVertex").unwrap_or(0) as i32,
-                                        first_instance: cu("firstInstance").unwrap_or(0) as u32,
-                                    });
-                                }
-                                _ => return false,
-                            }
-                        }
-                        decoded.push(webgpu_compute::GpuOp::RenderPass {
-                            color_texture,
-                            clear,
-                            commands,
-                        });
-                    }
-                    "copyTexToBuf" => {
-                        let f = |k: &str| op.get(k).and_then(serde_json::Value::as_u64);
-                        let (Some(texture), Some(buffer)) = (f("texture"), f("buffer")) else {
-                            return false;
-                        };
-                        decoded.push(webgpu_compute::GpuOp::CopyTextureToBuffer {
-                            texture,
-                            buffer,
-                            buffer_offset: f("bufferOffset").unwrap_or(0),
-                            bytes_per_row: f("bytesPerRow").unwrap_or(0) as u32,
-                            rows_per_image: f("rowsPerImage").unwrap_or(1) as u32,
-                            width: f("width").unwrap_or(1) as u32,
-                            height: f("height").unwrap_or(1) as u32,
-                        });
-                    }
-                    _ => return false,
-                }
-            }
-            webgpu_compute::submit(&decoded)
-        }),
-    )?;
-
-    // _lumen_webgpu_canvas_present(nid, textureHandle) → true on success. Reads the rendered
-    // texture back to dense RGBA8 and pushes it into the page <canvas> `nid`'s 2D buffer, which
-    // the shell uploads as `canvas:{nid}` — the GPU-rendered frame becomes visible on the page.
-    g.set(
-        "_lumen_webgpu_canvas_present",
-        rquickjs::Function::new(ctx.clone(), |nid: u32, texture: f64| -> bool {
-            let Some((w, h, rgba)) = webgpu_compute::texture_read_rgba(texture as u64) else {
-                return false;
-            };
-            crate::canvas2d::present_rgba(nid, w, h, &rgba);
-            true
-        }),
-    )?;
-
-    Ok(())
-}
-
-/// JavaScript shim implementing W3C WebGPU (Phase 0).
+/// JavaScript shim implementing W3C WebGPU (Phase 0). The rquickjs installer
+/// (`install_webgpu_bindings`) that used to eval this alongside V8's was removed in
+/// S12b-B29 — this string is now V8-only, shared by [`install_webgpu_bindings_v8`].
+#[cfg(feature = "v8-backend")]
 const WEBGPU_SHIM: &str = r#"(function() {
   'use strict';
 
@@ -1355,7 +888,8 @@ const WEBGPU_SHIM: &str = r#"(function() {
 })();
 "#;
 
-/// V8 port of [`install_webgpu_bindings`] (Ph3 V8 migration S9).
+/// Install the WebGPU API bindings into a V8 runtime (Ph3 V8 migration S9;
+/// the rquickjs twin was removed in S12b-B29).
 ///
 /// The natives here carry no `Persistent`/`Global` GC roots (confirmed by the
 /// S8 slice's finding that WebGPU is a plain data/handle bridge — every arg
@@ -1377,9 +911,9 @@ pub(crate) fn install_webgpu_bindings_v8(
     Ok(())
 }
 
-/// Registers the real wgpu-backed `_lumen_webgpu_*` bridge natives. V8 twin of
-/// [`install_webgpu_natives`] — see that function's per-native doc comments
-/// for the wire protocol (JSON-encoded op lists, opaque numeric handles).
+/// Registers the real wgpu-backed `_lumen_webgpu_*` bridge natives — JSON-encoded op lists,
+/// opaque numeric handles addressing `lumen_paint::webgpu_compute`'s buffer/texture/pipeline
+/// registries.
 #[cfg(all(feature = "v8-backend", feature = "webgpu"))]
 fn install_webgpu_natives_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use crate::v8_compat::{into_v8_fn0, into_v8_fn1, into_v8_fn2, into_v8_fn3, into_v8_fn4};
@@ -1519,9 +1053,7 @@ fn install_webgpu_natives_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core:
     Ok(())
 }
 
-/// Shared JSON-decode body for `_lumen_webgpu_bind_group_create`, factored
-/// out of the closure so both backends' `entries` parsing logic can stay
-/// byte-for-byte identical to [`install_webgpu_natives`]'s inline closure.
+/// Decode body for `_lumen_webgpu_bind_group_create`'s JSON `entries` argument.
 #[cfg(all(feature = "v8-backend", feature = "webgpu"))]
 fn webgpu_bind_group_create_impl(layout: f64, entries: &str) -> f64 {
     use lumen_paint::webgpu_compute;
@@ -1545,9 +1077,7 @@ fn webgpu_bind_group_create_impl(layout: f64, entries: &str) -> f64 {
     webgpu_compute::bind_group_create(layout as u64, &decoded).unwrap_or(0) as f64
 }
 
-/// Shared JSON-decode body for `_lumen_webgpu_render_pipeline_create`. Twin
-/// of [`webgpu_bind_group_create_impl`] — see [`install_webgpu_natives`]'s
-/// inline closure for the field-by-field rationale.
+/// Decode body for `_lumen_webgpu_render_pipeline_create`'s JSON `config` argument.
 #[cfg(all(feature = "v8-backend", feature = "webgpu"))]
 fn webgpu_render_pipeline_create_impl(config: &str) -> f64 {
     use lumen_paint::webgpu_compute;
@@ -1590,9 +1120,7 @@ fn webgpu_render_pipeline_create_impl(config: &str) -> f64 {
         .unwrap_or(0) as f64
 }
 
-/// Shared JSON-decode body for `_lumen_webgpu_submit`. Twin of
-/// [`webgpu_bind_group_create_impl`] — see [`install_webgpu_natives`]'s
-/// inline closure for the per-op-kind field rationale.
+/// Decode body for `_lumen_webgpu_submit`'s JSON `ops_json` argument (per-op-kind fields).
 #[cfg(all(feature = "v8-backend", feature = "webgpu"))]
 fn webgpu_submit_impl(ops_json: &str) -> bool {
     use lumen_paint::webgpu_compute;
@@ -1756,748 +1284,607 @@ fn webgpu_submit_impl(ops_json: &str) -> bool {
     webgpu_compute::submit(&decoded)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use rquickjs::{Context, Runtime};
+/// V8-backend tests for [`install_webgpu_bindings_v8`] (Ph3 V8 migration S9;
+/// ported from the removed rquickjs `mod tests` in S12b-B29). WebGPU carries no GC roots
+/// (see that function's doc comment), so these are plain shim-installation / JSON-bridge
+/// tests — the harder S9 risk (GC roots) is covered by `webassembly::tests_v8` instead.
+#[cfg(all(test, feature = "v8-backend"))]
+mod tests_v8 {
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
+    /// Install a minimal `navigator` stub then the WebGPU bindings.
+    fn with_gpu() -> V8JsRuntime {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval("globalThis.navigator = globalThis.navigator || {};").unwrap();
+        super::install_webgpu_bindings_v8(&rt).unwrap();
+        rt
     }
 
-    fn install(ctx: &rquickjs::Ctx) {
-        ctx.eval::<(), _>(
+    fn bool_eval(rt: &V8JsRuntime, expr: &str) -> bool {
+        matches!(rt.eval(expr).unwrap(), JsValue::Bool(true))
+    }
+
+    #[test]
+    fn v8_navigator_gpu_exists() {
+        let rt = with_gpu();
+        assert!(bool_eval(
+            &rt,
+            "typeof navigator.gpu !== 'undefined' && typeof navigator.gpu.requestAdapter === 'function'"
+        ));
+    }
+
+    #[test]
+    fn v8_request_adapter_returns_promise() {
+        let rt = with_gpu();
+        assert!(bool_eval(&rt, "navigator.gpu.requestAdapter() instanceof Promise"));
+    }
+
+    #[test]
+    fn v8_gpu_adapter_class_and_fields() {
+        let rt = with_gpu();
+        let ok = bool_eval(
+            &rt,
             r#"
-            var navigator = globalThis.navigator || {};
-            globalThis.navigator = navigator;
+            var a = new GPUAdapter();
+            typeof a.requestDevice === 'function'
+              && typeof a.requestAdapterInfo === 'function'
+              && a.isFallbackAdapter === false
             "#,
-        )
-        .unwrap();
-        install_webgpu_bindings(ctx).unwrap();
+        );
+        assert!(ok);
     }
 
     #[test]
-    fn navigator_gpu_exists() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval("typeof navigator.gpu !== 'undefined' && typeof navigator.gpu.requestAdapter === 'function'")
-                .unwrap();
-            assert!(ok);
-        });
+    fn v8_request_device_returns_promise_with_gpu_device() {
+        let rt = with_gpu();
+        let ok = bool_eval(
+            &rt,
+            r#"
+            var adapter = new GPUAdapter();
+            var p = adapter.requestDevice();
+            p instanceof Promise
+            "#,
+        );
+        assert!(ok);
     }
 
     #[test]
-    fn request_adapter_returns_promise() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval("navigator.gpu.requestAdapter() instanceof Promise")
-                .unwrap();
-            assert!(ok);
-        });
+    fn v8_gpu_device_create_methods_exist() {
+        let rt = with_gpu();
+        let ok = bool_eval(
+            &rt,
+            r#"
+            var d = new GPUDevice({});
+            typeof d.createBuffer === 'function'
+              && typeof d.createTexture === 'function'
+              && typeof d.createRenderPipeline === 'function'
+              && typeof d.createComputePipeline === 'function'
+              && typeof d.createCommandEncoder === 'function'
+              && typeof d.createShaderModule === 'function'
+              && typeof d.createSampler === 'function'
+              && typeof d.createBindGroup === 'function'
+            "#,
+        );
+        assert!(ok);
     }
 
     #[test]
-    fn gpu_adapter_class_and_fields() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var a = new GPUAdapter();
-                    typeof a.requestDevice === 'function'
-                      && typeof a.requestAdapterInfo === 'function'
-                      && a.isFallbackAdapter === false
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+    fn v8_gpu_buffer_map_and_range() {
+        let rt = with_gpu();
+        let ok = bool_eval(
+            &rt,
+            r#"
+            var d = new GPUDevice({});
+            var buf = d.createBuffer({ size: 64, usage: GPUBufferUsage.COPY_DST });
+            buf.size === 64
+              && buf.mapAsync(1) instanceof Promise
+            "#,
+        );
+        assert!(ok);
     }
 
     #[test]
-    fn request_device_returns_promise_with_gpu_device() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var adapter = new GPUAdapter();
-                    var p = adapter.requestDevice();
-                    p instanceof Promise
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
-    }
-
-    #[test]
-    fn gpu_device_create_methods_exist() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var d = new GPUDevice({});
-                    typeof d.createBuffer === 'function'
-                      && typeof d.createTexture === 'function'
-                      && typeof d.createRenderPipeline === 'function'
-                      && typeof d.createComputePipeline === 'function'
-                      && typeof d.createCommandEncoder === 'function'
-                      && typeof d.createShaderModule === 'function'
-                      && typeof d.createSampler === 'function'
-                      && typeof d.createBindGroup === 'function'
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
-    }
-
-    #[test]
-    fn gpu_buffer_map_and_range() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var d = new GPUDevice({});
-                    var buf = d.createBuffer({ size: 64, usage: GPUBufferUsage.COPY_DST });
-                    buf.size === 64
-                      && buf.mapAsync(1) instanceof Promise
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
-    }
-
-    #[test]
-    fn buffer_write_copy_map_round_trip() {
+    fn v8_buffer_write_copy_map_round_trip() {
         // Exercises writeBuffer → copyBufferToBuffer → mapAsync → getMappedRange. Without
         // the `webgpu` feature this runs the Phase 0 in-memory emulation; with the feature
-        // and a real adapter it round-trips through actual GPU memory. The buffer usages
-        // (COPY_SRC|COPY_DST on src, COPY_DST|MAP_READ on dst) are valid for both paths.
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var d   = new GPUDevice({});
-                    var src = d.createBuffer({ size: 8, usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
-                    var dst = d.createBuffer({ size: 8, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
-                    d.queue.writeBuffer(src, 0, new Uint8Array([10,20,30,40,50,60,70,80]));
-                    var enc = d.createCommandEncoder({});
-                    enc.copyBufferToBuffer(src, 0, dst, 0, 8);
-                    d.queue.submit([enc.finish()]);
-                    dst.mapAsync(GPUMapMode.READ);
-                    var v = new Uint8Array(dst.getMappedRange());
-                    v[0] === 10 && v[3] === 40 && v[7] === 80
-                    "#,
-                )
-                .unwrap();
-            assert!(ok, "in-memory buffer copy round-trip must preserve bytes");
-        });
+        // and a real adapter it round-trips through actual GPU memory.
+        let rt = with_gpu();
+        let ok = bool_eval(
+            &rt,
+            r#"
+            var d   = new GPUDevice({});
+            var src = d.createBuffer({ size: 8, usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
+            var dst = d.createBuffer({ size: 8, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+            d.queue.writeBuffer(src, 0, new Uint8Array([10,20,30,40,50,60,70,80]));
+            var enc = d.createCommandEncoder({});
+            enc.copyBufferToBuffer(src, 0, dst, 0, 8);
+            d.queue.submit([enc.finish()]);
+            dst.mapAsync(GPUMapMode.READ);
+            var v = new Uint8Array(dst.getMappedRange());
+            v[0] === 10 && v[3] === 40 && v[7] === 80
+            "#,
+        );
+        assert!(ok, "in-memory buffer copy round-trip must preserve bytes");
     }
 
     #[test]
-    fn buffer_mapped_at_creation_write_then_read() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var d = new GPUDevice({});
-                    var b = d.createBuffer({ size: 4, usage: GPUBufferUsage.VERTEX, mappedAtCreation: true });
-                    var w = new Uint8Array(b.getMappedRange());
-                    w[0] = 7; w[3] = 9;
-                    b.unmap();
-                    b.mapAsync(GPUMapMode.READ);
-                    var r = new Uint8Array(b.getMappedRange());
-                    r[0] === 7 && r[3] === 9
-                    "#,
-                )
-                .unwrap();
-            assert!(ok, "mappedAtCreation writes must persist to the buffer store");
-        });
+    fn v8_buffer_mapped_at_creation_write_then_read() {
+        let rt = with_gpu();
+        let ok = bool_eval(
+            &rt,
+            r#"
+            var d = new GPUDevice({});
+            var b = d.createBuffer({ size: 4, usage: GPUBufferUsage.VERTEX, mappedAtCreation: true });
+            var w = new Uint8Array(b.getMappedRange());
+            w[0] = 7; w[3] = 9;
+            b.unmap();
+            b.mapAsync(GPUMapMode.READ);
+            var r = new Uint8Array(b.getMappedRange());
+            r[0] === 7 && r[3] === 9
+            "#,
+        );
+        assert!(ok, "mappedAtCreation writes must persist to the buffer store");
     }
 
     #[test]
-    fn buffer_copy_three_arg_form() {
+    fn v8_buffer_copy_three_arg_form() {
         // Newer copyBufferToBuffer(source, destination, size?) overload.
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var d   = new GPUDevice({});
-                    var src = d.createBuffer({ size: 4, usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
-                    var dst = d.createBuffer({ size: 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
-                    d.queue.writeBuffer(src, 0, new Uint8Array([1,2,3,4]));
-                    var enc = d.createCommandEncoder({});
-                    enc.copyBufferToBuffer(src, dst, 4);
-                    d.queue.submit([enc.finish()]);
-                    dst.mapAsync(GPUMapMode.READ);
-                    var v = new Uint8Array(dst.getMappedRange());
-                    v[0] === 1 && v[3] === 4
-                    "#,
-                )
-                .unwrap();
-            assert!(ok, "3-arg copyBufferToBuffer must copy bytes");
-        });
+        let rt = with_gpu();
+        let ok = bool_eval(
+            &rt,
+            r#"
+            var d   = new GPUDevice({});
+            var src = d.createBuffer({ size: 4, usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
+            var dst = d.createBuffer({ size: 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+            d.queue.writeBuffer(src, 0, new Uint8Array([1,2,3,4]));
+            var enc = d.createCommandEncoder({});
+            enc.copyBufferToBuffer(src, dst, 4);
+            d.queue.submit([enc.finish()]);
+            dst.mapAsync(GPUMapMode.READ);
+            var v = new Uint8Array(dst.getMappedRange());
+            v[0] === 1 && v[3] === 4
+            "#,
+        );
+        assert!(ok, "3-arg copyBufferToBuffer must copy bytes");
     }
 
     #[test]
-    fn gpu_command_encoder_render_pass() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var d   = new GPUDevice({});
-                    var enc = d.createCommandEncoder({});
-                    var pass = enc.beginRenderPass({ colorAttachments: [] });
-                    typeof pass.setPipeline === 'function'
-                      && typeof pass.draw === 'function'
-                      && typeof pass.end === 'function'
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+    fn v8_gpu_command_encoder_render_pass() {
+        let rt = with_gpu();
+        let ok = bool_eval(
+            &rt,
+            r#"
+            var d   = new GPUDevice({});
+            var enc = d.createCommandEncoder({});
+            var pass = enc.beginRenderPass({ colorAttachments: [] });
+            typeof pass.setPipeline === 'function'
+              && typeof pass.draw === 'function'
+              && typeof pass.end === 'function'
+            "#,
+        );
+        assert!(ok);
     }
 
     #[test]
-    fn gpu_queue_submit_is_noop() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var d   = new GPUDevice({});
-                    var enc = d.createCommandEncoder({});
-                    var cmd = enc.finish({});
-                    d.queue.submit([cmd]);
-                    cmd instanceof GPUCommandBuffer
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+    fn v8_gpu_queue_submit_is_noop() {
+        let rt = with_gpu();
+        let ok = bool_eval(
+            &rt,
+            r#"
+            var d   = new GPUDevice({});
+            var enc = d.createCommandEncoder({});
+            var cmd = enc.finish({});
+            d.queue.submit([cmd]);
+            cmd instanceof GPUCommandBuffer
+            "#,
+        );
+        assert!(ok);
     }
 
     #[test]
-    fn gpu_canvas_context_configure_and_get_texture() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var canvas = { width: 800, height: 600 };
-                    var gpuCtx = new GPUCanvasContext(canvas);
-                    gpuCtx.configure({ format: 'bgra8unorm', usage: GPUTextureUsage.RENDER_ATTACHMENT });
-                    var tex = gpuCtx.getCurrentTexture();
-                    tex instanceof GPUTexture && tex.format === 'bgra8unorm' && tex.width === 800
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+    fn v8_gpu_canvas_context_configure_and_get_texture() {
+        let rt = with_gpu();
+        let ok = bool_eval(
+            &rt,
+            r#"
+            var canvas = { width: 800, height: 600 };
+            var gpuCtx = new GPUCanvasContext(canvas);
+            gpuCtx.configure({ format: 'bgra8unorm', usage: GPUTextureUsage.RENDER_ATTACHMENT });
+            var tex = gpuCtx.getCurrentTexture();
+            tex instanceof GPUTexture && tex.format === 'bgra8unorm' && tex.width === 800
+            "#,
+        );
+        assert!(ok);
     }
 
     #[test]
-    fn gpu_canvas_context_unconfigure_drops_texture() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            // configure → getCurrentTexture allocates; unconfigure clears it so the next
-            // getCurrentTexture lazily re-creates a fresh one (present registry stays consistent).
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var canvas = { width: 64, height: 64, __nid__: 5 };
-                    var c = new GPUCanvasContext(canvas);
-                    c.configure({ format: 'rgba8unorm', usage: GPUTextureUsage.RENDER_ATTACHMENT });
-                    var t1 = c.getCurrentTexture();
-                    c.unconfigure();
-                    var cleared = (c._texture === null);
-                    var t2 = c.getCurrentTexture();
-                    cleared && t2 instanceof GPUTexture && t2.width === 64
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+    fn v8_gpu_canvas_context_unconfigure_drops_texture() {
+        let rt = with_gpu();
+        // configure → getCurrentTexture allocates; unconfigure clears it so the next
+        // getCurrentTexture lazily re-creates a fresh one (present registry stays consistent).
+        let ok = bool_eval(
+            &rt,
+            r#"
+            var canvas = { width: 64, height: 64, __nid__: 5 };
+            var c = new GPUCanvasContext(canvas);
+            c.configure({ format: 'rgba8unorm', usage: GPUTextureUsage.RENDER_ATTACHMENT });
+            var t1 = c.getCurrentTexture();
+            c.unconfigure();
+            var cleared = (c._texture === null);
+            var t2 = c.getCurrentTexture();
+            cleared && t2 instanceof GPUTexture && t2.width === 64
+            "#,
+        );
+        assert!(ok);
     }
 
     #[test]
-    fn gpu_canvas_present_native_unknown_texture_is_false() {
+    fn v8_gpu_canvas_present_native_unknown_texture_is_false() {
         // Present native rejects an unknown texture handle (no GPU readback) without panicking.
         // Registered only with the `webgpu` feature; without it the JS bridge is simply absent.
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let has_native: bool = ctx
-                .eval("typeof _lumen_webgpu_canvas_present === 'function'")
-                .unwrap();
-            if !has_native {
-                return;
-            }
-            let result: bool = ctx
-                .eval("_lumen_webgpu_canvas_present(123, 999999)")
-                .unwrap();
-            assert!(!result, "unknown texture handle must present nothing");
-        });
+        let rt = with_gpu();
+        let has_native = bool_eval(&rt, "typeof _lumen_webgpu_canvas_present === 'function'");
+        if !has_native {
+            return;
+        }
+        let result = bool_eval(&rt, "_lumen_webgpu_canvas_present(123, 999999)");
+        assert!(!result, "unknown texture handle must present nothing");
     }
 
     #[test]
-    fn gpu_buffer_usage_constants_defined() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    GPUBufferUsage.VERTEX === 0x0020
-                      && GPUBufferUsage.UNIFORM === 0x0040
-                      && GPUTextureUsage.RENDER_ATTACHMENT === 0x10
-                      && GPUShaderStage.VERTEX === 0x1
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+    fn v8_gpu_buffer_usage_constants_defined() {
+        let rt = with_gpu();
+        let ok = bool_eval(
+            &rt,
+            r#"
+            GPUBufferUsage.VERTEX === 0x0020
+              && GPUBufferUsage.UNIFORM === 0x0040
+              && GPUTextureUsage.RENDER_ATTACHMENT === 0x10
+              && GPUShaderStage.VERTEX === 0x1
+            "#,
+        );
+        assert!(ok);
     }
 
     #[test]
-    fn get_preferred_canvas_format() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let fmt: String = ctx.eval("navigator.gpu.getPreferredCanvasFormat()").unwrap();
-            assert_eq!(fmt, "bgra8unorm");
-        });
+    fn v8_get_preferred_canvas_format() {
+        let rt = with_gpu();
+        let v = rt.eval("navigator.gpu.getPreferredCanvasFormat()").unwrap();
+        assert_eq!(v, JsValue::String("bgra8unorm".to_string()));
     }
 
     #[test]
-    fn adapter_request_adapter_info_returns_promise() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval("new GPUAdapter().requestAdapterInfo() instanceof Promise")
-                .unwrap();
-            assert!(ok);
-        });
+    fn v8_adapter_request_adapter_info_returns_promise() {
+        let rt = with_gpu();
+        assert!(bool_eval(&rt, "new GPUAdapter().requestAdapterInfo() instanceof Promise"));
     }
 
     #[test]
-    fn adapter_info_has_real_backend_fields() {
+    fn v8_adapter_info_has_real_backend_fields() {
         // Shape contract for the real backend: GPUAdapterInfo always exposes the four
         // W3C fields. Without the `webgpu` feature these keep the Phase 0 stub values.
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var i = new GPUAdapterInfo();
-                    typeof i.vendor === 'string'
-                      && typeof i.architecture === 'string'
-                      && typeof i.device === 'string'
-                      && typeof i.description === 'string'
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = with_gpu();
+        let ok = bool_eval(
+            &rt,
+            r#"
+            var i = new GPUAdapterInfo();
+            typeof i.vendor === 'string'
+              && typeof i.architecture === 'string'
+              && typeof i.device === 'string'
+              && typeof i.description === 'string'
+            "#,
+        );
+        assert!(ok);
     }
 
     #[test]
-    fn shader_module_compilation_info_shape() {
+    fn v8_shader_module_compilation_info_shape() {
         // getCompilationInfo() resolves to an object with a `messages` array. With a real
         // GPU device + the `webgpu` feature it carries WGSL diagnostics; otherwise empty.
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var d = new GPUDevice({});
-                    var m = d.createShaderModule({ code: '@compute @workgroup_size(1) fn main() {}' });
-                    var info = null;
-                    m.getCompilationInfo().then(function(r){ info = r; });
-                    // microtask not drained synchronously here; assert the module stored code
-                    // and exposes the API shape.
-                    typeof m.getCompilationInfo === 'function' && m._code.length > 0
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = with_gpu();
+        let ok = bool_eval(
+            &rt,
+            r#"
+            var d = new GPUDevice({});
+            var m = d.createShaderModule({ code: '@compute @workgroup_size(1) fn main() {}' });
+            var info = null;
+            m.getCompilationInfo().then(function(r){ info = r; });
+            // microtask not drained synchronously here; assert the module stored code
+            // and exposes the API shape.
+            typeof m.getCompilationInfo === 'function' && m._code.length > 0
+            "#,
+        );
+        assert!(ok);
     }
 
     #[test]
-    fn compute_pipeline_api_shape() {
+    fn v8_compute_pipeline_api_shape() {
         // Without the `webgpu` feature / a GPU the compute API still exists and is callable
         // (no-op). Exercises createComputePipeline → getBindGroupLayout → createBindGroup →
         // beginComputePass → setPipeline/setBindGroup/dispatchWorkgroups → end → submit.
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var d = new GPUDevice({});
-                    var mod = d.createShaderModule({ code:
-                      '@group(0) @binding(0) var<storage, read_write> v: array<u32>;' +
-                      '@compute @workgroup_size(1) fn main() { v[0] = 1u; }' });
-                    var pipe = d.createComputePipeline({ layout: 'auto', compute: { module: mod, entryPoint: 'main' } });
-                    var bgl  = pipe.getBindGroupLayout(0);
-                    var buf  = d.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE });
-                    var bg   = d.createBindGroup({ layout: bgl, entries: [{ binding: 0, resource: { buffer: buf } }] });
-                    var enc  = d.createCommandEncoder({});
-                    var pass = enc.beginComputePass();
-                    pass.setPipeline(pipe);
-                    pass.setBindGroup(0, bg);
-                    pass.dispatchWorkgroups(4);
-                    pass.end();
-                    d.queue.submit([enc.finish()]);
-                    pipe instanceof GPUComputePipeline
-                      && bgl instanceof GPUBindGroupLayout
-                      && bg instanceof GPUBindGroup
-                      && typeof pass.dispatchWorkgroups === 'function'
-                    "#,
-                )
-                .unwrap();
-            assert!(ok, "compute pipeline API must be callable end-to-end");
-        });
+        let rt = with_gpu();
+        let ok = bool_eval(
+            &rt,
+            r#"
+            var d = new GPUDevice({});
+            var mod = d.createShaderModule({ code:
+              '@group(0) @binding(0) var<storage, read_write> v: array<u32>;' +
+              '@compute @workgroup_size(1) fn main() { v[0] = 1u; }' });
+            var pipe = d.createComputePipeline({ layout: 'auto', compute: { module: mod, entryPoint: 'main' } });
+            var bgl  = pipe.getBindGroupLayout(0);
+            var buf  = d.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE });
+            var bg   = d.createBindGroup({ layout: bgl, entries: [{ binding: 0, resource: { buffer: buf } }] });
+            var enc  = d.createCommandEncoder({});
+            var pass = enc.beginComputePass();
+            pass.setPipeline(pipe);
+            pass.setBindGroup(0, bg);
+            pass.dispatchWorkgroups(4);
+            pass.end();
+            d.queue.submit([enc.finish()]);
+            pipe instanceof GPUComputePipeline
+              && bgl instanceof GPUBindGroupLayout
+              && bg instanceof GPUBindGroup
+              && typeof pass.dispatchWorkgroups === 'function'
+            "#,
+        );
+        assert!(ok, "compute pipeline API must be callable end-to-end");
     }
 
     #[test]
-    fn compute_pass_records_op_on_encoder() {
+    fn v8_compute_pass_records_op_on_encoder() {
         // The compute pass must record a single computePass op (with its command list)
         // onto the parent encoder so queue.submit can flush it.
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var d = new GPUDevice({});
-                    var enc = d.createCommandEncoder({});
-                    var pass = enc.beginComputePass();
-                    pass.setPipeline({ _id: 7 });
-                    pass.setBindGroup(0, { _id: 9 });
-                    pass.dispatchWorkgroups(2, 3, 4);
-                    pass.end();
-                    var op = enc._ops[0];
-                    op.op === 'computePass'
-                      && op.cmds.length === 3
-                      && op.cmds[0].c === 'setPipeline' && op.cmds[0].pipeline === 7
-                      && op.cmds[1].c === 'setBindGroup' && op.cmds[1].index === 0 && op.cmds[1].bindGroup === 9
-                      && op.cmds[2].c === 'dispatch' && op.cmds[2].x === 2 && op.cmds[2].y === 3 && op.cmds[2].z === 4
-                    "#,
-                )
-                .unwrap();
-            assert!(ok, "compute pass must record its command list onto the encoder");
-        });
+        let rt = with_gpu();
+        let ok = bool_eval(
+            &rt,
+            r#"
+            var d = new GPUDevice({});
+            var enc = d.createCommandEncoder({});
+            var pass = enc.beginComputePass();
+            pass.setPipeline({ _id: 7 });
+            pass.setBindGroup(0, { _id: 9 });
+            pass.dispatchWorkgroups(2, 3, 4);
+            pass.end();
+            var op = enc._ops[0];
+            op.op === 'computePass'
+              && op.cmds.length === 3
+              && op.cmds[0].c === 'setPipeline' && op.cmds[0].pipeline === 7
+              && op.cmds[1].c === 'setBindGroup' && op.cmds[1].index === 0 && op.cmds[1].bindGroup === 9
+              && op.cmds[2].c === 'dispatch' && op.cmds[2].x === 2 && op.cmds[2].y === 3 && op.cmds[2].z === 4
+            "#,
+        );
+        assert!(ok, "compute pass must record its command list onto the encoder");
     }
 
     #[test]
-    fn dispatch_workgroups_defaults_y_z_to_one() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var d = new GPUDevice({});
-                    var enc = d.createCommandEncoder({});
-                    var pass = enc.beginComputePass();
-                    pass.dispatchWorkgroups(8);
-                    pass.end();
-                    var c = enc._ops[0].cmds[0];
-                    c.x === 8 && c.y === 1 && c.z === 1
-                    "#,
-                )
-                .unwrap();
-            assert!(ok, "omitted dispatch y/z must default to 1");
-        });
+    fn v8_dispatch_workgroups_defaults_y_z_to_one() {
+        let rt = with_gpu();
+        let ok = bool_eval(
+            &rt,
+            r#"
+            var d = new GPUDevice({});
+            var enc = d.createCommandEncoder({});
+            var pass = enc.beginComputePass();
+            pass.dispatchWorkgroups(8);
+            pass.end();
+            var c = enc._ops[0].cmds[0];
+            c.x === 8 && c.y === 1 && c.z === 1
+            "#,
+        );
+        assert!(ok, "omitted dispatch y/z must default to 1");
     }
 
     // Real-GPU path: end-to-end compute. Only meaningful with the `webgpu` feature AND an
     // available adapter; skips on headless CI without a GPU.
     #[cfg(feature = "webgpu")]
     #[test]
-    fn real_backend_runs_compute_shader() {
+    fn v8_real_backend_runs_compute_shader() {
         if !lumen_paint::webgpu_compute::is_available() {
             eprintln!("skip: no GPU adapter available");
             return;
         }
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            // Doubling shader: storage buffer values are multiplied by 2 on the GPU, then
-            // copied to a MAP_READ buffer and read back through the JS GPUBuffer API.
-            let doubled: bool = ctx
-                .eval(
-                    r#"
-                    var d = new GPUDevice({});
-                    var mod = d.createShaderModule({ code:
-                      '@group(0) @binding(0) var<storage, read_write> data: array<u32>;' +
-                      '@compute @workgroup_size(1) fn main(@builtin(global_invocation_id) id: vec3<u32>) {' +
-                      '  data[id.x] = data[id.x] * 2u; }' });
-                    var pipe = d.createComputePipeline({ layout: 'auto', compute: { module: mod, entryPoint: 'main' } });
-                    var storage = d.createBuffer({ size: 16,
-                      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
-                    var readback = d.createBuffer({ size: 16, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
-                    d.queue.writeBuffer(storage, 0, new Uint32Array([1, 2, 3, 4]));
-                    var bg = d.createBindGroup({ layout: pipe.getBindGroupLayout(0),
-                      entries: [{ binding: 0, resource: { buffer: storage } }] });
-                    var enc = d.createCommandEncoder({});
-                    var pass = enc.beginComputePass();
-                    pass.setPipeline(pipe);
-                    pass.setBindGroup(0, bg);
-                    pass.dispatchWorkgroups(4);
-                    pass.end();
-                    enc.copyBufferToBuffer(storage, 0, readback, 0, 16);
-                    d.queue.submit([enc.finish()]);
-                    readback.mapAsync(GPUMapMode.READ);
-                    var v = new Uint32Array(readback.getMappedRange());
-                    v[0] === 2 && v[1] === 4 && v[2] === 6 && v[3] === 8
-                    "#,
-                )
-                .unwrap();
-            assert!(doubled, "real GPU compute shader must double the buffer");
-        });
+        let rt = with_gpu();
+        // Doubling shader: storage buffer values are multiplied by 2 on the GPU, then
+        // copied to a MAP_READ buffer and read back through the JS GPUBuffer API.
+        let doubled = bool_eval(
+            &rt,
+            r#"
+            var d = new GPUDevice({});
+            var mod = d.createShaderModule({ code:
+              '@group(0) @binding(0) var<storage, read_write> data: array<u32>;' +
+              '@compute @workgroup_size(1) fn main(@builtin(global_invocation_id) id: vec3<u32>) {' +
+              '  data[id.x] = data[id.x] * 2u; }' });
+            var pipe = d.createComputePipeline({ layout: 'auto', compute: { module: mod, entryPoint: 'main' } });
+            var storage = d.createBuffer({ size: 16,
+              usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
+            var readback = d.createBuffer({ size: 16, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+            d.queue.writeBuffer(storage, 0, new Uint32Array([1, 2, 3, 4]));
+            var bg = d.createBindGroup({ layout: pipe.getBindGroupLayout(0),
+              entries: [{ binding: 0, resource: { buffer: storage } }] });
+            var enc = d.createCommandEncoder({});
+            var pass = enc.beginComputePass();
+            pass.setPipeline(pipe);
+            pass.setBindGroup(0, bg);
+            pass.dispatchWorkgroups(4);
+            pass.end();
+            enc.copyBufferToBuffer(storage, 0, readback, 0, 16);
+            d.queue.submit([enc.finish()]);
+            readback.mapAsync(GPUMapMode.READ);
+            var v = new Uint32Array(readback.getMappedRange());
+            v[0] === 2 && v[1] === 4 && v[2] === 6 && v[3] === 8
+            "#,
+        );
+        assert!(doubled, "real GPU compute shader must double the buffer");
     }
 
     // Real-GPU path: only meaningful with the `webgpu` feature AND an available adapter.
     // Skips gracefully on headless CI without a GPU.
     #[cfg(feature = "webgpu")]
     #[test]
-    fn real_backend_validates_bad_wgsl() {
+    fn v8_real_backend_validates_bad_wgsl() {
         if !lumen_paint::webgpu_compute::is_available() {
             eprintln!("skip: no GPU adapter available");
             return;
         }
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            // Bad WGSL → native validator returns a non-empty error → stored as a message.
-            let has_error: bool = ctx
-                .eval(
-                    r#"
-                    var d = new GPUDevice({});
-                    var m = d.createShaderModule({ code: 'this is not valid wgsl @@@' });
-                    m._messages.length > 0 && m._messages[0].type === 'error'
-                    "#,
-                )
-                .unwrap();
-            assert!(has_error, "real backend must flag invalid WGSL");
+        let rt = with_gpu();
+        // Bad WGSL → native validator returns a non-empty error → stored as a message.
+        let has_error = bool_eval(
+            &rt,
+            r#"
+            var d = new GPUDevice({});
+            var m = d.createShaderModule({ code: 'this is not valid wgsl @@@' });
+            m._messages.length > 0 && m._messages[0].type === 'error'
+            "#,
+        );
+        assert!(has_error, "real backend must flag invalid WGSL");
 
-            // Real adapter info must replace the Phase 0 stub description.
-            let real_info: bool = ctx
-                .eval("new GPUAdapterInfo().description.indexOf('Phase 0 stub') === -1")
-                .unwrap();
-            assert!(real_info, "real adapter description must not be the stub");
-        });
+        // Real adapter info must replace the Phase 0 stub description.
+        let real_info = bool_eval(&rt, "new GPUAdapterInfo().description.indexOf('Phase 0 stub') === -1");
+        assert!(real_info, "real adapter description must not be the stub");
     }
 
     #[test]
-    fn render_pipeline_api_shape() {
+    fn v8_render_pipeline_api_shape() {
         // Without the `webgpu` feature / a GPU the render API still exists and is callable
         // (no-op). Exercises createTexture → createRenderPipeline → getBindGroupLayout →
         // beginRenderPass → setPipeline/setVertexBuffer/draw → end → copyTextureToBuffer → submit.
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var d = new GPUDevice({});
-                    var mod = d.createShaderModule({ code:
-                      '@vertex fn vs(@location(0) p: vec2<f32>) -> @builtin(position) vec4<f32> { return vec4<f32>(p, 0.0, 1.0); }' +
-                      '@fragment fn fs() -> @location(0) vec4<f32> { return vec4<f32>(0.0, 1.0, 0.0, 1.0); }' });
-                    var pipe = d.createRenderPipeline({
-                      layout: 'auto',
-                      vertex: { module: mod, entryPoint: 'vs',
-                        buffers: [{ arrayStride: 8, attributes: [{ format: 'float32x2', offset: 0, shaderLocation: 0 }] }] },
-                      fragment: { module: mod, entryPoint: 'fs', targets: [{ format: 'rgba8unorm' }] },
-                      primitive: { topology: 'triangle-list' }
-                    });
-                    var bgl = pipe.getBindGroupLayout(0);
-                    var tex = d.createTexture({ size: { width: 4, height: 4 }, format: 'rgba8unorm',
-                      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
-                    var vbuf = d.createBuffer({ size: 24, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
-                    var enc = d.createCommandEncoder({});
-                    var pass = enc.beginRenderPass({ colorAttachments: [{ view: tex.createView(),
-                      loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } }] });
-                    pass.setPipeline(pipe);
-                    pass.setVertexBuffer(0, vbuf);
-                    pass.draw(3);
-                    pass.end();
-                    d.queue.submit([enc.finish()]);
-                    pipe instanceof GPURenderPipeline
-                      && bgl instanceof GPUBindGroupLayout
-                      && tex instanceof GPUTexture
-                      && typeof pass.draw === 'function'
-                    "#,
-                )
-                .unwrap();
-            assert!(ok, "render pipeline API must be callable end-to-end");
-        });
+        let rt = with_gpu();
+        let ok = bool_eval(
+            &rt,
+            r#"
+            var d = new GPUDevice({});
+            var mod = d.createShaderModule({ code:
+              '@vertex fn vs(@location(0) p: vec2<f32>) -> @builtin(position) vec4<f32> { return vec4<f32>(p, 0.0, 1.0); }' +
+              '@fragment fn fs() -> @location(0) vec4<f32> { return vec4<f32>(0.0, 1.0, 0.0, 1.0); }' });
+            var pipe = d.createRenderPipeline({
+              layout: 'auto',
+              vertex: { module: mod, entryPoint: 'vs',
+                buffers: [{ arrayStride: 8, attributes: [{ format: 'float32x2', offset: 0, shaderLocation: 0 }] }] },
+              fragment: { module: mod, entryPoint: 'fs', targets: [{ format: 'rgba8unorm' }] },
+              primitive: { topology: 'triangle-list' }
+            });
+            var bgl = pipe.getBindGroupLayout(0);
+            var tex = d.createTexture({ size: { width: 4, height: 4 }, format: 'rgba8unorm',
+              usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
+            var vbuf = d.createBuffer({ size: 24, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+            var enc = d.createCommandEncoder({});
+            var pass = enc.beginRenderPass({ colorAttachments: [{ view: tex.createView(),
+              loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } }] });
+            pass.setPipeline(pipe);
+            pass.setVertexBuffer(0, vbuf);
+            pass.draw(3);
+            pass.end();
+            d.queue.submit([enc.finish()]);
+            pipe instanceof GPURenderPipeline
+              && bgl instanceof GPUBindGroupLayout
+              && tex instanceof GPUTexture
+              && typeof pass.draw === 'function'
+            "#,
+        );
+        assert!(ok, "render pipeline API must be callable end-to-end");
     }
 
     #[test]
-    fn render_pass_records_op_on_encoder() {
+    fn v8_render_pass_records_op_on_encoder() {
         // The render pass must record a single renderPass op (target texture id + clear +
         // command list) onto the parent encoder so queue.submit can flush it.
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var d = new GPUDevice({});
-                    var enc = d.createCommandEncoder({});
-                    var view = { _textureId: 42 };
-                    var pass = enc.beginRenderPass({ colorAttachments: [{ view: view,
-                      loadOp: 'clear', clearValue: { r: 1, g: 0, b: 0, a: 1 } }] });
-                    pass.setPipeline({ _id: 7 });
-                    pass.setVertexBuffer(0, { _id: 5 });
-                    pass.draw(3, 1, 0, 0);
-                    pass.end();
-                    var op = enc._ops[0];
-                    op.op === 'renderPass'
-                      && op.colorTexture === 42
-                      && op.clear[0] === 1 && op.clear[3] === 1
-                      && op.cmds.length === 3
-                      && op.cmds[0].c === 'setPipeline' && op.cmds[0].pipeline === 7
-                      && op.cmds[1].c === 'setVertexBuffer' && op.cmds[1].buffer === 5
-                      && op.cmds[2].c === 'draw' && op.cmds[2].vertexCount === 3
-                    "#,
-                )
-                .unwrap();
-            assert!(ok, "render pass must record its command list onto the encoder");
-        });
+        let rt = with_gpu();
+        let ok = bool_eval(
+            &rt,
+            r#"
+            var d = new GPUDevice({});
+            var enc = d.createCommandEncoder({});
+            var view = { _textureId: 42 };
+            var pass = enc.beginRenderPass({ colorAttachments: [{ view: view,
+              loadOp: 'clear', clearValue: { r: 1, g: 0, b: 0, a: 1 } }] });
+            pass.setPipeline({ _id: 7 });
+            pass.setVertexBuffer(0, { _id: 5 });
+            pass.draw(3, 1, 0, 0);
+            pass.end();
+            var op = enc._ops[0];
+            op.op === 'renderPass'
+              && op.colorTexture === 42
+              && op.clear[0] === 1 && op.clear[3] === 1
+              && op.cmds.length === 3
+              && op.cmds[0].c === 'setPipeline' && op.cmds[0].pipeline === 7
+              && op.cmds[1].c === 'setVertexBuffer' && op.cmds[1].buffer === 5
+              && op.cmds[2].c === 'draw' && op.cmds[2].vertexCount === 3
+            "#,
+        );
+        assert!(ok, "render pass must record its command list onto the encoder");
     }
 
     #[test]
-    fn render_pass_load_op_load_has_no_clear() {
+    fn v8_render_pass_load_op_load_has_no_clear() {
         // loadOp: 'load' must record clear === null (no clear color).
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var d = new GPUDevice({});
-                    var enc = d.createCommandEncoder({});
-                    var pass = enc.beginRenderPass({ colorAttachments: [{ view: { _textureId: 1 },
-                      loadOp: 'load' }] });
-                    pass.end();
-                    enc._ops[0].clear === null
-                    "#,
-                )
-                .unwrap();
-            assert!(ok, "loadOp 'load' must record a null clear");
-        });
+        let rt = with_gpu();
+        let ok = bool_eval(
+            &rt,
+            r#"
+            var d = new GPUDevice({});
+            var enc = d.createCommandEncoder({});
+            var pass = enc.beginRenderPass({ colorAttachments: [{ view: { _textureId: 1 },
+              loadOp: 'load' }] });
+            pass.end();
+            enc._ops[0].clear === null
+            "#,
+        );
+        assert!(ok, "loadOp 'load' must record a null clear");
     }
 
     // Real-GPU path: end-to-end render. Only meaningful with the `webgpu` feature AND an
     // available adapter; skips on headless CI without a GPU.
     #[cfg(feature = "webgpu")]
     #[test]
-    fn real_backend_renders_triangle() {
+    fn v8_real_backend_renders_triangle() {
         if !lumen_paint::webgpu_compute::is_available() {
             eprintln!("skip: no GPU adapter available");
             return;
         }
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            // Full-screen triangle filled green, rendered to a 4×4 texture, then read back
-            // through a real MAP_READ buffer via copyTextureToBuffer. bytesPerRow padded to 256.
-            let green: bool = ctx
-                .eval(
-                    r#"
-                    var d = new GPUDevice({});
-                    var mod = d.createShaderModule({ code:
-                      '@vertex fn vs(@location(0) p: vec2<f32>) -> @builtin(position) vec4<f32> { return vec4<f32>(p, 0.0, 1.0); }' +
-                      '@fragment fn fs() -> @location(0) vec4<f32> { return vec4<f32>(0.0, 1.0, 0.0, 1.0); }' });
-                    var pipe = d.createRenderPipeline({
-                      layout: 'auto',
-                      vertex: { module: mod, entryPoint: 'vs',
-                        buffers: [{ arrayStride: 8, attributes: [{ format: 'float32x2', offset: 0, shaderLocation: 0 }] }] },
-                      fragment: { module: mod, entryPoint: 'fs', targets: [{ format: 'rgba8unorm' }] },
-                      primitive: { topology: 'triangle-list' }
-                    });
-                    var verts = new Float32Array([-1, -1, 3, -1, -1, 3]);
-                    var vbuf = d.createBuffer({ size: verts.byteLength,
-                      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
-                    d.queue.writeBuffer(vbuf, 0, verts);
-                    var tex = d.createTexture({ size: { width: 4, height: 4 }, format: 'rgba8unorm',
-                      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
-                    var readback = d.createBuffer({ size: 256 * 4,
-                      usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
-                    var enc = d.createCommandEncoder({});
-                    var pass = enc.beginRenderPass({ colorAttachments: [{ view: tex.createView(),
-                      loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } }] });
-                    pass.setPipeline(pipe);
-                    pass.setVertexBuffer(0, vbuf);
-                    pass.draw(3);
-                    pass.end();
-                    enc.copyTextureToBuffer({ texture: tex },
-                      { buffer: readback, bytesPerRow: 256, rowsPerImage: 4 },
-                      { width: 4, height: 4 });
-                    d.queue.submit([enc.finish()]);
-                    // Center pixel (row 2, col 2): offset 2*256 + 2*4.
-                    readback.mapAsync(GPUMapMode.READ);
-                    var px = new Uint8Array(readback.getMappedRange(2 * 256 + 2 * 4, 4));
-                    px[0] === 0 && px[1] === 255 && px[2] === 0 && px[3] === 255
-                    "#,
-                )
-                .unwrap();
-            assert!(green, "real GPU render must fill the triangle green");
-        });
-    }
-}
-
-/// V8-backend counterpart of the [`tests`] module above (Ph3 V8 migration
-/// S9). WebGPU carries no GC roots (see [`install_webgpu_bindings_v8`]'s doc
-/// comment), so this is a plain shim-installation smoke test — the harder S9
-/// risk (GC roots) is covered by `webassembly::tests_v8` instead.
-#[cfg(all(test, feature = "v8-backend"))]
-mod tests_v8 {
-    use crate::v8_runtime::V8JsRuntime;
-    use lumen_core::{JsRuntime, JsValue};
-
-    #[test]
-    fn v8_navigator_gpu_exists() {
-        let rt = V8JsRuntime::new().unwrap();
-        rt.eval("globalThis.navigator = globalThis.navigator || {};").unwrap();
-        super::install_webgpu_bindings_v8(&rt).unwrap();
-        let ok = rt
-            .eval("typeof navigator.gpu !== 'undefined' && typeof navigator.gpu.requestAdapter === 'function'")
-            .unwrap();
-        assert_eq!(ok, JsValue::Bool(true));
+        let rt = with_gpu();
+        // Full-screen triangle filled green, rendered to a 4×4 texture, then read back
+        // through a real MAP_READ buffer via copyTextureToBuffer. bytesPerRow padded to 256.
+        let green = bool_eval(
+            &rt,
+            r#"
+            var d = new GPUDevice({});
+            var mod = d.createShaderModule({ code:
+              '@vertex fn vs(@location(0) p: vec2<f32>) -> @builtin(position) vec4<f32> { return vec4<f32>(p, 0.0, 1.0); }' +
+              '@fragment fn fs() -> @location(0) vec4<f32> { return vec4<f32>(0.0, 1.0, 0.0, 1.0); }' });
+            var pipe = d.createRenderPipeline({
+              layout: 'auto',
+              vertex: { module: mod, entryPoint: 'vs',
+                buffers: [{ arrayStride: 8, attributes: [{ format: 'float32x2', offset: 0, shaderLocation: 0 }] }] },
+              fragment: { module: mod, entryPoint: 'fs', targets: [{ format: 'rgba8unorm' }] },
+              primitive: { topology: 'triangle-list' }
+            });
+            var verts = new Float32Array([-1, -1, 3, -1, -1, 3]);
+            var vbuf = d.createBuffer({ size: verts.byteLength,
+              usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+            d.queue.writeBuffer(vbuf, 0, verts);
+            var tex = d.createTexture({ size: { width: 4, height: 4 }, format: 'rgba8unorm',
+              usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
+            var readback = d.createBuffer({ size: 256 * 4,
+              usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+            var enc = d.createCommandEncoder({});
+            var pass = enc.beginRenderPass({ colorAttachments: [{ view: tex.createView(),
+              loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } }] });
+            pass.setPipeline(pipe);
+            pass.setVertexBuffer(0, vbuf);
+            pass.draw(3);
+            pass.end();
+            enc.copyTextureToBuffer({ texture: tex },
+              { buffer: readback, bytesPerRow: 256, rowsPerImage: 4 },
+              { width: 4, height: 4 });
+            d.queue.submit([enc.finish()]);
+            // Center pixel (row 2, col 2): offset 2*256 + 2*4.
+            readback.mapAsync(GPUMapMode.READ);
+            var px = new Uint8Array(readback.getMappedRange(2 * 256 + 2 * 4, 4));
+            px[0] === 0 && px[1] === 255 && px[2] === 0 && px[3] === 255
+            "#,
+        );
+        assert!(green, "real GPU render must fill the triangle green");
     }
 }
