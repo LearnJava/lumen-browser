@@ -3003,6 +3003,54 @@ them in place without changing the total). `cargo test -p lumen-js` (default):
 Next in queue: S12b-B16 (`intl_bindings`/`media_devices`, Полоса 3 second
 batch, large modules).
 
+### S12b-B16 (`intl_bindings`, `media_devices` — Полоса 3 second batch)
+
+Both modules already carried a finished V8 port from S5-S7
+(`install_intl_bindings_v8`/`install_media_devices_bindings_v8`, wired via
+`install_v8!` in `v8_runtime.rs:4219`/`4225`) — removed the rquickjs
+`install_intl_bindings`/`install_media_devices_bindings` fns, `use
+rquickjs::Ctx`, and the two call sites in `lib.rs`'s `QuickJsRuntime::
+install_dom`. Gated the now-V8-only `INTL_SHIM`/`MEDIA_DEVICES_SHIM` consts
+`#[cfg(feature = "v8-backend")]` (B14/B15 `XHR_SHIM`/`DECORATOR_SHIM`
+precedent). No hidden tests in `crates/js/tests/cases/*.rs`.
+
+`intl_bindings` (19 tests) surfaced a real, non-mechanical finding: **V8's
+prebuilt binary ships a native, ICU-backed `Intl`** (`typeof Intl.NumberFormat`
+is `[native code]` on a bare `V8JsRuntime::new()`, before this module installs
+anything). `INTL_SHIM`'s own defer-to-native guard (`if (typeof
+global.Intl !== 'undefined' && global.Intl.NumberFormat) return;`) was written
+for QuickJS, which never has native `Intl` — under V8 the guard is always
+true, so the shim's hand-rolled `resolveLocale` fallback rules are permanently
+unreachable; V8's real ICU implementation formats instead. 17/19 ported tests
+passed unchanged (the shim was deliberately written to match real CLDR
+conventions for `en-US`/`ru-RU`, e.g. non-breaking-space grouping and genitive
+month forms, so it agrees with native ICU on well-formed locale tags). 2 tests
+failed because they asserted the *shim's own* fallback/negotiation behavior:
+requesting the invalid tag `'xx-YY'` returned the OS default locale
+(`ru-RU` on this dev machine, not `'en-US'`) — machine-dependent, not safe to
+hard-code — and `supportedLocalesOf(['en-US','fr-FR','ru-RU'])` returned all 3
+(native ICU recognizes `fr-FR`; the shim's narrow en/ru polyfill would have
+filtered it out). Rewrote both as `resolved_options_locale_recognizes_
+requested_language`/`supported_locales_of_recognizes_known_locale`, asserting
+only invariants true for both native ICU and the shim (see the in-test
+comments). Net effect: no engine-agnostic behavior regressed — pages still get
+a real `Intl`, now spec-accurate instead of a 2-locale approximation — but the
+test suite had encoded shim-specific behavior as if it were the contract.
+
+`media_devices` (24 tests): mechanical port, no surprises — tests used only
+`navigator`/`window`/`DOMException` stub prereqs (adapted `install_prereqs` to
+take `&V8JsRuntime` and drop the QuickJS-only `var Promise = globalThis.
+Promise;` line, since V8's `Promise` is already the global one).
+
+`cargo test -p lumen-js --features v8-backend`: 2584 lib (unchanged — both
+modules' tests already ran under `--features v8-backend` before this batch)
++ 68 integration (unchanged). `cargo test -p lumen-js` (default): 726 lib
+(down from 769, -43: the 19+24 tests moved to V8-only) + 1 integration
+(unchanged). Both clippy passes (`--all-targets`, default and
+`--features v8-backend`) clean.
+
+Next in queue: S12b-B17 (`wasm/mod`/`sw_worker`, Полоса 3 third batch).
+
 ---
 
 ## Risks (Rev 2)

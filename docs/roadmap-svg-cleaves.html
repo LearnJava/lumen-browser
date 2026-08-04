@@ -1148,9 +1148,9 @@
         {
          "id": "P3-v8-s12b-b16",
          "title": "S12b-B16: снос rquickjs, крупные модули (2/12)",
-         "status": "queued",
+         "status": "done",
          "size": "M",
-         "note": "Полоса 3 (1585/43): intl_bindings, media_devices"
+         "note": "Полоса 3 (1585/43): intl_bindings, media_devices — ЗАКРЫТ 2026-08-04 (ветка p1-s12b-b16): все 43 теста перенесены (19 intl_bindings + 24 media_devices), оба модуля уже имели готовый V8-порт с волны S5-S7. Находка — V8 несёт нативный ICU-based Intl, из-за чего собственный guard шима «уступить нативному Intl» делает откат-логику resolveLocale недостижимой под V8; 2 теста на fallback-поведение шима переписаны на инварианты, верные для обоих (нативного и шимового) Intl. Детали — docs/tasks/ph3-v8-migration.md §S12b-B16"
         },
         {
          "id": "P3-v8-s12b-b17",
