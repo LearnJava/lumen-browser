@@ -730,17 +730,6 @@ impl QuickJsRuntime {
             None
         };
         self.run(|inner| inner.ctx.with(|ctx| {
-            // Install functional WebGL bindings backed by the software
-            // rasterizer (task #28, §7F). Preserves the ADR-007 Layer 4
-            // fingerprint normalization of the old `webgl_bindings` shim.
-            let fingerprint = lumen_paint::GpuFingerprint {
-                vendor: "WebKit".to_string(),
-                renderer: "Generic GPU".to_string(),
-            };
-            if let Err(e) = webgl_canvas::install_webgl_canvas(&ctx, &fingerprint) {
-                eprintln!("WebGL bindings init failed: {}", e);
-            }
-
             // Install Canvas 2D native bindings (HTML LS §4.12.4). The JS-side
             // getContext('2d') shim lives in dom.rs::_lumen_make_element and
             // calls these `_lumen_canvas2d_*` functions keyed by node index.
@@ -803,11 +792,6 @@ impl QuickJsRuntime {
             // Install HTMLVideoElement stubs — after DOM so document.createElement is available.
             if let Err(e) = video_bindings::install_video_bindings(&ctx) {
                 eprintln!("Video bindings init failed: {}", e);
-            }
-
-            // Install HTMLAudioElement stubs (HTML spec §4.8.10) — after DOM/video.
-            if let Err(e) = audio_element::install_audio_element_bindings(&ctx) {
-                eprintln!("Audio element bindings init failed: {}", e);
             }
 
             // Install Contact Picker API stub (W3C Contact Picker API) — after DOM/navigator.

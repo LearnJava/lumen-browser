@@ -26,12 +26,19 @@
 //! strings, and `canvas.toDataURL()` / `toBlob()` stay blank to defeat pixel
 //! hashing.
 
+// The registry/`with_ctx` helpers below are reachable only through
+// `install_webgl_canvas_v8` (the rquickjs twin was removed in S12b-B21) —
+// gated so a default (non-v8) build doesn't trip `dead_code`.
+#[cfg(feature = "v8-backend")]
 use std::cell::{Cell, RefCell};
+#[cfg(feature = "v8-backend")]
 use std::collections::HashMap;
 
-use lumen_paint::webgl::{self, SoftwareWebGl};
-use rquickjs::{Ctx, Function};
+use lumen_paint::webgl;
+#[cfg(feature = "v8-backend")]
+use lumen_paint::webgl::SoftwareWebGl;
 
+#[cfg(feature = "v8-backend")]
 thread_local! {
     /// Per-thread WebGL context registry, keyed by opaque context id.
     static CONTEXTS: RefCell<HashMap<u32, SoftwareWebGl>> = RefCell::new(HashMap::new());
@@ -40,174 +47,12 @@ thread_local! {
 }
 
 /// Run `f` against the `SoftwareWebGl` for `id`, returning `default` if absent.
+#[cfg(feature = "v8-backend")]
 fn with_ctx<R>(id: u32, default: R, f: impl FnOnce(&mut SoftwareWebGl) -> R) -> R {
     CONTEXTS.with(|c| match c.borrow_mut().get_mut(&id) {
         Some(gl) => f(gl),
         None => default,
     })
-}
-
-/// Install functional WebGL bindings into the JS context.
-///
-/// Registers the `_lumen_webgl_*` native functions and evaluates the JS shim
-/// that intercepts `document.createElement('canvas')` so that
-/// `canvas.getContext('webgl')` returns a functional context backed by
-/// [`SoftwareWebGl`]. Must be called **before** any user script that touches
-/// the WebGL API.
-pub fn install_webgl_canvas(
-    ctx: &Ctx,
-    fingerprint: &lumen_paint::GpuFingerprint,
-) -> rquickjs::Result<()> {
-    ctx.globals()
-        .set("_LUMEN_GPU_VENDOR", fingerprint.vendor().to_string())?;
-    ctx.globals()
-        .set("_LUMEN_GPU_RENDERER", fingerprint.renderer().to_string())?;
-
-    macro_rules! reg {
-        ($name:expr, $f:expr) => {
-            ctx.globals().set($name, Function::new(ctx.clone(), $f)?)?;
-        };
-    }
-
-    // Allocate a context with a `w × h` drawing buffer; returns its id.
-    reg!("_lumen_webgl_create", |w: i32, h: i32| -> u32 {
-        let id = NEXT_ID.with(|n| {
-            let v = n.get();
-            n.set(v + 1);
-            v
-        });
-        let gl = SoftwareWebGl::new(w.max(1) as u32, h.max(1) as u32);
-        CONTEXTS.with(|c| c.borrow_mut().insert(id, gl));
-        id
-    });
-
-    // Release a context (called by the JS shim's `loseContext`).
-    reg!("_lumen_webgl_destroy", |id: u32| {
-        CONTEXTS.with(|c| {
-            c.borrow_mut().remove(&id);
-        });
-    });
-
-    reg!("_lumen_webgl_viewport", |id: u32, x: i32, y: i32, w: i32, h: i32| {
-        with_ctx(id, (), |gl| gl.viewport(x, y, w, h));
-    });
-    reg!("_lumen_webgl_clear_color", |id: u32, r: f64, g: f64, b: f64, a: f64| {
-        with_ctx(id, (), |gl| gl.clear_color(r as f32, g as f32, b as f32, a as f32));
-    });
-    reg!("_lumen_webgl_clear", |id: u32, mask: u32| {
-        with_ctx(id, (), |gl| gl.clear(mask));
-    });
-
-    reg!("_lumen_webgl_create_buffer", |id: u32| -> u32 {
-        with_ctx(id, 0, |gl| gl.create_buffer())
-    });
-    reg!("_lumen_webgl_bind_buffer", |id: u32, target: u32, buffer: u32| {
-        with_ctx(id, (), |gl| gl.bind_buffer(target, buffer));
-    });
-    reg!("_lumen_webgl_buffer_data", |id: u32, target: u32, data: Vec<f64>| {
-        let floats: Vec<f32> = data.into_iter().map(|v| v as f32).collect();
-        with_ctx(id, (), |gl| gl.buffer_data_f32(target, floats));
-    });
-
-    reg!("_lumen_webgl_create_shader", |id: u32, kind: u32| -> u32 {
-        with_ctx(id, 0, |gl| gl.create_shader(kind))
-    });
-    reg!("_lumen_webgl_shader_source", |id: u32, shader: u32, src: String| {
-        with_ctx(id, (), |gl| gl.shader_source(shader, src));
-    });
-    reg!("_lumen_webgl_compile_shader", |id: u32, shader: u32| {
-        with_ctx(id, (), |gl| gl.compile_shader(shader));
-    });
-    reg!("_lumen_webgl_shader_compiled", |id: u32, shader: u32| -> bool {
-        with_ctx(id, false, |gl| gl.shader_compiled(shader))
-    });
-
-    reg!("_lumen_webgl_create_program", |id: u32| -> u32 {
-        with_ctx(id, 0, |gl| gl.create_program())
-    });
-    reg!("_lumen_webgl_attach_shader", |id: u32, program: u32, shader: u32| {
-        with_ctx(id, (), |gl| gl.attach_shader(program, shader));
-    });
-    reg!("_lumen_webgl_link_program", |id: u32, program: u32| {
-        with_ctx(id, (), |gl| gl.link_program(program));
-    });
-    reg!("_lumen_webgl_program_linked", |id: u32, program: u32| -> bool {
-        with_ctx(id, false, |gl| gl.program_linked(program))
-    });
-    reg!("_lumen_webgl_use_program", |id: u32, program: u32| {
-        with_ctx(id, (), |gl| gl.use_program(program));
-    });
-
-    reg!("_lumen_webgl_attrib_location", |id: u32, program: u32, name: String| -> i32 {
-        with_ctx(id, -1, |gl| gl.get_attrib_location(program, &name))
-    });
-    reg!("_lumen_webgl_uniform_location", |id: u32, program: u32, name: String| -> i32 {
-        with_ctx(id, -1, |gl| gl.get_uniform_location(program, &name))
-    });
-
-    reg!("_lumen_webgl_enable_attrib", |id: u32, index: u32| {
-        with_ctx(id, (), |gl| gl.enable_vertex_attrib_array(index));
-    });
-    reg!("_lumen_webgl_disable_attrib", |id: u32, index: u32| {
-        with_ctx(id, (), |gl| gl.disable_vertex_attrib_array(index));
-    });
-    reg!(
-        "_lumen_webgl_attrib_pointer",
-        |id: u32, index: u32, size: i32, stride: i32, offset: i32| {
-            with_ctx(id, (), |gl| {
-                gl.vertex_attrib_pointer(
-                    index,
-                    size.max(0) as usize,
-                    stride.max(0) as usize,
-                    offset.max(0) as usize,
-                );
-            });
-        }
-    );
-    reg!("_lumen_webgl_uniform4f", |id: u32, loc: i32, x: f64, y: f64, z: f64, w: f64| {
-        with_ctx(id, (), |gl| gl.uniform4f(loc, x as f32, y as f32, z as f32, w as f32));
-    });
-    reg!("_lumen_webgl_uniform3f", |id: u32, loc: i32, x: f64, y: f64, z: f64| {
-        with_ctx(id, (), |gl| gl.uniform3f(loc, x as f32, y as f32, z as f32));
-    });
-    reg!("_lumen_webgl_uniform2f", |id: u32, loc: i32, x: f64, y: f64| {
-        with_ctx(id, (), |gl| gl.uniform2f(loc, x as f32, y as f32));
-    });
-    reg!("_lumen_webgl_uniform1f", |id: u32, loc: i32, x: f64| {
-        with_ctx(id, (), |gl| gl.uniform1f(loc, x as f32));
-    });
-    reg!("_lumen_webgl_uniform1i", |id: u32, loc: i32, v: i32| {
-        with_ctx(id, (), |gl| gl.uniform1i(loc, v));
-    });
-    reg!("_lumen_webgl_uniform_mat4fv", |id: u32, loc: i32, data: Vec<f64>| {
-        let fs: Vec<f32> = data.into_iter().map(|v| v as f32).collect();
-        with_ctx(id, (), |gl| gl.uniform_matrix4fv(loc, &fs));
-    });
-    reg!("_lumen_webgl_active_texture", |id: u32, unit: u32| {
-        with_ctx(id, (), |gl| gl.active_texture(unit));
-    });
-    reg!("_lumen_webgl_bind_texture", |id: u32, target: u32, tex_id: u32| {
-        with_ctx(id, (), |gl| gl.bind_texture(target, tex_id));
-    });
-    reg!("_lumen_webgl_tex_image_2d", |id: u32, tex_id: u32, w: u32, h: u32, data: Vec<u8>| {
-        with_ctx(id, (), |gl| gl.tex_image_2d_rgba(tex_id, w, h, &data));
-    });
-
-    reg!("_lumen_webgl_draw_arrays", |id: u32, mode: u32, first: i32, count: i32| {
-        with_ctx(id, (), |gl| gl.draw_arrays(mode, first, count));
-    });
-
-    // Full RGBA8 framebuffer readback (top-left origin). The JS `readPixels`
-    // wrapper crops the requested sub-rect and flips to WebGL's bottom-left.
-    reg!("_lumen_webgl_read_pixels", |id: u32| -> Vec<u8> {
-        with_ctx(id, Vec::new(), |gl| gl.pixels().to_vec())
-    });
-    reg!("_lumen_webgl_dims", |id: u32| -> Vec<u32> {
-        with_ctx(id, vec![0, 0], |gl| vec![gl.width(), gl.height()])
-    });
-
-    ctx.eval::<(), _>(WEBGL_SHIM)?;
-    Ok(())
 }
 
 /// Re-export of backend mode constants for callers/tests that build draw calls
@@ -221,6 +66,7 @@ pub use webgl::{ARRAY_BUFFER, COLOR_BUFFER_BIT, FRAGMENT_SHADER, TRIANGLES, VERT
 /// to the accessor the element factory (`dom.rs::WEB_API_SHIM`) already
 /// installed — this shim runs last, so anything it overwrites outright is gone
 /// for good (BUG-348).
+#[cfg(feature = "v8-backend")]
 const WEBGL_SHIM: &str = r#"(function() {
   var _vendor   = (typeof _LUMEN_GPU_VENDOR   !== 'undefined') ? _LUMEN_GPU_VENDOR   : 'WebKit';
   var _renderer = (typeof _LUMEN_GPU_RENDERER !== 'undefined') ? _LUMEN_GPU_RENDERER : 'Generic GPU';
@@ -748,16 +594,13 @@ pub(crate) fn install_webgl_canvas_v8(
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use rquickjs::{Context, Runtime};
-
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
+/// V8 test coverage for the functional WebGL shim (the rquickjs twin was
+/// removed in S12b-B21; this module ports its 12 tests to V8 verbatim).
+#[cfg(all(test, feature = "v8-backend"))]
+mod tests_v8 {
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
     fn fp() -> lumen_paint::GpuFingerprint {
         lumen_paint::GpuFingerprint {
@@ -770,8 +613,8 @@ mod tests {
     /// back already carries the non-WebGL `getContext` branches and the blank-PNG
     /// `toDataURL`, which is exactly what [`WEBGL_SHIM`]'s `createElement` wrapper
     /// must preserve (BUG-348).
-    fn install_minimal_dom(ctx: &rquickjs::Ctx) {
-        ctx.eval::<(), _>(
+    fn install_minimal_dom(rt: &V8JsRuntime) {
+        rt.eval(
             r#"var document = {
   createElement: function(tag) {
     return { _tag: tag, width: 8, height: 8,
@@ -787,21 +630,27 @@ mod tests {
         .unwrap();
     }
 
+    fn with_webgl() -> V8JsRuntime {
+        let rt = V8JsRuntime::new().unwrap();
+        install_minimal_dom(&rt);
+        super::install_webgl_canvas_v8(&rt, &fp()).unwrap();
+        rt
+    }
+
+    fn bool_eval(rt: &V8JsRuntime, expr: &str) -> bool {
+        matches!(rt.eval(expr).unwrap(), JsValue::Bool(true))
+    }
+
     #[test]
     fn get_context_returns_functional_object() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_webgl_canvas(&ctx, &fp()).unwrap();
-            let ok: bool = ctx
-                .eval(
-                    r#"var c = document.createElement('canvas');
+        let rt = with_webgl();
+        let ok = bool_eval(
+            &rt,
+            r#"var c = document.createElement('canvas');
 var gl = c.getContext('webgl');
 gl !== null && typeof gl.drawArrays === 'function' && typeof gl.createBuffer === 'function'"#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        );
+        assert!(ok);
     }
 
     /// BUG-348 regression: the WebGL wrapper must hand every non-WebGL
@@ -810,52 +659,39 @@ gl !== null && typeof gl.drawArrays === 'function' && typeof gl.createBuffer ===
     /// It used to return `null` for all of them, killing Canvas 2D outright.
     #[test]
     fn get_context_2d_delegates_to_element_factory() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_webgl_canvas(&ctx, &fp()).unwrap();
-            let ok: bool = ctx
-                .eval(
-                    r#"var c = document.createElement('canvas');
+        let rt = with_webgl();
+        let ok = bool_eval(
+            &rt,
+            r#"var c = document.createElement('canvas');
 var ctx2d = c.getContext('2d');
 ctx2d !== null && ctx2d.__base_2d === true && ctx2d.canvas === c"#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        );
+        assert!(ok);
     }
 
     /// One context per canvas (HTML LS §4.12.4): delegation to the element factory
     /// stops once this canvas has been given a WebGL context.
     #[test]
     fn get_context_2d_is_null_after_webgl() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_webgl_canvas(&ctx, &fp()).unwrap();
-            let ok: bool = ctx
-                .eval(
-                    r#"var c = document.createElement('canvas');
+        let rt = with_webgl();
+        let ok = bool_eval(
+            &rt,
+            r#"var c = document.createElement('canvas');
 c.getContext('webgl');
 c.getContext('2d') === null"#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        );
+        assert!(ok);
     }
 
     /// A `contextType` neither side handles still returns `null` (HTML LS §4.12.4).
     #[test]
     fn get_context_unknown_type_returns_null() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_webgl_canvas(&ctx, &fp()).unwrap();
-            let ok: bool = ctx
-                .eval("document.createElement('canvas').getContext('bogus') === null")
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = with_webgl();
+        let ok = bool_eval(
+            &rt,
+            "document.createElement('canvas').getContext('bogus') === null",
+        );
+        assert!(ok);
     }
 
     /// BUG-348 (same clobber, second victim): the element factory's `toDataURL`
@@ -863,48 +699,35 @@ c.getContext('2d') === null"#,
     /// with the non-image `'data:,'`.
     #[test]
     fn canvas_privacy_stubs_do_not_clobber_element_factory() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_webgl_canvas(&ctx, &fp()).unwrap();
-            let url: String = ctx
-                .eval("document.createElement('canvas').toDataURL()")
-                .unwrap();
-            assert_eq!(url, "data:image/png;base64,BASE");
-        });
+        let rt = with_webgl();
+        let url = rt
+            .eval("document.createElement('canvas').toDataURL()")
+            .unwrap();
+        assert_eq!(url, JsValue::String("data:image/png;base64,BASE".into()));
     }
 
     #[test]
     fn same_context_returned_on_repeated_calls() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_webgl_canvas(&ctx, &fp()).unwrap();
-            let ok: bool = ctx
-                .eval(
-                    r#"var c = document.createElement('canvas');
+        let rt = with_webgl();
+        let ok = bool_eval(
+            &rt,
+            r#"var c = document.createElement('canvas');
 c.getContext('webgl') === c.getContext('webgl')"#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        );
+        assert!(ok);
     }
 
     #[test]
     fn fingerprint_vendor_is_normalized() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_webgl_canvas(&ctx, &fp()).unwrap();
-            let vendor: String = ctx
-                .eval(
-                    r#"var gl = document.createElement('canvas').getContext('webgl');
+        let rt = with_webgl();
+        let vendor = rt
+            .eval(
+                r#"var gl = document.createElement('canvas').getContext('webgl');
 var ext = gl.getExtension('WEBGL_debug_renderer_info');
 gl.getParameter(ext.UNMASKED_VENDOR_WEBGL)"#,
-                )
-                .unwrap();
-            assert_eq!(vendor, "WebKit");
-        });
+            )
+            .unwrap();
+        assert_eq!(vendor, JsValue::String("WebKit".into()));
     }
 
     /// Privacy fallback (ADR-007): when the element factory offers no `toDataURL`
@@ -913,58 +736,49 @@ gl.getParameter(ext.UNMASKED_VENDOR_WEBGL)"#,
     /// `canvas_privacy_stubs_do_not_clobber_element_factory`.)
     #[test]
     fn to_data_url_is_blank_without_element_factory_stub() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            ctx.eval::<(), _>(
-                r#"var _base = document.createElement;
+        let rt = V8JsRuntime::new().unwrap();
+        install_minimal_dom(&rt);
+        rt.eval(
+            r#"var _base = document.createElement;
 document.createElement = function(tag) {
   var el = _base(tag);
   delete el.toDataURL;
   delete el.toBlob;
   return el;
 };"#,
-            )
+        )
+        .unwrap();
+        super::install_webgl_canvas_v8(&rt, &fp()).unwrap();
+        let url = rt
+            .eval("document.createElement('canvas').toDataURL()")
             .unwrap();
-            install_webgl_canvas(&ctx, &fp()).unwrap();
-            let url: String = ctx
-                .eval("document.createElement('canvas').toDataURL()")
-                .unwrap();
-            assert_eq!(url, "data:,");
-        });
+        assert_eq!(url, JsValue::String("data:,".into()));
     }
 
     #[test]
     fn clear_then_read_pixels_roundtrip() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_webgl_canvas(&ctx, &fp()).unwrap();
-            // Clear to opaque red, read back the bottom-left pixel.
-            let r: f64 = ctx
-                .eval(
-                    r#"var gl = document.createElement('canvas').getContext('webgl');
+        let rt = with_webgl();
+        // Clear to opaque red, read back the bottom-left pixel.
+        let r = rt
+            .eval(
+                r#"var gl = document.createElement('canvas').getContext('webgl');
 gl.clearColor(1.0, 0.0, 0.0, 1.0);
 gl.clear(gl.COLOR_BUFFER_BIT);
 var px = new Uint8Array(4);
 gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
 px[0]"#,
-                )
-                .unwrap();
-            assert_eq!(r as i32, 255);
-        });
+            )
+            .unwrap();
+        assert_eq!(r, JsValue::Number(255.0));
     }
 
     #[test]
     fn full_draw_pipeline_paints_pixels() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_webgl_canvas(&ctx, &fp()).unwrap();
-            // Compile a program, upload a fullscreen quad, draw green, read centre.
-            let g: f64 = ctx
-                .eval(
-                    r#"var gl = document.createElement('canvas').getContext('webgl');
+        let rt = with_webgl();
+        // Compile a program, upload a fullscreen quad, draw green, read centre.
+        let g = rt
+            .eval(
+                r#"var gl = document.createElement('canvas').getContext('webgl');
 var vs = gl.createShader(gl.VERTEX_SHADER);
 gl.shaderSource(vs, 'void main(){}'); gl.compileShader(vs);
 var fs = gl.createShader(gl.FRAGMENT_SHADER);
@@ -987,27 +801,25 @@ gl.drawArrays(gl.TRIANGLES, 0, 6);
 var px = new Uint8Array(4);
 gl.readPixels(4, 4, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
 px[1]"#,
-                )
-                .unwrap();
-            assert_eq!(g as i32, 255);
-        });
+            )
+            .unwrap();
+        assert_eq!(g, JsValue::Number(255.0));
     }
 
     #[test]
     fn attrib_location_is_nonnegative() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_webgl_canvas(&ctx, &fp()).unwrap();
-            let loc: f64 = ctx
-                .eval(
-                    r#"var gl = document.createElement('canvas').getContext('webgl');
+        let rt = with_webgl();
+        let loc = rt
+            .eval(
+                r#"var gl = document.createElement('canvas').getContext('webgl');
 var p = gl.createProgram();
 gl.getAttribLocation(p, 'a_pos')"#,
-                )
-                .unwrap();
-            assert!(loc >= 0.0);
-        });
+            )
+            .unwrap();
+        match loc {
+            JsValue::Number(n) => assert!(n >= 0.0),
+            other => panic!("expected number, got {other:?}"),
+        }
     }
 
     /// The WebGL stubs are attached to `<canvas>` only. (The element factory puts a
@@ -1015,31 +827,23 @@ gl.getAttribLocation(p, 'a_pos')"#,
     /// the discriminator is the WebGL context, not the presence of the method.)
     #[test]
     fn non_canvas_gets_no_webgl_stub() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_webgl_canvas(&ctx, &fp()).unwrap();
-            let stubbed: bool = ctx
-                .eval("document.createElement('div').getContext('webgl') !== null")
-                .unwrap();
-            assert!(!stubbed);
-        });
+        let rt = with_webgl();
+        let stubbed = bool_eval(
+            &rt,
+            "document.createElement('div').getContext('webgl') !== null",
+        );
+        assert!(!stubbed);
     }
 
     #[test]
     fn lose_context_extension_present() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_minimal_dom(&ctx);
-            install_webgl_canvas(&ctx, &fp()).unwrap();
-            let ok: bool = ctx
-                .eval(
-                    r#"var gl = document.createElement('canvas').getContext('webgl');
+        let rt = with_webgl();
+        let ok = bool_eval(
+            &rt,
+            r#"var gl = document.createElement('canvas').getContext('webgl');
 var e = gl.getExtension('WEBGL_lose_context');
 e !== null && typeof e.loseContext === 'function'"#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        );
+        assert!(ok);
     }
 }
