@@ -3655,6 +3655,56 @@ longer installs Canvas 2D bindings into the QuickJS runtime.
 
 Next in queue: S12b-B31 (`subtle_crypto`, Полоса 4, final batch of group A).
 
+### S12b-B31: `subtle_crypto` (2026-08-04, branch `p1-s12b-b31`)
+
+Final batch of group A. The V8 port already existed (`v8_runtime.rs:3818+`,
+wrapper-only `reg!` block calling `crate::subtle_crypto::*` directly, landed in
+the fifteenth S12b-24 porting slice). This batch removed the rquickjs
+installer (`install_subtle_bindings`, the `Ctx`/`Function` reg! block) and its
+`install_primitives` call site in `dom.rs`.
+
+Unlike every prior batch, none of the 39 tests needed porting: they're pure
+Rust, calling `generate_key`/`sign_data`/`aes_gcm_encrypt`/etc. directly with
+no `Ctx`, no `eval()`, no JS engine at all — the same "already engine-agnostic"
+shape `offscreen_canvas` (S12b-B26) found for a handful of its own tests, just
+covering the *entire* module here instead of a handful of helpers. No bridge
+bugs found.
+
+Removing the installer left the whole implementation (key registry, base64url/
+JSON helpers, all 14 `generate_key`/`import_key`/`export_key`/`sign_data`/
+`verify_signature`/`aes_gcm_*`/`aes_cbc_*`/`aes_ctr_crypt`/`derive_bits`/
+`rsa_oaep_*`/`key_info` entry points, and every private algorithm helper they
+call) reachable only from the now-`v8-backend`-gated `v8_runtime.rs` block —
+same "dead under a hypothetical no-features build" shape `canvas2d` (S12b-B30)
+hit. Unlike canvas2d, *all* of it is also exercised by the plain-Rust `mod
+tests`, so plain `#[cfg(feature = "v8-backend")]` (canvas2d's approach) would
+have broken `cargo test -p lumen-js` with no `--features` at all. Gated every
+item (imports included — a plain `--all-targets` build with no features
+compiles the lib target once *without* `cfg(test)` too, where the same imports
+go unused) with `#[cfg(any(feature = "v8-backend", test))]` instead: reachable
+whenever either the real V8 caller or the test module is being compiled,
+compiled away entirely otherwise. Net effect: `cargo clippy -p lumen-js
+--all-targets -- -D warnings` (no features) introduces **zero** new dead-code
+errors from this batch — a full close, not just a partial one like B30's 3
+leftover items, made possible only because this module's whole surface was
+already unit-testable without a JS engine.
+
+`cargo test -p lumen-js` (default, no features): 376 lib (unchanged — no
+rquickjs-only tests existed to remove). `cargo test -p lumen-js
+--features v8-backend`: 2568 lib (unchanged). `cargo clippy -p lumen-js
+--all-targets --features v8-backend -- -D warnings` clean. `cargo clippy
+-p lumen-js --all-targets -- -D warnings` (no features): same pre-existing
+16 baseline errors (`offscreen_canvas.rs`/`worker.rs`/`canvas2d.rs`, unchanged
+from before this batch) — zero new. `lumen-shell` checked under default
+(wgpu+v8) and rollback (`backend-femtovg,backend-wgpu,quickjs`) — both green;
+the rollback build no longer installs SubtleCrypto bindings into the QuickJS
+runtime.
+
+This closes group A (all "already-had-a-V8-port, just delete rquickjs" batches,
+B5…B31). Next in queue: group G (modules with **no** V8 port at all — G1…G7,
+`docs/tasks/p1-s12b-cleanup-queue.md`), starting with S12b-G1 (`contacts`,
+`background_sync`).
+
 ---
 
 ## Risks (Rev 2)
