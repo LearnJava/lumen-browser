@@ -367,6 +367,11 @@ pub struct V8JsRuntime {
     /// [`Self::pump_shared_workers`]. Mirrors [`crate::QuickJsRuntime`]'s
     /// `shared_worker_outbox` field.
     shared_worker_outbox: crate::shared_worker::SharedWorkerOutbox,
+    /// Cookie-banner auto-dismiss (7C.3) enable flag (Ph3 V8 migration S12b-G6,
+    /// BUG-548). Defaults to `true`. Shell sets this from the user's
+    /// `cookie_banner_dismiss` preference via [`Self::set_cookie_banner_dismiss`].
+    /// Mirrors [`crate::QuickJsRuntime`]'s field of the same name.
+    cookie_banner_dismiss: AtomicBool,
 }
 
 impl V8JsRuntime {
@@ -423,7 +428,14 @@ impl V8JsRuntime {
             worker_next_id: Arc::new(Mutex::new(0)),
             worker_blob_store: Arc::new(Mutex::new(HashMap::new())),
             shared_worker_outbox: Arc::new(Mutex::new(Vec::new())),
+            cookie_banner_dismiss: AtomicBool::new(true),
         })
+    }
+
+    /// Set whether the cookie-banner auto-dismiss shim (7C.3) is injected on
+    /// the next `install_dom`. Mirrors [`crate::QuickJsRuntime::set_cookie_banner_dismiss`].
+    pub fn set_cookie_banner_dismiss(&self, enabled: bool) {
+        self.cookie_banner_dismiss.store(enabled, Ordering::Relaxed);
     }
 
     /// Shared handle to this runtime's `BroadcastChannel` registry, for the
@@ -4215,6 +4227,12 @@ impl V8JsRuntime {
         install_v8!(compute_pressure::install_compute_pressure_bindings_v8);
         install_v8!(contacts::install_contacts_manager_v8);
         install_v8!(content_index::install_content_index_api_v8);
+        // Default: enabled (mirrors lib.rs::install_dom's `self.cookie_banner_dismiss`
+        // AtomicBool read; extra-arg call since the flag lives on `self`, not `&ctx`).
+        let cb_enabled = self.cookie_banner_dismiss.load(Ordering::Relaxed);
+        if let Err(e) = crate::cookie_banner::install_cookie_banner_bindings_v8(self, cb_enabled) {
+            eprintln!("v8: cookie_banner::install_cookie_banner_bindings_v8 failed: {e}");
+        }
         install_v8!(cookie_store::install_cookie_store_v8);
         install_v8!(credentials::install_credentials_bindings_v8);
         install_v8!(csp::install_csp_bindings_v8);

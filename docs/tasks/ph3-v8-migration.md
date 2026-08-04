@@ -3914,6 +3914,63 @@ the V8 install fn and its tests, not unconditionally as under rquickjs).
 (rollback) both clean, plus `cargo clippy -p lumen-shell -- -D warnings`
 (default) clean.
 
+### S12b-G6: `cookie_banner` (2026-08-04, branch `p1-s12b-g6`)
+
+Sixth and final port batch of group G — single module, closing the group's
+port work (the two remaining G-triage entries, `webgl_bindings`/
+`audio_bindings`, are removal-only and live in `S12b-Asnos1`/`S12b-Asnos2`,
+not here). No natives — same fast path as `cookie_store`/G1-G4:
+`rquickjs::Ctx::eval(COOKIE_BANNER_SHIM)` → `lumen_core::ext::JsRuntime::eval`,
+registered as an extra-arg call site in `V8JsRuntime::install_dom` (between
+`content_index` and `cookie_store`, not the bare `install_v8!` macro,
+because the enable flag lives on `self`, not `&ctx`) rather than a plain
+`install_v8!(cookie_banner::install_cookie_banner_bindings_v8)`. Added a
+`cookie_banner_dismiss: AtomicBool` field + `set_cookie_banner_dismiss()`
+setter on `V8JsRuntime`, mirroring `QuickJsRuntime`'s field/method of the
+same name (this closes the actual regression in BUG-548: the shell's
+`KeyCommand::ToggleCookieBannerDismiss` toggle and the `cookie_banner_dismiss`
+default were already wired into both `run_scripts_with_dom` call sites in
+`crates/shell/src/main.rs`, but only the QuickJS branch ever called
+`rt.set_cookie_banner_dismiss(...)` — the V8 branch had no such method to
+call, so the toggle silently did nothing on the default build). Both shell
+call sites (classic-load `run_scripts_with_dom` and the `Lumen::` navigate
+path) now call `rt.set_cookie_banner_dismiss(cookie_banner_dismiss)` on the
+V8 branch too.
+
+16 tests: 4 (`consent_selectors_*`) test the pure-Rust `CONSENT_SELECTORS`
+constant and needed no engine at all — left ungated in the shared `mod
+tests`. The remaining 12 (shim behavior: dismiss/no-match/hidden-element/
+display-none/cleanup/interval/observer/selector-ordering/no-MutationObserver
+cases) moved to `#[cfg(all(test, feature = "v8-backend"))] mod tests_v8`
+against a bare `V8JsRuntime::new()` + a hand-rolled `document`/
+`MutationObserver`/timer stub (no full `install_dom` needed — the shim only
+touches `document`, `window.getComputedStyle`, timers, and `MutationObserver`).
+No bridge bugs found. rquickjs `install_cookie_banner_bindings`/`install`/
+`install_with_selectors`/`inject`, the `use rquickjs::Ctx`, and the
+`cookie_banner_dismiss: AtomicBool` field + `set_cookie_banner_dismiss()` on
+`QuickJsRuntime` all removed from `lib.rs`/`cookie_banner.rs`, along with the
+`install` call in `QuickJsRuntime::install_dom`.
+
+Closes [BUG-548](../../bugs/BUG-548-FIXED.md) — not a `CAPABILITIES.md`
+overclaim (the feature was never listed there), but a real user-facing
+regression: the privacy toggle was a silent no-op on the default build.
+
+`cargo test -p lumen-js --features v8-backend cookie_banner`: 16/16
+(4 shared + 12 gated). Full `cargo test -p lumen-js --features v8-backend`:
+2568 passing, 0 failed (includes this batch's 12 gated tests — the
+G5-to-G6 total held flat rather than growing by 12, i.e. some other
+concurrent main-branch change removed roughly the same count from the
+v8-backend suite elsewhere in the same window; not investigated further,
+out of scope for this batch and not a regression of this change per se —
+0 failures either way). `cargo test -p lumen-js` (default): 309→297 (-12,
+the 12 tests that moved to the v8-only gate; the 4 shared ones stayed).
+Both clippy passes clean: `--features v8-backend --all-targets -- -D
+warnings` zero errors; default `--all-targets -- -D warnings` matches the
+pre-existing 18-error baseline (`offscreen_canvas.rs`/`worker.rs`/
+`canvas2d.rs` dead-code, unrelated to this batch), zero new errors.
+`cargo check -p lumen-shell` (default, v8) and `--no-default-features
+--features backend-femtovg,backend-wgpu,quickjs` (rollback) both clean.
+
 ---
 
 ## Risks (Rev 2)

@@ -7287,7 +7287,6 @@ fn run_scripts_with_dom(
         use lumen_core::ext::JsRuntime as _;
         match lumen_js::QuickJsRuntime::new() {
             Ok(mut rt) => {
-                rt.set_cookie_banner_dismiss(cookie_banner_dismiss);
                 if deterministic.enabled {
                     rt.set_deterministic_mode();
                 }
@@ -7358,8 +7357,8 @@ fn run_scripts_with_dom(
     }
 
     // Ph3 V8 migration S4: mirrors the quickjs block above. Since S12b-23 the
-    // import map and `eval_module` are wired here too; `set_cookie_banner_dismiss`
-    // is still V8-only-missing.
+    // import map and `eval_module` are wired here too; since S12b-G6
+    // (BUG-548) `set_cookie_banner_dismiss` is wired too.
     // `not(feature = "quickjs")`: the quickjs block above returns unconditionally
     // on both its match arms, so this block would be unreachable if both engine
     // features were compiled in — quickjs takes priority until S12 cutover.
@@ -7368,6 +7367,7 @@ fn run_scripts_with_dom(
         use lumen_core::ext::JsRuntime as _;
         match lumen_js::v8_runtime::V8JsRuntime::new() {
             Ok(mut rt) => {
+                rt.set_cookie_banner_dismiss(cookie_banner_dismiss);
                 if deterministic.enabled {
                     rt.set_deterministic_mode(true, deterministic.rng_seed, deterministic.monotonic_clock);
                 }
@@ -19197,7 +19197,6 @@ impl Lumen {
         {
             match lumen_js::QuickJsRuntime::new() {
                 Ok(rt) => {
-                    rt.set_cookie_banner_dismiss(self.cookie_banner_dismiss);
                     if self.deterministic.enabled {
                         rt.set_deterministic_mode();
                     }
@@ -19234,17 +19233,18 @@ impl Lumen {
                 }
             }
         }
-        // Ph3 V8 migration S4: mirrors the quickjs block above. Cookie-banner
-        // dismiss is not wired for V8 yet (no `set_cookie_banner_dismiss` on
-        // `V8JsRuntime`). `not(feature = "quickjs")`: unlike the classic-load
-        // site above, both blocks here call `set_js_ctx` without returning, so
-        // if both engine features were compiled in this block would silently
-        // clobber the quickjs context set just above — quickjs takes priority
-        // until S12 cutover.
+        // Ph3 V8 migration S4: mirrors the quickjs block above.
+        // `not(feature = "quickjs")`: unlike the classic-load site above, both
+        // blocks here call `set_js_ctx` without returning, so if both engine
+        // features were compiled in this block would silently clobber the
+        // quickjs context set just above — quickjs takes priority until S12
+        // cutover.
         #[cfg(all(feature = "v8", not(feature = "quickjs")))]
         {
             match lumen_js::v8_runtime::V8JsRuntime::new() {
                 Ok(rt) => {
+                    // BUG-548 (S12b-G6): cookie-banner dismiss now wired for V8.
+                    rt.set_cookie_banner_dismiss(self.cookie_banner_dismiss);
                     if self.deterministic.enabled {
                         rt.set_deterministic_mode(true, self.deterministic.rng_seed, self.deterministic.monotonic_clock);
                     }

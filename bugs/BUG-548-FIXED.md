@@ -1,6 +1,6 @@
 # BUG-548: cookie-banner auto-dismiss (privacy feature) is a no-op under the default V8 build — the user-facing toggle silently does nothing
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-04
 **Дата:** 2026-08-03
 **Компонент:** js (`crates/js/src/cookie_banner.rs`, install site `crates/js/src/lib.rs:1030` — QuickJS-only) + shell (`crates/shell/src/main.rs`)
 **Найден:** P1, S12b-G0 триаж (13 модулей без V8-порта)
@@ -29,12 +29,19 @@ the toggle state. Not mentioned in `CAPABILITIES.md`, so no doc overclaim
 to fix, but the feature itself is silently broken for every user on the
 default build.
 
-## Фикс (не сделан)
+## Фикс
 
-Port per the standard S12b-G group procedure
-(`docs/tasks/p1-s12b-cleanup-queue.md` §4, S12b-G6 slot): add an
-`install_cookie_banner_v8` (or fold the shim into the shared engine-agnostic
-`WEB_API_SHIM` in `dom.rs`, since it has no native bindings beyond the
-enable flag), and give `V8JsRuntime` a `set_cookie_banner_dismiss` matching
-`QuickJsRuntime`'s so the shell's existing call sites (`main.rs:7283`,
-`19193`) can be mirrored for the V8 branch without special-casing.
+**Закрыт 2026-08-04 (P1, S12b-G6).** Ported per the standard S12b-G group
+procedure (`docs/tasks/p1-s12b-cleanup-queue.md` §4): no natives — the
+familiar fast path, `install_cookie_banner_bindings_v8` calling
+`rt.eval(COOKIE_BANNER_SHIM)`, registered as an extra-arg call site in
+`v8_runtime.rs::install_dom` (the enable flag lives on `self`, so the plain
+`install_v8!` macro doesn't fit). Added `cookie_banner_dismiss: AtomicBool`
++ `set_cookie_banner_dismiss()` on `V8JsRuntime`, mirroring
+`QuickJsRuntime`'s field/method of the same name — both shell call sites in
+`crates/shell/src/main.rs` (`run_scripts_with_dom`'s classic-load branch and
+the `Lumen::` navigate path) now call `rt.set_cookie_banner_dismiss(...)` on
+the V8 branch too, so `KeyCommand::ToggleCookieBannerDismiss` has an effect
+again. 12 of 16 existing tests ported against `V8JsRuntime` (4 pure-Rust
+selector-list tests needed no engine, left ungated). rquickjs side removed
+in the same batch. Details — `docs/tasks/ph3-v8-migration.md` §S12b-G6.
