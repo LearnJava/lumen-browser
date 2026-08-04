@@ -1,42 +1,12 @@
-//! ES Module loader infrastructure for `<script type=module>` support (HTML LS §8.1.3).
-//!
-//! Implements `rquickjs::loader::{Resolver, Loader}` backed by an in-memory registry.
-//! The registry is shared between `LumenLoader` (attached to the QuickJS Runtime) and
-//! `QuickJsRuntime` (which populates it with pre-fetched module source code).
+//! ES Module URL-resolution infrastructure for `<script type=module>` support
+//! (HTML LS §8.1.3), shared by the V8 module loader ([`crate::v8_esm`]).
 //!
 //! Module specifier resolution follows URL Standard §5.1:
 //! - Absolute URLs passed through unchanged.
 //! - Relative specifiers (`./foo.js`, `../bar.js`) resolved against `base_url`.
 //! - Bare specifiers (`lodash`) kept as-is (caller must pre-register them by canonical name).
 
-use crate::import_attributes::{new_type_registry, ModuleType, ModuleTypeRegistry};
-use crate::import_meta::transform_import_meta;
-use rquickjs::{loader::{Loader, Resolver}, Ctx, Error, Module, Result as QjsResult};
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
-
-/// Shared, late-writable page URL used by `LumenResolver` to resolve relative
-/// module specifiers from inline `<script type=module>` scripts.
-///
-/// Because the resolver is moved into the QuickJS `Runtime` via `set_loader`,
-/// it cannot be updated via `&mut self` afterwards. Sharing an `Arc<Mutex<String>>`
-/// with `QuickJsRuntime` allows the resolver to pick up the page URL that is only
-/// known later (when `install_dom` is called).
-pub type SharedPageUrl = Arc<Mutex<String>>;
-
-/// Shared module source registry: specifier → source code.
-///
-/// Populated by `QuickJsRuntime::register_module()` before evaluation.
-/// The same `Arc<Mutex<…>>` is shared between the `LumenLoader` (QuickJS side)
-/// and `QuickJsRuntime` (Rust side) so new modules can be added at any time.
-pub type ModuleRegistry = Arc<Mutex<HashMap<String, String>>>;
-
-/// Creates an empty `ModuleRegistry`.
-pub fn new_registry() -> ModuleRegistry {
-    Arc::new(Mutex::new(HashMap::new()))
-}
+use std::collections::HashMap;
 
 /// Import map: specifier mappings for bare specifiers and scoped paths.
 ///
@@ -122,67 +92,19 @@ impl ImportMap {
     }
 }
 
-/// URL resolver: normalises module specifiers into canonical keys for the registry.
+/// Resolve `name` relative to `base` using simplified URL resolution rules.
 ///
-/// Relative specifiers are resolved against `base` (the importer's specifier).
-/// Absolute HTTP/HTTPS URLs and data: URIs are passed through unchanged.
-/// `blob:lumen/…` virtual URLs are passed through unchanged.
-///
-/// The page URL is held in a `SharedPageUrl` (`Arc<Mutex<String>>`): because
-/// `LumenResolver` is moved into the QuickJS `Runtime` via `set_loader` and
-/// cannot be mutated afterwards, the shared handle lets `QuickJsRuntime` write
-/// the page URL during `install_dom` and have the resolver pick it up at
-/// resolution time.
-#[derive(Clone)]
-pub struct LumenResolver {
-    /// Base page URL; used as fallback base when the import base is empty or virtual.
-    pub page_url: SharedPageUrl,
-    /// Import map: global mappings for bare specifiers.
-    pub import_map: Arc<Mutex<ImportMap>>,
-}
-
-impl LumenResolver {
-    /// Create a resolver; `page_url` is the initial fallback base (may be empty).
-    /// The returned `SharedPageUrl` can be updated later (e.g. from `install_dom`).
-    pub fn new(initial_page_url: &str) -> (Self, SharedPageUrl) {
-        let shared = Arc::new(Mutex::new(initial_page_url.to_owned()));
-        (Self {
-            page_url: Arc::clone(&shared),
-            import_map: Arc::new(Mutex::new(ImportMap::default())),
-        }, shared)
-    }
-
-    /// Set the import map for this resolver.
-    pub fn set_import_map(&self, map: ImportMap) {
-        if let Ok(mut guard) = self.import_map.lock() {
-            *guard = map;
-        }
-    }
-
-    /// Resolve `name` relative to `base` using simplified URL resolution rules.
-    ///
-    /// Rules (in priority order):
-    /// 1. `data:` and `blob:` prefixes — return unchanged.
-    /// 2. Absolute HTTP/HTTPS URL (starts with `https://` or `http://`) — unchanged.
-    /// 3. `./` or `../` prefix — resolve relative to `base`.
-    ///    If `base` is empty or a virtual `lumen://` specifier, fall back to `page_url`.
-    /// 4. Bare specifier — try import map, fall back to returning unchanged.
-    pub fn resolve_specifier(&self, base: &str, name: &str) -> String {
-        let page_url = self.page_url.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        let map = self.import_map.lock().unwrap_or_else(|e| e.into_inner());
-        resolve_specifier_with(&page_url, &map, base, name)
-    }
-}
-
-/// Engine-agnostic core of [`LumenResolver::resolve_specifier`].
-///
-/// Kept as a free function so the V8 module loader ([`crate::v8_esm`]), whose
-/// resolve callback is a captureless `fn` reading thread-local state rather
-/// than an `Arc<Mutex<…>>`-backed resolver object, applies exactly the same
-/// URL Standard §5.1 rules as the rquickjs `Resolver` impl.
+/// Rules (in priority order):
+/// 1. `data:` and `blob:` prefixes — return unchanged.
+/// 2. Absolute HTTP/HTTPS URL (starts with `https://` or `http://`) — unchanged.
+/// 3. `./` or `../` prefix — resolve relative to `base`.
+///    If `base` is empty or a virtual `lumen://` specifier, fall back to `page_url`.
+/// 4. Bare specifier — try import map, fall back to returning unchanged.
 ///
 /// `page_url` is the fallback base for relative specifiers whose importer has
-/// no meaningful directory (inline `lumen://inline-N` module scripts).
+/// no meaningful directory (inline `lumen://inline-N` module scripts). Used by
+/// the V8 module loader ([`crate::v8_esm`]), whose resolve callback is a
+/// captureless `fn` reading thread-local state.
 pub fn resolve_specifier_with(
     page_url: &str,
     import_map: &ImportMap,
@@ -215,90 +137,6 @@ pub fn resolve_specifier_with(
     }
     // Fall back to returning as-is
     name.to_owned()
-}
-
-impl std::fmt::Debug for LumenResolver {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let url = self.page_url.lock().unwrap_or_else(|e| e.into_inner());
-        f.debug_struct("LumenResolver").field("page_url", &*url).finish()
-    }
-}
-
-impl Resolver for LumenResolver {
-    fn resolve<'js>(&mut self, _ctx: &Ctx<'js>, base: &str, name: &str) -> QjsResult<String> {
-        Ok(self.resolve_specifier(base, name))
-    }
-}
-
-/// Module loader backed by `ModuleRegistry`.
-///
-/// When QuickJS requests a module by specifier (after resolution), this loader
-/// looks it up in the shared registry and compiles it as a JS module.
-/// Missing modules produce `Error::new_loading`.
-///
-/// Import attributes (TC39 Stage 3, `with { type: 'json' }`): when the shared
-/// [`ModuleTypeRegistry`] declares a type for the specifier, the loader applies
-/// it — `json` modules are validated as JSON and compiled as a synthetic
-/// `export default JSON.parse(...)` module; any other type fails the load.
-#[derive(Clone)]
-pub struct LumenLoader {
-    registry: ModuleRegistry,
-    /// Declared import-attribute types per resolved specifier (written by the
-    /// `import_attributes` preprocessor in `QuickJsRuntime`).
-    types: ModuleTypeRegistry,
-}
-
-impl LumenLoader {
-    /// Create a loader backed by `registry` with no declared module types.
-    pub fn new(registry: ModuleRegistry) -> Self {
-        Self { registry, types: new_type_registry() }
-    }
-
-    /// Create a loader that also consults `types` for import-attribute
-    /// (`with { type: '…' }`) module types.
-    pub fn with_types(registry: ModuleRegistry, types: ModuleTypeRegistry) -> Self {
-        Self { registry, types }
-    }
-}
-
-impl Loader for LumenLoader {
-    fn load<'js>(&mut self, ctx: &Ctx<'js>, specifier: &str) -> QjsResult<Module<'js>> {
-        let source = {
-            let guard = self.registry.lock().unwrap_or_else(|e| e.into_inner());
-            guard.get(specifier).cloned()
-        };
-        let declared_type = {
-            let guard = self.types.lock().unwrap_or_else(|e| e.into_inner());
-            guard.get(specifier).cloned()
-        };
-        match (source, declared_type) {
-            (Some(src), Some(ModuleType::Json)) => {
-                // JSON-assert guard: a module imported `with { type: 'json' }`
-                // must be valid JSON, otherwise the import fails to load.
-                if serde_json::from_str::<serde_json::Value>(&src).is_err() {
-                    return Err(Error::new_loading_message(
-                        specifier,
-                        "module is not valid JSON (imported with { type: 'json' })",
-                    ));
-                }
-                // Embed the JSON text as a JS string literal (serde escaping is
-                // a valid JS string) and default-export the parsed value.
-                let literal = serde_json::to_string(&src).map_err(|_| Error::new_loading(specifier))?;
-                let synth = format!("export default JSON.parse({literal});");
-                Module::declare(ctx.clone(), specifier, synth.as_bytes())
-            }
-            (Some(_), Some(ModuleType::Unsupported(ty))) => Err(Error::new_loading_message(
-                specifier,
-                format!("unsupported import attribute type '{ty}'"),
-            )),
-            (Some(src), None) => {
-                let src = transform_import_meta(&src, specifier)
-                    .unwrap_or(src);
-                Module::declare(ctx.clone(), specifier, src.as_bytes())
-            }
-            (None, _) => Err(Error::new_loading(specifier)),
-        }
-    }
 }
 
 // ── URL utilities ─────────────────────────────────────────────────────────────
@@ -359,10 +197,6 @@ fn normalize_path(url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn make_resolver(page_url: &str) -> LumenResolver {
-        LumenResolver::new(page_url).0
-    }
 
     #[test]
     fn import_map_parse_basic() {
@@ -432,47 +266,70 @@ mod tests {
 
     #[test]
     fn absolute_url_unchanged() {
-        let r = make_resolver("https://example.com/app.html");
-        assert_eq!(r.resolve_specifier("https://example.com/app.html", "https://cdn.example.com/lib.js"),
-                   "https://cdn.example.com/lib.js");
+        let map = ImportMap::default();
+        assert_eq!(
+            resolve_specifier_with(
+                "https://example.com/app.html",
+                &map,
+                "https://example.com/app.html",
+                "https://cdn.example.com/lib.js",
+            ),
+            "https://cdn.example.com/lib.js"
+        );
     }
 
     #[test]
     fn data_url_unchanged() {
-        let r = make_resolver("https://example.com/");
+        let map = ImportMap::default();
         let data = "data:text/javascript,export const x=1;";
-        assert_eq!(r.resolve_specifier("", data), data);
+        assert_eq!(
+            resolve_specifier_with("https://example.com/", &map, "", data),
+            data
+        );
     }
 
     #[test]
     fn relative_same_dir() {
-        let r = make_resolver("https://example.com/app.html");
+        let map = ImportMap::default();
         assert_eq!(
-            r.resolve_specifier("https://example.com/app.html", "./utils.js"),
+            resolve_specifier_with(
+                "https://example.com/app.html",
+                &map,
+                "https://example.com/app.html",
+                "./utils.js",
+            ),
             "https://example.com/utils.js"
         );
     }
 
     #[test]
     fn relative_parent_dir() {
-        let r = make_resolver("https://example.com/app/main.js");
+        let map = ImportMap::default();
         assert_eq!(
-            r.resolve_specifier("https://example.com/app/main.js", "../lib/util.js"),
+            resolve_specifier_with(
+                "https://example.com/app/main.js",
+                &map,
+                "https://example.com/app/main.js",
+                "../lib/util.js",
+            ),
             "https://example.com/lib/util.js"
         );
     }
 
     #[test]
     fn bare_specifier_unchanged() {
-        let r = make_resolver("https://example.com/");
-        assert_eq!(r.resolve_specifier("https://example.com/", "lodash"), "lodash");
+        let map = ImportMap::default();
+        assert_eq!(
+            resolve_specifier_with("https://example.com/", &map, "https://example.com/", "lodash"),
+            "lodash"
+        );
     }
 
     #[test]
     fn relative_uses_page_url_when_base_empty() {
-        let r = make_resolver("https://example.com/page.html");
+        let map = ImportMap::default();
         assert_eq!(
-            r.resolve_specifier("", "./helper.js"),
+            resolve_specifier_with("https://example.com/page.html", &map, "", "./helper.js"),
             "https://example.com/helper.js"
         );
     }
@@ -481,63 +338,15 @@ mod tests {
     fn relative_uses_page_url_for_virtual_lumen_base() {
         // Inline module scripts get a virtual lumen://inline-N specifier.
         // Relative imports from them should resolve against the page URL.
-        let r = make_resolver("https://example.com/page.html");
+        let map = ImportMap::default();
         assert_eq!(
-            r.resolve_specifier("lumen://inline-0", "./helper.js"),
+            resolve_specifier_with(
+                "https://example.com/page.html",
+                &map,
+                "lumen://inline-0",
+                "./helper.js",
+            ),
             "https://example.com/helper.js"
         );
-    }
-
-    #[test]
-    fn page_url_can_be_updated_via_shared_handle() {
-        let (r, handle) = LumenResolver::new("");
-        // With an empty page_url and empty base, the relative path cannot be resolved to a
-        // real origin; resolve_relative returns the path normalised but still relative.
-        assert_eq!(r.resolve_specifier("", "./a.js"), "./a.js");
-        // After updating the shared handle, relative imports from inline module scripts
-        // (which have a virtual lumen:// base) resolve correctly against the page origin.
-        *handle.lock().unwrap() = "https://example.com/page.html".to_owned();
-        assert_eq!(r.resolve_specifier("lumen://inline-0", "./a.js"), "https://example.com/a.js");
-    }
-
-    #[test]
-    fn loader_finds_registered_module() {
-        use rquickjs::{Runtime, Context};
-        let registry = new_registry();
-        registry.lock().unwrap().insert(
-            "mymod".to_owned(),
-            "export const answer = 42;".to_owned(),
-        );
-        let loader = LumenLoader::new(registry);
-        let (resolver, _url) = LumenResolver::new("https://example.com/");
-        let rt = Runtime::new().unwrap();
-        rt.set_loader(resolver, loader);
-        let ctx = Context::full(&rt).unwrap();
-        ctx.with(|ctx| {
-            let val: rquickjs::Value = ctx.eval(r#"
-                import('mymod').then(m => m.answer)
-            "#).unwrap();
-            drop(val);
-        });
-    }
-
-    #[test]
-    fn loader_missing_module_returns_error() {
-        use rquickjs::{Runtime, Context};
-        let registry = new_registry();
-        let loader = LumenLoader::new(Arc::clone(&registry));
-        let (resolver, _url) = LumenResolver::new("file:///page.html");
-        let rt = Runtime::new().unwrap();
-        rt.set_loader(resolver, loader);
-        let ctx = Context::full(&rt).unwrap();
-        ctx.with(|ctx| {
-            // direct Module::declare_and_eval of a module that imports a missing dep
-            let result = rquickjs::Module::declare::<&str, &str>(
-                ctx.clone(), "main", "import './missing.js'; export const x=1;"
-            );
-            // Declaring the module itself succeeds (it's parsed, not yet evaluated)
-            // Evaluating it would fail — just verify declare doesn't panic
-            drop(result);
-        });
     }
 }

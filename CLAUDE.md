@@ -14,7 +14,7 @@ Update this file whenever you change architecture, invariants, or policies.
 
 Current phase: **Phase 2 — v0.5 «Interactive» (complete)**, app version **v0.5.0**. Phase 0 (prototype) closed 2026-05-26; Phase 1 «Reader» largely complete. Phase 2 delivered: QuickJS, Canvas 2D, CSS Grid, Shadow DOM, accessibility tree, forms, find-in-page, DevTools/CDP, knowledge layer.
 
-**JS engine: V8 (`rusty_v8`) is the ONLY shell-reachable engine since S12b-F1 (2026-08-04) removed the `quickjs` rollback feature.** `rquickjs` itself is still a real dependency inside `crates/js` (`QuickJsRuntime`, `install_primitives`) — it's being deleted slice-by-slice (S12b, `docs/tasks/ph3-v8-migration.md`), F2..F4 finish the removal from `lumen-js`. Never target new functionality, fixes, or investigation at the rquickjs path; the engine-agnostic JS shim (`WEB_API_SHIM` in `crates/js/src/dom.rs`) is shared by both engines and is the right place for engine-independent fixes. Validate JS work against the default (V8) build.
+**JS engine: V8 (`rusty_v8`) is the ONLY shell-reachable engine since S12b-F1 (2026-08-04) removed the `quickjs` rollback feature.** `QuickJsRuntime` itself was deleted in S12b-F2 (2026-08-04); `rquickjs` is still a real dependency inside `crates/js` (`dom.rs::install_primitives`, 2736 lines) — it's being deleted slice-by-slice (S12b, `docs/tasks/ph3-v8-migration.md`), F3..F4 finish the removal from `lumen-js`. Never target new functionality, fixes, or investigation at the rquickjs path; the engine-agnostic JS shim (`WEB_API_SHIM` in `crates/js/src/dom.rs`) is shared by both engines and is the right place for engine-independent fixes. Validate JS work against the default (V8) build.
 
 ### Versioning & phase policy
 

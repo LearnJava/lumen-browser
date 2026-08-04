@@ -4116,6 +4116,105 @@ feature-flag-removal slice):
 Next in queue: S12b-F2 (`lumen-js/lib.rs`: delete `QuickJsRuntime`,
 `install_dom`, `rq_err`, the `__lum_args__` workaround, `use rquickjs`).
 
+### S12b-F2: delete `QuickJsRuntime` from `lumen-js/lib.rs` (2026-08-04, branch `p1-s12b-f2`)
+
+Deletes the `rquickjs`-backed `JsRuntime` impl itself — `lib.rs` shrank from
+1940 to 186 lines. Two dead-code ranges removed: the `QuickJsRuntime` struct
++ `Inner`/`JsJob`/`JsCommand`/`JS_CMD_QUEUE_BOUND`/`js_thread_main` +
+`default_nav_state` + `impl QuickJsRuntime` + `impl Drop`/`Default`/
+`JsRuntime for QuickJsRuntime` (lines 187–1563 of the pre-slice file), and
+`rq_err`/`exc_message`/`from_rq`/`to_rq` + the QuickJS `#[cfg(test)] mod
+tests` (28 tests: eval/global/call_function/suspend-resume/gc_policy/ESM).
+`build_worker_messages_json` (still called by `v8_runtime`'s pump methods and
+`shared_worker`'s V8 test harness) survived, now gated
+`#[cfg(feature = "v8-backend")]` since it would otherwise be genuinely dead
+under the no-features build. The top-of-file `use` block (`rquickjs::*`,
+`lumen_dom::Document`, `Arc`/`Mutex`/`AtomicBool`/`mpsc`/`JoinHandle`) was
+dropped entirely — nothing outside the deleted block needed it.
+
+`esm.rs` lost its `rquickjs::loader::{Resolver, Loader}` impls per the
+ROADMAP line's "заодно esm.rs" clause: `LumenResolver`/`LumenLoader` structs
++ impls, `SharedPageUrl`/`ModuleRegistry`/`new_registry` (QuickJS-only
+plumbing) all deleted. `ImportMap` and the free function
+`resolve_specifier_with` — already the engine-agnostic core both engines
+called (V8's `v8_esm.rs` never used `LumenResolver` itself, only this free
+fn) — were kept unchanged; `resolve_relative`/`normalize_path` kept as their
+private helpers. 8 `LumenResolver`-based URL-resolution tests rewritten to
+call `resolve_specifier_with` directly (7 kept 1:1, `page_url_can_be_updated_
+via_shared_handle` dropped — it tested the now-deleted "late-mutable shared
+handle" mechanism, not a URL-resolution rule); 2 raw-`rquickjs::{Runtime,
+Context}` loader tests deleted outright (no free-standing replacement needed
+— `LumenLoader`'s only behaviour, `ModuleType::Json` JSON-assert validation,
+already has V8-native coverage, see below).
+
+Three more files referenced `QuickJsRuntime` and needed a decision, not just
+a mechanical rename:
+
+- `import_attributes.rs`'s 4 "End-to-end through QuickJsRuntime" tests and
+  `import_meta.rs`'s 3 "Integration: end-to-end via QuickJS" tests were
+  **deleted, not ported** — `v8_esm.rs` already has 1:1 equivalent coverage
+  (`v8_json_module_import`/`v8_invalid_json_module_fails_to_load`/
+  `v8_same_specifier_as_json_and_js_are_distinct_modules`/
+  `v8_nested_json_attribute_in_registered_module`;
+  `v8_import_meta_url_is_module_specifier`/`v8_import_meta_resolve_relative`/
+  `v8_import_meta_env_mode_is_production`), because V8 parses import
+  attributes and preprocesses `import.meta` **natively** — it never called
+  `import_attributes.rs`'s Phase-0 source-stripping preprocessor at all (see
+  `v8_esm.rs`'s own doc comment). Porting these four+three tests to
+  `V8JsRuntime` would have exercised V8's native path under a misleading
+  name while claiming to test the (QuickJS-only, now unreachable from any
+  runtime) preprocessor — pure duplication. The preprocessor's own unit
+  tests (string-transform only, no runtime) stay; `import_attributes.rs` is
+  reachable from no runtime post-F2 but is left in place (not this slice's
+  scope — `strip_import_attributes`/`ModuleTypeRegistry` are `pub`, a P5
+  dead-code-sweep candidate, not touched here). Doc comments in both files
+  and `esm.rs`'s own module doc were reworded off the dangling `QuickJsRuntime`/
+  `LumenLoader` intra-doc references.
+- `crates/js/tests/cases/indexed_db.rs` — genuinely unique coverage (IndexedDB
+  structured-backend + snapshot-blob persistence across a runtime rebuild),
+  no V8 equivalent existed. Ported 1:1: `QuickJsRuntime` → `V8JsRuntime`
+  (`install_dom` signatures are identical between the two runtimes), whole
+  file gated `#![cfg(feature = "v8-backend")]` (matching the `v8_eval.rs`/
+  `no_automation_markers.rs` precedent) since `V8JsRuntime` no longer has a
+  same-crate sibling to fall back to under default features.
+
+`cargo check -p lumen-js` (default): clean. `--features v8-backend`: clean.
+`--all-targets` clean under both. `cargo clippy -p lumen-js --all-targets --
+-D warnings`: default — identical 18-error baseline (`offscreen_canvas.rs`/
+`worker.rs`/`canvas2d.rs` dead-code, unrelated, confirmed pre-existing on the
+F1 baseline via `git stash`); `--features v8-backend` — 0 errors. `cargo test
+-p lumen-js` (default): 247→208 (-39: 28 QuickJS-only unit tests + net -3
+`esm.rs` + 4 `import_attributes.rs` + 3 `import_meta.rs` + 1 diff for a
+mis-count, see below). `--features v8-backend`: 2518→2479 lib (-39, same
+delta — none of the removed tests were feature-gated, so they counted in
+both suites) + 68 `tests/all.rs` integration tests passing (new visibility:
+`indexed_db.rs` wasn't previously reachable under the default suite's report
+since `QuickJsRuntime`-based tests lived in `lib.rs`'s own `mod tests`, not
+`tests/all.rs`), 0 failed.
+
+**Windows-MSVC linking gotcha reconfirmed, not caused by this slice:** `cargo
+test -p lumen-js --features v8-backend` fails to *link* (not compile) with
+`rust-lld` — `undefined symbol: __declspec(dllimport) fmin/fmax/hypot/...`
+from `rquickjs_sys`'s vendored QuickJS C sources. This is the pre-existing
+S1-documented CRT conflict above ("rust-lld + rquickjs + v8"), reconfirmed
+identical on the F1 baseline via `git stash` before diagnosing — F2 doesn't
+touch `rquickjs_sys`'s C build at all (only `lumen-js`'s own Rust code), so
+the conflict is unchanged; it resolves itself only when F4 removes `rquickjs`
+from `Cargo.toml` entirely. Verified this slice's actual test pass/fail via
+the documented workaround (`RUSTFLAGS="-Clinker=C:\tmp\msvc-link.bat"`).
+**Gotcha found this slice:** a stale incremental-compilation cache produced a
+*third*, misleading failure mode after the deletion — `rust-lld: undefined
+symbol ... drop_in_place<lumen_js::QuickJsRuntime>` / `esm::LumenResolver`,
+referencing types that no longer exist in source but still lived in a cached
+`.rcgu.o` object file that incremental compilation failed to invalidate.
+`cargo clean -p lumen-js` (not a full workspace clean) fixed it. If a
+post-deletion link error names a symbol you just deleted, suspect stale
+incremental output before suspecting the deletion itself.
+
+Next in queue: S12b-F3 (`dom.rs`: delete `install_primitives`, 2736 lines,
+and `use rquickjs`; `esm.rs`'s `LumenResolver`/`LumenLoader` are already gone
+as of F2, so F3's own scope note about excluding them is now moot).
+
 ---
 
 ## Risks (Rev 2)

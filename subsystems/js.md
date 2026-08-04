@@ -1,9 +1,11 @@
 # lumen-js
 
-Crate providing the `JsRuntime` implementation. **V8 (`rusty_v8` 150.1.0) is the default engine
-as of Ph3-v8-migration S12a (2026-07-14, ADR-018)** — QuickJS (`rquickjs` v0.11) remains available
-as an explicit `--features quickjs` rollback until the full `rquickjs` removal (S12b,
-`docs/tasks/ph3-v8-migration.md`).
+Crate providing the `JsRuntime` implementation. **V8 (`rusty_v8` 150.1.0) is the ONLY
+shell-reachable engine since S12b-F1 (2026-08-04) removed the `quickjs` shell feature.**
+`QuickJsRuntime` itself was deleted in S12b-F2 (2026-08-04, same day); `rquickjs` remains
+a real dependency only for `dom.rs::install_primitives` (2736 lines) until S12b-F3/F4 finish
+the removal (`docs/tasks/ph3-v8-migration.md`). Historical entries below predating F1/F2 still
+describe `QuickJsRuntime`/`--features quickjs` as they were at the time — read dates.
 
 > **Coverage note (2026-07-02):** the code wires **~90 Web-API modules**; this file curates
 > only the highlights with implementation detail. For the full shipped-API list use
@@ -11,10 +13,11 @@ as an explicit `--features quickjs` rollback until the full `rquickjs` removal (
 
 ## Scope
 
-- `QuickJsRuntime` struct: wraps `rquickjs::Runtime + Context` under a `Mutex`.
+- `V8JsRuntime` struct (`v8_runtime.rs`, `#[cfg(feature = "v8-backend")]`): owns a `rusty_v8`
+  isolate on a dedicated thread.
 - Implements `lumen_core::JsRuntime`: `eval`, `set_global`, `get_global`, `call_function`.
-- JSON-compatible value conversion: `JsValue ↔ rquickjs::Value<'js>`.
-- Shell wires it in via `features = ["quickjs"]`; without the feature `NullJsRuntime` is used.
+- Shell wires it in via `features = ["v8"]` (the crate's `v8-backend`); without the feature
+  `NullJsRuntime` is used.
 
 ## Done
 
