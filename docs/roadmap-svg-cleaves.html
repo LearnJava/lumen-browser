@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-04",
  "counts": {
-  "open": 218,
+  "open": 221,
   "fixed": 309,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 527,
+ "total_bugs": 530,
  "phases": [
   {
    "id": "P0",
@@ -8219,6 +8219,27 @@
    "component": "js (`crates/js/src/navigator_bindings.rs:213-225` -- `_screen` object literal)",
    "date": null,
    "debtor": false
+  },
+  "BUG-560": {
+   "status": "open",
+   "title": "`.focus()` only queues a focus request for the shell's \"next pump\" instead of applying it synchronously, so any same-task `getComputedStyle()`/`:focus-within` r…",
+   "component": "js/shell (`crates/js/src/dom.rs:13474` `HTMLElement.prototype.focus`; `crates/shell/src/main.rs:3048` shell focus-queue drain)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-561": {
+   "status": "open",
+   "title": "`CSS.supports()`/`@supports` check a separate, stale allowlist that lags behind the real cascade dispatch in `layout/src/style.rs` -- `anchor-name`/`position-an…",
+   "component": "css-parser (`crates/engine/css-parser/src/lib.rs:36` `SUPPORTED_PROPERTIES`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-562": {
+   "status": "open",
+   "title": "CSS Anchor Positioning's fallback mechanism (spec §4: `position-try*` properties, `@position-try` at-rule, `CSSPositionTryRule`) is entirely unimplemented -- co…",
+   "component": "css-parser/layout (no `position-try`/`position-try-fallbacks`/`position-try-order`/`@position-try` anywhere in `css-parser/src/` or `layout/src/style.rs`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -8240,6 +8261,9 @@
   ],
   "css-parser (`@mixin`/`@apply`/`@contents` не распознаются нигде, `grep -rn \"MixinRule\\": [
    "BUG-518"
+  ],
+  "css-parser (`crates/engine/css-parser/src/lib.rs:36` `SUPPORTED_PROPERTIES`)": [
+   "BUG-561"
   ],
   "css-parser (`crates/engine/css-parser/src/parser.rs:1664-1672` `MediaQuery::matches`, empty-clauses fallback)": [
    "BUG-528"
@@ -8292,6 +8316,9 @@
   ],
   "css-parser/layout (`text-decoration-fill`/`text-decoration-stroke`/`-webkit-text-stroke` не распознаются нигде, `grep -rn \"text-decoration-fill\\": [
    "BUG-521"
+  ],
+  "css-parser/layout (no `position-try`/`position-try-fallbacks`/`position-try-order`/`@position-try` anywhere in `css-parser/src/` or `layout/src/style.rs`)": [
+   "BUG-562"
   ],
   "css-parser/layout (логические свойства не распознаются нигде, `grep -n \"overscroll-behavior-block\\": [
    "BUG-516"
@@ -8601,6 +8628,9 @@
   ],
   "js/network граница (`crates/js/src/dom.rs:11353` — `_lumen_record_resource_timing`, ни одного вызова вне `dom.rs`)": [
    "BUG-520"
+  ],
+  "js/shell (`crates/js/src/dom.rs:13474` `HTMLElement.prototype.focus`; `crates/shell/src/main.rs:3048` shell focus-queue drain)": [
+   "BUG-560"
   ],
   "js/shell граница (`crates/js/src/dom.rs:6196-6205` сеттеры, `crates/js/src/v8_runtime.rs:3106` `_lumen_request_scroll`)": [
    "BUG-523"

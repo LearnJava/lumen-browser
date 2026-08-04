@@ -1,17 +1,10 @@
-/// SVG DOM API stubs (W3C SVG 2 §3, §10, §11)
-/// Phase 0: SVGElement/SVGSVGElement class hierarchy, getBBox() → DOMRect(zeros),
-/// document.createElementNS('http://www.w3.org/2000/svg', ...) patched to return
-/// typed SVG element instances. SVGRect/SVGPoint/SVGLength/SVGAnimatedLength types.
-use rquickjs::Ctx;
+//! SVG DOM API stubs (W3C SVG 2 §3, §10, §11)
+//! Phase 0: SVGElement/SVGSVGElement class hierarchy, getBBox() → DOMRect(zeros),
+//! document.createElementNS('http://www.w3.org/2000/svg', ...) patched to return
+//! typed SVG element instances. SVGRect/SVGPoint/SVGLength/SVGAnimatedLength types.
 
-/// Install SVG DOM API bindings into the JS context.
-pub fn install_svg_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(SVG_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_svg_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// Install SVG DOM API bindings into a V8 runtime (Ph3 V8 migration S5-S7;
+/// the rquickjs twin was removed in S12b-B25).
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_svg_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -19,6 +12,7 @@ pub(crate) fn install_svg_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lu
     Ok(())
 }
 
+#[cfg(feature = "v8-backend")]
 const SVG_SHIM: &str = r#"
 (function() {
   'use strict';
@@ -931,301 +925,276 @@ const SVG_SHIM: &str = r#"
 })();
 "#;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use rquickjs::{Context, Runtime};
+#[cfg(all(test, feature = "v8-backend"))]
+mod tests_v8 {
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
+    use crate::v8_runtime::V8JsRuntime;
 
     /// Install minimal DOM stubs then SVG bindings.
-    fn with_svg(f: impl FnOnce(&rquickjs::Ctx)) {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            // Minimal browser globals used by the SVG shim
-            ctx.eval::<(), _>(r#"
-                var window = globalThis;
-                // Minimal Element stub (SVGElement extends it)
-                class Element {
-                    constructor() {
-                        this.attributes = {};
-                        this.children = [];
-                        this.childNodes = [];
-                    }
-                    getAttribute(n) { return this.attributes[n] || null; }
-                    setAttribute(n, v) { this.attributes[n] = v; }
-                    removeAttribute(n) { delete this.attributes[n]; }
-                    hasAttribute(n) { return n in this.attributes; }
-                    appendChild(c) { this.children.push(c); return c; }
-                    addEventListener() {}
-                    removeEventListener() {}
-                    dispatchEvent() { return true; }
+    fn with_svg() -> V8JsRuntime {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(r#"
+            var window = globalThis;
+            // Minimal Element stub (SVGElement extends it)
+            class Element {
+                constructor() {
+                    this.attributes = {};
+                    this.children = [];
+                    this.childNodes = [];
                 }
-                window.Element = Element;
-                // Minimal document with createElementNS
-                var document = {
-                    createElementNS: function(ns, tag) { return new Element(); }
-                };
-                globalThis.document = document;
-                window.document = document;
-            "#).unwrap();
-            install_svg_bindings(&ctx).unwrap();
-            f(&ctx);
-        });
+                getAttribute(n) { return this.attributes[n] || null; }
+                setAttribute(n, v) { this.attributes[n] = v; }
+                removeAttribute(n) { delete this.attributes[n]; }
+                hasAttribute(n) { return n in this.attributes; }
+                appendChild(c) { this.children.push(c); return c; }
+                addEventListener() {}
+                removeEventListener() {}
+                dispatchEvent() { return true; }
+            }
+            window.Element = Element;
+            // Minimal document with createElementNS
+            var document = {
+                createElementNS: function(ns, tag) { return new Element(); }
+            };
+            globalThis.document = document;
+            window.document = document;
+        "#).unwrap();
+        super::install_svg_bindings_v8(&rt).unwrap();
+        rt
+    }
+
+    fn bool_eval(rt: &V8JsRuntime, expr: &str) -> bool {
+        matches!(rt.eval(expr).unwrap(), JsValue::Bool(true))
     }
 
     #[test]
     fn svg_element_class_exists() {
-        with_svg(|ctx| {
-            let ok: bool = ctx.eval("typeof window.SVGElement === 'function'").unwrap();
-            assert!(ok);
-        });
+        let rt = with_svg();
+        assert!(bool_eval(&rt, "typeof window.SVGElement === 'function'"));
     }
 
     #[test]
     fn svg_svg_element_class_exists() {
-        with_svg(|ctx| {
-            let ok: bool = ctx.eval("typeof window.SVGSVGElement === 'function'").unwrap();
-            assert!(ok);
-        });
+        let rt = with_svg();
+        assert!(bool_eval(&rt, "typeof window.SVGSVGElement === 'function'"));
     }
 
     #[test]
     fn svg_graphics_element_get_bbox_returns_rect() {
-        with_svg(|ctx| {
-            let ok: bool = ctx.eval(r#"
-                const el = new SVGGraphicsElement();
-                const bb = el.getBBox();
-                bb instanceof SVGRect && bb.x === 0 && bb.y === 0 &&
-                bb.width === 0 && bb.height === 0
-            "#).unwrap();
-            assert!(ok);
-        });
+        let rt = with_svg();
+        let ok = bool_eval(&rt, r#"
+            const el = new SVGGraphicsElement();
+            const bb = el.getBBox();
+            bb instanceof SVGRect && bb.x === 0 && bb.y === 0 &&
+            bb.width === 0 && bb.height === 0
+        "#);
+        assert!(ok);
     }
 
     #[test]
     fn svg_rect_element_has_dimensions() {
-        with_svg(|ctx| {
-            let ok: bool = ctx.eval(r#"
-                const r = new SVGRectElement();
-                r.x instanceof SVGAnimatedLength &&
-                r.y instanceof SVGAnimatedLength &&
-                r.width instanceof SVGAnimatedLength &&
-                r.height instanceof SVGAnimatedLength
-            "#).unwrap();
-            assert!(ok);
-        });
+        let rt = with_svg();
+        let ok = bool_eval(&rt, r#"
+            const r = new SVGRectElement();
+            r.x instanceof SVGAnimatedLength &&
+            r.y instanceof SVGAnimatedLength &&
+            r.width instanceof SVGAnimatedLength &&
+            r.height instanceof SVGAnimatedLength
+        "#);
+        assert!(ok);
     }
 
     #[test]
     fn svg_circle_element_has_cx_cy_r() {
-        with_svg(|ctx| {
-            let ok: bool = ctx.eval(r#"
-                const c = new SVGCircleElement();
-                c.cx instanceof SVGAnimatedLength &&
-                c.cy instanceof SVGAnimatedLength &&
-                c.r  instanceof SVGAnimatedLength
-            "#).unwrap();
-            assert!(ok);
-        });
+        let rt = with_svg();
+        let ok = bool_eval(&rt, r#"
+            const c = new SVGCircleElement();
+            c.cx instanceof SVGAnimatedLength &&
+            c.cy instanceof SVGAnimatedLength &&
+            c.r  instanceof SVGAnimatedLength
+        "#);
+        assert!(ok);
     }
 
     #[test]
     fn svg_path_element_has_get_total_length() {
-        with_svg(|ctx| {
-            let ok: bool = ctx.eval(r#"
-                const p = new SVGPathElement();
-                typeof p.getTotalLength === 'function' && p.getTotalLength() === 0
-            "#).unwrap();
-            assert!(ok);
-        });
+        let rt = with_svg();
+        let ok = bool_eval(&rt, r#"
+            const p = new SVGPathElement();
+            typeof p.getTotalLength === 'function' && p.getTotalLength() === 0
+        "#);
+        assert!(ok);
     }
 
     #[test]
     fn svg_svg_element_create_svg_rect() {
-        with_svg(|ctx| {
-            let ok: bool = ctx.eval(r#"
-                const svg = new SVGSVGElement();
-                const r = svg.createSVGRect();
-                r instanceof SVGRect
-            "#).unwrap();
-            assert!(ok);
-        });
+        let rt = with_svg();
+        let ok = bool_eval(&rt, r#"
+            const svg = new SVGSVGElement();
+            const r = svg.createSVGRect();
+            r instanceof SVGRect
+        "#);
+        assert!(ok);
     }
 
     #[test]
     fn svg_svg_element_create_svg_point() {
-        with_svg(|ctx| {
-            let ok: bool = ctx.eval(r#"
-                const svg = new SVGSVGElement();
-                const p = svg.createSVGPoint();
-                p instanceof SVGPoint && p.x === 0 && p.y === 0
-            "#).unwrap();
-            assert!(ok);
-        });
+        let rt = with_svg();
+        let ok = bool_eval(&rt, r#"
+            const svg = new SVGSVGElement();
+            const p = svg.createSVGPoint();
+            p instanceof SVGPoint && p.x === 0 && p.y === 0
+        "#);
+        assert!(ok);
     }
 
     #[test]
     fn svg_matrix_multiply_identity() {
-        with_svg(|ctx| {
-            let ok: bool = ctx.eval(r#"
-                const a = new SVGMatrix();
-                const b = new SVGMatrix();
-                const c = a.multiply(b);
-                c instanceof SVGMatrix && c.a === 1 && c.d === 1 &&
-                c.b === 0 && c.c === 0 && c.e === 0 && c.f === 0
-            "#).unwrap();
-            assert!(ok);
-        });
+        let rt = with_svg();
+        let ok = bool_eval(&rt, r#"
+            const a = new SVGMatrix();
+            const b = new SVGMatrix();
+            const c = a.multiply(b);
+            c instanceof SVGMatrix && c.a === 1 && c.d === 1 &&
+            c.b === 0 && c.c === 0 && c.e === 0 && c.f === 0
+        "#);
+        assert!(ok);
     }
 
     #[test]
     fn svg_transform_set_translate() {
-        with_svg(|ctx| {
-            let ok: bool = ctx.eval(r#"
-                const t = new SVGTransform();
-                t.setTranslate(10, 20);
-                t.type === 2 && t.matrix.e === 10 && t.matrix.f === 20
-            "#).unwrap();
-            assert!(ok);
-        });
+        let rt = with_svg();
+        let ok = bool_eval(&rt, r#"
+            const t = new SVGTransform();
+            t.setTranslate(10, 20);
+            t.type === 2 && t.matrix.e === 10 && t.matrix.f === 20
+        "#);
+        assert!(ok);
     }
 
     #[test]
     fn svg_create_element_ns_returns_typed_element() {
-        with_svg(|ctx| {
-            let ok: bool = ctx.eval(r#"
-                const el = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-                el instanceof SVGCircleElement
-            "#).unwrap();
-            assert!(ok);
-        });
+        let rt = with_svg();
+        let ok = bool_eval(&rt, r#"
+            const el = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+            el instanceof SVGCircleElement
+        "#);
+        assert!(ok);
     }
 
     #[test]
     fn svg_create_element_ns_svg_returns_svg_svg_element() {
-        with_svg(|ctx| {
-            let ok: bool = ctx.eval(r#"
-                const el = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-                el instanceof SVGSVGElement
-            "#).unwrap();
-            assert!(ok);
-        });
+        let rt = with_svg();
+        let ok = bool_eval(&rt, r#"
+            const el = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            el instanceof SVGSVGElement
+        "#);
+        assert!(ok);
     }
 
     #[test]
     fn svg_create_element_ns_unknown_tag_returns_svg_element() {
-        with_svg(|ctx| {
-            let ok: bool = ctx.eval(r#"
-                const el = document.createElementNS('http://www.w3.org/2000/svg', 'unknown-tag');
-                el instanceof SVGElement
-            "#).unwrap();
-            assert!(ok);
-        });
+        let rt = with_svg();
+        let ok = bool_eval(&rt, r#"
+            const el = document.createElementNS('http://www.w3.org/2000/svg', 'unknown-tag');
+            el instanceof SVGElement
+        "#);
+        assert!(ok);
     }
 
     #[test]
     fn svg_point_matrix_transform() {
-        with_svg(|ctx| {
-            let ok: bool = ctx.eval(r#"
-                const p = new SVGPoint(3, 4);
-                const m = new SVGMatrix(2, 0, 0, 2, 1, 1); // scale(2) + translate(1,1)
-                const p2 = p.matrixTransform(m);
-                p2.x === 7 && p2.y === 9
-            "#).unwrap();
-            assert!(ok);
-        });
+        let rt = with_svg();
+        let ok = bool_eval(&rt, r#"
+            const p = new SVGPoint(3, 4);
+            const m = new SVGMatrix(2, 0, 0, 2, 1, 1); // scale(2) + translate(1,1)
+            const p2 = p.matrixTransform(m);
+            p2.x === 7 && p2.y === 9
+        "#);
+        assert!(ok);
     }
 
     #[test]
     fn svg_length_unit_types() {
-        with_svg(|ctx| {
-            let ok: bool = ctx.eval(r#"
-                SVGLength.SVG_LENGTHTYPE_NUMBER === 1 &&
-                SVGLength.SVG_LENGTHTYPE_PX     === 5 &&
-                SVGLength.SVG_LENGTHTYPE_PERCENTAGE === 2
-            "#).unwrap();
-            assert!(ok);
-        });
+        let rt = with_svg();
+        let ok = bool_eval(&rt, r#"
+            SVGLength.SVG_LENGTHTYPE_NUMBER === 1 &&
+            SVGLength.SVG_LENGTHTYPE_PX     === 5 &&
+            SVGLength.SVG_LENGTHTYPE_PERCENTAGE === 2
+        "#);
+        assert!(ok);
     }
 
     #[test]
     fn svg_animated_transform_list_consolidate() {
-        with_svg(|ctx| {
-            let ok: bool = ctx.eval(r#"
-                const atl = new SVGAnimatedTransformList();
-                const t = new SVGTransform();
-                t.setTranslate(5, 0);
-                atl.baseVal.appendItem(t);
-                const c = atl.baseVal.consolidate();
-                c instanceof SVGTransform && c.matrix.e === 5
-            "#).unwrap();
-            assert!(ok);
-        });
+        let rt = with_svg();
+        let ok = bool_eval(&rt, r#"
+            const atl = new SVGAnimatedTransformList();
+            const t = new SVGTransform();
+            t.setTranslate(5, 0);
+            atl.baseVal.appendItem(t);
+            const c = atl.baseVal.consolidate();
+            c instanceof SVGTransform && c.matrix.e === 5
+        "#);
+        assert!(ok);
     }
 
     #[test]
     fn svg_linear_gradient_element_x1_x2() {
-        with_svg(|ctx| {
-            let ok: bool = ctx.eval(r#"
-                const lg = new SVGLinearGradientElement();
-                lg.x1 instanceof SVGAnimatedLength &&
-                lg.x2 instanceof SVGAnimatedLength &&
-                lg.x2.baseVal.value === 100
-            "#).unwrap();
-            assert!(ok);
-        });
+        let rt = with_svg();
+        let ok = bool_eval(&rt, r#"
+            const lg = new SVGLinearGradientElement();
+            lg.x1 instanceof SVGAnimatedLength &&
+            lg.x2 instanceof SVGAnimatedLength &&
+            lg.x2.baseVal.value === 100
+        "#);
+        assert!(ok);
     }
 
     #[test]
     fn svg_filter_element_exists() {
-        with_svg(|ctx| {
-            let ok: bool = ctx.eval(r#"
-                const f = new SVGFilterElement();
-                typeof f.filterUnits === 'object' && f.tagName === 'filter'
-            "#).unwrap();
-            assert!(ok);
-        });
+        let rt = with_svg();
+        let ok = bool_eval(&rt, r#"
+            const f = new SVGFilterElement();
+            typeof f.filterUnits === 'object' && f.tagName === 'filter'
+        "#);
+        assert!(ok);
     }
 
     #[test]
     fn svg_text_element_get_number_of_chars() {
-        with_svg(|ctx| {
-            let ok: bool = ctx.eval(r#"
-                const t = new SVGTextElement();
-                t.getNumberOfChars() === 0 && t.getComputedTextLength() === 0
-            "#).unwrap();
-            assert!(ok);
-        });
+        let rt = with_svg();
+        let ok = bool_eval(&rt, r#"
+            const t = new SVGTextElement();
+            t.getNumberOfChars() === 0 && t.getComputedTextLength() === 0
+        "#);
+        assert!(ok);
     }
 
     #[test]
     fn svg_classes_on_window() {
-        with_svg(|ctx| {
-            let ok: bool = ctx.eval(r#"
-                typeof window.SVGRectElement       === 'function' &&
-                typeof window.SVGCircleElement     === 'function' &&
-                typeof window.SVGPathElement       === 'function' &&
-                typeof window.SVGLineElement       === 'function' &&
-                typeof window.SVGPolygonElement    === 'function' &&
-                typeof window.SVGPolylineElement   === 'function' &&
-                typeof window.SVGTextElement       === 'function' &&
-                typeof window.SVGGElement          === 'function' &&
-                typeof window.SVGDefsElement       === 'function' &&
-                typeof window.SVGUseElement        === 'function' &&
-                typeof window.SVGImageElement      === 'function' &&
-                typeof window.SVGClipPathElement   === 'function' &&
-                typeof window.SVGMaskElement       === 'function' &&
-                typeof window.SVGLinearGradientElement === 'function' &&
-                typeof window.SVGRadialGradientElement === 'function' &&
-                typeof window.SVGFilterElement     === 'function' &&
-                typeof window.SVGMarkerElement     === 'function'
-            "#).unwrap();
-            assert!(ok);
-        });
+        let rt = with_svg();
+        let ok = bool_eval(&rt, r#"
+            typeof window.SVGRectElement       === 'function' &&
+            typeof window.SVGCircleElement     === 'function' &&
+            typeof window.SVGPathElement       === 'function' &&
+            typeof window.SVGLineElement       === 'function' &&
+            typeof window.SVGPolygonElement    === 'function' &&
+            typeof window.SVGPolylineElement   === 'function' &&
+            typeof window.SVGTextElement       === 'function' &&
+            typeof window.SVGGElement          === 'function' &&
+            typeof window.SVGDefsElement       === 'function' &&
+            typeof window.SVGUseElement        === 'function' &&
+            typeof window.SVGImageElement      === 'function' &&
+            typeof window.SVGClipPathElement   === 'function' &&
+            typeof window.SVGMaskElement       === 'function' &&
+            typeof window.SVGLinearGradientElement === 'function' &&
+            typeof window.SVGRadialGradientElement === 'function' &&
+            typeof window.SVGFilterElement     === 'function' &&
+            typeof window.SVGMarkerElement     === 'function'
+        "#);
+        assert!(ok);
     }
 }

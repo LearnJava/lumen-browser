@@ -3416,6 +3416,36 @@ Next in queue: S12b-B25 (`svg`, Полоса 3 eleventh batch).
 
 ---
 
+### S12b-B25: svg (Полоса 3, 11/12)
+
+`svg.rs`'s V8 port (`install_svg_bindings_v8`) already existed (Ph3 S5-S7) —
+SVG DOM stubs (`SVGElement`/`SVGSVGElement` hierarchy, `SVGRect`/`SVGPoint`/
+`SVGLength`/`SVGMatrix` value types, `createElementNS` wiring), pure JS, no
+native bindings. This batch reduced to deleting `install_svg_bindings`
+(rquickjs, the one-line `ctx.eval` wrapper) + `use rquickjs::Ctx`, one call
+site in `lib.rs` (`QuickJsRuntime::install_dom`, the "W3C SVG 2" block), and
+porting all 20 `mod tests` to a new `tests_v8` module (same helper-fn pattern
+as B20-B24). `SVG_SHIM` gated under `#[cfg(feature = "v8-backend")]` (same
+reason as B20-B24: dead_code under the default no-`v8-backend` build otherwise
+fails `-D warnings`); the leading module doc comment had to switch from `///`
+to `//!` in the same edit — clippy's `empty_line_after_doc_comments` fires
+once the `///` block is no longer immediately followed by the item it used to
+attach to (`install_svg_bindings`, now deleted), since it then reads as
+documenting `install_svg_bindings_v8` with a blank line in between.
+
+No bridge bugs found.
+
+`cargo test -p lumen-js --features v8-backend`: 2576 lib (unchanged — 20 new
+`tests_v8` tests exactly replace the 20 old rquickjs `mod tests` tests).
+`cargo test -p lumen-js` (default): 505 lib (down from 525, -20). Both clippy
+passes (default and `--features v8-backend`) clean; `lumen-shell` checked
+clean under default (`v8`) and `--no-default-features --features
+backend-femtovg,quickjs` (pure rollback build).
+
+Next in queue: S12b-B26 (`offscreen_canvas`, Полоса 3 twelfth batch).
+
+---
+
 ## Risks (Rev 2)
 
 | Risk | Likelihood | Mitigation |
