@@ -10,18 +10,23 @@
 //! `_lumen_periodic_sync_unregister(tag)` are no-ops prepared for
 //! shell Phase 1 (OS task scheduler integration).
 
-use rquickjs::Ctx;
-
-/// Install the Periodic Background Sync API stub into the JS context.
+/// V8 port of the former rquickjs `init_periodic_sync` (Ph3 V8 migration
+/// S12b-G2, rquickjs side removed in the same batch): identical JS shim,
+/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 ///
 /// Defines `PeriodicSyncManager` class on `ServiceWorkerRegistration.prototype`.
 /// Must be called after worker registration and Promise are available.
-pub fn init_periodic_sync(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(PERIODIC_SYNC_SHIM)?;
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_periodic_sync_v8(
+    rt: &crate::v8_runtime::V8JsRuntime,
+) -> lumen_core::JsResult<()> {
+    use lumen_core::ext::JsRuntime as _;
+    rt.eval(PERIODIC_SYNC_SHIM)?;
     Ok(())
 }
 
 /// JavaScript shim implementing W3C Periodic Background Sync (Phase 0).
+#[cfg(feature = "v8-backend")]
 const PERIODIC_SYNC_SHIM: &str = r#"(function() {
   // PeriodicSyncManager — manages periodic sync registrations per ServiceWorkerRegistration.
   var PeriodicSyncManager = function(registration) {
@@ -81,84 +86,69 @@ const PERIODIC_SYNC_SHIM: &str = r#"(function() {
   globalThis.PeriodicSyncManager = PeriodicSyncManager;
 })();"#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
-    use rquickjs::{Context, Runtime};
+    use super::*;
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().expect("Runtime::new");
-        let ctx = Context::full(&rt).expect("Context::full");
-        (rt, ctx)
-    }
-
-    fn install_stubs(ctx: &rquickjs::Ctx) {
-        ctx.eval::<(), _>(
-            "globalThis.ServiceWorkerRegistration = function() {}; \
-             globalThis.TypeError = TypeError;",
-        )
-        .expect("install stubs");
+    fn with_periodic_sync(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval("var ServiceWorkerRegistration = function() {};")
+            .unwrap();
+        install_periodic_sync_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
-    fn test_periodic_sync_manager_exists() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_periodic_sync(&ctx).expect("init");
-            let result: String = ctx
+    fn periodic_sync_manager_exists() {
+        with_periodic_sync(|rt| {
+            let result = rt
                 .eval("typeof PeriodicSyncManager === 'function' ? 'exists' : 'missing'")
-                .expect("eval");
-            assert_eq!(result, "exists");
+                .unwrap();
+            assert_eq!(result, JsValue::String("exists".to_string()));
         });
     }
 
     #[test]
-    fn test_register_returns_promise() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_periodic_sync(&ctx).expect("init");
-            let result: String = ctx
+    fn register_returns_promise() {
+        with_periodic_sync(|rt| {
+            let result = rt
                 .eval(
                     "var pm = new PeriodicSyncManager({}); \
                      typeof pm.register('news', {minInterval: 86400000}) === 'object' \
                        ? 'promise' : 'not_promise'",
                 )
-                .expect("eval");
-            assert_eq!(result, "promise");
+                .unwrap();
+            assert_eq!(result, JsValue::String("promise".to_string()));
         });
     }
 
     #[test]
-    fn test_unregister_returns_promise() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_periodic_sync(&ctx).expect("init");
-            let result: String = ctx
+    fn unregister_returns_promise() {
+        with_periodic_sync(|rt| {
+            let result = rt
                 .eval(
                     "var pm = new PeriodicSyncManager({}); \
                      pm.register('news', {minInterval: 3600000}); \
                      typeof pm.unregister('news') === 'object' ? 'promise' : 'not_promise'",
                 )
-                .expect("eval");
-            assert_eq!(result, "promise");
+                .unwrap();
+            assert_eq!(result, JsValue::String("promise".to_string()));
         });
     }
 
     #[test]
-    fn test_get_tags_returns_promise() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_periodic_sync(&ctx).expect("init");
-            let result: String = ctx
+    fn get_tags_returns_promise() {
+        with_periodic_sync(|rt| {
+            let result = rt
                 .eval(
                     "var pm = new PeriodicSyncManager({}); \
                      typeof pm.getTags() === 'object' ? 'promise' : 'not_promise'",
                 )
-                .expect("eval");
-            assert_eq!(result, "promise");
+                .unwrap();
+            assert_eq!(result, JsValue::String("promise".to_string()));
         });
     }
 }

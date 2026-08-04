@@ -3746,6 +3746,44 @@ gated.
 
 ---
 
+### S12b-G2: `periodic_sync`, `storage_buckets` (2026-08-04, branch `p1-s12b-g2`)
+
+Second group G batch, same "no natives" fast path as G1. Both modules are
+pure `ctx.eval(SHIM)` Phase-0 stubs — `periodic_sync.rs` references two
+natives (`_lumen_periodic_sync_register`/`_lumen_periodic_sync_unregister`)
+behind a `typeof … === 'function'` guard that never resolves (grep confirms
+neither is registered on either engine), ported as-is; `storage_buckets.rs`
+has no natives at all. Port: `rquickjs::Ctx::eval` → `lumen_core::ext::
+JsRuntime::eval`, install fn + shim const gated `#[cfg(feature =
+"v8-backend")]`, registered via `install_v8!` in `v8_runtime.rs::install_dom`
+(`periodic_sync` before `permissions_policy`, `storage_buckets` before
+`storage_manager`), rquickjs `init_*` call sites removed from
+`lib.rs::install_dom` (`periodic_sync` was at `lib.rs:786`, `storage_buckets`
+at `:808`). 12 tests (4 periodic_sync + 8 storage_buckets) ported to
+`#[cfg(all(test, feature = "v8-backend"))]` against bare `V8JsRuntime::new()`
+— `periodic_sync` with a local `ServiceWorkerRegistration` stub (mirrors
+`background_sync`'s G1 harness), `storage_buckets` with no stubs at all since
+its existing test suite only exercised `StorageBucketManager` directly
+(never through `navigator.storageBuckets`), so the `typeof navigator/window
+!== 'undefined'` branches in the shim simply no-op under the bare runtime —
+same as before the port. No bridge bugs found. Closes 2 more of the 7 modules
+tracked by [BUG-549](../../bugs/BUG-549-OPEN.md) (4/7 done; remaining 3 —
+`push_api`/`background_fetch`/`payment_request`/`media_stream_recording` are
+G3/G4 — bug stays OPEN until all 7 land). `storage_buckets.rs` is also one of
+the two modules named in BUG-547 (CAPABILITIES.md overclaim) — the overclaim
+itself is not corrected by this batch, only the underlying V8 gap.
+
+`cargo test -p lumen-js --features v8-backend`: +12 new module tests.
+`cargo test -p lumen-js` (default, no features): 367→355 lib (-12, the ported
+rquickjs tests removed). `cargo clippy -p lumen-js --all-targets --features
+v8-backend -- -D warnings` clean. `cargo clippy -p lumen-js --all-targets --
+-D warnings` (no features): identical 18-error baseline to pre-batch main
+(`offscreen_canvas.rs`/`worker.rs`/`canvas2d.rs`, verified byte-for-byte
+against main before this batch) — zero new errors from `periodic_sync.rs`/
+`storage_buckets.rs`.
+
+---
+
 ## Risks (Rev 2)
 
 | Risk | Likelihood | Mitigation |

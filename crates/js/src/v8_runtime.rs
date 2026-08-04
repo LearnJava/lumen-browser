@@ -4244,6 +4244,7 @@ impl V8JsRuntime {
             eprintln!("v8: notifications_bindings::install_notifications_bindings_v8 failed: {e}");
         }
         install_v8!(paint_worklet::install_paint_worklet_api_v8);
+        install_v8!(periodic_sync::install_periodic_sync_v8);
         install_v8!(permissions_policy::install_permissions_policy_bindings_v8);
         install_v8!(pip_bindings::install_pip_bindings_v8);
         // W3C Pointer Events Level 3 §4.1 — takes `pointer_capture_nid` by ref since the
@@ -4269,6 +4270,7 @@ impl V8JsRuntime {
         install_v8!(soft_navigation::install_soft_navigation_api_v8);
         install_v8!(speculation_rules::install_speculation_rules_api_v8);
         install_v8!(speech::install_speech_bindings_v8);
+        install_v8!(storage_buckets::install_storage_buckets_v8);
         install_v8!(storage_manager::install_storage_manager_bindings_v8);
         install_v8!(surface_api::install_surface_api_protection_v8);
         install_v8!(svg::install_svg_bindings_v8);
