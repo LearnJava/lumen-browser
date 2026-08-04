@@ -23,23 +23,22 @@
 //! epoch) is approximate. This is acceptable for Phase 1; a BigInt-backed
 //! implementation can be substituted later without changing the public API.
 //!
-//! Installed as the last step in [`crate::QuickJsRuntime::install_dom`] so that
-//! `window.Temporal` is available alongside `globalThis.Temporal`.
+//! **V8 note (S12b-B24):** V8 ships a native, spec-conformant `Temporal`
+//! implementation, so the shim's own defer-to-native guard
+//! (`if (global.Temporal.PlainDate) return;`) always bails under the V8
+//! backend — this module is effectively unreachable dead code there today,
+//! kept only as documentation of the API surface and as a fallback should a
+//! future embedding lack native Temporal. Native `Temporal` differs from this
+//! shim in a few places the test suite had to account for: no standalone
+//! `Temporal.TimeZone` constructor (offsets are read off `ZonedDateTime`
+//! instead), and `PlainMonthDay` exposes `.monthCode` (calendar-relative
+//! string, e.g. `"M06"`) rather than this shim's simplified numeric `.month`.
 
-use rquickjs::Ctx;
-
-/// Install the Temporal API shim into the given QuickJS context.
+/// Install the Temporal API shim into a V8 runtime (Ph3 V8 migration S5-S7;
+/// the rquickjs twin was removed in S12b-B24).
 ///
 /// No-op when `globalThis.Temporal` already exists (future-proof for a
-/// native QuickJS Temporal implementation). Must run after the DOM is
-/// installed so that `window` is available for re-export.
-pub fn install_temporal_api(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(TEMPORAL_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_temporal_api`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// native Temporal implementation).
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_temporal_api_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -48,6 +47,7 @@ pub(crate) fn install_temporal_api_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lu
 }
 
 /// Pure-JS TC39 Temporal shim. See module docs for scope.
+#[cfg(feature = "v8-backend")]
 const TEMPORAL_SHIM: &str = r#"(function(global) {
   'use strict';
   // Skip if a native Temporal implementation already exists.
@@ -883,344 +883,272 @@ const TEMPORAL_SHIM: &str = r#"(function(global) {
 })(typeof globalThis !== 'undefined' ? globalThis : this);
 "#;
 
-#[cfg(test)]
-mod tests {
-    use rquickjs::{Context, Runtime};
+#[cfg(all(test, feature = "v8-backend"))]
+mod tests_v8 {
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn setup() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        ctx.with(|ctx| {
-            super::install_temporal_api(&ctx).unwrap();
-        });
-        (rt, ctx)
+    use crate::v8_runtime::V8JsRuntime;
+
+    fn setup() -> V8JsRuntime {
+        let rt = V8JsRuntime::new().unwrap();
+        super::install_temporal_api_v8(&rt).unwrap();
+        rt
+    }
+
+    fn bool_eval(rt: &V8JsRuntime, expr: &str) -> bool {
+        matches!(rt.eval(expr).unwrap(), JsValue::Bool(true))
+    }
+
+    fn string_eval(rt: &V8JsRuntime, expr: &str) -> String {
+        match rt.eval(expr).unwrap() {
+            JsValue::String(s) => s,
+            other => panic!("expected string, got {other:?}"),
+        }
+    }
+
+    fn number_eval(rt: &V8JsRuntime, expr: &str) -> f64 {
+        match rt.eval(expr).unwrap() {
+            JsValue::Number(n) => n,
+            other => panic!("expected number, got {other:?}"),
+        }
     }
 
     #[test]
     fn temporal_namespace_exists() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let v: bool = ctx.eval("typeof Temporal !== 'undefined'").unwrap();
-            assert!(v);
-            let v: bool = ctx.eval("typeof Temporal.Now !== 'undefined'").unwrap();
-            assert!(v);
-        });
-        drop(ctx); drop(rt);
+        let rt = setup();
+        assert!(bool_eval(&rt, "typeof Temporal !== 'undefined'"));
+        assert!(bool_eval(&rt, "typeof Temporal.Now !== 'undefined'"));
     }
 
     #[test]
     fn plain_date_from_string() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let year: i32 = ctx.eval("Temporal.PlainDate.from('2024-03-15').year").unwrap();
-            assert_eq!(year, 2024);
-            let month: i32 = ctx.eval("Temporal.PlainDate.from('2024-03-15').month").unwrap();
-            assert_eq!(month, 3);
-            let day: i32 = ctx.eval("Temporal.PlainDate.from('2024-03-15').day").unwrap();
-            assert_eq!(day, 15);
-        });
-        drop(ctx); drop(rt);
+        let rt = setup();
+        assert_eq!(number_eval(&rt, "Temporal.PlainDate.from('2024-03-15').year"), 2024.0);
+        assert_eq!(number_eval(&rt, "Temporal.PlainDate.from('2024-03-15').month"), 3.0);
+        assert_eq!(number_eval(&rt, "Temporal.PlainDate.from('2024-03-15').day"), 15.0);
     }
 
     #[test]
     fn plain_date_to_string() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let s: String = ctx.eval("Temporal.PlainDate.from('2024-03-15').toString()").unwrap();
-            assert_eq!(s, "2024-03-15");
-        });
-        drop(ctx); drop(rt);
+        let rt = setup();
+        assert_eq!(string_eval(&rt, "Temporal.PlainDate.from('2024-03-15').toString()"), "2024-03-15");
     }
 
     #[test]
     fn plain_date_add_duration() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let s: String = ctx.eval("Temporal.PlainDate.from('2024-01-31').add({ months: 1 }).toString()").unwrap();
-            // Jan 31 + 1 month = Feb 29 (2024 is a leap year) or Feb 28
-            assert!(s == "2024-02-29" || s == "2024-02-28");
-        });
-        drop(ctx); drop(rt);
+        let rt = setup();
+        let s = string_eval(&rt, "Temporal.PlainDate.from('2024-01-31').add({ months: 1 }).toString()");
+        // Jan 31 + 1 month = Feb 29 (2024 is a leap year) or Feb 28
+        assert!(s == "2024-02-29" || s == "2024-02-28");
     }
 
     #[test]
     fn plain_date_subtract_duration() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let s: String = ctx.eval("Temporal.PlainDate.from('2024-03-15').subtract({ days: 5 }).toString()").unwrap();
-            assert_eq!(s, "2024-03-10");
-        });
-        drop(ctx); drop(rt);
+        let rt = setup();
+        assert_eq!(
+            string_eval(&rt, "Temporal.PlainDate.from('2024-03-15').subtract({ days: 5 }).toString()"),
+            "2024-03-10"
+        );
     }
 
     #[test]
     fn plain_date_compare() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let cmp: i32 = ctx.eval("Temporal.PlainDate.compare('2024-01-01', '2024-12-31')").unwrap();
-            assert_eq!(cmp, -1);
-            let cmp: i32 = ctx.eval("Temporal.PlainDate.compare('2024-03-15', '2024-03-15')").unwrap();
-            assert_eq!(cmp, 0);
-        });
-        drop(ctx); drop(rt);
+        let rt = setup();
+        assert_eq!(number_eval(&rt, "Temporal.PlainDate.compare('2024-01-01', '2024-12-31')"), -1.0);
+        assert_eq!(number_eval(&rt, "Temporal.PlainDate.compare('2024-03-15', '2024-03-15')"), 0.0);
     }
 
     #[test]
     fn plain_date_since() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let days: i32 = ctx.eval("Temporal.PlainDate.from('2024-03-20').since('2024-03-10').days").unwrap();
-            assert_eq!(days, 10);
-        });
-        drop(ctx); drop(rt);
+        let rt = setup();
+        assert_eq!(number_eval(&rt, "Temporal.PlainDate.from('2024-03-20').since('2024-03-10').days"), 10.0);
     }
 
     #[test]
     fn plain_date_leap_year() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let leap: bool = ctx.eval("Temporal.PlainDate.from('2024-01-01').inLeapYear").unwrap();
-            assert!(leap);
-            let no_leap: bool = ctx.eval("Temporal.PlainDate.from('2023-01-01').inLeapYear").unwrap();
-            assert!(!no_leap);
-        });
-        drop(ctx); drop(rt);
+        let rt = setup();
+        assert!(bool_eval(&rt, "Temporal.PlainDate.from('2024-01-01').inLeapYear"));
+        assert!(!bool_eval(&rt, "Temporal.PlainDate.from('2023-01-01').inLeapYear"));
     }
 
     #[test]
     fn plain_time_from_string() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let h: i32 = ctx.eval("Temporal.PlainTime.from('14:30:00').hour").unwrap();
-            assert_eq!(h, 14);
-            let m: i32 = ctx.eval("Temporal.PlainTime.from('14:30:00').minute").unwrap();
-            assert_eq!(m, 30);
-        });
-        drop(ctx); drop(rt);
+        let rt = setup();
+        assert_eq!(number_eval(&rt, "Temporal.PlainTime.from('14:30:00').hour"), 14.0);
+        assert_eq!(number_eval(&rt, "Temporal.PlainTime.from('14:30:00').minute"), 30.0);
     }
 
     #[test]
     fn plain_time_to_string() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let s: String = ctx.eval("Temporal.PlainTime.from('09:05:03').toString()").unwrap();
-            assert_eq!(s, "09:05:03");
-        });
-        drop(ctx); drop(rt);
+        let rt = setup();
+        assert_eq!(string_eval(&rt, "Temporal.PlainTime.from('09:05:03').toString()"), "09:05:03");
     }
 
     #[test]
     fn plain_datetime_from_string() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let s: String = ctx.eval("Temporal.PlainDateTime.from('2024-03-15T14:30:00').toString()").unwrap();
-            assert_eq!(s, "2024-03-15T14:30:00");
-        });
-        drop(ctx); drop(rt);
+        let rt = setup();
+        assert_eq!(
+            string_eval(&rt, "Temporal.PlainDateTime.from('2024-03-15T14:30:00').toString()"),
+            "2024-03-15T14:30:00"
+        );
     }
 
     #[test]
     fn duration_from_string() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let y: i32 = ctx.eval("Temporal.Duration.from('P1Y2M3DT4H5M6S').years").unwrap();
-            assert_eq!(y, 1);
-            let m: i32 = ctx.eval("Temporal.Duration.from('P1Y2M3DT4H5M6S').months").unwrap();
-            assert_eq!(m, 2);
-            let d: i32 = ctx.eval("Temporal.Duration.from('P1Y2M3DT4H5M6S').days").unwrap();
-            assert_eq!(d, 3);
-            let h: i32 = ctx.eval("Temporal.Duration.from('P1Y2M3DT4H5M6S').hours").unwrap();
-            assert_eq!(h, 4);
-        });
-        drop(ctx); drop(rt);
+        let rt = setup();
+        assert_eq!(number_eval(&rt, "Temporal.Duration.from('P1Y2M3DT4H5M6S').years"), 1.0);
+        assert_eq!(number_eval(&rt, "Temporal.Duration.from('P1Y2M3DT4H5M6S').months"), 2.0);
+        assert_eq!(number_eval(&rt, "Temporal.Duration.from('P1Y2M3DT4H5M6S').days"), 3.0);
+        assert_eq!(number_eval(&rt, "Temporal.Duration.from('P1Y2M3DT4H5M6S').hours"), 4.0);
     }
 
     #[test]
     fn duration_to_string() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let s: String = ctx.eval("new Temporal.Duration(1, 2, 0, 3, 4, 5, 6).toString()").unwrap();
-            assert_eq!(s, "P1Y2M3DT4H5M6S");
-        });
-        drop(ctx); drop(rt);
+        let rt = setup();
+        assert_eq!(
+            string_eval(&rt, "new Temporal.Duration(1, 2, 0, 3, 4, 5, 6).toString()"),
+            "P1Y2M3DT4H5M6S"
+        );
     }
 
     #[test]
     fn duration_negated() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let d: i32 = ctx.eval("Temporal.Duration.from('P5D').negated().days").unwrap();
-            assert_eq!(d, -5);
-        });
-        drop(ctx); drop(rt);
+        let rt = setup();
+        assert_eq!(number_eval(&rt, "Temporal.Duration.from('P5D').negated().days"), -5.0);
     }
 
     #[test]
     fn instant_from_epoch_ms() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let ms: f64 = ctx.eval("Temporal.Instant.fromEpochMilliseconds(1000).epochMilliseconds").unwrap();
-            assert!((ms - 1000.0).abs() < 1.0);
-        });
-        drop(ctx); drop(rt);
+        let rt = setup();
+        let ms = number_eval(&rt, "Temporal.Instant.fromEpochMilliseconds(1000).epochMilliseconds");
+        assert!((ms - 1000.0).abs() < 1.0);
     }
 
     #[test]
     fn instant_to_string_utc() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let s: String = ctx.eval("Temporal.Instant.fromEpochMilliseconds(0).toString()").unwrap();
-            assert!(s.contains("1970-01-01T00:00:00"), "got: {}", s);
-        });
-        drop(ctx); drop(rt);
+        let rt = setup();
+        let s = string_eval(&rt, "Temporal.Instant.fromEpochMilliseconds(0).toString()");
+        assert!(s.contains("1970-01-01T00:00:00"), "got: {}", s);
     }
 
     #[test]
     fn temporal_now_instant_is_number() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let ok: bool = ctx.eval("typeof Temporal.Now.instant().epochMilliseconds === 'number'").unwrap();
-            assert!(ok);
-        });
-        drop(ctx); drop(rt);
+        let rt = setup();
+        assert!(bool_eval(&rt, "typeof Temporal.Now.instant().epochMilliseconds === 'number'"));
     }
 
     #[test]
     fn temporal_now_plain_date_iso() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let ok: bool = ctx.eval("Temporal.Now.plainDateISO() instanceof Temporal.PlainDate").unwrap();
-            assert!(ok);
-        });
-        drop(ctx); drop(rt);
+        let rt = setup();
+        assert!(bool_eval(&rt, "Temporal.Now.plainDateISO() instanceof Temporal.PlainDate"));
     }
 
     #[test]
     fn temporal_now_time_zone_id() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let s: String = ctx.eval("Temporal.Now.timeZoneId()").unwrap();
-            assert!(!s.is_empty(), "timezone id should not be empty");
-        });
-        drop(ctx); drop(rt);
+        let rt = setup();
+        let s = string_eval(&rt, "Temporal.Now.timeZoneId()");
+        assert!(!s.is_empty(), "timezone id should not be empty");
     }
 
     #[test]
     fn plain_year_month_from_string() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let y: i32 = ctx.eval("Temporal.PlainYearMonth.from('2024-06').year").unwrap();
-            assert_eq!(y, 2024);
-            let m: i32 = ctx.eval("Temporal.PlainYearMonth.from('2024-06').month").unwrap();
-            assert_eq!(m, 6);
-        });
-        drop(ctx); drop(rt);
+        let rt = setup();
+        assert_eq!(number_eval(&rt, "Temporal.PlainYearMonth.from('2024-06').year"), 2024.0);
+        assert_eq!(number_eval(&rt, "Temporal.PlainYearMonth.from('2024-06').month"), 6.0);
     }
 
     #[test]
     fn plain_month_day_from_string() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let m: i32 = ctx.eval("Temporal.PlainMonthDay.from('--06-15').month").unwrap();
-            assert_eq!(m, 6);
-            let d: i32 = ctx.eval("Temporal.PlainMonthDay.from('--06-15').day").unwrap();
-            assert_eq!(d, 15);
-        });
-        drop(ctx); drop(rt);
+        // V8 ships a native, spec-conformant Temporal implementation, so the shim's
+        // install guard (`if (global.Temporal.PlainDate) return;`) always bails and
+        // this exercises native Temporal, not TEMPORAL_SHIM. Native PlainMonthDay
+        // exposes `.day` (numeric) and `.monthCode` (calendar-relative string like
+        // "M06") rather than the shim's simplified numeric `.month`.
+        let rt = setup();
+        assert_eq!(number_eval(&rt, "Temporal.PlainMonthDay.from('--06-15').day"), 15.0);
+        assert_eq!(string_eval(&rt, "Temporal.PlainMonthDay.from('--06-15').monthCode"), "M06");
     }
 
     #[test]
     fn zoned_datetime_to_plain_date() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let ok: bool = ctx.eval("Temporal.Instant.fromEpochMilliseconds(0).toZonedDateTimeISO('UTC').toPlainDate() instanceof Temporal.PlainDate").unwrap();
-            assert!(ok);
-            let s: String = ctx.eval("Temporal.Instant.fromEpochMilliseconds(0).toZonedDateTimeISO('UTC').toPlainDate().toString()").unwrap();
-            assert_eq!(s, "1970-01-01");
-        });
-        drop(ctx); drop(rt);
+        let rt = setup();
+        assert!(bool_eval(
+            &rt,
+            "Temporal.Instant.fromEpochMilliseconds(0).toZonedDateTimeISO('UTC').toPlainDate() instanceof Temporal.PlainDate"
+        ));
+        assert_eq!(
+            string_eval(&rt, "Temporal.Instant.fromEpochMilliseconds(0).toZonedDateTimeISO('UTC').toPlainDate().toString()"),
+            "1970-01-01"
+        );
     }
 
     #[test]
     fn instant_add_duration() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let ms: f64 = ctx.eval("Temporal.Instant.fromEpochMilliseconds(0).add({ seconds: 60 }).epochMilliseconds").unwrap();
-            assert!((ms - 60000.0).abs() < 1.0);
-        });
-        drop(ctx); drop(rt);
+        let rt = setup();
+        let ms = number_eval(&rt, "Temporal.Instant.fromEpochMilliseconds(0).add({ seconds: 60 }).epochMilliseconds");
+        assert!((ms - 60000.0).abs() < 1.0);
     }
 
     #[test]
     fn plain_date_to_plain_datetime() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let s: String = ctx.eval("Temporal.PlainDate.from('2024-03-15').toPlainDateTime(Temporal.PlainTime.from('14:30:00')).toString()").unwrap();
-            assert_eq!(s, "2024-03-15T14:30:00");
-        });
-        drop(ctx); drop(rt);
+        let rt = setup();
+        assert_eq!(
+            string_eval(&rt, "Temporal.PlainDate.from('2024-03-15').toPlainDateTime(Temporal.PlainTime.from('14:30:00')).toString()"),
+            "2024-03-15T14:30:00"
+        );
     }
 
     #[test]
     fn duration_zero_is_pt0s() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let s: String = ctx.eval("new Temporal.Duration().toString()").unwrap();
-            assert_eq!(s, "PT0S");
-        });
-        drop(ctx); drop(rt);
+        let rt = setup();
+        assert_eq!(string_eval(&rt, "new Temporal.Duration().toString()"), "PT0S");
     }
 
     #[test]
     fn plain_date_day_of_week() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            // 2024-01-01 is a Monday (ISO weekday 1)
-            let dow: i32 = ctx.eval("Temporal.PlainDate.from('2024-01-01').dayOfWeek").unwrap();
-            assert_eq!(dow, 1);
-        });
-        drop(ctx); drop(rt);
+        let rt = setup();
+        // 2024-01-01 is a Monday (ISO weekday 1)
+        assert_eq!(number_eval(&rt, "Temporal.PlainDate.from('2024-01-01').dayOfWeek"), 1.0);
     }
 
     #[test]
     fn plain_datetime_add_hours() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let s: String = ctx.eval("Temporal.PlainDateTime.from('2024-03-15T22:00:00').add({ hours: 3 }).toString()").unwrap();
-            assert_eq!(s, "2024-03-16T01:00:00");
-        });
-        drop(ctx); drop(rt);
+        let rt = setup();
+        assert_eq!(
+            string_eval(&rt, "Temporal.PlainDateTime.from('2024-03-15T22:00:00').add({ hours: 3 }).toString()"),
+            "2024-03-16T01:00:00"
+        );
     }
 
     #[test]
     fn plain_date_with() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let s: String = ctx.eval("Temporal.PlainDate.from('2024-03-15').with({ day: 1 }).toString()").unwrap();
-            assert_eq!(s, "2024-03-01");
-        });
-        drop(ctx); drop(rt);
+        let rt = setup();
+        assert_eq!(
+            string_eval(&rt, "Temporal.PlainDate.from('2024-03-15').with({ day: 1 }).toString()"),
+            "2024-03-01"
+        );
     }
 
     #[test]
     fn timezone_utc_offset() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            let off: f64 = ctx.eval("new Temporal.TimeZone('UTC').getOffsetNanosecondsFor(Temporal.Instant.fromEpochMilliseconds(0))").unwrap();
-            assert_eq!(off as i64, 0);
-        });
-        drop(ctx); drop(rt);
+        // Native V8 Temporal (see plain_month_day_from_string) dropped the standalone
+        // `Temporal.TimeZone` constructor the shim models; the offset is queried via
+        // ZonedDateTime instead — an invariant true for both the shim (ZonedDateTime.
+        // offsetNanoseconds reads TimeZone._offsetMs()) and native Temporal.
+        let rt = setup();
+        let off = number_eval(
+            &rt,
+            "Temporal.Instant.fromEpochMilliseconds(0).toZonedDateTimeISO('UTC').offsetNanoseconds",
+        );
+        assert_eq!(off as i64, 0);
     }
 
     #[test]
     fn idempotent_when_already_defined() {
-        let (rt, ctx) = setup();
-        ctx.with(|ctx| {
-            // Install again — should not overwrite
-            super::install_temporal_api(&ctx).unwrap();
-            let ok: bool = ctx.eval("Temporal.PlainDate.from('2024-03-15').toString() === '2024-03-15'").unwrap();
-            assert!(ok);
-        });
-        drop(ctx); drop(rt);
+        let rt = setup();
+        // Install again — should not overwrite
+        super::install_temporal_api_v8(&rt).unwrap();
+        assert!(bool_eval(&rt, "Temporal.PlainDate.from('2024-03-15').toString() === '2024-03-15'"));
     }
 }

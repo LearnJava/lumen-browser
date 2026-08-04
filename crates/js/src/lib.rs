@@ -865,12 +865,6 @@ impl QuickJsRuntime {
                 eprintln!("Cookie-banner bindings init failed: {}", e);
             }
 
-            // Install TC39 Temporal API shim (Stage 4 / ES2025) — after Intl so the
-            // timezone helpers can leverage Date internals. Pure JS, no native bindings.
-            if let Err(e) = temporal_api::install_temporal_api(&ctx) {
-                eprintln!("Temporal API init failed: {}", e);
-            }
-
             // Install TC39 Stage 4 proposal shims — Object.groupBy/Map.groupBy, Set
             // methods, Promise.withResolvers, Promise.try, Array.fromAsync, Iterator
             // helpers. Each shim no-ops if the engine already has native support.

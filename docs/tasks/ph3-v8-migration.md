@@ -3376,6 +3376,44 @@ build); `--dump-layout samples/page.html` runs clean under the default build.
 
 Next in queue: S12b-B24 (`temporal_api`, Полоса 3 tenth batch).
 
+### S12b-B24: temporal_api (Полоса 3, 10/12)
+
+`temporal_api.rs`'s V8 port (`install_temporal_api_v8`) already existed
+(Ph3 S5-S7) — the TC39 Temporal shim (`Temporal.PlainDate`/`Instant`/
+`Duration`/etc, pure JS, no native bindings) — so this batch reduced to
+deleting `install_temporal_api` (rquickjs, the one-line `ctx.eval` wrapper) +
+`use rquickjs::Ctx`, one call site in `lib.rs` (`QuickJsRuntime::install_dom`,
+the "Install TC39 Temporal API shim" block), and porting all 30 `mod tests`
+to a new `tests_v8` module (same helper-fn pattern as B20-B23).
+
+**Bridge finding, not a bug:** V8 ships a native, spec-conformant `Temporal`
+implementation. The shim's own defer-to-native guard
+(`if (global.Temporal.PlainDate) return;`) always bails under the V8 backend,
+so `install_temporal_api_v8` is effectively unreachable dead code today — all
+30 ported tests actually exercise native V8 `Temporal`, not `TEMPORAL_SHIM`
+(confirmed: `typeof Temporal.PlainDate === 'function'` before the installer
+even runs its eval). Two tests assumed shim-only API shape and had to be
+rewritten against invariants true of the *reachable* implementation (mirrors
+the B16 `Intl.resolveLocale` fallback precedent): `plain_month_day_from_string`
+switched from the shim's simplified numeric `.month` to native
+`PlainMonthDay`'s real `.monthCode` (string, e.g. `"M06"`) + `.day`;
+`timezone_utc_offset` switched from `new Temporal.TimeZone('UTC')` (the
+standalone `TimeZone` constructor the shim models, absent from the finalized
+spec V8 implements) to `ZonedDateTime.offsetNanoseconds`, which both the shim
+and native Temporal support identically. `TEMPORAL_SHIM` gated under
+`#[cfg(feature = "v8-backend")]` (same reason as B20-B23: dead_code under the
+default no-`v8-backend` build otherwise fails `-D warnings`).
+
+`cargo test -p lumen-js --features v8-backend`: 2576 lib (unchanged — 30 new
+`tests_v8` tests exactly replace the 30 old rquickjs `mod tests` tests).
+`cargo test -p lumen-js` (default): 525 lib (down from 555, -30). Both
+clippy passes (default and `--features v8-backend`) clean; `lumen-shell`
+checked clean under default (`v8`) and
+`--no-default-features --features backend-femtovg,quickjs` (pure rollback
+build); `--dump-layout samples/page.html` runs clean under the default build.
+
+Next in queue: S12b-B25 (`svg`, Полоса 3 eleventh batch).
+
 ---
 
 ## Risks (Rev 2)
