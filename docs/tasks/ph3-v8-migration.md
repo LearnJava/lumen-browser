@@ -3345,6 +3345,37 @@ checked clean under default (`v8`) and `--features quickjs` (rollback build).
 
 Next in queue: S12b-B23 (`dom_parser`, Полоса 3 ninth batch).
 
+### S12b-B23: dom_parser (Полоса 3, 9/12)
+
+`dom_parser.rs`'s V8 port (`install_dom_parser_v8`) already existed (Ph3
+S5-S7): the DOMParser/XMLSerializer shim is engine-agnostic pure-JS (a
+tokenizer + virtual DOM + CSS selector engine building on `_lumen_get_attr*`/
+`_lumen_get_children` natives from `dom.rs`), so this batch reduced to
+deleting `install_dom_parser` (rquickjs, the one-line `ctx.eval` wrapper) +
+its `use rquickjs::Ctx` import, one call site in `lib.rs`
+(`QuickJsRuntime::new()`, the "W3C DOM Parsing and Serialization" block —
+its stale comment claiming `svg::install_svg_bindings` "must come after
+dom_parser" was also dropped, since dom_parser is no longer installed on
+this path at all), and porting all 19 `mod tests` to a new `tests_v8` module
+(same helper-fn pattern as B20-B22: `setup()` builds the runtime + minimal
+`window`/`navigator`/`document` stubs then calls the V8 installer;
+`bool_eval`/`string_eval`/`number_eval` wrap `JsValue` match arms since this
+module's tests read strings and array lengths, not just booleans). The
+`DOM_PARSER_SHIM` const, now reachable only from the
+`#[cfg(feature = "v8-backend")]` installer, was gated the same way to keep
+the default (no-`v8-backend`) build warning-free.
+
+No bridge bugs found. `cargo test -p lumen-js --features v8-backend`: 2576
+lib (unchanged — 19 new `tests_v8` tests exactly replace the 19 old rquickjs
+`mod tests` tests). `cargo test -p lumen-js` (default): 555 lib (down from
+574, -19). Both clippy passes (default and `--features v8-backend`) clean;
+`lumen-shell` checked clean under default (`v8`),
+`--no-default-features --features backend-femtovg,quickjs,v8`, and
+`--no-default-features --features backend-femtovg,quickjs` (pure rollback
+build); `--dump-layout samples/page.html` runs clean under the default build.
+
+Next in queue: S12b-B24 (`temporal_api`, Полоса 3 tenth batch).
+
 ---
 
 ## Risks (Rev 2)
