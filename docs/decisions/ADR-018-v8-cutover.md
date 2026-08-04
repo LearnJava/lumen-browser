@@ -70,13 +70,16 @@ default browsing).
 ## Consequences
 
 - **Positive:** default `lumen` now runs JIT-compiled V8 — the SPA-perf bottleneck ADR-004 named as the
-  v1.0 trigger is addressed; `quickjs` stays available as an explicit rollback feature during the S12b
+  v1.0 trigger is addressed; `quickjs` stayed available as an explicit rollback feature during the S12b
   transition window.
-- **Negative / trade-offs:** `rquickjs` (and its dual-maintained ~380 bindings) is not yet removed from
-  `Cargo.lock` — DoD item "rquickjs absent from Cargo.lock" is deferred to S12b, tracked in
-  `docs/tasks/ph3-v8-migration.md`. React 18 (and any other DOM-shim-dependent SPA) does not yet fully mount
-  due to BUG-280/BUG-281, independent of this cutover.
-- **Future:** S12b removes `rquickjs`, `QuickJsRuntime`, `QuickPersistentJs`, and the per-module
-  QuickJS-specific `install_*` functions across `crates/js/src`, then simplifies the broadened
-  `any(feature = "quickjs", feature = "v8")` gates back to unconditional code once `quickjs` is gone.
-  ADR-004 is marked Superseded by this ADR.
+- **Negative / trade-offs (at ADR time):** `rquickjs` (and its dual-maintained ~380 bindings) was not yet
+  removed from `Cargo.lock` — DoD item "rquickjs absent from Cargo.lock" was deferred to S12b, tracked in
+  `docs/tasks/ph3-v8-migration.md`. React 18 (and any other DOM-shim-dependent SPA) did not yet fully mount
+  due to BUG-280/BUG-281, independent of this cutover (both fixed 2026-07-16/2026-07-29).
+- **Update 2026-08-04 (S12b closed):** the deferred removal is done. S12b-F1 dropped the `quickjs` shell
+  feature/rollback; S12b-F2 deleted `QuickJsRuntime`/`QuickPersistentJs`; S12b-F3 deleted
+  `dom.rs::install_primitives` (the last rquickjs native-registration call site); S12b-F4 removed the
+  `rquickjs`/`rquickjs-core`/`rquickjs-sys` dependency from `crates/js/Cargo.toml` and `Cargo.lock` —
+  DoD item "rquickjs absent from Cargo.lock" is met. The broadened `any(feature = "quickjs", feature =
+  "v8")` gates were simplified back to unconditional/`feature = "v8"` code as part of the same slices.
+  V8 is now the only JS engine in the workspace. ADR-004 is marked Superseded by this ADR.
