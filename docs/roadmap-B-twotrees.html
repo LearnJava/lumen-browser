@@ -75,8 +75,8 @@
 {
  "generated": "2026-08-04",
  "counts": {
-  "open": 238,
-  "fixed": 314,
+  "open": 237,
+  "fixed": 315,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -7420,10 +7420,10 @@
    "debtor": false
   },
   "BUG-441": {
-   "status": "open",
-   "title": "**Присвоение `element.value` из скрипта не доезжает ни до рендера, ни до отправки формы.** Сеттер пишет только в JS-тень `_input_values[nid]`, поэтому `el.value…",
-   "component": "js (`dom.rs` — сеттер `value` в `_lumen_make_element`)",
-   "date": null,
+   "status": "fixed",
+   "title": "**Присвоение `element.value` из скрипта не доезжало ни до рендера, ни до отправки формы.** Значение жило только в JS-тени `_input_values[nid]`, поэтому `el.valu…",
+   "component": "dom (`Document::dirty_values` + `control_value`/`set_control_value`/`clear_control_value`), js (`dom.rs` — геттер/сеттер `value`; `v8_runtime.rs` — нативы `_lumen_{get,set,clear}_dirty_value`), layout (`box_tree.rs`, `style.rs`), shell (`forms.rs`, `main.rs`), driver (`session.rs`)",
+   "date": "2026-08-04",
    "debtor": false
   },
   "BUG-442": {
@@ -8511,6 +8511,9 @@
    "BUG-019",
    "BUG-218"
   ],
+  "dom (`Document::dirty_values` + `control_value`/`set_control_value`/`clear_control_value`), js (`dom.rs` — геттер/сеттер `value`; `v8_runtime.rs` — нативы `_lumen_{get,set,clear}_dirty_value`), layout (`box_tree.rs`, `style.rs`), shell (`forms.rs`, `main.rs`), driver (`session.rs`)": [
+   "BUG-441"
+  ],
   "dom/js (no `\"permission\"` tag handling anywhere in `crates/dom`, `crates/html-parser`, `crates/js/src/dom.rs`)": [
    "BUG-583"
   ],
@@ -8814,9 +8817,6 @@
   ],
   "js (`dom.rs` shim, `v8_runtime.rs`, `selector_query.rs`)": [
    "BUG-298"
-  ],
-  "js (`dom.rs` — сеттер `value` в `_lumen_make_element`)": [
-   "BUG-441"
   ],
   "js (`dom.rs` — элементный `dispatchEvent` в `_lumen_make_element`)": [
    "BUG-439"
