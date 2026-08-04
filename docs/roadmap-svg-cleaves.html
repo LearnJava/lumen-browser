@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-04",
  "counts": {
-  "open": 266,
+  "open": 267,
   "fixed": 315,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 581,
+ "total_bugs": 582,
  "phases": [
   {
    "id": "P0",
@@ -2835,9 +2835,12 @@
       {
        "id": "WPT-VENDOR-html-ruby-extensions",
        "title": "WPT: вендорить + прогнать категорию `html-ruby-extensions`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-04: вендорена + прогнана целиком (`--all --root html-ruby-extensions --recursive`, ~1 с) — **0/0**, все 84 отобранных id — `rel=mismatch` reftest (`Unsupported test type reftest`), категория на 100% ручная по замыслу спеки (README: \"these are manual tests... simply relying on automated reports is not sufficient\"). Единственный сигнал — `--dump-layout`-проба: BUG-614 (`<ruby>`/`<rb>`/`<rt>`/`<rp>`/`<rtc>` не входят в inline-список `default_display`, падают на catch-all `Block` — база и аннотация рендерятся раздельными блочными строками вместо inline-потока, хуже чем \"нет поддержки ruby\" вовсе)",
+       "bugs": [
+        "BUG-614"
+       ]
       },
       {
        "id": "WPT-VENDOR-https-upgrades",
@@ -8637,6 +8640,13 @@
    "status": "open",
    "title": "`input.capture` reflects the raw attribute value on an invalid keyword (`capture='invalid'` -> `\"invalid\"`) instead of the spec's limited-to-known-values defaul…",
    "component": "js (`crates/js/src/dom.rs` -- `HTMLInputElement.prototype` reflection table, `capture` wired as `'string'` instead of `'enum'`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-614": {
+   "status": "open",
+   "title": "`<ruby>`/`<rb>`/`<rt>`/`<rp>`/`<rtc>` fall through to the catch-all `Display::Block`, so base + annotation render as separate block lines instead of flowing inl…",
+   "component": "layout (`crates/engine/layout/src/style.rs::default_display`, no arm for ruby elements)",
    "date": null,
    "debtor": false
   }
