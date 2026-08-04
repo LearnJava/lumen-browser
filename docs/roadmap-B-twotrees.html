@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-04",
  "counts": {
-  "open": 228,
+  "open": 239,
   "fixed": 313,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 541,
+ "total_bugs": 552,
  "phases": [
   {
    "id": "P0",
@@ -8335,6 +8335,83 @@
    "component": "js (`crates/js/src/dom.rs::_lumen_make_range` object literal, `dom.rs:6870-6944`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-574": {
+   "status": "open",
+   "title": "`Node.prototype.contains()` does not exist at all on any node kind -- surfaces as `elementDocument.contains is not a function` inside `resources/testdriver.js`'…",
+   "component": "js (`crates/js/src/dom.rs` -- no `contains` on any node prototype)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-575": {
+   "status": "open",
+   "title": "`Element.prototype.localName` does not exist at all. Surfaces in `form-submission-target/resources/reltester.js` (`submitter.localName !== \"form\"` always true)…",
+   "component": "js (`crates/js/src/dom.rs` -- only `tagName`/`nodeName` reflected, no `localName`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-576": {
+   "status": "open",
+   "title": "`select.options.add()` missing (mirror `select.add()` at `dom.rs:14401` does work). 4 subtests/2 files. Найден P2, WPT-VENDOR-html-semantics-forms, 2026-08-04",
+   "component": "js (`crates/js/src/dom.rs:14124-14128` `HTMLOptionsCollection.prototype`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-577": {
+   "status": "open",
+   "title": "`Event.prototype.composedPath()` missing entirely -- inherited by every event subtype (`CustomEvent`/`UIEvent`/`MouseEvent`/etc. all chain off `Event.prototype`…",
+   "component": "js (`crates/js/src/dom.rs:3342-3358` `Event.prototype`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-578": {
+   "status": "open",
+   "title": "Popover/`<details>` toggle fires a plain `Event` with hand-bolted `oldState`/`newState` own properties instead of a real `ToggleEvent` -- no `ToggleEvent` const…",
+   "component": "js (`crates/js/src/dom.rs:14888-14937`, `dom.rs:15013-15042` -- popover/`<details>` toggle dispatch)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-579": {
+   "status": "open",
+   "title": "`HTMLDialogElement.prototype.requestClose()` missing entirely -- `show`/`showModal`/`close`/`returnValue` exist, `requestClose` (fires cancelable `cancel` then…",
+   "component": "js (`crates/js/src/dom.rs:5667-5702` `<dialog>` API block)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-580": {
+   "status": "open",
+   "title": "`Element.prototype.getClientRects()` missing entirely (contrast `Range.prototype.getClientRects` at `dom.rs:6940`, which does exist and shows the one-line fix p…",
+   "component": "js (`crates/js/src/dom.rs:6044-6049` -- `getBoundingClientRect` exists, no sibling `getClientRects`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-581": {
+   "status": "open",
+   "title": "`HTMLTableElement`/`HTMLTableRowElement`/`HTMLTableSectionElement` have zero spec API (`rows`/`tBodies`/`tHead`/`tFoot`/`caption`, `createTBody`/`createCaption`…",
+   "component": "js (`crates/js/src/dom.rs:4608-4625` -- table interfaces generated as bare non-constructible stubs, no table-specific members anywhere)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-582": {
+   "status": "open",
+   "title": "Invoker Commands API (`<button command=… commandfor=…>`, `CommandEvent`) not implemented at all -- the older, narrower `popovertarget`/`popovertargetaction` pai…",
+   "component": "js (`crates/js/src/dom.rs` -- no `command`/`commandFor` reflection, no `CommandEvent`, no invoke-action dispatch anywhere)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-583": {
+   "status": "open",
+   "title": "`<permission>` element (Permission Element API, single-vendor origin trial) not implemented at all -- falls through to generic unknown-tag/`HTMLUnknownElement`…",
+   "component": "dom/js (no `\"permission\"` tag handling anywhere in `crates/dom`, `crates/html-parser`, `crates/js/src/dom.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-584": {
+   "status": "open",
+   "title": "Interest Invokers API (`interestfor`, `InterestEvent` -- hover/focus analogue of BUG-582's `command`/`commandfor`) not implemented at all, entirely `.tentative.…",
+   "component": "js (`crates/js/src/dom.rs` -- no `interestFor`/`InterestEvent` anywhere)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -8440,6 +8517,9 @@
    "BUG-016",
    "BUG-019",
    "BUG-218"
+  ],
+  "dom/js (no `\"permission\"` tag handling anywhere in `crates/dom`, `crates/html-parser`, `crates/js/src/dom.rs`)": [
+   "BUG-583"
   ],
   "driver": [
    "BUG-061",
@@ -8564,8 +8644,17 @@
   "js (`crates/js/src/dom.rs:12772` — `window.getComputedStyle`)": [
    "BUG-539"
   ],
+  "js (`crates/js/src/dom.rs:14124-14128` `HTMLOptionsCollection.prototype`)": [
+   "BUG-576"
+  ],
+  "js (`crates/js/src/dom.rs:14888-14937`, `dom.rs:15013-15042` -- popover/`<details>` toggle dispatch)": [
+   "BUG-578"
+  ],
   "js (`crates/js/src/dom.rs:15412-15556` — WAAPI `Animation` шим)": [
    "BUG-530"
+  ],
+  "js (`crates/js/src/dom.rs:3342-3358` `Event.prototype`)": [
+   "BUG-577"
   ],
   "js (`crates/js/src/dom.rs:3441-3460` -- `MouseEvent` constructor)": [
    "BUG-558"
@@ -8579,11 +8668,20 @@
   "js (`crates/js/src/dom.rs:4264-4302`)": [
    "BUG-484"
   ],
+  "js (`crates/js/src/dom.rs:4608-4625` -- table interfaces generated as bare non-constructible stubs, no table-specific members anywhere)": [
+   "BUG-581"
+  ],
   "js (`crates/js/src/dom.rs:4780-4827` -- `_lumen_build_detached_document`)": [
    "BUG-552"
   ],
+  "js (`crates/js/src/dom.rs:5667-5702` `<dialog>` API block)": [
+   "BUG-579"
+  ],
   "js (`crates/js/src/dom.rs:5929` — `dispatchEvent` живого элемента; `dom.rs:3813` `_lumen_dispatch`, `dom.rs:3831` `_lumen_dispatch_bubble`, `dom.rs:3869` `_lumen_dispatch_rich`)": [
    "BUG-360"
+  ],
+  "js (`crates/js/src/dom.rs:6044-6049` -- `getBoundingClientRect` exists, no sibling `getClientRects`)": [
+   "BUG-580"
   ],
   "js (`crates/js/src/dom.rs:6190-6193`)": [
    "BUG-476"
@@ -8638,6 +8736,18 @@
   ],
   "js (`crates/js/src/dom.rs` -- live `Document` object literal, ~line 7140: `get body()`/`get documentElement()` exist, `get head()` does not)": [
    "BUG-565"
+  ],
+  "js (`crates/js/src/dom.rs` -- no `command`/`commandFor` reflection, no `CommandEvent`, no invoke-action dispatch anywhere)": [
+   "BUG-582"
+  ],
+  "js (`crates/js/src/dom.rs` -- no `contains` on any node prototype)": [
+   "BUG-574"
+  ],
+  "js (`crates/js/src/dom.rs` -- no `interestFor`/`InterestEvent` anywhere)": [
+   "BUG-584"
+  ],
+  "js (`crates/js/src/dom.rs` -- only `tagName`/`nodeName` reflected, no `localName`)": [
+   "BUG-575"
   ],
   "js (`crates/js/src/dom.rs` — `Range` global at `~6958`, no `StaticRange`)": [
    "BUG-533"
