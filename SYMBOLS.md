@@ -3860,17 +3860,17 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/lib.rs:204` **struct** `LabeledSummary` — [`Display`]-обёртка над [`FrameSummary`] с произвольной меткой-префиксом
 `crates/engine/paint/src/lib.rs:372` **struct** `FontMeasurer` — Реализация [`TextMeasurer`] на основе TTF-данных шрифта
 `crates/engine/paint/src/lib.rs:382` **fn** `new`
-`crates/engine/paint/src/lib.rs:574` **struct** `GenericFaceSet` — Метрики системных шрифтов, подобранных под CSS generic-семейства
-`crates/engine/paint/src/lib.rs:589` **fn** `from_provider` — Резолвит все generic-семейства через провайдер и парсит метрики
-`crates/engine/paint/src/lib.rs:617` **fn** `empty` — Пустой набор — для тестов и путей без системного провайдера
-`crates/engine/paint/src/lib.rs:623` **fn** `resolved_count` — Сколько generic-семейств удалось резолвить. 0 — на машине не нашлось
-`crates/engine/paint/src/lib.rs:658` **struct** `MultiFontMeasurer` — Многошрифтовый измеритель: поддерживает @font-face-загруженные шрифты
-`crates/engine/paint/src/lib.rs:671` **fn** `new` — Создаёт измеритель с bundled-шрифтом как fallback
-`crates/engine/paint/src/lib.rs:685` **fn** `set_generic_faces` — Подключает системные face-ы generic-семейств (BUG-128)
-`crates/engine/paint/src/lib.rs:701` **fn** `register_family` — Регистрирует @font-face шрифт под именем `family` без unicode-range ограничений
-`crates/engine/paint/src/lib.rs:715` **fn** `register_family_with_ranges` — Регистрирует @font-face шрифт с `unicode-range` ограничением
-`crates/engine/paint/src/lib.rs:731` **fn** `family_count` — Количество зарегистрированных семей (для тестов)
-`crates/engine/paint/src/lib.rs:746` **fn** `resolve_font_stretch` — Resolves `font-stretch` percentage for the first matching family
+`crates/engine/paint/src/lib.rs:590` **struct** `SystemFaceSet` — Метрики системных face-ов, которые для страницы выберет рендер: CSS
+`crates/engine/paint/src/lib.rs:614` **fn** `from_provider` — Резолвит все generic-семейства через провайдер, парсит метрики
+`crates/engine/paint/src/lib.rs:639` **fn** `empty` — Пустой набор — для тестов и путей без системного провайдера
+`crates/engine/paint/src/lib.rs:649` **fn** `resolved_generic_count` — Сколько generic-семейств удалось резолвить. 0 — на машине не нашлось
+`crates/engine/paint/src/lib.rs:744` **struct** `MultiFontMeasurer` — Многошрифтовый измеритель: поддерживает @font-face-загруженные шрифты
+`crates/engine/paint/src/lib.rs:758` **fn** `new` — Создаёт измеритель с bundled-шрифтом как fallback
+`crates/engine/paint/src/lib.rs:773` **fn** `set_system_faces` — Подключает системные face-ы (generic-семейства + конкретные системные
+`crates/engine/paint/src/lib.rs:790` **fn** `register_family` — Регистрирует @font-face шрифт под именем `family` без unicode-range ограничений
+`crates/engine/paint/src/lib.rs:804` **fn** `register_family_with_ranges` — Регистрирует @font-face шрифт с `unicode-range` ограничением
+`crates/engine/paint/src/lib.rs:820` **fn** `family_count` — Количество зарегистрированных семей (для тестов)
+`crates/engine/paint/src/lib.rs:835` **fn** `resolve_font_stretch` — Resolves `font-stretch` percentage for the first matching family
 `crates/engine/paint/src/matrix_util.rs:19` **fn** `mat4_to_2d_affine` — Извлекает 2D-аффинные компоненты `[a, b, c, d, e, f]` из column-major
 `crates/engine/paint/src/overlay_partition.rs:76` **fn** `overlay_ranges` — Report the command index ranges of viewport-pinned **overlay** content in a
 `crates/engine/paint/src/overlay_partition.rs:124` **fn** `has_overlay` — `true` when `content` holds any viewport-pinned overlay content — i.e

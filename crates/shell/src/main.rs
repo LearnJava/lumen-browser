@@ -5390,8 +5390,8 @@ fn parse_and_layout(
     // url()-семьи добавятся позже через FontLoaded + relayout_with_web_fonts.
     let mut measurer = lumen_paint::MultiFontMeasurer::new(&font)
         .map_err(|e| format!("ошибка метрик шрифта: {e}"))?;
-    // BUG-128: системные face-ы generic-семейств — те же, что выберет рендер.
-    measurer.set_generic_faces(generic_font_faces());
+    // BUG-128: системные face-ы — те же, что выберет рендер.
+    measurer.set_system_faces(system_font_faces());
     for rule in &sheet.font_faces {
         if !rule.family.is_empty()
             && let Some(bytes) = font_registry.face_bytes_for_family(&rule.family)
@@ -6104,31 +6104,33 @@ fn relayout_page(
     compute_layout(&src.document, &src.stylesheet, viewport, hp, dark_mode, web_fonts)
 }
 
-/// Процесс-глобальные метрики системных шрифтов для CSS generic-семейств
-/// (BUG-128).
+/// Процесс-глобальные метрики системных шрифтов для измерителя: CSS
+/// generic-семейства + конкретные системные семейства по имени (BUG-128).
 ///
 /// Строится один раз поверх общего системного индекса
 /// ([`lumen_font::shared_system_index`]) и переиспользуется всеми
 /// пересборками измерителя: сам скан директорий шрифтов страница делает в
 /// любом случае (рендер резолвит face-ы через тот же индекс), а чтение и
-/// парсинг 6 выбранных файлов не должно повторяться на каждый relayout.
-fn generic_font_faces() -> Arc<lumen_paint::GenericFaceSet> {
-    static SHARED: std::sync::OnceLock<Arc<lumen_paint::GenericFaceSet>> =
+/// парсинг выбранных файлов не должно повторяться на каждый relayout.
+/// Ленивый кэш конкретных семейств живёт здесь же, поэтому `font-family:
+/// Arial` читается с диска один раз на процесс, а не на каждый релэйаут.
+fn system_font_faces() -> Arc<lumen_paint::SystemFaceSet> {
+    static SHARED: std::sync::OnceLock<Arc<lumen_paint::SystemFaceSet>> =
         std::sync::OnceLock::new();
     SHARED
         .get_or_init(|| {
-            Arc::new(lumen_paint::GenericFaceSet::from_provider(
-                lumen_font::shared_system_index().as_ref(),
+            Arc::new(lumen_paint::SystemFaceSet::from_provider(
+                lumen_font::shared_system_index().clone(),
             ))
         })
         .clone()
 }
 
 /// Измеритель для страницы: bundled Inter + @font-face-семьи + системные
-/// face-ы generic-семейств.
+/// face-ы (generic-семейства и конкретные семейства по имени).
 ///
 /// Единая точка сборки для всех layout-путей (полный / инкрементальный /
-/// restyle) — иначе generic-семейства меряются по-разному в зависимости от
+/// restyle) — иначе системные семейства меряются по-разному в зависимости от
 /// того, есть ли на странице web-шрифты.
 fn page_measurer(
     font: &lumen_font::Font<'static>,
@@ -6143,7 +6145,7 @@ fn page_measurer(
             wf.unicode_range.clone(),
         );
     }
-    measurer.set_generic_faces(generic_font_faces());
+    measurer.set_system_faces(system_font_faces());
     measurer
 }
 
@@ -6166,7 +6168,7 @@ fn compute_layout(
 ) -> (DisplayList, lumen_layout::LayoutBox) {
     let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
     // PH3-19: измеритель включает накопленные web-шрифты (FOUT relayout);
-    // BUG-128: и системные face-ы generic-семейств.
+    // BUG-128: и системные face-ы.
     let measurer = page_measurer(&font, web_fonts);
     let doc = document.lock().unwrap();
     let layout = lumen_layout::layout_measured_hyp(&doc, stylesheet, viewport, &measurer, hp, dark_mode);
