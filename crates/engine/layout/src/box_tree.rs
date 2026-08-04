@@ -6105,8 +6105,10 @@ fn preferred_inline_block_width(
                 .iter()
                 .map(|seg| {
                     let ls = seg.style.letter_spacing;
-                    let ts = seg.style.tab_size * m.char_width(' ', seg.style.font_size);
-                    measure_text_w(&seg.text, seg.style.font_size, ls, ts, m)
+                    let fams = &seg.style.font_family;
+                    let ts = seg.style.tab_size
+                        * m.char_width_with_families(' ', seg.style.font_size, fams);
+                    measure_text_w_families(&seg.text, seg.style.font_size, ls, ts, fams, m)
                 })
                 .sum()
         });
@@ -6201,8 +6203,10 @@ fn max_content_outer_width(
             measurer.map_or(0.0, |m| {
                 segments.iter().map(|seg| {
                     let ls = seg.style.letter_spacing;
-                    let ts = seg.style.tab_size * m.char_width(' ', seg.style.font_size);
-                    measure_text_w(&seg.text, seg.style.font_size, ls, ts, m)
+                    let fams = &seg.style.font_family;
+                    let ts = seg.style.tab_size
+                        * m.char_width_with_families(' ', seg.style.font_size, fams);
+                    measure_text_w_families(&seg.text, seg.style.font_size, ls, ts, fams, m)
                 }).sum()
             })
         }
@@ -6295,10 +6299,12 @@ fn min_content_outer_width_of_contents(
             measurer.map_or(0.0, |m| {
                 segments.iter().flat_map(|seg| {
                     let ls = seg.style.letter_spacing;
-                    let ts = seg.style.tab_size * m.char_width(' ', seg.style.font_size);
+                    let fams = &seg.style.font_family;
+                    let ts = seg.style.tab_size
+                        * m.char_width_with_families(' ', seg.style.font_size, fams);
                     // Split on whitespace to find individual "words".
                     seg.text.split_whitespace().map(move |word| {
-                        measure_text_w(word, seg.style.font_size, ls, ts, m)
+                        measure_text_w_families(word, seg.style.font_size, ls, ts, fams, m)
                     })
                 }).fold(0.0_f32, f32::max)
             })
@@ -8135,8 +8141,12 @@ fn lay_out_inner(
                             0.0
                         } else {
                             measurer.map_or(0.0, |m| {
-                                let ts = child.style.tab_size * m.char_width(' ', em);
-                                measure_text_w(&marker_text, em, child.style.letter_spacing, ts, m)
+                                let fams = &child.style.font_family;
+                                let ts = child.style.tab_size
+                                    * m.char_width_with_families(' ', em, fams);
+                                measure_text_w_families(
+                                    &marker_text, em, child.style.letter_spacing, ts, fams, m,
+                                )
                             })
                         };
                         let marker_w = default_w.max(text_w); // CSS: list-style-type determines exact width
@@ -9499,12 +9509,16 @@ fn box_min_max_content_w(boxes: &[LayoutBox], m: &dyn TextMeasurer, vp: Size) ->
                         line_w += w;
                         run_min = run_min.max(w);
                     } else {
+                        let fams = &seg.style.font_family;
                         line_w += seg.pre_space
-                            + measure_text_w(&seg.text, fs, ls, 0.0, m)
+                            + measure_text_w_families(&seg.text, fs, ls, 0.0, fams, m)
                             + seg.post_space;
                         for word in seg.text.split_ascii_whitespace() {
-                            run_min = run_min
-                                .max(seg.pre_space + measure_text_w(word, fs, ls, 0.0, m) + seg.post_space);
+                            run_min = run_min.max(
+                                seg.pre_space
+                                    + measure_text_w_families(word, fs, ls, 0.0, fams, m)
+                                    + seg.post_space,
+                            );
                         }
                     }
                 }
@@ -12208,7 +12222,12 @@ fn pretty_wrap(
         return greedy_lines;
     }
     let penult_end = penult.last().map(|f| f.x + f.width).unwrap_or(0.0);
-    let space_w = m.char_width(' ', container_font_size);
+    // BUG-128: ширина пробела берётся семейством первого сегмента, а не
+    // bundled Inter-ом — иначе строка едет относительно нарисованного текста.
+    let space_w = segments.first().map_or_else(
+        || m.char_width(' ', container_font_size),
+        |s| m.char_width_with_families(' ', container_font_size, &s.style.font_family),
+    );
     // The penultimate line's last frag may be merged (e.g. "aaaa bb cc").
     // Extract the last word's width to find where a tighter wrap would push it down.
     let last_frag = penult.last().unwrap();
@@ -12274,7 +12293,12 @@ fn wrap_inline_run(
     line_break: LineBreak,
 ) -> Vec<Vec<InlineFrag>> {
     let _prof = lumen_core::profile::scope_detail("lo_wrap");
-    let space_w = m.char_width(' ', container_font_size);
+    // BUG-128: ширина пробела берётся семейством первого сегмента, а не
+    // bundled Inter-ом — иначе строка едет относительно нарисованного текста.
+    let space_w = segments.first().map_or_else(
+        || m.char_width(' ', container_font_size),
+        |s| m.char_width_with_families(' ', container_font_size, &s.style.font_family),
+    );
 
     // CSS Fonts L4 §6.2 — синтезированная капитель: сегменты режутся на
     // прогоны разного кегля до всех измерений, поэтому wrap/measure/paint
