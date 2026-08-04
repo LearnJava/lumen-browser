@@ -484,6 +484,15 @@ pub fn install_offscreen_canvas_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
 /// not a `V8JsRuntime` field — same pattern as `canvas2d_v8`/`webgl_canvas_v8`.
 /// [`OFFSCREEN_CANVAS_SHIM`] is not part of `dom.rs::WEB_API_SHIM` and must be
 /// `eval`'d here explicitly, mirroring `webgl_canvas::install_webgl_canvas_v8`.
+///
+/// [`install_offscreen_canvas_bindings`] (the rquickjs twin) is **not** removed
+/// by S12b-B26, unlike the other S12b-B* batches: `worker.rs`'s QuickJS worker
+/// thread (`run_worker_thread`, reachable in real pages via `_lumen_create_worker`
+/// under the QuickJS rollback build, not just from its own tests) still calls it
+/// to give dedicated workers an OffscreenCanvas registry (HTML LS §4.12.14).
+/// Deleting it now would break that live call site. Full removal is deferred to
+/// whichever batch deletes `worker.rs`'s QuickJS path (S12b-B27) — see the note
+/// there.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_offscreen_canvas_bindings_v8(
     rt: &crate::v8_runtime::V8JsRuntime,
@@ -1309,5 +1318,260 @@ mod tests {
                 .unwrap();
             assert!(result, "OffscreenCanvas and createImageBitmap must be available in fresh (worker) context");
         });
+    }
+}
+
+/// V8 test coverage for [`install_offscreen_canvas_bindings_v8`] (S12b-B26):
+/// the 14 JS-integration tests above (constructor/getContext/fillRect/
+/// transferToImageBitmap/createImageBitmap wiring) ported verbatim to V8. The
+/// 9 pure-Rust tests in `mod tests` above (no JS engine involved) are not
+/// duplicated here — they already cover both engines, since they call the
+/// shared native functions (`OffscreenCanvas::new`, `with_offscreen_canvas`,
+/// `create_offscreen_from_pixels`, …) directly.
+///
+/// [`V8JsRuntime::new`] spawns a dedicated OS thread per runtime, so unlike
+/// the rquickjs tests above, these can't peek at [`OFFSCREEN_CANVASES`]/
+/// [`DIRTY`] from the test's own thread (different `thread_local!` instance)
+/// — every assertion goes through the JS-visible native functions instead
+/// (e.g. `native_from_image_data_red_pixel_stored` reads pixels back via
+/// `_lumen_offscreen_canvas2d_get_image_data` rather than inspecting the
+/// `Context2D` directly).
+#[cfg(all(test, feature = "v8-backend"))]
+mod tests_v8 {
+    use lumen_core::JsValue;
+    use lumen_core::ext::JsRuntime as _;
+
+    use crate::v8_runtime::V8JsRuntime;
+
+    fn with_offscreen() -> V8JsRuntime {
+        let rt = V8JsRuntime::new().unwrap();
+        super::install_offscreen_canvas_bindings_v8(&rt).unwrap();
+        rt
+    }
+
+    fn bool_eval(rt: &V8JsRuntime, expr: &str) -> bool {
+        matches!(rt.eval(expr).unwrap(), JsValue::Bool(true))
+    }
+
+    #[test]
+    fn js_offscreen_canvas_constructor() {
+        let rt = with_offscreen();
+        let ok = bool_eval(
+            &rt,
+            r#"
+                let canvas = new OffscreenCanvas(100, 200);
+                canvas.width === 100 && canvas.height === 200 &&
+                typeof canvas.__canvas_id__ === 'number'
+            "#,
+        );
+        assert!(ok);
+    }
+
+    #[test]
+    fn js_offscreen_canvas_get_context() {
+        let rt = with_offscreen();
+        let ok = bool_eval(
+            &rt,
+            r#"
+                let canvas = new OffscreenCanvas(50, 50);
+                let ctx2d = canvas.getContext('2d');
+                ctx2d !== null && ctx2d.canvas === canvas
+            "#,
+        );
+        assert!(ok);
+    }
+
+    #[test]
+    fn js_offscreen_canvas_get_context_cached() {
+        let rt = with_offscreen();
+        let ok = bool_eval(
+            &rt,
+            r#"
+                let canvas = new OffscreenCanvas(50, 50);
+                let ctx1 = canvas.getContext('2d');
+                let ctx2 = canvas.getContext('2d');
+                ctx1 === ctx2  // Same instance cached
+            "#,
+        );
+        assert!(ok);
+    }
+
+    #[test]
+    fn js_offscreen_canvas_fill_rect() {
+        let rt = with_offscreen();
+        let ok = bool_eval(
+            &rt,
+            r#"
+                let canvas = new OffscreenCanvas(100, 100);
+                let ctx = canvas.getContext('2d');
+                ctx.fillStyle = '#ff0000';
+                ctx.fillRect(10, 10, 50, 50);
+                // Should mark canvas as dirty
+                true
+            "#,
+        );
+        assert!(ok);
+    }
+
+    #[test]
+    fn js_offscreen_canvas_transfer_to_image_bitmap() {
+        let rt = with_offscreen();
+        let ok = bool_eval(
+            &rt,
+            r#"
+                let canvas = new OffscreenCanvas(10, 10);
+                let bitmap = canvas.transferToImageBitmap();
+                bitmap.width === 10 && bitmap.height === 10 &&
+                typeof bitmap.__canvas_id__ === 'number' &&
+                typeof bitmap.close === 'function'
+            "#,
+        );
+        assert!(ok);
+    }
+
+    #[test]
+    fn js_offscreen_canvas_invalid_context_type() {
+        let rt = with_offscreen();
+        let ok = bool_eval(
+            &rt,
+            r#"
+                let canvas = new OffscreenCanvas(50, 50);
+                canvas.getContext('webgl') === null
+            "#,
+        );
+        assert!(ok);
+    }
+
+    // ── Phase 1: createImageBitmap + Worker availability tests ────────────────
+
+    #[test]
+    fn native_from_image_data_valid_2x2() {
+        // 2×2 RGBA pixels, all transparent black
+        let hex = "0".repeat(32); // 16 bytes = 32 hex chars
+        let rt = with_offscreen();
+        let ok = bool_eval(
+            &rt,
+            &format!("_lumen_offscreen_canvas_from_image_data(2, 2, '{hex}') > 0"),
+        );
+        assert!(ok, "expected non-zero canvas_id from valid 2x2 image data");
+    }
+
+    #[test]
+    fn native_from_image_data_size_mismatch_returns_zero() {
+        let rt = with_offscreen();
+        // 3×3 requested but only 4 bytes provided → mismatch
+        let ok = bool_eval(
+            &rt,
+            "_lumen_offscreen_canvas_from_image_data(3, 3, 'aabbccdd') === 0",
+        );
+        assert!(ok, "size mismatch should return 0");
+    }
+
+    #[test]
+    fn native_from_image_data_red_pixel_stored() {
+        let rt = with_offscreen();
+        // 1×1 canvas with red pixel (ff0000ff); read back via the same wire
+        // format ("{w},{h},{hex}") the JS shim parses, since the V8 runtime
+        // owns OFFSCREEN_CANVASES on its own dedicated thread.
+        let ok = bool_eval(
+            &rt,
+            r#"
+                var id = _lumen_offscreen_canvas_from_image_data(1, 1, 'ff0000ff');
+                var raw = _lumen_offscreen_canvas2d_get_image_data(id);
+                id > 0 && raw === '1,1,ff0000ff'
+            "#,
+        );
+        assert!(ok);
+    }
+
+    #[test]
+    fn js_create_image_bitmap_is_function() {
+        let rt = with_offscreen();
+        assert!(
+            bool_eval(&rt, "typeof createImageBitmap === 'function'"),
+            "createImageBitmap should be a function"
+        );
+    }
+
+    #[test]
+    fn js_create_image_bitmap_from_image_data_sync_via_native() {
+        // Test the native binding that createImageBitmap(ImageData) uses internally.
+        // We bypass the Promise wrapper and test the hex-encode → canvas ID path.
+        let rt = with_offscreen();
+        let ok = bool_eval(
+            &rt,
+            r#"
+                var data = new Uint8Array([
+                  100, 150, 200, 255,
+                  50,  80,  120, 200,
+                  10,  20,  30,  100,
+                  0,   0,   0,   0
+                ]);
+                var hex = '';
+                for (var i = 0; i < data.length; i++) {
+                  var b = data[i] & 0xff;
+                  hex += (b < 16 ? '0' : '') + b.toString(16);
+                }
+                var cid = _lumen_offscreen_canvas_from_image_data(2, 2, hex);
+                cid > 0
+            "#,
+        );
+        assert!(ok, "createImageBitmap inner binding should produce a canvas");
+    }
+
+    #[test]
+    fn native_transfer_to_image_bitmap_returns_new_canvas_id() {
+        let rt = with_offscreen();
+        let ok = bool_eval(
+            &rt,
+            r#"
+                var canvas = new OffscreenCanvas(4, 4);
+                var ctx2d = canvas.getContext('2d');
+                ctx2d.fillStyle = '#00ff00';
+                ctx2d.fillRect(0, 0, 4, 4);
+                var newId = _lumen_offscreen_canvas_transfer_to_image_bitmap(canvas.__canvas_id__);
+                newId > 0 && newId !== canvas.__canvas_id__
+            "#,
+        );
+        assert!(ok);
+    }
+
+    #[test]
+    fn js_create_image_bitmap_from_offscreen_canvas_does_not_detach_source() {
+        // createImageBitmap(OffscreenCanvas) must snapshot pixels without
+        // neutering the source (unlike transferToImageBitmap()). Exercises the
+        // same read-snapshot-recreate native sequence the JS shim uses,
+        // bypassing the Promise wrapper (same rationale as the ImageData test
+        // above: no microtask pump in this bare `eval` harness).
+        let rt = with_offscreen();
+        let ok = bool_eval(
+            &rt,
+            r#"
+                var canvas = new OffscreenCanvas(4, 4);
+                var ctx2d = canvas.getContext('2d');
+                ctx2d.fillStyle = '#00ff00';
+                ctx2d.fillRect(0, 0, 4, 4);
+                var raw = _lumen_offscreen_canvas2d_get_image_data(canvas.__canvas_id__);
+                var parts = raw.split(',');
+                var snapCid = _lumen_offscreen_canvas_from_image_data(parseInt(parts[0], 10), parseInt(parts[1], 10), parts[2]);
+                var bitmapCreated = snapCid > 0 && snapCid !== canvas.__canvas_id__;
+                var srcStillReadable = _lumen_offscreen_canvas2d_get_image_data(canvas.__canvas_id__).length > 0;
+                bitmapCreated && srcStillReadable
+            "#,
+        );
+        assert!(ok);
+    }
+
+    #[test]
+    fn js_offscreen_canvas_available_in_fresh_context() {
+        // Simulates worker thread: fresh JS runtime with OffscreenCanvas installed.
+        let rt = with_offscreen();
+        assert!(
+            bool_eval(
+                &rt,
+                "typeof OffscreenCanvas === 'function' && typeof createImageBitmap === 'function'"
+            ),
+            "OffscreenCanvas and createImageBitmap must be available in fresh (worker) context"
+        );
     }
 }
