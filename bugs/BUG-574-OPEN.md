@@ -63,3 +63,11 @@ specific to forms — this is very likely present as unexplained
 that exercises click-based interaction (already-closed slices were not
 re-audited for this specific message; flagging for awareness when triaging
 old FAIL logs, not re-opening them).
+
+**Расширено 2026-08-04 (P2, WPT-VENDOR-html-interaction):** the predicted
+`getRootNode` sibling gap is confirmed — filed separately as
+[BUG-599](BUG-599-OPEN.md) since it breaks a *different* call path
+(`tools/wptrunner/wptrunner/testdriver-extra.js`'s `get_selector_array`,
+used by `send_keys`/`get_computed_role`/`action_sequence`/etc., not just
+`click()`'s `getInViewCenterPoint`). Fix both together — same `Node.prototype`
+shared-method block, same implementation pattern.

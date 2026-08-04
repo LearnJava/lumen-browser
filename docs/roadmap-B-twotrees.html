@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-04",
  "counts": {
-  "open": 251,
+  "open": 254,
   "fixed": 315,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 566,
+ "total_bugs": 569,
  "phases": [
   {
    "id": "P0",
@@ -2783,9 +2783,14 @@
       {
        "id": "WPT-VENDOR-html-interaction",
        "title": "WPT: прогнать срез `html/interaction`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). Срез категории `html`, вынесен из `WPT-VENDOR-html` 2026-07-28 (полный прогон категории — 40+ часов, не помещается в сессию). 192 `testharness`-id, из них 144 с `testdriver` — та же оговорка про предсказатель. Дерево уже вендорено. Профильная категория для BUG-381 (focus API отсутствует целиком)"
+       "note": "Скоуп: ⬜ (кандидат). Срез категории `html`, вынесен из `WPT-VENDOR-html` 2026-07-28. Дерево уже вендорено (216 файлов, всё под `focus/`). DONE 2026-08-04: прогнан целиком (`--processes=4`, ~2 мин) — **169/192 harness OK, 169/686 сабтестов** — на порядок лучше типичного ценника backlog'а: BUG-381/382/383 (focus API), фикс которых профилировала эта строка, уже закрыты, `focusGroup`/`focusGroupStart` (WHATWG focusgroup attribute reflection) реализованы корректно. Крупнейший класс отказов (227+77 сабтестов) — цена уже известных дефектов: BUG-346 (`Url::resolve()` не схлопывает `..`, `../resources/focusgroup-utils.js` → 404) и невендоренный `/shadow-dom/focus-navigation/resources/focus-utils.js` (задокументирован в `VENDOR.md` как известный гэп категории `html`). Три новых бага: BUG-599 (`Node.prototype.getRootNode()` отсутствует целиком — ломает `get_selector_array` в вендоренном `testdriver-extra.js`, на пути почти каждого `test_driver_internal.*`-действия, не только `click()`; расширяет предсказанный, но не подтверждённый гэп из BUG-574), BUG-600 (HTML \"focus fixup rule\" не реализовано — фокус не уходит на `document.body`, когда сфокусированный элемент становится нефокусируемым), BUG-601 (`DOMTokenList` не выставлен глобальным конструктором, хотя сам объект работает полностью корректно). 21 из 23 unexpected верхнего уровня — TIMEOUT, часть согласуется с BUG-599 (зависание вместо отклонения промиса)",
+       "bugs": [
+        "BUG-599",
+        "BUG-600",
+        "BUG-601"
+       ]
       },
       {
        "id": "WPT-VENDOR-html-rendering",
@@ -8522,6 +8527,27 @@
    "status": "open",
    "title": "`types` getter `.slice()`s a fresh array on every access instead of caching a `FrozenArray` until the data store changes -- `dt.types === dt.types` always `fals…",
    "component": "js (`dom.rs:737-739` `DataTransfer.prototype.types` getter)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-599": {
+   "status": "open",
+   "title": "`Node.prototype.getRootNode()` missing entirely -- breaks `get_selector_array` in the vendored `tools/wptrunner/wptrunner/testdriver-extra.js`, the selector-bui…",
+   "component": "js (`crates/js/src/dom.rs`, `Node.prototype` shared-method block -- no `getRootNode`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-600": {
+   "status": "open",
+   "title": "HTML \"focus fixup rule\" not implemented -- when the focused element becomes non-focusable (disabled/hidden/detached/loses tabindex/contentEditable turned off),…",
+   "component": "js/shell focus pipeline (`crates/js/src/dom.rs` focus install path)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-601": {
+   "status": "open",
+   "title": "`DOMTokenList` constructor not exposed on `window` -- `instanceof DOMTokenList` throws `ReferenceError` even though the underlying object (`classList`/`focusGro…",
+   "component": "js (`crates/js/src/dom.rs`, `DOMTokenList (classList)` section ~line 1191)",
    "date": null,
    "debtor": false
   }
