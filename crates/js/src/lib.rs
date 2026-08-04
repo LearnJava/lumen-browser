@@ -800,13 +800,6 @@ impl QuickJsRuntime {
             )
             .map_err(|e| rq_err(&ctx, e))?;
 
-            // Install MediaDevices API (W3C Media Capture §4) — after DOM/navigator so that
-            // Promise, DOMException, and navigator are available. Phase 1: getUserMedia
-            // resolves with a live MediaStream when AudioCaptureProvider is installed.
-            if let Err(e) = media_devices::install_media_devices_bindings(&ctx) {
-                eprintln!("MediaDevices bindings init failed: {}", e);
-            }
-
             // Install HTMLVideoElement stubs — after DOM so document.createElement is available.
             if let Err(e) = video_bindings::install_video_bindings(&ctx) {
                 eprintln!("Video bindings init failed: {}", e);
@@ -910,13 +903,6 @@ impl QuickJsRuntime {
             let cb_enabled = self.cookie_banner_dismiss.load(Ordering::Relaxed);
             if let Err(e) = cookie_banner::install(&ctx, cb_enabled) {
                 eprintln!("Cookie-banner bindings init failed: {}", e);
-            }
-
-            // Install the ECMA-402 Intl shim (§91 i18n) — last, after window so
-            // `window.Intl` can be re-exported. Defers to a native Intl if the
-            // host QuickJS build ever provides one.
-            if let Err(e) = intl_bindings::install_intl_bindings(&ctx) {
-                eprintln!("Intl bindings init failed: {}", e);
             }
 
             // Install TC39 Temporal API shim (Stage 4 / ES2025) — after Intl so the

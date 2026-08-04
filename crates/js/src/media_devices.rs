@@ -19,8 +19,6 @@
 //! - `MediaDeviceInfo` — device descriptor, `window.MediaDeviceInfo` exported
 //! - `InputDeviceInfo` (subclass) — `window.InputDeviceInfo` exported
 
-use rquickjs::Ctx;
-
 /// Install MediaDevices API shim into the JS context.
 ///
 /// Adds `navigator.mediaDevices` with all W3C Media Capture §4 methods and
@@ -28,15 +26,8 @@ use rquickjs::Ctx;
 /// `InputDeviceInfo` as globals on `window`. All getUserMedia / getDisplayMedia
 /// calls reject with `NotAllowedError` (privacy-first).
 ///
-/// Must be called **after** `install_dom_api` so that `navigator`, `Promise`,
-/// `DOMException`, `EventTarget`, and `Event` already exist.
-pub fn install_media_devices_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(MEDIA_DEVICES_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_media_devices_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// Must be called **after** the DOM/`navigator` install so that `navigator`,
+/// `Promise`, `DOMException`, `EventTarget`, and `Event` already exist.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_media_devices_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -45,6 +36,7 @@ pub(crate) fn install_media_devices_bindings_v8(rt: &crate::v8_runtime::V8JsRunt
 }
 
 /// JavaScript shim implementing the MediaDevices API.
+#[cfg(feature = "v8-backend")]
 const MEDIA_DEVICES_SHIM: &str = r#"(function() {
   'use strict';
   if (typeof navigator === 'undefined') return;
@@ -438,408 +430,326 @@ const MEDIA_DEVICES_SHIM: &str = r#"(function() {
 })();
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
     use super::*;
-    use rquickjs::{Context, Runtime};
-
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
     /// Set up minimal globals needed before installing the shim.
     ///
     /// Note: `crypto.randomUUID` is deliberately omitted so that `_lumen_random_uuid()`
     /// falls through to the `Math.random`-based fallback — each call produces a distinct
     /// value, enabling clone-ID-inequality tests without a stateful mock.
-    fn install_prereqs(ctx: &rquickjs::Ctx) {
-        ctx.eval::<(), _>(
+    fn install_prereqs(rt: &V8JsRuntime) {
+        rt.eval(
             "var navigator = {}; \
              var window = {}; \
              function DOMException(msg, name) { this.message = msg; this.name = name; } \
-             DOMException.prototype = Object.create(Error.prototype); \
-             var Promise = globalThis.Promise;",
+             DOMException.prototype = Object.create(Error.prototype);",
         )
         .unwrap();
     }
 
+    fn s(rt: &V8JsRuntime, code: &str) -> String {
+        match rt.eval(code).unwrap() {
+            JsValue::String(s) => s,
+            other => panic!("expected string, got {other:?}"),
+        }
+    }
+
+    fn b(rt: &V8JsRuntime, code: &str) -> bool {
+        match rt.eval(code).unwrap() {
+            JsValue::Bool(b) => b,
+            other => panic!("expected bool, got {other:?}"),
+        }
+    }
+
     #[test]
     fn install_succeeds_without_navigator() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_media_devices_bindings(&ctx).expect("install must succeed");
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install_media_devices_bindings_v8(&rt).expect("install must succeed");
     }
 
     #[test]
     fn install_succeeds_with_prereqs() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_media_devices_bindings(&ctx).expect("install must succeed");
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install_prereqs(&rt);
+        install_media_devices_bindings_v8(&rt).expect("install must succeed");
     }
 
     #[test]
     fn navigator_media_devices_is_object() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_media_devices_bindings(&ctx).unwrap();
-            let ty: String = ctx.eval("typeof navigator.mediaDevices").unwrap();
-            assert_eq!(ty, "object");
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install_prereqs(&rt);
+        install_media_devices_bindings_v8(&rt).unwrap();
+        assert_eq!(s(&rt, "typeof navigator.mediaDevices"), "object");
     }
 
     #[test]
     fn get_user_media_is_function() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_media_devices_bindings(&ctx).unwrap();
-            let ty: String = ctx
-                .eval("typeof navigator.mediaDevices.getUserMedia")
-                .unwrap();
-            assert_eq!(ty, "function");
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install_prereqs(&rt);
+        install_media_devices_bindings_v8(&rt).unwrap();
+        assert_eq!(s(&rt, "typeof navigator.mediaDevices.getUserMedia"), "function");
     }
 
     #[test]
     fn get_user_media_returns_promise() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_media_devices_bindings(&ctx).unwrap();
-            let is_thenable: bool = ctx
-                .eval(
-                    "(function() { \
-                       var p = navigator.mediaDevices.getUserMedia({video:true}); \
-                       return typeof p === 'object' && typeof p.then === 'function'; \
-                     })()",
-                )
-                .unwrap();
-            assert!(is_thenable);
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install_prereqs(&rt);
+        install_media_devices_bindings_v8(&rt).unwrap();
+        assert!(b(
+            &rt,
+            "(function() { \
+               var p = navigator.mediaDevices.getUserMedia({video:true}); \
+               return typeof p === 'object' && typeof p.then === 'function'; \
+             })()",
+        ));
     }
 
     #[test]
     fn get_display_media_is_function() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_media_devices_bindings(&ctx).unwrap();
-            let ty: String = ctx
-                .eval("typeof navigator.mediaDevices.getDisplayMedia")
-                .unwrap();
-            assert_eq!(ty, "function");
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install_prereqs(&rt);
+        install_media_devices_bindings_v8(&rt).unwrap();
+        assert_eq!(s(&rt, "typeof navigator.mediaDevices.getDisplayMedia"), "function");
     }
 
     #[test]
     fn get_display_media_returns_promise() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_media_devices_bindings(&ctx).unwrap();
-            let is_thenable: bool = ctx
-                .eval(
-                    "(function() { \
-                       var p = navigator.mediaDevices.getDisplayMedia({video:true}); \
-                       return typeof p === 'object' && typeof p.then === 'function'; \
-                     })()",
-                )
-                .unwrap();
-            assert!(is_thenable);
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install_prereqs(&rt);
+        install_media_devices_bindings_v8(&rt).unwrap();
+        assert!(b(
+            &rt,
+            "(function() { \
+               var p = navigator.mediaDevices.getDisplayMedia({video:true}); \
+               return typeof p === 'object' && typeof p.then === 'function'; \
+             })()",
+        ));
     }
 
     #[test]
     fn enumerate_devices_is_function() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_media_devices_bindings(&ctx).unwrap();
-            let ty: String = ctx
-                .eval("typeof navigator.mediaDevices.enumerateDevices")
-                .unwrap();
-            assert_eq!(ty, "function");
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install_prereqs(&rt);
+        install_media_devices_bindings_v8(&rt).unwrap();
+        assert_eq!(s(&rt, "typeof navigator.mediaDevices.enumerateDevices"), "function");
     }
 
     #[test]
     fn enumerate_devices_returns_promise() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_media_devices_bindings(&ctx).unwrap();
-            let is_thenable: bool = ctx
-                .eval(
-                    "(function() { \
-                       var p = navigator.mediaDevices.enumerateDevices(); \
-                       return typeof p === 'object' && typeof p.then === 'function'; \
-                     })()",
-                )
-                .unwrap();
-            assert!(is_thenable);
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install_prereqs(&rt);
+        install_media_devices_bindings_v8(&rt).unwrap();
+        assert!(b(
+            &rt,
+            "(function() { \
+               var p = navigator.mediaDevices.enumerateDevices(); \
+               return typeof p === 'object' && typeof p.then === 'function'; \
+             })()",
+        ));
     }
 
     #[test]
     fn get_supported_constraints_returns_object() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_media_devices_bindings(&ctx).unwrap();
-            let ty: String = ctx
-                .eval("typeof navigator.mediaDevices.getSupportedConstraints()")
-                .unwrap();
-            assert_eq!(ty, "object");
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install_prereqs(&rt);
+        install_media_devices_bindings_v8(&rt).unwrap();
+        assert_eq!(s(&rt, "typeof navigator.mediaDevices.getSupportedConstraints()"), "object");
     }
 
     #[test]
     fn get_supported_constraints_has_common_keys() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_media_devices_bindings(&ctx).unwrap();
-            let has_width: bool = ctx
-                .eval("navigator.mediaDevices.getSupportedConstraints().width === true")
-                .unwrap();
-            assert!(has_width);
-            let has_frame_rate: bool = ctx
-                .eval("navigator.mediaDevices.getSupportedConstraints().frameRate === true")
-                .unwrap();
-            assert!(has_frame_rate);
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install_prereqs(&rt);
+        install_media_devices_bindings_v8(&rt).unwrap();
+        assert!(b(&rt, "navigator.mediaDevices.getSupportedConstraints().width === true"));
+        assert!(b(&rt, "navigator.mediaDevices.getSupportedConstraints().frameRate === true"));
     }
 
     #[test]
     fn media_stream_is_class() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_media_devices_bindings(&ctx).unwrap();
-            let ty: String = ctx.eval("typeof window.MediaStream").unwrap();
-            assert_eq!(ty, "function");
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install_prereqs(&rt);
+        install_media_devices_bindings_v8(&rt).unwrap();
+        assert_eq!(s(&rt, "typeof window.MediaStream"), "function");
     }
 
     #[test]
     fn media_stream_instance_has_id_and_active() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_media_devices_bindings(&ctx).unwrap();
-            let ok: bool = ctx
-                .eval(
-                    "(function() { \
-                       var s = new MediaStream(); \
-                       return typeof s.id === 'string' && s.active === false; \
-                     })()",
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install_prereqs(&rt);
+        install_media_devices_bindings_v8(&rt).unwrap();
+        assert!(b(
+            &rt,
+            "(function() { \
+               var s = new MediaStream(); \
+               return typeof s.id === 'string' && s.active === false; \
+             })()",
+        ));
     }
 
     #[test]
     fn media_stream_get_tracks_empty() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_media_devices_bindings(&ctx).unwrap();
-            let len: i32 = ctx
-                .eval("(new MediaStream()).getTracks().length")
-                .unwrap();
-            assert_eq!(len, 0);
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install_prereqs(&rt);
+        install_media_devices_bindings_v8(&rt).unwrap();
+        match rt.eval("(new MediaStream()).getTracks().length").unwrap() {
+            JsValue::Number(n) => assert_eq!(n, 0.0),
+            other => panic!("expected number, got {other:?}"),
+        }
     }
 
     #[test]
     fn media_stream_add_remove_track() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_media_devices_bindings(&ctx).unwrap();
-            let ok: bool = ctx
-                .eval(
-                    "(function() { \
-                       var s = new MediaStream(); \
-                       var t = new MediaStreamTrack('video', 'cam'); \
-                       s.addTrack(t); \
-                       if (s.getTracks().length !== 1) return false; \
-                       if (!s.active) return false; \
-                       s.removeTrack(t); \
-                       return s.getTracks().length === 0 && !s.active; \
-                     })()",
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install_prereqs(&rt);
+        install_media_devices_bindings_v8(&rt).unwrap();
+        assert!(b(
+            &rt,
+            "(function() { \
+               var s = new MediaStream(); \
+               var t = new MediaStreamTrack('video', 'cam'); \
+               s.addTrack(t); \
+               if (s.getTracks().length !== 1) return false; \
+               if (!s.active) return false; \
+               s.removeTrack(t); \
+               return s.getTracks().length === 0 && !s.active; \
+             })()",
+        ));
     }
 
     #[test]
     fn media_stream_clone_is_independent() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_media_devices_bindings(&ctx).unwrap();
-            let ok: bool = ctx
-                .eval(
-                    "(function() { \
-                       var s = new MediaStream([new MediaStreamTrack('audio','mic')]); \
-                       var c = s.clone(); \
-                       return c.id !== s.id && c.getTracks().length === 1; \
-                     })()",
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install_prereqs(&rt);
+        install_media_devices_bindings_v8(&rt).unwrap();
+        assert!(b(
+            &rt,
+            "(function() { \
+               var s = new MediaStream([new MediaStreamTrack('audio','mic')]); \
+               var c = s.clone(); \
+               return c.id !== s.id && c.getTracks().length === 1; \
+             })()",
+        ));
     }
 
     #[test]
     fn media_stream_track_is_class() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_media_devices_bindings(&ctx).unwrap();
-            let ty: String = ctx.eval("typeof window.MediaStreamTrack").unwrap();
-            assert_eq!(ty, "function");
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install_prereqs(&rt);
+        install_media_devices_bindings_v8(&rt).unwrap();
+        assert_eq!(s(&rt, "typeof window.MediaStreamTrack"), "function");
     }
 
     #[test]
     fn media_stream_track_properties() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_media_devices_bindings(&ctx).unwrap();
-            let ok: bool = ctx
-                .eval(
-                    "(function() { \
-                       var t = new MediaStreamTrack('video', 'camera'); \
-                       return t.kind === 'video' \
-                           && t.label === 'camera' \
-                           && typeof t.id === 'string' \
-                           && t.enabled === true \
-                           && t.muted === false \
-                           && t.readyState === 'ended'; \
-                     })()",
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install_prereqs(&rt);
+        install_media_devices_bindings_v8(&rt).unwrap();
+        assert!(b(
+            &rt,
+            "(function() { \
+               var t = new MediaStreamTrack('video', 'camera'); \
+               return t.kind === 'video' \
+                   && t.label === 'camera' \
+                   && typeof t.id === 'string' \
+                   && t.enabled === true \
+                   && t.muted === false \
+                   && t.readyState === 'ended'; \
+             })()",
+        ));
     }
 
     #[test]
     fn media_stream_track_clone() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_media_devices_bindings(&ctx).unwrap();
-            let ok: bool = ctx
-                .eval(
-                    "(function() { \
-                       var t = new MediaStreamTrack('audio', 'mic'); \
-                       var c = t.clone(); \
-                       return c.kind === 'audio' && c.id !== t.id; \
-                     })()",
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install_prereqs(&rt);
+        install_media_devices_bindings_v8(&rt).unwrap();
+        assert!(b(
+            &rt,
+            "(function() { \
+               var t = new MediaStreamTrack('audio', 'mic'); \
+               var c = t.clone(); \
+               return c.kind === 'audio' && c.id !== t.id; \
+             })()",
+        ));
     }
 
     #[test]
     fn media_device_info_is_class() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_media_devices_bindings(&ctx).unwrap();
-            let ty: String = ctx.eval("typeof window.MediaDeviceInfo").unwrap();
-            assert_eq!(ty, "function");
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install_prereqs(&rt);
+        install_media_devices_bindings_v8(&rt).unwrap();
+        assert_eq!(s(&rt, "typeof window.MediaDeviceInfo"), "function");
     }
 
     #[test]
     fn media_device_info_to_json() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_media_devices_bindings(&ctx).unwrap();
-            let ok: bool = ctx
-                .eval(
-                    "(function() { \
-                       var d = new MediaDeviceInfo('id1','g1','audioinput','Mic'); \
-                       var j = d.toJSON(); \
-                       return j.deviceId === 'id1' && j.kind === 'audioinput' && j.label === 'Mic'; \
-                     })()",
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install_prereqs(&rt);
+        install_media_devices_bindings_v8(&rt).unwrap();
+        assert!(b(
+            &rt,
+            "(function() { \
+               var d = new MediaDeviceInfo('id1','g1','audioinput','Mic'); \
+               var j = d.toJSON(); \
+               return j.deviceId === 'id1' && j.kind === 'audioinput' && j.label === 'Mic'; \
+             })()",
+        ));
     }
 
     #[test]
     fn input_device_info_is_subclass() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_media_devices_bindings(&ctx).unwrap();
-            let ok: bool = ctx
-                .eval(
-                    "(function() { \
-                       var d = new InputDeviceInfo('id2','g2','videoinput','Cam'); \
-                       return d instanceof MediaDeviceInfo \
-                           && typeof d.getCapabilities === 'function'; \
-                     })()",
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install_prereqs(&rt);
+        install_media_devices_bindings_v8(&rt).unwrap();
+        assert!(b(
+            &rt,
+            "(function() { \
+               var d = new InputDeviceInfo('id2','g2','videoinput','Cam'); \
+               return d instanceof MediaDeviceInfo \
+                   && typeof d.getCapabilities === 'function'; \
+             })()",
+        ));
     }
 
     #[test]
     fn on_device_change_setter() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_media_devices_bindings(&ctx).unwrap();
-            let ok: bool = ctx
-                .eval(
-                    "(function() { \
-                       var called = false; \
-                       navigator.mediaDevices.ondevicechange = function() { called = true; }; \
-                       return typeof navigator.mediaDevices.ondevicechange === 'function'; \
-                     })()",
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install_prereqs(&rt);
+        install_media_devices_bindings_v8(&rt).unwrap();
+        assert!(b(
+            &rt,
+            "(function() { \
+               var called = false; \
+               navigator.mediaDevices.ondevicechange = function() { called = true; }; \
+               return typeof navigator.mediaDevices.ondevicechange === 'function'; \
+             })()",
+        ));
     }
 
     #[test]
     fn add_remove_event_listener() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_prereqs(&ctx);
-            install_media_devices_bindings(&ctx).unwrap();
-            let ok: bool = ctx
-                .eval(
-                    "(function() { \
-                       var count = 0; \
-                       var fn = function() { count++; }; \
-                       navigator.mediaDevices.addEventListener('devicechange', fn); \
-                       navigator.mediaDevices.removeEventListener('devicechange', fn); \
-                       navigator.mediaDevices.dispatchEvent({type:'devicechange'}); \
-                       return count === 0; \
-                     })()",
-                )
-                .unwrap();
-            assert!(ok, "listener should have been removed");
-        });
+        let rt = V8JsRuntime::new().unwrap();
+        install_prereqs(&rt);
+        install_media_devices_bindings_v8(&rt).unwrap();
+        assert!(
+            b(
+                &rt,
+                "(function() { \
+                   var count = 0; \
+                   var fn = function() { count++; }; \
+                   navigator.mediaDevices.addEventListener('devicechange', fn); \
+                   navigator.mediaDevices.removeEventListener('devicechange', fn); \
+                   navigator.mediaDevices.dispatchEvent({type:'devicechange'}); \
+                   return count === 0; \
+                 })()",
+            ),
+            "listener should have been removed"
+        );
     }
 }

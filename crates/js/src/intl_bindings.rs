@@ -1,8 +1,8 @@
 //! ECMA-402 `Intl` shim for `en-US` and `ru-RU` (§91 i18n).
 //!
-//! QuickJS (as built by `rquickjs` with default features) ships **without** the
-//! ECMA-402 internationalization API, so pages that call `Intl.NumberFormat`,
-//! `Intl.DateTimeFormat`, `Intl.Collator` or `Intl.PluralRules` throw
+//! Not every V8 build ships the ECMA-402 internationalization API (depends on
+//! ICU data availability), so pages that call `Intl.NumberFormat`,
+//! `Intl.DateTimeFormat`, `Intl.Collator` or `Intl.PluralRules` may throw
 //! `ReferenceError: Intl is not defined`. This module installs a self-contained
 //! pure-JS implementation covering the two locales Lumen targets first:
 //! `en-US` (default fallback) and `ru-RU`.
@@ -27,25 +27,15 @@
 //! `Date.prototype.toLocaleString` / `toLocaleDateString` / `toLocaleTimeString`
 //! through the matching `Intl` constructor so existing code paths localize too.
 //!
-//! Installed last in [`crate::QuickJsRuntime::install_dom`] (after the DOM and
-//! `window` exist) so `window.Intl` is exposed alongside the global. If a native
-//! `Intl` is ever present (e.g. a future feature-enabled QuickJS build) the shim
-//! defers to it.
-
-use rquickjs::Ctx;
+//! Installed last in `V8JsRuntime`'s DOM install sequence (`v8_runtime.rs`,
+//! after the DOM and `window` exist) so `window.Intl` is exposed alongside the
+//! global. If a native `Intl` is already present the shim defers to it.
 
 /// Install the `Intl` shim into the JS context.
 ///
 /// No-op when a native `Intl` global already exists. Must run after the DOM is
 /// installed so `window` is available for re-export. Pure JS — no native
 /// bindings required.
-pub fn install_intl_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(INTL_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_intl_bindings`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_intl_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -54,6 +44,7 @@ pub(crate) fn install_intl_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> l
 }
 
 /// Pure-JS ECMA-402 shim (`en-US` + `ru-RU`). See module docs for scope.
+#[cfg(feature = "v8-backend")]
 const INTL_SHIM: &str = r#"(function(global) {
   // Defer to a native Intl if the host build provides one.
   if (typeof global.Intl !== 'undefined' && global.Intl && global.Intl.NumberFormat) {
@@ -437,21 +428,20 @@ const INTL_SHIM: &str = r#"(function(global) {
 })(typeof globalThis !== 'undefined' ? globalThis : this);
 "#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
-    use crate::QuickJsRuntime;
-    use lumen_core::{JsRuntime, JsValue};
-    use lumen_dom::Document;
-    use std::sync::{Arc, Mutex};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn runtime() -> QuickJsRuntime {
-        let rt = QuickJsRuntime::new().unwrap();
-        let doc = Arc::new(Mutex::new(Document::new()));
-        rt.install_dom(doc, "", None, None, None, None, None, None, None, None, false).unwrap();
+    fn runtime() -> V8JsRuntime {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval("var window = globalThis;").unwrap();
+        super::install_intl_bindings_v8(&rt).unwrap();
         rt
     }
 
-    fn s(rt: &QuickJsRuntime, code: &str) -> String {
+    fn s(rt: &V8JsRuntime, code: &str) -> String {
         match rt.eval(code).unwrap() {
             JsValue::String(s) => s,
             other => panic!("expected string, got {other:?}"),
@@ -713,28 +703,32 @@ mod tests {
     }
 
     #[test]
-    fn resolved_options_locale_fallback() {
+    fn resolved_options_locale_recognizes_requested_language() {
+        // V8 ships a native, ICU-backed `Intl` (confirmed: `typeof Intl.NumberFormat`
+        // is `[native code]` even before this module installs anything), so the
+        // shim's own defer-to-native guard makes its naive `resolveLocale`
+        // fallback rules unreachable under the default V8 backend — this test
+        // used to assert the shim's own choice for an *invalid* tag
+        // (`'xx-YY'` -> `'en-US'`), but V8's real Intl instead falls back to the
+        // OS default locale for invalid tags, which is machine-dependent and not
+        // safe to hard-code here. Assert only what holds for both the shim and
+        // native ICU: a requested, recognized language resolves to a locale
+        // that starts with that language subtag.
         let rt = runtime();
-        // Unknown locale falls back to en-US.
-        assert_eq!(
-            s(&rt, "new Intl.NumberFormat('xx-YY').resolvedOptions().locale"),
-            "en-US"
-        );
-        assert_eq!(
-            s(&rt, "new Intl.NumberFormat(['de','ru-RU']).resolvedOptions().locale"),
-            "ru-RU"
-        );
+        assert!(s(&rt, "new Intl.NumberFormat('ru-RU').resolvedOptions().locale").starts_with("ru"));
+        assert!(s(&rt, "new Intl.NumberFormat('en-US').resolvedOptions().locale").starts_with("en"));
     }
 
     #[test]
-    fn supported_locales_of() {
+    fn supported_locales_of_recognizes_known_locale() {
+        // Native ICU (see comment above) recognizes far more locales than the
+        // shim's narrow en/ru polyfill, so `fr-FR` is no longer filtered out
+        // once V8's real `Intl` takes over — assert only that a locale both
+        // implementations agree on (`ru-RU`) survives the filter.
         let rt = runtime();
-        assert_eq!(
-            rt.eval(
-                "Intl.NumberFormat.supportedLocalesOf(['en-US','fr-FR','ru-RU']).length"
-            )
-            .unwrap(),
-            JsValue::Number(2.0)
-        );
+        let ok = rt
+            .eval("Intl.NumberFormat.supportedLocalesOf(['en-US','fr-FR','ru-RU']).indexOf('ru-RU') !== -1")
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 }
