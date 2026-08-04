@@ -2823,9 +2823,12 @@
       {
        "id": "WPT-VENDOR-html-aam",
        "title": "WPT: вендорить + прогнать категорию `html-aam`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-04: прогнана целиком (`--processes=1`, ~2:41) — **2/16 harness OK, 0/7 сабтестов**. Внекатегорийный хелпер `/wai-aria/scripts/aria-utils.js` не довендорен (та же методология, что `core-aam`/`dpub-aam`/`graphics-aam`); необычно — 13 файлов, ссылающихся на него, не получают флаг `testdriver` в манифесте и вместо SKIP реально навигируют, падают на `AriaUtils is not defined` и виснут до TIMEOUT. Единственный реальный сигнал (7 сабтестов на 2 файлах) — переподтверждение уже заведённого BUG-599 (`Node.prototype.getRootNode()` отсутствует), новых багов не заведено",
+       "bugs": [
+        "BUG-599 (переподтверждён)"
+       ]
       },
       {
        "id": "WPT-VENDOR-html-longdesc",
