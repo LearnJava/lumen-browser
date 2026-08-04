@@ -3563,6 +3563,40 @@ clean (unifies `v8-backend` via `lumen-shell`'s dependency edge).
 
 Next in queue: S12b-B29 (`webgpu`, Полоса 4).
 
+### S12b-B29: `webgpu` (2026-08-04, branch `p1-s12b-b29`)
+
+The module already had a ready V8 port (`install_webgpu_bindings_v8`, S9) —
+`navigator.gpu` Phase-0 shim shared with the rquickjs twin, plus real-backend
+natives (`_lumen_webgpu_*`) gated behind the `webgpu` feature
+(`lumen-paint/backend-wgpu`). The batch removed the rquickjs installer
+(`install_webgpu_bindings`) and its `lib.rs` call site, and ported all 28
+unique tests from the old rquickjs `mod tests` (some of which required the
+`webgpu` feature — real compute/render pipeline round-trips against a real
+`wgpu` device) into `tests_v8`, replacing the old 1-test `tests_v8` smoke
+skeleton.
+
+No bridge bugs found — the V8 real-backend tests (`v8_real_backend_*`,
+gated `#[cfg(feature = "webgpu")]`) pass unmodified against the actual wgpu
+device, same as the rquickjs versions they replace.
+
+`cargo test -p lumen-js` (default, no features): 402 lib (down from 427,
+-25 — only the 25 non-webgpu-gated rquickjs tests counted here; the 3
+`real_backend_*` tests were already `#[cfg(feature = "webgpu")]`-gated out
+of a plain default build). `cargo test -p lumen-js --features v8-backend`:
+2568 lib (down from 2569, -1 — replaces 26 old tests [25 rquickjs +
+1 old tests_v8 skeleton] with 25 new `tests_v8`, since the 3 real-backend
+tests need `webgpu` too). `cargo test -p lumen-js --features
+v8-backend,webgpu`: 2571 lib, all pass, including the 28/28 module tests
+(module count net -1: 29 old tests [28 rquickjs + 1 skeleton] → 28 new).
+`cargo clippy -p lumen-js --all-targets --features v8-backend,webgpu -- -D
+warnings` clean. `lumen-shell` checked under default (wgpu+v8) and rollback
+(`backend-femtovg,backend-wgpu,quickjs`) — both green; the rollback build no
+longer installs any WebGPU shim into the QuickJS runtime (rquickjs installer
+is gone), matching the pattern of prior S12b batches removing engine-specific
+surface from the rollback path one module at a time.
+
+Next in queue: S12b-B30 (`canvas2d`, Полоса 4).
+
 ---
 
 ## Risks (Rev 2)
