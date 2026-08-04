@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-04",
  "counts": {
-  "open": 221,
+  "open": 222,
   "fixed": 309,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 530,
+ "total_bugs": 531,
  "phases": [
   {
    "id": "P0",
@@ -8240,6 +8240,13 @@
    "component": "css-parser/layout (no `position-try`/`position-try-fallbacks`/`position-try-order`/`@position-try` anywhere in `css-parser/src/` or `layout/src/style.rs`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-563": {
+   "status": "open",
+   "title": "`element.style.<prop>` for `anchor()`/`anchor-size()`/`position-area` is a raw-text passthrough -- never calls the real parsers (`layout/src/style.rs::parse_anc…",
+   "component": "js (`crates/js/src/dom.rs:4260-4298` `_lumen_make_style`; `dom.rs:4241-4255` `_lumen_parse_style`/`_lumen_serialize_style`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -8474,6 +8481,9 @@
   ],
   "js (`crates/js/src/dom.rs:4257`, `_lumen_serialize_style`)": [
    "BUG-497"
+  ],
+  "js (`crates/js/src/dom.rs:4260-4298` `_lumen_make_style`; `dom.rs:4241-4255` `_lumen_parse_style`/`_lumen_serialize_style`)": [
+   "BUG-563"
   ],
   "js (`crates/js/src/dom.rs:4264-4302`)": [
    "BUG-484"

@@ -41,4 +41,39 @@
       test_url(), harness_status.status, harness_status.message, harness_status.stack, subtests
     ]);
   });
+
+  // WARNING: this file goes through Python string interpolation
+  // (StaticHandler in tools/wptserve/wptserve/handlers.py does
+  // 'data = data times format_args' using the four bare tokens below) before
+  // being served — a literal percent sign anywhere in this file, including
+  // in a comment, breaks that substitution at request time. Escape any
+  // future percent sign as a doubled pair; better yet, avoid the character
+  // entirely in comments the way this one does.
+  //
+  // route_builder.add_static (environment.py::get_routes) feeds this file
+  // the same testharnessreport_format_args dict it feeds upstream's own
+  // testharnessreport.js — but only if the file actually contains the four
+  // placeholder tokens below and calls setup() with them, which this file
+  // didn't do until now. Without this, --timeout-multiplier silently had no
+  // effect on the file-level harness timeout: tests.setup() (testharness.js)
+  // is the only thing that both applies the multiplier to
+  // Tests.timeout_length AND reschedules the already-running timer
+  // (Tests.prototype.setup calls this.set_timeout() at its end) — the Tests
+  // singleton's constructor starts that timer immediately at testharness.js
+  // parse time, at the unmultiplied default, so anything short of calling
+  // setup() again leaves it running on the original deadline. Root-caused by
+  // reading source, not guessed, while investigating the WPT-RUN-3
+  // css-anchor-position TIMEOUT cluster (slice 40/42, ROADMAP.md): every
+  // observed TIMEOUT had duration pinned at roughly 10.1 to 10.6 seconds
+  // regardless of --timeout-multiplier, with message: null — exactly
+  // Tests.prototype.timeout()'s harness-level signature, fired at the
+  // default (unmultiplied) ~10s file timeout before the Python-side executor
+  // or manager-watchdog timeouts (both already correctly multiplier-scaled,
+  // see executorlumen.py/testrunner.py) were ever reached.
+  setup({
+    output: %(output)d,
+    timeout_multiplier: %(timeout_multiplier)s,
+    explicit_timeout: %(explicit_timeout)s,
+    debug: %(debug)s
+  });
 })();
