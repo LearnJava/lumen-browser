@@ -14,25 +14,31 @@
 //! 5. After a successful dismiss the observer and interval are torn down — the
 //!    feature is single-shot per page load.
 //!
-//! Opt-out: pass `enabled = false` to `install_cookie_banner_bindings`; the
-//! function becomes a no-op for that page. Shell wires this from the
-//! `cookie_banner_dismiss` field in `Lumen`.
-
-use rquickjs::Ctx;
+//! Opt-out: pass `enabled = false` to [`install_cookie_banner_bindings_v8`];
+//! the function becomes a no-op for that page. Shell wires this from the
+//! `cookie_banner_dismiss` field via [`crate::v8_runtime::V8JsRuntime::set_cookie_banner_dismiss`].
+//!
+//! V8 port of the former rquickjs `install_cookie_banner_bindings`/`install`
+//! (Ph3 V8 migration S12b-G6, BUG-548, rquickjs side removed in the same
+//! batch): identical JS shim, evaluated via
+//! [`lumen_core::ext::JsRuntime::eval`]/`set_global` instead of `rquickjs::Ctx`.
 
 /// Install cookie-banner auto-dismiss shim into the JS context.
 ///
 /// When `enabled` is `false` the function is a no-op — the shim is not
 /// injected and cookie banners are shown normally.
 ///
-/// Must be called **after** `dom::install_dom_api` so that `document`,
+/// Must be called **after** DOM API install so that `document`,
 /// `MutationObserver`, `setTimeout`, and `setInterval` are available.
-pub fn install_cookie_banner_bindings(ctx: &Ctx, enabled: bool) -> rquickjs::Result<()> {
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_cookie_banner_bindings_v8(
+    rt: &crate::v8_runtime::V8JsRuntime,
+    enabled: bool,
+) -> lumen_core::JsResult<()> {
     if !enabled {
         return Ok(());
     }
-    ctx.eval::<(), _>(COOKIE_BANNER_SHIM)?;
-    Ok(())
+    inject_v8(rt, CONSENT_SELECTORS)
 }
 
 /// EasyList I-don't-care-about-cookies selector list.
@@ -85,6 +91,7 @@ pub const CONSENT_SELECTORS: &[&str] = &[
 ];
 
 /// JavaScript shim source — evaluated once per page load when enabled.
+#[cfg(feature = "v8-backend")]
 const COOKIE_BANNER_SHIM: &str = r#"(function() {
   'use strict';
 
@@ -155,42 +162,64 @@ const COOKIE_BANNER_SHIM: &str = r#"(function() {
 
 /// Build the `_LUMEN_CONSENT_SELECTORS` global value and inject the shim.
 ///
-/// Separated from [`install_cookie_banner_bindings`] so tests can call it
+/// Separated from [`install_cookie_banner_bindings_v8`] so tests can call it
 /// with a custom selector list without going through the full DOM shim.
-pub fn install_with_selectors(ctx: &Ctx, selectors: &[&str]) -> rquickjs::Result<()> {
+#[cfg(all(test, feature = "v8-backend"))]
+pub(crate) fn install_with_selectors_v8(
+    rt: &crate::v8_runtime::V8JsRuntime,
+    selectors: &[&str],
+) -> lumen_core::JsResult<()> {
+    inject_v8(rt, selectors)
+}
+
+/// Inject the selector list global + shim.
+#[cfg(feature = "v8-backend")]
+fn inject_v8(
+    rt: &crate::v8_runtime::V8JsRuntime,
+    selectors: &[&str],
+) -> lumen_core::JsResult<()> {
+    use lumen_core::ext::JsRuntime as _;
     let joined = selectors.join("|");
-    ctx.globals().set("_LUMEN_CONSENT_SELECTORS", joined)?;
-    ctx.eval::<(), _>(COOKIE_BANNER_SHIM)?;
+    rt.set_global("_LUMEN_CONSENT_SELECTORS", lumen_core::JsValue::String(joined))?;
+    rt.eval(COOKIE_BANNER_SHIM)?;
     Ok(())
-}
-
-/// Inject the default selector list global + shim.
-fn inject(ctx: &Ctx) -> rquickjs::Result<()> {
-    install_with_selectors(ctx, CONSENT_SELECTORS)
-}
-
-// Re-export for use from lib.rs install_dom.
-pub(crate) fn install(ctx: &Ctx, enabled: bool) -> rquickjs::Result<()> {
-    if !enabled {
-        return Ok(());
-    }
-    inject(ctx)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rquickjs::{Context, Runtime};
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
+    #[test]
+    fn consent_selectors_not_empty() {
+        assert!(!CONSENT_SELECTORS.is_empty());
     }
 
+    #[test]
+    fn consent_selectors_cover_onetrust() {
+        assert!(CONSENT_SELECTORS.contains(&"#onetrust-accept-btn-handler"));
+    }
+
+    #[test]
+    fn consent_selectors_cover_cookiebot() {
+        assert!(CONSENT_SELECTORS.contains(&"#CybotCookiebotDialogBodyButtonAccept"));
+    }
+
+    #[test]
+    fn consent_selectors_cover_didomi() {
+        assert!(CONSENT_SELECTORS.contains(&"#didomi-notice-agree-button"));
+    }
+}
+
+#[cfg(all(test, feature = "v8-backend"))]
+mod tests_v8 {
+    use super::*;
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
+
     /// Minimal DOM + MutationObserver stub sufficient for the cookie-banner shim.
-    fn install_dom_stub(ctx: &rquickjs::Ctx) {
-        ctx.eval::<(), _>(r#"
+    fn install_dom_stub(rt: &V8JsRuntime) {
+        rt.eval(r#"
           // Minimal document stub
           var document = (function() {
             var _listeners = {};
@@ -230,222 +259,183 @@ mod tests {
         "#).unwrap();
     }
 
+    fn with_stub() -> V8JsRuntime {
+        let rt = V8JsRuntime::new().unwrap();
+        install_dom_stub(&rt);
+        rt
+    }
+
     #[test]
     fn disabled_is_noop() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_dom_stub(&ctx);
-            // No error and no shim globals injected.
-            install_cookie_banner_bindings(&ctx, false).expect("disabled must succeed");
-            let defined: bool = ctx.eval("typeof _LUMEN_CONSENT_SELECTORS !== 'undefined'").unwrap();
-            assert!(!defined, "disabled must not inject selector global");
-        });
+        let rt = with_stub();
+        // No error and no shim globals injected.
+        install_cookie_banner_bindings_v8(&rt, false).expect("disabled must succeed");
+        let defined = rt
+            .eval("typeof _LUMEN_CONSENT_SELECTORS !== 'undefined'")
+            .unwrap();
+        assert_eq!(defined, JsValue::Bool(false), "disabled must not inject selector global");
     }
 
     #[test]
     fn install_succeeds_enabled() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_dom_stub(&ctx);
-            install_with_selectors(&ctx, &["#accept"]).expect("install must succeed");
-        });
+        let rt = with_stub();
+        install_with_selectors_v8(&rt, &["#accept"]).expect("install must succeed");
     }
 
     #[test]
     fn selector_global_is_set() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_dom_stub(&ctx);
-            install_with_selectors(&ctx, &["#foo", ".bar"]).unwrap();
-            let val: String = ctx.eval("_LUMEN_CONSENT_SELECTORS").unwrap();
-            assert_eq!(val, "#foo|.bar");
-        });
+        let rt = with_stub();
+        install_with_selectors_v8(&rt, &["#foo", ".bar"]).unwrap();
+        let val = rt.eval("_LUMEN_CONSENT_SELECTORS").unwrap();
+        assert_eq!(val, JsValue::String("#foo|.bar".to_string()));
     }
 
     #[test]
     fn no_match_leaves_dismissed_false() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_dom_stub(&ctx);
-            // querySelector always returns null — no banner present.
-            install_with_selectors(&ctx, &["#accept"]).unwrap();
-            let dismissed: bool = ctx.eval("(function(){ return false; })()").unwrap();
-            assert!(!dismissed);
-        });
+        let rt = with_stub();
+        // querySelector always returns null — no banner present.
+        install_with_selectors_v8(&rt, &["#accept"]).unwrap();
+        let dismissed = rt.eval("(function(){ return false; })()").unwrap();
+        assert_eq!(dismissed, JsValue::Bool(false));
     }
 
     #[test]
     fn match_dispatches_click() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_dom_stub(&ctx);
-            // Patch querySelector to return a button that records click events.
-            ctx.eval::<(), _>(r#"
-              var _clicked = false;
-              var _btn = {
-                getBoundingClientRect: function() { return {width:120,height:36}; },
-                _style: { display: 'block', visibility: 'visible' },
-                dispatchEvent: function(ev) { _clicked = true; }
-              };
-              document.querySelector = function(sel) {
-                return (sel === '#accept-btn') ? _btn : null;
-              };
-            "#).unwrap();
-            install_with_selectors(&ctx, &["#accept-btn"]).unwrap();
-            let clicked: bool = ctx.eval("_clicked").unwrap();
-            assert!(clicked, "click must be dispatched on matching visible element");
-        });
+        let rt = with_stub();
+        // Patch querySelector to return a button that records click events.
+        rt.eval(r#"
+          var _clicked = false;
+          var _btn = {
+            getBoundingClientRect: function() { return {width:120,height:36}; },
+            _style: { display: 'block', visibility: 'visible' },
+            dispatchEvent: function(ev) { _clicked = true; }
+          };
+          document.querySelector = function(sel) {
+            return (sel === '#accept-btn') ? _btn : null;
+          };
+        "#).unwrap();
+        install_with_selectors_v8(&rt, &["#accept-btn"]).unwrap();
+        let clicked = rt.eval("_clicked").unwrap();
+        assert_eq!(clicked, JsValue::Bool(true), "click must be dispatched on matching visible element");
     }
 
     #[test]
     fn hidden_element_not_clicked() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_dom_stub(&ctx);
-            // Element has zero dimensions — treated as hidden.
-            ctx.eval::<(), _>(r#"
-              var _clicked = false;
-              var _btn = {
-                getBoundingClientRect: function() { return {width:0,height:0}; },
-                _style: {},
-                dispatchEvent: function(ev) { _clicked = true; }
-              };
-              document.querySelector = function(sel) { return _btn; };
-            "#).unwrap();
-            install_with_selectors(&ctx, &["#hidden-btn"]).unwrap();
-            let clicked: bool = ctx.eval("_clicked").unwrap();
-            assert!(!clicked, "hidden element must not be clicked");
-        });
+        let rt = with_stub();
+        // Element has zero dimensions — treated as hidden.
+        rt.eval(r#"
+          var _clicked = false;
+          var _btn = {
+            getBoundingClientRect: function() { return {width:0,height:0}; },
+            _style: {},
+            dispatchEvent: function(ev) { _clicked = true; }
+          };
+          document.querySelector = function(sel) { return _btn; };
+        "#).unwrap();
+        install_with_selectors_v8(&rt, &["#hidden-btn"]).unwrap();
+        let clicked = rt.eval("_clicked").unwrap();
+        assert_eq!(clicked, JsValue::Bool(false), "hidden element must not be clicked");
     }
 
     #[test]
     fn display_none_not_clicked() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_dom_stub(&ctx);
-            ctx.eval::<(), _>(r#"
-              var _clicked = false;
-              var _btn = {
-                getBoundingClientRect: function() { return {width:100,height:40}; },
-                _style: { display: 'none' },
-                dispatchEvent: function(ev) { _clicked = true; }
-              };
-              document.querySelector = function(sel) { return _btn; };
-              window.getComputedStyle  = function(el)  { return el._style; };
-            "#).unwrap();
-            install_with_selectors(&ctx, &["#hidden-btn"]).unwrap();
-            let clicked: bool = ctx.eval("_clicked").unwrap();
-            assert!(!clicked, "display:none element must not be clicked");
-        });
+        let rt = with_stub();
+        rt.eval(r#"
+          var _clicked = false;
+          var _btn = {
+            getBoundingClientRect: function() { return {width:100,height:40}; },
+            _style: { display: 'none' },
+            dispatchEvent: function(ev) { _clicked = true; }
+          };
+          document.querySelector = function(sel) { return _btn; };
+          window.getComputedStyle  = function(el)  { return el._style; };
+        "#).unwrap();
+        install_with_selectors_v8(&rt, &["#hidden-btn"]).unwrap();
+        let clicked = rt.eval("_clicked").unwrap();
+        assert_eq!(clicked, JsValue::Bool(false), "display:none element must not be clicked");
     }
 
     #[test]
     fn cleanup_after_dismiss() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_dom_stub(&ctx);
-            ctx.eval::<(), _>(r#"
-              var _clicks = 0;
-              var _btn = {
-                getBoundingClientRect: function() { return {width:100,height:40}; },
-                _style: {},
-                dispatchEvent: function(ev) { _clicks++; }
-              };
-              document.querySelector = function(sel) { return _btn; };
-            "#).unwrap();
-            install_with_selectors(&ctx, &["#btn"]).unwrap();
-            // Simulate a second MutationObserver callback fire after dismiss.
-            // The shim should be idempotent — only one click total.
-            let clicks: i32 = ctx.eval("_clicks").unwrap();
-            assert_eq!(clicks, 1, "element must be clicked exactly once");
-        });
+        let rt = with_stub();
+        rt.eval(r#"
+          var _clicks = 0;
+          var _btn = {
+            getBoundingClientRect: function() { return {width:100,height:40}; },
+            _style: {},
+            dispatchEvent: function(ev) { _clicks++; }
+          };
+          document.querySelector = function(sel) { return _btn; };
+        "#).unwrap();
+        install_with_selectors_v8(&rt, &["#btn"]).unwrap();
+        // Simulate a second MutationObserver callback fire after dismiss.
+        // The shim should be idempotent — only one click total.
+        let clicks = rt.eval("_clicks").unwrap();
+        assert_eq!(clicks, JsValue::Number(1.0), "element must be clicked exactly once");
     }
 
     #[test]
     fn interval_registered() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_dom_stub(&ctx);
-            // No matching element — interval should be registered.
-            install_with_selectors(&ctx, &["#nonexistent"]).unwrap();
-            let count: i32 = ctx.eval("_intervals.filter(function(i){return i.active;}).length").unwrap();
-            assert!(count >= 1, "at least one active interval must be registered");
-        });
+        let rt = with_stub();
+        // No matching element — interval should be registered.
+        install_with_selectors_v8(&rt, &["#nonexistent"]).unwrap();
+        let count = rt
+            .eval("_intervals.filter(function(i){return i.active;}).length")
+            .unwrap();
+        match count {
+            JsValue::Number(n) => assert!(n >= 1.0, "at least one active interval must be registered"),
+            other => panic!("expected number, got {other:?}"),
+        }
     }
 
     #[test]
     fn observer_attached() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_dom_stub(&ctx);
-            ctx.eval::<(), _>(r#"
-              var _obs_connected = false;
-              var _OrigMO = MutationObserver;
-              function MutationObserver(cb) { this._cb = cb; }
-              MutationObserver.prototype.observe     = function() { _obs_connected = true; };
-              MutationObserver.prototype.disconnect  = function() { _obs_connected = false; };
-            "#).unwrap();
-            install_with_selectors(&ctx, &["#nonexistent"]).unwrap();
-            let connected: bool = ctx.eval("_obs_connected").unwrap();
-            assert!(connected, "MutationObserver must be attached when no banner found yet");
-        });
-    }
-
-    #[test]
-    fn consent_selectors_not_empty() {
-        assert!(!CONSENT_SELECTORS.is_empty());
-    }
-
-    #[test]
-    fn consent_selectors_cover_onetrust() {
-        assert!(CONSENT_SELECTORS.contains(&"#onetrust-accept-btn-handler"));
-    }
-
-    #[test]
-    fn consent_selectors_cover_cookiebot() {
-        assert!(CONSENT_SELECTORS.contains(&"#CybotCookiebotDialogBodyButtonAccept"));
-    }
-
-    #[test]
-    fn consent_selectors_cover_didomi() {
-        assert!(CONSENT_SELECTORS.contains(&"#didomi-notice-agree-button"));
+        let rt = with_stub();
+        rt.eval(r#"
+          var _obs_connected = false;
+          var _OrigMO = MutationObserver;
+          function MutationObserver(cb) { this._cb = cb; }
+          MutationObserver.prototype.observe     = function() { _obs_connected = true; };
+          MutationObserver.prototype.disconnect  = function() { _obs_connected = false; };
+        "#).unwrap();
+        install_with_selectors_v8(&rt, &["#nonexistent"]).unwrap();
+        let connected = rt.eval("_obs_connected").unwrap();
+        assert_eq!(connected, JsValue::Bool(true), "MutationObserver must be attached when no banner found yet");
     }
 
     #[test]
     fn multiple_selectors_first_match_wins() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_dom_stub(&ctx);
-            ctx.eval::<(), _>(r#"
-              var _order = [];
-              var _btn = {
-                getBoundingClientRect: function() { return {width:100,height:40}; },
-                _style: {},
-                dispatchEvent: function(ev) { _order.push('clicked'); }
-              };
-              document.querySelector = function(sel) {
-                _order.push(sel);
-                return (sel === '#second') ? _btn : null;
-              };
-            "#).unwrap();
-            install_with_selectors(&ctx, &["#first", "#second", "#third"]).unwrap();
-            // #first → null, #second → button (clicked), #third never checked.
-            let order_json: String = ctx.eval("JSON.stringify(_order)").unwrap();
-            assert!(order_json.contains("#first"), "first selector must be tried");
-            assert!(order_json.contains("#second"), "second selector must be tried");
-            assert!(!order_json.contains("#third"), "third selector must NOT be tried after match");
-        });
+        let rt = with_stub();
+        rt.eval(r#"
+          var _order = [];
+          var _btn = {
+            getBoundingClientRect: function() { return {width:100,height:40}; },
+            _style: {},
+            dispatchEvent: function(ev) { _order.push('clicked'); }
+          };
+          document.querySelector = function(sel) {
+            _order.push(sel);
+            return (sel === '#second') ? _btn : null;
+          };
+        "#).unwrap();
+        install_with_selectors_v8(&rt, &["#first", "#second", "#third"]).unwrap();
+        // #first → null, #second → button (clicked), #third never checked.
+        let order_json = rt.eval("JSON.stringify(_order)").unwrap();
+        let order_json = match order_json {
+            JsValue::String(s) => s,
+            other => panic!("expected string, got {other:?}"),
+        };
+        assert!(order_json.contains("#first"), "first selector must be tried");
+        assert!(order_json.contains("#second"), "second selector must be tried");
+        assert!(!order_json.contains("#third"), "third selector must NOT be tried after match");
     }
 
     #[test]
     fn install_without_mutation_observer() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_dom_stub(&ctx);
-            // Remove MutationObserver to simulate environments where it's absent.
-            ctx.eval::<(), _>("MutationObserver = undefined;").unwrap();
-            install_with_selectors(&ctx, &["#nonexistent"])
-                .expect("must not panic without MutationObserver");
-        });
+        let rt = with_stub();
+        // Remove MutationObserver to simulate environments where it's absent.
+        rt.eval("MutationObserver = undefined;").unwrap();
+        install_with_selectors_v8(&rt, &["#nonexistent"])
+            .expect("must not panic without MutationObserver");
     }
 }

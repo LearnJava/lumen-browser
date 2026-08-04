@@ -253,12 +253,6 @@ pub struct QuickJsRuntime {
     /// QuickJS Worker implementation. Kept only because `pump_workers()` is a
     /// trait method the shell calls unconditionally; always drains empty.
     worker_messages: worker::WorkerMessageQueue,
-    /// Whether to auto-dismiss cookie consent banners on each page load (7C.3).
-    ///
-    /// Defaults to `true`. Shell sets this from the user's `cookie_banner_dismiss`
-    /// preference before calling `install_dom`. When `false` the cookie-banner
-    /// shim is not injected and banners are displayed normally.
-    cookie_banner_dismiss: AtomicBool,
     /// Pending OS notification requests queued by `new Notification(...)` in JS.
     /// Drained by the shell in `about_to_wait` via `take_notification_requests()`.
     pending_notifications: notifications_bindings::NotificationQueue,
@@ -500,7 +494,6 @@ impl QuickJsRuntime {
             page_scroll_y: Arc::new(Mutex::new(0.0)),
             computed_styles: Arc::new(Mutex::new(HashMap::new())),
             worker_messages: Arc::new(Mutex::new(Vec::new())),
-            cookie_banner_dismiss: AtomicBool::new(true),
             pending_notifications: Arc::new(Mutex::new(Vec::new())),
             deterministic: AtomicBool::new(false),
             window_open_requests: Arc::new(Mutex::new(Vec::new())),
@@ -766,23 +759,8 @@ impl QuickJsRuntime {
             )
             .map_err(|e| rq_err(&ctx, e))?;
 
-            // Install cookie-banner auto-dismiss shim (7C.3) — last, after full DOM.
-            let cb_enabled = self.cookie_banner_dismiss.load(Ordering::Relaxed);
-            if let Err(e) = cookie_banner::install(&ctx, cb_enabled) {
-                eprintln!("Cookie-banner bindings init failed: {}", e);
-            }
-
             Ok(())
         }))
-    }
-
-    /// Enable or disable cookie-banner auto-dismiss for subsequent `install_dom` calls.
-    ///
-    /// Default: `true` (banners are auto-dismissed). Set to `false` to let the user
-    /// interact with consent dialogs normally. Shell reads this from the user's
-    /// `cookie_banner_dismiss` preference stored in settings.
-    pub fn set_cookie_banner_dismiss(&self, enabled: bool) {
-        self.cookie_banner_dismiss.store(enabled, Ordering::Relaxed);
     }
 
     /// Enable deterministic render mode (8F).
