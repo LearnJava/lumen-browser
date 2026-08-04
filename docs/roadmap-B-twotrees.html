@@ -3031,9 +3031,9 @@
       {
        "id": "WPT-VENDOR-largest-contentful-paint",
        "title": "WPT: вендорить + прогнать категорию `largest-contentful-paint`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root largest-contentful-paint --recursive`, ~1:05) — **59/68 harness OK, 1/66 сабтестов**. Подавляющее большинство unexpected — `assert_implements: LargestContentfulPaint is not implemented`/`PerformancePaintTiming is not implemented` (Largest Contentful Paint API целиком отсутствует, грep `crates/js/src/dom.rs` подтвердил — ничего кроме комментария про Resource Timing L2); 8 FAIL на `PerformanceResourceTiming` — тоже не реализован. Остаток — TIMEOUT на исполнившихся тестах, ожидающих LCP-событие, которое никогда не приходит. Новых багов не заведено — первый проход отсутствующего кандидатного API"
       },
       {
        "id": "WPT-VENDOR-layout-instability",
