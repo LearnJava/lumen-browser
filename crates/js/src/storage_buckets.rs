@@ -12,15 +12,20 @@
 //! persistence are advisory. `getDirectory()` delegates to `navigator.storage` (OPFS)
 //! when present, otherwise rejects with an `InvalidStateError` DOMException.
 
-use rquickjs::Ctx;
-
-/// Install the Storage Buckets API into the JS context.
-pub fn init_storage_buckets(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(STORAGE_BUCKETS_SHIM)?;
+/// V8 port of the former rquickjs `init_storage_buckets` (Ph3 V8 migration
+/// S12b-G2, rquickjs side removed in the same batch): identical JS shim,
+/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_storage_buckets_v8(
+    rt: &crate::v8_runtime::V8JsRuntime,
+) -> lumen_core::JsResult<()> {
+    use lumen_core::ext::JsRuntime as _;
+    rt.eval(STORAGE_BUCKETS_SHIM)?;
     Ok(())
 }
 
 /// JavaScript shim implementing the W3C Storage Buckets API (Phase 0, ES5-only).
+#[cfg(feature = "v8-backend")]
 const STORAGE_BUCKETS_SHIM: &str = r#"(function() {
   function StorageBucketManager() {
     this._buckets = {};
@@ -124,115 +129,101 @@ const STORAGE_BUCKETS_SHIM: &str = r#"(function() {
   if (typeof window !== 'undefined') { window.StorageBucketManager = StorageBucketManager; window.StorageBucket = StorageBucket; }
 })();"#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
-    use rquickjs::{Context, Runtime};
+    use super::*;
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().expect("Runtime::new");
-        let ctx = Context::full(&rt).expect("Context::full");
-        (rt, ctx)
+    fn with_storage_buckets(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        install_storage_buckets_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
     fn manager_global_exists() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            super::init_storage_buckets(&ctx).expect("init");
-            let r: String = ctx
+        with_storage_buckets(|rt| {
+            let r = rt
                 .eval("typeof StorageBucketManager === 'function' ? 'ok' : 'no'")
-                .expect("eval");
-            assert_eq!(r, "ok");
+                .unwrap();
+            assert_eq!(r, JsValue::String("ok".to_string()));
         });
     }
 
     #[test]
     fn open_creates_bucket() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            super::init_storage_buckets(&ctx).expect("init");
-            let r: i32 = ctx
+        with_storage_buckets(|rt| {
+            let r = rt
                 .eval("var m=new StorageBucketManager(); m.open('photos'); Object.keys(m._buckets).length")
-                .expect("eval");
-            assert_eq!(r, 1);
+                .unwrap();
+            assert_eq!(r, JsValue::Number(1.0));
         });
     }
 
     #[test]
     fn open_returns_promise() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            super::init_storage_buckets(&ctx).expect("init");
+        with_storage_buckets(|rt| {
             // A native Promise reports `typeof` as "object"; assert it is thenable.
-            let r: String = ctx
+            let r = rt
                 .eval(
                     "var p=(new StorageBucketManager()).open('x'); \
                      typeof p === 'object' && typeof p.then === 'function' ? 'promise' : 'no'",
                 )
-                .expect("eval");
-            assert_eq!(r, "promise");
+                .unwrap();
+            assert_eq!(r, JsValue::String("promise".to_string()));
         });
     }
 
     #[test]
     fn open_rejects_invalid_name() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            super::init_storage_buckets(&ctx).expect("init");
+        with_storage_buckets(|rt| {
             // Leading hyphen is invalid → reject before inserting into _buckets.
-            let r: i32 = ctx
+            let r = rt
                 .eval("var m=new StorageBucketManager(); m.open('-bad').catch(function(){}); Object.keys(m._buckets).length")
-                .expect("eval");
-            assert_eq!(r, 0);
+                .unwrap();
+            assert_eq!(r, JsValue::Number(0.0));
         });
     }
 
     #[test]
     fn open_dedupes_same_name() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            super::init_storage_buckets(&ctx).expect("init");
-            let r: i32 = ctx
+        with_storage_buckets(|rt| {
+            let r = rt
                 .eval("var m=new StorageBucketManager(); m.open('a'); m.open('a'); Object.keys(m._buckets).length")
-                .expect("eval");
-            assert_eq!(r, 1);
+                .unwrap();
+            assert_eq!(r, JsValue::Number(1.0));
         });
     }
 
     #[test]
     fn bucket_name_readonly() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            super::init_storage_buckets(&ctx).expect("init");
-            let r: String = ctx
+        with_storage_buckets(|rt| {
+            let r = rt
                 .eval("var m=new StorageBucketManager(); m.open('logs'); m._buckets['logs'].name")
-                .expect("eval");
-            assert_eq!(r, "logs");
+                .unwrap();
+            assert_eq!(r, JsValue::String("logs".to_string()));
         });
     }
 
     #[test]
     fn delete_removes_bucket() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            super::init_storage_buckets(&ctx).expect("init");
-            let r: i32 = ctx
+        with_storage_buckets(|rt| {
+            let r = rt
                 .eval("var m=new StorageBucketManager(); m.open('tmp'); m.delete('tmp'); Object.keys(m._buckets).length")
-                .expect("eval");
-            assert_eq!(r, 0);
+                .unwrap();
+            assert_eq!(r, JsValue::Number(0.0));
         });
     }
 
     #[test]
     fn bucket_stores_durability() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            super::init_storage_buckets(&ctx).expect("init");
-            let r: String = ctx
+        with_storage_buckets(|rt| {
+            let r = rt
                 .eval("var m=new StorageBucketManager(); m.open('d',{durability:'strict'}); m._buckets['d']._durability")
-                .expect("eval");
-            assert_eq!(r, "strict");
+                .unwrap();
+            assert_eq!(r, JsValue::String("strict".to_string()));
         });
     }
 }
-
