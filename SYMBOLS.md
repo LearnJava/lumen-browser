@@ -197,7 +197,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 ## lumen-chrome  (31 symbols)
 
 `crates/chrome/src/lib.rs:41` **struct** `ChromeIdError` — Error returned by [`ChromeIds::resolve`] when the chrome [`lumen_dom::Document`]
-`crates/chrome/src/lib.rs:91` **fn** `parse_document` — Parses `html` (the chrome asset's contents — a runtime host passes
+`crates/chrome/src/lib.rs:86` **fn** `parse_document` — Parses `html` (the chrome asset's contents — a runtime host passes
 `crates/chrome/src/model.rs:27` **struct** `ChromeModel` — Snapshot of shell state [`bind_model`] reflects into the chrome document
 `crates/chrome/src/model.rs:97` **enum** `ChromeContentView` — Which content view fills `#contentArea` (CC-10b) — bound to `.view.active`
 `crates/chrome/src/model.rs:111` **struct** `ChromeHistoryModel` — `#view-history` snapshot (CC-10b) — mirrors `HistoryPanel::rows`
