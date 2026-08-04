@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-05",
  "counts": {
-  "open": 276,
+  "open": 277,
   "fixed": 315,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 591,
+ "total_bugs": 592,
  "phases": [
   {
    "id": "P0",
@@ -2932,9 +2932,12 @@
       {
        "id": "WPT-VENDOR-installedapp",
        "title": "WPT: вендорить + прогнать категорию `installedapp`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). ОС-интеграция"
+       "note": "Скоуп: 🚫 (вне скоупа, ОС-интеграция). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root installedapp --recursive`, ~2:15) -- **0/2 harness OK**. Категория самодостаточна (2 файла, без testdriver). `installedapp.https.window.js` TIMEOUT -- второй сабтест ждёт `iframe.onload` после `iframe.src = 'resources/iframe.html'`, воспроизводит уже открытый [BUG-480](bugs/BUG-480-OPEN.md) (`<iframe>` без отдельного browsing context, `load` не эмитится). `idlharness.https.window.js` TIMEOUT -- невендоренные `/resources/WebIDLParser.js`+`idlharness.js`, известный класс гэпа. Живая проба (`--mcp-live-port`) подтвердила: `navigator.getInstalledRelatedApps` отсутствует целиком (ожидаемо для 🚫-скоупа, не баг), но проба контейнера `navigator` нашла новый [BUG-624](bugs/BUG-624-OPEN.md) (нет глобального конструктора `Navigator` вовсе -- сильнее уже задокументированного класса BUG-366)",
+       "bugs": [
+        "BUG-624 (переподтверждён BUG-480)"
+       ]
       },
       {
        "id": "WPT-VENDOR-intersection-observer",
@@ -8743,6 +8746,13 @@
    "component": "js (`crates/js/src/dom.rs`, `window` object)",
    "date": null,
    "debtor": false
+  },
+  "BUG-624": {
+   "status": "open",
+   "title": "`navigator` has no backing `Navigator` interface at all: `window.Navigator === undefined`, `Object.prototype.toString.call(navigator)` = `\"[object Object]\"`, al…",
+   "component": "js (`crates/js/src/dom.rs:4999` -- `var navigator = {...}`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -9007,6 +9017,9 @@
   ],
   "js (`crates/js/src/dom.rs:4780-4827` -- `_lumen_build_detached_document`)": [
    "BUG-552"
+  ],
+  "js (`crates/js/src/dom.rs:4999` -- `var navigator = {...}`)": [
+   "BUG-624"
   ],
   "js (`crates/js/src/dom.rs:5667-5702` `<dialog>` API block)": [
    "BUG-579"
