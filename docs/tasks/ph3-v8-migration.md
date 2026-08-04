@@ -3172,8 +3172,54 @@ checked clean under default (`v8`), `quickjs` (both default features on,
 `--no-default-features --features backend-femtovg,backend-wgpu,quickjs`
 (pure rollback build).
 
-Next in queue: S12b-B19 (`notifications_bindings`/`web_audio`, Полоса 3 fifth
-batch).
+### S12b-B19 (`notifications_bindings`, `web_audio` — Полоса 3 fifth batch)
+
+Both modules already had a complete V8 port from earlier slices
+(`install_notifications_bindings_v8` since S5-S7 batch 3, `install_web_audio_api_v8`
+since S5-S7 batch 2), so the batch reduced to deleting the rquickjs twins and
+porting the tests that only existed as rquickjs `mod tests`.
+
+`notifications_bindings.rs`: removed `install_notifications_bindings(ctx: &Ctx,
+queue: NotificationQueue, allow: bool)`; `NOTIFICATIONS_SHIM` (backend-agnostic
+string) is now `#[cfg(feature = "v8-backend")]`-gated since only the V8
+installer evaluates it. `web_audio.rs`: removed `install_web_audio_api(ctx:
+&Ctx)` and the `rquickjs::Ctx` import; `WEB_AUDIO_SHIM` gated the same way.
+`lib.rs`'s `install_dom` (QuickJsRuntime) call sites for both modules had
+already been deleted in an earlier, uncommitted pass in this worktree slot —
+this batch's session picked up from that partial state and finished the test
+port.
+
+Test porting: `notifications_bindings.rs`'s 26 rquickjs tests → `tests_v8`
+(1:1 port, `V8JsRuntime`/`JsValue` assertions, using the runtime's own
+`take_notification_requests()` instead of the old free-standing
+`drain_notifications(&queue)` call). `web_audio.rs`'s 12 rquickjs tests (13
+counting the module doc's stale count) → `tests_v8`, 1:1 port. 4 of the 26
+notifications tests initially failed: they read a variable written inside a
+`Notification.requestPermission().then(...)` / `getNotifications().then(...)`
+callback in the *same* `eval()` call that scheduled it — under the old
+rquickjs test harness this worked because `setup_dom_stubs` installed a
+synchronous Promise stub (executor runs immediately, `.then()` fires inline),
+but real V8 Promises run `.then()` as a genuine microtask that hasn't fired
+yet when that same `eval()` call returns its final expression. Fixed by
+splitting each into a setup `eval()` + a separate read `eval()` — V8
+auto-drains pending microtasks between distinct `eval()` calls (same
+precedent as B18's `disposeAsync` test, also documented in
+`idle_detection.rs`/`shared_storage.rs`/`ua_client_hints.rs`). No bugs found
+in the V8 bridge itself — both modules are pure-JS shims aside from the
+trivial `_lumen_audio_tick_time` no-op and the three notification natives,
+all of which were already on V8.
+
+`cargo test -p lumen-js --features v8-backend`: 2576 lib (unchanged — both
+batches' tests were already counted in the running total after S5-S7).
+`cargo test -p lumen-js` (default): 650 lib (down from 689, -39: all 39
+QuickJS-only tests from these two modules removed, nothing added). Both
+clippy passes (`--all-targets`, default and `--features v8-backend`) clean;
+`lumen-shell` checked clean under default (`v8`), `quickjs` (both default
+features on, `quickjs` wins per the `#[cfg]` priority), and
+`--no-default-features --features backend-femtovg,backend-wgpu,quickjs`
+(pure rollback build).
+
+Next in queue: S12b-B20 (`filesystem_access`, Полоса 3 sixth batch).
 
 ---
 
