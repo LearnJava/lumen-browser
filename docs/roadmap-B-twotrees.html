@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-04",
  "counts": {
-  "open": 265,
+  "open": 266,
   "fixed": 315,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 580,
+ "total_bugs": 581,
  "phases": [
   {
    "id": "P0",
@@ -2843,9 +2843,12 @@
       {
        "id": "WPT-VENDOR-html-media-capture",
        "title": "WPT: вендорить + прогнать категорию `html-media-capture`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). медиа-конвейер"
+       "note": "Скоуп: 🚫 (вне скоупа). медиа-конвейер. DONE 2026-08-04: вендорена + прогнана целиком (14 файлов, 12 `-manual`, `--all --root html-media-capture --recursive`, ~30 с) — **1/2 harness OK, 5/6 сабтестов**. `capture_reflect.html` дал единственный новый баг: BUG-613 (`input.capture` реализован как plain-string рефлексия вместо `'enum'` limited-to-known-values, хотя нужный `kind='enum'` уже есть в таблице и используется для `type`/`referrerPolicy`/`dir` — правка на одну строку). `idlharness.window.html` — TIMEOUT, известный класс «common/-хелперы не вендорены» (404 на `/resources/idlharness.js`+`WebIDLParser.js`), не новая находка",
+       "bugs": [
+        "BUG-613"
+       ]
       },
       {
        "id": "WPT-VENDOR-html-ruby-extensions",
@@ -8645,6 +8648,13 @@
    "status": "open",
    "title": "legacy `longdesc` content attribute has no IDL reflection -- `img.longdesc` is `undefined` (only `getAttribute`/`hasAttribute` work). Same class as BUG-602 (`al…",
    "component": "js (`crates/js/src/dom.rs` -- IDL reflection table, `align`-class gap)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-613": {
+   "status": "open",
+   "title": "`input.capture` reflects the raw attribute value on an invalid keyword (`capture='invalid'` -> `\"invalid\"`) instead of the spec's limited-to-known-values defaul…",
+   "component": "js (`crates/js/src/dom.rs` -- `HTMLInputElement.prototype` reflection table, `capture` wired as `'string'` instead of `'enum'`)",
    "date": null,
    "debtor": false
   }
