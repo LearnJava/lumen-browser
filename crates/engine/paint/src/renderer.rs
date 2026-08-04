@@ -8175,7 +8175,7 @@ impl Renderer {
             .as_ref()
             .is_some_and(|c| c.usage.contains(wgpu::TextureUsages::COPY_SRC));
         let frame_blend_dst: Option<&wgpu::Texture> = match (&windowed_frame, &headless_tex) {
-            (Some(f), _) => surface_copy_src.then(|| &f.texture),
+            (Some(f), _) => surface_copy_src.then_some(&f.texture),
             (None, Some(t)) => Some(t),
             (None, None) => None,
         };
