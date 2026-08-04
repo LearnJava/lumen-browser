@@ -3051,6 +3051,79 @@ modules' tests already ran under `--features v8-backend` before this batch)
 
 Next in queue: S12b-B17 (`wasm/mod`/`sw_worker`, Полоса 3 third batch).
 
+### S12b-B17 (`wasm/mod`, `sw_worker` — Полоса 3 third batch)
+
+Unlike B14-B16, both modules are native Rust↔JS bridges (not JS-string
+shims), and both already had a complete V8 port from earlier slices:
+`wasm::v8_bridge` (S9) for the WASM interpreter's host-import/memory bridge,
+and `sw_worker::spawn_sw_worker_v8`/`install_sw_globals_v8` (S10) for the
+Service Worker execution thread. The batch reduced to deleting the rquickjs
+twins and `#[cfg(feature = "v8-backend")]`-gating what became V8-only
+(`WEBASSEMBLY_SHIM`, `wasm::{value_to_f64,f64_to_value,coerce_value}`,
+`sw_globals_shim`, `base64_encode`/`base64_decode` — B14/B15 precedent).
+
+`wasm::mod.rs`: removed the QuickJS `instantiate`/`JsHost`/`call_typed`/
+`func_signature`/`mem_*`/`global_*`/`wasm_value_to_js`/`js_value_to_wasm`/
+`js_value_to_i64`/`js_value_to_f64` and the `Persistent<Function>`-keyed
+`InstanceEntry`/`instances` half of the top-level `Registry` — it now holds
+only the `modules` cache, shared by both backends via `with_module`/
+`compile`. `webassembly.rs`: removed `install_webassembly_bindings` and its
+six `wasm_*_native` free functions plus `install_native_bindings`; the
+`WEBASSEMBLY_SHIM` JS string (backend-agnostic) is unchanged and now only
+`eval`'d by `install_webassembly_bindings_v8`.
+
+`dom.rs`'s `install_primitives` (rquickjs DOM install, itself untouched —
+scoped for S12b-F3) registers `_lumen_sw_activate_script` directly as a
+closure spawning `sw_worker::spawn_sw_worker`; since that rquickjs function
+is gone, the registration became a no-op (SW fetch interception is
+unavailable under the QuickJS rollback path — not a regression to fix, since
+QuickJS is a decaying opt-in path, not a target for new work). The V8 side
+(`v8_runtime.rs`) already had its own independent `_lumen_sw_activate_script`
+registration calling `spawn_sw_worker_v8` since S10 — unaffected.
+
+Porting the 13 `webassembly.rs` QuickJS tests (`mod tests`) surfaced 11
+without a V8 twin (2 — `instantiate_and_call_add`, `i64_import_arg_and_
+result_use_bigint` — already had one from S9) and, in porting them, two real
+pre-existing V8-backend bugs neither prior slice's minimal 2-test coverage
+had exercised:
+
+1. `v8_compat.rs`'s `v8_to_jsvalue` (the generic argument converter every
+   `into_v8_fnN` native goes through) didn't recognize a `Uint8Array` as a
+   byte sequence — it fell through to the generic `is_object()` branch,
+   which builds a `JsValue::Object` from the typed array's own property
+   names, and `Vec<u8>::from_js_value`/`array_from_js_value` don't know how
+   to unwrap an object into a byte vec (single-element-vec fallback → "arg[2]:
+   expected number"). Any native taking `Vec<u8>` from a JS `Uint8Array`
+   argument was affected, not just WASM — fixed once, generically, by adding
+   a `val.is_uint8_array()` branch that reads the bytes via
+   `Uint8Array::copy_contents` before the `is_object()` fallback.
+2. `__lumen_wasm_mem_buffer` was registered through the generic
+   `into_v8_fn1`/`Vec<u8>` path, which returns a plain `JsValue::Array` — not
+   a real `ArrayBuffer`. The shim assigns this return value directly to
+   `mem._buf` (the JS `Memory.buffer` backing) and relies on `new
+   Int32Array(mem._buf)`/`new Uint8Array(mem._buf)` sharing storage with it
+   (U-4b's whole point); a plain array has no byte-level storage to alias, so
+   every HEAP-view coherence test (write-then-read-back, JS-write-visible-to-
+   WASM, buffer-identity-across-calls, grow) silently no-op'd. Fixed by
+   giving `__lumen_wasm_mem_buffer` its own scoped native
+   (`wasm_mem_buffer_native_v8`) that builds a real `v8::ArrayBuffer` via
+   `ArrayBuffer::new` + writing through its `BackingStore`'s `&[Cell<u8>]`
+   view — mirroring the removed rquickjs original's `ArrayBuffer::new_copy`.
+
+`cargo test -p lumen-js --features v8-backend`: 2579 lib (down from 2584,
+-5: the old 16 QuickJS-only wasm/sw_worker tests are gone, the V8-only tests
+grew from 5 to 16 — 13 webassembly `tests_v8` + 3 sw_worker `tests_v8`,
+unchanged). `cargo test -p lumen-js` (default): 710 lib (down from 726, -16:
+the 13+3 QuickJS-only tests removed, nothing added). Both clippy passes
+(`--all-targets`, default and `--features v8-backend`) clean; `lumen-shell`
+checked clean under default (`v8`), `quickjs` (both default features on,
+`quickjs` wins per the `#[cfg]` priority), and
+`--no-default-features --features backend-femtovg,backend-wgpu,quickjs`
+(pure rollback build).
+
+Next in queue: S12b-B18 (`es2026_proposals`/`shared_worker`, Полоса 3 fourth
+batch).
+
 ---
 
 ## Risks (Rev 2)

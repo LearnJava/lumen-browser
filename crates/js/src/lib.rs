@@ -953,14 +953,6 @@ impl QuickJsRuntime {
                 eprintln!("WebGPU API init failed: {}", e);
             }
 
-            // Install WebAssembly API (W3C WebAssembly JavaScript Interface §7) — after DOM.
-            // Phase 0: compile/instantiate return resolved Promises with empty Module/Instance;
-            // validate() checks the 4-byte WASM magic header. No actual WASM execution.
-            // Phase 1 (future): integrate wasmtime or wasmer for real WASM execution.
-            if let Err(e) = webassembly::install_webassembly_bindings(&ctx) {
-                eprintln!("WebAssembly bindings init failed: {}", e);
-            }
-
             // W3C DOM Parsing and Serialization — DOMParser + XMLSerializer.
             // After DOM and _lumen_get_attr_names / _lumen_get_children / _lumen_is_text_node
             // bindings are registered.  DOMParser.parseFromString() creates independent

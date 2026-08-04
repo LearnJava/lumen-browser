@@ -4199,7 +4199,7 @@ pub struct SwFetchRequest {
 
 /// Opaque handle to a running Service Worker execution thread.
 ///
-/// Created by `lumen-js::sw_worker::spawn_sw_worker` when a SW activates.
+/// Created by `lumen-js::sw_worker::spawn_sw_worker_v8` when a SW activates.
 /// Held by `ServiceWorkerInterceptor` (in `lumen-storage`) to route fetch
 /// requests to the correct SW thread.
 pub struct SwWorkerHandle {

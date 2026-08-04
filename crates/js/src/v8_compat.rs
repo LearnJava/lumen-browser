@@ -754,6 +754,21 @@ pub(crate) fn v8_to_jsvalue<'s>(
         }
         return JsValue::Array(items);
     }
+    // A `Uint8Array` (the common byte-buffer argument, e.g. WASM linear-memory
+    // syncing) is a JS object, not an `Array` — without this branch it fell
+    // through to the generic `is_object()` case below, which reads its own
+    // property names, and `array_from_js_value`/`Vec<u8>::from_js_value` don't
+    // know how to unwrap an object into a byte vec (surfaced by S12b-B17
+    // porting `WebAssembly.Memory` sync tests to the V8 backend, where
+    // `__lumen_wasm_mem_write`'s `bytes: Vec<u8>` arg silently failed as
+    // "expected number").
+    if val.is_uint8_array()
+        && let Ok(view) = v8::Local::<v8::Uint8Array>::try_from(val)
+    {
+        let mut buf = vec![0u8; view.byte_length()];
+        view.copy_contents(&mut buf);
+        return JsValue::Array(buf.into_iter().map(|b| JsValue::Number(f64::from(b))).collect());
+    }
     if val.is_object()
         && let Ok(obj) = v8::Local::<v8::Object>::try_from(val)
         && let Some(own_props) = obj.get_own_property_names(scope, Default::default())
