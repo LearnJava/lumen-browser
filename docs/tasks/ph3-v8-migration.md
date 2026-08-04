@@ -4056,6 +4056,66 @@ the pre-existing 18-error baseline (`offscreen_canvas.rs`/`worker.rs`/
 Closes [BUG-550](../../bugs/BUG-550-FIXED.md) (premise corrected in the
 bug file itself, not just here).
 
+### S12b-F1: remove the `quickjs` shell feature (2026-08-04, branch `p1-s12b-f1`)
+
+Closes out group A/G/Asnos (all 38 batches `done`) by removing the shell-side
+`quickjs` Cargo feature and every branch that constructed a `QuickJsRuntime`.
+`rquickjs` itself (`QuickJsRuntime`, `install_primitives`, the `lumen-js`
+dependency) is untouched — that's S12b-F2..F4, scoped to `crates/js`.
+
+Three deletions in `crates/shell/src/main.rs`:
+
+1. `QuickPersistentJs` struct + its ~50-method `PersistentJs` impl (~305
+   lines) — the shell-side adapter wrapping `lumen_js::QuickJsRuntime`.
+2. The quickjs arm of `run_scripts_with_dom` (constructs `QuickJsRuntime::
+   new()`, installs DOM, evaluates scripts, returns a `QuickPersistentJs`).
+3. The quickjs arm of `Lumen::bfcache_thaw` (same construction pattern, for
+   the T3-hibernation JS-context rebuild path).
+
+Both matching `#[cfg(all(feature = "v8", not(feature = "quickjs")))]` guards
+collapsed to plain `#[cfg(feature = "v8")]` now that there's no `quickjs`
+branch left to out-race. ~84 occurrences of `#[cfg(any(feature = "quickjs",
+feature = "v8"))]` / `#[cfg(not(any(...)))]` / `#[cfg_attr(not(any(...)),
+allow(dead_code))]` simplified to the single-condition form across
+`main.rs`, `config.rs`, `tab_lifecycle/hibernate.rs`,
+`platform/file_dialog.rs` (all four files touched only by this mechanical
+substitution plus stale doc-comment wording — no behavioral change beyond
+the deleted quickjs arms). `crates/shell/Cargo.toml`'s `[features]` block
+lost the `quickjs` entry and its doc comment; `v8` is now the only JS-engine
+feature (`NullJsRuntime` remains the fallback with neither).
+
+`cargo check`/`clippy --all-targets -- -D warnings`/`test` -p lumen-shell
+(default, v8): clean, 1565 passed, 0 failed. Not re-verified: the
+`--no-default-features --features backend-femtovg,backend-wgpu,quickjs`
+rollback combo other batches checked, since the flag no longer exists.
+
+Two findings surfaced, neither fixed here (out of scope for a
+feature-flag-removal slice):
+
+- **Pre-existing, not a regression:** `--no-default-features --features
+  backend-femtovg,backend-wgpu` (no JS engine at all, `NullJsRuntime`
+  fallback) fails to compile — 25× `E0433 cannot find module lumen_js`,
+  because several fields/fns (`video_gif_store`, `text_track_store`,
+  `take_print_requests`, `handle_print_request`, …) reference `lumen_js::*`
+  types unconditionally instead of behind a `#[cfg(feature = "v8")]` gate.
+  Confirmed identical (same 25 errors) on `main` *before* this branch —
+  this build combination was already broken, this slice didn't touch any
+  of the offending lines. Candidate for a new BUG (P3).
+- **WebGPU reachability shrinks:** the real `navigator.gpu` backend
+  (`lumen-js` feature `webgpu` → `lumen-paint/backend-wgpu`) was only ever
+  turned on by shell's `quickjs` feature (`quickjs = ["dep:lumen-js",
+  "lumen-js/webgpu"]`); `v8` never enabled it. Default (`v8`) already
+  shipped `navigator.gpu` as a pure JS shim before this slice — that part
+  is unchanged — but the `--features quickjs` escape hatch to the real
+  backend is now gone with no replacement, since no shell feature pairs
+  `lumen-js/v8-backend` with `lumen-js/webgpu`. `CAPABILITIES.md` currently
+  marks WebGPU "✅ complete" unqualified; that claim needs the owning role
+  to either wire `lumen-js/webgpu` into shell's `v8` feature or caveat the
+  entry.
+
+Next in queue: S12b-F2 (`lumen-js/lib.rs`: delete `QuickJsRuntime`,
+`install_dom`, `rq_err`, the `__lum_args__` workaround, `use rquickjs`).
+
 ---
 
 ## Risks (Rev 2)

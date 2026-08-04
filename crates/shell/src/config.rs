@@ -237,7 +237,7 @@ impl FingerprintProfile {
     /// When `http_profile == TorBrowser`, screen is pinned to 1000×900 and
     /// `platform` to `"Win32"` to match the Tor Browser uniform fingerprint
     /// (anti-fingerprinting via population uniformity, TB §10.3).
-    #[cfg(any(feature = "quickjs", feature = "v8"))]
+    #[cfg(feature = "v8")]
     #[must_use]
     pub fn navigator_profile(&self) -> lumen_js::NavigatorProfile {
         let is_tor = self.http_profile == HttpProfile::TorBrowser;
@@ -262,7 +262,7 @@ impl FingerprintProfile {
 
     /// Install the navigator/screen/timezone values into the process-global JS
     /// profile. Must be called once at startup, before any page loads.
-    #[cfg(any(feature = "quickjs", feature = "v8"))]
+    #[cfg(feature = "v8")]
     pub fn install_navigator(&self) {
         lumen_js::set_navigator_profile(self.navigator_profile());
     }
@@ -897,7 +897,7 @@ mod tests {
         std::fs::remove_file(&path).ok();
     }
 
-    #[cfg(any(feature = "quickjs", feature = "v8"))]
+    #[cfg(feature = "v8")]
     #[test]
     fn tor_navigator_profile_pins_screen_and_platform() {
         let p = parse("http_profile = tor");

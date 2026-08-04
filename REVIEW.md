@@ -29,7 +29,7 @@ rule through a different mechanism.
 - CSS-related changes belong in `css-parser` (parsing) → `layout` (`style.rs`, ComputedStyle/cascade) →
   `paint` (`display_list.rs`, wiring). Flag CSS logic leaking into `shell` or paint-only crates.
 - JS engine: V8 (`rusty_v8`) is the default and the only actively developed path. Flag new code that
-  targets the legacy `rquickjs`/QuickJS path (feature `quickjs`) — it's being deleted, not extended.
+  targets the legacy `rquickjs`/QuickJS path in `crates/js` — it's being deleted, not extended (the shell-side `quickjs` feature is gone since S12b-F1; `rquickjs` is no longer reachable from `lumen-shell` at all).
   Engine-independent JS fixes belong in the shared shim (`WEB_API_SHIM` in `crates/js/src/dom.rs`), not
   duplicated per engine.
 

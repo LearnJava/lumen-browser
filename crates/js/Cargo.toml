@@ -94,7 +94,10 @@ v8 = { version = "150.1.0", optional = true, default-features = false }
 # Реальный WebGPU-бэкенд (U-4c, Stage 1): включает wgpu-устройство в lumen-paint и
 # регистрирует нативы `_lumen_webgpu_*`, через которые JS-шим navigator.gpu получает
 # настоящую информацию об адаптере и валидацию WGSL. Без фичи navigator.gpu остаётся
-# чистым in-memory JS-шимом (Phase 0). Включается shell-фичей `quickjs`.
+# чистым in-memory JS-шимом (Phase 0). До S12b-F1 включалась shell-фичей `quickjs`
+# (снесённой вместе со всем rollback-путём) — сейчас ни одна фича lumen-shell её не
+# включает, поэтому под V8-дефолтом navigator.gpu остаётся шимом, пока shell не
+# заведёт `lumen-js/webgpu` рядом с `v8-backend`.
 webgpu = ["lumen-paint/backend-wgpu"]
 # V8 JS backend (rusty_v8). Replaces QuickJS at S12 cutover. Off by default until then.
 v8-backend = ["dep:v8"]

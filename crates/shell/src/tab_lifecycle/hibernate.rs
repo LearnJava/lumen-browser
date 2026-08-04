@@ -49,7 +49,7 @@ pub(crate) fn resource_base_from_url(url: &str) -> ResourceBase {
 /// Reconstructs the per-origin localStorage / IndexedDB / Service Worker
 /// persistence handles and the network (`fetch` / `WebSocket`) providers for
 /// `url`, then runs the document's inline `<script>` blocks through a fresh
-/// QuickJS runtime via [`crate::run_scripts_with_dom`].
+/// V8 runtime via [`crate::run_scripts_with_dom`].
 ///
 /// `doc` is taken by value because `run_scripts_with_dom` wraps it in the
 /// `Arc<Mutex<Document>>` shared between JS closures and the layout tree; that
@@ -57,7 +57,7 @@ pub(crate) fn resource_base_from_url(url: &str) -> ResourceBase {
 /// it (the runtime must observe the *same* document the layout sees).
 ///
 /// Returns `(doc_arc, js_ctx)`.  `js_ctx` is `None` when the page has no inline
-/// scripts, scripts are sandboxed away, or the `quickjs` feature is disabled.
+/// scripts, scripts are sandboxed away, or the `v8` feature is disabled.
 /// `DOMContentLoaded` is fired on the new runtime so listeners registered
 /// during re-execution still observe the standard lifecycle event.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
@@ -130,7 +130,7 @@ pub(crate) fn restore_js_context(
 
     // HTML LS §8.2.3: signal DOMContentLoaded so handlers attached during
     // re-execution observe the standard lifecycle on the restored page.
-    #[cfg(any(feature = "quickjs", feature = "v8"))]
+    #[cfg(feature = "v8")]
     if let Some(js) = &js_ctx {
         js.notify_dom_content_loaded();
     }
