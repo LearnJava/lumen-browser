@@ -12,23 +12,9 @@
 //! `currentTime` increments via `_lumen_audio_tick_time` native binding.
 //! All node `start()`/`stop()` calls are recorded but produce no audio output.
 
-use rquickjs::Ctx;
-
-/// Install the Web Audio API into the JS context.
-pub fn install_web_audio_api(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.globals().set("_lumen_audio_tick_time", {
-        rquickjs::Function::new(ctx.clone(), |ctx: Ctx| -> rquickjs::Result<()> {
-            // Phase 0: no-op — currentTime advancement is handled purely in JS shim.
-            let _ = ctx;
-            Ok(())
-        })?
-    })?;
-    ctx.eval::<(), _>(WEB_AUDIO_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_web_audio_api`] (Ph3 V8 migration S5-S7 batch 2): the
-/// native goes through the compat layer, the JS shim evaluates unchanged.
+/// Install the W3C Web Audio API Level 1 into a V8 context (Ph3 V8 migration
+/// S5-S7 batch 2). The rquickjs twin (`install_web_audio_api`) was removed in
+/// S12b-B19 — this is now the only backend.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_web_audio_api_v8(
     rt: &crate::v8_runtime::V8JsRuntime,
@@ -43,6 +29,7 @@ pub(crate) fn install_web_audio_api_v8(
     Ok(())
 }
 
+#[cfg(feature = "v8-backend")]
 const WEB_AUDIO_SHIM: &str = r#"(function() {
   'use strict';
 
@@ -673,19 +660,17 @@ const WEB_AUDIO_SHIM: &str = r#"(function() {
 })();
 "#;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use rquickjs::{Context, Runtime};
+/// V8 test coverage for the Web Audio API shim (the rquickjs twin was
+/// removed in S12b-B19; this module ports its 12 tests to V8 verbatim).
+#[cfg(all(test, feature = "v8-backend"))]
+mod tests_v8 {
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
-
-    fn setup(ctx: &rquickjs::Ctx) {
-        ctx.eval::<(), _>(
+    fn rt_with_web_audio() -> V8JsRuntime {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(
             r#"
             if (typeof DOMException === 'undefined') {
                 function DOMException(msg, name) {
@@ -696,270 +681,230 @@ mod tests {
             "#,
         )
         .unwrap();
-        install_web_audio_api(ctx).unwrap();
+        super::install_web_audio_api_v8(&rt).unwrap();
+        rt
     }
 
     #[test]
     fn audio_context_classes_exist() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            setup(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    typeof AudioContext === 'function'
-                      && typeof OfflineAudioContext === 'function'
-                      && typeof AudioBuffer === 'function'
-                      && typeof AudioParam === 'function'
-                      && typeof AudioNode === 'function'
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = rt_with_web_audio();
+        let ok = rt
+            .eval(
+                r#"
+                typeof AudioContext === 'function'
+                  && typeof OfflineAudioContext === 'function'
+                  && typeof AudioBuffer === 'function'
+                  && typeof AudioParam === 'function'
+                  && typeof AudioNode === 'function'
+                "#,
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]
     fn audio_context_initial_state() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            setup(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var ac = new AudioContext();
-                    ac.state === 'running'
-                      && typeof ac.currentTime === 'number'
-                      && typeof ac.sampleRate === 'number'
-                      && ac.destination instanceof AudioDestinationNode
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = rt_with_web_audio();
+        let ok = rt
+            .eval(
+                r#"
+                var ac = new AudioContext();
+                ac.state === 'running'
+                  && typeof ac.currentTime === 'number'
+                  && typeof ac.sampleRate === 'number'
+                  && ac.destination instanceof AudioDestinationNode
+                "#,
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]
     fn audio_context_suspend_resume_close() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            setup(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var ac = new AudioContext();
-                    var suspendPromise = ac.suspend();
-                    var resumePromise  = ac.resume();
-                    var closePromise   = ac.close();
-                    suspendPromise instanceof Promise
-                      && resumePromise instanceof Promise
-                      && closePromise instanceof Promise
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = rt_with_web_audio();
+        let ok = rt
+            .eval(
+                r#"
+                var ac = new AudioContext();
+                var suspendPromise = ac.suspend();
+                var resumePromise  = ac.resume();
+                var closePromise   = ac.close();
+                suspendPromise instanceof Promise
+                  && resumePromise instanceof Promise
+                  && closePromise instanceof Promise
+                "#,
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]
     fn audio_node_classes_exist() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            setup(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    typeof GainNode === 'function'
-                      && typeof OscillatorNode === 'function'
-                      && typeof AudioBufferSourceNode === 'function'
-                      && typeof BiquadFilterNode === 'function'
-                      && typeof AnalyserNode === 'function'
-                      && typeof DelayNode === 'function'
-                      && typeof DynamicsCompressorNode === 'function'
-                      && typeof StereoPannerNode === 'function'
-                      && typeof PannerNode === 'function'
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = rt_with_web_audio();
+        let ok = rt
+            .eval(
+                r#"
+                typeof GainNode === 'function'
+                  && typeof OscillatorNode === 'function'
+                  && typeof AudioBufferSourceNode === 'function'
+                  && typeof BiquadFilterNode === 'function'
+                  && typeof AnalyserNode === 'function'
+                  && typeof DelayNode === 'function'
+                  && typeof DynamicsCompressorNode === 'function'
+                  && typeof StereoPannerNode === 'function'
+                  && typeof PannerNode === 'function'
+                "#,
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]
     fn audio_context_factory_methods() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            setup(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var ac = new AudioContext();
-                    var gain = ac.createGain();
-                    var osc  = ac.createOscillator();
-                    var buf  = ac.createBuffer(1, 100, 44100);
-                    var src  = ac.createBufferSource();
-                    var bq   = ac.createBiquadFilter();
-                    var an   = ac.createAnalyser();
-                    gain instanceof GainNode
-                      && osc  instanceof OscillatorNode
-                      && buf  instanceof AudioBuffer
-                      && src  instanceof AudioBufferSourceNode
-                      && bq   instanceof BiquadFilterNode
-                      && an   instanceof AnalyserNode
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = rt_with_web_audio();
+        let ok = rt
+            .eval(
+                r#"
+                var ac = new AudioContext();
+                var gain = ac.createGain();
+                var osc  = ac.createOscillator();
+                var buf  = ac.createBuffer(1, 100, 44100);
+                var src  = ac.createBufferSource();
+                var bq   = ac.createBiquadFilter();
+                var an   = ac.createAnalyser();
+                gain instanceof GainNode
+                  && osc  instanceof OscillatorNode
+                  && buf  instanceof AudioBuffer
+                  && src  instanceof AudioBufferSourceNode
+                  && bq   instanceof BiquadFilterNode
+                  && an   instanceof AnalyserNode
+                "#,
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]
     fn oscillator_node_type_and_freq() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            setup(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var ac  = new AudioContext();
-                    var osc = ac.createOscillator();
-                    osc.type === 'sine'
-                      && osc.frequency instanceof AudioParam
-                      && osc.frequency.value === 440
-                      && osc.detune instanceof AudioParam
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = rt_with_web_audio();
+        let ok = rt
+            .eval(
+                r#"
+                var ac  = new AudioContext();
+                var osc = ac.createOscillator();
+                osc.type === 'sine'
+                  && osc.frequency instanceof AudioParam
+                  && osc.frequency.value === 440
+                  && osc.detune instanceof AudioParam
+                "#,
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]
     fn audio_node_connect_disconnect() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            setup(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var ac   = new AudioContext();
-                    var gain = ac.createGain();
-                    var osc  = ac.createOscillator();
-                    var result = osc.connect(gain);
-                    result === gain && osc._connections.length === 1
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = rt_with_web_audio();
+        let ok = rt
+            .eval(
+                r#"
+                var ac   = new AudioContext();
+                var gain = ac.createGain();
+                var osc  = ac.createOscillator();
+                var result = osc.connect(gain);
+                result === gain && osc._connections.length === 1
+                "#,
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]
     fn audio_buffer_channel_data() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            setup(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var buf = new AudioBuffer({ numberOfChannels: 2, length: 128, sampleRate: 44100 });
-                    buf.numberOfChannels === 2
-                      && buf.length === 128
-                      && buf.sampleRate === 44100
-                      && buf.getChannelData(0) instanceof Float32Array
-                      && buf.getChannelData(0).length === 128
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = rt_with_web_audio();
+        let ok = rt
+            .eval(
+                r#"
+                var buf = new AudioBuffer({ numberOfChannels: 2, length: 128, sampleRate: 44100 });
+                buf.numberOfChannels === 2
+                  && buf.length === 128
+                  && buf.sampleRate === 44100
+                  && buf.getChannelData(0) instanceof Float32Array
+                  && buf.getChannelData(0).length === 128
+                "#,
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]
     fn audio_param_set_value_at_time() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            setup(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var ac   = new AudioContext();
-                    var gain = ac.createGain();
-                    gain.gain.value = 0.5;
-                    gain.gain.setValueAtTime(0.8, 0);
-                    gain.gain.value === 0.8
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = rt_with_web_audio();
+        let ok = rt
+            .eval(
+                r#"
+                var ac   = new AudioContext();
+                var gain = ac.createGain();
+                gain.gain.value = 0.5;
+                gain.gain.setValueAtTime(0.8, 0);
+                gain.gain.value === 0.8
+                "#,
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]
     fn offline_audio_context_start_rendering() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            setup(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var oac = new OfflineAudioContext(1, 44100, 44100);
-                    oac instanceof OfflineAudioContext
-                      && oac.length === 44100
-                      && oac.numberOfChannels === 1
-                      && oac.startRendering() instanceof Promise
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = rt_with_web_audio();
+        let ok = rt
+            .eval(
+                r#"
+                var oac = new OfflineAudioContext(1, 44100, 44100);
+                oac instanceof OfflineAudioContext
+                  && oac.length === 44100
+                  && oac.numberOfChannels === 1
+                  && oac.startRendering() instanceof Promise
+                "#,
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]
     fn decode_audio_data_returns_promise() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            setup(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var ac = new AudioContext();
-                    var buf = new ArrayBuffer(16);
-                    ac.decodeAudioData(buf) instanceof Promise
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = rt_with_web_audio();
+        let ok = rt
+            .eval(
+                r#"
+                var ac = new AudioContext();
+                var buf = new ArrayBuffer(16);
+                ac.decodeAudioData(buf) instanceof Promise
+                "#,
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]
     fn webkit_audio_context_alias() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            setup(&ctx);
-            let ok: bool = ctx
-                .eval("typeof webkitAudioContext === 'function'")
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = rt_with_web_audio();
+        let ok = rt.eval("typeof webkitAudioContext === 'function'").unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 
     #[test]
     fn analyser_frequency_bin_count() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            setup(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var ac = new AudioContext();
-                    var an = ac.createAnalyser();
-                    an.fftSize === 2048 && an.fftSize / 2 === 1024
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+        let rt = rt_with_web_audio();
+        let ok = rt
+            .eval(
+                r#"
+                var ac = new AudioContext();
+                var an = ac.createAnalyser();
+                an.fftSize === 2048 && an.fftSize / 2 === 1024
+                "#,
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 }

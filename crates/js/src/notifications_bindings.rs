@@ -11,7 +11,6 @@
 //! - Shell integration: `_lumen_show_notification` queues requests for OS delivery.
 //! - Default permission: `"denied"` (privacy-first). Shell may enable via `allow=true`.
 
-use rquickjs::{Ctx, Function};
 use std::sync::{Arc, Mutex};
 
 /// A notification request queued by `new Notification(...)` in JS.
@@ -33,74 +32,6 @@ pub struct NotificationRequest {
 /// drained by the shell in `about_to_wait` (main thread).
 pub type NotificationQueue = Arc<Mutex<Vec<NotificationRequest>>>;
 
-/// Install Web Notifications API globals into the JS context.
-///
-/// Registers three native bindings:
-/// - `_lumen_show_notification(id, title, body)` → pushes to `pending` queue.
-/// - `_lumen_notification_close(id)` → no-op stub (OS dismissal not wired yet).
-/// - `_lumen_notification_request_permission()` → returns permission string.
-///
-/// Then evaluates `NOTIFICATIONS_SHIM` which defines `window.Notification`.
-///
-/// `allow` controls the initial `Notification.permission` value:
-/// - `false` (default) → `"denied"` — sites cannot show notifications without
-///   explicit user opt-in in the permission UI.
-/// - `true` → `"granted"` — shell opted in (e.g. user toggled in per-site prefs).
-///
-/// Must be called **after** `dom::install_dom_api` so that `Event`, `Promise`,
-/// and `queueMicrotask` are already defined.
-pub fn install_notifications_bindings(
-    ctx: &Ctx<'_>,
-    pending: NotificationQueue,
-    allow: bool,
-) -> rquickjs::Result<()> {
-    macro_rules! reg {
-        ($name:expr, $f:expr) => {
-            ctx.globals()
-                .set($name, Function::new(ctx.clone(), $f)?)?;
-        };
-    }
-
-    // _lumen_show_notification(id, title, body) → bool
-    // Enqueues the request for OS delivery. Returns false if the queue lock
-    // is poisoned (should never happen in practice).
-    {
-        let q = Arc::clone(&pending);
-        reg!(
-            "_lumen_show_notification",
-            move |id: u32, title: String, body: String| -> bool {
-                match q.lock() {
-                    Ok(mut queue) => {
-                        queue.push(NotificationRequest { id, title, body });
-                        true
-                    }
-                    Err(_) => false,
-                }
-            }
-        );
-    }
-
-    // _lumen_notification_close(id)
-    // Phase 0 stub — OS-side close not yet implemented.
-    reg!("_lumen_notification_close", |_id: u32| {});
-
-    // _lumen_notification_request_permission() → "granted" | "denied"
-    // Returns the permission level the shell configured at init time.
-    // No interactive dialog in Phase 0.
-    let perm = if allow { "granted" } else { "denied" };
-    reg!(
-        "_lumen_notification_request_permission",
-        move || -> String { perm.to_string() }
-    );
-
-    // Inject initial permission so the JS shim can read it before the first call.
-    let init = format!("globalThis.__LUMEN_NOTIF_PERM = '{perm}';");
-    ctx.eval::<(), _>(init.as_str())?;
-
-    ctx.eval::<(), _>(NOTIFICATIONS_SHIM)?;
-    Ok(())
-}
-
 /// Drain all pending notification requests from the queue.
 ///
 /// Called by the shell in `about_to_wait` to retrieve notifications queued
@@ -112,10 +43,18 @@ pub fn drain_notifications(queue: &NotificationQueue) -> Vec<NotificationRequest
     }
 }
 
-/// V8 port of [`install_notifications_bindings`] (Ph3 V8 migration S5-S7 batch
-/// 3): the three natives capture a clone of `rt`'s queue (accessed via
-/// [`crate::v8_runtime::V8JsRuntime::notification_queue`]), the JS shim is
-/// unchanged. Must be called after the core DOM install.
+/// Install Web Notifications API globals into the JS context (Ph3 V8 migration
+/// S5-S7 batch 3; the rquickjs twin was removed in S12b-B19): the three
+/// natives capture a clone of `rt`'s queue (accessed via
+/// [`crate::v8_runtime::V8JsRuntime::notification_queue`]). Then evaluates
+/// `NOTIFICATIONS_SHIM` which defines `window.Notification`.
+///
+/// `allow` controls the initial `Notification.permission` value:
+/// - `false` (default) → `"denied"` — sites cannot show notifications without
+///   explicit user opt-in in the permission UI.
+/// - `true` → `"granted"` — shell opted in (e.g. user toggled in per-site prefs).
+///
+/// Must be called after the core DOM install.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_notifications_bindings_v8(
     rt: &crate::v8_runtime::V8JsRuntime,
@@ -154,6 +93,7 @@ pub(crate) fn install_notifications_bindings_v8(
 
 // ─── JavaScript shim ─────────────────────────────────────────────────────────
 
+#[cfg(feature = "v8-backend")]
 const NOTIFICATIONS_SHIM: &str = r#"(function() {
   'use strict';
 
@@ -353,132 +293,99 @@ const NOTIFICATIONS_SHIM: &str = r#"(function() {
 
 // ─── tests ────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
-mod tests {
+/// V8 test coverage for the Notifications API shim (the rquickjs twin was
+/// removed in S12b-B19; this module ports its 26 tests to V8 verbatim).
+#[cfg(all(test, feature = "v8-backend"))]
+mod tests_v8 {
     use super::*;
-    use rquickjs::{Context, Runtime};
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
+    // `Event`/`window`/`queueMicrotask` stubs — V8 has no DOM, so the shim's
+    // `new Event(...)`, `window.Notification = ...` and 'show' dispatch need
+    // minimal globals. Real V8 Promises are used as-is: `.then()` callbacks
+    // run as microtasks, which V8 auto-drains between separate `eval` calls
+    // (not within a single one — tests reading a `.then`-set variable split
+    // setup and read into two `eval` calls for that reason).
+    const STUBS: &str = r#"
+        var window = globalThis;
+        globalThis.Event = function(type, _init) { this.type = type; };
+        globalThis.queueMicrotask = function(fn) { fn(); };
+    "#;
+
+    fn rt_with_notifications(allow: bool) -> V8JsRuntime {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(STUBS).unwrap();
+        install_notifications_bindings_v8(&rt, allow).unwrap();
+        rt
     }
 
-    fn setup_dom_stubs(ctx: &Context) {
-        ctx.with(|c| {
-            // globalThis is a QuickJS built-in — assign globals directly on it
-            // so they are accessible as free variables in subsequent evals.
-            c.eval::<(), _>(
-                r#"
-globalThis.window = globalThis;
-globalThis.Event = function(type, _init) { this.type = type; };
-globalThis.queueMicrotask = function(fn) { fn(); };
-// Synchronous Promise stub — executor runs immediately; .then fires synchronously.
-// Required so requestPermission().then(cb) resolves in the same tick for tests.
-globalThis.Promise = (function() {
-  function P(exec) {
-    var self = this;
-    self._val = undefined;
-    self._cbs = [];
-    self._done = false;
-    exec(function(v) {
-      self._val = v;
-      self._done = true;
-      for (var i = 0; i < self._cbs.length; i++) { self._cbs[i](v); }
-    });
-  }
-  P.prototype.then = function(fn) {
-    if (this._done) { fn(this._val); } else { this._cbs.push(fn); }
-    return this;
-  };
-  return P;
-})();
-"#,
-            )
+    fn rt_with_sw_registration(allow: bool) -> V8JsRuntime {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(STUBS).unwrap();
+        rt.eval("globalThis.ServiceWorkerRegistration = function() {};")
             .unwrap();
-        });
-    }
-
-    fn install(ctx: &Context, allow: bool) -> NotificationQueue {
-        let q: NotificationQueue = Arc::new(Mutex::new(Vec::new()));
-        ctx.with(|c| {
-            install_notifications_bindings(&c, Arc::clone(&q), allow).unwrap();
-        });
-        q
+        install_notifications_bindings_v8(&rt, allow).unwrap();
+        rt
     }
 
     #[test]
     fn permission_denied_by_default() {
-        let (_rt, ctx) = make_ctx();
-        setup_dom_stubs(&ctx);
-        install(&ctx, false);
-        let perm: String = ctx
-            .with(|c| c.eval("Notification.permission"))
-            .unwrap();
-        assert_eq!(perm, "denied");
+        let rt = rt_with_notifications(false);
+        assert_eq!(
+            rt.eval("Notification.permission").unwrap(),
+            JsValue::String("denied".to_string())
+        );
     }
 
     #[test]
     fn permission_granted_when_allowed() {
-        let (_rt, ctx) = make_ctx();
-        setup_dom_stubs(&ctx);
-        install(&ctx, true);
-        let perm: String = ctx
-            .with(|c| c.eval("Notification.permission"))
-            .unwrap();
-        assert_eq!(perm, "granted");
+        let rt = rt_with_notifications(true);
+        assert_eq!(
+            rt.eval("Notification.permission").unwrap(),
+            JsValue::String("granted".to_string())
+        );
     }
 
     #[test]
     fn request_permission_returns_string() {
-        let (_rt, ctx) = make_ctx();
-        setup_dom_stubs(&ctx);
-        install(&ctx, false);
-        let perm: String = ctx
-            .with(|c| {
-                c.eval(
-                    r#"
+        // V8 auto-drains microtasks between separate `eval` calls, so the
+        // `.then()` scheduled below has already run by the time the second
+        // `eval` reads `result` — unlike within a single `eval`.
+        let rt = rt_with_notifications(false);
+        rt.eval(
+            r#"
 var result = '';
 Notification.requestPermission().then(function(p) { result = p; });
-result
 "#,
-                )
-            })
-            .unwrap();
-        assert_eq!(perm, "denied");
+        )
+        .unwrap();
+        let perm = rt.eval("result").unwrap();
+        assert_eq!(perm, JsValue::String("denied".to_string()));
     }
 
     #[test]
     fn request_permission_callback_called() {
-        let (_rt, ctx) = make_ctx();
-        setup_dom_stubs(&ctx);
-        install(&ctx, true);
-        let perm: String = ctx
-            .with(|c| {
-                c.eval(
-                    r#"
+        let rt = rt_with_notifications(true);
+        let perm = rt
+            .eval(
+                r#"
 var cbResult = '';
 Notification.requestPermission(function(p) { cbResult = p; });
 cbResult
 "#,
-                )
-            })
+            )
             .unwrap();
-        assert_eq!(perm, "granted");
+        assert_eq!(perm, JsValue::String("granted".to_string()));
     }
 
     #[test]
     fn notification_shows_when_granted() {
-        let (_rt, ctx) = make_ctx();
-        setup_dom_stubs(&ctx);
-        let q = install(&ctx, true);
-        ctx.with(|c| {
-            c.eval::<(), _>(
-                r#"var n = new Notification('Hello', { body: 'World' });"#,
-            )
+        let rt = rt_with_notifications(true);
+        rt.eval("var n = new Notification('Hello', { body: 'World' });")
             .unwrap();
-        });
-        let drained = drain_notifications(&q);
+        let drained = rt.take_notification_requests();
         assert_eq!(drained.len(), 1);
         assert_eq!(drained[0].title, "Hello");
         assert_eq!(drained[0].body, "World");
@@ -486,78 +393,47 @@ cbResult
 
     #[test]
     fn notification_silent_when_denied() {
-        let (_rt, ctx) = make_ctx();
-        setup_dom_stubs(&ctx);
-        let q = install(&ctx, false);
-        ctx.with(|c| {
-            c.eval::<(), _>("var n = new Notification('Hello');").unwrap();
-        });
-        assert!(drain_notifications(&q).is_empty());
+        let rt = rt_with_notifications(false);
+        rt.eval("var n = new Notification('Hello');").unwrap();
+        assert!(rt.take_notification_requests().is_empty());
     }
 
     #[test]
     fn notification_properties() {
-        let (_rt, ctx) = make_ctx();
-        setup_dom_stubs(&ctx);
-        install(&ctx, false);
-        let title: String = ctx
-            .with(|c| {
-                c.eval(
-                    r#"
-var n = new Notification('Title', { body: 'Body', tag: 'my-tag', silent: true });
-n.title
-"#,
-                )
-            })
-            .unwrap();
-        assert_eq!(title, "Title");
-
-        let body: String = ctx
-            .with(|c| c.eval("n.body"))
-            .unwrap();
-        assert_eq!(body, "Body");
-
-        let tag: String = ctx
-            .with(|c| c.eval("n.tag"))
-            .unwrap();
-        assert_eq!(tag, "my-tag");
-
-        let silent: bool = ctx
-            .with(|c| c.eval("n.silent"))
-            .unwrap();
-        assert!(silent);
+        let rt = rt_with_notifications(false);
+        rt.eval(
+            r#"var n = new Notification('Title', { body: 'Body', tag: 'my-tag', silent: true });"#,
+        )
+        .unwrap();
+        assert_eq!(rt.eval("n.title").unwrap(), JsValue::String("Title".to_string()));
+        assert_eq!(rt.eval("n.body").unwrap(), JsValue::String("Body".to_string()));
+        assert_eq!(rt.eval("n.tag").unwrap(), JsValue::String("my-tag".to_string()));
+        assert_eq!(rt.eval("n.silent").unwrap(), JsValue::Bool(true));
     }
 
     #[test]
     fn notification_close_fires_event() {
-        let (_rt, ctx) = make_ctx();
-        setup_dom_stubs(&ctx);
-        install(&ctx, false);
-        let closed: bool = ctx
-            .with(|c| {
-                c.eval(
-                    r#"
+        let rt = rt_with_notifications(false);
+        let closed = rt
+            .eval(
+                r#"
 var n = new Notification('Test');
 var fired = false;
 n.onclose = function() { fired = true; };
 n.close();
 fired
 "#,
-                )
-            })
+            )
             .unwrap();
-        assert!(closed);
+        assert_eq!(closed, JsValue::Bool(true));
     }
 
     #[test]
     fn notification_close_idempotent() {
-        let (_rt, ctx) = make_ctx();
-        setup_dom_stubs(&ctx);
-        install(&ctx, false);
-        let count: i32 = ctx
-            .with(|c| {
-                c.eval(
-                    r#"
+        let rt = rt_with_notifications(false);
+        let count = rt
+            .eval(
+                r#"
 var n = new Notification('Test');
 var count = 0;
 n.onclose = function() { count++; };
@@ -565,21 +441,17 @@ n.close();
 n.close();
 count
 "#,
-                )
-            })
+            )
             .unwrap();
-        assert_eq!(count, 1);
+        assert_eq!(count, JsValue::Number(1.0));
     }
 
     #[test]
     fn notification_add_remove_listener() {
-        let (_rt, ctx) = make_ctx();
-        setup_dom_stubs(&ctx);
-        install(&ctx, false);
-        let fired: bool = ctx
-            .with(|c| {
-                c.eval(
-                    r#"
+        let rt = rt_with_notifications(false);
+        let fired = rt
+            .eval(
+                r#"
 var n = new Notification('Test');
 var count = 0;
 function handler() { count++; }
@@ -588,57 +460,44 @@ n.removeEventListener('close', handler);
 n.close();
 count === 0
 "#,
-                )
-            })
+            )
             .unwrap();
-        assert!(fired);
+        assert_eq!(fired, JsValue::Bool(true));
     }
 
     #[test]
     fn show_queued_when_granted() {
         // Verifies that a notification shown with 'granted' permission is delivered
         // to the OS queue (separate from the JS 'show' event).
-        // The 'show' event fires via queueMicrotask (asynchronous in production),
-        // so we verify the OS-side queue rather than the JS event handler here.
-        let (_rt, ctx) = make_ctx();
-        setup_dom_stubs(&ctx);
-        let q = install(&ctx, true);
-        ctx.with(|c| {
-            c.eval::<(), _>("new Notification('Queued');").unwrap();
-        });
-        let items = drain_notifications(&q);
+        let rt = rt_with_notifications(true);
+        rt.eval("new Notification('Queued');").unwrap();
+        let items = rt.take_notification_requests();
         assert_eq!(items.len(), 1, "expected 1 queued notification");
         assert_eq!(items[0].title, "Queued");
     }
 
     #[test]
     fn max_actions_is_zero() {
-        let (_rt, ctx) = make_ctx();
-        setup_dom_stubs(&ctx);
-        install(&ctx, false);
-        let max: i32 = ctx
-            .with(|c| c.eval("Notification.maxActions"))
-            .unwrap();
-        assert_eq!(max, 0);
+        let rt = rt_with_notifications(false);
+        assert_eq!(
+            rt.eval("Notification.maxActions").unwrap(),
+            JsValue::Number(0.0)
+        );
     }
 
     #[test]
     fn notification_requires_new() {
-        let (_rt, ctx) = make_ctx();
-        setup_dom_stubs(&ctx);
-        install(&ctx, false);
-        let threw: bool = ctx
-            .with(|c| {
-                c.eval(
-                    r#"
+        let rt = rt_with_notifications(false);
+        let threw = rt
+            .eval(
+                r#"
 var threw = false;
 try { Notification('no-new'); } catch(e) { threw = true; }
 threw
 "#,
-                )
-            })
+            )
             .unwrap();
-        assert!(threw);
+        assert_eq!(threw, JsValue::Bool(true));
     }
 
     #[test]
@@ -649,20 +508,16 @@ threw
 
     #[test]
     fn multiple_notifications_queued() {
-        let (_rt, ctx) = make_ctx();
-        setup_dom_stubs(&ctx);
-        let q = install(&ctx, true);
-        ctx.with(|c| {
-            c.eval::<(), _>(
-                r#"
+        let rt = rt_with_notifications(true);
+        rt.eval(
+            r#"
 new Notification('First');
 new Notification('Second', { body: 'body2' });
 new Notification('Third');
 "#,
-            )
-            .unwrap();
-        });
-        let drained = drain_notifications(&q);
+        )
+        .unwrap();
+        let drained = rt.take_notification_requests();
         assert_eq!(drained.len(), 3);
         assert_eq!(drained[0].title, "First");
         assert_eq!(drained[1].title, "Second");
@@ -671,166 +526,105 @@ new Notification('Third');
 
     #[test]
     fn drain_clears_queue() {
-        let (_rt, ctx) = make_ctx();
-        setup_dom_stubs(&ctx);
-        let q = install(&ctx, true);
-        ctx.with(|c| {
-            c.eval::<(), _>("new Notification('X');").unwrap();
-        });
-        let first = drain_notifications(&q);
-        let second = drain_notifications(&q);
+        let rt = rt_with_notifications(true);
+        rt.eval("new Notification('X');").unwrap();
+        let first = rt.take_notification_requests();
+        let second = rt.take_notification_requests();
         assert_eq!(first.len(), 1);
         assert!(second.is_empty());
     }
 
     #[test]
     fn notification_title_coerced_to_string() {
-        let (_rt, ctx) = make_ctx();
-        setup_dom_stubs(&ctx);
-        install(&ctx, false);
-        let title: String = ctx
-            .with(|c| {
-                c.eval(
-                    r#"
-var n = new Notification(42);
-n.title
-"#,
-                )
-            })
-            .unwrap();
-        assert_eq!(title, "42");
+        let rt = rt_with_notifications(false);
+        rt.eval("var n = new Notification(42);").unwrap();
+        assert_eq!(rt.eval("n.title").unwrap(), JsValue::String("42".to_string()));
     }
 
     #[test]
     fn no_args_throws_type_error() {
-        let (_rt, ctx) = make_ctx();
-        setup_dom_stubs(&ctx);
-        install(&ctx, false);
-        let threw: bool = ctx
-            .with(|c| {
-                c.eval(
-                    r#"
+        let rt = rt_with_notifications(false);
+        let threw = rt
+            .eval(
+                r#"
 var threw = false;
 try { new Notification(); } catch(e) { threw = e instanceof TypeError; }
 threw
 "#,
-                )
-            })
+            )
             .unwrap();
-        assert!(threw);
+        assert_eq!(threw, JsValue::Bool(true));
     }
 
     #[test]
     fn permission_mutation_via_request_permission() {
-        let (_rt, ctx) = make_ctx();
-        setup_dom_stubs(&ctx);
-        install(&ctx, true);
-        let perm: String = ctx
-            .with(|c| {
-                c.eval(
-                    r#"
+        let rt = rt_with_notifications(true);
+        rt.eval(
+            r#"
 var result = '';
 Notification.requestPermission().then(function(p) { result = p; });
-result
 "#,
-                )
-            })
-            .unwrap();
-        assert_eq!(perm, "granted");
+        )
+        .unwrap();
+        let perm = rt.eval("result").unwrap();
+        assert_eq!(perm, JsValue::String("granted".to_string()));
     }
 
     #[test]
     fn onshow_not_fired_when_denied() {
-        let (_rt, ctx) = make_ctx();
-        setup_dom_stubs(&ctx);
-        install(&ctx, false);
-        let shown: bool = ctx
-            .with(|c| {
-                c.eval(
-                    r#"
+        let rt = rt_with_notifications(false);
+        let shown = rt
+            .eval(
+                r#"
 var shown = false;
 var n = new Notification('Hi');
 n.onshow = function() { shown = true; };
 shown
 "#,
-                )
-            })
+            )
             .unwrap();
-        assert!(!shown);
+        assert_eq!(shown, JsValue::Bool(false));
     }
 
     #[test]
     fn notification_data_preserved() {
-        let (_rt, ctx) = make_ctx();
-        setup_dom_stubs(&ctx);
-        install(&ctx, false);
-        let val: i32 = ctx
-            .with(|c| {
-                c.eval(
-                    r#"
-var n = new Notification('X', { data: 42 });
-n.data
-"#,
-                )
-            })
-            .unwrap();
-        assert_eq!(val, 42);
+        let rt = rt_with_notifications(false);
+        rt.eval("var n = new Notification('X', { data: 42 });").unwrap();
+        assert_eq!(rt.eval("n.data").unwrap(), JsValue::Number(42.0));
     }
 
     // ── ServiceWorkerRegistration tests ───────────────────────────────────────
 
-    fn setup_sw_registration(ctx: &Context) {
-        ctx.with(|c| {
-            c.eval::<(), _>("globalThis.ServiceWorkerRegistration = function() {};")
-                .unwrap();
-        });
-    }
-
     #[test]
     fn sw_show_notification_returns_promise() {
-        let (_rt, ctx) = make_ctx();
-        setup_dom_stubs(&ctx);
-        install(&ctx, true);
-        setup_sw_registration(&ctx);
-        // Re-eval shim so SW branch fires after ServiceWorkerRegistration is defined.
-        // We reinstall to pick up the SW prototype extension.
-        let q: NotificationQueue = Arc::new(Mutex::new(Vec::new()));
-        ctx.with(|c| {
-            install_notifications_bindings(&c, Arc::clone(&q), true).unwrap();
-        });
-        let is_promise: bool = ctx
-            .with(|c| {
-                c.eval(
-                    r#"
+        let rt = rt_with_sw_registration(true);
+        let is_promise = rt
+            .eval(
+                r#"
 var reg = new ServiceWorkerRegistration();
 var p = reg.showNotification('SW hello', { body: 'world' });
 typeof p.then === 'function'
 "#,
-                )
-            })
+            )
             .unwrap();
-        assert!(is_promise, "showNotification() should return a thenable");
+        assert_eq!(
+            is_promise,
+            JsValue::Bool(true),
+            "showNotification() should return a thenable"
+        );
     }
 
     #[test]
     fn sw_show_notification_queues_to_os() {
-        let (_rt, ctx) = make_ctx();
-        setup_dom_stubs(&ctx);
-        setup_sw_registration(&ctx);
-        let q: NotificationQueue = Arc::new(Mutex::new(Vec::new()));
-        ctx.with(|c| {
-            install_notifications_bindings(&c, Arc::clone(&q), true).unwrap();
-        });
-        ctx.with(|c| {
-            c.eval::<(), _>(
-                r#"
+        let rt = rt_with_sw_registration(true);
+        rt.eval(
+            r#"
 var reg = new ServiceWorkerRegistration();
 reg.showNotification('SW push', { body: 'payload' });
 "#,
-            )
-            .unwrap();
-        });
-        let drained = drain_notifications(&q);
+        )
+        .unwrap();
+        let drained = rt.take_notification_requests();
         assert_eq!(drained.len(), 1, "notification should reach OS queue");
         assert_eq!(drained[0].title, "SW push");
         assert_eq!(drained[0].body, "payload");
@@ -838,75 +632,54 @@ reg.showNotification('SW push', { body: 'payload' });
 
     #[test]
     fn sw_show_notification_silent_when_denied() {
-        let (_rt, ctx) = make_ctx();
-        setup_dom_stubs(&ctx);
-        setup_sw_registration(&ctx);
-        let q: NotificationQueue = Arc::new(Mutex::new(Vec::new()));
-        ctx.with(|c| {
-            install_notifications_bindings(&c, Arc::clone(&q), false).unwrap();
-        });
-        ctx.with(|c| {
-            c.eval::<(), _>(
-                r#"
+        let rt = rt_with_sw_registration(false);
+        rt.eval(
+            r#"
 var reg = new ServiceWorkerRegistration();
 reg.showNotification('Silent');
 "#,
-            )
-            .unwrap();
-        });
+        )
+        .unwrap();
         assert!(
-            drain_notifications(&q).is_empty(),
+            rt.take_notification_requests().is_empty(),
             "showNotification() must respect denied permission"
         );
     }
 
     #[test]
     fn sw_get_notifications_returns_empty_array() {
-        let (_rt, ctx) = make_ctx();
-        setup_dom_stubs(&ctx);
-        setup_sw_registration(&ctx);
-        let q: NotificationQueue = Arc::new(Mutex::new(Vec::new()));
-        ctx.with(|c| {
-            install_notifications_bindings(&c, Arc::clone(&q), true).unwrap();
-        });
-        let len: i32 = ctx
-            .with(|c| {
-                c.eval(
-                    r#"
+        let rt = rt_with_sw_registration(true);
+        rt.eval(
+            r#"
 var reg = new ServiceWorkerRegistration();
 var result = -1;
 reg.getNotifications().then(function(list) { result = list.length; });
-result
 "#,
-                )
-            })
-            .unwrap();
-        assert_eq!(len, 0, "getNotifications() should resolve with empty array");
+        )
+        .unwrap();
+        let len = rt.eval("result").unwrap();
+        assert_eq!(
+            len,
+            JsValue::Number(0.0),
+            "getNotifications() should resolve with empty array"
+        );
     }
 
     #[test]
     fn sw_get_notifications_with_filter_returns_empty_array() {
-        let (_rt, ctx) = make_ctx();
-        setup_dom_stubs(&ctx);
-        setup_sw_registration(&ctx);
-        let q: NotificationQueue = Arc::new(Mutex::new(Vec::new()));
-        ctx.with(|c| {
-            install_notifications_bindings(&c, Arc::clone(&q), true).unwrap();
-        });
-        let len: i32 = ctx
-            .with(|c| {
-                c.eval(
-                    r#"
+        let rt = rt_with_sw_registration(true);
+        rt.eval(
+            r#"
 var reg = new ServiceWorkerRegistration();
 var result = -1;
 reg.getNotifications({ tag: 'news' }).then(function(list) { result = list.length; });
-result
 "#,
-                )
-            })
-            .unwrap();
+        )
+        .unwrap();
+        let len = rt.eval("result").unwrap();
         assert_eq!(
-            len, 0,
+            len,
+            JsValue::Number(0.0),
             "getNotifications({{tag}}) should still resolve with empty array in Phase 0"
         );
     }
