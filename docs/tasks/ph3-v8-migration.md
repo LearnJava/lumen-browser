@@ -3444,6 +3444,81 @@ backend-femtovg,quickjs` (pure rollback build).
 
 Next in queue: S12b-B26 (`offscreen_canvas`, Полоса 3 twelfth batch).
 
+### S12b-B27: worker (+ довершение offscreen_canvas из B26) (Полоса 4, 1/…)
+
+`worker.rs`'s V8 port (`install_worker_bindings_v8`/`spawn_worker_v8`/
+`run_worker_thread_v8`/`install_worker_globals_v8`) already existed (Ph3 S10)
+as a full standalone twin — unlike most B-batches, the rquickjs and V8 Worker
+implementations were two independent per-thread-runtime constructs (each
+worker thread owns either a bare `rquickjs::Runtime`/`Context` or a full
+[`crate::v8_runtime::V8JsRuntime`]), not a thin shim reused by both. This
+batch deleted the rquickjs side wholesale: `spawn_worker`, `run_worker_thread`,
+`install_worker_globals`, `install_worker_bindings` (rquickjs) + their call
+site in `lib.rs` (`QuickJsRuntime::install_dom`, the "Install Web Worker
+bindings" block) + `use rquickjs::{Context, Function, Runtime}`.
+`WORKER_SHIM`/`worker_global_shim`/`b64_encode` gated under `#[cfg(feature =
+"v8-backend")]` (only consumer left is the V8 installer; same dead_code
+rationale as B20-B25). `WorkerRegistry`/`WorkerMessageQueue`/`WorkerBlobStore`/
+`WorkerInMsg` and `post_to_worker`/`terminate_worker`/`drain_messages` stayed
+unconditional (engine-agnostic plumbing, still read by both `QuickJsRuntime`
+and `V8JsRuntime`).
+
+One bridge finding: `QuickJsRuntime`'s own `workers`/`worker_next_id`/
+`worker_blob_store` struct fields (in `lib.rs`, separate from
+`V8JsRuntime`'s identically-named fields in `v8_runtime.rs`) became
+dead — their only writer was the just-deleted `install_worker_bindings`
+call site — so `cargo clippy --workspace` flagged them as "field is never
+read". Deleted all three; `worker_messages` stays (still read by
+`pump_workers()`, which the shell calls unconditionally for both runtimes —
+under `QuickJsRuntime` it now always drains empty, since nothing populates
+it, matching this batch's intent of dropping the QuickJS Worker
+implementation).
+
+Of `worker.rs`'s 21 rquickjs `mod tests`, 8 were pure Rust (b64/percent-decode/
+resolve_import_url, no engine) and stayed; the other 13 (JS-shim install,
+importScripts variants, structured-clone transfer, end-to-end postMessage)
+were deleted after verifying each was already covered, or porting the 6 not
+yet covered, in `tests_v8` (7→13 tests: added
+`v8_worker_import_scripts_via_blob_url`,
+`v8_worker_terminate_stops_message_delivery`, `v8_import_scripts_multiple_urls`,
+`v8_import_scripts_unknown_url_throws`,
+`v8_serialize_with_no_transfers_is_standard_json`,
+`v8_serialize_with_offscreen_canvas_transfer_embeds_sentinel`). The rquickjs
+`import_scripts_blob_url` test (direct `install_worker_globals` + blob-store
+call, no thread) has no 1:1 V8 counterpart — its code path is exercised
+instead by the ported `v8_worker_import_scripts_via_blob_url` end-to-end
+thread test, which is a superset (same `resolve_import_url` blob branch, plus
+proves the real worker thread runs it), not a coverage gap.
+
+Per the note left in B26, this batch also finished `offscreen_canvas.rs`:
+`worker.rs`'s QuickJS worker thread (`run_worker_thread`, its only live
+non-test caller) was the reason `install_offscreen_canvas_bindings`
+(rquickjs) survived B26; once that caller was deleted above, so was the
+installer, its call site in `lib.rs` (`QuickJsRuntime::install_dom`, "Install
+OffscreenCanvas bindings" block), and `use rquickjs::Ctx`. Of its 23 rquickjs
+`mod tests`, 9 were pure Rust and stayed (including `reset_state`, moved out
+of the deleted "Integration tests via JS bindings" section — it only touches
+the `OFFSCREEN_CANVASES`/`DIRTY` thread-locals, no rquickjs dependency); the
+other 14 were deleted, already fully duplicated in `tests_v8` since B26 (verified
+test-for-test, no gaps).
+
+No functional regression under the default (V8) engine: `run_worker_thread_v8`
+never installed `OffscreenCanvas` for worker threads even before this batch
+(documented gap, P1-imagebitmap) — this batch only removes the *rquickjs*
+worker thread's OffscreenCanvas support, which was unreachable under the
+default build anyway.
+
+`cargo test -p lumen-js --features v8-backend`: 2569 lib (down from 2590 —
+-27 rquickjs tests deleted, +6 new `tests_v8` tests). `cargo test -p lumen-js`
+(default, no features): 478 lib (down from 505, -27: the 13+14 rquickjs tests
+removed from `worker.rs`/`offscreen_canvas.rs`). Both clippy passes clean
+(`cargo clippy --workspace --all-targets -- -D warnings`, which unifies
+`v8-backend` in via `lumen-shell`'s dependency edge); `lumen-shell` checked
+clean under default (`v8`) and `--no-default-features --features
+backend-femtovg,backend-wgpu,quickjs` (pure rollback build).
+
+Next in queue: S12b-B28 (`tc39_proposals`, Полоса 4).
+
 ---
 
 ## Risks (Rev 2)
