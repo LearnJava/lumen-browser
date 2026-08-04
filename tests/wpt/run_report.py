@@ -22,7 +22,7 @@ Usage (from repo root, after `pip install -r tests/wpt/requirements.txt` in a
 venv — see tests/wpt/README.md):
 
     <venv>/python tests/wpt/run_report.py [--binary PATH] [--out PATH] [--all] [--root DIR] [--recursive]
-        [--processes N] [--offset N] [--limit N]
+        [--processes N] [--offset N] [--limit N] [--timeout-multiplier F]
 
 On Windows Git Bash also set `MSYS2_ARG_CONV_EXCL='/dom'` (see README) so the
 leading-slash test ids aren't mangled into Windows paths.
@@ -311,6 +311,17 @@ def main() -> int:
         help="run at most N test ids (after --offset) instead of the whole "
         "selection — see --offset",
     )
+    parser.add_argument(
+        "--timeout-multiplier",
+        type=float,
+        default=None,
+        help="wptrunner --timeout-multiplier: scale each test's timeout (already "
+        "wired through unmodified upstream, browsers/base.py::get_timeout_multiplier "
+        "-> executorlumen.py). Default (unset) is wptrunner's own default of 1x. "
+        "Raise this when the browser log shows a test finished with a correct "
+        "result but wptrunner still reports TIMEOUT (result arrived after the "
+        "external deadline) — see WPT-RUN-3 slice 40/42 in ROADMAP.md.",
+    )
     args = parser.parse_args()
 
     test_ids = (
@@ -332,7 +343,8 @@ def main() -> int:
     )
     print(
         f"running {len(test_ids)} {kind} WPT tests{slice_note} against {args.binary}"
-        + (f" with --processes={args.processes}" if args.processes else ""),
+        + (f" with --processes={args.processes}" if args.processes else "")
+        + (f" with --timeout-multiplier={args.timeout_multiplier}" if args.timeout_multiplier else ""),
         file=sys.stderr,
     )
 
@@ -345,6 +357,8 @@ def main() -> int:
     extra_args = [f"--log-wptreport={json_path}"]
     if args.processes:
         extra_args.append(f"--processes={args.processes}")
+    if args.timeout_multiplier:
+        extra_args.append(f"--timeout-multiplier={args.timeout_multiplier}")
 
     try:
         rv = run_smoke.run(args.binary, test_ids, extra_args=extra_args)
