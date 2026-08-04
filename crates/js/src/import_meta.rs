@@ -233,8 +233,6 @@ fn is_id_char(c: u8) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::QuickJsRuntime;
-    use lumen_core::ext::JsRuntime;
 
     // ── Unit: transformer ───────────────────────────────────────────────────
 
@@ -271,45 +269,7 @@ mod tests {
         assert!(transform_import_meta(src, "https://example.com/a.js").is_none());
     }
 
-    // ── Integration: end-to-end via QuickJS ─────────────────────────────────
-
-    #[test]
-    fn import_meta_url_returns_specifier() {
-        let rt = QuickJsRuntime::new().unwrap();
-        let specifier = "https://example.com/mymod.js";
-        rt.register_module_source(specifier, "export const u = import.meta.url;");
-        rt.eval_module(&format!("import {{ u }} from '{specifier}'; globalThis.__test_url = u;"))
-            .unwrap();
-        let got = rt.eval("globalThis.__test_url").unwrap();
-        assert_eq!(got, crate::JsValue::String(specifier.into()));
-    }
-
-    #[test]
-    fn import_meta_resolve_relative() {
-        let rt = QuickJsRuntime::new().unwrap();
-        let specifier = "https://example.com/app/main.js";
-        rt.register_module_source(
-            specifier,
-            "export const r = import.meta.resolve('./utils.js');",
-        );
-        rt.eval_module(&format!(
-            "import {{ r }} from '{specifier}'; globalThis.__res = r;"
-        ))
-        .unwrap();
-        let got = rt.eval("globalThis.__res").unwrap();
-        assert_eq!(got, crate::JsValue::String("https://example.com/app/./utils.js".into()));
-    }
-
-    #[test]
-    fn import_meta_env_mode_is_production() {
-        let rt = QuickJsRuntime::new().unwrap();
-        let specifier = "https://example.com/env.js";
-        rt.register_module_source(specifier, "export const mode = import.meta.env.MODE;");
-        rt.eval_module(&format!(
-            "import {{ mode }} from '{specifier}'; globalThis.__mode = mode;"
-        ))
-        .unwrap();
-        let got = rt.eval("globalThis.__mode").unwrap();
-        assert_eq!(got, crate::JsValue::String("production".into()));
-    }
+    // End-to-end `import.meta.url` / `.resolve()` / `.env` coverage lives in
+    // `v8_esm::tests` (`v8_import_meta_url_is_module_specifier` and friends) —
+    // V8 is the only runtime that still evaluates modules (S12b-F2).
 }

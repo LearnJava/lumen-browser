@@ -1,18 +1,22 @@
 //! TC39 Import Attributes (Stage 3) Phase 0 — `import ... with { type: 'json' }`.
 //!
-//! QuickJS (via rquickjs 0.11) cannot parse the `with { ... }` clause, and the
-//! `rquickjs::loader::Loader` trait receives only the resolved specifier — no
-//! attributes. Phase 0 therefore pre-processes module source before QuickJS
-//! sees it:
+//! QuickJS-only infrastructure (S12b-F2): QuickJS (via rquickjs 0.11) could
+//! not parse the `with { ... }` clause, and the `rquickjs::loader::Loader`
+//! trait received only the resolved specifier — no attributes. Phase 0
+//! therefore pre-processed module source before QuickJS saw it:
 //!
 //! * static `import` / `export ... from` statements: the `with { ... }` clause
 //!   (and the legacy `assert { ... }` spelling) is stripped from the source and
 //!   the declared `type` is recorded in a [`ModuleTypeRegistry`] keyed by the
 //!   resolved specifier;
-//! * [`LumenLoader`](crate::esm::LumenLoader) consults the registry at load
-//!   time: `type: 'json'` modules are validated as JSON (the "JSON-assert
-//!   guard") and compiled as a synthetic `export default JSON.parse(...)`
-//!   module; any other declared type fails the load.
+//! * the QuickJS module loader consulted the registry at load time:
+//!   `type: 'json'` modules were validated as JSON (the "JSON-assert guard")
+//!   and compiled as a synthetic `export default JSON.parse(...)` module; any
+//!   other declared type failed the load.
+//!
+//! V8 parses import attributes natively (see `crate::v8_esm`) and does not use
+//! this preprocessor — kept only until the QuickJS runtime itself is fully
+//! removed (S12b-F3/F4).
 //!
 //! Not supported (Phase 0): dynamic `import(spec, { with: { ... } })` options
 //! objects (left untouched — QuickJS ignores the extra argument) and attribute
@@ -47,9 +51,9 @@ impl ModuleType {
 
 /// Shared registry: resolved module specifier → declared module type.
 ///
-/// Written by [`strip_import_attributes`] callers (`QuickJsRuntime::eval_module`
-/// and `register_module_source`); read by `LumenLoader::load` when the module
-/// graph is instantiated.
+/// QuickJS-only (S12b-F2): was written by [`strip_import_attributes`] callers
+/// (`QuickJsRuntime::eval_module` and `register_module_source`) and read by
+/// the QuickJS module loader when the module graph was instantiated.
 pub type ModuleTypeRegistry = Arc<Mutex<HashMap<String, ModuleType>>>;
 
 /// Creates an empty [`ModuleTypeRegistry`].
@@ -455,8 +459,6 @@ pub fn strip_import_attributes(source: &str) -> Option<(String, Vec<(String, Str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::QuickJsRuntime;
-    use lumen_core::ext::JsRuntime;
 
     #[test]
     fn strips_with_clause_from_default_import() {
@@ -536,54 +538,8 @@ mod tests {
         assert!(attrs.is_empty());
     }
 
-    // ── End-to-end through QuickJsRuntime ────────────────────────────────────
-
-    #[test]
-    fn e2e_json_module_import() {
-        let rt = QuickJsRuntime::new().unwrap();
-        rt.register_module_source("cfgmod", r#"{ "answer": 42, "name": "lumen" }"#);
-        rt.eval_module(
-            "import cfg from 'cfgmod' with { type: 'json' };\n\
-             globalThis.__aa3_answer = cfg.answer;\n\
-             globalThis.__aa3_name = cfg.name;",
-        )
-        .unwrap();
-        let answer = rt.eval("globalThis.__aa3_answer").unwrap();
-        assert_eq!(answer, crate::JsValue::Number(42.0));
-        let name = rt.eval("globalThis.__aa3_name").unwrap();
-        assert_eq!(name, crate::JsValue::String("lumen".into()));
-    }
-
-    #[test]
-    fn e2e_invalid_json_fails_to_load() {
-        // JSON-assert guard: declared `type: 'json'` but the body is not JSON.
-        let rt = QuickJsRuntime::new().unwrap();
-        rt.register_module_source("badjson", "export const not_json = 1;");
-        let result =
-            rt.eval_module("import x from 'badjson' with { type: 'json' }; globalThis.__x = x;");
-        assert!(result.is_err(), "invalid JSON must fail the import");
-    }
-
-    #[test]
-    fn e2e_unsupported_type_fails_to_load() {
-        let rt = QuickJsRuntime::new().unwrap();
-        rt.register_module_source("styles", "body { color: red; }");
-        let result = rt.eval_module("import s from 'styles' with { type: 'css' };");
-        assert!(result.is_err(), "unsupported attribute type must fail the import");
-    }
-
-    #[test]
-    fn e2e_registered_module_with_attributes_is_preprocessed() {
-        // A registered module whose own source uses import attributes:
-        // the clause is stripped at registration time and the type recorded.
-        let rt = QuickJsRuntime::new().unwrap();
-        rt.register_module_source("data", r#"{ "v": 7 }"#);
-        rt.register_module_source(
-            "wrapper",
-            "import d from 'data' with { type: 'json' };\nexport const v = d.v;",
-        );
-        rt.eval_module("import { v } from 'wrapper'; globalThis.__aa3_v = v;").unwrap();
-        let v = rt.eval("globalThis.__aa3_v").unwrap();
-        assert_eq!(v, crate::JsValue::Number(7.0));
-    }
+    // End-to-end `with { type: 'json' }` module loading is covered by V8's
+    // native import-attribute support (`v8_esm::tests::v8_json_module_import`
+    // and friends) — this Phase 0 preprocessor is QuickJS-only infrastructure
+    // (S12b-F2) and is no longer wired into any runtime's module pipeline.
 }

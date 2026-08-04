@@ -9,11 +9,15 @@
 //! [`IdbBackend`]; it captures the snapshot and every schema op so the test can
 //! assert both the blob path and the structured-mirror path without pulling in
 //! `lumen-storage`.
+//!
+//! V8-only (S12b-F2 removed `QuickJsRuntime`, the only other `JsRuntime` impl
+//! in this crate); default (no-`v8-backend`) builds compile this file to nothing.
+#![cfg(feature = "v8-backend")]
 
 use lumen_core::JsRuntime as _;
 use lumen_core::ext::{IdbBackend, IdbSchemaOp};
 use lumen_dom::Document;
-use lumen_js::QuickJsRuntime;
+use lumen_js::v8_runtime::V8JsRuntime;
 use std::sync::{Arc, Mutex};
 
 /// In-memory [`IdbBackend`] capturing the snapshot blob and all schema ops.
@@ -62,8 +66,8 @@ impl IdbBackend for MockIdb {
     }
 }
 
-fn make_rt(backend: Arc<dyn IdbBackend>) -> QuickJsRuntime {
-    let rt = QuickJsRuntime::new().unwrap();
+fn make_rt(backend: Arc<dyn IdbBackend>) -> V8JsRuntime {
+    let rt = V8JsRuntime::new().unwrap();
     let doc = Arc::new(Mutex::new(Document::new()));
     rt.install_dom(
         doc,
@@ -82,7 +86,7 @@ fn make_rt(backend: Arc<dyn IdbBackend>) -> QuickJsRuntime {
     rt
 }
 
-fn eval_str(rt: &QuickJsRuntime, script: &str) -> String {
+fn eval_str(rt: &V8JsRuntime, script: &str) -> String {
     match rt.eval(script) {
         Ok(lumen_core::JsValue::String(s)) => s,
         Ok(other) => panic!("expected string from `{script}`, got {other:?}"),
