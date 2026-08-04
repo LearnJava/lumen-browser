@@ -84,7 +84,7 @@ pub use post::Post;
 pub use rasterizer::{Bitmap, Rasterizer};
 pub use font_registry::FontRegistry;
 pub use unicode_range::{UnicodeRange, parse_unicode_ranges, codepoint_in_ranges};
-pub use system_fonts::SystemFontIndex;
+pub use system_fonts::{SystemFontIndex, shared_system_index};
 pub use variation::apply_variations_to_simple_outline;
 pub use variation_coords::VariationCoords;
 pub use vvar::Vvar;

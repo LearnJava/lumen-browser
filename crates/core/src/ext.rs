@@ -522,6 +522,90 @@ pub trait FontProvider: Send + Sync {
     fn read_face_bytes(&self, _path: &Path) -> Option<Arc<[u8]>> {
         None
     }
+
+    /// Резолвит CSS generic-family (`serif`/`sans-serif`/`monospace`/
+    /// `cursive`/`fantasy`/`system-ui`, CSS Fonts L4 §3.1) в конкретный
+    /// системный face.
+    ///
+    /// Перебирает [`generic_family_candidates`] для текущей ОС в порядке
+    /// приоритета и отдаёт первый найденный через [`FontProvider::pick_face`].
+    /// `None` — ни один кандидат не установлен в системе (тогда потребитель
+    /// падает на bundled-шрифт) либо `generic` не является generic-именем.
+    ///
+    /// Регистр `generic` не важен (CSS Fonts L4 §4.3).
+    fn pick_generic_face(
+        &self,
+        generic: &str,
+        weight: u16,
+        style: FontStyle,
+        stretch: u16,
+    ) -> Option<FaceRecord> {
+        for candidate in generic_family_candidates(generic) {
+            if let Some(rec) = self.pick_face(candidate, weight, style, stretch) {
+                return Some(rec);
+            }
+        }
+        None
+    }
+}
+
+/// CSS generic font families (CSS Fonts L4 §3.1), которые Lumen резолвит в
+/// системные шрифты. `math` и `emoji`/`fangsong` пока не поддержаны —
+/// `emoji` покрывается отдельной curated fallback-цепочкой рендера.
+pub const GENERIC_FAMILIES: [&str; 6] =
+    ["serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui"];
+
+/// `true`, если имя — CSS generic-family (сравнение ASCII-case-insensitive).
+///
+/// Такие имена нельзя искать в индексе системных шрифтов напрямую: ни одна
+/// ОС не ставит шрифт с family name «serif». Их резолвит
+/// [`FontProvider::pick_generic_face`].
+pub fn is_generic_family(name: &str) -> bool {
+    GENERIC_FAMILIES.iter().any(|g| name.eq_ignore_ascii_case(g))
+}
+
+/// Конкретные системные семейства-кандидаты для CSS generic-family, в порядке
+/// приоритета для текущей ОС. Пустой срез — имя не generic.
+///
+/// Списки повторяют дефолты мейнстрим-браузеров на каждой платформе (Edge/
+/// Chrome на Windows: serif → Times New Roman, sans-serif → Arial,
+/// monospace → Consolas), поэтому страница без явного `font-family` рендерится
+/// тем же шрифтом, что и в браузере сравнения. Хвост каждого списка —
+/// свободные метрически-совместимые аналоги (DejaVu / Liberation), чтобы
+/// минимальные Linux-образы тоже что-то нашли.
+pub fn generic_family_candidates(generic: &str) -> &'static [&'static str] {
+    #[cfg(target_os = "windows")]
+    const TABLE: [(&str, &[&str]); 6] = [
+        ("serif", &["Times New Roman", "Georgia", "Cambria", "Liberation Serif", "DejaVu Serif"]),
+        ("sans-serif", &["Arial", "Segoe UI", "Tahoma", "Verdana", "Liberation Sans", "DejaVu Sans"]),
+        ("monospace", &["Consolas", "Courier New", "Lucida Console", "Liberation Mono", "DejaVu Sans Mono"]),
+        ("cursive", &["Comic Sans MS", "Segoe Script", "Gabriola"]),
+        ("fantasy", &["Impact", "Papyrus", "Segoe Print"]),
+        ("system-ui", &["Segoe UI", "Segoe UI Variable Text", "Tahoma", "Arial"]),
+    ];
+    #[cfg(target_os = "macos")]
+    const TABLE: [(&str, &[&str]); 6] = [
+        ("serif", &["Times New Roman", "Times", "Georgia"]),
+        ("sans-serif", &["Helvetica", "Helvetica Neue", "Arial"]),
+        ("monospace", &["Menlo", "Monaco", "SF Mono", "Courier New"]),
+        ("cursive", &["Apple Chancery", "Snell Roundhand"]),
+        ("fantasy", &["Papyrus", "Impact"]),
+        ("system-ui", &["SF Pro Text", "Helvetica Neue", "Helvetica"]),
+    ];
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    const TABLE: [(&str, &[&str]); 6] = [
+        ("serif", &["DejaVu Serif", "Liberation Serif", "Noto Serif", "FreeSerif", "Times New Roman"]),
+        ("sans-serif", &["DejaVu Sans", "Liberation Sans", "Noto Sans", "FreeSans", "Arial"]),
+        ("monospace", &["DejaVu Sans Mono", "Liberation Mono", "Noto Sans Mono", "FreeMono", "Courier New"]),
+        ("cursive", &["URW Chancery L", "Comic Neue", "Z003"]),
+        ("fantasy", &["Impact", "Papyrus", "Nimbus Sans Narrow"]),
+        ("system-ui", &["Cantarell", "Ubuntu", "DejaVu Sans", "Noto Sans"]),
+    ];
+
+    TABLE
+        .iter()
+        .find(|(name, _)| generic.eq_ignore_ascii_case(name))
+        .map_or(&[], |(_, candidates)| *candidates)
 }
 
 /// `font-stretch: normal` в тех же единицах, что [`FaceRecord::stretch`] —
@@ -2936,6 +3020,88 @@ impl CacheRegistry {
     /// `true` if no caches are registered.
     pub fn is_empty(&self) -> bool {
         self.caches.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod generic_family_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    /// Провайдер, у которого «установлено» ровно перечисленное множество
+    /// семейств; путь синтезируется из имени.
+    struct FakeProvider(Vec<&'static str>);
+
+    impl FontProvider for FakeProvider {
+        fn lookup_family(&self, family: &str) -> Vec<PathBuf> {
+            if self.0.iter().any(|f| f.eq_ignore_ascii_case(family)) {
+                vec![PathBuf::from(format!("{family}.ttf"))]
+            } else {
+                Vec::new()
+            }
+        }
+        fn list_families(&self) -> Vec<String> {
+            self.0.iter().map(|s| (*s).to_string()).collect()
+        }
+    }
+
+    #[test]
+    fn generic_names_recognised_case_insensitively() {
+        assert!(is_generic_family("serif"));
+        assert!(is_generic_family("SANS-SERIF"));
+        assert!(is_generic_family("Monospace"));
+        assert!(!is_generic_family("Arial"));
+        assert!(!is_generic_family("Times New Roman"));
+    }
+
+    #[test]
+    fn every_generic_has_candidates_on_this_platform() {
+        for generic in GENERIC_FAMILIES {
+            assert!(
+                !generic_family_candidates(generic).is_empty(),
+                "нет кандидатов для generic `{generic}`"
+            );
+        }
+        assert!(generic_family_candidates("Arial").is_empty());
+    }
+
+    #[test]
+    fn pick_generic_face_follows_candidate_order() {
+        let candidates = generic_family_candidates("serif");
+        // Установлен только ВТОРОЙ кандидат — первый должен быть пропущен,
+        // а не привести к отказу от резолва.
+        let provider = FakeProvider(vec![candidates[1]]);
+        let rec = provider
+            .pick_generic_face("serif", 400, FontStyle::Normal, NORMAL_STRETCH_PERCENT)
+            .expect("второй кандидат установлен — резолв обязан его найти");
+        assert!(rec.family.eq_ignore_ascii_case(candidates[1]));
+    }
+
+    #[test]
+    fn pick_generic_face_prefers_first_installed_candidate() {
+        let candidates = generic_family_candidates("monospace");
+        let provider = FakeProvider(vec![candidates[0], candidates[1]]);
+        let rec = provider
+            .pick_generic_face("monospace", 400, FontStyle::Normal, NORMAL_STRETCH_PERCENT)
+            .expect("оба кандидата установлены");
+        assert!(rec.family.eq_ignore_ascii_case(candidates[0]));
+    }
+
+    #[test]
+    fn pick_generic_face_none_when_nothing_installed() {
+        let provider = FakeProvider(Vec::new());
+        assert!(
+            provider
+                .pick_generic_face("serif", 400, FontStyle::Normal, NORMAL_STRETCH_PERCENT)
+                .is_none()
+        );
+        // Не-generic имя через этот вход не резолвится вообще.
+        let provider = FakeProvider(vec!["Arial"]);
+        assert!(
+            provider
+                .pick_generic_face("Arial", 400, FontStyle::Normal, NORMAL_STRETCH_PERCENT)
+                .is_none()
+        );
     }
 }
 

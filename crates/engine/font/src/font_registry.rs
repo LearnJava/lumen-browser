@@ -17,7 +17,10 @@ use crate::system_fonts::SystemFontIndex;
 
 /// Провайдер шрифтов с поддержкой @font-face: системные шрифты + URL-буферы.
 pub struct FontRegistry {
-    system: SystemFontIndex,
+    /// Системный индекс. У `new()` — процесс-глобальный
+    /// ([`crate::shared_system_index`]), чтобы каждая новая страница не
+    /// пересканировала директории шрифтов; у `with_dirs` — собственный.
+    system: Arc<SystemFontIndex>,
     /// family_lowercase → Vec<FaceRecord> с виртуальными путями.
     custom: RwLock<HashMap<String, Vec<FaceRecord>>>,
     /// Виртуальный путь → декодированные байты sfnt (TrueType/OTF).
@@ -31,7 +34,7 @@ pub struct FontRegistry {
 impl FontRegistry {
     pub fn new() -> Self {
         Self {
-            system: SystemFontIndex::new(),
+            system: Arc::clone(crate::system_fonts::shared_system_index()),
             custom: RwLock::new(HashMap::new()),
             bytes_store: RwLock::new(HashMap::new()),
         }
@@ -41,7 +44,7 @@ impl FontRegistry {
     /// headless modes that need predictable font resolution without scanning OS dirs.
     pub fn with_dirs(dirs: Vec<std::path::PathBuf>) -> Self {
         Self {
-            system: SystemFontIndex::with_dirs(dirs),
+            system: Arc::new(SystemFontIndex::with_dirs(dirs)),
             custom: RwLock::new(HashMap::new()),
             bytes_store: RwLock::new(HashMap::new()),
         }

@@ -27,7 +27,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use lumen_core::ColorSpace;
-use lumen_core::ext::{FontProvider, FontStyle as CssFontStyle};
+use lumen_core::ext::{FaceRecord, FontProvider, FontStyle as CssFontStyle};
 use lumen_core::geom::Rect;
 use lumen_font::{
     Bitmap, Colr, Cpal, Font, Head, Hmtx, Outline, OwnedCmap, Rasterizer,
@@ -4164,13 +4164,25 @@ impl Renderer {
         h.finish()
     }
 
-    /// Generic CSS-family (`serif`/`sans-serif`/…) — резолвится в default,
-    /// провайдер не спрашивается (Phase 0 без per-generic-fallback таблицы).
-    fn is_generic_family(lowercase_name: &str) -> bool {
-        matches!(
-            lowercase_name,
-            "serif" | "sans-serif" | "monospace" | "cursive" | "fantasy" | "system-ui"
-        )
+    /// Резолвит одну CSS-family в системный face.
+    ///
+    /// Generic-имя (`serif`/`sans-serif`/`monospace`/`cursive`/`fantasy`/
+    /// `system-ui`) идёт через [`FontProvider::pick_generic_face`] — таблицу
+    /// платформенных кандидатов (BUG-128); конкретное имя — напрямую через
+    /// `pick_face`. Раньше generic-имена молча пропускались, и любой
+    /// `font-family: serif` рисовался bundled-Inter-ом (sans).
+    fn pick_family_face(
+        provider: &Arc<dyn FontProvider>,
+        family: &str,
+        weight: u16,
+        style: CssFontStyle,
+        stretch: u16,
+    ) -> Option<FaceRecord> {
+        if lumen_core::ext::is_generic_family(family) {
+            provider.pick_generic_face(family, weight, style, stretch)
+        } else {
+            provider.pick_face(family, weight, style, stretch)
+        }
     }
 
     /// Конверсия paint-стиля в стиль `FontProvider`-а.
@@ -4233,11 +4245,8 @@ impl Renderer {
                 if matches!(fam.as_str(), "Golos Text" | "Golos Text Medium" | "JetBrains Mono") {
                     continue;
                 }
-                let lc = fam.to_lowercase();
-                if Self::is_generic_family(&lc) {
-                    continue;
-                }
-                let Some(rec) = provider.pick_face(
+                let Some(rec) = Self::pick_family_face(
+                    &provider,
                     fam,
                     font_weight.0,
                     Self::css_style_of(*font_style),
@@ -4330,11 +4339,8 @@ impl Renderer {
         provider: &Arc<dyn FontProvider>,
     ) -> usize {
         for fam in families {
-            let lc = fam.to_lowercase();
-            if Self::is_generic_family(&lc) {
-                continue;
-            }
-            let Some(rec) = provider.pick_face(
+            let Some(rec) = Self::pick_family_face(
+                provider,
                 fam,
                 weight.0,
                 Self::css_style_of(style),

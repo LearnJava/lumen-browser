@@ -74,6 +74,20 @@ impl Default for SystemFontIndex {
     }
 }
 
+/// Процесс-глобальный индекс системных шрифтов.
+///
+/// Скан директорий шрифтов читает и парсит каждый файл в системе — на Windows
+/// это сотни файлов. Индекс иммутабелен после построения, поэтому все
+/// потребители (по одному [`crate::FontRegistry`] на страницу + резолв
+/// generic-семейств для измерителя, BUG-128) делят один инстанс вместо того,
+/// чтобы пересканировать директории на каждую новую вкладку.
+///
+/// Скан всё так же ленивый: сама `OnceLock`-инициализация I/O не делает.
+pub fn shared_system_index() -> &'static std::sync::Arc<SystemFontIndex> {
+    static SHARED: OnceLock<std::sync::Arc<SystemFontIndex>> = OnceLock::new();
+    SHARED.get_or_init(|| std::sync::Arc::new(SystemFontIndex::new()))
+}
+
 impl FontProvider for SystemFontIndex {
     fn lookup_family(&self, family: &str) -> Vec<PathBuf> {
         let key = family.to_ascii_lowercase();
