@@ -548,16 +548,18 @@ impl InProcessSession {
         let mut value = {
             let state = self.state()?;
             let doc = Self::lock_doc(state)?;
-            doc.get(node).get_attr("value").unwrap_or("").to_owned()
+            doc.control_value(node).into_owned()
         };
         for ch in text.chars() {
             let key = escape_js_single_quoted(ch);
             dispatch_key("keydown", &key)?;
             value.push(ch);
             {
+                // BUG-441: typing sets the control's *current* value; the
+                // `value` attribute stays the default `form.reset()` restores.
                 let state = self.state()?;
                 let mut doc = Self::lock_doc(state)?;
-                set_attr(doc.get_mut(node), "value", &value);
+                doc.set_control_value(node, value.clone());
             }
             dispatch_key("input", &key)?;
             dispatch_key("keyup", &key)?;

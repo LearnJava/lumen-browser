@@ -17291,7 +17291,7 @@ impl Lumen {
                 let (y, m) = self.layout_source.as_ref()
                     .and_then(|src| {
                         let doc = src.document.lock().ok()?;
-                        let val = doc.get(id).get_attr("value").unwrap_or("").to_owned();
+                        let val = doc.control_value(id).into_owned();
                         forms::parse_date_value(&val).map(|(y, m, _)| (y, m))
                     })
                     .unwrap_or_else(forms::today_year_month);
@@ -17499,9 +17499,10 @@ impl Lumen {
     /// (HTML LS §4.10.19.2 — such a control is not mutable, so the engine
     /// performs no insertion).
     ///
-    /// The value read is the *rendered* one — the `value` content attribute for
-    /// `<input>`, the text-node children for `<textarea>` (HTML LS §4.10.11) —
-    /// because that is what layout paints and what form submission collects.
+    /// The value read is the *rendered* one — [`Document::control_value`], the
+    /// control's current value, which is what layout paints and what form
+    /// submission collects (BUG-441). The `value` attribute / child text behind
+    /// it is only the default the field started from.
     fn typeable_field(&self, nid: lumen_dom::NodeId) -> Option<(TypeableField, String)> {
         let doc = self.layout_source.as_ref()?.document.lock().ok()?;
         let node = doc.get(nid);
@@ -17509,8 +17510,7 @@ impl Lumen {
             return None;
         }
         if node.element_name().is_some_and(|n| n.local.eq_ignore_ascii_case("textarea")) {
-            let text = node_text_content(&doc, nid);
-            return Some((TypeableField::Textarea, text));
+            return Some((TypeableField::Textarea, doc.control_value(nid).into_owned()));
         }
         let is_typeable_input = matches!(
             node.input_type(),
@@ -17525,8 +17525,7 @@ impl Lumen {
         if !is_typeable_input {
             return None;
         }
-        let value = node.get_attr("value").unwrap_or_default().to_owned();
-        Some((TypeableField::Input, value))
+        Some((TypeableField::Input, doc.control_value(nid).into_owned()))
     }
 
     /// Engine-side text-editing default action on the focused form control
@@ -20550,7 +20549,7 @@ impl Lumen {
                 let (y, m) = self.layout_source.as_ref()
                     .and_then(|src| {
                         let doc = src.document.lock().ok()?;
-                        let val = doc.get(id).get_attr("value").unwrap_or("").to_owned();
+                        let val = doc.control_value(id).into_owned();
                         forms::parse_date_value(&val).map(|(y, m, _)| (y, m))
                     })
                     .unwrap_or_else(forms::today_year_month);
@@ -22001,10 +22000,13 @@ impl Lumen {
         let Some(ls) = self.layout_source.as_ref() else { return String::new() };
         let Ok(doc) = ls.document.lock() else { return String::new() };
         match kind {
-            SpellTargetKind::Input => doc.get(target_node).get_attr("value").unwrap_or("").to_owned(),
-            SpellTargetKind::Textarea | SpellTargetKind::ContentEditable => {
-                node_text_content(&doc, target_node)
+            // BUG-441: у `<input>`/`<textarea>` проверяем то, что в поле сейчас
+            // (runtime-значение), а не дефолт из разметки. `contenteditable`
+            // редактируется прямо в DOM, поэтому там по-прежнему текст узлов.
+            SpellTargetKind::Input | SpellTargetKind::Textarea => {
+                doc.control_value(target_node).into_owned()
             }
+            SpellTargetKind::ContentEditable => node_text_content(&doc, target_node),
         }
     }
 

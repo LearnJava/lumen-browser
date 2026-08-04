@@ -10,6 +10,7 @@
 // Catch the most common forms of accidental Rc-in-arena.
 #![deny(clippy::rc_buffer)]
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
@@ -978,6 +979,25 @@ pub struct Document {
     /// Not serialised — captures are transient input state cleared on page restore.
     #[serde(skip)]
     pointer_captures: HashMap<u32, NodeId>,
+    /// Runtime («dirty») value of a form control, keyed by its `NodeId`.
+    ///
+    /// HTML LS §4.10.5.5: an `<input>`/`<textarea>` has a *value* that the
+    /// content attribute (`value=` / the child text) only **seeds**. Once
+    /// anything sets the value — the user typing, a script assigning
+    /// `el.value`, a picker — the control's dirty value flag is raised and the
+    /// two diverge for good: the attribute stays the *default* value that
+    /// `defaultValue` reads and `form.reset()` restores.
+    ///
+    /// An entry here **is** that dirty value flag: present → this map is the
+    /// value; absent → the default derived from the DOM. Everything that needs
+    /// the current value (layout, form submission, constraint validation,
+    /// `:placeholder-shown`) goes through [`Document::control_value`], so the
+    /// engine has exactly one source of truth for what the field shows and
+    /// submits (BUG-441).
+    ///
+    /// Serialised: the text a user typed must survive tab hibernation.
+    #[serde(default)]
+    dirty_values: HashMap<NodeId, String>,
 }
 
 impl Default for Document {
@@ -1008,6 +1028,7 @@ impl Document {
             js_refs: HashMap::new(),
             viewport_meta: None,
             pointer_captures: HashMap::new(),
+            dirty_values: HashMap::new(),
         }
     }
 
@@ -1054,6 +1075,53 @@ impl Document {
     /// Clear the selection.
     pub fn clear_selection(&mut self) {
         self.selection.clear();
+    }
+
+    /// The control's **current** value (HTML LS §4.10.5.5 «value»): the dirty
+    /// value if the control has one, otherwise its default value — the `value`
+    /// content attribute for `<input>`, the child text for `<textarea>`
+    /// (§4.10.11 «text content model»).
+    ///
+    /// This is what layout paints, what form submission collects and what
+    /// constraint validation checks. Non-control elements simply have no
+    /// dirty value and no `value` attribute, so they come back as `""`.
+    pub fn control_value(&self, id: NodeId) -> Cow<'_, str> {
+        if let Some(v) = self.dirty_values.get(&id) {
+            return Cow::Borrowed(v.as_str());
+        }
+        let node = self.get(id);
+        if node
+            .element_name()
+            .is_some_and(|n| n.local.eq_ignore_ascii_case("textarea"))
+        {
+            return Cow::Owned(dom_text_content(self, id));
+        }
+        Cow::Borrowed(node.get_attr("value").unwrap_or(""))
+    }
+
+    /// The dirty value alone, `None` when the control still shows its default.
+    ///
+    /// Presence here *is* the dirty value flag — use it when the distinction
+    /// matters (e.g. deciding whether a `value=` attribute write is still
+    /// allowed to change what the field shows).
+    pub fn dirty_value(&self, id: NodeId) -> Option<&str> {
+        self.dirty_values.get(&id).map(String::as_str)
+    }
+
+    /// Set the control's value and raise its dirty value flag — the single
+    /// write path for typing, `el.value = …`, pickers and the driver.
+    ///
+    /// The `value` content attribute is deliberately left untouched: the spec
+    /// forbids reflecting the IDL value into it, and it must keep holding the
+    /// default value for `defaultValue`/`form.reset()`.
+    pub fn set_control_value(&mut self, id: NodeId, value: impl Into<String>) {
+        self.dirty_values.insert(id, value.into());
+    }
+
+    /// Drop the control's dirty value, so it falls back to its default —
+    /// what `form.reset()` does to every control it owns (HTML LS §4.10.21.3).
+    pub fn clear_control_value(&mut self, id: NodeId) {
+        self.dirty_values.remove(&id);
     }
 
     /// Текущий target — id из URL fragment (без ведущего `#`), к которому
@@ -1957,9 +2025,9 @@ pub fn pointer_capture_target(doc: &Document, pointer_id: u32) -> Option<NodeId>
 /// и который не является disabled. `<input type="submit">` и `<input type="reset">`
 /// не включаются в набор данных (они не submittable в смысле HTML LS).
 ///
-/// Значения берутся из DOM-атрибута `value`. Для актуальных runtime-значений
-/// (что пользователь набрал) — вызывающий код в shell должен наложить
-/// `FormState` поверх результата.
+/// Значения берутся из [`Document::control_value`] — то есть runtime-значение
+/// контрола (что набрал пользователь или присвоил скрипт), а `value`-атрибут
+/// служит лишь дефолтом (BUG-441).
 pub fn collect_dom_form_fields(doc: &Document, form_id: NodeId) -> Vec<(String, String)> {
     let mut out = Vec::new();
     collect_fields_in(doc, form_id, form_id, &mut out);
@@ -1991,8 +2059,8 @@ fn collect_fields_in(doc: &Document, id: NodeId, form_id: NodeId, out: &mut Vec<
                     let value = node.get_attr("value").unwrap_or("on").to_string();
                     out.push((name.to_string(), value));
                 } else {
-                    let value = node.get_attr("value").unwrap_or("").to_string();
-                    out.push((name.to_string(), value));
+                    let name = name.to_string();
+                    out.push((name, doc.control_value(id).into_owned()));
                 }
             }
         }
@@ -2001,8 +2069,11 @@ fn collect_fields_in(doc: &Document, id: NodeId, form_id: NodeId, out: &mut Vec<
                 return;
             }
             if let Some(name) = node.get_attr("name").filter(|n| !n.is_empty()) {
-                let value = node.get_attr("value").unwrap_or("").to_string();
-                out.push((name.to_string(), value));
+                // HTML LS §4.10.11: a textarea has no `value` attribute — its
+                // default value is the child text, its current value the dirty
+                // one. Reading `value=` here always yielded `""` (BUG-441).
+                let name = name.to_string();
+                out.push((name, doc.control_value(id).into_owned()));
             }
         }
         "select" => {
@@ -2143,10 +2214,10 @@ pub fn element_validity(doc: &Document, node: NodeId) -> Option<ValidityState> {
         let missing = if is_input {
             match itype {
                 "checkbox" | "radio" => node_ref.get_attr("checked").is_none(),
-                _ => node_ref.get_attr("value").unwrap_or("").trim().is_empty(),
+                _ => doc.control_value(node).trim().is_empty(),
             }
         } else if tag == "textarea" {
-            dom_text_content(doc, node).trim().is_empty()
+            doc.control_value(node).trim().is_empty()
         } else {
             // select: simplified — checks for non-empty selected value.
             node_ref.get_attr("value").unwrap_or("").trim().is_empty()
@@ -2155,7 +2226,10 @@ pub fn element_validity(doc: &Document, node: NodeId) -> Option<ValidityState> {
     }
 
     if is_input {
-        let value = node_ref.get_attr("value").unwrap_or("");
+        // Current value, not the `value=` default — a field the user filled in
+        // must validate on what it actually holds (BUG-441).
+        let value = doc.control_value(node);
+        let value = value.as_ref();
 
         // --- typeMismatch (HTML5 §4.10.21.4.2) ---
         if !value.is_empty() {
@@ -2193,7 +2267,7 @@ pub fn element_validity(doc: &Document, node: NodeId) -> Option<ValidityState> {
             vs.too_short = !value.is_empty() && value.chars().count() < min_len;
         }
     } else if tag == "textarea" {
-        let value = dom_text_content(doc, node);
+        let value = doc.control_value(node);
         if let Some(max_len) = node_ref.get_attr("maxlength").and_then(|v| v.trim().parse::<usize>().ok()) {
             vs.too_long = value.chars().count() > max_len;
         }
@@ -4367,18 +4441,89 @@ mod tests {
 
     #[test]
     fn collect_dom_form_fields_textarea() {
+        // HTML LS §4.10.11: a textarea's default value is its child text —
+        // it has no `value` content attribute (BUG-441).
         let mut doc = Document::new();
         let form = doc.create_element(QualName::html("form"));
         let ta = doc.create_element(QualName::html("textarea"));
         if let NodeData::Element { attrs, .. } = &mut doc.get_mut(ta).data {
             attrs.push(Attribute { name: QualName::html("name"), value: "msg".into() });
-            attrs.push(Attribute { name: QualName::html("value"), value: "hello".into() });
         }
+        let text = doc.create_text("hello".to_string());
         doc.append_child(doc.root(), form);
         doc.append_child(form, ta);
+        doc.append_child(ta, text);
         let fields = collect_dom_form_fields(&doc, form);
         assert_eq!(fields.len(), 1);
         assert_eq!(fields[0], ("msg".into(), "hello".into()));
+    }
+
+    // ── Runtime («dirty») control value — BUG-441 ─────────────────────────────
+
+    #[test]
+    fn control_value_falls_back_to_default_then_follows_dirty_value() {
+        let mut doc = Document::new();
+        let inp = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(inp).data {
+            attrs.push(Attribute { name: QualName::html("value"), value: "seed".into() });
+        }
+        doc.append_child(doc.root(), inp);
+
+        assert_eq!(doc.control_value(inp), "seed");
+        assert_eq!(doc.dirty_value(inp), None);
+
+        doc.set_control_value(inp, "typed");
+        assert_eq!(doc.control_value(inp), "typed");
+        // The attribute keeps holding the default value (`defaultValue`).
+        assert_eq!(doc.get(inp).get_attr("value"), Some("seed"));
+
+        doc.clear_control_value(inp);
+        assert_eq!(doc.control_value(inp), "seed");
+    }
+
+    #[test]
+    fn control_value_of_textarea_shadows_child_text() {
+        let mut doc = Document::new();
+        let ta = doc.create_element(QualName::html("textarea"));
+        let text = doc.create_text("default".to_string());
+        doc.append_child(doc.root(), ta);
+        doc.append_child(ta, text);
+
+        assert_eq!(doc.control_value(ta), "default");
+        doc.set_control_value(ta, "edited");
+        assert_eq!(doc.control_value(ta), "edited");
+    }
+
+    #[test]
+    fn collect_dom_form_fields_uses_runtime_value() {
+        let (mut doc, form, user, _) = make_form_doc();
+        doc.set_control_value(user, "bob");
+        let fields = collect_dom_form_fields(&doc, form);
+        assert_eq!(fields, vec![("user".to_string(), "bob".to_string())]);
+    }
+
+    #[test]
+    fn validity_reads_runtime_value() {
+        let mut doc = Document::new();
+        let inp = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(inp).data {
+            attrs.push(Attribute { name: QualName::html("type"), value: "email".into() });
+            attrs.push(Attribute { name: QualName::html("required"), value: String::new() });
+        }
+        doc.append_child(doc.root(), inp);
+
+        // Empty field → valueMissing.
+        let vs = element_validity(&doc, inp).unwrap();
+        assert!(vs.value_missing);
+
+        // Filled in at runtime → no longer missing, but still a type mismatch.
+        doc.set_control_value(inp, "not-an-email");
+        let vs = element_validity(&doc, inp).unwrap();
+        assert!(!vs.value_missing);
+        assert!(vs.type_mismatch);
+
+        doc.set_control_value(inp, "a@b.com");
+        assert!(element_validity(&doc, inp).unwrap().valid());
     }
 
     #[test]

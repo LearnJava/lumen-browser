@@ -1510,6 +1510,12 @@ fn collect_text_content(doc: &Document, node_id: NodeId) -> String {
 /// Used by `field-sizing: content` to determine the intrinsic size of the control.
 /// Newlines are preserved (each `\n` becomes a line for height computation).
 fn collect_textarea_content(doc: &Document, node_id: NodeId) -> String {
+    // BUG-441: what a textarea *shows* is its current value — the child text is
+    // only the default, replaced as soon as the user types or a script assigns
+    // `el.value` (HTML LS §4.10.11).
+    if let Some(dirty) = doc.dirty_value(node_id) {
+        return dirty.to_owned();
+    }
     let mut text = String::new();
     let node = doc.get(node_id);
     for child_id in node.children.iter() {
@@ -5429,16 +5435,18 @@ fn build_box_inner(
                                     .and_then(|v| v.trim().parse::<f32>().ok())
                                     .unwrap_or(100.0);
                                 let default_val = (min + max) / 2.0;
-                                let value = node.get_attr("value")
-                                    .and_then(|v| v.trim().parse::<f32>().ok())
+                                let value = doc.control_value(id)
+                                    .trim()
+                                    .parse::<f32>()
+                                    .ok()
                                     .unwrap_or(default_val)
                                     .clamp(min, max);
                                 FormControlKind::Range { value, min, max }
                             } else {
                                 let checked = node.get_attr("checked").is_some();
-                                let value_text = node.get_attr("value")
-                                    .unwrap_or("")
-                                    .to_owned();
+                                // BUG-441: the painted text is the control's
+                                // current value; `value=` is only its default.
+                                let value_text = doc.control_value(id).into_owned();
                                 let placeholder = node.get_attr("placeholder")
                                     .unwrap_or("")
                                     .to_owned();
@@ -13382,6 +13390,68 @@ mod tests {
             ),
             (186.0, 156.0),
         );
+    }
+
+    /// BUG-441 — a form control renders its *current* value: the runtime
+    /// («dirty») value once it has one, the `value=` attribute / child text
+    /// only until then. Before the fix the box tree read the attribute, so a
+    /// field the user typed into or a script assigned kept painting the old
+    /// text (`el.value = 'ZZ'` → screen still empty).
+    #[test]
+    fn form_control_paints_runtime_value_over_the_default() {
+        let html = r#"<input id="i" value="default"><textarea id="t">seed</textarea>"#;
+        let mut doc = lumen_html_parser::parse(html);
+        // Find the two controls by tag — the arena is small and ordered.
+        let (mut input, mut textarea) = (None, None);
+        for i in 0..doc.node_count() {
+            let id = lumen_dom::NodeId::from_index(i);
+            match doc.get(id).element_name().map(|q| q.local.as_str()) {
+                Some("input") => input = Some(id),
+                Some("textarea") => textarea = Some(id),
+                _ => {}
+            }
+        }
+        let (input, textarea) = (input.expect("<input>"), textarea.expect("<textarea>"));
+
+        let sheet = lumen_css_parser::parse("");
+        let defaults = collect_form_control_values(&super::layout(
+            &doc,
+            &sheet,
+            Size::new(800.0, 600.0),
+        ));
+        assert_eq!(defaults, vec!["default".to_string(), "seed".to_string()]);
+
+        doc.set_control_value(input, "typed");
+        doc.set_control_value(textarea, "edited");
+        let runtime = collect_form_control_values(&super::layout(
+            &doc,
+            &sheet,
+            Size::new(800.0, 600.0),
+        ));
+        assert_eq!(runtime, vec!["typed".to_string(), "edited".to_string()]);
+    }
+
+    /// Painted text of every `<input>`/`<textarea>` box, in tree order.
+    fn collect_form_control_values(root: &super::LayoutBox) -> Vec<String> {
+        let mut out = Vec::new();
+        fn walk(b: &super::LayoutBox, out: &mut Vec<String>) {
+            if let super::BoxKind::FormControl { kind } = &b.kind {
+                match kind {
+                    super::FormControlKind::Input { value_text, .. } => {
+                        out.push(value_text.clone())
+                    }
+                    super::FormControlKind::Textarea { value_text } => {
+                        out.push(value_text.clone())
+                    }
+                    _ => {}
+                }
+            }
+            for child in &b.children {
+                walk(child, out);
+            }
+        }
+        walk(root, &mut out);
+        out
     }
 
     /// An author-specified CSS `width`/`height` keeps its ordinary `border-box`

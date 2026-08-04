@@ -9793,13 +9793,11 @@ fn is_descendant_of_first_legend_child(
 }
 
 /// CSS Selectors L4 §15.1 `:placeholder-shown` — true для form-control,
-/// у которого есть непустой `placeholder`-атрибут И value-атрибут отсутствует
-/// либо пустой.
+/// у которого есть непустой `placeholder`-атрибут И пустое текущее значение.
 ///
-/// В Phase 0 без runtime form-state значение никем не вводится — текущее
-/// значение определяется только author-объявленным `value`-атрибутом. Этого
-/// достаточно для условных стилей вроде `input:placeholder-shown { color:
-/// gray }` на статически отрисованной форме.
+/// Текущее значение берётся из [`Document::control_value`]: набранный текст и
+/// присвоенный скриптом `el.value` прячут placeholder ровно так же, как
+/// author-объявленный `value`-атрибут (BUG-441).
 fn matches_placeholder_shown(doc: &Document, node: NodeId) -> bool {
     let node_ref = doc.get(node);
     let NodeData::Element { name, .. } = &node_ref.data else {
@@ -9815,20 +9813,18 @@ fn matches_placeholder_shown(doc: &Document, node: NodeId) -> bool {
     if placeholder.trim().is_empty() {
         return false;
     }
-    // `value` атрибут с непустым содержимым → пользователь (или author)
-    // уже задал контент, placeholder скрыт. `<textarea>`-у HTML присваивает
-    // значение через текстовых детей (а не через атрибут), но Phase 0
-    // нашей кодовой базы DOM-mutations нет — текстовое содержимое <textarea>
-    // в DOM тоже трактуем как «не пустое значение».
-    if let Some(value) = node_ref.get_attr("value")
-        && !value.is_empty()
-    {
-        return false;
+    // Непустое текущее значение → контент уже задан, placeholder скрыт.
+    // Набранное/присвоенное значение перекрывает дефолт целиком: пустой dirty
+    // value возвращает placeholder даже у `<textarea>` с author-текстом.
+    if let Some(dirty) = doc.dirty_value(node) {
+        return dirty.is_empty();
     }
-    if tag == "textarea" && has_non_whitespace_text(doc, node) {
-        return false;
+    // Дефолтная ветка — прежнее правило: у `<input>` это `value`-атрибут, у
+    // `<textarea>` — текстовые дети (whitespace-only контентом не считается).
+    if tag == "textarea" {
+        return !has_non_whitespace_text(doc, node);
     }
-    true
+    node_ref.get_attr("value").unwrap_or("").is_empty()
 }
 
 /// `:checked` (CSS Selectors L4 §10.1). Pure attribute-based matcher без
@@ -10135,7 +10131,9 @@ fn matches_in_range(doc: &Document, node: NodeId) -> Option<bool> {
         }
     };
 
-    let value = match node_ref.get_attr("value").and_then(parse_html_number) {
+    // Текущее значение контрола, а не `value`-атрибут: набранное/присвоенное
+    // число решает, попадает ли поле в диапазон (BUG-441).
+    let value = match parse_html_number(doc.control_value(node).as_ref()) {
         Some(v) => v,
         None => {
             if t == "range" {

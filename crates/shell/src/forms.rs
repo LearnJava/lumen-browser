@@ -156,31 +156,26 @@ pub fn toggle_checkbox(doc: &mut Document, id: NodeId) {
     }
 }
 
-/// Set `value` attribute of an input / textarea in the DOM.
+/// Set the current value of an `<input>` in the live DOM — typing, a picker
+/// choice, a spellcheck replacement.
+///
+/// Writes the control's runtime («dirty») value, not the `value` content
+/// attribute: HTML LS §4.10.5.5 keeps the attribute as the *default* value that
+/// `defaultValue` reads and `form.reset()` restores. Layout, form submission
+/// and constraint validation all read the runtime value via
+/// [`Document::control_value`], so this is the single write path (BUG-441).
 pub fn set_value(doc: &mut Document, id: NodeId, value: &str) {
-    let node = doc.get_mut(id);
-    if let NodeData::Element { ref mut attrs, .. } = node.data {
-        if let Some(attr) = attrs.iter_mut().find(|a| a.name.local.eq_ignore_ascii_case("value")) {
-            attr.value = value.to_owned();
-        } else {
-            attrs.push(Attribute { name: QualName::html("value"), value: value.to_owned() });
-        }
-    }
+    doc.set_control_value(id, value);
 }
 
-/// Replace a `<textarea>`'s text content (its direct text-node children) with
-/// `new_text` (P3-spell slice 4).
+/// Set a `<textarea>`'s current value (P3-spell slice 4).
 ///
-/// Unlike `<input>`, a textarea's rendered value comes from its text-node
-/// children, not a `value` attribute (HTML LS §4.10.11 — text content model).
-/// Existing children are detached and replaced by a single new text node.
+/// Like [`set_value`], and for the same reason: the textarea's text-node
+/// children are its *default* value (HTML LS §4.10.11 — text content model),
+/// so editing must not rewrite them. The runtime value shadows the children
+/// for everything that renders or submits the field.
 pub fn set_textarea_text(doc: &mut Document, id: NodeId, new_text: &str) {
-    let children: Vec<NodeId> = doc.get(id).children.clone();
-    for child in children {
-        doc.detach(child);
-    }
-    let text_node = doc.create_text(new_text.to_owned());
-    doc.append_child(id, text_node);
+    doc.set_control_value(id, new_text);
 }
 
 /// Update a range input's `value` attribute from a click at `click_x` within
@@ -507,12 +502,17 @@ pub fn build_validation_tooltip(
 // Form submission
 // ──────────────────────────────────────────────────────────────────────────────
 
-/// Собрать данные формы для submit — DOM-значения, поверх которых наложен
-/// `FormState` (то что пользователь ввёл в runtime).
+/// Собрать данные формы для submit.
 ///
-/// HTML LS §constructing-form-data-set: обходим submittable-контролы формы,
-/// берём значение из `form_state` если есть, иначе — из DOM-атрибута `value`.
-/// Checkbox/radio из `form_state` отражают runtime-состояние (checked).
+/// HTML LS §constructing-form-data-set: обходим submittable-контролы формы.
+/// Значение `<input>`/`<textarea>` берёт [`Document::control_value`] внутри
+/// `collect_dom_form_fields` — это единственный источник истины для текстовых
+/// полей (BUG-441), поэтому и набранное пользователем, и присвоенное скриптом
+/// `el.value` попадают в набор данных сами собой.
+///
+/// `FormState` остаётся наложением только для контролов, чьё runtime-значение
+/// DOM не хранит (`<select>`, выбранный из shell-овского оверлея): у них нет
+/// dirty value, и именно этот случай подхватывает поиск по `name`.
 #[allow(dead_code)]
 pub fn collect_form_entries(
     doc: &Document,
@@ -531,6 +531,11 @@ pub fn collect_form_entries(
                         .get_attr("name")
                         .map(|n| n == name)
                         .unwrap_or(false)
+                        // Контрол с собственным runtime-значением уже отдал его
+                        // через DOM — накладывать поверх снимок из `FormState`
+                        // нельзя: он не знает о записях из JS и переживает
+                        // `form.reset()`.
+                        && doc.dirty_value(**id).is_none()
                 })
                 .map(|(_, s)| s.value.clone());
             FormEntry::text(name, runtime_value.unwrap_or(dom_value))
@@ -1517,7 +1522,7 @@ mod tests {
     }
 
     #[test]
-    fn set_textarea_text_replaces_single_child() {
+    fn set_textarea_text_shadows_default_value() {
         let mut doc = Document::new();
         let ta = doc.create_element(QualName::html("textarea"));
         let old_text = doc.create_text("old value");
@@ -1526,12 +1531,18 @@ mod tests {
 
         set_textarea_text(&mut doc, ta, "new value");
 
+        // Current value follows the edit…
+        assert_eq!(doc.control_value(ta), "new value");
+        // …while the child text stays the *default* value, which
+        // `defaultValue`/`form.reset()` restore (HTML LS §4.10.11, BUG-441).
         let children = &doc.get(ta).children;
         assert_eq!(children.len(), 1);
         match &doc.get(children[0]).data {
-            NodeData::Text(s) => assert_eq!(s, "new value"),
+            NodeData::Text(s) => assert_eq!(s, "old value"),
             _ => panic!("expected a text child"),
         }
+        doc.clear_control_value(ta);
+        assert_eq!(doc.control_value(ta), "old value");
     }
 
     #[test]
@@ -1542,12 +1553,25 @@ mod tests {
 
         set_textarea_text(&mut doc, ta, "hello");
 
-        let children = &doc.get(ta).children;
-        assert_eq!(children.len(), 1);
-        match &doc.get(children[0]).data {
-            NodeData::Text(s) => assert_eq!(s, "hello"),
-            _ => panic!("expected a text child"),
+        assert_eq!(doc.control_value(ta), "hello");
+        assert!(doc.get(ta).children.is_empty());
+    }
+
+    #[test]
+    fn set_value_leaves_default_value_attribute_intact() {
+        let mut doc = Document::new();
+        let inp = doc.create_element(QualName::html("input"));
+        doc.append_child(doc.root(), inp);
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(inp).data {
+            attrs.push(Attribute { name: QualName::html("value"), value: "default".into() });
         }
+
+        set_value(&mut doc, inp, "typed");
+
+        assert_eq!(doc.control_value(inp), "typed");
+        assert_eq!(doc.get(inp).get_attr("value"), Some("default"));
+        doc.clear_control_value(inp);
+        assert_eq!(doc.control_value(inp), "default");
     }
 
     #[test]
@@ -2158,10 +2182,7 @@ mod tests {
         let rect = lumen_core::geom::Rect::new(0.0, 0.0, 100.0, 20.0);
         apply_range_value(&mut doc, input, rect, 50.0);
 
-        let val: f32 = doc.get(input)
-            .get_attr("value")
-            .and_then(|v| v.trim().parse().ok())
-            .unwrap_or(-1.0);
+        let val: f32 = doc.control_value(input).trim().parse().unwrap_or(-1.0);
         assert!((40.0..=60.0).contains(&val), "expected ~50.0, got {val}");
     }
 
@@ -2180,10 +2201,7 @@ mod tests {
         let rect = lumen_core::geom::Rect::new(10.0, 0.0, 100.0, 20.0);
         apply_range_value(&mut doc, input, rect, -1000.0);
 
-        let val: f32 = doc.get(input)
-            .get_attr("value")
-            .and_then(|v| v.trim().parse().ok())
-            .unwrap_or(-1.0);
+        let val: f32 = doc.control_value(input).trim().parse().unwrap_or(-1.0);
         assert!(val >= 0.0, "value clamped below min should be >= 0, got {val}");
     }
 
