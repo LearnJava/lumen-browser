@@ -252,9 +252,17 @@ fn vs_main(in: VIn) -> VOut {
 /// `radii_y`   = vertical  corner radii (tl, tr, br, bl).
 ///
 /// Screen y-axis is DOWN: p.y < 0 = top half, p.y > 0 = bottom half.
-/// For circular corners (rx == ry) this degenerates to the standard Quilez SDF.
-/// Elliptical corners use a first-order approximation: (|q/r| - 1) * min(rx,ry),
-/// which is exact on the ellipse surface and has unit gradient near the boundary.
+/// Radii arrive already reduced by the CSS Backgrounds L3 §5.5 overlap factor
+/// (`CornerRadii::clamped_to_box` on the CPU side) — the shader must NOT clamp
+/// them again per axis: `border-radius: 100px 0 0 0` on a 100px-wide box is a
+/// legal corner ellipse wider than the half-box.
+///
+/// Outside the corner bands the exact axis-aligned box SDF applies; only inside
+/// a corner band on BOTH axes does the ellipse term kick in. Elliptical corners
+/// use a first-order approximation: (|q/r| - 1) * min(rx,ry), which is exact on
+/// the ellipse surface and has unit gradient near the boundary; for circular
+/// corners (rx == ry) it is identical to the standard Quilez SDF and joins the
+/// box branch continuously at the tangent lines.
 fn sdf_rrect(p: vec2<f32>, half_size: vec2<f32>, radii_x: vec4<f32>, radii_y: vec4<f32>) -> f32 {
     // Select corner radii based on quadrant (y-down screen space).
     var rx: f32 = radii_x.x; // top-left (default)
@@ -262,22 +270,17 @@ fn sdf_rrect(p: vec2<f32>, half_size: vec2<f32>, radii_x: vec4<f32>, radii_y: ve
     if p.x >= 0.0 && p.y <= 0.0 { rx = radii_x.y; ry = radii_y.y; } // top-right
     if p.x >= 0.0 && p.y >  0.0 { rx = radii_x.z; ry = radii_y.z; } // bottom-right
     if p.x <  0.0 && p.y >  0.0 { rx = radii_x.w; ry = radii_y.w; } // bottom-left
-    // CSS Backgrounds L3 §5.5 overlap clamp: radius must fit inside half-box.
-    rx = min(rx, half_size.x);
-    ry = min(ry, half_size.y);
-    // Position relative to corner center (both axes clamped to ≥ 0 for corner).
-    let q = abs(p) - half_size + vec2<f32>(rx, ry);
-    // Inside the straight (non-corner) region.
-    if q.x <= 0.0 && q.y <= 0.0 { return max(q.x, q.y); }
-    // Sharp corner (degenerate radius): standard box SDF.
-    if rx < 0.001 || ry < 0.001 {
-        return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0);
+    // Offsets from the box edges (standard box-SDF form, negative = inside).
+    let d = abs(p) - half_size;
+    // Position relative to the corner ellipse centre: q > 0 on an axis means the
+    // point lies inside that corner band.
+    let q = d + vec2<f32>(rx, ry);
+    // Straight region on at least one axis (or a degenerate radius) — the nearest
+    // boundary is a flat edge, so the plain box SDF is exact.
+    if q.x <= 0.0 || q.y <= 0.0 || rx < 0.001 || ry < 0.001 {
+        return length(max(d, vec2<f32>(0.0))) + min(max(d.x, d.y), 0.0);
     }
-    // Only one axis in the corner region.
-    if q.x <= 0.0 { return q.y; }
-    if q.y <= 0.0 { return q.x; }
-    // Both axes in the ellipse corner: first-order ellipse SDF approximation.
-    // For rx == ry this is identical to the Quilez circular formula.
+    // Both axes inside the corner band: first-order ellipse SDF approximation.
     let k = length(q / vec2<f32>(rx, ry));
     return (k - 1.0) * min(rx, ry);
 }
@@ -9904,6 +9907,11 @@ fn apply_affine_to_circle_verts(verts: &mut [CircleVertex], m: &Mat4) {
 /// Emits 6 `RRectVertex` (two triangles) for a rounded rect quad.
 /// Per-vertex `center`, `half_size`, and `radii` are constant across the quad so
 /// the fragment shader can evaluate the SDF at each fragment position.
+///
+/// Radii are reduced by the CSS Backgrounds L3 §5.5 overlap factor here, through
+/// the same [`CornerRadii::clamped_to_box`] the CPU rasterizer uses — a single
+/// factor across all four corners, not a per-axis `min` (which would turn a
+/// `border-radius: 999px` pill into a full ellipse).
 fn push_rrect_quad(out: &mut Vec<RRectVertex>, rect: Rect, color: [f32; 4], radii: CornerRadii) {
     let x0 = rect.x;
     let y0 = rect.y;
@@ -9911,6 +9919,7 @@ fn push_rrect_quad(out: &mut Vec<RRectVertex>, rect: Rect, color: [f32; 4], radi
     let y1 = rect.y + rect.height;
     let center = [(x0 + x1) * 0.5, (y0 + y1) * 0.5];
     let half_size = [rect.width * 0.5, rect.height * 0.5];
+    let radii = radii.clamped_to_box(rect.width, rect.height);
     let radii_x = [radii.tl,   radii.tr,   radii.br,   radii.bl  ];
     let radii_y = [radii.tl_y, radii.tr_y, radii.br_y, radii.bl_y];
     let v = |px: f32, py: f32| RRectVertex { pos: [px, py], z: 0.0, color, center, half_size, radii_x, radii_y };
@@ -11733,6 +11742,33 @@ mod tests {
         assert_eq!(out.len(), 6);
         for v in &out {
             assert_eq!(v.z, 0.0, "push_rrect_quad must produce z=0 vertices");
+        }
+    }
+
+    /// BUG-277 срез 4 — `push_rrect_quad` уносит в шейдер радиусы, уже
+    /// уменьшенные единым коэффициентом CSS Backgrounds L3 §5.5
+    /// (`clamped_to_box`), а не по-осевым `min(r, half)`. Для «пилюли»
+    /// (`border-radius: 999px` на 300×140) это разница между стадионом с
+    /// круглыми торцами r=70 и сплошным эллипсом 150×70.
+    #[test]
+    fn push_rrect_quad_applies_css_overlap_clamp() {
+        let mut out = Vec::new();
+        let rect = lumen_core::geom::Rect::new(0.0, 0.0, 300.0, 140.0);
+        let radii = CornerRadii {
+            tl: 999.0, tr: 999.0, br: 999.0, bl: 999.0,
+            tl_y: 999.0, tr_y: 999.0, br_y: 999.0, bl_y: 999.0,
+        };
+        push_rrect_quad(&mut out, rect, [1.0, 0.0, 0.0, 1.0], radii);
+        for v in &out {
+            for (axis, got) in [("x", v.radii_x), ("y", v.radii_y)] {
+                for r in got {
+                    assert!(
+                        (r - 70.0).abs() < 1e-4,
+                        "radii_{axis} = {r}, ожидалось 70 (§5.5: 140/2), \
+                         иначе торцы пилюли станут эллиптическими"
+                    );
+                }
+            }
         }
     }
 
