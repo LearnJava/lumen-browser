@@ -2962,9 +2962,9 @@
        "title": "WPT: вендорить + прогнать категорию `intersection-observer`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root intersection-observer --recursive`, ~11:17) — **81/143 harness OK, 5/151 сабтестов**. Три новых бага, все подтверждены живой пробой (`--mcp-live-port`): [BUG-625](bugs/BUG-625-OPEN.md) (`IntersectionObserver.prototype.takeRecords` отсутствует целиком + `root`/`rootMargin`/`thresholds` без геттеров вовсе — доминирующая причина, 68/143 файлов рутинно вызывают `takeRecords()` и падают до собственных проверок), [BUG-626](bugs/BUG-626-OPEN.md) (конструктор/`observe()` не валидируют аргументы — не бросают `RangeError`/`TypeError`/`SyntaxError` там, где требует спека, `observe(non-Element)` тихо no-op вместо `TypeError`), [BUG-627](bugs/BUG-627-OPEN.md) (`options.root`/`options.scrollMargin` принимаются, но нигде не читаются в `_lumen_deliver_intersection_observers` — каждый observer всегда пересекается с viewport независимо от явного root; объясняет `root-*.html`-семейство и 14 провалов `scroll-margin-*`). `CAPABILITIES.md` понижен ✅→🟡 (тот же класс дрейфа, что BUG-368). Остальной провал — переподтверждения: [BUG-368](bugs/BUG-368-OPEN.md) (`ShadowRoot.innerHTML`-текстовая заглушка ломает `shadow-content.html`), [BUG-384](bugs/BUG-384-OPEN.md) (named access on Window — `target`/`container`/`iframe`/`frame`/`r` как голые идентификаторы), [BUG-346](bugs/BUG-346-OPEN.md) (`Url::resolve()` не схлопывает `..`, ломает `v2/../resources/...`), [BUG-482](bugs/BUG-482-OPEN.md) (`document.scrollingElement` отсутствует). Отдельно — невендоренный `/common/rendering-utils.js` (тот же класс гэпа, что невендоренные `common/*.js`-хелперы в других категориях), не баг движка",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root intersection-observer --recursive`, ~11:17) — **81/143 harness OK, 5/151 сабтестов**. Три новых бага, все подтверждены живой пробой (`--mcp-live-port`): [BUG-628](bugs/BUG-628-OPEN.md) (`IntersectionObserver.prototype.takeRecords` отсутствует целиком + `root`/`rootMargin`/`thresholds` без геттеров вовсе — доминирующая причина, 68/143 файлов рутинно вызывают `takeRecords()` и падают до собственных проверок), [BUG-626](bugs/BUG-626-OPEN.md) (конструктор/`observe()` не валидируют аргументы — не бросают `RangeError`/`TypeError`/`SyntaxError` там, где требует спека, `observe(non-Element)` тихо no-op вместо `TypeError`), [BUG-627](bugs/BUG-627-OPEN.md) (`options.root`/`options.scrollMargin` принимаются, но нигде не читаются в `_lumen_deliver_intersection_observers` — каждый observer всегда пересекается с viewport независимо от явного root; объясняет `root-*.html`-семейство и 14 провалов `scroll-margin-*`). `CAPABILITIES.md` понижен ✅→🟡 (тот же класс дрейфа, что BUG-368). Остальной провал — переподтверждения: [BUG-368](bugs/BUG-368-OPEN.md) (`ShadowRoot.innerHTML`-текстовая заглушка ломает `shadow-content.html`), [BUG-384](bugs/BUG-384-OPEN.md) (named access on Window — `target`/`container`/`iframe`/`frame`/`r` как голые идентификаторы), [BUG-346](bugs/BUG-346-OPEN.md) (`Url::resolve()` не схлопывает `..`, ломает `v2/../resources/...`), [BUG-482](bugs/BUG-482-OPEN.md) (`document.scrollingElement` отсутствует). Отдельно — невендоренный `/common/rendering-utils.js` (тот же класс гэпа, что невендоренные `common/*.js`-хелперы в других категориях), не баг движка",
        "bugs": [
-        "BUG-625",
+        "BUG-628",
         "BUG-626",
         "BUG-627 (переподтверждены BUG-368",
         "BUG-384",
@@ -8780,7 +8780,7 @@
    "date": null,
    "debtor": false
   },
-  "BUG-625": {
+  "BUG-628": {
    "status": "open",
    "title": "`IntersectionObserver.prototype.takeRecords` missing entirely (`typeof o.takeRecords === \"undefined\"`), and `root`/`rootMargin`/`thresholds` have no getters at…",
    "component": "js (`crates/js/src/dom.rs:7174-7276` -- `IntersectionObserver` shim)",

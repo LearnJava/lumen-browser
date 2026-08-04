@@ -29,7 +29,7 @@ silently `return`s instead of throwing — the WPT test's own comment
 Reproduced by `intersection-observer/observer-exceptions.html`: all 9
 subtests FAIL (`assert_throws_js`/`assert_throws_dom` all report "no
 exception thrown" instead of the constructor/`observe()` call actually
-throwing). Independent of BUG-625/BUG-627 — this is a missing-validation
+throwing). Independent of BUG-628/BUG-627 — this is a missing-validation
 gap, not a missing-getter or missing-root-support gap, though it lives in
 the same constructor/`observe()` code.
 

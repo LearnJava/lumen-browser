@@ -1,4 +1,9 @@
-# BUG-625: `IntersectionObserver.prototype.takeRecords()` missing entirely; `root`/`rootMargin`/`thresholds` are not exposed as IDL attributes at all
+# BUG-628: `IntersectionObserver.prototype.takeRecords()` missing entirely; `root`/`rootMargin`/`thresholds` are not exposed as IDL attributes at all
+
+**Renumbered 2026-08-05** from `BUG-625` — collided with another parallel
+session's `BUG-625` (chrome font measurer, already pushed to `origin/main`
+by P3's BUG-128 branch), resolved while merging this branch back into
+`main`.
 
 **Статус:** OPEN
 **Компонент:** js (`crates/js/src/dom.rs:7174-7276` — `IntersectionObserver` shim)

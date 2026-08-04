@@ -8,7 +8,7 @@
 ## Симптом
 
 Confirmed live (`--mcp-live-port`, `eval`): `new IntersectionObserver(cb,
-{root: someElement}).root` returns `undefined` (also covered by BUG-625 —
+{root: someElement}).root` returns `undefined` (also covered by BUG-628 —
 no getter at all), but more importantly `_lumen_deliver_intersection_observers`
 (`dom.rs:7217-7276`) never reads `obs._options.root` anywhere in its body —
 `rootTop`/`rootLeft`/`rootRight`/`rootBottom` (`dom.rs:7226-7227`) are
@@ -21,7 +21,7 @@ anywhere in the shim.
 
 ## Масштаб
 
-Explains a large share of the category's remaining, non-BUG-625 failures
+Explains a large share of the category's remaining, non-BUG-628 failures
 once `takeRecords()` availability stops masking them:
 
 - `root-*.html` family (`root-margin-root-element.html`,
@@ -51,5 +51,5 @@ instead of `_lumen_get_viewport_size()`, and expand it by the parsed
 `rootMargin`. Separately, `scrollMargin` (an array of 1-4 length values
 in the same shorthand grammar as `rootMargin`) needs to expand `ex/ey/
 ew/eh` (the *target's* rect, `dom.rs:7236`) before the intersection
-computation, not the root. Both are independent of BUG-625/BUG-626 but
+computation, not the root. Both are independent of BUG-628/BUG-626 but
 touch the same delivery function — worth doing together.
