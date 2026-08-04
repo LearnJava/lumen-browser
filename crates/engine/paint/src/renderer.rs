@@ -668,8 +668,9 @@ fn blend_channel(mode: u32, cs: f32, cd: f32) -> f32 {
 }
 
 // ── CSS Compositing L1 §8 general compositing formula ─────────────────
-// Co = αs × B(Cs, Cd) + αs × Cd × (1 - αd) + Cd × (1 - αs)
-// αo = αs + αd × (1 - αs)
+// Cs' = (1 - αd) × Cs + αd × B(Cd, Cs)        // §8 blending with the backdrop
+// Co  = αs × Cs' + (1 - αs) × αd × Cd         // §7 source-over, premultiplied
+// αo  = αs + αd × (1 - αs)
 @fragment fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     let src = textureSample(t_src, s_layer, in.uv);
     let dst = textureSample(t_dst, s_layer, in.uv);
@@ -707,8 +708,23 @@ fn blend_channel(mode: u32, cs: f32, cd: f32) -> f32 {
     }
 
     // Full CSS Compositing L1 §8 formula.
+    //
+    // Where the backdrop is transparent (ad = 0) the spec takes the SOURCE
+    // colour, not B(Cd, Cs): Cs' = (1 - ad)*Cs + ad*B(Cd, Cs). The previous
+    // form (`as*B + as*Cd*(1 - ad) + Cd*(1 - as)`) dropped the `ad` factor on
+    // the blended term and substituted Cd where the spec takes Cs, so
+    // multiply/difference over a TRANSPARENT backdrop (an element inside
+    // `isolation: isolate`) came out black instead of the element's own
+    // colour — BUG-277 slice 3. At ad = 1 (compositing into the opaque frame)
+    // both forms agree, so non-isolated blends are unchanged.
+    //
+    // The result is PREMULTIPLIED (as/ad folded into co) — the same convention
+    // offscreen layers accumulate and the composite pipeline expects
+    // (`One`/`OneMinusSrcAlpha`). The previous form returned a straight colour,
+    // which disagreed with the layer convention whenever ad < 1.
+    let cs_blended = mix(cs, blended, ad);
     let ao = as_ + ad * (1.0 - as_);
-    let co = as_ * blended + as_ * cd * (1.0 - ad) + cd * (1.0 - as_);
+    let co = as_ * cs_blended + (1.0 - as_) * ad * cd;
     if ao <= 0.0 {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
@@ -2241,8 +2257,20 @@ impl Renderer {
             }
             _ => wgpu::PresentMode::Fifo,
         };
+        // BUG-277 (срез 3): `mix-blend-mode` на боксе без offscreen-предка
+        // композитится прямо в swapchain-поверхность (`from_level == 1`), а
+        // blend-шейдеру нужен ЧИТАЕМЫЙ backdrop. Сэмплировать поверхность
+        // нельзя (`TEXTURE_BINDING` у неё не запросить), но её можно
+        // скопировать в scratch-текстуру — для этого нужен `COPY_SRC`.
+        // Драйверы, не отдающие `COPY_SRC` на поверхность, остаются на
+        // старом alpha-over fallback (см. `RenderPlanItem::Composite`).
+        let surface_usage = if caps.usages.contains(wgpu::TextureUsages::COPY_SRC) {
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC
+        } else {
+            wgpu::TextureUsages::RENDER_ATTACHMENT
+        };
         let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: surface_usage,
             format,
             width,
             height,
@@ -8135,6 +8163,22 @@ impl Renderer {
             windowed_frame = None;
             headless_tex = Some(tex);
         }
+        // BUG-277 (срез 3): текстура кадра как ЧИТАЕМЫЙ backdrop для
+        // `mix-blend-mode` на верхнем уровне (`Composite { from_level: 1 }`).
+        // Сэмплировать её нельзя, но можно скопировать в scratch — нужен
+        // `COPY_SRC`: у headless-текстуры он есть всегда, у swapchain — если
+        // его отдал драйвер (см. `surface_usage` в конструкторе). В
+        // `RenderPassMode::Band` доступен только view, поэтому `None` —
+        // полосный рендер остаётся на старом alpha-over fallback.
+        let surface_copy_src = self
+            .config
+            .as_ref()
+            .is_some_and(|c| c.usage.contains(wgpu::TextureUsages::COPY_SRC));
+        let frame_blend_dst: Option<&wgpu::Texture> = match (&windowed_frame, &headless_tex) {
+            (Some(f), _) => surface_copy_src.then(|| &f.texture),
+            (None, Some(t)) => Some(t),
+            (None, None) => None,
+        };
         let t_after_acquire = t_frame0.elapsed();
         let mut encoder = self
             .device
@@ -8335,15 +8379,30 @@ impl Renderer {
                 }
                 RenderPlanItem::Composite(comp) => {
                     if let Some(cvb) = &comp_vbuf {
-                        // Blend path: non-Normal mode AND parent layer exists.
-                        if comp.mode != BlendMode::Normal && comp.from_level > 1 {
+                        // Blend path: non-Normal mode AND a READABLE backdrop exists.
+                        // `from_level > 1` — родитель есть offscreen-слой (сэмплируется).
+                        // `from_level == 1` — родитель есть сама поверхность кадра: её
+                        // нельзя сэмплировать, но можно скопировать в scratch, если
+                        // текстура кадра доступна с `COPY_SRC` (BUG-277 срез 3). Без неё
+                        // (`RenderPassMode::Band`, драйвер без `COPY_SRC` на swapchain)
+                        // остаётся прежний alpha-over fallback.
+                        let dst_is_frame = comp.from_level == 1;
+                        if comp.mode != BlendMode::Normal
+                            && (comp.from_level > 1 || (dst_is_frame && frame_blend_dst.is_some()))
+                        {
                             // Ensure scratch layer before borrowing layer_textures immutably.
-                            let dst_layer_idx = comp.from_level - 2;
-                            let dst_w = self.layer_textures[dst_layer_idx].width;
-                            let dst_h = self.layer_textures[dst_layer_idx].height;
+                            let (dst_w, dst_h) = if dst_is_frame {
+                                (surface_w, surface_h)
+                            } else {
+                                let l = &self.layer_textures[comp.from_level - 2];
+                                (l.width, l.height)
+                            };
                             self.ensure_scratch_layer(dst_w, dst_h);
-                            // Copy dst (parent layer) into scratch before overwriting it.
-                            let dst_tex_copy = self.layer_textures[dst_layer_idx].texture.as_image_copy();
+                            // Copy dst (parent layer / frame) into scratch before overwriting it.
+                            let dst_tex_copy = match frame_blend_dst {
+                                Some(t) if dst_is_frame => t.as_image_copy(),
+                                _ => self.layer_textures[comp.from_level - 2].texture.as_image_copy(),
+                            };
                             let scratch_copy = self.scratch_layer.as_ref().unwrap().texture.as_image_copy();
                             encoder.copy_texture_to_texture(
                                 dst_tex_copy,
@@ -8360,7 +8419,11 @@ impl Renderer {
                             // Create per-frame blend bind group (src + scratch + sampler + uniform).
                             let src_view = &self.layer_textures[comp.from_level - 1].view;
                             let scratch_view = &self.scratch_layer.as_ref().unwrap().view;
-                            let target_view = &self.layer_textures[comp.from_level - 2].view;
+                            let target_view = if dst_is_frame {
+                                &frame_view
+                            } else {
+                                &self.layer_textures[comp.from_level - 2].view
+                            };
                             let blend_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                                 label: Some("blend-bg"),
                                 layout: &self.blend_bgl,
