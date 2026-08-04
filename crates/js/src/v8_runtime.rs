@@ -4192,6 +4192,7 @@ impl V8JsRuntime {
         install_v8!(async_context::install_async_context_v8);
         install_v8!(attribution_reporting::install_attribution_reporting_api_v8);
         install_v8!(audio_element::install_audio_element_bindings_v8);
+        install_v8!(background_fetch::install_background_fetch_v8);
         install_v8!(background_sync::install_background_sync_v8);
         install_v8!(badging::install_badging_bindings_v8);
         install_v8!(battery_bindings::install_battery_bindings_v8);
@@ -4257,6 +4258,7 @@ impl V8JsRuntime {
             eprintln!("v8: pointer_capture::install_pointer_capture_bindings_v8 failed: {e}");
         }
         install_v8!(presentation_api::install_presentation_api_v8);
+        install_v8!(push_api::install_push_api_v8);
         install_v8!(reporting_api::install_reporting_api_bindings_v8);
         install_v8!(sanitizer::install_sanitizer_bindings_v8);
         install_v8!(scheduler::install_scheduler_api_v8);

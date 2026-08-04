@@ -3784,6 +3784,40 @@ against main before this batch) — zero new errors from `periodic_sync.rs`/
 
 ---
 
+### S12b-G3: `push_api`, `background_fetch` (2026-08-04, branch `p1-s12b-g3`)
+
+Third group G batch, same "no natives" fast path as G1/G2. `push_api.rs`
+references two natives (`_lumen_push_subscribe`/`_lumen_push_unsubscribe`)
+and `background_fetch.rs` three (`_lumen_bg_fetch_register`/`_activate`/
+`_abort`), all behind `typeof … === 'function'` guards that never resolve —
+grep confirms none of the five is registered on either engine — ported
+as-is, no native binding needed. Port: `rquickjs::Ctx::eval` →
+`lumen_core::ext::JsRuntime::eval`, install fn + shim const gated
+`#[cfg(feature = "v8-backend")]`, registered via `install_v8!` in
+`v8_runtime.rs::install_dom` (`background_fetch` before `background_sync`,
+`push_api` between `presentation_api` and `reporting_api`), rquickjs `init_*`
+call sites removed from `lib.rs::install_dom` (`background_fetch` was at
+`lib.rs:779`, `push_api` at `:786`). 13 tests (7 push_api + 6
+background_fetch) ported to `#[cfg(all(test, feature = "v8-backend"))]`
+against bare `V8JsRuntime::new()` with a local `ServiceWorkerRegistration`
+stub + the relevant native no-op stubs — same shape as G1/G2's harnesses. No
+bridge bugs found. Closes 2 more of the 7 modules tracked by
+[BUG-549](../../bugs/BUG-549-OPEN.md) — with G1's `contacts`/`background_sync`
+and G2's `periodic_sync`, that's 5/7 done; remaining 2 —
+`payment_request`/`media_stream_recording` — are G4 (bug stays OPEN until
+all 7 land).
+
+`cargo test -p lumen-js --features v8-backend`: +13 new module tests, full
+suite 2568 passing (13 of those are `push_api`/`background_fetch`). `cargo
+test -p lumen-js` (default, no features): 355→342 lib (-13, the ported
+rquickjs tests removed). `cargo clippy -p lumen-js --all-targets --features
+v8-backend -- -D warnings` clean. `cargo clippy -p lumen-js --all-targets --
+-D warnings` (no features): identical 18-error baseline to pre-batch main
+(`offscreen_canvas.rs`/`worker.rs`/`canvas2d.rs`) — zero new errors from
+`push_api.rs`/`background_fetch.rs`.
+
+---
+
 ## Risks (Rev 2)
 
 | Risk | Likelihood | Mitigation |

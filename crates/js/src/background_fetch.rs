@@ -13,18 +13,23 @@
 //! Phase 0: all operations are in-memory; no actual HTTP fetch.
 //! Native bindings `_lumen_bg_fetch_*` are stubs for shell Phase 1.
 
-use rquickjs::Ctx;
-
-/// Install the Background Fetch API stub into the JS context.
+/// V8 port of the former rquickjs `init_background_fetch` (Ph3 V8 migration
+/// S12b-G3, rquickjs side removed in the same batch): identical JS shim,
+/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 ///
 /// Defines `BackgroundFetchManager` on `ServiceWorkerRegistration.prototype.backgroundFetch`.
 /// Must be called after DOM + Promise are available.
-pub fn init_background_fetch(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(BACKGROUND_FETCH_SHIM)?;
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_background_fetch_v8(
+    rt: &crate::v8_runtime::V8JsRuntime,
+) -> lumen_core::JsResult<()> {
+    use lumen_core::ext::JsRuntime as _;
+    rt.eval(BACKGROUND_FETCH_SHIM)?;
     Ok(())
 }
 
 /// JavaScript shim implementing W3C Background Fetch L1 (Phase 0).
+#[cfg(feature = "v8-backend")]
 const BACKGROUND_FETCH_SHIM: &str = r#"(function() {
   // BGFetchRegistration — represents one background fetch job.
   var BGFetchRegistration = function(id, opts) {
@@ -124,54 +129,47 @@ const BACKGROUND_FETCH_SHIM: &str = r#"(function() {
   globalThis.BGFetchRegistration = BGFetchRegistration;
 })();"#;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "v8-backend"))]
 mod tests {
-    use rquickjs::{Context, Runtime};
+    use super::*;
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().expect("Runtime::new");
-        let ctx = Context::full(&rt).expect("Context::full");
-        (rt, ctx)
-    }
-
-    fn install_stubs(ctx: &rquickjs::Ctx) {
-        ctx.eval::<(), _>(
-            "globalThis.ServiceWorkerRegistration = function() {}; \
-             globalThis.TypeError = TypeError; \
-             globalThis._lumen_bg_fetch_register = function() {}; \
-             globalThis._lumen_bg_fetch_activate = function() {}; \
-             globalThis._lumen_bg_fetch_abort = function() {};",
+    fn with_background_fetch(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(
+            "var ServiceWorkerRegistration = function() {}; \
+             var _lumen_bg_fetch_register = function() {}; \
+             var _lumen_bg_fetch_activate = function() {}; \
+             var _lumen_bg_fetch_abort = function() {};",
         )
-        .expect("install stubs");
+        .unwrap();
+        install_background_fetch_v8(&rt).unwrap();
+        f(&rt);
     }
 
     #[test]
     fn bg_fetch_manager_exists() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_background_fetch(&ctx).expect("init");
-            let result: String = ctx
+        with_background_fetch(|rt| {
+            let result = rt
                 .eval("typeof BackgroundFetchManager === 'function' ? 'exists' : 'missing'")
-                .expect("eval");
-            assert_eq!(result, "exists");
+                .unwrap();
+            assert_eq!(result, JsValue::String("exists".to_string()));
         });
     }
 
     #[test]
     fn fetch_returns_promise_with_registration() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_background_fetch(&ctx).expect("init");
-            let result: String = ctx
+        with_background_fetch(|rt| {
+            let result = rt
                 .eval(
                     "var mgr = new BackgroundFetchManager({}); \
                      var p = mgr.fetch('my-fetch', '/file.zip', {downloadTotal: 1000}); \
                      typeof p === 'object' && typeof p.then === 'function' ? 'promise' : 'not'",
                 )
-                .expect("eval");
-            assert_eq!(result, "promise");
+                .unwrap();
+            assert_eq!(result, JsValue::String("promise".to_string()));
         });
     }
 
@@ -179,29 +177,23 @@ mod tests {
     // so internal state is accessible immediately without awaiting.
     #[test]
     fn get_returns_registration_after_fetch() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_background_fetch(&ctx).expect("init");
-            let result: String = ctx
+        with_background_fetch(|rt| {
+            let result = rt
                 .eval(
                     "var mgr = new BackgroundFetchManager({}); \
                      mgr.fetch('dl', '/large.bin'); \
                      var reg = mgr._fetches['dl']; \
                      reg && reg.id === 'dl' ? 'found' : 'missing'",
                 )
-                .expect("eval");
-            assert_eq!(result, "found");
+                .unwrap();
+            assert_eq!(result, JsValue::String("found".to_string()));
         });
     }
 
     #[test]
     fn get_ids_returns_registered_ids() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_background_fetch(&ctx).expect("init");
-            let result: String = ctx
+        with_background_fetch(|rt| {
+            let result = rt
                 .eval(
                     "var mgr = new BackgroundFetchManager({}); \
                      mgr.fetch('a', '/a.bin'); \
@@ -210,19 +202,16 @@ mod tests {
                      ids.length === 2 && ids.indexOf('a') >= 0 && ids.indexOf('b') >= 0 \
                        ? 'ok' : 'fail'",
                 )
-                .expect("eval");
-            assert_eq!(result, "ok");
+                .unwrap();
+            assert_eq!(result, JsValue::String("ok".to_string()));
         });
     }
 
     // abort() is synchronous — sets result/failureReason immediately.
     #[test]
     fn abort_sets_failure_reason() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_background_fetch(&ctx).expect("init");
-            let result: String = ctx
+        with_background_fetch(|rt| {
+            let result = rt
                 .eval(
                     "var mgr = new BackgroundFetchManager({}); \
                      mgr.fetch('job', '/data.zip'); \
@@ -230,19 +219,16 @@ mod tests {
                      reg.abort(); \
                      reg.result === 'failure' && reg.failureReason === 'aborted' ? 'ok' : 'fail'",
                 )
-                .expect("eval");
-            assert_eq!(result, "ok");
+                .unwrap();
+            assert_eq!(result, JsValue::String("ok".to_string()));
         });
     }
 
     // fetch() with duplicate id rejects before storing — _fetches still has only one entry.
     #[test]
     fn duplicate_id_rejects() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install_stubs(&ctx);
-            super::init_background_fetch(&ctx).expect("init");
-            let result: String = ctx
+        with_background_fetch(|rt| {
+            let result = rt
                 .eval(
                     "var mgr = new BackgroundFetchManager({}); \
                      mgr.fetch('dup', '/x.bin'); \
@@ -250,8 +236,8 @@ mod tests {
                      var rejected = p instanceof Promise && Object.keys(mgr._fetches).length === 1; \
                      rejected ? 'rejected' : 'not_rejected'",
                 )
-                .expect("eval");
-            assert_eq!(result, "rejected");
+                .unwrap();
+            assert_eq!(result, JsValue::String("rejected".to_string()));
         });
     }
 }
