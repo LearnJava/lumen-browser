@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-04",
  "counts": {
-  "open": 257,
+  "open": 264,
   "fixed": 315,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 572,
+ "total_bugs": 579,
  "phases": [
   {
    "id": "P0",
@@ -2807,9 +2807,18 @@
       {
        "id": "WPT-VENDOR-html-misc",
        "title": "WPT: прогнать срез `html/misc`",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Скоуп: ⬜ (кандидат). Срез категории `html`, вынесен из `WPT-VENDOR-html` 2026-07-28 (полный прогон категории — 40+ часов, не помещается в сессию). Остаток из 14 мелких подкаталогов, 556 `testharness`-id суммарно: `cross-origin-opener-policy` 160, `infrastructure` 155, `cross-origin-embedder-policy` 103, `document-isolation-policy` 38, `anonymous-iframe` 35, `user-activation` 21, `obsolete` 14, `the-xhtml-syntax` 13, `links` 6, `capability-delegation` 6, `scripting` 2, `select` 1, `embedded-content` 1, `meta` 1. Дерево уже вендорено"
+       "note": "Скоуп: ⬜ (кандидат). Срез категории `html`, вынесен из `WPT-VENDOR-html` 2026-07-28. Дерево уже вендорено. DONE 2026-08-04: прогнан целиком по всем 14 под-каталогам (`--processes=4`) — **49/531 harness OK, 148/636 сабтестов**. Четыре https-тяжёлых под-каталога (`cross-origin-opener-policy`/`cross-origin-embedder-policy`/`document-isolation-policy`/`anonymous-iframe`, 321 id) почти целиком провалились на уже известном TLS-гэпе `UnknownIssuer` (см. `docs/wpt-status.md:26`) — не новые находки. Реальный сигнал дали лёгкие под-каталоги: `infrastructure` (22/146, 137/546 сабтестов) подтвердил уже заведённый [BUG-377](bugs/BUG-377-OPEN.md) (`document.baseURI`) и невендоренные `/common/utils.js`/`subset-tests-by-key.js`-хелперы; `obsolete` (14/14 harness OK, 5/53 сабтестов) дал самый плотный кластер новых багов — легаси-API секции HTML LS §obsolete целиком не реализованы. Семь новых багов: [BUG-605](bugs/BUG-605-OPEN.md) (`<marquee>` без `HTMLMarqueeElement`, `loop`/`scrollAmount`/`scrollDelay` не рефлексируют, нет UA `overflow:hidden`), [BUG-606](bugs/BUG-606-OPEN.md) (шесть независимых легаси-заглушек — `document.clear/captureEvents/releaseEvents`, `window.captureEvents/releaseEvents`, `document.all` unusual behaviors, `document.applets`, `HTMLScriptElement.event/htmlFor` — отсутствуют целиком), [BUG-607](bugs/BUG-607-OPEN.md) (`document.fgColor/linkColor/alinkColor/vlinkColor/bgColor` не реализованы), [BUG-608](bugs/BUG-608-OPEN.md) (`fetchPriority` отсутствует на `<script>`/`<img>`), [BUG-609](bugs/BUG-609-OPEN.md) (`HTMLOptionsCollection.length`-сеттер не растит `<select>` для валидных больших значений), [BUG-610](bugs/BUG-610-OPEN.md) (`MessageEvent.userActivation` отсутствует), [BUG-611](bugs/BUG-611-OPEN.md) (`HTMLLinkElement.relList` не реализован). Попутно подтверждены без новых номеров: BUG-485/BUG-565 (`document.head` отсутствует, `links/icon/*`), BUG-384 (именованный доступ на `window`, маскирует первый сабтест `fetchpriority`-тестов), BUG-601 (`DOMTokenList`-конструктор — соседствует, но не тот же дефект, что BUG-611). `the-xhtml-syntax` (0/12) — все TIMEOUT на XHTML-парсинге DTD-сущностей (`xhtml-mathml-dtd-entity-N.htm`), нишевая XML-фича, не расследовано глубже",
+       "bugs": [
+        "BUG-605",
+        "BUG-606",
+        "BUG-607",
+        "BUG-608",
+        "BUG-609",
+        "BUG-610",
+        "BUG-611"
+       ]
       },
       {
        "id": "WPT-VENDOR-html-aam",
@@ -8574,6 +8583,55 @@
    "status": "open",
    "title": "No UA (user-agent) shadow tree for `<video>`/`<audio>`/`<select>`/`<details>` -- light-DOM children appended to `<video>`/`<audio>` render directly instead of b…",
    "component": "layout/dom (no internal shadow-root construction for these 4 interfaces)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-605": {
+   "status": "open",
+   "title": "`<marquee>` has no dedicated interface -- `loop`/`scrollAmount`/`scrollDelay` IDL attributes all `undefined` instead of reflecting with spec defaults (`-1`/`6`/…",
+   "component": "js (no `HTMLMarqueeElement` interface anywhere) + layout (no UA `overflow:hidden` rule for `marquee`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-606": {
+   "status": "open",
+   "title": "Legacy no-op/compat APIs missing entirely: `document.clear()`/`captureEvents()`/`releaseEvents()`, `window.captureEvents()`/`releaseEvents()` (must exist as no-…",
+   "component": "js (`crates/js/src/dom.rs` -- six unrelated legacy symbols all absent)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-607": {
+   "status": "open",
+   "title": "`document.fgColor`/`linkColor`/`alinkColor`/`vlinkColor`/`bgColor` not implemented -- should reflect onto `<body>`'s `text`/`link`/`alink`/`vlink`/`bgcolor` att…",
+   "component": "js (`crates/js/src/dom.rs` -- no reflection entries for any of the five)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-608": {
+   "status": "open",
+   "title": "`fetchPriority` IDL attribute missing on `<script>`/`<img>` (default should reflect `\"auto\"`, currently `undefined`); likely also missing on `<link>`/`<iframe>`…",
+   "component": "js (`crates/js/src/dom.rs` -- IDL reflection table from BUG-383, no `fetchPriority` entry)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-609": {
+   "status": "open",
+   "title": "`select.options.length = N` setter correctly rejects out-of-range `N` but never implements the in-range growth path (appending empty `<option>`s up to `N`) -- `…",
+   "component": "js (`crates/js/src/dom.rs` -- `HTMLOptionsCollection.prototype` `length` setter)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-610": {
+   "status": "open",
+   "title": "`MessageEvent.userActivation` attribute missing -- `MessageEventInit.userActivation` dict member silently ignored by the constructor, no getter on the prototype…",
+   "component": "js (`crates/js/src/dom.rs` -- `MessageEvent`/`MessageEventInit` constructor path)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-611": {
+   "status": "open",
+   "title": "`HTMLLinkElement.relList` (live `DOMTokenList` with `.supports()`) not implemented -- `link.relList` is `undefined`, distinct from BUG-601 (missing global `DOMT…",
+   "component": "js (`crates/js/src/dom.rs` -- `HTMLLinkElement.prototype`, no `relList` accessor)",
    "date": null,
    "debtor": false
   }
