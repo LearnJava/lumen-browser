@@ -368,7 +368,11 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
     #     достигнута (ратчет «remove entry if ≤ 0.5%»).
     '26': ('BUG-277', 13.50),    # mask-image. DS-9 (2026-07-23, P1): ратчет 11.24%→13.50%. Постоянный тулбар удвоил высоту хрома над контентом (TAB_BAR_HEIGHT=36 → toolbar::CHROME_H=72), сдвинув абсолютную Y-позицию композитинга контента на экране; TEST-00/03 (магента-калибровка) проходят на 0.00%, т.е. геометрия viewport-а верна — сдвиг лишь меняет дробный остаток sub-pixel snapping на границах маски (тот же класс, что и BUG-124/PS-1), не новый дефект
     '49': ('BUG-277', 2.74),    # background-blend-mode. **BUG-277 срез 2 (2026-07-22, P1):** ратчет 28.15%→2.74% (10×). Root-cause: у top-level бокса (без родительского stacking-context) фоновые blend-слои композитились на from_level==1, чей «родитель» — swapchain-поверхность без TEXTURE_BINDING → wgpu-`Composite` молча падал в alpha-over, теряя blend целиком. Фикс: `emit_background_image` оборачивает стек фоновых слоёв в собственную `PushOpacity{alpha:1.0}`-изоляционную группу, когда не-нижний слой реально блендит (CSS Compositing L1 §8.3 «background = isolated group») → blend-пара получает свой 2-уровневый offscreen-стек независимо от вложенности. Плюс un-premultiply в BLEND_SHADER (offscreen-слои копят премультиплированный rgb) и отдельный uniform-буфер на каждый composite (устранён write_buffer-hazard при 2+ blend в кадре). Остаток 2.74% = AA-кромка/font-parity (rule 2/3). НЕ закрывает BUG-277: mix-blend-mode на top-level боксах (TEST-56/148) — отдельный путь, не изолируется этим срезом
-    '56': ('BUG-277', 14.12),
+    # '56' убран (BUG-277 срез 3, 2026-08-05): 14.12% → 0.00%. Два дефекта wgpu-blend:
+    #   (1) top-level `mix-blend-mode` композитился на from_level==1, где «родитель» —
+    #       swapchain-поверхность: её нельзя сэмплировать, и blend молча падал в alpha-over.
+    #       Теперь поверхность конфигурируется с COPY_SRC и копируется в scratch как backdrop;
+    #   (2) формула BLEND_SHADER брала Cd вместо Cs там, где backdrop прозрачен.
     '68': ('BUG-277', 3.17),
     '72': ('BUG-277', 1.29),
     '74': ('BUG-277', 3.74),
@@ -383,7 +387,9 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
     '116': ('BUG-277', 2.40),
     '140': ('BUG-277', 2.17),
     '141': ('BUG-277', 1.59),
-    '148': ('BUG-277', 5.44),   # P4-isolation: isolation:isolate blend-группа. Фича КОРРЕКТНА — CPU-снимок (cpu_raster, `lumen --screenshot`) пиксельно совпадает с Edge (изолированные ячейки = чистый цвет, неизолированные = блендинг), unit-тесты зелёные. Дивергенция целиком wgpu mix-blend (BUG-277, тот же класс, что TEST-56): в wgpu-окне неизолированный mix-blend не композитится (source-over вместо multiply), а изолирующий offscreen-слой делает multiply-против-прозрачного фоном чёрным. **BUG-277 срез 2 (2026-07-22):** un-premultiply в BLEND_SHADER (изолирующий offscreen-слой больше не чернеет при multiply-против-прозрачного) ратчет 6.30%→5.44%. Остаток = неизолированный top-level mix-blend (тот же путь, что TEST-56, не покрыт background-only изоляцией этого среза). Уйдёт в PASS с mix-blend-срезом BUG-277.
+    # '148' убран (BUG-277 срез 3, 2026-08-05): 5.44% → 0.00%, тот же фикс, что снял «56».
+    # Изолированные ячейки перестали чернеть, потому что BLEND_SHADER теперь берёт
+    # Cs' = (1−αd)·Cs + αd·B(Cd,Cs): при прозрачном backdrop-е спека даёт исходный цвет.
     # --- BUG-243 dynamic-SVG suite (JS-built SVG, gdigrab): tests are CORRECT; these
     #     fail until the SVG-engine gaps they uncovered are fixed. Do NOT edit the tests
     #     (user rule) — fix the engine, then delete these entries. ---
