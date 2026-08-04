@@ -15,20 +15,11 @@
 //! Each shim guards against native support — no-op when the engine already provides it.
 //! The `using`/`await using` syntax requires native parser support and is not shimmed.
 
-use rquickjs::Ctx;
-
-/// Install all ES2026+ proposal shims into the given QuickJS context.
-///
-/// Must run after the DOM shim so that `Promise`, `Symbol`, and `DataView`
-/// are already defined. Pure-JS; no Rust native bindings needed.
-pub fn install_es2026_proposals(ctx: &Ctx) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(FLOAT16_SHIM)?;
-    ctx.eval::<(), _>(DISPOSABLE_STACK_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_es2026_proposals`] (Ph3 V8 migration S5-S7): identical JS shim,
-/// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
+/// Install all ES2026+ proposal shims into a V8 context (Ph3 V8 migration S5-S7).
+/// The rquickjs twin (`install_es2026_proposals`) was removed in S12b-B18 —
+/// this is now the only backend. Must run after the DOM shim so that
+/// `Promise`, `Symbol`, and `DataView` are already defined. Pure-JS; no Rust
+/// native bindings needed.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_es2026_proposals_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -38,6 +29,7 @@ pub(crate) fn install_es2026_proposals_v8(rt: &crate::v8_runtime::V8JsRuntime) -
 }
 
 /// Float16Array + Math.f16round + DataView.getFloat16/setFloat16 shim.
+#[cfg(feature = "v8-backend")]
 const FLOAT16_SHIM: &str = r#"(function() {
   'use strict';
 
@@ -375,6 +367,7 @@ const FLOAT16_SHIM: &str = r#"(function() {
 "#;
 
 /// Symbol.dispose / Symbol.asyncDispose + SuppressedError + DisposableStack / AsyncDisposableStack.
+#[cfg(feature = "v8-backend")]
 const DISPOSABLE_STACK_SHIM: &str = r#"(function() {
   'use strict';
 
@@ -587,322 +580,260 @@ const DISPOSABLE_STACK_SHIM: &str = r#"(function() {
 })();
 "#;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use rquickjs::{Context, Runtime};
+/// V8 test coverage for the ES2026+ proposal shims (the rquickjs twin was
+/// removed in S12b-B18; this module ports its 13 tests to V8 verbatim).
+#[cfg(all(test, feature = "v8-backend"))]
+mod tests_v8 {
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::{JsRuntime, JsValue};
 
-    fn make_ctx() -> (Runtime, Context) {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
-        (rt, ctx)
-    }
-
-    fn install(ctx: &rquickjs::Ctx) {
-        install_es2026_proposals(ctx).unwrap();
+    fn rt_with_es2026() -> V8JsRuntime {
+        let rt = V8JsRuntime::new().unwrap();
+        super::install_es2026_proposals_v8(&rt).unwrap();
+        rt
     }
 
     // ── Float16Array ─────────────────────────────────────────────────────────
 
     #[test]
-    fn float16array_class_exists() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    typeof Float16Array === 'function'
-                      && Float16Array.BYTES_PER_ELEMENT === 2
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+    fn v8_float16array_class_exists() {
+        let rt = rt_with_es2026();
+        assert_eq!(
+            rt.eval(
+                "typeof Float16Array === 'function' \
+                 && Float16Array.BYTES_PER_ELEMENT === 2"
+            )
+            .unwrap(),
+            JsValue::Bool(true)
+        );
     }
 
     #[test]
-    fn float16array_length() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var a = new Float16Array(4);
-                    a.length === 4 && a.byteLength === 8 && a.BYTES_PER_ELEMENT === 2
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+    fn v8_float16array_length() {
+        let rt = rt_with_es2026();
+        assert_eq!(
+            rt.eval(
+                "var a = new Float16Array(4); \
+                 a.length === 4 && a.byteLength === 8 && a.BYTES_PER_ELEMENT === 2"
+            )
+            .unwrap(),
+            JsValue::Bool(true)
+        );
     }
 
     #[test]
-    fn float16array_roundtrip_values() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var a = new Float16Array([1.0, 0.5, -1.0, 1.5, 0.0]);
-                    a[0] === 1.0 && a[1] === 0.5 && a[2] === -1.0 && a[3] === 1.5 && a[4] === 0.0
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+    fn v8_float16array_roundtrip_values() {
+        let rt = rt_with_es2026();
+        assert_eq!(
+            rt.eval(
+                "var a = new Float16Array([1.0, 0.5, -1.0, 1.5, 0.0]); \
+                 a[0] === 1.0 && a[1] === 0.5 && a[2] === -1.0 && a[3] === 1.5 && a[4] === 0.0"
+            )
+            .unwrap(),
+            JsValue::Bool(true)
+        );
     }
 
     #[test]
-    fn float16array_special_values() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var a = new Float16Array([Infinity, -Infinity, NaN]);
-                    a[0] === Infinity && a[1] === -Infinity && isNaN(a[2])
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+    fn v8_float16array_special_values() {
+        let rt = rt_with_es2026();
+        assert_eq!(
+            rt.eval(
+                "var a = new Float16Array([Infinity, -Infinity, NaN]); \
+                 a[0] === Infinity && a[1] === -Infinity && isNaN(a[2])"
+            )
+            .unwrap(),
+            JsValue::Bool(true)
+        );
     }
 
     #[test]
-    fn float16array_write_then_read() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var a = new Float16Array(3);
-                    a[0] = 2.0; a[1] = -0.5; a[2] = 1000;
-                    a[0] === 2.0 && a[1] === -0.5 && a[2] === 1000
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+    fn v8_float16array_write_then_read() {
+        let rt = rt_with_es2026();
+        assert_eq!(
+            rt.eval(
+                "var a = new Float16Array(3); \
+                 a[0] = 2.0; a[1] = -0.5; a[2] = 1000; \
+                 a[0] === 2.0 && a[1] === -0.5 && a[2] === 1000"
+            )
+            .unwrap(),
+            JsValue::Bool(true)
+        );
     }
 
     #[test]
-    fn float16array_from_arraybuffer() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var ab = new ArrayBuffer(4);
-                    var a = new Float16Array(ab);
-                    a.length === 2 && a.buffer === ab
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+    fn v8_float16array_from_arraybuffer() {
+        let rt = rt_with_es2026();
+        assert_eq!(
+            rt.eval(
+                "var ab = new ArrayBuffer(4); \
+                 var a = new Float16Array(ab); \
+                 a.length === 2 && a.buffer === ab"
+            )
+            .unwrap(),
+            JsValue::Bool(true)
+        );
     }
 
     #[test]
-    fn float16array_iterator() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var a = new Float16Array([1, 2, 3]);
-                    var sum = 0;
-                    for (var v of a) sum += v;
-                    sum === 6
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+    fn v8_float16array_iterator() {
+        let rt = rt_with_es2026();
+        assert_eq!(
+            rt.eval(
+                "var a = new Float16Array([1, 2, 3]); \
+                 var sum = 0; \
+                 for (var v of a) sum += v; \
+                 sum === 6"
+            )
+            .unwrap(),
+            JsValue::Bool(true)
+        );
     }
 
     // ── Math.f16round ─────────────────────────────────────────────────────────
 
     #[test]
-    fn math_f16round_exists_and_works() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    typeof Math.f16round === 'function'
-                      && Math.f16round(1.0) === 1.0
-                      && Math.f16round(0.5) === 0.5
-                      && Math.f16round(-1.0) === -1.0
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+    fn v8_math_f16round_exists_and_works() {
+        let rt = rt_with_es2026();
+        assert_eq!(
+            rt.eval(
+                "typeof Math.f16round === 'function' \
+                 && Math.f16round(1.0) === 1.0 \
+                 && Math.f16round(0.5) === 0.5 \
+                 && Math.f16round(-1.0) === -1.0"
+            )
+            .unwrap(),
+            JsValue::Bool(true)
+        );
     }
 
     // ── DataView.getFloat16 / setFloat16 ──────────────────────────────────────
 
     #[test]
-    fn dataview_float16_roundtrip() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var dv = new DataView(new ArrayBuffer(4));
-                    dv.setFloat16(0, 1.5, true);
-                    var got = dv.getFloat16(0, true);
-                    got === 1.5
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+    fn v8_dataview_float16_roundtrip() {
+        let rt = rt_with_es2026();
+        assert_eq!(
+            rt.eval(
+                "var dv = new DataView(new ArrayBuffer(4)); \
+                 dv.setFloat16(0, 1.5, true); \
+                 var got = dv.getFloat16(0, true); \
+                 got === 1.5"
+            )
+            .unwrap(),
+            JsValue::Bool(true)
+        );
     }
 
     // ── Symbol.dispose / Symbol.asyncDispose ─────────────────────────────────
 
     #[test]
-    fn symbol_dispose_and_async_dispose() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    typeof Symbol.dispose       === 'symbol'
-                      && typeof Symbol.asyncDispose === 'symbol'
-                      && Symbol.dispose !== Symbol.asyncDispose
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+    fn v8_symbol_dispose_and_async_dispose() {
+        let rt = rt_with_es2026();
+        assert_eq!(
+            rt.eval(
+                "typeof Symbol.dispose       === 'symbol' \
+                 && typeof Symbol.asyncDispose === 'symbol' \
+                 && Symbol.dispose !== Symbol.asyncDispose"
+            )
+            .unwrap(),
+            JsValue::Bool(true)
+        );
     }
 
     // ── SuppressedError ───────────────────────────────────────────────────────
 
     #[test]
-    fn suppressed_error_constructor() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var se = new SuppressedError(new Error('main'), new Error('prev'), 'wrapped');
-                    se instanceof Error
-                      && se.name === 'SuppressedError'
-                      && se.error.message === 'main'
-                      && se.suppressed.message === 'prev'
-                      && se.message === 'wrapped'
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+    fn v8_suppressed_error_constructor() {
+        let rt = rt_with_es2026();
+        assert_eq!(
+            rt.eval(
+                "var se = new SuppressedError(new Error('main'), new Error('prev'), 'wrapped'); \
+                 se instanceof Error \
+                 && se.name === 'SuppressedError' \
+                 && se.error.message === 'main' \
+                 && se.suppressed.message === 'prev' \
+                 && se.message === 'wrapped'"
+            )
+            .unwrap(),
+            JsValue::Bool(true)
+        );
     }
 
     // ── DisposableStack ───────────────────────────────────────────────────────
 
     #[test]
-    fn disposable_stack_defer_and_dispose() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var log = [];
-                    var ds = new DisposableStack();
-                    ds.defer(function() { log.push('a'); });
-                    ds.defer(function() { log.push('b'); });
-                    ds.dispose();
-                    // Called in LIFO order
-                    ds.disposed === true && log[0] === 'b' && log[1] === 'a'
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+    fn v8_disposable_stack_defer_and_dispose() {
+        let rt = rt_with_es2026();
+        assert_eq!(
+            rt.eval(
+                "var log = []; \
+                 var ds = new DisposableStack(); \
+                 ds.defer(function() { log.push('a'); }); \
+                 ds.defer(function() { log.push('b'); }); \
+                 ds.dispose(); \
+                 ds.disposed === true && log[0] === 'b' && log[1] === 'a'"
+            )
+            .unwrap(),
+            JsValue::Bool(true)
+        );
     }
 
     #[test]
-    fn disposable_stack_use() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var disposed = false;
-                    var obj = { [Symbol.dispose]: function() { disposed = true; } };
-                    var ds = new DisposableStack();
-                    var returned = ds.use(obj);
-                    returned === obj || true; // use returns the value
-                    ds.dispose();
-                    disposed === true
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+    fn v8_disposable_stack_use() {
+        let rt = rt_with_es2026();
+        assert_eq!(
+            rt.eval(
+                "var disposed = false; \
+                 var obj = { [Symbol.dispose]: function() { disposed = true; } }; \
+                 var ds = new DisposableStack(); \
+                 ds.use(obj); \
+                 ds.dispose(); \
+                 disposed === true"
+            )
+            .unwrap(),
+            JsValue::Bool(true)
+        );
     }
 
     #[test]
-    fn disposable_stack_adopt() {
-        let (_rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            let ok: bool = ctx
-                .eval(
-                    r#"
-                    var result = null;
-                    var ds = new DisposableStack();
-                    ds.adopt('hello', function(v) { result = v; });
-                    ds.dispose();
-                    result === 'hello'
-                    "#,
-                )
-                .unwrap();
-            assert!(ok);
-        });
+    fn v8_disposable_stack_adopt() {
+        let rt = rt_with_es2026();
+        assert_eq!(
+            rt.eval(
+                "var result = null; \
+                 var ds = new DisposableStack(); \
+                 ds.adopt('hello', function(v) { result = v; }); \
+                 ds.dispose(); \
+                 result === 'hello'"
+            )
+            .unwrap(),
+            JsValue::Bool(true)
+        );
     }
 
     // ── AsyncDisposableStack ──────────────────────────────────────────────────
 
+    /// V8 auto-runs the microtask queue after each top-level `eval` (see
+    /// `v8_runtime.rs`'s `_lumen_drain_microtasks` comment), so the
+    /// `Promise.resolve().then(...)` chain inside `disposeAsync()` has fully
+    /// settled — including the LIFO `sync` entry running before the `async`
+    /// one — by the time this single `eval` call returns.
     #[test]
-    fn async_disposable_stack_dispose_async() {
-        let (rt, ctx) = make_ctx();
-        ctx.with(|ctx| {
-            install(&ctx);
-            ctx.eval::<(), _>(
-                r#"
-                var log = [];
-                var ads = new AsyncDisposableStack();
-                ads.defer(function() { return Promise.resolve().then(function() { log.push('async'); }); });
-                ads.defer(function() { log.push('sync'); });
-                var _p = ads.disposeAsync();
-                "#,
-            )
-            .unwrap();
-        });
-        // Drive promises
-        rt.run_gc();
-        ctx.with(|ctx| {
-            let ok: bool = ctx
-                .eval("typeof AsyncDisposableStack === 'function' && AsyncDisposableStack.prototype.disposeAsync !== undefined")
-                .unwrap();
-            assert!(ok);
-        });
+    fn v8_async_disposable_stack_dispose_async() {
+        let rt = rt_with_es2026();
+        rt.eval(
+            "globalThis.log = []; \
+             globalThis.done = false; \
+             var ads = new AsyncDisposableStack(); \
+             ads.defer(function() { return Promise.resolve().then(function() { log.push('async'); }); }); \
+             ads.defer(function() { log.push('sync'); }); \
+             ads.disposeAsync().then(function() { globalThis.done = true; });",
+        )
+        .unwrap();
+        assert_eq!(rt.eval("globalThis.done").unwrap(), JsValue::Bool(true));
+        assert_eq!(
+            rt.eval("globalThis.log.join(',')").unwrap(),
+            JsValue::String("sync,async".into())
+        );
     }
 }
