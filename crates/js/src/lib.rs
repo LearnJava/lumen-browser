@@ -894,12 +894,6 @@ impl QuickJsRuntime {
                 eprintln!("WebGPU API init failed: {}", e);
             }
 
-            // W3C SVG 2 — SVGElement/SVGSVGElement class hierarchy, getBBox() stubs,
-            // SVGRect/SVGPoint/SVGLength/SVGMatrix types, createElementNS SVG wiring.
-            if let Err(e) = svg::install_svg_bindings(&ctx) {
-                eprintln!("SVG DOM API init failed: {}", e);
-            }
-
             Ok(())
         }))
     }
