@@ -16,7 +16,7 @@
 //! - `screen.orientation`                        → stub { type: "landscape-primary", angle: 0 }
 //! - `Date.prototype.getTimezoneOffset`          → always returns 0 (UTC normalisation)
 //!
-//! Must be called **after** `dom::install_dom_api` (requires `navigator` to exist).
+//! Must be called **after** `v8_runtime.rs::install_dom` (requires `navigator` to exist).
 //!
 //! The exact values are taken from a process-global [`NavigatorProfile`] that
 //! the shell may override from `fingerprint.toml` (9F.1) via
@@ -106,7 +106,7 @@ pub fn current_navigator_profile() -> NavigatorProfile {
 /// `Date.prototype.getTimezoneOffset` to return the profile's offset, so
 /// timezone cannot be inferred from JS date arithmetic.
 ///
-/// Must be called after `install_dom_api`. V8 port of the former rquickjs
+/// Must be called after `v8_runtime.rs::install_dom`. V8 port of the former rquickjs
 /// `install_navigator_bindings` (Ph3 V8 migration S5-S7): identical JS shim,
 /// evaluated via [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 #[cfg(feature = "v8-backend")]

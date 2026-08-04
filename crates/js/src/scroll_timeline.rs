@@ -22,7 +22,7 @@
 /// S5-S7, rquickjs side removed in S12b-B6): identical JS shim, evaluated via
 /// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 ///
-/// Must be called **after** `install_dom_api` so that `document` and `Event`
+/// Must be called **after** `v8_runtime.rs::install_dom` so that `document` and `Event`
 /// are available.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_scroll_timeline_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {

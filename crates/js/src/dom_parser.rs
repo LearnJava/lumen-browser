@@ -27,7 +27,7 @@
 /// Install DOMParser and XMLSerializer into a V8 runtime (Ph3 V8 migration
 /// S5-S7; the rquickjs twin was removed in S12b-B23).
 ///
-/// Must be called after `dom::install_dom_api` so that `_lumen_is_text_node`,
+/// Must be called after `v8_runtime.rs::install_dom` so that `_lumen_is_text_node`,
 /// `_lumen_get_tag_name`, `_lumen_get_children`, `_lumen_get_attr`,
 /// `_lumen_get_attr_names`, and `_lumen_get_text_content` are registered.
 #[cfg(feature = "v8-backend")]

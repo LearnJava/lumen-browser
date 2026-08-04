@@ -12,7 +12,7 @@
 //! Mirrors [`crate::download_bindings`] / `clipboard::PROVIDER`: the binding has
 //! no access to the shell's `NetworkLog`, so it records intent in a `static` that
 //! the shell owns the draining of. This avoids threading another `Arc` through
-//! `install_primitives`' already-large signature.
+//! the V8 install path's already-large `install_dom` signature.
 //!
 //! Records are *completed* requests (method, URL, optional status and duration);
 //! JS gets no callback. Pending/lifecycle tracking for engine requests stays in

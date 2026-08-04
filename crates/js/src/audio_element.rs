@@ -67,7 +67,7 @@ fn get_provider() -> Option<Arc<dyn AudioPlaybackProvider>> {
 /// `V8JsRuntime` plumbing is needed — each native captures its own
 /// `get_provider()` clone. The JS shim is unchanged.
 ///
-/// Must be called **after** `dom::install_dom_api`.
+/// Must be called **after** `v8_runtime.rs::install_dom`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_audio_element_bindings_v8(
     rt: &crate::v8_runtime::V8JsRuntime,

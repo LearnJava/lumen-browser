@@ -18,14 +18,14 @@
 //! 3. Freezes `navigator.cookieEnabled = true` and
 //!    `navigator.doNotTrack = null` (Chrome-matching).
 //!
-//! Must be called **after** `install_dom_api` and `install_navigator_bindings`.
+//! Must be called **after** `v8_runtime.rs::install_dom` and `install_navigator_bindings`.
 
 /// V8 port of the former rquickjs `install_surface_api_protection` (Ph3 V8 migration
 /// S5-S7, rquickjs side removed in S12b-B6): identical JS shim, evaluated via
 /// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 ///
 /// Seals automation-detection properties and adds standard browser
-/// compatibility shims. Must be called after `install_dom_api`.
+/// compatibility shims. Must be called after `v8_runtime.rs::install_dom`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_surface_api_protection_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;

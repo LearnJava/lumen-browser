@@ -12,7 +12,7 @@
 //! Mirrors `clipboard::PROVIDER` / `broadcast_channel::HUB`: the binding has no
 //! access to the shell's `DownloadManager`, so it records intent in a `static`
 //! that the shell owns the draining of. This avoids threading another `Arc`
-//! through `install_primitives`' already-large signature.
+//! through the V8 install path's already-large `install_dom` signature.
 //!
 //! Downloads are *requests*, not promises — JS gets no completion callback in
 //! Phase 1 (matches the `<a download>` fire-and-forget model). Progress and

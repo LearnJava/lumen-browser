@@ -3,14 +3,16 @@
 //!
 //! The JS shim's `navigator.clipboard.readText()` / `writeText()` delegate to the
 //! native bindings `_lumen_clipboard_read` / `_lumen_clipboard_write` (registered
-//! in [`crate::dom::install_dom_api`]). Those bindings forward to the provider
-//! installed here by the shell via [`set_clipboard_provider`]. When no provider
-//! is installed (headless tests, dump modes), reads return `""` and writes are
-//! discarded — matching the spec'd "permission denied" no-op behaviour.
+//! by the V8 install path, `v8_runtime.rs::install_dom`). Those bindings forward
+//! to the provider installed here by the shell via [`set_clipboard_provider`].
+//! When no provider is installed (headless tests, dump modes), reads return
+//! `""` and writes are discarded — matching the spec'd "permission denied"
+//! no-op behaviour.
 //!
 //! A process-global [`OnceLock`] (mirroring `broadcast_channel::HUB`) is used
-//! instead of threading the provider through every `install_dom_api` call site:
-//! the clipboard has no per-runtime state, so a single shared provider suffices.
+//! instead of threading the provider through every native-registration call
+//! site: the clipboard has no per-runtime state, so a single shared provider
+//! suffices.
 
 use lumen_core::ext::ClipboardProvider;
 use std::sync::{Arc, OnceLock, RwLock};
@@ -39,6 +41,10 @@ pub fn set_clipboard_provider(provider: Arc<dyn ClipboardProvider>) {
 /// Read plain text from the installed clipboard provider.
 ///
 /// Returns `""` when no provider is installed or the lock is poisoned.
+///
+/// Only reachable from the V8 native registration or from `mod tests` below —
+/// the QuickJS registration this once also backed was removed in S12b-F3.
+#[cfg(any(test, feature = "v8-backend"))]
 pub(crate) fn read_text() -> String {
     slot()
         .read()
@@ -50,6 +56,7 @@ pub(crate) fn read_text() -> String {
 /// Write plain text to the installed clipboard provider.
 ///
 /// No-op when no provider is installed or the lock is poisoned.
+#[cfg(any(test, feature = "v8-backend"))]
 pub(crate) fn write_text(text: &str) {
     if let Ok(guard) = slot().read()
         && let Some(p) = guard.as_ref()
