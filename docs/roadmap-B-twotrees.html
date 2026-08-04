@@ -3010,9 +3010,9 @@
       {
        "id": "WPT-VENDOR-js-self-profiling",
        "title": "WPT: вендорить + прогнать категорию `js-self-profiling`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root js-self-profiling --recursive`, ~4:43) — **5/24 harness OK, 0/7 сабтестов**. 19/24 TIMEOUT на известном TLS-гэпе тестового сертификата (тот же класс, что `jpegxl`), 4 из них — контаминация [BUG-380](bugs/BUG-380-OPEN.md). Все 5 реально исполнившихся id падают на `ReferenceError: Profiler is not defined` / `ProfilingScript is not defined` — JS Self-Profiling API не реализован вовсе. Новых багов нет: как `navigator.scheduling` в `is-input-pending`, это первый проход по отсутствующему кандидатному API"
       },
       {
        "id": "WPT-VENDOR-keyboard-lock",
