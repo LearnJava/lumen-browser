@@ -1,8 +1,9 @@
 # BUG-365 — `EyeDropper.open()` всегда падает с `ReferenceError: _lumen_eye_dropper_open is not defined`: нативная привязка не установлена, `?.` не защищает необъявленный идентификатор, а 6 юнит-тестов при этом зелёные
 
 **Статус:** OPEN
-**Компонент:** js (`crates/js/src/eye_dropper.rs:58` — тело шима; установка шима — `crates/js/src/lib.rs:1187` для rquickjs и `crates/js/src/v8_runtime.rs:3893` для V8)
+**Компонент:** js (`crates/js/src/eye_dropper.rs:58` — тело шима; установка шима — `crates/js/src/v8_runtime.rs:4249`, единственный оставшийся движок)
 **Найден:** P2, WPT-VENDOR-eyedropper (2026-07-28), проба `--dump-layout` вне WPT (сам WPT-тест категории — SKIP по testdriver)
+**Актуализировано:** P1, 2026-08-04 (P3-v8-post-audit) — rquickjs-путь установки шима (был `lib.rs:1187`) удалён целиком в S12b-F2/F3; дефект не зависел от rquickjs и полностью переживает снос движка
 
 ## Симптом
 
@@ -37,14 +38,14 @@ const result = _lumen_eye_dropper_open?.call?.(null);
 
 Два независимых дефекта в одной строке:
 
-1. **Привязки нет.** `_lumen_eye_dropper_open` не регистрируется как глобал ни
-   на V8-, ни на rquickjs-пути. В Rust есть `pub extern "C" fn
+1. **Привязки нет.** `_lumen_eye_dropper_open` не регистрируется как глобал на
+   V8 (единственном оставшемся движке — rquickjs-путь снесён целиком в S12b-F2/F3,
+   до этого дефект был идентичен на обоих). В Rust есть `pub extern "C" fn
    _lumen_eye_dropper_open` (`eye_dropper.rs:24`), но это C-ABI-функция,
    возвращающая `*const u8`; она не связана с JS ничем, кроме совпадения имени,
    и во всём репозитории на неё нет ни одной ссылки, кроме собственного
-   определения. Комментарий на месте установки шима
-   (`lib.rs:1186`) прямо это подтверждает: «Platform integration (P3)
-   implements `_lumen_eye_dropper_open` for each OS» — интеграция не написана.
+   определения. Комментарий рядом (`eye_dropper.rs:20`) прямо это подтверждает:
+   «platform integration deferred to P3» — интеграция не написана.
 2. **`?.` не защищает от необъявленного идентификатора.** Опциональная
    цепочка коротит только на значениях `null`/`undefined`; разрешение самого
    имени `_lumen_eye_dropper_open` происходит до неё и на несуществующем

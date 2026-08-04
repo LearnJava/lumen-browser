@@ -615,7 +615,7 @@
     {
      "id": "P3-v8",
      "title": "Переход на V8 (rusty_v8) + Tier 2 Web APIs",
-     "status": "active",
+     "status": "done",
      "size": "XL",
      "note": "Срезы S0–S12 — подзадачами ниже (истина в docs/tasks/ph3-v8-migration.md). Разблокирован (v0.5.0 вышел). Единственное лекарство для тяжёлых SPA: аудит 2026-07-02 — github.com не дорендерился за 280 с (ресурсы загружены к 6.6 с, затык в QuickJS-интерпретаторе без JIT). Рекомендация: делать ПОСЛЕ дешёвых RP-5…RP-9 (они закрывают бо́льшую часть «не как в Edge» и не зависят от JS-движка), затем V8 как флагман Phase 3. Опц. промежуточный митигейт — watchdog/бюджет исполнения JS, чтобы страницы падали graceful, а не висли. Бриф docs/tasks/ph3-v8-migration.md. Сюда же перенесён уровень 2 bfcache — JS-куча переживает заморозку через ValueSerializer (docs/tasks/ph3-bfcache.md, DoD Level 2)",
      "tasks": [
@@ -1059,13 +1059,6 @@
          "note": "Поглощён срезами S12b-F1..F4 (2026-08-04), заведёнными позже как более мелкая разбивка того же финального скоупа: F1 снял фичу `quickjs` из `crates/shell/Cargo.toml` и `QuickPersistentJs`-конструирования в `main.rs`; F2 удалил `QuickJsRuntime`/`QuickPersistentJs`/`__lum_args__` из `lib.rs`; F3 удалил `install_primitives`/`use rquickjs` из `dom.rs`; F4 убрал `rquickjs`-зависимость из `crates/js/Cargo.toml` и синхронизировал ADR-018/CAPABILITIES.md/subsystems/js.md/CLAUDE.md. DoD «rquickjs отсутствует в Cargo.lock» выполнен (см. S12b-F4). Эта строка — дубликат более старого плана, отдельной работы не потребовалось"
         }
        ]
-      },
-      {
-       "id": "P3-v8-post-audit",
-       "title": "V8: пост-снос ревизия открытых багов на актуальность",
-       "status": "planned",
-       "size": "M",
-       "note": "Строго после S12b-25 (rquickjs отсутствует в Cargo.lock). Пройти все OPEN-строки `BUGS.md` на связь с QuickJS/rquickjs: (а) баги, чьё воспроизведение или диагноз опирался на расхождение QuickJS↔V8 (напр. тесты `dom::tests`, гонявшиеся на QuickJS и слепые к V8-специфичным дефектам — класс BUG-442) — актуализировать текст под пост-QuickJS реальность; (б) баги, описывающие поведение исключительно rquickjs-пути или временные заглушки «эпохи QuickJS» (напр. формулировка в BUG-357) — если функциональность к этому моменту уже портирована на V8 в рамках S12b, закрыть как устаревшие; (в) свериться, не остались ли ссылки на `--features quickjs` в текстах открытых багов. BUGS.md append-only (см. `docs/dev-roles.md`) — «удалить устаревший баг» технически значит флипнуть статус на закрытый/неактуальный с пояснением, а не стереть строку; если пользователь настаивает на физическом удалении строк — уточнить перед тем как ломать инвариант. Найдено аудитом перед S12b-final 2026-07-29"
       }
      ]
     },
@@ -6896,8 +6889,8 @@
   },
   "BUG-365": {
    "status": "open",
-   "title": "`EyeDropper.open()` всегда отклоняется с `ReferenceError: _lumen_eye_dropper_open is not defined` — нативная привязка не зарегистрирована как глобал ни на V8-,…",
-   "component": "js (`crates/js/src/eye_dropper.rs:58` — тело шима EyeDropper; установка — `crates/js/src/lib.rs:1187` и `crates/js/src/v8_runtime.rs:3893`)",
+   "title": "`EyeDropper.open()` всегда отклоняется с `ReferenceError: _lumen_eye_dropper_open is not defined` — нативная привязка не зарегистрирована как глобал на V8 (в Ru…",
+   "component": "js (`crates/js/src/eye_dropper.rs:58` — тело шима EyeDropper; установка — `crates/js/src/v8_runtime.rs:4249`, единственный оставшийся движок)",
    "date": null,
    "debtor": false
   },
@@ -6917,8 +6910,8 @@
   },
   "BUG-368": {
    "status": "open",
-   "title": "`innerHTML` на живом DOM — текстовая заглушка на обоих движках, обе половины помечены в коде как «Phase 0»: геттер возвращает `collect_text_content` (буквально…",
-   "component": "js (`crates/js/src/v8_runtime.rs:1386-1407` — привязки на дефолтном V8; `crates/js/src/dom.rs:878-899` — те же на rquickjs; потребители — `dom.rs:5546-5547`, `4255-4256`, `4322-4323`, `6307`/`6313`)",
+   "title": "`innerHTML` на живом DOM — текстовая заглушка, обе половины помечены в коде как «Phase 0»: геттер возвращает `collect_text_content` (буквально `textContent`), с…",
+   "component": "js (`crates/js/src/v8_runtime.rs:1554-1574` — привязки на единственном движке V8; ранее существовал зеркальный rquickjs-путь на `dom.rs:878-899`, удалён целиком в S12b-F3; потребители — `dom.rs:5546-5547`, `4255-4256`, `4322-4323`, `6307`/`6313`)",
    "date": null,
    "debtor": false
   },
@@ -6995,7 +6988,7 @@
   "BUG-379": {
    "status": "open",
    "title": "Защита от детекта автоматизации сама является отпечатком: цикл по `_automationGlobals` **создаёт** все 15 маркеров (`__playwright`, `__pwInitScripts`, `__seleni…",
-   "component": "js (`crates/js/src/surface_api.rs:163-181`, устанавливается на обоих движках: `lib.rs:944`, `v8_runtime.rs:3950`)",
+   "component": "js (`crates/js/src/surface_api.rs:163-181`, устанавливается на единственном оставшемся движке V8: `v8_runtime.rs:4311`)",
    "date": null,
    "debtor": false
   },
@@ -7729,7 +7722,7 @@
   },
   "BUG-485": {
    "status": "open",
-   "title": "`document.head` отсутствует вовсе — ни геттера на `document`, ни нативного `_lumen_get_head` в обоих движках (только `_lumen_get_body` существует). `document.he…",
+   "title": "`document.head` отсутствует вовсе — ни геттера на `document`, ни нативного `_lumen_get_head` на движке V8 (только `_lumen_get_body` существует). `document.head.…",
    "component": "js (`crates/js/src/dom.rs`)",
    "date": null,
    "debtor": false

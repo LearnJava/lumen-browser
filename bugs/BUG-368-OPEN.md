@@ -1,8 +1,9 @@
 # BUG-368 — `innerHTML` на живом DOM — текстовая заглушка «Phase 0» на обоих движках: геттер отдаёт `textContent`, сеттер кладёт разметку одним текстовым узлом
 
 **Статус:** OPEN
-**Компонент:** js — нативные привязки `_lumen_get_inner_html`/`_lumen_set_inner_html`: `crates/js/src/v8_runtime.rs:1386-1407` (дефолтный движок V8) и `crates/js/src/dom.rs:878-899` (rquickjs); потребители — `dom.rs:5546-5547` (живой `Element`), `4255-4256`, `4322-4323`, `6307`/`6313`
+**Компонент:** js — нативные привязки `_lumen_get_inner_html`/`_lumen_set_inner_html`: `crates/js/src/v8_runtime.rs:1554-1574` (единственный оставшийся движок V8); потребители — `dom.rs:5546-5547` (живой `Element`), `4255-4256`, `4322-4323`, `6307`/`6313`
 **Найден:** P2, WPT-VENDOR-fenced-frame (2026-07-28), проба `--dump-layout` вне WPT
+**Актуализировано:** P1, 2026-08-04 (P3-v8-post-audit) — на момент подачи бага дефект был зеркальным на rquickjs (`dom.rs:878-899`); тот путь удалён целиком в S12b-F3, дефект не зависел от выбора движка и полностью пережил снос rquickjs
 
 ## Симптом
 
@@ -36,10 +37,12 @@ d.firstChild.tagName      = #text                ← разметка легла
 
 ## Причина
 
-Прямо в теле привязок, дословно (обе реализации идентичны):
+Прямо в теле привязок, дословно (на момент подачи бага обе реализации —
+V8 и rquickjs — были идентичны; rquickjs-путь удалён целиком в S12b-F3,
+приведён текущий V8-код):
 
 ```rust
-// crates/js/src/v8_runtime.rs:1386
+// crates/js/src/v8_runtime.rs:1554
 reg!("_lumen_get_inner_html", move |node_id: u32| -> String {
     // Phase 0: return text content only (no HTML serialization).
     …
@@ -55,7 +58,7 @@ reg!("_lumen_set_inner_html", move |node_id: u32, html: String| {
 То есть геттер — это буквально `textContent` (отсюда потеря тегов, атрибутов и
 комментариев и попадание в выдачу текста `<script>`), а сеттер — `set_text_content`
 (отсюда единственный текстовый узел вместо распарсенного фрагмента). Ни
-сериализатора, ни fragment parsing нет ни на одном движке. Шим над сеттером
+сериализатора, ни fragment parsing нет на движке. Шим над сеттером
 (`dom.rs:9791-9797`) только доставляет `MutationObserver`-уведомление и на
 семантику не влияет.
 
@@ -111,9 +114,9 @@ reg!("_lumen_set_inner_html", move |node_id: u32, html: String| {
    элементом, затем замена детей узла результатом (текущий `set_text_content`
    уже делает «replace all children», нужен тот же путь, но с распарсенным
    поддеревом).
-3. Обе половины — на обоих движках (`v8_runtime.rs` и `dom.rs`), как это сделано
-   для `_lumen_create_comment`/`_lumen_is_comment_node` в
-   [BUG-326](BUG-326-FIXED.md).
+3. Обе половины — только в `v8_runtime.rs` (единственный оставшийся движок;
+   двухдвижковый паттерн `_lumen_create_comment`/`_lumen_is_comment_node` из
+   [BUG-326](BUG-326-FIXED.md) относился к эпохе до S12b и уже неактуален).
 4. `outerHTML` из [BUG-351](BUG-351-OPEN.md) — тот же сериализатор плюс сам узел;
    имеет смысл делать одним срезом.
 5. Тест-верификация — только по дереву: `el.innerHTML = '<i>y</i>'` →

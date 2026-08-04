@@ -8,17 +8,20 @@
 ## Механизм
 
 The live `document` singleton object (`dom.rs:~7159`) defines `get body()`
-(backed by the native `_lumen_get_body` binding, registered in both the
-rquickjs path `dom.rs:560` and the V8 path `v8_runtime.rs:1136`), but there
-is no matching `get head()` anywhere, and no `_lumen_get_head`/equivalent
-native function exists in either engine's `dom.rs`/`v8_runtime.rs`. So
-`document.head` resolves via normal property lookup to plain `undefined` —
+(backed by the native `_lumen_get_body` binding, registered on the V8 path,
+`v8_runtime.rs:1205`), but there is no matching `get head()` anywhere, and no
+`_lumen_get_head`/equivalent native function exists in `dom.rs`/`v8_runtime.rs`.
+So `document.head` resolves via normal property lookup to plain `undefined` —
 not a thrown error, not `null` — because the property was never declared at
 all.
 
-Confirmed by source inspection (both engines grepped, zero hits for
+Confirmed by source inspection (grepped, zero hits for
 `_lumen_get_head`/`get head`) and cross-checked live via `--mcp-live-port`
 (`typeof document.head` → `"undefined"`).
+
+*Updated P1, 2026-08-04 (P3-v8-post-audit): at filing time (2026-08-02) `_lumen_get_body`
+was still mirrored on the rquickjs path too; that path was removed entirely in
+S12b-F3, so V8 is now the only engine in scope for the fix below.*
 
 ## Симптом
 
@@ -73,8 +76,8 @@ which is a larger undertaking; this one is a single accessor).
 ## Что нужно
 
 Add `get head()` to the `document` object literal (`dom.rs:~7163`, right next
-to `get body()`), backed by a new native `_lumen_get_head` binding in both
-engines mirroring `_lumen_get_body`'s pattern (walk `documentElement`'s
+to `get body()`), backed by a new native `_lumen_get_head` binding in
+`v8_runtime.rs` mirroring `_lumen_get_body`'s pattern (walk `documentElement`'s
 children for the first `<head>`, matching `_lumen_get_body`'s equivalent
 walk for `<body>`). Per HTML LS §3.1.2, `document.head` must also be
 settable-adjacent in that a document is only ever built with the standard
