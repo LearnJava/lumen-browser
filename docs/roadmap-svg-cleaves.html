@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-04",
  "counts": {
-  "open": 268,
+  "open": 270,
   "fixed": 315,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 583,
+ "total_bugs": 585,
  "phases": [
   {
    "id": "P0",
@@ -2865,9 +2865,13 @@
       {
        "id": "WPT-VENDOR-imagebitmap-renderingcontext",
        "title": "WPT: вендорить + прогнать категорию `imagebitmap-renderingcontext`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-04: вендорена + прогнана целиком (`--all --root imagebitmap-renderingcontext --recursive`, ~48 с) — **12/14 harness OK, 1/20 сабтестов**. Два новых бага, оба подтверждены живой пробой: [BUG-616](bugs/BUG-616-OPEN.md) (`createImageBitmap()` отвергает `HTMLCanvasElement`-источник `TypeError: unsupported source type` — обработаны только `OffscreenCanvas`/`ImageData`/`HTMLImageElement`/`Blob`, доминирующая причина — 15 FAIL + 1 TIMEOUT из 19 unexpected сабтестов) и [BUG-617](bugs/BUG-617-OPEN.md) (`ImageBitmapRenderingContext` вообще не существует как глобальный конструктор — `typeof window.ImageBitmapRenderingContext === \"undefined\"` — плюс `OffscreenCanvas.getContext()` реализует только `'2d'`, для `'bitmaprenderer'`/`'webgpu'` всегда `null`, хотя фабрика для `<canvas>` на странице в `dom.rs` оба поддерживает). Один TIMEOUT (`toBlob-origin-clean-offscreen.sub.html`, источник — кросс-доменный `<img>`) не атрибутирован — в логе перед таймаутом нет JS-ошибки, вероятно блокируется на не срабатывающем `img.onload`, глубже не расследовано",
+       "bugs": [
+        "BUG-616",
+        "BUG-617"
+       ]
       },
       {
        "id": "WPT-VENDOR-images",
@@ -8660,6 +8664,20 @@
    "status": "open",
    "title": "`IdleDetector` instances leak private state (`_userState`/`_screenState`/`_started`/`_threshold`/`_timer`) as own, enumerable, writable JS properties -- visible…",
    "component": "js (`crates/js/src/idle_detection.rs::IDLE_DETECTION_SHIM`, same `this._x` pattern in `bluetooth.rs`/`document_pip.rs`/`navigation_api.rs`/`serial.rs`/`webhid.rs`/`webusb.rs`/`webxr.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-616": {
+   "status": "open",
+   "title": "`createImageBitmap(source)` rejects `TypeError: unsupported source type` for `HTMLCanvasElement` -- only `OffscreenCanvas`/`ImageData`/`HTMLImageElement`/`Blob`…",
+   "component": "js (`crates/js/src/offscreen_canvas.rs`, `createImageBitmap` global)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-617": {
+   "status": "open",
+   "title": "Two compounding gaps: (1) `ImageBitmapRenderingContext` has no global constructor at all (`typeof window.ImageBitmapRenderingContext === \"undefined\"`) -- the `'…",
+   "component": "js (`crates/js/src/dom.rs` `getContext` factory ~line 3083, `crates/js/src/offscreen_canvas.rs::getContext` ~line 454)",
    "date": null,
    "debtor": false
   }
