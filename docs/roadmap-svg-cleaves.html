@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-04",
  "counts": {
-  "open": 214,
+  "open": 218,
   "fixed": 309,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 523,
+ "total_bugs": 527,
  "phases": [
   {
    "id": "P0",
@@ -8191,6 +8191,34 @@
    "component": "shell (`crates/shell/src/main.rs::apply_loaded_page`), js (`crates/js/src/dom.rs:12769` `window.getComputedStyle`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-556": {
+   "status": "open",
+   "title": "`Node.nextSibling`/`previousSibling` (DOM §4.4) are missing entirely on the live element/text/comment wrapper -- only element-only `nextElementSibling`/`previou…",
+   "component": "js (`crates/js/src/dom.rs` -- `_lumen_build_element`, `_obj`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-557": {
+   "status": "open",
+   "title": "Live global `document` has `appendChild` but no `removeChild`/`insertBefore`/`replaceChild` at all -- third independent hole in the document-object pair alongsi…",
+   "component": "js (`crates/js/src/dom.rs:7125` -- live global `document` literal)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-558": {
+   "status": "open",
+   "title": "`MouseEvent.x`/`.y` (CSSOM View §5 aliases of `clientX`/`clientY`) missing entirely; `pageX`/`pageY` computed once at construction instead of live getters over…",
+   "component": "js (`crates/js/src/dom.rs:3441-3460` -- `MouseEvent` constructor)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-559": {
+   "status": "open",
+   "title": "`window.screen.width`/`height`/etc. are silently writable (the `defineProperty writable:false` only locks the `globalThis.screen` binding, not `_screen`'s own p…",
+   "component": "js (`crates/js/src/navigator_bindings.rs:213-225` -- `_screen` object literal)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -8414,6 +8442,9 @@
   "js (`crates/js/src/dom.rs:15412-15556` — WAAPI `Animation` шим)": [
    "BUG-530"
   ],
+  "js (`crates/js/src/dom.rs:3441-3460` -- `MouseEvent` constructor)": [
+   "BUG-558"
+  ],
   "js (`crates/js/src/dom.rs:4257`, `_lumen_serialize_style`)": [
    "BUG-497"
   ],
@@ -8444,8 +8475,14 @@
   "js (`crates/js/src/dom.rs:6770` — `_lumen_get_fonts()`)": [
    "BUG-467"
   ],
+  "js (`crates/js/src/dom.rs:7125` -- live global `document` literal)": [
+   "BUG-557"
+  ],
   "js (`crates/js/src/dom.rs:7463` — `_lumen_ce_upgrade_element`)": [
    "BUG-543"
+  ],
+  "js (`crates/js/src/dom.rs` -- `_lumen_build_element`, `_obj`)": [
+   "BUG-556"
   ],
   "js (`crates/js/src/dom.rs` -- element wrapper factory)": [
    "BUG-551"
@@ -8495,6 +8532,9 @@
   ],
   "js (`crates/js/src/highlight_api.rs` — `HIGHLIGHT_API_SHIM`)": [
    "BUG-534"
+  ],
+  "js (`crates/js/src/navigator_bindings.rs:213-225` -- `_screen` object literal)": [
+   "BUG-559"
   ],
   "js (`crates/js/src/storage_buckets.rs`)": [
    "BUG-547"

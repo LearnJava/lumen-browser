@@ -837,14 +837,6 @@ impl QuickJsRuntime {
                 eprintln!("Worker bindings init failed: {}", e);
             }
 
-            // Install Shared Worker bindings (WHATWG HTML §10.2) — after Worker so
-            // TextDecoder / _object_url_store / atob are available for script resolution.
-            if let Err(e) =
-                shared_worker::install_shared_worker_bindings(&ctx, &self.shared_worker_outbox)
-            {
-                eprintln!("SharedWorker bindings init failed: {}", e);
-            }
-
             // Install Web Notifications API (W3C Notifications API L1) — after DOM so
             // Event, Promise, and queueMicrotask are already defined.
             // Default permission: "denied" (privacy-first; shell can override per origin).
@@ -916,13 +908,6 @@ impl QuickJsRuntime {
             // helpers. Each shim no-ops if the engine already has native support.
             if let Err(e) = tc39_proposals::install_tc39_proposals(&ctx) {
                 eprintln!("TC39 proposals shim init failed: {}", e);
-            }
-
-            // Install ES2025/2026 proposal shims — Float16Array, Math.f16round,
-            // DataView.getFloat16/setFloat16, Symbol.dispose/asyncDispose,
-            // SuppressedError, DisposableStack, AsyncDisposableStack.
-            if let Err(e) = es2026_proposals::install_es2026_proposals(&ctx) {
-                eprintln!("ES2026 proposals shim init failed: {}", e);
             }
 
             // Install CSS View Transitions API (CSS View Transitions L1 §4) — after DOM

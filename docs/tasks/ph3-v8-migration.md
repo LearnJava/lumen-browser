@@ -3124,6 +3124,57 @@ checked clean under default (`v8`), `quickjs` (both default features on,
 Next in queue: S12b-B18 (`es2026_proposals`/`shared_worker`, Полоса 3 fourth
 batch).
 
+### S12b-B18 (`es2026_proposals`, `shared_worker` — Полоса 3 fourth batch)
+
+Both modules already had a complete V8 port from earlier slices
+(`install_es2026_proposals_v8` since S5-S7, `install_shared_worker_bindings_v8`/
+`HUB_V8` since S10), so the batch reduced to deleting the rquickjs twins and
+porting the tests that only existed as rquickjs `mod tests`.
+
+`es2026_proposals.rs`: removed `install_es2026_proposals(ctx: &Ctx)` and the
+`rquickjs::Ctx` import; `FLOAT16_SHIM`/`DISPOSABLE_STACK_SHIM` (both
+backend-agnostic strings) are now `#[cfg(feature = "v8-backend")]`-gated since
+only the V8 installer evaluates them. `shared_worker.rs`: removed `HUB`,
+`hub()`, `connect_shared_worker`, `post_to_shared_worker`,
+`close_shared_worker_port`, `install_shared_worker_bindings`,
+`run_shared_worker_thread`, `install_shared_worker_globals`, and the
+`rquickjs::{Context, Function, Runtime}` import; `SwInMsg`, `SharedWorkerThread`,
+and `PORT_COUNTER` — private types with no remaining unconditional caller —
+moved behind `#[cfg(feature = "v8-backend")]` alongside their V8 twins
+(precedent: B17's `WEBASSEMBLY_SHIM`). `SHARED_WORKER_GLOBAL_SHIM`/
+`SHARED_WORKER_SHIM` gated the same way. `lib.rs`'s `install_dom` (QuickJsRuntime)
+call sites for both modules were deleted outright (not turned into no-op
+closures — B17's `_lumen_sw_activate_script` no-op precedent only applies to
+native-binding registrations the JS shim still calls by name; these two are
+plain top-level installer calls with no such contract).
+
+Test porting: `es2026_proposals.rs`'s 15 rquickjs tests → `tests_v8`
+(1:1 port, `V8JsRuntime`/`JsValue` assertions). `shared_worker.rs`'s 6 rquickjs
+tests → 3 new `tests_v8` twins (`v8_port_is_messageport_like`,
+`v8_distinct_names_are_isolated`, `v8_drain_messages_empties_outbox`); the
+other 3 already had V8 twins from S10. The async-disposal test
+(`v8_async_disposable_stack_dispose_async`) relies on V8's default
+"auto-run-microtasks-after-each-script" behaviour (documented at
+`v8_runtime.rs`'s `_lumen_drain_microtasks` stub): a single `eval()` call is
+enough to drain the whole `Promise.resolve().then(...)` chain inside
+`disposeAsync()`, so the test can assert the final LIFO-ordered log
+(`sync,async`) synchronously instead of polling — no bugs found in this
+batch.
+
+`cargo test -p lumen-js --features v8-backend`: 2576 lib (down from 2579, -3:
+21 QuickJS-only tests removed, 21 V8 tests present — but 3 of those already
+existed pre-batch, so net new is 21-3=18 minus 21 removed = -3). `cargo test
+-p lumen-js` (default): 689 lib (down from 710, -21: all 21 QuickJS-only
+tests from these two modules removed, nothing added). Both clippy passes
+(`--all-targets`, default and `--features v8-backend`) clean; `lumen-shell`
+checked clean under default (`v8`), `quickjs` (both default features on,
+`quickjs` wins per the `#[cfg]` priority), and
+`--no-default-features --features backend-femtovg,backend-wgpu,quickjs`
+(pure rollback build).
+
+Next in queue: S12b-B19 (`notifications_bindings`/`web_audio`, Полоса 3 fifth
+batch).
+
 ---
 
 ## Risks (Rev 2)
