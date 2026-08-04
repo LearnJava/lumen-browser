@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-04",
  "counts": {
-  "open": 264,
+  "open": 265,
   "fixed": 315,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 579,
+ "total_bugs": 580,
  "phases": [
   {
    "id": "P0",
@@ -2815,9 +2815,12 @@
       {
        "id": "WPT-VENDOR-html-longdesc",
        "title": "WPT: вендорить + прогнать категорию `html-longdesc`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-04: вендорена + прогнана целиком (`--all --root html-longdesc --recursive`, ~секунды) — **0/0**, категория на 100% ручная (все тестовые файлы с суффиксом `-manual`, `wptrunner` не распознаёт ни одного как testharness-тест). Единственный сигнал — живая проба (`--mcp-live-port`): BUG-612, `img.longdesc` не имеет IDL-рефлексии (тот же класс, что BUG-602 `align`)",
+       "bugs": [
+        "BUG-612"
+       ]
       },
       {
        "id": "WPT-VENDOR-html-media-capture",
@@ -8617,6 +8620,13 @@
    "status": "open",
    "title": "`HTMLLinkElement.relList` (live `DOMTokenList` with `.supports()`) not implemented -- `link.relList` is `undefined`, distinct from BUG-601 (missing global `DOMT…",
    "component": "js (`crates/js/src/dom.rs` -- `HTMLLinkElement.prototype`, no `relList` accessor)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-612": {
+   "status": "open",
+   "title": "legacy `longdesc` content attribute has no IDL reflection -- `img.longdesc` is `undefined` (only `getAttribute`/`hasAttribute` work). Same class as BUG-602 (`al…",
+   "component": "js (`crates/js/src/dom.rs` -- IDL reflection table, `align`-class gap)",
    "date": null,
    "debtor": false
   }
