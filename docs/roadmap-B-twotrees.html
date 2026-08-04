@@ -2863,9 +2863,12 @@
       {
        "id": "WPT-VENDOR-https-upgrades",
        "title": "WPT: вендорить + прогнать категорию `https-upgrades`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-04: вендорена + прогнана целиком (`--all --root https-upgrades --recursive`, ~2:38) — **0/6 harness OK**, все TIMEOUT. Категория проверяет автоматический порт-сохраняющий http→https апгрейд из Fetch spec (в Lumen реализован только HSTS-вариант) через `window.open(url)` + `postMessage` обратно в `opener`. Реальная причина отказа — не апгрейд, а уже заведённый «второй барьер» BUG-359: `window.open` возвращает stub-объект (`opener: null`, `postMessage` — no-op), поэтому обратный `postMessage` в принципе не может прийти. Новых багов не заведено",
+       "bugs": [
+        "BUG-359 (переподтверждён)"
+       ]
       },
       {
        "id": "WPT-VENDOR-idle-detection",
