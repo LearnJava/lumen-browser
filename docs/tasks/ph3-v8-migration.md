@@ -3219,7 +3219,54 @@ features on, `quickjs` wins per the `#[cfg]` priority), and
 `--no-default-features --features backend-femtovg,backend-wgpu,quickjs`
 (pure rollback build).
 
-Next in queue: S12b-B20 (`filesystem_access`, Полоса 3 sixth batch).
+### S12b-B20 (`filesystem_access` — Полоса 3 sixth batch)
+
+The module already had a complete V8 port from an earlier slice
+(`install_filesystem_access_v8` since S5-S7 batch 2), so the batch reduced to
+deleting the rquickjs `install_filesystem_access` twin, its `lib.rs`
+`install_dom` call site, and porting its 33 tests (28 JS-shim tests + 5
+pure-Rust registry/JSON-helper unit tests) to V8.
+
+Because everything left in the module — the write/dir registries, the OS
+file-dialog spawners, and the JSON helpers — is now reachable only through
+`install_filesystem_access_v8`, they were individually gated behind
+`#[cfg(feature = "v8-backend")]` (combined with the existing per-OS
+`target_os` cfgs on the picker functions) rather than left unconditional;
+otherwise a default (non-v8) build would trip `dead_code` under
+`clippy --all-targets -D warnings`, since nothing outside the gated installer
+calls them anymore. The 5 pure-Rust tests (`writable_write_accumulates`,
+`writable_close_writes_file`, `json_escape_quotes`, `json_escape_backslash`,
+`file_entry_json_for_existing_file`) moved into `tests_v8` alongside the
+JS-shim tests for the same reason — the functions they exercise no longer
+exist without the feature.
+
+Porting surfaced a genuine engine-behavior hazard, not a bug in the bridge:
+`showOpenFilePicker()`/`showSaveFilePicker()`/`showDirectoryPicker()` each
+call `Promise.resolve().then(fn)` where `fn` invokes the real native picker
+(a blocking OS dialog — PowerShell `System.Windows.Forms` on Windows). Under
+the old rquickjs test harness this was safe because that engine's `eval()`
+never auto-ran pending jobs (same root cause as the two-eval-call pattern
+from S12b-B8/B19), so the `.then` callback simply never fired during a test.
+Under V8, `eval()` drains the microtask queue before returning — even for a
+single top-level statement that only checks `typeof ...().then === 'function'`
+— so calling any of the three picker functions inside a test pops a real,
+blocking native dialog. Fixed by having `tests_v8::with_fsa()` override the
+three `_lumen_show_*_picker` natives with synchronous, non-blocking JS mocks
+that resolve the promise with a canned payload instead of touching the OS.
+
+`cargo test -p lumen-js --features v8-backend`: 2576 lib (unchanged — the 33
+new `tests_v8` tests exactly replace the 33 old rquickjs `mod tests` tests,
+which were unconditionally compiled under `#[cfg(test)]` regardless of
+features and so were already counted in the v8-backend total before this
+batch). `cargo test -p lumen-js` (default): 617 lib (down from 650, -33: all
+33 rquickjs-only tests removed, nothing added since `tests_v8` requires
+`v8-backend`). Both clippy passes (`--all-targets`, default and
+`--features v8-backend`) clean; `lumen-shell` checked clean under default
+(`v8`), `quickjs` (both default features on, `quickjs` wins per the `#[cfg]`
+priority), and `--no-default-features --features backend-femtovg,backend-wgpu,quickjs`
+(pure rollback build).
+
+Next in queue: S12b-B21 (`webgl_canvas`, `audio_element`, Полоса 3 seventh batch).
 
 ---
 

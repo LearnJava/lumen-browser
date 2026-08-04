@@ -35,14 +35,20 @@
 //! | `_lumen_writable_write_text` | `(handle_id: u32, data: String) → bool` | Append UTF-8 text to writable stream |
 //! | `_lumen_writable_close` | `(handle_id: u32) → bool` | Flush and close writable stream |
 
-use rquickjs::{Ctx, Function};
+// All items below are reachable only through `install_filesystem_access_v8`
+// (the rquickjs twin was removed in S12b-B20) — gated so a default (non-v8)
+// build doesn't trip `dead_code`.
+#[cfg(feature = "v8-backend")]
 use std::collections::HashMap;
+#[cfg(feature = "v8-backend")]
 use std::path::PathBuf;
+#[cfg(feature = "v8-backend")]
 use std::sync::{Mutex, OnceLock};
 
 // ── Write-handle registry ──────────────────────────────────────────────────────
 
 /// Pending write buffer for an open `FileSystemWritableFileStream`.
+#[cfg(feature = "v8-backend")]
 struct WriteHandle {
     /// Target file path (caller-confirmed via the save picker).
     path: PathBuf,
@@ -50,11 +56,13 @@ struct WriteHandle {
     data: Vec<u8>,
 }
 
+#[cfg(feature = "v8-backend")]
 struct WriteRegistry {
     next_id: u32,
     handles: HashMap<u32, WriteHandle>,
 }
 
+#[cfg(feature = "v8-backend")]
 impl WriteRegistry {
     fn new() -> Self {
         Self { next_id: 1, handles: HashMap::new() }
@@ -85,19 +93,23 @@ impl WriteRegistry {
     }
 }
 
+#[cfg(feature = "v8-backend")]
 static WRITE_REG: OnceLock<Mutex<WriteRegistry>> = OnceLock::new();
 
+#[cfg(feature = "v8-backend")]
 fn write_reg() -> &'static Mutex<WriteRegistry> {
     WRITE_REG.get_or_init(|| Mutex::new(WriteRegistry::new()))
 }
 
 // ── Directory-handle registry ──────────────────────────────────────────────────
 
+#[cfg(feature = "v8-backend")]
 struct DirRegistry {
     next_id: u32,
     paths: HashMap<u32, PathBuf>,
 }
 
+#[cfg(feature = "v8-backend")]
 impl DirRegistry {
     fn new() -> Self {
         Self { next_id: 1, paths: HashMap::new() }
@@ -115,15 +127,17 @@ impl DirRegistry {
     }
 }
 
+#[cfg(feature = "v8-backend")]
 static DIR_REG: OnceLock<Mutex<DirRegistry>> = OnceLock::new();
 
+#[cfg(feature = "v8-backend")]
 fn dir_reg() -> &'static Mutex<DirRegistry> {
     DIR_REG.get_or_init(|| Mutex::new(DirRegistry::new()))
 }
 
 // ── OS file/directory dialogs ──────────────────────────────────────────────────
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "v8-backend"))]
 fn os_open_file_picker() -> Option<PathBuf> {
     let ps = r#"
 Add-Type -AssemblyName System.Windows.Forms
@@ -143,7 +157,7 @@ if ($dlg.ShowDialog() -eq 'OK') { $dlg.FileName }
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "v8-backend"))]
 fn os_open_file_picker() -> Option<PathBuf> {
     let out = std::process::Command::new("zenity")
         .args(["--file-selection", "--title=Open File"])
@@ -157,7 +171,7 @@ fn os_open_file_picker() -> Option<PathBuf> {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "v8-backend"))]
 fn os_open_file_picker() -> Option<PathBuf> {
     let out = std::process::Command::new("osascript")
         .args(["-e", "POSIX path of (choose file without invisibles)"])
@@ -171,12 +185,12 @@ fn os_open_file_picker() -> Option<PathBuf> {
     }
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+#[cfg(all(not(any(target_os = "windows", target_os = "linux", target_os = "macos")), feature = "v8-backend"))]
 fn os_open_file_picker() -> Option<PathBuf> {
     None
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "v8-backend"))]
 fn os_save_file_picker(suggested: &str) -> Option<PathBuf> {
     let safe = suggested.replace('"', "\\\"");
     let ps = format!(
@@ -200,7 +214,7 @@ if ($dlg.ShowDialog() -eq 'OK') {{ $dlg.FileName }}
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "v8-backend"))]
 fn os_save_file_picker(suggested: &str) -> Option<PathBuf> {
     let out = std::process::Command::new("zenity")
         .args(["--file-selection", "--save", &format!("--filename={suggested}"), "--title=Save File"])
@@ -214,7 +228,7 @@ fn os_save_file_picker(suggested: &str) -> Option<PathBuf> {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "v8-backend"))]
 fn os_save_file_picker(_suggested: &str) -> Option<PathBuf> {
     let out = std::process::Command::new("osascript")
         .args(["-e", "POSIX path of (choose file name)"])
@@ -228,12 +242,12 @@ fn os_save_file_picker(_suggested: &str) -> Option<PathBuf> {
     }
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+#[cfg(all(not(any(target_os = "windows", target_os = "linux", target_os = "macos")), feature = "v8-backend"))]
 fn os_save_file_picker(_suggested: &str) -> Option<PathBuf> {
     None
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "v8-backend"))]
 fn os_dir_picker() -> Option<PathBuf> {
     let ps = r#"
 Add-Type -AssemblyName System.Windows.Forms
@@ -252,7 +266,7 @@ if ($dlg.ShowDialog() -eq 'OK') { $dlg.SelectedPath }
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "v8-backend"))]
 fn os_dir_picker() -> Option<PathBuf> {
     let out = std::process::Command::new("zenity")
         .args(["--file-selection", "--directory", "--title=Choose Folder"])
@@ -266,7 +280,7 @@ fn os_dir_picker() -> Option<PathBuf> {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "v8-backend"))]
 fn os_dir_picker() -> Option<PathBuf> {
     let out = std::process::Command::new("osascript")
         .args(["-e", "POSIX path of (choose folder)"])
@@ -280,13 +294,14 @@ fn os_dir_picker() -> Option<PathBuf> {
     }
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+#[cfg(all(not(any(target_os = "windows", target_os = "linux", target_os = "macos")), feature = "v8-backend"))]
 fn os_dir_picker() -> Option<PathBuf> {
     None
 }
 
 // ── JSON helpers (no external dep) ────────────────────────────────────────────
 
+#[cfg(feature = "v8-backend")]
 fn json_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 4);
     for ch in s.chars() {
@@ -302,6 +317,7 @@ fn json_escape(s: &str) -> String {
     out
 }
 
+#[cfg(feature = "v8-backend")]
 fn file_entry_json(path: &std::path::Path) -> Option<String> {
     let name  = path.file_name()?.to_str()?.to_string();
     let size  = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
@@ -316,96 +332,8 @@ fn file_entry_json(path: &std::path::Path) -> Option<String> {
 
 // ── install ────────────────────────────────────────────────────────────────────
 
-/// Install File System Access API bindings and JS class shim into `ctx`.
-///
-/// Must be called **after** `file_input::install_file_input_bindings` so that
-/// `__lumen_file_read_text` / `__lumen_file_read_base64` are already registered.
-pub(crate) fn install_filesystem_access(ctx: &Ctx<'_>) -> rquickjs::Result<()> {
-    macro_rules! reg {
-        ($name:expr, $f:expr) => {
-            ctx.globals().set($name, Function::new(ctx.clone(), $f)?)?;
-        };
-    }
-
-    // _lumen_show_open_file_picker() → Option<String>  JSON {name,token,size} or null
-    reg!("_lumen_show_open_file_picker", || -> Option<String> {
-        let path = os_open_file_picker()?;
-        file_entry_json(&path)
-    });
-
-    // _lumen_show_save_file_picker(name) → Option<u32>  write-handle id or null
-    reg!("_lumen_show_save_file_picker", |suggested: String| -> Option<u32> {
-        let path = os_save_file_picker(&suggested)?;
-        Some(write_reg().lock().unwrap().allocate(path))
-    });
-
-    // _lumen_show_directory_picker() → Option<String>  JSON {name,path_id} or null
-    reg!("_lumen_show_directory_picker", || -> Option<String> {
-        let path = os_dir_picker()?;
-        let name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("folder")
-            .to_string();
-        let id = dir_reg().lock().unwrap().allocate(path);
-        Some(format!(r#"{{"name":"{}","path_id":{}}}"#, json_escape(&name), id))
-    });
-
-    // _lumen_dir_entries(path_id) → String  JSON [{name,kind},...]
-    reg!("_lumen_dir_entries", |path_id: u32| -> String {
-        let path_opt = dir_reg().lock().unwrap().get(path_id).cloned();
-        let Some(dir) = path_opt else { return "[]".to_string(); };
-        let Ok(rd) = std::fs::read_dir(&dir) else { return "[]".to_string(); };
-        let mut items = Vec::new();
-        for entry in rd.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            let kind = if entry.path().is_dir() { "directory" } else { "file" };
-            items.push(format!(
-                r#"{{"name":"{}","kind":"{}"}}"#,
-                json_escape(&name),
-                kind
-            ));
-        }
-        format!("[{}]", items.join(","))
-    });
-
-    // _lumen_dir_get_file(path_id, name) → Option<String>  JSON {name,token,size} or null
-    reg!("_lumen_dir_get_file", |path_id: u32, name: String| -> Option<String> {
-        let dir = dir_reg().lock().unwrap().get(path_id).cloned()?;
-        let file_path = dir.join(&name);
-        if !file_path.is_file() {
-            return None;
-        }
-        file_entry_json(&file_path)
-    });
-
-    // _lumen_dir_get_subdir(path_id, name) → Option<String>  JSON {name,path_id} or null
-    reg!("_lumen_dir_get_subdir", |path_id: u32, name: String| -> Option<String> {
-        let parent = dir_reg().lock().unwrap().get(path_id).cloned()?;
-        let sub = parent.join(&name);
-        if !sub.is_dir() {
-            return None;
-        }
-        let sub_name = json_escape(&name);
-        let sub_id = dir_reg().lock().unwrap().allocate(sub);
-        Some(format!(r#"{{"name":"{}","path_id":{}}}"#, sub_name, sub_id))
-    });
-
-    // _lumen_writable_write_text(handle_id, data) → bool
-    reg!("_lumen_writable_write_text", |handle_id: u32, data: String| -> bool {
-        write_reg().lock().unwrap().append_text(handle_id, &data)
-    });
-
-    // _lumen_writable_close(handle_id) → bool
-    reg!("_lumen_writable_close", |handle_id: u32| -> bool {
-        write_reg().lock().unwrap().close(handle_id)
-    });
-
-    ctx.eval::<(), _>(FSAL_SHIM)?;
-    Ok(())
-}
-
-/// V8 port of [`install_filesystem_access`] (Ph3 V8 migration S5-S7 batch 2):
+/// Install File System Access API bindings and JS class shim into a V8 runtime
+/// (Ph3 V8 migration S5-S7 batch 2; the rquickjs twin was removed in S12b-B20):
 /// all eight natives go through the compat layer, the JS shim evaluates
 /// unchanged. Must be called after [`crate::file_input::install_file_input_bindings_v8`].
 #[cfg(feature = "v8-backend")]
@@ -496,6 +424,7 @@ pub(crate) fn install_filesystem_access_v8(
 ///
 /// Classes are defined at top level (not inside an IIFE) so they are accessible as
 /// global variables AND via `window.X` when the window object is available.
+#[cfg(feature = "v8-backend")]
 const FSAL_SHIM: &str = r#"
 
 // ── FileSystemWritableFileStream ─────────────────────────────────────────────
@@ -710,195 +639,17 @@ if (typeof window !== 'undefined') {
 
 "#;
 
-#[cfg(test)]
-mod tests {
-    use crate::QuickJsRuntime;
-    use lumen_core::JsRuntime;
-    use lumen_dom::Document;
-    use std::sync::{Arc, Mutex};
-
-    fn runtime() -> QuickJsRuntime {
-        let rt = QuickJsRuntime::new().unwrap();
-        let doc = Arc::new(Mutex::new(Document::new()));
-        rt.install_dom(doc, "", None, None, None, None, None, None, None, None, false)
-            .unwrap();
-        rt
-    }
-
-    fn bool_eval(rt: &QuickJsRuntime, expr: &str) -> bool {
-        matches!(rt.eval(expr).unwrap(), lumen_core::JsValue::Bool(true))
-    }
-
-    #[test]
-    fn fsfh_constructor_exists() {
-        let rt = runtime();
-        assert!(bool_eval(&rt, "typeof window.FileSystemFileHandle === 'function'"));
-    }
-
-    #[test]
-    fn fsdh_constructor_exists() {
-        let rt = runtime();
-        assert!(bool_eval(
-            &rt,
-            "typeof window.FileSystemDirectoryHandle === 'function'"
-        ));
-    }
-
-    #[test]
-    fn fsws_constructor_exists() {
-        let rt = runtime();
-        assert!(bool_eval(
-            &rt,
-            "typeof window.FileSystemWritableFileStream === 'function'"
-        ));
-    }
-
-    #[test]
-    fn show_open_file_picker_is_function() {
-        let rt = runtime();
-        assert!(bool_eval(&rt, "typeof window.showOpenFilePicker === 'function'"));
-    }
-
-    #[test]
-    fn show_save_file_picker_is_function() {
-        let rt = runtime();
-        assert!(bool_eval(&rt, "typeof window.showSaveFilePicker === 'function'"));
-    }
-
-    #[test]
-    fn show_directory_picker_is_function() {
-        let rt = runtime();
-        assert!(bool_eval(
-            &rt,
-            "typeof window.showDirectoryPicker === 'function'"
-        ));
-    }
-
-    #[test]
-    fn fsfh_kind_is_file() {
-        let rt = runtime();
-        assert!(bool_eval(
-            &rt,
-            "new FileSystemFileHandle('a.txt', 0, 0).kind === 'file'"
-        ));
-    }
-
-    #[test]
-    fn fsfh_exposes_name() {
-        let rt = runtime();
-        let r = rt
-            .eval("new FileSystemFileHandle('hello.txt', 0, 0).name")
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("hello.txt".into()));
-    }
-
-    #[test]
-    fn fsdh_kind_is_directory() {
-        let rt = runtime();
-        assert!(bool_eval(
-            &rt,
-            "new FileSystemDirectoryHandle('docs', 1).kind === 'directory'"
-        ));
-    }
-
-    #[test]
-    fn fsdh_exposes_name() {
-        let rt = runtime();
-        let r = rt
-            .eval("new FileSystemDirectoryHandle('docs', 1).name")
-            .unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("docs".into()));
-    }
-
-    #[test]
-    fn fsws_write_returns_promise() {
-        let rt = runtime();
-        assert!(bool_eval(
-            &rt,
-            "typeof new FileSystemWritableFileStream(0).write('x').then === 'function'"
-        ));
-    }
-
-    #[test]
-    fn fsws_seek_returns_promise() {
-        let rt = runtime();
-        assert!(bool_eval(
-            &rt,
-            "typeof new FileSystemWritableFileStream(0).seek(0).then === 'function'"
-        ));
-    }
-
-    #[test]
-    fn fsws_truncate_returns_promise() {
-        let rt = runtime();
-        assert!(bool_eval(
-            &rt,
-            "typeof new FileSystemWritableFileStream(0).truncate(0).then === 'function'"
-        ));
-    }
-
-    #[test]
-    fn fsws_close_returns_promise() {
-        let rt = runtime();
-        assert!(bool_eval(
-            &rt,
-            "typeof new FileSystemWritableFileStream(0).close().then === 'function'"
-        ));
-    }
-
-    #[test]
-    fn fsfh_get_file_returns_promise() {
-        let rt = runtime();
-        assert!(bool_eval(
-            &rt,
-            "typeof new FileSystemFileHandle('a.txt', 0, 0).getFile().then === 'function'"
-        ));
-    }
-
-    #[test]
-    fn fsdh_get_file_handle_returns_promise() {
-        let rt = runtime();
-        assert!(bool_eval(
-            &rt,
-            "typeof new FileSystemDirectoryHandle('d', 0).getFileHandle('x.txt').then === 'function'"
-        ));
-    }
-
-    #[test]
-    fn fsdh_get_dir_handle_returns_promise() {
-        let rt = runtime();
-        assert!(bool_eval(
-            &rt,
-            "typeof new FileSystemDirectoryHandle('d', 0).getDirectoryHandle('sub').then === 'function'"
-        ));
-    }
-
-    #[test]
-    fn fsdh_entries_has_next() {
-        let rt = runtime();
-        assert!(bool_eval(
-            &rt,
-            "typeof new FileSystemDirectoryHandle('d', 0).entries().next === 'function'"
-        ));
-    }
-
-    #[test]
-    fn fsdh_values_has_next() {
-        let rt = runtime();
-        assert!(bool_eval(
-            &rt,
-            "typeof new FileSystemDirectoryHandle('d', 0).values().next === 'function'"
-        ));
-    }
-
-    #[test]
-    fn fsdh_keys_has_next() {
-        let rt = runtime();
-        assert!(bool_eval(
-            &rt,
-            "typeof new FileSystemDirectoryHandle('d', 0).keys().next === 'function'"
-        ));
-    }
+/// V8 test coverage for the File System Access API shim (the rquickjs twin
+/// was removed in S12b-B20; this module ports its 33 tests to V8 verbatim).
+/// The registries/JSON helpers exercised here are themselves gated on
+/// `v8-backend` (nothing else in the crate reaches them once the rquickjs
+/// installer is gone), so their unit tests live here too rather than in a
+/// separate engine-agnostic module.
+#[cfg(all(test, feature = "v8-backend"))]
+mod tests_v8 {
+    use crate::v8_runtime::V8JsRuntime;
+    use lumen_core::ext::JsRuntime as _;
+    use lumen_core::JsValue;
 
     #[test]
     fn writable_write_accumulates() {
@@ -922,27 +673,6 @@ mod tests {
         let content = std::fs::read_to_string(&tmp).unwrap_or_default();
         assert_eq!(content, "lumen test content");
         let _ = std::fs::remove_file(&tmp);
-    }
-
-    #[test]
-    fn dir_entries_empty_for_unknown_id() {
-        let rt = runtime();
-        let r = rt.eval("_lumen_dir_entries(9999999)").unwrap();
-        assert_eq!(r, lumen_core::JsValue::String("[]".into()));
-    }
-
-    #[test]
-    fn dir_entries_returns_json_array_for_real_dir() {
-        let tmp = std::env::temp_dir();
-        let pid = super::dir_reg().lock().unwrap().allocate(tmp);
-        let rt = runtime();
-        let r = rt.eval(&format!("_lumen_dir_entries({pid})")).unwrap();
-        match r {
-            lumen_core::JsValue::String(s) => {
-                assert!(s.starts_with('['), "expected JSON array, got: {s}");
-            }
-            other => panic!("expected string JSON, got {other:?}"),
-        }
     }
 
     #[test]
@@ -977,9 +707,241 @@ mod tests {
         let _ = std::fs::remove_file(&tmp);
     }
 
+    // Minimal DOM stubs `install_file_input_bindings_v8`'s shim needs — mirrors
+    // `file_input::tests::STUBS` (private to that module, so duplicated here).
+    const STUBS: &str = r#"
+        var window = globalThis;
+        function Blob(blobParts, options) {}
+        function _lumen_set_attr(nid, name, val) {}
+        function _lumen_get_attr(nid, name) { return undefined; }
+        function _lumen_dispatch_bubble(nid, type) {}
+        function _lumen_make_element(nid) { return {__nid__: nid}; }
+        window._lumen_make_element = _lumen_make_element;
+    "#;
+
+    fn with_fsa() -> V8JsRuntime {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(STUBS).unwrap();
+        crate::file_input::install_file_input_bindings_v8(&rt).unwrap();
+        super::install_filesystem_access_v8(&rt).unwrap();
+        // The real `_lumen_show_*_picker` natives spawn a blocking native OS dialog
+        // (PowerShell Windows.Forms on Windows). `showXPicker()`'s `Promise.resolve().then(...)`
+        // callback runs as a microtask that V8 drains at the end of THIS `eval()` call (unlike
+        // the removed rquickjs harness, which never auto-ran pending jobs — S12b-B8 finding) —
+        // so calling `showOpenFilePicker()` etc. here would pop a real dialog and hang the test.
+        // Override with non-blocking mocks that resolve the promise instead.
+        rt.eval(
+            r#"
+            globalThis._lumen_show_open_file_picker =
+              function() { return '{"name":"mock.txt","token":0,"size":0}'; };
+            globalThis._lumen_show_save_file_picker = function() { return 0; };
+            globalThis._lumen_show_directory_picker =
+              function() { return '{"name":"mockdir","path_id":0}'; };
+            "#,
+        )
+        .unwrap();
+        rt
+    }
+
+    fn bool_eval(rt: &V8JsRuntime, expr: &str) -> bool {
+        matches!(rt.eval(expr).unwrap(), JsValue::Bool(true))
+    }
+
+    #[test]
+    fn fsfh_constructor_exists() {
+        let rt = with_fsa();
+        assert!(bool_eval(&rt, "typeof window.FileSystemFileHandle === 'function'"));
+    }
+
+    #[test]
+    fn fsdh_constructor_exists() {
+        let rt = with_fsa();
+        assert!(bool_eval(
+            &rt,
+            "typeof window.FileSystemDirectoryHandle === 'function'"
+        ));
+    }
+
+    #[test]
+    fn fsws_constructor_exists() {
+        let rt = with_fsa();
+        assert!(bool_eval(
+            &rt,
+            "typeof window.FileSystemWritableFileStream === 'function'"
+        ));
+    }
+
+    #[test]
+    fn show_open_file_picker_is_function() {
+        let rt = with_fsa();
+        assert!(bool_eval(&rt, "typeof window.showOpenFilePicker === 'function'"));
+    }
+
+    #[test]
+    fn show_save_file_picker_is_function() {
+        let rt = with_fsa();
+        assert!(bool_eval(&rt, "typeof window.showSaveFilePicker === 'function'"));
+    }
+
+    #[test]
+    fn show_directory_picker_is_function() {
+        let rt = with_fsa();
+        assert!(bool_eval(
+            &rt,
+            "typeof window.showDirectoryPicker === 'function'"
+        ));
+    }
+
+    #[test]
+    fn fsfh_kind_is_file() {
+        let rt = with_fsa();
+        assert!(bool_eval(
+            &rt,
+            "new FileSystemFileHandle('a.txt', 0, 0).kind === 'file'"
+        ));
+    }
+
+    #[test]
+    fn fsfh_exposes_name() {
+        let rt = with_fsa();
+        let r = rt
+            .eval("new FileSystemFileHandle('hello.txt', 0, 0).name")
+            .unwrap();
+        assert_eq!(r, JsValue::String("hello.txt".into()));
+    }
+
+    #[test]
+    fn fsdh_kind_is_directory() {
+        let rt = with_fsa();
+        assert!(bool_eval(
+            &rt,
+            "new FileSystemDirectoryHandle('docs', 1).kind === 'directory'"
+        ));
+    }
+
+    #[test]
+    fn fsdh_exposes_name() {
+        let rt = with_fsa();
+        let r = rt
+            .eval("new FileSystemDirectoryHandle('docs', 1).name")
+            .unwrap();
+        assert_eq!(r, JsValue::String("docs".into()));
+    }
+
+    #[test]
+    fn fsws_write_returns_promise() {
+        let rt = with_fsa();
+        assert!(bool_eval(
+            &rt,
+            "typeof new FileSystemWritableFileStream(0).write('x').then === 'function'"
+        ));
+    }
+
+    #[test]
+    fn fsws_seek_returns_promise() {
+        let rt = with_fsa();
+        assert!(bool_eval(
+            &rt,
+            "typeof new FileSystemWritableFileStream(0).seek(0).then === 'function'"
+        ));
+    }
+
+    #[test]
+    fn fsws_truncate_returns_promise() {
+        let rt = with_fsa();
+        assert!(bool_eval(
+            &rt,
+            "typeof new FileSystemWritableFileStream(0).truncate(0).then === 'function'"
+        ));
+    }
+
+    #[test]
+    fn fsws_close_returns_promise() {
+        let rt = with_fsa();
+        assert!(bool_eval(
+            &rt,
+            "typeof new FileSystemWritableFileStream(0).close().then === 'function'"
+        ));
+    }
+
+    #[test]
+    fn fsfh_get_file_returns_promise() {
+        let rt = with_fsa();
+        assert!(bool_eval(
+            &rt,
+            "typeof new FileSystemFileHandle('a.txt', 0, 0).getFile().then === 'function'"
+        ));
+    }
+
+    #[test]
+    fn fsdh_get_file_handle_returns_promise() {
+        let rt = with_fsa();
+        assert!(bool_eval(
+            &rt,
+            "typeof new FileSystemDirectoryHandle('d', 0).getFileHandle('x.txt').then === 'function'"
+        ));
+    }
+
+    #[test]
+    fn fsdh_get_dir_handle_returns_promise() {
+        let rt = with_fsa();
+        assert!(bool_eval(
+            &rt,
+            "typeof new FileSystemDirectoryHandle('d', 0).getDirectoryHandle('sub').then === 'function'"
+        ));
+    }
+
+    #[test]
+    fn fsdh_entries_has_next() {
+        let rt = with_fsa();
+        assert!(bool_eval(
+            &rt,
+            "typeof new FileSystemDirectoryHandle('d', 0).entries().next === 'function'"
+        ));
+    }
+
+    #[test]
+    fn fsdh_values_has_next() {
+        let rt = with_fsa();
+        assert!(bool_eval(
+            &rt,
+            "typeof new FileSystemDirectoryHandle('d', 0).values().next === 'function'"
+        ));
+    }
+
+    #[test]
+    fn fsdh_keys_has_next() {
+        let rt = with_fsa();
+        assert!(bool_eval(
+            &rt,
+            "typeof new FileSystemDirectoryHandle('d', 0).keys().next === 'function'"
+        ));
+    }
+
+    #[test]
+    fn dir_entries_empty_for_unknown_id() {
+        let rt = with_fsa();
+        let r = rt.eval("_lumen_dir_entries(9999999)").unwrap();
+        assert_eq!(r, JsValue::String("[]".into()));
+    }
+
+    #[test]
+    fn dir_entries_returns_json_array_for_real_dir() {
+        let tmp = std::env::temp_dir();
+        let pid = super::dir_reg().lock().unwrap().allocate(tmp);
+        let rt = with_fsa();
+        let r = rt.eval(&format!("_lumen_dir_entries({pid})")).unwrap();
+        match r {
+            JsValue::String(s) => {
+                assert!(s.starts_with('['), "expected JSON array, got: {s}");
+            }
+            other => panic!("expected string JSON, got {other:?}"),
+        }
+    }
+
     #[test]
     fn fsfh_is_same_entry_same_token() {
-        let rt = runtime();
+        let rt = with_fsa();
         // Same token → isSameEntry resolves true; verify via internal _token equality.
         assert!(bool_eval(
             &rt,
@@ -991,7 +953,7 @@ mod tests {
 
     #[test]
     fn fsfh_is_same_entry_diff_token() {
-        let rt = runtime();
+        let rt = with_fsa();
         // Different tokens → isSameEntry resolves false.
         assert!(bool_eval(
             &rt,
@@ -1003,7 +965,7 @@ mod tests {
 
     #[test]
     fn fsdh_is_same_entry_same_path_id() {
-        let rt = runtime();
+        let rt = with_fsa();
         // Same pathId → isSameEntry resolves true; verify via internal _pathId equality.
         assert!(bool_eval(
             &rt,
@@ -1015,7 +977,7 @@ mod tests {
 
     #[test]
     fn show_open_file_picker_returns_promise() {
-        let rt = runtime();
+        let rt = with_fsa();
         assert!(bool_eval(
             &rt,
             "typeof window.showOpenFilePicker().then === 'function'"
@@ -1024,7 +986,7 @@ mod tests {
 
     #[test]
     fn show_save_file_picker_returns_promise() {
-        let rt = runtime();
+        let rt = with_fsa();
         assert!(bool_eval(
             &rt,
             "typeof window.showSaveFilePicker({suggestedName:'out.txt'}).then === 'function'"
@@ -1033,7 +995,7 @@ mod tests {
 
     #[test]
     fn show_directory_picker_returns_promise() {
-        let rt = runtime();
+        let rt = with_fsa();
         assert!(bool_eval(
             &rt,
             "typeof window.showDirectoryPicker().then === 'function'"
