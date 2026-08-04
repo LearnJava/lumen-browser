@@ -1,4 +1,3 @@
-pub mod audio_bindings;
 pub mod audio_element;
 pub mod background_fetch;
 pub mod background_sync;
@@ -711,12 +710,6 @@ impl QuickJsRuntime {
             None
         };
         self.run(|inner| inner.ctx.with(|ctx| {
-            // Install AudioContext stub with per-session fingerprint noise (ADR-007 Layer 4, 9D.3).
-            let audio_seed = audio_bindings::new_session_seed();
-            if let Err(e) = audio_bindings::install_audio_bindings(&ctx, audio_seed) {
-                eprintln!("Audio bindings init failed: {}", e);
-            }
-
             dom::install_dom_api(
                 &ctx,
                 doc,
