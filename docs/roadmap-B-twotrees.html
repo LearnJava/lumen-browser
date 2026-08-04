@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-05",
  "counts": {
-  "open": 281,
+  "open": 282,
   "fixed": 315,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 596,
+ "total_bugs": 597,
  "phases": [
   {
    "id": "P0",
@@ -2975,16 +2975,19 @@
       {
        "id": "WPT-VENDOR-intervention-reporting",
        "title": "WPT: вендорить + прогнать категорию `intervention-reporting`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root intervention-reporting --recursive`, ~32 с) — **0/1 harness OK**, единственный id TIMEOUT на невендоренных `/resources/WebIDLParser.js`+`idlharness.js` (тот же класс гэпа, что `input-device-capabilities`/`installedapp`); сам апстримный тест — пустой стаб (`idl_array.add_objects({ // TODO })`), даже вендоренный idlharness ничего конкретного не проверил бы. Живая проба (`--mcp-live-port`) API-контейнера, который категория тестирует (Reporting API, `crates/js/src/reporting_api.rs`), нашла [BUG-629](bugs/BUG-629-OPEN.md): `ReportingObserver`/`Report` — ES5-конструкторы без `new.target`-гварда (вызов без `new` тихо утекает поля в `globalThis`, включая `type`/`url` для `Report`), `Report` вдобавок конструируем и через `new`, хотя спека не даёт ему конструктора вовсе (подделка отчётов скриптом страницы), методы `ReportingObserver.prototype` (включая внутренний `_accepts`) ошибочно enumerable",
+       "bugs": [
+        "BUG-629"
+       ]
       },
       {
        "id": "WPT-VENDOR-is-input-pending",
        "title": "WPT: вендорить + прогнать категорию `is-input-pending`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root is-input-pending --recursive`, ~2:18) — **0/12 harness OK**. `idlharness.window.html` — невендоренные `WebIDLParser.js`/`idlharness.js` (известный класс гэпа). Остальные 11 `.sub.html` TIMEOUT по уже открытому [BUG-346](bugs/BUG-346-OPEN.md) (`Url::resolve()` не схлопывает `..` — категорийные хелперы, подключаемые как `security/../resources/...`, 404-ят). Живая проба подтвердила `navigator.scheduling` целиком отсутствует — не заведён отдельный баг, первый проход отсутствующей фичи"
       },
       {
        "id": "WPT-VENDOR-jpegxl",
@@ -8805,6 +8808,13 @@
    "status": "open",
    "title": "`options.root` (explicit root element) and `options.scrollMargin` are accepted but never read anywhere in the delivery function -- every observer always interse…",
    "component": "js (`crates/js/src/dom.rs:7217-7276` -- `_lumen_deliver_intersection_observers`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-629": {
+   "status": "open",
+   "title": "`ReportingObserver`/`Report` are ES5 constructor functions with no `new.target` guard: called without `new`, `this` binds to `globalThis` and leaks internal fie…",
+   "component": "js (`crates/js/src/reporting_api.rs` -- `REPORTING_API_SHIM`)",
    "date": null,
    "debtor": false
   }
