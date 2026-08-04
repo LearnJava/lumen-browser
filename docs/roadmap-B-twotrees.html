@@ -2930,9 +2930,9 @@
       {
        "id": "WPT-VENDOR-input-device-capabilities",
        "title": "WPT: вендорить + прогнать категорию `input-device-capabilities`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root input-device-capabilities --recursive`, ~44 с) — **0/1 harness OK**, единственный id TIMEOUT на невендоренных `/resources/WebIDLParser.js`+`idlharness.js` (известный класс гэпа). Живая проба (`--dump-layout`+`console.log`) подтвердила: `InputDeviceCapabilities` целиком не реализован (`window.InputDeviceCapabilities === undefined`, `sourceCapabilities` отсутствует на всех `UIEvent`-прототипах). Новых багов не заведено — целиком отсутствующая фича при первом проходе"
       },
       {
        "id": "WPT-VENDOR-input-events",
