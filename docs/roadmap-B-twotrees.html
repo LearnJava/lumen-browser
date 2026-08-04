@@ -3024,9 +3024,9 @@
       {
        "id": "WPT-VENDOR-keyboard-map",
        "title": "WPT: вендорить + прогнать категорию `keyboard-map`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root keyboard-map --recursive`, ~2:22) — **0/8 harness OK**. Все 8 TIMEOUT на стандартном TLS-гэпе тестового сертификата (тот же класс, что `keyboard-lock`/`jpegxl`/`js-self-profiling`). Живой грep (`crates/js/src/dom.rs`) подтвердил Keyboard Map API (`navigator.keyboard.getLayoutMap()`) целиком отсутствует — не заведён отдельный баг, первый проход отсутствующей фичи"
       },
       {
        "id": "WPT-VENDOR-largest-contentful-paint",
