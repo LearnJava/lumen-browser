@@ -3203,16 +3203,16 @@
       {
        "id": "WPT-VENDOR-mst-content-hint",
        "title": "WPT: вендорить + прогнать категорию `mst-content-hint`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). WebRTC — нет конвейера"
+       "note": "Скоуп: 🚫 (вне скоупа). WebRTC — нет конвейера. DONE 2026-08-05: вендорена + прогнана целиком (`--all --root mst-content-hint --recursive`, ~35с, 4 id) — **3/4 harness OK, 0/14 сабтестов**. `MediaStreamTrack-contentHint.html` (7 FAIL): `AudioContext.createMediaStreamDestination().stream` — заглушка без `getAudioTracks`/`getVideoTracks` (`getTracks()` всегда `[]`) и `canvas.captureStream` целиком отсутствует — оба уже задокументированы (Web Audio Phase 0 в CAPABILITIES.md; captureStream — известный пробел бэклога `mediacapture-*`). `RTCRtpSendParameters-degradationEffect.html` — невендоренный вне-категорийный хелпер `/webrtc/RTCPeerConnection-helper.js` (`getNoiseStream is not defined`). `RTCRtpSendParameters-degradationPreference.html` (6 FAIL) — `pc.addTransceiver()` возвращает `null`, согласуется со скоупом (WebRTC не реализован). `idlharness.window.html` TIMEOUT на том же хелпере. Новых багов не заведено — переподтверждение уже известных Phase 0/🚫-гэпов"
       },
       {
        "id": "WPT-VENDOR-nav-tracking-mitigations",
        "title": "WPT: вендорить + прогнать категорию `nav-tracking-mitigations`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: 🚫 (вне скоупа). WebRTC-смежная privacy-фича Chrome (Bounce Tracking Mitigations), нет конвейера. DONE 2026-08-05: вендорена + прогнана целиком (`--all --root nav-tracking-mitigations --recursive`, ~52с, 2 id) — **0/2 harness OK**, оба TIMEOUT на уже задокументированном TLS-гэпе WPT-RUN-2 `UnknownIssuer`. Новый баг не заведён — известный гэп, категория вне скоупа независимо"
       },
       {
        "id": "WPT-VENDOR-navigation-api",
