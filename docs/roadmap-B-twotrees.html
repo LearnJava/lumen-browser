@@ -75,8 +75,8 @@
 {
  "generated": "2026-08-05",
  "counts": {
-  "open": 302,
-  "fixed": 323,
+  "open": 299,
+  "fixed": 326,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -3508,9 +3508,9 @@
       {
        "id": "WPT-VENDOR-remote-playback",
        "title": "WPT: вендорить + прогнать категорию `remote-playback`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). медиа-конвейер"
+       "note": "Скоуп: 🚫 (вне скоупа). медиа-конвейер. DONE 2026-08-05: вендорена + прогнана целиком (`--all --root remote-playback --recursive`, ~33 с, 22 файла — 9 `*-manual.html` исключены wptrunner'ом, 9 отобранных id) — **8/9 harness OK, 0/9 сабтестов**. Весь сигнал — уже задокументированные гэпы, три класса: (1) 6 FAIL `getVideoURI is not defined` — общий хелпер `/common/media.js` не вендорится по устоявшейся конвенции (общие `/common/*`-хелперы вне текущей директории не вендорим); (2) `idlharness.window.html` TIMEOUT — невендоренные `/resources/WebIDLParser.js`+`idlharness.js`, тот же инфра-гэп, что у прочих idlharness-категорий; (3) `prompt-in-detached-iframe.html` FAIL (`Cannot read properties of null (reading 'body')` на `i.contentDocument.body`) — реконфирмация [BUG-480](bugs/BUG-480-OPEN.md) (`<iframe>` без отдельного browsing context). `grep -rli \"RemotePlayback\" crates/` — ноль совпадений: API не реализован вовсе, согласуется со скоупом 🚫. Новых багов не заведено"
       },
       {
        "id": "WPT-VENDOR-reporting",
@@ -6423,17 +6423,17 @@
    "debtor": false
   },
   "BUG-274": {
-   "status": "open",
+   "status": "fixed",
    "title": "**Пере-скоуплен 2026-07-20 (P1):** заявка «idle CPU ~4× + скачок памяти в простое» ОПРОВЕРГНУТА замером — в истинном простое (t16→t26 после оседания страницы) о…",
    "component": "paint (WgpuBackend/Renderer) / shell (streaming первого кадра)",
-   "date": null,
+   "date": "2026-08-05",
    "debtor": false
   },
   "BUG-275": {
-   "status": "open",
-   "title": "`WGPU_BACKEND=vulkan` на Intel Iris Plus (Windows 10) — окно презентует целиком белым, хотя рендер по всем наблюдаемым признакам исправен (реальный адаптер, кад…",
+   "status": "fixed",
+   "title": "`WGPU_BACKEND=vulkan` на Intel Iris Plus (Windows 10) — окно презентовало целиком белым, хотя рендер по всем наблюдаемым признакам был исправен. **Перепроверено…",
    "component": "paint (`Renderer::new_async`, выбор wgpu-бэкенда)",
-   "date": null,
+   "date": "2026-08-05",
    "debtor": false
   },
   "BUG-276": {
@@ -8901,10 +8901,10 @@
    "debtor": false
   },
   "BUG-633": {
-   "status": "open",
-   "title": "Живой `lumen.exe` падает целиком (V8 `V8_Fatal`: `Check failed: isolate_->IsOnCentralStack()`, стек `Heap::CollectGarbage` ← `Object::GetOwnPropertyNames` ← рек…",
+   "status": "fixed",
+   "title": "Живой `lumen.exe` падал целиком (V8 `V8_Fatal`: `Check failed: isolate_->IsOnCentralStack()`, стек `Heap::CollectGarbage` ← `Object::GetOwnPropertyNames` ← реку…",
    "component": "js (`crates/js/src/v8_runtime.rs::from_v8`)",
-   "date": null,
+   "date": "2026-08-05",
    "debtor": false
   },
   "BUG-634": {
