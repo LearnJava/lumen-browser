@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-05",
  "counts": {
-  "open": 291,
+  "open": 292,
   "fixed": 316,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 607,
+ "total_bugs": 608,
  "phases": [
   {
    "id": "P0",
@@ -3255,9 +3255,12 @@
       {
        "id": "WPT-VENDOR-netinfo",
        "title": "WPT: вендорить + прогнать категорию `netinfo`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root netinfo --recursive`, ~30 с, 2 id) — **1/2 harness OK, 5/6 сабтестов (83%)**. `netinfo-basics.html`: единственный провал — `navigator.connection.downlinkMax` отсутствует у Phase-1-заглушки `NetworkInformation` (`crates/js/src/dom.rs:12828-12847`). Заведён [BUG-641](bugs/BUG-641-OPEN.md). `idlharness.any.html` — TIMEOUT на уже задокументированном невендоренном `/resources/idlharness.js`+`WebIDLParser.js` (тот же класс, что `tests/wpt/VENDOR.md` фиксирует для `FileAPI`/`animation-worklet`), не новая находка",
+       "bugs": [
+        "BUG-641"
+       ]
       },
       {
        "id": "WPT-VENDOR-network-error-logging",
@@ -8910,6 +8913,13 @@
    "status": "open",
    "title": "Navigation API shim is missing several spec-required pieces: `NavigationCurrentEntryChangeEvent` global doesn't exist (`currententrychange` fires a plain `Event…",
    "component": "js (`crates/js/src/navigation_api.rs::NAVIGATION_API_SHIM`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-641": {
+   "status": "open",
+   "title": "`navigator.connection.downlinkMax` missing entirely (`undefined`) — the \"Phase 1 stub\" constructor sets `effectiveType`/`downlink`/`rtt`/`saveData`/`type` but n…",
+   "component": "js (`crates/js/src/dom.rs:12828-12847` — `NetworkInformation` shim)",
    "date": null,
    "debtor": false
   }
