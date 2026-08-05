@@ -1375,11 +1375,27 @@ fn apply_content_encoding(
 
 // ── Connect ─────────────────────────────────────────────────────────────────
 
+/// Read-inactivity bound for plain request/response traffic (page navigation,
+/// subresource `fetch()`/XHR, `fetch_with_body_sync`). Not used for WebSocket/
+/// SSE, which are meant to sit idle between messages far longer than this.
+/// BUG-307: without any bound, a server that accepts the connection and then
+/// never answers blocks the calling thread forever. `fetch()`'s default
+/// (no-`AbortSignal`) path runs this synchronously on the JS thread, so an
+/// unbounded stall there deadlocks the whole tab and the automation channel.
+const FETCH_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// Открыть TCP (или TLS поверх TCP) к указанному origin. Резолв host →
 /// SocketAddr-ы делегируется в `resolver` (default = SystemDnsResolver).
 /// При нескольких адресах (DNS round-robin или IPv4+IPv6 dual-stack)
 /// пробуем connect по каждому до первого успешного; ошибка от последнего
 /// поднимается наверх, если ни один не подошёл.
+///
+/// `read_timeout`, если задан, ставится на сырой `TcpStream` до TLS-хендшейка
+/// (покрывает и хендшейк, и все последующие чтения тела ответа через
+/// `rustls::StreamOwned`). Только для request/response-трафика (обычный
+/// `fetch()`/навигация) — вызывающие для WebSocket/SSE передают `None`,
+/// т.к. те соединения намеренно живут без активности дольше любого разумного
+/// таймаута (BUG-307).
 fn connect(
     host: &str,
     port: u16,
@@ -1387,6 +1403,7 @@ fn connect(
     resolver: &dyn DnsResolver,
     tls_profile: tls::TlsProfile,
     socks5: Option<&socks5::Socks5Proxy>,
+    read_timeout: Option<std::time::Duration>,
 ) -> Result<Connection> {
     let tcp = if let Some(s5) = socks5 {
         // SOCKS5 path: connect TCP to proxy server, then SOCKS5-tunnel to target.
@@ -1451,6 +1468,16 @@ fn connect(
                 .unwrap_or_else(|| Error::Network(format!("connect {host}:{port}: no addresses")))
         })?
     };
+
+    // BUG-307: without this, a server that accepts the TCP/TLS connection and
+    // then never sends a byte (stalled response, dead proxy, SW-related
+    // endpoint that never answers) blocks this thread's `read()` forever —
+    // on the single JS thread that means the whole tab (and the automation
+    // channel) deadlocks with 0% CPU, unrecoverable except by killing the
+    // process. A read timeout turns that into a bounded, recoverable error.
+    if let Some(timeout) = read_timeout {
+        let _ = tcp.set_read_timeout(Some(timeout));
+    }
 
     if !is_tls {
         return Ok(Connection::new(RawStream::Plain(tcp)));
@@ -1703,7 +1730,7 @@ fn fetch_single(
     }
 
     // Попытка 2 (или 1, если пул был пуст): свежий connect.
-    let mut conn = connect(connect_host, connect_port, connect_is_tls, resolver, tls_profile, socks5_proxy)?;
+    let mut conn = connect(connect_host, connect_port, connect_is_tls, resolver, tls_profile, socks5_proxy, Some(FETCH_READ_TIMEOUT))?;
 
     // Если используется HTTPS HTTP-прокси: выполнить CONNECT-туннель.
     #[allow(clippy::collapsible_if)]
@@ -3861,12 +3888,12 @@ impl JsFetchProvider for HttpClient {
         let mut conn = if let Some(pooled) = self.pool.acquire(&key) {
             pooled
         } else {
-            connect(&host_ascii, port, is_tls, self.resolver.as_ref(), self.tls_profile, self.socks5_proxy.as_deref())?
+            connect(&host_ascii, port, is_tls, self.resolver.as_ref(), self.tls_profile, self.socks5_proxy.as_deref(), Some(FETCH_READ_TIMEOUT))?
         };
 
         // HTTP/2 connections don't support the body path yet — fall back to H1.
         if conn.is_h2 {
-            let fresh = connect(&host_ascii, port, is_tls, self.resolver.as_ref(), self.tls_profile, self.socks5_proxy.as_deref())?;
+            let fresh = connect(&host_ascii, port, is_tls, self.resolver.as_ref(), self.tls_profile, self.socks5_proxy.as_deref(), Some(FETCH_READ_TIMEOUT))?;
             conn = fresh;
         }
 
@@ -5959,6 +5986,55 @@ mod tests {
         let body = client.fetch(&url).expect("fetch through mock resolver");
         assert_eq!(body, b"resolved!");
         assert_eq!(resolver.call_count(), 1, "resolver вызван ровно один раз");
+
+        server.join().unwrap();
+    }
+
+    // BUG-307: a server that accepts the connection and then never sends a
+    // byte used to block the calling thread forever (no read timeout was ever
+    // set on the socket). `connect()`'s `read_timeout` param bounds that.
+    #[test]
+    fn connect_with_read_timeout_bounds_a_stalled_server() {
+        use std::io::Read;
+        use std::time::{Duration, Instant};
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            // Accept and hold the connection open without ever writing a
+            // response — the stalled-server case from the bug report.
+            let (sock, _) = listener.accept().expect("accept");
+            thread::sleep(Duration::from_secs(2));
+            drop(sock);
+        });
+
+        let resolver = crate::SystemDnsResolver;
+        let started = Instant::now();
+        let conn = connect(
+            "127.0.0.1",
+            port,
+            false,
+            &resolver,
+            tls::TlsProfile::Standard,
+            None,
+            Some(Duration::from_millis(150)),
+        )
+        .expect("TCP connect itself must succeed — only the read stalls");
+
+        let mut buf = [0u8; 16];
+        let err = conn
+            .into_stream()
+            .read(&mut buf)
+            .expect_err("stalled server must time out the read, not hang forever");
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "read must return around the 150ms timeout, took {elapsed:?} instead"
+        );
+        assert!(
+            matches!(err.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut),
+            "expected a timeout error, got {err:?}"
+        );
 
         server.join().unwrap();
     }
