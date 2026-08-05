@@ -1,6 +1,6 @@
 # BUG-144
 
-**Статус:** OPEN (DEBTOR) — row-flip + gradient hard-stop + CPU backdrop-пайплайн + blur-качество (edge-bleed clamp + 3-pass Gaussian) исправлены; остаток = filter/edge AA + текст (rule 3), точечного P3-дефекта нет. KNOWN_DEBTOR baseline ратчет 4.36→4.27 (ревизия P3 2026-07-04)
+**Статус:** FIXED (DEBTOR retargeted) 2026-08-05 — row-flip + gradient hard-stop + CPU backdrop-пайплайн + blur-качество (edge-bleed clamp + 3-pass Gaussian) исправлены; остаток TEST-30 переклассифицирован как класс BUG-247 (gaussian-blur/backdrop-filter edge-AA), собственного P3-дефекта у BUG-144 больше нет — см. «Закрытие» ниже
 **Компонент:** paint
 **Файл:** `crates/engine/paint/src/backends/femtovg_backend.rs`
 
@@ -93,3 +93,21 @@ blur-улучшения дают лишь ~0.1pp; визуально blur-кар
   OPEN (DEBTOR), указатель перенесён в группу должников STATUS-P3.
 
 KNOWN_DEBTORS['30'] = ('BUG-144', 4.27) — ратчет вниз 4.36 → 4.27.
+
+## Закрытие (P3, 2026-08-05)
+
+`BUG-277` срез 16 (коммит `c1aebb3a8`, 2026-08-05) независимо перемерил TEST-30
+методом «wgpu-окно (`--mcp-live-port`) против headless-CPU (`--ipc`)»: 1.44%
+(wgpu) vs 1.69% (CPU) — расхождение бэкендов в пределах шума, дефекта
+wgpu-исполнителя нет. Страница без текста, поэтому остаток — чисто
+gaussian-blur/backdrop-filter edge-AA, тот же класс, что уже числится за
+`BUG-247` (см. запись BUG-247 в `BUGS.md`, срез «2026-08-05 (P3, BUG-277 срез
+16)»). `KNOWN_DEBTORS['30']` в `graphic_tests/run.py` перецелён на
+`('BUG-247', 1.44)` этим же срезом.
+
+Собственной, точечной P3-находки под BUG-144 больше нет — весь описанный в
+этом файле остаток инхерентен и теперь отслеживается под BUG-247. Закрываю
+BUG-144 как FIXED (retargeted), без кода: правка кода уже была сделана раньше
+(row-flip/gradient/CPU-пайплайн/blur-качество, см. секции выше), а нынешний
+хвост — не дефект, а переклассификация долга. Файл переименован в
+`BUG-144-FIXED.md`.
