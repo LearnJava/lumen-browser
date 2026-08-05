@@ -11965,31 +11965,24 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         self.load_generation = self.load_generation.wrapping_add(1);
 
         // BUG-274: `backend_factory::create_backend` below can take multiple
-        // seconds on wgpu/DX12 (pipeline compilation, see BUG-406) and runs
-        // before `start_streaming_load`, so network fetch/HTML parsing doesn't
-        // begin until the GPU backend is ready — the two costs are fully
-        // serialized instead of overlapping. Moving `start_streaming_load`
-        // here (before backend creation) looked like a free win — `HtmlChunk`'s
-        // `paint_partial_dom` already no-ops while `self.renderer` is `None` —
-        // but measured **worse**: `LUMEN_FRAME_LOG=1` component timestamps on
-        // `graphic_tests/1000000-final.html` (dev-release, interleaved A/B on
-        // one binary) showed the local-file streaming thread, which normally
-        // finishes in ~70ms with a quiet CPU, took ~1.9s when run concurrently
-        // with `init_pipelines` — the DX12 driver keeps compiling pipelines on
-        // background threads well after `create_backend` returns (the same
-        // "call returns early, driver finishes later" hazard already on record
-        // in BUG-406/`docs/perf-method.md` §"Сумма self-time…"), and that
-        // contends for CPU with the streaming thread's parsing/scanning work.
-        // Net effect on this page: `RenderDone` (true final page, not just a
-        // streaming snapshot) landed ~2.4s in with early-stream vs ~3.6s
-        // without measured once, but the OLD ordering's own "first non-empty
-        // frame" number is a mid-stream partial snapshot (RenderDone arrives
-        // 1.4s *after* it), not the final page, so the two orderings aren't
-        // comparable on that metric alone and this needs more rounds before
-        // trusting either direction. Left as an opt-in lever (`LUMEN_EARLY_STREAM=1`)
-        // for whoever picks this back up, default stays the safe (measured,
-        // battle-tested) ordering — see the "срез" write-up in BUG-274-OPEN.md.
-        let early_stream = std::env::var_os("LUMEN_EARLY_STREAM").is_some();
+        // seconds on wgpu/DX12 (pipeline compilation, see BUG-406). Starting
+        // `start_streaming_load` here (before backend creation) overlaps
+        // network fetch/HTML parsing with GPU init instead of serializing
+        // them — `HtmlChunk`'s `paint_partial_dom` already no-ops while
+        // `self.renderer` is `None`, so this only changes *when* streaming
+        // starts, not what it produces (display-list-neutral). On a local
+        // file this can lose to CPU contention with the DX12 driver's
+        // background pipeline-compile threads (BUG-406's "call returns
+        // early, driver finishes later" hazard) — but three interleaved
+        // rounds on a real network page (lenta.ru, live window,
+        // `LUMEN_FRAME_LOG=1`, 2026-08-05) showed a consistent win by
+        // `RenderDone` (true final page, not the mid-stream "first
+        // non-empty frame" snapshot earlier measurements used): OLD
+        // 3193/3278/3356ms vs NEW 2960/3001/3019ms, groups don't overlap.
+        // Default flipped to early-stream; `LUMEN_NO_EARLY_STREAM=1` restores
+        // the old (post-backend) ordering as an escape hatch — see the
+        // "срез" write-ups in BUG-274-OPEN.md.
+        let early_stream = std::env::var_os("LUMEN_NO_EARLY_STREAM").is_none();
         if early_stream {
             self.start_streaming_load(self.load_generation);
             if lumen_paint::frame_log_enabled()
