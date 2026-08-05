@@ -3055,9 +3055,9 @@
       {
        "id": "WPT-VENDOR-managed",
        "title": "WPT: вендорить + прогнать категорию `managed`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). корпоративное управление устройством"
+       "note": "Скоуп: 🚫 (вне скоупа, корпоративное управление устройством). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root managed --recursive`, ~48с), включена по тому же постоянному решению пользователя, что `accelerometer`/`magnetometer`/`keyboard-lock` — **0/2 harness OK**. Оба TIMEOUT на стандартном TLS-гэпе тестового сертификата (тот же класс, что `keyboard-lock`/`keyboard-map`/`loading`/`magnetometer`). Живой грep (`crates/js/src/dom.rs`) подтвердил Managed Configuration API (`navigator.managed`) целиком отсутствует — не заведён отдельный баг, первый проход отсутствующей фичи"
       },
       {
        "id": "WPT-VENDOR-mathml",
