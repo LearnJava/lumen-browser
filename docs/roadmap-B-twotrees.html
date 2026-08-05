@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-05",
  "counts": {
-  "open": 292,
+  "open": 294,
   "fixed": 316,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 608,
+ "total_bugs": 610,
  "phases": [
   {
    "id": "P0",
@@ -3272,30 +3272,36 @@
       {
        "id": "WPT-VENDOR-notifications",
        "title": "WPT: вендорить + прогнать категорию `notifications`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root notifications --recursive`, ~5 мин 20 с, 24 отобранных id из 46 вендоренных файлов — 11 `-manual` файлов раннер исключает) — **2/24 harness OK, 5/7 сабтестов**. Notification API реально реализован (`crates/js/src/notifications_bindings.rs`). Единственный собственный сигнал категории: `constructor-non-secure.html` (не-`.https.`, реально исполняется) — конструктор `new Notification()` при `_permission !== 'granted'` (дефолт движка — `denied`, приватность-first) не диспатчит `error`, как требует W3C Notifications API §6, а просто ничего не делает — заведён [BUG-642](bugs/BUG-642-OPEN.md). `permissions-non-secure.html` (Test TIMEOUT, 2/3 сабтеста) — реконфирмация [BUG-364](bugs/BUG-364-OPEN.md) (внешний URL воркера не фетчится). Остальные 20/24 id — все `.https.`, TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`",
+       "bugs": [
+        "BUG-642"
+       ]
       },
       {
        "id": "WPT-VENDOR-orientation-event",
        "title": "WPT: вендорить + прогнать категорию `orientation-event`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). датчик устройства (legacy DeviceOrientation)"
+       "note": "Скоуп: 🚫 (вне скоупа). датчик устройства (legacy DeviceOrientation). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root orientation-event --recursive`, ~7 мин, 27 отобранных id из 33 вендоренных файлов — 10 `-manual` раннер исключает) — **0/27 harness OK, 0/0 сабтестов**. 26/27 TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer` (все id `.https.`); 1/27 (`idlharness.https.window.html`) — реконфирмация [BUG-380](bugs/BUG-380-OPEN.md) (browsing context переиспользуется между тестами). API (`DeviceOrientationEvent`/`DeviceMotionEvent`) реально реализован как Phase 0 заглушка; сам прогон сигнала не дал (всё упирается в TLS-гэп раньше кода API), но живая проба через `--mcp-live-port` нашла реальный дефект шима — заведён [BUG-643](bugs/BUG-643-OPEN.md)",
+       "bugs": [
+        "BUG-643"
+       ]
       },
       {
        "id": "WPT-VENDOR-orientation-sensor",
        "title": "WPT: вендорить + прогнать категорию `orientation-sensor`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). датчик устройства"
+       "note": "Скоуп: 🚫 (вне скоупа). датчик устройства (Generic Sensor API). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root orientation-sensor --recursive`, ~7 мин 20 с, 16 id) — **1/16 harness OK, 0/2 сабтестов**. 15/16 TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer` (все `.https.`). Единственный не-`.https.` тест (`OrientationSensor_insecure_context.html`) реально исполнился и провалил оба сабтеста: `AbsoluteOrientationSensor`/`RelativeOrientationSensor` не должны быть видны в небезопасном контексте, но видны — прямая переподтверждение уже заведённого [BUG-399](bugs/BUG-399-OPEN.md) (`window.isSecureContext` захардкожен `true`, вся Generic Sensor family не гейтится). API реализован как Phase 0 заглушка (`crates/js/src/generic_sensor.rs`, нет реального железа). Новый баг не заведён — совпадает с уже описанным дефектом"
       },
       {
        "id": "WPT-VENDOR-page-lifecycle",
        "title": "WPT: вендорить + прогнать категорию `page-lifecycle`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root page-lifecycle --recursive`, ~1 мин, 5 id) — **0/5 harness OK, 0/3 сабтестов**. Три iframe-теста TIMEOUT — реконфирмация [BUG-480](bugs/BUG-480-OPEN.md) (`<iframe>` не имеет отдельного browsing context, `load` не срабатывает). `freeze.html` TIMEOUT — реконфирмация [BUG-359](bugs/BUG-359-OPEN.md) (`window.open` с относительным URL). `idlharness.html` TIMEOUT — известный невендоренный `/resources/idlharness.js`+`WebIDLParser.js` (класс `FileAPI`/`animation-worklet`/`netinfo`). Новых багов не заведено"
       },
       {
        "id": "WPT-VENDOR-page-visibility",
@@ -8920,6 +8926,20 @@
    "status": "open",
    "title": "`navigator.connection.downlinkMax` missing entirely (`undefined`) — the \"Phase 1 stub\" constructor sets `effectiveType`/`downlink`/`rtt`/`saveData`/`type` but n…",
    "component": "js (`crates/js/src/dom.rs:12828-12847` — `NetworkInformation` shim)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-642": {
+   "status": "open",
+   "title": "`new Notification()` never fires an `error` event when permission is not `\"granted\"` (denied/default, e.g. every non-secure-context construction) — the construc…",
+   "component": "js (`crates/js/src/notifications_bindings.rs` — `NOTIFICATIONS_SHIM`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-643": {
+   "status": "open",
+   "title": "The Phase 0 `deviceorientation`/`devicemotion` synthetic event only ever fires for the very first listener registered for a given type over the page's lifetime…",
+   "component": "js (`crates/js/src/device_sensors.rs` — `DEVICE_SENSORS_SHIM`)",
    "date": null,
    "debtor": false
   }
