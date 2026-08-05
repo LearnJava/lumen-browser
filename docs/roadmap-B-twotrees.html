@@ -3470,9 +3470,9 @@
       {
        "id": "WPT-VENDOR-private-click-measurement",
        "title": "WPT: вендорить + прогнать категорию `private-click-measurement`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). ad-tech (Privacy Sandbox)"
+       "note": "Скоуп: 🚫 (вне скоупа). ad-tech (Privacy Sandbox/WebKit PCM). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root private-click-measurement --recursive`, ~15 с, 1 id, не `.https.`) — **0/1 harness OK**. Единственный тест — `idlharness.window.html`, IDL-проверяющий `HTMLAnchorElement.attributionSourceId`; TIMEOUT не по TLS-гэпу, а по невендоренным `/resources/WebIDLParser.js`+`idlharness.js` (404, `idl_test is not defined`) — тот же документированный инфра-гэп, что у других idlharness-категорий. `grep -rli \"attributionSourceId\" crates/` — ноль совпадений: PCM-специфичный API не реализован (отличается от уже частично реализованного WICG Attribution Reporting API `attributionsrc` в `crates/js/src/attribution_reporting.rs` — разные спеки со схожим названием). Раз API целиком отсутствует по дизайну (скоуп 🚫) и харнесс не добежал по инфра-гэпу, а не по движковому дефекту, бага не заведено"
       },
       {
        "id": "WPT-VENDOR-proximity",
