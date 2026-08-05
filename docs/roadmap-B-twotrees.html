@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-05",
  "counts": {
-  "open": 283,
+  "open": 285,
   "fixed": 315,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 598,
+ "total_bugs": 600,
  "phases": [
   {
    "id": "P0",
@@ -8828,6 +8828,20 @@
    "component": "js (`crates/js/src/dom.rs:10864-10875` -- `HTMLImageElement.prototype` reflection), shell (`crates/shell/src/main.rs:4892-4904,10630-10635,5507-5512` -- decode call sites)",
    "date": null,
    "debtor": false
+  },
+  "BUG-631": {
+   "status": "open",
+   "title": "Градиентный фон не обрезается по `border-radius`: бокс со скруглением и `background: linear-gradient(...)` рисуется с квадратными углами, тогда как тот же бокс…",
+   "component": "paint (`display_list.rs::emit_background_image`) — дефект дисплей-листа, не бэкенда",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-632": {
+   "status": "open",
+   "title": "`scripts/scoped-test.sh` ложно краснеет на `-p lumen-network --lib`: `disk_cache_store_and_get_fresh` (`left: 2, right: 1`) и `disk_cache_no_store_not_persisted…",
+   "component": "network (тестовый хелпер `crates/network/src/http_cache.rs::tmp_db_path`) — дефект целиком в тестах, продакшен-код не затронут",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -9493,6 +9507,9 @@
   "network (резолвер)": [
    "BUG-304"
   ],
+  "network (тестовый хелпер `crates/network/src/http_cache.rs::tmp_db_path`) — дефект целиком в тестах, продакшен-код не затронут": [
+   "BUG-632"
+  ],
   "network+shell": [
    "BUG-169"
   ],
@@ -9567,6 +9584,9 @@
   ],
   "paint (`crates/engine/paint/src/renderer.rs` frame-skip/`content_generation`/page-band caching — подозреваемое место)": [
    "BUG-352"
+  ],
+  "paint (`display_list.rs::emit_background_image`) — дефект дисплей-листа, не бэкенда": [
+   "BUG-631"
   ],
   "paint (`display_list.rs::emit_inline_run`)": [
    "BUG-289"
