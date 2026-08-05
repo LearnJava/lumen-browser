@@ -2463,23 +2463,43 @@ function _lumen_element_child_nids(nid) {
 // satisfy `x instanceof HTMLCollection`. Not constructible from script.
 function HTMLCollection() { throw new TypeError('Illegal constructor'); }
 
-// `namedItem` semantics (DOM §4.2.10.2): first element in `ids` (tree order)
-// whose `id`, or failing that whose `name`, equals `name`; `null` otherwise.
+// BUG-328: the `name`-attribute half of `namedItem`/`ownKeys` (below) only
+// applies to elements in the HTML namespace (DOM §4.2.10.2) — an element
+// created with createElementNS(null-or-empty-string, ...) (`Namespace::None`,
+// no namespace at all) must not have its `name` attribute exposed as a
+// collection property, even though its `id` attribute still is (the id-pass
+// in both functions below is intentionally namespace-blind).
+function _lumen_is_html_namespace(nid) {
+    return _lumen_u2n(_lumen_get_namespace_uri(nid)) === 'http://www.w3.org/1999/xhtml';
+}
+
+// `namedItem` semantics (DOM §4.2.10.2): the first element in `ids` (tree
+// order) for which `id === name`, or (failing that on the SAME element) which
+// is in the HTML namespace and has `name attribute === name`; `null` if none
+// match. BUG-328: this must be a single tree-order scan checking both
+// conditions per element, not an id-pass over every element followed by a
+// separate name-pass — a two-pass structure would return an id-matching
+// element even when a different, earlier element already satisfies the
+// name condition for the same key.
 function _lumen_html_collection_named(ids, name) {
     for (var i = 0; i < ids.length; i++) {
         if (_lumen_u2n(_lumen_get_attr(ids[i], 'id')) === name) return _lumen_make_element(ids[i]);
-    }
-    for (var j = 0; j < ids.length; j++) {
-        if (_lumen_u2n(_lumen_get_attr(ids[j], 'name')) === name) return _lumen_make_element(ids[j]);
+        if (_lumen_is_html_namespace(ids[i]) && _lumen_u2n(_lumen_get_attr(ids[i], 'name')) === name) {
+            return _lumen_make_element(ids[i]);
+        }
     }
     return null;
 }
 
 // BUG-323: supported property names for `for-in`/`Object.getOwnPropertyNames`/
-// `hasOwnProperty` enumeration (DOM §4.2.10.2) — the `id`, then (failing that)
-// the `name` attribute of every element in the collection, in tree order,
-// ignoring later duplicates. Mirrors the id-pass-then-name-pass structure of
-// `_lumen_html_collection_named` above so the `ownKeys`/`getOwnPropertyDescriptor`
+// `hasOwnProperty` enumeration (DOM §4.2.10.2). A single tree-order pass over
+// `ids`, per element appending its `id` (if new), then — only for elements in
+// the HTML namespace (BUG-328) — its `name` attribute (if new): the same
+// per-element id-then-name order `_lumen_html_collection_named` above uses,
+// NOT an id-pass over every element followed by a separate name-pass (BUG-328:
+// that ordered a later element's `id` before an earlier element's `name`,
+// e.g. tree order `[name=bar, id=baz]` produced `['baz','bar']` instead of
+// the spec-required `['bar','baz']`), so the `ownKeys`/`getOwnPropertyDescriptor`
 // traps stay consistent with what `get`/`has`/`namedItem` already expose.
 function _lumen_html_collection_own_names(ids) {
     var names = [];
@@ -2490,8 +2510,10 @@ function _lumen_html_collection_own_names(ids) {
             names.push(v);
         }
     }
-    for (var i = 0; i < ids.length; i++) add(_lumen_u2n(_lumen_get_attr(ids[i], 'id')));
-    for (var j = 0; j < ids.length; j++) add(_lumen_u2n(_lumen_get_attr(ids[j], 'name')));
+    for (var i = 0; i < ids.length; i++) {
+        add(_lumen_u2n(_lumen_get_attr(ids[i], 'id')));
+        if (_lumen_is_html_namespace(ids[i])) add(_lumen_u2n(_lumen_get_attr(ids[i], 'name')));
+    }
     return names;
 }
 
@@ -4266,7 +4288,12 @@ var document = {
     // (native binding does not lowercase) — `linearGradient`/`clipPath` stay intact.
     createElementNS:   function(ns, qualifiedName) {
         var local = String(qualifiedName || '').replace(/^[^:]+:/, '');
-        var nid = _lumen_create_element_ns(String(ns), local);
+        // BUG-328: DOM §4.5 validate-and-extract normalizes a null/undefined
+        // namespace to no namespace — String(null) would otherwise send the
+        // literal 4-char string null down to _lumen_create_element_ns, which
+        // is neither the SVG URL nor empty and so falls into the HTML
+        // fallback (wrong namespace, silently).
+        var nid = _lumen_create_element_ns(ns === null || ns === undefined ? '' : String(ns), local);
         // See createElement above re: engine-specific overflow encoding.
         if (nid < 0) {
             throw new DOMException('DOM node limit exceeded', 'QuotaExceededError');
@@ -21512,6 +21539,54 @@ mod tests {
                     && !c.hasOwnProperty('missing')
             "#).unwrap();
             assert_eq!(has_own, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn bug_328_html_collection_name_exposure_requires_html_namespace() {
+            // BUG-328: `createElementNS(null-or-"", ...)` builds an element with NO
+            // namespace, previously collapsed into `Namespace::Html` on the Rust
+            // side — indistinguishable from a real HTML element. DOM §4.2.10.2
+            // only exposes an element's `name` attribute as an HTMLCollection
+            // property when the element is in the HTML namespace; `id` exposure is
+            // namespace-blind, and `ownKeys`'s order is a single tree-order pass
+            // (id-then-name per element), not an id-pass over every element
+            // followed by a separate name-pass. Mirrors
+            // `dom/nodes/Element-children.html` subtest 2 (`ownKeys`/enumeration
+            // order) exactly: `<img> <img id=foo> <img id=foo> <img name=bar>`
+            // plus two `createElementNS("", "img")` elements (id=baz, name=qux).
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(r#"
+                var _p = document.createElement('div');
+                document.body.appendChild(_p);
+                _p.appendChild(document.createElement('img'));
+                _p.appendChild(document.createElement('img')).id = 'foo';
+                _p.appendChild(document.createElement('img')).id = 'foo';
+                _p.appendChild(document.createElement('img')).setAttribute('name', 'bar');
+                var _baz = document.createElementNS('', 'img');
+                _baz.setAttribute('id', 'baz');
+                _p.appendChild(_baz);
+                var _qux = document.createElementNS('', 'img');
+                _qux.setAttribute('name', 'qux');
+                _p.appendChild(_qux);
+            "#).unwrap();
+            // `namespaceURI` of a no-namespace element is `null`, not the HTML
+            // namespace and not the empty string.
+            let ns_uri = rt.eval("_baz.namespaceURI").unwrap();
+            assert_eq!(ns_uri, lumen_core::JsValue::Null);
+            // `name` on a no-namespace element (`qux`) must not leak into
+            // `ownKeys`, and `id`-then-name per-element order must put `bar`
+            // (index 3) before `baz` (index 4), matching the WPT expectation.
+            let own_names = rt.eval("Object.getOwnPropertyNames(_p.children).join(',')").unwrap();
+            assert_eq!(
+                own_names,
+                lumen_core::JsValue::String("0,1,2,3,4,5,foo,bar,baz".into())
+            );
+            // `namedItem`/named `get` must not find the no-namespace element by
+            // its `name` attribute, but must still find it by `id`.
+            let named_by_name = rt.eval("_p.children.namedItem('qux')").unwrap();
+            assert_eq!(named_by_name, lumen_core::JsValue::Null);
+            let named_by_id = rt.eval("_p.children.namedItem('baz') === _baz").unwrap();
+            assert_eq!(named_by_id, lumen_core::JsValue::Bool(true));
         }
 
         #[test]

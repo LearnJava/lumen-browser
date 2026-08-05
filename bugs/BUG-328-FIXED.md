@@ -1,6 +1,6 @@
 # BUG-328: `HTMLCollection` — `.item()` возвращает элемент с `id` вместо ожидаемого IDless, и `qux`/порядок в `ownKeys` расходятся со спеком
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-05
 **Дата:** 2026-07-22
 **Компонент:** js (WEB_API_SHIM, `crates/js/src/dom.rs`, `_lumen_make_html_collection` /
 `_lumen_html_collection_own_names`)
@@ -85,3 +85,53 @@ tests\wpt\.venv\Scripts\python.exe tests\wpt\run_smoke.py --binary "$BIN" /dom/n
 
 или через новый единый лаунчер: `tests\wpt\run.ps1` (curated gate, без `--metadata`
 override увидит расхождение как unexpected) / `tests\wpt\run.ps1 -Report` для HTML-отчёта.
+
+## Резолюция (2026-08-05, P3)
+
+Сабтест 2 (`ownKeys`/`qux`/порядок) падал на ДВУХ независимых дефектах, а не
+одном:
+
+1. **Namespace-гэп (описан выше).** `Namespace` (`crates/engine/dom/src/lib.rs`)
+   не имел варианта «нет namespace» — `_lumen_create_element_ns` (`v8_runtime.rs`)
+   сворачивал любой не-SVG namespace (включая пустую строку) в `Namespace::Html`.
+   Добавлен `Namespace::None` (namespaceURI = `null`, DOM §4.5 «validate and
+   extract»); `_lumen_create_element_ns` теперь мапит `ns.is_empty()` →
+   `Namespace::None` вместо HTML-фолбэка. Заодно исправлена сама главная
+   `document.createElementNS` (`dom.rs`, объект `document` из ~4176 строки) —
+   она передавала `String(ns)` без нормализации `null`/`undefined` в `''`, из-за
+   чего `createElementNS(null, ...)` слал буквальную 4-символьную строку
+   `"null"` (уже не пустую, не SVG-URL → HTML-фолбэк) — тот же класс дефекта,
+   что и основной, только на другом входе. `_lumen_build_detached_document`'s
+   вариант (`createDocument`-детач-документы) такую нормализацию уже делал
+   правильно.
+2. **Структура прохода в `_lumen_html_collection_own_names`/
+   `_lumen_html_collection_named` (`dom.rs`).** Обе функции делали ДВА
+   отдельных прохода по всей коллекции — сперва все `id`, потом все `name` —
+   вместо одного прохода в document order, где для каждого элемента сначала
+   проверяется `id`, затем (только для HTML-namespace) `name`. DOM §4.2.10.2
+   определяет именно единый проход per-element; двухпроходная структура
+   давала верный НАБОР имён, но неверный ПОРЯДОК всякий раз, когда элемент с
+   `name` предшествует в дереве элементу с `id` (тестовое дерево: `name=bar`
+   на индексе 3, `id=baz` на индексе 4 — спек требует `['bar','baz']`, старый
+   код давал `['baz','bar']`, потому что все `id` собирались первым проходом
+   независимо от позиции в дереве). Даже после фикса namespace-гэпа (п.1)
+   сабтест 2 продолжал падать именно на этой перестановке, что и вскрыло
+   второй дефект. Обе функции переписаны на единый tree-order проход;
+   `_lumen_html_collection_named` заодно избавлен от того же структурного
+   бага (для одного `name`-параметра он был семантически безвреден на
+   данных этого теста, но некорректен в общем случае: элемент с более
+   ранним name-совпадением мог проигрывать более позднему по дереву
+   id-совпадению).
+
+Регресс-тест `bug_328_html_collection_name_exposure_requires_html_namespace`
+(`crates/js/src/dom.rs`, `dom::tests::v8_childnode_traversal`) воспроизводит
+ровно дерево `Element-children.html` (`<img> <img id=foo> <img id=foo>
+<img name=bar>` + два `createElementNS("", "img")`) и проверяет
+`namespaceURI === null`, точный порядок `ownKeys`, и что `namedItem` находит
+no-namespace элемент по `id`, но не по `name`.
+
+`dom/nodes/Element-children.html.ini`: оба сабтеста → `expected: PASS`. Живой
+прогон подтверждён: `run_smoke.py` (одиночный тест) 2/2 subtests OK, весь
+curated gate `run_suite.py` — 61/61 checks OK, 0 unexpected (без регрессий в
+остальных 19 `dom/nodes` тестах). `graphic_tests/dump_golden.py` — 12/12 без
+изменений (чисто JS/DOM-семантика, дисплей-лист не затронут).
