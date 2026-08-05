@@ -1,6 +1,6 @@
 # BUG-632 — `DiskHttpCache`-тесты валят гейт из-за протухших temp-БД (переиспользование PID)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-05
 **Компонент:** network (`crates/network/src/http_cache.rs`, тестовый хелпер `tmp_db_path`)
 **Найден:** 2026-08-05, P3, на гейте `scripts/scoped-test.sh` в ходе BUG-277 среза 6
 
@@ -66,3 +66,39 @@ cargo test -p lumen-network --lib     # 2119 passed; 0 failed
 Ложно-красный обязательный гейт: следующий разработчик увидит два провала в
 `lumen-network` поверх своего изменения в другом крейте и потратит время на
 разбор. Продакшен-код не затронут — дефект целиком в тестовом хелпере.
+
+## Как исправлено
+
+Реализован вариант 2 из «Как чинить» (RAII-guard), скомбинированный с
+вариантом 1 (уборка чужого мусора перед выдачей пути) — `tmp_db_path()`
+заменён на `TmpDbGuard` в `mod tests`:
+
+```rust
+struct TmpDbGuard(PathBuf);
+
+impl TmpDbGuard {
+    fn new() -> Self {
+        static CTR: AtomicU64 = AtomicU64::new(0);
+        let n = CTR.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir()
+            .join(format!("lumen_test_http_cache_{}_{}.db", std::process::id(), n));
+        let _ = std::fs::remove_file(&path); // подчистить чужой мусор по этому пути
+        Self(path)
+    }
+}
+
+impl Drop for TmpDbGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+```
+
+`Drop` выполняется и при размотке стека на панике (тестовый харнесс не
+использует `panic=abort`), поэтому файл больше не может пережить упавший
+тест — самоподдерживающийся цикл разорван. Все 7 тестов `disk_cache_*`
+переведены на `TmpDbGuard`, ручные `std::fs::remove_file` в хвостах убраны.
+
+**Проверка:** `rm -f "$TEMP"/lumen_test_http_cache_*.db` (разово подчистить
+875 старых файлов) → `cargo test -p lumen-network --lib` — 2119/2119 зелёных,
+`cargo clippy -p lumen-network --all-targets -- -D warnings` чист.
