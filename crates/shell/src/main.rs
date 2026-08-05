@@ -11929,30 +11929,6 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             }
         };
 
-        let mut renderer = match backend_factory::create_backend(
-            window.clone(),
-            INTER_FONT.to_vec(),
-            self.target_color_space(),
-        ) {
-            Ok(r) => r,
-            Err(err) => {
-                eprintln!("Не удалось инициализировать рендер: {err}");
-                event_loop.exit();
-                return;
-            }
-        };
-
-        // Заливаем декодированные ранее картинки в GPU. Take, чтобы освободить
-        // память Vec (изображение копируется в wgpu Texture внутри register_image).
-        for (src, image) in self.pending_images.drain(..) {
-            // BUG-272 срез 17: `image` — Arc; register shares it, raw_images
-            // holds no separate copy.
-            if let Err(err) = renderer.register_image(src.clone(), Arc::clone(&image)) {
-                eprintln!("Картинка {src} не зарегистрирована: {err}");
-            }
-            self.image_cache.insert(lumen_image::ImageKey::new(&src), (*image).clone());
-        }
-
         // CSS Media Queries L5 §5.2 — read the OS `prefers-color-scheme` once the
         // window exists. winit resolves it per platform (Win32 immersive dark mode,
         // macOS NSAppearance, Linux portal/XSettings); `None` → light fallback.
@@ -11975,7 +11951,83 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             }
         }
 
-        self.window = Some(window);
+        self.window = Some(window.clone());
+
+        // Сбрасываем состояние предыдущего streaming-цикла — новая страница.
+        self.preload_dispatched.clear();
+        self.stream_images_requested.clear();
+        self.stream_sheet = lumen_css_parser::Stylesheet::default();
+        self.stream_layout_seeded = false;
+        // Record navigation start for the initial streaming load.
+        self.nav_start = Some(std::time::Instant::now());
+        // A fresh navigation supersedes any prior settled error (BUG-308).
+        self.load_failed = false;
+        self.load_generation = self.load_generation.wrapping_add(1);
+
+        // BUG-274: `backend_factory::create_backend` below can take multiple
+        // seconds on wgpu/DX12 (pipeline compilation, see BUG-406) and runs
+        // before `start_streaming_load`, so network fetch/HTML parsing doesn't
+        // begin until the GPU backend is ready — the two costs are fully
+        // serialized instead of overlapping. Moving `start_streaming_load`
+        // here (before backend creation) looked like a free win — `HtmlChunk`'s
+        // `paint_partial_dom` already no-ops while `self.renderer` is `None` —
+        // but measured **worse**: `LUMEN_FRAME_LOG=1` component timestamps on
+        // `graphic_tests/1000000-final.html` (dev-release, interleaved A/B on
+        // one binary) showed the local-file streaming thread, which normally
+        // finishes in ~70ms with a quiet CPU, took ~1.9s when run concurrently
+        // with `init_pipelines` — the DX12 driver keeps compiling pipelines on
+        // background threads well after `create_backend` returns (the same
+        // "call returns early, driver finishes later" hazard already on record
+        // in BUG-406/`docs/perf-method.md` §"Сумма self-time…"), and that
+        // contends for CPU with the streaming thread's parsing/scanning work.
+        // Net effect on this page: `RenderDone` (true final page, not just a
+        // streaming snapshot) landed ~2.4s in with early-stream vs ~3.6s
+        // without measured once, but the OLD ordering's own "first non-empty
+        // frame" number is a mid-stream partial snapshot (RenderDone arrives
+        // 1.4s *after* it), not the final page, so the two orderings aren't
+        // comparable on that metric alone and this needs more rounds before
+        // trusting either direction. Left as an opt-in lever (`LUMEN_EARLY_STREAM=1`)
+        // for whoever picks this back up, default stays the safe (measured,
+        // battle-tested) ordering — see the "срез" write-up in BUG-274-OPEN.md.
+        let early_stream = std::env::var_os("LUMEN_EARLY_STREAM").is_some();
+        if early_stream {
+            self.start_streaming_load(self.load_generation);
+            if lumen_paint::frame_log_enabled()
+                && let Some(ms) = bench_frames::since_process_start_ms()
+            {
+                eprintln!("[frame:cold-start] streaming started (pre-backend) at {ms:.0}ms");
+            }
+        }
+
+        let mut renderer = match backend_factory::create_backend(
+            window.clone(),
+            INTER_FONT.to_vec(),
+            self.target_color_space(),
+        ) {
+            Ok(r) => r,
+            Err(err) => {
+                eprintln!("Не удалось инициализировать рендер: {err}");
+                event_loop.exit();
+                return;
+            }
+        };
+        if lumen_paint::frame_log_enabled()
+            && let Some(ms) = bench_frames::since_process_start_ms()
+        {
+            eprintln!("[frame:cold-start] backend ready at {ms:.0}ms");
+        }
+
+        // Заливаем декодированные ранее картинки в GPU. Take, чтобы освободить
+        // память Vec (изображение копируется в wgpu Texture внутри register_image).
+        for (src, image) in self.pending_images.drain(..) {
+            // BUG-272 срез 17: `image` — Arc; register shares it, raw_images
+            // holds no separate copy.
+            if let Err(err) = renderer.register_image(src.clone(), Arc::clone(&image)) {
+                eprintln!("Картинка {src} не зарегистрирована: {err}");
+            }
+            self.image_cache.insert(lumen_image::ImageKey::new(&src), (*image).clone());
+        }
+
         self.renderer = Some(renderer);
         // CC-4: first chrome layout pass, now that the renderer knows the
         // window's initial size.
@@ -11988,19 +12040,14 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             self.vertical_tabs.visible = true;
         }
 
-        // Запустить background-загрузку сразу после создания окна —
-        // первый кадр (пустой) уже виден, пока идёт fetch/parse.
-        // Сбрасываем состояние предыдущего streaming-цикла — новая страница.
-        self.preload_dispatched.clear();
-        self.stream_images_requested.clear();
-        self.stream_sheet = lumen_css_parser::Stylesheet::default();
-        self.stream_layout_seeded = false;
-        // Record navigation start for the initial streaming load.
-        self.nav_start = Some(std::time::Instant::now());
-        // A fresh navigation supersedes any prior settled error (BUG-308).
-        self.load_failed = false;
-        self.load_generation = self.load_generation.wrapping_add(1);
-        self.start_streaming_load(self.load_generation);
+        if !early_stream {
+            self.start_streaming_load(self.load_generation);
+            if lumen_paint::frame_log_enabled()
+                && let Some(ms) = bench_frames::since_process_start_ms()
+            {
+                eprintln!("[frame:cold-start] streaming started (post-backend) at {ms:.0}ms");
+            }
+        }
     }
 
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: LoadEvent) {
@@ -12103,6 +12150,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // slow earlier load would render its page over the newer one.
                 if generation != self.load_generation { return; }
                 eprintln!("Streaming завершён, финальный pipeline (off-thread)");
+                if lumen_paint::frame_log_enabled()
+                    && let Some(ms) = bench_frames::since_process_start_ms()
+                {
+                    eprintln!("[frame:cold-start] LoadDone (spawning render_bytes) at {ms:.0}ms");
+                }
                 self.stream_builder = None;
                 self.stream_sheet = lumen_css_parser::Stylesheet::default();
                 let viewport = self.renderer.as_ref().map_or_else(
@@ -12173,6 +12225,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // BUG-171 этап 2: устаревшую навигацию отбрасываем — её страница и
                 // JS-хэндл дропаются вместе с `outcome` (JS-поток завершается).
                 if generation != self.load_generation { return; }
+                if lumen_paint::frame_log_enabled()
+                    && let Some(ms) = bench_frames::since_process_start_ms()
+                {
+                    eprintln!("[frame:cold-start] RenderDone received on UI thread at {ms:.0}ms");
+                }
                 let RenderOutcome { result, preload_dispatched } = *outcome;
                 self.preload_dispatched = preload_dispatched;
                 match result {

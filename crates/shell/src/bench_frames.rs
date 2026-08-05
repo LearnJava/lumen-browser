@@ -48,6 +48,14 @@ pub fn mark_process_start() {
     let _ = PROCESS_START.set(std::time::Instant::now());
 }
 
+/// Milliseconds since [`mark_process_start`], or `None` if it was never called
+/// (e.g. in unit tests that construct `Lumen` directly). Used by ad-hoc
+/// `LUMEN_FRAME_LOG` cold-start diagnostics (BUG-274) that need a timestamp
+/// mid-`resumed()`, not just the single first-frame line below.
+pub fn since_process_start_ms() -> Option<f64> {
+    PROCESS_START.get().map(|t0| t0.elapsed().as_secs_f64() * 1000.0)
+}
+
 /// Prints `launch -> first non-empty frame` once per process.
 ///
 /// Counterpart of the Chromium baseline's `launch->FCP` (Paint Timing API +
