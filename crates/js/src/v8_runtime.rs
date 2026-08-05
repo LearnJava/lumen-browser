@@ -413,6 +413,77 @@ pub fn user_agent_override_script(ua: &str) -> String {
     format!("navigator.userAgent = \"{escaped}\";")
 }
 
+/// Process-global `Intl`/`Date` timezone override (WebDriver BiDi
+/// `browser.setTimezoneOverride`, BUG-295). `None` = host timezone.
+///
+/// Same process-global rationale as [`GLOBAL_UA_OVERRIDE`] (fresh
+/// `V8JsRuntime` per navigation, one runtime per process).
+static GLOBAL_TIMEZONE_OVERRIDE: Mutex<Option<String>> = Mutex::new(None);
+
+/// Set (or clear with `None`) the process-global IANA timezone override.
+/// Consulted by every subsequent `install_dom` call (new navigation); does
+/// **not** retroactively affect an already-loaded page — see
+/// [`timezone_override_script`] for re-injecting into the current page.
+pub fn set_global_timezone_override(timezone_id: Option<String>) {
+    if let Ok(mut guard) = GLOBAL_TIMEZONE_OVERRIDE.lock() {
+        *guard = timezone_id;
+    }
+}
+
+/// The active timezone override, if any.
+fn global_timezone_override() -> Option<String> {
+    GLOBAL_TIMEZONE_OVERRIDE.lock().ok().and_then(|g| g.clone())
+}
+
+/// Build the JS snippet that sets the global timezone-override marker
+/// (`globalThis.__lumen_timezone_override`) and, the first time it runs on a
+/// given context, wraps `Intl.DateTimeFormat` so a construction without an
+/// explicit `options.timeZone` picks up the marker (BUG-295).
+///
+/// Two `Intl` surfaces exist in this codebase (`crate::intl_bindings`'s
+/// pure-JS ECMA-402 shim, active when the `v8` crate build lacks ICU i18n
+/// data, defers to a native `Intl` otherwise) — the wrapper here covers
+/// **both**: on a build with a native `Intl.DateTimeFormat` (the common
+/// case; V8's bundled ICU already has full IANA tzdata, so an override like
+/// `"Pacific/Kiritimati"` resolves and formats correctly, no offset table
+/// needed on the Rust side) it wraps that constructor directly; the shim
+/// path additionally reads the same marker itself
+/// (`intl_bindings.rs::DateTimeFormat`'s `this._tz` line) so the wrap here
+/// is redundant-but-harmless there. The wrap is idempotent
+/// (`Intl.DateTimeFormat.__lumenPatched`) and reads the marker dynamically
+/// on each call — re-running just this script (no navigation) to change the
+/// override doesn't need a re-wrap, only the assignment line takes effect.
+///
+/// Explicit `options.timeZone` from calling JS always wins (spec behaviour
+/// — a caller who names a zone should get exactly that zone, not a
+/// session-wide emulation override); only the *default* (no `timeZone` key)
+/// case is redirected.
+pub fn timezone_override_script(timezone_id: &str) -> String {
+    let escaped = timezone_id.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");
+    format!(
+        r#"(function() {{
+  globalThis.__lumen_timezone_override = "{escaped}";
+  if (typeof Intl !== 'undefined' && Intl.DateTimeFormat && !Intl.DateTimeFormat.__lumenPatched) {{
+    var _Orig = Intl.DateTimeFormat;
+    function LumenDateTimeFormat(locales, options) {{
+      var opts = options ? Object.assign({{}}, options) : {{}};
+      if (!('timeZone' in opts) && globalThis.__lumen_timezone_override) {{
+        opts.timeZone = globalThis.__lumen_timezone_override;
+      }}
+      if (!(this instanceof LumenDateTimeFormat)) return new LumenDateTimeFormat(locales, opts);
+      return new _Orig(locales, opts);
+    }}
+    LumenDateTimeFormat.prototype = _Orig.prototype;
+    LumenDateTimeFormat.__lumenPatched = true;
+    if (_Orig.supportedLocalesOf) {{
+      LumenDateTimeFormat.supportedLocalesOf = _Orig.supportedLocalesOf.bind(_Orig);
+    }}
+    Intl.DateTimeFormat = LumenDateTimeFormat;
+  }}
+}})();"#
+    )
+}
+
 impl V8JsRuntime {
     /// Create a new V8 runtime on a dedicated thread.
     pub fn new() -> Result<Self, JsError> {
@@ -1069,6 +1140,8 @@ impl V8JsRuntime {
         let page_url = page_url.to_owned();
         // BUG-295: session-level `navigator.userAgent` override, if any.
         let ua_override = global_user_agent_override();
+        // BUG-295: session-level `Intl`/`Date` timezone override, if any.
+        let timezone_override = global_timezone_override();
 
         self.run(move |inner| {
             // ESM (S12b-23): fallback base URL the module resolver uses for
@@ -4299,6 +4372,32 @@ impl V8JsRuntime {
                 let _ = result;
             }
 
+            // BUG-295 (`browser.setTimezoneOverride`): a plain global
+            // assignment, order-independent w.r.t. the `Intl` shim (installed
+            // later, outside this closure — see `intl_bindings::install_intl_bindings_v8`
+            // call site) since the shim reads the marker lazily at
+            // `DateTimeFormat` construction time, not at shim-install time.
+            if let Some(tz) = timezone_override {
+                v8::tc_scope!(tc, scope);
+                let js = timezone_override_script(&tz);
+                let src = v8::String::new(tc, &js)
+                    .ok_or_else(|| JsError::Runtime("OOM: timezone override script".into()))?;
+                let compiled = v8::Script::compile(tc, src, None);
+                if tc.has_caught() {
+                    let exc = tc.exception().unwrap();
+                    return Err(v8_err(tc, exc));
+                }
+                let compiled = compiled.ok_or_else(|| {
+                    JsError::Runtime("timezone override script compile returned None".into())
+                })?;
+                let result = compiled.run(tc);
+                if tc.has_caught() {
+                    let exc = tc.exception().unwrap();
+                    return Err(v8_err(tc, exc));
+                }
+                let _ = result;
+            }
+
             Ok(())
         })?;
 
@@ -5515,6 +5614,57 @@ mod tests {
         let rt = runtime_with_dom(make_doc(), "");
         let ua = rt.eval("navigator.userAgent").unwrap();
         assert_ne!(ua, JsValue::String("LumenBug295TestUA/1.0".into()));
+    }
+
+    /// Serializes the `timezone_override_*` tests below against each other —
+    /// same rationale as [`UA_OVERRIDE_TEST_LOCK`] (shared process-global,
+    /// `GLOBAL_TIMEZONE_OVERRIDE`).
+    static TIMEZONE_OVERRIDE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    /// BUG-295 (`browser.setTimezoneOverride`): a `set_global_timezone_
+    /// override` call before `install_dom` must make
+    /// `Intl.DateTimeFormat().resolvedOptions().timeZone` reflect it —
+    /// exercises the exact mechanism the shell's live-window
+    /// `AutomationCommand::SetTimezone` handler relies on for the *next
+    /// navigation* half of the fix, without needing a live winit window.
+    #[test]
+    fn timezone_override_applies_at_install_dom() {
+        let _guard = TIMEZONE_OVERRIDE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_global_timezone_override(Some("Pacific/Kiritimati".to_owned()));
+        let rt = runtime_with_dom(make_doc(), "");
+        let tz = rt.eval("Intl.DateTimeFormat().resolvedOptions().timeZone").unwrap();
+        set_global_timezone_override(None);
+        assert_eq!(tz, JsValue::String("Pacific/Kiritimati".into()));
+    }
+
+    /// Without an override, `resolvedOptions().timeZone` keeps whatever the
+    /// unwrapped `Intl.DateTimeFormat` would have reported (host timezone on
+    /// a native-ICU build, `'UTC'` on the pure-JS shim fallback) — proves the
+    /// override is opt-in, not always-on. Doesn't assert the exact value
+    /// (host-dependent under native ICU), only that our override string
+    /// isn't leaking in from a previous test run.
+    #[test]
+    fn timezone_override_is_noop_when_unset() {
+        let _guard = TIMEZONE_OVERRIDE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_global_timezone_override(None);
+        let rt = runtime_with_dom(make_doc(), "");
+        let tz = rt.eval("Intl.DateTimeFormat().resolvedOptions().timeZone").unwrap();
+        assert_ne!(tz, JsValue::String("Pacific/Kiritimati".into()));
+    }
+
+    /// An explicit `options.timeZone` must win over the BiDi override (spec
+    /// behaviour — a caller who names a zone explicitly should get exactly
+    /// that zone back, not a session-wide emulation override).
+    #[test]
+    fn timezone_override_does_not_win_over_explicit_option() {
+        let _guard = TIMEZONE_OVERRIDE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_global_timezone_override(Some("Pacific/Kiritimati".to_owned()));
+        let rt = runtime_with_dom(make_doc(), "");
+        let tz = rt
+            .eval("Intl.DateTimeFormat('en-US', {timeZone: 'UTC'}).resolvedOptions().timeZone")
+            .unwrap();
+        set_global_timezone_override(None);
+        assert_eq!(tz, JsValue::String("UTC".into()));
     }
 
     #[test]

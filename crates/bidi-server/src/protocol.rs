@@ -1435,9 +1435,23 @@ fn session_set_locale(id: i64, params: &JsonValue, state: &mut BidiState) -> Dis
 ///
 /// Параметр `timezoneId` — IANA-идентификатор (напр., `"America/New_York"`, `"Europe/Moscow"`).
 /// Хранится в [`BidiState::timezone_override`] и читается через [`BidiState::timezone()`].
+///
+/// BUG-295: с живым окном (`--bidi-port` + открытое окно) также толкает
+/// значение в [`LiveWindowSession::set_timezone`] — реально сдвигает
+/// `Intl.DateTimeFormat().resolvedOptions().timeZone` живой страницы, не
+/// только in-memory bookkeeping.
 fn browser_set_timezone(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
     state.timezone_override =
         params.get("timezoneId").and_then(|v| v.as_str()).map(str::to_owned);
+    if let Some(live) = &mut state.live
+        && let Err(e) = live.set_timezone(state.timezone_override.as_deref())
+    {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "unknown error",
+            &format!("setTimezoneOverride: {e}"),
+        ));
+    }
     DispatchResult::single(make_success(id, empty_obj()))
 }
 

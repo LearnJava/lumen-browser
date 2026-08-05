@@ -328,6 +328,18 @@ pub trait BrowserSession {
         Ok(())
     }
 
+    /// Override the `Intl`/`Date` timezone (WebDriver BiDi
+    /// `browser.setTimezoneOverride`, BUG-295). `Some(id)` is an IANA
+    /// timezone identifier (e.g. `"America/New_York"`); `None` restores the
+    /// host timezone.
+    ///
+    /// Default impl is a no-op (`Ok(())`), same rationale as [`set_offline`](
+    /// BrowserSession::set_offline); [`LiveWindowSession`] overrides it for
+    /// real effect.
+    fn set_timezone(&mut self, _timezone_id: Option<&str>) -> Result<()> {
+        Ok(())
+    }
+
     // ── Deterministic mode (8F) ──────────────────────────────────────────────
 
     /// Управление режимом часов `Date.now()` / `performance.now()` (8F.1).

@@ -16,7 +16,12 @@
 //! * [`Intl.DateTimeFormat`] — `year`/`month`/`day`/`weekday`/`hour`/`minute`/
 //!   `second` components with locale month and weekday names; default short date
 //!   (`M/D/YYYY` for `en-US`, `DD.MM.YYYY` for `ru-RU`). `hour12` defaults to
-//!   `true` for `en-US`, `false` for `ru-RU`.
+//!   `true` for `en-US`, `false` for `ru-RU`. `resolvedOptions().timeZone`
+//!   reports an explicit `options.timeZone`, else the BiDi
+//!   `browser.setTimezoneOverride` global marker (BUG-295), else `'UTC'` — a
+//!   label only, `format()`'s date-field math is not itself timezone-shifted
+//!   (no tzdata backing this pure-JS shim; see `crates/js/src/v8_runtime.rs`'s
+//!   `timezone_override_script` doc for the accepted scope).
 //! * [`Intl.Collator`] — locale-aware `compare`, placing Cyrillic `ё` after `е`
 //!   for `ru-RU` and offering case-insensitive (`sensitivity: 'base'`) and
 //!   numeric (`numeric: true`) collation.
@@ -202,6 +207,10 @@ const INTL_SHIM: &str = r#"(function(global) {
     if (!(this instanceof DateTimeFormat)) return new DateTimeFormat(locales, options);
     this._locale = resolveLocale(locales);
     this._opt = options || null;
+    // BUG-295 (`browser.setTimezoneOverride`): an explicit `options.timeZone`
+    // always wins (spec behaviour); otherwise fall back to the BiDi-set
+    // global marker (`v8_runtime::timezone_override_script`), then 'UTC'.
+    this._tz = (options && options.timeZone) || global.__lumen_timezone_override || 'UTC';
   }
   DateTimeFormat.prototype.format = function(date) {
     var d = (date == null) ? new Date() : (date instanceof Date ? date : new Date(date));
@@ -284,7 +293,7 @@ const INTL_SHIM: &str = r#"(function(global) {
   };
   DateTimeFormat.prototype.resolvedOptions = function() {
     var r = { locale: this._locale, calendar: 'gregory', numberingSystem: 'latn',
-              timeZone: 'UTC' };
+              timeZone: this._tz };
     if (this._opt) for (var k in this._opt) r[k] = this._opt[k];
     return r;
   };
