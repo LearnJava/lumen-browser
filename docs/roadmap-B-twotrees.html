@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-05",
  "counts": {
-  "open": 304,
+  "open": 305,
   "fixed": 328,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 632,
+ "total_bugs": 633,
  "phases": [
   {
    "id": "P0",
@@ -3583,9 +3583,12 @@
       {
        "id": "WPT-VENDOR-screen-capture",
        "title": "WPT: вендорить + прогнать категорию `screen-capture`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). медиа-конвейер (getDisplayMedia)"
+       "note": "Скоуп: 🚫 (вне скоупа). медиа-конвейер (getDisplayMedia). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root screen-capture --recursive`, ~9 мин 30 с, 15 id) — **0/15 harness OK**. Все 15 — `.https.`, все TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`, ни один не исполнился. `getDisplayMedia()` реально реализован (Phase 1 PH3-17, `crates/js/src/screen_capture.rs` + `media_devices.rs`) — живая проба (`--mcp-live-port`) нашла [BUG-666](bugs/BUG-666-OPEN.md): метод не проверяет ни аргумент `constraints` (резолвится на `{video:false,audio:false}`/`{}`/без аргументов, спека требует `TypeError`), ни наличие пользовательского жеста (резолвится без единого клика, спека требует `InvalidStateError`)",
+       "bugs": [
+        "BUG-666"
+       ]
       },
       {
        "id": "WPT-VENDOR-screen-details",
@@ -9140,6 +9143,13 @@
    "status": "open",
    "title": "`TaskSignal.any()` static composer doesn't exist at all (`TypeError: TaskSignal.any is not a function`, 10 of 21 unique failures); `TaskController.setPriority()…",
    "component": "js (`crates/js/src/scheduler.rs` — Scheduler API Phase 0 shim)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-666": {
+   "status": "open",
+   "title": "`navigator.mediaDevices.getDisplayMedia()` never validates its `constraints` argument (resolves for no-args/`{}`/`{video:false,audio:false}`, spec requires `Typ…",
+   "component": "js (`crates/js/src/media_devices.rs:326`–`386` — `getDisplayMedia` shim)",
    "date": null,
    "debtor": false
   }
