@@ -1021,27 +1021,46 @@ mod tests {
 
     // ── DiskHttpCache tests ───────────────────────────────────────────────────
 
-    /// Returns a temp path that won't collide between parallel test runs.
-    fn tmp_db_path() -> PathBuf {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static CTR: AtomicU64 = AtomicU64::new(0);
-        let n = CTR.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir()
-            .join(format!("lumen_test_http_cache_{}_{}.db", std::process::id(), n))
+    /// RAII guard for a test-only temp SQLite DB file.
+    ///
+    /// Removes the file on drop, including during panic unwinding — unlike a bare
+    /// `remove_file` at the tail of a test body, this can't leak when the test
+    /// itself fails (BUG-632: a leaked file from a PID-reused, panicked prior run
+    /// was silently inherited as non-empty by the next `DiskHttpCache::new` at the
+    /// same path, causing that run to fail too — self-perpetuating). Also removes
+    /// any pre-existing file at the chosen path before handing it out, so garbage
+    /// left over from before this guard existed can't collide either.
+    struct TmpDbGuard(PathBuf);
+
+    impl TmpDbGuard {
+        fn new() -> Self {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static CTR: AtomicU64 = AtomicU64::new(0);
+            let n = CTR.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir()
+                .join(format!("lumen_test_http_cache_{}_{}.db", std::process::id(), n));
+            let _ = std::fs::remove_file(&path);
+            Self(path)
+        }
+    }
+
+    impl Drop for TmpDbGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
     }
 
     #[test]
     fn disk_cache_new_creates_db() {
-        let path = tmp_db_path();
-        let cache = DiskHttpCache::new(&path).unwrap();
+        let tmp = TmpDbGuard::new();
+        let cache = DiskHttpCache::new(&tmp.0).unwrap();
         assert_eq!(cache.len(), 0);
-        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn disk_cache_store_and_get_fresh() {
-        let path = tmp_db_path();
-        let cache = DiskHttpCache::new(&path).unwrap();
+        let tmp = TmpDbGuard::new();
+        let cache = DiskHttpCache::new(&tmp.0).unwrap();
         let headers = vec![
             ("Cache-Control".to_owned(), "max-age=3600".to_owned()),
             ("ETag".to_owned(), "\"disk-v1\"".to_owned()),
@@ -1053,23 +1072,21 @@ mod tests {
         assert!(snap.is_fresh, "entry with max-age=3600 should be fresh");
         assert_eq!(snap.body, b"body{}");
         assert_eq!(snap.etag.as_deref(), Some("\"disk-v1\""));
-        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn disk_cache_no_store_not_persisted() {
-        let path = tmp_db_path();
-        let cache = DiskHttpCache::new(&path).unwrap();
+        let tmp = TmpDbGuard::new();
+        let cache = DiskHttpCache::new(&tmp.0).unwrap();
         let headers = vec![("Cache-Control".to_owned(), "no-store".to_owned())];
         cache.store("https://example.com/secret", 200, b"data".to_vec(), &headers);
         assert_eq!(cache.len(), 0);
-        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn disk_cache_stale_entry_not_fresh() {
-        let path = tmp_db_path();
-        let cache = DiskHttpCache::new(&path).unwrap();
+        let tmp = TmpDbGuard::new();
+        let cache = DiskHttpCache::new(&tmp.0).unwrap();
         // max-age=0 → expires immediately
         let headers = vec![
             ("Cache-Control".to_owned(), "max-age=0".to_owned()),
@@ -1079,13 +1096,12 @@ mod tests {
         let snap = cache.get("https://example.com/stale").unwrap();
         assert!(!snap.is_fresh, "max-age=0 should not be fresh");
         assert!(snap.conditional_headers.contains("If-None-Match"));
-        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn disk_cache_revalidate_updates_etag() {
-        let path = tmp_db_path();
-        let cache = DiskHttpCache::new(&path).unwrap();
+        let tmp = TmpDbGuard::new();
+        let cache = DiskHttpCache::new(&tmp.0).unwrap();
         let headers = vec![
             ("Cache-Control".to_owned(), "max-age=0".to_owned()),
             ("ETag".to_owned(), "\"v1\"".to_owned()),
@@ -1101,36 +1117,33 @@ mod tests {
         let snap = cache.get("https://example.com/data.json").unwrap();
         assert_eq!(snap.etag.as_deref(), Some("\"v2\""), "ETag should be updated");
         assert!(snap.is_fresh, "should be fresh after revalidation with max-age=600");
-        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn disk_cache_survives_reopen() {
-        let path = tmp_db_path();
+        let tmp = TmpDbGuard::new();
         {
-            let cache = DiskHttpCache::new(&path).unwrap();
+            let cache = DiskHttpCache::new(&tmp.0).unwrap();
             let headers = vec![("Cache-Control".to_owned(), "max-age=3600".to_owned())];
             cache.store("https://example.com/persistent", 200, b"data".to_vec(), &headers);
             assert_eq!(cache.len(), 1);
         } // cache is dropped, connection closed
 
-        let cache2 = DiskHttpCache::new(&path).unwrap();
+        let cache2 = DiskHttpCache::new(&tmp.0).unwrap();
         assert_eq!(cache2.len(), 1, "entry should persist across reopen");
         let snap = cache2.get("https://example.com/persistent").unwrap();
         assert_eq!(snap.body, b"data");
         assert!(snap.is_fresh);
-        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn disk_cache_fragment_stripped() {
-        let path = tmp_db_path();
-        let cache = DiskHttpCache::new(&path).unwrap();
+        let tmp = TmpDbGuard::new();
+        let cache = DiskHttpCache::new(&tmp.0).unwrap();
         let headers = vec![("Cache-Control".to_owned(), "max-age=60".to_owned())];
         cache.store("https://example.com/page#section", 200, b"content".to_vec(), &headers);
         assert!(cache.get("https://example.com/page").is_some());
         assert!(cache.get("https://example.com/page#other").is_some());
-        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
