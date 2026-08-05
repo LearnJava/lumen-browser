@@ -5135,7 +5135,16 @@ pub enum ParsedGradient {
     /// clockwise from "to top" (0° = top, 90° = right, 180° = bottom).
     Linear {
         /// Gradient line angle in CSS degrees (0° = to top, 90° = to right).
+        /// For a `to <corner>` keyword this is only the square-box (45/135/
+        /// 225/315°) placeholder — `corner` carries the keyword so a paint-time
+        /// consumer that knows the actual box size can resolve the true,
+        /// aspect-ratio-dependent angle via [`GradientCorner::angle_deg`].
         angle_deg: f32,
+        /// `Some` when the direction was written as `to <corner>` (CSS Images
+        /// L3 §3.1) rather than an explicit `<angle>` — the true gradient-line
+        /// angle for a corner keyword depends on the gradient box's aspect
+        /// ratio, which is not known at style-parse time.
+        corner: Option<GradientCorner>,
         stops: Vec<GradientStop>,
         /// True when the original function was `repeating-linear-gradient`.
         repeating: bool,
@@ -5171,6 +5180,51 @@ pub enum ParsedGradient {
     },
     /// Fallback for any future gradient variant not yet rendered.
     Unknown(String),
+}
+
+/// CSS Images L3 §3.1 — `to <corner>` keyword of a `linear-gradient`'s
+/// direction. Unlike the four side keywords (`to top`/`to right`/…), a corner
+/// keyword's true gradient-line angle depends on the gradient box's aspect
+/// ratio: the line is defined to pass exactly through the two opposite
+/// corners, so on a non-square box it tilts away from the naive 45°
+/// diagonal toward whichever side the box is longer along.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GradientCorner {
+    /// `to top right` / `to right top`.
+    TopRight,
+    /// `to bottom right` / `to right bottom`.
+    BottomRight,
+    /// `to bottom left` / `to left bottom`.
+    BottomLeft,
+    /// `to top left` / `to left top`.
+    TopLeft,
+}
+
+impl GradientCorner {
+    /// Resolves the keyword to a true gradient-line angle (CSS degrees,
+    /// 0° = to top, clockwise) for a box of the given size.
+    ///
+    /// Per CSS Images L3 §3.1 the gradient line is defined to be
+    /// *perpendicular* to the diagonal connecting the two corners the
+    /// keyword does *not* name — e.g. for `to bottom right` that diagonal
+    /// runs between the top-right and bottom-left corners, direction
+    /// `(-width, height)`, so the gradient line itself runs along
+    /// `(height, width)`. That makes the base angle `atan2(height, width)`
+    /// (note: height first), not `atan2(width, height)` — on a box much
+    /// wider than it is tall this angle is *small* (the line tilts toward
+    /// vertical, "to bottom"/"to top"), which is the opposite of the naive
+    /// "tilts toward the long axis" guess. Verified against a real Edge
+    /// render of a 960×160 box: predicted 170.5°, measured ~170.5°.
+    /// Reduces to the familiar 45/135/225/315° only when `width == height`.
+    pub fn angle_deg(self, width: f32, height: f32) -> f32 {
+        let base = height.max(0.0).atan2(width.max(0.0)).to_degrees();
+        match self {
+            GradientCorner::TopRight => base,
+            GradientCorner::BottomRight => 180.0 - base,
+            GradientCorner::BottomLeft => 180.0 + base,
+            GradientCorner::TopLeft => 360.0 - base,
+        }
+    }
 }
 
 /// CSS Images L3 §3.5 — ending-shape of a `radial-gradient`.
@@ -21090,9 +21144,9 @@ pub fn parse_background_gradient(s: &str) -> ParsedGradient {
 
     if is_linear {
         // The first segment may be an angle / "to <side>" direction.
-        let angle_deg = parse_linear_gradient_angle(&clean_first);
+        let (angle_deg, corner) = parse_linear_gradient_angle(&clean_first);
         let stops = interp(parse_gradient_stops(s));
-        ParsedGradient::Linear { angle_deg, stops, repeating: repeating_linear }
+        ParsedGradient::Linear { angle_deg, corner, stops, repeating: repeating_linear }
     } else if is_radial {
         // Radial: look for `[<shape> || <size>]? [at <x> <y>]?` in the first segment.
         let (cx, cy) = parse_radial_gradient_center(&clean_first);
@@ -21281,41 +21335,44 @@ fn densify_gradient_stops_for_space(
 
 /// Parse the direction/angle portion of a `linear-gradient`.
 /// Returns the angle in CSS degrees (0° = to top, 90° = to right,
-/// 180° = to bottom, 270° = to left).
-fn parse_linear_gradient_angle(first_seg: &str) -> f32 {
+/// 180° = to bottom, 270° = to left), plus the corner keyword when the
+/// direction was a `to <corner>` (the angle is then only a square-box
+/// placeholder — see [`GradientCorner::angle_deg`] for the aspect-ratio
+/// -correct resolution once the paint-time box size is known).
+fn parse_linear_gradient_angle(first_seg: &str) -> (f32, Option<GradientCorner>) {
     let s = first_seg.trim().to_ascii_lowercase();
 
     // "to <side>" keywords.
     if s.starts_with("to ") {
         return match s.trim_start_matches("to ").trim() {
-            "top" => 0.0,
-            "right" => 90.0,
-            "bottom" => 180.0,
-            "left" => 270.0,
-            "top right" | "right top" => 45.0,
-            "bottom right" | "right bottom" => 135.0,
-            "bottom left" | "left bottom" => 225.0,
-            "top left" | "left top" => 315.0,
-            _ => 180.0, // fallback: to bottom
+            "top" => (0.0, None),
+            "right" => (90.0, None),
+            "bottom" => (180.0, None),
+            "left" => (270.0, None),
+            "top right" | "right top" => (45.0, Some(GradientCorner::TopRight)),
+            "bottom right" | "right bottom" => (135.0, Some(GradientCorner::BottomRight)),
+            "bottom left" | "left bottom" => (225.0, Some(GradientCorner::BottomLeft)),
+            "top left" | "left top" => (315.0, Some(GradientCorner::TopLeft)),
+            _ => (180.0, None), // fallback: to bottom
         };
     }
 
     // Explicit angle unit.
     if let Some(deg) = s.strip_suffix("deg").and_then(|v| v.trim().parse::<f32>().ok()) {
-        return deg;
+        return (deg, None);
     }
     if let Some(turn) = s.strip_suffix("turn").and_then(|v| v.trim().parse::<f32>().ok()) {
-        return turn * 360.0;
+        return (turn * 360.0, None);
     }
     if let Some(rad) = s.strip_suffix("rad").and_then(|v| v.trim().parse::<f32>().ok()) {
-        return rad * 180.0 / std::f32::consts::PI;
+        return (rad * 180.0 / std::f32::consts::PI, None);
     }
     if let Some(grad) = s.strip_suffix("grad").and_then(|v| v.trim().parse::<f32>().ok()) {
-        return grad * 0.9; // 400 grad = 360 deg
+        return (grad * 0.9, None); // 400 grad = 360 deg
     }
 
     // No recognised angle — default is "to bottom" per CSS spec.
-    180.0
+    (180.0, None)
 }
 
 /// Parse `[circle|ellipse] [size] [at <x> <y>]` from the first segment of a
@@ -34825,6 +34882,42 @@ mod tests {
             a.color.r != b.color.r || a.color.g != b.color.g || a.color.b != b.color.b
         });
         assert!(differs, "longer-hue arc must yield different intermediate colours");
+    }
+
+    /// `to <corner>` keywords parse to `GradientCorner`, with `angle_deg` left
+    /// as the square-box placeholder (BUG-645) — only [`GradientCorner::angle_deg`]
+    /// resolves the true, aspect-ratio-dependent angle.
+    #[test]
+    fn gradient_corner_keyword_parses_to_corner_variant() {
+        let g = parse_background_gradient("linear-gradient(to bottom right, red, blue)");
+        let ParsedGradient::Linear { angle_deg, corner, .. } = g else { panic!("expected linear") };
+        assert!((angle_deg - 135.0).abs() < 0.01, "square-box placeholder");
+        assert_eq!(corner, Some(GradientCorner::BottomRight));
+
+        // An explicit angle must not carry a corner.
+        let g = parse_background_gradient("linear-gradient(45deg, red, blue)");
+        let ParsedGradient::Linear { corner, .. } = g else { panic!("expected linear") };
+        assert_eq!(corner, None, "explicit <angle> has no corner keyword");
+    }
+
+    /// `GradientCorner::angle_deg` reduces to 45/135/225/315° on a square box
+    /// (matching the pre-BUG-645 hardcoded behaviour) but tilts toward vertical
+    /// — not horizontal — as the box gets wider, per CSS Images L3 §3.1's
+    /// "perpendicular to the diagonal of the two unnamed corners" construction.
+    /// The 170.5° figure is pixel-measured off a real Edge render of a 960×160
+    /// box (`graphic_tests/76-motion-path.html`'s `.track-diag`), not derived.
+    #[test]
+    fn gradient_corner_angle_matches_edge_reference() {
+        // Square box: reduces to the familiar diagonal angles.
+        assert!((GradientCorner::TopRight.angle_deg(100.0, 100.0) - 45.0).abs() < 0.01);
+        assert!((GradientCorner::BottomRight.angle_deg(100.0, 100.0) - 135.0).abs() < 0.01);
+        assert!((GradientCorner::BottomLeft.angle_deg(100.0, 100.0) - 225.0).abs() < 0.01);
+        assert!((GradientCorner::TopLeft.angle_deg(100.0, 100.0) - 315.0).abs() < 0.01);
+
+        // Wide box (960×160): tilts toward vertical (180°/"to bottom"), the
+        // opposite of the naive "tilts toward the long axis" guess.
+        let angle = GradientCorner::BottomRight.angle_deg(960.0, 160.0);
+        assert!((angle - 170.54).abs() < 0.1, "expected ~170.5°, got {angle}");
     }
 
     /// A plain `linear-gradient(red, blue)` (no `in <space>`) keeps exactly two

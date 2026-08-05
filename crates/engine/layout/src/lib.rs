@@ -127,7 +127,7 @@ pub use style::{
     set_print_media, print_media_active,
     parse_background_gradient, parse_color, parse_css_wide_keyword, parse_gradient_stops,
     parse_grid_template_areas, parse_transform_list,
-    radial_gradient_radii, RadialShape, RadialSize,
+    radial_gradient_radii, GradientCorner, RadialShape, RadialSize,
     AlignValue, AnimationDirection, Appearance, ContainerContext,
     AnimationFillMode, AnimationPlayState,
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat,
