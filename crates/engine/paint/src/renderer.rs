@@ -2449,6 +2449,16 @@ fn bbox_backdrop_disabled() -> bool {
     })
 }
 
+/// `true`, если сглаживание SVG-супа отключено (`LUMEN_NO_SVG_AA=1`):
+/// `DrawSvgFill`/`DrawSvgStroke` рисуются бинарным треугольным супом, как до
+/// BUG-277 среза 12. Диагностика: A/B-сравнение картинки и скорости на одном
+/// бинарнике (растеризация покрытия идёт на CPU и стоит O(площадь фигуры)).
+fn svg_aa_disabled() -> bool {
+    use std::sync::OnceLock;
+    static DISABLED: OnceLock<bool> = OnceLock::new();
+    *DISABLED.get_or_init(|| std::env::var("LUMEN_NO_SVG_AA").is_ok_and(|v| v == "1"))
+}
+
 /// `true`, если mip-цепочка картинок отключена (`LUMEN_NO_IMAGE_MIPS=1`):
 /// возврат к CPU-ресайзу под каждый placed-размер (`src@WxH`-зоопарк) и
 /// nearest-выбору mip-уровня в сэмплере. Диагностика: A/B-сравнение картинки,
@@ -8424,6 +8434,7 @@ impl Renderer {
                     if let Some(m) = transform_stack.last() {
                         apply_affine_to_verts(&mut fill_vertices[v_start as usize..], m);
                     }
+                    antialias_svg_soup(&mut fill_vertices, v_start as usize, c, dpr_f32);
                     let v_count = fill_vertices.len() as u32 - v_start;
                     if v_count > 0 {
                         draw_ops.push(DrawOp::Fill { v_start, v_count });
@@ -8449,6 +8460,7 @@ impl Renderer {
                     if let Some(m) = transform_stack.last() {
                         apply_affine_to_verts(&mut fill_vertices[v_start as usize..], m);
                     }
+                    antialias_svg_soup(&mut fill_vertices, v_start as usize, c, dpr_f32);
                     let v_count = fill_vertices.len() as u32 - v_start;
                     if v_count > 0 {
                         draw_ops.push(DrawOp::Fill { v_start, v_count });
@@ -10721,6 +10733,46 @@ impl VertexPos for RRectVertex {
 
 fn apply_affine_to_grad_verts(verts: &mut [GradVertex], m: &Mat4) {
     apply_affine_to_verts(verts, m);
+}
+
+/// BUG-247 / BUG-277 срез 12: заменяет треугольный суп SVG-фигуры, уже
+/// уложенный в `fill_vertices[v_start..]`, на pixel-aligned квады с точным
+/// покрытием — сглаженная кромка вместо бинарной.
+///
+/// Растеризация обязана идти в **device px**: суп приходит в CSS px (матрица
+/// `PushTransform` уже применена), поэтому здесь он умножается на `dpr`,
+/// считается покрытие относительно настоящей растровой сетки, и результат
+/// делится обратно — вершинный шейдер сам отобразит CSS px в NDC через
+/// viewport-uniform. `color` — цвет фигуры со straight-alpha (пайплайн
+/// заливки блендит `ALPHA_BLENDING`), поэтому покрытие домножается в альфу.
+///
+/// Ничего не делает при `LUMEN_NO_SVG_AA=1` и при вырожденном `dpr`.
+fn antialias_svg_soup(
+    fill_vertices: &mut Vec<FillVertex>,
+    v_start: usize,
+    color: [f32; 4],
+    dpr: f32,
+) {
+    if svg_aa_disabled() || dpr <= 0.0 || !dpr.is_finite() || v_start >= fill_vertices.len() {
+        return;
+    }
+    let soup: Vec<[f32; 2]> = fill_vertices[v_start..]
+        .iter()
+        .map(|v| [v.pos[0] * dpr, v.pos[1] * dpr])
+        .collect();
+    let quads = crate::svg_path::coverage_quads(&soup);
+    if quads.is_empty() {
+        return;
+    }
+    fill_vertices.truncate(v_start);
+    fill_vertices.reserve(quads.len());
+    for q in quads {
+        fill_vertices.push(FillVertex {
+            pos: [q.pos[0] / dpr, q.pos[1] / dpr],
+            z: 0.0,
+            color: [color[0], color[1], color[2], color[3] * q.cov],
+        });
+    }
 }
 
 /// Применяет матрицу `PushTransform` к pos-полям вершин.

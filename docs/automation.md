@@ -113,7 +113,7 @@ Snapshot-test env vars: `SNAPSHOT_VS_EDGE_STRICT=1` (hard-gate `crates/driver/te
 | `LUMEN_RENDER_THREAD` | Render thread on/off |
 | `LUMEN_PRESENT` | Present mode override |
 | `LUMEN_TEXTURE_POOL_MB=<N>` | Byte budget of the wgpu offscreen-layer pool's free list (default 64; `0` removes the cap = pre-BUG-272-slice-21 behaviour). A/B memory measurements on one binary |
-| `LUMEN_NO_FRAME_SKIP` / `LUMEN_NO_SCROLL_COMPOSITOR` / `LUMEN_NO_ANIM_SPLIT` / `LUMEN_NO_BBOX_SCISSOR` / `LUMEN_NO_BBOX_BACKDROP` / `LUMEN_NO_IMAGE_MIPS` / `LUMEN_NO_BAND_BIAS` | Disable one paint optimization each — **the paint-regression bisection kit** (crates/engine/paint/src/renderer.rs), driven automatically by `run.py --paint-bisect NN` (DEVX-4) |
+| `LUMEN_NO_FRAME_SKIP` / `LUMEN_NO_SCROLL_COMPOSITOR` / `LUMEN_NO_ANIM_SPLIT` / `LUMEN_NO_BBOX_SCISSOR` / `LUMEN_NO_BBOX_BACKDROP` / `LUMEN_NO_IMAGE_MIPS` / `LUMEN_NO_BAND_BIAS` / `LUMEN_NO_SVG_AA` | Disable one paint optimization each — **the paint-regression bisection kit** (crates/engine/paint/src/renderer.rs), driven automatically by `run.py --paint-bisect NN` (DEVX-4) |
 | `LUMEN_EAGER_PIPELINES=1` | **Rollback + A/B lever** for lazy wgpu pipeline compilation (BUG-406): compiles all 16 pipelines in `init_pipelines` instead of the 5 hot ones. Run it once after touching any `build_*_pipeline` — a lazy pipeline that is never built is never validated by wgpu |
 | `LUMEN_SCROLL_BLIT` / `LUMEN_NO_FAST_SCROLL_DEGRADE` | Scroll-blit opt / fast-scroll quality degrade |
 | `LUMEN_FRAME_LOG=1\|2` · `LUMEN_PROFILE_TREE=1` (+ `LUMEN_PROFILE_DETAIL=1`) · `LUMEN_MEM_REPORT=1` · `LUMEN_BENCH` / `LUMEN_BENCH_ITERS` | Diagnostics (see chooser table) |
