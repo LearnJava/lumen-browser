@@ -3483,9 +3483,9 @@
       {
        "id": "WPT-VENDOR-referrer-policy",
        "title": "WPT: вендорить + прогнать категорию `referrer-policy`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root referrer-policy --recursive --processes=4`, 7 слайсов по `--offset`/`--limit 200`, ~65 мин суммарно, 1393 id — крупнейшая вендоренная категория до сих пор, комбинаторный генератор `common/security-features/tools/generate.py`) — **44/1393 harness OK, 1/116 сабтестов**. Доминирующая причина отказа (~1001 из 1393 id, `gen/**`) — переподтверждение [BUG-346](bugs/BUG-346-OPEN.md) (`Url::resolve()` не схлопывает `..`): каждый генерированный тест грузит `../../../generic/test-case.sub.js` (относительный путь ровно на глубину категории, файл реально лежит на диске), но сервер отдаёт 404 на буквальный нерезолвленный путь — `TestCase is not defined`, TIMEOUT. Второй слой (`css-integration/`, 24 id) и часть `gen/**` — невендоренные общие ресурсы `/common/utils.js`+`/common/security-features/resources/common.sub.js` (документированный пробел вендоринга, не баг движка — по устоявшейся конвенции категории НЕ вендорить общие `/common/*` хелперы вне текущей директории). `generic/` (44 id, самая нетривиальная часть) дала единственный частичный успех сессии — `subresource-test/fetch-messaging.html` 1/2 сабтестов — и несколько `.https.` TIMEOUT на TLS-гэпе `UnknownIssuer`; также замечена кластерная аномалия `ERROR — WebSocket connection closed` (4 одновременных ошибки на `worker-classic.http-rp/*`, похоже на инфраструктурный сбой wptrunner-канала при параллельных TIMEOUT, не исследовано глубже). Новых багов не заведено — весь сигнал воспроизводит уже задокументированные гэпы"
       },
       {
        "id": "WPT-VENDOR-remote-playback",
