@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-05",
  "counts": {
-  "open": 299,
-  "fixed": 319,
+  "open": 300,
+  "fixed": 320,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 618,
+ "total_bugs": 620,
  "phases": [
   {
    "id": "P0",
@@ -3399,23 +3399,29 @@
       {
        "id": "WPT-VENDOR-permissions-revoke",
        "title": "WPT: вендорить + прогнать категорию `permissions-revoke`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root permissions-revoke --recursive`, ~14 с, 1 id) — **0/1 harness OK**. Единственный тест `idlharness.any.html` TIMEOUT на уже задокументированном гэпе `/resources/idlharness.js`+`/resources/WebIDLParser.js` (не вендорены). Живая проба (`--mcp-live-port`) `navigator.permissions.*` показала, что метод и не мог бы пройти: `revoke` отсутствует вовсе (`Object.getOwnPropertyNames` → `[\"query\"]`) — заведён [BUG-652](bugs/BUG-652-OPEN.md)",
+       "bugs": [
+        "BUG-652"
+       ]
       },
       {
        "id": "WPT-VENDOR-picture-in-picture",
        "title": "WPT: вендорить + прогнать категорию `picture-in-picture`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). PiP — нет медиа-конвейера видео"
+       "note": "Скоуп: 🚫 (вне скоупа). PiP — нет медиа-конвейера видео. DONE 2026-08-05: вендорена + прогнана целиком (`--all --root picture-in-picture --recursive`, ~51 с, 17 id) — **14/17 harness OK, 0/36 сабтестов**. Доминирующая причина отказа — `ReferenceError: getVideoURI is not defined` (`/common/media.js` не вендорен, известный гэп). Один FAIL не связан с медиа-гэпом и указывает на реальный дефект уже реализованного PiP-шима: `disable-picture-in-picture.html` — `disablePictureInPicture` IDL-геттер кеширует значение на момент патчинга элемента вместо живого чтения content-атрибута. Заведён [BUG-653](bugs/BUG-653-OPEN.md), подтверждён живой пробой",
+       "bugs": [
+        "BUG-653"
+       ]
       },
       {
        "id": "WPT-VENDOR-png",
        "title": "WPT: вендорить + прогнать категорию `png`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root png --recursive`, ~56 с, 35 id — 3 testharness + 32 reftest) — **0/3 harness OK, 0/3 сабтестов** (32 reftest-а `run_report.py` не поддерживает вовсе, \"Unsupported test type reftest\", не считаются). Все три исполнившихся id (`cicp-chunk`/`exif-chunk`/`trns-chunk`, каждый — `img.onload` → отложенный canvas-тест на пиксели) TIMEOUT по общей причине, не по содержимому PNG-чанков: живая проба (`--mcp-live-port`) с контрольным PNG без экзотических чанков (обычный и добавленный в DOM через `appendChild`) показала, что `onload`/`onerror` не срабатывают вовсе ни для одного `new Image()` — переподтверждение уже заведённого [BUG-630](bugs/BUG-630-OPEN.md) (`<img>` не диспатчит `load`/`error` в принципе, WPT-VENDOR-jpegxl, 2026-08-05), новых багов не заведено"
       },
       {
        "id": "WPT-VENDOR-pointerevents",
@@ -7518,10 +7524,10 @@
    "debtor": false
   },
   "BUG-434": {
-   "status": "open",
-   "title": "**Сабсеты `unicode-range` одной @font-face-семьи затирают друг друга в реестре шрифтов.** Ключ записи — виртуальный путь `@font-face:<family>/<weight>/<style>`…",
-   "component": "font (`font_registry.rs:56` — `register_from_bytes`), shell (`main.rs` — обработчик `LoadEvent::FontLoaded`)",
-   "date": null,
+   "status": "fixed",
+   "title": "**Сабсеты `unicode-range` одной @font-face-семьи затирали друг друга в реестре шрифтов** — виртуальный путь-ключ не включал диапазон, поэтому из N сабсетов оста…",
+   "component": "font (`font_registry.rs` — `register_from_bytes`), paint (`renderer.rs`/`femtovg_backend.rs`), shell (`main.rs`)",
+   "date": "2026-08-05",
    "debtor": false
   },
   "BUG-435": {
@@ -9014,6 +9020,20 @@
    "component": "shell (`crates/shell/src/main.rs:3424-3438` — `PageSource::from_arg`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-652": {
+   "status": "open",
+   "title": "`navigator.permissions.revoke()` (non-standard, Chromium-only reset API used by WPT's own permissions tests) is entirely absent — `navigator.permissions` is a p…",
+   "component": "js (`crates/js/src/dom.rs:5077-5086` — `navigator.permissions`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-653": {
+   "status": "open",
+   "title": "`HTMLVideoElement.disablePictureInPicture` IDL getter reads a closure variable `_disabled` cached once at patch time instead of live-reflecting the `disablepict…",
+   "component": "js (`crates/js/src/video_pip.rs:74-91` — `patchVideoPip`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -9162,7 +9182,7 @@
   "font (`face.rs::glyph_resolved_inner`, `rasterizer.rs::rasterize`)": [
    "BUG-423"
   ],
-  "font (`font_registry.rs:56` — `register_from_bytes`), shell (`main.rs` — обработчик `LoadEvent::FontLoaded`)": [
+  "font (`font_registry.rs` — `register_from_bytes`), paint (`renderer.rs`/`femtovg_backend.rs`), shell (`main.rs`)": [
    "BUG-434"
   ],
   "font (`system_fonts.rs`)": [
