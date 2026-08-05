@@ -58,11 +58,11 @@
  "generated": "2026-08-05",
  "counts": {
   "open": 291,
-  "fixed": 315,
+  "fixed": 316,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 606,
+ "total_bugs": 607,
  "phases": [
   {
    "id": "P0",
@@ -3217,9 +3217,12 @@
       {
        "id": "WPT-VENDOR-navigation-api",
        "title": "WPT: вендорить + прогнать категорию `navigation-api`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root navigation-api --recursive`, ~21 мин, 475 id) — API реализован, но **349/475 harness OK, 6/417 сабтестов (1.4%)**. Причина найдена в коде (`crates/js/src/navigation_api.rs`): `NavigationCurrentEntryChangeEvent` отсутствует, `updateCurrentEntry()` не реализован, `NavigateEvent.destination` — голый `URL` вместо `NavigationDestination`, `NavigationHistoryEntry` не наследует `EventTarget`. Заведён [BUG-639](bugs/BUG-639-OPEN.md); CAPABILITIES.md:195 снабжён 🟡-оговоркой",
+       "bugs": [
+        "BUG-639"
+       ]
       },
       {
        "id": "WPT-VENDOR-navigation-timing",
@@ -8855,10 +8858,10 @@
    "debtor": false
   },
   "BUG-635": {
-   "status": "open",
-   "title": "`background-image` не рисуется ни в живом wgpu-окне, ни в детерминированном CPU-снимке, хотя файл загружен и декодирован («Загружена bg-картинка: …/perceptron.p…",
-   "component": "paint (`DrawBackgroundImage` в обоих бэкендах)",
-   "date": null,
+   "status": "fixed",
+   "title": "Заявка: `background-image` не рисуется ни в живом wgpu-окне, ни в детерминированном CPU-снимке, хотя файл декодирован и дисплей-лист содержит шесть корректных `…",
+   "component": "paint (`renderer.rs`, `DrawBackgroundImage` в wgpu)",
+   "date": "2026-08-05",
    "debtor": false
   },
   "BUG-636": {
@@ -8879,6 +8882,13 @@
    "status": "open",
    "title": "`<audio>.src = <relative URL>` permanently deadlocks the JS engine/automation channel — the native `__lumen_audio_load` call never returns to JS, and every subs…",
    "component": "js (`crates/js/src/audio_element.rs` — src setter → `__lumen_audio_load`), shell (`crates/shell/src/platform/audio_player.rs::load`/`fetch_audio_bytes`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-639": {
+   "status": "open",
+   "title": "Navigation API shim is missing several spec-required pieces: `NavigationCurrentEntryChangeEvent` global doesn't exist (`currententrychange` fires a plain `Event…",
+   "component": "js (`crates/js/src/navigation_api.rs::NAVIGATION_API_SHIM`)",
    "date": null,
    "debtor": false
   }
@@ -9612,9 +9622,6 @@
   "paint (WgpuBackend/Renderer) / shell (streaming первого кадра)": [
    "BUG-274"
   ],
-  "paint (`DrawBackgroundImage` в обоих бэкендах)": [
-   "BUG-635"
-  ],
   "paint (`Renderer::init_pipelines`, `crates/engine/paint/src/renderer.rs`)": [
    "BUG-406"
   ],
@@ -9644,6 +9651,9 @@
   ],
   "paint (`emit_scrollbars`) / test-triage": [
    "BUG-288"
+  ],
+  "paint (`renderer.rs`, `DrawBackgroundImage` в wgpu)": [
+   "BUG-635"
   ],
   "paint (build)": [
    "BUG-235"

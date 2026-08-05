@@ -488,11 +488,21 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     let a = textureSample(tex_a, smp, in.uv);
     let b = textureSample(tex_b, smp, in.uv);
     let t = clamp(p.progress, 0.0, 1.0);
-    // Straight-alpha mix per CSS Images L4 §4.2. Pipeline blend state is
-    // ALPHA_BLENDING (SrcAlpha · src + (1-SrcAlpha) · dst), matching
-    // image_pipeline — shader emits straight-alpha RGBA, blend stage applies
-    // the SrcAlpha multiplication.
-    return mix(a, b, t);
+    // CSS Images L4 §4.2 — the mix is defined on PREMULTIPLIED colours:
+    //   Cout = (1−t)·αa·Ca + t·αb·Cb,  αout = (1−t)·αa + t·αb
+    // Mixing straight-alpha RGB instead (the old `mix(a, b, t)`) multiplied a
+    // fully transparent source's colour into the result and then let the blend
+    // stage scale it by αout a second time — a 50 % cross-fade over a
+    // transparent region came out roughly half as bright as Edge (BUG-277
+    // срез 15). The textures hold straight RGBA and the pipeline blend state is
+    // ALPHA_BLENDING (SrcAlpha·src + (1−SrcAlpha)·dst), so the shader has to
+    // return the un-premultiplied colour Cout/αout together with αout.
+    let premul = mix(a.rgb * a.a, b.rgb * b.a, t);
+    let out_a = mix(a.a, b.a, t);
+    if (out_a <= 0.0) {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    return vec4<f32>(premul / out_a, out_a);
 }
 "#;
 
@@ -2478,6 +2488,16 @@ fn rot_clip_disabled() -> bool {
     use std::sync::OnceLock;
     static DISABLED: OnceLock<bool> = OnceLock::new();
     *DISABLED.get_or_init(|| std::env::var("LUMEN_NO_ROT_CLIP").is_ok_and(|v| v == "1"))
+}
+
+/// `true`, если применение накопленного `PushTransform` к квадам
+/// `DrawBackgroundImage`/`DrawCrossFade` отключено (`LUMEN_NO_IMG_XFORM=1`):
+/// квады снова кладутся в нетрансформированных координатах, как до BUG-277
+/// среза 15. Диагностика: A/B-сравнение картинки на одном бинарнике.
+fn img_xform_disabled() -> bool {
+    use std::sync::OnceLock;
+    static DISABLED: OnceLock<bool> = OnceLock::new();
+    *DISABLED.get_or_init(|| std::env::var("LUMEN_NO_IMG_XFORM").is_ok_and(|v| v == "1"))
 }
 
 /// `true`, если mip-цепочка картинок отключена (`LUMEN_NO_IMAGE_MIPS=1`):
@@ -7818,6 +7838,17 @@ impl Renderer {
                         if !repeat_y { break; }
                         ty += step_y;
                     }
+                    // CSS Transforms L1 §13 — тайлы посчитаны в локальных
+                    // координатах бокса (там же и обрезаны по background-clip),
+                    // поэтому накопленная матрица применяется к готовым квадам,
+                    // как у `DrawImage`/`DrawLayerSnapshot`. Без этого шага
+                    // фон-картинка ложилась в нетрансформированных координатах
+                    // (BUG-277 срез 15).
+                    if let Some(m) = transform_stack.last()
+                        && !img_xform_disabled()
+                    {
+                        apply_affine_to_verts(&mut image_vertices[v_start as usize..], m);
+                    }
                     let v_count = image_vertices.len() as u32 - v_start;
                     if v_count > 0 {
                         draw_ops.push(DrawOp::Image { v_start, v_count, image_batch_idx });
@@ -8722,6 +8753,13 @@ impl Renderer {
 
                     let v_start = cross_fade_vertices.len() as u32;
                     push_cross_fade_quad(&mut cross_fade_vertices, scrolled);
+                    // Тот же накопленный `PushTransform`, что у остальных
+                    // image-путей (BUG-277 срез 15).
+                    if let Some(m) = transform_stack.last()
+                        && !img_xform_disabled()
+                    {
+                        apply_affine_to_verts(&mut cross_fade_vertices[v_start as usize..], m);
+                    }
                     let v_count = cross_fade_vertices.len() as u32 - v_start;
                     draw_ops.push(DrawOp::CrossFade {
                         v_start,
@@ -10783,6 +10821,10 @@ impl VertexPos for GradVertex {
 }
 
 impl VertexPos for MaskVertex {
+    fn pos_mut(&mut self) -> &mut [f32; 2] { &mut self.pos }
+}
+
+impl VertexPos for CrossFadeVertex {
     fn pos_mut(&mut self) -> &mut [f32; 2] { &mut self.pos }
 }
 
@@ -13056,6 +13098,32 @@ mod tests {
         for v in &out {
             assert_eq!(v.z, 0.0, "push_image_quad must produce z=0 vertices");
         }
+    }
+
+    /// BUG-277 срез 15 — квад `DrawCrossFade` обязан проходить через
+    /// накопленный `PushTransform`, как и остальные image-пути. Пока
+    /// `CrossFadeVertex` не реализовывал `VertexPos`, применить матрицу было
+    /// нечем, и картинка ложилась в нетрансформированных координатах (под
+    /// живым хромом — на `CHROME_H` px выше своего бокса).
+    #[test]
+    fn cross_fade_quad_follows_accumulated_transform() {
+        let mut out = Vec::new();
+        let rect = lumen_core::geom::Rect::new(10.0, 20.0, 100.0, 50.0);
+        push_cross_fade_quad(&mut out, rect);
+        assert_eq!(out.len(), 6);
+        let m = Mat4::translate_3d(0.0, 69.0, 0.0);
+        apply_affine_to_verts(&mut out, &m);
+        for v in &out {
+            assert!(
+                v.pos[1] >= 89.0 - 1e-4,
+                "квад cross-fade должен сдвинуться на 69px вниз, got y={}",
+                v.pos[1]
+            );
+        }
+        assert!(
+            out.iter().any(|v| approxf(v.pos[0], 10.0)),
+            "translate по Y не должен трогать X"
+        );
     }
 
     /// `push_rrect_quad` similarly emits z=0 for all 6 vertices.
