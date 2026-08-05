@@ -537,79 +537,47 @@ fn angle_vec(ux: f32, uy: f32, vx: f32, vy: f32) -> f32 {
     if cross < 0.0 { -a } else { a }
 }
 
-// ─── Triangulation (ear-clipping) ───────────────────────────────────────────
+// ─── Fill tessellation (scanline trapezoid decomposition) ───────────────────
 
-/// Tessellate a single closed polygon (no holes) using ear-clipping.
-/// Returns flat triangle vertex list (3 `[f32;2]` per triangle).
-///
-/// Uses the even-odd fill rule by tessellating each contour independently.
-/// For paths with multiple contours (holes), the caller runs this per contour
-/// and the GPU even-odd stencil pass handles the winding — or we use the
-/// simple nonzero rule (fills everything).
-///
-/// Phase 0: nonzero fill (single contour per call).
-#[must_use]
-pub fn tessellate_polygon(pts: &[[f32; 2]]) -> Vec<[f32; 2]> {
-    if pts.len() < 3 {
-        return Vec::new();
-    }
-    // Remove duplicate last point if polygon is explicitly closed.
-    let ring: Vec<[f32; 2]> = if pts.len() > 1 {
-        let first = pts[0];
-        let last  = *pts.last().unwrap();
-        if (first[0] - last[0]).abs() < 1e-6 && (first[1] - last[1]).abs() < 1e-6 {
-            pts[..pts.len() - 1].to_vec()
-        } else {
-            pts.to_vec()
-        }
-    } else {
-        pts.to_vec()
-    };
-
-    if ring.len() < 3 {
-        return Vec::new();
-    }
-
-    // Ensure counter-clockwise winding (positive area) so ear detection is correct.
-    let mut verts = ring;
-    if signed_area(&verts) < 0.0 {
-        verts.reverse();
-    }
-
-    ear_clip(&verts)
+/// Which fill rule the scanline sweep applies when deciding whether the gap
+/// between two consecutive crossings is inside the path.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SweepRule {
+    /// SVG §13.4 `fill-rule: nonzero` — inside where the accumulated winding ≠ 0.
+    NonZero,
+    /// SVG §13.4 `fill-rule: evenodd` — inside where the crossing count is odd.
+    EvenOdd,
 }
 
-/// Tessellate a path (all contours) into triangles. Multi-contour paths are
-/// simply all tessellated and concatenated — this gives correct results for
-/// most SVG icons where contours are disjoint.
-#[must_use]
-pub fn tessellate_fill(contours: &[Vec<[f32; 2]>]) -> Vec<[f32; 2]> {
-    contours.iter().flat_map(|c| tessellate_polygon(c)).collect()
+/// One non-horizontal path edge, normalised to run top→bottom, as consumed by
+/// [`sweep_fill`].
+struct SweepEdge {
+    /// Endpoint with the smaller Y.
+    top: [f32; 2],
+    /// Endpoint with the larger Y.
+    bot: [f32; 2],
+    /// `+1` if the edge runs downwards in the contour's own direction, `-1` if
+    /// upwards. Read by [`SweepRule::NonZero`] only.
+    dir: i32,
 }
 
-/// Tessellate the **even-odd** fill region of all contours into a flat triangle
-/// vertex list (3 `[f32;2]` per triangle), SVG §13.4 / CSS `fill-rule: evenodd`.
-///
-/// Unlike [`tessellate_fill`] (per-contour ear-clipping, which fills everything
-/// the contours cover — the nonzero approximation), this honours even-odd: a
-/// point is inside iff a ray from it crosses the path boundary an odd number of
-/// times. That leaves the centre of a self-intersecting pentagram empty and
-/// punches alternating holes through concentric rings (BUG-245).
+/// Tessellate the fill region of all contours under `rule` into a flat triangle
+/// vertex list (3 `[f32;2]` per triangle).
 ///
 /// Method: a horizontal sweep. Critical scanlines are placed at every vertex Y
 /// **and** every edge–edge intersection Y, so within each band the active edges
 /// keep a stable left-to-right order (no crossings inside a band). At each band
-/// the edges crossing its mid-line are sorted by X and paired even-odd — the
-/// gap between the 0th/1st, 2nd/3rd, … crossings is "inside" and emitted as a
-/// trapezoid (two triangles). The output is a non-overlapping tiling of exactly
-/// the even-odd region, so the backends' default nonzero fill of the triangle
-/// soup reproduces the even-odd shape.
-#[must_use]
-pub fn tessellate_fill_even_odd(contours: &[Vec<[f32; 2]>]) -> Vec<[f32; 2]> {
+/// the edges crossing its mid-line are sorted by X and walked left to right,
+/// accumulating the winding number / crossing count; every gap the rule calls
+/// inside is emitted as a trapezoid (two triangles). The output is a
+/// non-overlapping tiling of exactly the rule's region, so the backends' default
+/// nonzero fill of the triangle soup reproduces the shape — including for
+/// self-intersecting outlines and for contours that overlap each other.
+fn sweep_fill(contours: &[Vec<[f32; 2]>], rule: SweepRule) -> Vec<[f32; 2]> {
     const EPS: f32 = 1e-4;
 
-    // Collect non-horizontal edges, each normalised to run top→bottom (y0 < y1).
-    let mut edges: Vec<([f32; 2], [f32; 2])> = Vec::new();
+    // Collect non-horizontal edges, each normalised to run top→bottom.
+    let mut edges: Vec<SweepEdge> = Vec::new();
     for c in contours {
         let n = c.len();
         if n < 2 {
@@ -621,21 +589,31 @@ pub fn tessellate_fill_even_odd(contours: &[Vec<[f32; 2]>]) -> Vec<[f32; 2]> {
             if (a[1] - b[1]).abs() < EPS {
                 continue; // horizontal edge: contributes no scanline crossing
             }
-            edges.push(if a[1] < b[1] { (a, b) } else { (b, a) });
+            edges.push(if a[1] < b[1] {
+                SweepEdge { top: a, bot: b, dir: 1 }
+            } else {
+                SweepEdge { top: b, bot: a, dir: -1 }
+            });
         }
     }
     if edges.is_empty() {
         return Vec::new();
     }
+    // Sorted by top Y so the band loop can maintain the active set incrementally
+    // and the intersection scan can stop early on the first non-overlapping pair.
+    edges.sort_by(|a, b| a.top[1].partial_cmp(&b.top[1]).unwrap_or(std::cmp::Ordering::Equal));
 
     // Critical Y values: every edge endpoint + every edge–edge intersection.
     let mut ys: Vec<f32> = Vec::with_capacity(edges.len() * 2);
     for e in &edges {
-        ys.push(e.0[1]);
-        ys.push(e.1[1]);
+        ys.push(e.top[1]);
+        ys.push(e.bot[1]);
     }
     for i in 0..edges.len() {
         for j in (i + 1)..edges.len() {
+            if edges[j].top[1] >= edges[i].bot[1] {
+                break; // sorted by top Y — no later edge can overlap this one
+            }
             if let Some(y) = edge_intersection_y(&edges[i], &edges[j]) {
                 ys.push(y);
             }
@@ -644,33 +622,52 @@ pub fn tessellate_fill_even_odd(contours: &[Vec<[f32; 2]>]) -> Vec<[f32; 2]> {
     ys.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     ys.dedup_by(|a, b| (*a - *b).abs() < EPS);
 
-    let x_at = |e: &([f32; 2], [f32; 2]), y: f32| -> f32 {
-        let t = (y - e.0[1]) / (e.1[1] - e.0[1]);
-        e.0[0] + t * (e.1[0] - e.0[0])
+    let x_at = |e: &SweepEdge, y: f32| -> f32 {
+        let t = (y - e.top[1]) / (e.bot[1] - e.top[1]);
+        e.top[0] + t * (e.bot[0] - e.top[0])
     };
 
     let mut tris: Vec<[f32; 2]> = Vec::new();
+    // Edges spanning the current band (they cross its mid-line, hence span the
+    // whole band since no vertex/intersection lies strictly inside it).
+    let mut active: Vec<usize> = Vec::new();
+    let mut pending = 0usize;
+    // Per band: X at the top, mid and bottom of the band, plus winding direction.
+    let mut spans: Vec<(f32, f32, f32, i32)> = Vec::new();
     for w in ys.windows(2) {
         let (y0, y1) = (w[0], w[1]);
         if y1 - y0 < EPS {
             continue;
         }
         let mid = 0.5 * (y0 + y1);
-        // Edges spanning this band (they cross `mid`, hence span the whole band
-        // since no vertex/intersection lies strictly inside it). For each, record
-        // its X at the top, mid and bottom of the band.
-        let mut spans: Vec<(f32, f32, f32)> = Vec::new();
-        for e in &edges {
-            if e.0[1] <= mid && e.1[1] > mid {
-                spans.push((x_at(e, y0), x_at(e, mid), x_at(e, y1)));
-            }
+        while pending < edges.len() && edges[pending].top[1] <= mid {
+            active.push(pending);
+            pending += 1;
+        }
+        active.retain(|&i| edges[i].bot[1] > mid);
+        spans.clear();
+        for &i in &active {
+            let e = &edges[i];
+            spans.push((x_at(e, y0), x_at(e, mid), x_at(e, y1), e.dir));
         }
         spans.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-        // Even-odd: fill between consecutive pairs (0,1), (2,3), …
-        let mut k = 0;
-        while k + 1 < spans.len() {
+        let mut winding = 0i32;
+        let mut crossings = 0u32;
+        for k in 0..spans.len().saturating_sub(1) {
+            winding += spans[k].3;
+            crossings += 1;
+            let inside = match rule {
+                SweepRule::NonZero => winding != 0,
+                SweepRule::EvenOdd => crossings % 2 == 1,
+            };
+            if !inside {
+                continue;
+            }
             let l = spans[k];
             let r = spans[k + 1];
+            if (r.1 - l.1).abs() < EPS {
+                continue; // zero-width gap (coincident crossings)
+            }
             // Trapezoid corners (CCW-agnostic — backends fill nonzero):
             //   top    y0: l.0 → r.0
             //   bottom y1: l.2 → r.2
@@ -684,23 +681,50 @@ pub fn tessellate_fill_even_odd(contours: &[Vec<[f32; 2]>]) -> Vec<[f32; 2]> {
             tris.push(a);
             tris.push(c);
             tris.push(d);
-            k += 2;
         }
     }
     tris
 }
 
+/// Tessellate the **nonzero** fill region of all contours into a flat triangle
+/// vertex list (3 `[f32;2]` per triangle), SVG §13.4 / CSS `fill-rule: nonzero`.
+///
+/// Only the wgpu backend calls this — femtovg and `cpu_raster` fill the raw
+/// outline contours natively (`DrawSvgFill`), so their AA lands on the true
+/// boundary instead of on every internal shared edge (BUG-173/BUG-247).
+///
+/// BUG-277 срез 10: this used to ear-clip each contour independently, which is
+/// only defined for simple polygons — a self-intersecting outline (a bowtie,
+/// `M 20 20 L 180 20 L 100 80 L 180 140 L 20 140 L 100 80 Z`) has no ear at all,
+/// so the tessellator bailed out and the shape was **not drawn**, and a
+/// donut (outer contour + reverse-wound inner one) had its hole filled solid.
+/// The scanline sweep gets both right by construction.
+#[must_use]
+pub fn tessellate_fill(contours: &[Vec<[f32; 2]>]) -> Vec<[f32; 2]> {
+    sweep_fill(contours, SweepRule::NonZero)
+}
+
+/// Tessellate the **even-odd** fill region of all contours into a flat triangle
+/// vertex list (3 `[f32;2]` per triangle), SVG §13.4 / CSS `fill-rule: evenodd`.
+///
+/// A point is inside iff a ray from it crosses the path boundary an odd number
+/// of times. That leaves the centre of a self-intersecting pentagram empty and
+/// punches alternating holes through concentric rings (BUG-245). Shares
+/// [`sweep_fill`] with [`tessellate_fill`] — a second copy of the sweep would
+/// let the two rules drift apart on the shared geometry.
+#[must_use]
+pub fn tessellate_fill_even_odd(contours: &[Vec<[f32; 2]>]) -> Vec<[f32; 2]> {
+    sweep_fill(contours, SweepRule::EvenOdd)
+}
+
 /// Y coordinate where two top→bottom edges cross strictly inside both segments,
 /// or `None` if they are parallel or only meet at an endpoint. Used by
-/// [`tessellate_fill_even_odd`] to split scanline bands at self-intersections so
-/// the active-edge ordering stays stable within each band.
-fn edge_intersection_y(
-    e1: &([f32; 2], [f32; 2]),
-    e2: &([f32; 2], [f32; 2]),
-) -> Option<f32> {
+/// [`sweep_fill`] to split scanline bands at self-intersections so the
+/// active-edge ordering stays stable within each band.
+fn edge_intersection_y(e1: &SweepEdge, e2: &SweepEdge) -> Option<f32> {
     const EPS: f32 = 1e-4;
-    let (p1, p2) = (e1.0, e1.1);
-    let (p3, p4) = (e2.0, e2.1);
+    let (p1, p2) = (e1.top, e1.bot);
+    let (p3, p4) = (e2.top, e2.bot);
     let d1 = [p2[0] - p1[0], p2[1] - p1[1]];
     let d2 = [p4[0] - p3[0], p4[1] - p3[1]];
     let denom = d1[0] * d2[1] - d1[1] * d2[0];
@@ -719,76 +743,20 @@ fn edge_intersection_y(
     }
 }
 
-/// Signed area of polygon (positive = CCW in Y-down coordinate system).
-fn signed_area(pts: &[[f32; 2]]) -> f32 {
-    let n = pts.len();
-    let mut area = 0.0f32;
-    for i in 0..n {
-        let j = (i + 1) % n;
-        area += pts[i][0] * pts[j][1];
-        area -= pts[j][0] * pts[i][1];
-    }
-    area * 0.5
-}
-
-/// Ear-clipping triangulation for a simple (non-self-intersecting) polygon.
-/// Time: O(n²). Correct for convex and most concave polygons.
-fn ear_clip(orig: &[[f32; 2]]) -> Vec<[f32; 2]> {
-    let mut tris = Vec::with_capacity((orig.len() - 2) * 3);
-    // Working index list.
-    let mut idx: Vec<usize> = (0..orig.len()).collect();
-
-    let mut iter = 0usize;
-    while idx.len() > 3 {
-        let n = idx.len();
-        let mut found = false;
-        for i in 0..n {
-            let a = idx[(i + n - 1) % n];
-            let b = idx[i];
-            let c = idx[(i + 1) % n];
-            if is_ear(orig, &idx, a, b, c) {
-                tris.push(orig[a]);
-                tris.push(orig[b]);
-                tris.push(orig[c]);
-                idx.remove(i);
-                found = true;
-                break;
-            }
-        }
-        // Guard against infinite loop (degenerate polygons).
-        iter += 1;
-        if !found || iter > orig.len() * orig.len() + 10 {
-            break;
-        }
-    }
-    // Last triangle.
-    if idx.len() == 3 {
-        tris.push(orig[idx[0]]);
-        tris.push(orig[idx[1]]);
-        tris.push(orig[idx[2]]);
-    }
-    tris
-}
-
-/// True if triangle (a, b, c) is a valid ear: convex and contains no other vertex.
-fn is_ear(pts: &[[f32; 2]], idx: &[usize], a: usize, b: usize, c: usize) -> bool {
-    let pa = pts[a]; let pb = pts[b]; let pc = pts[c];
-    // Must be CCW (convex ear).
-    if cross2d(pa, pb, pc) <= 0.0 { return false; }
-    // No other polygon vertex inside triangle.
-    for &j in idx {
-        if j == a || j == b || j == c { continue; }
-        if point_in_triangle(pts[j], pa, pb, pc) { return false; }
-    }
-    true
-}
-
 /// 2-D cross product of vectors (b-a) × (c-a). Positive = CCW in Y-down.
+///
+/// Test-only since BUG-277 срез 10 removed the ear-clipping fill: the tests use
+/// it to measure the area of a triangle soup.
+#[cfg(test)]
 fn cross2d(a: [f32; 2], b: [f32; 2], c: [f32; 2]) -> f32 {
     (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
 }
 
 /// True if point p is strictly inside triangle (a, b, c) — all cross products same sign.
+///
+/// Test-only (see [`cross2d`]): the tests probe whether a tessellated region
+/// covers a given point.
+#[cfg(test)]
 fn point_in_triangle(p: [f32; 2], a: [f32; 2], b: [f32; 2], c: [f32; 2]) -> bool {
     let d0 = cross2d(a, b, p);
     let d1 = cross2d(b, c, p);
@@ -1505,42 +1473,51 @@ mod tests {
 
     // ── Tessellation ────────────────────────────────────────────────────────
 
-    #[test]
-    fn tessellate_triangle_gives_one_triangle() {
-        let pts = vec![[0.0f32, 0.0], [10.0, 0.0], [5.0, 10.0]];
-        let tris = tessellate_polygon(&pts);
-        assert_eq!(tris.len(), 3, "one triangle = 3 vertices");
+    /// Total area of a flat triangle-soup vertex list.
+    fn soup_area(tris: &[[f32; 2]]) -> f32 {
+        tris.chunks_exact(3).map(|t| cross2d(t[0], t[1], t[2]).abs() * 0.5).sum()
     }
 
     #[test]
-    fn tessellate_quad_gives_two_triangles() {
-        // Axis-aligned rectangle: 4 verts → 2 triangles → 6 vertices.
+    fn tessellate_triangle_covers_its_interior() {
+        let pts = vec![[0.0f32, 0.0], [10.0, 0.0], [5.0, 10.0]];
+        let tris = tessellate_fill(&[pts]);
+        assert!((soup_area(&tris) - 50.0).abs() < 0.5, "area={}", soup_area(&tris));
+        assert!(covered_by(&tris, [5.0, 5.0]), "centroid is inside");
+        assert!(!covered_by(&tris, [9.0, 9.0]), "outside the slanted edge");
+    }
+
+    #[test]
+    fn tessellate_quad_area() {
+        // Axis-aligned rectangle 10×10.
         let pts = vec![[0.0f32, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]];
-        let tris = tessellate_polygon(&pts);
-        assert_eq!(tris.len(), 6, "quad → 2 triangles → 6 verts");
+        let tris = tessellate_fill(&[pts]);
+        assert!((soup_area(&tris) - 100.0).abs() < 0.5, "area={}", soup_area(&tris));
     }
 
     #[test]
     fn tessellate_degenerate_line_gives_nothing() {
         let pts = vec![[0.0f32, 0.0], [10.0, 0.0]];
-        assert!(tessellate_polygon(&pts).is_empty());
+        assert!(tessellate_fill(&[pts]).is_empty());
     }
 
     #[test]
     fn tessellate_empty_gives_nothing() {
-        assert!(tessellate_polygon(&[]).is_empty());
+        assert!(tessellate_fill(&[]).is_empty());
+        assert!(tessellate_fill(&[Vec::new()]).is_empty());
     }
 
     #[test]
     fn tessellate_pentagon() {
-        // Regular pentagon: 5 verts → 3 triangles → 9 vertices.
+        // Regular pentagon, circumradius 40: area = 5/2 · R² · sin(72°).
         let n = 5;
         let pts: Vec<[f32; 2]> = (0..n).map(|i| {
             let a = 2.0 * PI * i as f32 / n as f32 - PI / 2.0;
             [50.0 + 40.0 * a.cos(), 50.0 + 40.0 * a.sin()]
         }).collect();
-        let tris = tessellate_polygon(&pts);
-        assert_eq!(tris.len(), (n - 2) * 3, "pentagon → 3 triangles");
+        let tris = tessellate_fill(&[pts]);
+        let expected = 2.5 * 40.0 * 40.0 * (2.0 * PI / 5.0).sin();
+        assert!((soup_area(&tris) - expected).abs() < 1.0, "area={}", soup_area(&tris));
     }
 
     #[test]
@@ -1548,7 +1525,45 @@ mod tests {
         let contour1 = vec![[0.0f32,0.0],[10.0,0.0],[5.0,10.0]];
         let contour2 = vec![[20.0,0.0],[30.0,0.0],[25.0,10.0]];
         let tris = tessellate_fill(&[contour1, contour2]);
-        assert_eq!(tris.len(), 6); // 1 tri * 3 + 1 tri * 3
+        assert!((soup_area(&tris) - 100.0).abs() < 0.5, "two triangles, area={}", soup_area(&tris));
+        assert!(covered_by(&tris, [5.0, 5.0]), "first contour filled");
+        assert!(covered_by(&tris, [25.0, 5.0]), "second contour filled");
+        assert!(!covered_by(&tris, [15.0, 5.0]), "gap between them stays empty");
+    }
+
+    /// BUG-277 срез 10: a self-intersecting outline (bowtie — TEST-54's hourglass)
+    /// has no ear at all, so the old per-contour ear-clipping returned an empty
+    /// triangle list and wgpu drew nothing where femtovg/`cpu_raster` fill both
+    /// lobes. Both lobes must be covered under nonzero.
+    #[test]
+    fn nonzero_bowtie_fills_both_lobes() {
+        let segs = parse_svg_path("M 20 20 L 180 20 L 100 80 L 180 140 L 20 140 L 100 80 Z");
+        let contours = flatten_path(&segs, 0.5);
+        let tris = tessellate_fill(&contours);
+        assert!(!tris.is_empty(), "bowtie must tessellate");
+        assert!(covered_by(&tris, [100.0, 35.0]), "upper lobe filled");
+        assert!(covered_by(&tris, [100.0, 125.0]), "lower lobe filled");
+        assert!(!covered_by(&tris, [40.0, 80.0]), "left notch stays empty");
+        assert!(!covered_by(&tris, [160.0, 80.0]), "right notch stays empty");
+        // Two triangles, each base 160 × height 60.
+        assert!((soup_area(&tris) - 9600.0).abs() < 20.0, "area={}", soup_area(&tris));
+    }
+
+    /// Nonzero honours contour direction: a reverse-wound inner square punches a
+    /// hole, a same-wound one does not. Per-contour ear-clipping filled both
+    /// solid because it never compared windings across contours.
+    #[test]
+    fn nonzero_reverse_wound_inner_contour_is_a_hole() {
+        let outer = vec![[-80.0f32, -80.0], [80.0, -80.0], [80.0, 80.0], [-80.0, 80.0]];
+        let inner_cw  = vec![[-40.0f32, -40.0], [-40.0, 40.0], [40.0, 40.0], [40.0, -40.0]];
+        let inner_ccw = vec![[-40.0f32, -40.0], [40.0, -40.0], [40.0, 40.0], [-40.0, 40.0]];
+
+        let donut = tessellate_fill(&[outer.clone(), inner_cw]);
+        assert!(covered_by(&donut, [0.0, 60.0]), "ring is filled");
+        assert!(!covered_by(&donut, [0.0, 0.0]), "reverse-wound inner contour is a hole");
+
+        let solid = tessellate_fill(&[outer, inner_ccw]);
+        assert!(covered_by(&solid, [0.0, 0.0]), "same-wound inner contour stays filled (winding 2)");
     }
 
     #[test]
