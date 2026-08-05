@@ -5215,15 +5215,19 @@ fn emit_background_layer(
                 });
             }
         }
-        BackgroundImage::Gradient(ParsedGradient::Linear { angle_deg, stops, repeating }) => {
+        BackgroundImage::Gradient(ParsedGradient::Linear { angle_deg, corner, stops, repeating }) => {
             let (rects, needs_clip) = gradient_paint_rects(layer, origin, clip);
             if needs_clip && !rects.is_empty() {
                 out.push(DisplayCommand::PushClipRect { rect: clip });
             }
             for r in &rects {
+                // CSS Images L3 §3.1 — a `to <corner>` keyword's true angle
+                // depends on this paint rect's aspect ratio; an explicit
+                // `<angle>` is box-independent and passes through unchanged.
+                let resolved_angle = corner.map_or(*angle_deg, |c| c.angle_deg(r.width, r.height));
                 out.push(DisplayCommand::DrawLinearGradient {
                     rect: *r,
-                    angle_deg: *angle_deg,
+                    angle_deg: resolved_angle,
                     stops: stops.clone(),
                     repeating: *repeating,
                 });
@@ -5500,10 +5504,11 @@ fn emit_push_mask_layer(out: &mut Vec<DisplayCommand>, b: &LayoutBox, layer: &Ma
             });
             true
         }
-        BackgroundImage::Gradient(ParsedGradient::Linear { angle_deg, stops, repeating }) => {
+        BackgroundImage::Gradient(ParsedGradient::Linear { angle_deg, corner, stops, repeating }) => {
+            let resolved_angle = corner.map_or(*angle_deg, |c| c.angle_deg(rect.width, rect.height));
             out.push(DisplayCommand::PushMaskLinearGradient {
                 rect,
-                angle_deg: *angle_deg,
+                angle_deg: resolved_angle,
                 stops: mask_stops_for_mode(stops, mode),
                 repeating: *repeating,
             });
