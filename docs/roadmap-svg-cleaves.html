@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-05",
  "counts": {
-  "open": 300,
-  "fixed": 327,
+  "open": 301,
+  "fixed": 328,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 627,
+ "total_bugs": 629,
  "phases": [
   {
    "id": "P0",
@@ -3517,16 +3517,20 @@
       {
        "id": "WPT-VENDOR-resize-observer",
        "title": "WPT: вендорить + прогнать категорию `resize-observer`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root resize-observer --recursive`, ~2 мин, 25 файлов, 15 исполнившихся id) — **3/15 harness OK, 13/32 сабтестов**. Заведён [BUG-661](bugs/BUG-661-OPEN.md) — `ResizeObserver` не спек-совместим по четырём независимо подтверждённым осям: (1) доставка целиком завязана на relayout-пайплайн, поэтому `observe()` без последующей мутации никогда не получает гарантированное спекой первое уведомление (живой `--mcp-live-port`-пробой — 3 с опроса без единой доставки, до первой несвязанной мутации), это и объясняет чистые TIMEOUT без единого сабтеста (`ordering.html`, `calculate-depth-for-node.html`); (2) `observe()` не валидирует аргумент — тихо no-op вместо `TypeError` на не-Element (`observe.html`); (3) `contentRect`/`borderBoxSize`/`contentBoxSize`/`devicePixelContentBoxSize` — один и тот же плоский rect без различия border/content/scrollbar (`scrollbars.html`, `scrollbars-2.html`); (4) reparenting (remove+appendChild) той же геометрии не сбрасывает `lastW`/`lastH` — уведомление не приходит (`notify.html`, test2). Второй, независимый [BUG-662](bugs/BUG-662-OPEN.md) (js/v8_runtime.rs, не специфичен для этой категории) — `rt.eval()`'s completion-value сериализация (`from_v8_bounded`) безусловно дёргает все геттеры возвращаемого объекта, даже когда значение никем не читается (`crates/shell/src/main.rs`'s классик-скрипт луп его отбрасывает); геттер, бросающий вне своего `this`-контекста (найдено на невендоренном апстримном `resizeTestHelper.js`), маскирует реальную (в данном случае — отсутствующую) ошибку скрипта под непонятный `get '<key>' failed`. `fragments.html` (multicol fragment-aware `contentBoxSize`/`borderBoxSize` массивы) и `svg-with-css-box-001.html`/`svg.html`/`zoom.html`/`eventloop.html`/`callback-cross-realm-report-exception.html` — не доисследованы в эту сессию (см. секцию «НЕ является причиной» в BUG-661), вероятно частично объясняются той же осью (1).",
+       "bugs": [
+        "BUG-661",
+        "BUG-662"
+       ]
       },
       {
        "id": "WPT-VENDOR-resource-timing",
        "title": "WPT: вендорить + прогнать категорию `resource-timing`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root resource-timing --recursive --processes=4`, ~7 мин, 271 файл, 132 исполнившихся id) — **30/132 harness OK, 11/147 сабтестов**. Весь сигнал воспроизводит уже задокументированные гэпы, три класса: (1) `TypeError: performance.addEventListener is not a function` (14 хитов, `buffer-full-*.html`) — реконфирмация [BUG-400](bugs/BUG-400-OPEN.md) (`performance` — плоский объектный литерал без `EventTarget`); отдельно подтверждено (живой grep `dom.rs`), что `resourcetimingbufferfull`-событие не существует в шиме вовсе (нулевых упоминаний) — BUG-400 явно выносит его диспатч за скобки своего фикса, так что `buffer-full-*.html` не позеленеют даже после него, остаточный гэп уже предвиден в тексте бага; (2) `Error: observe_entry: timeout` — почти все `initiator-type/*.html` (img/script/css/svg/video/embed/input/frameset/body background/sendBeacon) вместе с `clear-resource-timings.html` (`expected 2 but got 0`) и весь NOTRUN/TIMEOUT-хвост `test_resource_timing.html` — реконфирмация [BUG-520](bugs/BUG-520-OPEN.md) (`_lumen_record_resource_timing` не вызывается ни из одного реального пути загрузки ресурса — JS-сторона и `PerformanceObserver`-доставка рабочие, буфер просто никогда не наполняется); (3) единичные реконфирмации на периферии — [BUG-572](bugs/BUG-572-OPEN.md) (`HTMLScriptElement.supports` отсутствует, `resource-timing-failed-fetch-web-bundle.tentative.html`), [BUG-568](bugs/BUG-568-OPEN.md) (`document.write` отсутствует целиком, `link-sequence-of-events.html`/`input-sequence-of-events.html`), [BUG-347](bugs/BUG-347-OPEN.md) (`missing scheme` на относительных URL, `no-entries-for-cross-origin-css-fetched.sub.html`), TLS-гэп `UnknownIssuer` (`.https.`/`.h2.` файлы, [BUG-380](bugs/BUG-380-OPEN.md)) и `AssertionError: Got results from X, expected Y` (27 хитов, тот же реюз browsing context, BUG-380). Невендоренные общие хелперы (`/common/*.js`, `../../resources/*.js` на уровень выше категории) — по устоявшейся конвенции, не баг. Новых багов не заведено — весь сигнал уже покрыт открытыми тикетами"
       },
       {
        "id": "WPT-VENDOR-sanitizer-api",
@@ -6775,10 +6779,10 @@
    "debtor": false
   },
   "BUG-328": {
-   "status": "open",
-   "title": "`dom/nodes/Element-children.html` снова unexpected (2 сабтеста) против `.ini`, флипнутого в `expected: PASS` при закрытии BUG-322/BUG-323 2026-07-21: `.item(\"fo…",
-   "component": "js (WEB_API_SHIM, dom.rs)",
-   "date": null,
+   "status": "fixed",
+   "title": "`dom/nodes/Element-children.html` subtest 2 (`ownKeys`): two independent defects — (1) no `Namespace::None` variant, so `createElementNS(\"\", ...)` collapsed int…",
+   "component": "js (`crates/js/src/dom.rs`, `crates/js/src/v8_runtime.rs`, `crates/engine/dom/src/lib.rs`)",
+   "date": "2026-08-05",
    "debtor": false
   },
   "BUG-329": {
@@ -9076,6 +9080,20 @@
    "component": "js (`crates/js/src/dom.rs:8456`–`8480` — `requestIdleCallback`/`cancelIdleCallback`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-661": {
+   "status": "open",
+   "title": "`ResizeObserver` delivery only runs inside the relayout pipeline, so `observe()` with no subsequent DOM/style mutation never gets its spec-guaranteed initial no…",
+   "component": "js (`crates/js/src/dom.rs:7085`–`7138` — `ResizeObserver`), shell (`crates/shell/src/main.rs:10300` — relayout-gated delivery)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-662": {
+   "status": "open",
+   "title": "`rt.eval()`'s completion-value conversion eagerly invokes every own-property getter of the script's last-statement object value merely to serialize a result nob…",
+   "component": "js (`crates/js/src/v8_runtime.rs:5041`–`5068` — `from_v8_bounded`, object branch)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -9278,8 +9296,7 @@
    "BUG-323",
    "BUG-324",
    "BUG-325",
-   "BUG-327",
-   "BUG-328"
+   "BUG-327"
   ],
   "js (WEB_API_SHIM, dom.rs) + native `v8_runtime.rs`/`dom.rs` (оба движка)": [
    "BUG-326"
@@ -9461,6 +9478,9 @@
   ],
   "js (`crates/js/src/dom.rs`, `contentEditable`/`isContentEditable`)": [
    "BUG-344"
+  ],
+  "js (`crates/js/src/dom.rs`, `crates/js/src/v8_runtime.rs`, `crates/engine/dom/src/lib.rs`)": [
+   "BUG-328"
   ],
   "js (`crates/js/src/dom.rs`, `window` object)": [
    "BUG-623"
