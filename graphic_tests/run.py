@@ -431,8 +431,16 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
     #   полифилл дробит сегмент на 16 подстопов → 17 стопов, а uniform-массив
     #   шейдера держал ровно 16 и `build_grad_params` резала список молча.
     #   Стопы переехали в storage buffer с runtime-sized `array<GradStop>`.
-    '140': ('BUG-277', 2.17),
-    '141': ('BUG-277', 1.59),
+    '140': ('BUG-128', 1.27),   # Ратчет 2.17→1.27, перецелён из BUG-277 (BUG-277 срез 16, 2026-08-05):
+    #   «wgpu-окно против headless-CPU» дал 1.27% против 1.45% — расхождение бэкендов
+    #   в пределах шума, wgpu-исполнителя дефекта нет. `--dump-display-list` подтверждает
+    #   геометрию/цвета точными (4 `FillRoundedRect`-свотча резолвленных ::placeholder-цветов
+    #   совпадают с ожиданием) — остаток целиком из 4 `sans-serif`-подписей (Inter vs Edge UI-шрифт).
+    '141': ('BUG-128', 1.44),   # Ратчет 1.59→1.44, перецелён из BUG-277 (BUG-277 срез 16, 2026-08-05):
+    #   «wgpu-окно против headless-CPU» дал 1.44% против 1.46% — расхождение бэкендов
+    #   в пределах шума. `--dump-display-list` подтверждает backface-culling корректным
+    #   (скрытые ряды идут через `PushOpacity 0.000`, видимые — без него); остаток из
+    #   4 длинных `monospace`-подписей (Inter fallback vs Edge monospace).
     # '148' убран (BUG-277 срез 3, 2026-08-05): 5.44% → 0.00%, тот же фикс, что снял «56».
     # Изолированные ячейки перестали чернеть, потому что BLEND_SHADER теперь берёт
     # Cs' = (1−αd)·Cs + αd·B(Cd,Cs): при прозрачном backdrop-е спека даёт исходный цвет.
@@ -491,7 +499,13 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
     #   а `PopClip` композитит его через покрытие точной формы — тот же
     #   механизм, что срез 5 дал скруглённому клипу. femtovg-baseline была
     #   0.60% (inherent AA-fringe, класс BUG-176/247/173 — история сохранена).
-    '30': ('BUG-277', 1.44),    # Ратчет 10.24→1.44 (BUG-277 срез 7, 2026-08-05): три дефекта wgpu-исполнителя — (1) `PushBackdropFilter{bounds}` шли в регион и в квад блита без scroll-offset-а и накопленного `PushTransform`, поэтому и источник, и приёмник стояли на высоту хрома выше элемента; (2) `filter_pipeline` композитил премультиплированный offscreen-слой straight-alpha блендингом (alpha применялась дважды), а `FILTER_SHADER_SRC` применял фильтры к премультиплированному цвету; (3) H- и V-проходы блюра делили один `blur_uniform` — обе записи до `submit`, побеждает последняя, горизонтальной половины свёртки не было. Расхождение с детерминированным CPU-рендером 9.74%→0.31%, остаток вместе с ним ниже femtovg-класса. Историческая справка: femtovg-baseline была 4.27% (row-flip BUG-144 + backdrop colour-matrix BUG-085 + blur AA, класс BUG-176/247/128 — история сохранена). BUG-287/BUG-277 (2026-07-16): P1-wgpu-flip сделал wgpu дефолтным — wgpu рендерит filter/blur иначе, ратчет к живому wgpu-числу 10.24% (совпадает с BUG-277 рядом «30» день-в-день независимо измеренным)
+    '30': ('BUG-247', 1.44),    # Перецелён из BUG-277 (BUG-277 срез 16, 2026-08-05): «wgpu-окно против
+    #   headless-CPU» дал 1.44% против 1.69% — расхождение бэкендов в пределах шума, дефекта
+    #   wgpu-исполнителя нет (срезы 1/7 уже вычистили реальные дефекты — Px/Calc-стопы и
+    #   backdrop-filter/blur-uniform hazard). Страница не содержит текста (filter/backdrop-filter
+    #   боксы) — остаток инхерентен: gaussian-blur AA/kernel и backdrop colour-matrix vs Edge,
+    #   класс BUG-247 (уже перечисляет TEST-30 по классу в BUGS.md). Ратчет 10.24→1.44 (BUG-277
+    #   срезы 1/7, 2026-08-05): три дефекта wgpu-исполнителя — (1) `PushBackdropFilter{bounds}` шли в регион и в квад блита без scroll-offset-а и накопленного `PushTransform`, поэтому и источник, и приёмник стояли на высоту хрома выше элемента; (2) `filter_pipeline` композитил премультиплированный offscreen-слой straight-alpha блендингом (alpha применялась дважды), а `FILTER_SHADER_SRC` применял фильтры к премультиплированному цвету; (3) H- и V-проходы блюра делили один `blur_uniform` — обе записи до `submit`, побеждает последняя, горизонтальной половины свёртки не было. Расхождение с детерминированным CPU-рендером было 9.74%→0.31% на срезе 7. Историческая справка: femtovg-baseline была 4.27% (row-flip BUG-144 + backdrop colour-matrix BUG-085 + blur AA, класс BUG-176/247/128 — история сохранена)
          '34': ('BUG-128', 3.02),    # form controls: inline-block flow (контролы шли блоками-в-столбик → теперь в строку как Edge), radio-точка стала кругом, <option> не утекает текстом, color-swatch показывает value, value-текст инпутов рисуется, placeholder серым у пустых полей, checkbox белая галочка + radio белая точка-в-центре (BUG-187 закрыт 4.78% → 3.02%); остаток = чисто font-parity лейблов/value (Inter vs Edge UI-шрифт) + вертикальный сдвиг line-height → класс BUG-128
     # '39' убран (BUG-277 срез 9, 2026-08-05): 2.96% → 0.00%, цель ≤0.5%
     #   достигнута. Остаток после среза 6 держался на трёх дефектах пути
@@ -529,7 +543,13 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
     '79': ('BUG-128', 6.76),    # text-underline-offset / text-decoration: геометрия линий корректна; остаток = font-parity (serif vs sans, Inter vs Edge) по всему тексту страницы (rule 3). BUGS.md давно помечал кандидатом в KNOWN_DEBTORS
     '110': ('BUG-214', 1.70),   # accent-color РЕАЛИЗОВАН (дрейф трекера, прогон 2026-06-23): emit_form_control_accents тинтит checkbox/radio/range/progress + юнит-тесты. Diff-картинка подтверждает: цвета-акценты применяются верно (cyan/magenta/green), остаток = расхождение нативной отрисовки form-виджетов (толщина трека слайдера, форма thumb, стиль progress-бара) vs UA-виджеты Edge — присущее кросс-браузерное расхождение (сам тест-HTML отмечает «native control sizes kept → divergence stays small»)
     '120': ('BUG-217', 3.26),   # prefers-contrast/prefers-reduced-data РЕАЛИЗОВАНЫ и спек-корректны (ревизия 2026-06-23): парсинг+матчинг в parser.rs (MediaFeature::PrefersContrast/PrefersReducedData, +unit-тесты media_query_prefers_*). Diff-картинка подтверждает: swatch .a (prefers-contrast: no-preference) зелёный в обоих движках; единственное расхождение = swatch .b (prefers-reduced-data: no-preference) — Lumen матчит (зелёный, как требует комментарий теста «correct engine → both green»), а Edge НЕ поддерживает prefers-reduced-data → query не матчится → .b остаётся красным. Lumen корректнее reference-браузера (тот же класс, что BUG-126/TEST-77 inset-area, BUG-199/TEST-71 @starting-style, BUG-237/TEST-122 line-height-step). Совпасть = отключить рабочую media-feature (запрещено rule 4)
-    '113': ('BUG-277', 1.30),   # Ратчет 6.10→1.30 (BUG-277 срез 8, 2026-08-05: точная форма `clip-path` в wgpu — страница обрезает плавающие фигуры clip-path-ом). shape-outside path(): femtovg-baseline была 1.41% (AA вдоль диагональной кромки + font-parity, класс BUG-215 — история сохранена). BUG-287/BUG-277 (2026-07-16): P1-wgpu-flip сделал wgpu дефолтным, ратчет к живому wgpu-числу 6.10% (совпадает с BUG-277 рядом «113»)
+    '113': ('BUG-215', 1.30),   # Перецелён из BUG-277 обратно на его собственный debtor-баг (BUG-277
+    #   срез 16, 2026-08-05): «wgpu-окно против headless-CPU» дал 1.30% против 1.36% — расхождение
+    #   бэкендов в пределах шума, дефекта wgpu-исполнителя не осталось (срез 8 уже вычистил
+    #   реальный — `PushClipPath` резал по bbox формы вместо точного контура). Число ниже исходного
+    #   femtovg-baseline BUG-215 (1.41%: AA вдоль диагональной кромки shape-outside + font-parity
+    #   обтекающего текста) — остаток того же класса, не новый. Ратчет 6.10→1.30 (BUG-277 срез 8,
+    #   2026-08-05: точная форма `clip-path` в wgpu — страница обрезает плавающие фигуры clip-path-ом).
     '126': ('BUG-126', 3.26),  # media inverted-colors: 3.26% FAIL на текущем main и на a7c348fa (до font-parity fix) — регрессия не от BUG-128; Edge headless ловит кадр без инверсии, Lumen рендерит инверсию через apply_inverted_colors — цветовое расхождение coverage area page, не дефект движка
     '97': ('BUG-128', 2.78),    # counter-set: порядок reset→increment→set спек-корректен (counters.rs apply_reset/apply_increment/apply_set + регресс-тест counter_set_test97_sibling_rows). Все пять значений счётчика совпадают с Edge: 5 (set на reset-0), 6 (inc), 0 (inc затем set — set перекрывает inc), 1 (inc от 0), 42 (set). Diff-картинка подтверждает: цветные боксы строк и границы совпадают пиксель-в-пиксель, весь остаток = font-parity ::before-меток counter(c) + текста строк (Inter sans vs Edge sans → разная ширина «inc+set» сдвигает глифы по X, ghosting), rule 3. Класс BUG-128
     '66': ('BUG-128', 1.07),    # ::selection: правила парсятся, но в тесте не выделяется текст — фича не видна без user-selection. Свотчи (sw1 #0078D4 / sw2 #e74c3c / sw3 #1a6ead) показывают цвета выделения и совпадают с Edge по цвету и X-позиции (41–220) пиксель-в-пиксель. Декомпозиция diff (BUG-195): 93% пикселей — текст (62% метки-лейблы «Default ::selection background…», 31% центрированный белый текст «Default»/«Highlight»/«Custom» внутри свотчей), Inter sans vs Edge sans (rule 3). Остаток = ~1–2px накопленный вертикальный line-height-дрейф верх/низ свотчей (Inter «normal» ≈1.2 vs Edge) → свотчи на 1–2px ниже к концу страницы. Реального дефекта движка нет. Класс BUG-128
