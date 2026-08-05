@@ -6096,13 +6096,16 @@ impl Renderer {
         struct CompositePlan { from_level: usize, comp_v_start: u32, mode: BlendMode }
         // CSS Masking L1 §4: gradient mask spec — stored in plan for render-time GPU pass.
         // For Linear: p0/p1 are UV endpoints (from linear_gradient_uv_endpoints).
-        // For Radial: p0=[cx_pct,cy_pct], p1=[1,1] (radial_gradient_uv_params).
+        // For Radial: p0=[cx_pct,cy_pct], p1=ending-shape radii in UV units.
         // For Conic:  p0=[cx_pct,cy_pct], p1=[width,height] (box-space atan2).
+        // `quad` — вершины квада маски в ЭКРАННЫХ CSS px: rect уже прогнан
+        // через накопленный `PushTransform`, потому что рендер-стадия матрицы
+        // не видит, а контент-слой рисуется трансформированным (BUG-277).
         #[derive(Clone)]
         enum MaskGradientSpec {
-            Linear { params: GradParamsCpu, rect: Rect },
-            Radial { params: GradParamsCpu, rect: Rect },
-            Conic  { params: GradParamsCpu, rect: Rect },
+            Linear { params: GradParamsCpu, quad: [GradVertex; 6] },
+            Radial { params: GradParamsCpu, quad: [GradVertex; 6] },
+            Conic  { params: GradParamsCpu, quad: [GradVertex; 6] },
         }
         // CSS Masking L1 §4: mask composite plan. `from_level` = offscreen level
         // with element content; `mask_src` = key in self.images (image mask).
@@ -6199,6 +6202,11 @@ impl Renderer {
             position: ObjectPosition,
             repeat: BackgroundRepeat,
             rect: Rect,
+            /// Накопленный `PushTransform` на момент открытия маски. `PopMask`
+            /// гонит через него вершины квада: сам контент рисуется
+            /// трансформированным, а квад композита без этого лежал бы в
+            /// нетрансформированных координатах (BUG-277).
+            transform: Option<Mat4>,
         }
         let mut mask_params_stack: Vec<MaskPushInfo> = Vec::new();
         // Accumulated vertex data for rounded-clip composite passes.
@@ -6282,6 +6290,12 @@ impl Renderer {
         let (surface_w, surface_h) = (sw0, sh0);
 
         let dpr_f32 = self.scale_factor.max(1e-6) as f32;
+        // CSS-px размер цели пасса — ровно то, что уходит в `Uniforms.viewport`
+        // (см. запись uniform-буфера ниже). Маски сэмплируют полноразмерные
+        // текстуры по `pos / viewport`, а НЕ `pos / surface`: позиции вершин в
+        // CSS px, а surface — в device px, и при dpr ≠ 1 это разные числа.
+        let viewport_w = (surface_w as f32 / dpr_f32).max(1e-6);
+        let viewport_h = (surface_h as f32 / dpr_f32).max(1e-6);
 
         // Объединяет позиции вершин диапазона draw-op-а в bbox уровня.
         // Вершины уже в CSS px, после transform/scroll — bbox финальный.
@@ -7355,7 +7369,9 @@ impl Renderer {
                         continue;
                     }
                     let scrolled = translate_rect(*rect, dx, dy);
-                    let (p0, p1) = radial_gradient_uv_params(*center_x_pct, *center_y_pct);
+                    let (p0, p1) = radial_gradient_uv_params(
+                        *center_x_pct, *center_y_pct, *radius_x, *radius_y, scrolled,
+                    );
                     // Px/Calc stops resolve against the larger ending-shape radius,
                     // matching `cpu_raster::rasterize_radial_gradient` (BUG-277).
                     let line_len = radius_x.max(*radius_y).max(1.0);
@@ -7479,6 +7495,7 @@ impl Renderer {
                         position: *position,
                         repeat: *repeat,
                         rect: translate_rect(*rect, dx, dy),
+                        transform: transform_stack.last().copied(),
                     });
                     current_level += 1;
                     while level_first.len() <= current_level {
@@ -7498,13 +7515,16 @@ impl Renderer {
                     let (p0, p1, line_len) = linear_gradient_uv_endpoints(scrolled.width, scrolled.height, *angle_deg);
                     let resolved = resolve_gradient_stops(stops, line_len);
                     let params = build_grad_params(&resolved, p0, p1, 0, *repeating, 0.0);
+                    let transform = transform_stack.last().copied();
+                    let quad = transformed_grad_quad(scrolled, transform.as_ref());
                     mask_params_stack.push(MaskPushInfo {
                         src: None,
-                        gradient: Some(MaskGradientSpec::Linear { params, rect: scrolled }),
+                        gradient: Some(MaskGradientSpec::Linear { params, quad }),
                         size: BackgroundSize::Auto,
                         position: ObjectPosition::background_initial(),
                         repeat: BackgroundRepeat::NoRepeat,
                         rect: scrolled,
+                        transform,
                     });
                     current_level += 1;
                     while level_first.len() <= current_level {
@@ -7519,21 +7539,26 @@ impl Renderer {
                 DisplayCommand::PushMaskRadialGradient { rect, center_x_pct, center_y_pct, stops, repeating } => {
                     flush_batch!();
                     let scrolled = translate_rect(*rect, dx, dy);
-                    let (p0, p1) = radial_gradient_uv_params(*center_x_pct, *center_y_pct);
                     // Mask radial gradients stay circular (farthest-corner) — the mask
                     // command carries no ending-shape, matching `cpu_raster::render_mask`.
                     let mask_dx = center_x_pct.max(1.0 - center_x_pct) * scrolled.width;
                     let mask_dy = center_y_pct.max(1.0 - center_y_pct) * scrolled.height;
                     let line_len = mask_dx.hypot(mask_dy).max(1.0);
+                    let (p0, p1) = radial_gradient_uv_params(
+                        *center_x_pct, *center_y_pct, line_len, line_len, scrolled,
+                    );
                     let resolved = resolve_gradient_stops(stops, line_len);
                     let params = build_grad_params(&resolved, p0, p1, 1, *repeating, 0.0);
+                    let transform = transform_stack.last().copied();
+                    let quad = transformed_grad_quad(scrolled, transform.as_ref());
                     mask_params_stack.push(MaskPushInfo {
                         src: None,
-                        gradient: Some(MaskGradientSpec::Radial { params, rect: scrolled }),
+                        gradient: Some(MaskGradientSpec::Radial { params, quad }),
                         size: BackgroundSize::Auto,
                         position: ObjectPosition::background_initial(),
                         repeat: BackgroundRepeat::NoRepeat,
                         rect: scrolled,
+                        transform,
                     });
                     current_level += 1;
                     while level_first.len() <= current_level {
@@ -7553,13 +7578,16 @@ impl Renderer {
                     let from_angle_rad = from_angle_deg.to_radians();
                     let resolved = resolve_gradient_stops(stops, 1.0);
                     let params = build_grad_params(&resolved, p0, p1, 2, *repeating, from_angle_rad);
+                    let transform = transform_stack.last().copied();
+                    let quad = transformed_grad_quad(scrolled, transform.as_ref());
                     mask_params_stack.push(MaskPushInfo {
                         src: None,
-                        gradient: Some(MaskGradientSpec::Conic { params, rect: scrolled }),
+                        gradient: Some(MaskGradientSpec::Conic { params, quad }),
                         size: BackgroundSize::Auto,
                         position: ObjectPosition::background_initial(),
                         repeat: BackgroundRepeat::NoRepeat,
                         rect: scrolled,
+                        transform,
                     });
                     current_level += 1;
                     while level_first.len() <= current_level {
@@ -7673,23 +7701,29 @@ impl Renderer {
                                 }
                             }
                         }
+                        // Плитки построены в нетрансформированных координатах;
+                        // uv_mask у них внутри-плиточные, поэтому трансформа
+                        // касается только позиций (BUG-277 срез 6).
+                        if let Some(m) = info.transform.as_ref() {
+                            apply_affine_to_verts(&mut mask_vertices[mv_start as usize..], m);
+                        }
                         (Some(src.clone()), None)
                     } else if let Some(grad) = info.gradient.clone() {
-                        // Gradient mask: quad covers element rect; uv_mask = pos/surface
-                        // so the surface-size gradient texture is sampled at the same coords
-                        // as the content layer (uv_layer = pos/viewport).
-                        let area = info.rect;
-                        let (sw, sh) = (surface_w as f32, surface_h as f32);
-                        let (x0, y0) = (area.x, area.y);
-                        let (x1, y1) = (area.x + area.width, area.y + area.height);
-                        mask_vertices.extend_from_slice(&[
-                            MaskVertex { pos: [x0, y0], uv_mask: [x0/sw, y0/sh] },
-                            MaskVertex { pos: [x1, y0], uv_mask: [x1/sw, y0/sh] },
-                            MaskVertex { pos: [x1, y1], uv_mask: [x1/sw, y1/sh] },
-                            MaskVertex { pos: [x0, y0], uv_mask: [x0/sw, y0/sh] },
-                            MaskVertex { pos: [x1, y1], uv_mask: [x1/sw, y1/sh] },
-                            MaskVertex { pos: [x0, y1], uv_mask: [x0/sw, y1/sh] },
-                        ]);
+                        // Gradient mask: the quad is the very same (already transformed)
+                        // one the gradient is rendered with, so mask texel and content
+                        // pixel line up by construction. uv_mask = pos / viewport_css:
+                        // the temp texture is surface-sized but written through the same
+                        // `u.viewport` NDC mapping, so a CSS-px position p lands on texel
+                        // p/viewport·surface — exactly what uv = p/viewport samples.
+                        let quad = match &grad {
+                            MaskGradientSpec::Linear { quad, .. }
+                            | MaskGradientSpec::Radial { quad, .. }
+                            | MaskGradientSpec::Conic { quad, .. } => *quad,
+                        };
+                        mask_vertices.extend(quad.iter().map(|v| MaskVertex {
+                            pos: v.pos,
+                            uv_mask: [v.pos[0] / viewport_w, v.pos[1] / viewport_h],
+                        }));
                         (None, Some(Box::new(grad)))
                     } else {
                         (None, None)
@@ -8036,21 +8070,18 @@ impl Renderer {
                     flush_batch!();
                     let Some((rect, mode)) = mask_layer_stack.pop() else { continue };
                     let ml_v_start = mask_layer_vertices.len() as u32;
-                    // Build a rect quad over the element area. UV = pos / surface_size
-                    // so both t_content (scratch, full surface) and t_mask (full surface layer)
-                    // are sampled at the same normalised coordinate.
-                    let (sw, sh) = (surface_w as f32, surface_h as f32);
+                    // Квад по площади элемента, уже прогнанный через накопленный
+                    // `PushTransform` (BUG-277 срез 6 — контент рисуется
+                    // трансформированным). UV = pos / viewport_css: и t_content
+                    // (scratch), и t_mask — полноразмерные слои, записанные через
+                    // тот же `u.viewport`-маппинг, поэтому CSS-px позиция p
+                    // читается по uv = p/viewport (а не p/surface — это device px).
                     let scrolled = translate_rect(rect, dx, dy);
-                    let (x0, y0) = (scrolled.x, scrolled.y);
-                    let (x1, y1) = (scrolled.x + scrolled.width, scrolled.y + scrolled.height);
-                    mask_layer_vertices.extend_from_slice(&[
-                        MaskVertex { pos: [x0, y0], uv_mask: [x0/sw, y0/sh] },
-                        MaskVertex { pos: [x1, y0], uv_mask: [x1/sw, y0/sh] },
-                        MaskVertex { pos: [x1, y1], uv_mask: [x1/sw, y1/sh] },
-                        MaskVertex { pos: [x0, y0], uv_mask: [x0/sw, y0/sh] },
-                        MaskVertex { pos: [x1, y1], uv_mask: [x1/sw, y1/sh] },
-                        MaskVertex { pos: [x0, y1], uv_mask: [x0/sw, y1/sh] },
-                    ]);
+                    let quad = transformed_grad_quad(scrolled, transform_stack.last());
+                    mask_layer_vertices.extend(quad.iter().map(|v| MaskVertex {
+                        pos: v.pos,
+                        uv_mask: [v.pos[0] / viewport_w, v.pos[1] / viewport_h],
+                    }));
                     let ml_v_end = mask_layer_vertices.len() as u32;
                     render_plan.push(RenderPlanItem::MaskLayerComposite(MaskLayerCompositePlan {
                         from_level: current_level,
@@ -8874,10 +8905,10 @@ impl Renderer {
                         // Render gradient into a surface-size temp texture and use it as mask.
                         // Gradient rendered in same pixel-coord system as content layer,
                         // so uv_mask = pos/surface (set during plan building) samples correctly.
-                        let (grad_params, grad_rect) = match grad_spec.as_ref() {
-                            MaskGradientSpec::Linear { params, rect } => (params, rect),
-                            MaskGradientSpec::Radial { params, rect } => (params, rect),
-                            MaskGradientSpec::Conic  { params, rect } => (params, rect),
+                        let (grad_params, grad_verts) = match grad_spec.as_ref() {
+                            MaskGradientSpec::Linear { params, quad } => (params, quad),
+                            MaskGradientSpec::Radial { params, quad } => (params, quad),
+                            MaskGradientSpec::Conic  { params, quad } => (params, quad),
                         };
                         // Пул-текстура пред-захвачена до цикла (temp_grad_layers);
                         // LoadOp::Clear ниже гарантирует чистый старт при reuse.
@@ -8903,23 +8934,16 @@ impl Renderer {
                                 resource: grad_ubuf.as_entire_binding(),
                             }],
                         });
-                        // Gradient vertex quad covering the element rect (CSS px coords).
-                        let r = grad_rect;
-                        let grad_verts: [GradVertex; 6] = [
-                            GradVertex { pos: [r.x,           r.y          ], uv: [0.0, 0.0] },
-                            GradVertex { pos: [r.x + r.width, r.y          ], uv: [1.0, 0.0] },
-                            GradVertex { pos: [r.x + r.width, r.y + r.height], uv: [1.0, 1.0] },
-                            GradVertex { pos: [r.x,           r.y          ], uv: [0.0, 0.0] },
-                            GradVertex { pos: [r.x + r.width, r.y + r.height], uv: [1.0, 1.0] },
-                            GradVertex { pos: [r.x,           r.y + r.height], uv: [0.0, 1.0] },
-                        ];
+                        // Квад градиента — в экранных CSS px: `PushTransform`
+                        // применён ещё при планировании (BUG-277 срез 6),
+                        // иначе маска легла бы мимо трансформированного контента.
                         let grad_vbuf_m = self.device.create_buffer(&wgpu::BufferDescriptor {
                             label: Some("mask-grad-vbuf"),
-                            size: std::mem::size_of_val(&grad_verts) as u64,
+                            size: std::mem::size_of_val(grad_verts) as u64,
                             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                             mapped_at_creation: false,
                         });
-                        self.queue.write_buffer(&grad_vbuf_m, 0, as_bytes(&grad_verts));
+                        self.queue.write_buffer(&grad_vbuf_m, 0, as_bytes(grad_verts.as_slice()));
                         // Render gradient into temp_tex (cleared to transparent first).
                         {
                             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -10170,6 +10194,10 @@ impl VertexPos for GradVertex {
     fn pos_mut(&mut self) -> &mut [f32; 2] { &mut self.pos }
 }
 
+impl VertexPos for MaskVertex {
+    fn pos_mut(&mut self) -> &mut [f32; 2] { &mut self.pos }
+}
+
 impl VertexPos for RRectVertex {
     fn pos_mut(&mut self) -> &mut [f32; 2] { &mut self.pos }
     fn set_depth(&mut self, z: f32) { self.z = z; }
@@ -10419,16 +10447,38 @@ fn emit_border_arc(
 /// CSS Images L3 §3.3 — push 6 GradVertex (2 triangles) for `rect`.
 /// UV is baked: TL=(0,0), TR=(1,0), BL=(0,1), BR=(1,1).
 fn push_grad_quad(out: &mut Vec<GradVertex>, rect: Rect) {
+    out.extend_from_slice(&grad_quad(rect));
+}
+
+/// [`grad_quad`], прогнанный через накопленный `PushTransform`.
+///
+/// Маски держат свой квад в плане рендера (а не в общем вершинном буфере),
+/// поэтому трансформа обязана примениться на этапе планирования: рендер-стадия
+/// матрицы уже не видит, а контент-слой рисуется трансформированным (BUG-277).
+fn transformed_grad_quad(rect: Rect, m: Option<&Mat4>) -> [GradVertex; 6] {
+    let mut quad = grad_quad(rect);
+    if let Some(m) = m {
+        apply_affine_to_grad_verts(&mut quad, m);
+    }
+    quad
+}
+
+/// Два треугольника градиентного квада по `rect`, uv = (0,0)…(1,1).
+///
+/// Отдельно от [`push_grad_quad`], потому что маски держат свой квад
+/// в плане рендера (а не в общем вершинном буфере) и должны прогнать
+/// его через `PushTransform` ещё на этапе планирования.
+fn grad_quad(rect: Rect) -> [GradVertex; 6] {
     let (x0, y0) = (rect.x, rect.y);
     let (x1, y1) = (rect.x + rect.width, rect.y + rect.height);
-    out.extend_from_slice(&[
+    [
         GradVertex { pos: [x0, y0], uv: [0.0, 0.0] },
         GradVertex { pos: [x1, y0], uv: [1.0, 0.0] },
         GradVertex { pos: [x1, y1], uv: [1.0, 1.0] },
         GradVertex { pos: [x0, y0], uv: [0.0, 0.0] },
         GradVertex { pos: [x1, y1], uv: [1.0, 1.0] },
         GradVertex { pos: [x0, y1], uv: [0.0, 1.0] },
-    ]);
+    ]
 }
 
 /// CSS Images L3 §3.3 — resolve `GradientStop` positions to normalized [0,1].
@@ -10486,11 +10536,25 @@ fn linear_gradient_uv_endpoints(w: f32, h: f32, angle_deg: f32) -> ([f32; 2], [f
 
 /// CSS Images L3 §3.5 — compute radial gradient center + semi-axes in UV [0,1] space.
 ///
-/// Returns (center_uv, semi_axes_uv) where semi-axes are "farthest-corner" sized:
-/// rx = max(cx_frac, 1-cx_frac), ry = max(cy_frac, 1-cy_frac).
-fn radial_gradient_uv_params(cx_pct: f32, cy_pct: f32) -> ([f32; 2], [f32; 2]) {
-    let rx = cx_pct.max(1.0 - cx_pct).max(1e-6);
-    let ry = cy_pct.max(1.0 - cy_pct).max(1e-6);
+/// Returns (center_uv, semi_axes_uv). Шейдер (kind = 1) берёт
+/// `t = length((uv − p0) / p1)`, поэтому `t == 1` обязано ложиться ровно на
+/// конечную фигуру — эллипс с полуосями `radius_x`/`radius_y` в CSS px,
+/// как их посчитал дисплей-лист (`cpu_raster::rasterize_radial_gradient`
+/// берёт те же два числа). Перевод в UV — деление на размер бокса.
+///
+/// BUG-277 срез 6: прежняя версия игнорировала радиусы вовсе и брала
+/// `rx = max(cx, 1−cx)` — полуширину бокса, то есть farthest-**side**.
+/// На `circle at 50% 50%` в квадрате это давало радиус 150 px вместо
+/// farthest-corner 212 px: градиент «сжимался» в √2 раза.
+fn radial_gradient_uv_params(
+    cx_pct: f32,
+    cy_pct: f32,
+    radius_x: f32,
+    radius_y: f32,
+    rect: Rect,
+) -> ([f32; 2], [f32; 2]) {
+    let rx = (radius_x / rect.width.max(1e-6)).max(1e-6);
+    let ry = (radius_y / rect.height.max(1e-6)).max(1e-6);
     ([cx_pct, cy_pct], [rx, ry])
 }
 
