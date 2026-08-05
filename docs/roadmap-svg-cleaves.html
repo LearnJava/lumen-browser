@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-05",
  "counts": {
-  "open": 300,
+  "open": 301,
   "fixed": 321,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 621,
+ "total_bugs": 622,
  "phases": [
   {
    "id": "P0",
@@ -3418,9 +3418,12 @@
       {
        "id": "WPT-VENDOR-pointerlock",
        "title": "WPT: вендорить + прогнать категорию `pointerlock`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root pointerlock --recursive`, ~2 мин, 20 id) — **10/20 harness OK, 2/22 сабтестов**. Найден и заведён [BUG-655](bugs/BUG-655-OPEN.md): `requestPointerLock()` не проверяет transient user activation, блокировка выдаётся синхронно и безусловно (тот же класс пробела, что BUG-365/BUG-390). Остальной сигнал — реконфирмации [BUG-622](bugs/BUG-622-OPEN.md) (`document.defaultView`, доминирует), BUG-462/574 (`Node.prototype.contains`), [BUG-596](bugs/BUG-596-OPEN.md) (`Event.prototype.initEvent`); часть id TIMEOUT на неполном `test_driver.Actions` (только `click` реализован в исполнителе, известный инфраструктурный пробел)",
+       "bugs": [
+        "BUG-655"
+       ]
       },
       {
        "id": "WPT-VENDOR-preload",
@@ -9025,6 +9028,13 @@
    "title": "`resources/testdriver-actions.js` (upstream's `test_driver.Actions` builder class, 607 lines) and the sibling empty `testdriver-vendor.js` hook were never vendo…",
    "component": "tooling (`tests/wpt/resources/`)",
    "date": "2026-08-05",
+   "debtor": false
+  },
+  "BUG-655": {
+   "status": "open",
+   "title": "`requestPointerLock()` не проверяет transient user activation (и никакое другое предусловие спеки) — блокировка выдаётся синхронно и безусловно даже без предшес…",
+   "component": "js (`crates/js/src/pointer_lock.rs:42-46` — `request_pointer_lock`, `crates/js/src/v8_runtime.rs:3248-3250` — привязка)",
+   "date": null,
    "debtor": false
   }
  },
