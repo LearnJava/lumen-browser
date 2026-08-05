@@ -112,6 +112,16 @@ If you claim a change is display-list-neutral, **show it**: an empty `dump_golde
 
 **Since BUG-128 (2026-08-04) the dump goldens depend on the machine's installed fonts.** `--dump-layout`/`--dump-display-list` run through the shell's real `FontProvider`, and a CSS generic family (`serif`, `sans-serif`, `monospace`, …) — including the generic tail of a list like `Arial, sans-serif` — now resolves to a system face, so text widths in the goldens encode *this* machine's fonts (Windows: Times New Roman / Arial / Consolas). The deterministic CPU snapshot gate is **not** affected: `lumen-driver` renders and measures without a `FontProvider`, so `graphic_tests/snapshots/cpu/` stays reproducible everywhere. If the golden gate ever moves to a machine without the Windows core fonts, expect width-only diffs on pages that use generic families, and re-baseline there rather than "fixing" the engine.
 
+## Telling a backend debt from an engine-wide debt
+
+A large `KNOWN_DEBTORS` number does **not** mean the wgpu backend is at fault — and picking the next debt to fix by that number alone wastes slices. The cheap discriminator compares the two renderers Lumen already has against the same reference:
+
+- `graphic_tests/snapshots/cpu/NN-*.png` — the deterministic `cpu_raster` render (the CPU snapshot gate's own reference, GPU-free);
+- `graphic_tests/screenshots/NN-*-lumen-cropped.png` — the cropped live wgpu window, written by any `run.py --only NN`;
+- `graphic_tests/screenshots/NN-*-edge.png` — the committed Edge reference.
+
+Diff each against Edge with the same metric `run.py` uses (share of pixels where any channel differs by more than 16). When both are close, the debt is engine-wide (layout, fonts, an unimplemented feature) and no amount of renderer work will move it; when CPU is clean and wgpu is not, the gap is a wgpu-executor defect, and the CPU render doubles as the expected picture while you fix it. BUG-277 slice 7 (2026-08-05) picked its target this way: the biggest number in the table, TEST-59 at 22 %, turned out to be 22.97 % on CPU too — not a wgpu debt at all — while TEST-30 was 1.69 % on CPU against 10.64 % on wgpu.
+
 ## Run rules
 
 0. **Test-run history lives in `graphic_tests/results/*.json`.** JSON result files are committed to git (`.gitignore` excludes only `*.html` reports). After every full `--continue-on-fail` run: `git add graphic_tests/results/<timestamp>.json && git commit -m "тесты: прогон YYYY-MM-DD"`. Do NOT write manual "Прогон..." tables in `BUGS.md` — the JSON is the source of truth. Delta vs previous run is printed automatically by `run.py`. KNOWN_DEBTORS (Phase 2 tests) live in `KNOWN_DEBTORS` dict in `run.py`; BUGS.md carries only BUG-NNN entries.
