@@ -3245,9 +3245,12 @@
       {
        "id": "WPT-VENDOR-navigation-timing",
        "title": "WPT: вендорить + прогнать категорию `navigation-timing`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root navigation-timing --recursive`, ~8 мин, 59 id) — **12/58 harness OK, 4/36 сабтестов (11%)**. Причина найдена в коде (`crates/shell/src/main.rs::deliver_nav_timing`): `PerformanceNavigationTiming` записи передают `detail_json = null`, поэтому entry содержит только `entryType`/`name`/`startTime`/`duration` — ни одного специфичного для navigation-timing поля (`connectEnd`, `redirectCount`, `type`, `transferSize` и т.д. — все `undefined`). Заведён [BUG-640](bugs/BUG-640-OPEN.md). Остальные 46/58 не-harness-OK — уже известные гэпы (TLS `UnknownIssuer` на `.https.`, cross-origin/iframe multi-window навигация, невендоренный категория-внешний `/common/dispatcher/dispatcher.js`), новых багов не заведено",
+       "bugs": [
+        "BUG-640"
+       ]
       },
       {
        "id": "WPT-VENDOR-netinfo",
