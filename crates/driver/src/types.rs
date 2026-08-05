@@ -481,6 +481,11 @@ pub enum AutomationCommand {
     /// for the live window (BUG-295, WebDriver BiDi
     /// `emulation.setUserAgentOverride`). Empty string clears the override.
     SetUserAgent(String),
+    /// Override the `Intl`/`Date` timezone reported by the live window
+    /// (BUG-295, WebDriver BiDi `browser.setTimezoneOverride`). `None`
+    /// clears the override (host timezone); `Some(id)` is an IANA timezone
+    /// identifier (e.g. `"America/New_York"`).
+    SetTimezone(Option<String>),
 }
 
 /// Reply from automation API — returned from shell after command execution.

@@ -307,6 +307,14 @@ impl BrowserSession for LiveWindowSession {
         Ok(())
     }
 
+    /// BUG-295: round-trips to the live window, which sets a global marker
+    /// and wraps `Intl.DateTimeFormat` to consult it at construction time
+    /// (`v8_runtime::set_global_timezone_override`/`timezone_override_script`).
+    fn set_timezone(&mut self, timezone_id: Option<&str>) -> Result<()> {
+        self.execute(AutomationCommand::SetTimezone(timezone_id.map(str::to_owned)))?;
+        Ok(())
+    }
+
     fn set_clock(&mut self, _mode: crate::ClockMode) -> Result<()> {
         Ok(())
     }

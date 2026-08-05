@@ -12972,6 +12972,34 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     }
                     let _ = reply_tx.send(AutomationReply::Ack);
                 }
+                AutomationCommand::SetTimezone(timezone_id) => {
+                    // BUG-295 (`browser.setTimezoneOverride`): unlike UA
+                    // override there is no HTTP-layer counterpart — timezone
+                    // only affects JS-visible `Intl`/`Date` behavior.
+                    #[cfg(feature = "v8")]
+                    {
+                        // Applies to the *next* navigation (install_dom reads
+                        // the global at DOM-bootstrap time — see
+                        // `v8_runtime::set_global_timezone_override`'s doc).
+                        lumen_js::v8_runtime::set_global_timezone_override(timezone_id.clone());
+                        // Also re-inject into the *current* page right now,
+                        // mirroring `SetUserAgent` above: BiDi clients set the
+                        // override then immediately `script.evaluate` on the
+                        // already-loaded default context, with no navigation
+                        // in between. Clearing (`None`) is intentionally not
+                        // re-applied here — only the *next* navigation clears
+                        // the marker (matches `SetUserAgent`'s accepted gap).
+                        if let Some(tz) = &timezone_id {
+                            let script = lumen_js::v8_runtime::timezone_override_script(tz);
+                            let _ = route_query_js(
+                                self.engine_thread.as_ref(),
+                                self.js_ctx.as_ref(),
+                                move |j| j.eval_js_value(&script),
+                            );
+                        }
+                    }
+                    let _ = reply_tx.send(AutomationReply::Ack);
+                }
             }
         }
 
