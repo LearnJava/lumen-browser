@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-05",
  "counts": {
-  "open": 294,
+  "open": 296,
   "fixed": 316,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 610,
+ "total_bugs": 612,
  "phases": [
   {
    "id": "P0",
@@ -3313,9 +3313,12 @@
       {
        "id": "WPT-VENDOR-paint-timing",
        "title": "WPT: вендорить + прогнать категорию `paint-timing`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root paint-timing --recursive`, ~4 мин, 56 id, ни testdriver, ни `.https.`, ни variant-ов) — **34/56 harness OK, 1/36 сабтестов**. Доминирующая причина (20/36): каждый тест стартует с `assert_implements(window.PerformancePaintTiming, …)`, а этого глобального интерфейса в шиме нет вовсе — заведён [BUG-645](bugs/BUG-645-OPEN.md) (тот же класс, что BUG-624/637/589). Доставка `first-paint`/`first-contentful-paint` в реальный рендер-пайплайн при этом подключена (`main.rs:15551-15566`). Остальные 20/22 harness-TIMEOUT (`fcp-only/*.html`) — реконфирмация [BUG-346](bugs/BUG-346-OPEN.md) (`../resources/utils.js` не резолвится, 404). `idlharness.window.html` TIMEOUT — известный невендоренный `idlharness.js`+`WebIDLParser.js`",
+       "bugs": [
+        "BUG-645"
+       ]
       },
       {
        "id": "WPT-VENDOR-parakeet",
@@ -8942,6 +8945,20 @@
    "component": "js (`crates/js/src/device_sensors.rs` — `DEVICE_SENSORS_SHIM`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-644": {
+   "status": "open",
+   "title": "CSS Grid `align-items: stretch` (grid-дефолт) растягивает item, присваивая `item.rect.height = cell_h` уже готовому поддереву из пробного прохода, но не перекла…",
+   "component": "layout (`box_tree.rs::lay_out_grid`, Step 5)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-645": {
+   "status": "open",
+   "title": "`window.PerformancePaintTiming` interface object doesn't exist at all — every `paint-timing` WPT test starts with `assert_implements(window.PerformancePaintTimi…",
+   "component": "js (`crates/js/src/dom.rs` — `PerformanceObserver`/`_perf_entries` shim)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -9487,6 +9504,9 @@
   ],
   "layout (`box_tree.rs::lay_out_flex`)": [
    "BUG-460"
+  ],
+  "layout (`box_tree.rs::lay_out_grid`, Step 5)": [
+   "BUG-644"
   ],
   "layout (`box_tree.rs` — `lay_out_flex`, `flex_item_min_main_width`, `min_content_outer_width_of_contents`)": [
    "BUG-433"
