@@ -474,6 +474,13 @@ pub enum AutomationCommand {
     /// Network request log since the last `Navigate` (DEVX-14, wires
     /// `resource://network` to the live window).
     NetworkLog,
+    /// Enable/disable offline-network simulation (BUG-295, WebDriver BiDi
+    /// `network.setOfflineStatus`) on the live window.
+    SetOffline(bool),
+    /// Override `navigator.userAgent` and the real HTTP `User-Agent` header
+    /// for the live window (BUG-295, WebDriver BiDi
+    /// `emulation.setUserAgentOverride`). Empty string clears the override.
+    SetUserAgent(String),
 }
 
 /// Reply from automation API — returned from shell after command execution.

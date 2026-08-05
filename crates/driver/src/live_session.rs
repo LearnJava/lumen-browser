@@ -290,7 +290,20 @@ impl BrowserSession for LiveWindowSession {
         format!("Lumen/{}", env!("CARGO_PKG_VERSION"))
     }
 
-    fn set_user_agent(&mut self, _ua: &str) -> Result<()> {
+    /// BUG-295: round-trips to the live window, which threads the override
+    /// into both the real HTTP `User-Agent` header (`lumen_network`'s
+    /// process-global override) and `navigator.userAgent` (V8 runtime).
+    fn set_user_agent(&mut self, ua: &str) -> Result<()> {
+        self.execute(AutomationCommand::SetUserAgent(ua.to_owned()))?;
+        Ok(())
+    }
+
+    /// BUG-295: round-trips to the live window, which flips
+    /// `lumen_network`'s process-global offline flag — every fetch path
+    /// (navigation, JS `fetch()`/XHR, subresources) fails immediately while
+    /// active.
+    fn set_offline(&mut self, offline: bool) -> Result<()> {
+        self.execute(AutomationCommand::SetOffline(offline))?;
         Ok(())
     }
 
