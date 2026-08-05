@@ -3135,9 +3135,9 @@
       {
        "id": "WPT-VENDOR-mediacapture-insertable-streams",
        "title": "WPT: вендорить + прогнать категорию `mediacapture-insertable-streams`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). медиазахват — нет конвейера"
+       "note": "Скоуп: 🚫 (вне скоупа, медиазахват — нет конвейера). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root mediacapture-insertable-streams --recursive`, ~3:23) — **0/12 harness OK**. Все 12 TIMEOUT на стандартном TLS-гэпе (тот же класс, что `mediacapture-handle`/`mediacapture-extensions`). Живой грep (`crates/js/src/`) подтвердил `MediaStreamTrackProcessor`/`VideoTrackGenerator`/`MediaStreamTrackGenerator` целиком отсутствуют. 13-й id глоба (`idlharness.any.html`) дал «Not run» — известная гоча run_report.py не разбирающего `// META: global=dedicatedworker`. Новых багов не заведено, первый проход отсутствующей фичи"
       },
       {
        "id": "WPT-VENDOR-mediacapture-record",
