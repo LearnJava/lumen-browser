@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-05",
  "counts": {
-  "open": 303,
+  "open": 304,
   "fixed": 328,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 631,
+ "total_bugs": 632,
  "phases": [
   {
    "id": "P0",
@@ -3573,9 +3573,12 @@
       {
        "id": "WPT-VENDOR-scheduler",
        "title": "WPT: вендорить + прогнать категорию `scheduler`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root scheduler --recursive`, ~1.5 мин, 41 файл, 37 исполнившихся id) — **31/37 harness OK, 22/64 сабтестов**. Заведён [BUG-665](bugs/BUG-665-OPEN.md) — Scheduler API Phase 0 шим (`crates/js/src/scheduler.rs`) даёт пять независимых дефектов: `TaskSignal.any()` статик-композер отсутствует целиком (10/21 уникальных фейлов); `TaskController.setPriority()` бьёт `prioritychange`, но переупорядочивания уже поставленных в очередь задач нет вовсе (нет общей приоритетной очереди — приоритет лишь выбирает `setTimeout`/`queueMicrotask` в момент вызова `postTask()`); `scheduler.yield()` не принимает `{signal, priority}` вовсе — никогда не отклоняется по abort и всегда идёт на плоском `user-visible`-таймере независимо от приоритета текущей задачи; события `prioritychange`/`abort` — плоские объекты без `target`; abort изнутри синхронного тела колбэка теряется (листенер снят до вызова колбэка). Happy-path `postTask()` (результат/throw/delay/порядок без жонглирования приоритетом) устойчив. Остаточный сигнал — реконфирмация [BUG-480](bugs/BUG-480-OPEN.md) (iframe-пропагация yield) и невендоренный `/common/blank.html` (конвенция, не баг)",
+       "bugs": [
+        "BUG-665"
+       ]
       },
       {
        "id": "WPT-VENDOR-screen-capture",
@@ -9130,6 +9133,13 @@
    "status": "open",
    "title": "`navigator.connection` (`NetworkInformation`) doesn't inherit from `EventTarget` (`instanceof EventTarget` → `false`, no `dispatchEvent`, `Symbol.toStringTag` →…",
    "component": "js (`crates/js/src/dom.rs:12855`–`12874` — `NetworkInformation` shim)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-665": {
+   "status": "open",
+   "title": "`TaskSignal.any()` static composer doesn't exist at all (`TypeError: TaskSignal.any is not a function`, 10 of 21 unique failures); `TaskController.setPriority()…",
+   "component": "js (`crates/js/src/scheduler.rs` — Scheduler API Phase 0 shim)",
    "date": null,
    "debtor": false
   }
