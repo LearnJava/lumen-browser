@@ -3128,9 +3128,9 @@
       {
        "id": "WPT-VENDOR-mediacapture-image",
        "title": "WPT: вендорить + прогнать категорию `mediacapture-image`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). медиазахват — нет конвейера"
+       "note": "Скоуп: 🚫 (вне скоупа, медиазахват — нет конвейера). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root mediacapture-image --recursive`, ~5:27) — **3/23 harness OK (1 id — `ImageCapture-grabFrame-crash.https.html` — never runs, `crashtest` unsupported test type), 0/6 сабтестов**. Живой лог подтвердил тот же класс отсутствующей фичи, что `mediacapture-fromelement`: все `MediaStreamTrack-*`-тесты падают на `canvas.captureStream is not a function` — `HTMLCanvasElement.captureStream()` по-прежнему целиком отсутствует. Остальные 15 `.https.` тестов TIMEOUT на стандартном TLS `UnknownIssuer`-гэпе; 4 `.https.`-теста дали мгновенный ERROR вместо TIMEOUT — воспроизведение уже заведённого BUG-380 (после провала TLS-навигации исполнитель не проверяет `browsingContext.navigate` и отдаёт результаты предыдущего теста, `AssertionError: Got results from <prev>, expected <this>`). Новых багов не заведено — переподтверждение отсутствующего API + уже известного BUG-380"
       },
       {
        "id": "WPT-VENDOR-mediacapture-insertable-streams",
