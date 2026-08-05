@@ -165,6 +165,7 @@ PAINT_BISECT_FLAGS = [
     'LUMEN_NO_SVG_AA',
     'LUMEN_NO_ROT_AA',
     'LUMEN_NO_ROT_CLIP',
+    'LUMEN_NO_IMG_XFORM',
 ]
 
 # (id, html, threshold_pct, label).
