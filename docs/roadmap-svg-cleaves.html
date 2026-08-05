@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-05",
  "counts": {
-  "open": 289,
+  "open": 290,
   "fixed": 315,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 604,
+ "total_bugs": 605,
  "phases": [
   {
    "id": "P0",
@@ -3176,9 +3176,12 @@
       {
        "id": "WPT-VENDOR-merchant-validation",
        "title": "WPT: вендорить + прогнать категорию `merchant-validation`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). Payment Request API"
+       "note": "Скоуп: 🚫 (вне скоупа). Payment Request API. DONE 2026-08-05: вендорена + прогнана целиком (`--all --root merchant-validation --recursive`, ~55с, 4 id) — **1/4 harness OK, 0/1 сабтестов**. Три `.https.` теста TIMEOUT/ERROR на TLS-гэпе (BUG-380 переподтверждён). Единственный не-https тест исполнился и вскрыл дефект: заведён [BUG-637](bugs/BUG-637-OPEN.md) — глобальный `Window` не существует (`typeof Window === \"undefined\"`), тот же класс, что BUG-624/BUG-589",
+       "bugs": [
+        "BUG-637"
+       ]
       },
       {
        "id": "WPT-VENDOR-mimesniff",
@@ -8859,6 +8862,13 @@
    "status": "open",
    "title": "MediaSession API skips WebIDL validation/freezing across the board: `MediaMetadata` constructor doesn't throw `TypeError` for a non-object init; `chapterInfo` (…",
    "component": "js (`crates/js/src/media_session.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-637": {
+   "status": "open",
+   "title": "Global `Window` interface object doesn't exist at all (`typeof Window === \"undefined\"`), unlike `Document`/`Element`, which are proper global constructors (`typ…",
+   "component": "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`)",
    "date": null,
    "debtor": false
   }
