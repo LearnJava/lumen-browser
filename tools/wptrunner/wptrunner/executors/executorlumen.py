@@ -30,10 +30,12 @@ onto `window.__wptrunner_message_queue`, which only drains once
 `window.__wptrunner_testdriver_callback` is armed. `_run_testharness` arms it
 every poll iteration and checks both `RESULTS_GLOBAL` and the action slot in
 one `script.evaluate` round trip, so this stays a single poll loop instead of
-two. Only `click` is actually executed (`input.performActions`, which the
-BiDi server does implement); every other action fails cleanly (rejects the
-test's promise) rather than hanging forever — the DoD is "not silently
-SKIPped", not "every `test_driver.*` method works".
+two. `click` (`input.performActions`, which the BiDi server does implement)
+and `generate_test_report` (a direct call into the page-visible
+`_lumen_deliver_report` JS global, no new BiDi surface needed) are actually
+executed; every other action fails cleanly (rejects the test's promise)
+rather than hanging forever — the DoD is "not silently SKIPped", not "every
+`test_driver.*` method works".
 """
 
 import asyncio
@@ -226,10 +228,13 @@ class LumenTestharnessExecutor(TestharnessExecutor):
         cmd_id = payload["id"]
         params = payload.get("params") or {}
         try:
-            if action != "click":
+            if action == "click":
+                result = await self._action_click(session, context, params)
+            elif action == "generate_test_report":
+                result = await self._action_generate_test_report(session, context, params)
+            else:
                 raise ActionError(
                     f"action {action!r} not implemented by Lumen's minimal WPT executor")
-            result = await self._action_click(session, context, params)
             status, message = "success", json.dumps({"result": result})
         except ActionError as e:
             status, message = "failure", str(e)
@@ -259,6 +264,24 @@ class LumenTestharnessExecutor(TestharnessExecutor):
         pointer.pointer_down(0)
         pointer.pointer_up(0)
         await session.input.perform_actions(actions, context=target_context)
+        return None
+
+    async def _action_generate_test_report(self, session, context, params):
+        """`test_driver.generate_test_report(message)` — deliver a `"test"`
+        report carrying `{message}` to the target context's `ReportingObserver`s
+        (W3C Reporting API §8.2). Lumen's Reporting API shim already exposes
+        the delivery entry point as a page-visible JS global
+        (`crates/js/src/reporting_api.rs::_lumen_deliver_report`), so this
+        needs no new engine binding — just call it with `location.href` as the
+        report URL and a JSON-encoded `TestReportBody`."""
+        target_context = params.get("context") or context
+        message = params.get("message")
+        expression = (
+            "_lumen_deliver_report('test', location.href, "
+            f"{json.dumps(json.dumps({'message': message}))})"
+        )
+        await session.script.evaluate(
+            expression=expression, target=ContextTarget(target_context), await_promise=False)
         return None
 
     async def _resolve_element_center(self, session, context, selectors):
