@@ -3132,9 +3132,9 @@
       {
        "id": "WPT-VENDOR-mediacapture-fromelement",
        "title": "WPT: вендорить + прогнать категорию `mediacapture-fromelement`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). медиазахват — нет конвейера"
+       "note": "Скоуп: 🚫 (вне скоупа, медиазахват — нет конвейера). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root mediacapture-fromelement --recursive`, ~44с) — **10/12 harness OK, 10/32 сабтестов**. Живой грep (`crates/js/src/`) подтвердил `HTMLCanvasElement.captureStream()`/`HTMLMediaElement.captureStream()` целиком отсутствуют — не заведён отдельный баг, первый проход отсутствующей фичи"
       },
       {
        "id": "WPT-VENDOR-mediacapture-handle",
