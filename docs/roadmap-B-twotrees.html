@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-05",
  "counts": {
-  "open": 299,
+  "open": 300,
   "fixed": 327,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 626,
+ "total_bugs": 627,
  "phases": [
   {
    "id": "P0",
@@ -3525,9 +3525,12 @@
       {
        "id": "WPT-VENDOR-requestidlecallback",
        "title": "WPT: вендорить + прогнать категорию `requestidlecallback`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root requestidlecallback --recursive --processes=4`, ~3 мин, 25 файлов, 20 исполнившихся id) — **14/20 harness OK, 16/28 сабтестов**. Заведён [BUG-660](bugs/BUG-660-OPEN.md) — `requestIdleCallback`'s shim (`dom.rs:8456`–`8480`, уже помеченный в комментарии как stub, но никогда не заводившийся багом) не спек-совместим: нет глобального класса `IdleDeadline` (class-string/cross-realm проверки падают), `timeRemaining()` — захардкоженная константа `50` вне зависимости от реального бюджета, `didTimeout` всегда `false` даже на пути тайм-аута, исключения колбэка молча глотаются вместо репорта в global error handler, реального busy/idle-моделирования нет вовсе — 8 из 13 неожиданных результатов трассируются к этой одной причине (`basic`/`callback-timeout-when-busy`/`callback-timeout`/`deadline-max-rAF(-dynamic)`/`deadline-max-timeout-dynamic`/`callback-exception`/`callback-timeRemaining-cross-realm-method`). Остальной сигнал — реконфирмации уже задокументированных гэпов: [BUG-480](bugs/BUG-480-OPEN.md) (`<iframe>`/`contentWindow` без отдельного browsing context — `callback-iframe*`/`callback-removed-frame`/`callback-suspended`, последний ещё и требует `window.open`+bfcache) и рекуррентный невендоренный idlharness-инфра-гэп (`idlharness.window.html` TIMEOUT).",
+       "bugs": [
+        "BUG-660"
+       ]
       },
       {
        "id": "WPT-VENDOR-resize-observer",
@@ -9083,6 +9086,13 @@
    "title": "`generate_test_report` testdriver action was never implemented by `_handle_action` (only `click` was) — every `reporting/` test using `test_driver.generate_test…",
    "component": "tooling (`tools/wptrunner/wptrunner/executors/executorlumen.py`)",
    "date": "2026-08-05",
+   "debtor": false
+  },
+  "BUG-660": {
+   "status": "open",
+   "title": "`requestIdleCallback`'s deadline argument is a plain object literal, not an `IdleDeadline` instance (`window.IdleDeadline` doesn't exist — class-string/cross-re…",
+   "component": "js (`crates/js/src/dom.rs:8456`–`8480` — `requestIdleCallback`/`cancelIdleCallback`)",
+   "date": null,
    "debtor": false
   }
  },
