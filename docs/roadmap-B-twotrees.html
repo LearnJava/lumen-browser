@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-05",
  "counts": {
-  "open": 302,
+  "open": 303,
   "fixed": 328,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 630,
+ "total_bugs": 631,
  "phases": [
   {
    "id": "P0",
@@ -3563,9 +3563,12 @@
       {
        "id": "WPT-VENDOR-savedata",
        "title": "WPT: вендорить + прогнать категорию `savedata`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root savedata --recursive`, ~30 с, единственный тест — `idlharness.any.js`) — **0/1 harness OK** (TIMEOUT, `/resources/WebIDLParser.js`+`idlharness.js` 404, невендоренный общий idlharness-инфра-гэп, реконфирмация уже задокументированного класса). Заведён [BUG-664](bugs/BUG-664-OPEN.md) прямой пробой `--mcp-live-port`/`eval` (та же техника, что у `generic-sensor`/BUG-394): `navigator.connection` (`NetworkInformation`) не наследуется от `EventTarget` (`instanceof` → false, нет `dispatchEvent`, свои no-op заглушки `addEventListener`/`removeEventListener`) — `change`-событие в принципе не может быть доставлено ни одним из двух способов подписки; тот же класс дефекта, что [BUG-386](bugs/BUG-386-OPEN.md)/[BUG-394](bugs/BUG-394-OPEN.md)/[BUG-400](bugs/BUG-400-OPEN.md). Соседняя находка того же шима — [BUG-641](bugs/BUG-641-OPEN.md) (`downlinkMax` отсутствует) — уже заведена категорией `netinfo`",
+       "bugs": [
+        "BUG-664"
+       ]
       },
       {
        "id": "WPT-VENDOR-scheduler",
@@ -9120,6 +9123,13 @@
    "status": "open",
    "title": "Sanitizer API implements a pre-redesign draft, not the current spec: `Document.parseHTML`/`parseHTMLUnsafe` don't exist at all; `Sanitizer`'s config-object meth…",
    "component": "js (`crates/js/src/sanitizer.rs` — `Sanitizer`/`Element.prototype.setHTML`; `crates/js/src/dom.rs:1315` — `_lumen_make_shadow_root`; `crates/js/src/dom.rs:3499` — `setHTMLUnsafe`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-664": {
+   "status": "open",
+   "title": "`navigator.connection` (`NetworkInformation`) doesn't inherit from `EventTarget` (`instanceof EventTarget` → `false`, no `dispatchEvent`, `Symbol.toStringTag` →…",
+   "component": "js (`crates/js/src/dom.rs:12855`–`12874` — `NetworkInformation` shim)",
    "date": null,
    "debtor": false
   }
