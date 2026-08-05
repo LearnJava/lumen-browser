@@ -1,8 +1,8 @@
 # BUG-635 — `background-image` не рисуется ни одним бэкендом, хотя команда и файл на месте
 
-**Статус:** FIXED 2026-08-05 (P3, [BUG-277](BUG-277-OPEN.md) срез 15)
+**Статус:** FIXED 2026-08-05 (P3, [BUG-277](BUG-277-FIXED.md) срез 15)
 **Компонент:** paint (`renderer.rs`, квады `DrawBackgroundImage` в wgpu)
-**Найден:** 2026-08-05 (P3, попутно к [BUG-277](BUG-277-OPEN.md) срезу 12)
+**Найден:** 2026-08-05 (P3, попутно к [BUG-277](BUG-277-FIXED.md) срезу 12)
 **Тест:** `graphic_tests/53-background-origin.html` (TEST-53, 7.95 % → 1.16 %)
 
 ## Симптом (как он был заявлен)
