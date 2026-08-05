@@ -1206,6 +1206,13 @@ struct GradStop {
     pos:   f32,
     _p0:   f32, _p1: f32, _p2: f32,
 }
+// CSS Images L4 §3.1 — the stop list is a RUNTIME-SIZED array in a read-only
+// storage buffer, not a fixed uniform array. A gradient carrying an
+// interpolation space (`in oklab`, `in lab`, …) is polyfilled by densifying
+// every segment into 16 sub-stops (`densify_gradient_stops_for_space`), so even
+// the two-stop `linear-gradient(to right in oklab, red, blue)` arrives with 17
+// stops — one more than the old `array<GradStop, 16>` could hold, and the tail
+// was dropped silently (BUG-277 срез 11).
 struct GradParams {
     p0:        vec2<f32>,
     p1:        vec2<f32>,
@@ -1213,9 +1220,9 @@ struct GradParams {
     kind:      u32,
     repeating: u32,
     param0:    f32,
-    stops: array<GradStop, 16>,
+    stops: array<GradStop>,
 }
-@group(1) @binding(0) var<uniform> gp: GradParams;
+@group(1) @binding(0) var<storage, read> gp: GradParams;
 
 struct VIn  { @location(0) pos: vec2<f32>, @location(1) uv: vec2<f32> }
 struct VOut { @builtin(position) clip: vec4<f32>, @location(0) uv: vec2<f32> }
@@ -1529,11 +1536,13 @@ struct GradStopCpu {
     _p0: f32, _p1: f32, _p2: f32,
 }
 
-/// CPU-side зеркало WGSL `GradParams` (32 bytes header + 16×32 bytes stops = 544 bytes).
-/// Используется как uniform buffer для одного DrawLinearGradient/DrawRadialGradient/DrawConicGradient.
+/// CPU-side зеркало заголовка WGSL `GradParams` — 32 байта, ровно до
+/// runtime-sized массива стопов (WGSL требует выравнивания `array<GradStop>`
+/// на 16 байт, заголовок уже кратен). Стопы дописываются в тот же storage
+/// buffer сразу за заголовком, см. [`GradParamsCpu`] и `write_grad_buffer`.
 #[repr(C)]
 #[derive(Copy, Clone)]
-struct GradParamsCpu {
+struct GradHeaderCpu {
     /// Linear: (sx, sy) — gradient-line start in UV [0,1].
     /// Radial: (cx, cy) — center in UV [0,1].
     /// Conic:  (cx, cy) — center in UV [0,1].
@@ -1550,7 +1559,22 @@ struct GradParamsCpu {
     /// Conic: starting angle in radians (0 = top, CW). Linear: box aspect
     /// `h/w` (see [`box_aspect`]). Unused for radial.
     param0: f32,
-    stops: [GradStopCpu; 16],
+}
+
+/// Полное описание одного `DrawLinearGradient`/`DrawRadialGradient`/
+/// `DrawConicGradient` для GPU: заголовок + список стопов ПРОИЗВОЛЬНОЙ длины.
+///
+/// Длина не ограничена: стопы уезжают в storage buffer (`write_grad_buffer`),
+/// а не в uniform-массив фиксированного размера. Прежний потолок в 16 стопов
+/// обрезался молча, из-за чего хвост любого градиента с
+/// `<color-interpolation-method>` (17 стопов после полифилла) заливался
+/// плоским цветом 16-го стопа — BUG-277 срез 11.
+#[derive(Clone)]
+struct GradParamsCpu {
+    /// Скалярная часть — байт-в-байт заголовок WGSL-структуры.
+    header: GradHeaderCpu,
+    /// Стопы в порядке возрастания позиции; пишутся со смещения 32.
+    stops: Vec<GradStopCpu>,
 }
 
 /// Конвертирует `FilterFn` в `FilterEntryCpu` для GPU uniform.
@@ -3467,7 +3491,11 @@ impl Renderer {
                 binding: 0,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
+                    // Read-only storage, не uniform: список стопов имеет
+                    // произвольную длину (`array<GradStop>`), а uniform-массив
+                    // требует фиксированного размера и молча терял хвост —
+                    // BUG-277 срез 11.
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
                     has_dynamic_offset: false,
                     min_binding_size: None,
                 },
@@ -6414,7 +6442,8 @@ impl Renderer {
         // with element content; `mask_src` = key in self.images (image mask).
         // `mask_gradient` = gradient mask rendered to temp surface-size texture.
         // `mask_v_start..mask_v_end` indexes into `mask_vertices`.
-        // Box<MaskGradientSpec>: GradParamsCpu is 544 bytes; boxing avoids large-variant warning.
+        // Box<MaskGradientSpec>: варианты несут заголовок + квад из 6 вершин;
+        // boxing avoids large-variant warning.
         struct MaskCompositePlan {
             from_level: usize,
             mask_v_start: u32,
@@ -8821,25 +8850,18 @@ impl Renderer {
             self.queue.write_buffer(&buf, 0, as_bytes(&cross_fade_vertices));
             Some(buf)
         };
-        // One uniform buffer + bind group per gradient draw call (same pattern as image batches).
+        // One storage buffer + bind group per gradient draw call (same pattern as image batches).
         let grad_bind_groups: Vec<wgpu::BindGroup> = grad_params
             .iter()
             .enumerate()
             .map(|(i, params)| {
-                let ubuf = self.device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some(&format!("grad-ubuf-{i}")),
-                    size: std::mem::size_of::<GradParamsCpu>() as u64,
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                });
-                // SAFETY: GradParamsCpu is #[repr(C)]; casting to bytes is valid.
-                self.queue.write_buffer(&ubuf, 0, as_bytes(std::slice::from_ref(params)));
+                let sbuf = write_grad_buffer(&self.device, &self.queue, params, &format!("grad-sbuf-{i}"));
                 self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some(&format!("grad-bg-{i}")),
                     layout: &self.gradient_bgl,
                     entries: &[wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: ubuf.as_entire_binding(),
+                        resource: sbuf.as_entire_binding(),
                     }],
                 })
             })
@@ -9409,15 +9431,9 @@ impl Renderer {
                         };
                         temp_grad_next += 1;
                         let temp_view = &grad_layer.view;
-                        // Write gradient params uniform and build bind group.
-                        let grad_ubuf = self.device.create_buffer(&wgpu::BufferDescriptor {
-                            label: Some("mask-grad-ubuf"),
-                            size: std::mem::size_of::<GradParamsCpu>() as u64,
-                            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                            mapped_at_creation: false,
-                        });
-                        // SAFETY: GradParamsCpu is #[repr(C)].
-                        self.queue.write_buffer(&grad_ubuf, 0, as_bytes(std::slice::from_ref(grad_params)));
+                        // Write gradient params + stop list and build bind group.
+                        let grad_ubuf =
+                            write_grad_buffer(&self.device, &self.queue, grad_params, "mask-grad-sbuf");
                         let grad_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                             label: Some("mask-grad-bg"),
                             layout: &self.gradient_bgl,
@@ -11184,11 +11200,14 @@ fn box_aspect(rect: Rect) -> f32 {
     rect.height / rect.width
 }
 
-/// Build a `GradParamsCpu` uniform from resolved stops + pre-computed UV params.
+/// Build a [`GradParamsCpu`] from resolved stops + pre-computed UV params.
 ///
 /// `param0` is kind-specific: the conic gradient (kind = 2) passes its starting
 /// angle in radians (0 = top, clockwise), the linear gradient (kind = 0) passes
 /// [`box_aspect`]; the radial gradient does not use it.
+///
+/// The stop list is taken WHOLE — the shader reads it out of a storage buffer,
+/// so there is no capacity to truncate against (BUG-277 срез 11).
 fn build_grad_params(
     resolved: &[(f32, [f32; 4])],
     p0: [f32; 2],
@@ -11197,21 +11216,54 @@ fn build_grad_params(
     repeating: bool,
     param0: f32,
 ) -> GradParamsCpu {
-    let n = resolved.len().min(16);
-    let zero_stop = GradStopCpu { color: [0.0; 4], pos: 0.0, _p0: 0.0, _p1: 0.0, _p2: 0.0 };
-    let mut stops = [zero_stop; 16];
-    for (i, &(pos, col)) in resolved.iter().take(16).enumerate() {
-        stops[i] = GradStopCpu { color: col, pos, _p0: 0.0, _p1: 0.0, _p2: 0.0 };
-    }
+    let stops: Vec<GradStopCpu> = resolved
+        .iter()
+        .map(|&(pos, col)| GradStopCpu { color: col, pos, _p0: 0.0, _p1: 0.0, _p2: 0.0 })
+        .collect();
     GradParamsCpu {
-        p0,
-        p1,
-        n_stops: n as u32,
-        kind,
-        repeating: if repeating { 1 } else { 0 },
-        param0,
+        header: GradHeaderCpu {
+            p0,
+            p1,
+            n_stops: stops.len() as u32,
+            kind,
+            repeating: if repeating { 1 } else { 0 },
+            param0,
+        },
         stops,
     }
+}
+
+/// Заливает [`GradParamsCpu`] в свежий storage buffer для градиентного пасса:
+/// заголовок со смещения 0, стопы — со смещения `size_of::<GradHeaderCpu>()`
+/// (32 байта, выравнивание `array<GradStop>` в WGSL).
+///
+/// Буфер всегда содержит место хотя бы под один стоп: `array<GradStop>` нулевой
+/// длины — невалидная привязка, а `n_stops == 0` шейдер и так отбрасывает.
+/// Отдельный буфер на каждый вызов — тот же запрет на общий uniform, что и у
+/// параметров фильтра/блэнда: все `write_buffer` ложатся до единственного
+/// `submit`, и общий буфер отдал бы всем пассам параметры последнего (срез 7).
+fn write_grad_buffer(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    params: &GradParamsCpu,
+    label: &str,
+) -> wgpu::Buffer {
+    let header_size = std::mem::size_of::<GradHeaderCpu>() as u64;
+    let stop_size = std::mem::size_of::<GradStopCpu>() as u64;
+    let n = params.stops.len().max(1) as u64;
+    let buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size: header_size + n * stop_size,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    // SAFETY: GradHeaderCpu/GradStopCpu — #[repr(C)] POD без паддинг-инвариантов,
+    // раскладка совпадает с WGSL-структурой; байтовое представление валидно.
+    queue.write_buffer(&buf, 0, as_bytes(std::slice::from_ref(&params.header)));
+    if !params.stops.is_empty() {
+        queue.write_buffer(&buf, header_size, as_bytes(&params.stops));
+    }
+    buf
 }
 
 fn push_fill_quad(out: &mut Vec<FillVertex>, rect: Rect, color: [f32; 4]) {
