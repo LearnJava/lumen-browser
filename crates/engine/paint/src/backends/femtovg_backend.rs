@@ -2882,6 +2882,28 @@ impl FemtovgBackend {
                         true_italic = !matches!(rec.style, lumen_core::ext::FontStyle::Normal);
                     }
                     ids.push(id);
+                    // BUG-434: @font-face subsets of the same (family, weight,
+                    // style, stretch) partition the codepoint space via
+                    // non-overlapping `unicode-range` (CSS Fonts L4 §5.1)
+                    // instead of competing — `pick_family_face` only ever
+                    // returns one of them. Load every sibling right after the
+                    // primary so femtovg's own per-glyph fallback across the
+                    // chain can reach the subset that actually has the glyph,
+                    // ahead of the next fallback family.
+                    for sibling in provider.lookup_faces(fam) {
+                        if sibling.path == rec.path
+                            || sibling.weight != rec.weight
+                            || sibling.style != rec.style
+                            || sibling.stretch != rec.stretch
+                        {
+                            continue;
+                        }
+                        if let Some(sib_id) = self.load_font_by_path(&sibling.path.clone(), provider)
+                            && !ids.contains(&sib_id)
+                        {
+                            ids.push(sib_id);
+                        }
+                    }
                 }
             }
         }

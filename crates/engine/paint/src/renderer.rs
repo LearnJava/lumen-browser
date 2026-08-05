@@ -4910,6 +4910,48 @@ impl Renderer {
         }
     }
 
+    /// Loads one `FaceRecord` into `self.faces` (WOFF/WOFF2 → sfnt decode +
+    /// `build_face_metrics`) and returns its `face_id`. `None` on read/decode/
+    /// parse failure. Idempotent: an already-loaded path is looked up instead
+    /// of reparsed. Factored out of [`Self::resolve_face_id_uncached`] so both
+    /// the primary face and its same-bucket siblings (BUG-434) share the
+    /// loading logic.
+    fn load_face_by_record(
+        &mut self,
+        rec: &FaceRecord,
+        provider: &Arc<dyn FontProvider>,
+    ) -> Option<usize> {
+        if let Some(&id) = self.face_id_by_path.get(&rec.path) {
+            return Some(id);
+        }
+        // @font-face in-memory байты (virtual path) или диск для системных шрифтов.
+        // Реестр отдаёт Arc (клон = счётчик ссылок), диск — новый Arc (BUG-272).
+        let raw: Arc<[u8]> = if let Some(mem_bytes) = provider.read_face_bytes(&rec.path) {
+            mem_bytes
+        } else {
+            let disk_bytes = std::fs::read(&rec.path).ok()?;
+            Arc::from(disk_bytes)
+        };
+        // Transparent WOFF/WOFF2 → sfnt conversion before parsing.
+        // `Ok(None)` (@font-face-байты уже sfnt) переиспользует Arc реестра.
+        let bytes: Arc<[u8]> = match maybe_decode_font(&raw) {
+            Ok(Some(decoded)) => Arc::from(decoded),
+            Ok(None) => raw,
+            Err(e) => {
+                eprintln!("[font] WOFF decode failed {}: {e}", rec.path.display());
+                return None;
+            }
+        };
+        let Some(metrics) = build_face_metrics(&bytes) else {
+            eprintln!("[font] parse failed {}", rec.path.display());
+            return None;
+        };
+        let id = self.faces.len();
+        self.faces.push(LoadedFace { bytes, metrics: Some(metrics) });
+        self.face_id_by_path.insert(rec.path.clone(), id);
+        Some(id)
+    }
+
     /// Полный (немемоизированный) резолв — вынесен из [`Self::resolve_face_id`],
     /// который добавляет кэш поверх.
     fn resolve_face_id_uncached(
@@ -4930,37 +4972,27 @@ impl Renderer {
             ) else {
                 continue;
             };
-            if let Some(&id) = self.face_id_by_path.get(&rec.path) {
-                return id;
-            }
-            // @font-face in-memory байты (virtual path) или диск для системных шрифтов.
-            // Реестр отдаёт Arc (клон = счётчик ссылок), диск — новый Arc (BUG-272).
-            let raw: Arc<[u8]> = if let Some(mem_bytes) = provider.read_face_bytes(&rec.path) {
-                mem_bytes
-            } else {
-                let Ok(disk_bytes) = std::fs::read(&rec.path) else {
-                    continue;
-                };
-                Arc::from(disk_bytes)
-            };
-            // Transparent WOFF/WOFF2 → sfnt conversion before parsing.
-            // `Ok(None)` (@font-face-байты уже sfnt) переиспользует Arc реестра.
-            let bytes: Arc<[u8]> = match maybe_decode_font(&raw) {
-                Ok(Some(decoded)) => Arc::from(decoded),
-                Ok(None) => raw,
-                Err(e) => {
-                    eprintln!("[font] WOFF decode failed {}: {e}", rec.path.display());
-                    continue;
-                }
-            };
-            let Some(metrics) = build_face_metrics(&bytes) else {
-                eprintln!("[font] parse failed {}", rec.path.display());
+            let Some(primary_id) = self.load_face_by_record(&rec, provider) else {
                 continue;
             };
-            let id = self.faces.len();
-            self.faces.push(LoadedFace { bytes, metrics: Some(metrics) });
-            self.face_id_by_path.insert(rec.path, id);
-            return id;
+            // BUG-434: @font-face subsets of the same (family, weight, style,
+            // stretch) partition the codepoint space via non-overlapping
+            // `unicode-range` (CSS Fonts L4 §5.1) instead of competing —
+            // `pick_family_face` only ever returns one of them. Load every
+            // sibling too, so `pick_face_for_codepoint`'s cmap scan over
+            // `self.faces` can actually find the one that has the glyph,
+            // instead of silently missing subsets that were never parsed.
+            for sibling in provider.lookup_faces(fam) {
+                if sibling.path == rec.path
+                    || sibling.weight != rec.weight
+                    || sibling.style != rec.style
+                    || sibling.stretch != rec.stretch
+                {
+                    continue;
+                }
+                self.load_face_by_record(&sibling, provider);
+            }
+            return primary_id;
         }
         0
     }

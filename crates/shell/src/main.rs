@@ -5610,7 +5610,12 @@ fn load_font_faces(
                         "@font-face загружен: «{}» weight={} src={} (local)",
                         rule.family, weight, src.value,
                     );
-                    registry.register_from_bytes(&rule.family, weight, style, bytes);
+                    let ranges = rule
+                        .unicode_range
+                        .as_deref()
+                        .map(lumen_font::parse_unicode_ranges)
+                        .unwrap_or_default();
+                    registry.register_from_bytes(&rule.family, weight, style, &ranges, bytes);
                     local_resolved = true;
                     break;
                 }
@@ -12071,6 +12076,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     &family,
                     weight,
                     style,
+                    &unicode_range,
                     bytes.clone(),
                 );
                 // Update renderer's font provider so GPU glyph atlas picks up the new face.

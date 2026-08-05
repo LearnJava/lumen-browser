@@ -4,7 +4,8 @@
 //! из @font-face `src: url(...)`. Рендер обращается к `read_face_bytes` и
 //! получает байты без чтения диска для URL-шрифтов.
 //!
-//! Виртуальные пути имеют вид `@font-face:<family_lower>/<weight>/<style>`;
+//! Виртуальные пути имеют вид
+//! `@font-face:<family_lower>/<weight>/<style>/<unicode-range-key>`;
 //! диска по ним нет — это только ключи для `bytes_store`.
 
 use std::collections::HashMap;
@@ -14,6 +15,21 @@ use std::sync::{Arc, RwLock};
 use lumen_core::{FaceRecord, FontProvider, FontStyle, NORMAL_STRETCH_PERCENT};
 
 use crate::system_fonts::SystemFontIndex;
+use crate::unicode_range::UnicodeRange;
+
+/// Канонический ключ для `unicode_range` — часть идентичности виртуального
+/// пути реестра (BUG-434). Пустой список (нет дескриптора `unicode-range`,
+/// значит face покрывает все кодпоинты) даёт стабильный ключ `"all"`.
+fn unicode_range_key(ranges: &[UnicodeRange]) -> String {
+    if ranges.is_empty() {
+        return "all".to_string();
+    }
+    ranges
+        .iter()
+        .map(|r| format!("{:x}-{:x}", r.start, r.end))
+        .collect::<Vec<_>>()
+        .join(",")
+}
 
 /// Провайдер шрифтов с поддержкой @font-face: системные шрифты + URL-буферы.
 pub struct FontRegistry {
@@ -54,19 +70,34 @@ impl FontRegistry {
     /// WOFF/WOFF2). Параметры `family`/`weight`/`style` берутся из дескрипторов
     /// @font-face; байты хранятся в памяти и возвращаются через `read_face_bytes`.
     ///
-    /// Если для той же (family, weight, style) запись уже есть — она
-    /// заменяется: CSS @font-face последнего правила wins (cascade order).
-    pub fn register_from_bytes(&self, family: &str, weight: u16, style: FontStyle, bytes: Vec<u8>) {
+    /// Если для той же (family, weight, style, unicode_range) запись уже
+    /// есть — она заменяется: CSS @font-face последнего правила wins (cascade
+    /// order). Записи с тем же (family, weight, style), но **другим**
+    /// `unicode_range`, не конкурируют — CSS Fonts L4 §5.1 трактует их как
+    /// сабсеты одной логической семьи, дополняющие друг друга покрытием
+    /// кодпоинтов, а не альтернативы. До BUG-434 `unicode_range` не входил в
+    /// идентичность записи, поэтому второй и последующие сабсеты одной
+    /// (family, weight, style) молча стирали предыдущие — реестр держал
+    /// ровно один face вместо всех.
+    pub fn register_from_bytes(
+        &self,
+        family: &str,
+        weight: u16,
+        style: FontStyle,
+        unicode_range: &[UnicodeRange],
+        bytes: Vec<u8>,
+    ) {
         let style_str = match style {
             FontStyle::Normal => "normal",
             FontStyle::Italic => "italic",
             FontStyle::Oblique => "oblique",
         };
         let virt_path = PathBuf::from(format!(
-            "@font-face:{}/{}/{}",
+            "@font-face:{}/{}/{}/{}",
             family.to_ascii_lowercase(),
             weight,
             style_str,
+            unicode_range_key(unicode_range),
         ));
 
         let record = FaceRecord {
@@ -190,6 +221,7 @@ impl FontProvider for FontRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::unicode_range::parse_unicode_ranges;
 
     fn make_minimal_ttf() -> Vec<u8> {
         // Минимальный валидный sfnt-заголовок (4 таблицы, все нули).
@@ -205,7 +237,7 @@ mod tests {
     #[test]
     fn register_and_lookup() {
         let reg = FontRegistry::new();
-        reg.register_from_bytes("TestFont", 400, FontStyle::Normal, make_minimal_ttf());
+        reg.register_from_bytes("TestFont", 400, FontStyle::Normal, &[], make_minimal_ttf());
         assert_eq!(reg.custom_face_count(), 1);
 
         let faces = reg.lookup_faces("TestFont");
@@ -216,7 +248,7 @@ mod tests {
     fn read_face_bytes_returns_registered_bytes() {
         let reg = FontRegistry::new();
         let bytes = vec![1u8, 2, 3, 4];
-        reg.register_from_bytes("Foo", 700, FontStyle::Italic, bytes.clone());
+        reg.register_from_bytes("Foo", 700, FontStyle::Italic, &[], bytes.clone());
 
         let faces = reg.lookup_faces("Foo");
         let face = faces.iter().find(|f| f.weight == 700).unwrap();
@@ -229,7 +261,7 @@ mod tests {
         // указывают на одну аллокацию (буфер шрифта не копируется на каждый
         // вызов, счётчик ссылок разделяется с bytes_store и LoadedFace рендера).
         let reg = FontRegistry::new();
-        reg.register_from_bytes("Shared", 400, FontStyle::Normal, vec![9, 8, 7, 6]);
+        reg.register_from_bytes("Shared", 400, FontStyle::Normal, &[], vec![9, 8, 7, 6]);
         let faces = reg.lookup_faces("Shared");
         let path = faces.iter().find(|f| f.weight == 400).unwrap().path.clone();
 
@@ -247,8 +279,8 @@ mod tests {
     #[test]
     fn replace_existing_entry() {
         let reg = FontRegistry::new();
-        reg.register_from_bytes("Bar", 400, FontStyle::Normal, vec![1, 2]);
-        reg.register_from_bytes("Bar", 400, FontStyle::Normal, vec![3, 4]);
+        reg.register_from_bytes("Bar", 400, FontStyle::Normal, &[], vec![1, 2]);
+        reg.register_from_bytes("Bar", 400, FontStyle::Normal, &[], vec![3, 4]);
         // Вторая регистрация заменила первую.
         assert_eq!(reg.custom_face_count(), 1);
         let faces = reg.lookup_faces("Bar");
@@ -257,9 +289,44 @@ mod tests {
     }
 
     #[test]
+    fn subsets_with_different_unicode_range_coexist() {
+        // BUG-434: two @font-face rules for the same (family, weight, style)
+        // but non-overlapping unicode-range are subsets of one logical family
+        // (CSS Fonts L4 §5.1) — the second must not clobber the first.
+        let reg = FontRegistry::new();
+        let latin = parse_unicode_ranges("U+0000-00FF");
+        let cyrillic = parse_unicode_ranges("U+0400-04FF");
+        reg.register_from_bytes("Roboto", 400, FontStyle::Normal, &latin, vec![1, 2]);
+        reg.register_from_bytes("Roboto", 400, FontStyle::Normal, &cyrillic, vec![3, 4]);
+        assert_eq!(reg.custom_face_count(), 2, "both subsets must be kept, not just the last one");
+
+        let faces = reg.lookup_faces("Roboto");
+        assert_eq!(faces.len(), 2);
+        let bytes: std::collections::HashSet<Vec<u8>> = faces
+            .iter()
+            .map(|f| reg.read_face_bytes(&f.path).unwrap().to_vec())
+            .collect();
+        assert!(bytes.contains(&vec![1u8, 2]), "latin subset bytes must survive");
+        assert!(bytes.contains(&vec![3u8, 4]), "cyrillic subset bytes must survive");
+    }
+
+    #[test]
+    fn re_registering_same_unicode_range_still_replaces() {
+        // Re-fetching the same @font-face rule's subset (e.g. after reload)
+        // must still replace-in-place, not accumulate duplicates.
+        let reg = FontRegistry::new();
+        let ranges = parse_unicode_ranges("U+0000-00FF");
+        reg.register_from_bytes("Bar", 400, FontStyle::Normal, &ranges, vec![1, 2]);
+        reg.register_from_bytes("Bar", 400, FontStyle::Normal, &ranges, vec![3, 4]);
+        assert_eq!(reg.custom_face_count(), 1);
+        let faces = reg.lookup_faces("Bar");
+        assert_eq!(&*reg.read_face_bytes(&faces[0].path).unwrap(), &[3, 4][..]);
+    }
+
+    #[test]
     fn lookup_is_case_insensitive() {
         let reg = FontRegistry::new();
-        reg.register_from_bytes("MyFont", 400, FontStyle::Normal, make_minimal_ttf());
+        reg.register_from_bytes("MyFont", 400, FontStyle::Normal, &[], make_minimal_ttf());
         assert!(!reg.lookup_faces("myfont").is_empty());
         assert!(!reg.lookup_faces("MYFONT").is_empty());
     }
@@ -267,7 +334,7 @@ mod tests {
     #[test]
     fn list_families_includes_custom() {
         let reg = FontRegistry::new();
-        reg.register_from_bytes("CustomSerif", 400, FontStyle::Normal, make_minimal_ttf());
+        reg.register_from_bytes("CustomSerif", 400, FontStyle::Normal, &[], make_minimal_ttf());
         let families = reg.list_families();
         assert!(families.iter().any(|f| f == "CustomSerif"));
     }
