@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-05",
  "counts": {
-  "open": 303,
-  "fixed": 321,
+  "open": 302,
+  "fixed": 323,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 624,
+ "total_bugs": 625,
  "phases": [
   {
    "id": "P0",
@@ -3491,9 +3491,12 @@
       {
        "id": "WPT-VENDOR-quirks",
        "title": "WPT: вендорить + прогнать категорию `quirks`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root quirks --recursive`, ~2 мин, 72 файла, 17 исполнившихся id) — **6/17 harness OK, 2/75 сабтестов**. Три класса сигнала: (1) 7 TIMEOUT (`hashless-hex-color/*`, `table-cell-width-calculation*`, `line-height-calculation`, `percentage-height-calculation`, `blocks-ignore-line-height`) — все используют `iframe.contentWindow` + `document.open/write/close()` для сравнения quirks/limited-quirks/no-quirks режимов между документами, реконфирмация [BUG-480](bugs/BUG-480-OPEN.md) (`<iframe>` без отдельного browsing context) и смежных гэпов; (2) `classname-query-after-sibling-adoption.html` (`templateDocument.compatMode` — `undefined`) и `supports.html` (`CSS.supports()`/`@supports` не валидируют value, принимают \"00ff00\"/\"1 1\" как валидные) — реконфирмации [BUG-358](bugs/BUG-358-OPEN.md)/[BUG-482](bugs/BUG-482-OPEN.md)/[BUG-552](bugs/BUG-552-OPEN.md) (`document.compatMode` не реализован на живом документе) и [BUG-501](bugs/BUG-501-OPEN.md) (`@supports`/`CSS.supports()` полностью игнорируют value); (3) новый [BUG-658](bugs/BUG-658-OPEN.md) — `table-cell-width-calculation-applies-to.html` (`checkLayout('table')` инлайн-скриптом сразу после разметки) дал `width expected 80 but got 0` при исполнении под wptrunner, но `--dump-layout` на том же файле пост-settle показывает верную геометрию (`w=80.00`) — тот же гэп синхронизации публикации layout-снапшота, что [BUG-555](bugs/BUG-555-OPEN.md) документировал для `getComputedStyle()`, только через `offsetWidth`/`getBoundingClientRect()` (`_lumen_get_bounding_rect`), причём `0` вместо `\"\"` — гонку сложнее отличить от «нулевого бокса на самом деле». Живой `--mcp-live-port`-пробой не подтверждалось (инфраструктурная нестабильность живого клиента в этой сессии — токен не читался из лог-файла Client-классом `scripts/scroll_perf.py`), вывод сделан по коду (`_lumen_get_bounding_rect` — тот же паблиш-путь, что `getComputedStyle`) и по кросс-проверке `--dump-layout`.",
+       "bugs": [
+        "BUG-658"
+       ]
       },
       {
        "id": "WPT-VENDOR-referrer-policy",
@@ -8884,17 +8887,17 @@
    "debtor": false
   },
   "BUG-631": {
-   "status": "open",
-   "title": "Градиентный фон не обрезается по `border-radius`: бокс со скруглением и `background: linear-gradient(...)` рисуется с квадратными углами, тогда как тот же бокс…",
+   "status": "fixed",
+   "title": "Градиентный фон не обрезался по `border-radius`: бокс со скруглением и `background: linear-gradient(...)` рисовался с квадратными углами. Ветки `BackgroundImage…",
    "component": "paint (`display_list.rs::emit_background_image`) — дефект дисплей-листа, не бэкенда",
-   "date": null,
+   "date": "2026-08-05",
    "debtor": false
   },
   "BUG-632": {
-   "status": "open",
-   "title": "`scripts/scoped-test.sh` ложно краснеет на `-p lumen-network --lib`: `disk_cache_store_and_get_fresh` (`left: 2, right: 1`) и `disk_cache_no_store_not_persisted…",
-   "component": "network (тестовый хелпер `crates/network/src/http_cache.rs::tmp_db_path`) — дефект целиком в тестах, продакшен-код не затронут",
-   "date": null,
+   "status": "fixed",
+   "title": "`scripts/scoped-test.sh` ложно краснела на `-p lumen-network --lib` из-за протухших temp-БД (переиспользование PID на Windows + `remove_file` только на успешном…",
+   "component": "network (тестовый хелпер `crates/network/src/http_cache.rs`, `mod tests`)",
+   "date": "2026-08-05",
    "debtor": false
   },
   "BUG-633": {
@@ -9062,6 +9065,13 @@
    "status": "open",
    "title": "`ServiceWorkerRegistration` global class is never defined in the production V8 install — only as a local test stub inside each module's own unit tests — so ever…",
    "component": "js (`crates/js/src/dom.rs` — `_sw_make_registration`, ~line 4843) + all seven `ServiceWorkerRegistration.prototype`-attaching modules (`push_api.rs`, `background_sync.rs`, `periodic_sync.rs`, `background_fetch.rs`, `cookie_store.rs`, `content_index.rs`, `notifications_bindings.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-658": {
+   "status": "open",
+   "title": "`offsetWidth`/`offsetHeight`/`getBoundingClientRect()` read back `0` (not a distinguishable sentinel like `getComputedStyle`'s `\"\"`) when called from an inline…",
+   "component": "js (`crates/js/src/dom.rs:3196` — `offsetWidth`/`offsetHeight`/`getBoundingClientRect()`, backed by `_lumen_get_bounding_rect`), shell (`crates/shell/src/main.rs::apply_loaded_page` — same publish path as [BUG-555](bugs/BUG-555-OPEN.md))",
    "date": null,
    "debtor": false
   }
@@ -9738,7 +9748,7 @@
   "network (резолвер)": [
    "BUG-304"
   ],
-  "network (тестовый хелпер `crates/network/src/http_cache.rs::tmp_db_path`) — дефект целиком в тестах, продакшен-код не затронут": [
+  "network (тестовый хелпер `crates/network/src/http_cache.rs`, `mod tests`)": [
    "BUG-632"
   ],
   "network+shell": [
