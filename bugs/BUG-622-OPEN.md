@@ -36,3 +36,19 @@ test helper libraries (`elem.ownerDocument.defaultView`) for reaching
 Fix shape: add `get defaultView() { return window; }` to the live
 `document` object literal — same one-line pattern as other single-value
 accessors on that object.
+
+## Реконфирмация 2026-08-05 (WPT-VENDOR-pointerevents)
+
+The predicted "wider-impact" played out: after fixing the separate
+vendoring gap [BUG-654](BUG-654-FIXED.md) (`test_driver.Actions` was
+undefined, masking everything downstream of it), this became the single
+largest failure cluster in the corrected `pointerevents` run — dozens of
+subtests across `setPointerCapture`/boundary-event/predicted-list tests,
+each surfacing as `Error: Browsing context for element was detached`
+(misleading text, same root cause) from
+`tools/wptrunner/wptrunner/testdriver-extra.js::get_context`'s
+`element.ownerDocument.defaultView` check. Confirms this is worth
+prioritizing — it silently degrades signal quality for every WPT category
+whose tests route through `test_driver`'s element-targeted helpers
+(`send_keys`, `action_sequence`, `get_computed_label`, etc.), not just the
+one file already on record.

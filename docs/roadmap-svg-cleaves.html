@@ -58,11 +58,11 @@
  "generated": "2026-08-05",
  "counts": {
   "open": 300,
-  "fixed": 320,
+  "fixed": 321,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 620,
+ "total_bugs": 621,
  "phases": [
   {
    "id": "P0",
@@ -3408,9 +3408,12 @@
       {
        "id": "WPT-VENDOR-pointerevents",
        "title": "WPT: вендорить + прогнать категорию `pointerevents`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root pointerevents --recursive`, ~32 мин, 258 id) — **94/258 harness OK, 223/645 сабтестов**. По пути найден и исправлен гэп вендоринга: `resources/testdriver-actions.js` (класс `test_driver.Actions`, 607 строк) и пустой хук `testdriver-vendor.js` никогда не вендорились — каждый тест с жестовым вводом (drag/multi-touch/pointer-capture) 404-ил ресурс и падал `TypeError: test_driver.Actions is not a constructor`, маскируя реальную причину для этой и всех прежних категорий с таким вводом. Заведён и закрыт [BUG-654](bugs/BUG-654-FIXED.md), файлы довендорены (`tests/wpt/VENDOR.md`). После фикса доминирующая причина отказа — реконфирмация [BUG-622](bugs/BUG-622-OPEN.md) (`document.defaultView` отсутствует, десятки хитов через `testdriver-extra.js::get_context`, текст ошибки вводит в заблуждение: `Browsing context for element was detached`); также реконфирмации BUG-462/574 (`Node.prototype.contains`), BUG-464/477/580 (`document.elementFromPoint`), BUG-481 (`window.visualViewport`) и TLS-гэп `UnknownIssuer` на `.https.`-файлах. Итоговый прогон почти нейтрален по числу прошедших (94/258 против 100/258 с маскирующим артефактом) — фикс меняет время прогона на точность сигнала, не проходимость",
+       "bugs": [
+        "BUG-654"
+       ]
       },
       {
        "id": "WPT-VENDOR-pointerlock",
@@ -9015,6 +9018,13 @@
    "title": "`HTMLVideoElement.disablePictureInPicture` IDL getter reads a closure variable `_disabled` cached once at patch time instead of live-reflecting the `disablepict…",
    "component": "js (`crates/js/src/video_pip.rs:74-91` — `patchVideoPip`)",
    "date": null,
+   "debtor": false
+  },
+  "BUG-654": {
+   "status": "fixed",
+   "title": "`resources/testdriver-actions.js` (upstream's `test_driver.Actions` builder class, 607 lines) and the sibling empty `testdriver-vendor.js` hook were never vendo…",
+   "component": "tooling (`tests/wpt/resources/`)",
+   "date": "2026-08-05",
    "debtor": false
   }
  },
