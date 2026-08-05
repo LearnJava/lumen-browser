@@ -3090,9 +3090,9 @@
       {
        "id": "WPT-VENDOR-media-playback-quality",
        "title": "WPT: вендорить + прогнать категорию `media-playback-quality`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). медиа-конвейер"
+       "note": "Скоуп: 🚫 (вне скоупа, медиа-конвейер). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root media-playback-quality --recursive`, ~13с), включена по тому же постоянному решению пользователя, что `media-capabilities`/`audio-output`/`audio-session` — **0/1 harness OK**. Единственный тест (`idlharness.window.js`) TIMEOUT на `idl_test is not defined` — 404 на невендоренные `/resources/WebIDLParser.js`+`idlharness.js`, тот же документированный разрыв, что у прочих категорий; до вызова `HTMLVideoElement.getVideoPlaybackQuality()` тест не дошёл. Живой грep (`crates/js/src/`) подтвердил VideoPlaybackQuality API целиком отсутствует — не заведён отдельный баг, первый проход отсутствующей фичи"
       },
       {
        "id": "WPT-VENDOR-media-source",
