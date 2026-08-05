@@ -34885,7 +34885,7 @@ mod tests {
     }
 
     /// `to <corner>` keywords parse to `GradientCorner`, with `angle_deg` left
-    /// as the square-box placeholder (BUG-645) — only [`GradientCorner::angle_deg`]
+    /// as the square-box placeholder (BUG-647) — only [`GradientCorner::angle_deg`]
     /// resolves the true, aspect-ratio-dependent angle.
     #[test]
     fn gradient_corner_keyword_parses_to_corner_variant() {
@@ -34901,7 +34901,7 @@ mod tests {
     }
 
     /// `GradientCorner::angle_deg` reduces to 45/135/225/315° on a square box
-    /// (matching the pre-BUG-645 hardcoded behaviour) but tilts toward vertical
+    /// (matching the pre-BUG-647 hardcoded behaviour) but tilts toward vertical
     /// — not horizontal — as the box gets wider, per CSS Images L3 §3.1's
     /// "perpendicular to the diagonal of the two unnamed corners" construction.
     /// The 170.5° figure is pixel-measured off a real Edge render of a 960×160

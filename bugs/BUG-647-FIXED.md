@@ -1,4 +1,4 @@
-# BUG-645: `linear-gradient(to <corner>, …)` used a fixed 45/135/225/315° angle regardless of box aspect ratio
+# BUG-647: `linear-gradient(to <corner>, …)` used a fixed 45/135/225/315° angle regardless of box aspect ratio
 
 **Статус:** FIXED 2026-08-05
 **Компонент:** layout (`crates/engine/layout/src/style.rs::parse_linear_gradient_angle`) — shared by paint (`cpu_raster.rs`, `renderer.rs`, `femtovg_backend.rs`)
