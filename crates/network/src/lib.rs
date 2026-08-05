@@ -53,6 +53,7 @@ pub mod http;
 pub mod http_cache;
 mod hsts;
 mod hsts_preload;
+mod intercept;
 mod mixed_content;
 mod mock;
 mod origin;
@@ -206,6 +207,10 @@ fn apply_ua_override_h2(mut headers: Vec<(Vec<u8>, Vec<u8>)>) -> Vec<(Vec<u8>, V
     headers
 }
 
+pub use intercept::{
+    GlobalIntercept, InterceptDecision, add_global_intercept, drain_new_intercept_announcements,
+    pause_for_intercept, remove_global_intercept, resolve_intercept,
+};
 pub use http_cache::{HttpCache, HttpCacheBackend, DiskHttpCache, lumen_cache_dir};
 pub use http::{HttpProfile, H2Settings, H2StreamPriority, ClientHintsProfile, HeaderOrder};
 pub use mock::MockTransport;
@@ -2262,6 +2267,17 @@ fn fetch_with_redirect(
             });
         }
         return Err(Error::Network(format!("blocked: {reason}")));
+    }
+
+    // BUG-295 remainder: `network.addIntercept` + `continueRequest`/`failRequest` —
+    // after the ad-block filter (no point pausing a request that would be
+    // blocked anyway), before CORS preflight / Started: a paused request that
+    // gets failed follows the same "no RequestStarted/RequestCompleted"
+    // contract as the blocks above. Only the `beforeRequestSent` phase pauses
+    // here; `responseStarted`/`authRequired` phases remain unactuated (see
+    // `intercept.rs` module doc).
+    if let Err(reason) = intercept::pause_for_intercept(url.as_str(), "beforeRequestSent") {
+        return Err(Error::Network(reason));
     }
 
     // CORS preflight enforcement (Fetch §4.8) — после mixed-content / filter,
@@ -7486,6 +7502,58 @@ world\r\n\
         let body = client.fetch(&url).expect("fetch after clearing offline must reach the real server");
         assert_eq!(body, b"ok");
 
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn global_intercept_pauses_real_fetch_until_resolved() {
+        // BUG-295 remainder (`network.addIntercept` + `continueRequest`/
+        // `failRequest`): end-to-end through the real `fetch_with_redirect`
+        // chokepoint (`HttpClient::fetch`), not just the isolated
+        // `intercept` module tests — proves a matching request genuinely
+        // blocks its calling thread until resolved, then either reaches the
+        // real mock server (Continue) or fails without ever connecting (Fail
+        // is covered by the module's own `fail_decision_unblocks_with_err`).
+        //
+        // Uses `intercept::GLOBAL_TEST_LOCK`, not `BUG_295_GLOBAL_TEST_LOCK`
+        // above — this test touches the *intercept* registry specifically,
+        // and must serialize against `intercept.rs`'s own blocking tests
+        // (same process-wide state), not the unrelated offline/UA globals.
+        let _guard = crate::intercept::GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (port, server) = mock_http_server(1, |_| {
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".to_vec()
+        });
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+
+        // A specific pattern (not match-all) — the pause stays open until
+        // resolved below; an empty `url_patterns` would match ANY
+        // concurrently running *unrelated* test's real fetch too.
+        add_global_intercept(GlobalIntercept {
+            id: "test-intercept".into(),
+            phases: vec!["beforeRequestSent".into()],
+            url_patterns: vec![url.to_string()],
+        });
+
+        let fetch_url = url.clone();
+        let handle = thread::spawn(move || HttpClient::new().fetch(&fetch_url));
+
+        let mut request_id = None;
+        for _ in 0..400 {
+            if let Some((id, seen_url)) = drain_new_intercept_announcements().into_iter().next() {
+                assert_eq!(seen_url, url.to_string());
+                request_id = Some(id);
+                break;
+            }
+            thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let request_id = request_id.expect("fetch never registered as paused");
+        assert!(!handle.is_finished(), "fetch must stay blocked until resolved");
+
+        assert!(resolve_intercept(&request_id, InterceptDecision::Continue));
+        let body = handle.join().unwrap().expect("fetch must complete once resolved as Continue");
+        assert_eq!(body, b"ok");
+
+        remove_global_intercept("test-intercept");
         server.join().unwrap();
     }
 

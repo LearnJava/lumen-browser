@@ -57,8 +57,8 @@
 {
  "generated": "2026-08-06",
  "counts": {
-  "open": 309,
-  "fixed": 328,
+  "open": 308,
+  "fixed": 329,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -1740,7 +1740,7 @@
        "title": "DEVX-6: BiDi-сценарии offline/intercept/timezone/UA",
        "status": "done",
        "size": "M",
-       "note": "DONE 2026-07-17: `tests/wpt/verify_devx6_bidi_scenarios.py` (raw `BidiSession`, same pattern as `verify_s3_bidi_session.py`) drives a real spawned `lumen --bidi-port` window and checks two things per command — protocol round-trip (ACK/error shape) and live-page effect (fetch blocked, `Intl` timezone shift, `navigator.userAgent` shift). All six protocol round-trips pass; all four live-effect checks confirmed **not wired** (none of `network.setOfflineStatus`/`addIntercept`/`continueRequest`/`failRequest`, `browser.setTimezoneOverride`, `emulation.setUserAgentOverride` touch `state.live` — filed as [BUG-295](../bugs/BUG-295-OPEN.md) with full diagnosis; wiring them is real engine/shell feature work, out of this Python-tooling task's scope). Also found and handled a separate, environment-dependent gap: the live window's JS runtime can fail to finish installing at all in some working sessions (`script.evaluate` stuck on \"JS context not available\") — reported as `SKIP(env)`, documented in CLAUDE.md Known gotchas, not filed as part of BUG-295 (reproduced independent of these six commands).",
+       "note": "DONE 2026-07-17: `tests/wpt/verify_devx6_bidi_scenarios.py` (raw `BidiSession`, same pattern as `verify_s3_bidi_session.py`) drives a real spawned `lumen --bidi-port` window and checks two things per command — protocol round-trip (ACK/error shape) and live-page effect (fetch blocked, `Intl` timezone shift, `navigator.userAgent` shift). All six protocol round-trips pass; all four live-effect checks confirmed **not wired** (none of `network.setOfflineStatus`/`addIntercept`/`continueRequest`/`failRequest`, `browser.setTimezoneOverride`, `emulation.setUserAgentOverride` touch `state.live` — filed as [BUG-295](../bugs/BUG-295-FIXED.md) with full diagnosis; wiring them is real engine/shell feature work, out of this Python-tooling task's scope — closed 2026-08-06, all four now wired). Also found and handled a separate, environment-dependent gap: the live window's JS runtime can fail to finish installing at all in some working sessions (`script.evaluate` stuck on \"JS context not available\") — reported as `SKIP(env)`, documented in CLAUDE.md Known gotchas, not filed as part of BUG-295 (reproduced independent of these six commands).",
        "bugs": [
         "BUG-295"
        ]
@@ -6575,10 +6575,10 @@
    "debtor": false
   },
   "BUG-295": {
-   "status": "open",
-   "title": "Шесть BiDi-команд корректно отвечали по протоколу, но не трогали живое окно. **2/4 исправлено (2026-08-05, P3):** `network.setOfflineStatus` и `emulation.setUse…",
-   "component": "bidi-server (`protocol.rs`) + `crates/driver` + shell + `crates/network` + `crates/js`",
-   "date": null,
+   "status": "fixed",
+   "title": "Шесть BiDi-команд корректно отвечали по протоколу, но не трогали живое окно. **2/4 (2026-08-05):** `network.setOfflineStatus` и `emulation.setUserAgentOverride`…",
+   "component": "bidi-server (`protocol.rs`) + `crates/driver` + shell + `crates/network` (+ `intercept.rs`) + `crates/js`",
+   "date": "2026-08-06",
    "debtor": false
   },
   "BUG-297": {

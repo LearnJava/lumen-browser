@@ -114,7 +114,8 @@ use lumen_paint::{
 use lumen_layout::Cursor as CssCursor;
 use lumen_driver::{
     AutomationCommand, AutomationHandle, AutomationReply, AutomationRequest, BoxModel, ConsoleEntry,
-    ConsoleLevel as DriverConsoleLevel, NetworkEntry as DriverNetworkEntry, WaitCondition,
+    ConsoleLevel as DriverConsoleLevel, InterceptedRequest, NetworkEntry as DriverNetworkEntry,
+    WaitCondition,
 };
 use winit::application::ApplicationHandler;
 
@@ -12999,6 +13000,41 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         }
                     }
                     let _ = reply_tx.send(AutomationReply::Ack);
+                }
+                AutomationCommand::AddIntercept { id, phases, url_patterns } => {
+                    // BUG-295 remainder (`network.addIntercept`): synced into
+                    // `lumen_network`'s process-global registry, consulted at
+                    // the same `fetch_with_redirect` chokepoint as the
+                    // offline/UA-override toggles above.
+                    lumen_network::add_global_intercept(lumen_network::GlobalIntercept {
+                        id,
+                        phases,
+                        url_patterns,
+                    });
+                    let _ = reply_tx.send(AutomationReply::Ack);
+                }
+                AutomationCommand::RemoveIntercept(id) => {
+                    lumen_network::remove_global_intercept(&id);
+                    let _ = reply_tx.send(AutomationReply::Ack);
+                }
+                AutomationCommand::ResolveIntercept { request_id, continue_request } => {
+                    // BUG-295 remainder (`network.continueRequest`/`network.failRequest`):
+                    // unblocks the fetch worker thread (if any) paused on
+                    // `request_id` in `lumen_network`'s registry.
+                    let decision = if continue_request {
+                        lumen_network::InterceptDecision::Continue
+                    } else {
+                        lumen_network::InterceptDecision::Fail
+                    };
+                    let matched = lumen_network::resolve_intercept(&request_id, decision);
+                    let _ = reply_tx.send(AutomationReply::InterceptResolved(matched));
+                }
+                AutomationCommand::PollIntercepts => {
+                    let requests = lumen_network::drain_new_intercept_announcements()
+                        .into_iter()
+                        .map(|(request_id, url)| InterceptedRequest { request_id, url })
+                        .collect();
+                    let _ = reply_tx.send(AutomationReply::Intercepts(requests));
                 }
             }
         }
