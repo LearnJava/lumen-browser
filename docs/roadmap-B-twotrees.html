@@ -76,11 +76,11 @@
  "generated": "2026-08-05",
  "counts": {
   "open": 298,
-  "fixed": 316,
+  "fixed": 317,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 614,
+ "total_bugs": 615,
  "phases": [
   {
    "id": "P0",
@@ -8973,6 +8973,13 @@
    "date": null,
    "debtor": false
   },
+  "BUG-647": {
+   "status": "fixed",
+   "title": "`linear-gradient(to <corner>, …)` resolved corner keywords to a fixed square-box angle (45/135/225/315°) regardless of the box's actual aspect ratio, instead of…",
+   "component": "layout (`style.rs::parse_linear_gradient_angle`) — shared by all 3 paint backends",
+   "date": "2026-08-05",
+   "debtor": true
+  },
   "BUG-648": {
    "status": "open",
    "title": "`observe()` performs no call-signature validation at all (no `TypeError` on `observe({})`/non-array `entryTypes`, no `InvalidModificationError` on mixing single…",
@@ -9564,6 +9571,9 @@
   ],
   "layout (`selector_query.rs::computed_style_to_map`) + js (`_lumen_get_computed_style`)": [
    "BUG-472"
+  ],
+  "layout (`style.rs::parse_linear_gradient_angle`) — shared by all 3 paint backends": [
+   "BUG-647"
   ],
   "layout (`style.rs` cascade, `rule_index.rs`)": [
    "BUG-284"
