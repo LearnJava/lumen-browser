@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-05",
  "counts": {
-  "open": 301,
+  "open": 302,
   "fixed": 321,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 622,
+ "total_bugs": 623,
  "phases": [
   {
    "id": "P0",
@@ -3446,16 +3446,19 @@
       {
        "id": "WPT-VENDOR-preload",
        "title": "WPT: вендорить + прогнать категорию `preload`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root preload --recursive`, ~8 мин, 79 id) — **36/79 harness OK, 10/203 сабтестов**. Доминирующая причина отказа — реконфирмация [BUG-485](bugs/BUG-485-OPEN.md)/[BUG-565](bugs/BUG-565-OPEN.md) (`document.head` всегда `undefined`, ~60 хитов на `document.head.appendChild`/`.append`); остальной сигнал — реконфирмации [BUG-611](bugs/BUG-611-OPEN.md) (`HTMLLinkElement.relList` отсутствует), [BUG-568](bugs/BUG-568-OPEN.md) (`document.write` отсутствует), [BUG-380](bugs/BUG-380-OPEN.md) (переиспользование browsing context), TLS-гэп `UnknownIssuer` на 5 `.https.`-файлах, и невендоренные общие ресурсы (`/common/utils.js`, `/common/get-host-info.sub.js`, `/common/dispatcher/dispatcher.js`) — документированный пробел вендоринга, не баг движка. Новых багов не заведено"
       },
       {
        "id": "WPT-VENDOR-presentation-api",
        "title": "WPT: вендорить + прогнать категорию `presentation-api`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). медиа/casting API"
+       "note": "Скоуп: 🚫 (вне скоупа). медиа/casting API. DONE 2026-08-05: вендорена + прогнана целиком (`--all --root presentation-api --recursive`, ~5 мин, 13 id — все `.https.`) — **0/13 harness OK**. 24 из 37 файлов категории `-manual` (не выбираются `run_report.py` — требуют человека у второго экрана), все 13 исполнимых упёрлись в TLS-гэп `UnknownIssuer` до JS. Хотя категория вне скоупа, W3C Presentation API Level 1 (Phase 0) реализован (`crates/js/src/presentation_api.rs`) — чтение исходника + живая проба (`--mcp-live-port`) нашли [BUG-656](bugs/BUG-656-OPEN.md): `PresentationRequest`-конструктор не валидирует аргументы вовсе (нет args/пустой массив/невалидный URL/неподдержанная схема — везде `NO THROW` вместо TypeError/NotSupportedError/SyntaxError по спеке)",
+       "bugs": [
+        "BUG-656"
+       ]
       },
       {
        "id": "WPT-VENDOR-print",
@@ -9052,6 +9055,13 @@
    "status": "open",
    "title": "`requestPointerLock()` не проверяет transient user activation (и никакое другое предусловие спеки) — блокировка выдаётся синхронно и безусловно даже без предшес…",
    "component": "js (`crates/js/src/pointer_lock.rs:42-46` — `request_pointer_lock`, `crates/js/src/v8_runtime.rs:3248-3250` — привязка)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-656": {
+   "status": "open",
+   "title": "`PresentationRequest` constructor performs no argument validation at all — no args, empty array, invalid URL (`https://@`), unsupported scheme (`unsupported://……",
+   "component": "js (`crates/js/src/presentation_api.rs:102-106` — `PresentationRequest` constructor)",
    "date": null,
    "debtor": false
   }
