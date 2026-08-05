@@ -13096,6 +13096,71 @@ mod tests {
         }
     }
 
+    /// BUG-277 срез 13: покрытие включается только там, где кромка квада
+    /// действительно сошла с осей растровой сетки. Осевые матрицы обязаны
+    /// остаться на прежнем (побитово идентичном) пути, иначе каждый обычный
+    /// фон платил бы за CPU-растеризацию без единого изменённого пикселя.
+    #[test]
+    fn rotates_axes_2d_only_for_rotate_and_skew() {
+        assert!(!rotates_axes_2d(&Mat4::IDENTITY));
+        assert!(!rotates_axes_2d(&Mat4::translation_2d(10.0, -20.0)));
+        assert!(!rotates_axes_2d(&Mat4::scale_2d(2.0, 3.0)));
+        assert!(!rotates_axes_2d(&Mat4::scale_2d(-1.0, 1.0)), "flip остаётся осевым");
+        assert!(rotates_axes_2d(&Mat4::rotate_2d(std::f32::consts::FRAC_PI_4)));
+        assert!(rotates_axes_2d(&Mat4::skew_x(0.3)));
+        assert!(rotates_axes_2d(&Mat4::skew_y(0.3)));
+        // Поворот на кратное 90° меняет оси местами, но кромки остаются на сетке
+        // — b/c при этом ненулевые, поэтому предикат срабатывает. Это осознанно
+        // безопасная сторона ошибки: лишняя растеризация даёт cov=1 и тот же
+        // пиксель, тогда как пропуск настоящего поворота вернул бы ступеньку.
+        assert!(rotates_axes_2d(&Mat4::rotate_2d(std::f32::consts::FRAC_PI_2)));
+        // 3D/перспектива исключены: antialias_fill_soup не переносит z.
+        assert!(!rotates_axes_2d(&Mat4::rotate_y(0.5)));
+        assert!(!rotates_axes_2d(&Mat4::perspective(800.0).multiply(&Mat4::rotate_x(0.5))));
+    }
+
+    /// Растеризация обязана идти в device px, а результат — вернуться в CSS px:
+    /// при `dpr = 2` квад, лежащий ровно на пиксельной сетке, обязан остаться
+    /// полностью непрозрачным и не сдвинуться (иначе AA-путь двигал бы обычную
+    /// геометрию на повёрнутых страницах).
+    #[test]
+    fn antialias_fill_soup_roundtrips_device_px_and_keeps_aligned_quad_opaque() {
+        let color = [0.2, 0.4, 0.6, 1.0];
+        let mut verts = Vec::new();
+        push_fill_quad(&mut verts, Rect::new(4.0, 6.0, 10.0, 8.0), color);
+        antialias_fill_soup(&mut verts, 0, color, 2.0);
+        assert!(!verts.is_empty(), "квад не должен исчезнуть");
+        for v in &verts {
+            assert!((v.color[3] - 1.0).abs() < 1e-3, "alpha = {}", v.color[3]);
+            assert_eq!([v.color[0], v.color[1], v.color[2]], [color[0], color[1], color[2]]);
+            assert!(
+                (4.0..=14.0).contains(&v.pos[0]) && (6.0..=14.0).contains(&v.pos[1]),
+                "вершина ушла за исходный прямоугольник: {:?}",
+                v.pos
+            );
+        }
+    }
+
+    /// А кромка, сошедшая с сетки, обязана дать дробное покрытие — ради этого
+    /// срез и делается. Ромб (квад под 45°) не может состоять из одних
+    /// полностью залитых пикселей.
+    #[test]
+    fn antialias_fill_soup_gives_fractional_alpha_on_rotated_quad() {
+        let color = [1.0, 0.0, 0.0, 1.0];
+        let mut verts = Vec::new();
+        push_fill_quad(&mut verts, Rect::new(0.0, 0.0, 20.0, 20.0), color);
+        apply_affine_to_verts(&mut verts, &Mat4::rotate_2d(std::f32::consts::FRAC_PI_4));
+        antialias_fill_soup(&mut verts, 0, color, 1.0);
+        assert!(
+            verts.iter().any(|v| v.color[3] > 0.01 && v.color[3] < 0.99),
+            "ни одного частично покрытого пикселя на кромке ромба"
+        );
+        assert!(
+            verts.iter().any(|v| v.color[3] > 0.99),
+            "внутренность ромба обязана остаться сплошной"
+        );
+    }
+
     /// Неравномерный масштаб превращает круг в эллипс — шейдеру нужна полная
     /// обратная матрица, а не пара радиусов (TEST-109 c1 масштабирует бокс).
     #[test]
