@@ -3305,9 +3305,9 @@
       {
        "id": "WPT-VENDOR-parakeet",
        "title": "WPT: вендорить + прогнать категорию `parakeet`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). ad-tech (Privacy Sandbox)"
+       "note": "Скоуп: 🚫 (вне скоупа). ad-tech (Privacy Sandbox / Microsoft PARAKEET). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root parakeet --recursive`, ~1 мин, 3 id) — **0/3 harness OK, 0/0 сабтестов**. Все 3 — `.https.` файлы, все TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`, ни один не исполнился. Живая проба (`--dump-layout` + инлайн-скрипт) подтвердила `navigator.createAdRequest`/`finalizeAd`/`runAdAuction`/`joinAdInterestGroup`/`deprecatedURNToURL` — все `undefined`, API не реализован вовсе, соответствует скоупу 🚫. Новый баг не заведён"
       },
       {
        "id": "WPT-VENDOR-payment-method-basic-card",
