@@ -3087,16 +3087,16 @@
       {
        "id": "WPT-VENDOR-measure-memory",
        "title": "WPT: вендорить + прогнать категорию `measure-memory`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root measure-memory --recursive --processes=4`, ~7:12) — **0/14 harness OK**. 13/14 TIMEOUT на стандартном TLS-гэпе (тот же класс, что `keyboard-lock`/`keyboard-map`/`loading`/`magnetometer`/`managed`), последний (`idlharness.window.html`) переподтвердил уже открытый [BUG-380](bugs/BUG-380-OPEN.md) (реюз browsing context). Живой грep (`crates/js/src/dom.rs`) подтвердил `performance.measureMemory()` целиком отсутствует — не заведён отдельный баг, первый проход отсутствующей фичи"
       },
       {
        "id": "WPT-VENDOR-media",
        "title": "WPT: вендорить + прогнать категорию `media`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена целиком (`git sparse-checkout add media`, 39 файлов), категория фикстурная — ноль собственных `.html`/`.js` (тот же класс, что `images`). `run_report.py --all --root media --recursive` мгновенно даёт `no tests selected` — нечего гонять, нечего пробовать (нет своего API). Новых багов не заведено"
       },
       {
        "id": "WPT-VENDOR-media-capabilities",
