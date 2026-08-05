@@ -688,9 +688,12 @@ pub enum DisplayCommand {
     ///
     /// Phase 0 ограничения:
     /// - `PushClipRect` под не-identity transform-ом использует axis-aligned
-    ///   bounding box трансформированного rect-а как scissor — корректно
-    ///   только для translate-чистых трансформов; rotate/scale могут потерять
-    ///   точность по краям. Полноценный clip через clip-mask — P2 п.4+.
+    ///   bounding box трансформированного rect-а как scissor. Для осевых
+    ///   трансформов (translate/scale/flip) этот bbox точен. Под rotate/skew
+    ///   он шире самого клипа, и **wgpu**-бэкенд (BUG-277 срез 14) переводит
+    ///   такой клип на точный контур через offscreen-уровень; `cpu_raster` и
+    ///   femtovg остаются на bbox. Повёрнутый клип со скруглением — на bbox
+    ///   везде.
     /// - DrawBorder / DrawOutline эмитят 4 axis-aligned rect-а под стороны;
     ///   при rotate они трансформируются по-отдельности, что выглядит
     ///   корректно для translate/scale, но может рассинхронизировать стыки
