@@ -3048,9 +3048,9 @@
       {
        "id": "WPT-VENDOR-magnetometer",
        "title": "WPT: вендорить + прогнать категорию `magnetometer`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). датчик устройства"
+       "note": "Скоуп: 🚫 (вне скоупа, датчик устройства). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root magnetometer --recursive`, ~1:56), включена по тому же постоянному решению пользователя, что `accelerometer`/`ambient-light`/`compute-pressure` — **2/10 harness OK, 1/3 сабтестов**. 6 `.https.` TIMEOUT на стандартном TLS-гэпе тестового сертификата (тот же класс, что `keyboard-lock`/`loading`); 2 ERROR — session-reuse артефакт класса [BUG-380](bugs/BUG-380-OPEN.md). Реально исполнились 2 не-https теста: 1 FAIL на Permissions-Policy интроспекции (тот же паттерн, что `ambient-light`), 1 FAIL переподтверждает уже открытые [BUG-399](bugs/BUG-399-OPEN.md)/[BUG-394](bugs/BUG-394-OPEN.md) (`Magnetometer` доступен в небезопасном контексте — общий `_makeXyzSensor`-стаб, найдено ранее на `Gyroscope_insecure_context.html`). Новых багов не заведено"
       },
       {
        "id": "WPT-VENDOR-managed",
