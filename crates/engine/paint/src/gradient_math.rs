@@ -146,9 +146,14 @@ pub fn lerp_color_premul(a: Color, b: Color, f: f32) -> Color {
 }
 
 /// Sample a resolved gradient stop list at position `t` (straight-colour linear
-/// interpolation), mirroring the GPU `sample_grad`: `repeating` wraps `t` to
-/// `[0,1)`, otherwise it clamps; positions outside the first/last stop take the
-/// boundary colour.
+/// interpolation): `repeating` wraps `t` to `[0,1)`, otherwise it clamps;
+/// positions outside the first/last stop take the boundary colour.
+///
+/// The `[0,1)` wrap is **not** the CSS repeat period (that is the `[first,
+/// last]` stop span, CSS Images L3 §3.6) — the only caller, the conic
+/// rasterizer, folds `t` into that span itself before calling. The GPU
+/// `sample_grad` folds via its own `wrap_repeat` for the same reason; do not
+/// read this wrap as the shared repeat rule (BUG-277 срез 9).
 #[must_use]
 pub fn sample_gradient_color(resolved: &[(f32, Color)], t: f32, repeating: bool) -> Color {
     let n = resolved.len();
