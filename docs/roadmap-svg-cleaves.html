@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-06",
  "counts": {
-  "open": 307,
+  "open": 309,
   "fixed": 328,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 635,
+ "total_bugs": 637,
  "phases": [
   {
    "id": "P0",
@@ -3595,23 +3595,22 @@
       {
        "id": "WPT-VENDOR-screen-wake-lock",
        "title": "WPT: вендорить + прогнать категорию `screen-wake-lock`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root screen-wake-lock --recursive`, ~4 мин 39 с, 21 файл, 16 исполнившихся id) — **2/16 harness OK, 1/2 сабтестов**. 13/16 id — `.https.`, TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`; 2 ERROR — session/URL-reuse артефакт (BUG-380). Оба реально исполнившихся не-`.https.` теста — реконфирмации: `wakelock-supported-by-permissions-policy.html` → [BUG-361](bugs/BUG-361-OPEN.md) (`document.permissionsPolicy.features()` всегда `[]`); `wakelock-insecure-context.any.html` формально PASS, но по неверной причине — живая проба (`--mcp-live-port`) нашла [BUG-669](bugs/BUG-669-OPEN.md): `WakeLock`-интерфейс никогда не выставляется на `globalThis` (только `WakeLockSentinel` и `navigator.wakeLock`), поэтому `'WakeLock' in self` всегда `false`, даже в контексте, который сам движок считает secure (реконфирмация [BUG-399](bugs/BUG-399-OPEN.md), `isSecureContext` захардкожен `true`) — `navigator.wakeLock.request('screen')` при этом реально работает и резолвится",
+       "bugs": [
+        "BUG-669"
+       ]
       },
       {
        "id": "WPT-VENDOR-scroll-animations",
        "title": "WPT: вендорить + прогнать категорию `scroll-animations`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
-      },
-      {
-       "id": "WPT-VENDOR-scroll-performance-timing",
-       "title": "WPT: вендорить + прогнать категорию `scroll-performance-timing`",
-       "status": "planned",
-       "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root scroll-animations --recursive`, ~2 мин 46 с, 280 файлов, 205 отобранных id) — **160/205 harness OK, 355/1853 сабтестов**. Большинство провалов — задокументированный класс «внекатегорийный хелпер не вендорен» (`/web-animations/testcommon.js` даёт `createDiv`/`target`/`scroller`/... `is not defined` на 460+ сайтах вызова; `/dom/events/scrolling/scroll_support.js` аналогично), та же методология, что `FileAPI`/`animation-worklet` — намеренно не вендорится. 40× `CSS.percent is not a function` + 6× `CSS.px is not a function` реконфирмируют уже открытый [BUG-554](bugs/BUG-554-OPEN.md) (CSS Typed OM numeric factories отсутствуют целиком). Новая находка — 2× `animation.effect.getComputedTiming is not a function` на тестах, исполнившихся независимо от невендоренного `testcommon.js`; живая проба (`--mcp-live-port`) подтвердила: [BUG-670](bugs/BUG-670-OPEN.md) — `KeyframeEffect.prototype.getComputedTiming` отсутствует целиком (`crates/js/src/dom.rs:12449-12452` реализует только `getTiming`/`updateTiming`/`getKeyframes`/`setKeyframes`), отдельно от BUG-536 (CSS Transitions)",
+       "bugs": [
+        "BUG-670"
+       ]
       },
       {
        "id": "WPT-VENDOR-scroll-to-text-fragment",
@@ -9152,6 +9151,20 @@
    "status": "open",
    "title": "`ScreenOrientation` doesn't inherit `EventTarget` (`instanceof EventTarget` → `false`, `dispatchEvent` entirely missing, own hand-rolled `_listeners`/`addEventL…",
    "component": "js (`crates/js/src/screen_orientation.rs` — Screen Orientation Phase 0 shim)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-669": {
+   "status": "open",
+   "title": "The `WakeLock` interface object is never exposed on `globalThis` at all — only `WakeLockSentinel` and `navigator.wakeLock` (the manager instance) are — so `'Wak…",
+   "component": "js (`crates/js/src/wake_lock.rs` — Screen Wake Lock Level 1 Phase 1 shim)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-670": {
+   "status": "open",
+   "title": "`AnimationEffect.getComputedTiming()` is missing entirely — only `getTiming()` (the *specified* timing dict) exists on `KeyframeEffect.prototype`; `getComputedT…",
+   "component": "js (`crates/js/src/dom.rs:12449-12452` — Web Animations `WEB_API_SHIM`, `KeyframeEffect.prototype`)",
    "date": null,
    "debtor": false
   }
