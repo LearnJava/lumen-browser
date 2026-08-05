@@ -320,8 +320,9 @@ impl BidiState {
     }
 
     /// Effective User-Agent for a context: per-context → session-level → `None`.
-    // Shell layer injects this UA into HTTP headers when present.
-    #[allow(dead_code)]
+    ///
+    /// BUG-295: also used by [`emulation_set_ua_override`] to compute the
+    /// effective UA pushed to the live window.
     pub fn user_agent_for(&self, context_id: &str) -> Option<&str> {
         self.contexts
             .iter()
@@ -1445,6 +1446,10 @@ fn browser_set_timezone(id: i64, params: &JsonValue, state: &mut BidiState) -> D
 /// Параметры: `{"status": {"offline": true}}` или `{"offline": true}` (упрощённая форма).
 /// После установки `true` все сетевые запросы должны имитировать ошибку подключения.
 /// Читается через [`BidiState::is_offline()`].
+///
+/// BUG-295: с живым окном (`--bidi-port` + открытое окно) также толкает флаг
+/// в [`LiveWindowSession::set_offline`] — реально фейлит навигацию/`fetch()`/XHR
+/// живой страницы, не только in-memory bookkeeping.
 fn network_set_offline(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
     // Поддерживаем обе формы: {"status":{"offline":true}} и {"offline":true}.
     let offline = params
@@ -1454,6 +1459,15 @@ fn network_set_offline(id: i64, params: &JsonValue, state: &mut BidiState) -> Di
         .or_else(|| params.get("offline").and_then(JsonValue::as_bool))
         .unwrap_or(false);
     state.offline = offline;
+    if let Some(live) = &mut state.live
+        && let Err(e) = live.set_offline(offline)
+    {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "unknown error",
+            &format!("setOfflineStatus: {e}"),
+        ));
+    }
     DispatchResult::single(make_success(id, empty_obj()))
 }
 
@@ -1463,6 +1477,14 @@ fn network_set_offline(id: i64, params: &JsonValue, state: &mut BidiState) -> Di
 /// если задан, переопределение применяется к указанным контекстам; иначе — ко всей сессии.
 /// Per-context переопределение имеет приоритет над сессионным при чтении
 /// через [`BidiState::user_agent_for()`].
+///
+/// BUG-295: с живым окном также толкает эффективный UA (после применения
+/// этого вызова) в [`LiveWindowSession::set_user_agent`] — реально
+/// переопределяет `navigator.userAgent` и реальный HTTP `User-Agent` для
+/// будущих запросов. Lumen — один процесс с одним нативным окном (см.
+/// `CLIENT_WINDOW_ID`), поэтому per-context targeting не может маршрутизировать
+/// разные UA в разные окна; живому окну всегда толкается эффективный UA
+/// **первого** контекста сессии (обычно единственного).
 fn emulation_set_ua_override(
     id: i64,
     params: &JsonValue,
@@ -1492,6 +1514,21 @@ fn emulation_set_ua_override(
                 ctx.ua_override = ua.clone();
             }
         }
+    }
+
+    let effective_ua = state
+        .contexts
+        .first()
+        .and_then(|c| state.user_agent_for(&c.id).map(str::to_owned))
+        .or_else(|| state.session_ua_override.clone());
+    if let Some(live) = &mut state.live
+        && let Err(e) = live.set_user_agent(effective_ua.as_deref().unwrap_or(""))
+    {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "unknown error",
+            &format!("setUserAgentOverride: {e}"),
+        ));
     }
     DispatchResult::single(make_success(id, empty_obj()))
 }

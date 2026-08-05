@@ -374,6 +374,45 @@ pub struct V8JsRuntime {
     cookie_banner_dismiss: AtomicBool,
 }
 
+/// Process-global `navigator.userAgent` override (WebDriver BiDi
+/// `emulation.setUserAgentOverride`, BUG-295). `None` = the WEB_API_SHIM
+/// default (`Lumen/<version>`).
+///
+/// A process-global rather than a `V8JsRuntime` field: the shell constructs a
+/// **fresh** `V8JsRuntime` on every navigation (`run_scripts_with_dom`,
+/// `bfcache_thaw`, …) — there is no single long-lived instance to carry a
+/// per-session override on across navigations. Lumen also runs one JS
+/// runtime at a time per process, so a process-global reads identically to a
+/// "session-level" BiDi override in practice (mirrors `lumen_network`'s
+/// `GLOBAL_UA_OVERRIDE`/`GLOBAL_OFFLINE` statics, same rationale).
+static GLOBAL_UA_OVERRIDE: Mutex<Option<String>> = Mutex::new(None);
+
+/// Set (or clear with `None`) the process-global `navigator.userAgent` override.
+/// Consulted by every subsequent `install_dom` call (new navigation); does
+/// **not** retroactively affect an already-loaded page — see
+/// [`V8JsRuntime::eval`] for re-injecting into the current page.
+pub fn set_global_user_agent_override(ua: Option<String>) {
+    if let Ok(mut guard) = GLOBAL_UA_OVERRIDE.lock() {
+        *guard = ua;
+    }
+}
+
+/// The active `navigator.userAgent` override, if any.
+fn global_user_agent_override() -> Option<String> {
+    GLOBAL_UA_OVERRIDE.lock().ok().and_then(|g| g.clone())
+}
+
+/// Build the JS snippet that redefines `navigator.userAgent` to `ua`
+/// (BUG-295). `navigator` is a plain object literal in `WEB_API_SHIM`
+/// (writable, configurable `userAgent` property), so a direct assignment is
+/// enough — no `Object.defineProperty` needed. Shared between `install_dom`
+/// (next-navigation application) and the shell's immediate-apply path (the
+/// already-loaded page), so both go through the same escaping.
+pub fn user_agent_override_script(ua: &str) -> String {
+    let escaped = ua.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");
+    format!("navigator.userAgent = \"{escaped}\";")
+}
+
 impl V8JsRuntime {
     /// Create a new V8 runtime on a dedicated thread.
     pub fn new() -> Result<Self, JsError> {
@@ -1028,6 +1067,8 @@ impl V8JsRuntime {
         let monotonic_clock = self.deterministic_monotonic.load(Ordering::Relaxed);
         let deterministic_clock_ms = Arc::clone(&self.deterministic_clock_ms);
         let page_url = page_url.to_owned();
+        // BUG-295: session-level `navigator.userAgent` override, if any.
+        let ua_override = global_user_agent_override();
 
         self.run(move |inner| {
             // ESM (S12b-23): fallback base URL the module resolver uses for
@@ -4232,6 +4273,32 @@ impl V8JsRuntime {
                 let _ = result;
             }
 
+            // BUG-295 (`emulation.setUserAgentOverride`): must run after
+            // WEB_API_SHIM (same ordering constraint as the deterministic-seed
+            // block above) so `navigator` already exists, and before any page
+            // `<script>` executes (those run after `install_dom` returns) so
+            // even a synchronous top-level read of `navigator.userAgent` sees
+            // the override from the very first script.
+            if let Some(ua) = ua_override {
+                v8::tc_scope!(tc, scope);
+                let js = user_agent_override_script(&ua);
+                let src = v8::String::new(tc, &js)
+                    .ok_or_else(|| JsError::Runtime("OOM: UA override script".into()))?;
+                let compiled = v8::Script::compile(tc, src, None);
+                if tc.has_caught() {
+                    let exc = tc.exception().unwrap();
+                    return Err(v8_err(tc, exc));
+                }
+                let compiled = compiled
+                    .ok_or_else(|| JsError::Runtime("UA override script compile returned None".into()))?;
+                let result = compiled.run(tc);
+                if tc.has_caught() {
+                    let exc = tc.exception().unwrap();
+                    return Err(v8_err(tc, exc));
+                }
+                let _ = result;
+            }
+
             Ok(())
         })?;
 
@@ -5415,6 +5482,39 @@ mod tests {
         rt.install_dom(doc, page_url, None, None, None, None, None, None, None, None, false)
             .unwrap();
         rt
+    }
+
+    /// Serializes the two `user_agent_override_*` tests below against each
+    /// other — both read/write the process-global `GLOBAL_UA_OVERRIDE`
+    /// (BUG-295), which every `install_dom` call in the crate consults, so an
+    /// unsynchronized run risks one test's `Some(..)` leaking into the
+    /// other's `install_dom` under cargo's default parallel test execution.
+    static UA_OVERRIDE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    /// BUG-295 (`emulation.setUserAgentOverride`): a `set_global_user_agent_
+    /// override` call before `install_dom` must make `navigator.userAgent`
+    /// reflect it — exercises the exact mechanism the shell's live-window
+    /// `AutomationCommand::SetUserAgent` handler relies on for the *next
+    /// navigation* half of the fix, without needing a live winit window.
+    #[test]
+    fn user_agent_override_applies_at_install_dom() {
+        let _guard = UA_OVERRIDE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_global_user_agent_override(Some("LumenBug295TestUA/1.0".to_owned()));
+        let rt = runtime_with_dom(make_doc(), "");
+        let ua = rt.eval("navigator.userAgent").unwrap();
+        set_global_user_agent_override(None);
+        assert_eq!(ua, JsValue::String("LumenBug295TestUA/1.0".into()));
+    }
+
+    /// Without an override, `navigator.userAgent` keeps the WEB_API_SHIM
+    /// default — proves the override is opt-in, not always-on.
+    #[test]
+    fn user_agent_override_is_noop_when_unset() {
+        let _guard = UA_OVERRIDE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_global_user_agent_override(None);
+        let rt = runtime_with_dom(make_doc(), "");
+        let ua = rt.eval("navigator.userAgent").unwrap();
+        assert_ne!(ua, JsValue::String("LumenBug295TestUA/1.0".into()));
     }
 
     #[test]

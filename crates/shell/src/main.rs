@@ -12932,6 +12932,46 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let entries = self.automation_network_log();
                     let _ = reply_tx.send(AutomationReply::NetworkLog(entries));
                 }
+                AutomationCommand::SetOffline(offline) => {
+                    // BUG-295 (`network.setOfflineStatus`): process-global flag
+                    // consulted at the one `fetch_with_redirect` chokepoint every
+                    // fetch path (navigation, JS `fetch()`/XHR, subresources)
+                    // already funnels through — no per-request wiring needed here.
+                    lumen_network::set_global_offline(offline);
+                    let _ = reply_tx.send(AutomationReply::Ack);
+                }
+                AutomationCommand::SetUserAgent(ua) => {
+                    // BUG-295 (`emulation.setUserAgentOverride`): empty string
+                    // clears the override (see `LiveWindowSession::set_user_agent`
+                    // / `BidiState::user_agent_for` — `None` collapses to `""`
+                    // before reaching this command).
+                    let override_value = if ua.is_empty() { None } else { Some(ua.clone()) };
+                    lumen_network::set_global_ua_override(override_value.clone());
+                    #[cfg(feature = "v8")]
+                    {
+                        // Applies to the *next* navigation (install_dom reads the
+                        // global at DOM-bootstrap time — see
+                        // `v8_runtime::set_global_user_agent_override`'s doc).
+                        lumen_js::v8_runtime::set_global_user_agent_override(override_value);
+                        // Also re-inject into the *current* page right now: BiDi
+                        // clients (and BUG-295's own repro) set the override then
+                        // immediately `script.evaluate` `navigator.userAgent` on
+                        // the already-loaded default context, with no navigation
+                        // in between. Clearing (`ua.is_empty()`) is intentionally
+                        // not re-applied here — the current page keeps whatever
+                        // it last had; only the *next* navigation reverts to the
+                        // real WEB_API_SHIM default.
+                        if !ua.is_empty() {
+                            let script = lumen_js::v8_runtime::user_agent_override_script(&ua);
+                            let _ = route_query_js(
+                                self.engine_thread.as_ref(),
+                                self.js_ctx.as_ref(),
+                                move |j| j.eval_js_value(&script),
+                            );
+                        }
+                    }
+                    let _ = reply_tx.send(AutomationReply::Ack);
+                }
             }
         }
 

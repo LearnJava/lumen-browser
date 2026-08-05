@@ -126,6 +126,86 @@ fn global_adblock_filter() -> Option<Arc<dyn lumen_core::ext::RequestFilter>> {
         None
     }
 }
+
+// BUG-295 (WebDriver BiDi `network.setOfflineStatus` / `emulation.setUserAgentOverride`):
+// same process-global pattern as the ad-block toggle above — checked at the one
+// `fetch_with_redirect` chokepoint every fetch path (top-level navigation, JS
+// `fetch()`/XHR, subresources) already funnels through, so the shell's live
+// window and any headless `HttpClient` honour the same BiDi-driven state
+// without threading it through every construction site individually.
+
+/// Process-global offline-simulation flag. When `true`, every request fails
+/// before it touches the network (no `RequestStarted`/`RequestCompleted`).
+static GLOBAL_OFFLINE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Enable or disable the process-global offline simulation.
+pub fn set_global_offline(offline: bool) {
+    GLOBAL_OFFLINE.store(offline, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether the process-global offline simulation is currently active.
+#[must_use]
+pub fn is_global_offline() -> bool {
+    GLOBAL_OFFLINE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Process-global `User-Agent` header override. `None` — every request keeps
+/// using its `HttpProfile`'s own default UA (unchanged behaviour).
+static GLOBAL_UA_OVERRIDE: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+
+/// Set (or clear with `None`) the process-global `User-Agent` header override.
+pub fn set_global_ua_override(ua: Option<String>) {
+    if let Ok(mut guard) = GLOBAL_UA_OVERRIDE.write() {
+        *guard = ua;
+    }
+}
+
+/// The active `User-Agent` override, if any.
+#[must_use]
+pub fn global_ua_override() -> Option<String> {
+    GLOBAL_UA_OVERRIDE.read().ok().and_then(|g| g.clone())
+}
+
+/// Replace the `User-Agent:` value in an already-built H1 header block with
+/// the process-global override (BUG-295), if one is set. Surgical substring
+/// splice rather than a line-based rebuild, so every other header's exact
+/// casing/terminator is left byte-identical. No-op when no override is active
+/// or the block has no `User-Agent:` line (shouldn't happen — every
+/// `HttpProfile` arm in `build_request_headers` adds one).
+fn apply_ua_override(header_block: String) -> String {
+    let Some(ua) = global_ua_override() else {
+        return header_block;
+    };
+    let Some(start) = header_block.find("User-Agent: ") else {
+        return header_block;
+    };
+    let value_start = start + "User-Agent: ".len();
+    let Some(rel_end) = header_block[value_start..].find("\r\n") else {
+        return header_block;
+    };
+    let value_end = value_start + rel_end;
+    let mut out = String::with_capacity(header_block.len() + ua.len());
+    out.push_str(&header_block[..value_start]);
+    out.push_str(&ua);
+    out.push_str(&header_block[value_end..]);
+    out
+}
+
+/// Replace the `user-agent` entry in an H2 header list with the process-global
+/// override (BUG-295), if one is set. Mirrors [`apply_ua_override`] for the H1
+/// path; `build_h2_headers` always seeds a `user-agent` entry from
+/// `http::h2_fingerprint_headers`, so this only rewrites, never appends.
+fn apply_ua_override_h2(mut headers: Vec<(Vec<u8>, Vec<u8>)>) -> Vec<(Vec<u8>, Vec<u8>)> {
+    if let Some(ua) = global_ua_override() {
+        for (k, v) in &mut headers {
+            if k.eq_ignore_ascii_case(b"user-agent") {
+                *v = ua.clone().into_bytes();
+            }
+        }
+    }
+    headers
+}
+
 pub use http_cache::{HttpCache, HttpCacheBackend, DiskHttpCache, lumen_cache_dir};
 pub use http::{HttpProfile, H2Settings, H2StreamPriority, ClientHintsProfile, HeaderOrder};
 pub use mock::MockTransport;
@@ -322,6 +402,7 @@ impl Connection {
         let combined_extra = format!("{range_header}{if_range_header}{auth_header}{extra_headers}");
         let accept_enc = accept_encoding.unwrap_or("");
         let header_block = http::build_request_headers(host, accept_enc, &combined_extra, http_profile);
+        let header_block = apply_ua_override(header_block);
         let req = format!("{method} {path} HTTP/1.1\r\n{header_block}");
         let stream = self.reader.get_mut();
         stream
@@ -354,6 +435,7 @@ impl Connection {
             body.len()
         );
         let header_block = http::build_request_headers(host, "", &body_headers, http_profile);
+        let header_block = apply_ua_override(header_block);
         let req = format!("{method} {path} HTTP/1.1\r\n{header_block}");
         let stream = self.reader.get_mut();
         stream
@@ -1809,7 +1891,7 @@ fn build_h2_headers(
         }
     }
     out.extend(parsed_extra);
-    out
+    apply_ua_override_h2(out)
 }
 
 /// Разобрать строку вида `"Key: Value\r\nKey2: Value2\r\n"` в вектор пар байт.
@@ -2117,6 +2199,15 @@ fn fetch_with_redirect(
     // completed = network failure»; явный RequestFailed добавим, когда
     // увидим, что наблюдателям этого мало.
     let (host_ascii, port, is_tls) = require_http_scheme(url)?;
+
+    // BUG-295: process-global offline simulation (`network.setOfflineStatus`) —
+    // right after scheme validation (no point simulating "no network" for an
+    // already-invalid URL), before mixed-content/filter/Started, matching the
+    // "blocked request generates no Started/Completed" contract those two
+    // already follow.
+    if is_global_offline() {
+        return Err(Error::Network("net::ERR_INTERNET_DISCONNECTED".to_owned()));
+    }
 
     // Mixed-content enforcement (W3C Mixed Content §5) — после HSTS upgrade
     // (если http→https произошёл, mixed-content уже не возникнет), перед
@@ -7319,6 +7410,113 @@ world\r\n\
             req.to_ascii_lowercase().contains("accept-encoding: br"),
             "no Accept-Encoding in request: {req:?}"
         );
+
+        server.join().unwrap();
+    }
+
+    /// BUG-295 tests below toggle `GLOBAL_UA_OVERRIDE`/`GLOBAL_OFFLINE` —
+    /// process-globals that gate every `HttpClient::fetch` in the crate, not
+    /// just this test's own. A bare toggle in each test races under cargo's
+    /// default parallel test execution: e.g. `global_offline_fails_before_
+    /// touching_network` briefly setting the offline flag can make a
+    /// concurrently-running `global_ua_override_*` test's unrelated `fetch`
+    /// spuriously fail. One shared lock serializes all of them against each
+    /// other (does not protect against the much lower-probability case of
+    /// racing one of the crate's many *other* fetch tests during the brief
+    /// window the flag is set).
+    static BUG_295_GLOBAL_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn apply_ua_override_is_noop_without_override() {
+        let _guard = BUG_295_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let block = "Host: x\r\nUser-Agent: Real/1\r\nAccept: */*\r\n\r\n".to_owned();
+        set_global_ua_override(None);
+        assert_eq!(apply_ua_override(block.clone()), block);
+    }
+
+    #[test]
+    fn apply_ua_override_splices_only_the_ua_line() {
+        let _guard = BUG_295_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let block = "Host: x\r\nUser-Agent: Real/1\r\nAccept: */*\r\n\r\n".to_owned();
+        set_global_ua_override(Some("Override/9".to_owned()));
+        let out = apply_ua_override(block);
+        set_global_ua_override(None);
+        assert_eq!(out, "Host: x\r\nUser-Agent: Override/9\r\nAccept: */*\r\n\r\n");
+    }
+
+    #[test]
+    fn apply_ua_override_h2_replaces_only_user_agent_entry() {
+        let _guard = BUG_295_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let headers: Vec<(Vec<u8>, Vec<u8>)> = vec![
+            (b"user-agent".to_vec(), b"Real/1".to_vec()),
+            (b"accept".to_vec(), b"*/*".to_vec()),
+        ];
+        set_global_ua_override(Some("Override/9".to_owned()));
+        let out = apply_ua_override_h2(headers);
+        set_global_ua_override(None);
+        assert_eq!(out, vec![
+            (b"user-agent".to_vec(), b"Override/9".to_vec()),
+            (b"accept".to_vec(), b"*/*".to_vec()),
+        ]);
+    }
+
+    #[test]
+    fn global_offline_fails_before_touching_network() {
+        // BUG-295 (`network.setOfflineStatus`): the offline gate must fail a
+        // fetch before any TCP connection reaches the network — proven here
+        // via a mock server that only ever sees ONE real connection (the
+        // post-clear fetch), not two, even though `fetch` is called twice.
+        let _guard = BUG_295_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (port, server) = mock_http_server(1, |_| {
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".to_vec()
+        });
+        let sink = Arc::new(CollectingSink::new());
+        let client = HttpClient::new().with_sink(sink.clone());
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+
+        set_global_offline(true);
+        let blocked = client.fetch(&url);
+        assert!(blocked.is_err(), "fetch must fail while the global offline flag is set");
+        assert!(
+            sink.events().is_empty(),
+            "no RequestStarted/RequestCompleted while offline — the request must never leave the process"
+        );
+
+        set_global_offline(false);
+        let body = client.fetch(&url).expect("fetch after clearing offline must reach the real server");
+        assert_eq!(body, b"ok");
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn global_ua_override_replaces_header_on_wire_h1() {
+        // BUG-295 (`emulation.setUserAgentOverride`): the override must reach
+        // the real HTTP `User-Agent:` header on the wire, replacing whatever
+        // the active `HttpProfile` would otherwise send — proven by capturing
+        // the literal request bytes a mock server received.
+        let _guard = BUG_295_GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let (port, server) = mock_http_server_capturing(captured.clone(), |_| {
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".to_vec()
+        });
+
+        set_global_ua_override(Some("LumenBug295TestUA/1.0".to_owned()));
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let body = client.fetch(&url).expect("fetch");
+        set_global_ua_override(None);
+
+        assert_eq!(body, b"ok");
+        let req = captured.lock().unwrap()[0].clone();
+        assert!(
+            req.contains("User-Agent: LumenBug295TestUA/1.0\r\n"),
+            "override UA missing from request: {req:?}"
+        );
+        // Only the User-Agent line changed — everything else in the request
+        // (Host, method/path, Connection, …) is untouched by the surgical
+        // splice in `apply_ua_override`.
+        assert!(req.starts_with("GET / HTTP/1.1\r\n"), "request line corrupted: {req:?}");
 
         server.join().unwrap();
     }
