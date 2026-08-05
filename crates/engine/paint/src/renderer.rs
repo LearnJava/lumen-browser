@@ -2459,6 +2459,16 @@ fn svg_aa_disabled() -> bool {
     *DISABLED.get_or_init(|| std::env::var("LUMEN_NO_SVG_AA").is_ok_and(|v| v == "1"))
 }
 
+/// `true`, если сглаживание кромки повёрнутого/скошенного `FillRect` отключено
+/// (`LUMEN_NO_ROT_AA=1`): квад рисуется бинарно, как до BUG-277 среза 13.
+/// Диагностика: A/B-сравнение картинки и скорости на одном бинарнике
+/// (растеризация покрытия идёт на CPU и стоит O(площадь bbox квада)).
+fn rot_aa_disabled() -> bool {
+    use std::sync::OnceLock;
+    static DISABLED: OnceLock<bool> = OnceLock::new();
+    *DISABLED.get_or_init(|| std::env::var("LUMEN_NO_ROT_AA").is_ok_and(|v| v == "1"))
+}
+
 /// `true`, если mip-цепочка картинок отключена (`LUMEN_NO_IMAGE_MIPS=1`):
 /// возврат к CPU-ресайзу под каждый placed-размер (`src@WxH`-зоопарк) и
 /// nearest-выбору mip-уровня в сэмплере. Диагностика: A/B-сравнение картинки,
@@ -6788,13 +6798,16 @@ impl Renderer {
                     }
                     let alpha = 1.0_f32;
                     let v_start = fill_vertices.len() as u32;
-                    push_fill_quad(
-                        &mut fill_vertices,
-                        translate_rect(*rect, dx, dy),
-                        apply_alpha_to_color(color_to_array(color), alpha),
-                    );
+                    let c = apply_alpha_to_color(color_to_array(color), alpha);
+                    push_fill_quad(&mut fill_vertices, translate_rect(*rect, dx, dy), c);
                     if let Some(m) = transform_stack.last() {
                         apply_affine_to_verts(&mut fill_vertices[v_start as usize..], m);
+                        // BUG-277 срез 13: только повёрнутый/скошенный квад уходит
+                        // кромкой с растровой сетки — осевой остаётся на прежнем
+                        // (побитово идентичном) пути.
+                        if rotates_axes_2d(m) && !rot_aa_disabled() {
+                            antialias_fill_soup(&mut fill_vertices, v_start as usize, c, dpr_f32);
+                        }
                     }
                     let v_count = fill_vertices.len() as u32 - v_start;
                     if v_count > 0 {
@@ -8434,7 +8447,9 @@ impl Renderer {
                     if let Some(m) = transform_stack.last() {
                         apply_affine_to_verts(&mut fill_vertices[v_start as usize..], m);
                     }
-                    antialias_svg_soup(&mut fill_vertices, v_start as usize, c, dpr_f32);
+                    if !svg_aa_disabled() {
+                        antialias_fill_soup(&mut fill_vertices, v_start as usize, c, dpr_f32);
+                    }
                     let v_count = fill_vertices.len() as u32 - v_start;
                     if v_count > 0 {
                         draw_ops.push(DrawOp::Fill { v_start, v_count });
@@ -8460,7 +8475,9 @@ impl Renderer {
                     if let Some(m) = transform_stack.last() {
                         apply_affine_to_verts(&mut fill_vertices[v_start as usize..], m);
                     }
-                    antialias_svg_soup(&mut fill_vertices, v_start as usize, c, dpr_f32);
+                    if !svg_aa_disabled() {
+                        antialias_fill_soup(&mut fill_vertices, v_start as usize, c, dpr_f32);
+                    }
                     let v_count = fill_vertices.len() as u32 - v_start;
                     if v_count > 0 {
                         draw_ops.push(DrawOp::Fill { v_start, v_count });
@@ -10735,9 +10752,15 @@ fn apply_affine_to_grad_verts(verts: &mut [GradVertex], m: &Mat4) {
     apply_affine_to_verts(verts, m);
 }
 
-/// BUG-247 / BUG-277 срез 12: заменяет треугольный суп SVG-фигуры, уже
-/// уложенный в `fill_vertices[v_start..]`, на pixel-aligned квады с точным
-/// покрытием — сглаженная кромка вместо бинарной.
+/// BUG-247 / BUG-277 срезы 12–13: заменяет треугольный суп, уже уложенный в
+/// `fill_vertices[v_start..]`, на pixel-aligned квады с точным покрытием —
+/// сглаженная кромка вместо бинарной.
+///
+/// Вызывается для фигур SVG (`DrawSvgFill`/`DrawSvgStroke`, срез 12) и для
+/// повёрнутого/скошенного `FillRect` (срез 13) — оба кладут в общий
+/// `fill_pipeline` суп, чьи кромки не совпадают с растровой сеткой, а
+/// `sample_count: 1` на всех пассах делает такой пиксель либо полностью
+/// залитым, либо чистым фоном.
 ///
 /// Растеризация обязана идти в **device px**: суп приходит в CSS px (матрица
 /// `PushTransform` уже применена), поэтому здесь он умножается на `dpr`,
@@ -10746,14 +10769,15 @@ fn apply_affine_to_grad_verts(verts: &mut [GradVertex], m: &Mat4) {
 /// viewport-uniform. `color` — цвет фигуры со straight-alpha (пайплайн
 /// заливки блендит `ALPHA_BLENDING`), поэтому покрытие домножается в альфу.
 ///
-/// Ничего не делает при `LUMEN_NO_SVG_AA=1` и при вырожденном `dpr`.
-fn antialias_svg_soup(
+/// Ничего не делает при вырожденном `dpr`; выключается флагами вызывающей
+/// стороны (`LUMEN_NO_SVG_AA` / `LUMEN_NO_ROT_AA`).
+fn antialias_fill_soup(
     fill_vertices: &mut Vec<FillVertex>,
     v_start: usize,
     color: [f32; 4],
     dpr: f32,
 ) {
-    if svg_aa_disabled() || dpr <= 0.0 || !dpr.is_finite() || v_start >= fill_vertices.len() {
+    if dpr <= 0.0 || !dpr.is_finite() || v_start >= fill_vertices.len() {
         return;
     }
     let soup: Vec<[f32; 2]> = fill_vertices[v_start..]
@@ -10773,6 +10797,19 @@ fn antialias_svg_soup(
             color: [color[0], color[1], color[2], color[3] * q.cov],
         });
     }
+}
+
+/// `true`, если 2D-affine матрица `PushTransform` уводит кромки квада с осей
+/// растровой сетки (rotate/skew/matrix с ненулевыми `b`/`c`).
+///
+/// Только у такого квада кромка перестаёт быть пиксельной границей и требует
+/// покрытия ([`antialias_fill_soup`], BUG-277 срез 13). Чисто осевые матрицы
+/// (translate/scale/flip) оставляют прежний путь побитово нетронутым, а 3D и
+/// перспектива исключены: [`antialias_fill_soup`] не переносит спроецированный
+/// `z`, нужный для depth-теста под `preserve-3d`.
+fn rotates_axes_2d(m: &Mat4) -> bool {
+    const EPS: f32 = 1e-4;
+    m.is_2d_affine() && (m.0[1].abs() > EPS || m.0[4].abs() > EPS)
 }
 
 /// Применяет матрицу `PushTransform` к pos-полям вершин.
@@ -13057,6 +13094,71 @@ mod tests {
             let len = (qx * qx + qy * qy).sqrt();
             assert!((len - 1.0).abs() < 1e-3, "точка контура дала length = {len}");
         }
+    }
+
+    /// BUG-277 срез 13: покрытие включается только там, где кромка квада
+    /// действительно сошла с осей растровой сетки. Осевые матрицы обязаны
+    /// остаться на прежнем (побитово идентичном) пути, иначе каждый обычный
+    /// фон платил бы за CPU-растеризацию без единого изменённого пикселя.
+    #[test]
+    fn rotates_axes_2d_only_for_rotate_and_skew() {
+        assert!(!rotates_axes_2d(&Mat4::IDENTITY));
+        assert!(!rotates_axes_2d(&Mat4::translation_2d(10.0, -20.0)));
+        assert!(!rotates_axes_2d(&Mat4::scale_2d(2.0, 3.0)));
+        assert!(!rotates_axes_2d(&Mat4::scale_2d(-1.0, 1.0)), "flip остаётся осевым");
+        assert!(rotates_axes_2d(&Mat4::rotate_2d(std::f32::consts::FRAC_PI_4)));
+        assert!(rotates_axes_2d(&Mat4::skew_x(0.3)));
+        assert!(rotates_axes_2d(&Mat4::skew_y(0.3)));
+        // Поворот на кратное 90° меняет оси местами, но кромки остаются на сетке
+        // — b/c при этом ненулевые, поэтому предикат срабатывает. Это осознанно
+        // безопасная сторона ошибки: лишняя растеризация даёт cov=1 и тот же
+        // пиксель, тогда как пропуск настоящего поворота вернул бы ступеньку.
+        assert!(rotates_axes_2d(&Mat4::rotate_2d(std::f32::consts::FRAC_PI_2)));
+        // 3D/перспектива исключены: antialias_fill_soup не переносит z.
+        assert!(!rotates_axes_2d(&Mat4::rotate_y(0.5)));
+        assert!(!rotates_axes_2d(&Mat4::perspective(800.0).multiply(&Mat4::rotate_x(0.5))));
+    }
+
+    /// Растеризация обязана идти в device px, а результат — вернуться в CSS px:
+    /// при `dpr = 2` квад, лежащий ровно на пиксельной сетке, обязан остаться
+    /// полностью непрозрачным и не сдвинуться (иначе AA-путь двигал бы обычную
+    /// геометрию на повёрнутых страницах).
+    #[test]
+    fn antialias_fill_soup_roundtrips_device_px_and_keeps_aligned_quad_opaque() {
+        let color = [0.2, 0.4, 0.6, 1.0];
+        let mut verts = Vec::new();
+        push_fill_quad(&mut verts, Rect::new(4.0, 6.0, 10.0, 8.0), color);
+        antialias_fill_soup(&mut verts, 0, color, 2.0);
+        assert!(!verts.is_empty(), "квад не должен исчезнуть");
+        for v in &verts {
+            assert!((v.color[3] - 1.0).abs() < 1e-3, "alpha = {}", v.color[3]);
+            assert_eq!([v.color[0], v.color[1], v.color[2]], [color[0], color[1], color[2]]);
+            assert!(
+                (4.0..=14.0).contains(&v.pos[0]) && (6.0..=14.0).contains(&v.pos[1]),
+                "вершина ушла за исходный прямоугольник: {:?}",
+                v.pos
+            );
+        }
+    }
+
+    /// А кромка, сошедшая с сетки, обязана дать дробное покрытие — ради этого
+    /// срез и делается. Ромб (квад под 45°) не может состоять из одних
+    /// полностью залитых пикселей.
+    #[test]
+    fn antialias_fill_soup_gives_fractional_alpha_on_rotated_quad() {
+        let color = [1.0, 0.0, 0.0, 1.0];
+        let mut verts = Vec::new();
+        push_fill_quad(&mut verts, Rect::new(0.0, 0.0, 20.0, 20.0), color);
+        apply_affine_to_verts(&mut verts, &Mat4::rotate_2d(std::f32::consts::FRAC_PI_4));
+        antialias_fill_soup(&mut verts, 0, color, 1.0);
+        assert!(
+            verts.iter().any(|v| v.color[3] > 0.01 && v.color[3] < 0.99),
+            "ни одного частично покрытого пикселя на кромке ромба"
+        );
+        assert!(
+            verts.iter().any(|v| v.color[3] > 0.99),
+            "внутренность ромба обязана остаться сплошной"
+        );
     }
 
     /// Неравномерный масштаб превращает круг в эллипс — шейдеру нужна полная

@@ -163,6 +163,7 @@ PAINT_BISECT_FLAGS = [
     'LUMEN_NO_IMAGE_MIPS',
     'LUMEN_NO_BAND_BIAS',
     'LUMEN_NO_SVG_AA',
+    'LUMEN_NO_ROT_AA',
 ]
 
 # (id, html, threshold_pct, label).
@@ -429,7 +430,12 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
     # --- BUG-243 dynamic-SVG suite (JS-built SVG, gdigrab): tests are CORRECT; these
     #     fail until the SVG-engine gaps they uncovered are fixed. Do NOT edit the tests
     #     (user rule) — fix the engine, then delete these entries. ---
-    '130': ('BUG-277', 1.00),   # nested <g rotate scale> spiral: femtovg-baseline was 0.10% (BUG-244 FIXED, CTM — history preserved). BUG-287/BUG-277 (2026-07-16): P1-wgpu-flip made wgpu the default, ratchet to live wgpu number 1.00% (matches BUG-277 row «130»)
+    # '130' убран (BUG-277 срез 13, 2026-08-05): 1.00% → 0.30%, цель ≤0.5%
+    #   достигнута. Спираль из 16 вложенных <g rotate scale> — это повёрнутые
+    #   квады `FillRect`, а не SVG-фигуры: срез 12 покрыл только
+    #   `DrawSvgFill`/`DrawSvgStroke`, поэтому здесь кромка оставалась бинарной
+    #   (`sample_count: 1`). Прежний комментарий:
+    # '130': ('BUG-277', 1.00),   # nested <g rotate scale> spiral: femtovg-baseline was 0.10% (BUG-244 FIXED, CTM — history preserved). BUG-287/BUG-277 (2026-07-16): P1-wgpu-flip made wgpu the default, ratchet to live wgpu number 1.00% (matches BUG-277 row «130»)
     '132': ('BUG-246', 2.67),  # Ратчет 8.11→2.67 (P1 2026-07-30, BUG-424 (а) fix): `<path>`/`<polyline>`/`<polygon>` now route through the CTM `PushTransform` whenever the matrix carries a pure scale (not just rotate/skew), so `<symbol viewBox>` instances get the viewBox→width/height scale. Note: BUG-246 itself was already closed FIXED 2026-06-30 (BUGS.md) — this row's comment had gone stale pointing at it as still-open; the 8.11% baseline this fix improved was actually the same `has_rot_skew`-only-CTM gap BUG-424 (а) describes, not a live BUG-246 regression. Residual 2.67% (target ≤0.5%) is unattributed — needs fresh root-causing, not a re-open of BUG-246
     # '133' убран (BUG-277 срез 12, 2026-08-05): 0.63% → 0.32%, цель ≤0.5%
     #   достигнута. Остаток среза 10 был кромочным AA (класс BUG-247), теперь
