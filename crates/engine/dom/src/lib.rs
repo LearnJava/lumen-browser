@@ -118,6 +118,10 @@ pub enum Namespace {
     Xml,
     XmlNs,
     XLink,
+    /// No namespace — `Element.namespaceURI` is `null` (DOM Standard §4.5
+    /// "validate and extract", e.g. `createElementNS(null, name)` /
+    /// `createElementNS("", name)`). Distinct from `Html`: BUG-328.
+    None,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

@@ -1464,7 +1464,9 @@ impl V8JsRuntime {
                 let doc = d.lock().unwrap();
                 let nid = NodeId::from_index(node_id as usize);
                 match &doc.get(nid).data {
-                    NodeData::Element { name, .. } => Some(namespace_uri(name.namespace).to_string()),
+                    NodeData::Element { name, .. } => {
+                        namespace_uri(name.namespace).map(|s| s.to_string())
+                    }
                     _ => None,
                 }
             }
@@ -1682,11 +1684,17 @@ impl V8JsRuntime {
             move |ns: String, local: String| -> i32 {
                 let mut doc = d.lock().unwrap();
                 // Foreign-content namespace selection. SVG keeps the local name's
-                // original case (case-sensitive tags like `linearGradient`); all
-                // other namespaces fall back to HTML. Returns -1 on overflow (see
-                // `_lumen_create_element` above for why this must be i32, not u32).
+                // original case (case-sensitive tags like `linearGradient`); the
+                // empty string means "no namespace" per DOM §4.5 "validate and
+                // extract" (BUG-328, e.g. `createElementNS(null/"", name)` — the
+                // JS shim normalizes `null`/`undefined` to `""` before this call),
+                // distinct from HTML; any other namespace URI falls back to HTML.
+                // Returns -1 on overflow (see `_lumen_create_element` above for
+                // why this must be i32, not u32).
                 let namespace = if ns == "http://www.w3.org/2000/svg" {
                     Namespace::Svg
+                } else if ns.is_empty() {
+                    Namespace::None
                 } else {
                     Namespace::Html
                 };
@@ -4540,15 +4548,18 @@ fn find_element_by_tag(doc: &lumen_dom::Document, tag: &str) -> Option<lumen_dom
 }
 
 /// Mirrors `dom::namespace_uri`. DOM LS §4.9.1 `Node.namespaceURI` value for a
-/// given `Namespace`. Backs `_lumen_get_namespace_uri` (BUG-281).
-fn namespace_uri(ns: Namespace) -> &'static str {
+/// given `Namespace`. Backs `_lumen_get_namespace_uri` (BUG-281). `None` means
+/// "no namespace" (`Namespace::None`, BUG-328) — callers must surface that as
+/// JS `null`, not the empty string.
+fn namespace_uri(ns: Namespace) -> Option<&'static str> {
     match ns {
-        Namespace::Html => "http://www.w3.org/1999/xhtml",
-        Namespace::Svg => "http://www.w3.org/2000/svg",
-        Namespace::MathMl => "http://www.w3.org/1998/Math/MathML",
-        Namespace::Xml => "http://www.w3.org/XML/1998/namespace",
-        Namespace::XmlNs => "http://www.w3.org/2000/xmlns/",
-        Namespace::XLink => "http://www.w3.org/1999/xlink",
+        Namespace::Html => Some("http://www.w3.org/1999/xhtml"),
+        Namespace::Svg => Some("http://www.w3.org/2000/svg"),
+        Namespace::MathMl => Some("http://www.w3.org/1998/Math/MathML"),
+        Namespace::Xml => Some("http://www.w3.org/XML/1998/namespace"),
+        Namespace::XmlNs => Some("http://www.w3.org/2000/xmlns/"),
+        Namespace::XLink => Some("http://www.w3.org/1999/xlink"),
+        Namespace::None => None,
     }
 }
 
