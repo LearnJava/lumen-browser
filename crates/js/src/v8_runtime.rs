@@ -4974,11 +4974,34 @@ impl v8::ValueDeserializerImpl for LumenValueDeserializerImpl {}
 
 // ── Value converters ──────────────────────────────────────────────────────────
 
+/// Max object/array nesting depth `from_v8` will walk before giving up on a
+/// branch (BUG-633). JS-controlled values can be arbitrarily deep or cyclic —
+/// e.g. WPT's `testharness.js` `Test` objects embed
+/// `test.eventExpectations_.test_ === test` — and an unbounded recursive walk
+/// can drive the Rust call stack (and V8 allocations happening on it) deep
+/// enough that a GC triggered mid-walk fails V8's own
+/// `isolate_->IsOnCentralStack()` invariant and takes down the whole process
+/// via `V8_Fatal`, instead of surfacing as a catchable `JsError`.
+const FROM_V8_MAX_DEPTH: usize = 64;
+
 /// Convert a V8 `Local<Value>` to a `JsValue`.
 ///
 /// `scope` must be a `&PinScope<'s, '_>` (= `PinnedRef<HandleScope<'_, Context>>`).
 /// Any scope that deref-coerces to one is accepted (e.g. `&mut PinnedRef<TryCatch<…>>`).
 fn from_v8<'s>(scope: &v8::PinScope<'s, '_>, val: v8::Local<'s, v8::Value>) -> JsResult<JsValue> {
+    let mut ancestors = Vec::new();
+    from_v8_bounded(scope, val, &mut ancestors)
+}
+
+/// Depth/cycle-guarded worker behind [`from_v8`]. `ancestors` holds the
+/// identity hashes of every object/array currently being walked on the
+/// current path (push on entry, pop on exit) so a self-reference anywhere in
+/// the chain is caught instead of recursed into forever.
+fn from_v8_bounded<'s>(
+    scope: &v8::PinScope<'s, '_>,
+    val: v8::Local<'s, v8::Value>,
+    ancestors: &mut Vec<std::num::NonZeroI32>,
+) -> JsResult<JsValue> {
     if val.is_null() || val.is_undefined() {
         return Ok(JsValue::Null);
     }
@@ -4996,18 +5019,35 @@ fn from_v8<'s>(scope: &v8::PinScope<'s, '_>, val: v8::Local<'s, v8::Value>) -> J
     }
     if val.is_array() {
         let arr: v8::Local<v8::Array> = val.try_into().unwrap();
+        let hash = arr.get_identity_hash();
+        if ancestors.len() >= FROM_V8_MAX_DEPTH {
+            return Ok(JsValue::String("[Max Depth Exceeded]".into()));
+        }
+        if ancestors.contains(&hash) {
+            return Ok(JsValue::String("[Circular]".into()));
+        }
+        ancestors.push(hash);
         let len = arr.length();
         let mut items = Vec::with_capacity(len as usize);
         for i in 0..len {
             let elem = arr
                 .get_index(scope, i)
                 .ok_or_else(|| JsError::Runtime(format!("array[{i}] is missing")))?;
-            items.push(from_v8(scope, elem)?);
+            items.push(from_v8_bounded(scope, elem, ancestors)?);
         }
+        ancestors.pop();
         return Ok(JsValue::Array(items));
     }
     if val.is_object() {
         let obj: v8::Local<v8::Object> = val.try_into().unwrap();
+        let hash = obj.get_identity_hash();
+        if ancestors.len() >= FROM_V8_MAX_DEPTH {
+            return Ok(JsValue::String("[Max Depth Exceeded]".into()));
+        }
+        if ancestors.contains(&hash) {
+            return Ok(JsValue::String("[Circular]".into()));
+        }
+        ancestors.push(hash);
         let own_props = obj
             .get_own_property_names(scope, Default::default())
             .ok_or_else(|| JsError::Runtime("get_own_property_names failed".into()))?;
@@ -5021,8 +5061,9 @@ fn from_v8<'s>(scope: &v8::PinScope<'s, '_>, val: v8::Local<'s, v8::Value>) -> J
             let prop_val = obj
                 .get(scope, key)
                 .ok_or_else(|| JsError::Runtime(format!("get '{key_str}' failed")))?;
-            entries.push((key_str, from_v8(scope, prop_val)?));
+            entries.push((key_str, from_v8_bounded(scope, prop_val, ancestors)?));
         }
+        ancestors.pop();
         return Ok(JsValue::object(entries));
     }
     Ok(JsValue::Undefined)
@@ -5175,6 +5216,47 @@ mod tests {
                 ("b".to_string(), JsValue::String("x".into())),
             ])
         );
+    }
+
+    #[test]
+    fn eval_circular_object_does_not_crash() {
+        // BUG-633: a self-referential object (the shape of WPT's
+        // `testharness.js` `Test`/`EventExpectationsManager` pair) must not
+        // send `from_v8` into unbounded recursion — it should come back as a
+        // `[Circular]` marker instead of hanging or crashing the process.
+        let val = rt().eval("var o = {}; o.self = o; o").unwrap();
+        match val {
+            JsValue::Object(entries) => {
+                let self_val = entries.into_iter().find(|(k, _)| k == "self").map(|(_, v)| v);
+                assert_eq!(self_val, Some(JsValue::String("[Circular]".into())));
+            }
+            other => panic!("expected object, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn eval_deeply_nested_array_truncates() {
+        // BUG-633: a pathologically deep (but non-cyclic) structure must
+        // also be bounded, not just cycles — otherwise a long linked chain
+        // hits the same unbounded-recursion crash.
+        let script = format!("{}{}{}", "[".repeat(200), "1", "]".repeat(200));
+        let val = rt().eval(&script).unwrap();
+        let mut current = val;
+        let mut depth = 0usize;
+        loop {
+            match current {
+                JsValue::Array(mut items) if items.len() == 1 => {
+                    current = items.pop().unwrap();
+                    depth += 1;
+                }
+                JsValue::String(s) => {
+                    assert_eq!(s, "[Max Depth Exceeded]");
+                    break;
+                }
+                other => panic!("unexpected {other:?} at depth {depth}"),
+            }
+        }
+        assert!(depth <= FROM_V8_MAX_DEPTH, "depth {depth} exceeded cap");
     }
 
     #[test]
