@@ -59,3 +59,30 @@ pipeline, so the true count of affected subtests across the whole WPT corpus
 (any category whose tests rely on `window.onerror`/`unhandledrejection` firing
 to detect an unexpected failure, not just to test the feature itself) is
 almost certainly larger than what this one slice shows.
+
+**Reconfirmed for the `Worker`/`SharedWorker` parent-side error mechanism**
+(P2, WPT-VENDOR-secure-contexts, 2026-08-06) — a distinct HTML LS mechanism
+from the in-worker `window.onerror` case above (HTML LS "runtime script
+errors": an uncaught top-level worker exception must dispatch an `ErrorEvent`
+named `error` at the owning `Worker` object). Confirmed by source read +
+live probe (`--mcp-live-port`, `new Worker("data:text/javascript,throw new
+Error('boom')")`): `run_worker_thread_v8` (`crates/js/src/worker.rs:699-702`)
+catches the top-level script's `Err` from `rt.eval(&script)` only to
+`eprintln!` it to the host's stderr — nothing is posted back through the
+worker's reply channel, so the parent never learns the worker's script
+failed. On the JS side, `Worker.prototype` (`worker.rs:502-521`) defines
+only an `onmessage` accessor; there is no `onerror` accessor at all (so
+`worker.onerror = fn` is a dead plain-property write, never invoked), and
+`Worker.prototype.addEventListener` only recognizes `type === 'message'` —
+`addEventListener('error', fn)` is silently a no-op, not even queued. Net
+effect: a worker that throws at top level (or in a later `postMessage`
+handler — same `rt.eval` error path) looks to the parent exactly like a
+worker that never posts anything back — an unrecoverable silent hang,
+reproduced live with both `throw new Error(...)` and a bare
+`ReferenceError` (`postMessage(isSecureContext)`, the literal expression
+`secure-contexts/basic-dedicated-worker.html`'s `w7` subtest uses) at a
+worker's top level. This is the mechanism `tests/wpt/secure-contexts`'s
+`basic-dedicated-worker*.html`/`basic-shared-worker*.html` rely on for
+their `data:` URL worker subtest and is one contributor (alongside
+[BUG-364](bugs/BUG-364-OPEN.md), which blocks that category's non-`data:`
+worker subtests separately) to that category's 0/8 harness OK.

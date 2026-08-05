@@ -3622,9 +3622,12 @@
       {
        "id": "WPT-VENDOR-secure-contexts",
        "title": "WPT: вендорить + прогнать категорию `secure-contexts`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root secure-contexts --recursive`, ~1 мин 49 с, 21 файл, 8 отобранных id) — **0/8 harness OK, 0/12 сабтестов**. Три не-`.https.` теста (`basic-dedicated-worker.html`/`basic-popup-and-iframe-tests.html`/`basic-shared-worker.html`) TIMEOUT; их `.https.` пары ERROR `Got results from <insecure url>, expected <https url>` — реконфирмация BUG-380 (browsing context переиспользуется, executor не проверяет исход навигации). `shared-worker-{insecure,secure}-first.https.html` TIMEOUT напрямую (навигация прошла, testharnessreport не пришёл). Живая проба (`--mcp-live-port`) на воркерных сабтестах категории (все создают Worker/SharedWorker по внешнему `support/*.js` URL — блокируются [BUG-364](bugs/BUG-364-OPEN.md)) нашла и обогатила существующий [BUG-591](bugs/BUG-591-OPEN.md) новым конкретным механизмом: у `Worker`/`SharedWorker` на стороне родителя нет `onerror`-аксессора вовсе (`worker.rs:502-521` определяет только `onmessage`) и `addEventListener('error', …)` — молчаливый no-op (`worker.rs:510-514` фильтрует по `type === 'message'`), а `run_worker_thread_v8` (`worker.rs:699-702`) при ошибке top-level скрипта воркера только `eprintln!`-ит её в stderr хоста, ничего не отправляя обратно — воспроизведено живьём и `throw new Error(...)`, и голым `ReferenceError` (`postMessage(isSecureContext)`, буквальное выражение `w7`-сабтеста `basic-dedicated-worker.html`) — падающий воркер неотличим от родителя от зависшего. Новых номеров багов не заведено (обогащён BUG-591)",
+       "bugs": [
+        "BUG-591"
+       ]
       },
       {
        "id": "WPT-VENDOR-secure-payment-confirmation",
