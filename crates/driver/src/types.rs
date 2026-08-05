@@ -144,6 +144,18 @@ pub struct NetworkEntry {
     pub size_bytes: usize,
 }
 
+/// A network request paused by an active intercept, not yet reported to the
+/// BiDi connection that registered it (WebDriver BiDi `network.beforeRequestSent`,
+/// BUG-295 remainder). See [`BrowserSession::poll_intercepted_requests`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InterceptedRequest {
+    /// Opaque request identifier — the same id `network.continueRequest`/
+    /// `network.failRequest` must reference to resolve this pause.
+    pub request_id: String,
+    /// URL of the paused request.
+    pub url: String,
+}
+
 /// Запись из консоли [`BrowserSession::console_log`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConsoleEntry {
@@ -486,6 +498,31 @@ pub enum AutomationCommand {
     /// clears the override (host timezone); `Some(id)` is an IANA timezone
     /// identifier (e.g. `"America/New_York"`).
     SetTimezone(Option<String>),
+    /// Register a network intercept rule on the live window (BUG-295
+    /// remainder, WebDriver BiDi `network.addIntercept`).
+    AddIntercept {
+        /// Opaque intercept identifier (BiDi `intercept`).
+        id: String,
+        /// Phases at which to intercept (only `"beforeRequestSent"` is
+        /// actually paused on — see `lumen_network::intercept`).
+        phases: Vec<String>,
+        /// URL patterns to match (BiDi urlPattern `type: "string"`; empty = match-all).
+        url_patterns: Vec<String>,
+    },
+    /// Remove a previously registered intercept rule (`network.removeIntercept`).
+    RemoveIntercept(String),
+    /// Deliver a decision for a paused request (BUG-295 remainder,
+    /// `network.continueRequest`/`network.failRequest`). `continue_request =
+    /// true` lets the request proceed; `false` fails it.
+    ResolveIntercept {
+        /// Opaque request identifier to resolve.
+        request_id: String,
+        /// `true` = continue, `false` = fail.
+        continue_request: bool,
+    },
+    /// Poll requests newly paused by an active intercept since the last call
+    /// (BUG-295 remainder, `network.beforeRequestSent` event data).
+    PollIntercepts,
 }
 
 /// Reply from automation API — returned from shell after command execution.
@@ -509,4 +546,8 @@ pub enum AutomationReply {
     LayoutSnapshot(Vec<BoxModel>),
     /// `NetworkLog` result: network request log (DEVX-14).
     NetworkLog(Vec<NetworkEntry>),
+    /// `ResolveIntercept` result: whether `request_id` matched a pending pause.
+    InterceptResolved(bool),
+    /// `PollIntercepts` result: requests newly paused since the last poll.
+    Intercepts(Vec<InterceptedRequest>),
 }

@@ -38,8 +38,8 @@ pub mod gpu_session;
 
 pub use types::{
     A11yNode, A11yState, AxQuery, AutomationCommand, AutomationReply, BoxModel, ComputedProperties, ConsoleEntry, ConsoleLevel,
-    ExplainElement, ExplainPage, ExplainPagePhaseTimings, FingerprintProfile, InputCommand, InvariantViolationCounts,
-    NetworkEntry, NodeRef, ScrollDelta, Target, WaitCondition,
+    ExplainElement, ExplainPage, ExplainPagePhaseTimings, FingerprintProfile, InputCommand, InterceptedRequest,
+    InvariantViolationCounts, NetworkEntry, NodeRef, ScrollDelta, Target, WaitCondition,
 };
 pub use automation::{AutomationHandle, AutomationRequest};
 pub use live_session::LiveWindowSession;
@@ -338,6 +338,53 @@ pub trait BrowserSession {
     /// real effect.
     fn set_timezone(&mut self, _timezone_id: Option<&str>) -> Result<()> {
         Ok(())
+    }
+
+    /// Register a network intercept rule (WebDriver BiDi `network.addIntercept`,
+    /// BUG-295 remainder). A subsequent request whose URL matches
+    /// `url_patterns` (exact-string match, per BiDi urlPattern `type: "string"`;
+    /// empty = match-all) for one of `phases` pauses at that phase until
+    /// [`resolve_intercepted_request`](BrowserSession::resolve_intercepted_request)
+    /// decides it or a bounded timeout elapses. Only the `"beforeRequestSent"`
+    /// phase is actually paused on by [`LiveWindowSession`] — `"responseStarted"`/
+    /// `"authRequired"` are accepted but not yet acted on.
+    ///
+    /// Default impl is a no-op (`Ok(())`), same rationale as [`set_offline`](
+    /// BrowserSession::set_offline); [`LiveWindowSession`] overrides it for
+    /// real effect.
+    fn add_intercept(&mut self, _id: &str, _phases: &[String], _url_patterns: &[String]) -> Result<()> {
+        Ok(())
+    }
+
+    /// Remove a previously registered intercept rule (`network.removeIntercept`).
+    ///
+    /// Default impl is a no-op, same rationale as [`add_intercept`](BrowserSession::add_intercept).
+    fn remove_intercept(&mut self, _id: &str) -> Result<()> {
+        Ok(())
+    }
+
+    /// Deliver a decision for a paused request (`network.continueRequest`/
+    /// `network.failRequest`, BUG-295 remainder). `continue_request = true` lets
+    /// the request proceed unmodified; `false` fails it.
+    ///
+    /// Returns `true` if `request_id` matched an outstanding pause — an
+    /// unknown id is not an error (mirrors the bare-ACK tolerance the BiDi
+    /// handlers already had before real bookkeeping existed).
+    ///
+    /// Default impl always returns `Ok(false)`, same rationale as
+    /// [`add_intercept`](BrowserSession::add_intercept).
+    fn resolve_intercepted_request(&mut self, _request_id: &str, _continue_request: bool) -> Result<bool> {
+        Ok(false)
+    }
+
+    /// Requests newly paused by an active intercept since the last call —
+    /// data for the `network.beforeRequestSent` event a BiDi connection
+    /// should deliver to its client.
+    ///
+    /// Default impl always returns an empty vector, same rationale as
+    /// [`add_intercept`](BrowserSession::add_intercept).
+    fn poll_intercepted_requests(&mut self) -> Result<Vec<InterceptedRequest>> {
+        Ok(Vec::new())
     }
 
     // ── Deterministic mode (8F) ──────────────────────────────────────────────

@@ -13,14 +13,15 @@ Each scenario checks two things:
    regressions in these six command handlers.
 2. **Live-page effect** — does a page in the same live window actually
    observe the requested behavior (blocked fetch, failed request, shifted
-   `Intl` timezone, overridden `navigator.userAgent`)? While researching
-   this task it was confirmed (`crates/bidi-server/src/protocol.rs`) that
-   none of these six commands touch `state.live` at all — they only mutate
-   `BidiState` fields nothing else reads yet. So this half is **expected to
-   fail today** and is reported as `XFAIL(BUG-295)`, not a script failure —
-   see `bugs/BUG-295-OPEN.md` for the full diagnosis and what's needed to
-   close it (real engine/shell wiring, out of scope for this Python-tooling
-   task).
+   `Intl` timezone, overridden `navigator.userAgent`)? As originally written,
+   none of these six commands touched `state.live` at all — they only
+   mutated `BidiState` fields nothing else read, so this half was expected to
+   fail and reported as `XFAIL(BUG-295)`. All six now have real live-window
+   effect (`bugs/BUG-295-FIXED.md`, closed 2026-08-06) — the checks below
+   should report `OK` on a session with a working live window. The
+   `XFAIL(BUG-295)` labels remain in the `Report` helper (see `xfail()`) as a
+   defensive fallback in case a future regression reintroduces the gap for
+   one specific command, not because the gap is still expected by default.
 
 A third outcome, `SKIP(env)`, covers a separate environment-dependent gap
 found while writing this script: in some working sessions the live window's
@@ -226,15 +227,28 @@ async def check_intercept_fail_request(
         return
 
     try:
-        # No real paused-request bookkeeping exists yet (confirmed in
-        # BUG-295) — there is no genuine `request` id to react to, so this
-        # exercises the bare ACK shape rather than a real pause/decide flow.
+        # This id is bogus (sent before the real fetch below even starts), so
+        # it exercises the bare-ACK-on-unknown-id shape (BUG-295-FIXED.md:
+        # `resolve_intercepted_request` returns `Ok(false)` for an id with no
+        # matching pause, and the BiDi handler ACKs either way) rather than a
+        # real pause/decide round-trip against the request the fetch below
+        # actually registers.
         await send(session, "network.failRequest", {"request": "nonexistent-request-id"})
         report.protocol("network.failRequest: ACK", True)
     except Exception as e:  # noqa: BLE001
         report.protocol("network.failRequest: ACK", False, str(e))
 
     try:
+        # Nothing ever resolves the *real* paused request by its real id here
+        # (only the bogus id above was sent) — this exercises the
+        # `INTERCEPT_DECISION_TIMEOUT` fallback path (`crates/network/src/
+        # intercept.rs`): the request genuinely pauses at `beforeRequestSent`,
+        # then fails once the timeout elapses. `fetch_probe`'s own poll budget
+        # (5s) is shorter than the timeout (30s), so this typically observes
+        # "still pending" rather than the timeout's own rejection — both
+        # count as `"rejected"` here, since a client that abandons a paused
+        # request without deciding should not see it silently succeed either
+        # way.
         fetch_result = await fetch_probe(session, ctx, f"{base_url}/index.html", "__devx6_intercept")
     except JsContextUnavailable as e:
         report.skip("network.addIntercept+failRequest: live request actually fails", str(e))
@@ -244,7 +258,7 @@ async def check_intercept_fail_request(
         else:
             report.xfail(
                 "network.addIntercept+failRequest: live request actually fails",
-                f"fetch still succeeded (result={fetch_result!r}) — no paused-request bookkeeping wired to the live window",
+                f"fetch still succeeded (result={fetch_result!r}) — paused request was not blocked",
             )
 
     try:
@@ -445,7 +459,7 @@ def main() -> int:
 
     report.print()
     if report.all_protocol_ok():
-        print("DEVX-6 OK: all BiDi command round-trips verified (see bugs/BUG-295-OPEN.md for live-effect XFAILs)")
+        print("DEVX-6 OK: all BiDi command round-trips verified (see bugs/BUG-295-FIXED.md for live-effect history)")
         return 0
     print("DEVX-6 FAILED: a BiDi command round-trip regressed", file=sys.stderr)
     return 1

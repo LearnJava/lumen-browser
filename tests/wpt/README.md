@@ -97,9 +97,10 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   window, same raw `BidiSession` pattern as `verify_s3_bidi_session.py`
   (not wptrunner). Checks two things per command: the protocol round-trip
   (real verification value, catches `lumen-bidi-server` regressions) and
-  whether a live page actually observes the effect — confirmed **not wired**
-  today ([BUG-295](../../bugs/BUG-295-OPEN.md), reported as `XFAIL(BUG-295)`,
-  not a script failure). Also documents a separate, environment-dependent gap
+  whether a live page actually observes the effect — all six now wired for
+  real ([BUG-295](../../bugs/BUG-295-FIXED.md), closed 2026-08-06; `XFAIL(BUG-295)`
+  remains in the report as a defensive fallback, not the expected outcome).
+  Also documents a separate, environment-dependent gap
   found while writing it: the live window's JS runtime can fail to install at
   all in some sessions (`SKIP(env)` — see `CLAUDE.md` "Known gotchas"). Run
   with:

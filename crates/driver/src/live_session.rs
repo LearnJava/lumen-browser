@@ -28,7 +28,8 @@ use lumen_core::error::{Error, Result};
 use crate::{
     A11yNode, AutomationCommand, AutomationHandle, AutomationReply, AxQuery, BoxModel,
     BrowserSession, ComputedProperties, ComputedStyleSnapshot, ConsoleEntry, ExplainElement,
-    ExplainPage, FingerprintProfile, NetworkEntry, NodeRef, ScrollDelta, Target, WaitCondition,
+    ExplainPage, FingerprintProfile, InterceptedRequest, NetworkEntry, NodeRef, ScrollDelta, Target,
+    WaitCondition,
 };
 
 /// Default timeout for a single automation round-trip to the live window.
@@ -313,6 +314,51 @@ impl BrowserSession for LiveWindowSession {
     fn set_timezone(&mut self, timezone_id: Option<&str>) -> Result<()> {
         self.execute(AutomationCommand::SetTimezone(timezone_id.map(str::to_owned)))?;
         Ok(())
+    }
+
+    /// BUG-295 remainder: round-trips to the live window, which registers
+    /// the rule in `lumen_network`'s process-global intercept registry —
+    /// consulted at the same `fetch_with_redirect` chokepoint every fetch
+    /// path already funnels through.
+    fn add_intercept(&mut self, id: &str, phases: &[String], url_patterns: &[String]) -> Result<()> {
+        self.execute(AutomationCommand::AddIntercept {
+            id: id.to_owned(),
+            phases: phases.to_vec(),
+            url_patterns: url_patterns.to_vec(),
+        })?;
+        Ok(())
+    }
+
+    /// BUG-295 remainder: round-trips to the live window, which removes the
+    /// rule from `lumen_network`'s process-global intercept registry.
+    fn remove_intercept(&mut self, id: &str) -> Result<()> {
+        self.execute(AutomationCommand::RemoveIntercept(id.to_owned()))?;
+        Ok(())
+    }
+
+    /// BUG-295 remainder: round-trips to the live window, which delivers the
+    /// decision to `lumen_network`'s paused-request registry — unblocking the
+    /// fetch worker thread waiting on it, if any request is still paused
+    /// under this id.
+    fn resolve_intercepted_request(&mut self, request_id: &str, continue_request: bool) -> Result<bool> {
+        match self.execute(AutomationCommand::ResolveIntercept {
+            request_id: request_id.to_owned(),
+            continue_request,
+        })? {
+            AutomationReply::InterceptResolved(matched) => Ok(matched),
+            other => Err(unexpected_reply("InterceptResolved", &other)),
+        }
+    }
+
+    /// BUG-295 remainder: round-trips to the live window, which drains
+    /// requests newly paused (since the last poll) from `lumen_network`'s
+    /// registry — data for the `network.beforeRequestSent` event a BiDi
+    /// connection should deliver.
+    fn poll_intercepted_requests(&mut self) -> Result<Vec<InterceptedRequest>> {
+        match self.execute(AutomationCommand::PollIntercepts)? {
+            AutomationReply::Intercepts(requests) => Ok(requests),
+            other => Err(unexpected_reply("Intercepts", &other)),
+        }
     }
 
     fn set_clock(&mut self, _mode: crate::ClockMode) -> Result<()> {

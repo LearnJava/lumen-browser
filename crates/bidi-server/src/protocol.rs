@@ -38,10 +38,13 @@
 //! [`lumen_driver::LiveWindowSession`] instead of only updating in-memory
 //! bookkeeping. `browsingContext.navigate` blocks on the JS runtime's real
 //! `document.readyState == "complete"` signal before emitting
-//! `browsingContext.load` with a real timestamp (P2-wpt S1). Everything else
-//! (cookie events, network interception, a dedicated `domContentLoaded`
-//! event, full input action-chain fidelity) remains a later handoff —
-//! roadmap 8H.3.
+//! `browsingContext.load` with a real timestamp (P2-wpt S1).
+//! `network.addIntercept`+`continueRequest`/`failRequest` genuinely pause and
+//! resume a matching `beforeRequestSent` request against `lumen_network`'s
+//! process-global registry (BUG-295 remainder) — `responseStarted`/
+//! `authRequired` phases remain unactuated. Everything else (cookie events, a
+//! dedicated `domContentLoaded` event, full input action-chain fidelity)
+//! remains a later handoff — roadmap 8H.3.
 //! Without a live window this layer stays a pure protocol state machine: one
 //! connection = one [`BidiState`].
 
@@ -49,7 +52,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use lumen_core::json::{parse as parse_json, JsonValue};
-use lumen_driver::{BrowserSession, LiveWindowSession, Target, WaitCondition};
+use lumen_driver::{BrowserSession, InterceptedRequest, LiveWindowSession, Target, WaitCondition};
 
 /// Upper bound on how long `bc_navigate` blocks waiting for
 /// `document.readyState == "complete"` before giving up (P2-wpt S1). Generous
@@ -83,14 +86,19 @@ struct BidiContext {
     viewport: Option<(u32, u32)>,
 }
 
-/// One network intercept rule registered via `network.addIntercept`.
+/// One network intercept rule registered via `network.addIntercept`. This
+/// connection-local record is the Phase 1 bookkeeping used by
+/// `intercept_count()`; the actual matching happens against a separate copy
+/// synced into `lumen_network`'s process-global registry (BUG-295 remainder,
+/// `LiveWindowSession::add_intercept`), since the network layer running on
+/// another thread has no access to this connection's `BidiState`.
 struct NetworkIntercept {
     /// Opaque intercept identifier (BiDi `intercept`).
     id: String,
     /// Phases at which to intercept: "beforeRequestSent", "responseStarted", "authRequired".
     #[allow(dead_code)]
     phases: Vec<String>,
-    /// URL patterns to match; empty means match-all (Phase 1 stub: stored but not evaluated).
+    /// URL patterns to match; empty means match-all.
     #[allow(dead_code)]
     url_patterns: Vec<String>,
 }
@@ -206,7 +214,9 @@ pub struct BidiState {
     ///
     /// Set by `emulation.setUserAgentOverride` without `contexts`.
     session_ua_override: Option<String>,
-    /// Registered network intercept rules (Phase 1 stub: stored, not evaluated).
+    /// Registered network intercept rules — connection-local bookkeeping
+    /// (`intercept_count()`); the actual matching copy lives in
+    /// `lumen_network`'s process-global registry, see [`NetworkIntercept`].
     ///
     /// Populated by `network.addIntercept`, removed by `network.removeIntercept`.
     intercepts: Vec<NetworkIntercept>,
@@ -643,7 +653,7 @@ pub fn dispatch(message: &str, state: &mut BidiState) -> DispatchResult {
         return DispatchResult::single(make_error(Some(id), "invalid argument", "missing method"));
     };
 
-    match method {
+    let mut result = match method {
         "session.status" => DispatchResult::single(make_success(id, session_status_result(state))),
         "session.new" => session_new(id, &params, state),
         "session.subscribe" => session_subscribe(id, &params, state),
@@ -669,10 +679,12 @@ pub fn dispatch(message: &str, state: &mut BidiState) -> DispatchResult {
         "network.setOfflineStatus" => network_set_offline(id, &params, state),
         "network.addIntercept" => network_add_intercept(id, &params, state),
         "network.removeIntercept" => network_remove_intercept(id, &params, state),
-        "network.continueRequest" => DispatchResult::single(make_success(id, empty_obj())),
+        "network.continueRequest" => network_continue_request(id, &params, state),
+        // `responseStarted`/`authRequired` phases are not paused on (BUG-295
+        // remainder scopes to `beforeRequestSent` only) — bare ACK, unchanged.
         "network.continueResponse" => DispatchResult::single(make_success(id, empty_obj())),
         "network.continueWithAuth" => DispatchResult::single(make_success(id, empty_obj())),
-        "network.failRequest" => DispatchResult::single(make_success(id, empty_obj())),
+        "network.failRequest" => network_fail_request(id, &params, state),
         "network.setCacheBehavior" => network_set_cache_behavior(id, &params, state),
         "input.performActions" => input_perform_actions(id, &params, state),
         "input.releaseActions" => input_release_actions(id, &params, state),
@@ -691,7 +703,52 @@ pub fn dispatch(message: &str, state: &mut BidiState) -> DispatchResult {
             "unknown command",
             &format!("unknown command: {other}"),
         )),
+    };
+
+    // BUG-295 remainder: this transport has no spontaneous event-push path
+    // (one connection = one blocking read-dispatch-write loop, see
+    // `transport::handle`) — every event, including this one, can only ride
+    // along on the response to SOME incoming command. So opportunistically
+    // drain any requests newly paused by an active intercept (on whatever
+    // thread is running the matching fetch) and prepend `network.
+    // beforeRequestSent` events ahead of `method`'s own response frames,
+    // regardless of which command triggered this dispatch call. A client
+    // that polls at all (as any BiDi automation client driving a paused
+    // request must) observes the event within its next round-trip.
+    if state.is_subscribed("network.beforeRequestSent")
+        && let Some(live) = &mut state.live
+        && let Ok(requests) = live.poll_intercepted_requests()
+    {
+        for req in requests.iter().rev() {
+            let frame = make_event("network.beforeRequestSent", before_request_sent_params(state, req));
+            result.frames.insert(0, frame);
+        }
     }
+    result
+}
+
+/// Parameters for the `network.beforeRequestSent` event (BiDi §12.5.1,
+/// simplified — BUG-295 remainder). `context` is the first browsing context
+/// in this connection (Lumen runs one window per process, so there is
+/// exactly one meaningful context to attribute a live-window request to).
+fn before_request_sent_params(state: &BidiState, req: &InterceptedRequest) -> JsonValue {
+    let mut request_data = BTreeMap::new();
+    request_data.insert("request".into(), JsonValue::String(req.request_id.clone()));
+    request_data.insert("url".into(), JsonValue::String(req.url.clone()));
+    request_data.insert("method".into(), JsonValue::String("GET".into()));
+    request_data.insert("headersSize".into(), JsonValue::Number(-1.0));
+    request_data.insert("bodySize".into(), JsonValue::Null);
+
+    let mut params = BTreeMap::new();
+    if let Some(ctx) = state.contexts.first() {
+        params.insert("context".into(), JsonValue::String(ctx.id.clone()));
+    }
+    params.insert("isBlocked".into(), JsonValue::Bool(true));
+    params.insert("navigation".into(), JsonValue::Null);
+    params.insert("redirectCount".into(), JsonValue::Number(0.0));
+    params.insert("request".into(), JsonValue::Object(request_data));
+    params.insert("timestamp".into(), JsonValue::Number(unix_timestamp_ms()));
+    JsonValue::Object(params)
 }
 
 /// `session.status` — готовность к созданию новой сессии.
@@ -1617,9 +1674,13 @@ fn script_get_realms(id: i64, _state: &BidiState) -> DispatchResult {
 
 /// `network.addIntercept` — register a network intercept rule (BiDi §12.6.9).
 ///
-/// Phase 1: stores the rule and returns an opaque `intercept` ID.
-/// Actual request interception (pausing and delivering `network.beforeRequestSent`
-/// events) requires live network integration — 8H.3.
+/// Stores the rule and returns an opaque `intercept` ID. BUG-295 remainder:
+/// with a live window (`--bidi-port` + an open window), also syncs the rule
+/// into [`LiveWindowSession::add_intercept`] — `lumen_network`'s
+/// process-global registry, consulted at the `fetch_with_redirect` chokepoint
+/// every fetch path funnels through. Only the `"beforeRequestSent"` phase is
+/// actually paused on — `"responseStarted"`/`"authRequired"` are accepted
+/// (stored) but not yet acted on.
 fn network_add_intercept(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
     let phases: Vec<String> = params
         .get("phases")
@@ -1646,6 +1707,15 @@ fn network_add_intercept(id: i64, params: &JsonValue, state: &mut BidiState) -> 
         .unwrap_or_default();
 
     let intercept_id = state.next_id(0x1ce0);
+    if let Some(live) = &mut state.live
+        && let Err(e) = live.add_intercept(&intercept_id, &phases, &url_patterns)
+    {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "unknown error",
+            &format!("addIntercept: {e}"),
+        ));
+    }
     state.intercepts.push(NetworkIntercept {
         id: intercept_id.clone(),
         phases,
@@ -1659,7 +1729,9 @@ fn network_add_intercept(id: i64, params: &JsonValue, state: &mut BidiState) -> 
 
 /// `network.removeIntercept` — remove a registered intercept rule (BiDi §12.6.11).
 ///
-/// Returns `no such intercept` if the ID is unknown.
+/// Returns `no such intercept` if the ID is unknown. BUG-295 remainder: with a
+/// live window, also removes the rule from `lumen_network`'s process-global
+/// registry via [`LiveWindowSession::remove_intercept`].
 fn network_remove_intercept(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
     let Some(intercept_id) = params.get("intercept").and_then(|v| v.as_str()) else {
         return DispatchResult::single(make_error(
@@ -1676,6 +1748,56 @@ fn network_remove_intercept(id: i64, params: &JsonValue, state: &mut BidiState) 
             Some(id),
             "no such intercept",
             &format!("unknown intercept: {intercept_id}"),
+        ));
+    }
+    if let Some(live) = &mut state.live
+        && let Err(e) = live.remove_intercept(intercept_id)
+    {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "unknown error",
+            &format!("removeIntercept: {e}"),
+        ));
+    }
+    DispatchResult::single(make_success(id, empty_obj()))
+}
+
+/// `network.continueRequest` — resolve a paused request as "continue"
+/// (BiDi §12.6.13, BUG-295 remainder).
+///
+/// Delivers the decision to `lumen_network`'s paused-request registry via
+/// [`LiveWindowSession::resolve_intercepted_request`] when a live window is
+/// attached. An unknown/already-resolved `request` id still ACKs — no
+/// paused-request bookkeeping exists without a live window (Phase 1 stub),
+/// and matching the bare-ACK tolerance this handler already had before real
+/// bookkeeping existed avoids breaking callers that resolve defensively.
+fn network_continue_request(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
+    resolve_intercepted_request(id, params, state, true)
+}
+
+/// `network.failRequest` — resolve a paused request as "fail" (BiDi §12.6.15,
+/// BUG-295 remainder). See [`network_continue_request`] for the shared shape.
+fn network_fail_request(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
+    resolve_intercepted_request(id, params, state, false)
+}
+
+/// Shared implementation of [`network_continue_request`]/[`network_fail_request`].
+fn resolve_intercepted_request(
+    id: i64,
+    params: &JsonValue,
+    state: &mut BidiState,
+    continue_request: bool,
+) -> DispatchResult {
+    let Some(request_id) = params.get("request").and_then(|v| v.as_str()) else {
+        return DispatchResult::single(make_error(Some(id), "invalid argument", "missing request id"));
+    };
+    if let Some(live) = &mut state.live
+        && let Err(e) = live.resolve_intercepted_request(request_id, continue_request)
+    {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "unknown error",
+            &format!("resolve intercepted request: {e}"),
         ));
     }
     DispatchResult::single(make_success(id, empty_obj()))
@@ -2236,6 +2358,82 @@ mod tests {
             }
         });
         LiveWindowSession::new(AutomationHandle::new(tx))
+    }
+
+    /// A fake "live window" for BUG-295 remainder tests: `PollIntercepts`
+    /// reports exactly one paused request (`"r1"`) on its first call and
+    /// nothing thereafter (mirrors `lumen_network::drain_new_intercept_
+    /// announcements`'s at-most-once-per-request semantics);
+    /// `ResolveIntercept` matches only that same id.
+    fn fake_live_session_with_intercept() -> LiveWindowSession {
+        use lumen_driver::{AutomationCommand, AutomationHandle, AutomationReply, InterceptedRequest};
+        let (tx, rx) = std::sync::mpsc::channel::<lumen_driver::AutomationRequest>();
+        std::thread::spawn(move || {
+            let mut polled_once = false;
+            for (cmd, reply_tx) in rx {
+                let reply = match cmd {
+                    AutomationCommand::AddIntercept { .. } | AutomationCommand::RemoveIntercept(_) => {
+                        AutomationReply::Ack
+                    }
+                    AutomationCommand::PollIntercepts => {
+                        if polled_once {
+                            AutomationReply::Intercepts(Vec::new())
+                        } else {
+                            polled_once = true;
+                            AutomationReply::Intercepts(vec![InterceptedRequest {
+                                request_id: "r1".into(),
+                                url: "http://example.test/paused".into(),
+                            }])
+                        }
+                    }
+                    AutomationCommand::ResolveIntercept { request_id, .. } => {
+                        AutomationReply::InterceptResolved(request_id == "r1")
+                    }
+                    _ => AutomationReply::Ack,
+                };
+                let _ = reply_tx.send(reply);
+            }
+        });
+        LiveWindowSession::new(AutomationHandle::new(tx))
+    }
+
+    #[test]
+    fn before_request_sent_event_delivered_when_subscribed() {
+        let mut state = BidiState::with_live_session(fake_live_session_with_intercept(), None);
+        // Subscribing itself is a dispatch call, so it can already opportunistically
+        // drain the pause (this transport has no async push — see `dispatch`'s doc
+        // comment: the event rides along on whatever call happens to run next).
+        let r = dispatch(
+            r#"{"id":1,"method":"session.subscribe","params":{"events":["network.beforeRequestSent"]}}"#,
+            &mut state,
+        );
+        assert_eq!(r.frames.len(), 2, "expected event frame + response frame: {:?}", r.frames);
+        assert!(r.frames[0].contains("network.beforeRequestSent"), "got: {}", r.frames[0]);
+        assert!(r.frames[0].contains("http://example.test/paused"), "got: {}", r.frames[0]);
+        assert!(r.frames[0].contains("\"r1\""), "got: {}", r.frames[0]);
+        assert!(r.frames[1].contains("success"), "got: {}", r.frames[1]);
+
+        // Already-announced pause must not repeat on a later dispatch.
+        let r2 = dispatch(r#"{"id":2,"method":"session.status","params":{}}"#, &mut state);
+        assert_eq!(r2.frames.len(), 1, "must not re-announce: {:?}", r2.frames);
+    }
+
+    #[test]
+    fn before_request_sent_event_not_delivered_without_subscription() {
+        let mut state = BidiState::with_live_session(fake_live_session_with_intercept(), None);
+        let r = dispatch(r#"{"id":1,"method":"session.status","params":{}}"#, &mut state);
+        assert_eq!(r.frames.len(), 1, "no subscription — no event: {:?}", r.frames);
+        assert!(!r.frames[0].contains("beforeRequestSent"));
+    }
+
+    #[test]
+    fn continue_request_with_live_window_resolves_matching_id() {
+        let mut state = BidiState::with_live_session(fake_live_session_with_intercept(), None);
+        let r = dispatch(
+            r#"{"id":1,"method":"network.continueRequest","params":{"request":"r1"}}"#,
+            &mut state,
+        );
+        assert!(r.frames[0].contains("success"), "got: {}", r.frames[0]);
     }
 
     #[test]
@@ -3130,9 +3328,11 @@ mod tests {
 
     #[test]
     fn network_continue_request_acks() {
+        // BiDi §12.6.13: `request` is the opaque request id string itself,
+        // not an object — matches `verify_devx6_bidi_scenarios.py`'s shape.
         let mut state = BidiState::new();
         let r = dispatch(
-            r#"{"id":1,"method":"network.continueRequest","params":{"request":{"requestId":1}}}"#,
+            r#"{"id":1,"method":"network.continueRequest","params":{"request":"nonexistent-request-id"}}"#,
             &mut state,
         );
         assert!(r.frames[0].contains("success"), "got: {}", r.frames[0]);
@@ -3142,10 +3342,17 @@ mod tests {
     fn network_fail_request_acks() {
         let mut state = BidiState::new();
         let r = dispatch(
-            r#"{"id":1,"method":"network.failRequest","params":{"request":{"requestId":1}}}"#,
+            r#"{"id":1,"method":"network.failRequest","params":{"request":"nonexistent-request-id"}}"#,
             &mut state,
         );
         assert!(r.frames[0].contains("success"), "got: {}", r.frames[0]);
+    }
+
+    #[test]
+    fn network_continue_request_missing_request_id_errors() {
+        let mut state = BidiState::new();
+        let r = dispatch(r#"{"id":1,"method":"network.continueRequest","params":{}}"#, &mut state);
+        assert!(r.frames[0].contains("invalid argument"), "got: {}", r.frames[0]);
     }
 
     // --- input.* tests ---
