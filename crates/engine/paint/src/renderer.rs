@@ -6503,9 +6503,11 @@ impl Renderer {
         // CSS Masking L1 §3 — параметры формы `clip-path`, открывшей
         // offscreen-уровень: форма в экранных CSS px, её bbox (геометрия
         // квада) + метка в `render_plan`.
+        // `params` в боксе: без индирекции вариант формы (584 байта) раздул бы
+        // весь `ClipLevel` в десять раз против скруглённого (56 байт).
         struct PathClipLevel {
             rect: Rect,
-            params: PathClipParamsCpu,
+            params: Box<PathClipParamsCpu>,
             plan_mark: usize,
         }
         // Какой контур открыл уровень — общий `PopClip` разбирает по варианту.
@@ -7332,7 +7334,7 @@ impl Renderer {
                             level_bounds[current_level] = LevelBounds::Empty;
                             clip_level_stack.push(Some(ClipLevel::Path(PathClipLevel {
                                 rect: in_screen,
-                                params,
+                                params: Box::new(params),
                                 plan_mark,
                             })));
                         }
@@ -7402,7 +7404,7 @@ impl Renderer {
                                     PathClipCompositePlan {
                                         from_level: current_level,
                                         v_start,
-                                        params: Box::new(c.params),
+                                        params: c.params,
                                     },
                                 ));
                             }
