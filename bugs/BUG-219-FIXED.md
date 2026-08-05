@@ -2,7 +2,7 @@
 
 **Статус:** FIXED 2026-07-04 (DEBTOR)
 **Компонент:** image/paint
-**Тест:** TEST-18 (KNOWN_DEBTOR 2.11%), TEST-19 (KNOWN_DEBTOR 9.05%)
+**Тест:** TEST-18 (KNOWN_DEBTOR 2.11%), TEST-19 (KNOWN_DEBTOR 9.05%), TEST-53 (KNOWN_DEBTOR 1.16%, перецелён из BUG-277 срезом 17)
 
 ## Описание
 
@@ -50,3 +50,14 @@ downscale-путях: femtovg `resolve_image_for_rect`, `cpu_raster`, wgpu `rend
 Альтернативные ядра не приняты — регрессируют один из двух baseline и не дают
 чистого выигрыша. TEST-18/19 остаются KNOWN_DEBTORS с прежними baseline
 (2.11% / 9.05%); цель <0.5% недостижима простым сменом kernel.
+
+## Срез 17 BUG-277 (2026-08-05, P3) — TEST-53 перецелён сюда
+
+TEST-53 (`53-background-origin.html`) числился за BUG-277, но срез 15 закрыл
+единственный реальный wgpu-дефект этой записи (`DrawBackgroundImage` не шёл
+через `PushTransform`), а срез 17 подтвердил «wgpu-окно против headless-CPU»:
+1.16% / 1.76% — wgpu уже НИЖЕ CPU-числа, расхождения бэкендов нет. Фон страницы —
+тот же `../samples/images/perceptron.png`, что в TEST-18/19: остаток —
+downscale-resampling AA этой картинки поверх обычного font-parity подписей,
+тот же класс, что уже описан выше. `KNOWN_DEBTORS['53']` перецелён с BUG-277
+на BUG-219, baseline не изменился (1.16%).
