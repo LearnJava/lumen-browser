@@ -3101,9 +3101,9 @@
       {
        "id": "WPT-VENDOR-media-capabilities",
        "title": "WPT: вендорить + прогнать категорию `media-capabilities`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). медиа-конвейер"
+       "note": "Скоуп: 🚫 (вне скоупа, медиа-конвейер). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root media-capabilities --recursive`, ~25с), включена по тому же постоянному решению пользователя, что `audio-output`/`audio-session`/`autoplay-policy-detection` — **6/7 harness OK, 10/94 сабтестов**. `navigator.mediaCapabilities.decodingInfo`/`encodingInfo` реализованы как явная Phase 0 заглушка (`crates/js/src/media_capabilities.rs`: любой конфиг с валидным `type`-полем резолвится в `{supported:true, smooth:true, powerEfficient:false}`, без проверки кодеков/полей и без `keySystemAccess`) — большинство FAIL это либо «должен был отклонить невалидный конфиг, но зарезолвил» (нет валидации), либо `assert_equals(typeof x.keySystemAccess, \"object\")` на отсутствующем поле. `decodingInfoEncryptedMedia.https.html` — TLS handshake `UnknownIssuer` (задокументированный разрыв тестового сертификата, `docs/wpt-status.md:26`); `idlharness.any.html` — 404 на невендоренные `/resources/WebIDLParser.js`+`idlharness.js`, тот же гэп, что у прочих категорий. Новых багов не заведено"
       },
       {
        "id": "WPT-VENDOR-media-playback-quality",
