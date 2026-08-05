@@ -3445,9 +3445,9 @@
       {
        "id": "WPT-VENDOR-print",
        "title": "WPT: вендорить + прогнать категорию `print`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root print --recursive`, ~1 с, 1 id) — категория upstream почти пуста (только `WEB_FEATURES.yml` + один crashtest), 0/0 harness OK (единственный тест — тип `crashtest`, `run_report.py` его не поддерживает, тот же класс пробела, что `accessibility`/`acid`). Живая проба (`--mcp-live-port`) на самом crashtest-файле (`reload-crash.html`, `<body onload=\"PrintAndRefreshPage()\">`) показала обработчик не срабатывает вовсе — `document.body.onload === undefined` — реконфирмация уже заведённого [BUG-360](bugs/BUG-360-OPEN.md) (inline-обработчики событий мертвы), не бага печати: вызванный вручную `window.print()` отработал штатно (лог `[window.print()] Opening print preview dialog` + реальный экспорт PDF). Новых багов не заведено"
       },
       {
        "id": "WPT-VENDOR-private-aggregation",
