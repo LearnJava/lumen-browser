@@ -76,11 +76,11 @@
  "generated": "2026-08-05",
  "counts": {
   "open": 299,
-  "fixed": 326,
+  "fixed": 327,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 625,
+ "total_bugs": 626,
  "phases": [
   {
    "id": "P0",
@@ -3515,9 +3515,12 @@
       {
        "id": "WPT-VENDOR-reporting",
        "title": "WPT: вендорить + прогнать категорию `reporting`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root reporting --recursive --processes=4`, ~2 мин, 25 id) — до фикса **3/25 harness OK, 0/15 сабтестов**. Пять из шести исполнившихся своих тестов (`bufferSize`/`disconnect`/`generateTestReport`/`order`/`nestedReport`) опирались на `test_driver.generate_test_report()`, который `executorlumen.py::_handle_action` не реализовывал вовсе (только `click`) — падали/висели до таймаута, маскируя весь собственный сигнал категории. Заведён и сразу исправлен [BUG-659](bugs/BUG-659-FIXED.md): добавлен обработчик действия, вызывающий уже существующий JS-глобал `_lumen_deliver_report` (`crates/js/src/reporting_api.rs`) — новый движковый код не понадобился. После фикса: **5/25 harness OK, 5/15 сабтестов** — все пять целевых тестов зелёные. Остаточный сигнал — TLS-гэп `UnknownIssuer` (17 `.https.` TIMEOUT), реконфирмация [BUG-380](bugs/BUG-380-OPEN.md) (3 ERROR, поросячее заражение результата соседним TIMEOUT) и реконфирмация [BUG-480](bugs/BUG-480-OPEN.md) (`crashReport-test.html`, `<iframe>` без browsing context; сам Crash Reporting API не реализован и нигде не заявлен)",
+       "bugs": [
+        "BUG-659"
+       ]
       },
       {
        "id": "WPT-VENDOR-requestidlecallback",
@@ -9073,6 +9076,13 @@
    "title": "`offsetWidth`/`offsetHeight`/`getBoundingClientRect()` read back `0` (not a distinguishable sentinel like `getComputedStyle`'s `\"\"`) when called from an inline…",
    "component": "js (`crates/js/src/dom.rs:3196` — `offsetWidth`/`offsetHeight`/`getBoundingClientRect()`, backed by `_lumen_get_bounding_rect`), shell (`crates/shell/src/main.rs::apply_loaded_page` — same publish path as [BUG-555](bugs/BUG-555-OPEN.md))",
    "date": null,
+   "debtor": false
+  },
+  "BUG-659": {
+   "status": "fixed",
+   "title": "`generate_test_report` testdriver action was never implemented by `_handle_action` (only `click` was) — every `reporting/` test using `test_driver.generate_test…",
+   "component": "tooling (`tools/wptrunner/wptrunner/executors/executorlumen.py`)",
+   "date": "2026-08-05",
    "debtor": false
   }
  },
