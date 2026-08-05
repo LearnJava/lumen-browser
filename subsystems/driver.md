@@ -234,7 +234,10 @@ headless pipeline without winit/wgpu/ffmpeg.
   defaults, not yet threaded through `AutomationCommand` (SDC-2 MVP scope). `console_log` is
   real as of DEVX-1 (see above) — no longer in this list.
 - Remote transport (BiDi over WebSocket) — live navigate/eval/captureScreenshot/input done
-  (SDC-2); network interception, cookie/storage events, `domContentLoaded` remain 8H.3.
+  (SDC-2); network interception is done for the `beforeRequestSent` phase (BUG-295,
+  `add_intercept`/`remove_intercept`/`resolve_intercepted_request`/`poll_intercepted_requests`
+  on `BrowserSession`, `crates/network/src/intercept.rs`) — `responseStarted`/`authRequired`
+  phases, cookie/storage events, `domContentLoaded` remain 8H.3.
 - CSS selector: descendant/child combinators, pseudo-classes — when needed.
 
 ## Invariants
