@@ -3062,9 +3062,9 @@
       {
        "id": "WPT-VENDOR-mathml",
        "title": "WPT: вендорить + прогнать категорию `mathml`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root mathml --recursive --processes=4`, ~6 мин) — **81/196 harness OK, 31/700 сабтестов**. Доминирующий сигнал (300+ `insertAdjacentHTML is not a function`) — каскад уже открытых [BUG-351](bugs/BUG-351-OPEN.md)/[BUG-368](bugs/BUG-368-OPEN.md) (собственный хелпер набора тестов строит фрагменты через `innerHTML`). Остаток переподтверждает задокументированный в CAPABILITIES.md пробел: `mathml.rs` не подключён к пайплайну, `<math>` не строится в box tree. Новых багов не заведено"
       },
       {
        "id": "WPT-VENDOR-measure-memory",
