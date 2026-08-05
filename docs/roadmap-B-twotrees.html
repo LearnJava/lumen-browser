@@ -73,14 +73,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-08-05",
+ "generated": "2026-08-06",
  "counts": {
-  "open": 306,
+  "open": 307,
   "fixed": 328,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 634,
+ "total_bugs": 635,
  "phases": [
   {
    "id": "P0",
@@ -3603,9 +3603,12 @@
       {
        "id": "WPT-VENDOR-screen-orientation",
        "title": "WPT: вендорить + прогнать категорию `screen-orientation`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root screen-orientation --recursive`, ~2 мин 30 с, 16 файлов, 15 исполнившихся id) — **1/15 harness OK, 2/2 сабтестов**. 13 файлов TIMEOUT — реконфирмация [BUG-446](bugs/BUG-446-OPEN.md) (граф ES-модулей: `import ... from \"./resources/orientation-utils.js\"` никогда не подгружается, ноль `test()` регистрируется); `idlharness.window.html` TIMEOUT — реконфирмация рекуррентного невендоренного idlharness-инфра-гэпа; `lock-bad-argument.html` (единственный без модульного импорта) исполнился чисто. Раз функциональный сигнал целиком заблокирован, прямой `--mcp-live-port`-пробой найден [BUG-668](bugs/BUG-668-OPEN.md) — `screen.orientation` (`crates/js/src/screen_orientation.rs`) даёт два независимых дефекта: (1) `ScreenOrientation` не наследует `EventTarget` (`instanceof` → false, `dispatchEvent` отсутствует целиком, свой ручной `_listeners`-массив вместо прототипной цепочки) — тот же класс, что BUG-664/BUG-400; (2) `.lock()` резолвится успешно, но никогда не обновляет `type`/`angle` — успешный лок неотличим от no-op (проверено живьём: после `lock('landscape-primary')` `type` остаётся `'portrait-primary'`), что сломало бы `active-lock.html`/`lock-basic.html`/`lock-unlock-check.html`/`orientation-reading.html` даже после фикса BUG-446",
+       "bugs": [
+        "BUG-668"
+       ]
       },
       {
        "id": "WPT-VENDOR-screen-wake-lock",
@@ -9160,6 +9163,13 @@
    "status": "open",
    "title": "`navigator.getScreenDetails()` never checks the `window-management` permission state (resolves unconditionally regardless of `navigator.permissions.query`, whic…",
    "component": "js (`crates/js/src/window_management.rs:112`–`136` — `getScreenDetails` shim)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-668": {
+   "status": "open",
+   "title": "`ScreenOrientation` doesn't inherit `EventTarget` (`instanceof EventTarget` → `false`, `dispatchEvent` entirely missing, own hand-rolled `_listeners`/`addEventL…",
+   "component": "js (`crates/js/src/screen_orientation.rs` — Screen Orientation Phase 0 shim)",
    "date": null,
    "debtor": false
   }
