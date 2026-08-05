@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-05",
  "counts": {
-  "open": 287,
+  "open": 289,
   "fixed": 315,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 602,
+ "total_bugs": 604,
  "phases": [
   {
    "id": "P0",
@@ -3166,9 +3166,12 @@
       {
        "id": "WPT-VENDOR-mediasession",
        "title": "WPT: вендорить + прогнать категорию `mediasession`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). медиа-конвейер"
+       "note": "Скоуп: 🚫 (вне скоупа, но API реализован). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root mediasession --recursive`, ~27с, 9 id) — **6/9 harness OK, 34/56 сабтестов**. Найден и заведён [BUG-636](bugs/BUG-636-OPEN.md): MediaSession API пропускает WebIDL-валидацию/заморозку по всему API (`MediaMetadata` ctor не бросает на не-объектный init, `artwork` не заморожен/не резолвит URL, `chapterInfo` не реализован, `setPositionState`/`setActionHandler` не валидируют). `CAPABILITIES.md` понижен ✅→🟡",
+       "bugs": [
+        "BUG-636"
+       ]
       },
       {
        "id": "WPT-VENDOR-merchant-validation",
@@ -8844,6 +8847,20 @@
    "component": "js (`crates/js/src/media_stream_recording.rs`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-635": {
+   "status": "open",
+   "title": "`background-image` не рисуется ни в живом wgpu-окне, ни в детерминированном CPU-снимке, хотя файл загружен и декодирован («Загружена bg-картинка: …/perceptron.p…",
+   "component": "paint (`DrawBackgroundImage` в обоих бэкендах)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-636": {
+   "status": "open",
+   "title": "MediaSession API skips WebIDL validation/freezing across the board: `MediaMetadata` constructor doesn't throw `TypeError` for a non-object init; `chapterInfo` (…",
+   "component": "js (`crates/js/src/media_session.rs`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -9574,6 +9591,9 @@
   ],
   "paint (WgpuBackend/Renderer) / shell (streaming первого кадра)": [
    "BUG-274"
+  ],
+  "paint (`DrawBackgroundImage` в обоих бэкендах)": [
+   "BUG-635"
   ],
   "paint (`Renderer::init_pipelines`, `crates/engine/paint/src/renderer.rs`)": [
    "BUG-406"
