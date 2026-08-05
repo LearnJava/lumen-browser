@@ -76,11 +76,11 @@
  "generated": "2026-08-05",
  "counts": {
   "open": 298,
-  "fixed": 317,
+  "fixed": 318,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 615,
+ "total_bugs": 616,
  "phases": [
   {
    "id": "P0",
@@ -3371,9 +3371,12 @@
       {
        "id": "WPT-VENDOR-permissions",
        "title": "WPT: вендорить + прогнать категорию `permissions`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root permissions --recursive`, ~1 мин 39 с, 14 id) — **5/14 harness OK, 40/40 сабтестов**. `crashtests/permissions-query-worker.window.html` формально зелёный, но лог вскрыл реальный дефект: `navigator is not defined` внутри воркера — `worker_global_shim` не определяет `navigator` вовсе, любой `navigator.*` изнутри Worker бросает `ReferenceError` до собственной логики. Заведён [BUG-649](bugs/BUG-649-OPEN.md). Остальные 9 id: 5 TIMEOUT на TLS-гэпе `UnknownIssuer`, 3 ERROR — реконфирмация BUG-380 (browsing-context reuse), 1 TIMEOUT на невендоренных общих ресурсах (`idlharness.js`/`WebIDLParser.js`)",
+       "bugs": [
+        "BUG-649"
+       ]
       },
       {
        "id": "WPT-VENDOR-permissions-policy",
@@ -6426,10 +6429,10 @@
    "debtor": false
   },
   "BUG-277": {
-   "status": "open",
+   "status": "fixed",
    "title": "Установленный wgpu-базлайн: первый полный прогон `LUMEN_BACKEND=wgpu graphic_tests/run.py --continue-on-fail` после фикса BUG-276 — 65 PASS · 38 FAIL · 38 DEBTO…",
    "component": "paint (`WgpuBackend`/`renderer.rs`) — wgpu-рендеринг расходится с femtovg",
-   "date": null,
+   "date": "2026-08-05",
    "debtor": true
   },
   "BUG-278": {
@@ -8984,6 +8987,13 @@
    "status": "open",
    "title": "`observe()` performs no call-signature validation at all (no `TypeError` on `observe({})`/non-array `entryTypes`, no `InvalidModificationError` on mixing single…",
    "component": "js (`crates/js/src/dom.rs:8258-8335` — `PerformanceObserver`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-649": {
+   "status": "open",
+   "title": "`navigator` is entirely undefined inside a Worker's global scope — `worker_global_shim` hand-installs `self`/`postMessage`/`onmessage`/`console`/`importScripts`…",
+   "component": "js (`crates/js/src/worker.rs:227-352` — `worker_global_shim`; `worker.rs:719-752` — `install_worker_globals_v8`)",
    "date": null,
    "debtor": false
   }
