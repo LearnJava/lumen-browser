@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-05",
  "counts": {
-  "open": 302,
+  "open": 303,
   "fixed": 321,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 623,
+ "total_bugs": 624,
  "phases": [
   {
    "id": "P0",
@@ -3466,9 +3466,9 @@
       {
        "id": "WPT-VENDOR-push-api",
        "title": "WPT: вендорить + прогнать категорию `push-api`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). Push-уведомления — нужен пуш-сервис"
+       "note": "Скоуп: 🚫 (вне скоупа). Push-уведомления — нужен пуш-сервис. DONE 2026-08-05: вендорена + прогнана целиком (`--all --root push-api --recursive`, ~2 мин 24 с, 5 id глоба — 4 реально исполнились) — **0/4 harness OK**. Все 4 исполнившихся id (`idlharness`/`permission`/`subscribe-with-faulty-applicationServerKey`/`supported-encodings`) упёрлись в TLS-гэп `UnknownIssuer`, тот же класс, что `presentation-api`/`pointerlock`/`proximity`. Пятый файл (`push-event.https.any.js`, `// META: global=window-module`) `run_report.py`'s глоб-подсчёт не запустил вовсе — известный класс расхождения глоба с манифестом при нестандартном `META: global=`. Живая проба `--mcp-live-port` (раз API реализован Phase 0-стабом, `crates/js/src/push_api.rs`, вопреки скоупу 🚫) нашла [BUG-657](bugs/BUG-657-OPEN.md): `ServiceWorkerRegistration` глобал никогда не создаётся в продакшн-инсталляции — реальная регистрация от `navigator.serviceWorker.register()` не имеет `.pushManager` вовсе, вопреки заявлению [BUG-549](bugs/BUG-549-FIXED.md) об обратном"
       },
       {
        "id": "WPT-VENDOR-quirks",
@@ -9039,6 +9039,13 @@
    "component": "js (`crates/js/src/presentation_api.rs:102-106` — `PresentationRequest` constructor)",
    "date": null,
    "debtor": false
+  },
+  "BUG-657": {
+   "status": "open",
+   "title": "`ServiceWorkerRegistration` global class is never defined in the production V8 install — only as a local test stub inside each module's own unit tests — so ever…",
+   "component": "js (`crates/js/src/dom.rs` — `_sw_make_registration`, ~line 4843) + all seven `ServiceWorkerRegistration.prototype`-attaching modules (`push_api.rs`, `background_sync.rs`, `periodic_sync.rs`, `background_fetch.rs`, `cookie_store.rs`, `content_index.rs`, `notifications_bindings.rs`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -9390,6 +9397,9 @@
   ],
   "js (`crates/js/src/dom.rs` — `_lumen_make_style`/`_lumen_serialize_style`)": [
    "BUG-473"
+  ],
+  "js (`crates/js/src/dom.rs` — `_sw_make_registration`, ~line 4843) + all seven `ServiceWorkerRegistration.prototype`-attaching modules (`push_api.rs`, `background_sync.rs`, `periodic_sync.rs`, `background_fetch.rs`, `cookie_store.rs`, `content_index.rs`, `notifications_bindings.rs`)": [
+   "BUG-657"
   ],
   "js (`crates/js/src/dom.rs` — `devicePixelRatio` никогда не проставляется на глобал вне `window_management.rs`)": [
    "BUG-515"
