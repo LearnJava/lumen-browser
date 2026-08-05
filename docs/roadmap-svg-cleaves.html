@@ -3159,9 +3159,9 @@
       {
        "id": "WPT-VENDOR-mediacapture-streams",
        "title": "WPT: вендорить + прогнать категорию `mediacapture-streams`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). медиазахват — нет конвейера"
+       "note": "Скоуп: 🚫 (вне скоупа, медиазахват — нет конвейера). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root mediacapture-streams --recursive`, ~18 мин, 58 id глоба — 57 отобрано wptrunner, 1 `crashtest` не поддерживается) — **2/57 harness OK, 0/3 сабтестов**. 53 `.https.` теста TIMEOUT на стандартном TLS-гэпе, 2 ERROR — переподтверждение BUG-380 (исполнитель не проверяет исход навигации и отдаёт результаты предыдущего теста). Оба harness-OK — не движковый дефект: `MediaDevices-SecureContext.html` требует несекьюрный контекст, а `127.0.0.1` по спеке Secure Contexts всегда потенциально доверенный (потолок тестовой инфраструктуры); `MediaStream-supported-by-permissions-policy.html` — `permissionsPolicy.features()` не содержит `camera`/`microphone`, ожидаемо для 🚫-категории без конвейера захвата. Живой грep (`crates/js/src/media_devices.rs`) подтвердил `getUserMedia`/`MediaStream`/`MediaStreamTrack` реализованы (Phase 1). Новых багов не заведено"
       },
       {
        "id": "WPT-VENDOR-mediasession",
