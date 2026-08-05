@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-05",
  "counts": {
-  "open": 296,
+  "open": 297,
   "fixed": 316,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 612,
+ "total_bugs": 613,
  "phases": [
   {
    "id": "P0",
@@ -3330,9 +3330,12 @@
       {
        "id": "WPT-VENDOR-payment-method-basic-card",
        "title": "WPT: вендорить + прогнать категорию `payment-method-basic-card`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). Payment Request API"
+       "note": "Скоуп: 🚫 (вне скоупа). Payment Request API. DONE 2026-08-05: вендорена + прогнана целиком (`--all --root payment-method-basic-card --recursive`, ~1 мин 21 с, 4 отобранных id из 6 вендоренных файлов — 2 `-manual` в имени раннер исключает) — **0/4 harness OK**. Все 4 TIMEOUT: 2 `.https.` на уже задокументированном TLS-гэпе `UnknownIssuer`, 2 оставшихся — тесты без `-manual` в имени файла, но фактически ручные (промисы навешаны только на `onclick`), не завершаются автоматически. `window.PaymentRequest` реально реализован (Phase 0 stub, `crates/js/src/payment_request.rs`) — первая живая проверка конструктора живой пробой (`--mcp-live-port`) нашла: конструктор не валидирует вход вовсе (пустой `methodData`, отрицательная/нечисловая сумма, некорректная валюта — все обязаны бросать по спеке, ни один не бросает). Заведён [BUG-646](bugs/BUG-646-OPEN.md)",
+       "bugs": [
+        "BUG-646"
+       ]
       },
       {
        "id": "WPT-VENDOR-payment-method-id",
@@ -8957,6 +8960,13 @@
    "status": "open",
    "title": "`window.PerformancePaintTiming` interface object doesn't exist at all — every `paint-timing` WPT test starts with `assert_implements(window.PerformancePaintTimi…",
    "component": "js (`crates/js/src/dom.rs` — `PerformanceObserver`/`_perf_entries` shim)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-646": {
+   "status": "open",
+   "title": "`new PaymentRequest(methodData, details)` performs zero input validation beyond `typeof === 'object'` — spec-mandated `TypeError`/`RangeError` throws (empty `me…",
+   "component": "js (`crates/js/src/payment_request.rs`)",
    "date": null,
    "debtor": false
   }
