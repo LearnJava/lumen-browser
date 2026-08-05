@@ -3381,9 +3381,9 @@
       {
        "id": "WPT-VENDOR-permissions-policy",
        "title": "WPT: вендорить + прогнать категорию `permissions-policy`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root permissions-policy --recursive --processes=4`, ~8 мин 53 с, 114 id) — **26/114 harness OK, 1/48 сабтестов**. Доминирующая причина отказа — TLS-гэп `UnknownIssuer` (~76 id) и невендоренные общие ресурсы (`/common/dispatcher/dispatcher.js`+`/common/utils.js` — 404, `token is not defined` на 17 `unload`-тестах). Исполнившиеся тесты реконфирмируют пять уже заведённых багов: BUG-361 (`document.permissionsPolicy.features()` всегда `[]`), BUG-358 (`document.location` не определён — `Cannot read properties of undefined (reading 'href')`), BUG-390 (`requestFullscreen()` не проверяет transient user activation), BUG-462/574 (`Node.prototype.contains` отсутствует), BUG-380 (переиспользование browsing context — 16 ERROR). Новых багов не заведено"
       },
       {
        "id": "WPT-VENDOR-permissions-request",
