@@ -1320,6 +1320,221 @@ fn slerp_normal(n0: [f32; 2], n1: [f32; 2], t: f32, half_w: f32, center: [f32; 2
     [center[0] + nx * half_w, center[1] + ny * half_w]
 }
 
+// ─── Coverage rasterisation of a triangle soup (BUG-247 / BUG-277 срез 12) ───
+
+/// One vertex of an antialiased coverage tessellation: a position in **device
+/// pixels** plus the fraction of the pixel the original shape covers there.
+///
+/// [`coverage_quads`] returns these in triples (one triangle per triple); the
+/// coverage is constant across a triple, so a backend multiplies the fill
+/// colour's alpha by it and draws the triangles exactly like a plain soup.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CoverageVertex {
+    /// Position in device pixels (the same space the input soup is given in).
+    pub pos: [f32; 2],
+    /// Fraction of the pixel covered by the shape, in `0.0..=1.0`.
+    pub cov: f32,
+}
+
+/// Sub-scanlines sampled per pixel row. 16 caps the vertical quantisation error
+/// of a near-horizontal edge at 1/32 of the colour range (≈8/255), i.e. below
+/// the graphic-test per-channel diff threshold of 16.
+const COVERAGE_SUBS: usize = 16;
+
+/// Upper bound on the bounding-box area (device px) [`coverage_quads`] will
+/// rasterise. Past it the per-row work stops being worth the AA and the caller
+/// gets the raw soup back at full coverage.
+const COVERAGE_MAX_AREA: u64 = 16 * 1024 * 1024;
+
+/// Converts a triangle soup into pixel-aligned quads carrying the soup's exact
+/// per-pixel coverage, so a GPU backend without multisampling still gets an
+/// antialiased edge (BUG-247: `sample_count: 1` on every wgpu pass means a
+/// boundary pixel is either the full fill colour or untouched background,
+/// while `cpu_raster`/femtovg/Edge all produce fractional coverage there).
+///
+/// `tris` must already be in **device pixels** (accumulated `PushTransform` and
+/// the device-pixel-ratio applied), because coverage is only meaningful against
+/// the raster grid the soup will actually be rasterised on.
+///
+/// Method: a scanline sweep over the soup's bounding box. Each pixel row is
+/// sampled at [`COVERAGE_SUBS`] sub-scanlines; a convex triangle meets a
+/// horizontal line in a single interval, so every (triangle, sub-scanline) pair
+/// contributes one span, accumulated with exact horizontal overlap — fractional
+/// at the two end pixels, a `+w`/`−w` delta pair over the fully covered middle
+/// (prefix-summed once per row, so a long span costs O(1) rather than O(len)).
+/// Runs of equal coverage collapse into one quad, so a solid interior costs one
+/// quad per row and only the boundary pays per pixel.
+///
+/// Coverage is summed across triangles and clamped to 1: [`tessellate_fill`]
+/// emits a non-overlapping tiling (sum = exact coverage), while
+/// [`tessellate_stroke_ex`] overlaps at joins and caps, where the clamp keeps
+/// the interior solid at the cost of a slight overestimate on the few boundary
+/// pixels a join spills across.
+#[must_use]
+pub fn coverage_quads(tris: &[[f32; 2]]) -> Vec<CoverageVertex> {
+    let ntri = tris.len() / 3;
+    if ntri == 0 {
+        return Vec::new();
+    }
+    let (mut minx, mut miny) = (f32::INFINITY, f32::INFINITY);
+    let (mut maxx, mut maxy) = (f32::NEG_INFINITY, f32::NEG_INFINITY);
+    for p in &tris[..ntri * 3] {
+        if !p[0].is_finite() || !p[1].is_finite() {
+            return raw_coverage(tris);
+        }
+        minx = minx.min(p[0]);
+        miny = miny.min(p[1]);
+        maxx = maxx.max(p[0]);
+        maxy = maxy.max(p[1]);
+    }
+    let x0 = minx.floor() as i64;
+    let y0 = miny.floor() as i64;
+    let w = (maxx.ceil() as i64 - x0).max(0) as u64;
+    let h = (maxy.ceil() as i64 - y0).max(0) as u64;
+    if w == 0 || h == 0 || w * h > COVERAGE_MAX_AREA {
+        return raw_coverage(tris);
+    }
+    let (w, h) = (w as usize, h as usize);
+    let (x0f, y0f) = (x0 as f32, y0 as f32);
+
+    // Triangles bucketed by the first pixel row they touch; the active list is
+    // extended row by row and pruned once a triangle's last row is behind us.
+    let mut starts: Vec<Vec<u32>> = vec![Vec::new(); h];
+    let mut tri_bot: Vec<f32> = Vec::with_capacity(ntri);
+    for i in 0..ntri {
+        let (a, b, c) = (tris[i * 3], tris[i * 3 + 1], tris[i * 3 + 2]);
+        let top = a[1].min(b[1]).min(c[1]);
+        let bot = a[1].max(b[1]).max(c[1]);
+        tri_bot.push(bot);
+        let r = ((top.floor() - y0f) as i64).clamp(0, h as i64 - 1) as usize;
+        starts[r].push(i as u32);
+    }
+
+    let mut out: Vec<CoverageVertex> = Vec::new();
+    let mut active: Vec<u32> = Vec::new();
+    let mut part = vec![0.0_f32; w];
+    let mut run = vec![0.0_f32; w + 1];
+    let mut cov = vec![0.0_f32; w];
+    let wgt = 1.0 / COVERAGE_SUBS as f32;
+
+    for (r, row_starts) in starts.iter_mut().enumerate() {
+        active.append(row_starts);
+        let row_top = y0f + r as f32;
+        active.retain(|&i| tri_bot[i as usize] > row_top);
+        if active.is_empty() {
+            continue;
+        }
+        part[..].fill(0.0);
+        run[..].fill(0.0);
+        for s in 0..COVERAGE_SUBS {
+            let ys = row_top + (s as f32 + 0.5) * wgt;
+            for &i in &active {
+                let i = i as usize;
+                if let Some((xa, xb)) = triangle_span(&tris[i * 3..i * 3 + 3], ys) {
+                    add_span(&mut part, &mut run, x0f, w, xa, xb, wgt);
+                }
+            }
+        }
+        let mut running = 0.0_f32;
+        for ((c, p), d) in cov.iter_mut().zip(part.iter()).zip(run.iter()) {
+            running += *d;
+            *c = (*p + running).clamp(0.0, 1.0);
+        }
+        emit_row_quads(&cov, x0f, row_top, &mut out);
+    }
+    out
+}
+
+/// Fallback for inputs [`coverage_quads`] declines to rasterise (empty,
+/// non-finite or an implausibly large bounding box): the original soup at full
+/// coverage, i.e. exactly the pre-BUG-247 aliased output.
+fn raw_coverage(tris: &[[f32; 2]]) -> Vec<CoverageVertex> {
+    tris.iter().map(|&pos| CoverageVertex { pos, cov: 1.0 }).collect()
+}
+
+/// X interval where the horizontal line `y = ys` crosses triangle `t`, or
+/// `None` when the line misses it. A triangle is convex, so the intersection is
+/// a single segment: collect the crossing X of every edge that spans `ys` and
+/// take the extremes.
+fn triangle_span(t: &[[f32; 2]], ys: f32) -> Option<(f32, f32)> {
+    let mut lo = f32::INFINITY;
+    let mut hi = f32::NEG_INFINITY;
+    for i in 0..3 {
+        let a = t[i];
+        let b = t[(i + 1) % 3];
+        let (top, bot) = if a[1] <= b[1] { (a, b) } else { (b, a) };
+        // Half-open in Y: a vertex shared by two edges is counted once.
+        if ys < top[1] || ys >= bot[1] {
+            continue;
+        }
+        let dy = bot[1] - top[1];
+        if dy <= 0.0 {
+            continue;
+        }
+        let x = top[0] + (ys - top[1]) / dy * (bot[0] - top[0]);
+        lo = lo.min(x);
+        hi = hi.max(x);
+    }
+    if hi > lo { Some((lo, hi)) } else { None }
+}
+
+/// Adds one sub-scanline span `[xa, xb)` (device px) weighted by `wgt` to the
+/// row accumulators: exact fractional overlap into `part` for the two end
+/// pixels, a delta pair into `run` for the fully covered middle.
+fn add_span(part: &mut [f32], run: &mut [f32], x0f: f32, w: usize, xa: f32, xb: f32, wgt: f32) {
+    let a = (xa - x0f).max(0.0);
+    let b = (xb - x0f).min(w as f32);
+    if b <= a {
+        return;
+    }
+    let ia = a.floor() as usize;
+    let ib = ((b.ceil() as usize).max(1) - 1).min(w - 1);
+    if ia >= w {
+        return;
+    }
+    if ia == ib {
+        part[ia] += (b - a) * wgt;
+        return;
+    }
+    part[ia] += ((ia + 1) as f32 - a) * wgt;
+    part[ib] += (b - ib as f32) * wgt;
+    if ib > ia + 1 {
+        run[ia + 1] += wgt;
+        run[ib] -= wgt;
+    }
+}
+
+/// Emits one pixel row of the coverage buffer as quads: consecutive pixels
+/// whose coverage rounds to the same 1/255 step share a single quad (two
+/// triangles), zero-coverage pixels are skipped entirely.
+fn emit_row_quads(cov: &[f32], x0f: f32, row_top: f32, out: &mut Vec<CoverageVertex>) {
+    let mut i = 0usize;
+    while i < cov.len() {
+        let q = (cov[i] * 255.0).round() as u16;
+        if q == 0 {
+            i += 1;
+            continue;
+        }
+        let mut j = i + 1;
+        while j < cov.len() && (cov[j] * 255.0).round() as u16 == q {
+            j += 1;
+        }
+        let (xa, xb) = (x0f + i as f32, x0f + j as f32);
+        let (ya, yb) = (row_top, row_top + 1.0);
+        let c = q as f32 / 255.0;
+        let v = |x: f32, y: f32| CoverageVertex { pos: [x, y], cov: c };
+        out.extend_from_slice(&[
+            v(xa, ya),
+            v(xb, ya),
+            v(xb, yb),
+            v(xa, ya),
+            v(xb, yb),
+            v(xa, yb),
+        ]);
+        i = j;
+    }
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1880,5 +2095,83 @@ mod tests {
         let eo = tessellate_fill_even_odd(&contours);
         assert!(covered_by(&eo, [50.0, 30.0]), "interior of a simple triangle is filled");
         assert!(!covered_by(&eo, [50.0, 90.0]), "point below the triangle is empty");
+    }
+
+    // ── Coverage rasterisation (BUG-247 / BUG-277 срез 12) ──────────────────
+
+    /// Two triangles tiling the axis-aligned rect `[x0,x1) × [y0,y1)`.
+    fn rect_soup(x0: f32, y0: f32, x1: f32, y1: f32) -> Vec<[f32; 2]> {
+        vec![
+            [x0, y0], [x1, y0], [x1, y1],
+            [x0, y0], [x1, y1], [x0, y1],
+        ]
+    }
+
+    /// Σ (площадь квада × покрытие) — должна сходиться к площади фигуры.
+    fn coverage_area(q: &[CoverageVertex]) -> f32 {
+        let mut area = 0.0;
+        for t in q.chunks_exact(6) {
+            let (x0, y0) = (t[0].pos[0], t[0].pos[1]);
+            let (x1, y1) = (t[2].pos[0], t[2].pos[1]);
+            area += (x1 - x0) * (y1 - y0) * t[0].cov;
+        }
+        area
+    }
+
+    #[test]
+    fn coverage_quads_empty_input() {
+        assert!(coverage_quads(&[]).is_empty());
+        assert!(coverage_quads(&[[0.0, 0.0], [1.0, 0.0]]).is_empty(), "неполный треугольник");
+    }
+
+    #[test]
+    fn coverage_quads_pixel_aligned_rect_is_opaque() {
+        let q = coverage_quads(&rect_soup(10.0, 20.0, 14.0, 23.0));
+        assert!(!q.is_empty());
+        assert!(
+            q.iter().all(|v| (v.cov - 1.0).abs() < 1e-6),
+            "прямоугольник по границам пикселей не должен давать дробного покрытия"
+        );
+        assert!((coverage_area(&q) - 12.0).abs() < 1e-3, "площадь 4×3");
+        // Один квад на строку: сплошная внутренность не платит по пикселю.
+        assert_eq!(q.len(), 3 * 6);
+    }
+
+    #[test]
+    fn coverage_quads_half_pixel_offset_gives_half_coverage() {
+        let q = coverage_quads(&rect_soup(10.5, 20.0, 13.5, 21.0));
+        let left = q
+            .chunks_exact(6)
+            .find(|t| (t[0].pos[0] - 10.0).abs() < 1e-6)
+            .expect("квад левого граничного пикселя");
+        assert!(
+            (left[0].cov - 0.5).abs() < 0.02,
+            "полупокрытый пиксель кромки: {}",
+            left[0].cov
+        );
+        assert!((coverage_area(&q) - 3.0).abs() < 1e-2, "площадь 3×1");
+    }
+
+    #[test]
+    fn coverage_quads_diagonal_area_matches_triangle() {
+        // Прямоугольный треугольник с катетами 20: площадь 200.
+        let q = coverage_quads(&[[0.0, 0.0], [20.0, 0.0], [0.0, 20.0]]);
+        let a = coverage_area(&q);
+        assert!((a - 200.0).abs() < 4.0, "площадь по покрытию {a}, ожидалось ≈200");
+        assert!(
+            q.chunks_exact(6).any(|t| t[0].cov > 0.05 && t[0].cov < 0.95),
+            "на диагонали обязаны быть дробные покрытия"
+        );
+    }
+
+    #[test]
+    fn coverage_quads_overlapping_soup_clamps_to_one() {
+        // Два наложенных прямоугольника (как перекрытие на стыке штриха):
+        // суммарное покрытие внутри не должно превысить 1.
+        let mut soup = rect_soup(0.0, 0.0, 4.0, 4.0);
+        soup.extend(rect_soup(2.0, 0.0, 6.0, 4.0));
+        let q = coverage_quads(&soup);
+        assert!(q.iter().all(|v| v.cov <= 1.0 + 1e-6));
+        assert!((coverage_area(&q) - 24.0).abs() < 1e-2, "объединение 6×4");
     }
 }
