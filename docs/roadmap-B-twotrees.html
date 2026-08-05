@@ -3059,9 +3059,9 @@
       {
        "id": "WPT-VENDOR-longtask-timing",
        "title": "WPT: вендорить + прогнать категорию `longtask-timing`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root longtask-timing --recursive`, ~1:04) — **15/21 harness OK, 1/23 сабтестов**. Long Tasks API целиком отсутствует (живой грep `crates/js/src/dom.rs` подтвердил: нет `PerformanceLongTaskTiming`) — большинство FAIL/ERROR это `assert_implements: Longtasks are not supported`. Единственный прошедший сабтест переподтверждает [BUG-354](bugs/BUG-354-OPEN.md) (`supportedEntryTypes` рекламирует нереализованный `'longtask'`). Остальное — невендоренные хелперы (`get_host_info.sub.js`, `WebIDLParser.js`/`idlharness.js`), тот же документированный разрыв, что у прочих категорий. Новых багов не заведено"
       },
       {
        "id": "WPT-VENDOR-magnetometer",
