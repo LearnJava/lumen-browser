@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-05",
  "counts": {
-  "open": 285,
+  "open": 286,
   "fixed": 315,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 600,
+ "total_bugs": 601,
  "phases": [
   {
    "id": "P0",
@@ -3115,9 +3115,12 @@
       {
        "id": "WPT-VENDOR-media-source",
        "title": "WPT: вендорить + прогнать категорию `media-source`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). медиа-конвейер (MSE)"
+       "note": "Скоуп: 🚫 (вне скоупа, MSE). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root media-source --recursive`, ~1:06) — **60/82 harness OK, 0/272 сабтестов**. MediaSource API целиком отсутствует (47 тестов, `ReferenceError: MediaSource is not defined`, новых багов не заведено). Новая находка на 13 тестах: живой `lumen.exe` падает V8-фаталом `Check failed: isolate_->IsOnCentralStack()` в `lumen_js::v8_runtime::from_v8`, воспроизведено детерминированно на `--processes=1` и `--processes=4` — [BUG-633](bugs/BUG-633-OPEN.md)",
+       "bugs": [
+        "BUG-633"
+       ]
       },
       {
        "id": "WPT-VENDOR-mediacapture-extensions",
@@ -8840,6 +8843,13 @@
    "status": "open",
    "title": "`scripts/scoped-test.sh` ложно краснеет на `-p lumen-network --lib`: `disk_cache_store_and_get_fresh` (`left: 2, right: 1`) и `disk_cache_no_store_not_persisted…",
    "component": "network (тестовый хелпер `crates/network/src/http_cache.rs::tmp_db_path`) — дефект целиком в тестах, продакшен-код не затронут",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-633": {
+   "status": "open",
+   "title": "Живой `lumen.exe` падает целиком (V8 `V8_Fatal`: `Check failed: isolate_->IsOnCentralStack()`, стек `Heap::CollectGarbage` ← `Object::GetOwnPropertyNames` ← рек…",
+   "component": "js (`crates/js/src/v8_runtime.rs::from_v8`)",
    "date": null,
    "debtor": false
   }
