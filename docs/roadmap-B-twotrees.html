@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-06",
  "counts": {
-  "open": 308,
+  "open": 309,
   "fixed": 329,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 637,
+ "total_bugs": 638,
  "phases": [
   {
    "id": "P0",
@@ -3660,9 +3660,12 @@
       {
        "id": "WPT-VENDOR-selection",
        "title": "WPT: вендорить + прогнать категорию `selection`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root selection --recursive`, ~5 мин 32 с, 100 файлов, 128 отобранных id) — **68/128 harness OK, 22/375 сабтестов**. Основной сигнал — реконфирмация уже открытых дефектов: [BUG-368](bugs/BUG-368-OPEN.md) (`innerHTML` — текстовая заглушка: `container.innerHTML = \"<svg>…\"`/`\"<details>…\"` не парсит разметку, `document.querySelector` не находит вставленные элементы, дальше `setBaseAndExtent(null,…)` не создаёт диапазон — «Selection.getRangeAt: no range», крупнейший кластер `anonymous/setBaseAndExtent-start-or-end-in-anonymous-shadow-container.html`); [BUG-384](bugs/BUG-384-OPEN.md) (именованный доступ `window.<id>` не реализован — `container is not defined` роняет весь top-level скрипт `bidi/modify.tentative.html` до регистрации тестов); [BUG-346](bugs/BUG-346-OPEN.md) (`..`-сегменты в `Url::resolve()` не схлопываются — `../../editing/include/editor-test-utils.js` уходит на сервер буквально и 404-ит, `EditorTestUtils is not defined` дальше по цепочке); [BUG-462](bugs/BUG-462-OPEN.md) (`Node.contains` отсутствует — `elementDocument.contains is not a function`, блокирует `test_driver.click()` в 28 сабтестах); [BUG-415](bugs/BUG-415-OPEN.md) (отсоединённый документ `createHTMLDocument()` без Node-методов/HTML-аксессоров — `foreignDoc.body` = `undefined`, `TypeError: Cannot read properties of undefined (reading 'appendChild')` в `common.js::setupRangeTests`, крупнейший ERROR-кластер — 15 файлов `addRange-*`/`extend-*`/`collapse-*`/`getRangeAt.html`/`isCollapsed.html`/`setBaseAndExtent.html` и др.). Живая проба (`--mcp-live-port`) нашла независимую находку — [BUG-671](bugs/BUG-671-OPEN.md): `window.Selection` (глобальный интерфейс-конструктор) отсутствует вовсе (`'Selection' in window === false`), при этом `getSelection()` работает и возвращает Selection-подобный объект с `constructor.name === \"Object\"` — `instanceof Selection` бросает `TypeError`. Блокирует sanity-check, повторённый почти в каждом файле категории (`getSelection.html` — 0/9 сабтестов). Один новый номер бага",
+       "bugs": [
+        "BUG-671"
+       ]
       },
       {
        "id": "WPT-VENDOR-serial",
@@ -9189,6 +9192,13 @@
    "status": "open",
    "title": "`AnimationEffect.getComputedTiming()` is missing entirely — only `getTiming()` (the *specified* timing dict) exists on `KeyframeEffect.prototype`; `getComputedT…",
    "component": "js (`crates/js/src/dom.rs:12449-12452` — Web Animations `WEB_API_SHIM`, `KeyframeEffect.prototype`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-671": {
+   "status": "open",
+   "title": "`window.Selection` interface constructor is missing entirely — not a broken getter, the property doesn't exist (`'Selection' in window === false`). `window.getS…",
+   "component": "js (`crates/js/src/dom.rs` — `Selection`/`getSelection()` shim)",
    "date": null,
    "debtor": false
   }
