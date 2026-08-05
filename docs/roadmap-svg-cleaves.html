@@ -3034,9 +3034,9 @@
       {
        "id": "WPT-VENDOR-long-animation-frame",
        "title": "WPT: вендорить + прогнать категорию `long-animation-frame`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root long-animation-frame --recursive`, ~4:03) — **18/40 harness OK, 2/93 сабтестов**. Long Animation Frame API целиком отсутствует (живой грep `crates/js/src/dom.rs` подтвердил: нет `PerformanceLongAnimationFrameTiming`, `long-animation-frame` не входит в `PerformanceObserver.supportedEntryTypes`) — большинство FAIL/TIMEOUT это `PerformanceObserver`, вечно ждущий недостижимую запись, тот же паттерн, что `layout-instability`/`largest-contentful-paint`. Один переподтверждённый баг: [BUG-462](bugs/BUG-462-OPEN.md)/[BUG-574](bugs/BUG-574-OPEN.md) (`Node.prototype.contains` отсутствует целиком, `elementDocument.contains is not a function`). Остальное — невендоренные хелперы (`get_host_info`/`/common/dummy.xml`), тот же документированный разрыв, что у прочих категорий. Новых багов не заведено"
       },
       {
        "id": "WPT-VENDOR-longtask-timing",
