@@ -40,6 +40,7 @@ use winit::window::Window;
 use crate::atlas::{AtlasKey, GlyphAtlas, GlyphEntry};
 use crate::display_list::{
     fit_image_quad, fit_image_rect, space_axis_geometry, BlendMode, CornerRadii, MaskMode,
+    ResolvedClipShape,
 };
 use crate::fingerprint::GpuFingerprint;
 use lumen_image::{resize_area_avg, resize_bilinear};
@@ -578,6 +579,137 @@ struct VOut {
     let d = sdf_rrect(in.world_pos - in.center, in.half_size, in.radii_x, in.radii_y);
     // Same sub-pixel AA ramp as the rounded-rect fill, so a clipped child edge
     // lands on the same coverage as the container's own painted contour.
+    let cov = 1.0 - smoothstep(-0.5, 0.5, d);
+    if cov <= 0.0 { discard; }
+    let c = textureSample(t_layer, s_layer, in.uv);
+    return vec4<f32>(c.rgb * cov, c.a * cov);
+}
+"#;
+
+/// Максимум вершин полигональной формы `clip-path`, которую wgpu клиппит
+/// точно. Форма едет в uniform-буфер как `array<vec4<f32>, 32>` (две точки на
+/// vec4), фрагментный шейдер обходит рёбра циклом. Всё, что длиннее (сильно
+/// флэттеный `path()`), падает на исторический bbox-клип — лучше грубая
+/// коробка, чем 200-итерационный цикл на каждый пиксель.
+const PATH_CLIP_MAX_VERTS: usize = 64;
+
+/// CSS Masking L1 §3 — composite-пасс формы `clip-path`.
+/// Композитит offscreen-уровень на родителя через покрытие произвольной формы:
+/// scissor умеет только коробку, поэтому круг/эллипс/полигон вырезаются здесь
+/// (`PushClipPath` → уровень, `PopClip` → этот пасс) — тем же механизмом, что
+/// `RRECT_CLIP_SHADER_SRC` вырезает скруглённые углы (BUG-277 срез 5).
+///
+/// Форма приходит уже в экранных CSS px (накопленный `PushTransform` применён
+/// на CPU): у полигона — трансформированные вершины, у круга/эллипса — центр
+/// и обратная матрица `inv_m` отображения «единичный круг → фигура», поэтому
+/// поворот/скос/неравномерный масштаб поддержаны точно, а не через AABB.
+///
+/// Bindings: 0 = текстура уровня, 1 = sampler, 2 = uniform формы.
+/// Blend: PREMULTIPLIED_ALPHA_BLENDING — содержимое уровня премультиплировано,
+/// шейдер домножает rgb и a на одно покрытие (инвариант сохраняется).
+const PATH_CLIP_SHADER_SRC: &str = r#"
+@group(0) @binding(0) var t_layer: texture_2d<f32>;
+@group(0) @binding(1) var s_layer: sampler;
+
+struct ShapeUniform {
+    /// x = вид формы (0 = эллипс/круг, 1 = полигон),
+    /// y = число вершин полигона, z = 1 при even-odd fill rule.
+    header:  vec4<u32>,
+    /// xy = центр эллипса в экранных CSS px.
+    center:  vec4<f32>,
+    /// Обратная матрица (row-major) отображения единичного круга в фигуру.
+    inv_m:   vec4<f32>,
+    /// Вершины полигона в экранных CSS px, по две точки на vec4.
+    verts:   array<vec4<f32>, 32>,
+};
+@group(0) @binding(2) var<uniform> u: ShapeUniform;
+
+struct VIn {
+    @location(0) pos:       vec2<f32>,
+    @location(1) uv:        vec2<f32>,
+    @location(2) world_pos: vec2<f32>,
+};
+struct VOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) uv:        vec2<f32>,
+    @location(1) world_pos: vec2<f32>,
+};
+
+@vertex fn vs_main(in: VIn) -> VOut {
+    var o: VOut;
+    o.clip      = vec4<f32>(in.pos, 0.0, 1.0);
+    o.uv        = in.uv;
+    o.world_pos = in.world_pos;
+    return o;
+}
+
+/// i-я вершина полигона (две точки упакованы в один vec4).
+fn poly_vert(i: u32) -> vec2<f32> {
+    let v = u.verts[i >> 1u];
+    if (i & 1u) == 0u { return v.xy; }
+    return v.zw;
+}
+
+/// Знаковое расстояние (CSS px, отрицательное внутри) до контура полигона.
+/// Модуль — минимум по расстояниям до отрезков; знак — правило заливки
+/// (CSS Shapes L1 §3/§4: nonzero по умолчанию, even-odd по `header.z`).
+fn sdf_polygon(p: vec2<f32>, n: u32, even_odd: bool) -> f32 {
+    var d2 = 1e20;
+    var wind: i32 = 0;
+    var crossings: u32 = 0u;
+    for (var i: u32 = 0u; i < n; i = i + 1u) {
+        var j = i + 1u;
+        if j == n { j = 0u; }
+        let a = poly_vert(i);
+        let b = poly_vert(j);
+        let e = b - a;
+        let w = p - a;
+        let t = clamp(dot(w, e) / max(dot(e, e), 1e-12), 0.0, 1.0);
+        let dv = w - e * t;
+        d2 = min(d2, dot(dv, dv));
+        // Winding number (Sunday): знак `cr` сам говорит, с какой стороны от
+        // ребра лежит точка, поэтому сравнение по x тут не нужно.
+        let cr = e.x * w.y - e.y * w.x;
+        if a.y <= p.y {
+            if b.y > p.y && cr > 0.0 { wind = wind + 1; }
+        } else {
+            if b.y <= p.y && cr < 0.0 { wind = wind - 1; }
+        }
+        // Even-odd — честный луч вправо: считаются ТОЛЬКО пересечения правее
+        // точки, иначе чётность собирает обе стороны и всё оказывается снаружи.
+        if (a.y > p.y) != (b.y > p.y) {
+            let xi = a.x + (p.y - a.y) / e.y * e.x;
+            if xi > p.x { crossings = crossings + 1u; }
+        }
+    }
+    var inside = wind != 0;
+    if even_odd { inside = (crossings & 1u) == 1u; }
+    let d = sqrt(d2);
+    if inside { return -d; }
+    return d;
+}
+
+/// Знаковое расстояние (CSS px) до контура эллипса, заданного центром и
+/// обратной матрицей `inv_m`. `length(inv_m·p)` = 1 на контуре; деление на
+/// длину градиента переводит эту безразмерную величину в пиксели (первый
+/// порядок — точен на самом контуре, где и лежит AA-кромка).
+fn sdf_mapped_circle(p: vec2<f32>, inv_m: vec4<f32>) -> f32 {
+    let q = vec2<f32>(inv_m.x * p.x + inv_m.y * p.y, inv_m.z * p.x + inv_m.w * p.y);
+    let lq = length(q);
+    let qn = q / max(lq, 1e-6);
+    let g = vec2<f32>(inv_m.x * qn.x + inv_m.z * qn.y, inv_m.y * qn.x + inv_m.w * qn.y);
+    return (lq - 1.0) / max(length(g), 1e-6);
+}
+
+@fragment fn fs_main(in: VOut) -> @location(0) vec4<f32> {
+    var d: f32;
+    if u.header.x == 1u {
+        d = sdf_polygon(in.world_pos, u.header.y, u.header.z == 1u);
+    } else {
+        d = sdf_mapped_circle(in.world_pos - u.center.xy, u.inv_m);
+    }
+    // Та же суб-пиксельная AA-рампа, что у скруглённого клипа и заливок —
+    // кромка обрезанного ребёнка садится на кромку собственного контура.
     let cov = 1.0 - smoothstep(-0.5, 0.5, d);
     if cov <= 0.0 { discard; }
     let c = textureSample(t_layer, s_layer, in.uv);
@@ -1286,6 +1418,36 @@ struct RRectClipVertex {
     radii_y: [f32; 4],
 }
 
+/// Вершина composite-пасса формы `clip-path` (`PATH_CLIP_SHADER_SRC`).
+/// Как `CompositeVertex` (NDC + UV), плюс экранная позиция в CSS px — форма
+/// живёт в uniform-буфере, поэтому per-vertex параметров контура тут нет.
+/// Layout: pos(8) + uv(8) + world_pos(8) = 24 bytes.
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct PathClipVertex {
+    /// Position in NDC (clip-space), same convention as `CompositeVertex::pos`.
+    pos: [f32; 2],
+    /// UV into the offscreen level texture.
+    uv: [f32; 2],
+    /// Screen position in CSS pixels — the space the shape lives in.
+    world_pos: [f32; 2],
+}
+
+/// CPU-зеркало WGSL `ShapeUniform` из [`PATH_CLIP_SHADER_SRC`].
+/// Все координаты — экранные CSS px (накопленный transform уже применён).
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct PathClipParamsCpu {
+    /// [вид формы (0 = эллипс, 1 = полигон), число вершин, even-odd, pad].
+    header: [u32; 4],
+    /// [cx, cy, pad, pad] — центр эллипса.
+    center: [f32; 4],
+    /// Обратная матрица (row-major) отображения «единичный круг → эллипс».
+    inv_m: [f32; 4],
+    /// Вершины полигона, по две точки на `vec4`.
+    verts: [[f32; 4]; PATH_CLIP_MAX_VERTS / 2],
+}
+
 /// CSS Masking L1 §4 — вершина mask-composite пайплайна.
 /// `pos` — pixel-space (convert to NDC via viewport uniform).
 /// `uv_mask` — UV [0,1]×[0,1] в пределах одной плитки mask-изображения.
@@ -1899,6 +2061,13 @@ pub struct Renderer {
     /// Разделяет `composite_bgl` с обычным композитом: та же пара
     /// {текстура уровня, sampler}. BUG-406: компиляция ленивая.
     rrect_clip_pipeline: OnceCell<wgpu::RenderPipeline>,
+    /// CSS Masking L1 §3 — composite-пайплайн формы `clip-path`
+    /// (`PushClipPath` → offscreen-уровень, `PopClip` → этот пасс).
+    /// Свой BGL: к паре {текстура уровня, sampler} добавлен uniform формы.
+    /// BUG-406: компиляция ленивая.
+    path_clip_pipeline: OnceCell<wgpu::RenderPipeline>,
+    /// BGL пайплайна формы клипа: текстура(0) + sampler(1) + uniform формы(2).
+    path_clip_bgl: wgpu::BindGroupLayout,
     /// BUG-406: ленивая компиляция — `OnceCell` заполняется при первом
     /// использовании (`blend_pipeline()`), не при старте окна.
     blend_pipeline: OnceCell<wgpu::RenderPipeline>,
@@ -3065,6 +3234,39 @@ impl Renderer {
                 },
             ],
         });
+        // ── Path-clip BGL (CSS Masking L1 §3; пайплайн ленив, BUG-406) ────
+        // Как composite_bgl, плюс uniform с формой клипа (binding 2).
+        let path_clip_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("path-clip-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
         let layer_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("layer-sampler"),
             mag_filter: wgpu::FilterMode::Nearest,
@@ -3368,6 +3570,8 @@ impl Renderer {
             layer_cache: crate::layer_cache::LayerCache::new(),
             composite_pipeline: OnceCell::new(),
             rrect_clip_pipeline: OnceCell::new(),
+            path_clip_pipeline: OnceCell::new(),
+            path_clip_bgl,
             composite_bgl,
             blend_pipeline: OnceCell::new(),
             blend_bgl,
@@ -3727,6 +3931,62 @@ impl Renderer {
                         wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 32, shader_location: 4 },
                         wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 40, shader_location: 5 },
                         wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 56, shader_location: 6 },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: self.surface_format,
+                    // Как у composite: содержимое уровня премультиплировано,
+                    // шейдер домножает rgb и a на одно покрытие.
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        })
+    }
+
+    /// CSS Masking L1 §3 — пайплайн композита формы `clip-path`.
+    /// Тот же контракт, что у `build_rrect_clip_pipeline`, но контур приходит
+    /// не per-vertex, а uniform-ом: у полигона переменное число вершин.
+    fn build_path_clip_pipeline(&self) -> wgpu::RenderPipeline {
+        let shader = timed_shader(&self.device, wgpu::ShaderModuleDescriptor {
+            label: Some("path-clip-shader"),
+            source: wgpu::ShaderSource::Wgsl(PATH_CLIP_SHADER_SRC.into()),
+        });
+        let layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("path-clip-layout"),
+            bind_group_layouts: &[&self.path_clip_bgl],
+            push_constant_ranges: &[],
+        });
+        timed_pipeline(&self.device, &wgpu::RenderPipelineDescriptor {
+            label: Some("path-clip-pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<PathClipVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0,  shader_location: 0 },
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 8,  shader_location: 1 },
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 16, shader_location: 2 },
                     ],
                 }],
                 compilation_options: Default::default(),
@@ -4200,6 +4460,11 @@ impl Renderer {
     /// Ленивый доступ к пайплайну скруглённого клипа (BUG-406, BUG-277 срез 5).
     fn rrect_clip_pipeline(&self) -> &wgpu::RenderPipeline {
         self.rrect_clip_pipeline.get_or_init(|| self.build_rrect_clip_pipeline())
+    }
+
+    /// Ленивый доступ к пайплайну композита формы `clip-path` (BUG-406).
+    fn path_clip_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.path_clip_pipeline.get_or_init(|| self.build_path_clip_pipeline())
     }
     /// Ленивый доступ к `blend`-пайплайну (BUG-406): компилирует его при
     /// первом обращении и кэширует на весь срок жизни рендера.
@@ -6183,6 +6448,16 @@ impl Renderer {
             from_level: usize,
             v_start: u32,
         }
+        // CSS Masking L1 §3 — composite-план формы `clip-path`.
+        // `from_level` = offscreen-уровень с обрезаемым поддеревом;
+        // `v_start` = первая из 6 вершин в `path_clip_vertices`;
+        // `params` = форма в экранных CSS px (свой uniform на каждый пасс —
+        // общий буфер дал бы тот же write_buffer-hazard, что в срезе 7).
+        struct PathClipCompositePlan {
+            from_level: usize,
+            v_start: u32,
+            params: Box<PathClipParamsCpu>,
+        }
         enum RenderPlanItem {
             Draw(DrawBatchPlan),
             Composite(CompositePlan),
@@ -6191,6 +6466,7 @@ impl Renderer {
             BackdropFilterComposite(BackdropFilterCompositePlan),
             MaskLayerComposite(MaskLayerCompositePlan),
             RRectClipComposite(RRectClipCompositePlan),
+            PathClipComposite(PathClipCompositePlan),
         }
 
         let mut render_plan: Vec<RenderPlanItem> = Vec::new();
@@ -6224,12 +6500,27 @@ impl Renderer {
             radii: CornerRadii,
             plan_mark: usize,
         }
+        // CSS Masking L1 §3 — параметры формы `clip-path`, открывшей
+        // offscreen-уровень: форма в экранных CSS px, её bbox (геометрия
+        // квада) + метка в `render_plan`.
+        struct PathClipLevel {
+            rect: Rect,
+            params: PathClipParamsCpu,
+            plan_mark: usize,
+        }
+        // Какой контур открыл уровень — общий `PopClip` разбирает по варианту.
+        enum ClipLevel {
+            RRect(RRectClipLevel),
+            Path(PathClipLevel),
+        }
         // По записи на КАЖДЫЙ push клипа (`PushClipRect`/`PushClipRoundedRect`/
         // `PushClipPath`), чтобы `PopClip` знал, открывал ли его парный push
         // уровень. `None` — обычный scissor-клип, как раньше.
         // Инвариант: стек двигается ровно теми же командами, что и `clip_stack`,
         // за вычетом `PushScrollLayer`/`PopScrollLayer` (у них своя пара).
-        let mut clip_level_stack: Vec<Option<RRectClipLevel>> = Vec::new();
+        let mut clip_level_stack: Vec<Option<ClipLevel>> = Vec::new();
+        // Накопленные вершины composite-пассов формы клипа.
+        let mut path_clip_vertices: Vec<PathClipVertex> = Vec::new();
         // Stack for PushMaskLayer: (rect, mode). Popped by PopMaskLayer.
         let mut mask_layer_stack: Vec<(Rect, MaskMode)> = Vec::new();
 
@@ -6995,19 +7286,26 @@ impl Renderer {
                                 level_bounds.push(LevelBounds::Empty);
                             }
                             level_bounds[current_level] = LevelBounds::Empty;
-                            clip_level_stack.push(Some(RRectClipLevel {
+                            clip_level_stack.push(Some(ClipLevel::RRect(RRectClipLevel {
                                 rect: in_screen,
                                 radii,
                                 plan_mark,
-                            }));
+                            })));
                         }
                         _ => clip_level_stack.push(None),
                     }
                 }
-                // BUG-140: wgpu-fallback клиппит shape-клип bounding box-ом
-                // (scissor не умеет произвольные формы; точная форма — в
-                // femtovg/cpu_raster путях). Push обязателен для баланса
-                // пар с общим PopClip.
+                // CSS Masking L1 §3 — `clip-path` произвольной формой:
+                // bbox по-прежнему идёт в scissor (дешёвое отсечение), но
+                // круг/эллипс/полигон им не вырезать, поэтому поддерево
+                // рисуется в offscreen-уровень, а `PopClip` композитит его
+                // через покрытие точной формы (тот же механизм, что у
+                // скруглённого клипа, BUG-277 срез 5).
+                //
+                // Фолбэк на прежний bbox-клип (BUG-140, уровень НЕ
+                // открывается) — когда `path_clip_params` возвращает `None`:
+                // вырожденная форма, вершин больше `PATH_CLIP_MAX_VERTS` или
+                // не-2D-аффинный трансформ.
                 DisplayCommand::PushClipPath { shape } => {
                     let scrolled = translate_rect(shape.bounding_rect(), dx, dy);
                     let in_screen = apply_transform_to_clip(scrolled, transform_stack.last());
@@ -7016,13 +7314,41 @@ impl Renderer {
                         None => in_screen,
                     };
                     clip_stack.push(new);
-                    clip_level_stack.push(None);
+                    // Форма приходит в page px (до transform элемента), как и
+                    // её bbox — сдвигаем её тем же scroll-смещением.
+                    let shape_scrolled = translate_clip_shape(shape, dx, dy);
+                    match path_clip_params(&shape_scrolled, transform_stack.last()) {
+                        Some(params) => {
+                            flush_batch!();
+                            let plan_mark = render_plan.len();
+                            current_level += 1;
+                            while level_first.len() <= current_level {
+                                level_first.push(true);
+                            }
+                            level_first[current_level] = true;
+                            while level_bounds.len() <= current_level {
+                                level_bounds.push(LevelBounds::Empty);
+                            }
+                            level_bounds[current_level] = LevelBounds::Empty;
+                            clip_level_stack.push(Some(ClipLevel::Path(PathClipLevel {
+                                rect: in_screen,
+                                params,
+                                plan_mark,
+                            })));
+                        }
+                        None => clip_level_stack.push(None),
+                    }
                 }
                 DisplayCommand::PopClip => {
                     clip_stack.pop();
-                    // Парный push открыл уровень под скруглённый клип —
-                    // закрыть его composite-пассом через SDF-контур.
+                    // Парный push открыл уровень под скруглённый клип или
+                    // форму `clip-path` — закрыть его composite-пассом через
+                    // покрытие контура.
                     if let Some(Some(clip)) = clip_level_stack.pop() {
+                        let (clip_rect, plan_mark) = match &clip {
+                            ClipLevel::RRect(c) => (c.rect, c.plan_mark),
+                            ClipLevel::Path(c) => (c.rect, c.plan_mark),
+                        };
                         flush_batch!();
                         // viewport-cull: пустой/за-экранный уровень невидим —
                         // выбросить из плана и контент, и композит (как в
@@ -7046,21 +7372,41 @@ impl Renderer {
                             LevelBounds::Unbounded => false,
                         };
                         if invisible {
-                            render_plan.truncate(clip.plan_mark);
+                            render_plan.truncate(plan_mark);
                             current_level -= 1;
                             continue;
                         }
-                        let v_start = rrect_clip_vertices.len() as u32;
-                        push_rrect_clip_quad(
-                            &mut rrect_clip_vertices,
-                            clip.rect,
-                            clip.radii,
-                            viewport_css_w,
-                            viewport_css_h,
-                        );
-                        render_plan.push(RenderPlanItem::RRectClipComposite(
-                            RRectClipCompositePlan { from_level: current_level, v_start },
-                        ));
+                        match clip {
+                            ClipLevel::RRect(c) => {
+                                let v_start = rrect_clip_vertices.len() as u32;
+                                push_rrect_clip_quad(
+                                    &mut rrect_clip_vertices,
+                                    c.rect,
+                                    c.radii,
+                                    viewport_css_w,
+                                    viewport_css_h,
+                                );
+                                render_plan.push(RenderPlanItem::RRectClipComposite(
+                                    RRectClipCompositePlan { from_level: current_level, v_start },
+                                ));
+                            }
+                            ClipLevel::Path(c) => {
+                                let v_start = path_clip_vertices.len() as u32;
+                                push_path_clip_quad(
+                                    &mut path_clip_vertices,
+                                    c.rect,
+                                    viewport_css_w,
+                                    viewport_css_h,
+                                );
+                                render_plan.push(RenderPlanItem::PathClipComposite(
+                                    PathClipCompositePlan {
+                                        from_level: current_level,
+                                        v_start,
+                                        params: Box::new(c.params),
+                                    },
+                                ));
+                            }
+                        }
                         let child = level_bounds
                             .get(current_level)
                             .copied()
@@ -7074,10 +7420,10 @@ impl Renderer {
                             match child {
                                 LevelBounds::Empty => {}
                                 LevelBounds::Rect { x0, y0, x1, y1 } => lb.add_rect(
-                                    x0.max(clip.rect.x),
-                                    y0.max(clip.rect.y),
-                                    x1.min(clip.rect.x + clip.rect.width),
-                                    y1.min(clip.rect.y + clip.rect.height),
+                                    x0.max(clip_rect.x),
+                                    y0.max(clip_rect.y),
+                                    x1.min(clip_rect.x + clip_rect.width),
+                                    y1.min(clip_rect.y + clip_rect.height),
                                 ),
                                 LevelBounds::Unbounded => *lb = LevelBounds::Unbounded,
                             }
@@ -8403,6 +8749,18 @@ impl Renderer {
             self.queue.write_buffer(&buf, 0, as_bytes(&rrect_clip_vertices));
             Some(buf)
         };
+        let path_clip_vbuf = if path_clip_vertices.is_empty() {
+            None
+        } else {
+            let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("path-clip-vbuf"),
+                size: std::mem::size_of_val(path_clip_vertices.as_slice()) as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.queue.write_buffer(&buf, 0, as_bytes(&path_clip_vertices));
+            Some(buf)
+        };
         let grad_vbuf = if grad_vertices.is_empty() {
             None
         } else {
@@ -8461,6 +8819,7 @@ impl Renderer {
             RenderPlanItem::BackdropFilterComposite(c) => m.max(c.from_level),
             RenderPlanItem::MaskLayerComposite(c) => m.max(c.from_level),
             RenderPlanItem::RRectClipComposite(c) => m.max(c.from_level),
+            RenderPlanItem::PathClipComposite(c) => m.max(c.from_level),
         });
         if max_level > 0 {
             self.ensure_layer_textures(max_level, surface_w, surface_h);
@@ -8685,7 +9044,10 @@ impl Renderer {
                 RenderPlanItem::FilterComposite(_) => 3,
                 RenderPlanItem::BackdropFilterComposite(_) => 4,
                 RenderPlanItem::MaskLayerComposite(_) => 5,
+                // Оба клип-композита делят слот статистики: пасс один и тот
+                // же по смыслу (уровень → родитель через покрытие контура).
                 RenderPlanItem::RRectClipComposite(_) => 6,
+                RenderPlanItem::PathClipComposite(_) => 6,
             };
             match item {
                 RenderPlanItem::Draw(batch) => {
@@ -8908,6 +9270,73 @@ impl Renderer {
                     });
                     pass.set_pipeline(self.rrect_clip_pipeline());
                     pass.set_bind_group(0, src_bg, &[]);
+                    pass.set_vertex_buffer(0, vb.slice(..));
+                    pass.draw(plan.v_start..plan.v_start + 6, 0..1);
+                }
+                // CSS Masking L1 §3 — композит формы `clip-path`: тот же
+                // пасс, что у скруглённого клипа, но контур приходит своим
+                // uniform-буфером на КАЖДЫЙ пасс (общий буфер повторил бы
+                // write_buffer-hazard среза 7: все записи ложатся до submit).
+                RenderPlanItem::PathClipComposite(plan) => {
+                    let Some(vb) = &path_clip_vbuf else { continue };
+                    if plan.from_level == 0 { continue; }
+                    let target_view = if plan.from_level == 1 {
+                        &frame_view
+                    } else {
+                        &self.layer_textures[plan.from_level - 2].view
+                    };
+                    let shape_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("path-clip-shape-ubuf"),
+                        size: std::mem::size_of::<PathClipParamsCpu>() as u64,
+                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    });
+                    // SAFETY: PathClipParamsCpu is #[repr(C)] POD.
+                    self.queue.write_buffer(
+                        &shape_buf,
+                        0,
+                        as_bytes(std::slice::from_ref(plan.params.as_ref())),
+                    );
+                    let src_view = &self.layer_textures[plan.from_level - 1].view;
+                    let shape_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("path-clip-bg"),
+                        layout: &self.path_clip_bgl,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: wgpu::BindingResource::TextureView(src_view),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::Sampler(&self.layer_sampler),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 2,
+                                resource: shape_buf.as_entire_binding(),
+                            },
+                        ],
+                    });
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("path-clip-composite-pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: target_view,
+                            resolve_target: None,
+                            depth_slice: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Load,
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                            view: dv,
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                            stencil_ops: None,
+                        }),
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+                    pass.set_pipeline(self.path_clip_pipeline());
+                    pass.set_bind_group(0, &shape_bg, &[]);
                     pass.set_vertex_buffer(0, vb.slice(..));
                     pass.draw(plan.v_start..plan.v_start + 6, 0..1);
                 }
@@ -10352,6 +10781,119 @@ fn push_rrect_clip_quad(
         v(x0, y0), v(x1, y0), v(x1, y1),
         v(x0, y0), v(x1, y1), v(x0, y1),
     ]);
+}
+
+/// Emits 6 [`PathClipVertex`] (two triangles) for the clip-shape composite quad.
+/// The quad is the shape's screen-space bounding box; the exact contour is
+/// carved per-fragment from the uniform (`PATH_CLIP_SHADER_SRC`).
+fn push_path_clip_quad(out: &mut Vec<PathClipVertex>, rect: Rect, vw: f32, vh: f32) {
+    let x0 = rect.x;
+    let y0 = rect.y;
+    let x1 = rect.x + rect.width;
+    let y1 = rect.y + rect.height;
+    let v = |px: f32, py: f32| PathClipVertex {
+        pos: [px / vw * 2.0 - 1.0, 1.0 - py / vh * 2.0],
+        uv: [px / vw, py / vh],
+        world_pos: [px, py],
+    };
+    out.extend_from_slice(&[
+        v(x0, y0), v(x1, y0), v(x1, y1),
+        v(x0, y0), v(x1, y1), v(x0, y1),
+    ]);
+}
+
+/// Сдвигает форму клипа на scroll-смещение слоя (page px), как
+/// `translate_rect` делает с прямоугольниками.
+fn translate_clip_shape(shape: &ResolvedClipShape, dx: f32, dy: f32) -> ResolvedClipShape {
+    match shape {
+        ResolvedClipShape::Circle { cx, cy, r } => {
+            ResolvedClipShape::Circle { cx: cx + dx, cy: cy + dy, r: *r }
+        }
+        ResolvedClipShape::Ellipse { cx, cy, rx, ry } => {
+            ResolvedClipShape::Ellipse { cx: cx + dx, cy: cy + dy, rx: *rx, ry: *ry }
+        }
+        ResolvedClipShape::Polygon { verts, even_odd } => ResolvedClipShape::Polygon {
+            verts: verts.iter().map(|(x, y)| (x + dx, y + dy)).collect(),
+            even_odd: *even_odd,
+        },
+    }
+}
+
+/// Переводит форму `clip-path` (page px, до transform элемента) в параметры
+/// шейдера в экранных CSS px под накопленным трансформом `m`.
+///
+/// Полигон трансформируется по вершинам — аффинный образ полигона это полигон,
+/// поэтому поворот/скос/масштаб точны. Круг/эллипс образуют аффинно-отображённый
+/// единичный круг: `screen = M·u + c`, где `M = A·diag(rx, ry)`, а шейдеру
+/// нужна `M⁻¹`.
+///
+/// `None` (→ исторический bbox-клип) когда: форма вырождена; вершин больше
+/// [`PATH_CLIP_MAX_VERTS`]; трансформ не 2D-аффинный (3D/перспектива — форма
+/// в экранном пространстве уже не эта); матрица вырождена (нулевая площадь).
+fn path_clip_params(shape: &ResolvedClipShape, m: Option<&Mat4>) -> Option<PathClipParamsCpu> {
+    // Column-major 2D affine: screen.x = a·x + c·y + e, screen.y = b·x + d·y + f.
+    let (a, b, c, d, e, f) = match m {
+        None => (1.0, 0.0, 0.0, 1.0, 0.0, 0.0),
+        Some(m) if m.is_2d_affine() => (m.0[0], m.0[1], m.0[4], m.0[5], m.0[12], m.0[13]),
+        Some(_) => return None,
+    };
+    let mut p = PathClipParamsCpu {
+        header: [0; 4],
+        center: [0.0; 4],
+        inv_m: [0.0; 4],
+        verts: [[0.0; 4]; PATH_CLIP_MAX_VERTS / 2],
+    };
+    match shape {
+        ResolvedClipShape::Circle { cx, cy, r } if *r > 0.0 => {
+            ellipse_params(&mut p, (a, b, c, d, e, f), (*cx, *cy), (*r, *r))?;
+        }
+        ResolvedClipShape::Ellipse { cx, cy, rx, ry } if *rx > 0.0 && *ry > 0.0 => {
+            ellipse_params(&mut p, (a, b, c, d, e, f), (*cx, *cy), (*rx, *ry))?;
+        }
+        ResolvedClipShape::Polygon { verts, even_odd } if verts.len() >= 3 => {
+            if verts.len() > PATH_CLIP_MAX_VERTS {
+                return None;
+            }
+            p.header = [1, verts.len() as u32, u32::from(*even_odd), 0];
+            for (i, (x, y)) in verts.iter().enumerate() {
+                let sx = a * x + c * y + e;
+                let sy = b * x + d * y + f;
+                let slot = &mut p.verts[i / 2];
+                if i % 2 == 0 {
+                    slot[0] = sx;
+                    slot[1] = sy;
+                } else {
+                    slot[2] = sx;
+                    slot[3] = sy;
+                }
+            }
+        }
+        // Вырожденная форма (нулевой радиус, <3 вершин) не клиппит ничего
+        // осмысленного — оставляем bbox-путь, как было до среза.
+        _ => return None,
+    }
+    Some(p)
+}
+
+/// Заполняет параметры аффинно-отображённого круга: центр в экранных px и
+/// `M⁻¹` для `M = A·diag(rx, ry)`. `None` — вырожденная матрица.
+fn ellipse_params(
+    p: &mut PathClipParamsCpu,
+    (a, b, c, d, e, f): (f32, f32, f32, f32, f32, f32),
+    (cx, cy): (f32, f32),
+    (rx, ry): (f32, f32),
+) -> Option<()> {
+    // M = A·diag(rx, ry) = [[a·rx, c·ry], [b·rx, d·ry]].
+    let (m00, m01, m10, m11) = (a * rx, c * ry, b * rx, d * ry);
+    let det = m00 * m11 - m01 * m10;
+    if det.abs() < 1e-9 {
+        return None;
+    }
+    let inv = 1.0 / det;
+    p.header = [0, 0, 0, 0];
+    p.center = [a * cx + c * cy + e, b * cx + d * cy + f, 0.0, 0.0];
+    p.inv_m = [m11 * inv, -m01 * inv, -m10 * inv, m00 * inv];
+    Some(())
 }
 
 /// Per-axis scale of an accumulated transform, or `None` if it rotates/skews.
@@ -12318,6 +12860,81 @@ mod tests {
             assert_eq!(v.center, [200.0, 100.0]);
             assert_eq!(v.half_size, [100.0, 50.0]);
         }
+    }
+
+    /// BUG-277 срез 8 — форма `clip-path` едет в шейдер в ЭКРАННЫХ px:
+    /// контент уровня уже трансформирован по вершинам, поэтому нетронутая
+    /// page-форма обрезала бы его по чужому месту (класс BUG-276/срез 6/7).
+    #[test]
+    fn path_clip_params_transforms_polygon_verts_to_screen() {
+        let shape = ResolvedClipShape::Polygon {
+            verts: vec![(0.0, 0.0), (10.0, 0.0), (10.0, 20.0)],
+            even_odd: true,
+        };
+        let m = Mat4::translation_2d(100.0, 50.0);
+        let p = path_clip_params(&shape, Some(&m)).expect("2D-аффинный трансформ");
+        assert_eq!(p.header[0], 1, "вид формы = полигон");
+        assert_eq!(p.header[1], 3, "три вершины");
+        assert_eq!(p.header[2], 1, "even-odd fill rule");
+        // Две точки на vec4: (v0.x, v0.y, v1.x, v1.y), (v2.x, v2.y, _, _).
+        assert_eq!(p.verts[0], [100.0, 50.0, 110.0, 50.0]);
+        assert_eq!(p.verts[1][0], 110.0);
+        assert_eq!(p.verts[1][1], 70.0);
+    }
+
+    /// Круг под поворотом остаётся кругом, но его центр едет вместе с боксом
+    /// (TEST-109 c0). Проверка через контракт шейдера: `length(inv_m·p) == 1`
+    /// ровно на контуре фигуры в экранном пространстве.
+    #[test]
+    fn path_clip_params_maps_rotated_circle_contour_to_unit_length() {
+        let shape = ResolvedClipShape::Circle { cx: 40.0, cy: 40.0, r: 20.0 };
+        let m = Mat4::rotate_2d(std::f32::consts::FRAC_PI_4);
+        let p = path_clip_params(&shape, Some(&m)).expect("аффинный трансформ");
+        assert_eq!(p.header[0], 0, "вид формы = эллипс");
+        let (ecx, ecy) = m.transform_point_2d(40.0, 40.0);
+        assert!((p.center[0] - ecx).abs() < 1e-4 && (p.center[1] - ecy).abs() < 1e-4);
+        // Восемь точек контура в page-пространстве → экран → unit-space.
+        for i in 0..8 {
+            let a = i as f32 * std::f32::consts::FRAC_PI_4;
+            let (sx, sy) = m.transform_point_2d(40.0 + 20.0 * a.cos(), 40.0 + 20.0 * a.sin());
+            let (dx, dy) = (sx - p.center[0], sy - p.center[1]);
+            let qx = p.inv_m[0] * dx + p.inv_m[1] * dy;
+            let qy = p.inv_m[2] * dx + p.inv_m[3] * dy;
+            let len = (qx * qx + qy * qy).sqrt();
+            assert!((len - 1.0).abs() < 1e-3, "точка контура дала length = {len}");
+        }
+    }
+
+    /// Неравномерный масштаб превращает круг в эллипс — шейдеру нужна полная
+    /// обратная матрица, а не пара радиусов (TEST-109 c1 масштабирует бокс).
+    #[test]
+    fn path_clip_params_handles_non_uniform_scale() {
+        let shape = ResolvedClipShape::Ellipse { cx: 0.0, cy: 0.0, rx: 10.0, ry: 5.0 };
+        let m = Mat4::scale_2d(2.0, 3.0);
+        let p = path_clip_params(&shape, Some(&m)).expect("аффинный трансформ");
+        // Полуоси в экране: 20 по X, 15 по Y → inv_m = diag(1/20, 1/15).
+        assert!((p.inv_m[0] - 0.05).abs() < 1e-6, "inv_m[0] = {}", p.inv_m[0]);
+        assert!((p.inv_m[3] - 1.0 / 15.0).abs() < 1e-6, "inv_m[3] = {}", p.inv_m[3]);
+        assert_eq!([p.inv_m[1], p.inv_m[2]], [0.0, 0.0]);
+    }
+
+    /// Фолбэк на исторический bbox-клип (BUG-140) обязан срабатывать там, где
+    /// точная форма не представима: 3D-трансформ, вырожденная фигура и
+    /// полигон длиннее `PATH_CLIP_MAX_VERTS` (иначе — цикл на каждый пиксель).
+    #[test]
+    fn path_clip_params_falls_back_on_unsupported_shapes() {
+        let circle = ResolvedClipShape::Circle { cx: 0.0, cy: 0.0, r: 10.0 };
+        let persp = Mat4::perspective(500.0).multiply(&Mat4::rotate_y(0.5));
+        assert!(path_clip_params(&circle, Some(&persp)).is_none(), "3D-трансформ");
+        let zero = ResolvedClipShape::Circle { cx: 0.0, cy: 0.0, r: 0.0 };
+        assert!(path_clip_params(&zero, None).is_none(), "нулевой радиус");
+        let two = ResolvedClipShape::Polygon { verts: vec![(0.0, 0.0), (1.0, 1.0)], even_odd: false };
+        assert!(path_clip_params(&two, None).is_none(), "меньше трёх вершин");
+        let long = ResolvedClipShape::Polygon {
+            verts: (0..PATH_CLIP_MAX_VERTS + 1).map(|i| (i as f32, 0.0)).collect(),
+            even_odd: false,
+        };
+        assert!(path_clip_params(&long, None).is_none(), "длиннее лимита uniform-а");
     }
 
     /// BUG-277 срез 5 — контур клипа обязан пройти тот же §5.5-клэмп, что и
