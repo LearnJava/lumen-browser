@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-05",
  "counts": {
-  "open": 297,
+  "open": 298,
   "fixed": 316,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 613,
+ "total_bugs": 614,
  "phases": [
   {
    "id": "P0",
@@ -3322,23 +3322,26 @@
       {
        "id": "WPT-VENDOR-payment-method-id",
        "title": "WPT: вендорить + прогнать категорию `payment-method-id`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). Payment Request API"
+       "note": "Скоуп: 🚫 (вне скоупа). Payment Request API. DONE 2026-08-05: вендорена + прогнана целиком (`--all --root payment-method-id --recursive`, ~36 с, 1 id) — **0/1 harness OK**. Единственный `.https.sub.html`-тест TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`, не исполнился. Тест проверяет валидацию PMI-строки в конструкторе `PaymentRequest` — живая проба (`--mcp-live-port`, 6 кейсов) подтвердила: конструктор не бросает ни на одном синтаксически невалидном PMI, тот же дефект, что уже заведён [BUG-646](bugs/BUG-646-OPEN.md) (`supportedMethods` не читается вовсе). Новый баг не заведён"
       },
       {
        "id": "WPT-VENDOR-payment-request",
        "title": "WPT: вендорить + прогнать категорию `payment-request`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). Payment Request API"
+       "note": "Скоуп: 🚫 (вне скоупа). Payment Request API. DONE 2026-08-05: вендорена + прогнана целиком (`--all --root payment-request --recursive --processes=4`, ~3 мин 25 с, 32 id) — **2/32 harness OK, 0/2 сабтестов**. 30/32 TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`. Два исполнившихся не-`.https.` теста реконфирмируют уже заведённые баги: `payment-request-insecure.http.html` — [BUG-399](bugs/BUG-399-OPEN.md) (`window.isSecureContext` захардкожен `true`); `PaymentRequestUpdateEvent/constructor.http.html` — [BUG-637](bugs/BUG-637-OPEN.md) (глобальный `Window` не определён). Новых багов не заведено"
       },
       {
        "id": "WPT-VENDOR-performance-timeline",
        "title": "WPT: вендорить + прогнать категорию `performance-timeline`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root performance-timeline --recursive`, ~4.5 мин, 51 id) — **36/51 harness OK, 19/69 сабтестов** (заметно выше обычного для этого бэклога). Доминирующая находка: `PerformanceObserver.observe()` не валидирует форму аргумента (нет `TypeError`/`InvalidModificationError`) и доставка колбэков синхронна вместо очереди задач (`disconnect()`/`takeRecords()` расходятся со спекой) — заведён [BUG-648](bugs/BUG-648-OPEN.md). Реконфирмации: `PerformanceObserverEntryList` не определён (класс BUG-645/624/637/589), относительный URL не резолвится (BUG-347), detached-iframe без browsing context (BUG-480), `/common/dispatcher/dispatcher.js` не вендорен (известный гэп). Побочно: `window.stop is not a function` — не расследовано отдельно",
+       "bugs": [
+        "BUG-648"
+       ]
       },
       {
        "id": "WPT-VENDOR-periodic-background-sync",
@@ -8949,6 +8952,13 @@
    "status": "open",
    "title": "`new PaymentRequest(methodData, details)` performs zero input validation beyond `typeof === 'object'` — spec-mandated `TypeError`/`RangeError` throws (empty `me…",
    "component": "js (`crates/js/src/payment_request.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-648": {
+   "status": "open",
+   "title": "`observe()` performs no call-signature validation at all (no `TypeError` on `observe({})`/non-array `entryTypes`, no `InvalidModificationError` on mixing single…",
+   "component": "js (`crates/js/src/dom.rs:8258-8335` — `PerformanceObserver`)",
    "date": null,
    "debtor": false
   }
