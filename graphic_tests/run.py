@@ -399,8 +399,15 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
     #   Тот же фикс SDF скруглённого прямоугольника — box-shadow на скруглённых
     #   боксах (107) и `appearance: none`-контролы (111) состоят почти целиком
     #   из них.
-    '109': ('BUG-277', 7.53),   # clip-path × transform. Замер 2026-08-05 после среза 4 — 5.58% (улучшение 1.95 п.п. < 2 п.п. храповика, базовая строка не двигается)
-    '112': ('BUG-277', 7.41),
+    # '109' убран (BUG-277 срез 8, 2026-08-05): 7.53% → 0.22%, цель ≤0.5%
+    #   достигнута (замер после среза 4 давал 5.58%). Тот же дефект, что у «31»,
+    #   плюс проверка трансформов: форма уходит в шейдер уже в экранных px —
+    #   полигон по вершинам, круг/эллипс через `M⁻¹` аффинного отображения,
+    #   поэтому круг на повёрнутом боксе (c0) режет ровно там, где нарисован.
+    # '112' убран (BUG-277 срез 8, 2026-08-05): 7.41% → 0.03%, цель ≤0.5%
+    #   достигнута. Колонка nonzero пришла с общим фиксом формы, колонка
+    #   even-odd — с честным лучом вправо: чётность по ВСЕМ пересечениям строки
+    #   (без сравнения по x) считает внешним весь полигон.
     '116': ('BUG-277', 2.40),
     '140': ('BUG-277', 2.17),
     '141': ('BUG-277', 1.59),
@@ -440,7 +447,13 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
     #   (`clamped_to_box`) вместо по-осевого min → `border-radius: 999px` снова
     #   стадион, а не эллипс. femtovg-baseline был 0.96% (inherent edge-AA,
     #   класс BUG-124/247) — wgpu теперь ниже него.
-    '31': ('BUG-277', 3.99),    # clip-path: femtovg-baseline была 0.60% (inherent AA-fringe, класс BUG-176/247/173 — история сохранена). BUG-287/BUG-277 (2026-07-16): P1-wgpu-flip сделал wgpu дефолтным — wgpu клипует иначе, ратчет к живому wgpu-числу 3.99% (совпадает с BUG-277 рядом «31»)
+    # '31' убран (BUG-277 срез 8, 2026-08-05): 3.99% → 0.16%, цель ≤0.5% достигнута.
+    #   `PushClipPath` в wgpu клал в clip_stack ТОЛЬКО bounding box формы
+    #   (фолбэк BUG-140), поэтому circle()/ellipse()/polygon() не резали вовсе:
+    #   круги рисовались квадратами. Теперь push открывает offscreen-уровень,
+    #   а `PopClip` композитит его через покрытие точной формы — тот же
+    #   механизм, что срез 5 дал скруглённому клипу. femtovg-baseline была
+    #   0.60% (inherent AA-fringe, класс BUG-176/247/173 — история сохранена).
     '30': ('BUG-277', 1.44),    # Ратчет 10.24→1.44 (BUG-277 срез 7, 2026-08-05): три дефекта wgpu-исполнителя — (1) `PushBackdropFilter{bounds}` шли в регион и в квад блита без scroll-offset-а и накопленного `PushTransform`, поэтому и источник, и приёмник стояли на высоту хрома выше элемента; (2) `filter_pipeline` композитил премультиплированный offscreen-слой straight-alpha блендингом (alpha применялась дважды), а `FILTER_SHADER_SRC` применял фильтры к премультиплированному цвету; (3) H- и V-проходы блюра делили один `blur_uniform` — обе записи до `submit`, побеждает последняя, горизонтальной половины свёртки не было. Расхождение с детерминированным CPU-рендером 9.74%→0.31%, остаток вместе с ним ниже femtovg-класса. Историческая справка: femtovg-baseline была 4.27% (row-flip BUG-144 + backdrop colour-matrix BUG-085 + blur AA, класс BUG-176/247/128 — история сохранена). BUG-287/BUG-277 (2026-07-16): P1-wgpu-flip сделал wgpu дефолтным — wgpu рендерит filter/blur иначе, ратчет к живому wgpu-числу 10.24% (совпадает с BUG-277 рядом «30» день-в-день независимо измеренным)
          '34': ('BUG-128', 3.02),    # form controls: inline-block flow (контролы шли блоками-в-столбик → теперь в строку как Edge), radio-точка стала кругом, <option> не утекает текстом, color-swatch показывает value, value-текст инпутов рисуется, placeholder серым у пустых полей, checkbox белая галочка + radio белая точка-в-центре (BUG-187 закрыт 4.78% → 3.02%); остаток = чисто font-parity лейблов/value (Inter vs Edge UI-шрифт) + вертикальный сдвиг line-height → класс BUG-128
     '39': ('BUG-277', 2.96),   # BUG-277 срез 6 (2026-08-05): ратчет 12.66%→2.96% — wgpu нормировал радиальный градиент на полуширину бокса (farthest-side) вместо `radius_x/radius_y` из дисплей-листа, т.е. сжимал его в √2 раза на farthest-corner. Историческая справка: conic-gradient: femtovg-baseline была 0.48% (BUG-085 FIXED — история сохранена; '40' остаётся PASS, не тронут). BUG-287/BUG-277 (2026-07-16): P1-wgpu-flip сделал wgpu дефолтным, ратчет к живому wgpu-числу 12.66% (совпадает с BUG-277 рядом «39»)
@@ -472,7 +485,7 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
     '79': ('BUG-128', 6.76),    # text-underline-offset / text-decoration: геометрия линий корректна; остаток = font-parity (serif vs sans, Inter vs Edge) по всему тексту страницы (rule 3). BUGS.md давно помечал кандидатом в KNOWN_DEBTORS
     '110': ('BUG-214', 1.70),   # accent-color РЕАЛИЗОВАН (дрейф трекера, прогон 2026-06-23): emit_form_control_accents тинтит checkbox/radio/range/progress + юнит-тесты. Diff-картинка подтверждает: цвета-акценты применяются верно (cyan/magenta/green), остаток = расхождение нативной отрисовки form-виджетов (толщина трека слайдера, форма thumb, стиль progress-бара) vs UA-виджеты Edge — присущее кросс-браузерное расхождение (сам тест-HTML отмечает «native control sizes kept → divergence stays small»)
     '120': ('BUG-217', 3.26),   # prefers-contrast/prefers-reduced-data РЕАЛИЗОВАНЫ и спек-корректны (ревизия 2026-06-23): парсинг+матчинг в parser.rs (MediaFeature::PrefersContrast/PrefersReducedData, +unit-тесты media_query_prefers_*). Diff-картинка подтверждает: swatch .a (prefers-contrast: no-preference) зелёный в обоих движках; единственное расхождение = swatch .b (prefers-reduced-data: no-preference) — Lumen матчит (зелёный, как требует комментарий теста «correct engine → both green»), а Edge НЕ поддерживает prefers-reduced-data → query не матчится → .b остаётся красным. Lumen корректнее reference-браузера (тот же класс, что BUG-126/TEST-77 inset-area, BUG-199/TEST-71 @starting-style, BUG-237/TEST-122 line-height-step). Совпасть = отключить рабочую media-feature (запрещено rule 4)
-    '113': ('BUG-277', 6.10),   # shape-outside path(): femtovg-baseline была 1.41% (AA вдоль диагональной кромки + font-parity, класс BUG-215 — история сохранена). BUG-287/BUG-277 (2026-07-16): P1-wgpu-flip сделал wgpu дефолтным, ратчет к живому wgpu-числу 6.10% (совпадает с BUG-277 рядом «113»)
+    '113': ('BUG-277', 1.30),   # Ратчет 6.10→1.30 (BUG-277 срез 8, 2026-08-05: точная форма `clip-path` в wgpu — страница обрезает плавающие фигуры clip-path-ом). shape-outside path(): femtovg-baseline была 1.41% (AA вдоль диагональной кромки + font-parity, класс BUG-215 — история сохранена). BUG-287/BUG-277 (2026-07-16): P1-wgpu-flip сделал wgpu дефолтным, ратчет к живому wgpu-числу 6.10% (совпадает с BUG-277 рядом «113»)
     '126': ('BUG-126', 3.26),  # media inverted-colors: 3.26% FAIL на текущем main и на a7c348fa (до font-parity fix) — регрессия не от BUG-128; Edge headless ловит кадр без инверсии, Lumen рендерит инверсию через apply_inverted_colors — цветовое расхождение coverage area page, не дефект движка
     '97': ('BUG-128', 2.78),    # counter-set: порядок reset→increment→set спек-корректен (counters.rs apply_reset/apply_increment/apply_set + регресс-тест counter_set_test97_sibling_rows). Все пять значений счётчика совпадают с Edge: 5 (set на reset-0), 6 (inc), 0 (inc затем set — set перекрывает inc), 1 (inc от 0), 42 (set). Diff-картинка подтверждает: цветные боксы строк и границы совпадают пиксель-в-пиксель, весь остаток = font-parity ::before-меток counter(c) + текста строк (Inter sans vs Edge sans → разная ширина «inc+set» сдвигает глифы по X, ghosting), rule 3. Класс BUG-128
     '66': ('BUG-128', 1.07),    # ::selection: правила парсятся, но в тесте не выделяется текст — фича не видна без user-selection. Свотчи (sw1 #0078D4 / sw2 #e74c3c / sw3 #1a6ead) показывают цвета выделения и совпадают с Edge по цвету и X-позиции (41–220) пиксель-в-пиксель. Декомпозиция diff (BUG-195): 93% пикселей — текст (62% метки-лейблы «Default ::selection background…», 31% центрированный белый текст «Default»/«Highlight»/«Custom» внутри свотчей), Inter sans vs Edge sans (rule 3). Остаток = ~1–2px накопленный вертикальный line-height-дрейф верх/низ свотчей (Inter «normal» ≈1.2 vs Edge) → свотчи на 1–2px ниже к концу страницы. Реального дефекта движка нет. Класс BUG-128
