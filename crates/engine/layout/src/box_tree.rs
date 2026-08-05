@@ -11403,7 +11403,26 @@ fn lay_out_grid(
     // Resolve fr row heights (skip when row axis is subgridded — sizes are fixed).
     let total_row_gap = if n_rows > 1 { row_gap * (n_rows - 1) as f32 } else { 0.0 };
     if inherited_rows.is_none() {
-        let fixed_row_total: f32 = row_heights.iter().sum::<f32>() + total_row_gap;
+        // CSS Grid L1 §11.7 — the free space available to flexible (`fr`) tracks is
+        // the container's content size minus the base sizes of the OTHER tracks
+        // only. `row_heights[r]` for an `fr` track was seeded from its content's
+        // probed intrinsic height above (the fallback used when the container's
+        // block size is indefinite) — that probed value is a floor for the final
+        // `.max()` below, not a "fixed" size to subtract here. Counting it against
+        // `definite_content_height` double-dips: a two-row `1fr 1fr` grid with
+        // ~29px-tall cell content and a 220px definite height wrongly landed each
+        // row at (220 - 29*2) / 2 ≈ 83px instead of 220 / 2 = 110px, leaving a
+        // ~58px unaccounted gap at the bottom (found via TEST-62 BUG-277 triage).
+        let fixed_row_total: f32 = (0..n_rows)
+            .map(|r| {
+                if grid_track(r, eff_row_template, &s.grid_auto_rows).fr().is_some() {
+                    0.0
+                } else {
+                    row_heights[r as usize]
+                }
+            })
+            .sum::<f32>()
+            + total_row_gap;
         // If container has explicit height, distribute fr rows from it.
         let free_row = definite_content_height.map(|h| (h - fixed_row_total).max(0.0)).unwrap_or(0.0);
         let total_row_fr: f32 = (0..n_rows)
@@ -20570,6 +20589,64 @@ mod tests {
         assert!(
             !skipped.is_empty(),
             "the .cv item must be recomputed (not served from a y=0 probe) and skipped at its real position",
+        );
+    }
+
+    #[test]
+    fn grid_fr_rows_fill_definite_container_height_not_just_content_leftover() {
+        // BUG-277 срез 18: a `1fr 1fr` row template on a grid with a definite
+        // content-box height must split that FULL height evenly between the
+        // two rows — the fr tracks' own probed content height (used only as a
+        // fallback for *indefinite*-height containers) must not be subtracted
+        // from the available space before distributing it. Before the fix,
+        // each row got only `(height - 2*content_height) / 2`, leaving a gap
+        // of `2*content_height` unaccounted for at the container's bottom.
+        use lumen_dom::build_flat_tree;
+        use crate::counters::{build_counter_style_registry, precompute_counters};
+        use crate::style::ComputedStyle;
+        let html = r#"<div class="grid"><div class="cell">a</div><div class="cell">b</div></div>"#;
+        let css = r#"
+            .grid { display: grid; grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; height: 220px; width: 400px; }
+            .cell { display: flex; align-items: center; justify-content: center; }
+        "#;
+        let vp = Size::new(800.0, 600.0);
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let flat = build_flat_tree(&doc);
+        let root_style = ComputedStyle::root();
+        let counters = precompute_counters(&doc, &sheet, vp, &flat, false);
+        let registry = build_counter_style_registry(&sheet);
+        let null_hp = lumen_core::ext::NullHyphenationProvider;
+        let init_pcb = super::Rect::new(0.0, 0.0, vp.width, vp.height);
+        let mut b = super::build_box(
+            &doc, &sheet, doc.root(), &root_style, vp, &flat, &counters, &registry, false, None,
+        );
+        super::lay_out(&mut b, 0.0, 0.0, vp.width, Some(vp.height), None, vp, init_pcb, &null_hp, false);
+
+        fn find_all_by_class<'a>(b: &'a super::LayoutBox, doc: &lumen_dom::Document, class: &str, out: &mut Vec<&'a super::LayoutBox>) {
+            if let lumen_dom::NodeData::Element { attrs, .. } = &doc.get(b.node).data
+                && attrs.iter().any(|a| a.name.local == "class" && a.value.split_whitespace().any(|c| c == class))
+            {
+                out.push(b);
+            }
+            for c in &b.children {
+                find_all_by_class(c, doc, class, out);
+            }
+        }
+        let mut cells = Vec::new();
+        find_all_by_class(&b, &doc, "cell", &mut cells);
+        assert_eq!(cells.len(), 2, "expected exactly 2 `.cell` grid items");
+        for cell in &cells {
+            assert!(
+                (cell.rect.height - 110.0).abs() < 1.0,
+                "each 1fr row of a 220px-tall grid must be ~110px, got {}",
+                cell.rect.height,
+            );
+        }
+        let gap = cells[1].rect.y - (cells[0].rect.y + cells[0].rect.height);
+        assert!(
+            gap.abs() < 1.0,
+            "the two fr rows must be contiguous (no unaccounted leftover space), got gap {gap}",
         );
     }
 
