@@ -904,7 +904,8 @@ struct VOut { @builtin(position) clip: vec4<f32>, @location(0) uv: vec2<f32> };
 
 /// CSS Filter Effects Module L1 — color filter pipeline.
 /// Bindings: 0=t_src (offscreen layer), 1=s_src (sampler), 2=FilterParams uniform.
-/// Uses CompositeVertex layout. Blend: ALPHA_BLENDING (composites filtered element over parent).
+/// Uses CompositeVertex layout. Blend: PREMULTIPLIED_ALPHA_BLENDING (the source is
+/// an offscreen layer, whose content is premultiplied; `fs_main` returns premultiplied).
 /// Kind values: 1=Brightness, 2=Contrast, 3=Grayscale, 4=HueRotate(rad), 5=Invert,
 /// 6=Opacity, 7=Saturate, 8=Sepia. Kind=0 (Blur) is handled by the blur shader, not here.
 const FILTER_SHADER_SRC: &str = r#"
@@ -977,11 +978,20 @@ fn apply_filter_fn(c: vec4<f32>, kind: u32, amount: f32) -> vec4<f32> {
 }
 
 @fragment fn fs_main(in: VOut) -> @location(0) vec4<f32> {
-    var c = textureSample(t_src, s_src, in.uv);
+    let src = textureSample(t_src, s_src, in.uv);
+    // Offscreen-слои копят ПРЕМУЛЬТИПЛИРОВАННЫЙ цвет, а CSS Filter Effects L1
+    // §7 определяет фильтры над НЕпремультиплированным: invert/contrast/
+    // brightness от `rgb·a` — не то же, что `(invert rgb)·a`. Поэтому
+    // распремультиплить → фильтры → премультиплить обратно. Результат снова
+    // премультиплирован — этого ждут оба потребителя шейдера:
+    // `filter_pipeline` (PREMULTIPLIED_ALPHA_BLENDING) и
+    // `backdrop_blit_pipeline` (REPLACE в премультиплированный слой).
+    let straight = select(src.rgb / max(src.a, 1e-6), vec3<f32>(0.0), src.a <= 0.0);
+    var c = vec4<f32>(straight, src.a);
     for (var i = 0u; i < u.count; i = i + 1u) {
         c = apply_filter_fn(c, u.entries[i].kind, u.entries[i].amount);
     }
-    return c;
+    return vec4<f32>(c.rgb * c.a, c.a);
 }
 "#;
 
@@ -1916,7 +1926,6 @@ pub struct Renderer {
     /// BUG-406: ленивая компиляция — `OnceCell` заполняется при первом
     /// использовании (`blur_pipeline()`), не при старте окна.
     blur_pipeline: OnceCell<wgpu::RenderPipeline>,
-    blur_uniform: wgpu::Buffer,
     /// CSS Filter Effects L1 §2 — backdrop-filter blit pipeline.
     /// Same shader as `filter_pipeline` but uses REPLACE blend so the filtered
     /// backdrop snapshot overwrites (not composites over) the parent layer at
@@ -3215,12 +3224,6 @@ impl Renderer {
                 },
             ],
         });
-        let blur_uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("blur-uniform"),
-            size: std::mem::size_of::<BlurParamsCpu>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
 
 
         // ── Gradient pipeline (linear + radial) ──────────────────────────────
@@ -3375,7 +3378,6 @@ impl Renderer {
             filter_pipeline: OnceCell::new(),
             blur_bgl,
             blur_pipeline: OnceCell::new(),
-            blur_uniform,
             backdrop_blit_pipeline: OnceCell::new(),
             backdrop_layer: None,
             small_depth_cache: HashMap::new(),
@@ -4032,7 +4034,11 @@ impl Renderer {
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: self.surface_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    // Источник — offscreen-слой, его содержимое премультиплировано
+                    // (та же конвенция, что у `composite_pipeline`), и `fs_main`
+                    // возвращает премультиплированный результат. Straight-alpha
+                    // `ALPHA_BLENDING` домножал бы rgb на alpha второй раз.
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),
@@ -6276,6 +6282,10 @@ impl Renderer {
         // Tracks filter list per opened offscreen level (for CSS filter compositing).
         let mut filter_stack: Vec<(Vec<FilterFn>, usize)> = Vec::new();
         // Stack for backdrop-filter: (filter_list, element_bounds_css_px).
+        // Bounds are stored already in **screen** space (scroll offset applied,
+        // accumulated `PushTransform` applied) — both the parent-layer region the
+        // backdrop is copied from and the quad it is blitted back through are
+        // read out of the parent layer, whose contents live in screen space.
         let mut backdrop_filter_stack: Vec<(Vec<FilterFn>, lumen_core::geom::Rect)> = Vec::new();
         // Monotonic counter assigning a stable ordinal to each backdrop element
         // (in paint/pop order) — the key into the backdrop-filter result cache.
@@ -7851,7 +7861,17 @@ impl Renderer {
                 // Opens a new offscreen level for the element's own content.
                 DisplayCommand::PushBackdropFilter { filters, bounds } => {
                     flush_batch!();
-                    backdrop_filter_stack.push((filters.clone(), *bounds));
+                    // `bounds` приходят в page-пространстве, как и всякий rect
+                    // дисплей-листа: без scroll-offset-а и без накопленного
+                    // `PushTransform` (в живом окне это сдвиг страницы под
+                    // хром, `toolbar::CHROME_H`). Родительский слой, из
+                    // которого копируется backdrop и в который он вблитывается,
+                    // хранит уже трансформированный контент — значит и регион,
+                    // и квад должны быть в screen-пространстве, ровно как
+                    // `clip_stack` (BUG-276) и квады масок (BUG-277 срез 6).
+                    let scrolled = translate_rect(*bounds, dx, dy);
+                    let in_screen = apply_transform_to_clip(scrolled, transform_stack.last());
+                    backdrop_filter_stack.push((filters.clone(), in_screen));
                     current_level += 1;
                     while level_first.len() <= current_level {
                         level_first.push(true);
@@ -8625,6 +8645,13 @@ impl Renderer {
         // background layers) every blend render pass ended up reading whichever mode was
         // written LAST, since all writes land before the single shared encoder submits.
         let mut blend_mode_param_bufs: Vec<wgpu::Buffer> = Vec::new();
+        // BUG-277 срез 7: та же ловушка для параметров blur-проходов. Сепарабельный
+        // гауссиан кодирует ДВА прохода одним `self.blur_uniform` — H (direction=0)
+        // и V (direction=1) — и обе записи ложатся до единственного `submit`, так что
+        // оба прохода читали `direction=1`: горизонтальная половина свёртки не
+        // выполнялась вовсе (`filter: blur()` и `backdrop-filter: blur()` размывались
+        // только по вертикали). Сюда же попадает и `sigma` при 2+ размытиях в кадре.
+        let mut blur_param_bufs: Vec<wgpu::Buffer> = Vec::new();
 
         // BUG-274: поэлементный CPU-учёт encode-фазы (LUMEN_FRAME_LOG=2) —
         // суммарное время и число элементов по каждому типу RenderPlanItem.
@@ -9087,7 +9114,7 @@ impl Renderer {
 
                         // H pass: src_level → scratch
                         let blur_h = BlurParamsCpu { sigma, direction: 0, _p0: 0, _p1: 0 };
-                        self.queue.write_buffer(&self.blur_uniform, 0, as_bytes(&[blur_h]));
+                        let blur_h_buf = make_blur_param_buf(&self.device, &blur_h);
                         let src_view_h = &self.layer_textures[src_layer_idx].view;
                         let scratch_view_h = &self.scratch_layer.as_ref().unwrap().view;
                         let blur_bg_h = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -9096,7 +9123,7 @@ impl Renderer {
                             entries: &[
                                 wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(src_view_h) },
                                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.layer_sampler) },
-                                wgpu::BindGroupEntry { binding: 2, resource: self.blur_uniform.as_entire_binding() },
+                                wgpu::BindGroupEntry { binding: 2, resource: blur_h_buf.as_entire_binding() },
                             ],
                         });
                         {
@@ -9127,7 +9154,7 @@ impl Renderer {
 
                         // V pass: scratch → src_level (overwrite with fully blurred result)
                         let blur_v = BlurParamsCpu { sigma, direction: 1, _p0: 0, _p1: 0 };
-                        self.queue.write_buffer(&self.blur_uniform, 0, as_bytes(&[blur_v]));
+                        let blur_v_buf = make_blur_param_buf(&self.device, &blur_v);
                         let scratch_view_v = &self.scratch_layer.as_ref().unwrap().view;
                         let src_level_view_v = &self.layer_textures[src_layer_idx].view;
                         let blur_bg_v = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -9136,7 +9163,7 @@ impl Renderer {
                             entries: &[
                                 wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(scratch_view_v) },
                                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.layer_sampler) },
-                                wgpu::BindGroupEntry { binding: 2, resource: self.blur_uniform.as_entire_binding() },
+                                wgpu::BindGroupEntry { binding: 2, resource: blur_v_buf.as_entire_binding() },
                             ],
                         });
                         {
@@ -9164,9 +9191,13 @@ impl Renderer {
                             pass.set_vertex_buffer(0, cvb.slice(..));
                             pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
                         }
+                        // Буферы должны пережить `encoder` — проходы читают их
+                        // на `submit`, а не в момент кодирования.
+                        blur_param_bufs.push(blur_h_buf);
+                        blur_param_bufs.push(blur_v_buf);
                     }
 
-                    // Color filter pass: src_level → parent (ALPHA_BLENDING).
+                    // Color filter pass: src_level → parent (PREMULTIPLIED_ALPHA_BLENDING).
                     // src_level now has blurred content if blur was applied.
                     let mut entries = [FilterEntryCpu { kind: 0, amount: 0.0, _p0: 0, _p1: 0 }; 8];
                     let mut color_count = 0u32;
@@ -9334,14 +9365,14 @@ impl Renderer {
 
                             // Step 2 H pass: ping → pong (REPLACE).
                             let blur_h = BlurParamsCpu { sigma, direction: 0, _p0: 0, _p1: 0 };
-                            self.queue.write_buffer(&self.blur_uniform, 0, as_bytes(&[blur_h]));
+                            let blur_h_buf = make_blur_param_buf(&self.device, &blur_h);
                             let blur_bg_h = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                                 label: Some("backdrop-blur-h-bg"),
                                 layout: &self.blur_bgl,
                                 entries: &[
                                     wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&ping_view) },
                                     wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.layer_sampler) },
-                                    wgpu::BindGroupEntry { binding: 2, resource: self.blur_uniform.as_entire_binding() },
+                                    wgpu::BindGroupEntry { binding: 2, resource: blur_h_buf.as_entire_binding() },
                                 ],
                             });
                             {
@@ -9369,7 +9400,7 @@ impl Renderer {
                             // Step 2 V pass: pong → CACHE texture (REPLACE).
                             // The blurred result lands in the cache, ready for reuse next frame.
                             let blur_v = BlurParamsCpu { sigma, direction: 1, _p0: 0, _p1: 0 };
-                            self.queue.write_buffer(&self.blur_uniform, 0, as_bytes(&[blur_v]));
+                            let blur_v_buf = make_blur_param_buf(&self.device, &blur_v);
                             let cache_view_v = &self.backdrop_cache_textures[&plan.ordinal].view;
                             let blur_bg_v = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                                 label: Some("backdrop-blur-v-bg"),
@@ -9377,7 +9408,7 @@ impl Renderer {
                                 entries: &[
                                     wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&pong_view) },
                                     wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.layer_sampler) },
-                                    wgpu::BindGroupEntry { binding: 2, resource: self.blur_uniform.as_entire_binding() },
+                                    wgpu::BindGroupEntry { binding: 2, resource: blur_v_buf.as_entire_binding() },
                                 ],
                             });
                             {
@@ -9402,6 +9433,10 @@ impl Renderer {
                                 pass.set_vertex_buffer(0, cvb.slice(..));
                                 pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
                             }
+                            // Буферы должны пережить `encoder` — см. тот же
+                            // push в `FilterComposite`.
+                            blur_param_bufs.push(blur_h_buf);
+                            blur_param_bufs.push(blur_v_buf);
                         } else {
                             // Filter-only backdrop (no blur): copy parent-region → cache directly.
                             // parent has COPY_SRC, cache has COPY_DST.
@@ -11408,6 +11443,23 @@ fn make_blend_mode_param_buf(device: &wgpu::Device, mode_padded: &[u32; 4]) -> w
         mapped_at_creation: true,
     });
     buf.slice(..).get_mapped_range_mut().copy_from_slice(as_bytes(mode_padded.as_slice()));
+    buf.unmap();
+    buf
+}
+
+/// Создаёт отдельный UNIFORM-буфер с параметрами одного blur pass —
+/// тот же приём и по той же причине, что [`make_filter_param_buf`] (BUG-277 срез 7).
+/// Разделяемый `blur_uniform` делал ГОРИЗОНТАЛЬНЫЙ проход вертикальным:
+/// H и V пишутся до `submit`, побеждает последняя запись — и обе половины
+/// сепарабельной свёртки шли по одной оси.
+fn make_blur_param_buf(device: &wgpu::Device, params: &BlurParamsCpu) -> wgpu::Buffer {
+    let buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("blur-pass-param"),
+        size: std::mem::size_of::<BlurParamsCpu>() as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: true,
+    });
+    buf.slice(..).get_mapped_range_mut().copy_from_slice(as_bytes(std::slice::from_ref(params)));
     buf.unmap();
     buf
 }
