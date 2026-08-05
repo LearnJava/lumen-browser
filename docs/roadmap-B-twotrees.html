@@ -3125,9 +3125,9 @@
       {
        "id": "WPT-VENDOR-mediacapture-extensions",
        "title": "WPT: вендорить + прогнать категорию `mediacapture-extensions`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). медиазахват — нет конвейера"
+       "note": "Скоуп: 🚫 (вне скоупа, медиазахват — нет конвейера). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root mediacapture-extensions --recursive`, ~3:17) — **0/5 harness OK**. Все 5 TIMEOUT на стандартном TLS-гэпе (тот же класс, что `keyboard-lock`/`magnetometer`/`managed`/`measure-memory`). Живой грep (`crates/js/src/media_devices.rs`) подтвердил `getUserMedia`/`MediaStreamTrack` реализованы (Phase 1), но расширения категории отсутствуют выборочно: нет `track.stats`, нет `backgroundBlur`/`eyeGazeCorrection`/`faceFraming` в `getCapabilities()`. Новых багов не заведено, первый проход отсутствующей фичи"
       },
       {
        "id": "WPT-VENDOR-mediacapture-fromelement",
