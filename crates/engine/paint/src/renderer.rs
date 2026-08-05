@@ -2469,6 +2469,17 @@ fn rot_aa_disabled() -> bool {
     *DISABLED.get_or_init(|| std::env::var("LUMEN_NO_ROT_AA").is_ok_and(|v| v == "1"))
 }
 
+/// `true`, если точный клип повёрнутого/скошенного прямоугольника отключён
+/// (`LUMEN_NO_ROT_CLIP=1`): `PushClipRect` под поворотом снова режет по AABB
+/// трансформированного прямоугольника, как до BUG-277 среза 14. Диагностика:
+/// A/B-сравнение картинки и скорости на одном бинарнике (точный клип открывает
+/// offscreen-уровень и стоит один composite-пасс на каждый такой клип).
+fn rot_clip_disabled() -> bool {
+    use std::sync::OnceLock;
+    static DISABLED: OnceLock<bool> = OnceLock::new();
+    *DISABLED.get_or_init(|| std::env::var("LUMEN_NO_ROT_CLIP").is_ok_and(|v| v == "1"))
+}
+
 /// `true`, если mip-цепочка картинок отключена (`LUMEN_NO_IMAGE_MIPS=1`):
 /// возврат к CPU-ресайзу под каждый placed-размер (`src@WxH`-зоопарк) и
 /// nearest-выбору mip-уровня в сэмплере. Диагностика: A/B-сравнение картинки,
@@ -6743,6 +6754,31 @@ impl Renderer {
             }}
         }
 
+        // BUG-277 срезы 8/14 — открыть offscreen-уровень под клип точной формы:
+        // поддерево рисуется в собственный уровень, а парный `PopClip`
+        // композитит его через покрытие контура (`PathClipComposite`). `$rect` —
+        // экранный AABB клипа (квад композита), `$params` — сам контур.
+        macro_rules! open_path_clip_level {
+            ($rect:expr, $params:expr) => {{
+                flush_batch!();
+                let plan_mark = render_plan.len();
+                current_level += 1;
+                while level_first.len() <= current_level {
+                    level_first.push(true);
+                }
+                level_first[current_level] = true;
+                while level_bounds.len() <= current_level {
+                    level_bounds.push(LevelBounds::Empty);
+                }
+                level_bounds[current_level] = LevelBounds::Empty;
+                clip_level_stack.push(Some(ClipLevel::Path(PathClipLevel {
+                    rect: $rect,
+                    params: Box::new($params),
+                    plan_mark,
+                })));
+            }};
+        }
+
         // CSS Positioning L3 §6.3 — position:sticky offset stack.
         // Each BeginStickyLayer pushes a (dy, dx) that clamps scroll for its subtree.
         let viewport_css_h = surface_h as f32 / dpr_f32;
@@ -7331,7 +7367,16 @@ impl Renderer {
                         None => in_screen,
                     };
                     clip_stack.push(new);
-                    clip_level_stack.push(None);
+                    // BUG-277 срез 14: под `rotate`/`skew` scissor-AABB — уже не
+                    // сам клип, а описанная рамка, и ребёнок протекает в её
+                    // угловые треугольники (TEST-100 c5). Точная форма идёт
+                    // через ту же машинерию, что `clip-path` (срез 8). Осевые
+                    // трансформы (подавляющее большинство) остаются на дешёвом
+                    // scissor-пути побитово нетронутыми.
+                    match rotated_rect_clip_params(scrolled, transform_stack.last()) {
+                        Some(params) => open_path_clip_level!(in_screen, params),
+                        None => clip_level_stack.push(None),
+                    }
                 }
                 // CSS Overflow L3 §2 — `overflow: hidden` на боксе с
                 // `border-radius`: bbox по-прежнему идёт в scissor (дешёвое
@@ -7378,7 +7423,22 @@ impl Renderer {
                                 plan_mark,
                             })));
                         }
-                        _ => clip_level_stack.push(None),
+                        // BUG-277 срез 14: повёрнутый клип без радиусов — это
+                        // обычный прямоугольник, и его точный контур доступен
+                        // (`rotated_rect_clip_params`). Повёрнутый СО скруглением
+                        // остаётся на историческом bbox-фолбэке: контур там уже
+                        // не полигон, а стадион под матрицей — отдельный долг.
+                        _ => {
+                            let exact = if radii.iter().all(|r| *r <= 0.0) {
+                                rotated_rect_clip_params(scrolled, transform_stack.last())
+                            } else {
+                                None
+                            };
+                            match exact {
+                                Some(params) => open_path_clip_level!(in_screen, params),
+                                None => clip_level_stack.push(None),
+                            }
+                        }
                     }
                 }
                 // CSS Masking L1 §3 — `clip-path` произвольной формой:
@@ -7404,24 +7464,7 @@ impl Renderer {
                     // её bbox — сдвигаем её тем же scroll-смещением.
                     let shape_scrolled = translate_clip_shape(shape, dx, dy);
                     match path_clip_params(&shape_scrolled, transform_stack.last()) {
-                        Some(params) => {
-                            flush_batch!();
-                            let plan_mark = render_plan.len();
-                            current_level += 1;
-                            while level_first.len() <= current_level {
-                                level_first.push(true);
-                            }
-                            level_first[current_level] = true;
-                            while level_bounds.len() <= current_level {
-                                level_bounds.push(LevelBounds::Empty);
-                            }
-                            level_bounds[current_level] = LevelBounds::Empty;
-                            clip_level_stack.push(Some(ClipLevel::Path(PathClipLevel {
-                                rect: in_screen,
-                                params: Box::new(params),
-                                plan_mark,
-                            })));
-                        }
+                        Some(params) => open_path_clip_level!(in_screen, params),
                         None => clip_level_stack.push(None),
                     }
                 }
@@ -11037,6 +11080,35 @@ fn ellipse_params(
     Some(())
 }
 
+/// Параметры точного клипа для прямоугольного `overflow: hidden`, чей бокс
+/// повёрнут/скошен накопленным трансформом (BUG-277 срез 14).
+///
+/// `PushClipRect` кладёт в `clip_stack` AABB трансформированного прямоугольника
+/// (`apply_transform_to_clip`, политика BUG-140), а scissor у wgpu и не умеет
+/// иначе. Пока матрица осевая, AABB *и есть* сам клип; под `rotate`/`skew` он
+/// становится описанной рамкой, и ребёнок протекает в четыре угловых
+/// треугольника между рамкой и настоящим квадрилатералом. Здесь тот же
+/// прямоугольник отдаётся уже существующей машинерии точного клипа
+/// ([`path_clip_params`], срез 8) как четырёхвершинный полигон — контур
+/// вычисляется в шейдере покрытия, поэтому кромка ещё и сглаживается.
+///
+/// `None` — трансформа нет, он осевой (AABB точен, прежний путь остаётся
+/// побитово тем же), прямоугольник вырожден или клип отключён
+/// [`rot_clip_disabled`].
+fn rotated_rect_clip_params(rect: Rect, m: Option<&Mat4>) -> Option<PathClipParamsCpu> {
+    let m = m?;
+    if rot_clip_disabled() || !rotates_axes_2d(m) || rect.width <= 0.0 || rect.height <= 0.0 {
+        return None;
+    }
+    let (x0, y0) = (rect.x, rect.y);
+    let (x1, y1) = (rect.x + rect.width, rect.y + rect.height);
+    let shape = ResolvedClipShape::Polygon {
+        verts: vec![(x0, y0), (x1, y0), (x1, y1), (x0, y1)],
+        even_odd: false,
+    };
+    path_clip_params(&shape, Some(m))
+}
+
 /// Per-axis scale of an accumulated transform, or `None` if it rotates/skews.
 ///
 /// A rounded clip is only a rounded rect in screen space while the transform
@@ -13159,6 +13231,58 @@ mod tests {
             verts.iter().any(|v| v.color[3] > 0.99),
             "внутренность ромба обязана остаться сплошной"
         );
+    }
+
+    /// BUG-277 срез 14: осевой трансформ (или его отсутствие) обязан остаться
+    /// на дешёвом scissor-пути — там AABB и есть сам клип, а точный контур
+    /// стоил бы offscreen-уровень и composite-пасс на каждый `overflow: hidden`
+    /// корпуса без единого изменённого пикселя.
+    #[test]
+    fn rotated_rect_clip_params_only_for_rotate_and_skew() {
+        let r = Rect::new(10.0, 20.0, 100.0, 50.0);
+        assert!(rotated_rect_clip_params(r, None).is_none(), "трансформа нет");
+        assert!(rotated_rect_clip_params(r, Some(&Mat4::IDENTITY)).is_none());
+        assert!(rotated_rect_clip_params(r, Some(&Mat4::translation_2d(5.0, -7.0))).is_none());
+        assert!(rotated_rect_clip_params(r, Some(&Mat4::scale_2d(2.0, 3.0))).is_none());
+        // 3D/перспектива: контур в экранном пространстве — уже не этот полигон.
+        assert!(rotated_rect_clip_params(r, Some(&Mat4::rotate_y(0.5))).is_none());
+        // Вырожденный прямоугольник ничего осмысленного не клиппит.
+        let rot = Mat4::rotate_2d(std::f32::consts::FRAC_PI_4);
+        assert!(rotated_rect_clip_params(Rect::new(0.0, 0.0, 0.0, 50.0), Some(&rot)).is_none());
+        assert!(rotated_rect_clip_params(r, Some(&rot)).is_some(), "поворот");
+        assert!(rotated_rect_clip_params(r, Some(&Mat4::skew_x(0.3))).is_some(), "скос");
+    }
+
+    /// А под поворотом контур обязан быть настоящим квадрилатералом бокса, а не
+    /// его описанной рамкой: именно в зазор между ними протекал ребёнок
+    /// (TEST-100 c5, `overflow: hidden` на повёрнутом контейнере).
+    #[test]
+    fn rotated_rect_clip_params_maps_corners_not_bbox() {
+        let r = Rect::new(0.0, 0.0, 300.0, 300.0);
+        let m = Mat4::rotate_2d(std::f32::consts::FRAC_PI_4);
+        let p = rotated_rect_clip_params(r, Some(&m)).expect("поворот даёт точный контур");
+        assert_eq!(p.header, [1, 4, 0, 0], "полигон, 4 вершины, nonzero");
+        // Две точки на vec4: (v0, v1), (v2, v3).
+        let got = [
+            (p.verts[0][0], p.verts[0][1]),
+            (p.verts[0][2], p.verts[0][3]),
+            (p.verts[1][0], p.verts[1][1]),
+            (p.verts[1][2], p.verts[1][3]),
+        ];
+        for (i, (x, y)) in [(0.0, 0.0), (300.0, 0.0), (300.0, 300.0), (0.0, 300.0)]
+            .into_iter()
+            .enumerate()
+        {
+            let (ex, ey) = m.transform_point_2d(x, y);
+            assert!(
+                (got[i].0 - ex).abs() < 1e-3 && (got[i].1 - ey).abs() < 1e-3,
+                "вершина {i}: {:?}, ожидалось ({ex}, {ey})",
+                got[i]
+            );
+        }
+        // Ключевое отличие от прежнего поведения: AABB строго шире контура.
+        let bbox = apply_transform_to_clip(r, Some(&m));
+        assert!(bbox.width > 300.0 * 1.4, "AABB ромба шире стороны: {}", bbox.width);
     }
 
     /// Неравномерный масштаб превращает круг в эллипс — шейдеру нужна полная
