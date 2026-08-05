@@ -1181,7 +1181,9 @@ struct VOut { @builtin(position) clip: vec4<f32>, @location(0) uv: vec2<f32> }
 /// shader uses UV directly without needing rect bounds in the uniform.
 ///
 /// Linear gradient: p0=(sx,sy), p1=(ex,ey) are gradient-line endpoints
-/// in UV space.  t = dot(uv-p0, p1-p0) / |p1-p0|²  (0 at start, 1 at end).
+/// in UV space, `param0` is the box aspect h/w. The projection is weighted by
+/// that aspect so the iso-colour bands keep their pixel-space angle
+/// (0 at start, 1 at end).
 ///
 /// Radial gradient: p0=(cx,cy) is center in UV space; p1=(rx,ry) are
 /// semi-axes (farthest-corner size) in UV space.
@@ -1191,6 +1193,10 @@ struct VOut { @builtin(position) clip: vec4<f32>, @location(0) uv: vec2<f32> }
 /// p1=(w,h) is box size in CSS px (for box-space angle calculation);
 /// `param0` is starting angle in radians (0 = top, clockwise).
 /// t = (atan2(dx_box, -dy_box) - param0) / (2π), wrapped to [0,1].
+///
+/// `repeating` folds `t` into the **stop period** `[first, last]`, not into
+/// `[0,1]` (see `wrap_repeat` below), and stop-to-stop interpolation runs in
+/// premultiplied sRGBA (`mix_premul`, CSS Images L4 §3.1).
 const GRADIENT_SHADER_SRC: &str = r#"
 struct ViewUniforms { viewport: vec2<f32> }
 @group(0) @binding(0) var<uniform> vu: ViewUniforms;
@@ -1222,12 +1228,41 @@ struct VOut { @builtin(position) clip: vec4<f32>, @location(0) uv: vec2<f32> }
     return VOut(vec4<f32>(ndc, 0.0, 1.0), in.uv);
 }
 
+// CSS Images L3 §3.6 — a repeating gradient tiles the span between its FIRST
+// and LAST stop, which is not [0,1]: `repeating-linear-gradient(45deg, #333 0
+// 10px, #666 10px 20px)` on a 200px line resolves to positions 0…0.1, so
+// folding t by 1.0 leaves every pixel past 0.1 clamped to the last stop — a
+// flat colour instead of stripes. Fold by the stop period instead; mirrors
+// tiny-skia `SpreadMode::Repeat` over the rescaled `[first,last]` tile in
+// `cpu_raster::skia_gradient_stops`.
+fn wrap_repeat(t: f32) -> f32 {
+    if gp.repeating == 0u || gp.n_stops < 2u { return t; }
+    let lo = gp.stops[0].pos;
+    let span = gp.stops[gp.n_stops - 1u].pos - lo;
+    if span <= 0.0001 { return t; }
+    let rel = t - lo;
+    return lo + rel - floor(rel / span) * span;
+}
+
+// CSS Images L4 §3.1 — gradient colour interpolation is defined in
+// PREMULTIPLIED sRGBA. Straight `mix()` drags a fade to `transparent`
+// (rgba(0,0,0,0)) toward black, so a red→transparent layer darkens whatever it
+// covers. The raster backends approximate this by subdividing such segments
+// (`gradient_math::premultiplied_subdivide_stops`, BUG-190); on the GPU the
+// exact form costs nothing.
+fn mix_premul(a: vec4<f32>, b: vec4<f32>, f: f32) -> vec4<f32> {
+    let pa = mix(a.a, b.a, f);
+    if pa <= 0.0001 { return vec4<f32>(0.0); }
+    let rgb = mix(a.rgb * a.a, b.rgb * b.a, f) / pa;
+    return vec4<f32>(rgb, pa);
+}
+
 fn sample_grad(t_in: f32) -> vec4<f32> {
     if gp.n_stops == 0u { return vec4<f32>(0.0); }
+    // Repeating `t` arrives already folded into the stop period by
+    // `wrap_repeat`; only the non-repeating case clamps to the gradient line.
     var t = t_in;
-    if gp.repeating != 0u {
-        t = t - floor(t);
-    } else {
+    if gp.repeating == 0u {
         t = clamp(t, 0.0, 1.0);
     }
     if gp.n_stops == 1u { return gp.stops[0].color; }
@@ -1240,7 +1275,7 @@ fn sample_grad(t_in: f32) -> vec4<f32> {
         if t >= a.pos && t <= b.pos {
             let span = b.pos - a.pos;
             let f = select(0.0, (t - a.pos) / span, span > 0.0001);
-            return mix(a.color, b.color, f);
+            return mix_premul(a.color, b.color, f);
         }
     }
     return gp.stops[last].color;
@@ -1249,9 +1284,17 @@ fn sample_grad(t_in: f32) -> vec4<f32> {
 @fragment fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     var t: f32;
     if gp.kind == 0u {
+        // The gradient line is projected in PIXEL space, not in the squashed
+        // UV box. `p0`/`p1` are UV endpoints, so a naive dot() in UV tilts the
+        // iso-colour bands by the box aspect ratio: `linear-gradient(45deg,…)`
+        // on a 180×80 box came out at ~11° instead of 45°. `param0` carries
+        // h/w for kind 0, which is all the pixel metric needs (dividing both
+        // sums by w² leaves a single k² weight on the y term).
+        let k2 = gp.param0 * gp.param0;
         let d = gp.p1 - gp.p0;
-        let len_sq = dot(d, d);
-        t = select(0.0, dot(in.uv - gp.p0, d) / len_sq, len_sq > 0.0001);
+        let rel = in.uv - gp.p0;
+        let den = d.x * d.x + d.y * d.y * k2;
+        t = select(0.0, (rel.x * d.x + rel.y * d.y * k2) / den, den > 0.0000001);
     } else if gp.kind == 1u {
         let rel = (in.uv - gp.p0) / gp.p1;
         t = length(rel);
@@ -1265,23 +1308,11 @@ fn sample_grad(t_in: f32) -> vec4<f32> {
         let two_pi = 6.2831853;
         let raw = atan2(dx, -dy) - gp.param0;
         let frac = raw / two_pi;
-        let norm = frac - floor(frac);  // [0, 1) — one full revolution
-        if gp.repeating != 0u && gp.n_stops > 1u {
-            // Repeating conic (CSS Images L4 §3.7): stops tile within one
-            // revolution such that consecutive iterations align edge-to-edge.
-            let last = gp.n_stops - 1u;
-            let span = gp.stops[last].pos - gp.stops[0].pos;
-            if span > 0.0001 {
-                let mod_s = norm - floor(norm / span) * span;
-                t = gp.stops[0].pos + mod_s;
-            } else {
-                t = norm;
-            }
-        } else {
-            t = norm;
-        }
+        t = frac - floor(frac);  // [0, 1) — one full revolution
     }
-    return sample_grad(t);
+    // Repeating conic (CSS Images L4 §3.7) tiles the stop span within one
+    // revolution — the same fold linear/radial need, so it lives in one place.
+    return sample_grad(wrap_repeat(t));
 }
 "#;
 
@@ -1514,9 +1545,10 @@ struct GradParamsCpu {
     n_stops: u32,
     /// 0 = linear, 1 = radial, 2 = conic.
     kind: u32,
-    /// 0 = clamp, 1 = repeating (wrap t via fract).
+    /// 0 = clamp, 1 = repeating (fold t into the `[first, last]` stop period).
     repeating: u32,
-    /// Conic: starting angle in radians (0 = top, CW). Unused for linear/radial.
+    /// Conic: starting angle in radians (0 = top, CW). Linear: box aspect
+    /// `h/w` (see [`box_aspect`]). Unused for radial.
     param0: f32,
     stops: [GradStopCpu; 16],
 }
@@ -7707,7 +7739,8 @@ impl Renderer {
                     let scrolled = translate_rect(*rect, dx, dy);
                     let (p0, p1, line_len) = linear_gradient_uv_endpoints(scrolled.width, scrolled.height, *angle_deg);
                     let resolved = resolve_gradient_stops(stops, line_len);
-                    let params = build_grad_params(&resolved, p0, p1, 0, *repeating, 0.0);
+                    let params =
+                        build_grad_params(&resolved, p0, p1, 0, *repeating, box_aspect(scrolled));
                     let v_start = grad_vertices.len() as u32;
                     push_grad_quad(&mut grad_vertices, scrolled);
                     if let Some(m) = transform_stack.last() {
@@ -7872,7 +7905,8 @@ impl Renderer {
                     let scrolled = translate_rect(*rect, dx, dy);
                     let (p0, p1, line_len) = linear_gradient_uv_endpoints(scrolled.width, scrolled.height, *angle_deg);
                     let resolved = resolve_gradient_stops(stops, line_len);
-                    let params = build_grad_params(&resolved, p0, p1, 0, *repeating, 0.0);
+                    let params =
+                        build_grad_params(&resolved, p0, p1, 0, *repeating, box_aspect(scrolled));
                     let transform = transform_stack.last().copied();
                     let quad = transformed_grad_quad(scrolled, transform.as_ref());
                     mask_params_stack.push(MaskPushInfo {
@@ -11137,10 +11171,24 @@ fn radial_gradient_uv_params(
     ([cx_pct, cy_pct], [rx, ry])
 }
 
+/// Box aspect `height / width` — the `param0` a linear gradient feeds the shader.
+///
+/// The gradient-line endpoints travel in UV, where the box is squashed to a
+/// unit square; projecting onto them there tilts the iso-colour bands by the
+/// aspect ratio. Passing `h/w` lets the fragment shader restore the pixel
+/// metric (BUG-277 срез 9). A degenerate box collapses to 1.0 (square).
+fn box_aspect(rect: Rect) -> f32 {
+    if rect.width.abs() < 1e-6 || rect.height.abs() < 1e-6 {
+        return 1.0;
+    }
+    rect.height / rect.width
+}
+
 /// Build a `GradParamsCpu` uniform from resolved stops + pre-computed UV params.
 ///
-/// `param0` is used by the conic gradient (kind = 2) to pass the starting
-/// angle in radians (0 = top, clockwise); for linear/radial it is unused.
+/// `param0` is kind-specific: the conic gradient (kind = 2) passes its starting
+/// angle in radians (0 = top, clockwise), the linear gradient (kind = 0) passes
+/// [`box_aspect`]; the radial gradient does not use it.
 fn build_grad_params(
     resolved: &[(f32, [f32; 4])],
     p0: [f32; 2],
