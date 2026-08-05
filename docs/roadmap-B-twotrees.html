@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-05",
  "counts": {
-  "open": 286,
+  "open": 287,
   "fixed": 315,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 601,
+ "total_bugs": 602,
  "phases": [
   {
    "id": "P0",
@@ -3160,9 +3160,12 @@
       {
        "id": "WPT-VENDOR-mediacapture-record",
        "title": "WPT: вендорить + прогнать категорию `mediacapture-record`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). медиазахват — нет конвейера"
+       "note": "Скоуп: 🚫 (вне скоупа, медиазахват — нет конвейера). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root mediacapture-record --recursive --processes=4`, ~14 мин, 100/120 id — 20 не досчитаны из-за краха одного из wptrunner-воркеров, инфраструктурный флейк, не предмет находки) — **30/100 harness OK, 130/476 сабтестов**. Первый прогон дал 0/120 harness OK на устаревшем бинарнике (`target/dev-release/lumen.exe` собран до последнего V8-порта `media_stream_recording.rs`/`cookie_store.rs`/`payment_request.rs` — известная гоча CLAUDE.md про stale-binary, подтверждено живой пробой через `--mcp-live-port` и пересборкой); после пересборки `MediaRecorder`/`BlobEvent` заведены и функциональны. Подавляющее большинство FAIL — уже задокументированный пробел `HTMLCanvasElement.captureStream()` (тот же класс, что `mediacapture-fromelement`/`mediacapture-image`). Найден и заведён [BUG-634](bugs/BUG-634-OPEN.md): `BlobEvent`-конструктор не валидирует обязательный init-dict/`data`-член и дефолтит `timecode` в `0` вместо `NaN` — единственный не заблокированный captureStream-тест категории (`BlobEvent-constructor.html`, 2/5 сабтестов)",
+       "bugs": [
+        "BUG-634"
+       ]
       },
       {
        "id": "WPT-VENDOR-mediacapture-region",
@@ -8850,6 +8853,13 @@
    "status": "open",
    "title": "Живой `lumen.exe` падает целиком (V8 `V8_Fatal`: `Check failed: isolate_->IsOnCentralStack()`, стек `Heap::CollectGarbage` ← `Object::GetOwnPropertyNames` ← рек…",
    "component": "js (`crates/js/src/v8_runtime.rs::from_v8`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-634": {
+   "status": "open",
+   "title": "`BlobEvent` constructor doesn't validate: called without an init dict, or with an init dict missing `data`, it doesn't throw `TypeError` as WebIDL requires for…",
+   "component": "js (`crates/js/src/media_stream_recording.rs`)",
    "date": null,
    "debtor": false
   }
