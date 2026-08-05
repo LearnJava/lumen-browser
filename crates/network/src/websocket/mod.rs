@@ -90,7 +90,10 @@ impl WebSocket {
             }
         }
 
-        let conn = connect(&host, port, is_tls, resolver, crate::tls::TlsProfile::Standard, None)?;
+        // No read timeout: a WebSocket connection is meant to sit idle between
+        // messages far longer than any bounded fetch (BUG-307's timeout is for
+        // plain request/response `connect()` calls, not long-lived sockets).
+        let conn = connect(&host, port, is_tls, resolver, crate::tls::TlsProfile::Standard, None, None)?;
         let mut stream = conn.into_stream();
 
         let key = upgrade::generate_key();
@@ -142,7 +145,10 @@ impl WebSocket {
             }
         }
 
-        let conn = connect(&host, port, is_tls, resolver, crate::tls::TlsProfile::Standard, None)?;
+        // No read timeout: a WebSocket connection is meant to sit idle between
+        // messages far longer than any bounded fetch (BUG-307's timeout is for
+        // plain request/response `connect()` calls, not long-lived sockets).
+        let conn = connect(&host, port, is_tls, resolver, crate::tls::TlsProfile::Standard, None, None)?;
         let mut stream = conn.into_stream();
 
         let key = upgrade::generate_key();
