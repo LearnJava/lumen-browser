@@ -397,7 +397,7 @@ TEST-39 12.65%, TEST-30 10.64%), scroll-snap (TEST-62 8.47%).
 **Does not close BUG-277.** Остаток TEST-104 (0.33 %) — **не** wgpu: градиентный
 фон вообще не обрезается по `border-radius` ни на одном бэкенде, потому что
 `display_list.rs::emit_background_image` эмитит для градиента прямоугольный
-`PushClipRect` без радиусов. Заведено отдельно — [BUG-631](BUG-631-OPEN.md).
+`PushClipRect` без радиусов. Заведено отдельно и исправлено — [BUG-631](BUG-631-FIXED.md).
 Остальные долги базлайна не тронуты: `image-set`/cross-fade (TEST-59 21.98 %),
 scroll-snap (TEST-62), фильтры (TEST-30 10.64 %), clip-path × transform
 (TEST-109 5.58 %).

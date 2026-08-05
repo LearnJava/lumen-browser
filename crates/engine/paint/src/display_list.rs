@@ -5180,6 +5180,12 @@ fn emit_background_layer(
     // blend mode has no visible effect — skip PushBlendMode to avoid blending against the
     // stacking context instead of an isolated background canvas.
     suppress_blend: bool,
+    // CSS Backgrounds L3 §4.3: a gradient background is clipped to the same
+    // rounded painting-area box as a solid `background-color` (BUG-631) — the
+    // border-box radii, reused as-is for any `background-clip` box (same
+    // simplification the solid-color path already makes at the `FillRoundedRect`
+    // call site above).
+    radii: CornerRadii,
 ) {
     let clip = background_clip_rect(b, layer.clip);
     if clip.width <= 0.0 || clip.height <= 0.0 {
@@ -5217,8 +5223,19 @@ fn emit_background_layer(
         }
         BackgroundImage::Gradient(ParsedGradient::Linear { angle_deg, corner, stops, repeating }) => {
             let (rects, needs_clip) = gradient_paint_rects(layer, origin, clip);
-            if needs_clip && !rects.is_empty() {
-                out.push(DisplayCommand::PushClipRect { rect: clip });
+            // BUG-631: a rounded box needs its gradient clipped to the rounded
+            // painting area even when `needs_clip` is false (single full-`clip`
+            // rect, otherwise unclipped) — square corners must not leak through.
+            let has_radii = !radii.all_zero();
+            if (needs_clip || has_radii) && !rects.is_empty() {
+                if has_radii {
+                    out.push(DisplayCommand::PushClipRoundedRect {
+                        rect: clip,
+                        radii: [radii.tl, radii.tr, radii.br, radii.bl],
+                    });
+                } else {
+                    out.push(DisplayCommand::PushClipRect { rect: clip });
+                }
             }
             for r in &rects {
                 // CSS Images L3 §3.1 — a `to <corner>` keyword's true angle
@@ -5232,7 +5249,7 @@ fn emit_background_layer(
                     repeating: *repeating,
                 });
             }
-            if needs_clip && !rects.is_empty() {
+            if (needs_clip || has_radii) && !rects.is_empty() {
                 out.push(DisplayCommand::PopClip);
             }
         }
@@ -5240,8 +5257,16 @@ fn emit_background_layer(
             center_x_pct, center_y_pct, shape, size, stops, repeating,
         }) => {
             let (rects, needs_clip) = gradient_paint_rects(layer, origin, clip);
-            if needs_clip && !rects.is_empty() {
-                out.push(DisplayCommand::PushClipRect { rect: clip });
+            let has_radii = !radii.all_zero();
+            if (needs_clip || has_radii) && !rects.is_empty() {
+                if has_radii {
+                    out.push(DisplayCommand::PushClipRoundedRect {
+                        rect: clip,
+                        radii: [radii.tl, radii.tr, radii.br, radii.bl],
+                    });
+                } else {
+                    out.push(DisplayCommand::PushClipRect { rect: clip });
+                }
             }
             for r in &rects {
                 // Resolve the CSS ending-shape/size to concrete px radii against
@@ -5260,7 +5285,7 @@ fn emit_background_layer(
                     repeating: *repeating,
                 });
             }
-            if needs_clip && !rects.is_empty() {
+            if (needs_clip || has_radii) && !rects.is_empty() {
                 out.push(DisplayCommand::PopClip);
             }
         }
@@ -5268,8 +5293,16 @@ fn emit_background_layer(
             center_x_pct, center_y_pct, from_angle_deg, stops, repeating
         }) => {
             let (rects, needs_clip) = gradient_paint_rects(layer, origin, clip);
-            if needs_clip && !rects.is_empty() {
-                out.push(DisplayCommand::PushClipRect { rect: clip });
+            let has_radii = !radii.all_zero();
+            if (needs_clip || has_radii) && !rects.is_empty() {
+                if has_radii {
+                    out.push(DisplayCommand::PushClipRoundedRect {
+                        rect: clip,
+                        radii: [radii.tl, radii.tr, radii.br, radii.bl],
+                    });
+                } else {
+                    out.push(DisplayCommand::PushClipRect { rect: clip });
+                }
             }
             for r in &rects {
                 out.push(DisplayCommand::DrawConicGradient {
@@ -5281,7 +5314,7 @@ fn emit_background_layer(
                     repeating: *repeating,
                 });
             }
-            if needs_clip && !rects.is_empty() {
+            if (needs_clip || has_radii) && !rects.is_empty() {
                 out.push(DisplayCommand::PopClip);
             }
         }
@@ -5369,10 +5402,14 @@ fn emit_background_image(out: &mut Vec<DisplayCommand>, b: &LayoutBox, dpr: f32)
     if needs_isolation {
         out.push(DisplayCommand::PushOpacity { alpha: 1.0, bounds: Some(b.rect) });
     }
+    // CSS Backgrounds L3 §4.3 — same border-box radii the solid `background-color`
+    // path uses (BUG-631: a gradient background must be clipped to the same
+    // rounded box, not a square `PushClipRect`).
+    let radii = CornerRadii::from_style_and_box(&b.style, b.rect.width, b.rect.height);
     // Рисуем в обратном порядке: последний слой = нижний (рисуется первым).
     for (i, layer) in b.style.background_layers.iter().rev().enumerate() {
         // i == 0 is the bottom-most layer; suppress its blend mode (identity effect).
-        emit_background_layer(out, b, layer, dpr, i == 0);
+        emit_background_layer(out, b, layer, dpr, i == 0, radii);
     }
     if needs_isolation {
         out.push(DisplayCommand::PopOpacity);
@@ -11373,6 +11410,34 @@ mod tests {
             assert_eq!(stops.len(), 2);
             assert!(!repeating);
         }
+    }
+
+    #[test]
+    fn background_image_linear_gradient_with_border_radius_clips_rounded() {
+        // BUG-631: a gradient background on a rounded box must clip to the
+        // same rounded painting area as a solid `background-color`, not a
+        // square `PushClipRect` — otherwise the gradient fills the corners.
+        let dl = build(
+            "<div>x</div>",
+            "div { width: 50px; height: 20px; border-radius: 8px; \
+             background-image: linear-gradient(to right, red, blue); }",
+        );
+        let grad_idx = dl
+            .iter()
+            .position(|c| matches!(c, DisplayCommand::DrawLinearGradient { .. }))
+            .expect("expected DrawLinearGradient");
+        assert!(
+            matches!(dl[grad_idx - 1], DisplayCommand::PushClipRoundedRect { .. }),
+            "gradient must be preceded by PushClipRoundedRect, got {:?}",
+            dl[grad_idx - 1]
+        );
+        if let DisplayCommand::PushClipRoundedRect { radii, .. } = dl[grad_idx - 1] {
+            assert_eq!(radii, [8.0, 8.0, 8.0, 8.0]);
+        }
+        assert!(
+            matches!(dl[grad_idx + 1], DisplayCommand::PopClip),
+            "gradient's rounded clip must be closed"
+        );
     }
 
     #[test]
