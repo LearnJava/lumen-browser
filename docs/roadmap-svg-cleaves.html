@@ -3288,9 +3288,9 @@
       {
        "id": "WPT-VENDOR-page-visibility",
        "title": "WPT: вендорить + прогнать категорию `page-visibility`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root page-visibility --recursive`, ~1 мин 36 с, 11 отобранных id из 13 вендоренных файлов — 2 `-manual` раннер исключает) — **1/11 harness OK, 4/10 сабтестов**. Единственный проходящий тест — `test_attributes_exist.html` (не использует `<body onload>`, запускает проверку прямым `<script>`). Три файла (`test_default_view.html`, `test_read_only.html`, `test_child_document.html`) TIMEOUT с нулём зарегистрированных сабтестов — реконфирмация [BUG-360](bugs/BUG-360-OPEN.md) (`<body onload=\"…\">` не компилируется в обработчик). Три файла (`iframe-session-history.html`, `iframe-unload.html`, `onvisibilitychange.html`) TIMEOUT — реконфирмация [BUG-480](bugs/BUG-480-OPEN.md) (`<iframe>` не имеет отдельного browsing context, `load` не срабатывает). Два файла (`unload.html`, `unload-bubbles.html`) TIMEOUT — реконфирмация [BUG-359](bugs/BUG-359-OPEN.md) (`window.open` с относительным URL). `minimize.html` ERROR — ожидаемый гэп раннера (`action 'minimize_window' not implemented by Lumen's minimal WPT executor`, класс уже задокументированного `send_keys`-гэпа), не движковый баг. `visibility-state-entry.tentative.html` ERROR — `VisibilityStateEntry` (tentative Performance Timeline API) не реализован, ожидаемо для tentative-спеки. Новых багов не заведено"
       },
       {
        "id": "WPT-VENDOR-paint-timing",
