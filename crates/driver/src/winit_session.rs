@@ -1064,7 +1064,31 @@ impl BrowserSession for WinitSession {
         Ok(())
     }
 
-    fn scroll(&mut self, _target: &Target, delta: ScrollDelta) -> Result<()> {
+    fn scroll(&mut self, target: &Target, delta: ScrollDelta) -> Result<()> {
+        // BUG-338: when `target` resolves to a DOM node with a scrolling
+        // overflow ancestor (inclusive of the node itself), scroll THAT
+        // container instead of the page — mirrors the live shell's real
+        // mouse-wheel routing (`try_scroll_overflow_container`,
+        // CC-CSS-2), just driven by node identity instead of a hit-tested
+        // cursor position. Falls through to the page-level scroll below
+        // when there's no target, no DOM match, or no scrolling ancestor —
+        // preserving existing callers (`scroll_perf.py` etc., which scroll
+        // `body`, itself never a `ScrollContainer`).
+        if let Ok(state) = self.state() {
+            let mut guard = state.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+            if let Ok(node) = resolve_target_node(&guard, target) {
+                let containers = lumen_layout::collect_scroll_containers(&guard.layout_root);
+                let scroll_node = lumen_layout::find_scroll_container_for_node(&containers, &guard.doc, node);
+                if let Some(scroll_node) = scroll_node {
+                    let c = containers.iter().find(|c| c.node == scroll_node).expect("just resolved from containers");
+                    let new_x = (c.scroll_x + delta.x).clamp(0.0, (c.scroll_width - c.clip_rect.width).max(0.0));
+                    let new_y = (c.scroll_y + delta.y).clamp(0.0, (c.scroll_height - c.clip_rect.height).max(0.0));
+                    lumen_layout::set_scroll_position(&mut guard.layout_root, scroll_node, new_x, new_y);
+                    return Ok(());
+                }
+            }
+        }
+
         // Update logical position (for scroll_position()) and compositor scroll nodes
         // (for live rendering). scroll_page_by() is a no-op without an active tree,
         // so the fields are the authoritative fallback for headless mode.

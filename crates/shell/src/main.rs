@@ -10883,13 +10883,18 @@ impl Lumen {
             .layout_source
             .as_ref()
             .and_then(|src| links::find_element_by_id(&src.document.lock().unwrap(), &fragment));
-        let target_y = node_id.and_then(|nid| {
-            self.layout_box
-                .as_ref()
-                .and_then(|lb| forms::find_box_rect(lb, nid))
-                .map(|r| r.y)
+        let target_rect = node_id.and_then(|nid| {
+            self.layout_box.as_ref().and_then(|lb| forms::find_box_rect(lb, nid))
         });
+        let target_y = target_rect.map(|r| r.y);
         click_log::log_fragment(&fragment, target_y.is_some());
+        // BUG-338: bring the target into view within any nested scrolling
+        // ancestors BEFORE the page-level scroll below — real fragment
+        // navigation / `scrollIntoView()` walks the whole scrollable
+        // ancestor chain, not just the page.
+        if let (Some(nid), Some(rect)) = (node_id, target_rect) {
+            self.scroll_nested_ancestors_into_view(nid, rect);
+        }
         if let Some(y) = target_y {
             // CSS Scroll Behavior L1 §3: respect scroll-behavior on the scrolling box.
             // The page viewport's scroll-behavior comes from the root (<html>) element.
@@ -21697,6 +21702,44 @@ impl Lumen {
         } else {
             false
         }
+    }
+
+    /// BUG-338: bring `target_rect` (a target element's absolute border-box
+    /// rect) into view within every scrolling overflow ancestor of `node`,
+    /// vertical axis only — the ancestor-walk part of `Element.scrollIntoView()`
+    /// that fragment navigation is supposed to invoke but never did (only the
+    /// page-level scroll below ran). Walks the DOM parent chain from `node`,
+    /// scrolls each `ScrollContainer` match whose current viewport doesn't
+    /// already contain `target_rect` just enough to bring it in (align the
+    /// nearer edge), and leaves already-visible containers untouched. Content
+    /// boxes carry absolute (unscrolled) coordinates — see `PushScrollLayer`'s
+    /// paint-time `translate(-scroll_x, -scroll_y)` — so each container's
+    /// adjustment is independent of its ancestors' own scroll offset.
+    fn scroll_nested_ancestors_into_view(&mut self, node: NodeId, target_rect: lumen_core::geom::Rect) {
+        let Some(src) = self.layout_source.as_ref() else { return };
+        let mut ancestor = src.document.lock().unwrap().get(node).parent;
+        while let Some(n) = ancestor {
+            let Some(c) = self.scroll_containers.iter().find(|c| c.node == n) else {
+                ancestor = src.document.lock().unwrap().get(n).parent;
+                continue;
+            };
+            let visible_top = target_rect.y - c.scroll_y;
+            let visible_bottom = target_rect.y + target_rect.height - c.scroll_y;
+            let new_scroll_y = if visible_top < c.clip_rect.y {
+                c.scroll_y - (c.clip_rect.y - visible_top)
+            } else if visible_bottom > c.clip_rect.y + c.clip_rect.height {
+                c.scroll_y + (visible_bottom - (c.clip_rect.y + c.clip_rect.height))
+            } else {
+                c.scroll_y
+            };
+            if (new_scroll_y - c.scroll_y).abs() > f32::EPSILON
+                && let Some(lb) = self.layout_box.as_mut()
+            {
+                set_scroll_position(lb, n, c.scroll_x, new_scroll_y);
+            }
+            ancestor = src.document.lock().unwrap().get(n).parent;
+        }
+        self.update_scroll_containers();
     }
 
     /// Apply CSS Scroll Snap L1 to a proposed page-level Y scroll offset.
