@@ -924,6 +924,20 @@ impl V8JsRuntime {
         });
     }
 
+    /// V8 isolate heap statistics: `(total_heap_size, used_heap_size)` in bytes.
+    ///
+    /// BUG-306 diagnostics: `V8JsRuntime` replaced `QuickJsRuntime` as the only
+    /// JS engine (S12b), but `debug_js_heap` (`PersistentJs` trait, consumed by
+    /// `LUMEN_MEM_REPORT`) was never wired to the V8 isolate — it silently fell
+    /// back to the trait default `(-1, -1)`. `get_heap_statistics` requires
+    /// running on the JS thread (mutable isolate access), hence `self.run`.
+    pub fn debug_heap_stats(&self) -> (i64, i64) {
+        self.run(|inner| {
+            let stats = inner.isolate.get_heap_statistics();
+            (stats.total_heap_size() as i64, stats.used_heap_size() as i64)
+        })
+    }
+
     /// Install the import map (HTML LS §8.1.6.2) used to resolve bare module
     /// specifiers such as `"react"`.
     ///
@@ -5330,6 +5344,14 @@ mod tests {
     #[test]
     fn eval_null() {
         assert_eq!(rt().eval("null").unwrap(), JsValue::Null);
+    }
+
+    #[test]
+    fn debug_heap_stats_reports_nonzero_isolate_heap() {
+        let (total, used) = rt().debug_heap_stats();
+        assert!(total > 0, "total_heap_size should be positive, got {total}");
+        assert!(used > 0, "used_heap_size should be positive, got {used}");
+        assert!(used <= total, "used ({used}) should not exceed total ({total})");
     }
 
     #[test]
