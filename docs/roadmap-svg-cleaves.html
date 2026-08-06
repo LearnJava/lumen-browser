@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-06",
  "counts": {
-  "open": 312,
+  "open": 313,
   "fixed": 330,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 642,
+ "total_bugs": 643,
  "phases": [
   {
    "id": "P0",
@@ -3673,9 +3673,12 @@
       {
        "id": "WPT-VENDOR-shadow-dom",
        "title": "WPT: вендорить + прогнать категорию `shadow-dom`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root shadow-dom --recursive --processes=4`, ~4 мин, 393 файла, 276 отобранных id) — **198/276 harness OK, 221/1780 сабтестов**. Категория реально реализована (Shadow DOM работает end-to-end) — резко контрастирует с типичными пустыми прогонами. Доминирующий сигнал — реконфирмация уже открытых дефектов: [BUG-384](bugs/BUG-384-OPEN.md) (именованный доступ на `window`, крупнейший кластер), [BUG-346](bugs/BUG-346-OPEN.md) (`..`-сегменты в `Url::resolve()` — `../../../../html/resources/common.js` 404), [BUG-574](bugs/BUG-574-OPEN.md) (`Node.contains` отсутствует), [BUG-415](bugs/BUG-415-OPEN.md) (отсоединённый документ без Node-методов), [BUG-464](bugs/BUG-464-OPEN.md)/[BUG-477](bugs/BUG-477-OPEN.md) (`elementFromPoint`/`elementsFromPoint`), [BUG-601](bugs/BUG-601-OPEN.md) (`DOMTokenList` глобал), [BUG-471](bugs/BUG-471-OPEN.md) (CSSOM). Живая проба (`--mcp-live-port`) подтвердила независимую находку — [BUG-676](bugs/BUG-676-OPEN.md): `ShadowRoot` — плоский `{}`-литерал, не WebIDL-интерфейс: нет глобального конструктора `window.ShadowRoot`, нет `cloneNode()` (должен бросать `NotSupportedError`, а не отсутствовать), компаньон — `HTMLSlotElement.prototype.assign()` отсутствует рядом с рабочими `assignedNodes`/`assignedElements`. Один новый номер бага",
+       "bugs": [
+        "BUG-676"
+       ]
       },
       {
        "id": "WPT-VENDOR-shape-detection",
@@ -9209,6 +9212,13 @@
    "status": "open",
    "title": "`navigator.serviceWorker.register()` performs zero validation of its script-URL argument — a cross-origin script URL (`https://evil.example/sw.js`) and a `javas…",
    "component": "js (`crates/js/src/dom.rs:4999`-5013 — `_sw_container.register`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-676": {
+   "status": "open",
+   "title": "`ShadowRoot` is a plain `{}`-literal, not a `class`/prototype-chained interface — no global `window.ShadowRoot` constructor (`'ShadowRoot' in window === false`)…",
+   "component": "js (`crates/js/src/dom.rs:1310-1366` — `_lumen_make_shadow_root`)",
    "date": null,
    "debtor": false
   }
