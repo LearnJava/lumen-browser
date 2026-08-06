@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-06",
  "counts": {
-  "open": 312,
+  "open": 313,
   "fixed": 342,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 654,
+ "total_bugs": 655,
  "phases": [
   {
    "id": "P0",
@@ -3843,9 +3843,12 @@
       {
        "id": "WPT-VENDOR-touch-events",
        "title": "WPT: вендорить + прогнать категорию `touch-events`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root touch-events --recursive`, ~53 с, 17 файлов, 15 отобранных id) — **8/14 harness OK, 19/44 сабтестов**. Заведён [BUG-688](bugs/BUG-688-OPEN.md): `Touch`/`TouchList`/`TouchEvent` глобальные конструкторы отсутствуют вовсе, `GlobalEventHandlers` без `ontouch*` — прямая причина `historical.html`/`touch-touchevent-constructor.html`/половины `touch-globaleventhandler-interface.html`/`pinch-zoom-change.html`; ни один нативный код не диспатчит реальный `TouchEvent`, поэтому `single-touch*.html` TIMEOUT. Второстепенный сигнал (5 файлов `Browsing context for element was detached`) — реконфирмация [BUG-622](bugs/BUG-622-OPEN.md) (`document.defaultView`), плюс документированные гэпы `action_sequence`-исполнителя и невендоренного `idlharness.js`. Один новый номер бага",
+       "bugs": [
+        "BUG-688"
+       ]
       },
       {
        "id": "WPT-VENDOR-trust-tokens",
@@ -9344,6 +9347,13 @@
    "status": "open",
    "title": "`performance.mark()`/`.measure()` build entries as plain object literals (`{ entryType: 'mark', name, startTime, duration }`); neither `PerformanceMark` nor `Pe…",
    "component": "js (`crates/js/src/dom.rs:8227` — `performance.mark()`; `crates/js/src/dom.rs:8247` — `performance.measure()`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-688": {
+   "status": "open",
+   "title": "`Touch`/`TouchList`/`TouchEvent` global constructors don't exist at all (`ReferenceError`), and `GlobalEventHandlers` has no `ontouchstart`/`ontouchmove`/`ontou…",
+   "component": "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`; analogous constructors at `dom.rs:437` `UIEvent`, `dom.rs:445` `MouseEvent`, `dom.rs:536-554` `PointerEvent`, no equivalent for Touch)",
    "date": null,
    "debtor": false
   }
