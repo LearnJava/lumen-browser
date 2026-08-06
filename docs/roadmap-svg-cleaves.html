@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-06",
  "counts": {
-  "open": 311,
+  "open": 312,
   "fixed": 337,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 648,
+ "total_bugs": 649,
  "phases": [
   {
    "id": "P0",
@@ -3754,9 +3754,12 @@
       {
        "id": "WPT-VENDOR-storage-access-api",
        "title": "WPT: вендорить + прогнать категорию `storage-access-api`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root storage-access-api --recursive`, 11:39, 40 файлов, 40 отобранных id) — **3/40 harness OK, 2/9 сабтестов**. Новая находка — [BUG-682](bugs/BUG-682-OPEN.md): `requestStorageAccess`/`hasStorageAccess`/`requestStorageAccessFor`/`hasUnpartitionedCookieAccess` определены только в литерале живого `document` (`dom.rs:4423-4433`), но не в `_lumen_build_detached_document` (`DOMParser.parseFromString` и т.п.) — второй независимый экземпляр класса [BUG-358](bugs/BUG-358-OPEN.md)/[BUG-359](bugs/BUG-359-OPEN.md) (два несинхронизированных Document-литерала), на этот раз в обратную сторону. Остальной сигнал двух исполнившихся не-`.https.` тестов — реконфирмация: [BUG-399](bugs/BUG-399-OPEN.md) (`window.isSecureContext` захардкожен `true`), [BUG-480](bugs/BUG-480-OPEN.md) (`<iframe>` без browsing context), [BUG-574](bugs/BUG-574-OPEN.md) (`Node.contains` отсутствует). Остальные 37 `.https.` id — TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`. Один новый номер бага",
+       "bugs": [
+        "BUG-682"
+       ]
       },
       {
        "id": "WPT-VENDOR-streams",
@@ -9269,6 +9272,13 @@
    "status": "open",
    "title": "`StorageManager`/`StorageBucketManager`/`StorageBucket` are plain ES5 `function X() {}` constructors with no `new.target` guard, so `new StorageManager()`/`new…",
    "component": "js (`crates/js/src/storage_manager.rs` — `STORAGE_MANAGER_SHIM`; `crates/js/src/storage_buckets.rs` — `STORAGE_BUCKETS_SHIM`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-682": {
+   "status": "open",
+   "title": "Storage Access API methods (`requestStorageAccess`/`hasStorageAccess`/`requestStorageAccessFor`/`hasUnpartitionedCookieAccess`) exist only on the live global `d…",
+   "component": "js (`crates/js/src/dom.rs:4423-4433` — live `document` literal at `dom.rs:4182+`; `_lumen_build_detached_document`, `dom.rs:1795-1868`)",
    "date": null,
    "debtor": false
   }
