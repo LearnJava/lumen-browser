@@ -1728,10 +1728,13 @@ impl V8JsRuntime {
         reg!(
             "_lumen_get_inner_html",
             move |node_id: u32| -> String {
-                // Phase 0: return text content only (no HTML serialization).
+                // BUG-368: real HTML fragment serialization of `nid`'s children
+                // (was a Phase-0 stub that returned plain `textContent`).
                 let doc = d.lock().unwrap();
                 let nid = NodeId::from_index(node_id as usize);
-                collect_text_content(&doc, nid)
+                let mut out = String::new();
+                serialize_children(&doc, nid, &mut out);
+                out
             }
         );
         let d = Arc::clone(&doc);
@@ -1740,12 +1743,50 @@ impl V8JsRuntime {
         reg!(
             "_lumen_set_inner_html",
             move |node_id: u32, html: String| {
-                // Phase 0: treat innerHTML as plain text (no fragment parsing).
+                // BUG-368: parse `html` as a fragment and replace `nid`'s children
+                // with the result (was a Phase-0 stub that stored `html` verbatim
+                // as a single text node — no element/comment structure at all).
                 let mut doc = d.lock().unwrap();
                 let nid = NodeId::from_index(node_id as usize);
-                set_text_content(&mut doc, nid, &html);
+                let old_children: Vec<NodeId> = doc.get(nid).children.clone();
+                for c in old_children {
+                    doc.detach(c);
+                }
+                let new_children = parse_html_fragment(&mut doc, &html);
+                for c in new_children {
+                    doc.append_child(nid, c);
+                }
                 record_dom_touch(&touched, nid);
                 dirty.store(true, Ordering::Relaxed);
+            }
+        );
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_get_outer_html",
+            move |node_id: u32| -> String {
+                // BUG-351: serialize `nid` itself (open tag + attrs + children +
+                // close tag for elements; escaped data for text/comment).
+                let doc = d.lock().unwrap();
+                let nid = NodeId::from_index(node_id as usize);
+                let mut out = String::new();
+                serialize_node(&doc, nid, &mut out);
+                out
+            }
+        );
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_parse_html_fragment",
+            move |html: String| -> Vec<u32> {
+                // BUG-351: parses `html` and imports the result into the live
+                // document as new, still-**detached** top-level nodes — callers
+                // (outerHTML setter, insertAdjacentHTML) attach them via the
+                // existing before/prepend/append/after/replaceWith JS helpers,
+                // which already handle dirty/touched bookkeeping.
+                let mut doc = d.lock().unwrap();
+                parse_html_fragment(&mut doc, &html)
+                    .into_iter()
+                    .map(|n| n.index() as u32)
+                    .collect()
             }
         );
     }
@@ -4857,6 +4898,120 @@ fn remove_attribute(doc: &mut lumen_dom::Document, id: lumen_dom::NodeId, name: 
     if let lumen_dom::NodeData::Element { attrs, .. } = &mut doc.get_mut(id).data {
         attrs.retain(|a| !a.name.local.eq_ignore_ascii_case(name));
     }
+}
+
+// ── innerHTML/outerHTML/insertAdjacentHTML (BUG-368, BUG-351) ─────────────────
+
+/// HTML LS §13.1.2 void elements — no content model, no closing tag when serialized.
+const VOID_ELEMENTS: &[&str] = &[
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param",
+    "source", "track", "wbr",
+];
+
+/// DOM Parsing §2.6 "fragment serializing algorithm" escaping for text nodes:
+/// `&` and `<` (`>` is also escaped — mirrors the existing `_nativeSerializeNode`
+/// JS-side convention in `dom_parser.rs`, harmless and slightly more defensive
+/// than the spec's `&`/`<`/non-breaking-space-only minimum).
+fn escape_html_text(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+/// DOM Parsing §2.6 escaping for a double-quoted attribute value: `&` and `"`.
+fn escape_html_attr(s: &str) -> String {
+    s.replace('&', "&amp;").replace('"', "&quot;")
+}
+
+/// Serializes `id` itself — element open tag + attributes + children + close tag,
+/// or the escaped data for a text/comment node. Mirrors HTML LS §13.3 "serializing
+/// HTML fragments" run on a single node (used for `outerHTML`, BUG-351).
+fn serialize_node(doc: &lumen_dom::Document, id: lumen_dom::NodeId, out: &mut String) {
+    match &doc.get(id).data {
+        lumen_dom::NodeData::Text(s) => out.push_str(&escape_html_text(s)),
+        lumen_dom::NodeData::Comment(s) => {
+            out.push_str("<!--");
+            out.push_str(s);
+            out.push_str("-->");
+        }
+        lumen_dom::NodeData::Element { name, attrs } => {
+            let tag = name.local.to_ascii_lowercase();
+            out.push('<');
+            out.push_str(&tag);
+            for a in attrs {
+                out.push(' ');
+                out.push_str(&a.name.local);
+                out.push_str("=\"");
+                out.push_str(&escape_html_attr(&a.value));
+                out.push('"');
+            }
+            out.push('>');
+            if VOID_ELEMENTS.contains(&tag.as_str()) {
+                return;
+            }
+            serialize_children(doc, id, out);
+            out.push_str("</");
+            out.push_str(&tag);
+            out.push('>');
+        }
+        // Document/Doctype/ShadowRoot/DocumentFragment never appear as a regular
+        // DOM child reachable from `innerHTML`/`outerHTML` — nothing to emit.
+        _ => {}
+    }
+}
+
+/// Serializes `id`'s children in tree order (used for `innerHTML`, BUG-368).
+fn serialize_children(doc: &lumen_dom::Document, id: lumen_dom::NodeId, out: &mut String) {
+    for &child in &doc.get(id).children.clone() {
+        serialize_node(doc, child, out);
+    }
+}
+
+/// Recursively re-creates `src_id` (and its descendants) from the throwaway `src`
+/// `Document` produced by `lumen_html_parser::parse` into the live `dst` document,
+/// returning the new, still-detached node id. Node arenas are per-`Document`, so a
+/// `NodeId` from `src` cannot simply be reused in `dst` — every node must be
+/// recreated via `dst`'s own `create_*` calls.
+fn import_node(
+    dst: &mut lumen_dom::Document,
+    src: &lumen_dom::Document,
+    src_id: lumen_dom::NodeId,
+) -> lumen_dom::NodeId {
+    let new_id = match &src.get(src_id).data {
+        lumen_dom::NodeData::Element { name, attrs } => {
+            let id = dst.create_element(name.clone());
+            if let lumen_dom::NodeData::Element { attrs: dst_attrs, .. } = &mut dst.get_mut(id).data {
+                *dst_attrs = attrs.clone();
+            }
+            id
+        }
+        lumen_dom::NodeData::Text(s) => dst.create_text(s.clone()),
+        lumen_dom::NodeData::Comment(s) => dst.create_comment(s.clone()),
+        // Doctype/Document/ShadowRoot/DocumentFragment cannot occur among a
+        // parsed fragment's `<body>` children — fall back to an inert, unused
+        // fragment node rather than panicking on an unreachable shape.
+        _ => return dst.create_fragment(),
+    };
+    for &child in &src.get(src_id).children.clone() {
+        let new_child = import_node(dst, src, child);
+        dst.append_child(new_id, new_child);
+    }
+    new_id
+}
+
+/// Parses `html` as an HTML fragment and imports the result into `doc`, returning
+/// the new, still-detached top-level node ids (the parsed document's `<body>`'s
+/// direct children — `lumen_html_parser::parse` only exposes a full-document
+/// parser, HTML LS §13.4 fragment-context tree-construction adjustments are not
+/// implemented, matching the existing `Foreign content is not supported` gap noted
+/// in `tree_builder.rs`, BUG-685).
+fn parse_html_fragment(doc: &mut lumen_dom::Document, html: &str) -> Vec<lumen_dom::NodeId> {
+    let temp = lumen_html_parser::parse(html);
+    let root = temp.body().unwrap_or_else(|| temp.root());
+    temp.get(root)
+        .children
+        .clone()
+        .into_iter()
+        .map(|c| import_node(doc, &temp, c))
+        .collect()
 }
 
 // ── JsRuntime impl ────────────────────────────────────────────────────────────

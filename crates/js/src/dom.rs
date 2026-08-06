@@ -2653,6 +2653,25 @@ function _lumen_build_element(nid) {
         set textContent(v)   { _lumen_set_text_content(nid, String(v)); },
         get innerHTML()      { return _lumen_get_inner_html(nid); },
         set innerHTML(v)     { _lumen_set_inner_html(nid, String(v)); },
+        // DOM Parsing §2.6 'Extensions to the Element interface' — outerHTML
+        // (BUG-351). Getter serializes this element itself; setter parses the
+        // assigned markup and replaces `this` with the result in its parent,
+        // mirroring `replaceWith`. Per spec, no-op if detached, throws if the
+        // parent is the Document node itself (i.e. `this` is the root element).
+        get outerHTML()      { return _lumen_get_outer_html(nid); },
+        set outerHTML(v) {
+            var pid = _lumen_u2n(_lumen_get_parent(nid));
+            if (pid === null) return;
+            if (pid === _lumen_get_document_root()) {
+                throw new DOMException(
+                    'Failed to set the outerHTML property: This element has no parent node.',
+                    'NoModificationAllowedError');
+            }
+            var newIds = _lumen_parse_html_fragment(String(v));
+            var wrapped = [];
+            for (var _ohi = 0; _ohi < newIds.length; _ohi++) { wrapped.push(_lumen_make_element(newIds[_ohi])); }
+            this.replaceWith.apply(this, wrapped);
+        },
         getAttribute:    function(n)    { return _lumen_u2n(_lumen_get_attr(nid, String(n))); },
         setAttribute:    function(n, v) {
             var attrName = String(n);
@@ -2993,6 +3012,24 @@ function _lumen_build_element(nid) {
                 case 'afterbegin':  this.prepend(element); return element;
                 case 'beforeend':   this.append(element); return element;
                 case 'afterend':    this.after(element); return element;
+                default:
+                    throw new DOMException(
+                        'The value provided (' + where + ') is not one of beforebegin, ' +
+                        'afterbegin, beforeend, or afterend.', 'SyntaxError');
+            }
+        },
+        // DOM Parsing §2.6 — insertAdjacentHTML (BUG-351). Parses `html` and
+        // inserts the result at the given position, same delegation pattern as
+        // insertAdjacentText/insertAdjacentElement above.
+        insertAdjacentHTML: function(where, html) {
+            var newIds = _lumen_parse_html_fragment(String(html));
+            var wrapped = [];
+            for (var _iahi = 0; _iahi < newIds.length; _iahi++) { wrapped.push(_lumen_make_element(newIds[_iahi])); }
+            switch (String(where).toLowerCase()) {
+                case 'beforebegin': this.before.apply(this, wrapped); break;
+                case 'afterbegin':  this.prepend.apply(this, wrapped); break;
+                case 'beforeend':   this.append.apply(this, wrapped); break;
+                case 'afterend':    this.after.apply(this, wrapped); break;
                 default:
                     throw new DOMException(
                         'The value provided (' + where + ') is not one of beforebegin, ' +
@@ -7018,13 +7055,17 @@ _lumen_set_attr = function(nid, name, value) {
     }
 };
 
-// Wrap _lumen_set_inner_html to intercept childList mutations
+// Wrap _lumen_set_inner_html to intercept childList mutations. BUG-368 fixed
+// the setter to actually parse+replace children (was a no-op text stub before),
+// so this wrapper now reports the real before/after child lists, mirroring
+// _lumen_set_text_content's wrapper below.
 var _orig_set_inner_html = _lumen_set_inner_html;
 _lumen_set_inner_html = function(nid, html) {
+    if (_mo_observers.length === 0) { _orig_set_inner_html(nid, html); return; }
+    var before = _lumen_get_children(nid);
     _orig_set_inner_html(nid, html);
-    if (_mo_observers.length > 0) {
-        _mo_notify(nid, 'childList', null, null, [], []);
-    }
+    var after = _lumen_get_children(nid);
+    _mo_notify(nid, 'childList', null, null, after, before);
 };
 
 // Wrap _lumen_append_child to intercept childList mutations
@@ -15085,6 +15126,108 @@ mod tests {
                      document.body.appendChild(d);\
                      d.innerHTML = 'test';\
                      d.getHTML({serializableShadowRoots: true}) === 'test'",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        // ── BUG-368: innerHTML must parse/serialize real markup, not textContent ──
+
+        #[test]
+        fn inner_html_setter_parses_elements_not_text() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "var d = document.createElement('div');\
+                     document.body.appendChild(d);\
+                     d.innerHTML = '<i id=\"x\">y</i>';\
+                     d.children.length === 1 && \
+                     d.firstElementChild.tagName === 'I' && \
+                     d.firstElementChild.id === 'x' && \
+                     d.firstElementChild.textContent === 'y'",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn inner_html_round_trips_elements_attrs_comments_and_text() {
+            let rt = v8_runtime_with_dom(make_doc());
+            // Same repro tree as bugs/BUG-368-OPEN.md's probe.
+            let ok = rt
+                .eval(
+                    "var host = document.createElement('div');\
+                     document.body.appendChild(host);\
+                     host.innerHTML = '<span id=\"a\" class=\"c\">A</span><!--k--><b>B</b>tail';\
+                     host.childNodes.length === 4 && \
+                     host.children.length === 2 && \
+                     host.firstElementChild.tagName === 'SPAN' && \
+                     host.innerHTML === '<span id=\"a\" class=\"c\">A</span><!--k--><b>B</b>tail'",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        // ── BUG-351: outerHTML / insertAdjacentHTML ────────────────────────────
+
+        #[test]
+        fn outer_html_getter_serializes_element_itself() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "var d = document.createElement('div');\
+                     d.id = 'x';\
+                     d.innerHTML = '<b>y</b>';\
+                     d.outerHTML === '<div id=\"x\"><b>y</b></div>'",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn outer_html_setter_replaces_element_in_parent() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "var parent = document.createElement('div');\
+                     document.body.appendChild(parent);\
+                     parent.innerHTML = '<p id=\"old\">a</p>';\
+                     parent.firstElementChild.outerHTML = '<span id=\"new\">b</span>';\
+                     parent.children.length === 1 && \
+                     parent.firstElementChild.tagName === 'SPAN' && \
+                     parent.firstElementChild.id === 'new'",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn outer_html_setter_throws_on_document_element() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "var threw = false;\
+                     try { document.documentElement.outerHTML = '<html></html>'; } \
+                     catch (e) { threw = e.name === 'NoModificationAllowedError'; }\
+                     threw",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn insert_adjacent_html_inserts_parsed_element() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "var parent = document.createElement('div');\
+                     document.body.appendChild(parent);\
+                     var el = document.createElement('a');\
+                     parent.appendChild(el);\
+                     el.insertAdjacentHTML('afterend', '<span id=\"z\">Z</span>');\
+                     parent.children.length === 2 && \
+                     parent.lastElementChild.tagName === 'SPAN' && \
+                     parent.lastElementChild.id === 'z'",
                 )
                 .unwrap();
             assert_eq!(ok, lumen_core::JsValue::Bool(true));

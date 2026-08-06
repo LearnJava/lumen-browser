@@ -1,9 +1,50 @@
 # BUG-368 — `innerHTML` на живом DOM — текстовая заглушка «Phase 0» на обоих движках: геттер отдаёт `textContent`, сеттер кладёт разметку одним текстовым узлом
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-06 (P3, вместе с [BUG-351](BUG-351-FIXED.md) — общий сериализатор/фрагмент-парсер)
 **Компонент:** js — нативные привязки `_lumen_get_inner_html`/`_lumen_set_inner_html`: `crates/js/src/v8_runtime.rs:1554-1574` (единственный оставшийся движок V8); потребители — `dom.rs:5546-5547` (живой `Element`), `4255-4256`, `4322-4323`, `6307`/`6313`
 **Найден:** P2, WPT-VENDOR-fenced-frame (2026-07-28), проба `--dump-layout` вне WPT
 **Актуализировано:** P1, 2026-08-04 (P3-v8-post-audit) — на момент подачи бага дефект был зеркальным на rquickjs (`dom.rs:878-899`); тот путь удалён целиком в S12b-F3, дефект не зависел от выбора движка и полностью пережил снос rquickjs
+
+## Фикс (P3, 2026-08-06)
+
+Реализован ровно план из раздела «Возможный фикс» ниже, одним срезом с BUG-351:
+
+- `crates/engine/html-parser` подключена как зависимость `crates/js` (была только
+  у shell) — `Cargo.toml`, комментарий с обоснованием (workspace-internal, без
+  нового внешнего dep).
+- `crates/js/src/v8_runtime.rs`: новые хелперы `serialize_node`/`serialize_children`
+  (HTML LS §13.3 fragment serializing algorithm — экранирование `&`/`<`/`>` в
+  тексте, `&`/`"` в атрибутах, список void-элементов, комментарии как
+  `<!--data-->`), `import_node` (рекурсивно пересоздаёт узлы чужого `Document`,
+  полученного от `lumen_html_parser::parse`, в live-документе — арены узлов
+  документо-локальны, `NodeId` нельзя переиспользовать между документами) и
+  `parse_html_fragment` (парсит `html`, берёт `temp.body()`'s детей, импортирует
+  их). `_lumen_get_inner_html`/`_lumen_set_inner_html` переписаны на реальную
+  сериализацию/парсинг вместо `collect_text_content`/`set_text_content`. Новые
+  натвы `_lumen_get_outer_html` (сериализует сам узел) и
+  `_lumen_parse_html_fragment` (возвращает id новых **detached** узлов —
+  использует JS-сторона для `outerHTML`-сеттера/`insertAdjacentHTML`, см.
+  [BUG-351](BUG-351-FIXED.md)).
+- `crates/js/src/dom.rs`: `MutationObserver`-обёртка `_lumen_set_inner_html`
+  теперь снимает `_lumen_get_children` до/после и репортит настоящие
+  `addedNodes`/`removedNodes` (была `_mo_notify(nid, 'childList', null, null, [], [])`
+  безусловно — зеркалит уже корректный паттерн `_lumen_set_text_content`).
+- Верификация — по дереву, не по round-trip строки (сам баг предупреждал про эту
+  ловушку): новые тесты `dom::tests::v8_dragdrop_scroll_pointer::inner_html_setter_parses_elements_not_text`
+  и `inner_html_round_trips_elements_attrs_comments_and_text` (последний — тот же
+  репро-набор, что в разделе «Симптом» ниже: `childNodes.length===4`,
+  `children.length===2`, `firstElementChild.tagName==='SPAN'`, плюс сериализация
+  геттером даёт исходную строку обратно). `cargo test -p lumen-js --features
+  v8-backend --lib` 2503/2503 зелёных (не только новые тесты — полный прогон,
+  ловит и уже существовавшие ложноположительные `getHTML`/`setHTMLUnsafe`-тесты,
+  которые теперь проверяют настоящий парсинг, а не round-trip строки).
+- **Не реализовано (вне скоупа):** HTML LS §13.4 fragment-context tree-construction
+  adjustments (парсер запускается как полнодокументный `lumen_html_parser::parse`,
+  контекстный элемент не влияет на разбор — тот же приближённый режим, что уже
+  описан как ограничение движка, см. BUG-685 про foreign content). Для типичной
+  живой разметки (`<span>`, `<b>`, `<div>` и т.п. без table/foreign-content
+  контекстных тонкостей) это не проявляется — оба новых теста и `css-ruby`
+  срез 26 (ниже) проверены на реальных случаях.
 
 ## Симптом
 

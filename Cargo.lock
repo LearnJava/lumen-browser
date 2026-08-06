@@ -2308,6 +2308,7 @@ dependencies = [
  "lumen-css-parser",
  "lumen-dom",
  "lumen-font",
+ "lumen-html-parser",
  "lumen-image",
  "lumen-layout",
  "lumen-paint",

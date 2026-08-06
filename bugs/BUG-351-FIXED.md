@@ -1,8 +1,42 @@
 # BUG-351 — `outerHTML` and `insertAdjacentHTML` missing entirely on the live `Element` interface
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-06 (P3, вместе с [BUG-368](BUG-368-FIXED.md) — общий сериализатор/фрагмент-парсер)
 **Компонент:** js (`crates/js/src/dom.rs` — the live-DOM `Element` object literal, roughly lines 5522-5880 in the `p1-*`/`p2-*` worktree snapshot; `insertAdjacentText`/`insertAdjacentElement` live right next to the gap)
 **Найден:** P2, WPT-VENDOR-domparsing (2026-07-26), `run_report.py --all --root domparsing --recursive`
+
+## Фикс (P3, 2026-08-06)
+
+Реализован вариант 2 из «Возможный фикс» ниже, вместе с [BUG-368](BUG-368-FIXED.md)
+(тот же нативный сериализатор/фрагмент-парсер, `crates/js/src/v8_runtime.rs`):
+
+- `outerHTML` getter/setter добавлены на живой `Element` (`dom.rs`, рядом с
+  `innerHTML`): геттер — новый натив `_lumen_get_outer_html(nid)` (сериализует
+  сам узел — открывающий тег+атрибуты+дети+закрывающий тег, или экранированные
+  данные для text/comment). Сеттер — no-op, если `this` не в дереве
+  (`_lumen_get_parent(nid) === null`), бросает `NoModificationAllowedError`
+  (`DOMException`), если родитель — сам узел документа
+  (`_lumen_get_parent(nid) === _lumen_get_document_root()`, т.е. `this` —
+  элемент документа), иначе парсит присвоенную строку через новый натив
+  `_lumen_parse_html_fragment(html)` (возвращает id новых **detached** узлов
+  уже в live-документе) и делегирует в уже существующий `replaceWith`
+  (`apply` с обёрнутыми через `_lumen_make_element` узлами) — тот же приём,
+  что и у `insertAdjacentElement`.
+- `insertAdjacentHTML` добавлен рядом с `insertAdjacentText`/`insertAdjacentElement`
+  — тот же `_lumen_parse_html_fragment` + делегирование в `before`/`prepend`/
+  `append`/`after` по `where`-аргументу (`apply` с массивом обёрнутых узлов).
+- Верификация — по дереву (`children.length`, `tagName`, `id`), не по round-trip
+  строки: новые тесты `outer_html_getter_serializes_element_itself`,
+  `outer_html_setter_replaces_element_in_parent`,
+  `outer_html_setter_throws_on_document_element`,
+  `insert_adjacent_html_inserts_parsed_element` (`dom.rs`, `cargo test -p
+  lumen-js --features v8-backend --lib`, 2503/2503 зелёных).
+- Пункт 3 исходной заявки (`outerhtml-01.html`'s `NoModificationAllowedError`
+  throw-check) закрыт тем же срезом — см. `outer_html_setter_throws_on_document_element`.
+- **Не реализовано (вне скоупа, унаследовано от BUG-368):** HTML LS §13.4
+  fragment-context tree-construction adjustments — `_lumen_parse_html_fragment`
+  парсит как полный документ и берёт `<body>`'s детей, контекстный элемент
+  (`this`'s namespace/tag) не влияет на разбор. Не проявляется для типичной
+  живой разметки без table/foreign-content контекстных тонкостей.
 
 ## Симптом
 
