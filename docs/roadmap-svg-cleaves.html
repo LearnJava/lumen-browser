@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-06",
  "counts": {
-  "open": 313,
+  "open": 314,
   "fixed": 330,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 643,
+ "total_bugs": 644,
  "phases": [
   {
    "id": "P0",
@@ -3683,9 +3683,12 @@
       {
        "id": "WPT-VENDOR-shape-detection",
        "title": "WPT: вендорить + прогнать категорию `shape-detection`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root shape-detection --recursive --processes=4`, 2 мин 16 с, 26 файлов, 23 отобранных id) — **0/23 harness OK**. Все id — `.https.`/`.sub.https.`, все TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`, ни один не исполнился. Shape Detection API реально реализован как Phase 0 заглушка (`crates/js/src/shape_detection.rs`) и соответствует своему doc-комментарию (`FaceDetector`/`BarcodeDetector`/`TextDetector.detect()` → `[]`) — не баг. Живая проба (`--mcp-live-port`) нашла независимую находку — [BUG-677](bugs/BUG-677-OPEN.md): все три класса не совпадают с WebIDL-формой (`constructor.length` 1 вместо 0, нет `Symbol.toStringTag`, внутреннее состояние утекает как собственные свойства инстанса), тот же класс, что [BUG-365](bugs/BUG-365-OPEN.md). Один новый номер бага",
+       "bugs": [
+        "BUG-677"
+       ]
       },
       {
        "id": "WPT-VENDOR-shared-storage",
@@ -9219,6 +9222,13 @@
    "status": "open",
    "title": "`ShadowRoot` is a plain `{}`-literal, not a `class`/prototype-chained interface — no global `window.ShadowRoot` constructor (`'ShadowRoot' in window === false`)…",
    "component": "js (`crates/js/src/dom.rs:1310-1366` — `_lumen_make_shadow_root`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-677": {
+   "status": "open",
+   "title": "`FaceDetector`/`BarcodeDetector`/`TextDetector` all deviate from their WebIDL interface shape the same way: constructor `.length` is 1 instead of the spec's 0 (…",
+   "component": "js (`crates/js/src/shape_detection.rs:18-86` — `SHAPE_DETECTION_SHIM`)",
    "date": null,
    "debtor": false
   }
