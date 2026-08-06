@@ -57,8 +57,8 @@
 {
  "generated": "2026-08-06",
  "counts": {
-  "open": 312,
-  "fixed": 339,
+  "open": 310,
+  "fixed": 341,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -3781,9 +3781,9 @@
       {
        "id": "WPT-VENDOR-subresource-integrity",
        "title": "WPT: вендорить + прогнать категорию `subresource-integrity`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root subresource-integrity --recursive`, 7:59, 44 файла, 23 отобранных id → 30 инстансов из-за variant-фан-аута) — **7/30 harness OK, 39/156 сабтестов**. Новых находок движка нет: невендоренный целиком `/common/` (тот же класс, что `/common/gc.js` у `streams`) не дал прогнать даже базовый нетентативный хеш-тест `subresource-integrity.html`; 2 `ERROR` — реконфирмация [BUG-380](bugs/BUG-380-OPEN.md); `signatures/tentative/accept-signature.parser-inserted.html` (4 FAIL) — реконфирмация [BUG-486](bugs/BUG-486-OPEN.md) (`document.currentScript` отсутствует); `signatures/tentative/inline.html` (6 FAIL) — Signature-based Integrity (WICG-черновик) не реализован вовсе, но лежит целиком под `tentative/`, тот же класс что `subapps`/`speculation-rules`. Новых номеров бага не заведено"
       },
       {
        "id": "WPT-VENDOR-svg",
@@ -6955,17 +6955,17 @@
    "debtor": false
   },
   "BUG-346": {
-   "status": "open",
-   "title": "`Url::resolve()` не схлопывает `.`/`..` dot-segments (документированный, намеренный гэп — модульный doc-комментарий прямо говорит «добавим, когда упрёмся»): отн…",
-   "component": "core (`crates/core/src/url.rs::Url::resolve`)",
-   "date": null,
+   "status": "fixed",
+   "title": "`Url::resolve()` не схлопывала `.`/`..` dot-segments (документированный, намеренный гэп — модульный doc-комментарий прямо говорил «добавим, когда упрёмся»): отн…",
+   "component": "core (`crates/core/src/url.rs::Url::parse`/`resolve`)",
+   "date": "2026-08-06",
    "debtor": false
   },
   "BUG-347": {
-   "status": "open",
+   "status": "fixed",
    "title": "`fetch()` не резолвит относительные URL относительно document base вовсе (`Url::parse(url)` на буквальном JS-аргументе, без base) — любой `fetch()` с относитель…",
    "component": "js (`crates/js/src/dom.rs` fetch shim), network (`crates/network/src/lib.rs::HttpClient::fetch_sync`+3 sibling fns)",
-   "date": null,
+   "date": "2026-08-06",
    "debtor": false
   },
   "BUG-348": {

@@ -99,8 +99,8 @@ synchronous `_perf_entries` push.
   (the plain-object "list" passed to callbacks, `dom.rs:8319-8326`) works.
 - `case-sensitivity.any.html` (`resources/square.png?id=1` never loads,
   "fetch error: invalid url: invalid url: missing scheme") — same class
-  as [BUG-347](bugs/BUG-347-OPEN.md) (`fetch()`/resource loading doesn't
-  resolve relative URLs).
+  as [BUG-347](bugs/BUG-347-FIXED.md) (`fetch()`/resource loading doesn't
+  resolve relative URLs — fixed 2026-08-06).
 - `timing-removed-iframe.html` (`Cannot read properties of null (reading
   'performance')` on a detached iframe's `contentWindow`) — same class as
   the already-documented `<iframe>` no-separate-browsing-context gap
