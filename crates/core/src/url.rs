@@ -12,9 +12,13 @@
 //! к полям через аксессоры, никто из них больше не парсит URL ad-hoc.
 //!
 //! Сознательно не реализуем здесь:
-//! - WHATWG URL Standard полностью (percent-decoding, IDNA UTS #46,
-//!   `.`/`..` нормализация в path) — добавим, когда упрёмся;
+//! - WHATWG URL Standard полностью (percent-decoding, IDNA UTS #46);
 //! - userinfo (`user:pass@`) — отбрасываем при парсинге, в http(s) deprecated.
+//!
+//! `.`/`..` dot-segment нормализация в path (RFC 3986 §5.2.4) реализована —
+//! см. [`remove_dot_segments`] — и применяется в [`Url::parse`] для схем с
+//! authority (`http`/`https`/`file`/`ws`/`wss`), включая пути, дописанные
+//! [`Url::resolve`] (который всегда идёт через `parse`).
 
 use crate::error::{Error, Result};
 use std::fmt;
@@ -58,6 +62,9 @@ impl Url {
 
         let (path, after_path) = split_at_any(path_start, &['?', '#']);
         let mut path = path.to_owned();
+        if has_authority {
+            path = remove_dot_segments(&path);
+        }
         if has_authority && path.is_empty() {
             path.push('/');
         }
@@ -144,7 +151,9 @@ impl Url {
     }
 
     /// Разрешить относительный или абсолютный `reference` относительно `self`.
-    /// Упрощённый алгоритм RFC 3986 §5.3 без нормализации `.`/`..`.
+    /// Упрощённый алгоритм RFC 3986 §5.3; `.`/`..` dot-segments в получившемся
+    /// пути схлопываются через [`Url::parse`] (все ветки этой функции строят
+    /// результат через него).
     pub fn resolve(&self, reference: &str) -> Result<Self> {
         if has_scheme(reference) {
             return Self::parse(reference);
@@ -274,6 +283,49 @@ fn parse_authority(authority: &str, scheme: &str) -> Result<(String, Option<u16>
             }
         }
         None => Ok((host_port.to_owned(), None)),
+    }
+}
+
+/// RFC 3986 §5.2.4 remove_dot_segments — схлопывает `.`/`..` в path.
+/// Оперирует только компонентом path (без query/fragment).
+fn remove_dot_segments(path: &str) -> String {
+    let mut input = path;
+    let mut output = String::new();
+    while !input.is_empty() {
+        if let Some(rest) = input.strip_prefix("../") {
+            input = rest;
+        } else if let Some(rest) = input.strip_prefix("./") {
+            input = rest;
+        } else if input.starts_with("/./") {
+            input = &input[2..];
+        } else if input == "/." {
+            input = "/";
+        } else if input.starts_with("/../") {
+            input = &input[3..];
+            remove_last_segment(&mut output);
+        } else if input == "/.." {
+            input = "/";
+            remove_last_segment(&mut output);
+        } else if input == "." || input == ".." {
+            input = "";
+        } else {
+            let start = usize::from(input.starts_with('/'));
+            let seg_end = input[start..]
+                .find('/')
+                .map(|i| i + start)
+                .unwrap_or(input.len());
+            output.push_str(&input[..seg_end]);
+            input = &input[seg_end..];
+        }
+    }
+    output
+}
+
+/// Убрать последний сегмент и предшествующий `/` (если есть) из output-буфера.
+fn remove_last_segment(output: &mut String) {
+    match output.rfind('/') {
+        Some(i) => output.truncate(i),
+        None => output.clear(),
     }
 }
 
@@ -496,6 +548,59 @@ mod tests {
         let base = Url::parse("https://example.com/page?old=1#f").unwrap();
         let r = base.resolve("?new=2").unwrap();
         assert_eq!(r.as_str(), "https://example.com/page?new=2");
+    }
+
+    #[test]
+    fn resolve_dot_segment_one_level_up() {
+        let base =
+            Url::parse("http://127.0.0.1:8300/custom-elements/reactions/HTMLTableElement.html")
+                .unwrap();
+        let r = base
+            .resolve("../resources/custom-elements-helpers.js")
+            .unwrap();
+        assert_eq!(
+            r.as_str(),
+            "http://127.0.0.1:8300/custom-elements/resources/custom-elements-helpers.js"
+        );
+    }
+
+    #[test]
+    fn resolve_dot_segment_two_levels_up() {
+        let base = Url::parse(
+            "http://127.0.0.1:8300/custom-elements/reactions/customized-builtins/x.html",
+        )
+        .unwrap();
+        let r = base
+            .resolve("../../resources/custom-elements-helpers.js")
+            .unwrap();
+        assert_eq!(
+            r.as_str(),
+            "http://127.0.0.1:8300/custom-elements/resources/custom-elements-helpers.js"
+        );
+    }
+
+    #[test]
+    fn parse_collapses_dot_segments_directly() {
+        let u = Url::parse("https://example.com/a/../b").unwrap();
+        assert_eq!(u.path(), "/b");
+    }
+
+    #[test]
+    fn parse_collapses_single_dot_segment() {
+        let u = Url::parse("https://example.com/a/./b").unwrap();
+        assert_eq!(u.path(), "/a/b");
+    }
+
+    #[test]
+    fn parse_trailing_dot_dot_collapses_to_parent() {
+        let u = Url::parse("https://example.com/a/b/..").unwrap();
+        assert_eq!(u.path(), "/a/");
+    }
+
+    #[test]
+    fn parse_dot_dot_above_root_is_dropped() {
+        let u = Url::parse("https://example.com/../a").unwrap();
+        assert_eq!(u.path(), "/a");
     }
 
     #[test]
