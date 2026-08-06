@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-06",
  "counts": {
-  "open": 311,
+  "open": 312,
   "fixed": 342,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 653,
+ "total_bugs": 654,
  "phases": [
   {
    "id": "P0",
@@ -3808,9 +3808,12 @@
       {
        "id": "WPT-VENDOR-timing-entrytypes-registry",
        "title": "WPT: вендорить + прогнать категорию `timing-entrytypes-registry`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root timing-entrytypes-registry --recursive`, ~45 с, 2 файла/2 id) — **0/2 harness OK, 2/8 сабтестов**. `performance.mark()`/`performance.measure()` доставляют записи через `PerformanceObserver`, но записи — обычные объектные литералы, не инстансы `PerformanceMark`/`PerformanceMeasure` (`[object Object]` вместо `[object PerformanceMark]`/`[object PerformanceMeasure]`) — заведён [BUG-687](bugs/BUG-687-OPEN.md), тот же класс, что [BUG-645](bugs/BUG-645-OPEN.md)/[BUG-673](bugs/BUG-673-OPEN.md). Второстепенный сигнал — реконфирмация: `resource` NOTRUN (BUG-520), `paint`/`longtask` NOTRUN (BUG-645/BUG-354). Один новый номер бага",
+       "bugs": [
+        "BUG-687"
+       ]
       },
       {
        "id": "WPT-VENDOR-top-level-storage-access-api",
@@ -9316,6 +9319,13 @@
    "status": "open",
    "title": "`implicit_role` maps only HTML tag local names (`nav`/`main`/`button`/`img`/…) and never checks `node.namespace()` — no arm exists for any SVG tag (`svg`/`circl…",
    "component": "a11y (`crates/engine/a11y/src/roles.rs::implicit_role`, line 349)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-687": {
+   "status": "open",
+   "title": "`performance.mark()`/`.measure()` build entries as plain object literals (`{ entryType: 'mark', name, startTime, duration }`); neither `PerformanceMark` nor `Pe…",
+   "component": "js (`crates/js/src/dom.rs:8227` — `performance.mark()`; `crates/js/src/dom.rs:8247` — `performance.measure()`)",
    "date": null,
    "debtor": false
   }
