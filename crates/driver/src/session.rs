@@ -878,9 +878,34 @@ impl BrowserSession for InProcessSession {
         self.relayout()
     }
 
-    fn scroll(&mut self, _target: &Target, delta: ScrollDelta) -> Result<()> {
-        // Whole-page scroll only (matches WinitSession — `_target` is unused
-        // there too): off-main-thread compositor update, no relayout.
+    fn scroll(&mut self, target: &Target, delta: ScrollDelta) -> Result<()> {
+        // BUG-338: route to the nearest scrolling ancestor of `target`
+        // (inclusive of the resolved node itself; `Target::Point` resolves
+        // via the same hit-test `click` uses) when one exists — mirrors
+        // `WinitSession::scroll`'s node-based routing. The closure borrows
+        // `self` immutably and returns before the mutation below, so the
+        // fallback mutable borrow doesn't conflict with it.
+        let routed = (|| -> Option<(NodeId, f32, f32)> {
+            let state = self.state.as_ref()?;
+            let doc = Self::lock_doc(state).ok()?;
+            let (node, _x, _y) = resolve_click_target(state, &doc, target).ok()?;
+            let containers = lumen_layout::collect_scroll_containers(&state.layout_root);
+            let scroll_node = lumen_layout::find_scroll_container_for_node(&containers, &doc, node)?;
+            let c = containers.iter().find(|c| c.node == scroll_node)?;
+            let new_x = (c.scroll_x + delta.x).clamp(0.0, (c.scroll_width - c.clip_rect.width).max(0.0));
+            let new_y = (c.scroll_y + delta.y).clamp(0.0, (c.scroll_height - c.clip_rect.height).max(0.0));
+            Some((scroll_node, new_x, new_y))
+        })();
+
+        if let Some((scroll_node, new_x, new_y)) = routed {
+            let state = self.state.as_mut().ok_or_else(|| {
+                Error::Other("сессия не инициализирована — вызовите navigate() первым".into())
+            })?;
+            lumen_layout::set_scroll_position(&mut state.layout_root, scroll_node, new_x, new_y);
+            return Ok(());
+        }
+
+        // Whole-page scroll fallback: off-main-thread compositor update, no relayout.
         self.scroll_page_by(delta.x, delta.y);
         Ok(())
     }
@@ -2577,5 +2602,66 @@ mod tests {
             .type_text(&Target::Selector("#d".into()), "hi")
             .expect_err("type_text on a div must fail");
         assert!(err.to_string().contains("не является"), "unexpected error: {err}");
+    }
+
+    // ── BUG-338: scroll(target) routes to a nested overflow ancestor ────────
+
+    fn nested_scroll_html() -> &'static str {
+        r#"<html><body style="margin:0">
+            <div id="outer" style="overflow:auto;width:200px;height:100px">
+                <p id="leaf" style="margin-top:400px">deep content</p>
+            </div>
+        </body></html>"#
+    }
+
+    #[test]
+    fn scroll_with_selector_target_scrolls_nested_container_not_page() {
+        let mut s = make_session(nested_scroll_html());
+        s.scroll(&Target::Selector("#leaf".into()), ScrollDelta { x: 0.0, y: 50.0 })
+            .expect("scroll");
+
+        let containers = lumen_layout::collect_scroll_containers(&s.state().unwrap().layout_root);
+        assert_eq!(containers.len(), 1);
+        assert_eq!(containers[0].scroll_y, 50.0, "#outer should have absorbed the scroll");
+
+        // Page-level (compositor) scroll must stay untouched — the delta was
+        // routed to the nested container, not the root.
+        let root_offset = s.active_property_trees().and_then(|t| t.scroll.nodes.first().map(|n| n.offset_y));
+        assert_eq!(root_offset, Some(0.0));
+    }
+
+    #[test]
+    fn scroll_with_selector_target_clamps_to_container_bounds() {
+        let mut s = make_session(nested_scroll_html());
+        s.scroll(&Target::Selector("#leaf".into()), ScrollDelta { x: 0.0, y: 10_000.0 })
+            .expect("scroll");
+        let containers = lumen_layout::collect_scroll_containers(&s.state().unwrap().layout_root);
+        // Content height (400px margin + line) minus 100px viewport clamps the max.
+        assert!(containers[0].scroll_y > 0.0);
+        assert!(containers[0].scroll_y <= containers[0].scroll_height - containers[0].clip_rect.height);
+    }
+
+    #[test]
+    fn scroll_with_point_over_container_routes_there_too() {
+        // A point over #outer's own scrollport routes there — mirrors real
+        // wheel-event routing (`try_scroll_overflow_container`), not a bypass.
+        let mut s = make_session(nested_scroll_html());
+        s.scroll(&Target::Point { x: 5.0, y: 5.0 }, ScrollDelta { x: 0.0, y: 30.0 })
+            .expect("scroll");
+        let containers = lumen_layout::collect_scroll_containers(&s.state().unwrap().layout_root);
+        assert_eq!(containers[0].scroll_y, 30.0);
+    }
+
+    #[test]
+    fn scroll_with_target_outside_any_container_falls_back_to_page() {
+        // `body` has no scrolling overflow ancestor of its own — preserves the
+        // pre-BUG-338 whole-page `scroll_page_by` behavior for such targets.
+        let mut s = make_session(nested_scroll_html());
+        s.scroll(&Target::Selector("body".into()), ScrollDelta { x: 0.0, y: 30.0 })
+            .expect("scroll");
+        let containers = lumen_layout::collect_scroll_containers(&s.state().unwrap().layout_root);
+        assert_eq!(containers[0].scroll_y, 0.0, "#outer must stay untouched");
+        let root_offset = s.active_property_trees().and_then(|t| t.scroll.nodes.first().map(|n| n.offset_y));
+        assert_eq!(root_offset, Some(30.0), "delta should land on the page-level scroll node");
     }
 }

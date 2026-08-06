@@ -21,6 +21,7 @@ mod snapshot_generator;
 mod snapshot_vs_edge;
 mod test_00_calibration;
 mod test_automation_commands;
+mod test_bug338_nested_scroll;
 mod test_01_sanity;
 mod test_02_color_named;
 mod test_03_color_formats;

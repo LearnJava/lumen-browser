@@ -1409,6 +1409,28 @@ pub fn find_scroll_container_at(
     })
 }
 
+/// Find the nearest scrolling ancestor of `node` (inclusive of `node` itself),
+/// walking up the DOM parent chain.
+///
+/// BUG-338: mirrors [`find_scroll_container_at`] but resolves by node identity
+/// instead of a hit-tested point — used by automation surfaces (MCP `scroll`
+/// `target`, fragment navigation) that already know which element they want
+/// scrolled rather than a screen coordinate under a cursor.
+pub fn find_scroll_container_for_node(
+    containers: &[ScrollContainer],
+    doc: &lumen_dom::Document,
+    node: lumen_dom::NodeId,
+) -> Option<lumen_dom::NodeId> {
+    let mut cur = Some(node);
+    while let Some(n) = cur {
+        if containers.iter().any(|c| c.node == n) {
+            return Some(n);
+        }
+        cur = doc.get(n).parent;
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -18462,6 +18484,53 @@ mod tests {
         // Point in outer but not in inner
         let result = find_scroll_container_at(&[outer, inner], 10.0, 10.0);
         assert_eq!(result, Some(lumen_dom::NodeId::from_index(1)));
+    }
+
+    // ── find_scroll_container_for_node (BUG-338) ────────────────────────────
+
+    #[test]
+    fn find_scroll_container_for_node_walks_dom_ancestors() {
+        let doc = lumen_html_parser::parse(
+            "<div id=\"outer\"><div id=\"inner\"><p id=\"leaf\">x</p></div></div>",
+        );
+        let sheet = lumen_css_parser::parse(
+            "#outer { overflow: auto; width: 200px; height: 100px; }\n\
+             #inner { height: 400px; }",
+        );
+        let root = layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let containers = collect_scroll_containers(&root);
+        assert_eq!(containers.len(), 1, "only #outer should be a scroll container");
+        let outer_node = containers[0].node;
+
+        let leaf = crate::selector_query::find_box_by_selector(&root, &doc, "#leaf")
+            .expect("#leaf should have a layout box")
+            .node;
+        let result = find_scroll_container_for_node(&containers, &doc, leaf);
+        assert_eq!(result, Some(outer_node), "#leaf's nearest scrolling ancestor is #outer");
+    }
+
+    #[test]
+    fn find_scroll_container_for_node_matches_node_itself() {
+        let doc = lumen_html_parser::parse("<div id=\"outer\"><p>x</p></div>");
+        let sheet = lumen_css_parser::parse("#outer { overflow: auto; width: 200px; height: 100px; }");
+        let root = layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let containers = collect_scroll_containers(&root);
+        let outer_node = containers[0].node;
+        let result = find_scroll_container_for_node(&containers, &doc, outer_node);
+        assert_eq!(result, Some(outer_node), "the scroll container itself matches, no walk needed");
+    }
+
+    #[test]
+    fn find_scroll_container_for_node_none_when_no_scrolling_ancestor() {
+        let doc = lumen_html_parser::parse("<div id=\"leaf\">x</div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let containers = collect_scroll_containers(&root);
+        assert!(containers.is_empty());
+        let leaf = crate::selector_query::find_box_by_selector(&root, &doc, "#leaf")
+            .expect("#leaf should have a layout box")
+            .node;
+        assert_eq!(find_scroll_container_for_node(&containers, &doc, leaf), None);
     }
 
     // ── collect_view_transition_names ─────────────────────────────────────────
