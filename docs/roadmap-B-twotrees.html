@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-06",
  "counts": {
-  "open": 314,
+  "open": 315,
   "fixed": 330,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 644,
+ "total_bugs": 645,
  "phases": [
   {
    "id": "P0",
@@ -3735,9 +3735,12 @@
       {
        "id": "WPT-VENDOR-soft-navigation-heuristics",
        "title": "WPT: вендорить + прогнать категорию `soft-navigation-heuristics`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root soft-navigation-heuristics --recursive --processes=4`, 1:38, 104 файла, 94 отобранных id) — **73/94 harness OK, 2/101 сабтестов**. Необычно высокий harness-OK для testdriver-насыщенной категории (93/103 файлов упоминают testdriver, но SKIP не было ни одного — вся категория опирается только на `test_driver.click()`, единственное реально реализованное действие исполнителя). Доминирующий сигнал — 54 FAIL «Timed out waiting for LCP entries»: новая находка — [BUG-678](bugs/BUG-678-OPEN.md), `_lumen_deliver_soft_nav` («shell hook» по своему doc-комментарию) не вызывается вообще нигде в движке (в отличие от соседних `_lumen_deliver_lcp_entry`/`_lumen_deliver_paint_entry`, реально подключённых из shell/driver) — детекция мягкой навигации не реализована совсем, отличается от уже известного [BUG-354](bugs/BUG-354-OPEN.md) (тот про ложь `supportedEntryTypes`, этот — про то, что событие в принципе не генерируется). Второстепенный сигнал того же бага — 14 FAIL `assert_implements: LargestContentfulPaint is not implemented` (WebIDL-конструктор LCP-записи отсутствует, записи — голые объектные литералы, тот же класс, что BUG-673, впервые для LCP). Остальной сигнал — реконфирмация: 34 FAIL [BUG-574](bugs/BUG-574-OPEN.md) (`Node.contains` отсутствует), 28 FAIL/ERROR [BUG-346](bugs/BUG-346-OPEN.md) (`..`-сегменты в `Url::resolve()` — 404 на `../../resources/soft-navigation-test-helper.js` из `dom/tentative/`/`detection/tentative/`). Один новый номер бага",
+       "bugs": [
+        "BUG-678"
+       ]
       },
       {
        "id": "WPT-VENDOR-speculation-rules",
@@ -9250,6 +9253,13 @@
    "status": "open",
    "title": "`FaceDetector`/`BarcodeDetector`/`TextDetector` all deviate from their WebIDL interface shape the same way: constructor `.length` is 1 instead of the spec's 0 (…",
    "component": "js (`crates/js/src/shape_detection.rs:18-86` — `SHAPE_DETECTION_SHIM`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-678": {
+   "status": "open",
+   "title": "Soft Navigation detection never fires — `PerformanceSoftNavigationEntry`/`_lumen_deliver_soft_nav` (the \"shell hook\" per its own doc comment) exist but nothing…",
+   "component": "js (`crates/js/src/soft_navigation.rs` — `_lumen_deliver_soft_nav` has no caller anywhere in `crates/shell/`/`crates/driver/`)",
    "date": null,
    "debtor": false
   }
