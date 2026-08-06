@@ -1,6 +1,6 @@
 # BUG-339: `ch_approximated_as_half_em`/`ex_approximated_as_half_em` fail when run after other `lumen-layout` tests (thread-local leak)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-06 (P3)
 **Компонент:** layout (`crates/engine/layout/src/style.rs`, `FONT_CH_EX` thread-local)
 **Найден:** P1, CC-CSS-4 2026-07-24 (workspace `scoped-test.sh` gate before merge)
 
@@ -80,3 +80,21 @@ approximation constant belongs to `resolve()` now.
 `lumen-layout` (2 failures out of 3351), and still not attributable to the branch under
 test. Confirmed independent of `p4-content-url`: `cascade_at` reaches only `compute_style`
 plus the HTML/CSS parsers, none of which that branch modifies.
+
+## Fix 2026-08-06 (P3)
+
+Applied the revised fix direction verbatim. Both tests now assert two things instead of
+one: (1) `cascade_at` still stores the authored `Length::Ch`/`Length::Ex` unit verbatim
+(unchanged cascade behaviour, was never wrong), and (2) `.resolve(16.0, None, vp())` on
+that stored value yields the spec `0.5em` fallback px (`2ch` → `16.0`, `4ex` → `32.0`),
+matching the sibling `length_resolve_ch_ex_fallback_is_half_em` test added earlier in the
+same file (style.rs, CSS Values L4 §5.1.1 section) that already exercised this exact
+`resolve()`-time behaviour. Each test starts with `pop_ch_ex_context(None)` to guarantee
+`FONT_CH_EX` is unset regardless of what a previously-run test on the same reused OS
+thread left behind — the original thread-local-leak framing turned out to be moot once
+the assertion targets `resolve()` (which itself reads `FONT_CH_EX` and is exactly the
+thing under test), but clearing it first keeps the test deterministic and self-contained.
+
+Verified: `cargo test -p lumen-layout --lib` — 3493/3493 passed (isolated and full-suite
+runs both green, no more order dependence). `cargo clippy -p lumen-layout --all-targets
+-- -D warnings` clean.

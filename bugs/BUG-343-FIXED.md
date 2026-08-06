@@ -187,4 +187,4 @@ Verified:
 - The pre-existing regression comments that were written around this behaviour
   (BUG-104, BUG-158, BUG-179, BUG-209, BUG-294) all keep their tests green:
   `cargo test -p lumen-layout` 3454 passed, 2 failed (pre-existing
-  [BUG-339](BUG-339-OPEN.md), red on `main`).
+  [BUG-339](BUG-339-FIXED.md), red on `main`).

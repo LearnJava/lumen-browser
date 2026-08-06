@@ -31710,15 +31710,22 @@ mod tests {
 
     #[test]
     fn ch_approximated_as_half_em() {
-        // 2ch ≈ 1em. At default font-size 16px: 2ch = 16px → stored as Em(1.0).
+        // Cascade stores the authored Ch unit verbatim (BUG-339: it used to fold
+        // into Em at cascade time, but resolution moved to `Length::resolve`).
+        // 2ch ≈ 1em is the spec §5.1.1 fallback applied there when FONT_CH_EX is
+        // unset: at default font-size 16px, 2ch = 2 * 0.5 * 16 = 16px = 1em.
+        pop_ch_ex_context(None);
         let s = cascade_at("<div>", "div { width: 2ch; }", &[0]);
-        assert_eq!(s.width, Some(Length::Em(1.0)));
+        assert_eq!(s.width, Some(Length::Ch(2.0)));
+        assert_eq!(s.width.unwrap().resolve(16.0, None, vp()), Some(16.0));
     }
 
     #[test]
     fn ex_approximated_as_half_em() {
+        pop_ch_ex_context(None);
         let s = cascade_at("<div>", "div { width: 4ex; }", &[0]);
-        assert_eq!(s.width, Some(Length::Em(2.0)));
+        assert_eq!(s.width, Some(Length::Ex(4.0)));
+        assert_eq!(s.width.unwrap().resolve(16.0, None, vp()), Some(32.0));
     }
 
     #[test]

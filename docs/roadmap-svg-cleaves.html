@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-06",
  "counts": {
-  "open": 315,
-  "fixed": 330,
+  "open": 310,
+  "fixed": 336,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 645,
+ "total_bugs": 646,
  "phases": [
   {
    "id": "P0",
@@ -6531,10 +6531,10 @@
   },
   "BUG-286": {
    "status": "open",
-   "title": "Первый скролл колесом на тяжёлой реальной странице (https://ria.ru) подвисает на ~1с (`[engine] relayout 1041.99ms` посреди скролла) — `content-visibility:auto`…",
+   "title": "Первый скролл колесом на тяжёлой реальной странице (https://ria.ru) подвисал на ~1с (`[engine] relayout 1041.99ms` посреди скролла) — `content-visibility:auto`…",
    "component": "shell (`main.rs`, `maybe_expand_cv_relevant`)",
    "date": null,
-   "debtor": false
+   "debtor": true
   },
   "BUG-287": {
    "status": "fixed",
@@ -6670,10 +6670,10 @@
    "debtor": false
   },
   "BUG-307": {
-   "status": "open",
+   "status": "fixed",
    "title": "UI-поток «не отвечает» (IsHungAppWindow): обратимо 39–48 с на ria/rbc, НЕОБРАТИМО после вкладок-гигантов github+stackoverflow — сессия мертва, даже navigate по…",
    "component": "shell (main thread) / network",
-   "date": null,
+   "date": "2026-08-06",
    "debtor": false
   },
   "BUG-308": {
@@ -6838,10 +6838,10 @@
    "debtor": true
   },
   "BUG-331": {
-   "status": "open",
-   "title": "Cloudflare-защищённые сайты стабильно отдают Lumen `HTTP 503` (4/4 повторов на httpbin.org), хотя `curl` с идентичной строкой User-Agent (`Lumen/0.5.0`) получае…",
-   "component": "network (`crates/network/src/tls/fingerprint.rs`, `http/headers.rs`)",
-   "date": null,
+   "status": "fixed",
+   "title": "Cloudflare-защищённые сайты стабильно отдавали Lumen `HTTP 503` (4/4 повторов на httpbin.org) в момент заявки (2026-07-23), хотя `curl` с идентичной строкой Use…",
+   "component": "network (`crates/network/src/tls/mod.rs`, `http/headers.rs`)",
+   "date": "2026-08-06",
    "debtor": false
   },
   "BUG-332": {
@@ -6880,24 +6880,24 @@
    "debtor": false
   },
   "BUG-337": {
-   "status": "open",
-   "title": "Тот же баг, что BUG-336, но в femtovg-фолбэке (не дефолтный живой бэкенд — им является wgpu): `BeginStickyLayer` кламписит только против page-level `self.scroll…",
+   "status": "fixed",
+   "title": "Тот же баг, что BUG-336, но в femtovg-фолбэке (не дефолтный живой бэкенд — им является wgpu): `BeginStickyLayer` кламписил только против page-level `self.scroll…",
    "component": "paint (femtovg `backends/femtovg_backend.rs`, `BeginStickyLayer`)",
-   "date": null,
+   "date": "2026-08-06",
    "debtor": false
   },
   "BUG-338": {
-   "status": "open",
-   "title": "Ни один сурфейс автоматизации не умеет прокручивать ВЛОЖЕННЫЙ `overflow:auto`-контейнер — только страницу целиком. MCP `scroll`-тул принимает `target`, но `Wini…",
-   "component": "driver/shell (`WinitSession::scroll`, `navigate_fragment`)",
-   "date": null,
+   "status": "fixed",
+   "title": "Ни один сурфейс автоматизации не умел прокручивать ВЛОЖЕННЫЙ `overflow:auto`-контейнер — только страницу целиком. Добавлен `lumen_layout::find_scroll_container_…",
+   "component": "driver/shell (`WinitSession::scroll`, `InProcessSession::scroll`, `navigate_fragment`)",
+   "date": "2026-08-06",
    "debtor": false
   },
   "BUG-339": {
-   "status": "open",
-   "title": "`ch_approximated_as_half_em`/`ex_approximated_as_half_em` проходят изолированно, но падают в полном прогоне `cargo test -p lumen-layout --lib` — тест-харнесс пе…",
+   "status": "fixed",
+   "title": "`ch_approximated_as_half_em`/`ex_approximated_as_half_em` красили гейт `scoped-test.sh` для любой задачи, затрагивающей `lumen-layout` — не флейки/thread-local…",
    "component": "layout (`crates/engine/layout/src/style.rs`, `FONT_CH_EX` thread-local)",
-   "date": null,
+   "date": "2026-08-06",
    "debtor": false
   },
   "BUG-340": {
@@ -9244,6 +9244,13 @@
    "component": "js (`crates/js/src/soft_navigation.rs` — `_lumen_deliver_soft_nav` has no caller anywhere in `crates/shell/`/`crates/driver/`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-679": {
+   "status": "fixed",
+   "title": "HTTP 1xx informational responses (RFC 9110 §15.2, e.g. `103 Early Hints`) were treated as terminal instead of skipped. HTTP/1.1 (`read_head`) read exactly one s…",
+   "component": "network (`crates/network/src/lib.rs::read_head`, `crates/network/src/h2/conn.rs`)",
+   "date": "2026-08-06",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -9371,7 +9378,7 @@
   "driver/MCP (`BrowserSession::navigate`, live-window) / шелл-навигация по `data:`": [
    "BUG-438"
   ],
-  "driver/shell (`WinitSession::scroll`, `navigate_fragment`)": [
+  "driver/shell (`WinitSession::scroll`, `InProcessSession::scroll`, `navigate_fragment`)": [
    "BUG-338"
   ],
   "encoding": [
@@ -9914,7 +9921,10 @@
   "network (HTTP client)": [
    "BUG-278"
   ],
-  "network (`crates/network/src/tls/fingerprint.rs`, `http/headers.rs`)": [
+  "network (`crates/network/src/lib.rs::read_head`, `crates/network/src/h2/conn.rs`)": [
+   "BUG-679"
+  ],
+  "network (`crates/network/src/tls/mod.rs`, `http/headers.rs`)": [
    "BUG-331"
   ],
   "network (`filter/easylist.rs` + filter context в `lib.rs`)": [
