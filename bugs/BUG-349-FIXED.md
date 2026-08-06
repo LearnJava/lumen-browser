@@ -1,6 +1,6 @@
 # BUG-349: `restyle_root_set_for_node_change` doesn't account for `:has()` — a DOM mutation can leave an ancestor's `:has()`-dependent style stale under the incremental restyle path
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-06
 **Компонент:** layout (`crates/engine/layout/src/style.rs::restyle_root_set_for_node_change`,
 `PseudoClass::Has` matching via `matches_relative`)
 **Найден:** P1, 2026-07-26, while implementing BUG-341 S7's hover-fan-out-narrowing
@@ -56,3 +56,35 @@ correct (this is the common case for both of Lumen's current stylesheets — chr
 selector does use `:has()`, the conservative correct fallback is invalidating the whole
 document for structural/attribute mutations until a real `:has()`-dependency index is
 designed — a bigger, separate task.
+
+## Fix (P3, 2026-08-06)
+
+Implemented exactly the suggested direction above, without attempting the bigger
+`:has()`-dependency-index task. `NodeRestyleIndex` (`style.rs`) gained a new
+`has_dependent: bool` field, set by `restyle_node_index` from the same
+`complex_selector_has_any_has` scan that already fed the pre-existing `conservative`
+flag (kept as-is for the unrelated `:nth-child(… of S)`/shadow-root reasons, both of
+which stay correctly served by parent-only widening — sibling reach never leaves the
+parent's subtree). `restyle_root_set_for_node_change` now checks
+`index.has_has_dependency()` first: when set, every reported change maps to
+`doc.root()` instead of running through the parent-widen/narrow logic at all — the
+"invalidate the whole document" fallback the original writeup called for. `chrome.html`
+and every graphic test still use zero `:has()` selectors, so `is_conservative()`/
+`needs_fanout` stay `false` for both and this is a no-op for every existing fixture —
+confirmed by an unchanged `cargo test -p lumen-layout --lib` pass count baseline plus
+`dump_golden.py` (no `:has()` anywhere in the display-list-producing fixtures, so no
+diff possible).
+
+2 new unit tests in `style::node_fanout_tests`: `has_anywhere_in_the_sheet_widens_to_the_whole_document`
+(replaces the old `has_anywhere_in_the_sheet_disables_narrowing`, which asserted the
+insufficient parent-only widening as correct) and
+`has_far_above_the_mutated_node_is_caught_by_the_document_wide_widening` — the exact
+`article:has(.expanded)` / three-levels-deep mutation shape from the Симптом section
+above, asserting the root-set now reaches `doc.root()` instead of stopping at the
+mutated node's immediate parent. `cargo test -p lumen-layout --lib`: 3494/3494 green.
+`cargo clippy -p lumen-layout --all-targets -- -D warnings`: clean.
+
+Still not attempted, same as the original writeup flagged as a bigger separate task: a
+real `:has()`-dependency index that narrows the whole-document fallback to just the
+ancestors a given `:has()` selector could actually reach. `INCREMENTAL_RESTYLE` remains
+off by default (BUG-341, paused).

@@ -12468,11 +12468,12 @@ pub fn restyle_root_set_for_state_change(
 ///
 /// `:has()` binds one node's match result to *other* nodes' state, in the one
 /// direction [`restyle_root_set_for_node_change`]'s subtree-shaped root-set
-/// cannot express (BUG-348). The pre-S17 widen-to-parent at least re-cascaded
-/// the mutated node's immediate parent, so a `:has()` on that parent happened
-/// to be re-evaluated; narrowing to the node itself would take even that away.
-/// Sheets using `:has()` therefore keep the old behaviour verbatim — this
-/// slice neither fixes nor worsens BUG-348.
+/// cannot express (BUG-348/BUG-349) — the affected ancestor can sit
+/// arbitrarily far above the mutated node, not just at its immediate parent.
+/// [`restyle_node_index`] uses this to set
+/// [`NodeRestyleIndex::has_has_dependency`], which makes
+/// [`restyle_root_set_for_node_change`] widen to the whole document instead of
+/// the parent while any selector in the sheet uses `:has()` (BUG-349's fix).
 fn complex_selector_has_any_has(c: &ComplexSelector) -> bool {
     fn compound_has_any_has(compound: &CompoundSelector) -> bool {
         compound.parts.iter().any(|p| match p {
@@ -12594,17 +12595,33 @@ pub struct NodeRestyleIndex<'a> {
     sibling_sources: Vec<&'a CompoundSelector>,
     /// The per-node narrowing below is unsound for this document/sheet pair, so
     /// every changed node widens to its parent (pre-S17 behaviour). Set by
-    /// `:has()` anywhere in the sheet (BUG-348's direction, deliberately left
-    /// exactly as it was), by `:nth-child(… of S)` (sibling reach with no
-    /// combinator to see it) or by the presence of any shadow root (shadow-tree
-    /// sheets are not scanned here — the same carve-out S7 made).
+    /// `:nth-child(… of S)` (sibling reach with no combinator to see it) or by
+    /// the presence of any shadow root (shadow-tree sheets are not scanned here
+    /// — the same carve-out S7 made). `:has()` is handled separately by
+    /// [`has_dependent`](Self::has_dependent) — widening to the parent is not
+    /// enough for it (BUG-349).
     conservative: bool,
+    /// BUG-349 — `sheet` contains a `:has()` selector anywhere. A `:has()`
+    /// match can flip on an ancestor arbitrarily far above the mutated node —
+    /// not just its parent — so [`restyle_root_set_for_node_change`] widens
+    /// every reported change to the whole document while this is set, instead
+    /// of the parent-only widening `conservative` triggers on its own. No
+    /// `:has()`-dependency index exists yet to narrow this further (see
+    /// BUG-349's suggested fix direction for that follow-up).
+    has_dependent: bool,
 }
 
 impl NodeRestyleIndex<'_> {
     /// Whether per-node narrowing is disabled for this document/sheet pair.
     pub fn is_conservative(&self) -> bool {
         self.conservative
+    }
+
+    /// BUG-349 — whether `sheet` contains a `:has()` selector, forcing
+    /// [`restyle_root_set_for_node_change`] to widen every change to the whole
+    /// document.
+    pub fn has_has_dependency(&self) -> bool {
+        self.has_dependent
     }
 
     /// Number of sibling-reachable compounds the narrowing tests each changed
@@ -12637,17 +12654,20 @@ impl NodeRestyleIndex<'_> {
 /// sibling-reachable compound.
 pub fn restyle_node_index<'a>(doc: &Document, sheet: &'a Stylesheet) -> NodeRestyleIndex<'a> {
     let mut conservative = document_has_shadow_roots(doc);
+    let mut has_dependent = false;
     let mut sibling_sources = Vec::new();
     for rules in stylesheet_rule_groups(sheet) {
         for rule in rules {
             for selector in &rule.selectors {
-                conservative |= complex_selector_has_any_has(selector);
+                let has_has = complex_selector_has_any_has(selector);
+                has_dependent |= has_has;
+                conservative |= has_has;
                 conservative |= complex_selector_has_nth_of(selector);
                 collect_sibling_source_compounds(selector, &mut sibling_sources);
             }
         }
     }
-    NodeRestyleIndex { sibling_sources, conservative }
+    NodeRestyleIndex { sibling_sources, conservative, has_dependent }
 }
 
 /// BUG-341 S17 — one reported DOM mutation, as
@@ -12686,16 +12706,17 @@ pub enum NodeChange<'a> {
 ///
 /// A node with no parent (the document root) invalidates itself either way.
 ///
-/// **Known gap (BUG-348):** this does *not* account for `:has()` — which this
-/// engine does implement (`PseudoClass::Has`, `style.rs`'s `matches_relative`)
-/// — so a change on a node that flips some ancestor `E`'s `:has(...)` result is
-/// not invalidated by this function at all (`E` is outside the node's parent's
-/// subtree whenever `E` is more than one level up). Unchanged by S17: a sheet
-/// containing any `:has()` is `conservative`, i.e. keeps the pre-S17 root-set
-/// verbatim. No fixture currently exercises this combination; see BUG-348 for
-/// the full writeup.
+/// **Fixed gap (BUG-348/BUG-349):** `:has()` — which this engine does
+/// implement (`PseudoClass::Has`, `style.rs`'s `matches_relative`) — lets a
+/// change on a node flip some ancestor `E`'s `:has(...)` result, where `E` can
+/// sit arbitrarily far above the node's own parent. The parent-only widening
+/// below cannot express that reach at any distance beyond one level up, so
+/// while [`NodeRestyleIndex::has_has_dependency`] is set (`sheet` contains a
+/// `:has()` selector anywhere), every reported change widens to the whole
+/// document instead — the conservative fallback the BUG-349 writeup calls for
+/// until a real `:has()`-dependency index narrows this further.
 ///
-/// **Second known gap, same family:** `:indeterminate` on a radio group and
+/// **Known gap, same family:** `:indeterminate` on a radio group and
 /// `:default` on a form's submit button read *other* elements' `name`/`checked`/
 /// `type` attributes across the whole form. Like `:has()`, that reach is
 /// document-shaped rather than subtree-shaped, so neither the pre-S17
@@ -12706,6 +12727,9 @@ pub fn restyle_root_set_for_node_change<'a>(
     changes: impl IntoIterator<Item = (NodeId, NodeChange<'a>)>,
     index: &NodeRestyleIndex<'_>,
 ) -> HashSet<NodeId> {
+    if index.has_has_dependency() {
+        return changes.into_iter().map(|_| doc.root()).collect();
+    }
     changes
         .into_iter()
         .map(|(n, change)| {
@@ -36844,17 +36868,47 @@ mod node_fanout_tests {
     }
 
     #[test]
-    fn has_anywhere_in_the_sheet_disables_narrowing() {
-        // BUG-348's direction: `:has()` binds an ancestor's match to a
-        // descendant's state, which no subtree-shaped root-set expresses. S17
-        // must not make that worse, so such sheets keep the pre-S17 behaviour.
+    fn has_anywhere_in_the_sheet_widens_to_the_whole_document() {
+        // BUG-349: `:has()` binds an ancestor's match to a descendant's state,
+        // and that ancestor can sit arbitrarily far above the mutated node's
+        // parent — parent-only widening (S17's pre-BUG-349 fallback) is not
+        // enough to catch it, so the root-set must cover the whole document.
         let doc = fixture();
         let sheet = parse_css("ul:has(.item) { color: green; }");
         let index = restyle_node_index(&doc, &sheet);
         assert!(index.is_conservative(), ":has() anywhere must force the conservative path");
+        assert!(index.has_has_dependency(), ":has() anywhere must set the has-dependency flag");
         let a = doc.find_by_id("a").expect("#a");
-        let menu = doc.find_by_id("menu").expect("#menu");
-        assert_eq!(roots(&doc, &sheet, a, "data-x"), [menu].into_iter().collect::<HashSet<_>>());
+        assert_eq!(
+            roots(&doc, &sheet, a, "data-x"),
+            [doc.root()].into_iter().collect::<HashSet<_>>(),
+            "a `:has()`-affected ancestor can be more than one level up, so the whole \
+             document must widen, not just #a's parent",
+        );
+    }
+
+    #[test]
+    fn has_far_above_the_mutated_node_is_caught_by_the_document_wide_widening() {
+        // The exact shape BUG-349 documents: `article:has(.expanded)` reacts to
+        // a class toggle on a node several levels below `<article>`, which the
+        // old parent-only widening (still correct for plain sibling-reach
+        // selectors) could never reach.
+        let doc = parse_html(
+            r#"<article id="art">
+                <section><div><span id="leaf" class="collapsed"></span></div></section>
+            </article>"#,
+        );
+        let sheet = parse_css("article:has(.expanded) { border: 1px solid red; }");
+        let leaf = doc.find_by_id("leaf").expect("#leaf");
+        let art = doc.find_by_id("art").expect("#art");
+        let index = restyle_node_index(&doc, &sheet);
+        let got = restyle_root_set_for_node_change(&doc, [(leaf, NodeChange::Attr("class"))], &index);
+        assert_eq!(got, [doc.root()].into_iter().collect::<HashSet<_>>());
+        assert!(
+            got.contains(&doc.root()) && doc.root() != art,
+            "the whole-document root-set must cover #art even though it is three levels \
+             above #leaf, well outside #leaf's parent's subtree",
+        );
     }
 
     #[test]
