@@ -1,6 +1,41 @@
 # BUG-347: `fetch()` never resolves relative URLs against the document base — every relative-URL fetch fails
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-06
+
+## Фикс (P3, 2026-08-06)
+
+`fetch(input, init)` (`crates/js/src/dom.rs`, `WEB_API_SHIM`) теперь резолвит
+`url` через уже существующий `_url_resolve(url, _lumen_document_base_url())`
+сразу после извлечения из `input`/`init`, до любого обращения к нативным
+биндингам (`_lumen_fetch_sync`/`_lumen_fetch_sync_with_body`/`_lumen_fetch_cancellable*`/
+`_lumen_fetch_async_start`) — абсолютный URL проходит `_url_resolve` без
+изменений (уже абсолютные ссылки не трогаются), относительный резолвится
+против document base (`<base href>` или URL документа), как того требует
+Fetch §4.1 шаг 8. Фикс целиком в JS-шиме — сигнатуры нативных
+`HttpClient::fetch_sync`/`fetch_with_body_sync`/`fetch_cancellable`/
+`fetch_with_body_cancellable` не менялись, вариант из «suspected fix
+direction» с резолюцией в Rust-слое не понадобился.
+
+Заодно (та же строка шима, тот же корень, явно указано в заявке как «чинить
+вместе», пункт A2 [BUG-370](BUG-370-OPEN.md)) исправлена абсолютизация
+`new Request(url).url` — конструктор `Request` теперь тоже пропускает `url`
+через `_url_resolve`/`_lumen_document_base_url()`. Остальные пункты BUG-370
+(Body-mixin, `Response.json()`, валидация конструкторов и т.д.) не тронуты —
+вне скоупа этого бага.
+
+3 новых юнит-теста (`fetch_resolves_relative_url_against_document_base`,
+`fetch_resolves_root_relative_url_against_document_origin`,
+`request_constructor_absolutizes_relative_url`), `cargo test -p lumen-js
+--features v8-backend` 2497+68/2497+68 OK, `cargo clippy -p lumen-js
+--all-targets --features v8-backend -- -D warnings` чист. Изменение не
+трогает paint/layout — гейт `scoped-test.sh` + `dump_golden.py` вместо
+полного графического прогона.
+
+Верификация живым WPT-прогоном (`run_report.py --all --root fetch
+--recursive`) не выполнена в этой сессии — не запущена (нет активного venv
+под рукой при подготовке фикса); ожидание по заявке — исчезновение строк
+`missing scheme` (было 201) и рост harness OK / сабтестов на категории
+`fetch`.
 **Компонент:** js (`crates/js/src/dom.rs:9310`, `WEB_API_SHIM` `fetch()`), network
 (`crates/network/src/lib.rs` — `HttpClient::fetch_sync:3667-3668`,
 `fetch_with_body_sync:3733`, `fetch_cancellable:3815`, `fetch_with_body_cancellable:3830`)

@@ -6250,7 +6250,9 @@ Response.redirect = function(url, status) {
 // Request (Fetch Standard §2.4) — minimal Phase 0 impl
 function Request(input, init) {
     init = init || {};
-    this.url = typeof input === 'string' ? input : (input.url || '');
+    // Fetch §5 «new Request(input, init)» step 6: request URL parsing is relative
+    // to the API base URL (the document base), same resolution `fetch()` applies.
+    this.url = _url_resolve(String(typeof input === 'string' ? input : (input.url || '')), _lumen_document_base_url());
     this.method = (init.method || (typeof input === 'object' && input.method) || 'GET').toUpperCase();
     this.headers = new Headers(init.headers || (typeof input === 'object' && input.headers) || []);
     this.body = init.body !== undefined ? init.body : null;
@@ -6533,6 +6535,10 @@ function fetch(input, init) {
                     : new DOMException('signal is aborted without reason', 'AbortError'));
         }
         var url = typeof input === 'string' ? input : (input && input.url ? input.url : String(input));
+        // Fetch §4.1 step 8: the request URL is parsed relative to the API base URL
+        // (the document base) — a bare `fetch('resources/x.js')` must resolve against
+        // the current page, not fail as an absolute-URL parse (BUG-347).
+        url = _url_resolve(String(url), _lumen_document_base_url());
         var method = (init && init.method) ? String(init.method).toUpperCase() :
                      (typeof input === 'object' && input.method ? input.method.toUpperCase() : 'GET');
 
@@ -27671,6 +27677,36 @@ mod tests {
                  && out.value[0] === 111 && out.value[1] === 107"  // 'ok' = [111, 107]
             ).unwrap();
             assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn fetch_resolves_relative_url_against_document_base() {
+            // BUG-347: fetch('resources/x.js') on a page served at
+            // https://example.com/ must resolve to the absolute URL before
+            // reaching the native binding, not fail as "missing scheme".
+            let capture = CaptureFetch::new();
+            let rt = v8_runtime_with_fetch(Arc::clone(&capture));
+            rt.eval("fetch('resources/x.js');").unwrap();
+            let calls = capture.calls.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].0, "https://example.com/resources/x.js");
+        }
+
+        #[test]
+        fn fetch_resolves_root_relative_url_against_document_origin() {
+            let capture = CaptureFetch::new();
+            let rt = v8_runtime_with_fetch(Arc::clone(&capture));
+            rt.eval("fetch('/common/blank.html');").unwrap();
+            let calls = capture.calls.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].0, "https://example.com/common/blank.html");
+        }
+
+        #[test]
+        fn request_constructor_absolutizes_relative_url() {
+            let rt = v8_runtime_with_fetch(CaptureFetch::new());
+            let r = rt.eval("new Request('resources/x.js').url").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("https://example.com/resources/x.js".into()));
         }
 
         #[test]

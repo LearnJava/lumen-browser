@@ -32,28 +32,32 @@ Request defaults → bodyUsed=undefined  keepalive=undefined  destination=undefi
 `TypeError: r.text is not a function`. Атрибуты `bodyUsed`, `keepalive`,
 `destination` тоже не заведены (возвращают `undefined`, а не `false`/`false`/`""`).
 
-### A2. `Request.url` не абсолютизируется
+### A2. `Request.url` не абсолютизируется — ИСПРАВЛЕНО вместе с BUG-347 2026-08-06
 
 ```
-Request.url on "x"        = x                          // ожидается абсолютный URL
-Request.url on "./rel"    = ./rel                       // ожидается абсолютный URL
+Request.url on "x"        = x                          // было; ожидался абсолютный URL
+Request.url on "./rel"    = ./rel                       // было; ожидался абсолютный URL
 Request.url on absolute   = https://ex.com/a            // единственный работающий случай
 new URL("x", location.href) → работает                  // механизм резолва в шиме ЕСТЬ
 ```
 
-Конструктор (`dom.rs:9027`) кладёт аргумент дословно:
+Конструктор клал аргумент дословно:
 `this.url = typeof input === 'string' ? input : (input.url || '')`. Спека требует
 распарсить его относительно base URL документа и хранить сериализованный
 абсолютный URL. Строка `new URL("x", location.href)` в той же пробе отрабатывает,
-то есть нужный механизм в шиме доступен — это пропуск, а не отсутствие
+то есть нужный механизм в шиме доступен был — это был пропуск, а не отсутствие
 инструмента.
 
-**Это пятый независимый сайт того же семейства**, что
-[BUG-346](BUG-346-OPEN.md) (`Url::resolve()` не схлопывает `..`),
-[BUG-347](BUG-347-OPEN.md) (`fetch()` не резолвит относительные URL),
+**Фикс (P3, 2026-08-06):** конструктор `Request` теперь пропускает `url` через
+тот же `_url_resolve(url, _lumen_document_base_url())`, что и `fetch()` — см.
+[BUG-347](BUG-347-FIXED.md). Остальные пункты этой заявки (A1 Body-mixin, A3
+валидация, ниже) не тронуты этим фиксом.
+
+Это было **пятым независимым сайтом того же семейства**, что
+[BUG-346](BUG-346-FIXED.md) (`Url::resolve()` не схлопывает `..`),
+[BUG-347](BUG-347-FIXED.md) (`fetch()` не резолвит относительные URL),
 [BUG-359](BUG-359-OPEN.md) (`window.open`/`location.href=`),
-[BUG-362](BUG-362-OPEN.md) (`EventSource`). Чинить осмысленно вместе с BUG-347 —
-это соседние строки одного шима.
+[BUG-362](BUG-362-OPEN.md) (`EventSource`).
 
 ### A3. Нет валидации
 
@@ -233,9 +237,9 @@ target/dev-release/lumen.exe --dump-layout .tmp/probe-fetch2.html
 ## Связанные
 
 - [BUG-369](BUG-369-OPEN.md) — та же проба, `Headers`: не итерируем, не копируется.
-- [BUG-347](BUG-347-OPEN.md) — `fetch()` не резолвит относительные URL; A2 —
-  соседняя строка того же шима, чинить вместе.
-- [BUG-346](BUG-346-OPEN.md), [BUG-359](BUG-359-OPEN.md), [BUG-362](BUG-362-OPEN.md) —
+- [BUG-347](BUG-347-FIXED.md) — `fetch()` не резолвит относительные URL; A2 —
+  соседняя строка того же шима, исправлена вместе с ним 2026-08-06.
+- [BUG-346](BUG-346-FIXED.md), [BUG-359](BUG-359-OPEN.md), [BUG-362](BUG-362-OPEN.md) —
   остальные сайты семейства «относительный URL не резолвится».
 - [BUG-367](BUG-367-OPEN.md) — тот же дефект формы (атрибуты на инстансе, внутренние
   слоты наружу) на `Element`.

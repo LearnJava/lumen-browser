@@ -57,8 +57,8 @@
 {
  "generated": "2026-08-06",
  "counts": {
-  "open": 313,
-  "fixed": 338,
+  "open": 310,
+  "fixed": 341,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -6948,24 +6948,24 @@
    "debtor": false
   },
   "BUG-345": {
-   "status": "open",
-   "title": "Навигация на страницу, сочетающую декларативный Shadow DOM (`<template shadowrootmode=\"open\">`) с `document.designMode` + 4 `test()`, читающими `isContentEditab…",
-   "component": "shell/js (не локализовано)",
-   "date": null,
+   "status": "fixed",
+   "title": "Original hang (`browsingContext.navigate` timing out on `contenteditable/designmode-iscontenteditable.html`) no longer reproduces — two independent `run_report.…",
+   "component": "shell/js",
+   "date": "2026-08-06",
    "debtor": false
   },
   "BUG-346": {
-   "status": "open",
-   "title": "`Url::resolve()` не схлопывает `.`/`..` dot-segments (документированный, намеренный гэп — модульный doc-комментарий прямо говорит «добавим, когда упрёмся»): отн…",
-   "component": "core (`crates/core/src/url.rs::Url::resolve`)",
-   "date": null,
+   "status": "fixed",
+   "title": "`Url::resolve()` не схлопывала `.`/`..` dot-segments (документированный, намеренный гэп — модульный doc-комментарий прямо говорил «добавим, когда упрёмся»): отн…",
+   "component": "core (`crates/core/src/url.rs::Url::parse`/`resolve`)",
+   "date": "2026-08-06",
    "debtor": false
   },
   "BUG-347": {
-   "status": "open",
+   "status": "fixed",
    "title": "`fetch()` не резолвит относительные URL относительно document base вовсе (`Url::parse(url)` на буквальном JS-аргументе, без base) — любой `fetch()` с относитель…",
    "component": "js (`crates/js/src/dom.rs` fetch shim), network (`crates/network/src/lib.rs::HttpClient::fetch_sync`+3 sibling fns)",
-   "date": null,
+   "date": "2026-08-06",
    "debtor": false
   },
   "BUG-348": {
@@ -10205,9 +10205,7 @@
    "BUG-170"
   ],
   "shell/js": [
-   "BUG-164"
-  ],
-  "shell/js (не локализовано)": [
+   "BUG-164",
    "BUG-345"
   ],
   "shell/network": [
