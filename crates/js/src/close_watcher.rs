@@ -38,6 +38,7 @@ const CLOSE_WATCHER_SHIM: &str = r#"
     this._id      = ++_cwNextId;
     this._signal  = (init && init.signal) || null;
     this._closed  = false;
+    this._closePending = false;
     this._oncancel = null;
     this._onclose  = null;
     this._cancelListeners = [];
@@ -90,11 +91,21 @@ const CLOSE_WATCHER_SHIM: &str = r#"
   // WICG §3.3 requestClose(): fire cancel (cancelable), then close if not prevented.
   CloseWatcher.prototype.requestClose = function() {
     if (this._closed) return;
+    // Re-entrant guard: a cancel listener calling requestClose() again on the
+    // same watcher (legal per spec, exercised by WPT inside-event-listeners.html)
+    // must no-op instead of dispatching a second nested `cancel` event — `_closed`
+    // alone doesn't catch this because it's only set after `cancel` finishes
+    // dispatching, i.e. too late to guard the dispatch itself.
+    if (this._closePending) return;
+    this._closePending = true;
 
     // Fire cancel event.
     var cancelEvt = _makeEvent('cancel', true);
     _dispatch(this._cancelListeners, cancelEvt);
-    if (cancelEvt.defaultPrevented) return; // script cancelled the close.
+    if (cancelEvt.defaultPrevented) {
+      this._closePending = false;
+      return; // script cancelled the close.
+    }
 
     this._fireClose();
   };
@@ -331,6 +342,59 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(v, JsValue::Bool(true), "requestClose on top watcher must not close the one below");
+        });
+    }
+
+    // BUG-340: requestClose() called re-entrantly from its own `cancel` handler must
+    // not recurse — mirrors WPT close-watcher/inside-event-listeners.html subtests.
+    #[test]
+    fn request_close_reentrant_from_oncancel_fires_once() {
+        with_close_watcher(|rt| {
+            let v = rt
+                .eval(
+                    "(function() { \
+                       var cw = new CloseWatcher(); \
+                       var events = []; \
+                       cw.addEventListener('cancel', function() { events.push('cancel'); }); \
+                       cw.addEventListener('close',  function() { events.push('close'); }); \
+                       cw.oncancel = function() { cw.requestClose(); }; \
+                       cw.requestClose(); \
+                       return events.join(','); \
+                     })()",
+                )
+                .unwrap();
+            assert_eq!(
+                v,
+                JsValue::String("cancel,close".to_string()),
+                "re-entrant requestClose() from oncancel must no-op, not recurse"
+            );
+        });
+    }
+
+    #[test]
+    fn request_close_reentrant_from_oncancel_with_prevent_default() {
+        with_close_watcher(|rt| {
+            let v = rt
+                .eval(
+                    "(function() { \
+                       var cw = new CloseWatcher(); \
+                       var events = []; \
+                       cw.addEventListener('cancel', function() { events.push('cancel'); }); \
+                       cw.addEventListener('close',  function() { events.push('close'); }); \
+                       cw.oncancel = function(e) { e.preventDefault(); cw.requestClose(); }; \
+                       cw.requestClose(); \
+                       var afterFirst = events.join(','); \
+                       cw.requestClose(); \
+                       var afterSecond = events.join(','); \
+                       return afterFirst + '|' + afterSecond; \
+                     })()",
+                )
+                .unwrap();
+            assert_eq!(
+                v,
+                JsValue::String("cancel|cancel,cancel".to_string()),
+                "prevented cancel must clear the guard so a later top-level requestClose() still fires cancel"
+            );
         });
     }
 }
