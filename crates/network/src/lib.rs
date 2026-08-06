@@ -817,6 +817,19 @@ impl RawStream {
             RawStream::Tls(s) => s.sock.try_clone().ok(),
         }
     }
+
+    /// Sets (or clears, with `None`) the read timeout on the underlying TCP
+    /// socket — for `Tls` this is the raw socket read, below the TLS record
+    /// layer, exactly like the pre-handshake `read_timeout` param of
+    /// [`connect`]. Used by [`crate::websocket::WebSocket::recv_timeout`]
+    /// (BUG-307) to bound how long a background reader thread can hold a
+    /// session lock shared with JS-invoked `send`/`close` calls.
+    pub(crate) fn set_read_timeout(&self, dur: Option<std::time::Duration>) -> std::io::Result<()> {
+        match self {
+            RawStream::Plain(s) => s.set_read_timeout(dur),
+            RawStream::Tls(s) => s.sock.set_read_timeout(dur),
+        }
+    }
 }
 
 impl Connection {
@@ -4010,6 +4023,15 @@ impl SseProvider for HttpClient {
 
 // ── JsWebSocketSession ────────────────────────────────────────────────────────
 
+/// How long the background recv thread waits for a frame before releasing
+/// `session` and checking again (BUG-307). Bounds the worst-case latency a
+/// JS-invoked `send`/`close` call can be blocked behind an idle connection's
+/// reader lock — was previously unbounded (the reader held the lock inside
+/// a plain, timeout-less blocking `recv()`), which froze the single-threaded
+/// JS engine solid (and with it the whole UI thread, via `EngineThread::query`)
+/// whenever a page called any WebSocket method while its socket was idle.
+const WS_RECV_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
+
 /// Background-threaded WebSocket session for the JS runtime.
 ///
 /// Spawns a receive thread that pushes `JsWsEvent`s into a shared queue.
@@ -4020,11 +4042,16 @@ struct JsWebSocketSessionImpl {
     session: Arc<std::sync::Mutex<Box<dyn WebSocketSession>>>,
     /// Buffered events produced by the background recv thread.
     queue: Arc<std::sync::Mutex<std::collections::VecDeque<JsWsEvent>>>,
+    /// Server-negotiated sub-protocol, cached at connect time — never changes
+    /// afterwards, so `protocol()` doesn't need to contend with the recv
+    /// thread's `session` lock at all (BUG-307).
+    protocol: String,
 }
 
 impl JsWebSocketSessionImpl {
     /// Create a new session, spawning a background thread to receive frames.
     fn new(ws: websocket::WebSocket) -> Self {
+        let protocol = ws.protocol().to_string();
         let queue: Arc<std::sync::Mutex<std::collections::VecDeque<JsWsEvent>>> =
             Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
         let session: Arc<std::sync::Mutex<Box<dyn WebSocketSession>>> =
@@ -4033,34 +4060,53 @@ impl JsWebSocketSessionImpl {
         let q2 = Arc::clone(&queue);
         let s2 = Arc::clone(&session);
 
-        // The background thread calls recv() in a loop and pushes events into
-        // the shared queue so JS can poll without blocking.
+        // The background thread polls recv_timeout() in a loop and pushes
+        // events into the shared queue so JS can poll without blocking. Each
+        // poll only holds `session` for up to WS_RECV_POLL_INTERVAL, then
+        // releases it — see BUG-307: an unbounded lock-and-block here starved
+        // any concurrent JS-invoked send_text/send_binary/close/protocol call
+        // (all of which lock the same `session`) for as long as the socket
+        // stayed idle, i.e. forever on a connection with no pending traffic.
         std::thread::spawn(move || {
             loop {
-                let result = s2.lock().unwrap().recv();
+                let result = s2.lock().unwrap().recv_timeout(WS_RECV_POLL_INTERVAL);
                 match result {
-                    Ok(lumen_core::ext::WsMessage::Text(t)) => {
+                    Ok(None) => {
+                        // Nothing arrived within the poll window — the lock
+                        // was already released above (the temporary guard
+                        // from `s2.lock().unwrap()` drops at the end of the
+                        // previous statement), but `std::sync::Mutex` gives
+                        // no fairness guarantee: relocking immediately here
+                        // can starve a JS-invoked send_text/send_binary/close
+                        // waiting on the same `session` (observed: it can
+                        // lose the race for several seconds straight under
+                        // load). Sleep briefly outside the lock so the OS
+                        // scheduler has a genuine window to hand it to a
+                        // waiter instead of handing it straight back to us.
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                    }
+                    Ok(Some(lumen_core::ext::WsMessage::Text(t))) => {
                         q2.lock().unwrap().push_back(JsWsEvent::Message {
                             data: t.into_bytes(),
                             is_binary: false,
                         });
                     }
-                    Ok(lumen_core::ext::WsMessage::Binary(b)) => {
+                    Ok(Some(lumen_core::ext::WsMessage::Binary(b))) => {
                         q2.lock().unwrap().push_back(JsWsEvent::Message {
                             data: b,
                             is_binary: true,
                         });
                     }
-                    Ok(lumen_core::ext::WsMessage::Close { code, reason }) => {
+                    Ok(Some(lumen_core::ext::WsMessage::Close { code, reason })) => {
                         q2.lock()
                             .unwrap()
                             .push_back(JsWsEvent::Close { code, reason });
                         break;
                     }
-                    Ok(
+                    Ok(Some(
                         lumen_core::ext::WsMessage::Ping(_)
                         | lumen_core::ext::WsMessage::Pong(_),
-                    ) => {
+                    )) => {
                         // Control frames handled internally by WebSocket::recv_inner.
                     }
                     Err(e) => {
@@ -4073,7 +4119,7 @@ impl JsWebSocketSessionImpl {
             }
         });
 
-        Self { session, queue }
+        Self { session, queue, protocol }
     }
 }
 
@@ -4095,7 +4141,7 @@ impl JsWebSocketSession for JsWebSocketSessionImpl {
     }
 
     fn protocol(&self) -> String {
-        self.session.lock().unwrap().protocol().to_string()
+        self.protocol.clone()
     }
 }
 
@@ -4626,6 +4672,87 @@ mod tests {
             _ => panic!("expected Close, got {m:?}"),
         }
         assert!(server.join().unwrap(), "client must echo Close");
+    }
+
+    /// `recv_timeout` on an idle connection returns `Ok(None)` within the
+    /// requested window instead of blocking forever, and a later message is
+    /// still delivered correctly afterwards — no frame state is lost across
+    /// the intervening timeout (BUG-307).
+    #[test]
+    fn ws_recv_timeout_returns_none_when_idle_then_delivers_later() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            ws_server_handshake(&mut sock);
+            // Stay idle past the client's recv_timeout window before sending.
+            thread::sleep(std::time::Duration::from_millis(300));
+            crate::websocket::frame::write_frame(
+                &mut sock, true, false, crate::websocket::frame::Opcode::Text, b"late", None,
+            ).unwrap();
+            let _ = crate::websocket::frame::read_frame(&mut sock);
+        });
+        let client = HttpClient::new();
+        let url = lumen_core::url::Url::parse(&format!("ws://127.0.0.1:{port}/")).unwrap();
+        let mut ws: Box<dyn lumen_core::ext::WebSocketSession> =
+            <HttpClient as WebSocketProvider>::connect_ws(&client, &url, TabId(0), std::sync::Arc::new(NoopEventSink)).expect("connect_ws");
+
+        let first = ws.recv_timeout(std::time::Duration::from_millis(80)).unwrap();
+        assert_eq!(first, None, "server hasn't sent anything yet — must not block");
+
+        let second = ws.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+        assert_eq!(second, Some(WsMessage::Text("late".to_string())));
+        ws.close(1000, "").unwrap();
+        server.join().ok();
+    }
+
+    /// BUG-307 regression: before this fix, `JsWebSocketSessionImpl`'s
+    /// background recv thread held the `session` mutex inside a plain
+    /// blocking `recv()` with no timeout, so `send_text()` (which needs the
+    /// same mutex) hung forever behind an idle connection — freezing the
+    /// single-threaded JS engine (and the UI thread behind `EngineThread::query`)
+    /// solid. `recv_timeout` bounds that hold to `WS_RECV_POLL_INTERVAL`.
+    #[test]
+    fn ws_send_not_blocked_by_idle_recv_thread() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            ws_server_handshake(&mut sock);
+            // Never send or read again — an idle-but-open connection, exactly
+            // the state that deadlocked before the fix.
+            thread::sleep(std::time::Duration::from_secs(3));
+        });
+        let client = HttpClient::new();
+        let url = lumen_core::url::Url::parse(&format!("ws://127.0.0.1:{port}/")).unwrap();
+        let ws_session: Box<dyn JsWebSocketSession> =
+            <HttpClient as JsWebSocketProvider>::connect(&client, url.as_str(), &[]).expect("connect");
+
+        // Let the background recv thread settle into its first recv_timeout()
+        // wait, so send_text() below genuinely contends for the lock.
+        thread::sleep(WS_RECV_POLL_INTERVAL / 2);
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            let start = std::time::Instant::now();
+            ws_session.send_text("ping").unwrap();
+            let _ = tx.send(start.elapsed());
+        });
+        // The primary regression signal is this call not panicking: before the
+        // fix, send_text() blocked forever behind the reader thread's
+        // unbounded lock hold, so even a generous multi-second timeout here
+        // would never fire. `std::sync::Mutex` isn't guaranteed FIFO, so the
+        // exact wait can span a couple of poll cycles under load — bound it
+        // loosely (well under "forever", comfortably above worst-case jitter)
+        // rather than pinning to a tight multiple of WS_RECV_POLL_INTERVAL.
+        let elapsed = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("send_text must complete well within 5s — BUG-307 regression");
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "send_text took {elapsed:?}, expected well under 2s"
+        );
+        server.join().ok();
     }
 
     /// RFC 6455 §4.1 handshake that also negotiates RFC 7692 permessage-deflate:

@@ -205,58 +205,82 @@ impl WebSocket {
     fn recv_inner(&mut self) -> Result<WsMessage> {
         loop {
             let fr = frame::read_frame(&mut self.stream)?;
+            if let Some(msg) = self.handle_frame(fr)? {
+                return Ok(msg);
+            }
+        }
+    }
 
-            match fr.opcode {
-                Opcode::Ping => {
-                    // RFC 6455 §5.5.2: respond with Pong immediately.
-                    let payload = fr.payload.clone();
-                    self.send_frame(false, Opcode::Pong, &payload)?;
-                    return Ok(WsMessage::Ping(fr.payload));
+    /// Like [`Self::recv_inner`], but each individual frame wait respects the
+    /// read timeout the caller already set on `self.stream` (see
+    /// [`WebSocketSession::recv_timeout`](lumen_core::ext::WebSocketSession::recv_timeout)) —
+    /// returns `Ok(None)` the moment a frame wait times out with no full
+    /// message assembled yet, instead of blocking indefinitely (BUG-307).
+    fn recv_timeout_inner(&mut self) -> Result<Option<WsMessage>> {
+        loop {
+            let Some(fr) = frame::try_read_frame(&mut self.stream)? else {
+                return Ok(None);
+            };
+            if let Some(msg) = self.handle_frame(fr)? {
+                return Ok(Some(msg));
+            }
+        }
+    }
+
+    /// Process one already-read frame: control frames resolve immediately,
+    /// data frames either complete a message or extend the in-progress
+    /// fragment buffer (`Ok(None)` — caller should read the next frame).
+    fn handle_frame(&mut self, fr: frame::Frame) -> Result<Option<WsMessage>> {
+        match fr.opcode {
+            Opcode::Ping => {
+                // RFC 6455 §5.5.2: respond with Pong immediately.
+                let payload = fr.payload.clone();
+                self.send_frame(false, Opcode::Pong, &payload)?;
+                Ok(Some(WsMessage::Ping(fr.payload)))
+            }
+            Opcode::Pong => Ok(Some(WsMessage::Pong(fr.payload))),
+            Opcode::Close => {
+                let (code, reason) = frame::parse_close_payload(&fr.payload);
+                if !self.closed {
+                    let echo = frame::make_close_payload(code.unwrap_or(1000), &reason);
+                    let _ = self.send_frame(false, Opcode::Close, &echo);
+                    self.closed = true;
                 }
-                Opcode::Pong => {
-                    return Ok(WsMessage::Pong(fr.payload));
+                self.sink.emit(&Event::WebSocketClosed {
+                    tab_id: self.tab_id,
+                    url:    self.url.clone(),
+                    code,
+                    reason: reason.clone(),
+                });
+                Ok(Some(WsMessage::Close { code, reason }))
+            }
+            Opcode::Text | Opcode::Binary => {
+                if fr.fin {
+                    let payload = self.maybe_decompress(fr.rsv1, fr.payload)?;
+                    return self.finish_data(fr.opcode, payload).map(Some);
                 }
-                Opcode::Close => {
-                    let (code, reason) = frame::parse_close_payload(&fr.payload);
-                    if !self.closed {
-                        let echo = frame::make_close_payload(code.unwrap_or(1000), &reason);
-                        let _ = self.send_frame(false, Opcode::Close, &echo);
-                        self.closed = true;
-                    }
-                    self.sink.emit(&Event::WebSocketClosed {
-                        tab_id: self.tab_id,
-                        url:    self.url.clone(),
-                        code,
-                        reason: reason.clone(),
-                    });
-                    return Ok(WsMessage::Close { code, reason });
+                // First fragment of a multi-frame message.
+                self.frag_op   = Some(fr.opcode);
+                self.frag_buf  = fr.payload;
+                self.frag_rsv1 = fr.rsv1;
+                Ok(None)
+            }
+            Opcode::Continuation => {
+                let Some(op) = self.frag_op else {
+                    return Err(Error::Network(
+                        "ws: continuation frame without preceding data frame".into(),
+                    ));
+                };
+                self.frag_buf.extend_from_slice(&fr.payload);
+                if fr.fin {
+                    let buf  = std::mem::take(&mut self.frag_buf);
+                    let rsv1 = self.frag_rsv1;
+                    self.frag_op   = None;
+                    self.frag_rsv1 = false;
+                    let payload = self.maybe_decompress(rsv1, buf)?;
+                    return self.finish_data(op, payload).map(Some);
                 }
-                Opcode::Text | Opcode::Binary => {
-                    if fr.fin {
-                        let payload = self.maybe_decompress(fr.rsv1, fr.payload)?;
-                        return self.finish_data(fr.opcode, payload);
-                    }
-                    // First fragment of a multi-frame message.
-                    self.frag_op   = Some(fr.opcode);
-                    self.frag_buf  = fr.payload;
-                    self.frag_rsv1 = fr.rsv1;
-                }
-                Opcode::Continuation => {
-                    let Some(op) = self.frag_op else {
-                        return Err(Error::Network(
-                            "ws: continuation frame without preceding data frame".into(),
-                        ));
-                    };
-                    self.frag_buf.extend_from_slice(&fr.payload);
-                    if fr.fin {
-                        let buf  = std::mem::take(&mut self.frag_buf);
-                        let rsv1 = self.frag_rsv1;
-                        self.frag_op   = None;
-                        self.frag_rsv1 = false;
-                        let payload = self.maybe_decompress(rsv1, buf)?;
-                        return self.finish_data(op, payload);
-                    }
-                }
+                Ok(None)
             }
         }
     }
@@ -306,6 +330,22 @@ impl WebSocketSession for WebSocket {
 
     fn recv(&mut self) -> Result<WsMessage> {
         self.recv_inner()
+    }
+
+    fn recv_timeout(&mut self, timeout: std::time::Duration) -> Result<Option<WsMessage>> {
+        // Best-effort: if the platform refuses to set a read timeout, fall
+        // back to the (correct, if unbounded) blocking path rather than
+        // erroring the whole connection out.
+        if self.stream.set_read_timeout(Some(timeout)).is_err() {
+            return self.recv_inner().map(Some);
+        }
+        let result = self.recv_timeout_inner();
+        // Restore blocking mode so a plain `recv()` call after this one (or
+        // this same session reused via the trait's default `recv`) keeps its
+        // original "wait forever" semantics instead of silently inheriting
+        // a leftover timeout.
+        let _ = self.stream.set_read_timeout(None);
+        result
     }
 
     fn close(&mut self, code: u16, reason: &str) -> Result<()> {
