@@ -75,8 +75,8 @@
 {
  "generated": "2026-08-06",
  "counts": {
-  "open": 315,
-  "fixed": 330,
+  "open": 314,
+  "fixed": 331,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -3745,9 +3745,9 @@
       {
        "id": "WPT-VENDOR-speculation-rules",
        "title": "WPT: вендорить + прогнать категорию `speculation-rules`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root speculation-rules --recursive --processes=4`, ~115 мин, 408 файлов, 197 отобранных id по глобу, но из-за фан-аута variant-ов — 530 реально прогнанных инстансов) — **7/530 harness OK, 0/32 сабтестов**. Весь движковый сигнал — реконфирмация уже открытых дефектов: доминирует [BUG-485](bugs/BUG-485-OPEN.md) (`document.head` отсутствует вовсе — `TypeError: Cannot read properties of undefined (reading 'appendChild')` на каждом тесте, вставляющем `<script type=\"speculationrules\">` через `document.head.appendChild`); пробел `performance.getSpeculations()`/`SpeculationMeasurement` и полное отсутствие `load`/`error` на `<script type=\"speculationrules\">` соответствуют собственному doc-комментарию Phase 0 движка (`crates/js/src/speculation_rules.rs` — «not consumed by the engine in Phase 0», реализованы только `document.prerendering`/`getSpeculationRules()`/`onprerenderingchange`-заглушки и no-op хук `_lumen_deliver_speculation_rules`); единичные `ERROR` — уже задокументированный класс BUG-380 (переиспользуемый browsing context отдаёт результаты предыдущего теста). Живая проба (`--mcp-live-port`, локальный `http.server`) подтвердила форму Phase 0-шима напрямую и то, что `<script type=\"speculationrules\" src=...>` не всплывает ни `onload`, ни `onerror` — элемент полностью инертен, как и задокументировано. Новых номеров багов не заведено"
       },
       {
        "id": "WPT-VENDOR-speech-api",
@@ -6688,10 +6688,10 @@
    "debtor": false
   },
   "BUG-307": {
-   "status": "open",
+   "status": "fixed",
    "title": "UI-поток «не отвечает» (IsHungAppWindow): обратимо 39–48 с на ria/rbc, НЕОБРАТИМО после вкладок-гигантов github+stackoverflow — сессия мертва, даже navigate по…",
    "component": "shell (main thread) / network",
-   "date": null,
+   "date": "2026-08-06",
    "debtor": false
   },
   "BUG-308": {
