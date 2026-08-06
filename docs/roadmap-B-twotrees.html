@@ -76,11 +76,11 @@
  "generated": "2026-08-06",
  "counts": {
   "open": 310,
-  "fixed": 329,
+  "fixed": 330,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 639,
+ "total_bugs": 640,
  "phases": [
   {
    "id": "P0",
@@ -3678,13 +3678,6 @@
        ]
       },
       {
-       "id": "WPT-VENDOR-server-timing",
-       "title": "WPT: вендорить + прогнать категорию `server-timing`",
-       "status": "planned",
-       "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
-      },
-      {
        "id": "WPT-VENDOR-service-workers",
        "title": "WPT: вендорить + прогнать категорию `service-workers`",
        "status": "planned",
@@ -6399,10 +6392,10 @@
    "debtor": false
   },
   "BUG-240": {
-   "status": "open",
+   "status": "fixed",
    "title": "TEST-45: «4.73%» = артефакт устаревшего gdigrab-снимка (run.py без `--build`). Свежая сборка 2026-06-25 → **1.02%**; отрисовка слоёв корректна (свежий рендер со…",
    "component": "paint/test-harness",
-   "date": null,
+   "date": "2026-08-06",
    "debtor": true
   },
   "BUG-243": {
@@ -6673,15 +6666,15 @@
   },
   "BUG-306": {
    "status": "open",
-   "title": "github.com раздувает процесс на ~2.3 ГБ одной вкладкой (610→2904 МБ в живом прогоне; воспроизводимо), после чего сессия умирает (BUG-307). Профиль иной, чем len…",
-   "component": "js/dom (атрибуция не сделана)",
+   "title": "github.com раздувает процесс на ~2.3 ГБ одной вкладкой (610→2904 МБ в живом прогоне; воспроизводимо), после чего сессия умирает (BUG-307). Найден живым /lumen-p…",
+   "component": "js/dom",
    "date": null,
    "debtor": false
   },
   "BUG-307": {
    "status": "open",
    "title": "UI-поток «не отвечает» (IsHungAppWindow): обратимо 39–48 с на ria/rbc, НЕОБРАТИМО после вкладок-гигантов github+stackoverflow — сессия мертва, даже navigate по…",
-   "component": "shell (main thread)",
+   "component": "shell (main thread) / network",
    "date": null,
    "debtor": false
   },
@@ -9211,6 +9204,13 @@
    "component": "js (`crates/js/src/serial.rs` — `SERIAL_SHIM`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-673": {
+   "status": "open",
+   "title": "`window.PerformanceResourceTiming`/`window.PerformanceNavigationTiming` interface objects don't exist at all — `PerformanceObserver.supportedEntryTypes` lists `…",
+   "component": "js (`crates/js/src/dom.rs` — `PerformanceObserver`/`_perf_entries` shim, ~line 8409-8460)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -9556,6 +9556,9 @@
   "js (`crates/js/src/dom.rs` -- only `tagName`/`nodeName` reflected, no `localName`)": [
    "BUG-575"
   ],
+  "js (`crates/js/src/dom.rs` — `PerformanceObserver`/`_perf_entries` shim, ~line 8409-8460)": [
+   "BUG-673"
+  ],
   "js (`crates/js/src/dom.rs` — `Window`-шим)": [
    "BUG-529"
   ],
@@ -9656,7 +9659,7 @@
   "js/css-parser (`crates/js/src/dom.rs::CSS.supports`, `crates/engine/css-parser/src/parser.rs::SupportsCondition::evaluate`)": [
    "BUG-501"
   ],
-  "js/dom (атрибуция не сделана)": [
+  "js/dom": [
    "BUG-306"
   ],
   "js/engine граница (диспетчеризация animation-событий, точное место не изолировано)": [
@@ -10099,7 +10102,7 @@
   "shell (event loop) + js (таймер-шим)": [
    "BUG-271"
   ],
-  "shell (main thread)": [
+  "shell (main thread) / network": [
    "BUG-307"
   ],
   "shell (навигация)": [

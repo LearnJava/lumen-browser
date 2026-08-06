@@ -9,7 +9,6 @@ BUGS.md:232
 BUGS.md:233
 BUGS.md:234
 BUGS.md:253
-BUGS.md:258
 BUGS.md:301
 docs/tasks/p3-cascade-perf.md — Задача 1 влита (кэш active @media/@supports), Задача 2 (LUMEN_ENGINE_THREAD default) сделана отдельно через ADR-023 2026-07-28, осталась только Задача 3 (частичный пересчёт стилей, самая рискованная — архитектурная переделка кэша каскада)
 BUGS.md:320
