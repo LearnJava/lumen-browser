@@ -3818,9 +3818,9 @@
       {
        "id": "WPT-VENDOR-top-level-storage-access-api",
        "title": "WPT: вендорить + прогнать категорию `top-level-storage-access-api`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root top-level-storage-access-api --recursive`, ~35 с, 3 файла/3 id) — **0/3 harness OK, 1/7 сабтестов**. Весь сигнал — реконфирмация уже открытых багов, новых номеров не заведено: `requestStorageAccessFor()` на документе из `DOMParser.parseFromString` — реконфирмация [BUG-682](bugs/BUG-682-OPEN.md) (Storage Access API методы есть только у живого `document`, не у `_lumen_build_detached_document`); отсутствие проверки user gesture/контекста в Phase 0 шиме («always granted») — тот же корень, что [BUG-399](bugs/BUG-399-OPEN.md); `CreateDetachedFrame().requestStorageAccessFor` падает на `null` — реконфирмация [BUG-480](bugs/BUG-480-OPEN.md) (`<iframe>` без browsing context); `AssertionError: Got results from <previous test>` на обоих `.https.` id — реконфирмация [BUG-380](bugs/BUG-380-OPEN.md); третий `.https.` id TIMEOUT на документированном TLS-гэпе `UnknownIssuer`"
       },
       {
        "id": "WPT-VENDOR-touch-events",
