@@ -57,8 +57,8 @@
 {
  "generated": "2026-08-06",
  "counts": {
-  "open": 314,
-  "fixed": 337,
+  "open": 313,
+  "fixed": 338,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -3774,9 +3774,9 @@
       {
        "id": "WPT-VENDOR-subapps",
        "title": "WPT: вендорить + прогнать категорию `subapps`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). PWA-инсталляция"
+       "note": "Скоуп: 🚫 (вне скоупа). PWA-инсталляция. DONE 2026-08-06: вендорена + прогнана целиком (`--all --root subapps --recursive`, 2:00, 8 файлов, 8 отобранных id) — **1/8 harness OK, 1/1 сабтест**. `window.subApps`/`SubApps` не реализован вовсе (грep по `crates/` — ноль совпадений), ожидаемо для 🚫-scope; апстримный мок сам Chromium-only (`isChromiumBased`-гвард в `subapps-helpers.js` бросает `'Unsupported browser'` на любом другом движке) — содержательный прогон тестов невозможен в принципе, не только из-за гэпа движка. 7/8 `.https.` id — TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer` (см. `WPT-VENDOR-storage-access-api`); один (`list-error.tentative.https.html`) сначала дал `AssertionError: Got results from insecure-context-error…, expected list-error…` — реконфирмация [BUG-380](bugs/BUG-380-OPEN.md) (переиспользуемый browsing context отдаёт результаты предыдущего теста после неудачной навигации). Единственный не-`.https.` тест (`insecure-context-error.tentative.html`) прошёл — `window.subApps`/`window.SubApps` действительно `undefined`. Новых номеров бага не заведено"
       },
       {
        "id": "WPT-VENDOR-subresource-integrity",
@@ -6941,10 +6941,10 @@
    "debtor": false
   },
   "BUG-344": {
-   "status": "open",
-   "title": "`contentEditable`-сеттер распознаёт только `\"true\"`/`\"false\"`, любое другое значение (в т.ч. спековое `\"plaintext-only\"`) сворачивает в удаление атрибута → `inh…",
+   "status": "fixed",
+   "title": "`contentEditable`-сеттер распознавал только `\"true\"`/`\"false\"`, любое другое значение (в т.ч. спековое `\"plaintext-only\"`) сворачивал в удаление атрибута → `inh…",
    "component": "js (`crates/js/src/dom.rs`, `contentEditable`/`isContentEditable`)",
-   "date": null,
+   "date": "2026-08-06",
    "debtor": false
   },
   "BUG-345": {
