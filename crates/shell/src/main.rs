@@ -2716,8 +2716,9 @@ pub(crate) trait PersistentJs: Send + Sync {
     fn take_dom_touched(&self) -> DomTouchedSummary {
         DomTouchedSummary { nodes: std::collections::HashSet::new(), unattributed: true }
     }
-    /// TEMP BUG-272 diagnostics: QuickJS heap (malloc_size, memory_used_size);
-    /// `(-1, -1)` when the runtime does not expose it.
+    /// BUG-272/BUG-306 diagnostics: JS engine heap `(total_heap_size,
+    /// used_heap_size)` in bytes; `(-1, -1)` when the runtime does not expose
+    /// it. `V8PersistentJs` overrides this via `V8JsRuntime::debug_heap_stats`.
     fn debug_js_heap(&self) -> (i64, i64) {
         (-1, -1)
     }
@@ -3175,6 +3176,9 @@ impl PersistentJs for V8PersistentJs {
     fn take_dom_touched(&self) -> DomTouchedSummary {
         let t = self.rt.take_dom_touched();
         DomTouchedSummary { nodes: t.nodes, unattributed: t.unattributed }
+    }
+    fn debug_js_heap(&self) -> (i64, i64) {
+        self.rt.debug_heap_stats()
     }
     fn run_animation_frame(&self, timestamp_ms: f64) {
         self.eval_js(&format!("_lumen_run_raf_callbacks({timestamp_ms})"));
