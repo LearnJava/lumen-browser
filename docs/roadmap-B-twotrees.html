@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-06",
  "counts": {
-  "open": 310,
+  "open": 311,
   "fixed": 342,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 652,
+ "total_bugs": 653,
  "phases": [
   {
    "id": "P0",
@@ -3816,9 +3816,12 @@
       {
        "id": "WPT-VENDOR-svg-aam",
        "title": "WPT: вендорить + прогнать категорию `svg-aam`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root svg-aam --recursive`, 1:39, 7 файлов, 7 отобранных id) — **0/7 harness OK**. Прогон не дал сигнала: все 7 id тянут не довендоренный `/wai-aria/scripts/aria-utils.js` (`WPT-VENDOR-wai-aria`, ROADMAP.md:560, тот же гэп что `core-aam`/`dpub-aam`/`graphics-aria`/`html-aam`) и TIMEOUT на `ReferenceError: AriaUtils is not defined` (манифест не ставит `testdriver: true`, инверсия предиктора того же класса, что `html-aam`/`fledge`). Заведён [BUG-686](bugs/BUG-686-OPEN.md) прямой пробой на движке (Rust-тест на `build_ax_tree`, минуя прогон): `implicit_role` (`roles.rs:349`) не содержит ни одной ветки для SVG-тегов и не проверяет namespace — `<svg>`/`<circle>` откатываются к `Generic` вместо implicit-ролей SVG-AAM. Отдельный от уже открытого BUG-398 (explicit `role=\"graphics-document\"`) пробел — тот же класс потери роли, другая функция. Один новый номер бага",
+       "bugs": [
+        "BUG-686"
+       ]
       },
       {
        "id": "WPT-VENDOR-timing-entrytypes-registry",
@@ -9324,6 +9327,13 @@
    "status": "open",
    "title": "The HTML parser never implements HTML LS §13.2.6.5 foreign content — every element parsed from markup, including everything inside `<svg>…</svg>`, is unconditio…",
    "component": "engine (`crates/engine/html-parser/src/tree_builder.rs:1879` — `create_element_with_attrs` always builds `QualName::html(name)`, no foreign-content branch in the crate at all); knock-on in js (`crates/js/src/dom.rs:1673`, `crates/js/src/svg.rs:905-921`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-686": {
+   "status": "open",
+   "title": "`implicit_role` maps only HTML tag local names (`nav`/`main`/`button`/`img`/…) and never checks `node.namespace()` — no arm exists for any SVG tag (`svg`/`circl…",
+   "component": "a11y (`crates/engine/a11y/src/roles.rs::implicit_role`, line 349)",
    "date": null,
    "debtor": false
   }
