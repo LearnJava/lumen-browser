@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-06",
  "counts": {
-  "open": 310,
+  "open": 312,
   "fixed": 330,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 640,
+ "total_bugs": 642,
  "phases": [
   {
    "id": "P0",
@@ -3680,9 +3680,13 @@
       {
        "id": "WPT-VENDOR-service-workers",
        "title": "WPT: вендорить + прогнать категорию `service-workers`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root service-workers --recursive --processes=4`, ~34 мин, 297 отобранных id) — **1/287 harness OK, 0/1 сабтестов**. 285 id — `.https.`, TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`; 1 ERROR — артефакт застрявшего контекста (класс BUG-380, `AssertionError: Got results from data-iframe.html, expected data-transfer-files.https.html`); единственный исполнившийся non-`.https.` тест (`data-iframe.html`) сам провалил единственный сабтест на постороннем 500 (`resources/test-helpers.sub.js`, `.sub.html`-гэп `wptserve/pipes.py`). Живая проба (`--mcp-live-port`) реальной инфраструктуры SW (`_sw_origin`/`_lumen_sw_*` натив в `v8_runtime.rs`, `_sw_container.register` в `dom.rs`) нашла два новых бага: [BUG-674](bugs/BUG-674-OPEN.md) — реестр Service Worker и Cache Storage ключуется недоверенной JS-строкой origin без серверной привязки к реально навигированному origin (любой скрипт может подделать/прочитать чужой origin, класс BUG-371); [BUG-675](bugs/BUG-675-OPEN.md) — `navigator.serviceWorker.register()` не валидирует script URL вовсе (cross-origin и `javascript:`-схема успешно регистрируются, класс BUG-646/656/666/667). Два новых номера бага",
+       "bugs": [
+        "BUG-674",
+        "BUG-675"
+       ]
       },
       {
        "id": "WPT-VENDOR-shadow-dom",
@@ -9209,6 +9213,20 @@
    "status": "open",
    "title": "`window.PerformanceResourceTiming`/`window.PerformanceNavigationTiming` interface objects don't exist at all — `PerformanceObserver.supportedEntryTypes` lists `…",
    "component": "js (`crates/js/src/dom.rs` — `PerformanceObserver`/`_perf_entries` shim, ~line 8409-8460)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-674": {
+   "status": "open",
+   "title": "The entire Service Worker registration table and Cache Storage are keyed by an unauthenticated JS-string \"origin\" argument with zero server-side binding to the…",
+   "component": "js (`crates/js/src/dom.rs:4805` — `_sw_origin`; `crates/js/src/v8_runtime.rs:1900`-1940 `_lumen_sw_*`/`_lumen_cache_*` natives)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-675": {
+   "status": "open",
+   "title": "`navigator.serviceWorker.register()` performs zero validation of its script-URL argument — a cross-origin script URL (`https://evil.example/sw.js`) and a `javas…",
+   "component": "js (`crates/js/src/dom.rs:4999`-5013 — `_sw_container.register`)",
    "date": null,
    "debtor": false
   }
