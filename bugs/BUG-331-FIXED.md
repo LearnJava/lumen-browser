@@ -1,6 +1,6 @@
 # BUG-331: Cloudflare-защищённые сайты возвращают `HTTP 503` для Lumen, хотя HTTP-заголовки корректно подделаны под браузер
 
-**Статус:** OPEN
+**Статус:** FIXED (не воспроизводится) 2026-08-06
 **Дата:** 2026-07-23
 **Компонент:** network (`crates/network/src/tls/fingerprint.rs`, `crates/network/src/http/headers.rs`, `crates/network/src/http/mod.rs`)
 **Найден:** эксперимент с автозаполнением веб-формы через MCP (`--mcp-live-port`, инструменты `type`/`click`/`query`) на публичной тестовой форме httpbin.org/forms/post.
@@ -46,3 +46,15 @@ target/dev-release/lumen.exe --dump-source https://httpbin.org/forms/post   # 50
 curl -A "Lumen/0.5.0" https://httpbin.org/forms/post                        # 200 каждый раз
 target/dev-release/lumen.exe --dump-source https://github.com/              # 200 — сеть в целом жива
 ```
+
+## Ревизия 2026-08-06 (P3): не воспроизводится, закрыт
+
+**Код `tls/`/`http/headers.rs` не менялся ни разу с момента подачи заявки** (`git log --since=2026-07-23 -- crates/network/src/tls/ crates/network/src/http/headers.rs` — пусто), поэтому любое изменение поведения объясняется не фиксом Lumen, а состоянием на стороне httpbin.org/Cloudflare в момент первой заявки.
+
+Живая перепроверка на свежей `dev-release`-сборке (`p3-work` worktree, HEAD на момент проверки): **9 из 9** запросов `--dump-source https://httpbin.org/forms/post` вернули `200` подряд (два прогона по 4 и 5 попыток). Исходный симптом (4/4 `503`) не воспроизводится.
+
+Разобран текущий `crates/network/src/tls/mod.rs::build_client_config` — TLS ClientHello уже приближен к Chrome 130: cipher suites в порядке Chrome (TLS 1.3 AEAD → TLS 1.2 ECDHE AEAD), `kx_groups` X25519→secp256r1→secp384r1, ALPN h2+http/1.1. Не хватает GREASE-инъекции и точного Chrome-порядка расширений — это упирается в возможности `rustls` (не даёт контролировать порядок extensions/добавлять GREASE-значения без замены TLS-стека на что-то вроде BoringSSL-биндингов) и осталось бы систематическим ограничением, но раз исходный симптом не воспроизводится, нет живого сигнала подтвердить или опровергнуть, что TLS-фингерпринт вообще был истинной причиной прежних `503` — гипотеза остаётся недоказанной.
+
+**Побочная находка при живой проверке**: `https://www.cloudflare.com/` (другой CDN-защищённый сайт) стабильно падал с `network error: HTTP 103` — сервер шлёт `103 Early Hints` (RFC 8297) перед финальным `200` по HTTP/2, а Lumen трактовал промежуточный статус как терминальный. Это отдельный, реальный и подтверждённый дефект (не связан с TLS-фингерпринтом/JA3) — заведён и исправлен отдельно как [BUG-679](BUG-679-FIXED.md).
+
+**Итог:** закрыт как «не воспроизводится» — точечного P3-дефекта в TLS/HTTP-заголовках для исходного репро не найдено; если проблема вернётся на httpbin.org или другом Cloudflare-сайте, переоткрыть с новым живым захватом ClientHello (`tshark`/`Wireshark`) для реальной JA3/JA4-локализации.

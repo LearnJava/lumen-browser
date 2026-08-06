@@ -722,50 +722,69 @@ fn all_header_values<'a>(
 /// `read_response`, чтобы streaming-вариант (`read_response_streamed`) читал
 /// head идентично — единый источник правды по разбору статуса/заголовков.
 fn read_head(conn: &mut Connection) -> Result<ResponseHead> {
-    // Status line.
-    let mut status_line = String::new();
-    let n = conn
-        .reader
-        .read_line(&mut status_line)
-        .map_err(|e| Error::Network(format!("read status: {e}")))?;
-    if n == 0 {
-        conn.closed = true;
-        return Err(Error::Network("EOF before status line".to_owned()));
-    }
-    let status = parse_status(&status_line)?;
-
-    // Headers до пустой строки.
-    let mut headers: Vec<(String, String)> = Vec::new();
-    loop {
-        let mut line = String::new();
+    // 1xx informational responses (RFC 9110 §15.2, e.g. 103 Early Hints)
+    // precede the final response on the same connection and must be
+    // skipped transparently — a client that doesn't special-case them
+    // sees a 1xx status with no body where a 2xx/3xx/4xx/5xx was expected.
+    // 101 Switching Protocols is excluded: it IS the final response for an
+    // Upgrade request (WebSocket handshake), parsed separately by
+    // `websocket::upgrade::expect_101`, never through this path. Cap at 20
+    // to bound a misbehaving/malicious server flooding interim responses.
+    const MAX_INTERIM_RESPONSES: u32 = 20;
+    for _ in 0..MAX_INTERIM_RESPONSES {
+        // Status line.
+        let mut status_line = String::new();
         let n = conn
             .reader
-            .read_line(&mut line)
-            .map_err(|e| Error::Network(format!("read header: {e}")))?;
+            .read_line(&mut status_line)
+            .map_err(|e| Error::Network(format!("read status: {e}")))?;
         if n == 0 {
             conn.closed = true;
-            return Err(Error::Network("EOF in headers".to_owned()));
+            return Err(Error::Network("EOF before status line".to_owned()));
         }
-        let trimmed = line.trim_end_matches(['\r', '\n']);
-        if trimmed.is_empty() {
-            break;
+        let status = parse_status(&status_line)?;
+
+        // Headers до пустой строки.
+        let mut headers: Vec<(String, String)> = Vec::new();
+        loop {
+            let mut line = String::new();
+            let n = conn
+                .reader
+                .read_line(&mut line)
+                .map_err(|e| Error::Network(format!("read header: {e}")))?;
+            if n == 0 {
+                conn.closed = true;
+                return Err(Error::Network("EOF in headers".to_owned()));
+            }
+            let trimmed = line.trim_end_matches(['\r', '\n']);
+            if trimmed.is_empty() {
+                break;
+            }
+            if let Some((k, v)) = trimmed.split_once(':') {
+                headers.push((k.trim().to_owned(), v.trim().to_owned()));
+            }
         }
-        if let Some((k, v)) = trimmed.split_once(':') {
-            headers.push((k.trim().to_owned(), v.trim().to_owned()));
+
+        if (100..200).contains(&status) && status != 101 {
+            continue;
         }
+
+        // Решение о keep-alive: HTTP/1.1 default = keep-alive, отменяется явным
+        // `Connection: close` (case-insensitive, может содержаться в списке через
+        // запятую с другими токенами вроде `keep-alive`/`upgrade`).
+        let server_wants_close = header_value(&headers, "connection")
+            .map(|v| {
+                v.split(',')
+                    .any(|t| t.trim().eq_ignore_ascii_case("close"))
+            })
+            .unwrap_or(false);
+
+        return Ok((status, headers, server_wants_close));
     }
-
-    // Решение о keep-alive: HTTP/1.1 default = keep-alive, отменяется явным
-    // `Connection: close` (case-insensitive, может содержаться в списке через
-    // запятую с другими токенами вроде `keep-alive`/`upgrade`).
-    let server_wants_close = header_value(&headers, "connection")
-        .map(|v| {
-            v.split(',')
-                .any(|t| t.trim().eq_ignore_ascii_case("close"))
-        })
-        .unwrap_or(false);
-
-    Ok((status, headers, server_wants_close))
+    conn.closed = true;
+    Err(Error::Network(format!(
+        "too many 1xx interim responses (>{MAX_INTERIM_RESPONSES})"
+    )))
 }
 
 // ── Fetch in-flight abort (Phase A) ──────────────────────────────────────────
@@ -5840,6 +5859,30 @@ mod tests {
             !events.iter().any(|e| matches!(e, Event::RequestBlocked { .. })),
             "no RequestBlocked when filter allows"
         );
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_skips_1xx_interim_response_before_final() {
+        // BUG-331 расследование: сервер может прислать один или несколько
+        // 1xx-ответов (RFC 9110 §15.2, напр. 103 Early Hints, RFC 8297) на
+        // том же соединении ДО финального статуса. read_head раньше читал
+        // ровно один статус+заголовки и отдавал 103 как финальный ответ —
+        // `fetch_with_redirect` не имел ветки под 103 и валил его как
+        // network error "HTTP 103". Два интерима подряд (103 → 103 → 200)
+        // проверяют, что цикл, а не одноразовый skip.
+        let (port, server) = mock_http_server(1, |_| {
+            b"HTTP/1.1 103 Early Hints\r\nLink: </style.css>; rel=preload\r\n\r\n\
+              HTTP/1.1 103 Early Hints\r\nLink: </script.js>; rel=preload\r\n\r\n\
+              HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+                .to_vec()
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+
+        assert_eq!(client.fetch(&url).unwrap(), b"ok");
 
         server.join().unwrap();
     }
