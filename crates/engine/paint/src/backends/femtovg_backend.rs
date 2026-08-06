@@ -323,24 +323,41 @@ fn linear_gradient_endpoints(
 }
 
 // ─── Sticky layer helpers ─────────────────────────────────────────────────────
+//
+// BUG-337: unlike the wgpu backend (`renderer.rs`), femtovg has no parallel
+// `Vec<Mat4>` transform stack — every `PushClipRect`/`PushScrollLayer`/
+// `PushTransform`-equivalent call folds straight into the one continuously
+// accumulated `self.canvas.transform()`. So instead of wgpu's "dx,dy applied
+// pre-transform, then the ambient transform maps it to screen" split, the bound
+// and offset here are computed directly against the *current* canvas transform
+// at `BeginStickyLayer` time (`ambient`, captured fresh per sticky layer — it
+// already includes page scroll, any nested `PushScrollLayer`'s own scroll, and
+// any rotate/scale ancestors), and `sticky_offset_dy`/`dx` use a `0.0` baseline
+// (not `-scroll_y`/`-scroll_x`): `ambient` already carries the scroll, so "no
+// correction needed" means "let the natural scrolled position stand", and a
+// correction is only added when it would violate `bound` (in the same
+// pre-`ambient` page space `flow_rect` is in).
 
-/// CSS Positioning L3 §6.3 — смещение dy для sticky-элемента.
+/// CSS Positioning L3 §6.3 — смещение dy для sticky-элемента: 0, если
+/// естественная прокрученная позиция укладывается в `bound` (уже отображённый
+/// назад в page-пространство этого уровня scrollport), иначе — компенсация,
+/// прижимающая край к `top`/`bottom` инсету.
 fn sticky_offset_dy(
     flow_rect: &lumen_core::geom::Rect,
     top: Option<f32>,
     bottom: Option<f32>,
-    scroll_y: f32,
-    viewport_h: f32,
+    bound: Rect,
 ) -> f32 {
-    let mut dy = -scroll_y;
+    let mut dy = 0.0;
     if let Some(t) = top {
         let screen_y = flow_rect.y + dy;
-        if screen_y < t {
-            dy += t - screen_y;
+        let min_y = bound.y + t;
+        if screen_y < min_y {
+            dy += min_y - screen_y;
         }
     }
     if let Some(b) = bottom {
-        let max_screen_y = viewport_h - b - flow_rect.height;
+        let max_screen_y = bound.y + bound.height - b - flow_rect.height;
         let actual = flow_rect.y + dy;
         if actual > max_screen_y {
             dy -= actual - max_screen_y;
@@ -349,29 +366,103 @@ fn sticky_offset_dy(
     dy
 }
 
-/// CSS Positioning L3 §6.3 — смещение dx для sticky-элемента.
+/// CSS Positioning L3 §6.3 — то же самое для оси X, см. [`sticky_offset_dy`].
 fn sticky_offset_dx(
     flow_rect: &lumen_core::geom::Rect,
     left: Option<f32>,
     right: Option<f32>,
-    scroll_x: f32,
-    viewport_w: f32,
+    bound: Rect,
 ) -> f32 {
-    let mut dx = -scroll_x;
+    let mut dx = 0.0;
     if let Some(l) = left {
         let screen_x = flow_rect.x + dx;
-        if screen_x < l {
-            dx += l - screen_x;
+        let min_x = bound.x + l;
+        if screen_x < min_x {
+            dx += min_x - screen_x;
         }
     }
     if let Some(r) = right {
-        let max_screen_x = viewport_w - r - flow_rect.width;
+        let max_screen_x = bound.x + bound.width - r - flow_rect.width;
         let actual = flow_rect.x + dx;
         if actual > max_screen_x {
             dx -= actual - max_screen_x;
         }
     }
     dx
+}
+
+/// Пересечение двух прямоугольников в CSS-px (origin-top-left). Пустое
+/// пересечение — `Rect { width: 0.0, height: 0.0 }`. Локальная копия
+/// `renderer.rs::intersect_rects` (та живёт за `backend-wgpu`, а femtovg
+/// собирается и без него — см. `push_sticky_bound`).
+fn intersect_rects(a: Rect, b: Rect) -> Rect {
+    let x0 = a.x.max(b.x);
+    let y0 = a.y.max(b.y);
+    let x1 = (a.x + a.width).min(b.x + b.width);
+    let y1 = (a.y + a.height).min(b.y + b.height);
+    if x1 <= x0 || y1 <= y0 {
+        Rect::new(x0, y0, 0.0, 0.0)
+    } else {
+        Rect::new(x0, y0, x1 - x0, y1 - y0)
+    }
+}
+
+/// AABB прямоугольника `rect` (page-пространство, до `t`) под 2D-аффинным
+/// трансформом femtovg `t` — femtovg-аналог `renderer.rs::apply_transform_to_clip`.
+fn transform_rect_to_screen(rect: &Rect, t: &femtovg::Transform2D) -> Rect {
+    let corners = [
+        t.transform_point(rect.x, rect.y),
+        t.transform_point(rect.x + rect.width, rect.y),
+        t.transform_point(rect.x, rect.y + rect.height),
+        t.transform_point(rect.x + rect.width, rect.y + rect.height),
+    ];
+    let min_x = corners.iter().map(|p| p.0).fold(f32::INFINITY, f32::min);
+    let max_x = corners.iter().map(|p| p.0).fold(f32::NEG_INFINITY, f32::max);
+    let min_y = corners.iter().map(|p| p.1).fold(f32::INFINITY, f32::min);
+    let max_y = corners.iter().map(|p| p.1).fold(f32::NEG_INFINITY, f32::max);
+    Rect::new(min_x, min_y, (max_x - min_x).max(0.0), (max_y - min_y).max(0.0))
+}
+
+/// Безопасная инверсия `femtovg::Transform2D`: femtovg-0.9.2's own
+/// `Transform2D::inverse()` does NOT fail safe on a near-singular matrix — it
+/// resets to identity, then unconditionally overwrites every component again
+/// using the pre-reset matrix and `1.0 / det` (`det` in `(-1e-6, 1e-6)` still
+/// yields a huge-but-finite or literally-infinite `invdet`), silently
+/// clobbering the identity reset with garbage. Guard the determinant here
+/// ourselves before calling `.inversed()`, mirroring `renderer.rs`'s
+/// `Mat4::is_2d_affine`+`invert_2d_affine` conservative-`None` policy (BUG-140).
+fn try_invert_transform(t: &femtovg::Transform2D) -> Option<femtovg::Transform2D> {
+    let m = t.0;
+    let det = m[0] as f64 * m[3] as f64 - m[2] as f64 * m[1] as f64;
+    if det.abs() < 1e-6 {
+        return None;
+    }
+    Some(t.inversed())
+}
+
+/// CSS Positioning L3 §6.3 — the scrollport a `position:sticky` element is
+/// clamped against: femtovg-backend analogue of `renderer.rs::sticky_bound`.
+/// `bound_stack`'s top is the innermost active clip in screen space (or the
+/// full viewport when empty); mapped back into this layer's pre-`ambient`
+/// page space via the inverse of the *current* canvas transform, so it lines
+/// up with `flow_rect`'s own coordinate space regardless of how many nested
+/// `PushScrollLayer`s sit in between. Falls back to the screen-space bound
+/// unchanged when `ambient` isn't (safely) invertible — same conservative
+/// policy as `try_invert_transform`/BUG-140.
+fn sticky_bound(
+    bound_stack: &[Rect],
+    ambient: &femtovg::Transform2D,
+    viewport_w: f32,
+    viewport_h: f32,
+) -> Rect {
+    let screen_bound = bound_stack
+        .last()
+        .copied()
+        .unwrap_or_else(|| Rect::new(0.0, 0.0, viewport_w, viewport_h));
+    match try_invert_transform(ambient) {
+        Some(inv) => transform_rect_to_screen(&screen_bound, &inv),
+        None => screen_bound,
+    }
 }
 
 // ─── BlendMode → CompositeOperation ──────────────────────────────────────────
@@ -714,6 +805,16 @@ pub struct FemtovgBackend {
     /// (`canvas.restore()`) и shape-клипы (композит offscreen-слоя через
     /// путь формы) по-разному; вид определяется парным Push.
     clip_stack: Vec<ClipEntry>,
+    /// BUG-337: innermost active clip/scrollport rect, in screen space —
+    /// pushed by every `PushClipRect`/`PushClipRoundedRect`/`PushClipPath`/
+    /// `PushScrollLayer` (mirroring `clip_stack`'s pairing, but always
+    /// carrying the *intersected* screen-space rect regardless of which of
+    /// the three `ClipEntry` variants was opened), popped by `PopClip`/
+    /// `PopScrollLayer`. Consulted by `BeginStickyLayer` via [`sticky_bound`]
+    /// to find the nearest scrolling ancestor's scrollport a nested
+    /// `position:sticky` element must clamp against — see module-level
+    /// "Sticky layer helpers" doc comment.
+    sticky_bound_stack: Vec<Rect>,
     /// Currently active render target image. `None` means Screen.
     /// Updated by [`Self::switch_render_target`] whenever the RT changes.
     active_rt_image: Option<femtovg::ImageId>,
@@ -1904,6 +2005,7 @@ impl FemtovgBackend {
             bbox_cpu_upload_pool_size: (0, 0),
             backdrop_filter_layer_stack: Vec::new(),
             clip_stack: Vec::new(),
+            sticky_bound_stack: Vec::new(),
             active_rt_image: None,
             gradient_pending_delete: Vec::new(),
             layer_pool: Vec::new(),
@@ -3428,6 +3530,27 @@ impl FemtovgBackend {
         self.release_layer(src_id);
     }
 
+    /// BUG-337: push the screen-space AABB of `rect` (page-space, mapped
+    /// through the canvas transform *as it stands right now* — captured
+    /// before the caller's own scissor/translate/FBO-switch changes it)
+    /// onto [`Self::sticky_bound_stack`], intersected with the current top
+    /// (same combine rule `renderer.rs`'s wgpu `clip_stack` uses for its
+    /// screen-space rects). Shared by all four scrollport-opening commands
+    /// (`PushClipRect`/`PushClipRoundedRect`/`PushClipPath`/`PushScrollLayer`)
+    /// so the ambient transform is captured at the identical point regardless
+    /// of which offscreen-layer branch (if any) the caller takes afterward —
+    /// each has a matching unconditional `sticky_bound_stack.pop()` in
+    /// `PopClip`/`PopScrollLayer`.
+    fn push_sticky_bound(&mut self, rect: &Rect) {
+        let ambient = self.canvas.transform();
+        let screen = transform_rect_to_screen(rect, &ambient);
+        let bound = match self.sticky_bound_stack.last() {
+            Some(prev) => intersect_rects(*prev, screen),
+            None => screen,
+        };
+        self.sticky_bound_stack.push(bound);
+    }
+
     /// BUG-272 срез 12: `PushClipRoundedRect` fallback when
     /// `screen_bbox_device_px` returned `None` (degenerate/off-target bbox) or
     /// `acquire_bbox_layer` failed — the same two-tier fallback the
@@ -4883,6 +5006,7 @@ impl FemtovgBackend {
                 }
             }
             DisplayCommand::PushClipRect { rect } => {
+                self.push_sticky_bound(rect);
                 self.canvas.save();
                 self.canvas.scissor(rect.x, rect.y, rect.width, rect.height);
                 self.clip_stack.push(ClipEntry::Scissor);
@@ -4903,6 +5027,7 @@ impl FemtovgBackend {
                 // scissor (BUG-132 fallback) — углы детей оставались острыми,
                 // расходясь с Edge (TEST-101). Subtree рендерится в FBO, а
                 // PopClip композитит его одним fill_path по скруглённому контуру.
+                self.push_sticky_bound(rect);
                 let prev_rt = self.current_rt();
                 let screen_bbox = self.screen_bbox_device_px(*rect);
                 let entry = match screen_bbox {
@@ -4943,6 +5068,7 @@ impl FemtovgBackend {
             DisplayCommand::PushClipPath { shape } => {
                 let prev_rt = self.current_rt();
                 let bbox_rect = shape.bounding_rect();
+                self.push_sticky_bound(&bbox_rect);
                 let screen_bbox = self.screen_bbox_device_px(bbox_rect);
                 let entry = match screen_bbox {
                     Some((x0, y0, w, h)) => match self.acquire_bbox_layer(w, h) {
@@ -4975,6 +5101,7 @@ impl FemtovgBackend {
                 if self.layer_stack_depth > 0 {
                     self.layer_stack_depth -= 1;
                 }
+                self.sticky_bound_stack.pop();
                 match self.clip_stack.pop() {
                     Some(ClipEntry::PathLayer { image_id, shape, transform, prev_render_target, bbox }) => {
                         self.composite_clip_path_layer(image_id, &shape, &transform, prev_render_target, bbox);
@@ -4991,6 +5118,12 @@ impl FemtovgBackend {
 
             // ── Scroll layer ────────────────────────────────────────────────
             DisplayCommand::PushScrollLayer { clip_rect, scroll_x, scroll_y } => {
+                // BUG-337: capture the scrollport bound BEFORE this layer's own
+                // scroll translate joins the canvas transform, same convention
+                // as `push_sticky_bound` for the three `PushClip*` commands —
+                // the container's own screen-space clip rect must stay
+                // invariant to ITS OWN scroll (only ancestors can move it).
+                self.push_sticky_bound(clip_rect);
                 self.canvas.save();
                 self.canvas.scissor(
                     clip_rect.x, clip_rect.y,
@@ -5004,6 +5137,7 @@ impl FemtovgBackend {
                     self.canvas.restore();
                     self.layer_stack_depth -= 1;
                 }
+                self.sticky_bound_stack.pop();
             }
 
             // ── Outline ─────────────────────────────────────────────────────
@@ -5787,21 +5921,29 @@ impl FemtovgBackend {
             }
 
             // ── Sticky layer ─────────────────────────────────────────────────
+            // BUG-337: `bound` is the nearest scrolling ancestor's scrollport
+            // (or the full viewport when not nested) mapped back through the
+            // *current* canvas transform — which, unlike wgpu's separate
+            // `transform_stack`, already carries any nested `PushScrollLayer`'s
+            // own scroll. `sticky_offset_dy`/`dx` therefore use a `0.0`
+            // baseline (see their doc comment) and `self.canvas.translate`
+            // composes directly on top of `ambient`: for any subsequently-
+            // drawn local point `p`, femtovg's `translate` premultiplies, so
+            // the new transform maps `p` to `ambient(p + (sdx, sdy))` — exactly
+            // the clamped screen position, with no manual "undo the old scroll"
+            // arithmetic needed (that was only correct for a non-nested sticky,
+            // which is why it missed the nested case).
             DisplayCommand::BeginStickyLayer { flow_rect, top, bottom, left, right } => {
-                let sdy = sticky_offset_dy(
-                    flow_rect, *top, *bottom, self.scroll_y, self.viewport_css_h,
+                let ambient = self.canvas.transform();
+                let bound = sticky_bound(
+                    &self.sticky_bound_stack, &ambient,
+                    self.viewport_css_w, self.viewport_css_h,
                 );
-                let sdx = sticky_offset_dx(
-                    flow_rect, *left, *right, self.scroll_x, self.viewport_css_w,
-                );
+                let sdy = sticky_offset_dy(flow_rect, *top, *bottom, bound);
+                let sdx = sticky_offset_dx(flow_rect, *left, *right, bound);
                 self.sticky_stack.push((sdy, sdx));
                 self.canvas.save();
-                // Текущий контент уже сдвинут на (-scroll_x, -scroll_y).
-                // Sticky-элемент должен быть на (sdx, sdy) относительно страницы.
-                // Компенсируем: tx = sdx - (-scroll_x) = sdx + scroll_x.
-                let tx = sdx + self.scroll_x;
-                let ty = sdy + self.scroll_y;
-                self.canvas.translate(tx, ty);
+                self.canvas.translate(sdx, sdy);
                 self.layer_stack_depth += 1;
             }
             DisplayCommand::EndStickyLayer => {
@@ -7380,21 +7522,75 @@ mod tests {
         assert!(dotted_border_offsets(-5.0, 4.0).is_empty());
     }
 
+    // ── position:sticky offset/bound tests (BUG-337) ────────────────────────
+    // Mirrors renderer.rs's wgpu-backend BUG-336 test suite (§ "position:sticky
+    // offset/bound tests"), adapted to femtovg's continuously-accumulated
+    // `canvas.transform()` model instead of a parallel `Vec<Mat4>` stack.
+
     #[test]
-    fn sticky_offset_dy_sticks_to_top() {
-        use lumen_core::geom::Rect;
-        let flow_rect = Rect { x: 0.0, y: 100.0, width: 200.0, height: 50.0 };
-        let dy = sticky_offset_dy(&flow_rect, Some(10.0), None, 150.0, 720.0);
-        let screen_y = flow_rect.y + dy;
-        assert!((screen_y - 10.0).abs() < 1e-4, "screen_y={screen_y}");
+    fn sticky_bound_defaults_to_full_viewport_with_no_clip_or_transform() {
+        let bound = sticky_bound(&[], &femtovg::Transform2D::identity(), 800.0, 600.0);
+        assert_eq!(bound, Rect::new(0.0, 0.0, 800.0, 600.0));
     }
 
     #[test]
-    fn sticky_offset_dy_no_insets() {
-        use lumen_core::geom::Rect;
-        let flow_rect = Rect { x: 0.0, y: 100.0, width: 200.0, height: 50.0 };
-        let dy = sticky_offset_dy(&flow_rect, None, None, 200.0, 720.0);
-        assert!((dy - (-200.0)).abs() < 1e-4);
+    fn sticky_bound_narrows_to_innermost_clip_rect() {
+        let bound_stack = [Rect::new(50.0, 100.0, 300.0, 200.0)];
+        let bound = sticky_bound(&bound_stack, &femtovg::Transform2D::identity(), 800.0, 600.0);
+        assert_eq!(bound, Rect::new(50.0, 100.0, 300.0, 200.0));
+    }
+
+    #[test]
+    fn sticky_bound_maps_screen_clip_back_through_ambient_transform() {
+        // The panel's clip (screen space) sits at y=[100,300) once an ambient
+        // translate(0, 80) is active — the bound handed to sticky_offset_dy
+        // must be in the SAME pre-ambient page-space as flow_rect, i.e.
+        // shifted back by -80.
+        let bound_stack = [Rect::new(50.0, 100.0, 300.0, 200.0)];
+        let ambient = femtovg::Transform2D::new_translation(0.0, 80.0);
+        let bound = sticky_bound(&bound_stack, &ambient, 800.0, 600.0);
+        assert!((bound.y - 20.0).abs() < 0.01, "expected bound.y=20 (100 - 80), got {}", bound.y);
+        assert!((bound.x - 50.0).abs() < 0.01, "x untouched by a pure y-translate, got {}", bound.x);
+    }
+
+    #[test]
+    fn sticky_offset_dy_unclamped_is_zero() {
+        // No insets fire yet — 0.0 baseline means "let the ambient-scrolled
+        // position stand unmodified" (unlike wgpu's `-scroll_y` baseline,
+        // femtovg's `ambient` already carries all scroll on its own).
+        let flow_rect = Rect::new(0.0, 200.0, 300.0, 50.0);
+        let bound = Rect::new(0.0, 0.0, 800.0, 600.0);
+        let dy = sticky_offset_dy(&flow_rect, Some(0.0), None, bound);
+        assert!(dy.abs() < 0.01, "expected unclamped dy=0, got {dy}");
+    }
+
+    #[test]
+    fn sticky_nested_in_scroll_container_pins_within_local_scrollport() {
+        // BUG-337 regression scenario: `.net-table th { position:sticky; top:0 }`
+        // inside a `.dt-panel { overflow-y:auto }` whose own PushScrollLayer has
+        // scrolled 120px — folded directly into femtovg's ambient canvas
+        // transform (unlike wgpu, no separate page-level scroll_y baseline is
+        // needed: bound_stack holds the panel's own screen-space scrollport,
+        // captured via `push_sticky_bound` BEFORE that scroll translate joins
+        // the canvas, exactly like `PushScrollLayer`'s real handler does).
+        let bound_stack = [Rect::new(0.0, 40.0, 400.0, 240.0)]; // panel's screen-space scrollport
+        let ambient = femtovg::Transform2D::new_translation(0.0, -120.0); // panel's own scroll(-y)
+        let bound = sticky_bound(&bound_stack, &ambient, 800.0, 600.0);
+
+        // Header's flow (page-space, pre-scroll) position: early in the table,
+        // well above where the panel has scrolled to — its *unclamped* on-screen
+        // position would be ambient(flow.y) = 150 - 120 = 30, above the panel's
+        // visible top (40), i.e. scrolled out of view without the sticky clamp.
+        let flow_rect = Rect::new(0.0, 150.0, 400.0, 24.0);
+        let dy = sticky_offset_dy(&flow_rect, Some(0.0), None, bound);
+
+        // Final on-screen position = ambient(flow.y + dy), same as the real
+        // `self.canvas.translate(sdx, sdy)` composition BeginStickyLayer does.
+        let (_, screen_y) = ambient.transform_point(0.0, flow_rect.y + dy);
+        assert!(
+            (screen_y - 40.0).abs() < 0.01,
+            "sticky header must pin at the panel's own scrollport top (40), got {screen_y}"
+        );
     }
 
     // interp_conic_color / conic_sample_t unit-тесты переехали в
