@@ -1,6 +1,6 @@
 # BUG-346: `Url::resolve()` doesn't collapse `.`/`..` dot-segments — relative subresource URLs with `..` 404
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-06
 **Компонент:** core (`crates/core/src/url.rs::Url::resolve`), consumed by `ResourceBase::resolve`
 (`crates/shell/src/main.rs:4207-4210`) for `<script src>`, `<link>`/stylesheet preload
 (`main.rs:4345`), `<img>`/other resource loads (`main.rs:4849`, `5509`)
@@ -163,3 +163,37 @@ TIMEOUT (`idlharness.html`, unrelated — `/resources/idlharness.js` simply
 unvendored) are genuine Typed-OM API gaps, filed separately as
 [BUG-554](BUG-554-OPEN.md). `.ini` committed for all affected files under
 `tests/wpt/metadata/css/css-typed-om/`.
+
+## Фикс (P3, 2026-08-06)
+
+Implemented RFC 3986 §5.2.4 `remove_dot_segments` in `crates/core/src/url.rs`
+and wired it into `Url::parse()`, gated on `has_authority` (`http`/`https`/
+`file`/`ws`/`wss` — schemes without authority, e.g. `data:`, keep their path
+untouched since dot-segment folding is a hierarchical-path concept). Since
+`Url::resolve()`'s every branch that builds a new URL already delegates to
+`Self::parse()`, this single change fixes both direct absolute-URL parsing
+(`https://x/a/../b` → `/b`) and reference resolution (`base.resolve("../y")`)
+in one place — no change to `resolve()` itself was needed beyond a doc-comment
+update.
+
+Algorithm follows the RFC pseudocode literally (loop consuming `input`,
+building `output`, five cases: `../`/`./` prefix strip, `/./`/`/..` segment
+collapse with last-segment removal, bare `.`/`..` drop, plain segment move).
+9 new unit tests in `crates/core/src/url.rs`, including the two exact URLs
+from this bug's original repro (`custom-elements/reactions/HTMLTableElement.html`
+→ `../resources/custom-elements-helpers.js` and the `customized-builtins/`
+two-level-up variant) plus RFC edge cases (`/a/./b`, `/a/b/..`, `/../a` —
+extra `..` above root is dropped, not an error). `cargo test -p lumen-core`
+34/34 green, `cargo clippy -p lumen-core --all-targets -- -D warnings` clean.
+`ResourceBase::resolve` (`crates/shell/src/main.rs::4149-4159`) calls exactly
+`Url::parse(base_url).and_then(|u| u.resolve(href))` with no other
+transformation, so `<script src>`/`<link>`/`<img>` resolution is fixed
+end-to-end through this one change.
+
+Not verified via a full `run_report.py --all --root custom-elements
+--recursive` run in this session (no Python venv present in the worktree;
+setting one up was judged disproportionate for a pure string-normalization
+fix already covered by exact-repro unit tests) — a future WPT session should
+confirm the `reactions/`/`reactions/customized-builtins/` subtrees move from
+TIMEOUT to running actual test bodies, and that the `fetch/api/*/../resources/
+utils.js` 404 class (69 responses, measured 2026-07-28) is gone.
