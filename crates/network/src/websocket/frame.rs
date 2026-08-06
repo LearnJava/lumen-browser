@@ -52,9 +52,37 @@ pub(crate) struct Frame {
 /// Per RFC 6455 §5.5.1, control frames (Ping/Pong/Close) MUST be ≤ 125 bytes.
 /// We enforce a 16 MiB hard limit on all frames.
 pub(crate) fn read_frame<R: Read>(r: &mut R) -> Result<Frame> {
-    let mut hdr = [0u8; 2];
-    r.read_exact(&mut hdr)
+    let mut b0 = [0u8; 1];
+    r.read_exact(&mut b0)
         .map_err(|e| Error::Network(format!("ws: read frame header: {e}")))?;
+    read_frame_after_byte0(r, b0[0])
+}
+
+/// Like [`read_frame`], but does not block indefinitely waiting for the
+/// *first* byte of a new frame — see [`crate::websocket::WebSocket::recv_timeout`]
+/// (BUG-307). Returns `Ok(None)` if the stream's current read timeout elapses
+/// before that first byte arrives; safe to retry, since a plain (non-`read_exact`)
+/// single-byte `read()` either consumes exactly one byte or none at all, so no
+/// partial frame state is ever lost on timeout. Once the first byte has
+/// arrived we commit to reading the rest of the frame via the ordinary
+/// (still timeout-bound, but now genuinely-fatal-on-timeout) `read_exact`
+/// path — a frame that starts arriving is assumed to finish promptly, same
+/// trust model the rest of this module already relies on.
+pub(crate) fn try_read_frame<R: Read>(r: &mut R) -> Result<Option<Frame>> {
+    let mut b0 = [0u8; 1];
+    match r.read(&mut b0) {
+        Ok(0) => Err(Error::Network("ws: connection closed".into())),
+        Ok(_) => read_frame_after_byte0(r, b0[0]).map(Some),
+        Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => Ok(None),
+        Err(e) => Err(Error::Network(format!("ws: read frame header: {e}"))),
+    }
+}
+
+fn read_frame_after_byte0<R: Read>(r: &mut R, byte0: u8) -> Result<Frame> {
+    let mut b1 = [0u8; 1];
+    r.read_exact(&mut b1)
+        .map_err(|e| Error::Network(format!("ws: read frame header: {e}")))?;
+    let hdr = [byte0, b1[0]];
 
     let fin        = hdr[0] & 0x80 != 0;
     let rsv1       = hdr[0] & 0x40 != 0;
