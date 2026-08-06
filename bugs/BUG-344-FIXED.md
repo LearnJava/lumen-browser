@@ -1,8 +1,9 @@
 # BUG-344: `contentEditable`/`isContentEditable` don't recognize the `plaintext-only` value
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-06
 **Компонент:** js (`crates/js/src/dom.rs`, `contentEditable`/`isContentEditable` IDL, `_lumen_is_contenteditable`)
 **Найден:** P2, WPT-VENDOR-contenteditable 2026-07-25 (`run_report.py --all --root contenteditable --recursive`, vendored `contenteditable/plaintext-only.html`)
+**Исправлено:** P3 2026-08-06
 
 ## Симптом
 
@@ -53,3 +54,28 @@ Extend the `contentEditable` setter to also accept/reflect `"plaintext-only"` ve
 for the purposes of `isContentEditable`. The actual plaintext-only *editing behavior*
 (no rich markup on input) is separate follow-up work — this bug is scoped to the
 attribute/IDL reflection gap the WPT test caught.
+
+## Fix (P3, 2026-08-06)
+
+The suspected root cause was half right: only the `contentEditable` getter/setter
+(JS shim, `crates/js/src/dom.rs:3527`-`3546`) needed a change. `_lumen_is_contenteditable`
+(native, `v8_runtime.rs`) delegates to `lumen_dom::find_editing_host` →
+`node_is_contenteditable` (`crates/engine/dom/src/lib.rs:1942`), which already treats
+**any** `contenteditable` attribute value other than `"false"` as truthy — so once the
+attribute actually holds `"plaintext-only"` instead of being stripped, `isContentEditable`
+was already correct with no native-side change.
+
+The real bug was entirely in the setter: any value other than `"true"`/`"false"`
+(including `"plaintext-only"`) fell into the `else` branch and called
+`_lumen_remove_attr`, silently downgrading the state to `inherit` — which is why
+`isContentEditable` read back `false` after assigning `"plaintext-only"`, not because
+the native truthy check rejected the value.
+
+**Change:** `contentEditable` getter now recognizes `v.toLowerCase() === 'plaintext-only'`
+and returns it verbatim (instead of falling through to `'inherit'`); the setter now
+special-cases `s === 'plaintext-only'` and writes the attribute instead of removing it.
+Two regression tests added next to the existing contenteditable coverage in `dom.rs`
+(`contenteditable_property_plaintext_only_attribute`, `contenteditable_set_property_plaintext_only`).
+`cargo test -p lumen-js --features v8-backend`: 2494 passed, 0 failed — no regressions.
+Plaintext-only *editing behavior* (no rich markup on input) remains separate follow-up
+work, out of scope for this attribute/IDL reflection fix.

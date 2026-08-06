@@ -3529,6 +3529,7 @@ function _lumen_build_element(nid) {
             var v = _lumen_u2n(_lumen_get_attr(nid, 'contenteditable'));
             if (v === null) return 'inherit';
             if (v === '' || v.toLowerCase() === 'true') return 'true';
+            if (v.toLowerCase() === 'plaintext-only') return 'plaintext-only';
             if (v.toLowerCase() === 'false') return 'false';
             return 'inherit';
         },
@@ -3536,6 +3537,7 @@ function _lumen_build_element(nid) {
             var s = String(v).toLowerCase();
             if (s === 'true') _lumen_set_attr(nid, 'contenteditable', 'true');
             else if (s === 'false') _lumen_set_attr(nid, 'contenteditable', 'false');
+            else if (s === 'plaintext-only') _lumen_set_attr(nid, 'contenteditable', 'plaintext-only');
             else _lumen_remove_attr(nid, 'contenteditable');
         },
         enumerable: true, configurable: true,
@@ -25120,6 +25122,26 @@ mod tests {
             let rt = v8_runtime_with_dom(make_doc());
             // Create a div and set contentEditable
             rt.eval("var _ce_div = document.createElement('div'); document.body.appendChild(_ce_div); _ce_div.contentEditable = 'true';").unwrap();
+            assert!(bool_eval(&rt, "_ce_div.isContentEditable === true"));
+        }
+
+        // BUG-344: `contenteditable="plaintext-only"` must reflect verbatim
+        // through the `contentEditable` attribute getter, not collapse to `inherit`.
+        #[test]
+        fn contenteditable_property_plaintext_only_attribute() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("var _ce_div = document.createElement('div'); document.body.appendChild(_ce_div); _ce_div.setAttribute('contenteditable', 'plaintext-only');").unwrap();
+            assert!(bool_eval(&rt, "_ce_div.contentEditable === 'plaintext-only'"));
+        }
+
+        // BUG-344: assigning `contentEditable = 'plaintext-only'` must not be
+        // silently downgraded to attribute removal (`inherit`), and must make
+        // `isContentEditable` true.
+        #[test]
+        fn contenteditable_set_property_plaintext_only() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("var _ce_div = document.createElement('div'); document.body.appendChild(_ce_div); _ce_div.contentEditable = 'plaintext-only';").unwrap();
+            assert!(bool_eval(&rt, "_ce_div.contentEditable === 'plaintext-only'"));
             assert!(bool_eval(&rt, "_ce_div.isContentEditable === true"));
         }
 
