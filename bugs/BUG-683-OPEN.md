@@ -1,4 +1,4 @@
-# BUG-682 — github.com stagnalone tab retains ~890 MB of unaccounted Rust-side memory
+# BUG-683 — github.com stagnalone tab retains ~890 MB of unaccounted Rust-side memory
 
 **Статус:** OPEN
 **Компонент:** layout/dom (не локализовано — нужна перепись структур)
