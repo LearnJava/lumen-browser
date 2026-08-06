@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-06",
  "counts": {
-  "open": 310,
+  "open": 311,
   "fixed": 341,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 651,
+ "total_bugs": 652,
  "phases": [
   {
    "id": "P0",
@@ -3788,9 +3788,12 @@
       {
        "id": "WPT-VENDOR-svg",
        "title": "WPT: вендорить + прогнать категорию `svg`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root svg --recursive --processes=4`, 4:12, 2149 файлов, 861 отобранный id) — **421/472 harness OK, 397/2068 сабтестов**, необычно высокая доля harness OK для этого бэклога (профиль реализованной категории, как `fetch`). Заведён [BUG-685](bugs/BUG-685-OPEN.md): HTML-парсер не реализует foreign content (HTML LS §13.2.6.5) — элементы, распарсенные внутри `<svg>…</svg>`, получают XHTML-namespace и `HTMLElement.prototype` вместо SVG-специфичной цепочки прототипов; `svg.rs` реализует полноценный юнит-протестированный `SVG*Element`-DOM (`getBBox`/`getTotalLength`/`pauseAnimations`/`baseVal`/`animVal`/…), но подключает его только через перехват `document.createElementNS`, до узлов парсера не достаёт. Объясняет подавляющую часть сигнала прогона (260× `baseVal`, ~230× SMIL-таймлайн, ~130× `getBBox`, ~45× path-геометрия). 90× `document.elementFromPoint` — реконфирмация BUG-464/477/580, не новая находка. Подтверждено живой пробой (`--mcp-port`). Один новый номер бага",
+       "bugs": [
+        "BUG-685"
+       ]
       },
       {
        "id": "WPT-VENDOR-svg-aam",
@@ -9296,6 +9299,13 @@
    "status": "open",
    "title": "`ReadableStream`/`WritableStream`/`TransformStream` are plain ES5 `function X(...) { this._foo = ...; }` constructors with no `new.target` guard, so calling any…",
    "component": "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`, §\"WHATWG Streams\", ~line 5630)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-685": {
+   "status": "open",
+   "title": "The HTML parser never implements HTML LS §13.2.6.5 foreign content — every element parsed from markup, including everything inside `<svg>…</svg>`, is unconditio…",
+   "component": "engine (`crates/engine/html-parser/src/tree_builder.rs:1879` — `create_element_with_attrs` always builds `QualName::html(name)`, no foreign-content branch in the crate at all); knock-on in js (`crates/js/src/dom.rs:1673`, `crates/js/src/svg.rs:905-921`)",
    "date": null,
    "debtor": false
   }
