@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-06",
  "counts": {
-  "open": 312,
+  "open": 314,
   "fixed": 337,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 649,
+ "total_bugs": 651,
  "phases": [
   {
    "id": "P0",
@@ -3782,9 +3782,12 @@
       {
        "id": "WPT-VENDOR-streams",
        "title": "WPT: вендорить + прогнать категорию `streams`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root streams --recursive`, 5:50, 98 значимых файлов, 88 отобранных id) — **55/88 harness OK, 154/1076 сабтестов**. Основной объём сигнала — реконфирмация: [BUG-346](bugs/BUG-346-OPEN.md) (`..`-сегменты в `Url::resolve()`, ~200 FAIL через `streams/piping/../resources/*.js` 404); недокументированно-невендоренный `/common/gc.js` (`garbageCollect is not defined`, тот же класс, что `FileAPI`/`custom-elements`/`js`); отсутствие `byobRequest`/повторных вызовов `pull()`/`flush()` соответствует собственному doc-комментарию модуля (`dom.rs:5630-5634`, «synchronous-friendly model», Phase 0) — не баг. Новая находка — [BUG-684](bugs/BUG-684-OPEN.md): `ReadableStream`/`WritableStream`/`TransformStream` — обычные ES5-конструкторы без `new.target`-гварда, вызов без `new` молча биндит `this` на `globalThis` и утекает поля конструктора как одноимённые глобалы (`TransformStream()` — худший случай, утекают `globalThis.readable`/`globalThis.writable`, предельно общие имена); тот же класс, что BUG-629/374/672/681, седьмая-девятая поверхность. Отдельно: `ReadableStream.prototype[Symbol.asyncIterator]`/`.values()` отсутствуют целиком (WHATWG Streams §4.1), объясняя кластер `s[Symbol.asyncIterator] is not a function` в самом прогоне. Живая проба через `--mcp-live-port`. Один новый номер бага",
+       "bugs": [
+        "BUG-684"
+       ]
       },
       {
        "id": "WPT-VENDOR-subapps",
@@ -6694,7 +6697,7 @@
    "title": "github.com раздувает процесс на ~2.3 ГБ одной вкладкой (610→2904 МБ в живом прогоне; воспроизводимо), после чего сессия умирает (BUG-307). Найден живым /lumen-p…",
    "component": "js/dom",
    "date": null,
-   "debtor": false
+   "debtor": true
   },
   "BUG-307": {
    "status": "fixed",
@@ -9299,6 +9302,20 @@
    "component": "js (`crates/js/src/dom.rs:4423-4433` — live `document` literal at `dom.rs:4182+`; `_lumen_build_detached_document`, `dom.rs:1795-1868`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-683": {
+   "status": "open",
+   "title": "Открытие ОДНОЙ вкладки github.com в живой сессии стоит ~890 МБ Rust-кучи сверх шести уже открытых лёгких вкладок (`rust_alloc` 189.5→1079.0 МБ по counting-alloc…",
+   "component": "layout/dom (не локализовано — нужна перепись структур)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-684": {
+   "status": "open",
+   "title": "`ReadableStream`/`WritableStream`/`TransformStream` are plain ES5 `function X(...) { this._foo = ...; }` constructors with no `new.target` guard, so calling any…",
+   "component": "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`, §\"WHATWG Streams\", ~line 5630)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -9920,6 +9937,9 @@
   "layout+paint": [
    "BUG-005",
    "BUG-023"
+  ],
+  "layout/dom (не локализовано — нужна перепись структур)": [
+   "BUG-683"
   ],
   "layout/js (`crates/engine/layout/src/selector_query.rs::computed_style_to_map`, `crates/js/src/v8_runtime.rs::_lumen_get_computed_style`)": [
    "BUG-499"
