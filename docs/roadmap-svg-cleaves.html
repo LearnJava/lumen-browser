@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-06",
  "counts": {
-  "open": 310,
+  "open": 311,
   "fixed": 336,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 646,
+ "total_bugs": 647,
  "phases": [
   {
    "id": "P0",
@@ -3734,9 +3734,12 @@
       {
        "id": "WPT-VENDOR-speech-api",
        "title": "WPT: вендорить + прогнать категорию `speech-api`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). нет речевого движка"
+       "note": "Скоуп: 🚫 (вне скоупа). нет речевого движка. DONE 2026-08-06: вендорена + прогнана целиком (`--all --root speech-api --recursive`, 1:36, 27 файлов, 16 отобранных id) — **9/16 harness OK, 6/31 сабтестов**, необычно высоко для 🚫-категории — движок реально реализует TTS-мост (SAPI/espeak/`say`) и шим `SpeechSynthesis`/`SpeechSynthesisUtterance` (CAPABILITIES.md перечисляет «Web Speech TTS (OS)»). Новая находка — [BUG-680](bugs/BUG-680-OPEN.md): `SpeechSynthesisEvent`/`SpeechSynthesisErrorEvent` не существуют как глобальные конструкторы (`ReferenceError` на `new SpeechSynthesisEvent(...)`), а доставляемые события — plain object literals, не инстансы этих классов. Остальной сигнал — реконфирмация: [BUG-480](bugs/BUG-480-OPEN.md) (`<iframe>` без browsing context), [BUG-574](bugs/BUG-574-OPEN.md) (`Node.contains` отсутствует, ломает testdriver `bless()`/`click()`), класс BUG-380 (переиспользуемый browsing context), TLS `UnknownIssuer` TIMEOUT на всех `.https.` id. `historical.html` (2 FAIL: `webkitSpeechRecognition` существует, `SpeechRecognitionEvent` без `interpretation`/`emma`) соответствует документированному дизайну шима (legacy-алиас), не баг. Один новый номер бага",
+       "bugs": [
+        "BUG-680"
+       ]
       },
       {
        "id": "WPT-VENDOR-storage",
@@ -9250,6 +9253,13 @@
    "title": "HTTP 1xx informational responses (RFC 9110 §15.2, e.g. `103 Early Hints`) were treated as terminal instead of skipped. HTTP/1.1 (`read_head`) read exactly one s…",
    "component": "network (`crates/network/src/lib.rs::read_head`, `crates/network/src/h2/conn.rs`)",
    "date": "2026-08-06",
+   "debtor": false
+  },
+  "BUG-680": {
+   "status": "open",
+   "title": "`SpeechSynthesisEvent`/`SpeechSynthesisErrorEvent` constructors don't exist on `window`/`globalThis` at all — `new SpeechSynthesisEvent(...)`/`new SpeechSynthes…",
+   "component": "js (`crates/js/src/speech.rs` — `SPEECH_SHIM`, `_fire` at line 136, globals export at lines 273-289)",
+   "date": null,
    "debtor": false
   }
  },
