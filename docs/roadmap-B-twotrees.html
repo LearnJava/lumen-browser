@@ -76,11 +76,11 @@
  "generated": "2026-08-06",
  "counts": {
   "open": 311,
-  "fixed": 336,
+  "fixed": 337,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 647,
+ "total_bugs": 648,
  "phases": [
   {
    "id": "P0",
@@ -3762,9 +3762,12 @@
       {
        "id": "WPT-VENDOR-storage",
        "title": "WPT: вендорить + прогнать категорию `storage`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root storage --recursive`, 7:47, 32 значимых файла, 26 отобранных id) — **0/26 harness OK**. Все 26 — `.https.`, все TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`, ни один не дошёл до навигации. `navigator.storage`/`navigator.storageBuckets` реально реализованы как Phase 0 in-memory заглушки (`crates/js/src/storage_manager.rs`/`storage_buckets.rs`), поведение самих методов соответствует doc-комментариям — не баг. Новая находка — [BUG-681](bugs/BUG-681-OPEN.md): `StorageManager`/`StorageBucketManager`/`StorageBucket` — обычные ES5-конструкторы без `new.target`-гварда, все три конструируемы напрямую со страницы, хотя ни один спек не определяет для них конструктор (тот же класс, что BUG-629/374/672, три новые поверхности сразу). `navigator.permissions.query({name:'persistent-storage'})` → `granted` — реконфирмация уже открытого [BUG-386](bugs/BUG-386-OPEN.md) (прямо перечисляет `persistent-storage` в примере), не новая находка. Живая проба через `--mcp-live-port`. Один новый номер бага",
+       "bugs": [
+        "BUG-681"
+       ]
       },
       {
        "id": "WPT-VENDOR-storage-access-api",
@@ -6922,10 +6925,10 @@
    "debtor": false
   },
   "BUG-340": {
-   "status": "open",
-   "title": "`CloseWatcher.requestClose()` рекурсирует без ограничения, если вызвана повторно изнутри собственного `cancel`-обработчика — `this._closed` выставляется только…",
+   "status": "fixed",
+   "title": "`CloseWatcher.requestClose()` рекурсировала без ограничения при вызове изнутри собственного `cancel`-обработчика — `this._closed` выставлялся только внутри `_fi…",
    "component": "js (`crates/js/src/close_watcher.rs`, `CLOSE_WATCHER_SHIM`)",
-   "date": null,
+   "date": "2026-08-06",
    "debtor": false
   },
   "BUG-341": {
@@ -9277,6 +9280,13 @@
    "status": "open",
    "title": "`SpeechSynthesisEvent`/`SpeechSynthesisErrorEvent` constructors don't exist on `window`/`globalThis` at all — `new SpeechSynthesisEvent(...)`/`new SpeechSynthes…",
    "component": "js (`crates/js/src/speech.rs` — `SPEECH_SHIM`, `_fire` at line 136, globals export at lines 273-289)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-681": {
+   "status": "open",
+   "title": "`StorageManager`/`StorageBucketManager`/`StorageBucket` are plain ES5 `function X() {}` constructors with no `new.target` guard, so `new StorageManager()`/`new…",
+   "component": "js (`crates/js/src/storage_manager.rs` — `STORAGE_MANAGER_SHIM`; `crates/js/src/storage_buckets.rs` — `STORAGE_BUCKETS_SHIM`)",
    "date": null,
    "debtor": false
   }
