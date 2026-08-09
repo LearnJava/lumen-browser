@@ -58,11 +58,11 @@
  "generated": "2026-08-10",
  "counts": {
   "open": 327,
-  "fixed": 379,
+  "fixed": 380,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 706,
+ "total_bugs": 707,
  "phases": [
   {
    "id": "P0",
@@ -9727,6 +9727,13 @@
    "component": "layout (`crates/engine/layout/src/box_tree.rs` — ветка `BoxKind::InlineBlockRow` в `lay_out`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-742": {
+   "status": "fixed",
+   "title": "Процентная `width` в intrinsic-расчёте резолвилась против нулевой базы (`percent_basis: Some(0.0)`) и трактовалась как ЯВНАЯ ширина 0: shrink-to-fit бокс (`inli…",
+   "component": "layout (`crates/engine/layout/src/box_tree.rs` — `preferred_inline_block_width`, `max_content_outer_width`, `min_content_outer_width`)",
+   "date": "2026-08-10",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -10361,6 +10368,9 @@
   ],
   "layout (`crates/engine/layout/src/box_tree.rs` — `max_content_outer_width`, `min_content_outer_width_of_contents`, `preferred_inline_block_width`)": [
    "BUG-737"
+  ],
+  "layout (`crates/engine/layout/src/box_tree.rs` — `preferred_inline_block_width`, `max_content_outer_width`, `min_content_outer_width`)": [
+   "BUG-742"
   ],
   "layout (`crates/engine/layout/src/box_tree.rs` — `produces_inline_segments`, `is_atomic_inline_level`, shrink-to-fit в `lay_out`)": [
    "BUG-739"
