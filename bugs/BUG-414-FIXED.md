@@ -1,6 +1,6 @@
 # BUG-414 — `element.dataset` / `DOMStringMap` отсутствуют (у SVG есть заглушка, возвращающая пустой объект)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-09
 **Компонент:** js (`crates/js/src/dom.rs` — фабрика живых обёрток `_lumen_build_element`,
 `:5516-5880`; заглушка — `crates/js/src/svg.rs:265`)
 **Найден:** 2026-07-28 (P2), WPT-VENDOR-html, срез `html/dom`
@@ -75,3 +75,29 @@ bug's blast radius is any WPT file that uses `element.dataset` inside a
 synchronous top-level `<script>` before test registration, independent of
 element type. `.ini` under `tests/wpt/metadata/css/css-sizing/`, file-level
 `expected: TIMEOUT`.
+
+## Исправлено (P3, 2026-08-09, в ходе разбора [BUG-703](BUG-703-OPEN.md))
+
+`dataset` реализован ровно предложенным здесь способом: `Proxy` поверх
+`_lumen_get_attr`/`_lumen_set_attr`/`_lumen_remove_attr`/`_lumen_get_attr_names`
+с ловушками `get`/`set`/`has`/`deleteProperty`/`ownKeys`/
+`getOwnPropertyDescriptor` (`crates/js/src/dom.rs`, `_lumen_make_dataset`),
+преобразованием `data-multi-word` ↔ `multiWord` и `SyntaxError` на имени вида
+`-x`. Целью прокси служит `Object.create(DOMStringMap.prototype)`, поэтому
+`el.dataset instanceof DOMStringMap` истинно; сам `DOMStringMap` заведён как
+неконструируемый интерфейсный объект (`new DOMStringMap()` → `TypeError`).
+Обёртка кэшируется на элементе, так что `el.dataset === el.dataset`.
+
+Заглушка `svg.rs:265` удалена, как и предписывал этот баг: реальные SVG-узлы
+приходят из нативного `createElementNS` и несут собственный живой геттер
+общей обёртки, поэтому прототипная заглушка только затеняла его для
+конструируемых вручную экземпляров.
+
+Найдено заново на живой странице: `script.dataset.mmid = ...` в бутстрапе
+`tbank.ru` падал с `TypeError: Cannot set properties of undefined`.
+
+Тесты: `dataset_maps_data_attributes_both_ways`,
+`dataset_is_a_domstringmap_on_html_and_svg` в `dom::tests::v8_core`.
+Сабтесты WPT (`elements/global-attributes/dataset.html`,
+`dataset-binding.window.html`) заново не измерялись — прогон категории `html`
+в этой сессии не запускался.

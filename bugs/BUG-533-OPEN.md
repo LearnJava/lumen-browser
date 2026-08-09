@@ -28,7 +28,7 @@ which is specified entirely around mixed `Range`/`StaticRange` collections).
 
 Two distinct failure shapes depending on where the throw lands relative to
 `testharness.js`'s `test()` registration — the same TIMEOUT-vs-FAIL split
-already documented for [BUG-485](BUG-485-OPEN.md) (`document.head`):
+already documented for [BUG-485](BUG-485-FIXED.md) (`document.head`):
 
 - **TIMEOUT** — `new StaticRange(...)` sits at the **top level** of the
   `<script>`, before the first `test()`/`promise_test()` call registers, so

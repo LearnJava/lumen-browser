@@ -1,6 +1,6 @@
 # BUG-565: `document.head` does not exist — always `undefined`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-09
 **Компонент:** js (`crates/js/src/dom.rs` — the `Document` object literal, ~line
 7140-7210: `get body()` and `get documentElement()` are defined there, `head`
 is not)
@@ -51,3 +51,26 @@ skips its setup step, so the failure is not scoped to `document-metadata` —
 `document.head` is one of the most commonly used DOM entry points in the
 entire WPT corpus (test setup routinely injects `<link>`/`<meta>`/`<style>`
 via it) and any category touching page metadata will hit the same throw.
+
+## Исправлено (P3, 2026-08-09, в ходе разбора [BUG-703](BUG-703-OPEN.md))
+
+Добавлены нативный `_lumen_get_head` (сосед `_lumen_get_body`, тот же обход
+дерева — первый `<head>` в порядке документа) и геттер `document.head` в
+живом объекте `document` (`crates/js/src/dom.rs`); заодно `head`/`body`
+появились у отсоединённых документов (частично закрывает
+[BUG-415](BUG-415-OPEN.md)).
+
+Найдено заново на живой странице `https://www.tbank.ru/`: загрузчик чанков
+webpack заканчивается на `document.head.appendChild(script)`, поэтому на
+любом бандл-сайте каждый ленивый чанк падал с `TypeError: Cannot read
+properties of undefined (reading 'appendChild')` — внутри асинхронного
+бутстрапа без следа.
+
+Тесты: `document_head_is_the_head_element`,
+`document_head_accepts_appended_script`,
+`detached_document_exposes_head_and_body` в `dom::tests::v8_core`.
+Сабтесты WPT заново не измерялись — прогонов категорий в этой сессии не было.
+
+Дубликат: [BUG-485](BUG-485-FIXED.md) и [BUG-565](BUG-565-FIXED.md) — один и
+тот же дефект, заведённый дважды разными срезами WPT (WPT-RUN-3 срез 6 и
+WPT-VENDOR-html-semantics-document-metadata); закрыты одним фиксом.

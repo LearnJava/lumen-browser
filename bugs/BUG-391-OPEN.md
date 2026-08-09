@@ -126,7 +126,7 @@ Same shape, a new pseudo-element: `highlight-pseudo-parsing.html`'s
 `":not(::highlight(foo)))"` — 6 subtests) all fail to throw
 `SyntaxError`/`DOMException` from `document.querySelector(selector)`. The
 file's "should be a valid selector" subtests fail for the unrelated reason
-already covered by [BUG-485](BUG-485-OPEN.md) (shared
+already covered by [BUG-485](BUG-485-FIXED.md) (shared
 `test_valid_selector`/`test_invalid_selector` helper's
 `document.head.append(style)`). `.ini` under
 `tests/wpt/metadata/css/css-highlight-api/`.

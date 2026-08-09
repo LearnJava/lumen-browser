@@ -2817,8 +2817,15 @@ function _lumen_dataset_keys(nid) {
     }
     return out;
 }
+// WebIDL interface object — `dataset` must satisfy `instanceof DOMStringMap`
+// (BUG-414: the WPT dataset tests assert exactly that, which is why the old
+// SVG-only `get dataset() { return {}; }` stub failed them even where it
+// answered). Not constructible from script, per WebIDL.
+function DOMStringMap() { throw new TypeError('Illegal constructor'); }
+globalThis.DOMStringMap = DOMStringMap;
+
 function _lumen_make_dataset(nid) {
-    return new Proxy({}, {
+    return new Proxy(Object.create(DOMStringMap.prototype), {
         get: function(_t, prop) {
             if (typeof prop !== 'string') { return undefined; }
             var attr = _lumen_dataset_attr_name(prop);
@@ -17168,6 +17175,31 @@ mod tests {
                 .eval("document.getElementById('main').dataset === document.getElementById('main').dataset")
                 .unwrap();
             assert_eq!(same, lumen_core::JsValue::Bool(true));
+        }
+
+        /// BUG-414: the WPT `dataset` tests assert `instanceof DOMStringMap`,
+        /// and one of them asserts it for an SVG element — which used to hit
+        /// `svg.rs`'s `get dataset() { return {}; }` stub instead.
+        #[test]
+        fn dataset_is_a_domstringmap_on_html_and_svg() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "var svg = document.createElementNS('http://www.w3.org/2000/svg', 'circle'); \
+                     svg.setAttribute('data-r', '5'); \
+                     var html = document.getElementById('main'); \
+                     typeof DOMStringMap === 'function' \
+                     && html.dataset instanceof DOMStringMap \
+                     && svg.dataset instanceof DOMStringMap \
+                     && svg.dataset.r === '5' \
+                     && (svg.dataset.r = '9', svg.getAttribute('data-r') === '9')",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+            let ctor = rt
+                .eval("(function(){ try { new DOMStringMap(); return false; } catch (e) { return e instanceof TypeError; } })()")
+                .unwrap();
+            assert_eq!(ctor, lumen_core::JsValue::Bool(true));
         }
 
         /// BUG-703: the detached-document half of the shim's Document split had

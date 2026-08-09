@@ -55,3 +55,35 @@
 понадобится способ вызвать JS из статического V8-колбэка.
 
 Найден P3, 2026-08-09.
+
+## Диагностическая ценность (P3, 2026-08-09, разбор BUG-703)
+
+Даже без полного диспатча событий один только колбэк, печатающий отклонение
+в stderr, оказался решающим инструментом: [BUG-703](BUG-703-OPEN.md)
+(`tbank.ru` молча не рендерится) был неразличим по консоли — асинхронный
+бутстрап глотал всё, — а временный колбэк за один прогон выдал и точку
+падения, и стек. Рабочий минимум (проверен на `v8 = 150.1.0`):
+
+```rust
+extern "C" fn diag_promise_reject_callback(msg: v8::PromiseRejectMessage) {
+    v8::callback_scope!(unsafe scope, &msg);
+    let event = msg.get_event();
+    let Some(value) = msg.get_value() else { return };
+    v8::scope!(let scope, scope);
+    let text = value.to_rust_string_lossy(scope);
+    let stack = value.to_object(scope)
+        .and_then(|o| { let k = v8::String::new(scope, "stack")?; o.get(scope, k.into()) })
+        .filter(|v| !v.is_undefined())
+        .map(|v| v.to_rust_string_lossy(scope))
+        .unwrap_or_default();
+    eprintln!("[unhandled-rejection] event={event:?} value={text}\n{stack}");
+}
+// в v8_thread_main, сразу после install_dynamic_import_hook:
+isolate.set_promise_reject_callback(diag_promise_reject_callback);
+```
+
+Замечание к шагу 4 плана: reason'ы, не являющиеся `Error`, печатаются как
+`[object Object]` — при реализации стоит сериализовать их (JSON) хотя бы для
+консольного вывода. Стоит рассмотреть вывод необработанных отклонений в
+`resource://console` как часть этого бага: сейчас страница может отказать
+полностью, не оставив ни одной диагностической строки.

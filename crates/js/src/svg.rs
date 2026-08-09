@@ -256,7 +256,10 @@ const SVG_SHIM: &str = r#"
       this.id = '';
       this.className = new SVGAnimatedString('');
     }
-    get dataset() { return {}; }
+    // BUG-414: no `dataset` stub here. Real SVG elements come from the native
+    // `createElementNS` and carry the shared wrapper's own live DOMStringMap
+    // (`dom.rs`); a prototype stub returning a fresh `{}` only shadowed it for
+    // hand-constructed instances and silently dropped writes.
     focus() {}
     blur() {}
   }

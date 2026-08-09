@@ -33,7 +33,7 @@ for any image, successful decode or failed decode alike.
 reflection (`dom.rs:10864-10875`: `src`/`alt`/`srcset`/`sizes`/`useMap`/
 `isMap`/`crossOrigin`/`decoding`/`loading`/`referrerPolicy`) — no
 `complete`/`naturalWidth`/`naturalHeight` getters were ever added, matching
-the pattern for `body`/`head` in [BUG-485](BUG-485-OPEN.md)/[BUG-565](BUG-565-OPEN.md)
+the pattern for `body`/`head` in [BUG-485](BUG-485-FIXED.md)/[BUG-565](BUG-565-FIXED.md)
 (a member simply never wired up, not a deliberate stub).
 
 On the engine side, the single fetch+decode entry point
