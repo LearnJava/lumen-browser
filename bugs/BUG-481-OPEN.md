@@ -41,3 +41,16 @@ so `window.visualViewport.scale` throws `Cannot read properties of undefined
 cannot expose without a `VisualViewport` object regardless of whether the
 underlying zoom clamping itself is implemented. `.ini` under
 `tests/wpt/metadata/css/css-device-adapt/` for all 5 files.
+
+## WPT-VENDOR-visual-viewport (2026-08-09)
+
+Category vendored and run whole (`run_report.py --all --root visual-viewport
+--recursive`, 19 selected ids): **11/19 harness OK, 0/22 subtests**. Same
+`window.visualViewport` absence, now observed as three distinct failure
+shapes depending on where each file's first reference sits relative to
+`test()`/`async_test().step()`: plain `FAIL` (`TypeError: Cannot read
+properties of undefined`) when wrapped in a step, `TIMEOUT` or `ERROR: done()
+was called without first defining any tests` when the reference is at the
+file's top level or inside an unwrapped callback and the resulting unhandled
+exception aborts the script before `done()` runs. No new bug number filed —
+same root cause as the entries above.
