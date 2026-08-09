@@ -4099,9 +4099,9 @@
       {
        "id": "WPT-VENDOR-webmcp",
        "title": "WPT: вендорить + прогнать категорию `webmcp`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). экспериментальный, вне текущего скоупа"
+       "note": "Скоуп: 🚫 (вне скоупа, экспериментальное предложение, в движке не реализовано вовсе). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root webmcp --recursive --processes=4`, ~6:10, 61 файл, 50 отобранных id) — **1/50 harness OK, 1/1 сабтестов** (только не-`.https.` `non-secure.html`), остальные 49 TIMEOUT на TLS-гэпе `UnknownIssuer` (BUG-657). Живая проба (`--mcp-live-port`) подтвердила `navigator.modelContext`/`window.ModelContext` отсутствуют целиком, без частичной утечки. Новый номер бага не заводился"
       },
       {
        "id": "WPT-VENDOR-webmessaging",
