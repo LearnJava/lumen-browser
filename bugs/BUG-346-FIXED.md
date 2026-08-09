@@ -197,3 +197,33 @@ fix already covered by exact-repro unit tests) — a future WPT session should
 confirm the `reactions/`/`reactions/customized-builtins/` subtrees move from
 TIMEOUT to running actual test bodies, and that the `fetch/api/*/../resources/
 utils.js` 404 class (69 responses, measured 2026-07-28) is gone.
+
+## Live-run verification (P2, WPT-VENDOR-web-animations, 2026-08-09)
+
+Confirmed genuinely fixed — but only visible after rebuilding. First
+`web-animations` run used the **shared root worktree's warm
+`target/dev-release/lumen.exe`** and reproduced the pre-fix symptom
+exactly: `<script src="../../testcommon.js">` (two-level-up, same shape as
+this bug's original repro) went out over the wire as the literal
+`.../animation-model/animation-types/../../testcommon.js`, 404'd against
+`wptserve`, and cascaded into 3966× `ReferenceError: createElement is not
+defined` + 1208× `createDiv is not defined` (testcommon.js's own exports,
+never executed). A dedicated unit test added temporarily to
+`crates/shell/src/main.rs` (`ResourceBase::resolve_str("../../testcommon.js")`
+against a 3-segment-deep base) proved the **source** already collapses
+correctly (`http://127.0.0.1:18500/testcommon.js`) — so the live 404s were
+coming from a **stale binary**, not a code regression. Rebuilding
+`lumen-shell` in-slot and re-running `web-animations` dropped the
+`testcommon.js: network error` count from thousands to 2 (both from a
+genuinely out-of-category, unvendored helper, unrelated to this bug) and
+raised the pass rate from 128/139→121/139 harness OK but 723/3625→930/4147
+subtests (more tests now run far enough to hit their *real*, deeper
+failures instead of dying on the missing helper). Matches
+[[reference_wpt_run_report_invocation_recipe]]'s "stale
+`target/dev-release/lumen.exe`" gotcha — worth suspecting any time a
+WPT-VENDOR run's dominant failure is a `ReferenceError` for a name the
+vendored helper file demonstrably exports. `custom-elements`/`fetch`/
+`css-typed-om`/`streams`/`images`/`svg` entries in `tests/wpt/VENDOR.md`
+that "reconfirmed" this bug after 2026-08-06 should be treated with the
+same suspicion — re-verify against a freshly built binary before assuming
+the fix regressed.
