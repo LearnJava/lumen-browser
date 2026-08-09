@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-09",
  "counts": {
-  "open": 310,
+  "open": 311,
   "fixed": 351,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 661,
+ "total_bugs": 662,
  "phases": [
   {
    "id": "P0",
@@ -3893,9 +3893,12 @@
       {
        "id": "WPT-VENDOR-urlpattern",
        "title": "WPT: вендорить + прогнать категорию `urlpattern`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root urlpattern --recursive`, ~35 с, 12 файлов, 9 отобранных id) — **6/9 harness OK, 15/425 сабтестов**. Заведён [BUG-695](bugs/BUG-695-OPEN.md): `URLPattern` — рукописный мини pattern-matcher (доку-комментарий сам это признаёт), а не портированный алгоритм WHATWG URLPattern Standard — конструктор читает только `pathname`/`search`/`hash`/`hostname` (`protocol`/`port`/`username`/`password`/`baseURL` не читаются вовсе), нет компиляции компонент, `test()`/`exec()` отдают плоский объект групп вместо `URLPatternResult`, нет `compareComponent`/`.hasRegExpGroups`/`.generate()`, нет валидации синтаксиса паттерна (regexp-группы `(...)` не парсятся вовсе). Один новый номер бага",
+       "bugs": [
+        "BUG-695"
+       ]
       },
       {
        "id": "WPT-VENDOR-user-timing",
@@ -9394,6 +9397,13 @@
    "status": "open",
    "title": "`URLSearchParams` has no `Symbol.iterator` (same defect class as `Headers`, [BUG-369](bugs/BUG-369-OPEN.md)) — `for...of`/spread/`Array.from()` all fail with \"i…",
    "component": "js (`crates/js/src/dom.rs:7974-8073` — `URLSearchParams` constructor + prototype)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-695": {
+   "status": "open",
+   "title": "`URLPattern` is a hand-rolled mini pattern-matcher (its own doc comment: \"Pure JavaScript implementation\"), not a port of the WHATWG URLPattern Standard algorit…",
+   "component": "js (`crates/js/src/url_pattern.rs` — `install_url_pattern_api_v8`/`URL_PATTERN_SHIM`)",
    "date": null,
    "debtor": false
   }
