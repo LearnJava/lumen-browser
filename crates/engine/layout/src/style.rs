@@ -7906,30 +7906,18 @@ pub fn compute_style(
     drop(prof_revert);
     let prof_apply = lumen_core::profile::scope_detail("cs_apply");
 
-    // Pre-pass: применяем font-size раньше, потому что em/% других свойств
-    // считаются относительно computed font-size этого же элемента, а em для
-    // самого font-size — относительно inherited (родительского) font-size.
-    let parent_fs = inherited.font_size;
-    let is_quirks = doc.mode() == DocumentMode::Quirks;
-    for (_, _, _, _, _, _, decl) in &matched {
-        apply_font_size(&mut style, decl, parent_fs, ua_baseline_font_size, viewport, is_quirks);
-    }
-
-    // Pre-pass: применяем color-scheme раньше main-pass, чтобы системные
-    // цвета (Canvas, ButtonFace, …) резолвились против правильной темы
-    // ещё в ходе main-pass (для поля `color: Color`; CssColor-поля
-    // резолвятся отдельным post-pass в конце compute_style).
-    for (_, _, _, _, _, _, decl) in &matched {
-        if decl.property.eq_ignore_ascii_case("color-scheme") {
-            apply_declaration(&mut style, decl, parent_fs, viewport, FontWeight::NORMAL, inherited, ua_baseline_ref, is_quirks, dark_mode);
-        }
-    }
-
     // Custom-properties pass: все `--name: value` декларации применяются
-    // отдельно и ДО main-pass, чтобы любая обычная декларация в main-pass
-    // могла видеть финальное значение custom property независимо от порядка
+    // отдельно и ДО остальных пассов, чтобы любая обычная декларация могла
+    // видеть финальное значение custom property независимо от порядка
     // объявления в source. Каскад уже соблюдён через sort `matched`:
     // последующая запись с тем же ключом перебивает раннюю.
+    //
+    // BUG-731: пасс стоит ПЕРЕД font-size-pre-pass, а не после него. Иначе
+    // `font-size: var(--x)` / `font: var(--x)` видели бы только унаследованную
+    // карту, а собственное объявление элемента (`.card { --fs: 20px;
+    // font-size: var(--fs) }`) — нет. Пасс ни от чего в pre-pass-ах не зависит:
+    // он читает только `matched` + `registry`, а `validate_against_syntax`
+    // работает по тексту значения, не по computed font-size.
     //
     // CSS Properties and Values L1 §1.1 «invalid at computed value time»:
     // для зарегистрированных custom properties value валидируется против
@@ -7953,10 +7941,29 @@ pub fn compute_style(
 
     // CSS Properties and Values L1 §1.1: для каждого зарегистрированного
     // имени, у которого после custom-pass нет значения (ни унаследованного,
-    // ни локально объявленного), подставить `initial-value`. Делается между
-    // custom-pass и main-pass, чтобы `var(--registered)` в обычных
-    // декларациях видел initial-value-fallback.
+    // ни локально объявленного), подставить `initial-value`. Делается до
+    // остальных пассов, чтобы `var(--registered)` в обычных декларациях
+    // видел initial-value-fallback.
     apply_property_initial_values(&mut style.custom_props, &registry);
+
+    // Pre-pass: применяем font-size раньше, потому что em/% других свойств
+    // считаются относительно computed font-size этого же элемента, а em для
+    // самого font-size — относительно inherited (родительского) font-size.
+    let parent_fs = inherited.font_size;
+    let is_quirks = doc.mode() == DocumentMode::Quirks;
+    for (_, _, _, _, _, _, decl) in &matched {
+        apply_font_size(&mut style, decl, parent_fs, ua_baseline_font_size, viewport, is_quirks);
+    }
+
+    // Pre-pass: применяем color-scheme раньше main-pass, чтобы системные
+    // цвета (Canvas, ButtonFace, …) резолвились против правильной темы
+    // ещё в ходе main-pass (для поля `color: Color`; CssColor-поля
+    // резолвятся отдельным post-pass в конце compute_style).
+    for (_, _, _, _, _, _, decl) in &matched {
+        if decl.property.eq_ignore_ascii_case("color-scheme") {
+            apply_declaration(&mut style, decl, parent_fs, viewport, FontWeight::NORMAL, inherited, ua_baseline_ref, is_quirks, dark_mode);
+        }
+    }
 
     // Main-pass: остальные декларации; em-basis теперь = current font_size.
     // Inherited font_weight нужен для разрешения `lighter`/`bolder`;
@@ -13975,6 +13982,27 @@ fn calc_num_to_node(value: f32, unit: &str) -> Option<CalcNode> {
 /// определения отсекутся быстро.
 const VAR_EXPAND_MAX_DEPTH: u32 = 32;
 
+/// Раскрывает `var()`, затем `env()`, ровно в том порядке и с той же
+/// семантикой отказа, что и main-pass внутри [`apply_declaration`]: `env()`
+/// идёт вторым, потому что custom property может содержать `env(...)`.
+/// `None` = декларация invalid at computed value time (CSS Variables L1 §3.3).
+///
+/// Вынесено в отдельную функцию ради pre-pass-а `font-size`/`font`
+/// ([`apply_font_size`], BUG-731) — единственного места, где значение
+/// парсится вне main-pass-а, и где раньше `var()` терялся.
+fn expand_vars_and_env(value: &str, custom: &HashMap<String, String>) -> Option<String> {
+    let after_var = if value.contains("var(") {
+        expand_vars(value, custom, 0)?
+    } else {
+        value.to_string()
+    };
+    if after_var.contains("env(") {
+        expand_env_vars(&after_var, &empty_env_registry(), 0)
+    } else {
+        Some(after_var)
+    }
+}
+
 /// CSS Variables L1 §3: рекурсивно разворачивает все `var(--name [, fallback])`
 /// в `value`. Возвращает None, если:
 ///   - встретилась `var()` с именем, которого нет в `custom`, и нет fallback;
@@ -14484,27 +14512,15 @@ fn apply_declaration(
     // валидным `&str`.
     let expanded;
     let val: &str = if decl.value.contains("var(") || decl.value.contains("env(") {
-        let after_var = if decl.value.contains("var(") {
-            match expand_vars(&decl.value, &style.custom_props, 0) {
-                Some(v) => v,
-                None => return,
-            }
-        } else {
-            decl.value.clone()
-        };
         // CSS Environment Variables L1: env() раскрывается ПОСЛЕ var(),
-        // потому что custom property может содержать `env(...)`.
-        if after_var.contains("env(") {
-            match expand_env_vars(&after_var, &empty_env_registry(), 0) {
-                Some(v) => {
-                    expanded = v;
-                    expanded.as_str()
-                }
-                None => return,
+        // потому что custom property может содержать `env(...)` — порядок
+        // зафиксирован в `expand_vars_and_env`, общей с pre-pass-ом font-size.
+        match expand_vars_and_env(&decl.value, &style.custom_props) {
+            Some(v) => {
+                expanded = v;
+                expanded.as_str()
             }
-        } else {
-            expanded = after_var;
-            expanded.as_str()
+            None => return,
         }
     } else {
         decl.value.as_str()
@@ -14520,12 +14536,20 @@ fn apply_declaration(
         "DEVX-8a: unresolved var() reached property parser: {prop}={val}"
     );
 
+    // `font-size` целиком принадлежит pre-pass-у `apply_font_size` — включая
+    // CSS-wide keyword-ы. BUG-731: раньше keyword-ветка ниже применяла
+    // `font-size: inherit` ещё раз, уже в main-pass, и затирала размер,
+    // который pre-pass взял из более поздней декларации `font`-shorthand
+    // (`.a{font-size:inherit} .c{font:700 44px/1.2 X}` на одном элементе →
+    // 16px вместо 44px). Значения-длины и так уходили в no-op-арм `"font-size"`
+    // ниже, так что асимметричной была именно keyword-ветка.
+    if prop == "font-size" {
+        return;
+    }
+
     // CSS Cascade L4 §7: CSS-wide keywords (inherit / initial / unset /
     // revert) применимы к любому свойству. Делается ДО property-specific
-    // парсинга, чтобы не дублировать проверку в 30+ branch-ах. font-size
-    // обрабатывается в `apply_font_size` (pre-pass) — здесь повторно для
-    // случая, когда font-size попал в main-pass через невидимую генерик
-    // декларацию (no-op, font-size уже выставлен).
+    // парсинга, чтобы не дублировать проверку в 30+ branch-ах.
     if let Some(kw) = parse_css_wide_keyword(val) {
         apply_css_wide_keyword(style, prop, kw, inherited, ua_baseline);
         return;
@@ -15020,9 +15044,6 @@ fn apply_declaration(
             {
                 style.max_height = Some(len);
             }
-        }
-        "font-size" => {
-            // Обрабатывается в pre-pass; в этой ветке пропускаем.
         }
         "font-style" => {
             // CSS Fonts L4 — normal | italic | oblique. Прочее (`oblique 10deg`,
@@ -18293,12 +18314,10 @@ fn apply_css_wide_keyword(
     match prop {
         // ──────── Inherited properties ────────
         "color" => style.color = if inh { inherited.color } else { init.color },
-        "font-size" => {
-            // Font-size уже обработан в apply_font_size (pre-pass). Здесь
-            // повторно — если main-pass почему-то его коснётся, оставляем
-            // корректный итог.
-            style.font_size = if inh { inherited.font_size } else { init.font_size };
-        }
+        // `font-size` сюда не доходит: `apply_declaration` отсекает его до
+        // keyword-ветки (BUG-731) — размер целиком считает pre-pass
+        // `apply_font_size`, который один видит весь каскад, включая
+        // `font`-shorthand.
         "line-height" => {
             style.line_height = if inh { inherited.line_height } else { init.line_height };
             style.line_height_is_relative = if inh {
@@ -21698,6 +21717,12 @@ fn media_context_from_viewport(viewport: Size, dark_mode: bool) -> MediaContext 
 /// для `revert`: элементы вроде `<small>`/`<sub>`/`<sup>`/`<h1>`–`<h6>` получают
 /// UA-хинт на font-size (`ua_font_size_factor`/`apply_ua_heading_style`) до этого
 /// pre-pass-а, так что `revert` должен откатываться к нему, а не к голому `parent_fs`.
+///
+/// BUG-731: `var()`/`env()` раскрываются здесь так же, как это делает
+/// `apply_declaration` для main-pass-свойств. Раньше pre-pass парсил сырую
+/// строку, поэтому `font-size: var(--fs)` и `font: var(--f)` молча теряли
+/// размер (остальные longhand-ы `font` при этом применялись — их считает
+/// main-pass, который var() раскрывает).
 fn apply_font_size(
     style: &mut ComputedStyle,
     decl: &Declaration,
@@ -21706,16 +21731,31 @@ fn apply_font_size(
     viewport: Size,
     is_quirks: bool,
 ) {
+    if decl.property != "font" && decl.property != "font-size" {
+        return;
+    }
+    // CSS Variables L1 §3.3: нераскрываемый `var()` делает декларацию invalid at
+    // computed value time — она просто не применяется.
+    let expanded;
+    let raw: &str = if decl.value.contains("var(") || decl.value.contains("env(") {
+        match expand_vars_and_env(&decl.value, &style.custom_props) {
+            Some(v) => {
+                expanded = v;
+                expanded.as_str()
+            }
+            None => return,
+        }
+    } else {
+        decl.value.as_str()
+    };
+
     if decl.property == "font" {
-        if let Some(parts) = parse_font_shorthand(&decl.value) {
+        if let Some(parts) = parse_font_shorthand(raw) {
             resolve_font_size(style, &parts.size, parent_fs, viewport, is_quirks);
         }
         return;
     }
-    if decl.property != "font-size" {
-        return;
-    }
-    let val = decl.value.as_str();
+    let val = raw;
     // CSS Cascade L4 §7: CSS-wide keywords. font-size — inherited; unset ==
     // inherit; revert rolls back to the UA-hinted value (falls back to
     // `parent_fs` when the element has no font-size UA hint, since
@@ -21875,16 +21915,67 @@ fn is_font_size_token(tok: &str) -> bool {
     ) {
         return true;
     }
+    // Набор вариантов — ровно тот, что умеет `resolve_font_size`; intrinsic-
+    // keyword-ы (`min-content` и Ко) для font-size бессмысленны и им отсеяны.
+    // BUG-731: `Calc` и cq*-единицы раньше отсутствовали здесь, хотя
+    // `resolve_font_size` их считает — из-за чего `font: 700 calc(…)/… serif`
+    // целиком признавался невалидным shorthand-ом, а longhand
+    // `font-size: calc(…)` с тем же значением работал.
     matches!(parse_length_q(tok, false), Some(Length::Px(_) | Length::Em(_) | Length::Rem(_)
         | Length::Ch(_) | Length::Ex(_)
-        | Length::Percent(_) | Length::Vh(_) | Length::Vw(_) | Length::Vmin(_) | Length::Vmax(_)))
+        | Length::Percent(_) | Length::Vh(_) | Length::Vw(_) | Length::Vmin(_) | Length::Vmax(_)
+        | Length::Cqw(_) | Length::Cqh(_) | Length::Cqi(_) | Length::Cqb(_)
+        | Length::Cqmin(_) | Length::Cqmax(_)
+        | Length::Calc(_)))
+}
+
+/// Токенизирует значение `font`-shorthand с учётом вложенных скобок: пробел и
+/// `/` разделяют токены только на глубине 0, поэтому `calc(0px + 44px)` и
+/// `calc((44px) * 1.09)` остаются одним токеном вместе со своими пробелами и
+/// делением внутри (BUG-731). `/` на глубине 0 выдаётся отдельным токеном —
+/// вызывающему не нужно нормализовать значение заранее.
+///
+/// Незакрытая скобка не отбрасывается: остаток становится последним токеном, а
+/// невалидность поймает уже разбор компонентов.
+fn split_font_shorthand_tokens(val: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut cur = String::new();
+    let mut depth = 0usize;
+    for ch in val.chars() {
+        match ch {
+            '(' => {
+                depth += 1;
+                cur.push(ch);
+            }
+            ')' => {
+                depth = depth.saturating_sub(1);
+                cur.push(ch);
+            }
+            '/' if depth == 0 => {
+                if !cur.is_empty() {
+                    tokens.push(std::mem::take(&mut cur));
+                }
+                tokens.push("/".to_string());
+            }
+            c if c.is_whitespace() && depth == 0 => {
+                if !cur.is_empty() {
+                    tokens.push(std::mem::take(&mut cur));
+                }
+            }
+            c => cur.push(c),
+        }
+    }
+    if !cur.is_empty() {
+        tokens.push(cur);
+    }
+    tokens
 }
 
 /// Разбирает CSS `font`-shorthand в компоненты. Возвращает `None`, если значение
 /// невалидно или это system-font/CSS-wide keyword (их раскрытие не делаем).
 ///
-/// Алгоритм: нормализуем `/` пробелами (он не встречается в валидном
-/// font-family), токенизируем по whitespace. Leading-секция = `style || variant
+/// Алгоритм: токенизируем `split_font_shorthand_tokens` (скобко-аварная
+/// разбивка, `/` — отдельный токен). Leading-секция = `style || variant
 /// || weight || width` в любом порядке (плюс no-op `normal` и `oblique <angle>`),
 /// потребляется до первого `<font-size>`-токена. Дальше — `<font-size>`,
 /// опциональный `/ <line-height>`, остаток — обязательный `<font-family>`.
@@ -21904,8 +21995,7 @@ fn parse_font_shorthand(val: &str) -> Option<FontShorthand> {
     }
 
     // `13px/1.4`, `13px /1.4`, `13px/ 1.4`, `13px / 1.4` → одинаковая токенизация.
-    let normalised = trimmed.replace('/', " / ");
-    let tokens: Vec<&str> = normalised.split_whitespace().collect();
+    let tokens: Vec<String> = split_font_shorthand_tokens(trimmed);
 
     let mut style: Option<FontStyle> = None;
     let mut small_caps = false;
@@ -21950,14 +22040,14 @@ fn parse_font_shorthand(val: &str) -> Option<FontShorthand> {
     if !is_font_size_token(&size.to_ascii_lowercase()) {
         return None;
     }
-    let size = (*size).to_string();
+    let size = size.clone();
     i += 1;
 
     // Опциональный `/ <line-height>`.
     let mut line_height = None;
-    if tokens.get(i) == Some(&"/") {
+    if tokens.get(i).map(String::as_str) == Some("/") {
         i += 1;
-        line_height = Some((*tokens.get(i)?).to_string());
+        line_height = Some(tokens.get(i)?.clone());
         i += 1;
     }
 
@@ -29837,6 +29927,119 @@ mod tests {
         // Missing family → invalid → declaration ignored, defaults kept.
         let s = p_style_with_css("p { font: 16px; }");
         assert_eq!(s.font_size, 16.0); // matches default; no panic
+    }
+
+    /// Стиль `<p>` внутри `<body>`, посчитанный по настоящей цепочке
+    /// наследования (root → body → p) — нужен там, где проверяется, что
+    /// значение приходит от предка, а не объявлено на самом элементе.
+    fn p_style_inheriting_from_body(css: &str) -> ComputedStyle {
+        let doc = lumen_html_parser::parse("<body><p>x</p></body>");
+        let sheet = lumen_css_parser::parse(css);
+        let root_style = ComputedStyle::root();
+        let viewport = Size::new(800.0, 600.0);
+        let body = doc.body().unwrap();
+        let body_style = compute_style(&doc, body, &sheet, &root_style, viewport, false);
+        let p = doc.get(body).children[0];
+        compute_style(&doc, p, &sheet, &body_style, viewport, false)
+    }
+
+    #[test]
+    fn font_size_var_declared_on_same_element() {
+        // BUG-731: custom-properties pass раньше шёл ПОСЛЕ font-size-pre-pass,
+        // поэтому объявленная на том же элементе переменная была ему не видна.
+        let s = p_style_with_css("p { --fs: 21px; font-size: var(--fs); }");
+        assert_eq!(s.font_size, 21.0);
+    }
+
+    #[test]
+    fn font_size_var_inherited_from_ancestor() {
+        // BUG-731: типовой случай дизайн-систем — переменные объявлены на
+        // предке (`:root`/`body`), размеры берутся из них.
+        let s = p_style_inheriting_from_body("body { --fs: 27px; } p { font-size: var(--fs); }");
+        assert_eq!(s.font_size, 27.0);
+    }
+
+    #[test]
+    fn font_size_var_fallback_used_when_name_undefined() {
+        let s = p_style_with_css("p { font-size: var(--nope, 19px); }");
+        assert_eq!(s.font_size, 19.0);
+    }
+
+    #[test]
+    fn font_size_var_unresolvable_leaves_inherited_size() {
+        // CSS Variables L1 §3.3: invalid at computed value time → декларация
+        // не применяется, размер остаётся унаследованным.
+        let s = p_style_with_css("p { font-size: var(--nope); }");
+        assert_eq!(s.font_size, ROOT_FONT_SIZE);
+    }
+
+    #[test]
+    fn font_shorthand_from_var_applies_size_not_only_weight() {
+        // BUG-731: `font: var(--f)` применял всё, кроме размера — longhand-ы
+        // считает main-pass (он var() раскрывает), а `<font-size>` — pre-pass
+        // (он не раскрывал). Проверяем, что теперь совпадает с литералом.
+        let s = p_style_with_css("p { --f: 700 23px/1.4 serif; font: var(--f); }");
+        assert_eq!(s.font_size, 23.0);
+        assert_eq!(s.font_weight, FontWeight(700));
+        assert!(s.line_height_is_relative);
+        assert!((s.line_height - 1.4).abs() < 1e-4);
+    }
+
+    #[test]
+    fn font_size_var_chain_through_another_var() {
+        let s = p_style_with_css("p { --a: var(--b); --b: 29px; font-size: var(--a); }");
+        assert_eq!(s.font_size, 29.0);
+    }
+
+    #[test]
+    fn font_shorthand_size_from_calc() {
+        // BUG-731: `is_font_size_token` не знал про `Length::Calc`, поэтому весь
+        // shorthand признавался невалидным — при том что longhand
+        // `font-size: calc(...)` с тем же значением работал.
+        let s = p_style_with_css("p { font: 700 calc(4px + 40px) serif; }");
+        assert_eq!(s.font_size, 44.0);
+        assert_eq!(s.font_weight, FontWeight(700));
+    }
+
+    #[test]
+    fn font_shorthand_calc_size_and_calc_line_height() {
+        // Токенизация shorthand-а должна считать пробелы и `/` внутри `calc()`
+        // частью токена, а не разделителями (BUG-731).
+        let s = p_style_with_css("p { font: 700 calc(0px + 44px) / calc(44px * 1.5) serif; }");
+        assert_eq!(s.font_size, 44.0);
+        assert!((s.line_height - 1.5).abs() < 1e-4);
+    }
+
+    #[test]
+    fn font_shorthand_overrides_earlier_font_size_inherit() {
+        // BUG-731: `font-size: inherit` применялся дважды — в pre-pass (там его
+        // корректно перебивал более поздний `font`) и ещё раз в main-pass через
+        // ветку CSS-wide keyword-ов, которая про shorthand не знает и затирала
+        // размер обратно в унаследованный.
+        let s = p_style_with_css("p { font-size: inherit; font: 700 44px/1.2 serif; }");
+        assert_eq!(s.font_size, 44.0);
+    }
+
+    #[test]
+    fn font_size_inherit_after_shorthand_still_wins() {
+        // Обратный порядок: более поздний `font-size: inherit` обязан победить
+        // размер из более раннего shorthand-а — иначе фикс BUG-731 сломал бы
+        // каскад в другую сторону.
+        let s = p_style_with_css("p { font: 700 44px/1.2 serif; font-size: inherit; }");
+        assert_eq!(s.font_size, ROOT_FONT_SIZE);
+        assert_eq!(s.font_weight, FontWeight(700));
+    }
+
+    #[test]
+    fn split_font_shorthand_tokens_keeps_calc_intact() {
+        assert_eq!(
+            split_font_shorthand_tokens("700 calc(0px + 44px) / calc((1px) * 2) A, B"),
+            vec!["700", "calc(0px + 44px)", "/", "calc((1px) * 2)", "A,", "B"]
+        );
+        assert_eq!(
+            split_font_shorthand_tokens("13px/1.4 serif"),
+            vec!["13px", "/", "1.4", "serif"]
+        );
     }
 
     #[test]
