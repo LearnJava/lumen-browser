@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-09",
  "counts": {
-  "open": 320,
+  "open": 322,
   "fixed": 370,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 690,
+ "total_bugs": 692,
  "phases": [
   {
    "id": "P0",
@@ -4173,16 +4173,22 @@
       {
        "id": "WPT-VENDOR-webrtc-priority",
        "title": "WPT: вендорить + прогнать категорию `webrtc-priority`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). WebRTC — нет конвейера"
+       "note": "Скоуп: 🚫 (вне скоупа, заметка «нет конвейера» была неточна — тот же дрейф, что у `webrtc`/`webrtc-extensions`). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root webrtc-priority --recursive`, 2 файла, 2 id) — **2/2 harness OK, 0/9 сабтестов**. Найден [BUG-726](bugs/BUG-726-OPEN.md) (`createDataChannel()` отбрасывает `options` целиком, `.priority` не отражается). Остальные 7 падений — уже задокументированный [BUG-721](bugs/BUG-721-OPEN.md)-смежный пробел (`addTransceiver()` no-op). Новый номер: BUG-726",
+       "bugs": [
+        "BUG-726"
+       ]
       },
       {
        "id": "WPT-VENDOR-webrtc-stats",
        "title": "WPT: вендорить + прогнать категорию `webrtc-stats`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). WebRTC — нет конвейера"
+       "note": "Скоуп: 🚫 (вне скоупа, подтверждено — по существу, не только по формулировке заметки). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root webrtc-stats --recursive`, 8 файлов, 8 id) — **0/8 harness OK, 0/23 сабтестов**, стопроцентный отказ. Найден [BUG-727](bugs/BUG-727-OPEN.md): стаб никогда не диспатчит `ontrack`/`ondatachannel`/`on(ice)connectionstatechange` — оба пира полностью изолированы, любой двухпировый тест виснет до таймаута враннера. Новый номер: BUG-727",
+       "bugs": [
+        "BUG-727"
+       ]
       },
       {
        "id": "WPT-VENDOR-webrtc-svc",
@@ -9625,6 +9631,20 @@
    "status": "open",
    "title": "`https://www.tbank.ru/` после закрытия [BUG-703](bugs/BUG-703-FIXED.md) строит правильный DOM (2382 элемента против 2380 в эталонном headless Edge) и рисует тек…",
    "component": "layout, paint (какая именно подсистема — не локализовано)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-726": {
+   "status": "open",
+   "title": "`RTCPeerConnection.prototype.createDataChannel(label, options)` отбрасывает второй аргумент целиком — возвращаемый объект не отражает ни одного поля `RTCDataCha…",
+   "component": "js (`crates/js/src/webrtc_stub.rs` — `WEBRTC_SHIM`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-727": {
+   "status": "open",
+   "title": "`RTCPeerConnection`-стаб никогда не диспатчит `ontrack`/`ondatachannel`/`onconnectionstatechange`/`oniceconnectionstatechange` — `_dispatch()` вызывается только…",
+   "component": "js (`crates/js/src/webrtc_stub.rs` — `WEBRTC_SHIM`)",
    "date": null,
    "debtor": false
   }
