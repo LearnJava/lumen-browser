@@ -6245,6 +6245,80 @@ fn build_box_inner(
     }
 }
 
+/// CSS Intrinsic Sizing L3 §4.1 / CSS 2.1 §10.3.7 — does `c` contribute to its
+/// parent's intrinsic (max-content / min-content / shrink-to-fit) width?
+///
+/// Two kinds of children do not:
+/// * `display: none` (`BoxKind::Skip`) — no box is generated at all, so not even
+///   the element's own padding/border may be counted;
+/// * out-of-flow boxes (`position: absolute`/`fixed`) — they are sized against a
+///   containing block, not against their parent's content, and are laid out
+///   after it. A nav item holding a hidden 1104px-wide mega-menu dropdown must
+///   still be as wide as its label (BUG-738, `tbank.ru` top navigation).
+fn contributes_to_intrinsic_width(c: &LayoutBox) -> bool {
+    !matches!(c.kind, BoxKind::Skip)
+        && !matches!(c.style.position, Position::Absolute | Position::Fixed)
+}
+
+/// Is `b` a **row-direction** flex container (`display: flex`/`inline-flex`
+/// with `flex-direction: row`/`row-reverse`)?
+///
+/// Only the row axis matters for intrinsic *width*: a column flex container
+/// stacks its items vertically, exactly like a block container, so the existing
+/// "widest child" rule is already right for it.
+fn is_row_flex_container(b: &LayoutBox) -> bool {
+    matches!(b.style.display, Display::Flex | Display::InlineFlex)
+        && !matches!(
+            b.style.flex_direction,
+            FlexDirection::Column | FlexDirection::ColumnReverse
+        )
+}
+
+/// CSS Flexbox L1 §9.9 — intrinsic width contribution of a **row-direction**
+/// flex container: its items sit side by side on the main axis, so the
+/// container's intrinsic width is the *sum* of the items' outer (margin-box)
+/// intrinsic widths plus the `column-gap` between them — not the maximum, which
+/// is what the block-container rule (children stack vertically) yields.
+///
+/// `per_item` supplies the caller's own notion of an item's border-box
+/// intrinsic width (max-content, min-content or shrink-to-fit preferred);
+/// margins and gaps are added here so every caller agrees on them.
+///
+/// Same class of defect as [BUG-178] for floats: a formatting context whose
+/// children are laid out horizontally was being measured with the vertical rule.
+///
+/// Item selection mirrors `lay_out_flex`: `Skip` boxes and absolutely-positioned
+/// children are not flex items (§4.1) and contribute nothing.
+///
+/// Percentage `column-gap` resolves against the container's own content box,
+/// which is exactly what intrinsic sizing does not know yet — it resolves to
+/// zero here, consistent with every other percentage in these functions.
+fn flex_row_intrinsic_sum(
+    b: &LayoutBox,
+    viewport: Size,
+    per_item: &dyn Fn(&LayoutBox) -> f32,
+) -> f32 {
+    let gap = b
+        .style
+        .column_gap
+        .resolve(b.style.font_size, Some(0.0), viewport)
+        .unwrap_or(0.0)
+        .max(0.0);
+    let mut sum = 0.0_f32;
+    let mut n_items = 0_usize;
+    for c in &b.children {
+        if !contributes_to_intrinsic_width(c) {
+            continue;
+        }
+        let cem = c.style.font_size;
+        let ml = c.style.margin_left.resolve_or_zero(cem, 0.0, viewport);
+        let mr = c.style.margin_right.resolve_or_zero(cem, 0.0, viewport);
+        sum += per_item(c) + ml + mr;
+        n_items += 1;
+    }
+    sum + gap * n_items.saturating_sub(1) as f32
+}
+
 /// Phase 0 shrink-to-fit: возвращает «предпочтительную» ширину inline-block-бокса
 /// (включая padding+border самого бокса). Алгоритм: если у бокса явная CSS `width` —
 /// берём её; иначе рекурсивно ищем максимальную preferred_width среди потомков
@@ -6297,8 +6371,16 @@ fn preferred_inline_block_width(
     // InlineBlockRow — горизонтальный поток: суммируем ширины детей + их margins.
     // InlineSpace — collapsed whitespace gap; его ширина = char_width(' ').
     // Остальные боксы (Block, Image и т.д.) — вертикальный поток: берём max.
-    let content_w = if matches!(b.kind, BoxKind::InlineBlockRow) {
-        let sum: f32 = b.children.iter().map(|c| {
+    let content_w = if is_row_flex_container(b) {
+        // Row flex container: items are laid side by side (see
+        // `flex_row_intrinsic_sum`). A child with no preference of its own
+        // contributes 0, matching the `unwrap_or(0.0)` used for the other
+        // horizontal flow below.
+        flex_row_intrinsic_sum(b, viewport, &|c| {
+            preferred_inline_block_width(c, measurer, viewport).unwrap_or(0.0)
+        })
+    } else if matches!(b.kind, BoxKind::InlineBlockRow) {
+        let sum: f32 = b.children.iter().filter(|c| contributes_to_intrinsic_width(c)).map(|c| {
             if matches!(c.kind, BoxKind::InlineSpace) {
                 // Учитываем ширину collapsed space, чтобы при shrink-to-fit
                 // не занижать ширину контейнера и не вызывать перенос соседних
@@ -6320,6 +6402,9 @@ fn preferred_inline_block_width(
         let mut inflow_max = 0.0_f32;
         let mut float_sum = 0.0_f32;
         for c in &b.children {
+            if !contributes_to_intrinsic_width(c) {
+                continue;
+            }
             let Some(cw) = preferred_inline_block_width(c, measurer, viewport) else {
                 continue;
             };
@@ -6391,7 +6476,7 @@ fn max_content_outer_width(
             })
         }
         BoxKind::InlineBlockRow => {
-            b.children.iter().map(|c| {
+            b.children.iter().filter(|c| contributes_to_intrinsic_width(c)).map(|c| {
                 if matches!(c.kind, BoxKind::InlineSpace) {
                     return measurer.map_or(0.0, |m| m.char_width(' ', c.style.font_size));
                 }
@@ -6402,6 +6487,14 @@ fn max_content_outer_width(
                 cw + ml + mr
             }).sum()
         }
+        // Row flex container: items sit side by side, so max-content is their
+        // sum + gaps (CSS Flexbox §9.9). This holds for `flex-wrap: wrap` too —
+        // max-content suppresses line breaking, so every item stays on one line.
+        _ if is_row_flex_container(b) => {
+            flex_row_intrinsic_sum(b, viewport, &|c| {
+                max_content_outer_width(c, measurer, viewport)
+            })
+        }
         _ => {
             // Block container: in-flow children stack vertically → take the
             // widest. Floated children are laid side by side on one line
@@ -6410,6 +6503,9 @@ fn max_content_outer_width(
             let mut inflow_max = 0.0_f32;
             let mut float_sum = 0.0_f32;
             for c in &b.children {
+                if !contributes_to_intrinsic_width(c) {
+                    continue;
+                }
                 let cw = max_content_outer_width(c, measurer, viewport);
                 if c.style.float_side != FloatSide::None {
                     let cem = c.style.font_size;
@@ -6491,7 +6587,7 @@ fn min_content_outer_width_of_contents(
         }
         BoxKind::InlineBlockRow => {
             // For inline-block row, min-content is the max over children.
-            b.children.iter().map(|c| {
+            b.children.iter().filter(|c| contributes_to_intrinsic_width(c)).map(|c| {
                 if matches!(c.kind, BoxKind::InlineSpace) {
                     return 0.0; // spaces are breakable
                 }
@@ -6502,8 +6598,19 @@ fn min_content_outer_width_of_contents(
                 cw + ml + mr
             }).fold(0.0_f32, f32::max)
         }
+        // Row flex container with `flex-wrap: nowrap`: the items cannot be
+        // pushed onto separate lines, so the narrowest the container can get is
+        // the sum of its items' min-content widths + gaps (CSS Flexbox §9.9).
+        // With `wrap` the items *can* break onto their own lines, so the
+        // min-content width is the widest single item — the block rule below.
+        _ if is_row_flex_container(b) && matches!(b.style.flex_wrap, FlexWrap::Nowrap) => {
+            flex_row_intrinsic_sum(b, viewport, &|c| {
+                min_content_outer_width(c, measurer, viewport)
+            })
+        }
         _ => {
             b.children.iter()
+                .filter(|c| contributes_to_intrinsic_width(c))
                 .map(|c| min_content_outer_width(c, measurer, viewport))
                 .fold(0.0_f32, f32::max)
         }
@@ -14109,6 +14216,172 @@ mod tests {
     fn bug734_unknown_intrinsic_size_stays_collapsed() {
         let (w, h) = img_border_box(r#"<img src="x.png">"#, "img { height: auto; }");
         assert_eq!((w, h), (0.0, 0.0));
+    }
+
+    // ── BUG-737: intrinsic width of a row flex container ──────────────────────
+
+    /// Border-box widths of the direct children of the element with `id="outer"`.
+    ///
+    /// Leaf sizes are declared in CSS on purpose: `super::layout` runs without a
+    /// `TextMeasurer`, so any text-derived width would measure as zero and the
+    /// assertions would pass for the wrong reason.
+    fn child_widths(html: &str, css: &str) -> Vec<f32> {
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let outer = find_by_id_all(&root, &doc, "outer").expect("#outer box not found");
+        outer
+            .children
+            .iter()
+            .filter(|c| !matches!(c.kind, super::BoxKind::Skip))
+            .map(|c| c.rect.width)
+            .collect()
+    }
+
+    const FLEX_CSS: &str =
+        "#outer { display: flex; width: 600px; } \
+         .inner { display: flex; } \
+         .leaf { display: block; width: 40px; height: 10px; } \
+         .tail { width: 30px; height: 10px; }";
+    const FLEX_HTML: &str = r#"<div id="outer">
+        <div class="inner"><div class="leaf"></div><div class="leaf"></div></div>
+        <div class="tail"></div></div>"#;
+
+    /// Вложенный row-flex как flex-элемент: его max-content — СУММА элементов,
+    /// а не максимум (CSS Flexbox §9.9). До BUG-737 давало 40 вместо 80.
+    #[test]
+    fn bug737_nested_row_flex_max_content_is_sum() {
+        assert_eq!(child_widths(FLEX_HTML, FLEX_CSS), vec![80.0, 30.0]);
+    }
+
+    /// `column-gap` — тоже часть intrinsic-ширины: два элемента по 40 с
+    /// зазором 10 дают 90.
+    #[test]
+    fn bug737_row_flex_max_content_includes_gap() {
+        let css = FLEX_CSS.replace(".inner { display: flex; }", ".inner { display: flex; gap: 10px; }");
+        assert_eq!(child_widths(FLEX_HTML, &css), vec![90.0, 30.0]);
+    }
+
+    /// `flex-wrap: wrap` не меняет max-content: перенос строк подавлен по
+    /// определению max-content, все элементы остаются на одной линии.
+    #[test]
+    fn bug737_wrapping_row_flex_max_content_is_still_sum() {
+        let css = FLEX_CSS.replace(
+            ".inner { display: flex; }",
+            ".inner { display: flex; flex-wrap: wrap; }",
+        );
+        assert_eq!(child_widths(FLEX_HTML, &css), vec![80.0, 30.0]);
+    }
+
+    /// Колоночный контейнер элементы складывает вертикально — как блок,
+    /// поэтому правило «самый широкий ребёнок» для него верно и не тронуто.
+    #[test]
+    fn bug737_column_flex_max_content_stays_max() {
+        let css = FLEX_CSS.replace(
+            ".inner { display: flex; }",
+            ".inner { display: flex; flex-direction: column; }",
+        );
+        assert_eq!(child_widths(FLEX_HTML, &css), vec![40.0, 30.0]);
+    }
+
+    /// Абсолютно позиционированный ребёнок flex-элементом не является
+    /// (§4.1) и в intrinsic-ширину контейнера не входит.
+    #[test]
+    fn bug737_absolutely_positioned_child_does_not_contribute() {
+        let css = format!("{FLEX_CSS} .abs {{ position: absolute; width: 500px; height: 10px; }}");
+        let html = r#"<div id="outer">
+            <div class="inner"><div class="leaf"></div><div class="abs"></div></div>
+            <div class="tail"></div></div>"#;
+        assert_eq!(child_widths(html, &css), vec![40.0, 30.0]);
+    }
+
+    /// min-content row-flex-контейнера с `nowrap` — тоже сумма: элементы
+    /// нечем развести по строкам, поэтому контейнер не может стать уже 80 и
+    /// переполняет тесный родитель (сверено с Edge).
+    #[test]
+    fn bug737_nowrap_row_flex_min_content_is_sum() {
+        let css = FLEX_CSS.replace("width: 600px;", "width: 60px;");
+        assert_eq!(child_widths(FLEX_HTML, &css)[0], 80.0);
+    }
+
+    /// shrink-to-fit `inline-block`, внутри которого row-flex: обтягивает
+    /// сумму, а не самый широкий элемент.
+    #[test]
+    fn bug737_inline_block_wrapping_row_flex_shrinks_to_sum() {
+        let css = format!("{FLEX_CSS} #ib {{ display: inline-block; }}");
+        let html = r#"<div id="outer"><div id="ib">
+            <div class="inner"><div class="leaf"></div><div class="leaf"></div></div>
+            </div></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(&css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let ib = find_by_id_all(&root, &doc, "ib").expect("#ib box not found");
+        assert_eq!(ib.rect.width, 80.0);
+    }
+
+    // ── BUG-738: out-of-flow дети не участвуют в intrinsic-ширине ─────────────
+
+    const ABS_CSS: &str =
+        "#outer { display: flex; width: 600px; } \
+         .item { position: relative; } \
+         .leaf { display: block; width: 40px; height: 10px; } \
+         .drop { position: absolute; width: 300px; height: 10px; } \
+         .tail { width: 30px; height: 10px; }";
+
+    /// Меню-выпадайка `position: absolute` шириной 300px внутри пункта
+    /// навигации не должна раздувать сам пункт до 300px (CSS 2.1 §10.3.7 —
+    /// out-of-flow бокс меряется от своего containing block, а не от родителя).
+    /// Ровно эта форма у верхней навигации `tbank.ru`.
+    #[test]
+    fn bug738_absolute_child_does_not_inflate_flex_item() {
+        let html = r#"<div id="outer">
+            <div class="item"><div class="leaf"></div><div class="drop"></div></div>
+            <div class="tail"></div></div>"#;
+        assert_eq!(child_widths(html, ABS_CSS), vec![40.0, 30.0]);
+    }
+
+    /// То же для shrink-to-fit флоата.
+    #[test]
+    fn bug738_absolute_child_does_not_inflate_float() {
+        let css = format!("{ABS_CSS} #fl {{ float: left; position: relative; }}");
+        let html = r#"<div id="outer"><div id="fl">
+            <div class="leaf"></div><div class="drop"></div></div></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(&css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let fl = find_by_id_all(&root, &doc, "fl").expect("#fl box not found");
+        assert_eq!(fl.rect.width, 40.0);
+    }
+
+    /// `display: none` бокса не существует вовсе — даже его padding не имеет
+    /// права попасть в intrinsic-ширину родителя.
+    #[test]
+    fn bug738_display_none_child_does_not_inflate() {
+        let css = format!("{ABS_CSS} .gone {{ display: none; width: 300px; padding: 0 50px; }}");
+        let html = r#"<div id="outer">
+            <div class="item"><div class="leaf"></div><div class="gone"></div></div>
+            <div class="tail"></div></div>"#;
+        assert_eq!(child_widths(html, &css), vec![40.0, 30.0]);
+    }
+
+    /// `position: fixed` — тот же out-of-flow случай, что и `absolute`.
+    #[test]
+    fn bug738_fixed_child_does_not_inflate() {
+        let css = ABS_CSS.replace("position: absolute;", "position: fixed;");
+        let html = r#"<div id="outer">
+            <div class="item"><div class="leaf"></div><div class="drop"></div></div>
+            <div class="tail"></div></div>"#;
+        assert_eq!(child_widths(html, &css), vec![40.0, 30.0]);
+    }
+
+    /// Обычный in-flow потомок по-прежнему задаёт ширину пункта.
+    #[test]
+    fn bug738_in_flow_child_still_contributes() {
+        let css = ABS_CSS.replace(".drop { position: absolute;", ".drop { position: static;");
+        let html = r#"<div id="outer">
+            <div class="item"><div class="leaf"></div><div class="drop"></div></div>
+            <div class="tail"></div></div>"#;
+        assert_eq!(child_widths(html, &css), vec![300.0, 30.0]);
     }
 
     // ── Hyphenation helpers ───────────────────────────────────────────────────
