@@ -4110,9 +4110,9 @@
       {
        "id": "WPT-VENDOR-webnn",
        "title": "WPT: вендорить + прогнать категорию `webnn`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). нет ML-инференс рантайма"
+       "note": "Скоуп: 🚫 (вне скоупа, подтверждено — нет ML-инференс рантайма, никакого `navigator.ml`/`MLContext`/`MLGraph` нет ни в `crates/`, ни живьём, в отличие от `webmidi`/`webgpu`/`webhid`, у которых был Phase 0 стаб). DONE 2026-08-09: вендорена целиком (`git sparse-checkout add webnn`, 196 файлов — `conformance_tests/` 111 + `validation_tests/` 64, все `.https.any.js` с фан-аутом `?cpu`/`?gpu`/`?npu`, ≈520 инстансов). Полный `run_report.py --all --root webnn --recursive --processes=4` не доведён до конца: представительная выборка 62/62 id дала нулевой разброс — 100% TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer` (BUG-657), экстраполяция полного прогона ≈2.5 ч ради переподтверждения того же гэпа признана нерентабельной (методология `mixed-content`). Живая проба (`--mcp-live-port`) подтвердила: `navigator.ml`/`MLContext`/`MLGraph`/`MLGraphBuilder` отсутствуют целиком, без частичной утечки. Новый BUG-NNN не заводился"
       },
       {
        "id": "WPT-VENDOR-webrtc",
