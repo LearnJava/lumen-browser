@@ -4022,9 +4022,9 @@
       {
        "id": "WPT-VENDOR-web-otp",
        "title": "WPT: вендорить + прогнать категорию `web-otp`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). WebOTP (SMS)"
+       "note": "Скоуп: 🚫 (вне скоупа). WebOTP (SMS). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root web-otp --recursive`, 3 файла, 1 отобранный id) — **0/1 harness OK**. Единственный `.https.window.html` TIMEOUT на TLS-гэпе `UnknownIssuer` ([BUG-657](bugs/BUG-657-OPEN.md)). Живая проба (`--mcp-live-port`, на пересобранном бинарнике) подтвердила: `OTPCredential` — корректная 🚫-скоуп заглушка (`new` бросает `TypeError: Illegal constructor`), `navigator.credentials.get({otp:…})` отклоняется `NotSupportedError` — не баг. Первая проба (до пересборки бинарника) случайно попала на бинарник до мержа [BUG-366](bugs/BUG-366-FIXED.md) (11:39) и воспроизвела уже пофикшенный симптом — ложная находка, снята пересборкой. Новый номер бага не заводился"
       },
       {
        "id": "WPT-VENDOR-web-share",
