@@ -10875,6 +10875,62 @@ _lumen_install_reflection(HTMLAreaElement.prototype, [
     ['referrerPolicy', 'referrerpolicy', 'enum',   _LUMEN_REFERRER_POLICY],
 ]);
 
+// HTML LS §4.6.3 `HTMLHyperlinkElementUtils` mixin (BUG-356 part 2 — part 1,
+// `href` reflection above, was already wired). Every accessor reads through to
+// the live `href` content attribute (resolved against the document base URL)
+// on each call rather than caching, since element wrappers are interned per
+// nid (`_lumen_element_wrappers`) and outlive attribute mutations.
+function _lumen_hyperlink_url_get(self) {
+    var n = _lumen_reflect_nid(self);
+    if (n === -1) return null;
+    var abs = _lumen_reflect_url(n, 'href');
+    if (abs === '') return null;
+    return _lumen_parse_url(abs);
+}
+// Decompose the current href, let `mutate` edit the parts, re-serialize and
+// write the result back to the `href` attribute. Per spec, setting a part
+// when the element has no href (or isn't live) is a no-op.
+function _lumen_hyperlink_url_set(self, mutate) {
+    var n = _lumen_reflect_nid(self);
+    if (n === -1) return;
+    var abs = _lumen_reflect_url(n, 'href');
+    if (abs === '') return;
+    var p = _lumen_parse_url(abs);
+    mutate(p);
+    var authority = p.hostname + (p.port ? ':' + p.port : '');
+    _lumen_set_attr(n, 'href', p.protocol + '//' + authority + (p.pathname || '/') + (p.search || '') + (p.hash || ''));
+}
+function _lumen_install_hyperlink_utils(proto) {
+    function part(idl, mutate) {
+        Object.defineProperty(proto, idl, {
+            get: function() { var p = _lumen_hyperlink_url_get(this); return p ? p[idl] : ''; },
+            set: function(v) { _lumen_hyperlink_url_set(this, function(p) { mutate(p, String(v)); }); },
+            enumerable: true, configurable: true
+        });
+    }
+    part('protocol', function(p, v) { p.protocol = v.replace(/:.*$/, '') + ':'; });
+    part('hostname', function(p, v) { p.hostname = v.split(':')[0].split('/')[0]; });
+    part('host',     function(p, v) {
+        var idx = v.indexOf(':');
+        p.hostname = idx >= 0 ? v.slice(0, idx) : v;
+        p.port     = idx >= 0 ? v.slice(idx + 1) : '';
+    });
+    part('port',     function(p, v) { p.port = v.replace(/\\D/g, ''); });
+    part('pathname', function(p, v) { p.pathname = v.charAt(0) === '/' ? v : '/' + v; });
+    part('search',   function(p, v) { p.search = v && v.charAt(0) !== '?' ? '?' + v : v; });
+    part('hash',     function(p, v) { p.hash = v && v.charAt(0) !== '#' ? '#' + v : v; });
+    Object.defineProperty(proto, 'origin', {
+        get: function() { var p = _lumen_hyperlink_url_get(this); return p ? p.origin : ''; },
+        enumerable: true, configurable: true
+    });
+    // Credentials are not modeled anywhere in the URL machinery (URL.prototype
+    // does the same) — present the accessors, keep them inert.
+    Object.defineProperty(proto, 'username', { get: function() { return ''; }, set: function() {}, enumerable: true, configurable: true });
+    Object.defineProperty(proto, 'password', { get: function() { return ''; }, set: function() {}, enumerable: true, configurable: true });
+}
+_lumen_install_hyperlink_utils(HTMLAnchorElement.prototype);
+_lumen_install_hyperlink_utils(HTMLAreaElement.prototype);
+
 _lumen_install_reflection(HTMLInputElement.prototype, [
     ['type',           'type',           'enum',   { def: 'text', keys: [
         'button', 'checkbox', 'color', 'date', 'datetime-local', 'email', 'file',
@@ -20437,6 +20493,146 @@ mod tests {
             let rt = v8_runtime_with_dom(make_doc());
             let r = rt.eval("typeof window.URL === 'function'").unwrap();
             assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        // ── BUG-356: HTMLHyperlinkElementUtils on <a>/<area> ────────────────────────
+
+        #[test]
+        fn anchor_href_reflects_content_attribute() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var a = document.createElement('a');\
+                     a.setAttribute('href', 'https://example.com/p?q=1#h');\
+                     document.body.appendChild(a);\
+                     a.href;",
+                )
+                .unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String("https://example.com/p?q=1#h".into())
+            );
+        }
+
+        #[test]
+        fn anchor_url_decomposition_getters() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var a = document.createElement('a');\
+                     a.setAttribute('href', 'https://example.com:8080/p/q.html?x=1#frag');\
+                     document.body.appendChild(a);\
+                     [a.protocol, a.hostname, a.host, a.port, a.pathname, a.search, a.hash, a.origin].join('|');",
+                )
+                .unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String(
+                    "https:|example.com|example.com:8080|8080|/p/q.html|?x=1|#frag|https://example.com:8080".into()
+                )
+            );
+        }
+
+        #[test]
+        fn anchor_search_substr_matches_wpt_encoder_idiom() {
+            // encoding/resources/encode-href-common.js: a.href = base + '?' + input;
+            // a.search.substr(1) — the exact idiom behind BUG-356's 451 subtest failures.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var a = document.createElement('a');\
+                     a.href = 'https://example.com/?' + 'foo=bar';\
+                     a.search.substr(1);",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("foo=bar".into()));
+        }
+
+        #[test]
+        fn anchor_without_href_decomposition_is_empty() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var a = document.createElement('a');\
+                     document.body.appendChild(a);\
+                     a.protocol === '' && a.search === '' && a.host === '';",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn anchor_decomposition_setters_rewrite_href() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var a = document.createElement('a');\
+                     a.setAttribute('href', 'https://example.com/old?a=1#x');\
+                     document.body.appendChild(a);\
+                     a.pathname = '/new'; a.search = '?b=2'; a.hash = '#y';\
+                     a.href;",
+                )
+                .unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String("https://example.com/new?b=2#y".into())
+            );
+        }
+
+        #[test]
+        fn anchor_host_setter_updates_hostname_and_port() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var a = document.createElement('a');\
+                     a.setAttribute('href', 'https://example.com:8080/p');\
+                     document.body.appendChild(a);\
+                     a.host = 'foo.com:9090';\
+                     a.hostname + '|' + a.port + '|' + a.href;",
+                )
+                .unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String("foo.com|9090|https://foo.com:9090/p".into())
+            );
+        }
+
+        #[test]
+        fn area_href_and_decomposition() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var ar = document.createElement('area');\
+                     ar.setAttribute('href', 'https://example.com/map?a=1');\
+                     document.body.appendChild(ar);\
+                     ar.protocol + '|' + ar.search + '|' + ar.origin;",
+                )
+                .unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String("https:|?a=1|https://example.com".into())
+            );
+        }
+
+        #[test]
+        fn link_does_not_get_url_decomposition_mixin() {
+            // HTMLLinkElement reflects `href` but is not part of the
+            // HTMLHyperlinkElementUtils mixin — only <a>/<area> get it.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var l = document.createElement('link');\
+                     l.setAttribute('href', 'https://example.com/style.css');\
+                     document.body.appendChild(l);\
+                     l.href + '|' + (typeof l.protocol);",
+                )
+                .unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String(
+                    "https://example.com/style.css|undefined".into()
+                )
+            );
         }
 
     }
