@@ -27879,6 +27879,42 @@ mod tests {
             assert_eq!(r, lumen_core::JsValue::String("complete".into()));
         }
 
+        // document.write()/writeln() — HTML LS 8.4.4, scoped fix (see dom.rs write/
+        // writeln comment): insert at end of body while still 'loading', no-op once
+        // 'complete', never the spec's page-erasing implicit document.open().
+        #[test]
+        fn document_write_inserts_while_loading() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "document.write('<span id=\"w\">hi</span>'); \
+                 document.getElementById('w') !== null && \
+                 document.getElementById('w').textContent === 'hi'"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn document_writeln_appends_newline() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "document.writeln('a'); document.writeln('b'); \
+                 document.body.innerHTML"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("<div id=\"main\"><span class=\"highlight\">Hello</span></div>a\nb\n".into()));
+        }
+
+        #[test]
+        fn document_write_is_noop_after_complete() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(
+                "_lumen_apply_ready_state('interactive'); \
+                 _lumen_apply_ready_state('complete'); \
+                 document.write('<span id=\"late\">late</span>'); \
+                 document.getElementById('late') === null"
+            ).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
         #[test]
         fn window_dcl_listener() {
             let rt = v8_runtime_with_dom(make_doc());
