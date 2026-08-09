@@ -4001,9 +4001,9 @@
       {
        "id": "WPT-VENDOR-web-install",
        "title": "WPT: вендорить + прогнать категорию `web-install`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). PWA-инсталляция"
+       "note": "Скоуп: 🚫 (вне скоупа). PWA-инсталляция. DONE 2026-08-09: вендорена + прогнана целиком (`--all --root web-install --recursive`, 4 файла, 4 отобранных id) — **0/4 harness OK**. Все 4 `.tentative.https`-файла TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer` ([BUG-657](bugs/BUG-657-OPEN.md)). Живая проба (`--mcp-live-port`) API категории — `navigator.install` — подтвердила: метод отсутствует целиком (`typeof navigator.install === \"undefined\"`), ни `onappinstalled`, ни `onbeforeinstallprompt` на `window` нет, ни одного `install`-подобного имени в прототипе `Navigator` — ожидаемо для 🚫-скоупа, не баг. Новый номер бага не заводился"
       },
       {
        "id": "WPT-VENDOR-web-locks",
