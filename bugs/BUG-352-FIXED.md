@@ -1,7 +1,7 @@
 # BUG-352 — Address-bar (omnibox) text turns into overlapping/scrambled glyphs after rapid sequential same-tab navigation
 
-**Статус:** OPEN
-**Компонент:** paint (`crates/engine/paint/src/renderer.rs` — frame-skip/`content_generation`/page-band caching, prime suspect) or shell chrome text pipeline (`crates/shell/src/toolbar.rs`/`address_bar.rs`)
+**Статус:** FIXED 2026-08-09 (P3) — see "Действительная причина" below; original paint-layer hypotheses (a)/(b) investigated and NOT confirmed, see "Что было проверено и опровергнуто"
+**Компонент:** shell (`crates/shell/src/main.rs::commit_nav_state`/`navigate_replace`) — not paint/renderer as originally suspected
 **Найден:** P2/пользователь, во время WPT-прогона (wptrunner гоняет тесты один за другим в одной вкладке), 2026-07-27. Скриншоты приложены пользователем в диалоге сессии (не в репозитории — см. Воспроизведение).
 
 ## Симптом
@@ -99,3 +99,77 @@ field border+background»), но упомянуто для полноты.
 Найдено визуально во время P2 WPT-тестирования; не покрыто `graphic_tests/`
 (тесты статичны, каждый — отдельный запуск `lumen.exe`, а не серия навигаций в
 одном окне).
+
+## Что было проверено и опровергнуто (P3, 2026-08-09)
+
+Гипотезы (a)/(b) из раздела выше (свопчейн-стейлнесс / partial-redraw в
+`renderer.rs`) проверены прямой инструментацией. Репро: `lumen.exe --maximized
+--mcp-live-port N about:blank`, затем 8 навигаций подряд MCP `navigate` на
+локальный HTTP-сервер (разный query, как в оригинальном репро), каждая с
+`wait{document_ready}` перед следующей (как делает `wptrunner`), под
+`LUMEN_FRAME_LOG=2` + временный дамп `overlay`'s `DrawText` строк на входе в
+`render_with_anim` и в точке skip-identical-frame.
+
+Результат: `[frame:wgpu] skip (identical frame)` действительно случается после
+каждой навигации (гипотеза (a) выглядела правдоподобно), **но** дамп overlay-текста
+показал, что `overlay`, приходящий в `render()`, вообще никогда не содержит
+навигированный URL — на всех 8 навигациях `overlay`'s `DrawText`-строки были
+идентичны (`"about:blank"` — URL самой первой, до-навигационной страницы). То
+есть кадр действительно не менялся: skip был корректным решением, а не багом
+рендерера. `try_page_compose`/`page_band` (гипотеза a, `pending_base_blit`) и
+`push_text_glyphs`/`cursor_x`-расчёт под текстом (гипотеза b) тем самым исключены
+как причина — им просто никогда не давали разные входные данные.
+
+## Действительная причина
+
+`crates/shell/src/toolbar.rs`/`address_bar.rs` (упомянутые в исходной гипотезе
+как «пересобирают с нуля, кэша нет») — это **legacy**-путь, вытесненный CC-track
+движковым хромом (`crates/chrome`, `Self::chrome_layout`). Реальный
+`#omniInput`-текст берётся из `Self::chrome_omnibox_value` →
+`Self::current_display_url()`, но печётся в `self.chrome_layout`'s display list
+только внутри `Self::relayout_chrome_host()` — а этот вызов размещён только в
+обработчиках клавиш омнибокса (CC-7), кликов/resize/etc., **но не в самом акте
+навигации**. `Self::navigate_to`/`Self::navigate_replace`/`Self::apply_loaded_page`
+(последняя — общая точка для всех путей завершения загрузки, sync и streaming)
+обновляют `self.source`/`self.display_url`, но никогда не звали
+`relayout_chrome_host()` — так что `#omniInput` навсегда оставался с тем URL,
+что был на экране в момент последнего клика/клавиши/resize (для окна, поднятого
+только под автоматизацию — с самого создания окна, т.е. `about:blank`).
+Это ровно то, что видит `wptrunner`: BiDi/MCP `navigate` не трогает клавиатуру/
+resize вообще, поэтому адресная строка не обновляется НИ РАЗУ за весь прогон.
+
+Не покрыто `graphic_tests/` по той же причине, что указана выше (`lumen.exe`
+per-test, не серия навигаций) — плюс `graphic_tests/run.py` не использует
+живой chrome-омнибокс вовсе.
+
+**Оговорка:** это объясняет и чинит «адресная строка не отражает текущий URL
+после программной/BiDi-навигации», но НЕ было независимо визуально
+подтверждено как объяснение именно «наложенной каши из нескольких URL
+одновременно» (эта часть требует живого `gdigrab`-снимка окна, который эта
+сессия не делала — на машине параллельно шёл чужой WPT-прогон, а `gdigrab`
+захватывает весь десктоп, см. CLAUDE.md «Known gotchas»). Раз до фикса поле
+никогда не обновлялось вовсе (всегда один и тот же `"about:blank"`), чистое
+наложение нескольких РАЗНЫХ URL пикселями этим механизмом само по себе не
+объясняется — если после фикса «каша» на живом скрине всё ещё
+воспроизводится, это отдельный дефект в paint-слое, и гипотезы (a)/(b) выше
+(с готовым диагностическим рецептом `LUMEN_FRAME_LOG=2`) остаются рабочей
+отправной точкой для дальнейшего расследования.
+
+## Фикс
+
+`crates/shell/src/main.rs`:
+- `Lumen::commit_nav_state` — `&self` → `&mut self`, в конце вызывает
+  `self.relayout_chrome_host()`. Эта функция — общая точка, через которую
+  проходят все пути коммита состояния навигации (полная загрузка через
+  `apply_loaded_page`, sync-фоллбэк в `reload`, JS-перехваченные push/replace,
+  `navigate_to`, same-doc/cross-doc `navigate_back`/`navigate_forward`) —
+  9 вызовов до фикса, теперь все автоматически чинят омнибокс.
+- `Lumen::navigate_replace` — отдельный явный вызов `self.relayout_chrome_host()`
+  (эта функция не вызывает `commit_nav_state`, так как `location.replace()`-
+  навигация не обновляет `window.navigation`-состояние для JS — сознательно не
+  трогал эту семантику, только добавил недостающий chrome-рефреш).
+
+Тесты: `cargo test -p lumen-shell` (1566 passed), `cargo clippy -p lumen-shell
+--all-targets -- -D warnings` чист. Полноценный Rust-юнит-тест не добавлен —
+`Lumen` требует живого `winit`-окна/GPU-рендерера, тестовой обвязки для
+конструирования headless-инстанса в файле нет.
