@@ -4278,6 +4278,18 @@ var document = {
     // HTML LS §6.6.3: true while this document's window is the active one.
     // Reuses the shell signal that already drives `document.visibilityState`.
     hasFocus: function() { return !_doc_hidden; },
+    // HTML LS §6.6.3 (BUG-353): 'on'/'off', reflecting a design-mode flag kept
+    // on the native `Document` — when 'on' the whole document becomes an
+    // editing host (see `find_editing_host`'s design-mode fallback), without
+    // requiring `contenteditable` on any element.
+    get designMode() { return _lumen_get_design_mode() ? 'on' : 'off'; },
+    set designMode(v) {
+        var s = String(v).toLowerCase();
+        // Spec: a value that is neither 'on' nor 'off' (case-insensitive) leaves
+        // the current mode untouched rather than falling back to 'off'.
+        if (s === 'on') _lumen_set_design_mode(true);
+        else if (s === 'off') _lumen_set_design_mode(false);
+    },
     getElementById:    function(id)  {
         var n = _lumen_u2n(_lumen_get_element_by_id(String(id)));
         return n !== null ? _lumen_make_element(n) : null;
@@ -25292,6 +25304,36 @@ mod tests {
             rt.eval("var _ce_div = document.createElement('div'); document.body.appendChild(_ce_div); _ce_div.contentEditable = 'plaintext-only';").unwrap();
             assert!(bool_eval(&rt, "_ce_div.contentEditable === 'plaintext-only'"));
             assert!(bool_eval(&rt, "_ce_div.isContentEditable === true"));
+        }
+
+        // ── document.designMode (HTML LS §6.6.3, BUG-353) ──────────────────────
+
+        #[test]
+        fn design_mode_defaults_to_off() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(&rt, "document.designMode === 'off'"));
+        }
+
+        #[test]
+        fn design_mode_on_makes_plain_element_editable() {
+            let rt = v8_runtime_with_dom(make_doc());
+            // A freshly created div carries no `contenteditable` attribute at all.
+            rt.eval("var _dm_div = document.createElement('div'); document.body.appendChild(_dm_div);").unwrap();
+            assert!(bool_eval(&rt, "_dm_div.isContentEditable === false"));
+            rt.eval("document.designMode = 'on';").unwrap();
+            assert!(bool_eval(&rt, "document.designMode === 'on'"));
+            assert!(bool_eval(&rt, "_dm_div.isContentEditable === true"));
+            rt.eval("document.designMode = 'off';").unwrap();
+            assert!(bool_eval(&rt, "_dm_div.isContentEditable === false"));
+        }
+
+        #[test]
+        fn design_mode_setter_ignores_invalid_values() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("document.designMode = 'on';").unwrap();
+            rt.eval("document.designMode = 'nonsense';").unwrap();
+            // Spec: an unrecognized value leaves the current mode untouched.
+            assert!(bool_eval(&rt, "document.designMode === 'on'"));
         }
 
         #[test]

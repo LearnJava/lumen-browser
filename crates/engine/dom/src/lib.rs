@@ -1002,6 +1002,14 @@ pub struct Document {
     /// Serialised: the text a user typed must survive tab hibernation.
     #[serde(default)]
     dirty_values: HashMap<NodeId, String>,
+    /// `document.designMode` (HTML LS §6.6.3): when `true`, the whole document
+    /// becomes an editing host even though no element carries an explicit
+    /// `contenteditable` attribute — see [`find_editing_host`].
+    ///
+    /// Serialised: matches `dirty_values` — a page that turned itself into an
+    /// editor should stay editable across tab hibernation.
+    #[serde(default)]
+    design_mode: bool,
 }
 
 impl Default for Document {
@@ -1033,7 +1041,18 @@ impl Document {
             viewport_meta: None,
             pointer_captures: HashMap::new(),
             dirty_values: HashMap::new(),
+            design_mode: false,
         }
+    }
+
+    /// Current value of `document.designMode` (HTML LS §6.6.3).
+    pub fn design_mode(&self) -> bool {
+        self.design_mode
+    }
+
+    /// Set `document.designMode`. Driven by the JS shim's setter.
+    pub fn set_design_mode(&mut self, enabled: bool) {
+        self.design_mode = enabled;
     }
 
     pub fn root(&self) -> NodeId {
@@ -1953,17 +1972,24 @@ pub fn node_is_contenteditable(doc: &Document, node: NodeId) -> bool {
 /// Walk up the tree from `node` (inclusive) and return the nearest element
 /// with `contenteditable` set to a truthy value — the *editing host*.
 ///
-/// Returns `None` when no such ancestor exists.
-pub fn find_editing_host(doc: &Document, mut node: NodeId) -> Option<NodeId> {
+/// When no ancestor carries an explicit `contenteditable` and
+/// `document.designMode` (HTML LS §6.6.3) is enabled, falls back to the
+/// document's `<body>` — design mode makes the whole document an editing
+/// host without any element needing the attribute.
+///
+/// Returns `None` when neither applies.
+pub fn find_editing_host(doc: &Document, node: NodeId) -> Option<NodeId> {
+    let mut cur = node;
     loop {
-        if node_is_contenteditable(doc, node) {
-            return Some(node);
+        if node_is_contenteditable(doc, cur) {
+            return Some(cur);
         }
-        {
-            let p = doc.get(node).parent?;
-            node = p
+        match doc.get(cur).parent {
+            Some(p) => cur = p,
+            None => break,
         }
     }
+    if doc.design_mode() { doc.body() } else { None }
 }
 
 /// Return `true` when `node` is draggable by default HTML5 rules (HTML LS §9.3.3).
@@ -4366,6 +4392,51 @@ mod tests {
         doc.append_child(doc.root(), div);
         doc.append_child(div, text);
         assert_eq!(find_editing_host(&doc, text), None);
+    }
+
+    /// Builds `<html><body><div>hi</div></body></html>` with no `contenteditable`
+    /// attribute anywhere, for `document.designMode` (BUG-353) coverage.
+    fn make_design_mode_doc() -> (Document, NodeId, NodeId) {
+        let mut doc = Document::new();
+        let html = doc.create_element(QualName::html("html"));
+        let body = doc.create_element(QualName::html("body"));
+        let div = doc.create_element(QualName::html("div"));
+        let text = doc.create_text("hi");
+        doc.append_child(doc.root(), html);
+        doc.append_child(html, body);
+        doc.append_child(body, div);
+        doc.append_child(div, text);
+        (doc, body, text)
+    }
+
+    #[test]
+    fn find_editing_host_design_mode_off_stays_none() {
+        let (doc, _body, text) = make_design_mode_doc();
+        assert!(!doc.design_mode());
+        assert_eq!(find_editing_host(&doc, text), None);
+    }
+
+    #[test]
+    fn find_editing_host_design_mode_on_falls_back_to_body() {
+        let (mut doc, body, text) = make_design_mode_doc();
+        doc.set_design_mode(true);
+        assert_eq!(find_editing_host(&doc, text), Some(body));
+        // The document's own root has no `<body>`-derived fallback issue: any
+        // node in the tree resolves to the same host.
+        assert_eq!(find_editing_host(&doc, body), Some(body));
+    }
+
+    #[test]
+    fn find_editing_host_design_mode_on_still_honours_explicit_contenteditable() {
+        let (mut doc, body, text) = make_design_mode_doc();
+        doc.set_design_mode(true);
+        let div = doc.get(text).parent.unwrap();
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(div).data {
+            attrs.push(Attribute { name: QualName::html("contenteditable"), value: "true".into() });
+        }
+        // The explicit, nearer host wins over the design-mode fallback.
+        assert_eq!(find_editing_host(&doc, text), Some(div));
+        assert_ne!(find_editing_host(&doc, text), Some(body));
     }
 
     #[test]
