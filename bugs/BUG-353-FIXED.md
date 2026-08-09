@@ -1,7 +1,7 @@
 # BUG-353 — `element.focus()`/`blur()` and `document.activeElement` missing entirely from the JS shim
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/dom.rs` — the live-DOM `Element`/`HTMLElement` object literal and the `document` object literal), shell (`crates/shell/src/main.rs` — `focused_node`, which already exists and is the state a `focus()` binding would drive)
+**Статус:** FIXED 2026-08-09
+**Компонент:** js (`crates/js/src/dom.rs` — the live-DOM `Element`/`HTMLElement` object literal and the `document` object literal), shell (`crates/shell/src/main.rs` — `focused_node`, which already exists and is the state a `focus()` binding would drive), dom (`crates/engine/dom/src/lib.rs` — `Document::design_mode`, `find_editing_host`)
 **Найден:** P2, WPT-VENDOR-editing (2026-07-27), `run_report.py --all --root editing --recursive`
 
 ## Симптом
@@ -68,19 +68,28 @@ Option<lumen_dom::NodeId>`, updates it on click (`main.rs:12945-12954`, includin
 that state: nothing named `activeElement` appears anywhere in `crates/js/`, and
 no native `_lumen_focus`-style function is registered.
 
-## Возможный фикс (не реализован в этой сессии)
+## Фикс
 
-- Native `_lumen_focus(nid)` / `_lumen_blur(nid)` setting the shell's existing
-  `focused_node` through the same path the click handler uses (so `:focus`
-  styling, IME target dispatch, and the accessibility tree all stay consistent),
-  plus `_lumen_active_element()` returning the current `focused_node`.
-- JS: `focus`/`blur` methods on the live `Element` object literal delegating to
-  those natives, and an `activeElement` getter on `document`.
-- Per spec `focus()` must also fire `focus`/`focusin` (and `blur`/`focusout` on
-  the previously focused element) — the shell's `focused_node_changed` bridge is
-  the natural place to hang that event dispatch, and `FocusEvent` already exists
-  in the shim (`crates/js/src/dom.rs`, see `focusevent_instanceof_chain` test).
-- `document.designMode` is a separate, smaller follow-on in the same area.
+**Часть 1 — `focus()`/`blur()`/`activeElement` — already fixed by [BUG-381](bugs/BUG-381-FIXED.md) (2026-07-29),
+filed two days after this bug and covering the exact gap described above** (native
+`_lumen_request_focus`/`_lumen_request_blur` pair, `HTMLElement.prototype.focus(options)`/`blur()`,
+`document.activeElement`, `document.hasFocus()`, the `blur→focusout→focus→focusin` event
+sequence, `tabIndex`/`autofocus` reflection, focusability per §6.6.1). Re-verified live on this
+session's build: `el.focus()`/`blur()` and `document.activeElement` all work as specced.
 
-Not fixed in this session — P2-wpt vendors and surveys, code fixes are P3's lane
-(`CLAUDE.md` developer assignments).
+**Часть 2 — `document.designMode` (P3, 2026-08-09), the residual gap `BUG-381` explicitly deferred:**
+a `design_mode: bool` field on `Document` (`crates/engine/dom/src/lib.rs`, `#[serde(default)]` —
+survives tab hibernation like the sibling `dirty_values` flag), two natives
+(`_lumen_get_design_mode`/`_lumen_set_design_mode`), and a `document.designMode` getter/setter in
+the shim reflecting `'on'`/`'off'` (a value that is neither, case-insensitively, is a no-op per
+spec — does not silently fall back to `'off'`).
+
+`find_editing_host` (already the single ancestor-walk `_lumen_is_contenteditable` and the
+contenteditable-key routing in `shell/src/main.rs` both go through) now falls back to
+`doc.body()` when the walk finds no explicit `contenteditable` ancestor and design mode is
+enabled — so the whole document becomes one editing host without any element needing the
+attribute, while an explicit `contenteditable` closer to the node still wins (design mode is
+only a fallback, never overrides an explicit `false`). 3 new `lumen-dom` unit tests
+(`find_editing_host_design_mode_*`) plus 3 new `lumen-js` V8 tests (`design_mode_*`) — default
+`'off'`, `isContentEditable` flips on a plain `<div>` with `designMode='on'`, invalid setter
+values are ignored.

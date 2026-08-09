@@ -3734,6 +3734,19 @@ impl V8JsRuntime {
             lumen_dom::find_editing_host(&doc, NodeId::from_index(nid as usize)).is_some()
         });
     }
+    // ── document.designMode (HTML LS §6.6.3, BUG-353) ──────────────────────
+    {
+        let d = Arc::clone(&doc);
+        reg!("_lumen_get_design_mode", move || -> bool {
+            d.lock().unwrap().design_mode()
+        });
+    }
+    {
+        let d = Arc::clone(&doc);
+        reg!("_lumen_set_design_mode", move |enabled: bool| {
+            d.lock().unwrap().set_design_mode(enabled);
+        });
+    }
     {
         // Insert `text` at the current selection (or caret) inside contenteditable.
         // Replaces selected content if the selection is non-collapsed.

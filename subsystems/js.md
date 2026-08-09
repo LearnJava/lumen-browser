@@ -713,6 +713,14 @@ the time — read dates.
   **synchronously** (`document.activeElement` must be current on the next statement) while the shell is
   told through the pre-existing `_lumen_request_focus`/`_lumen_request_blur` queue and applies it on its
   next pump.
+- **`document.designMode` (HTML LS §6.6.3, BUG-353, 2026-08-09).** `'on'`/`'off'`, backed by a
+  `design_mode: bool` field on `lumen_dom::Document` (`#[serde(default)]`, survives tab
+  hibernation) rather than any per-element attribute. `find_editing_host` (`crates/engine/dom/src/lib.rs`
+  — the single ancestor-walk both `_lumen_is_contenteditable` and the shell's contenteditable-key
+  routing go through) falls back to `doc.body()` when the walk finds no explicit `contenteditable`
+  and design mode is on; an explicit `contenteditable` closer to the node still wins, since the
+  fallback only runs after the walk exhausts. Setter is spec-correct: a value that is neither `'on'`
+  nor `'off'` (case-insensitively) is a no-op, not a silent reset to `'off'`.
 - **IDL attribute reflection, form-control collections and activation (HTML LS §2.6.1/§4.10, BUG-383,
   2026-07-29).** Reflection is one declarative table `{idl, content-attr, kind, default}` plus one
   generic accessor pair per kind (`string`/`bool`/`long`/`ulong`/`url`/`enum`), installed by
