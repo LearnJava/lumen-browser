@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-10",
  "counts": {
-  "open": 325,
-  "fixed": 376,
+  "open": 327,
+  "fixed": 378,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 701,
+ "total_bugs": 705,
  "phases": [
   {
    "id": "P0",
@@ -9692,6 +9692,34 @@
    "component": "layout (`crates/engine/layout/src/box_tree.rs` — `lay_out_flex`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-737": {
+   "status": "fixed",
+   "title": "Все три расчёта intrinsic-ширины применяли к любому не-inline боксу блочное правило «дети складываются вертикально → берём самого широкого». Для контейнера `dis…",
+   "component": "layout (`crates/engine/layout/src/box_tree.rs` — `max_content_outer_width`, `min_content_outer_width_of_contents`, `preferred_inline_block_width`)",
+   "date": "2026-08-10",
+   "debtor": false
+  },
+  "BUG-738": {
+   "status": "fixed",
+   "title": "Расчёты max-content / min-content / shrink-to-fit обходили ВСЕХ детей бокса, включая `position:absolute",
+   "component": "layout (`crates/engine/layout/src/box_tree.rs` — те же три функции intrinsic-ширины)",
+   "date": "2026-08-10",
+   "debtor": false
+  },
+  "BUG-739": {
+   "status": "open",
+   "title": "`display:inline-flex` и `display:inline-grid` не создают бокс вообще: содержимое уплощается в `InlineRun` родителя, как при `display:inline` — ни фона, ни рамки…",
+   "component": "layout (`crates/engine/layout/src/box_tree.rs` — построение дерева боксов)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-740": {
+   "status": "open",
+   "title": "`display:grid` с несколькими колонками меряется блочным правилом «самый широкий ребёнок» вместо суммы колонок: `grid-template-columns:auto auto` с двумя элемент…",
+   "component": "layout (`crates/engine/layout/src/box_tree.rs` — те же три функции intrinsic-ширины)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -10324,8 +10352,18 @@
   "layout (`crates/engine/layout/src/box_tree.rs` — `lay_out_flex`)": [
    "BUG-736"
   ],
+  "layout (`crates/engine/layout/src/box_tree.rs` — `max_content_outer_width`, `min_content_outer_width_of_contents`, `preferred_inline_block_width`)": [
+   "BUG-737"
+  ],
   "layout (`crates/engine/layout/src/box_tree.rs` — ветка `is_image_element`, auto-ширина замещаемого элемента)": [
    "BUG-734"
+  ],
+  "layout (`crates/engine/layout/src/box_tree.rs` — построение дерева боксов)": [
+   "BUG-739"
+  ],
+  "layout (`crates/engine/layout/src/box_tree.rs` — те же три функции intrinsic-ширины)": [
+   "BUG-738",
+   "BUG-740"
   ],
   "layout (`crates/engine/layout/src/incremental.rs::graft_geometry_with_cascade` + `lay_out`'s O(1) translate fast path для `DirtyBits::CLEAN`)": [
    "BUG-355"
