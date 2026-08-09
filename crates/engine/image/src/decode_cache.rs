@@ -103,6 +103,20 @@ impl ImageDecodeCache {
         self.entries.contains_key(key)
     }
 
+    /// Every cached entry as `(key, handle)` pairs, in unspecified order.
+    ///
+    /// Read-only: unlike [`get`](Self::get) this does **not** touch LRU
+    /// timestamps, so dumping the cache cannot change which entry the next
+    /// [`evict_to_budget`](Self::evict_to_budget) drops. Meant for callers that
+    /// need the whole set at once (the CPU rasterizer takes `&[(String,
+    /// ImageHandle)]`), not for lookups.
+    pub fn snapshot(&self) -> Vec<(String, ImageHandle)> {
+        self.entries
+            .iter()
+            .map(|(k, e)| (k.0.clone(), Arc::clone(&e.handle)))
+            .collect()
+    }
+
     /// Look up a cached image by key, updating its LRU timestamp.
     ///
     /// Returns `None` if the key is not cached.

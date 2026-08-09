@@ -23665,19 +23665,28 @@ impl Lumen {
         /// Renders `self.display_list` — the page content only, not the browser
         /// chrome (tab strip/panels) — through the deterministic CPU rasterizer
         /// (same renderer as `--screenshot`/`--ipc-server`), at the current
-        /// window's content viewport size and scroll offset. Images are not
-        /// included (empty images slice — CPU path renders their placeholder
-        /// box, matching existing headless CPU-render behavior elsewhere);
-        /// registering the live decoded image set here is future work.
+        /// window's content viewport size and scroll offset.
+        ///
+        /// BUG-726: the image set comes from `self.image_cache`, whose keys are
+        /// the very strings `register_image` gets — i.e. exactly what the
+        /// display list's `DrawImage`/`LazyImageSlot`/background-image commands
+        /// look up. Passing an empty slice here (the SDC-1b behaviour) made
+        /// *every* picture on the page rasterize as the grey placeholder, so an
+        /// automation screenshot of a perfectly rendering page read as "the
+        /// browser draws no images at all". Canvas 2D bitmaps are still absent:
+        /// they live in the JS runtime and reach paint only through the per-frame
+        /// `flush_canvas_updates` drain into the GPU renderer, never through this
+        /// CPU-side cache.
         fn render_current_page_to_png(&self) -> Result<Vec<u8>, String> {
             use lumen_paint::Renderer;
             let width = (self.viewport_width_css().max(1.0)) as u32;
             let height = (self.viewport_height_css().max(1.0)) as u32;
+            let images = self.image_cache.snapshot();
             let image = Renderer::render_to_image_cpu(
                 width,
                 height,
                 &self.display_list,
-                &[],
+                &images,
                 self.scroll_x,
                 self.scroll_y,
             )
