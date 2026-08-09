@@ -75,8 +75,8 @@
 {
  "generated": "2026-08-09",
  "counts": {
-  "open": 311,
-  "fixed": 353,
+  "open": 310,
+  "fixed": 354,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -7119,10 +7119,10 @@
    "debtor": false
   },
   "BUG-362": {
-   "status": "open",
-   "title": "`EventSource` не резолвит относительный URL относительно базы документа: `new EventSource(\"resources/message.py\")` даёт `[JS SSE] connect error: … missing schem…",
-   "component": "js (`crates/js/src/dom.rs:8194` — конструктор `EventSource`; `crates/js/src/v8_runtime.rs:2646` — биндинг `_lumen_sse_connect`)",
-   "date": null,
+   "status": "fixed",
+   "title": "`EventSource` не резолвил относительный URL относительно базы документа: `new EventSource(\"resources/message.py\")` давал `[JS SSE] connect error: … missing sche…",
+   "component": "js (`crates/js/src/dom.rs` — конструктор `EventSource`, функция `_url_resolve`)",
+   "date": "2026-08-09",
    "debtor": false
   },
   "BUG-363": {
