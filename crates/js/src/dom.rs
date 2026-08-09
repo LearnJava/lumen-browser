@@ -30415,5 +30415,124 @@ mod tests {
             let result = rt.eval("res").unwrap();
             assert_eq!(result, lumen_core::JsValue::Number(11.0));
         }
+
+        // ── BUG-364: external (http/https) Worker/SharedWorker script URLs ──────
+
+        /// Fetch provider stub for BUG-364 tests: returns a fixed status/body for
+        /// every request, regardless of URL or method.
+        struct FixedFetch {
+            status: u16,
+            body: &'static str,
+        }
+        impl lumen_core::ext::JsFetchProvider for FixedFetch {
+            fn fetch_sync(
+                &self,
+                _url: &str,
+                _method: &str,
+            ) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+                Ok(lumen_core::ext::JsFetchResult {
+                    status: self.status,
+                    status_text: "".into(),
+                    headers: vec![],
+                    body: self.body.as_bytes().to_vec(),
+                })
+            }
+        }
+
+        fn v8_runtime_with_dom_and_fetch(
+            doc: Arc<Mutex<Document>>,
+            provider: Arc<dyn lumen_core::ext::JsFetchProvider>,
+        ) -> V8JsRuntime {
+            let rt = V8JsRuntime::new().unwrap();
+            rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+            rt.install_dom(
+                doc,
+                "https://example.com/page.html",
+                Some(provider),
+                None, None, None, None, None, None, None, false,
+            )
+            .unwrap();
+            rt
+        }
+
+        #[test]
+        fn worker_external_url_fetches_and_runs_script() {
+            use std::time::Duration;
+            let provider = Arc::new(FixedFetch { status: 200, body: "postMessage('remote');" });
+            let rt = v8_runtime_with_dom_and_fetch(make_doc(), provider);
+            // Relative URL — must resolve against the page URL before fetching.
+            rt.eval(
+                "var w = new Worker('worker.js'); \
+                 var got = null; \
+                 w.onmessage = function(e){ got = e.data; };",
+            )
+            .unwrap();
+            std::thread::sleep(Duration::from_millis(150));
+            rt.pump_workers();
+            let result = rt.eval("got").unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("remote".into()));
+        }
+
+        #[test]
+        fn worker_external_url_fetch_failure_fires_onerror() {
+            let provider = Arc::new(FixedFetch { status: 404, body: "not found" });
+            let rt = v8_runtime_with_dom_and_fetch(make_doc(), provider);
+            rt.eval(
+                "var w = new Worker('https://example.com/missing.js'); \
+                 var errEvent = null; \
+                 w.onerror = function(e){ errEvent = e; }; \
+                 w.postMessage('ignored'); \
+                 w.terminate();",
+            )
+            .unwrap();
+            // `error` is queued via setTimeout(fn, 0) — drive the timer wheel.
+            rt.eval("_lumen_tick_timers()").unwrap();
+            assert!(bool_eval(&rt, "errEvent !== null"));
+            assert!(bool_eval(&rt, "errEvent.type === 'error'"));
+            assert!(bool_eval(
+                &rt,
+                "errEvent.message.indexOf('https://example.com/missing.js') !== -1"
+            ));
+        }
+
+        #[test]
+        fn shared_worker_external_url_connects_and_echoes() {
+            use std::time::Duration;
+            let provider = Arc::new(FixedFetch {
+                status: 200,
+                body: "onconnect = function(e){ e.ports[0].onmessage = function(ev){ e.ports[0].postMessage(ev.data + 1); }; };",
+            });
+            let rt = v8_runtime_with_dom_and_fetch(make_doc(), provider);
+            rt.eval(
+                "var sw = new SharedWorker('https://example.com/sw.js'); \
+                 var got = null; \
+                 sw.port.onmessage = function(e){ got = e.data; }; \
+                 sw.port.postMessage(41);",
+            )
+            .unwrap();
+            std::thread::sleep(Duration::from_millis(150));
+            rt.pump_shared_workers();
+            let result = rt.eval("got").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(42.0));
+        }
+
+        #[test]
+        fn shared_worker_external_url_fetch_failure_fires_onerror() {
+            let provider = Arc::new(FixedFetch { status: 500, body: "server error" });
+            let rt = v8_runtime_with_dom_and_fetch(make_doc(), provider);
+            rt.eval(
+                "var sw = new SharedWorker('https://example.com/missing-sw.js'); \
+                 var errEvent = null; \
+                 sw.onerror = function(e){ errEvent = e; }; \
+                 sw.port.postMessage('ignored');",
+            )
+            .unwrap();
+            rt.eval("_lumen_tick_timers()").unwrap();
+            assert!(bool_eval(&rt, "errEvent !== null"));
+            assert!(bool_eval(
+                &rt,
+                "errEvent.message.indexOf('https://example.com/missing-sw.js') !== -1"
+            ));
+        }
     }
 }

@@ -475,13 +475,42 @@ const WORKER_SHIM: &str = r#"(function() {
         script = '';
       }
     } else {
-      // External URL workers are not yet supported (requires async fetch).
-      script = '/* Lumen: external URL worker not supported: ' + u.replace(/\*\//g,'*\\/') + ' */';
+      // External URL: resolve against the document base and fetch the
+      // script body synchronously (BUG-364 — previously never hit the
+      // network at all). `null` here means the fetch failed (network error
+      // or non-2xx status); `script` stays a String on success.
+      var abs = _url_resolve(u, _lumen_document_base_url());
+      var fetched = _lumen_worker_fetch_script(abs);
+      script = (typeof fetched === 'string') ? fetched : null;
+    }
+
+    this._onmessage = null;
+    this._onerror = null;
+    this._listeners = [];
+    this._errorListeners = [];
+
+    if (script === null) {
+      // HTML LS §10.2.6.1 "run a worker": when the classic script fetch
+      // fails, queue a task to fire `error` at the worker and never start
+      // it — `_id` stays null so postMessage/terminate become no-ops and
+      // the worker is not registered for message delivery.
+      this._id = null;
+      var self = this;
+      setTimeout(function() {
+        var ev = new ErrorEvent('error', {
+          message: 'Worker script failed to load: ' + u,
+          filename: u, lineno: 0, colno: 0,
+          bubbles: false, cancelable: true,
+        });
+        if (typeof self._onerror === 'function') { try { self._onerror(ev); } catch(e) {} }
+        for (var i = 0; i < self._errorListeners.length; i++) {
+          try { self._errorListeners[i](ev); } catch(e) {}
+        }
+      }, 0);
+      return;
     }
 
     this._id = _lumen_create_worker(script);
-    this._onmessage = null;
-    this._listeners = [];
     _workerRegistry[this._id] = this;
   }
 
@@ -489,12 +518,16 @@ const WORKER_SHIM: &str = r#"(function() {
   // When transfer contains OffscreenCanvas objects (identified by __canvas_id__),
   // their pixel buffers are serialized into the payload so the worker can
   // reconstruct them as OffscreenCanvas instances.
+  // No-op when the worker never started (`_id === null`, BUG-364 script-fetch failure).
   Worker.prototype.postMessage = function(data, transfer) {
+    if (this._id === null) return;
     _lumen_worker_post(this._id, _lumenSerializeWithTransfers(data, transfer));
   };
 
   // terminate() — immediately stop the worker; no more messages delivered.
+  // No-op when the worker never started (`_id === null`).
   Worker.prototype.terminate = function() {
+    if (this._id === null) return;
     _lumen_worker_terminate(this._id);
     delete _workerRegistry[this._id];
   };
@@ -507,9 +540,19 @@ const WORKER_SHIM: &str = r#"(function() {
     configurable: true,
   });
 
+  Object.defineProperty(Worker.prototype, 'onerror', {
+    get: function() { return this._onerror; },
+    set: function(fn) {
+      this._onerror = typeof fn === 'function' ? fn : null;
+    },
+    configurable: true,
+  });
+
   Worker.prototype.addEventListener = function(type, fn, _opts) {
     if (type === 'message' && typeof fn === 'function') {
       this._listeners.push(fn);
+    } else if (type === 'error' && typeof fn === 'function') {
+      this._errorListeners.push(fn);
     }
   };
 
@@ -517,6 +560,9 @@ const WORKER_SHIM: &str = r#"(function() {
     if (type === 'message') {
       var i = this._listeners.indexOf(fn);
       if (i !== -1) this._listeners.splice(i, 1);
+    } else if (type === 'error') {
+      var j = this._errorListeners.indexOf(fn);
+      if (j !== -1) this._errorListeners.splice(j, 1);
     }
   };
 
@@ -562,8 +608,8 @@ const WORKER_SHIM: &str = r#"(function() {
 // `worker_global_shim` (the worker-thread global scope) are pure JS.
 
 /// Install native bindings (`_lumen_create_worker`, `_lumen_worker_post`,
-/// `_lumen_worker_terminate`, `_lumen_register_worker_blob`) and the `Worker`
-/// JS class into `rt`.
+/// `_lumen_worker_terminate`, `_lumen_register_worker_blob`,
+/// `_lumen_worker_fetch_script`) and the `Worker` JS class into `rt`.
 ///
 /// Must be called after the core DOM shim so that `TextDecoder` and
 /// `_object_url_store` are available for blob-URL resolution in the constructor.
@@ -574,6 +620,7 @@ pub(crate) fn install_worker_bindings_v8(
     queue: &WorkerMessageQueue,
     next_id: &Arc<Mutex<u32>>,
     blob_store: &WorkerBlobStore,
+    fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
 ) -> JsResult<()> {
     // _lumen_create_worker(script: String) → u32
     {
@@ -585,6 +632,24 @@ pub(crate) fn install_worker_bindings_v8(
             "_lumen_create_worker",
             into_v8_fn1(move |script: String| -> u32 {
                 spawn_worker_v8(&reg, &q, &nid, &bs, script)
+            }),
+        )?;
+    }
+
+    // _lumen_worker_fetch_script(url: String) → String | undefined
+    //
+    // Synchronous GET for a classic (non-blob/data) worker script, backed by
+    // the same `JsFetchProvider` bridge `fetch()`/`<script src>` use (BUG-364:
+    // previously an external `new Worker(url)` never touched the network at
+    // all and silently ran an empty comment). Returns `undefined` on any
+    // network error or non-2xx status so the JS shim can fire `error` instead
+    // of pretending the worker started.
+    {
+        let fp = fetch_provider.clone();
+        rt.register_native(
+            "_lumen_worker_fetch_script",
+            into_v8_fn1(move |url: String| -> Option<String> {
+                fetch_worker_script(fp.as_deref(), &url)
             }),
         )?;
     }
@@ -624,6 +689,21 @@ pub(crate) fn install_worker_bindings_v8(
 
     rt.eval(WORKER_SHIM)?;
     Ok(())
+}
+
+/// Fetch a classic worker script body over the network via `provider`.
+///
+/// Returns `None` when there is no provider, the request fails, or the
+/// response status is not 2xx — the caller (`_lumen_worker_fetch_script`)
+/// surfaces that as `undefined` to JS, which fires `error` on the `Worker`
+/// instead of running an empty script.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn fetch_worker_script(provider: Option<&dyn lumen_core::ext::JsFetchProvider>, url: &str) -> Option<String> {
+    let resp = provider?.fetch_sync(url, "GET").ok()?;
+    if !(200..300).contains(&resp.status) {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&resp.body).into_owned())
 }
 
 /// Spawn a new worker thread backed by its own [`V8JsRuntime`] that evaluates
@@ -921,7 +1001,7 @@ mod tests_v8 {
         let reg: WorkerRegistry = Arc::new(Mutex::new(HashMap::new()));
         let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
         let nid = Arc::new(Mutex::new(0u32));
-        install_worker_bindings_v8(&rt, &reg, &queue, &nid, &make_store()).unwrap();
+        install_worker_bindings_v8(&rt, &reg, &queue, &nid, &make_store(), None).unwrap();
         let result = rt.eval("typeof Worker === 'function'").unwrap();
         assert_eq!(result, lumen_core::JsValue::Bool(true));
     }
@@ -1095,7 +1175,7 @@ mod tests_v8 {
         let reg: WorkerRegistry = Arc::new(Mutex::new(HashMap::new()));
         let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
         let nid = Arc::new(Mutex::new(0u32));
-        install_worker_bindings_v8(&rt, &reg, &queue, &nid, &make_store()).unwrap();
+        install_worker_bindings_v8(&rt, &reg, &queue, &nid, &make_store(), None).unwrap();
 
         let result = rt
             .eval(r#"_lumenSerializeWithTransfers({x: 1, y: "hello"}, [])"#)
@@ -1112,7 +1192,7 @@ mod tests_v8 {
         let reg: WorkerRegistry = Arc::new(Mutex::new(HashMap::new()));
         let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
         let nid = Arc::new(Mutex::new(0u32));
-        install_worker_bindings_v8(&rt, &reg, &queue, &nid, &make_store()).unwrap();
+        install_worker_bindings_v8(&rt, &reg, &queue, &nid, &make_store(), None).unwrap();
         crate::offscreen_canvas::install_offscreen_canvas_bindings_v8(&rt).unwrap();
 
         let result = rt

@@ -84,5 +84,17 @@ reproduced live with both `throw new Error(...)` and a bare
 worker's top level. This is the mechanism `tests/wpt/secure-contexts`'s
 `basic-dedicated-worker*.html`/`basic-shared-worker*.html` rely on for
 their `data:` URL worker subtest and is one contributor (alongside
-[BUG-364](bugs/BUG-364-OPEN.md), which blocks that category's non-`data:`
+[BUG-364](bugs/BUG-364-FIXED.md), which blocks that category's non-`data:`
 worker subtests separately) to that category's 0/8 harness OK.
+
+**Partially addressed by the [BUG-364](bugs/BUG-364-FIXED.md) fix (P3,
+2026-08-09):** the accessor-level gap described above — `Worker.prototype`
+having no `onerror` at all and `addEventListener('error', …)` being a silent
+no-op — is now closed; both exist and fire for the script-fetch-failure case
+BUG-364 added. **The core mechanism reconfirmed here is still broken**:
+`run_worker_thread_v8`'s `rt.eval(&script)` error arms (top-level script
+error, and the same path for a later `postMessage` handler) still only
+`eprintln!` to the host's stderr and never post anything back through the
+worker's reply channel — an uncaught exception inside an *already-started*
+worker still cannot reach the parent's `error` handler. This bug stays OPEN
+for that mechanism.
