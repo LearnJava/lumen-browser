@@ -1,4 +1,4 @@
-# BUG-714: `unhandledrejection`/`rejectionhandled` никогда не диспатчатся
+# BUG-716: `unhandledrejection`/`rejectionhandled` никогда не диспатчатся
 
 **Статус:** OPEN
 **Компонент:** js (`crates/js/src/v8_runtime.rs` — уровень изолята; интерфейс события живёт в `crates/js/src/dom.rs`, `WEB_API_SHIM`)

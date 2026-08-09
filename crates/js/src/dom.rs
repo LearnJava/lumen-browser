@@ -632,7 +632,7 @@ ErrorEvent.prototype.constructor = ErrorEvent;
 //
 // BUG-702: the interface exists here for construction and feature detection; Lumen
 // does not yet *fire* the two events (that needs V8's promise-reject callback at
-// isolate level — see BUG-714). Defining it is nevertheless load-bearing, not
+// isolate level — see BUG-716). Defining it is nevertheless load-bearing, not
 // cosmetic: core-js's `promise-constructor-detection` treats a browser without
 // `PromiseRejectionEvent` as one whose native Promise cannot be trusted, and
 // replaces `globalThis.Promise` with its own polyfill on every site that ships
@@ -8067,7 +8067,7 @@ var window = {
     onload: null,
     // BUG-702: present so `'onunhandledrejection' in window` is true, which is the
     // other half of the feature test libraries run for promise-rejection support.
-    // Nothing dispatches to them yet — see BUG-714.
+    // Nothing dispatches to them yet — see BUG-716.
     onunhandledrejection: null,
     onrejectionhandled: null,
     location: location,
