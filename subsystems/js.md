@@ -116,6 +116,30 @@ the time — read dates.
   19 tests in `v8_esm.rs`. **Gap:** the shell never calls `register_module_source`, so a
   page's `import './x.js'` still fails "module not found" —
   [BUG-446](../bugs/BUG-446-OPEN.md), engine-independent (rquickjs had it too).
+- **Live "prepare the script element" — dynamically inserted `<script>` ([P3],
+  2026-08-09, closes [BUG-571](../bugs/BUG-571-FIXED.md)).** Script execution used to be
+  the shell's one-shot walk of the parsed tree (`main.rs::collect_scripts_ordered`, once per
+  navigation), so a `<script>` built with `document.createElement` and appended into the live
+  document was inert forever. The live half of HTML LS §4.12.1 now lives in the shim
+  (`dom.rs`, `_lumen_script_*` block); the shell is untouched. **Non-obvious, three points.**
+  (1) *Membership, not a flag:* `createElement`/`createElementNS` put a `<script>`'s nid into
+  `_lumen_script_pending`, and preparation deletes it — so the map is simultaneously the
+  "which elements may run" filter and the spec's per-element `already started` flag. Parser
+  and fragment-parser (`innerHTML`) scripts never enter it, which is exactly why they stay
+  spec-inert with no extra check. (2) *One hook, not thirty:* the insertion hook wraps the
+  `_lumen_append_child` / `_lumen_insert_before` **natives** rather than the ~30 shim methods
+  that call them (`appendChild`, `insertBefore`, `replaceChild`, `append`/`prepend`/`before`/
+  `after`/`replaceWith`, `select.add`, `insertAdjacentElement`, …) — the natives are globals
+  set with a plain `ctx.global().set`, so reassigning them from the shim is legal and every
+  present *and future* insertion path is covered. Cost when nothing is pending is one property
+  read. (3) *Module bodies bypass the shell:* `_lumen_esm_register` /
+  `_lumen_esm_register_inline` write straight into `v8_esm`'s thread-local source map (plain
+  map writes — a compat-layer native cannot re-enter V8), after which the shim calls dynamic
+  `import()`. That `import()` is compiled lazily through `new Function`, not written as a
+  literal, because the shim is compiled as one classic script and a host refusing dynamic
+  import in that position would take the entire shim down instead of just module scripts.
+  **Gap:** `run_dump` never ticks timers, so under `--dump-layout` only the synchronous inline
+  path is observable; external/module scripts need a live window (same as any `setTimeout`).
 
 - **Document Picture-in-Picture reaches a real OS window ([P1] P3-pip, 2026-07-17).**
   `documentPictureInPicture.requestWindow({width,height})` (`document_pip.rs`) called

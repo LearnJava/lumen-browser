@@ -111,7 +111,12 @@ pub(crate) fn reset() {
 /// virtual specifier gives the module map a stable key while
 /// [`crate::esm::resolve_specifier_with`] redirects relative imports from it to
 /// the page URL.
-fn register_inline(source: &str) -> String {
+///
+/// `pub(crate)` since BUG-571: a `<script type=module>` inserted by page script
+/// is prepared in the JS shim, which registers its body through the
+/// `_lumen_esm_register_inline` native and then `import()`s the returned
+/// specifier.
+pub(crate) fn register_inline(source: &str) -> String {
     with_state(|s| {
         let key = format!("lumen://inline-{}", s.inline_seq);
         s.inline_seq += 1;

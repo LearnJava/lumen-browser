@@ -4633,6 +4633,9 @@ var document = {
             __dom_node_warned = true;
             console.warn('DOM tree exceeds 40000 nodes');
         }
+        // BUG-571: a script element minted here is allowed to run once it is
+        // inserted into the document — see `_lumen_script_track`.
+        _lumen_script_track(nid, tag);
         return _lumen_make_element(nid);
     },
     // DOM LS §4.5: createElementNS(namespace, qualifiedName) creates a native
@@ -4650,6 +4653,8 @@ var document = {
         if (nid < 0) {
             throw new DOMException('DOM node limit exceeded', 'QuotaExceededError');
         }
+        // BUG-571: SVG's <script> runs on insertion exactly like the HTML one.
+        _lumen_script_track(nid, local);
         return _lumen_make_element(nid);
     },
     createTextNode:         function(t) {
@@ -4842,6 +4847,210 @@ var alert    = function(m) { _lumen_console_log('[alert] ' + String(m)); };
 var confirm  = function()  { return false; };
 var prompt   = function()  { return null; };
 var print    = function()  { _lumen_print_dialog(); };
+
+// ── HTML LS §4.12.1 'prepare the script element' (BUG-571) ───────────────────
+// Script execution used to be a one-shot walk of the already-parsed tree, run
+// exactly once per navigation by the shell (`main.rs::run_scripts_with_dom`),
+// so a <script> built with `document.createElement` and appended into the live
+// document stayed inert forever — no exception, no network request, nothing.
+// That is the single most common dynamic-loading pattern on the web (webpack
+// chunk loaders, lazy analytics/ad snippets, polyfill loaders) and 218 subtests
+// of the WPT `the-script-element` category. Everything below is the live half
+// of the algorithm: elements minted through the DOM API are tracked, and the
+// first time one of them becomes connected it is prepared and executed.
+//
+// Deliberately NOT covered, matching the spec's 'already started' flag: scripts
+// produced by the fragment parser (innerHTML / insertAdjacentHTML /
+// document.write) and scripts that came from the document parser. Neither ever
+// enters `_lumen_script_pending`, so neither can be re-run from here.
+
+// nid → true for a <script> element built by createElement/createElementNS that
+// has not been prepared yet. The entry is deleted on preparation, so the map
+// doubles as the spec's per-element 'already started' flag: moving an executed
+// script around the tree can never run it a second time.
+var _lumen_script_pending = {};
+var _lumen_script_pending_count = 0;
+
+// Remember a freshly created element when it is a <script>. Called from
+// document.createElement / createElementNS — the only two ways page script can
+// mint a script element that the spec allows to run on insertion.
+function _lumen_script_track(nid, local) {
+    if (String(local).toLowerCase() !== 'script') return;
+    _lumen_script_pending[nid] = true;
+    _lumen_script_pending_count++;
+}
+
+// Same shadow-inclusive test as Node.isConnected, by nid alone — no element
+// wrapper is allocated, because this runs on the DOM insertion hot path.
+function _lumen_script_is_connected(nid) {
+    var htmlId = _lumen_u2n(_lumen_get_html_element());
+    if (htmlId === null) return false;
+    var cur = nid;
+    while (cur !== null && cur !== undefined) {
+        if (cur === htmlId) return true;
+        cur = _lumen_u2n(_lumen_get_parent(cur));
+    }
+    return false;
+}
+
+// HTML LS §2.1.5 JavaScript MIME types — the JS-side mirror of
+// `main.rs::is_classic_script_type` (parser path); keep the two in step.
+var _LUMEN_CLASSIC_SCRIPT_TYPES = {
+    'text/javascript': 1, 'application/javascript': 1, 'application/ecmascript': 1,
+    'application/x-ecmascript': 1, 'application/x-javascript': 1, 'text/ecmascript': 1,
+    'text/javascript1.0': 1, 'text/javascript1.1': 1, 'text/javascript1.2': 1,
+    'text/javascript1.3': 1, 'text/javascript1.4': 1, 'text/javascript1.5': 1,
+    'text/jscript': 1, 'text/livescript': 1, 'text/x-ecmascript': 1,
+    'text/x-javascript': 1
+};
+function _lumen_is_classic_script_type(t) {
+    if (t === null || t === undefined) return true;
+    var s = String(t).trim();
+    if (s === '') return true;
+    return _LUMEN_CLASSIC_SCRIPT_TYPES[s.toLowerCase()] === 1;
+}
+
+// `load`/`error` on a script element neither bubble nor cancel, so a plain
+// at-target dispatch is the whole story. `_lumen_dispatch` runs addEventListener
+// listeners and the `on<type>` IDL attribute alike (BUG-360).
+function _lumen_script_fire(nid, type) {
+    try { _lumen_dispatch(nid, new Event(type, { bubbles: false, cancelable: false })); }
+    catch (e) {}
+}
+
+// A classic script body runs in global scope — indirect eval is exactly that.
+// An uncaught exception must not escape into the DOM call that inserted the
+// element (the spec reports it to the page instead), hence the catch.
+function _lumen_script_execute_classic(text) {
+    try { (0, eval)(text); }
+    catch (e) { _lumen_console_error('Uncaught ' + ((e && e.stack) ? e.stack : e)); }
+}
+
+// `import()` is compiled lazily through `new Function` rather than written
+// inline: the shim is compiled as one classic script, so a host that refuses
+// dynamic import in this position would take the whole shim down with it.
+// Cached as `false` after a failed compile — module scripts then report `error`
+// instead of hanging, and classic scripts are unaffected either way.
+var _lumen_dynamic_import = null;
+function _lumen_get_dynamic_import() {
+    if (_lumen_dynamic_import === null) {
+        try { _lumen_dynamic_import = new Function('s', 'return import(s);'); }
+        catch (e) { _lumen_dynamic_import = false; }
+    }
+    return _lumen_dynamic_import;
+}
+
+// Evaluate a module script body. `url` is the absolute URL of an external
+// module (empty for an inline one); registering the source under that specifier
+// and then importing it reuses the existing ES module map, so a second <script>
+// with the same src evaluates the module only once. Static imports *inside* the
+// module still resolve only against pre-registered sources — the network module
+// graph is BUG-446, unchanged by this.
+function _lumen_script_run_module(url, text) {
+    var dyn = _lumen_get_dynamic_import();
+    if (!dyn) return Promise.reject(new Error('dynamic import is unavailable'));
+    var spec;
+    if (url) { spec = url; _lumen_esm_register(spec, text); }
+    else { spec = _lumen_esm_register_inline(text); }
+    return Promise.resolve(dyn(spec));
+}
+
+// External `<script src>`: HTML LS §4.12.1 sets the 'force async' flag on any
+// script element inserted by script, so the fetch and the execution both belong
+// to a later task — never to the appendChild call itself. That matters twice
+// over here: Lumen's `fetch` is synchronous underneath (an inline fetch would
+// stall the insertion), and the near-universal `el.onload = …` assignment that
+// follows appendChild would otherwise be installed after the event fired.
+function _lumen_script_load_external(nid, src, isModule) {
+    setTimeout(function() {
+        var url = _url_resolve(String(src), _lumen_document_base_url());
+        fetch(url).then(function(resp) {
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            return resp.text();
+        }).then(function(text) {
+            if (isModule) return _lumen_script_run_module(url, text);
+            _lumen_script_execute_classic(text);
+        }).then(function() {
+            _lumen_script_fire(nid, 'load');
+        }).catch(function(e) {
+            _lumen_console_error('script load failed: ' + url + ': ' + e);
+            _lumen_script_fire(nid, 'error');
+        });
+    }, 0);
+}
+
+// HTML LS §4.12.1 steps 11-32, minus the parser-only branches.
+function _lumen_script_prepare(nid) {
+    var type = _lumen_u2n(_lumen_get_attr(nid, 'type'));
+    var isModule = type !== null && String(type).trim().toLowerCase() === 'module';
+    // A non-JS type (importmap, application/json, speculationrules, a template
+    // language, …) is a data block: it is never a script and never runs.
+    if (!isModule && !_lumen_is_classic_script_type(type)) return;
+    var src = _lumen_u2n(_lumen_get_attr(nid, 'src'));
+    src = (src === null) ? '' : String(src).trim();
+    if (src !== '') { _lumen_script_load_external(nid, src, isModule); return; }
+    // `src` wins over the inline body; with no `src` the body is the source.
+    var body = _lumen_u2n(_lumen_get_text_content(nid));
+    if (body === null || String(body).trim() === '') return;
+    body = String(body);
+    if (!isModule) {
+        // An inline classic script executes synchronously, inside the insertion
+        // — `assert_equals(window.ran, true)` on the line after appendChild is
+        // the canonical WPT shape and must already see the side effect.
+        _lumen_script_execute_classic(body);
+        return;
+    }
+    // Module scripts are deferred by spec; a task hop is the approximation.
+    setTimeout(function() {
+        _lumen_script_run_module('', body).then(function() {
+            _lumen_script_fire(nid, 'load');
+        }).catch(function(e) {
+            _lumen_console_error('module script failed: ' + e);
+            _lumen_script_fire(nid, 'error');
+        });
+    }, 0);
+}
+
+// Run the pending check for one tracked element, if it is connected by now.
+function _lumen_script_try_prepare(nid) {
+    if (_lumen_script_pending[nid] !== true) return;
+    if (!_lumen_script_is_connected(nid)) return;
+    delete _lumen_script_pending[nid];
+    _lumen_script_pending_count--;
+    _lumen_script_prepare(nid);
+}
+
+// Insertion hook. Fast path when no dynamically created script is outstanding
+// (one property read), which is every page that never calls
+// createElement('script') and every insertion after the last one has run.
+function _lumen_script_after_insert(childNid) {
+    if (_lumen_script_pending_count === 0) return;
+    if (_lumen_script_pending[childNid] === true) {
+        _lumen_script_try_prepare(childNid);
+        return;
+    }
+    // The inserted node may be an *ancestor* of a tracked script that was built
+    // detached (`div.appendChild(script)` before `body.appendChild(div)`) and
+    // only becomes connected now. Deleting the current key inside for-in is
+    // well-defined, and the map holds only not-yet-run scripts.
+    for (var k in _lumen_script_pending) _lumen_script_try_prepare(+k);
+}
+
+// Route every tree insertion through the hook by wrapping the two natives that
+// all of them bottom out in. One place instead of the ~30 shim call sites
+// (appendChild, insertBefore, replaceChild, append/prepend/before/after/
+// replaceWith, <select>.add, insertAdjacentElement, …), so a future insertion
+// path cannot silently miss it.
+var _lumen_native_append_child  = _lumen_append_child;
+var _lumen_native_insert_before = _lumen_insert_before;
+_lumen_append_child = function(parent, child) {
+    _lumen_native_append_child(parent, child);
+    _lumen_script_after_insert(child);
+};
+_lumen_insert_before = function(parent, child, reference) {
+    _lumen_native_insert_before(parent, child, reference);
+    _lumen_script_after_insert(child);
+};
 
 // ── Custom Elements registry ──────────────────────────────────────────────────
 // Maps lower-case tag name → { ctor, observedAttributes: string[] }
@@ -28225,6 +28434,205 @@ mod tests {
             assert_eq!(r, lumen_core::JsValue::Bool(true));
         }
 
+        // BUG-571: a `<script>` built through the DOM API and inserted into the
+        // live document runs when it becomes connected (HTML LS §4.12.1
+        // "prepare the script element"). Before this it stayed inert forever —
+        // no exception, no request, nothing.
+        #[test]
+        fn dynamic_inline_script_runs_on_append() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    r#"var s = document.createElement('script');
+                       s.setAttribute('type', 'text/javascript');
+                       s.textContent = 'globalThis.__b571_ran = true;';
+                       document.body.appendChild(s);
+                       globalThis.__b571_ran === true"#,
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// The 'already started' flag is per element, not per insertion: moving
+        /// an executed script back into the tree must not run it again.
+        #[test]
+        fn dynamic_script_runs_exactly_once() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    r#"globalThis.__b571_n = 0;
+                       var s = document.createElement('script');
+                       s.textContent = 'globalThis.__b571_n++;';
+                       document.body.appendChild(s);
+                       s.remove();
+                       document.body.appendChild(s);
+                       globalThis.__b571_n === 1"#,
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// An absent `type` means classic JavaScript, as do the legacy MIME
+        /// spellings — the same whitelist the parser path applies.
+        #[test]
+        fn dynamic_script_legacy_and_absent_type_run() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    r#"globalThis.__b571_c = 0;
+                       ['', 'text/javascript1.5', 'TEXT/JScript', 'application/ecmascript']
+                         .forEach(function(t, i) {
+                             var s = document.createElement('script');
+                             if (t !== '') s.type = t;
+                             s.textContent = 'globalThis.__b571_c++;';
+                             document.body.appendChild(s);
+                         });
+                       globalThis.__b571_c === 4"#,
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// A non-JavaScript `type` is a data block, never code.
+        #[test]
+        fn dynamic_script_with_data_type_is_inert() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    r#"['application/json', 'importmap', 'text/template'].forEach(function(t) {
+                           var s = document.createElement('script');
+                           s.type = t;
+                           s.textContent = 'globalThis.__b571_data = true;';
+                           document.body.appendChild(s);
+                       });
+                       globalThis.__b571_data === undefined"#,
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// Insertion into a detached subtree must not run the script; it runs
+        /// later, when an ancestor carries it into the document.
+        #[test]
+        fn dynamic_script_waits_until_ancestor_is_connected() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    r#"var d = document.createElement('div');
+                       var s = document.createElement('script');
+                       s.textContent = 'globalThis.__b571_deep = true;';
+                       d.appendChild(s);
+                       var beforeInsert = globalThis.__b571_deep === undefined;
+                       document.body.appendChild(d);
+                       beforeInsert && globalThis.__b571_deep === true"#,
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// `insertBefore` is a second insertion path and goes through the same
+        /// hook — the wrapper sits on the native, not on one DOM method.
+        #[test]
+        fn dynamic_script_runs_via_insert_before() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    r#"var s = document.createElement('script');
+                       s.textContent = 'globalThis.__b571_ib = true;';
+                       document.body.insertBefore(s, document.body.firstChild);
+                       globalThis.__b571_ib === true"#,
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// SVG's `<script>` (createElementNS) is prepared exactly like the HTML one.
+        #[test]
+        fn dynamic_svg_script_runs() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    r#"var s = document.createElementNS('http://www.w3.org/2000/svg', 'script');
+                       s.textContent = 'globalThis.__b571_svg = true;';
+                       document.body.appendChild(s);
+                       globalThis.__b571_svg === true"#,
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// The fragment parser sets the 'already started' flag, so markup
+        /// injected through innerHTML stays inert — the fix must not change that.
+        #[test]
+        fn innerhtml_script_stays_inert() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    r#"document.body.innerHTML =
+                           '<script>globalThis.__b571_ih = true;</scr' + 'ipt>';
+                       globalThis.__b571_ih === undefined"#,
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// An external `<script src>` inserted by script is force-async: the
+        /// insertion returns immediately and nothing is fetched inside it.
+        #[test]
+        fn dynamic_external_script_does_not_execute_synchronously() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    r#"var s = document.createElement('script');
+                       s.src = 'missing.js';
+                       s.textContent = 'globalThis.__b571_ext = true;';
+                       document.body.appendChild(s);
+                       globalThis.__b571_ext === undefined"#,
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// An inline `<script type=module>` is deferred one task, then routed
+        /// through the ES module map (`_lumen_esm_register_inline` + `import()`),
+        /// and fires `load` when it has evaluated.
+        #[test]
+        fn dynamic_inline_module_script_runs_and_fires_load() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    r#"globalThis.__b571_mod_load = false;
+                       var s = document.createElement('script');
+                       s.type = 'module';
+                       s.onload = function() { globalThis.__b571_mod_load = true; };
+                       s.textContent = 'globalThis.__b571_mod = true;';
+                       document.body.appendChild(s);
+                       var deferred = globalThis.__b571_mod === undefined;
+                       _lumen_tick_timers();
+                       deferred && globalThis.__b571_mod === true"#,
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+            let loaded = rt.eval("globalThis.__b571_mod_load === true").unwrap();
+            assert_eq!(loaded, lumen_core::JsValue::Bool(true));
+        }
+
+        /// A throwing inline script is reported, not propagated into the DOM
+        /// call that inserted it.
+        #[test]
+        fn dynamic_script_error_does_not_escape_append() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    r#"var s = document.createElement('script');
+                       s.textContent = 'throw new Error(3);';
+                       document.body.appendChild(s);
+                       true"#,
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
         #[test]
         fn window_dcl_listener() {
             let rt = v8_runtime_with_dom(make_doc());
@@ -30844,6 +31252,49 @@ mod tests {
             )
             .unwrap();
             rt
+        }
+
+        // ── BUG-571: external `<script src>` inserted by page script ───────────
+
+        /// The chunk-loader shape every bundler emits: create a script, set
+        /// `src`, hook `onload`, append. The body must be fetched, executed in
+        /// global scope, and `load` fired — one task after the insertion.
+        #[test]
+        fn dynamic_external_script_executes_and_fires_load() {
+            let provider = Arc::new(FixedFetch { status: 200, body: "globalThis.__b571_ext = 7;" });
+            let rt = v8_runtime_with_dom_and_fetch(make_doc(), provider);
+            rt.eval(
+                r#"globalThis.__b571_ext_load = false;
+                   var s = document.createElement('script');
+                   s.src = 'chunk.js';
+                   s.onload = function() { globalThis.__b571_ext_load = true; };
+                   document.head.appendChild(s);
+                   _lumen_tick_timers();"#,
+            )
+            .unwrap();
+            let r = rt
+                .eval("globalThis.__b571_ext === 7 && globalThis.__b571_ext_load === true")
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// A failed fetch must fire `error` rather than leave the loader's
+        /// promise pending forever — the exact hang behind BUG-703.
+        #[test]
+        fn dynamic_external_script_fires_error_on_http_failure() {
+            let provider = Arc::new(FixedFetch { status: 404, body: "nope" });
+            let rt = v8_runtime_with_dom_and_fetch(make_doc(), provider);
+            rt.eval(
+                r#"globalThis.__b571_ext_err = false;
+                   var s = document.createElement('script');
+                   s.src = 'missing.js';
+                   s.addEventListener('error', function() { globalThis.__b571_ext_err = true; });
+                   document.head.appendChild(s);
+                   _lumen_tick_timers();"#,
+            )
+            .unwrap();
+            let r = rt.eval("globalThis.__b571_ext_err === true").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
         }
 
         #[test]
