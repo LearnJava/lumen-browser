@@ -105,6 +105,6 @@ not exist in headless mode are 'denied'; everything else is 'granted'». Спи�
   определяет поведение по умолчанию при появлении перечисления шрифтов.
 * [BUG-366](BUG-366-OPEN.md) — `navigator.credentials`: тот же класс дефекта
   (методы на экземпляре вместо прототипа, контейнер перезаписываем).
-* [BUG-361](BUG-361-OPEN.md) — соседний слой той же темы: `permissionsPolicy`
+* [BUG-361](BUG-361-FIXED.md) — соседний слой той же темы: `permissionsPolicy`
   не сообщает список поддерживаемых фич.
 * [BUG-379](BUG-379-OPEN.md) — собственные свойства глобала как отпечаток.

@@ -28,6 +28,23 @@ const PERMISSIONS_POLICY_SHIM: &str = r#"
   // Maps feature name → allowlist: '*' | 'none' | string[]
   var _ppStore = {};
 
+  // Feature names actually supported by this engine (BUG-361: §8.2 requires
+  // features() to report "the set of feature names supported by the user
+  // agent", not the names declared in the document's policy). Conservative
+  // allowlist — only features with a real, non-stub native binding belong
+  // here. Deliberately excludes: encrypted-media (no EME), sensors
+  // (accelerometer/ambient-light/gyroscope/magnetometer — not implemented),
+  // camera/font-access/payment/midi/usb/hid/bluetooth/serial/xr (Phase 0
+  // stubs that always reject NotSupportedError) — advertising those would be
+  // the BUG-354 false-positive mirror image of this bug.
+  var _ppSupported = [
+    'fullscreen',
+    'geolocation',
+    'microphone',
+    'screen-wake-lock',
+    'display-capture',
+  ];
+
   // ── FeaturePolicy interface (W3C Permissions Policy §8) ─────────────────
   // Exposed as document.featurePolicy (and document.permissionsPolicy alias).
   function FeaturePolicy() {}
@@ -43,14 +60,21 @@ const PERMISSIONS_POLICY_SHIM: &str = r#"
     return entry.indexOf(target) !== -1 || entry.indexOf('*') !== -1;
   };
 
-  // Returns all feature names present in the active policy.
+  // Returns the set of feature names supported by the user agent, unioned
+  // with any names declared in the active policy (W3C Permissions Policy
+  // §8.2) — not just the names the document happens to mention.
   FeaturePolicy.prototype.features = function() {
-    return Object.keys(_ppStore);
+    var names = _ppSupported.slice();
+    var declared = Object.keys(_ppStore);
+    for (var i = 0; i < declared.length; i++) {
+      if (names.indexOf(declared[i]) === -1) { names.push(declared[i]); }
+    }
+    return names;
   };
 
   // Returns feature names the current origin ('self') is allowed to use.
   FeaturePolicy.prototype.allowedFeatures = function() {
-    return Object.keys(_ppStore).filter(function(f) {
+    return FeaturePolicy.prototype.features.call(this).filter(function(f) {
       return FeaturePolicy.prototype.allowsFeature.call(this, f, 'self');
     }, this);
   };
@@ -183,6 +207,74 @@ mod tests {
                     "_lumen_set_permissions_policy('geolocation=(), usb=(self)'); \
                      var f = document.featurePolicy.features(); \
                      f.indexOf('geolocation') !== -1 && f.indexOf('usb') !== -1",
+                )
+                .unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
+    }
+
+    /// BUG-361: `features()` must advertise engine-supported feature names
+    /// even with no `Permissions-Policy` header at all (previously always []).
+    #[test]
+    fn features_advertises_supported_engine_features_without_header() {
+        with_pp_api(|rt| {
+            let ok = rt
+                .eval(
+                    "var f = document.featurePolicy.features(); \
+                     f.indexOf('fullscreen') !== -1 && \
+                     f.indexOf('geolocation') !== -1 && \
+                     f.indexOf('microphone') !== -1 && \
+                     f.indexOf('screen-wake-lock') !== -1 && \
+                     f.indexOf('display-capture') !== -1",
+                )
+                .unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
+    }
+
+    /// BUG-361: unimplemented features (no real native binding) must never
+    /// be advertised as supported — the false-positive mirror of BUG-354.
+    #[test]
+    fn features_excludes_unimplemented_features() {
+        with_pp_api(|rt| {
+            let ok = rt
+                .eval(
+                    "var f = document.featurePolicy.features(); \
+                     f.indexOf('encrypted-media') === -1 && \
+                     f.indexOf('camera') === -1 && \
+                     f.indexOf('payment') === -1",
+                )
+                .unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
+    }
+
+    /// BUG-361: allowedFeatures() must be based on the engine's supported
+    /// set (default-allow), not just names the document's policy mentions.
+    #[test]
+    fn allowed_features_includes_supported_features_by_default() {
+        with_pp_api(|rt| {
+            let ok = rt
+                .eval(
+                    "var f = document.featurePolicy.allowedFeatures(); \
+                     f.indexOf('geolocation') !== -1 && f.indexOf('fullscreen') !== -1",
+                )
+                .unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
+    }
+
+    /// BUG-361: a policy entry disabling a supported feature must drop it
+    /// from allowedFeatures() while still keeping it in features().
+    #[test]
+    fn allowed_features_excludes_disabled_supported_feature() {
+        with_pp_api(|rt| {
+            let ok = rt
+                .eval(
+                    "_lumen_set_permissions_policy('geolocation=()'); \
+                     var f = document.featurePolicy.features(); \
+                     var af = document.featurePolicy.allowedFeatures(); \
+                     f.indexOf('geolocation') !== -1 && af.indexOf('geolocation') === -1",
                 )
                 .unwrap();
             assert_eq!(ok, JsValue::Bool(true));

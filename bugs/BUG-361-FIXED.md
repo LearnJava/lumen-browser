@@ -1,6 +1,6 @@
 # BUG-361 — `document.permissionsPolicy.features()` возвращает ключи объявленной политики вместо списка фич, поддерживаемых движком (на обычной странице — всегда `[]`)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-09
 **Компонент:** js (`crates/js/src/permissions_policy.rs:47-49` — `FeaturePolicy.prototype.features`; хранилище `_ppStore` заполняется только из HTTP-заголовка, `permissions_policy.rs:86+`)
 **Найден:** P2, WPT-VENDOR-encrypted-media (2026-07-28), `run_report.py --all --root encrypted-media --recursive`, тест `encrypted-media-supported-by-permissions-policy.tentative.html`
 
@@ -89,26 +89,47 @@ root cause:
 default-allow (`permissions_policy.rs:38`), так что ничего лишнего не
 разрешается.
 
-## Возможный фикс (не реализован в этой сессии)
+## Фикс (P3, 2026-08-09)
 
-1. Развести две таблицы. Добавить в шим статический список поддерживаемых
-   движком фич — `_ppSupported` — и вернуть из `features()` именно его
-   (объединённым с ключами `_ppStore`, как того требует §8.2: реестр UA
-   плюс всё, что реально объявлено).
-2. Наполнить `_ppSupported` честно, а не всем реестром: перечислять только те
-   имена, для которых у Lumen есть хоть какая-то реализация или осмысленный
-   отказ. Иначе получится BUG-354 наоборот — реклама несуществующего.
-   Первые кандидаты — то, что в движке есть: `fullscreen`, `geolocation`
-   (сверить с `CAPABILITIES.md` перед фиксацией списка).
-3. `encrypted-media` в этот список **не** класть: EME в Lumen не реализован
-   вовсе (проба: `navigator.requestMediaKeySystemAccess`, `MediaKeys`,
-   `MediaSource` — все `undefined`), так что тест
-   `encrypted-media-supported-by-permissions-policy.tentative.html` и после
-   фикса обязан падать — и это будет правильный, честный провал.
-4. Заодно проверить `allowedFeatures()` (`permissions_policy.rs:52`): он
-   фильтрует `Object.keys(_ppStore)` и потому на странице без заголовка тоже
-   вернёт `[]`. По спеке это «фичи, разрешённые текущему origin» — при
-   default-allow там должен оказаться весь `_ppSupported`.
+Реализован ровно план из предыдущей сессии, п.1-2-3-4:
 
-Не чинилось в этой сессии — P2-wpt вендорит и обследует, кодовые фиксы — полоса
-P3 (`CLAUDE.md`, developer assignments).
+1. Добавлена отдельная константа `_ppSupported` — статический список имён
+   фич, для которых у Lumen есть настоящая нативная реализация (не
+   Phase-0-заглушка, всегда бросающая `NotSupportedError`). `features()`
+   теперь возвращает объединение `_ppSupported` и `Object.keys(_ppStore)`
+   (§8.2: реестр UA плюс всё, что реально объявлено в политике документа) —
+   `permissions_policy.rs:47-56`.
+2. Список `_ppSupported` собран консервативно, сверкой с реальным кодом
+   (не с `CAPABILITIES.md` — там формулировки по подсистемам, не по именам
+   реестра Permissions Policy): `fullscreen` (`dom.rs::requestFullscreen`,
+   полная реализация с событиями), `geolocation` (`geolocation.rs` —
+   настоящий API, по умолчанию `PERMISSION_DENIED`, как в браузере без
+   выданного разрешения — это не заглушка, а честное поведение),
+   `microphone` (`media_capture.rs` — реальный захват аудио через `cpal`),
+   `screen-wake-lock` (`wake_lock.rs` — реальная блокировка сна),
+   `display-capture` (`screen_capture.rs` — реальный захват экрана).
+   Явно **не** включены: `camera` (только видео остаётся
+   `NotSupportedError`, см. `media_devices.rs:203` — аудио отдельно от
+   видео), `payment`/`midi`/`usb`/`hid`/`xr-spatial-tracking` (все
+   Phase-0-заглушки, `throw ... NotSupportedError` безусловно) и
+   сенсоры (`accelerometer`/`ambient-light-sensor`/`gyroscope`/
+   `magnetometer` — не реализованы вовсе).
+3. `encrypted-media` в список не включён — EME в Lumen действительно не
+   реализован, `encrypted-media-supported-by-permissions-policy.tentative.html`
+   и после фикса корректно проваливается (честный, ожидаемый результат).
+4. `allowedFeatures()` переписан на `features().filter(allowsFeature)`
+   вместо `Object.keys(_ppStore).filter(...)` — на странице без заголовка
+   политики теперь возвращает весь `_ppSupported` (default-allow), а не `[]`
+   (`permissions_policy.rs:58-63`).
+
+6 новых юнит-тестов в `permissions_policy.rs` (без заголовка политики —
+`_ppSupported` присутствует и не содержит `encrypted-media`/`camera`/
+`payment`; `allowedFeatures()` по умолчанию включает поддерживаемые фичи;
+явный запрет через политику убирает фичу из `allowedFeatures()`, но не из
+`features()`). `cargo test -p lumen-js --features v8-backend
+permissions_policy` — 10/10 OK. `cargo clippy -p lumen-js --all-targets
+--features v8-backend -- -D warnings` — чисто.
+
+Вне скоупа: `getAllowlistForFeature()` не трогался (уже корректен по
+спеке); реальное серверное принуждение политики (enforcement) остаётся
+Phase 1 задачей, как и было отмечено в шапке файла до фикса.
