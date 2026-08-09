@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-09",
  "counts": {
-  "open": 310,
+  "open": 311,
   "fixed": 347,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 657,
+ "total_bugs": 658,
  "phases": [
   {
    "id": "P0",
@@ -3880,9 +3880,12 @@
       {
        "id": "WPT-VENDOR-uievents",
        "title": "WPT: вендорить + прогнать категорию `uievents`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root uievents --recursive`, ~6:41, 146 файлов, 70 отобранных id) — **33/70 harness OK, 17/127 сабтестов**. Заведён [BUG-691](bugs/BUG-691-OPEN.md): `window.TextEvent` (легаси DOM3 Events) отсутствует вовсе, `UIEvent.prototype.pseudoTarget` не определён — по одному файлу на дефект, 8 сабтестов суммарно. Второстепенный сигнал — реконфирмация уже открытых [BUG-574](bugs/BUG-574-OPEN.md) (`Node.contains`, 34 сабтеста), [BUG-622](bugs/BUG-622-OPEN.md) (`document.defaultView`, 52 сабтеста), [BUG-590](bugs/BUG-590-OPEN.md) (`document.createEvent`, 18 сабтестов), [BUG-384](bugs/BUG-384-OPEN.md) (именованный доступ `window.<id>`, 2 сабтеста). Один новый номер бага",
+       "bugs": [
+        "BUG-691"
+       ]
       },
       {
        "id": "WPT-VENDOR-upgrade-insecure-requests",
@@ -9374,6 +9377,13 @@
    "status": "open",
    "title": "`NavigatorUAData` is a plain `function NavigatorUAData() {}` with no `new.target` guard and no `[Symbol.toStringTag]` — `new NavigatorUAData()` succeeds from pa…",
    "component": "js (`crates/js/src/ua_client_hints.rs` — `UA_CLIENT_HINTS_SHIM`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-691": {
+   "status": "open",
+   "title": "Two independent, previously unfiled defects surfaced by `uievents/textInput/api.html` and `uievents/ui_event_pseudo_target.html`: (1) `window.TextEvent` (legacy…",
+   "component": "js (`crates/js/src/dom.rs`, `WEB_API_SHIM` — event-class block starting `dom.rs:432`: `UIEvent`/`MouseEvent`/`KeyboardEvent`/`InputEvent`/`FocusEvent`/`WheelEvent`/`PointerEvent`/`AnimationEvent`/… has no `TextEvent` sibling and no `pseudoTarget` member on `UIEvent.prototype`)",
    "date": null,
    "debtor": false
   }
