@@ -87,22 +87,43 @@ So the two categories whose entry types are mis-advertised (`element` from
 run, and both point at the same literal. `soft-navigation`/`longtask` are still
 unvendored — expect the same result there.
 
-## Возможный фикс (не реализован в этой сессии)
+## Фикс (P3, 2026-08-09)
 
-Two independent halves, both small:
+Both halves from the "possible fix" section implemented, `crates/js/src/dom.rs`
+(`WEB_API_SHIM`, `PerformanceObserver`):
 
-- Trim the literal to the implemented seven (`largest-contentful-paint`,
-  `layout-shift`, `mark`, `measure`, `navigation`, `paint`, `resource`), and
-  add each back in the same commit that implements its entry type. Better still,
-  build the array from the same table `_lumen_deliver_perf_entry` dispatches on,
-  so the two cannot drift again.
-- Make `observe()` reject/no-op-with-warning consistently for a type not in that
-  list, so `supportedEntryTypes` and `observe()` agree by construction.
+- New `_PERF_SUPPORTED_ENTRY_TYPES` array — single source of truth for both
+  halves, so they cannot drift apart again — trimmed to the seven entry types
+  an entry constructor actually produces on the live document:
+  `largest-contentful-paint`, `layout-shift`, `mark`, `measure`, `navigation`,
+  `paint`, `resource`. The `supportedEntryTypes` getter now returns a copy of
+  this array instead of the old 12-element literal.
+- `observe()` gates admission against the same array per Performance Timeline
+  L2 §6.2.2: the single-type form (`observe({type})`) aborts with a
+  `console.warn` and no-op when `type` is unsupported; the multi-type form
+  (`observe({entryTypes})`) drops each unsupported entry individually (same
+  warning) instead of subscribing to it. Delivery to `getEntriesByType()`/the
+  entry buffer is untouched — `_lumen_deliver_perf_entry` (a generic Rust→JS
+  hook, not itself part of this bug) can still push any `entryType` string
+  into the buffer; only the *observer* notification path is now gated.
 
-Note this is a *narrowing* change: it makes `PerformanceElementTiming`-gated
-code take its fallback path instead of a dead path. Implementing Element Timing
-itself (`PerformanceElementTiming`, the `elementtiming` attribute, image/text
-paint timestamps) is a separate, much larger piece of work — not this bug.
+`element`/`event`/`first-input`/`longtask` were confirmed to have zero
+producing code anywhere in `crates/js/` (no `PerformanceElementTiming`/
+`PerformanceEventTiming`/`PerformanceLongTaskTiming` constructor exists).
+`soft-navigation` was excluded too: `PerformanceSoftNavigationEntry` exists as
+a class (`crates/js/src/soft_navigation.rs`) but its delivery hook
+`_lumen_deliver_soft_nav` has no caller anywhere in the engine outside unit
+tests — tracked separately as [BUG-678](BUG-678-OPEN.md), not fixed here.
 
-Not fixed in this session — P2-wpt vendors and surveys, code fixes are P3's lane
-(`CLAUDE.md` developer assignments).
+One existing unit test (`deliver_perf_entry_notifies_observer`) exercised the
+generic `_lumen_deliver_perf_entry` hook through `observe({entryTypes:
+['longtask']})`; switched to `'navigation'` (a genuinely supported type) so it
+still exercises the same delivery path without asserting on a type `observe()`
+now correctly rejects. `cargo test -p lumen-js --features v8-backend --lib`
+2506/2506 green, `cargo clippy -p lumen-js --features v8-backend -- -D
+warnings` clean.
+
+This is a narrowing change: `PerformanceElementTiming`-gated feature-detection
+code now correctly takes its fallback branch instead of a dead "supported"
+branch. Implementing Element Timing/Event Timing/Long Tasks/Soft Navigation
+themselves is out of scope — separate, larger pieces of work.

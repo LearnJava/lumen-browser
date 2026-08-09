@@ -8343,6 +8343,16 @@ function _perf_entries_by_name(name, type) {
 // disconnect() → stops observing. Callback: fn(list, observer).
 var _perf_observers = [];
 
+// Single source of truth for supportedEntryTypes AND observe()'s admission
+// check (BUG-354): only types an entry constructor actually produces belong
+// here, so the two cannot drift apart again. 'element'/'event'/'first-input'/
+// 'longtask'/'soft-navigation' are intentionally excluded — no PerformanceEntry
+// of those types is ever produced on the live document (soft-navigation has a
+// PerformanceSoftNavigationEntry class but nothing calls its delivery hook
+// outside unit tests).
+var _PERF_SUPPORTED_ENTRY_TYPES = ['largest-contentful-paint', 'layout-shift',
+    'mark', 'measure', 'navigation', 'paint', 'resource'];
+
 function PerformanceObserver(callback) {
     if (typeof callback !== 'function') throw new TypeError('PerformanceObserver: callback must be a function');
     this._cb      = callback;
@@ -8352,9 +8362,7 @@ function PerformanceObserver(callback) {
 // Performance Timeline L2 §6.2.2: supportedEntryTypes static accessor.
 Object.defineProperty(PerformanceObserver, 'supportedEntryTypes', {
     get: function() {
-        return ['element', 'event', 'first-input', 'largest-contentful-paint',
-                'layout-shift', 'longtask', 'mark', 'measure', 'navigation',
-                'paint', 'resource', 'soft-navigation'];
+        return _PERF_SUPPORTED_ENTRY_TYPES.slice();
     },
     configurable: true,
 });
@@ -8363,12 +8371,30 @@ PerformanceObserver.prototype.observe = function(opts) {
     var buffered;
     if (opts && typeof opts.type === 'string') {
         // §6.2.2 single-type form: observe({type, buffered})
+        // Per spec step 6: an unsupported single type aborts observe() entirely.
+        if (_PERF_SUPPORTED_ENTRY_TYPES.indexOf(opts.type) === -1) {
+            if (typeof console !== 'undefined' && console.warn) {
+                console.warn('PerformanceObserver: unsupported entryType ' + opts.type);
+            }
+            return;
+        }
         types   = [opts.type];
         buffered = !!(opts.buffered);
     } else {
         // §6.2.2 multi-type form: observe({entryTypes[, buffered]})
         // Spec disallows buffered here, but we accept it for compatibility.
-        types   = (opts && Array.isArray(opts.entryTypes)) ? opts.entryTypes : [];
+        // Unsupported types are dropped individually, not fatal to the call.
+        var requested = (opts && Array.isArray(opts.entryTypes)) ? opts.entryTypes : [];
+        types = [];
+        for (var r = 0; r < requested.length; r++) {
+            if (_PERF_SUPPORTED_ENTRY_TYPES.indexOf(requested[r]) === -1) {
+                if (typeof console !== 'undefined' && console.warn) {
+                    console.warn('PerformanceObserver: unsupported entryType ' + requested[r]);
+                }
+                continue;
+            }
+            types.push(requested[r]);
+        }
         buffered = !!(opts && opts.buffered);
     }
     // Merge into existing subscribed types so repeated observe() calls accumulate.
@@ -8500,8 +8526,12 @@ function _lumen_record_resource_timing(url, initiator, start_ms, duration_ms) {
 }
 
 // Generic entry delivery — called by Rust shell for any PerformanceEntry type.
-// entry_type: W3C entryType string (e.g. 'longtask', 'element', 'event').
+// entry_type: W3C entryType string (e.g. 'navigation', 'resource').
 // detail_json: optional JSON string; its properties are merged into the entry.
+// The entry always lands in performance's entry buffer regardless of entry_type
+// (getEntriesByType() sees it), but PerformanceObserver.observe() only forwards
+// types listed in _PERF_SUPPORTED_ENTRY_TYPES (BUG-354) — delivering a type
+// outside that list populates the buffer silently without notifying observers.
 function _lumen_deliver_perf_entry(entry_type, name, start_ms, duration_ms, detail_json) {
     var entry = {
         entryType: String(entry_type),
@@ -14383,9 +14413,9 @@ mod tests {
                 r#"
                 var got = [];
                 var po = new PerformanceObserver(function(list) { got = list.getEntries(); });
-                po.observe({entryTypes: ['longtask']});
-                _lumen_deliver_perf_entry('longtask', 'self', 100.0, 60.0, null);
-                got.length === 1 && got[0].entryType === 'longtask'
+                po.observe({entryTypes: ['navigation']});
+                _lumen_deliver_perf_entry('navigation', 'self', 100.0, 60.0, null);
+                got.length === 1 && got[0].entryType === 'navigation'
                 "#
             ).unwrap();
             assert_eq!(r, lumen_core::JsValue::Bool(true));
