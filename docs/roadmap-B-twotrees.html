@@ -76,11 +76,11 @@
  "generated": "2026-08-09",
  "counts": {
   "open": 310,
-  "fixed": 348,
+  "fixed": 349,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 658,
+ "total_bugs": 659,
  "phases": [
   {
    "id": "P0",
@@ -3890,9 +3890,12 @@
       {
        "id": "WPT-VENDOR-upgrade-insecure-requests",
        "title": "WPT: вендорить + прогнать категорию `upgrade-insecure-requests`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root upgrade-insecure-requests --recursive --processes=4`, ~64 мин, 254 файла, 197 отобранных id) — **0/197 harness OK**, все TIMEOUT, 100% реконфирмация уже задокументированного HTTPS-порт-гэпа (`UnknownIssuer`, `docs/wpt-status.md:26`) — каждый файл категории сам `.https.html`. Заведён [BUG-692](bugs/BUG-692-OPEN.md) прямой пробой источника (не прогоном): CSP-директива `upgrade-insecure-requests` парсится в `CspPolicy::upgrade_insecure_requests`, но нигде не читается — ни один `http://`-подресурс никогда не переписывается в `https://`, отдельный от неё mixed-content классификатор только блокирует, не апгрейдит. Один новый номер бага",
+       "bugs": [
+        "BUG-692"
+       ]
       },
       {
        "id": "WPT-VENDOR-url",
@@ -7071,10 +7074,10 @@
    "debtor": false
   },
   "BUG-357": {
-   "status": "open",
-   "title": "`TextDecoder` — заглушка «только UTF-8», label обрабатывается как непрозрачная строка. Шесть отклонений от Encoding Standard: (1) нет таблицы label→encoding — `…",
-   "component": "js (`crates/js/src/dom.rs:9189-9291` — чисто-JS пара `TextEncoder`/`TextDecoder`; `dom.rs:8734-8752` `TextDecoderStream`, оборачивающий тот же объект)",
-   "date": null,
+   "status": "fixed",
+   "title": "`TextDecoder` была заглушкой «только UTF-8», label обрабатывался как непрозрачная строка. Шесть отклонений от Encoding Standard: (1) нет таблицы label→encoding;…",
+   "component": "js (`crates/js/src/dom.rs` — `TextEncoder`/`TextDecoder`; `crates/js/src/v8_runtime.rs` native bridge; `crates/engine/encoding` decoder)",
+   "date": "2026-08-09",
    "debtor": false
   },
   "BUG-358": {
@@ -9384,6 +9387,13 @@
    "status": "open",
    "title": "Two independent, previously unfiled defects surfaced by `uievents/textInput/api.html` and `uievents/ui_event_pseudo_target.html`: (1) `window.TextEvent` (legacy…",
    "component": "js (`crates/js/src/dom.rs`, `WEB_API_SHIM` — event-class block starting `dom.rs:432`: `UIEvent`/`MouseEvent`/`KeyboardEvent`/`InputEvent`/`FocusEvent`/`WheelEvent`/`PointerEvent`/`AnimationEvent`/… has no `TextEvent` sibling and no `pseudoTarget` member on `UIEvent.prototype`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-692": {
+   "status": "open",
+   "title": "CSP `upgrade-insecure-requests` directive is parsed into `CspPolicy::upgrade_insecure_requests` (`csp.rs:188-190`, unit-tested) but the field is read nowhere el…",
+   "component": "network (`crates/network/src/csp.rs` — `CspPolicy::upgrade_insecure_requests`; gap spans `HttpClient::fetch*` in `lib.rs`, `mixed_content.rs`, `crates/storage/src/csp_policies.rs`)",
    "date": null,
    "debtor": false
   }
