@@ -1,8 +1,9 @@
 # BUG-703: `tbank.ru` не завершает гидратацию React — главная страница остаётся пустой (белой), DOM застревает на SSR-скелетоне
 
-**Статус:** OPEN — разблокирован 2026-08-09 закрытием
-[BUG-571](BUG-571-FIXED.md); три движковых дефекта на пути исправлены
-(см. «Что уже исправлено»); остаток готов к дальнейшей диагностике
+**Статус:** OPEN — четыре движковых дефекта на пути исправлены
+(`document.head`, `element.dataset`, [BUG-571](BUG-571-FIXED.md),
+[BUG-721](BUG-721-FIXED.md), см. «Что уже исправлено»); рендер главной
+по-прежнему не начинается, остаток описан ниже
 **Компонент:** js (шим `crates/js/src/dom.rs`), shell (исполнение динамически
 вставленных скриптов)
 **Найден:** живая проверка `https://www.tbank.ru/` (запрос пользователя — открыть браузер, зайти в личный кабинет), 2026-08-09
@@ -66,6 +67,79 @@ React-узлов (эталонный прогон через CDP), значит 
 
 Эффект: скриптов в DOM 43 → 66, оба `TypeError` ушли, страница дошла до
 загрузки чанков. Рендера всё ещё нет.
+
+3. **`fetch()` отдавал тело чужого ответа** — [BUG-721](BUG-721-FIXED.md),
+   найден и исправлен в этом же разборе (P3, 2026-08-09). Любое тело до
+   64 КиБ читалось из единственного глобального слота `FetchCache`, а не из
+   своего: eager pull в конструкторе `ReadableStream` вычерпывал тело в
+   очередь потока и освобождал персональный слот ещё до резолва промиса,
+   после чего `_consumeBody` сваливался в legacy-ветку. На этой странице 20+
+   URL получали один и тот же 1447-байтовый JSON-конфиг cookie-consent, в
+   том числе webpack-чанк `tramvai-web-performance-rum` — он падал с
+   `SyntaxError`, модули не регистрировались, и webpack бросал
+   `ChunkLoadError: Loading chunk tramvai-web-performance-rum failed.
+   (missing: null)` внутри `executeCommand` Tramvai. Эффект: 19
+   `Uncaught SyntaxError` → 0, `ChunkLoadError` ушёл, каждый скрипт получает
+   своё тело. **Рендер главной этим не чинится** — React-узлов по-прежнему
+   10 (только баннер cookie-consent), `.application` не получает
+   `__reactContainer$`, то есть за BUG-721 стоит ещё минимум один дефект.
+
+## Как найдена цепочка (техника, работает и дальше)
+
+Приложение молчит по всем обычным каналам, но **шлёт собственную телеметрию
+об ошибках**. Перехват исходящих тел (`fetch`/`XMLHttpRequest.send`/
+`navigator.sendBeacon` из `LUMEN_DIAG_PRESCRIPT`) выдал точный диагноз одним
+прогоном: POST на `/api/front/pwaplatform/log/collect` с
+`event: init-failed` и полным `ChunkLoadError`-стеком. Это дешевле и точнее,
+чем бисекция бандла (сравнить с раундами 1-4 [BUG-702](BUG-702-FIXED.md)).
+Дальше — сужение по слоям: обёртка `globalThis.eval` показала, какой текст
+не парсится; обёртка `resp.text` — что тело не соответствует URL; обёртка
+`Response._fromFetchCache` — что `_stream_handle === 0` при непустом
+`_lumen_fetch_body_length()`, то есть где именно теряется персональный слот.
+
+Оба хука временные и в дерево не влиты (P3 — только багфиксы). Восстановить
+их — две правки в `crates/js/src/v8_runtime.rs`: в конце `install_dom`, после
+последнего `install_*_v8`, добавить чтение `LUMEN_DIAG_PRESCRIPT` и
+`self.eval(&std::fs::read_to_string(path))` (шим и все модули к этому моменту
+уже стоят, скрипты страницы — ещё нет); в `v8_thread_main`, сразу после
+`v8::Isolate::new`, — `isolate.set_promise_reject_callback(cb)` с
+`unsafe extern "C" fn(v8::PromiseRejectMessage)`, внутри
+`v8::callback_scope!(unsafe let scope, &message)` и печать
+`message.get_event()` / `get_value()` / поля `stack`. Готовые пробники
+(`probe703.py` + prescript'ы под каждый слой) лежали в `.tmp/`.
+
+## Что известно об остатке (после BUG-721)
+
+- Бандлы приложения выполняются: глобал `wsp` (webpack chunk registry
+  `platform.js`) на месте, чанки `react`/`pfphomeMain`/
+  `tramvai-web-performance-rum` зарегистрированы, все микроблоки
+  `boxy/mm/*.client.js` и их CSS загружены.
+- Приложение доходит до своих действий: POST'ы `metrics:perf`,
+  `personalized-landing-metrics` (`dco-applied-info`), `certs.certInstalled`,
+  `events.pageLoad` уходят.
+- `__TRAMVAI_STATE__` цел и парсится (`JSON.parse` ок, 32 стора),
+  `__TRAMVAI_HTML_READY__` выставлен, `__TRAMVAI_HTML_READY_RESOLVE__` вызван.
+- `DOMContentLoaded`/`readystatechange`/`load`/`pageshow`/`rAF`/
+  `requestIdleCallback`/`setTimeout` — все срабатывают.
+- Необработанных отклонений промисов у приложения нет: остаются только
+  сетевые (`eventea-beer/event`, `mddc.tbank.ru` — TLS
+  [BUG-657](BUG-657-OPEN.md), `twa/ttm/…/index.js` — 404).
+- Диф сетевых логов Lumen (68 URL) против headless Edge (130 URL): Lumen ни
+  разу не запрашивает `api/common/v1/session`, `session_status`,
+  `id.tbank.ru/*`, `cobrowsing.tbank.ru/*`, `fingerprint.t-static.ru/*` и ни
+  одной картинки контента (`cdn.tbank.ru/static/pages/files/*`,
+  `imgproxy.cdn-tinkoff.ru/*`) — то есть расхождение наступает до сессионного
+  бутстрапа и до рендера.
+- Тупики этого раунда, повторять не нужно: обёртка глобального `logger`
+  ничего не ловит (модули берут логгер из DI, не из глобала); обёртки
+  `Node.prototype.appendChild`/`insertBefore` не срабатывают вовсе (элементы
+  шима — обычные объекты с собственными методами, не через прототип), так что
+  инструментировать вставку узлов через прототипы бессмысленно.
+- Мелочь на будущее: в событии `load`, которое `_lumen_script_fire` шлёт
+  динамическому `<script>`, webpack читает `event.target.src` и получает
+  `null` (в сообщении `ChunkLoadError` было `(missing: null)` вместо URL) —
+  `event.target` шим ставит, но `.src` на обёртке элемента не отдаётся.
+  Отдельно не заводилось.
 
 ## Бывший блокер — снят 2026-08-09
 

@@ -29640,6 +29640,33 @@ mod tests {
         }
 
         #[test]
+        fn fetch_cache_response_reads_own_stream_queue_not_global_slot() {
+            // BUG-703: a body up to _RS_CHUNK is drained into the stream's own
+            // queue by the eager pull in the ReadableStream constructor, which
+            // frees the per-response slot (`_stream_handle` → 0). `_consumeBody`
+            // must then read that queue; falling through to the process-wide
+            // FetchCache slot handed the response another request's body.
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var r = Object.create(Response.prototype); \
+                 r._from_fetch_cache = true; \
+                 r._body = null; \
+                 r._stream_handle = 0; \
+                 r.bodyUsed = false; \
+                 r.body = new ReadableStream({ start: function(c) { \
+                     c.enqueue(new TextEncoder().encode('chunk-a')); \
+                     c.enqueue(new TextEncoder().encode('chunk-b')); \
+                     c.close(); \
+                 } }); \
+                 var got = null; \
+                 r.text().then(function(t) { got = t; });",
+            )
+            .unwrap();
+            let r = rt.eval("got === 'chunk-achunk-b'").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
         fn stream_slot_alloc_returns_zero_when_no_cache() {
             // _lumen_stream_alloc returns 0 when FetchCache is empty (no prior fetch).
             let rt = v8_runtime_with_dom(make_doc());

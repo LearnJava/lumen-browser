@@ -58,11 +58,11 @@
  "generated": "2026-08-09",
  "counts": {
   "open": 320,
-  "fixed": 365,
+  "fixed": 366,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 685,
+ "total_bugs": 686,
  "phases": [
   {
    "id": "P0",
@@ -9571,6 +9571,13 @@
    "component": "js (`crates/js/src/web_midi.rs` — `WEB_MIDI_SHIM`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-721": {
+   "status": "fixed",
+   "title": "`fetch()` отдавал тело **чужого** ответа для любого тела до 64 КиБ: `_fromFetchCache` копирует тело в персональный слот, но eager pull в конструкторе `ReadableS…",
+   "component": "js (`crates/js/src/dom.rs` — `Response._fromFetchCache`, `Response.prototype._consumeBody`)",
+   "date": "2026-08-09",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -9927,6 +9934,9 @@
   ],
   "js (`crates/js/src/dom.rs` — `PerformanceObserver`/`_perf_entries` shim, ~line 8409-8460)": [
    "BUG-673"
+  ],
+  "js (`crates/js/src/dom.rs` — `Response._fromFetchCache`, `Response.prototype._consumeBody`)": [
+   "BUG-721"
   ],
   "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`: `queueMicrotask`, конструктор `PromiseRejectionEvent`)": [
    "BUG-702"
