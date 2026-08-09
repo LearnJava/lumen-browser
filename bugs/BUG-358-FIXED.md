@@ -1,6 +1,6 @@
 # BUG-358 — the live global `document` exposes none of the document-metadata IDL attributes (`characterSet`/`charset`/`inputEncoding`/`compatMode`/`contentType`/`URL`/`documentURI`/`location`)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-09
 **Компонент:** js (`crates/js/src/dom.rs:6989+` — the hand-written `var document = {…}` object literal that backs the live global document; contrast `crates/js/src/dom.rs:4728-4769` `_lumen_build_detached_document`, which *does* define them)
 **Найден:** P2, WPT-VENDOR-encoding-detection (2026-07-27), `run_report.py --all --root encoding-detection --recursive`
 
@@ -111,3 +111,75 @@ Outside WPT the blast radius is much larger than encoding detection:
 
 Not fixed in this session — P2-wpt vendors and surveys, code fixes are P3's lane
 (`CLAUDE.md` developer assignments).
+
+## Фикс (P3, 2026-08-09)
+
+Implemented items 1-3 of the possible fix (the whole live-document gap); left
+the `encoding-detection` category's remaining WPT gap (20 of 22 tested
+encodings undecodable) as the pre-existing scope limit of `lumen-encoding`
+noted below, not something this bug's fix owns closing.
+
+1. **`URL`/`documentURI`/`location` — no native needed.** Added three getters
+   to the live `document` literal (`dom.rs:4221+`) reading the module-level
+   `_lumen_loc_href`/`location` that `window.location` already builds
+   (`dom.rs:4672-4702`) — same values, just missing the `document.*` alias.
+   `document.location === window.location` holds (same object reference).
+2. **`compatMode` — no new plumbing needed either.** The HTML parser's tree
+   builder already computes `lumen_dom::DocumentMode` from the DOCTYPE (or its
+   absence) and stores it on `Document` (`crates/engine/html-parser/src/tree_builder.rs`,
+   `Document::mode()`/`set_mode()` in `crates/engine/dom/src/lib.rs`) — nothing
+   in `crates/js` ever read it. Added `_lumen_get_document_compat_mode`
+   (`v8_runtime.rs`), mapping `Quirks` → `"BackCompat"`,
+   `NoQuirks`/`LimitedQuirks` → `"CSS1Compat"`.
+3. **`characterSet`/`charset`/`inputEncoding`** (all three are HTML LS legacy
+   aliases of one value): `lumen_encoding::detect()` was already computing the
+   right answer in `parse_and_layout` (`crates/shell/src/main.rs`) but the
+   result was a local variable, discarded after feeding `decode()` — never
+   attached to `Document`. Added `Document::character_set`/`set_character_set`
+   (new serialized field — a decode-time fact, not runtime UI state, so it
+   must survive bfcache restore like the HTML it describes) and stamped it
+   right after `detect()` runs. Exposed via `_lumen_get_document_character_set`.
+   **Casing gotcha:** `Encoding::name()` (used by `TextDecoder.encoding`, BUG-357)
+   always lowercases per Encoding Standard §4.1 — but `document.characterSet`
+   wants the table's actual mixed case (`"UTF-8"`, `"IBM866"`, but
+   `"windows-1251"` lowercase-w). Reusing `name()` would have failed WPT's own
+   `assert_equals(document.characterSet, "IBM866", …)`. Added a second method,
+   `Encoding::canonical_name()`, instead of lowercasing/uppercasing `name()`'s
+   output in JS (the casing isn't a uniform transform of the lowercase form).
+4. **`contentType`**: reused the `content_type: Option<&str>` hint
+   `parse_and_layout` already receives (fed to `detect()` for its
+   `charset=`-in-header sniff step) — stamped onto the same new `Document`
+   field the same way, split at `;` to drop any `charset=` parameter. **Not a
+   full fix of the underlying gap**: `RawPage.content_type` is hardcoded
+   `Some("text/html")` at every construction site in `PageSource::load_bytes`
+   (`crates/shell/src/main.rs`) — none of them extract the real HTTP
+   `Content-Type` response header even though `resp_headers` is already in
+   scope there (used today for COOP/COEP and `Cache-Control`). Real per-page
+   MIME sniffing (XML docs served as `application/xhtml+xml`, JSON, etc.)
+   needs that header threaded through separately — left as a natural,
+   narrowly-scoped follow-up, not part of this bug: `document.contentType`
+   now reads a real (if currently always-`"text/html"`) value instead of
+   `undefined`, which was the reported defect.
+
+**Scope not closed by this fix** (documented, not silently dropped): the
+`encoding-detection` WPT category itself stays mostly red even with
+`characterSet` now wired end-to-end — `lumen_encoding::Encoding` only
+implements 2 of the 22 encodings the category's 44 tests assert
+(windows-1251, IBM866; the category tests koi8-**u**, `lumen-encoding` has
+koi8-**r**). That is `lumen-encoding`'s pre-existing table-coverage limit
+(same shortfall as BUG-357), not a defect in the metadata wiring this bug
+fixes — re-running the category will show `characterSet` now populated and
+correctly cased for the 2 in-scope encodings, still `undefined`-shaped
+mismatches (wrong string, not `undefined`) for the other 20.
+
+**Verification:** `cargo test -p lumen-encoding -p lumen-dom -p lumen-js
+--features v8-backend` all green; `cargo clippy -p lumen-encoding -p
+lumen-dom -p lumen-js --features v8-backend -p lumen-shell --all-targets --
+-D warnings` clean. Live-window MCP probe (`.tmp/probe_bug358.html`, `<meta
+charset="windows-1251">`, and a no-DOCTYPE quirks-mode page) confirmed every
+field: `characterSet`/`charset`/`inputEncoding` = `"windows-1251"`,
+`compatMode` = `"CSS1Compat"` (doctype'd) / `"BackCompat"` (quirks),
+`contentType` = `"text/html"`, `URL`/`documentURI`/`location.href` = the
+real page URL, `document.location === window.location` = `true`. A separate
+`<meta charset="ibm866">` probe confirmed the canonical-name casing:
+`document.characterSet === "IBM866"`.

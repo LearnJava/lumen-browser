@@ -28,8 +28,8 @@ use lumen_core::ext::{AbortToken, JsSseEvent, JsWsEvent};
 use lumen_core::url::Url;
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::{
-    DomPosition, Namespace, NodeData, NodeId, QualName, Range as DomRange, Selection,
-    ShadowRootMode, node_child_count, node_length, node_text_content, range_text,
+    DocumentMode, DomPosition, Namespace, NodeData, NodeId, QualName, Range as DomRange,
+    Selection, ShadowRootMode, node_child_count, node_length, node_text_content, range_text,
 };
 use lumen_layout::{matches_selector, query_all, query_all_scoped, query_all_within};
 use std::collections::{HashMap, HashSet};
@@ -1354,6 +1354,29 @@ impl V8JsRuntime {
             if let Some(title_id) = find_element_by_tag(&doc, "title") {
                 set_text_content(&mut doc, title_id, &text);
             }
+        });
+        // BUG-358: document-metadata IDL attributes the live `document` never
+        // exposed — `characterSet`/`charset`/`inputEncoding` share one native
+        // (all three are spec-defined aliases of the same encoding name),
+        // `compatMode` reads the tree builder's quirks-mode flag directly off
+        // `Document` (no new plumbing — `set_mode` is already called from
+        // `lumen-html-parser`'s DOCTYPE handling), `contentType` reads the MIME
+        // type the shell stamped on `Document` in `parse_and_layout`.
+        let d = Arc::clone(&doc);
+        reg!("_lumen_get_document_character_set", move || -> String {
+            d.lock().unwrap().character_set().to_string()
+        });
+        let d = Arc::clone(&doc);
+        reg!("_lumen_get_document_content_type", move || -> String {
+            d.lock().unwrap().content_type().to_string()
+        });
+        let d = Arc::clone(&doc);
+        reg!("_lumen_get_document_compat_mode", move || -> String {
+            match d.lock().unwrap().mode() {
+                DocumentMode::Quirks => "BackCompat",
+                DocumentMode::NoQuirks | DocumentMode::LimitedQuirks => "CSS1Compat",
+            }
+            .to_string()
         });
     }
 

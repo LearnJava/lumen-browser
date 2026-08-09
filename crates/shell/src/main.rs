@@ -5184,10 +5184,20 @@ fn parse_and_layout(
     let preload_hints = lumen_html_parser::scan_preload_hints(&source);
     dispatch_preload_hints(&preload_hints, base, sink, preload_seen);
 
-    let doc = {
+    let mut doc = {
         let _s = lumen_core::trace::span("parse-html", "parse");
         lumen_html_parser::parse(&source)
     };
+    // BUG-358: stamp the document with what it was actually decoded as / served
+    // as, so `document.characterSet`/`charset`/`inputEncoding`/`contentType`
+    // read real per-load state instead of `undefined`.
+    doc.set_character_set(encoding.canonical_name().to_string());
+    if let Some(ct) = content_type {
+        let mime = ct.split(';').next().unwrap_or(ct).trim();
+        if !mime.is_empty() {
+            doc.set_content_type(mime.to_string());
+        }
+    }
     let title = extract_title(&doc);
 
     // Гейт выполнения скриптов: top-level документ не sandboxed.
