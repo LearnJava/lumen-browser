@@ -4022,6 +4022,13 @@ fn probe_display(
 /// схлопывается в высоту строки ([BUG-728]). Они получают собственный бокс
 /// (`BoxKind::Image` / `BoxKind::FormControl`), как и всё блочно-уровневое.
 ///
+/// `inline-flex` / `inline-grid` тоже исключены ([BUG-739]): по CSS Display L3
+/// §2.1 это **atomic inline-level** боксы — снаружи inline, внутри собственный
+/// flex/grid formatting context. Сегмент такого контекста не несёт, поэтому
+/// уплощение стоило элементу бокса целиком: ни фона, ни рамки, ни размеров,
+/// flex/grid-алгоритм не запускался. Их место — рядом с `inline-block`, в
+/// [`is_atomic_inline_level`].
+///
 /// `display` передаётся отдельно, чтобы вызывающий не считал стиль дважды:
 /// [`collect_inline_segments`] к этому месту уже имеет вычисленный
 /// `ComputedStyle` узла, а [`is_inline_content`] берёт `display` из кэша.
@@ -4029,13 +4036,7 @@ fn produces_inline_segments(doc: &Document, id: NodeId, display: Display) -> boo
     if is_image_element(doc, id) || is_form_control_element(doc, id) {
         return false;
     }
-    // Inline-семантика: чистый `inline` или его flex/grid-варианты.
-    // Phase 0 layout не делает реального flex/grid — флэт-семантика
-    // блока для outer-display, но inline-family остаётся inline.
-    matches!(
-        display,
-        Display::Inline | Display::InlineFlex | Display::InlineGrid
-    )
+    display == Display::Inline
 }
 
 /// То же для потомка inline-элемента: `display: contents` дополнительно
@@ -4086,7 +4087,17 @@ fn is_inline_content(
     }
 }
 
-/// Является ли DOM-узел `display: inline-block` элементом.
+/// Является ли DOM-узел **atomic inline-level** элементом — таким, который
+/// снаружи участвует в inline-контексте одним неделимым боксом, а внутри
+/// заводит собственный formatting context (CSS Display L3 §2.1):
+/// `inline-block`, `inline-flex`, `inline-grid`.
+///
+/// Все три собираются в `InlineBlockRow` и текут горизонтально рядом с текстом;
+/// различает их только внутренний лэйаут, который выбирает `lay_out` по
+/// `style.display` (ветки `Display::Flex | Display::InlineFlex` и
+/// `Display::Grid | Display::InlineGrid`). До [BUG-739] `inline-flex`/
+/// `inline-grid` не попадали сюда и уплощались в сегменты родителя, то есть
+/// не получали бокса вовсе.
 ///
 /// Возвращает false для изображений (`<img>` — replaced element, Phase-0
 /// block-only). Form controls (`<input>`/`<select>`/`<button>`/…) — наоборот,
@@ -4096,7 +4107,7 @@ fn is_inline_content(
 /// текстом и соседними контролами. Author `display:block` поверх → обычный
 /// block-бокс (эта функция вернёт false).
 #[allow(clippy::too_many_arguments)]
-fn is_inline_block(
+fn is_atomic_inline_level(
     doc: &Document,
     sheet: &Stylesheet,
     id: NodeId,
@@ -4109,8 +4120,10 @@ fn is_inline_block(
         &doc.get(id).data,
         NodeData::Element { .. }
         if !is_image_element(doc, id)
-            && probe_display(doc, sheet, id, inherited, viewport, dark_mode, counters)
-                == Display::InlineBlock
+            && matches!(
+                probe_display(doc, sheet, id, inherited, viewport, dark_mode, counters),
+                Display::InlineBlock | Display::InlineFlex | Display::InlineGrid
+            )
     )
 }
 
@@ -5978,11 +5991,12 @@ fn build_box_inner(
             let is_inl =
                 is_inline_content(doc, sheet, child_id, &style, viewport, dark_mode, counters);
             let is_ib = !is_inl
-                && is_inline_block(doc, sheet, child_id, &style, viewport, dark_mode, counters);
+                && is_atomic_inline_level(doc, sheet, child_id, &style, viewport, dark_mode, counters);
 
             if is_inl || is_ib {
                 // Унифицированный сбор inline-уровневого контента: inline-элементы
-                // и inline-block элементы участвуют в ОДНОМ inline-контексте.
+                // и atomic inline-level (`inline-block`/`inline-flex`/
+                // `inline-grid`) участвуют в ОДНОМ inline-контексте.
                 // Межэлементный whitespace не прерывает поток.
                 // Результат: InlineRun (чистый текст) или InlineBlockRow (смешанный).
                 let mut row_items: Vec<LayoutBox> = Vec::new();
@@ -6049,7 +6063,7 @@ fn build_box_inner(
                         collect_inline_segments(doc, sheet, cid, &style, viewport, &mut pending, &mut pending_escapes, flat, counters, registry, &mut need_first_letter, dark_mode);
                         had_ws = false;
                         i += 1;
-                    } else if is_inline_block(doc, sheet, cid, &style, viewport, dark_mode, counters)
+                    } else if is_atomic_inline_level(doc, sheet, cid, &style, viewport, dark_mode, counters)
                     {
                         if !pending.is_empty() || !pending_escapes.is_empty() {
                             let from = row_items.len();
@@ -7911,13 +7925,22 @@ fn lay_out_inner(
             b.rect.width = b.rect.width.max(min_w);
         }
     }
-    // Phase 0 shrink-to-fit для inline-block без явной CSS width.
+    // Phase 0 shrink-to-fit для atomic inline-level бокса без явной CSS width.
     // Полный алгоритм (CSS 2.1 §10.3.9) требует двух проходов; здесь —
     // упрощение: ищем максимальную explicit-width среди потомков.
     // CSS Box Sizing L4 §5: a size-contained inline-block ignores its content
     // for auto inline-size and uses contain-intrinsic-width (content-box → +pad/
     // border), or 0 when `none`/unset — exactly as if it had no contents.
-    if s.width.is_none() && s.display == Display::InlineBlock {
+    //
+    // BUG-739: `inline-flex`/`inline-grid` — тот же класс боксов (CSS Display L3
+    // §2.1), их auto-ширина тоже shrink-to-fit, а не «весь доступный inline-
+    // размер». Без этой ветки inline-flex-кнопка растягивалась бы на всю строку.
+    if s.width.is_none()
+        && matches!(
+            s.display,
+            Display::InlineBlock | Display::InlineFlex | Display::InlineGrid
+        )
+    {
         if size_contained {
             let cw = s
                 .contain_intrinsic_width
@@ -14382,6 +14405,148 @@ mod tests {
             <div class="item"><div class="leaf"></div><div class="drop"></div></div>
             <div class="tail"></div></div>"#;
         assert_eq!(child_widths(html, &css), vec![300.0, 30.0]);
+    }
+
+    // ── BUG-739: inline-flex / inline-grid — atomic inline-level боксы ────────
+
+    /// `display: inline-flex`/`inline-grid` — atomic inline-level (CSS Display
+    /// L3 §2.1): снаружи inline, внутри собственный formatting context. До
+    /// BUG-739 они не создавали бокса вовсе — содержимое уплощалось в
+    /// `InlineRun` родителя, как при `display: inline`.
+    ///
+    /// Размеры листьев задаются в CSS: `super::layout` работает без
+    /// `TextMeasurer`, поэтому любая ширина из текста измерилась бы нулём и
+    /// проверки прошли бы по неверной причине.
+    const IL_CSS: &str = "#outer { display: block; width: 600px; } \
+         .leaf { display: block; width: 40px; height: 10px; }";
+    const IL_HTML: &str = r#"<div id="outer"><span id="t">
+        <i class="leaf"></i><i class="leaf"></i></span></div>"#;
+
+    /// Бокс есть, лежит в `InlineBlockRow` (как `inline-block`), а его
+    /// auto-ширина — shrink-to-fit по row-flex сумме, а не 600 родителя.
+    #[test]
+    fn bug739_inline_flex_gets_its_own_shrink_to_fit_box() {
+        let css = format!("{IL_CSS} #t {{ display: inline-flex; }}");
+        let doc = lumen_html_parser::parse(IL_HTML);
+        let sheet = lumen_css_parser::parse(&css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let outer = find_by_id_all(&root, &doc, "outer").expect("#outer box not found");
+        assert!(
+            outer.children.iter().any(|c| matches!(c.kind, super::BoxKind::InlineBlockRow)),
+            "atomic inline-level бокс должен собираться в InlineBlockRow"
+        );
+        let t = find_by_id_all(&root, &doc, "t").expect("#t box not found");
+        assert_eq!(t.style.display, super::Display::InlineFlex);
+        assert_eq!(t.rect.width, 80.0);
+    }
+
+    /// Внутри действительно работает flex-алгоритм, а не блочный поток:
+    /// элементы стоят бок о бок, второй — за первым по X на одном Y.
+    #[test]
+    fn bug739_inline_flex_lays_items_side_by_side() {
+        let css = format!("{IL_CSS} #t {{ display: inline-flex; }}");
+        let doc = lumen_html_parser::parse(IL_HTML);
+        let sheet = lumen_css_parser::parse(&css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let t = find_by_id_all(&root, &doc, "t").expect("#t box not found");
+        let items: Vec<_> = t.children.iter().filter(|c| !matches!(c.kind, super::BoxKind::Skip)).collect();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].rect.x - t.rect.x, 0.0);
+        assert_eq!(items[1].rect.x - t.rect.x, 40.0);
+        assert_eq!(items[0].rect.y, items[1].rect.y);
+    }
+
+    /// `column-gap` внутри inline-flex доезжает и до раскладки, и до
+    /// shrink-to-fit ширины (после BUG-737 сумма учитывает зазор).
+    #[test]
+    fn bug739_inline_flex_honours_gap() {
+        let css = format!("{IL_CSS} #t {{ display: inline-flex; gap: 10px; }}");
+        let doc = lumen_html_parser::parse(IL_HTML);
+        let sheet = lumen_css_parser::parse(&css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let t = find_by_id_all(&root, &doc, "t").expect("#t box not found");
+        assert_eq!(t.rect.width, 90.0);
+        let items: Vec<_> = t.children.iter().filter(|c| !matches!(c.kind, super::BoxKind::Skip)).collect();
+        assert_eq!(items[1].rect.x - t.rect.x, 50.0);
+    }
+
+    /// Колоночный inline-flex складывает элементы вертикально; ширина —
+    /// самый широкий элемент, высота — сумма (сверено с headless Edge).
+    #[test]
+    fn bug739_inline_flex_column_stacks_items() {
+        let css = format!("{IL_CSS} #t {{ display: inline-flex; flex-direction: column; }}");
+        let doc = lumen_html_parser::parse(IL_HTML);
+        let sheet = lumen_css_parser::parse(&css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let t = find_by_id_all(&root, &doc, "t").expect("#t box not found");
+        assert_eq!(t.rect.width, 40.0);
+        assert_eq!(t.rect.height, 20.0);
+    }
+
+    /// Явные `width` + padding + border дают border-box 214 — тот же расчёт,
+    /// что у `inline-block` (Edge: 214).
+    #[test]
+    fn bug739_inline_flex_explicit_width_adds_padding_and_border() {
+        let css = format!(
+            "{IL_CSS} #t {{ display: inline-flex; width: 200px; padding: 5px; \
+             border: 2px solid #000; }}"
+        );
+        let doc = lumen_html_parser::parse(IL_HTML);
+        let sheet = lumen_css_parser::parse(&css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let t = find_by_id_all(&root, &doc, "t").expect("#t box not found");
+        assert_eq!(t.rect.width, 214.0);
+    }
+
+    /// `inline-grid` запускает grid-алгоритм: два трека 40px ставят второй
+    /// элемент на x = 40. (Shrink-to-fit ширина самого контейнера остаётся
+    /// блочной — это [BUG-740], отдельная заявка.)
+    #[test]
+    fn bug739_inline_grid_runs_track_sizing() {
+        let css = format!(
+            "{IL_CSS} #t {{ display: inline-grid; grid-template-columns: 40px 40px; }}"
+        );
+        let doc = lumen_html_parser::parse(IL_HTML);
+        let sheet = lumen_css_parser::parse(&css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let t = find_by_id_all(&root, &doc, "t").expect("#t box not found");
+        assert_eq!(t.style.display, super::Display::InlineGrid);
+        let items: Vec<_> = t.children.iter().filter(|c| !matches!(c.kind, super::BoxKind::Skip)).collect();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].rect.x - t.rect.x, 0.0);
+        assert_eq!(items[1].rect.x - t.rect.x, 40.0);
+        assert_eq!(items[0].rect.y, items[1].rect.y);
+    }
+
+    /// Внутри inline-элемента бокс приходит через `InlineEscape` (BUG-728) и
+    /// наследует стиль inline-родителя, а не блока: `<a>` красит содержимое.
+    #[test]
+    fn bug739_inline_flex_inside_inline_element_gets_box() {
+        let css = format!("{IL_CSS} #t {{ display: inline-flex; }} a {{ color: #008800; }}");
+        let html = r##"<div id="outer"><a href="#"><span id="t">
+            <i class="leaf"></i><i class="leaf"></i></span></a></div>"##;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(&css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let t = find_by_id_all(&root, &doc, "t").expect("#t box not found");
+        assert_eq!(t.rect.width, 80.0);
+        assert_eq!(t.style.color, crate::Color { r: 0, g: 136, b: 0, a: 255 });
+    }
+
+    /// Два соседних inline-flex стоят на одной строке — это и значит
+    /// «снаружи ведёт себя как inline».
+    #[test]
+    fn bug739_two_inline_flex_siblings_share_a_line() {
+        let css = format!("{IL_CSS} .t {{ display: inline-flex; }}");
+        let html = r#"<div id="outer"><span class="t" id="a"><i class="leaf"></i></span><span
+            class="t" id="b"><i class="leaf"></i></span></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(&css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("#a box not found");
+        let b = find_by_id_all(&root, &doc, "b").expect("#b box not found");
+        assert_eq!(a.rect.y, b.rect.y);
+        assert!(b.rect.x >= a.rect.x + a.rect.width, "второй бокс должен стоять справа от первого");
     }
 
     // ── Hyphenation helpers ───────────────────────────────────────────────────

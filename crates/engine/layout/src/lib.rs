@@ -9498,12 +9498,14 @@ mod tests {
 
     #[test]
     fn display_inline_flex_parses_and_stores() {
-        // inline-flex element внутри div — должен попасть в InlineRun
-        // (трактуется как inline-family).
+        // BUG-739: inline-flex — atomic inline-level бокс (CSS Display L3 §2.1),
+        // а не inline-family: он получает СВОЙ бокс внутри InlineBlockRow, а не
+        // уплощается в сегменты родительского InlineRun (так было до фикса).
         let root = lay("<div><span>x</span></div>", "span { display: inline-flex; }");
         let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
-        // div содержит InlineRun (inline-flex span внутри).
-        assert!(matches!(&div.children[0].kind, BoxKind::InlineRun { .. }));
+        assert!(matches!(&div.children[0].kind, BoxKind::InlineBlockRow));
+        let item = &div.children[0].children[0];
+        assert_eq!(item.style.display, Display::InlineFlex);
     }
 
     #[test]
@@ -9514,10 +9516,13 @@ mod tests {
     }
 
     #[test]
-    fn display_inline_grid_parses_as_inline_family() {
+    fn display_inline_grid_creates_its_own_box() {
+        // BUG-739, симметрично `display_inline_flex_parses_and_stores`.
         let root = lay("<div><span>x</span></div>", "span { display: inline-grid; }");
         let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
-        assert!(matches!(&div.children[0].kind, BoxKind::InlineRun { .. }));
+        assert!(matches!(&div.children[0].kind, BoxKind::InlineBlockRow));
+        let item = &div.children[0].children[0];
+        assert_eq!(item.style.display, Display::InlineGrid);
     }
 
     #[test]
