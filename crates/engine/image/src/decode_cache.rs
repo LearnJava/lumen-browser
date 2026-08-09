@@ -103,6 +103,20 @@ impl ImageDecodeCache {
         self.entries.contains_key(key)
     }
 
+    /// Every cached entry as `(key, handle)` pairs, in unspecified order.
+    ///
+    /// Read-only: unlike [`get`](Self::get) this does **not** touch LRU
+    /// timestamps, so dumping the cache cannot change which entry the next
+    /// [`evict_to_budget`](Self::evict_to_budget) drops. Meant for callers that
+    /// need the whole set at once (the CPU rasterizer takes `&[(String,
+    /// ImageHandle)]`), not for lookups.
+    pub fn snapshot(&self) -> Vec<(String, ImageHandle)> {
+        self.entries
+            .iter()
+            .map(|(k, e)| (k.0.clone(), Arc::clone(&e.handle)))
+            .collect()
+    }
+
     /// Look up a cached image by key, updating its LRU timestamp.
     ///
     /// Returns `None` if the key is not cached.
@@ -445,6 +459,26 @@ mod tests {
             cache.used_bytes() <= img_bytes * 4 / 10 + img_bytes,
             "High должен оставить ≤10% бюджета (или 1 изображение если бюджет/10 < одного изображения)"
         );
+    }
+
+    #[test]
+    fn snapshot_returns_every_entry_without_touching_lru() {
+        // BUG-729: снимок кэша нужен CPU-растеризатору целиком и не должен
+        // подменять жертву следующей эвикции — иначе один снимок экрана менял бы
+        // то, какая картинка выживет.
+        let img_bytes = bytes(10, 10);
+        let mut cache = ImageDecodeCache::with_budget(img_bytes * 2);
+        cache.insert(key("a"), make_image(10, 10));
+        cache.insert(key("b"), make_image(10, 10));
+
+        let mut keys: Vec<String> = cache.snapshot().into_iter().map(|(k, _)| k).collect();
+        keys.sort();
+        assert_eq!(keys, vec!["a".to_owned(), "b".to_owned()]);
+
+        // "a" — самая старая; снимок её не «освежил», поэтому вытесняется именно она.
+        cache.insert(key("c"), make_image(10, 10));
+        assert!(!cache.contains(&key("a")), "snapshot не должен спасать LRU-жертву");
+        assert!(cache.contains(&key("b")) && cache.contains(&key("c")));
     }
 
     #[test]

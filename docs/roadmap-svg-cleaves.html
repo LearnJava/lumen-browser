@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-09",
  "counts": {
-  "open": 322,
-  "fixed": 370,
+  "open": 323,
+  "fixed": 372,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 692,
+ "total_bugs": 695,
  "phases": [
   {
    "id": "P0",
@@ -9612,7 +9612,7 @@
   "BUG-725": {
    "status": "open",
    "title": "`https://www.tbank.ru/` после закрытия [BUG-703](bugs/BUG-703-FIXED.md) строит правильный DOM (2382 элемента против 2380 в эталонном headless Edge) и рисует тек…",
-   "component": "layout, paint (какая именно подсистема — не локализовано)",
+   "component": "layout (`crates/engine/layout/src/box_tree.rs`, inline formatting)",
    "date": null,
    "debtor": false
   },
@@ -9628,6 +9628,27 @@
    "title": "`RTCPeerConnection`-стаб никогда не диспатчит `ontrack`/`ondatachannel`/`onconnectionstatechange`/`oniceconnectionstatechange` — `_dispatch()` вызывается только…",
    "component": "js (`crates/js/src/webrtc_stub.rs` — `WEBRTC_SHIM`)",
    "date": null,
+   "debtor": false
+  },
+  "BUG-728": {
+   "status": "open",
+   "title": "Всё, что вложено внутрь inline-элемента (`<a>`, `<span>`, вложенность любой глубины), теряет собственную геометрию и схлопывается в высоту текстовой строки: `<i…",
+   "component": "layout (`crates/engine/layout/src/box_tree.rs` — `collect_inline_segments` / `InlineSegment`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-729": {
+   "status": "fixed",
+   "title": "`resource://screenshot` живого окна (`AutomationCommand::Screenshot`) передавал CPU-растеризатору пустой набор картинок, поэтому КАЖДОЕ изображение страницы рис…",
+   "component": "shell (`crates/shell/src/main.rs::render_current_page_to_png`), image (`decode_cache.rs`)",
+   "date": "2026-08-09",
+   "debtor": false
+  },
+  "BUG-730": {
+   "status": "fixed",
+   "title": "Любая картинка, попавшая в DOM после завершения загрузки, не запрашивалась вообще — ни запроса, ни декода, пейнт вечно рисовал серый плейсхолдер. Затронуты все…",
+   "component": "shell (`crates/shell/src/main.rs` — `spawn_stream_image_loads` / `apply_relayout_result`)",
+   "date": "2026-08-09",
    "debtor": false
   }
  },
@@ -10252,6 +10273,12 @@
   "layout (`crates/engine/layout/src/box_tree.rs::flatten_contents`)": [
    "BUG-489"
   ],
+  "layout (`crates/engine/layout/src/box_tree.rs` — `collect_inline_segments` / `InlineSegment`)": [
+   "BUG-728"
+  ],
+  "layout (`crates/engine/layout/src/box_tree.rs`, inline formatting)": [
+   "BUG-725"
+  ],
   "layout (`crates/engine/layout/src/incremental.rs::graft_geometry_with_cascade` + `lay_out`'s O(1) translate fast path для `DirtyBits::CLEAN`)": [
    "BUG-355"
   ],
@@ -10306,9 +10333,6 @@
   "layout+paint": [
    "BUG-005",
    "BUG-023"
-  ],
-  "layout, paint (какая именно подсистема — не локализовано)": [
-   "BUG-725"
   ],
   "layout/dom (не локализовано — нужна перепись структур)": [
    "BUG-683"
@@ -10554,6 +10578,12 @@
   ],
   "shell (`crates/shell/src/main.rs::parse_and_layout` — порядок фаз `parse → CSS → run_scripts_with_dom → images → layout`; `notify_dom_content_loaded` на `main.rs:5466`), js (`crates/js/src/dom.rs` — нативы читают снимок и не умеют его запросить)": [
    "BUG-443"
+  ],
+  "shell (`crates/shell/src/main.rs::render_current_page_to_png`), image (`decode_cache.rs`)": [
+   "BUG-729"
+  ],
+  "shell (`crates/shell/src/main.rs` — `spawn_stream_image_loads` / `apply_relayout_result`)": [
+   "BUG-730"
   ],
   "shell (`main.rs::handle_click_at`, ветка `FormClickAction::SubmitForm`), js (`dom.rs` — `WEB_API_SHIM`)": [
    "BUG-437"
