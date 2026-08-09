@@ -76,11 +76,11 @@
  "generated": "2026-08-09",
  "counts": {
   "open": 311,
-  "fixed": 352,
+  "fixed": 353,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 663,
+ "total_bugs": 664,
  "phases": [
   {
    "id": "P0",
@@ -3615,7 +3615,7 @@
        "title": "WPT: вендорить + прогнать категорию `screen-wake-lock`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root screen-wake-lock --recursive`, ~4 мин 39 с, 21 файл, 16 исполнившихся id) — **2/16 harness OK, 1/2 сабтестов**. 13/16 id — `.https.`, TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`; 2 ERROR — session/URL-reuse артефакт (BUG-380). Оба реально исполнившихся не-`.https.` теста — реконфирмации: `wakelock-supported-by-permissions-policy.html` → [BUG-361](bugs/BUG-361-OPEN.md) (`document.permissionsPolicy.features()` всегда `[]`); `wakelock-insecure-context.any.html` формально PASS, но по неверной причине — живая проба (`--mcp-live-port`) нашла [BUG-669](bugs/BUG-669-OPEN.md): `WakeLock`-интерфейс никогда не выставляется на `globalThis` (только `WakeLockSentinel` и `navigator.wakeLock`), поэтому `'WakeLock' in self` всегда `false`, даже в контексте, который сам движок считает secure (реконфирмация [BUG-399](bugs/BUG-399-OPEN.md), `isSecureContext` захардкожен `true`) — `navigator.wakeLock.request('screen')` при этом реально работает и резолвится",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root screen-wake-lock --recursive`, ~4 мин 39 с, 21 файл, 16 исполнившихся id) — **2/16 harness OK, 1/2 сабтестов**. 13/16 id — `.https.`, TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`; 2 ERROR — session/URL-reuse артефакт (BUG-380). Оба реально исполнившихся не-`.https.` теста — реконфирмации: `wakelock-supported-by-permissions-policy.html` → [BUG-361](bugs/BUG-361-FIXED.md) (`document.permissionsPolicy.features()` всегда `[]`); `wakelock-insecure-context.any.html` формально PASS, но по неверной причине — живая проба (`--mcp-live-port`) нашла [BUG-669](bugs/BUG-669-OPEN.md): `WakeLock`-интерфейс никогда не выставляется на `globalThis` (только `WakeLockSentinel` и `navigator.wakeLock`), поэтому `'WakeLock' in self` всегда `false`, даже в контексте, который сам движок считает secure (реконфирмация [BUG-399](bugs/BUG-399-OPEN.md), `isSecureContext` захардкожен `true`) — `navigator.wakeLock.request('screen')` при этом реально работает и резолвится",
        "bugs": [
         "BUG-669"
        ]
@@ -3938,9 +3938,9 @@
       {
        "id": "WPT-VENDOR-video-rvfc",
        "title": "WPT: вендорить + прогнать категорию `video-rvfc`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). медиа-конвейер"
+       "note": "Скоуп: 🚫 (вне скоупа). медиа-конвейер. DONE 2026-08-09: вендорена + прогнана целиком (`--all --root video-rvfc --recursive`, 8 файлов, 8 отобранных id) — **2/8 harness OK, 0/4 сабтестов**. `HTMLVideoElement.prototype.requestVideoFrameCallback` отсутствует целиком (ожидаемо для 🚫-скоупа, не баг). `idlharness.window.html` — TIMEOUT, известный класс «idlharness.js/WebIDLParser.js не вендорены». `-dom.html`/`request-video-frame-callback.html` — TIMEOUT: `getVideoURI()` из невендоренного `/common/media.js` вызывается на верхнем уровне скрипта, `ReferenceError` до регистрации теста → 0 тестов зарегистрировано → `all_done()` не завершается, тот же класс, что `silent-ignore.html` в `vibration`. Три `.https.` файла — переподтверждение уже открытого [BUG-380](bugs/BUG-380-OPEN.md). Новый номер бага не заводился"
       },
       {
        "id": "WPT-VENDOR-viewport",
@@ -7112,10 +7112,10 @@
    "debtor": false
   },
   "BUG-361": {
-   "status": "open",
+   "status": "fixed",
    "title": "`document.permissionsPolicy.features()` отдаёт `Object.keys(_ppStore)` — ключи политики, объявленной HTTP-заголовком `Permissions-Policy`, — вместо требуемого с…",
    "component": "js (`crates/js/src/permissions_policy.rs:47-49` `FeaturePolicy.prototype.features`)",
-   "date": null,
+   "date": "2026-08-09",
    "debtor": false
   },
   "BUG-362": {
@@ -9434,6 +9434,13 @@
    "component": "js (`crates/js/src/dom.rs:8366-8392` — `performance.mark`/`performance.measure` in `WEB_API_SHIM`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-697": {
+   "status": "open",
+   "title": "`document.permissionsPolicy.allowsFeature(name)` returns `true` for any unrecognized feature name (`'made-up-xyz'`), not just for real-but-unlisted ones — spec…",
+   "component": "js (`crates/js/src/permissions_policy.rs:37-44` — `FeaturePolicy.prototype.allowsFeature`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -9836,6 +9843,9 @@
   ],
   "js (`crates/js/src/navigator_bindings.rs:213-225` -- `_screen` object literal)": [
    "BUG-559"
+  ],
+  "js (`crates/js/src/permissions_policy.rs:37-44` — `FeaturePolicy.prototype.allowsFeature`)": [
+   "BUG-697"
   ],
   "js (`crates/js/src/storage_buckets.rs`)": [
    "BUG-547"
