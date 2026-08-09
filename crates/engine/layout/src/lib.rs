@@ -18764,5 +18764,178 @@ mod tests {
             cards[2].0, cards[1].0, cards[1].1
         );
     }
-}
 
+    // ──────── BUG-728: геометрия не-inline потомка inline-элемента ────────
+
+    /// Первый в глубину бокс, удовлетворяющий предикату.
+    fn find_first<'a>(b: &'a LayoutBox, f: &dyn Fn(&LayoutBox) -> bool) -> Option<&'a LayoutBox> {
+        if f(b) {
+            return Some(b);
+        }
+        b.children.iter().find_map(|c| find_first(c, f))
+    }
+
+    #[test]
+    fn img_inside_inline_element_keeps_its_own_box() {
+        // BUG-728: <img> внутри <span>/<a> уплощался в InlineSegment, у которого
+        // нет высоты — картинка рисовалась 50×16.8 (высота строки) вместо 50×50.
+        for html in [
+            "<div><span><img src=\"a.png\"></span></div>",
+            "<div><a href=\"#\"><img src=\"a.png\"></a></div>",
+            "<div><span><span><img src=\"a.png\"></span></span></div>",
+        ] {
+            let root = lay_measured(html, "img { width: 50px; height: 50px; }", 800.0);
+            let img = find_first(&root, &|b| matches!(b.kind, BoxKind::Image { .. }))
+                .unwrap_or_else(|| panic!("нет Image-бокса для {html}"));
+            assert!(
+                (img.rect.width - 50.0).abs() < 0.5 && (img.rect.height - 50.0).abs() < 0.5,
+                "{html}: картинка {}×{}, ожидалось 50×50",
+                img.rect.width, img.rect.height
+            );
+        }
+    }
+
+    #[test]
+    fn block_child_of_inline_element_keeps_its_height() {
+        // CSS 2.1 §9.2.1.1: блочный потомок разрезает inline-бокс и остаётся
+        // блоком. До BUG-728 от него оставался текстовый прогон в одну строку.
+        let root = lay_measured(
+            "<div><span>a<div class=\"b\">bb</div>c</span></div>",
+            ".b { display: block; height: 30px; }",
+            800.0,
+        );
+        let b = find_first(&root, &|x| {
+            x.style.display == Display::Block && (x.rect.height - 30.0).abs() < 0.5
+        });
+        assert!(b.is_some(), "блочный потомок inline-элемента потерял height: 30px");
+        // Текст до и после блока — два разных анонимных прогона (разрез).
+        fn count_runs(b: &LayoutBox) -> usize {
+            usize::from(matches!(b.kind, BoxKind::InlineRun { .. }))
+                + b.children.iter().map(count_runs).sum::<usize>()
+        }
+        assert_eq!(
+            count_runs(&root), 3,
+            "ожидались прогоны «a», «bb» и «c» по разные стороны блока"
+        );
+    }
+
+    #[test]
+    fn flex_child_of_inline_element_stays_a_flex_container() {
+        // Флекс-контейнер внутри <span> переставал быть контейнером: рекурсия
+        // забирала из него только текст.
+        let root = lay_measured(
+            "<div><span><div class=\"f\"><i>x</i><i>y</i></div></span></div>",
+            ".f { display: flex; height: 40px; } i { width: 20px; }",
+            800.0,
+        );
+        let f = find_first(&root, &|b| b.style.display == Display::Flex)
+            .expect("флекс-контейнер внутри inline-элемента не построен");
+        assert!(
+            (f.rect.height - 40.0).abs() < 0.5,
+            "флекс-контейнер height {} вместо 40",
+            f.rect.height
+        );
+    }
+
+    #[test]
+    fn form_control_inside_inline_element_gets_a_box() {
+        // <input> внутри <span> не эмитил вообще ничего — поле исчезало.
+        let root = lay_measured("<div><span><input></span></div>", "", 800.0);
+        let input = find_first(&root, &|b| matches!(b.kind, BoxKind::FormControl { .. }))
+            .expect("FormControl-бокс внутри inline-элемента не построен");
+        assert!(
+            input.rect.width > 0.0 && input.rect.height > 0.0,
+            "поле схлопнулось в {}×{}",
+            input.rect.width, input.rect.height
+        );
+    }
+
+    #[test]
+    fn escaped_child_inherits_from_the_inline_element_not_the_block() {
+        // Бокс строится блочным контейнером, но наследовать обязан от <span>,
+        // между ними стоящего, — иначе теряются цвет/шрифт inline-родителя.
+        let root = lay_measured(
+            "<div><span class=\"s\"><div class=\"b\">x</div></span></div>",
+            ".s { color: rgb(1, 2, 3); } .b { display: block; }",
+            800.0,
+        );
+        let b = find_first(&root, &|x| {
+            x.style.display == Display::Block
+                && x.style.color == crate::style::Color { r: 1, g: 2, b: 3, a: 255 }
+        });
+        assert!(b.is_some(), "блочный потомок не унаследовал color от <span>");
+    }
+
+    #[test]
+    fn escape_preserves_document_order_around_the_split() {
+        // Разрез сохраняет порядок: текст до, всплывший бокс, текст после.
+        // `<img>` в Phase 0 — block-level replaced (UA-дефолт), поэтому внутри
+        // <span> он ведёт себя ровно так же, как прямой ребёнок блока: своя
+        // строка и свои 50×50 — а не 50×высота_строки, как до BUG-728.
+        let root = lay_measured(
+            "<div><span>ab<img src=\"a.png\">cd</span></div>",
+            "img { width: 50px; height: 50px; }",
+            800.0,
+        );
+        let div = root.children.iter()
+            .find(|c| matches!(c.kind, BoxKind::Block))
+            .expect("нет блока <div>");
+        let kinds: Vec<&str> = div.children.iter().map(|c| match c.kind {
+            BoxKind::InlineRun { .. } => "run",
+            BoxKind::Image { .. } => "img",
+            _ => "other",
+        }).collect();
+        assert_eq!(kinds, vec!["run", "img", "run"], "порядок кусков потока нарушен");
+        let img = &div.children[1];
+        assert!(
+            (img.rect.height - 50.0).abs() < 0.5,
+            "картинка height {} вместо 50", img.rect.height
+        );
+        assert!(img.rect.y >= div.children[0].rect.y, "картинка выше предшествующего текста");
+        assert!(
+            div.children[2].rect.y >= img.rect.y + img.rect.height,
+            "текст после картинки не сдвинулся вниз"
+        );
+    }
+
+    #[test]
+    fn display_contents_inside_inline_element_stays_flattened() {
+        // `display: contents` бокса не порождает (CSS Display L3 §3.1) — его
+        // дети остаются в inline-контексте родителя. Escape-механика BUG-728
+        // не должна его выносить: иначе «cc dd ee» разъезжается на три строки.
+        let root = lay_measured(
+            "<div><span>cc<span class=\"c\">dd</span>ee</span></div>",
+            ".c { display: contents; }",
+            800.0,
+        );
+        let div = root.children.iter()
+            .find(|c| matches!(c.kind, BoxKind::Block))
+            .expect("нет блока <div>");
+        assert_eq!(div.children.len(), 1, "inline-контекст разрезан на куски");
+        assert!(matches!(div.children[0].kind, BoxKind::InlineRun { .. }));
+    }
+
+    #[test]
+    fn inline_block_inside_inline_element_stays_in_the_row() {
+        // Inline-уровневый всплывший бокс ряд НЕ разрывает: он остаётся в том
+        // же анонимном контейнере, что и текст вокруг (breaks_inline_row).
+        let root = lay_measured(
+            "<div><span>ff<span class=\"ib\"></span>gg</span></div>",
+            ".ib { display: inline-block; width: 30px; height: 12px; }",
+            800.0,
+        );
+        let row = find_first(&root, &|b| matches!(b.kind, BoxKind::InlineBlockRow))
+            .expect("InlineBlockRow не построен");
+        let kinds: Vec<&str> = row.children.iter().map(|c| match c.kind {
+            BoxKind::InlineRun { .. } => "run",
+            BoxKind::Block => "block",
+            _ => "other",
+        }).collect();
+        assert_eq!(kinds, vec!["run", "block", "run"], "куски не попали в один ряд");
+        let ib = &row.children[1];
+        assert!(
+            (ib.rect.width - 30.0).abs() < 0.5 && (ib.rect.height - 12.0).abs() < 0.5,
+            "inline-block {}×{} вместо 30×12", ib.rect.width, ib.rect.height
+        );
+    }
+}
