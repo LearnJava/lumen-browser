@@ -1156,6 +1156,12 @@ impl V8JsRuntime {
         let ua_override = global_user_agent_override();
         // BUG-295: session-level `Intl`/`Date` timezone override, if any.
         let timezone_override = global_timezone_override();
+        // BUG-364: dedicated/shared Worker script fetch reuses the same fetch
+        // provider as the Fetch API below. Cloned *before* the `move` closure
+        // below takes ownership of `fetch_provider` — Worker/SharedWorker
+        // installation happens after that closure returns.
+        let fp_worker = fetch_provider.clone();
+        let fp_shared_worker = fetch_provider.clone();
 
         self.run(move |inner| {
             // ESM (S12b-23): fallback base URL the module resolver uses for
@@ -4708,12 +4714,15 @@ impl V8JsRuntime {
             &self.worker_messages,
             &self.worker_next_id,
             &self.worker_blob_store,
+            fp_worker,
         ) {
             eprintln!("v8: worker::install_worker_bindings_v8 failed: {e}");
         }
-        if let Err(e) =
-            crate::shared_worker::install_shared_worker_bindings_v8(self, &self.shared_worker_outbox)
-        {
+        if let Err(e) = crate::shared_worker::install_shared_worker_bindings_v8(
+            self,
+            &self.shared_worker_outbox,
+            fp_shared_worker,
+        ) {
             eprintln!("v8: shared_worker::install_shared_worker_bindings_v8 failed: {e}");
         }
         Ok(())

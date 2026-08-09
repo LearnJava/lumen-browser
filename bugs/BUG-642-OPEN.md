@@ -74,7 +74,7 @@ new Notification('x').onerror = () => console.log('fired');
 2/3 сабтеста passed, 1 unexpected) падает по другой, уже известной
 причине — третий сабтест грузит `resources/permission-worker.js` как
 `new Worker(url, {type:'module'})` с обычным внешним URL, что подпадает
-под [BUG-364](BUG-364-OPEN.md) (внешний URL воркера не фетчится, тело
+под [BUG-364](BUG-364-FIXED.md) (внешний URL воркера не фетчится, тело
 пустое) — реконфирмация, не новая находка. Остальные 20/24 id — все
 `.https.`, TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`
 (`docs/wpt-status.md:25-28`) либо ERROR/TIMEOUT на несвязанных с этим

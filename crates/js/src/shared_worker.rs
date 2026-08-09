@@ -23,9 +23,12 @@
 //! `_lumen_deliver_shared_worker_messages(msgs)` to route each payload to the
 //! matching client `port` by id.
 //!
-//! GLSL-free, network-free stub: external (`http(s):`) script URLs are not
-//! fetched; only `blob:` / `data:` scripts execute (resolution happens in the
-//! JS shim, identical to the dedicated-worker resolver).
+//! External (`http(s):`) script URLs are fetched synchronously via the shared
+//! `JsFetchProvider` bridge (BUG-364, `crate::worker::fetch_worker_script`),
+//! resolved against the document base URL in the JS shim; `blob:` / `data:`
+//! scripts still resolve locally (identical to the dedicated-worker
+//! resolver). If the fetch fails, the worker never connects and `onerror`
+//! fires once instead of running an empty script.
 
 use std::sync::{Arc, Mutex};
 
@@ -218,6 +221,9 @@ const SHARED_WORKER_GLOBAL_SHIM: &str = r#"(function() {
 const SHARED_WORKER_SHIM: &str = r#"(function() {
   var _clientPorts = {};   // port_id → client-side MessagePort
 
+  // Returns the script body as a String, or `null` when an external URL's
+  // network fetch failed (BUG-364) — the caller must not spawn a worker
+  // thread in that case, only fire `error` on the SharedWorker instance.
   function _resolveScript(url) {
     var u = String(url || '');
     if (u.startsWith('blob:lumen/')) {
@@ -236,7 +242,24 @@ const SHARED_WORKER_SHIM: &str = r#"(function() {
       }
       try { return decodeURIComponent(content); } catch(e) { return content; }
     }
-    return '/* Lumen: external URL shared worker not supported: ' + u.replace(/\*\//g,'*\\/') + ' */';
+    // External URL: resolve against the document base and fetch the script
+    // body synchronously (previously never hit the network at all).
+    var abs = _url_resolve(u, _lumen_document_base_url());
+    var fetched = _lumen_sw_fetch_script(abs);
+    return (typeof fetched === 'string') ? fetched : null;
+  }
+
+  // A port for a SharedWorker whose script failed to fetch: never delivers
+  // or accepts anything, matching the "worker never started" outcome.
+  function _makeDeadClientPort() {
+    return {
+      onmessage: null,
+      postMessage: function() {},
+      start: function() {},
+      close: function() {},
+      addEventListener: function() {},
+      removeEventListener: function() {},
+    };
   }
 
   function _makeClientPort(pid, key) {
@@ -280,10 +303,27 @@ const SHARED_WORKER_SHIM: &str = r#"(function() {
     var nm = (name === undefined || name === null) ? '' : String(name);
     // Identity key: name when present, else the URL (single-origin process).
     var key = nm ? ('name:' + nm) : ('url:' + String(url || ''));
+    this.onerror = null;
     var script = _resolveScript(url);
+    if (script === null) {
+      // Script fetch failed (BUG-364): never connect, only fire `error`.
+      this.port = _makeDeadClientPort();
+      var self = this;
+      var u = String(url || '');
+      setTimeout(function() {
+        if (typeof self.onerror !== 'function') return;
+        try {
+          self.onerror(new ErrorEvent('error', {
+            message: 'SharedWorker script failed to load: ' + u,
+            filename: u, lineno: 0, colno: 0,
+            bubbles: false, cancelable: true,
+          }));
+        } catch(e) {}
+      }, 0);
+      return;
+    }
     var pid = _lumen_sw_connect(key, script);
     this.port = _makeClientPort(pid, key);
-    this.onerror = null;
     _clientPorts[pid] = this.port;
   }
 
@@ -386,6 +426,7 @@ fn close_shared_worker_port_v8(key: &str, port_id: u32) {
 pub(crate) fn install_shared_worker_bindings_v8(
     rt: &V8JsRuntime,
     outbox: &SharedWorkerOutbox,
+    fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
 ) -> JsResult<()> {
     {
         let out = Arc::clone(outbox);
@@ -393,6 +434,21 @@ pub(crate) fn install_shared_worker_bindings_v8(
             "_lumen_sw_connect",
             into_v8_fn2(move |key: String, script: String| -> u32 {
                 connect_shared_worker_v8(key, script, Arc::clone(&out))
+            }),
+        )?;
+    }
+
+    // _lumen_sw_fetch_script(url: String) → String | undefined
+    //
+    // Synchronous GET for an external SharedWorker script (BUG-364), mirroring
+    // `worker.rs::fetch_worker_script`. `undefined` on network error / non-2xx
+    // status tells the JS shim to fire `error` instead of connecting.
+    {
+        let fp = fetch_provider.clone();
+        rt.register_native(
+            "_lumen_sw_fetch_script",
+            into_v8_fn1(move |url: String| -> Option<String> {
+                crate::worker::fetch_worker_script(fp.as_deref(), &url)
             }),
         )?;
     }
@@ -548,7 +604,7 @@ mod tests_v8 {
     fn runtime_with_shared_worker() -> (V8JsRuntime, SharedWorkerOutbox) {
         let rt = V8JsRuntime::new().unwrap();
         let outbox: SharedWorkerOutbox = Arc::new(Mutex::new(Vec::new()));
-        install_shared_worker_bindings_v8(&rt, &outbox).unwrap();
+        install_shared_worker_bindings_v8(&rt, &outbox, None).unwrap();
         (rt, outbox)
     }
 
