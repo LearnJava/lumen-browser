@@ -4634,8 +4634,8 @@ var document = {
             console.warn('DOM tree exceeds 40000 nodes');
         }
         // BUG-571: a script element minted here is allowed to run once it is
-        // inserted into the document — see `_lumen_script_track`.
-        _lumen_script_track(nid, tag);
+        // inserted into the document — see `_lumen_resource_track`.
+        _lumen_resource_track(nid, tag);
         return _lumen_make_element(nid);
     },
     // DOM LS §4.5: createElementNS(namespace, qualifiedName) creates a native
@@ -4654,7 +4654,7 @@ var document = {
             throw new DOMException('DOM node limit exceeded', 'QuotaExceededError');
         }
         // BUG-571: SVG's <script> runs on insertion exactly like the HTML one.
-        _lumen_script_track(nid, local);
+        _lumen_resource_track(nid, local);
         return _lumen_make_element(nid);
     },
     createTextNode:         function(t) {
@@ -4862,27 +4862,34 @@ var print    = function()  { _lumen_print_dialog(); };
 // Deliberately NOT covered, matching the spec's 'already started' flag: scripts
 // produced by the fragment parser (innerHTML / insertAdjacentHTML /
 // document.write) and scripts that came from the document parser. Neither ever
-// enters `_lumen_script_pending`, so neither can be re-run from here.
+// enters `_lumen_resource_pending`, so neither can be re-run from here.
+//
+// BUG-703: <link rel=stylesheet> rides the same machinery. The shell fetches a
+// dynamically inserted sheet and puts it in the cascade, but nothing told the
+// page — so `link.onload` never fired, and the common «await the sheet, then
+// render» loader waited forever.
 
-// nid → true for a <script> element built by createElement/createElementNS that
-// has not been prepared yet. The entry is deleted on preparation, so the map
-// doubles as the spec's per-element 'already started' flag: moving an executed
-// script around the tree can never run it a second time.
-var _lumen_script_pending = {};
-var _lumen_script_pending_count = 0;
+// nid → 'script' | 'link' for an element built by createElement/createElementNS
+// whose insertion has to start a resource load and that has not been prepared
+// yet. The entry is deleted on preparation, so the map doubles as the spec's
+// per-element 'already started' flag: moving an executed script (or a loaded
+// link) around the tree can never fetch it a second time.
+var _lumen_resource_pending = {};
+var _lumen_resource_pending_count = 0;
 
-// Remember a freshly created element when it is a <script>. Called from
+// Remember a freshly created element whose insertion starts a load. Called from
 // document.createElement / createElementNS — the only two ways page script can
-// mint a script element that the spec allows to run on insertion.
-function _lumen_script_track(nid, local) {
-    if (String(local).toLowerCase() !== 'script') return;
-    _lumen_script_pending[nid] = true;
-    _lumen_script_pending_count++;
+// mint such an element that the spec allows to act on insertion.
+function _lumen_resource_track(nid, local) {
+    var tag = String(local).toLowerCase();
+    if (tag !== 'script' && tag !== 'link') return;
+    _lumen_resource_pending[nid] = tag;
+    _lumen_resource_pending_count++;
 }
 
 // Same shadow-inclusive test as Node.isConnected, by nid alone — no element
 // wrapper is allocated, because this runs on the DOM insertion hot path.
-function _lumen_script_is_connected(nid) {
+function _lumen_resource_is_connected(nid) {
     var htmlId = _lumen_u2n(_lumen_get_html_element());
     if (htmlId === null) return false;
     var cur = nid;
@@ -4910,10 +4917,10 @@ function _lumen_is_classic_script_type(t) {
     return _LUMEN_CLASSIC_SCRIPT_TYPES[s.toLowerCase()] === 1;
 }
 
-// `load`/`error` on a script element neither bubble nor cancel, so a plain
-// at-target dispatch is the whole story. `_lumen_dispatch` runs addEventListener
-// listeners and the `on<type>` IDL attribute alike (BUG-360).
-function _lumen_script_fire(nid, type) {
+// `load`/`error` on a script or link element neither bubble nor cancel, so a
+// plain at-target dispatch is the whole story. `_lumen_dispatch` runs
+// addEventListener listeners and the `on<type>` IDL attribute alike (BUG-360).
+function _lumen_resource_fire(nid, type) {
     try { _lumen_dispatch(nid, new Event(type, { bubbles: false, cancelable: false })); }
     catch (e) {}
 }
@@ -4971,10 +4978,10 @@ function _lumen_script_load_external(nid, src, isModule) {
             if (isModule) return _lumen_script_run_module(url, text);
             _lumen_script_execute_classic(text);
         }).then(function() {
-            _lumen_script_fire(nid, 'load');
+            _lumen_resource_fire(nid, 'load');
         }).catch(function(e) {
             _lumen_console_error('script load failed: ' + url + ': ' + e);
-            _lumen_script_fire(nid, 'error');
+            _lumen_resource_fire(nid, 'error');
         });
     }, 0);
 }
@@ -5003,37 +5010,81 @@ function _lumen_script_prepare(nid) {
     // Module scripts are deferred by spec; a task hop is the approximation.
     setTimeout(function() {
         _lumen_script_run_module('', body).then(function() {
-            _lumen_script_fire(nid, 'load');
+            _lumen_resource_fire(nid, 'load');
         }).catch(function(e) {
             _lumen_console_error('module script failed: ' + e);
-            _lumen_script_fire(nid, 'error');
+            _lumen_resource_fire(nid, 'error');
+        });
+    }, 0);
+}
+
+// HTML LS §4.6.7 «process the linked resource»: a <link> whose `rel` makes it
+// fetch a resource fires `load` on success and `error` on failure. Only the
+// stylesheet case is wired here — it is the one pages await (a lazy-block
+// loader that awaits `link.onload` before rendering hangs forever otherwise,
+// BUG-703) and the one the shell already fetches for the cascade.
+//
+// The fetch below is a second, cache-warm request for the same URL rather than
+// a report from the cascade loader: the shell re-collects link hrefs from the
+// whole tree on restyle (`main.rs::collect_link_hrefs`) and has no per-node
+// completion signal to forward. So `load` here means «the bytes arrived», not
+// «the sheet is in the cascade» — the same approximation the <script> path
+// above makes, and enough for the await that pages actually write.
+function _lumen_link_prepare(nid) {
+    var rel = _lumen_u2n(_lumen_get_attr(nid, 'rel'));
+    if (rel === null) return;
+    var toks = String(rel).toLowerCase().split(/\\s+/);
+    var isSheet = false;
+    for (var i = 0; i < toks.length; i++) {
+        if (toks[i] === 'stylesheet') isSheet = true;
+    }
+    if (!isSheet) return;
+    var href = _lumen_u2n(_lumen_get_attr(nid, 'href'));
+    href = (href === null) ? '' : String(href).trim();
+    // No href → no resource is obtained, so neither event fires.
+    if (href === '') return;
+    // Task hop for the same reason as the external <script> path: the
+    // `link.onload = …` assignment almost always follows the appendChild.
+    setTimeout(function() {
+        var url = _url_resolve(href, _lumen_document_base_url());
+        fetch(url).then(function(resp) {
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            // Drain the body: an unread response holds its fetch slot (BUG-721).
+            return resp.text();
+        }).then(function() {
+            _lumen_resource_fire(nid, 'load');
+        }).catch(function(e) {
+            _lumen_console_error('stylesheet load failed: ' + url + ': ' + e);
+            _lumen_resource_fire(nid, 'error');
         });
     }, 0);
 }
 
 // Run the pending check for one tracked element, if it is connected by now.
-function _lumen_script_try_prepare(nid) {
-    if (_lumen_script_pending[nid] !== true) return;
-    if (!_lumen_script_is_connected(nid)) return;
-    delete _lumen_script_pending[nid];
-    _lumen_script_pending_count--;
+function _lumen_resource_try_prepare(nid) {
+    var kind = _lumen_resource_pending[nid];
+    if (kind !== 'script' && kind !== 'link') return;
+    if (!_lumen_resource_is_connected(nid)) return;
+    delete _lumen_resource_pending[nid];
+    _lumen_resource_pending_count--;
+    if (kind === 'link') { _lumen_link_prepare(nid); return; }
     _lumen_script_prepare(nid);
 }
 
 // Insertion hook. Fast path when no dynamically created script is outstanding
 // (one property read), which is every page that never calls
 // createElement('script') and every insertion after the last one has run.
-function _lumen_script_after_insert(childNid) {
-    if (_lumen_script_pending_count === 0) return;
-    if (_lumen_script_pending[childNid] === true) {
-        _lumen_script_try_prepare(childNid);
+function _lumen_resource_after_insert(childNid) {
+    if (_lumen_resource_pending_count === 0) return;
+    if (_lumen_resource_pending[childNid] !== undefined) {
+        _lumen_resource_try_prepare(childNid);
         return;
     }
-    // The inserted node may be an *ancestor* of a tracked script that was built
+    // The inserted node may be an *ancestor* of a tracked element that was built
     // detached (`div.appendChild(script)` before `body.appendChild(div)`) and
     // only becomes connected now. Deleting the current key inside for-in is
-    // well-defined, and the map holds only not-yet-run scripts.
-    for (var k in _lumen_script_pending) _lumen_script_try_prepare(+k);
+    // well-defined, and the map holds only not-yet-prepared elements.
+    for (var k in _lumen_resource_pending) _lumen_resource_try_prepare(+k);
 }
 
 // Route every tree insertion through the hook by wrapping the two natives that
@@ -5045,11 +5096,11 @@ var _lumen_native_append_child  = _lumen_append_child;
 var _lumen_native_insert_before = _lumen_insert_before;
 _lumen_append_child = function(parent, child) {
     _lumen_native_append_child(parent, child);
-    _lumen_script_after_insert(child);
+    _lumen_resource_after_insert(child);
 };
 _lumen_insert_before = function(parent, child, reference) {
     _lumen_native_insert_before(parent, child, reference);
-    _lumen_script_after_insert(child);
+    _lumen_resource_after_insert(child);
 };
 
 // ── Custom Elements registry ──────────────────────────────────────────────────
@@ -31341,6 +31392,95 @@ mod tests {
             .unwrap();
             let r = rt.eval("globalThis.__b571_ext_err === true").unwrap();
             assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        // ── BUG-703: dynamic `<link rel=stylesheet>` load/error ────────────────
+
+        /// The shape behind the tbank.ru hang: a block loader appends a
+        /// stylesheet link and awaits its `load` before rendering. Both the IDL
+        /// attribute and an addEventListener listener must be reached.
+        #[test]
+        fn dynamic_stylesheet_link_fires_load() {
+            let provider = Arc::new(FixedFetch { status: 200, body: "#a{color:red}" });
+            let rt = v8_runtime_with_dom_and_fetch(make_doc(), provider);
+            rt.eval(
+                r#"globalThis.__b703_load = 0;
+                   var l = document.createElement('link');
+                   l.rel = 'stylesheet';
+                   l.href = 'block.css';
+                   l.onload = function() { globalThis.__b703_load++; };
+                   l.addEventListener('load', function() { globalThis.__b703_load++; });
+                   document.head.appendChild(l);
+                   _lumen_tick_timers();"#,
+            )
+            .unwrap();
+            let r = rt.eval("globalThis.__b703_load").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Number(2.0));
+        }
+
+        /// A failed sheet must fire `error`, not hang — the loader in the field
+        /// races `onload` against `onerror` and settles on whichever arrives.
+        #[test]
+        fn dynamic_stylesheet_link_fires_error_on_http_failure() {
+            let provider = Arc::new(FixedFetch { status: 404, body: "nope" });
+            let rt = v8_runtime_with_dom_and_fetch(make_doc(), provider);
+            rt.eval(
+                r#"globalThis.__b703_err = false;
+                   var l = document.createElement('link');
+                   l.rel = 'stylesheet';
+                   l.href = 'missing.css';
+                   l.onerror = function() { globalThis.__b703_err = true; };
+                   document.head.appendChild(l);
+                   _lumen_tick_timers();"#,
+            )
+            .unwrap();
+            let r = rt.eval("globalThis.__b703_err === true").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// Scope guard: only `rel=stylesheet` is wired. A `rel=preload` link
+        /// must not be fetched behind the page's back — no event either way.
+        #[test]
+        fn dynamic_preload_link_fires_nothing() {
+            let provider = Arc::new(FixedFetch { status: 200, body: "x" });
+            let rt = v8_runtime_with_dom_and_fetch(make_doc(), provider);
+            rt.eval(
+                r#"globalThis.__b703_any = false;
+                   var l = document.createElement('link');
+                   l.rel = 'preload';
+                   l.href = 'thing.woff2';
+                   l.onload = function() { globalThis.__b703_any = true; };
+                   l.onerror = function() { globalThis.__b703_any = true; };
+                   document.head.appendChild(l);
+                   _lumen_tick_timers();"#,
+            )
+            .unwrap();
+            let r = rt.eval("globalThis.__b703_any === false").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// A link built detached and only later connected still loads, and a
+        /// link that never enters the document must not fetch at all.
+        #[test]
+        fn detached_stylesheet_link_loads_only_once_connected() {
+            let provider = Arc::new(FixedFetch { status: 200, body: "#a{color:red}" });
+            let rt = v8_runtime_with_dom_and_fetch(make_doc(), provider);
+            rt.eval(
+                r#"globalThis.__b703_d = 0;
+                   var d = document.createElement('div');
+                   var l = document.createElement('link');
+                   l.rel = 'stylesheet';
+                   l.href = 'block.css';
+                   l.onload = function() { globalThis.__b703_d++; };
+                   d.appendChild(l);
+                   _lumen_tick_timers();"#,
+            )
+            .unwrap();
+            let before = rt.eval("globalThis.__b703_d").unwrap();
+            assert_eq!(before, lumen_core::JsValue::Number(0.0));
+            rt.eval("document.body.appendChild(d); _lumen_tick_timers();").unwrap();
+            let after = rt.eval("globalThis.__b703_d").unwrap();
+            assert_eq!(after, lumen_core::JsValue::Number(1.0));
         }
 
         #[test]
