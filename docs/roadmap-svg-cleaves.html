@@ -57,8 +57,8 @@
 {
  "generated": "2026-08-09",
  "counts": {
-  "open": 322,
-  "fixed": 361,
+  "open": 319,
+  "fixed": 364,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -2779,7 +2779,7 @@
        "title": "WPT: прогнать срез `html/rendering`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). Срез категории `html`, вынесен из `WPT-VENDOR-html` 2026-07-28. Дерево уже вендорено. DONE 2026-08-04: прогнан целиком (`--processes=4`, ~2 мин) — **115/149 harness OK, 187/1053 сабтестов** (296 `reftest` вне охвата минимального исполнителя, как и предсказывала строка). Основная масса из 900+ unexpected — не новые находки, а концентрированный ценник уже известных сквозных дефектов: [BUG-367](bugs/BUG-367-OPEN.md) (`localName`/`prefix` отсутствуют — `<undefined type=submit>` во всех тест-именах и телах ассертов button-layout/computed-style.html, 167/167 сабтестов одного файла), [BUG-488](bugs/BUG-488-OPEN.md) (`getComputedStyle` пуст для ЛЮБОГО inline-элемента — `<span>`/`<a>`), [BUG-351](bugs/BUG-351-OPEN.md) (`outerHTML` отсутствует на живом DOM), [BUG-478](bugs/BUG-478-OPEN.md)/[522](bugs/BUG-522-OPEN.md)/[551](bugs/BUG-551-OPEN.md)/[580](bugs/BUG-580-OPEN.md) (`Element.getClientRects` отсутствует), [BUG-414](bugs/BUG-414-OPEN.md) (`dataset` отсутствует — 12 хитов в iframe-frameborder.html), [BUG-368](bugs/BUG-368-OPEN.md) (`innerHTML` текстовая заглушка — `table_tr`-инъекция в table-attribute.html даёт `getElementById`=null, каскадный ERROR/NOTRUN на 8 сабтестов той же категории). Три новых бага, все подтверждены живой пробой `--mcp-live-port` поверх сигнала прогона: [BUG-602](bugs/BUG-602-OPEN.md) (легаси `align` — вообще нет IDL-рефлексии ни на одном элементе, отдельно от table `align`→`text-align` presentational hint, который работает), [BUG-603](bugs/BUG-603-OPEN.md) (`bgcolor` presentational hint применяется только из начального парсинга и никогда не переприменяется на рантайменый `setAttribute`, плюс `background`/`bordercolor`/`cellspacing` не реализованы вовсе), [BUG-604](bugs/BUG-604-OPEN.md) (нет UA shadow tree у `<video>`/`<audio>`/`<select>`/`<details>` — дочерний контент рендерится напрямую вместо ожидаемого no-slot/slot-контракта). Отдельно расширен [BUG-537](bugs/BUG-537-OPEN.md) новым шестым свойством: `aspect-ratio` пропущен в whitelist `computed_style_to_map`, изолировано на блочном элементе, чтобы исключить BUG-488/443/555",
+       "note": "Скоуп: ⬜ (кандидат). Срез категории `html`, вынесен из `WPT-VENDOR-html` 2026-07-28. Дерево уже вендорено. DONE 2026-08-04: прогнан целиком (`--processes=4`, ~2 мин) — **115/149 harness OK, 187/1053 сабтестов** (296 `reftest` вне охвата минимального исполнителя, как и предсказывала строка). Основная масса из 900+ unexpected — не новые находки, а концентрированный ценник уже известных сквозных дефектов: [BUG-367](bugs/BUG-367-OPEN.md) (`localName`/`prefix` отсутствуют — `<undefined type=submit>` во всех тест-именах и телах ассертов button-layout/computed-style.html, 167/167 сабтестов одного файла), [BUG-488](bugs/BUG-488-OPEN.md) (`getComputedStyle` пуст для ЛЮБОГО inline-элемента — `<span>`/`<a>`), [BUG-351](bugs/BUG-351-OPEN.md) (`outerHTML` отсутствует на живом DOM), [BUG-478](bugs/BUG-478-OPEN.md)/[522](bugs/BUG-522-OPEN.md)/[551](bugs/BUG-551-OPEN.md)/[580](bugs/BUG-580-OPEN.md) (`Element.getClientRects` отсутствует), [BUG-414](bugs/BUG-414-FIXED.md) (`dataset` отсутствует — 12 хитов в iframe-frameborder.html), [BUG-368](bugs/BUG-368-OPEN.md) (`innerHTML` текстовая заглушка — `table_tr`-инъекция в table-attribute.html даёт `getElementById`=null, каскадный ERROR/NOTRUN на 8 сабтестов той же категории). Три новых бага, все подтверждены живой пробой `--mcp-live-port` поверх сигнала прогона: [BUG-602](bugs/BUG-602-OPEN.md) (легаси `align` — вообще нет IDL-рефлексии ни на одном элементе, отдельно от table `align`→`text-align` presentational hint, который работает), [BUG-603](bugs/BUG-603-OPEN.md) (`bgcolor` presentational hint применяется только из начального парсинга и никогда не переприменяется на рантайменый `setAttribute`, плюс `background`/`bordercolor`/`cellspacing` не реализованы вовсе), [BUG-604](bugs/BUG-604-OPEN.md) (нет UA shadow tree у `<video>`/`<audio>`/`<select>`/`<details>` — дочерний контент рендерится напрямую вместо ожидаемого no-slot/slot-контракта). Отдельно расширен [BUG-537](bugs/BUG-537-OPEN.md) новым шестым свойством: `aspect-ratio` пропущен в whitelist `computed_style_to_map`, изолировано на блочном элементе, чтобы исключить BUG-488/443/555",
        "bugs": [
         "BUG-602",
         "BUG-603",
@@ -2885,7 +2885,7 @@
        "title": "WPT: вендорить + прогнать категорию `import-maps`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-04: вендорена + прогнана целиком (`--all --root import-maps --recursive`, ~5 мин) — **35/57 harness OK, 9/81 сабтестов**. Самодостаточная категория (0 `.https.`, 0 `testdriver.js`), но весь провал объясняется тремя уже открытыми дефектами: доминирующий [BUG-446](bugs/BUG-446-OPEN.md) (граф модулей не подгружается — любой относительный `import`/`import()` внутри уже загруженного модуля падает `module not found`, вне зависимости от import-карты — `set_import_map` переименовывает спецификатор, но загружать переименованный URL по-прежнему некому), часть `not-overridden/*`/`*-integrity.html` — [BUG-485](bugs/BUG-485-OPEN.md)/[BUG-565](bugs/BUG-565-OPEN.md) (`document.head` всегда `undefined`), `script-supports-importmap.html` — [BUG-572](bugs/BUG-572-OPEN.md) (`HTMLScriptElement.supports` отсутствует). Проверено отдельно: 2 «прошедших» сабтеста `static-integrity.html` — ложноположительные (модуль не грузится по BUG-446 независимо от корректности integrity-хэша, импорт-карт-специфичная проверка `integrity` не подтверждена рабочей). Новых багов не заведено — перепрогнать категорию после фикса BUG-446",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-04: вендорена + прогнана целиком (`--all --root import-maps --recursive`, ~5 мин) — **35/57 harness OK, 9/81 сабтестов**. Самодостаточная категория (0 `.https.`, 0 `testdriver.js`), но весь провал объясняется тремя уже открытыми дефектами: доминирующий [BUG-446](bugs/BUG-446-OPEN.md) (граф модулей не подгружается — любой относительный `import`/`import()` внутри уже загруженного модуля падает `module not found`, вне зависимости от import-карты — `set_import_map` переименовывает спецификатор, но загружать переименованный URL по-прежнему некому), часть `not-overridden/*`/`*-integrity.html` — [BUG-485](bugs/BUG-485-FIXED.md)/[BUG-565](bugs/BUG-565-FIXED.md) (`document.head` всегда `undefined`), `script-supports-importmap.html` — [BUG-572](bugs/BUG-572-OPEN.md) (`HTMLScriptElement.supports` отсутствует). Проверено отдельно: 2 «прошедших» сабтеста `static-integrity.html` — ложноположительные (модуль не грузится по BUG-446 независимо от корректности integrity-хэша, импорт-карт-специфичная проверка `integrity` не подтверждена рабочей). Новых багов не заведено — перепрогнать категорию после фикса BUG-446",
        "bugs": [
         "BUG-446",
         "BUG-485/BUG-565",
@@ -2976,7 +2976,7 @@
        "title": "WPT: вендорить + прогнать категорию `jpegxl`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root jpegxl --recursive`, ~2 мин) — **2/13 harness OK, 0/11 сабтестов**. Категория состоит на 2/3 из reftest-пар (33 пары, `Unsupported test type reftest`, run_report.py даёт 0/0) — весь сигнал из 13 testharness-файлов. Все провалы объясняются известными причинами: декодер `jxl.rs::decode_jxl` — Phase-0 заглушка, всегда `Err` (движок уже документирует это в CAPABILITIES.md), что и объясняет большинство TIMEOUT на прямых fixture-тестах (`alpha-vardct.html`, `html-img.html`, `modular-lossy.html` и т.п.); `html-preload-image.html` FAIL — переподтверждение [BUG-485](bugs/BUG-485-OPEN.md)/[BUG-565](bugs/BUG-565-OPEN.md) (`document.head` отсутствует целиком); два `.https.`-файла ERROR/TIMEOUT на известном TLS-гэпе тестового сертификата, с побочной контаминацией — переподтверждение [BUG-380](bugs/BUG-380-OPEN.md) (browsing context переиспользуется, `AssertionError: Got results from X, expected Y`). Живой пробой (`--mcp-live-port`) обнаружен новый **[BUG-630](bugs/BUG-630-OPEN.md)**: `<img>` не эмитит НИ `load`, НИ `error` — проверено на валидном декодируемом PNG (не только на JXL), то есть баг общий и не зависит от формата; `HTMLImageElement.prototype` вообще не имеет `complete`/`naturalWidth`/`naturalHeight`/`onload`/`onerror` (только атрибутная рефлексия, `dom.rs:10864-10875`), а движковый декод (`main.rs::decode_image` и парные lazy/background-image пути) логирует и молча роняет и `Ok`, и `Err`-ветку без диспатча события. Это фундаментальный гэп: любой WPT-тест, ожидающий `<img>` `load`/`error` (стандартная идиома), зависает до внешнего таймаута wptrunner независимо от корректности остального движка",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root jpegxl --recursive`, ~2 мин) — **2/13 harness OK, 0/11 сабтестов**. Категория состоит на 2/3 из reftest-пар (33 пары, `Unsupported test type reftest`, run_report.py даёт 0/0) — весь сигнал из 13 testharness-файлов. Все провалы объясняются известными причинами: декодер `jxl.rs::decode_jxl` — Phase-0 заглушка, всегда `Err` (движок уже документирует это в CAPABILITIES.md), что и объясняет большинство TIMEOUT на прямых fixture-тестах (`alpha-vardct.html`, `html-img.html`, `modular-lossy.html` и т.п.); `html-preload-image.html` FAIL — переподтверждение [BUG-485](bugs/BUG-485-FIXED.md)/[BUG-565](bugs/BUG-565-FIXED.md) (`document.head` отсутствует целиком); два `.https.`-файла ERROR/TIMEOUT на известном TLS-гэпе тестового сертификата, с побочной контаминацией — переподтверждение [BUG-380](bugs/BUG-380-OPEN.md) (browsing context переиспользуется, `AssertionError: Got results from X, expected Y`). Живой пробой (`--mcp-live-port`) обнаружен новый **[BUG-630](bugs/BUG-630-OPEN.md)**: `<img>` не эмитит НИ `load`, НИ `error` — проверено на валидном декодируемом PNG (не только на JXL), то есть баг общий и не зависит от формата; `HTMLImageElement.prototype` вообще не имеет `complete`/`naturalWidth`/`naturalHeight`/`onload`/`onerror` (только атрибутная рефлексия, `dom.rs:10864-10875`), а движковый декод (`main.rs::decode_image` и парные lazy/background-image пути) логирует и молча роняет и `Ok`, и `Err`-ветку без диспатча события. Это фундаментальный гэп: любой WPT-тест, ожидающий `<img>` `load`/`error` (стандартная идиома), зависает до внешнего таймаута wptrunner независимо от корректности остального движка",
        "bugs": [
         "BUG-630 (переподтверждены BUG-485/565",
         "BUG-380)"
@@ -3430,7 +3430,7 @@
        "title": "WPT: вендорить + прогнать категорию `preload`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root preload --recursive`, ~8 мин, 79 id) — **36/79 harness OK, 10/203 сабтестов**. Доминирующая причина отказа — реконфирмация [BUG-485](bugs/BUG-485-OPEN.md)/[BUG-565](bugs/BUG-565-OPEN.md) (`document.head` всегда `undefined`, ~60 хитов на `document.head.appendChild`/`.append`); остальной сигнал — реконфирмации [BUG-611](bugs/BUG-611-OPEN.md) (`HTMLLinkElement.relList` отсутствует), [BUG-568](bugs/BUG-568-OPEN.md) (`document.write` отсутствует), [BUG-380](bugs/BUG-380-OPEN.md) (переиспользование browsing context), TLS-гэп `UnknownIssuer` на 5 `.https.`-файлах, и невендоренные общие ресурсы (`/common/utils.js`, `/common/get-host-info.sub.js`, `/common/dispatcher/dispatcher.js`) — документированный пробел вендоринга, не баг движка. Новых багов не заведено"
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root preload --recursive`, ~8 мин, 79 id) — **36/79 harness OK, 10/203 сабтестов**. Доминирующая причина отказа — реконфирмация [BUG-485](bugs/BUG-485-FIXED.md)/[BUG-565](bugs/BUG-565-FIXED.md) (`document.head` всегда `undefined`, ~60 хитов на `document.head.appendChild`/`.append`); остальной сигнал — реконфирмации [BUG-611](bugs/BUG-611-OPEN.md) (`HTMLLinkElement.relList` отсутствует), [BUG-568](bugs/BUG-568-OPEN.md) (`document.write` отсутствует), [BUG-380](bugs/BUG-380-OPEN.md) (переиспользование browsing context), TLS-гэп `UnknownIssuer` на 5 `.https.`-файлах, и невендоренные общие ресурсы (`/common/utils.js`, `/common/get-host-info.sub.js`, `/common/dispatcher/dispatcher.js`) — документированный пробел вендоринга, не баг движка. Новых багов не заведено"
       },
       {
        "id": "WPT-VENDOR-presentation-api",
@@ -3729,7 +3729,7 @@
        "title": "WPT: вендорить + прогнать категорию `speculation-rules`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root speculation-rules --recursive --processes=4`, ~115 мин, 408 файлов, 197 отобранных id по глобу, но из-за фан-аута variant-ов — 530 реально прогнанных инстансов) — **7/530 harness OK, 0/32 сабтестов**. Весь движковый сигнал — реконфирмация уже открытых дефектов: доминирует [BUG-485](bugs/BUG-485-OPEN.md) (`document.head` отсутствует вовсе — `TypeError: Cannot read properties of undefined (reading 'appendChild')` на каждом тесте, вставляющем `<script type=\"speculationrules\">` через `document.head.appendChild`); пробел `performance.getSpeculations()`/`SpeculationMeasurement` и полное отсутствие `load`/`error` на `<script type=\"speculationrules\">` соответствуют собственному doc-комментарию Phase 0 движка (`crates/js/src/speculation_rules.rs` — «not consumed by the engine in Phase 0», реализованы только `document.prerendering`/`getSpeculationRules()`/`onprerenderingchange`-заглушки и no-op хук `_lumen_deliver_speculation_rules`); единичные `ERROR` — уже задокументированный класс BUG-380 (переиспользуемый browsing context отдаёт результаты предыдущего теста). Живая проба (`--mcp-live-port`, локальный `http.server`) подтвердила форму Phase 0-шима напрямую и то, что `<script type=\"speculationrules\" src=...>` не всплывает ни `onload`, ни `onerror` — элемент полностью инертен, как и задокументировано. Новых номеров багов не заведено"
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root speculation-rules --recursive --processes=4`, ~115 мин, 408 файлов, 197 отобранных id по глобу, но из-за фан-аута variant-ов — 530 реально прогнанных инстансов) — **7/530 harness OK, 0/32 сабтестов**. Весь движковый сигнал — реконфирмация уже открытых дефектов: доминирует [BUG-485](bugs/BUG-485-FIXED.md) (`document.head` отсутствует вовсе — `TypeError: Cannot read properties of undefined (reading 'appendChild')` на каждом тесте, вставляющем `<script type=\"speculationrules\">` через `document.head.appendChild`); пробел `performance.getSpeculations()`/`SpeculationMeasurement` и полное отсутствие `load`/`error` на `<script type=\"speculationrules\">` соответствуют собственному doc-комментарию Phase 0 движка (`crates/js/src/speculation_rules.rs` — «not consumed by the engine in Phase 0», реализованы только `document.prerendering`/`getSpeculationRules()`/`onprerenderingchange`-заглушки и no-op хук `_lumen_deliver_speculation_rules`); единичные `ERROR` — уже задокументированный класс BUG-380 (переиспользуемый browsing context отдаёт результаты предыдущего теста). Живая проба (`--mcp-live-port`, локальный `http.server`) подтвердила форму Phase 0-шима напрямую и то, что `<script type=\"speculationrules\" src=...>` не всплывает ни `onload`, ни `onerror` — элемент полностью инертен, как и задокументировано. Новых номеров багов не заведено"
       },
       {
        "id": "WPT-VENDOR-speech-api",
@@ -7462,10 +7462,10 @@
    "debtor": false
   },
   "BUG-414": {
-   "status": "open",
+   "status": "fixed",
    "title": "`element.dataset` и глобальный `DOMStringMap` отсутствуют (`data-*` при этом читаются через `getAttribute`). У SVG-элементов есть заглушка `get dataset() { retu…",
    "component": "js (`crates/js/src/dom.rs:5516-5880`; заглушка — `crates/js/src/svg.rs:265`)",
-   "date": null,
+   "date": "2026-08-09",
    "debtor": false
   },
   "BUG-415": {
@@ -7952,10 +7952,10 @@
    "debtor": false
   },
   "BUG-485": {
-   "status": "open",
+   "status": "fixed",
    "title": "`document.head` отсутствует вовсе — ни геттера на `document`, ни нативного `_lumen_get_head` на движке V8 (только `_lumen_get_body` существует). `document.head.…",
    "component": "js (`crates/js/src/dom.rs`)",
-   "date": null,
+   "date": "2026-08-09",
    "debtor": false
   },
   "BUG-486": {
@@ -8498,10 +8498,10 @@
    "debtor": false
   },
   "BUG-565": {
-   "status": "open",
+   "status": "fixed",
    "title": "`document.head` is always `undefined` -- never wired up, unlike its `body`/`documentElement` siblings. `document.head.append/appendChild/prepend(...)` throws `T…",
    "component": "js (`crates/js/src/dom.rs` -- live `Document` object literal, ~line 7140: `get body()`/`get documentElement()` exist, `get head()` does not)",
-   "date": null,
+   "date": "2026-08-09",
    "debtor": false
   },
   "BUG-566": {
@@ -9458,8 +9458,8 @@
   },
   "BUG-703": {
    "status": "open",
-   "title": "`https://www.tbank.ru/` не завершает гидратацию React — после полной загрузки (readyState complete, все 43 скрипта выполнились без ошибок, консоль пуста) DOM ос…",
-   "component": "js (V8-движок, гидратация React)",
+   "title": "`https://www.tbank.ru/` не рендерится: клиентский рендер React не начинается вовсе (ни одного ключа `__reactContainer$` в DOM, `createRoot` не вызывался), DOM с…",
+   "component": "js (`crates/js/src/dom.rs` — шим), shell (исполнение динамически вставленных скриптов)",
    "date": null,
    "debtor": false
   },
@@ -9740,9 +9740,6 @@
   "js (V8 ESM, `crates/js/src/v8_esm.rs` + `crates/shell/src/main.rs`)": [
    "BUG-459"
   ],
-  "js (V8-движок, гидратация React)": [
-   "BUG-703"
-  ],
   "js (WEB_API_SHIM, dom.rs)": [
    "BUG-302",
    "BUG-305",
@@ -9945,6 +9942,9 @@
   ],
   "js (`crates/js/src/dom.rs` — ни одного `DOMMatrix`/`DOMPoint`/`DOMRect`/`DOMQuad`-конструктора нигде)": [
    "BUG-522"
+  ],
+  "js (`crates/js/src/dom.rs` — шим), shell (исполнение динамически вставленных скриптов)": [
+   "BUG-703"
   ],
   "js (`crates/js/src/dom.rs`)": [
    "BUG-462",

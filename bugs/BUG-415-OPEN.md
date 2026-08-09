@@ -68,3 +68,18 @@ document-metadata-атрибутов (`characterSet`/`compatMode`/`URL`/…), к
 `_lumen_make_element`, с `__nid__`), а различия (`location`, `URL`, `readyState`,
 `contentType`) — параметрами. Тогда закрываются обе стороны раскола: и эта, и
 [BUG-358](BUG-358-OPEN.md).
+
+## Частично закрыто (P3, 2026-08-09, в ходе разбора [BUG-703](BUG-703-OPEN.md))
+
+`head` и `body` у отсоединённого документа реализованы: `_lumen_build_detached_document`
+определяет их как первый элемент-потомок `documentElement` с тегом `HEAD` и
+`BODY`/`FRAMESET` соответственно (HTML LS 3.1.4), поверх того же реального
+арена-поддерева, по которому уже ходит `documentElement`. Тест —
+`detached_document_exposes_head_and_body` в `dom::tests::v8_core`.
+
+Остаётся всё остальное из симптома: `removeChild`/`insertBefore`/`replaceChild`/
+`cloneNode`/`contains`/`hasChildNodes`, `title`, `readyState`,
+`getElementById`/`getElementsByTagName`/`querySelector`. Именно `removeChild`
+даёт 17 из 24 FAIL в `Document.body.html`, так что вклад этого фикса в цифры
+WPT, скорее всего, нулевой до того, как появятся методы `Node`. Направление
+починки (общий строитель для живого и отсоединённого документа) не изменилось.

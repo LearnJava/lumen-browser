@@ -1,6 +1,6 @@
 # BUG-485: `document.head` is entirely missing — no getter, no native binding
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-09
 **Дата:** 2026-08-02
 **Компонент:** js (`crates/js/src/dom.rs` — live `document` object literal, `~7159-7184`)
 **Найден:** WPT-RUN-3 срез 6 (`ROADMAP.md`) — массовый прогон `css/css-cascade`
@@ -152,3 +152,26 @@ same caution as [BUG-539](BUG-539-OPEN.md)'s note about its own systemic
 reach. `.ini` under `tests/wpt/metadata/css/css-shadow/`,
 `tests/wpt/metadata/css/css-scroll-snap/`,
 `tests/wpt/metadata/css/css-animations/`.
+
+## Исправлено (P3, 2026-08-09, в ходе разбора [BUG-703](BUG-703-OPEN.md))
+
+Добавлены нативный `_lumen_get_head` (сосед `_lumen_get_body`, тот же обход
+дерева — первый `<head>` в порядке документа) и геттер `document.head` в
+живом объекте `document` (`crates/js/src/dom.rs`); заодно `head`/`body`
+появились у отсоединённых документов (частично закрывает
+[BUG-415](BUG-415-OPEN.md)).
+
+Найдено заново на живой странице `https://www.tbank.ru/`: загрузчик чанков
+webpack заканчивается на `document.head.appendChild(script)`, поэтому на
+любом бандл-сайте каждый ленивый чанк падал с `TypeError: Cannot read
+properties of undefined (reading 'appendChild')` — внутри асинхронного
+бутстрапа без следа.
+
+Тесты: `document_head_is_the_head_element`,
+`document_head_accepts_appended_script`,
+`detached_document_exposes_head_and_body` в `dom::tests::v8_core`.
+Сабтесты WPT заново не измерялись — прогонов категорий в этой сессии не было.
+
+Дубликат: [BUG-485](BUG-485-FIXED.md) и [BUG-565](BUG-565-FIXED.md) — один и
+тот же дефект, заведённый дважды разными срезами WPT (WPT-RUN-3 срез 6 и
+WPT-VENDOR-html-semantics-document-metadata); закрыты одним фиксом.

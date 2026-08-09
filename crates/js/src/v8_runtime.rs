@@ -1340,6 +1340,15 @@ impl V8JsRuntime {
             let doc = d.lock().unwrap();
             find_element_by_tag(&doc, "body").map(|n| n.index() as u32)
         });
+        // BUG-703: `document.head` — the sibling of `_lumen_get_body` that the
+        // live `document` never had. Same tree scan (first `<head>` in document
+        // order, which in a parsed HTML document is the `<head>` child of
+        // `<html>`).
+        let d = Arc::clone(&doc);
+        reg!("_lumen_get_head", move || -> Option<u32> {
+            let doc = d.lock().unwrap();
+            find_element_by_tag(&doc, "head").map(|n| n.index() as u32)
+        });
         // BUG-281: `document.documentElement` — the `<html>` element, distinct from
         // `_lumen_get_document_root` (the `Document` node itself, `nodeType === 9`).
         let d = Arc::clone(&doc);

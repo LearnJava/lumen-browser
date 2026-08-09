@@ -74,3 +74,29 @@ graph) and [BUG-568](BUG-568-OPEN.md) (`document.write()`) — both are about
 different script-loading paths; this one is specifically "script created via
 DOM API, whether classic or module, whether inline or `src`, is never
 executed at all, in a page that has already finished its initial parse".
+
+## Блокирует BUG-703 (P3, 2026-08-09)
+
+Диагностика [BUG-703](BUG-703-OPEN.md) (`https://www.tbank.ru/` не рендерит
+React) упёрлась ровно в этот дефект: webpack-загрузчик чанков
+(`a.l` в `platform.<hash>.js`) создаёт `<script>`, вешает `onload`/`onerror`,
+кладёт его в `document.head` и ставит сторожевой `setTimeout(..., 24e4)`.
+В Lumen элемент попадает в DOM (`document.querySelectorAll('script[data-webpack]')`
+находит его с правильным `src`), но **сети по нему нет вовсе** — ни запроса,
+ни `load`, ни `error`, поэтому промис `a.e()` висит вечно и асинхронный
+бутстрап приложения молча останавливается. Наблюдаемый признак прямо на
+живой странице: сторожевой таймаут на 240 000 мс остаётся pending.
+
+Живой прототип фикса (проверен на tbank.ru, 2026-08-09): полифилл в чистом
+JS — перехват `appendChild`/`insertBefore` на `document.head`, затем
+`fetch(src).then(text => (0, eval)(text))` и диспатч `load`/`error` на
+элементе — сдвинул страницу с 0 до 11 React-узлов (React начал монтировать),
+т.е. механизм именно этот. Полного рендера полифилл не дал (в Edge на той же
+странице 2380 React-узлов), значит за BUG-571 в этой цепочке стоит ещё
+что-то — но следующий блокер BUG-703 не диагностируется, пока 571 открыт.
+
+Практический вывод для реализации: тела скриптов не обязательно тянуть через
+шелл — в шиме уже есть `fetch`, а косвенный `(0, eval)(text)` даёт ровно
+семантику классического скрипта (глобальная область видимости). Порядок:
+динамически созданный скрипт по спеке async, если явно не выставлен
+`script.async = false`.

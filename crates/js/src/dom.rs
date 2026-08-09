@@ -1974,6 +1974,28 @@ function _lumen_build_detached_document(proto, contentType) {
         },
         enumerable: true,
     });
+    // HTML LS 3.1.4 (BUG-703): head/body of a document with no browsing
+    // context — the first `<head>` / `<body>`-or-`<frameset>` child of the
+    // document element. The live `document` reads these off the arena
+    // (`_lumen_get_head`/`_lumen_get_body`); here the tree is the detached
+    // subtree hanging off `documentElement`, so walk its element children.
+    function _detached_doc_child(tags) {
+        var root = doc.documentElement;
+        if (!root) { return null; }
+        var kids = root.children;
+        for (var i = 0; i < kids.length; i++) {
+            if (tags.indexOf(kids[i].tagName) >= 0) { return kids[i]; }
+        }
+        return null;
+    }
+    Object.defineProperty(doc, 'head', {
+        get: function() { return _detached_doc_child(['HEAD']); },
+        enumerable: true,
+    });
+    Object.defineProperty(doc, 'body', {
+        get: function() { return _detached_doc_child(['BODY', 'FRAMESET']); },
+        enumerable: true,
+    });
     Object.defineProperty(doc, 'implementation', {
         get: function() {
             if (_impl === null) { _impl = _lumen_make_dom_implementation(doc); }
@@ -2775,9 +2797,76 @@ function _lumen_make_element(nid) {
     return built;
 }
 
+// HTML LS 3.2.6.6 — DOMStringMap (`element.dataset`), BUG-703.
+// data-foo-bar  <->  dataset.fooBar. Built on a Proxy so get/set/delete/`in`/
+// enumeration all stay live against the element's attributes instead of
+// snapshotting them.
+function _lumen_dataset_attr_name(prop) {
+    // Spec: a key containing an ASCII upper alpha right after a `-` is invalid.
+    if (/-[a-z]/.test(prop)) { return null; }
+    return 'data-' + prop.replace(/[A-Z]/g, function(c) { return '-' + c.toLowerCase(); });
+}
+function _lumen_dataset_prop_name(attr) {
+    return attr.slice(5).replace(/-([a-z])/g, function(m, c) { return c.toUpperCase(); });
+}
+function _lumen_dataset_keys(nid) {
+    var out = [];
+    var names = _lumen_get_attr_names(nid);
+    for (var i = 0; i < names.length; i++) {
+        if (names[i].indexOf('data-') === 0) { out.push(_lumen_dataset_prop_name(names[i])); }
+    }
+    return out;
+}
+// WebIDL interface object — `dataset` must satisfy `instanceof DOMStringMap`
+// (BUG-414: the WPT dataset tests assert exactly that, which is why the old
+// SVG-only `get dataset() { return {}; }` stub failed them even where it
+// answered). Not constructible from script, per WebIDL.
+function DOMStringMap() { throw new TypeError('Illegal constructor'); }
+globalThis.DOMStringMap = DOMStringMap;
+
+function _lumen_make_dataset(nid) {
+    return new Proxy(Object.create(DOMStringMap.prototype), {
+        get: function(_t, prop) {
+            if (typeof prop !== 'string') { return undefined; }
+            var attr = _lumen_dataset_attr_name(prop);
+            if (attr === null) { return undefined; }
+            var v = _lumen_u2n(_lumen_get_attr(nid, attr));
+            return v !== null ? v : undefined;
+        },
+        set: function(_t, prop, value) {
+            var attr = _lumen_dataset_attr_name(String(prop));
+            if (attr === null) {
+                throw new DOMException('Invalid dataset name: ' + prop, 'SyntaxError');
+            }
+            _lumen_set_attr(nid, attr, String(value));
+            return true;
+        },
+        has: function(_t, prop) {
+            if (typeof prop !== 'string') { return false; }
+            var attr = _lumen_dataset_attr_name(prop);
+            return attr !== null && _lumen_u2n(_lumen_get_attr(nid, attr)) !== null;
+        },
+        deleteProperty: function(_t, prop) {
+            var attr = _lumen_dataset_attr_name(String(prop));
+            if (attr !== null) { _lumen_remove_attr(nid, attr); }
+            return true;
+        },
+        ownKeys: function() { return _lumen_dataset_keys(nid); },
+        getOwnPropertyDescriptor: function(_t, prop) {
+            if (typeof prop !== 'string') { return undefined; }
+            var attr = _lumen_dataset_attr_name(prop);
+            if (attr === null) { return undefined; }
+            var v = _lumen_u2n(_lumen_get_attr(nid, attr));
+            if (v === null) { return undefined; }
+            return { value: v, writable: true, enumerable: true, configurable: true };
+        },
+    });
+}
+
 function _lumen_build_element(nid) {
     var _classList = _lumen_make_class_list(nid);
     var _style     = _lumen_make_style(nid);
+    var _dataset   = null;
     var _returnValue = '';
     var _obj = {
         __nid__: nid,
@@ -2793,6 +2882,12 @@ function _lumen_build_element(nid) {
         set className(v)     { _lumen_set_attr(nid, 'class', String(v)); },
         get classList()      { return _classList; },
         get style()          { return _style; },
+        // HTML LS 3.2.6.6 (BUG-703): lazily built, then cached for the wrapper's
+        // lifetime so `el.dataset === el.dataset` holds as it does in a browser.
+        get dataset()        {
+            if (_dataset === null) { _dataset = _lumen_make_dataset(nid); }
+            return _dataset;
+        },
         get attributeStyleMap() {
             // CSS Typed OM L1 — StylePropertyMap for element.style (mutable)
             if (typeof CSS === 'undefined' || !CSS.StylePropertyMap) return null;
@@ -4453,6 +4548,15 @@ var document = {
     get body()   {
         var bid = _lumen_u2n(_lumen_get_body());
         return bid !== null ? _lumen_make_element(bid) : null;
+    },
+    // HTML LS 3.1.4 (BUG-703): the head element. Missing entirely until now —
+    // webpack's chunk loader ends in `document.head.appendChild(script)`, so on
+    // every bundled site each lazily-loaded chunk threw
+    // `Cannot read properties of undefined`; inside an async bootstrap that
+    // became an unreported rejection and the app silently never rendered.
+    get head()   {
+        var hid = _lumen_u2n(_lumen_get_head());
+        return hid !== null ? _lumen_make_element(hid) : null;
     },
     // BUG-281: must return the `<html>` element, not the `Document` node itself
     // (react-dom's container-identity checks fail if `tagName` reads `#document`).
@@ -17001,6 +17105,118 @@ mod tests {
             let rt = v8_runtime_with_dom(make_doc());
             let result = rt.eval("document.body !== null").unwrap();
             assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        /// BUG-703: `document.head` was absent from the live `document` (only
+        /// `body`/`documentElement` existed), so webpack's chunk loader —
+        /// `document.head.appendChild(script)` — threw on every bundled site.
+        #[test]
+        fn document_head_is_the_head_element() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval(
+                    "'head' in document && document.head !== null \
+                     && document.head.tagName === 'HEAD' \
+                     && document.head.__nid__ === document.querySelector('head').__nid__",
+                )
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        /// BUG-703 regression, in the exact shape the webpack runtime uses it:
+        /// a freshly created `<script>` appended to `document.head` must land
+        /// in the real tree.
+        #[test]
+        fn document_head_accepts_appended_script() {
+            let doc = make_doc();
+            let rt = v8_runtime_with_dom(Arc::clone(&doc));
+            let ok = rt
+                .eval(
+                    "var s = document.createElement('script'); \
+                     s.src = 'https://example.com/chunk.js'; \
+                     document.head.appendChild(s); \
+                     document.head.lastChild.tagName === 'SCRIPT' \
+                     && document.querySelectorAll('head script').length === 1",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        /// BUG-703: `element.dataset` did not exist at all (only an SVG stub
+        /// returning `{}`), so `script.dataset.mmid = ...` threw mid-bootstrap.
+        #[test]
+        fn dataset_maps_data_attributes_both_ways() {
+            let rt = v8_runtime_with_dom(make_doc());
+            // read: data-foo-bar → dataset.fooBar
+            let read = rt
+                .eval(
+                    "var d = document.getElementById('main'); \
+                     d.setAttribute('data-foo-bar', 'v1'); \
+                     d.dataset.fooBar === 'v1' && ('fooBar' in d.dataset) \
+                     && d.dataset.missing === undefined",
+                )
+                .unwrap();
+            assert_eq!(read, lumen_core::JsValue::Bool(true));
+            // write: dataset.mmId → data-mm-id, and delete removes the attribute
+            let write = rt
+                .eval(
+                    "var d = document.getElementById('main'); \
+                     d.dataset.mmId = 'x7'; \
+                     var set = d.getAttribute('data-mm-id') === 'x7'; \
+                     var keys = Object.keys(d.dataset).sort().join(','); \
+                     delete d.dataset.fooBar; \
+                     set && keys === 'fooBar,mmId' && !d.hasAttribute('data-foo-bar') \
+                       && d.dataset.mmId === 'x7'",
+                )
+                .unwrap();
+            assert_eq!(write, lumen_core::JsValue::Bool(true));
+            // identity is stable, like a browser's DOMStringMap
+            let same = rt
+                .eval("document.getElementById('main').dataset === document.getElementById('main').dataset")
+                .unwrap();
+            assert_eq!(same, lumen_core::JsValue::Bool(true));
+        }
+
+        /// BUG-414: the WPT `dataset` tests assert `instanceof DOMStringMap`,
+        /// and one of them asserts it for an SVG element — which used to hit
+        /// `svg.rs`'s `get dataset() { return {}; }` stub instead.
+        #[test]
+        fn dataset_is_a_domstringmap_on_html_and_svg() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "var svg = document.createElementNS('http://www.w3.org/2000/svg', 'circle'); \
+                     svg.setAttribute('data-r', '5'); \
+                     var html = document.getElementById('main'); \
+                     typeof DOMStringMap === 'function' \
+                     && html.dataset instanceof DOMStringMap \
+                     && svg.dataset instanceof DOMStringMap \
+                     && svg.dataset.r === '5' \
+                     && (svg.dataset.r = '9', svg.getAttribute('data-r') === '9')",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+            let ctor = rt
+                .eval("(function(){ try { new DOMStringMap(); return false; } catch (e) { return e instanceof TypeError; } })()")
+                .unwrap();
+            assert_eq!(ctor, lumen_core::JsValue::Bool(true));
+        }
+
+        /// BUG-703: the detached-document half of the shim's Document split had
+        /// neither `head` nor `body` (see the `_lumen_build_detached_document`
+        /// vs live-`document` note in that function's comment).
+        #[test]
+        fn detached_document_exposes_head_and_body() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "var d = document.implementation.createHTMLDocument('t'); \
+                     d.head !== null && d.head.tagName === 'HEAD' \
+                     && d.body !== null && d.body.tagName === 'BODY' \
+                     && document.implementation.createDocument(null, '', null).head === null",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
         }
 
         #[test]
