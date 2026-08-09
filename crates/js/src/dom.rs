@@ -4573,6 +4573,31 @@ var document = {
     get visibilityState() { return _doc_visibility_state; },
     // Document lifecycle (HTML LS §8.5) — readyState driven by _lumen_apply_ready_state()
     get readyState()      { return _doc_ready_state; },
+    // HTML LS §8.4.4 document.write()/writeln() — was missing entirely, so any
+    // page calling it (legacy ad/analytics snippets are the common case) threw
+    // `document.write is not a function` and aborted the rest of that script.
+    // Spec-accurate behaviour needs an active-parser insertion point we do not
+    // track; instead this covers the two cases that matter without the
+    // destructive implicit document.open() the spec calls for on a closed
+    // document (which would wipe an already-hydrating SPA root out from under
+    // it): while still parsing, the text lands at the end of body, same as a
+    // real browser's insertion point would for a synchronous inline-script
+    // call; once the document has finished loading it is a no-op, matching
+    // real browsers' document.write() intervention for scripts that call it
+    // after load instead of erasing the page.
+    write: function() {
+        if (_doc_ready_state !== 'loading') return;
+        var body = document.body;
+        if (!body) return;
+        var text = '';
+        for (var i = 0; i < arguments.length; i++) text += String(arguments[i]);
+        body.insertAdjacentHTML('beforeend', text);
+    },
+    writeln: function() {
+        var args = Array.prototype.slice.call(arguments);
+        args.push('\\n');
+        document.write.apply(document, args);
+    },
     // addEventListener intercepts DOMContentLoaded to fire immediately when already ready
     addEventListener: function(type, fn, opts) {
         if (type === 'DOMContentLoaded' && _doc_ready_state !== 'loading') {
