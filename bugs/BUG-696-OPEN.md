@@ -92,8 +92,9 @@ matrix, or the `detail` structured-clone step).
   `measures.html`/`measure_associated_with_navigation_timing.html`/
   `measure_navigation_timing.html` TIMEOUT — all use
   `<body onload="...">`/`<body onload=...>` inline event-handler content
-  attributes to kick off the test; same as [BUG-360](bugs/BUG-360-OPEN.md)
-  (inline event-handler attributes never fire).
+  attributes to kick off the test; same as [BUG-360](bugs/BUG-360-FIXED.md)
+  (inline event-handler attributes were dead at the time of this run — the
+  fix landed in main the same day, in parallel; not re-run against it).
 - `idlharness.any.html` TIMEOUT — `/resources/idlharness.js` 404, the
   established not-vendored-`idlharness.js` gap already documented for
   other categories (`touch-events`, `trusted-types`, …).
