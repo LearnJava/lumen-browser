@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-09",
  "counts": {
-  "open": 310,
+  "open": 311,
   "fixed": 352,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 662,
+ "total_bugs": 663,
  "phases": [
   {
    "id": "P0",
@@ -3921,9 +3921,12 @@
       {
        "id": "WPT-VENDOR-user-timing",
        "title": "WPT: вендорить + прогнать категорию `user-timing`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root user-timing --recursive`, ~1:42, 44 файла, 36 отобранных id) — **27/36 harness OK, 66/176 сабтестов**. Заведён [BUG-696](bugs/BUG-696-OPEN.md): `performance.mark()`/`.measure()` (`dom.rs:8366-8392`) не валидируют аргументы вовсе — ни `SyntaxError` на зарезервированных именах вроде `navigationStart`, ни `TypeError` на невалидных mark-options (`123`/`NaN`/строка/отрицательный `startTime`), ни `SyntaxError` на несуществующих именованных метках в `measure()`, `detail` не клонируется вовсе. Второстепенный сигнал — реконфирмация [BUG-687](bugs/BUG-687-OPEN.md) (`PerformanceMark`/`PerformanceMeasure` — plain-объекты) и [BUG-360](bugs/BUG-360-OPEN.md) (`<body onload=\"...\">` мёртв, 7 TIMEOUT-файлов), плюс известный невендоренный `idlharness.js`. Один новый номер бага",
+       "bugs": [
+        "BUG-696"
+       ]
       },
       {
        "id": "WPT-VENDOR-vibration",
@@ -9422,6 +9425,13 @@
    "status": "open",
    "title": "`URLPattern` is a hand-rolled mini pattern-matcher (its own doc comment: \"Pure JavaScript implementation\"), not a port of the WHATWG URLPattern Standard algorit…",
    "component": "js (`crates/js/src/url_pattern.rs` — `install_url_pattern_api_v8`/`URL_PATTERN_SHIM`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-696": {
+   "status": "open",
+   "title": "`performance.mark()`/`.measure()` perform zero argument validation. Per User Timing L3 §3.1, `mark()` must throw `SyntaxError` when `markName` matches a legacy…",
+   "component": "js (`crates/js/src/dom.rs:8366-8392` — `performance.mark`/`performance.measure` in `WEB_API_SHIM`)",
    "date": null,
    "debtor": false
   }
