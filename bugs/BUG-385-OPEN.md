@@ -119,7 +119,7 @@ after: enumerable?             = {"e":true,"w":true,"c":true}
 * [BUG-386](BUG-386-OPEN.md) — `permissions.query({name:'local-fonts'})`
   отвечает `granted` по умолчанию; вместе с этим багом определяет, каким
   окажется поведение по умолчанию, когда перечисление шрифтов появится.
-* [BUG-361](BUG-361-OPEN.md) — `document.permissionsPolicy.features()` пуст,
+* [BUG-361](BUG-361-FIXED.md) — `document.permissionsPolicy.features()` пуст,
   из-за чего падает единственный исполнившийся тест категории.
 * [BUG-366](BUG-366-OPEN.md) — тот же класс дефекта формы WebIDL на
   `navigator.credentials`.

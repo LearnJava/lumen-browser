@@ -14,7 +14,7 @@ session/URL-reuse артефакт, что и в других категория
 результат прилетает под URL предыдущего теста, `assert result_url == test.url`
 в `base.py:104` ловит несовпадение, не даёт ложных зелёных). Из двух реально
 исполнившихся не-`.https.` тестов один (`wakelock-supported-by-permissions-policy.html`)
-— реконфирмация уже открытого [BUG-361](BUG-361-OPEN.md)
+— реконфирмация уже открытого [BUG-361](BUG-361-FIXED.md)
 (`document.permissionsPolicy.features()` всегда `[]`); второй,
 `wakelock-insecure-context.any.html`, формально **PASS**:
 
