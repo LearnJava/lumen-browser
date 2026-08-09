@@ -8914,8 +8914,19 @@ function cancelIdleCallback(id) {
 
 // ── MessageChannel / MessagePort (WHATWG HTML §8.3.4-§8.3.5) ─────────────────
 // MessageChannel() creates two entangled MessagePort objects (port1 / port2).
-// Messages posted on one port are delivered asynchronously (queueMicrotask) to
-// the other.  Setting port.onmessage auto-starts the port (spec §8.3.5 step 4).
+// Messages posted on one port are delivered asynchronously to the other.
+// Setting port.onmessage auto-starts the port (spec §8.3.5 step 4).
+//
+// Delivery MUST run as a task (HTML §9.2.3, port message queue task source),
+// not a microtask: a microtask queue (queueMicrotask/Promise.resolve().then)
+// is drained to exhaustion by V8 before control ever returns to Rust's event
+// loop (kAuto policy, no manual drain hook here). Callers that keep
+// rescheduling work from inside their own onmessage handler — e.g. React's
+// Scheduler package, whose whole point in choosing MessageChannel over
+// Promise is to get a real macrotask boundary between reschedules — never
+// see that boundary and spin forever in one synchronous V8 burst instead
+// (BUG-702). setTimeout(fn, 0) below feeds the same _lumen_timers/
+// _lumen_tick_timers task queue window.postMessage already uses correctly.
 
 function MessagePort() {
     this._other          = null;
@@ -8932,7 +8943,7 @@ MessagePort.prototype.start = function() {
     if (this._started || this._closed) return;
     this._started = true;
     var self = this;
-    queueMicrotask(function() { self._drain(); });
+    setTimeout(function() { self._drain(); }, 0);
 };
 
 // close() — detach the port; further delivery and sends are no-ops.
@@ -8947,7 +8958,7 @@ MessagePort.prototype.postMessage = function(message) {
     if (this._closed || !this._other || this._other._closed) return;
     var other = this._other;
     var clone = structuredClone(message);
-    queueMicrotask(function() {
+    setTimeout(function() {
         if (other._closed) return;
         var evt = { type: 'message', data: clone, target: other,
                     currentTarget: other, bubbles: false, cancelable: false };
@@ -8956,7 +8967,7 @@ MessagePort.prototype.postMessage = function(message) {
         } else {
             other._queue.push(evt);
         }
-    });
+    }, 0);
 };
 
 // Internal: deliver evt to onmessage + 'message' addEventListener listeners.
@@ -30104,10 +30115,8 @@ mod tests {
         fn message_port_post_delivers_via_onmessage() {
             let rt = v8_runtime_with_dom(make_doc());
             // onmessage auto-starts port1; postMessage on port2 delivers to port1.
-            // Two-step per the S12b-2 lesson: the end-of-script microtask
-            // checkpoint runs after this eval() returns, so a same-eval read
-            // would observe pre-delivery state — the second eval() reads the
-            // global after delivery has actually happened.
+            // Delivery is a real task (HTML §9.2.3, BUG-702/BUG-704), not a
+            // microtask, so it only runs after an explicit _lumen_tick_timers().
             rt.eval(
                 "var ch = new MessageChannel(); \
                  var received = null; \
@@ -30115,7 +30124,7 @@ mod tests {
                  ch.port2.postMessage('hello');",
             )
             .unwrap();
-            assert!(bool_eval(&rt, "received === 'hello'"));
+            assert!(bool_eval(&rt, "_lumen_tick_timers(); received === 'hello'"));
         }
 
         #[test]
@@ -30128,7 +30137,7 @@ mod tests {
                  ch.port2.postMessage({ x: 42 });",
             )
             .unwrap();
-            assert!(bool_eval(&rt, "got !== null && got.x === 42"));
+            assert!(bool_eval(&rt, "_lumen_tick_timers(); got !== null && got.x === 42"));
         }
 
         #[test]
@@ -30144,7 +30153,7 @@ mod tests {
                  orig.v = 99;",
             )
             .unwrap();
-            assert!(bool_eval(&rt, "got !== null && got.v === 1"));
+            assert!(bool_eval(&rt, "_lumen_tick_timers(); got !== null && got.v === 1"));
         }
 
         #[test]
@@ -30158,7 +30167,7 @@ mod tests {
                  ch.port1.onmessage = function(e) { got = e.data; };",
             )
             .unwrap();
-            assert!(bool_eval(&rt, "got === 'queued'"));
+            assert!(bool_eval(&rt, "_lumen_tick_timers(); got === 'queued'"));
         }
 
         #[test]
@@ -30171,7 +30180,7 @@ mod tests {
                  ch.port2.postMessage('evt');",
             )
             .unwrap();
-            assert!(bool_eval(&rt, "got === 'evt'"));
+            assert!(bool_eval(&rt, "_lumen_tick_timers(); got === 'evt'"));
         }
 
         #[test]
@@ -30184,7 +30193,7 @@ mod tests {
                  ch.port2.postMessage('a'); \
                  ch.port1.close(); \
                  ch.port2.postMessage('b'); \
-                 _lumen_drain_microtasks(); \
+                 _lumen_tick_timers(); \
                  count === 0"));
         }
 
@@ -30198,7 +30207,7 @@ mod tests {
                  ch.port1.addEventListener('message', fn); \
                  ch.port1.removeEventListener('message', fn); \
                  ch.port2.postMessage('x'); \
-                 _lumen_drain_microtasks(); \
+                 _lumen_tick_timers(); \
                  count === 0"));
         }
 
