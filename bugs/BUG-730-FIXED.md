@@ -2,7 +2,7 @@
 
 **Статус:** FIXED 2026-08-09
 **Компонент:** shell (`crates/shell/src/main.rs` — `spawn_stream_image_loads` / `apply_relayout_result`)
-**Найден:** P3 при разборе [BUG-725](BUG-725-OPEN.md), 2026-08-09
+**Найден:** P3 при разборе [BUG-725](BUG-725-FIXED.md), 2026-08-09
 
 ## Симптом
 

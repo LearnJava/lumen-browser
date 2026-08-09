@@ -2,7 +2,7 @@
 
 **Статус:** FIXED 2026-08-09
 **Компонент:** layout (`crates/engine/layout/src/box_tree.rs` — `collect_inline_segments` / `InlineSegment`)
-**Найден:** P3 при разборе [BUG-725](BUG-725-OPEN.md), 2026-08-09
+**Найден:** P3 при разборе [BUG-725](BUG-725-FIXED.md), 2026-08-09
 **Исправлен:** P3, 2026-08-09
 
 ## Симптом
