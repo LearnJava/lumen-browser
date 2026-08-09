@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-09",
  "counts": {
-  "open": 322,
+  "open": 324,
   "fixed": 361,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 683,
+ "total_bugs": 685,
  "phases": [
   {
    "id": "P0",
@@ -4117,9 +4117,13 @@
       {
        "id": "WPT-VENDOR-webmidi",
        "title": "WPT: вендорить + прогнать категорию `webmidi`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). аппаратный API (MIDI)"
+       "note": "Скоуп: 🚫 (вне скоупа, но не по причине пустого движка — `crates/js/src/web_midi.rs` реально реализует Phase 0 заглушку, `requestMIDIAccess()` резолвится с пустыми `inputs`/`outputs`). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root webmidi --recursive`, ~1:30, 1 файл, 1 отобранный id) — **0/1 harness OK**. Единственный TIMEOUT — уже задокументированный гэп невендоренных `/resources/WebIDLParser.js`+`/resources/idlharness.js` (тот же, что у `webgl`), функционального сигнала нет. Живая проба (`--mcp-live-port`) нашла [BUG-719](bugs/BUG-719-OPEN.md) (`MIDIPort`/`MIDIInput`/`MIDIOutput`/`MIDIAccess` конструируются напрямую без guard'а — пятая поверхность паттерна BUG-629/374/672/713) и [BUG-720](bugs/BUG-720-OPEN.md) (спековые `MIDIInputMap`/`MIDIOutputMap` отсутствуют глобально целиком, вместо них один нестандартный `MIDIPortMap`). Новые номера: BUG-719, BUG-720",
+       "bugs": [
+        "BUG-719",
+        "BUG-720"
+       ]
       },
       {
        "id": "WPT-VENDOR-webnn",
@@ -9569,6 +9573,20 @@
    "status": "open",
    "title": "`postMessage()` clones the payload via `JSON.stringify` instead of structured clone: calling with zero arguments doesn't throw (`message` is a required WebIDL a…",
    "component": "js (`crates/js/src/broadcast_channel.rs:193-219` — `BroadcastChannel.prototype.postMessage`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-719": {
+   "status": "open",
+   "title": "`MIDIPort`/`MIDIInput`/`MIDIOutput`/`MIDIAccess` are plain `class X extends EventTarget` exported directly on `window` with no constructor guard — `new window.M…",
+   "component": "js (`crates/js/src/web_midi.rs` — `WEB_MIDI_SHIM`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-720": {
+   "status": "open",
+   "title": "`MIDIInputMap`/`MIDIOutputMap` (spec-mandated separate maplike globals) don't exist at all — `MIDIAccess.inputs`/`.outputs` are both built from one shared, non-…",
+   "component": "js (`crates/js/src/web_midi.rs` — `WEB_MIDI_SHIM`)",
    "date": null,
    "debtor": false
   }
