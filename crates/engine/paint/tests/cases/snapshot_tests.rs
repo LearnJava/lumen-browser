@@ -141,7 +141,9 @@ fn img_with_background_and_border() {
 
 #[test]
 fn img_inside_span() {
-    // <img> inside <span> must produce DrawImage in inline flow (BUG-005).
+    // <img> inside <span> must produce DrawImage (BUG-005) at its own size:
+    // до BUG-728 сегмент inline-прогона нёс ширину и не нёс высоты, поэтому
+    // эталон был запечён с 32×19.20 — высотой строки вместо height="32".
     let actual = build(
         r#"<span><img src="inline.png" alt="icon" width="32" height="32"></span>"#,
         "",

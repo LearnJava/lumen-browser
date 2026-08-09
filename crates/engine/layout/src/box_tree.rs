@@ -4038,6 +4038,22 @@ fn produces_inline_segments(doc: &Document, id: NodeId, display: Display) -> boo
     )
 }
 
+/// То же для потомка inline-элемента: `display: contents` дополнительно
+/// прозрачен — бокса он не порождает вовсе (CSS Display L3 §3.1), его дети
+/// участвуют в inline-контексте родителя напрямую, поэтому уплощать надо
+/// сквозь него. Собственный бокс достанется уже его не-inline потомкам.
+///
+/// На уровне сиблингов блочного контейнера `contents` этой поблажки не имеет
+/// ([`is_inline_content`]) — там он и до [BUG-728] получал отдельный бокс.
+fn produces_inline_segments_nested(doc: &Document, id: NodeId, display: Display) -> bool {
+    if display == Display::Contents {
+        // На replaced-элементе `contents` вычисляется в `inline` (§3.1), то
+        // есть бокс у него остаётся — и высота, ради которой всё это.
+        return !is_image_element(doc, id) && !is_form_control_element(doc, id);
+    }
+    produces_inline_segments(doc, id, display)
+}
+
 /// `<img>` в Phase 0 — block-level replaced element, не inline-контент:
 /// он порождает собственный `BoxKind::Image`, а не вливается в `InlineRun`.
 /// Inline-replaced (картинка внутри строки текста) — отдельная задача;
@@ -4638,7 +4654,7 @@ fn collect_inline_segments(
             // Уплощение в сегмент стоило бы такому потомку высоты: у сегмента
             // её нет, вертикальный размер строки считается по метрикам шрифта,
             // и `<img width=50 height=50>` внутри `<a>` рисовался 50×16.8.
-            if !produces_inline_segments(doc, id, s.display) {
+            if !produces_inline_segments_nested(doc, id, s.display) {
                 escapes.push(InlineEscape { at: out.len(), node: id, inherited: inherited.clone() });
                 return;
             }

@@ -18897,4 +18897,45 @@ mod tests {
             "текст после картинки не сдвинулся вниз"
         );
     }
+
+    #[test]
+    fn display_contents_inside_inline_element_stays_flattened() {
+        // `display: contents` бокса не порождает (CSS Display L3 §3.1) — его
+        // дети остаются в inline-контексте родителя. Escape-механика BUG-728
+        // не должна его выносить: иначе «cc dd ee» разъезжается на три строки.
+        let root = lay_measured(
+            "<div><span>cc<span class=\"c\">dd</span>ee</span></div>",
+            ".c { display: contents; }",
+            800.0,
+        );
+        let div = root.children.iter()
+            .find(|c| matches!(c.kind, BoxKind::Block))
+            .expect("нет блока <div>");
+        assert_eq!(div.children.len(), 1, "inline-контекст разрезан на куски");
+        assert!(matches!(div.children[0].kind, BoxKind::InlineRun { .. }));
+    }
+
+    #[test]
+    fn inline_block_inside_inline_element_stays_in_the_row() {
+        // Inline-уровневый всплывший бокс ряд НЕ разрывает: он остаётся в том
+        // же анонимном контейнере, что и текст вокруг (breaks_inline_row).
+        let root = lay_measured(
+            "<div><span>ff<span class=\"ib\"></span>gg</span></div>",
+            ".ib { display: inline-block; width: 30px; height: 12px; }",
+            800.0,
+        );
+        let row = find_first(&root, &|b| matches!(b.kind, BoxKind::InlineBlockRow))
+            .expect("InlineBlockRow не построен");
+        let kinds: Vec<&str> = row.children.iter().map(|c| match c.kind {
+            BoxKind::InlineRun { .. } => "run",
+            BoxKind::Block => "block",
+            _ => "other",
+        }).collect();
+        assert_eq!(kinds, vec!["run", "block", "run"], "куски не попали в один ряд");
+        let ib = &row.children[1];
+        assert!(
+            (ib.rect.width - 30.0).abs() < 0.5 && (ib.rect.height - 12.0).abs() < 0.5,
+            "inline-block {}×{} вместо 30×12", ib.rect.width, ib.rect.height
+        );
+    }
 }
