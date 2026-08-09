@@ -52,7 +52,7 @@ pub fn request_pointer_lock(element_nid: u32) {
 только объявления `onpointerlockerror: null`, ни одного `dispatchEvent`).
 
 Тот же класс отсутствующей проверки user activation уже задокументирован для
-двух других API того же движка: [BUG-365](BUG-365-OPEN.md) (`EyeDropper.open()`)
+двух других API того же движка: [BUG-365](BUG-365-FIXED.md) (`EyeDropper.open()`)
 и [BUG-390](BUG-390-OPEN.md) (`requestFullscreen()`) — систематический пробел,
 не специфичный для pointer lock.
 

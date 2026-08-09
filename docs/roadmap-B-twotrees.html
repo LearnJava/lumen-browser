@@ -76,11 +76,11 @@
  "generated": "2026-08-09",
  "counts": {
   "open": 308,
-  "fixed": 356,
+  "fixed": 357,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 664,
+ "total_bugs": 665,
  "phases": [
   {
    "id": "P0",
@@ -3703,7 +3703,7 @@
        "title": "WPT: вендорить + прогнать категорию `shape-detection`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root shape-detection --recursive --processes=4`, 2 мин 16 с, 26 файлов, 23 отобранных id) — **0/23 harness OK**. Все id — `.https.`/`.sub.https.`, все TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`, ни один не исполнился. Shape Detection API реально реализован как Phase 0 заглушка (`crates/js/src/shape_detection.rs`) и соответствует своему doc-комментарию (`FaceDetector`/`BarcodeDetector`/`TextDetector.detect()` → `[]`) — не баг. Живая проба (`--mcp-live-port`) нашла независимую находку — [BUG-677](bugs/BUG-677-OPEN.md): все три класса не совпадают с WebIDL-формой (`constructor.length` 1 вместо 0, нет `Symbol.toStringTag`, внутреннее состояние утекает как собственные свойства инстанса), тот же класс, что [BUG-365](bugs/BUG-365-OPEN.md). Один новый номер бага",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root shape-detection --recursive --processes=4`, 2 мин 16 с, 26 файлов, 23 отобранных id) — **0/23 harness OK**. Все id — `.https.`/`.sub.https.`, все TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`, ни один не исполнился. Shape Detection API реально реализован как Phase 0 заглушка (`crates/js/src/shape_detection.rs`) и соответствует своему doc-комментарию (`FaceDetector`/`BarcodeDetector`/`TextDetector.detect()` → `[]`) — не баг. Живая проба (`--mcp-live-port`) нашла независимую находку — [BUG-677](bugs/BUG-677-OPEN.md): все три класса не совпадают с WebIDL-формой (`constructor.length` 1 вместо 0, нет `Symbol.toStringTag`, внутреннее состояние утекает как собственные свойства инстанса), тот же класс, что [BUG-365](bugs/BUG-365-FIXED.md). Один новый номер бага",
        "bugs": [
         "BUG-677"
        ]
@@ -7140,10 +7140,10 @@
    "debtor": false
   },
   "BUG-365": {
-   "status": "open",
-   "title": "`EyeDropper.open()` всегда отклоняется с `ReferenceError: _lumen_eye_dropper_open is not defined` — нативная привязка не зарегистрирована как глобал на V8 (в Ru…",
-   "component": "js (`crates/js/src/eye_dropper.rs:58` — тело шима EyeDropper; установка — `crates/js/src/v8_runtime.rs:4249`, единственный оставшийся движок)",
-   "date": null,
+   "status": "fixed",
+   "title": "`EyeDropper.open()` всегда отклонялся `ReferenceError: _lumen_eye_dropper_open is not defined` — `_lumen_eye_dropper_open?.call?.(null)` не защищает от необъявл…",
+   "component": "js (`crates/js/src/eye_dropper.rs` — тело шима EyeDropper; установка — `crates/js/src/v8_runtime.rs`, единственный оставшийся движок)",
+   "date": "2026-08-09",
    "debtor": false
   },
   "BUG-366": {
@@ -9441,6 +9441,13 @@
    "component": "js (`crates/js/src/permissions_policy.rs:37-44` — `FeaturePolicy.prototype.allowsFeature`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-698": {
+   "status": "open",
+   "title": "`EyeDropper.open()` не проверяет transient user activation — спека WICG требует немедленный отказ `NotAllowedError`, если вызов не инициирован пользовательским…",
+   "component": "js (`crates/js/src/eye_dropper.rs` — тело шима `open()`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -9837,6 +9844,9 @@
   ],
   "js (`crates/js/src/dom.rs`, нет `dataset` нигде в `WEB_API_SHIM`)": [
    "BUG-496"
+  ],
+  "js (`crates/js/src/eye_dropper.rs` — тело шима `open()`)": [
+   "BUG-698"
   ],
   "js (`crates/js/src/highlight_api.rs` — `HIGHLIGHT_API_SHIM`)": [
    "BUG-534"

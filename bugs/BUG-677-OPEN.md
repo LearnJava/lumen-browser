@@ -62,7 +62,7 @@ Shape Detection API реально реализован в движке как �
 
 ## Причина
 
-Тот же класс дефекта, что [BUG-365](BUG-365-OPEN.md) (`EyeDropper`): Phase 0
+Тот же класс дефекта, что [BUG-365](BUG-365-FIXED.md) (`EyeDropper`): Phase 0
 JS-шим написан как обычный ES6-класс без сверки с WebIDL-формой
 (`Symbol.toStringTag`, arity через default-параметр, отсутствие лишних
 собственных свойств инстанса) — функционально `detect()`/`getSupportedFormats()`

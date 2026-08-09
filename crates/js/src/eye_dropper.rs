@@ -13,24 +13,14 @@ pub(crate) fn install_eye_dropper_bindings_v8(rt: &crate::v8_runtime::V8JsRuntim
     Ok(())
 }
 
-/// Native binding for platform color picker
-/// Called from shell/platform modules for each OS
-pub extern "C" fn _lumen_eye_dropper_open() -> *const u8 {
-    // This will be implemented by the shell layer for each OS
-    // Returns JSON: {"sRGBHex": "#rrggbb"} or error
-    // For now, returns null (platform integration deferred to P3)
-    std::ptr::null()
-}
-
 /// JavaScript shim: Eye Dropper API (Phase 0)
 #[cfg(feature = "v8-backend")]
 const EYE_DROPPER_SHIM: &str = r#"
 (function() {
-  // EyeDropper class
+  // EyeDropper class. Spec (WICG Eye Dropper API): constructor takes no
+  // arguments — `options` belongs to `open()`, not the constructor.
   class EyeDropper {
-    constructor(options) {
-      this.options = options || {};
-    }
+    constructor() {}
 
     async open(options) {
       const signal = options?.signal;
@@ -49,8 +39,13 @@ const EYE_DROPPER_SHIM: &str = r#"
 
         if (signal) signal.addEventListener('abort', onAbort);
 
-        // Call native binding (implemented by shell)
-        const result = _lumen_eye_dropper_open?.call?.(null);
+        // Call native binding (implemented by shell). No platform picker is
+        // wired up yet (BUG-365), so this is never a function today — the
+        // `typeof` guard (not `?.call?.()`, which does not protect against an
+        // undeclared identifier and threw ReferenceError) keeps that honest
+        // and routes straight to the documented white-color fallback below.
+        const nativeOpen = globalThis._lumen_eye_dropper_open;
+        const result = typeof nativeOpen === 'function' ? nativeOpen() : null;
 
         if (signal?.aborted) {
           if (signal) signal.removeEventListener('abort', onAbort);
@@ -77,6 +72,13 @@ const EYE_DROPPER_SHIM: &str = r#"
       });
     }
   }
+
+  Object.defineProperty(EyeDropper.prototype, Symbol.toStringTag, {
+    value: 'EyeDropper',
+    writable: false,
+    enumerable: false,
+    configurable: true,
+  });
 
   // Export to global scope
   if (typeof window !== 'undefined') {
@@ -148,6 +150,8 @@ mod tests {
 
     #[test]
     fn test_eye_dropper_options_constructor() {
+        // The constructor ignores extra arguments (spec: it takes none) —
+        // passing one must not throw.
         with_eye_dropper(|rt| {
             let ok = rt
                 .eval("(function() { const dropper = new EyeDropper({}); return !!dropper; })()")
@@ -157,23 +161,59 @@ mod tests {
     }
 
     #[test]
-    fn test_eye_dropper_resolve_value() {
+    fn test_eye_dropper_constructor_length_is_zero() {
+        with_eye_dropper(|rt| {
+            let ok = rt.eval("EyeDropper.length === 0").unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
+    }
+
+    #[test]
+    fn test_eye_dropper_no_stray_options_property() {
         with_eye_dropper(|rt| {
             let ok = rt
-                .eval(
-                    r#"
-                    (function() {
-                        const dropper = new EyeDropper();
-                        dropper.open().then(result => {
-                            if (!result.hasOwnProperty('sRGBHex')) throw new Error('missing sRGBHex');
-                            if (typeof result.sRGBHex !== 'string') throw new Error('sRGBHex not a string');
-                        });
-                        return true;
-                    })()
-                    "#,
-                )
+                .eval("!new EyeDropper().hasOwnProperty('options')")
                 .unwrap();
             assert_eq!(ok, JsValue::Bool(true));
+        });
+    }
+
+    #[test]
+    fn test_eye_dropper_to_string_tag() {
+        with_eye_dropper(|rt| {
+            let ok = rt
+                .eval("Object.prototype.toString.call(new EyeDropper()) === '[object EyeDropper]'")
+                .unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
+        });
+    }
+
+    /// BUG-365 regression: with no native platform binding installed,
+    /// `open()` must resolve the documented `#ffffff` fallback instead of
+    /// rejecting with `ReferenceError: _lumen_eye_dropper_open is not
+    /// defined`. The two-`eval` split relies on V8's default
+    /// `MicrotasksPolicy::kAuto` draining the promise job between them (same
+    /// pattern as `shared_storage.rs`'s `promise_result` helper).
+    #[test]
+    fn test_eye_dropper_resolve_value() {
+        with_eye_dropper(|rt| {
+            rt.eval(
+                r#"
+                globalThis.__ok = null;
+                globalThis.__err = null;
+                new EyeDropper().open().then(
+                    result => { globalThis.__ok = result; },
+                    err => { globalThis.__err = err && err.message ? err.message : String(err); }
+                );
+                "#,
+            )
+            .unwrap();
+
+            let err = rt.eval("globalThis.__err").unwrap();
+            assert_eq!(err, JsValue::Null, "open() rejected: {err:?}");
+
+            let hex = rt.eval("globalThis.__ok && globalThis.__ok.sRGBHex").unwrap();
+            assert_eq!(hex, JsValue::String("#ffffff".to_string()));
         });
     }
 }
