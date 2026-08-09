@@ -2,7 +2,7 @@
 
 **Статус:** FIXED 2026-08-09
 **Компонент:** js (`crates/js/src/dom.rs` — `Response._fromFetchCache`, `Response.prototype._consumeBody`)
-**Найден:** P3, при разборе [BUG-703](BUG-703-OPEN.md), 2026-08-09
+**Найден:** P3, при разборе [BUG-703](BUG-703-FIXED.md), 2026-08-09
 
 ## Симптом
 
@@ -65,4 +65,4 @@ token ':'` из `_lumen_script_execute_classic` (JSON вместо JS) и
 `ChunkLoadError: Loading chunk tramvai-web-performance-rum failed.
 (missing: null)` в телеметрии приложения; после — 0 `SyntaxError`, каждый URL
 получает своё тело, `ChunkLoadError` исчез. Рендер главной страницы этим
-не чинится — остаток см. [BUG-703](BUG-703-OPEN.md).
+не чинится — остаток см. [BUG-703](BUG-703-FIXED.md).

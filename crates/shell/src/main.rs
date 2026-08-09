@@ -6627,11 +6627,13 @@ fn extract_style_blocks(doc: &Document) -> String {
 /// Produced by [`collect_scripts_ordered`] in document order; external entries
 /// are resolved + fetched by [`resolve_script_sources`].
 enum ScriptSource {
-    /// Inline `<script>` body (concatenated text children).
-    Inline(String),
+    /// Inline `<script>` body (concatenated text children) plus the id of the
+    /// `<script>` element itself, which backs `document.currentScript` while the
+    /// body runs (BUG-486).
+    Inline(NodeId, String),
     /// External `<script src="...">` — raw `src` attribute, resolved relative
-    /// to the document base.
-    External(String),
+    /// to the document base, plus the element's id (see [`ScriptSource::Inline`]).
+    External(NodeId, String),
 }
 
 /// True for `type` values that designate an executable classic script
@@ -6695,7 +6697,7 @@ fn collect_scripts_ordered(
         if let Some(src) = node.get_attr("src") {
             let src = src.trim();
             if !src.is_empty() {
-                target.push(ScriptSource::External(src.to_owned()));
+                target.push(ScriptSource::External(id, src.to_owned()));
             }
             return;
         }
@@ -6706,7 +6708,7 @@ fn collect_scripts_ordered(
             }
         }
         if !text.trim().is_empty() {
-            target.push(ScriptSource::Inline(text));
+            target.push(ScriptSource::Inline(id, text));
         }
         return;
     }
@@ -6724,18 +6726,18 @@ fn resolve_script_sources(
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
-) -> Vec<String> {
+) -> Vec<(NodeId, String)> {
     // Внешние `<script src>` грузятся параллельно (сеть — главный тормоз), но
     // результат собирается строго в исходном порядке: классические скрипты
     // обязаны выполняться в порядке документа (HTML LS §8.1.3.1). Inline-тела
     // проходят насквозь без сети.
     let fetched = parallel_map(items, |_, item| match item {
-        ScriptSource::Inline(body) => Some(body.clone()),
-        ScriptSource::External(src) => match base.resolve(src) {
+        ScriptSource::Inline(nid, body) => Some((*nid, body.clone())),
+        ScriptSource::External(nid, src) => match base.resolve(src) {
             ResolvedResource::File(path) => match std::fs::read_to_string(&path) {
                 Ok(content) => {
                     eprintln!("Загружен скрипт: {}", path.display());
-                    Some(content)
+                    Some((*nid, content))
                 }
                 Err(e) => {
                     eprintln!("Пропуск скрипта {}: {e}", path.display());
@@ -6768,7 +6770,7 @@ fn resolve_script_sources(
                     Ok(bytes) => {
                         eprintln!("Загружен скрипт: {url}");
                         fetch_span.set_bytes(bytes.len());
-                        Some(String::from_utf8_lossy(&bytes[..]).into_owned())
+                        Some((*nid, String::from_utf8_lossy(&bytes[..]).into_owned()))
                     }
                     Err(e) => {
                         eprintln!("Пропуск скрипта {url}: {e}");
@@ -6968,8 +6970,8 @@ fn run_scripts_with_dom(
     deterministic: deterministic::DetConfig,
     cross_origin_isolated: bool,
     extra_scripts: &[String],
-    scripts: Vec<String>,
-    module_scripts: Vec<String>,
+    scripts: Vec<(NodeId, String)>,
+    module_scripts: Vec<(NodeId, String)>,
 ) -> (Arc<Mutex<Document>>, Option<JsNavigateRequest>, Option<Arc<dyn PersistentJs>>) {
     // `scripts` / `module_scripts` are already resolved by the caller in
     // document order, including fetched external `<script src>` bodies (BUG-164).
@@ -7015,7 +7017,13 @@ fn run_scripts_with_dom(
                     rt.set_import_map(map);
                 }
                 // Classic scripts run first (HTML LS §8.1.3 execution order).
-                for src in &scripts {
+                for (nid, src) in &scripts {
+                    // BUG-486: `document.currentScript` must name the element
+                    // being executed for the whole body and nothing else, so the
+                    // push/pop pair brackets the eval — including the error paths
+                    // below, or one throwing script would leave a stale value
+                    // behind for every script after it.
+                    let _ = rt.eval(&format!("_lumen_push_current_script({});", nid.index()));
                     match rt.eval(src) {
                         Ok(_) => {}
                         Err(lumen_core::JsError::NotImplemented) => {
@@ -7026,9 +7034,11 @@ fn run_scripts_with_dom(
                         }
                         Err(e) => eprintln!("script error: {e}"),
                     }
+                    let _ = rt.eval("_lumen_pop_current_script();");
                 }
                 // Module scripts run after classic scripts (HTML LS §8.1.3.1 deferred).
-                for src in &module_scripts {
+                // No `currentScript` bracket: it is `null` inside a module by spec.
+                for (_, src) in &module_scripts {
                     match rt.eval_module(src) {
                         Ok(()) => {}
                         Err(lumen_core::JsError::NotImplemented) => {
@@ -7078,7 +7088,7 @@ fn run_scripts_with_dom(
         let _ = ws_provider;
         let _ = sse_provider;
         use lumen_core::ext::JsRuntime as _;
-        for src in &scripts {
+        for (_, src) in &scripts {
             match lumen_core::NullJsRuntime.eval(src) {
                 Ok(_) => {}
                 Err(lumen_core::JsError::NotImplemented) => {
@@ -29570,9 +29580,9 @@ mod tests {
         collect_scripts_ordered(&doc, doc.root(), &mut classic, &mut modules);
         assert!(modules.is_empty());
         assert_eq!(classic.len(), 3, "two inline + one external");
-        assert!(matches!(&classic[0], ScriptSource::Inline(s) if s.contains("a=1")));
-        assert!(matches!(&classic[1], ScriptSource::External(s) if s == "/bundle.js"));
-        assert!(matches!(&classic[2], ScriptSource::Inline(s) if s.contains("b=2")));
+        assert!(matches!(&classic[0], ScriptSource::Inline(_, s) if s.contains("a=1")));
+        assert!(matches!(&classic[1], ScriptSource::External(_, s) if s == "/bundle.js"));
+        assert!(matches!(&classic[2], ScriptSource::Inline(_, s) if s.contains("b=2")));
     }
 
     /// `<script type=module src>` lands in the module list as `External`.
@@ -29586,7 +29596,7 @@ mod tests {
         collect_scripts_ordered(&doc, doc.root(), &mut classic, &mut modules);
         assert!(classic.is_empty());
         assert_eq!(modules.len(), 1);
-        assert!(matches!(&modules[0], ScriptSource::External(s) if s == "/app.mjs"));
+        assert!(matches!(&modules[0], ScriptSource::External(_, s) if s == "/app.mjs"));
     }
 
     /// Non-JS script blocks (`application/ld+json`, `importmap`) are data, not
@@ -29606,7 +29616,7 @@ mod tests {
         collect_scripts_ordered(&doc, doc.root(), &mut classic, &mut modules);
         assert!(modules.is_empty());
         assert_eq!(classic.len(), 1, "only the executable classic script");
-        assert!(matches!(&classic[0], ScriptSource::Inline(s) if s.contains("real=1")));
+        assert!(matches!(&classic[0], ScriptSource::Inline(_, s) if s.contains("real=1")));
     }
 
     /// When both `src` and an inline body are present, `src` wins and the inline
@@ -29620,21 +29630,27 @@ mod tests {
         let mut modules = Vec::new();
         collect_scripts_ordered(&doc, doc.root(), &mut classic, &mut modules);
         assert_eq!(classic.len(), 1);
-        assert!(matches!(&classic[0], ScriptSource::External(s) if s == "/x.js"));
+        assert!(matches!(&classic[0], ScriptSource::External(_, s) if s == "/x.js"));
     }
 
     /// Inline items resolve to their body verbatim without any fetch (the
     /// no-network path of `resolve_script_sources`).
     #[test]
     fn resolve_script_sources_passes_inline_through() {
-        let items = vec![
-            ScriptSource::Inline("var a = 1;".to_owned()),
-            ScriptSource::Inline("var b = 2;".to_owned()),
-        ];
+        let doc = lumen_html_parser::parse(
+            "<script>var a = 1;</script><script>var b = 2;</script>",
+        );
+        let mut items: Vec<ScriptSource> = Vec::new();
+        let mut modules: Vec<ScriptSource> = Vec::new();
+        collect_scripts_ordered(&doc, doc.root(), &mut items, &mut modules);
         let base = ResourceBase::Url("https://example.com/".to_owned());
         let sink: Arc<dyn EventSink> = Arc::new(StdoutEventSink);
         let out = resolve_script_sources(&items, &base, &sink, None);
-        assert_eq!(out, vec!["var a = 1;".to_owned(), "var b = 2;".to_owned()]);
+        let bodies: Vec<&str> = out.iter().map(|(_, s)| s.as_str()).collect();
+        assert_eq!(bodies, vec!["var a = 1;", "var b = 2;"]);
+        // BUG-486: each body keeps the id of its own `<script>` element, so the
+        // executor can point `document.currentScript` at it.
+        assert_ne!(out[0].0, out[1].0);
     }
 
     #[test]

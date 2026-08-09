@@ -153,7 +153,7 @@ reach. `.ini` under `tests/wpt/metadata/css/css-shadow/`,
 `tests/wpt/metadata/css/css-scroll-snap/`,
 `tests/wpt/metadata/css/css-animations/`.
 
-## Исправлено (P3, 2026-08-09, в ходе разбора [BUG-703](BUG-703-OPEN.md))
+## Исправлено (P3, 2026-08-09, в ходе разбора [BUG-703](BUG-703-FIXED.md))
 
 Добавлены нативный `_lumen_get_head` (сосед `_lumen_get_body`, тот же обход
 дерева — первый `<head>` в порядке документа) и геттер `document.head` в

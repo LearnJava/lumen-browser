@@ -1996,6 +1996,13 @@ function _lumen_build_detached_document(proto, contentType) {
         get: function() { return _detached_doc_child(['BODY', 'FRAMESET']); },
         enumerable: true,
     });
+    // HTML LS §3.1.5 (BUG-486): a document with no browsing context never runs
+    // scripts of its own, so its `currentScript` is always `null` — but the
+    // property must exist, or feature detection reads `undefined` on it.
+    Object.defineProperty(doc, 'currentScript', {
+        get: function() { return null; },
+        enumerable: true,
+    });
     Object.defineProperty(doc, 'implementation', {
         get: function() {
             if (_impl === null) { _impl = _lumen_make_dom_implementation(doc); }
@@ -4558,6 +4565,16 @@ var document = {
         var hid = _lumen_u2n(_lumen_get_head());
         return hid !== null ? _lumen_make_element(hid) : null;
     },
+    // HTML LS §3.1.5 (BUG-486, blocking BUG-703): the `<script>` element whose
+    // body is executing right now, `null` outside classic script execution.
+    // Self-locating bundles key themselves off it — the tbank.ru micro-block
+    // bundles read `document.currentScript.dataset.mmid`, so with it missing all
+    // 44 of them registered under the key `undefined`, overwriting each other,
+    // and every one of the page's 81 blocks rendered as an empty frame.
+    get currentScript() {
+        var s = _lumen_current_script_stack;
+        return s.length !== 0 ? s[s.length - 1] : null;
+    },
     // BUG-281: must return the `<html>` element, not the `Document` node itself
     // (react-dom's container-identity checks fail if `tagName` reads `#document`).
     get documentElement() {
@@ -4925,12 +4942,31 @@ function _lumen_resource_fire(nid, type) {
     catch (e) {}
 }
 
+// HTML LS §3.1.5 «current script» (BUG-486, blocking BUG-703). A stack, not a
+// single slot: a classic script may synchronously insert and run another one,
+// and the outer script must see itself again once the inner one returns.
+// Pushed only around classic script bodies — module scripts, event handlers and
+// any asynchronous callback read `null`, which is exactly what the spec asks
+// for (the stack is empty by the time a task or microtask runs).
+var _lumen_current_script_stack = [];
+function _lumen_push_current_script(nid) {
+    var n = _lumen_u2n(nid);
+    _lumen_current_script_stack.push(n === null || n < 0 ? null : _lumen_make_element(n));
+}
+function _lumen_pop_current_script() {
+    _lumen_current_script_stack.pop();
+}
+
 // A classic script body runs in global scope — indirect eval is exactly that.
 // An uncaught exception must not escape into the DOM call that inserted the
 // element (the spec reports it to the page instead), hence the catch.
-function _lumen_script_execute_classic(text) {
+// `nid` is the `<script>` element being executed; it backs
+// `document.currentScript` for the duration of the body (omitted → `null`).
+function _lumen_script_execute_classic(text, nid) {
+    _lumen_push_current_script(nid);
     try { (0, eval)(text); }
     catch (e) { _lumen_console_error('Uncaught ' + ((e && e.stack) ? e.stack : e)); }
+    finally { _lumen_pop_current_script(); }
 }
 
 // `import()` is compiled lazily through `new Function` rather than written
@@ -4976,7 +5012,7 @@ function _lumen_script_load_external(nid, src, isModule) {
             return resp.text();
         }).then(function(text) {
             if (isModule) return _lumen_script_run_module(url, text);
-            _lumen_script_execute_classic(text);
+            _lumen_script_execute_classic(text, nid);
         }).then(function() {
             _lumen_resource_fire(nid, 'load');
         }).catch(function(e) {
@@ -5004,7 +5040,7 @@ function _lumen_script_prepare(nid) {
         // An inline classic script executes synchronously, inside the insertion
         // — `assert_equals(window.ran, true)` on the line after appendChild is
         // the canonical WPT shape and must already see the side effect.
-        _lumen_script_execute_classic(body);
+        _lumen_script_execute_classic(body, nid);
         return;
     }
     // Module scripts are deferred by spec; a task hop is the approximation.
@@ -28537,6 +28573,86 @@ mod tests {
                        s.remove();
                        document.body.appendChild(s);
                        globalThis.__b571_n === 1"#,
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        // BUG-486 (`document.currentScript`, blocking BUG-703): a running
+        // classic script must be able to find its own element — self-locating
+        // bundles read their id/base URL off it (`currentScript.dataset.*`).
+        /// Inside an inline classic script `currentScript` is that very element.
+        #[test]
+        fn current_script_points_at_running_script() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    r#"var s = document.createElement('script');
+                       s.setAttribute('data-mmid', 'block-42');
+                       s.textContent =
+                         'globalThis.__b486_self = document.currentScript;' +
+                         'globalThis.__b486_mmid = document.currentScript.dataset.mmid;';
+                       document.body.appendChild(s);
+                       globalThis.__b486_self === s && globalThis.__b486_mmid === 'block-42'"#,
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// Outside script execution it is `null` — and the property exists, so
+        /// feature detection sees `null`, never `undefined`.
+        #[test]
+        fn current_script_is_null_outside_execution() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    r#"var before = document.currentScript;
+                       var s = document.createElement('script');
+                       s.textContent = 'globalThis.__b486_x = 1;';
+                       document.body.appendChild(s);
+                       before === null && document.currentScript === null &&
+                       'currentScript' in document"#,
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// Nesting restores the outer script: an inner script inserted and run
+        /// synchronously must not leave `currentScript` pointing at itself.
+        #[test]
+        fn current_script_restores_outer_after_nested_script() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    r#"var outer = document.createElement('script');
+                       outer.textContent =
+                         'var o = document.currentScript;' +
+                         'var inner = document.createElement("script");' +
+                         'inner.textContent = "globalThis.__b486_inner = document.currentScript;";' +
+                         'document.body.appendChild(inner);' +
+                         'globalThis.__b486_outer_before = o;' +
+                         'globalThis.__b486_outer_after = document.currentScript;' +
+                         'globalThis.__b486_inner_el = inner;';
+                       document.body.appendChild(outer);
+                       globalThis.__b486_outer_before === outer &&
+                       globalThis.__b486_outer_after === outer &&
+                       globalThis.__b486_inner === globalThis.__b486_inner_el"#,
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// A script that throws must still restore the previous value — a stale
+        /// `currentScript` would mislead every script that runs after it.
+        #[test]
+        fn current_script_cleared_after_throwing_script() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    r#"var s = document.createElement('script');
+                       s.textContent = 'throw new Error("boom");';
+                       document.body.appendChild(s);
+                       document.currentScript === null"#,
                 )
                 .unwrap();
             assert_eq!(r, lumen_core::JsValue::Bool(true));

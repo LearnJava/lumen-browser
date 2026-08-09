@@ -69,7 +69,7 @@ document-metadata-атрибутов (`characterSet`/`compatMode`/`URL`/…), к
 `contentType`) — параметрами. Тогда закрываются обе стороны раскола: и эта, и
 [BUG-358](BUG-358-OPEN.md).
 
-## Частично закрыто (P3, 2026-08-09, в ходе разбора [BUG-703](BUG-703-OPEN.md))
+## Частично закрыто (P3, 2026-08-09, в ходе разбора [BUG-703](BUG-703-FIXED.md))
 
 `head` и `body` у отсоединённого документа реализованы: `_lumen_build_detached_document`
 определяет их как первый элемент-потомок `documentElement` с тегом `HEAD` и

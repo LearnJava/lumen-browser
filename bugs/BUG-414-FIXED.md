@@ -76,7 +76,7 @@ synchronous top-level `<script>` before test registration, independent of
 element type. `.ini` under `tests/wpt/metadata/css/css-sizing/`, file-level
 `expected: TIMEOUT`.
 
-## Исправлено (P3, 2026-08-09, в ходе разбора [BUG-703](BUG-703-OPEN.md))
+## Исправлено (P3, 2026-08-09, в ходе разбора [BUG-703](BUG-703-FIXED.md))
 
 `dataset` реализован ровно предложенным здесь способом: `Proxy` поверх
 `_lumen_get_attr`/`_lumen_set_attr`/`_lumen_remove_attr`/`_lumen_get_attr_names`

@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-09",
  "counts": {
-  "open": 321,
-  "fixed": 367,
+  "open": 320,
+  "fixed": 370,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 688,
+ "total_bugs": 690,
  "phases": [
   {
    "id": "P0",
@@ -3783,7 +3783,7 @@
        "title": "WPT: вендорить + прогнать категорию `subresource-integrity`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root subresource-integrity --recursive`, 7:59, 44 файла, 23 отобранных id → 30 инстансов из-за variant-фан-аута) — **7/30 harness OK, 39/156 сабтестов**. Новых находок движка нет: невендоренный целиком `/common/` (тот же класс, что `/common/gc.js` у `streams`) не дал прогнать даже базовый нетентативный хеш-тест `subresource-integrity.html`; 2 `ERROR` — реконфирмация [BUG-380](bugs/BUG-380-OPEN.md); `signatures/tentative/accept-signature.parser-inserted.html` (4 FAIL) — реконфирмация [BUG-486](bugs/BUG-486-OPEN.md) (`document.currentScript` отсутствует); `signatures/tentative/inline.html` (6 FAIL) — Signature-based Integrity (WICG-черновик) не реализован вовсе, но лежит целиком под `tentative/`, тот же класс что `subapps`/`speculation-rules`. Новых номеров бага не заведено"
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root subresource-integrity --recursive`, 7:59, 44 файла, 23 отобранных id → 30 инстансов из-за variant-фан-аута) — **7/30 harness OK, 39/156 сабтестов**. Новых находок движка нет: невендоренный целиком `/common/` (тот же класс, что `/common/gc.js` у `streams`) не дал прогнать даже базовый нетентативный хеш-тест `subresource-integrity.html`; 2 `ERROR` — реконфирмация [BUG-380](bugs/BUG-380-OPEN.md); `signatures/tentative/accept-signature.parser-inserted.html` (4 FAIL) — реконфирмация [BUG-486](bugs/BUG-486-FIXED.md) (`document.currentScript` отсутствует); `signatures/tentative/inline.html` (6 FAIL) — Signature-based Integrity (WICG-черновик) не реализован вовсе, но лежит целиком под `tentative/`, тот же класс что `subapps`/`speculation-rules`. Новых номеров бага не заведено"
       },
       {
        "id": "WPT-VENDOR-svg",
@@ -7966,10 +7966,10 @@
    "debtor": false
   },
   "BUG-486": {
-   "status": "open",
+   "status": "fixed",
    "title": "`document.currentScript` отсутствует вовсе (`grep` — ноль совпадений) — резолвится в `undefined` вместо ссылки на текущий `<script>`. 3 файла/55 сабтестов `css/…",
-   "component": "js (`crates/js/src/dom.rs`)",
-   "date": null,
+   "component": "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`), shell (`crates/shell/src/main.rs` — парсерный путь)",
+   "date": "2026-08-09",
    "debtor": false
   },
   "BUG-487": {
@@ -9464,10 +9464,10 @@
    "debtor": false
   },
   "BUG-703": {
-   "status": "open",
-   "title": "`https://www.tbank.ru/` не рендерится: клиентский рендер React не начинается вовсе (ни одного ключа `__reactContainer$` в DOM, `createRoot` не вызывался), DOM с…",
-   "component": "js (`crates/js/src/dom.rs` — шим), shell (исполнение динамически вставленных скриптов)",
-   "date": null,
+   "status": "fixed",
+   "title": "`https://www.tbank.ru/` не рендерился: клиентский рендер React не начинался вовсе (ни одного ключа `__reactContainer$`, DOM стоял на 136 узлах SSR-скелетона, ко…",
+   "component": "js (`crates/js/src/dom.rs` — шим), shell (исполнение скриптов), layout (`style.rs`)",
+   "date": "2026-08-09",
    "debtor": false
   },
   "BUG-704": {
@@ -9593,6 +9593,20 @@
    "status": "open",
    "title": "На странице по схеме `file://` всё, что шим грузит своим `fetch`, падает с `TypeError: fetch: network error`, и элемент получает `error` вместо `load`: воспроиз…",
    "component": "js (`crates/js/src/dom.rs` — `_url_resolve` + `fetch`), network (провайдер `JsFetchProvider`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-724": {
+   "status": "fixed",
+   "title": "Пустое значение любого из 1-4-токенных шорткатов `border-width`/`border-style`/`border-color`/`border-radius` роняло поток `lumen-engine` паникой `index out of…",
+   "component": "layout (`crates/engine/layout/src/style.rs` — `expand_border_4`)",
+   "date": "2026-08-09",
+   "debtor": false
+  },
+  "BUG-725": {
+   "status": "open",
+   "title": "`https://www.tbank.ru/` после закрытия [BUG-703](bugs/BUG-703-FIXED.md) строит правильный DOM (2382 элемента против 2380 в эталонном headless Edge) и рисует тек…",
+   "component": "layout, paint (какая именно подсистема — не локализовано)",
    "date": null,
    "debtor": false
   }
@@ -9952,6 +9966,9 @@
   "js (`crates/js/src/dom.rs` — `PerformanceObserver`/`_perf_entries` shim, ~line 8409-8460)": [
    "BUG-673"
   ],
+  "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`), shell (`crates/shell/src/main.rs` — парсерный путь)": [
+   "BUG-486"
+  ],
   "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`, машинерия `_lumen_resource_*`)": [
    "BUG-722"
   ],
@@ -9991,7 +10008,7 @@
   "js (`crates/js/src/dom.rs` — ни одного `DOMMatrix`/`DOMPoint`/`DOMRect`/`DOMQuad`-конструктора нигде)": [
    "BUG-522"
   ],
-  "js (`crates/js/src/dom.rs` — шим), shell (исполнение динамически вставленных скриптов)": [
+  "js (`crates/js/src/dom.rs` — шим), shell (исполнение скриптов), layout (`style.rs`)": [
    "BUG-703"
   ],
   "js (`crates/js/src/dom.rs`)": [
@@ -10004,8 +10021,7 @@
    "BUG-480",
    "BUG-481",
    "BUG-482",
-   "BUG-485",
-   "BUG-486"
+   "BUG-485"
   ],
   "js (`crates/js/src/dom.rs`, `contentEditable`/`isContentEditable`)": [
    "BUG-344"
@@ -10231,6 +10247,9 @@
   "layout (`crates/engine/layout/src/style.rs::restyle_root_set_for_node_change`)": [
    "BUG-349"
   ],
+  "layout (`crates/engine/layout/src/style.rs` — `expand_border_4`)": [
+   "BUG-724"
+  ],
   "layout (`crates/engine/layout/src/style.rs`, `FONT_CH_EX` thread-local)": [
    "BUG-339"
   ],
@@ -10267,6 +10286,9 @@
   "layout+paint": [
    "BUG-005",
    "BUG-023"
+  ],
+  "layout, paint (какая именно подсистема — не локализовано)": [
+   "BUG-725"
   ],
   "layout/dom (не локализовано — нужна перепись структур)": [
    "BUG-683"
