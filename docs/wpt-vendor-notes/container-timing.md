@@ -1,0 +1,9 @@
+# WPT vendor notes — `container-timing`
+
+## Vendoring (`tests/wpt/VENDOR.md`)
+
+Test category, added 2026-07-25 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VENDOR-container-timing`, `docs/wpt-status.md`), in-scope (⬜, an experimental Performance Timeline extension). Same pinned commit, `git sparse-checkout` at the same commit hash, 22 files (`META.yml`, `resources/` — `container-timing-helpers.js`+`square100.png`, `tentative/` — 19 test files). Out-of-category helper not vendored: `/element-timing/resources/element-timing-helpers.js`, same documented survey gap as `FileAPI`/`ai`. `run_report.py --all --root container-timing --recursive` completed fully (~17s, 19 selected ids): all 19 harness OK, 0/19 subtests, every one FAIL on `assert_implements: PerformanceContainerTiming is not implemented` — the Container Timing API isn't implemented in Lumen at all. Not filed as a separate BUG-NNN — single root cause (API entirely unimplemented), first pass. See `docs/wpt-status.md` for details.
+
+## Прогон и находки (`docs/wpt-status.md`)
+
+Вендорена целиком 2026-07-25 (коммит `35be3b44`, `tests/wpt/container-timing/`, 22 файла: `META.yml`, `resources/` — `container-timing-helpers.js`+`square100.png`, `tentative/` — 19 тестовых файлов). Внекатегорийный хелпер не довендорен: `/element-timing/resources/element-timing-helpers.js`, та же методология survey-gap, что `FileAPI`/`ai`. `run_report.py --all --root container-timing --recursive` прошёл полностью (~17с, 19 отобранных id): все 19 — harness OK, 0/19 сабтестов, все FAIL на `assert_implements: PerformanceContainerTiming is not implemented` — Container Timing API (экспериментальное расширение Performance Timeline) вовсе не реализован в Lumen. 19/19 harness OK, 0/19 сабтестов. Не заводился отдельный BUG-NNN — единый root cause (API не реализован целиком), первый проход категории

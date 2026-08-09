@@ -1,0 +1,5 @@
+# WPT vendor notes — `remote-playback`
+
+## Прогон и находки (`docs/wpt-status.md`)
+
+Вендорена целиком 2026-08-05 (коммит `35be3b44`, `tests/wpt/remote-playback/`, 22 файла; `LICENSE-WPT.md` скопирован из соседней `push-api`), включена несмотря на скоуп 🚫 (медиа-конвейер) по устоявшейся конвенции. 9 `*-manual.html` исключены wptrunner'ом. `run_report.py --all --root remote-playback --recursive` (~33 с, 9 отобранных id): **8/9 harness OK, 0/9 сабтестов**. Весь сигнал — уже задокументированные гэпы: 6 FAIL `getVideoURI is not defined` (невендоренный общий `/common/media.js`, устоявшаяся конвенция не вендорить общие `/common/*`-хелперы вне категории), `idlharness.window.html` TIMEOUT (невендоренные `/resources/WebIDLParser.js`+`idlharness.js`, тот же инфра-гэп прочих idlharness-категорий), `prompt-in-detached-iframe.html` FAIL на `i.contentDocument.body` — реконфирмация [BUG-480](../bugs/BUG-480-OPEN.md). `grep -rli "RemotePlayback" crates/` — ноль совпадений, API не реализован вовсе. Новых багов не заведено
