@@ -6245,6 +6245,21 @@ fn build_box_inner(
     }
 }
 
+/// CSS Intrinsic Sizing L3 §4.1 / CSS 2.1 §10.3.7 — does `c` contribute to its
+/// parent's intrinsic (max-content / min-content / shrink-to-fit) width?
+///
+/// Two kinds of children do not:
+/// * `display: none` (`BoxKind::Skip`) — no box is generated at all, so not even
+///   the element's own padding/border may be counted;
+/// * out-of-flow boxes (`position: absolute`/`fixed`) — they are sized against a
+///   containing block, not against their parent's content, and are laid out
+///   after it. A nav item holding a hidden 1104px-wide mega-menu dropdown must
+///   still be as wide as its label (BUG-738, `tbank.ru` top navigation).
+fn contributes_to_intrinsic_width(c: &LayoutBox) -> bool {
+    !matches!(c.kind, BoxKind::Skip)
+        && !matches!(c.style.position, Position::Absolute | Position::Fixed)
+}
+
 /// Is `b` a **row-direction** flex container (`display: flex`/`inline-flex`
 /// with `flex-direction: row`/`row-reverse`)?
 ///
@@ -6292,9 +6307,7 @@ fn flex_row_intrinsic_sum(
     let mut sum = 0.0_f32;
     let mut n_items = 0_usize;
     for c in &b.children {
-        if matches!(c.kind, BoxKind::Skip)
-            || matches!(c.style.position, Position::Absolute | Position::Fixed)
-        {
+        if !contributes_to_intrinsic_width(c) {
             continue;
         }
         let cem = c.style.font_size;
@@ -6367,7 +6380,7 @@ fn preferred_inline_block_width(
             preferred_inline_block_width(c, measurer, viewport).unwrap_or(0.0)
         })
     } else if matches!(b.kind, BoxKind::InlineBlockRow) {
-        let sum: f32 = b.children.iter().map(|c| {
+        let sum: f32 = b.children.iter().filter(|c| contributes_to_intrinsic_width(c)).map(|c| {
             if matches!(c.kind, BoxKind::InlineSpace) {
                 // Учитываем ширину collapsed space, чтобы при shrink-to-fit
                 // не занижать ширину контейнера и не вызывать перенос соседних
@@ -6389,6 +6402,9 @@ fn preferred_inline_block_width(
         let mut inflow_max = 0.0_f32;
         let mut float_sum = 0.0_f32;
         for c in &b.children {
+            if !contributes_to_intrinsic_width(c) {
+                continue;
+            }
             let Some(cw) = preferred_inline_block_width(c, measurer, viewport) else {
                 continue;
             };
@@ -6460,7 +6476,7 @@ fn max_content_outer_width(
             })
         }
         BoxKind::InlineBlockRow => {
-            b.children.iter().map(|c| {
+            b.children.iter().filter(|c| contributes_to_intrinsic_width(c)).map(|c| {
                 if matches!(c.kind, BoxKind::InlineSpace) {
                     return measurer.map_or(0.0, |m| m.char_width(' ', c.style.font_size));
                 }
@@ -6487,6 +6503,9 @@ fn max_content_outer_width(
             let mut inflow_max = 0.0_f32;
             let mut float_sum = 0.0_f32;
             for c in &b.children {
+                if !contributes_to_intrinsic_width(c) {
+                    continue;
+                }
                 let cw = max_content_outer_width(c, measurer, viewport);
                 if c.style.float_side != FloatSide::None {
                     let cem = c.style.font_size;
@@ -6568,7 +6587,7 @@ fn min_content_outer_width_of_contents(
         }
         BoxKind::InlineBlockRow => {
             // For inline-block row, min-content is the max over children.
-            b.children.iter().map(|c| {
+            b.children.iter().filter(|c| contributes_to_intrinsic_width(c)).map(|c| {
                 if matches!(c.kind, BoxKind::InlineSpace) {
                     return 0.0; // spaces are breakable
                 }
@@ -6591,6 +6610,7 @@ fn min_content_outer_width_of_contents(
         }
         _ => {
             b.children.iter()
+                .filter(|c| contributes_to_intrinsic_width(c))
                 .map(|c| min_content_outer_width(c, measurer, viewport))
                 .fold(0.0_f32, f32::max)
         }
@@ -14297,6 +14317,71 @@ mod tests {
         let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
         let ib = find_by_id_all(&root, &doc, "ib").expect("#ib box not found");
         assert_eq!(ib.rect.width, 80.0);
+    }
+
+    // ── BUG-738: out-of-flow дети не участвуют в intrinsic-ширине ─────────────
+
+    const ABS_CSS: &str =
+        "#outer { display: flex; width: 600px; } \
+         .item { position: relative; } \
+         .leaf { display: block; width: 40px; height: 10px; } \
+         .drop { position: absolute; width: 300px; height: 10px; } \
+         .tail { width: 30px; height: 10px; }";
+
+    /// Меню-выпадайка `position: absolute` шириной 300px внутри пункта
+    /// навигации не должна раздувать сам пункт до 300px (CSS 2.1 §10.3.7 —
+    /// out-of-flow бокс меряется от своего containing block, а не от родителя).
+    /// Ровно эта форма у верхней навигации `tbank.ru`.
+    #[test]
+    fn bug738_absolute_child_does_not_inflate_flex_item() {
+        let html = r#"<div id="outer">
+            <div class="item"><div class="leaf"></div><div class="drop"></div></div>
+            <div class="tail"></div></div>"#;
+        assert_eq!(child_widths(html, ABS_CSS), vec![40.0, 30.0]);
+    }
+
+    /// То же для shrink-to-fit флоата.
+    #[test]
+    fn bug738_absolute_child_does_not_inflate_float() {
+        let css = format!("{ABS_CSS} #fl {{ float: left; position: relative; }}");
+        let html = r#"<div id="outer"><div id="fl">
+            <div class="leaf"></div><div class="drop"></div></div></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(&css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let fl = find_by_id_all(&root, &doc, "fl").expect("#fl box not found");
+        assert_eq!(fl.rect.width, 40.0);
+    }
+
+    /// `display: none` бокса не существует вовсе — даже его padding не имеет
+    /// права попасть в intrinsic-ширину родителя.
+    #[test]
+    fn bug738_display_none_child_does_not_inflate() {
+        let css = format!("{ABS_CSS} .gone {{ display: none; width: 300px; padding: 0 50px; }}");
+        let html = r#"<div id="outer">
+            <div class="item"><div class="leaf"></div><div class="gone"></div></div>
+            <div class="tail"></div></div>"#;
+        assert_eq!(child_widths(html, &css), vec![40.0, 30.0]);
+    }
+
+    /// `position: fixed` — тот же out-of-flow случай, что и `absolute`.
+    #[test]
+    fn bug738_fixed_child_does_not_inflate() {
+        let css = ABS_CSS.replace("position: absolute;", "position: fixed;");
+        let html = r#"<div id="outer">
+            <div class="item"><div class="leaf"></div><div class="drop"></div></div>
+            <div class="tail"></div></div>"#;
+        assert_eq!(child_widths(html, &css), vec![40.0, 30.0]);
+    }
+
+    /// Обычный in-flow потомок по-прежнему задаёт ширину пункта.
+    #[test]
+    fn bug738_in_flow_child_still_contributes() {
+        let css = ABS_CSS.replace(".drop { position: absolute;", ".drop { position: static;");
+        let html = r#"<div id="outer">
+            <div class="item"><div class="leaf"></div><div class="drop"></div></div>
+            <div class="tail"></div></div>"#;
+        assert_eq!(child_widths(html, &css), vec![300.0, 30.0]);
     }
 
     // ── Hyphenation helpers ───────────────────────────────────────────────────
