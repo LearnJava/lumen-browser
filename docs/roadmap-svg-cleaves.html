@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-09",
  "counts": {
-  "open": 318,
+  "open": 320,
   "fixed": 361,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 679,
+ "total_bugs": 681,
  "phases": [
   {
    "id": "P0",
@@ -4070,9 +4070,13 @@
       {
        "id": "WPT-VENDOR-webidl",
        "title": "WPT: вендорить + прогнать категорию `webidl`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root webidl --recursive`, ~1:43, 51 файл, 45 отобранных id, без HTTPS/testdriver/variant-гэпа) — **37/45 harness OK, 134/324 сабтестов**. Найдены [BUG-714](bugs/BUG-714-OPEN.md) (DOMException не соответствует WebIDL legacy-exception биндингу) и [BUG-715](bugs/BUG-715-OPEN.md) (DOMTokenList/CSSStyleDeclaration без глобального конструктора и индексного доступа). Остальной сигнал — переподтверждение BUG-480/BUG-529/BUG-694. Новые номера: BUG-714, BUG-715",
+       "bugs": [
+        "BUG-714",
+        "BUG-715"
+       ]
       },
       {
        "id": "WPT-VENDOR-webmcp",
@@ -9508,6 +9512,20 @@
    "status": "open",
    "title": "`HIDManager`/`HIDDevice` are plain `class X extends EventTarget` with no constructor guard — `new HIDManager()`/`new HIDDevice(1,2,'x')` both construct successf…",
    "component": "js (`crates/js/src/webhid.rs` — `WEBHID_SHIM`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-714": {
+   "status": "open",
+   "title": "`DOMException` doesn't match the WebIDL \"legacy exception\" binding shape: `name`/`message`/`code` are own instance data properties instead of prototype accessor…",
+   "component": "js (`crates/js/src/v8_runtime.rs:120-163` — `DOM_EXCEPTION_POLYFILL`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-715": {
+   "status": "open",
+   "title": "`DOMTokenList`(`classList`)/`CSSStyleDeclaration`(`style`) are built as ad-hoc object-literal factories with no global constructor and no WebIDL \"legacy platfor…",
+   "component": "js (`crates/js/src/dom.rs:1327-1381` — `_lumen_make_class_list`; `dom.rs:1404+` — `_lumen_make_style`)",
    "date": null,
    "debtor": false
   },

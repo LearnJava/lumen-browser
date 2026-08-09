@@ -348,7 +348,7 @@ tests/wpt/.venv/Scripts/python.exe tests/wpt/gen_status_md.py
 | `webgl` | ⬜ | ✅ |  | [BUG-711](../bugs/BUG-711-OPEN.md) | Вендорена целиком 2026-08-09 (коммит `35be3b44`, `tests/wpt/webgl/`, 12 файлов). `run_report.py --all --root webgl --recursive` (~38с, 8 отобранных id): 7/8 harness OK, 7/15 сабтестов. Контекст —… [Подробности](wpt-vendor-notes/webgl.md). |
 | `webgpu` | 🚫 | ✅ |  | [BUG-712](../bugs/BUG-712-OPEN.md) | Скоуп 🚫 не по причине пустого движка — `crates/js/src/webgpu.rs`… [Подробности](wpt-vendor-notes/webgpu.md). |
 | `webhid` | 🚫 | ✅ |  | [BUG-713](../bugs/BUG-713-OPEN.md) | аппаратный API (HID), но `crates/js/src/webhid.rs` реально реализует Phase 0 заглушку. Вендорена целиком 2026-08-09 (коммит `35be3b44`, `tests/wpt/webhid/`, 11 файлов). `run_report.py --all --root webhid --recursive` (~1:35, 5 отобранных id, все `.https.`): 0/5 harness OK, все TIMEOUT на… [Подробности](wpt-vendor-notes/webhid.md). |
-| `webidl` | ⬜ | — |  |  |  |
+| `webidl` | ⬜ | ✅ |  | BUG-714, BUG-715 | Вендорена целиком 2026-08-09 (коммит `35be3b44`, `tests/wpt/webidl/`, 51 файл, `LICENSE-WPT.md` скопирован из `webhid`). `run_report.py --all --root webidl --recursive` (~1:43, 45 отобранных id, ноль `.https.`/testdriver/variant): **37/45 harness OK, 134/324 сабтестов** — одна из самых чистых по сигналу категорий бэклога. [Подробности](wpt-vendor-notes/webidl.md). |
 | `webmcp` | 🚫 | — |  |  | экспериментальный, вне текущего скоупа |
 | `webmessaging` | ⬜ | — |  |  |  |
 | `webmidi` | 🚫 | — |  |  | аппаратный API (MIDI) |
