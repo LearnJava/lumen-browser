@@ -69,7 +69,7 @@ dest.appendChild(a)              -> host.innerHTML after = A ; dest.innerHTML = 
 
 `appendChild(a)` переместил `b`. Скрипту страницы для этого не нужны привилегии —
 достаточно одного присваивания. Тот же класс, что пункт (2) в
-[BUG-366](BUG-366-OPEN.md) (`navigator.credentials._get_original`), но здесь
+[BUG-366](BUG-366-FIXED.md) (`navigator.credentials._get_original`, исправлено), но здесь
 утечка не на одном служебном объекте, а на каждом узле документа.
 
 Внутри того же файла есть и правильный паттерн: `dom.rs:4669`

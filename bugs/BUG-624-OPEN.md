@@ -28,7 +28,7 @@ instance, not a getter on an interface prototype.
 
 ## Отличие от класса BUG-366
 
-[BUG-366](BUG-366-OPEN.md)/[BUG-367](BUG-367-OPEN.md)/[BUG-369](BUG-369-OPEN.md)
+[BUG-366](BUG-366-FIXED.md)/[BUG-367](BUG-367-OPEN.md)/[BUG-369](BUG-369-OPEN.md)
 document the same instance-vs-prototype defect for *sub-objects hanging off*
 `navigator` (`navigator.credentials`, `Headers`, `Element`) — those interfaces
 at least exist as global constructors (`CredentialsContainer`, `Headers`),
