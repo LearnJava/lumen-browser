@@ -8200,12 +8200,26 @@ var window = {
 };
 
 // ── queueMicrotask (HTML LS §8.1.4.4) ────────────────────────────────────────
-// Schedules `fn` as a microtask; implemented via resolved Promise chain which
-// QuickJS drains between tasks (same semantics as spec §8.1.4.2 microtask queue).
-function queueMicrotask(fn) {
-    if (typeof fn !== 'function') throw new TypeError('queueMicrotask: argument must be a function');
-    Promise.resolve().then(fn);
-}
+// Schedules `fn` as a microtask; implemented via a resolved Promise chain, which
+// V8 drains between tasks (same semantics as spec §8.1.4.2 microtask queue).
+//
+// BUG-702: the resolve/then pair is captured HERE, at shim-install time, while
+// `Promise` is still V8's own, and is never re-read from the global afterwards.
+// A page is free to replace `window.Promise` with its own implementation — core-js
+// does exactly that whenever its feature detection rejects the native one — and
+// such a polyfill schedules its reaction jobs through the host `queueMicrotask`.
+// Reading `Promise` from the global here would then close the loop: polyfill
+// resolve -> queueMicrotask -> polyfill Promise.resolve().then() -> polyfill
+// resolve -> ... an unbounded recursion that spins the engine at 100% CPU
+// forever (the tbank.ru hang).
+var queueMicrotask = (function() {
+    var _nativeResolve = Promise.resolve.bind(Promise);
+    var _nativeThen = Promise.prototype.then;
+    return function queueMicrotask(fn) {
+        if (typeof fn !== 'function') throw new TypeError('queueMicrotask: argument must be a function');
+        _nativeThen.call(_nativeResolve(), fn);
+    };
+})();
 
 // ── URLSearchParams (WHATWG URL §5) ──────────────────────────────────────────
 function URLSearchParams(init) {
@@ -21661,6 +21675,49 @@ mod tests {
                 after,
                 lumen_core::JsValue::String("sync,micro".to_string()),
                 "microtask must have run by the end of the script that queued it"
+            );
+        }
+
+        // BUG-702: a page may replace the global `Promise` with its own implementation
+        // — core-js does exactly that whenever its feature detection rejects the native
+        // one — and such a polyfill schedules its own reaction jobs through the host
+        // `queueMicrotask`. When `queueMicrotask` re-read `Promise` from the global it
+        // called straight back into the polyfill, which notified again: unbounded
+        // recursion that spun the engine at 100% CPU forever on `tbank.ru/auth/login/`.
+        // The pristine resolve/then pair is captured at shim-install time instead.
+        #[test]
+        fn queue_microtask_ignores_page_replaced_promise() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let reentered = rt
+                .eval(
+                    "var log = [];\
+                     var reentered = false;\
+                     var fake = function() { throw new Error('page Promise ctor used'); };\
+                     fake.resolve = function() { reentered = true; return { then: function(f) { f(); } }; };\
+                     globalThis.Promise = fake;\
+                     queueMicrotask(function() { log.push('micro'); });\
+                     log.push('sync');\
+                     reentered",
+                )
+                .unwrap();
+            // The sabotage must actually be visible in the scope the shim resolves
+            // `Promise` from — otherwise this test would pass for the wrong reason.
+            let visible = rt.eval("Promise === fake").unwrap();
+            assert_eq!(
+                visible,
+                lumen_core::JsValue::Bool(true),
+                "test setup broken: the replaced Promise is not visible in global scope"
+            );
+            assert_eq!(
+                reentered,
+                lumen_core::JsValue::Bool(false),
+                "queueMicrotask must not route through the page's replaced Promise"
+            );
+            let after = rt.eval("log.join(',')").unwrap();
+            assert_eq!(
+                after,
+                lumen_core::JsValue::String("sync,micro".to_string()),
+                "the microtask must still run, on the pristine Promise captured at install"
             );
         }
 
