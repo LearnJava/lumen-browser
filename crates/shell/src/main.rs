@@ -1013,6 +1013,8 @@ fn run_window_mode(
         stream_layout_seeded: false,
         preload_dispatched: std::collections::HashSet::new(),
         stream_images_requested: std::collections::HashSet::new(),
+        stream_image_sizes: HashMap::new(),
+        stream_image_sizes_dirty: false,
         pending_restore_scroll: None,
         pending_pageshow_persisted: false,
         pending_post_reload_traversal: None,
@@ -4909,10 +4911,18 @@ fn decode_image(
     }
 }
 
-fn apply_intrinsic_size(doc: &mut Document, node_id: NodeId, width: u32, height: u32) {
+/// Доставляет intrinsic-размеры декодированной картинки в layout, дописывая
+/// `<img>` пустые презентационные атрибуты `width`/`height`.
+///
+/// Возвращает `true`, если атрибут действительно был дописан — то есть DOM
+/// изменился и странице нужен релейаут. `false` (ничего не изменилось) — когда
+/// автор задал оба размера сам или размеры уже дописаны прошлым вызовом; на нём
+/// держится сходимость повторного прохода [`Lumen::apply_stream_intrinsic_sizes`]
+/// (BUG-735), иначе «применили → релейаут → применили» зациклилось бы.
+fn apply_intrinsic_size(doc: &mut Document, node_id: NodeId, width: u32, height: u32) -> bool {
     use lumen_dom::{Attribute, QualName};
     let NodeData::Element { attrs, .. } = &mut doc.get_mut(node_id).data else {
-        return;
+        return false;
     };
     // Presence of the author's width/height content attributes (any value —
     // including percentages — counts as "set" and must never be duplicated).
@@ -4962,18 +4972,22 @@ fn apply_intrinsic_size(doc: &mut Document, node_id: NodeId, width: u32, height:
         ),
     };
 
+    let mut changed = false;
     if !has_w && let Some(w) = new_w {
         attrs.push(Attribute {
             name: QualName::html("width"),
             value: w.to_string(),
         });
+        changed = true;
     }
     if !has_h && let Some(h) = new_h {
         attrs.push(Attribute {
             name: QualName::html("height"),
             value: h.to_string(),
         });
+        changed = true;
     }
+    changed
 }
 
 // ── Рендер ───────────────────────────────────────────────────────────────────
@@ -5093,6 +5107,10 @@ struct PageSnapshot {
     /// during the current streaming load. Dedup across intermediate frames so
     /// each `<img>` is fetched once. Cleared at the start of every navigation.
     stream_images_requested: std::collections::HashSet<String>,
+    /// BUG-735: mirrors [`Lumen::stream_image_sizes`].
+    stream_image_sizes: HashMap<String, (u32, u32)>,
+    /// BUG-735: mirrors [`Lumen::stream_image_sizes_dirty`].
+    stream_image_sizes_dirty: bool,
     ime_composing: Option<String>,
     bfcache: BfCache,
     /// Parsed stylesheets of frozen bfcache pages, keyed by URL.
@@ -7644,6 +7662,18 @@ struct Lumen {
     /// промежуточными кадрами `paint_partial_dom`, чтобы каждый `<img>`
     /// загружался один раз. Очищается в начале каждой навигации.
     stream_images_requested: std::collections::HashSet<String>,
+    /// BUG-735: intrinsic-размеры `src` → `(width, height)` всех картинок,
+    /// декодированных streaming/динамическим путём в текущей навигации.
+    /// Карта живёт до конца навигации (а не дренируется за проход), потому что
+    /// `stream_images_requested` дедуплицирует запрос по URL: узел с тем же
+    /// `src`, добавленный скриптом позже, своего `ImageDecoded` уже не получит,
+    /// и размер ему может дать только эта карта.
+    stream_image_sizes: HashMap<String, (u32, u32)>,
+    /// BUG-735: в карту [`Self::stream_image_sizes`] попал новый размер —
+    /// на ближайшем кадре нужно разнести его по `<img>` и, если DOM изменился,
+    /// сделать релейаут. Флаг коалесцирует пачку декодов (сотня картинок = один
+    /// проход, а не сотня релейаутов).
+    stream_image_sizes_dirty: bool,
     /// U-1: scroll offset to restore once the in-flight navigation completes.
     /// Set by back/forward navigation before kicking off an async (streaming)
     /// reload; consumed in `apply_loaded_page` (and the sync fallback in
@@ -10345,6 +10375,14 @@ impl Lumen {
         // post-layout point every relayout producer routes through, so a
         // script-appended `<img>` is picked up whichever path relaid it out.
         self.spawn_dynamic_image_loads(viewport);
+        // BUG-735: и по той же причине — свежеперестроенное поддерево могло
+        // принести НОВЫЙ `<img>` с уже декодированным `src` (React перерисовал
+        // блок: узел другой, картинка та же). Второго `ImageDecoded` для него не
+        // будет — запрос дедуплицирован по URL, — поэтому размеры ему раздаёт
+        // проход `apply_stream_intrinsic_sizes`, и здесь мы его заказываем.
+        // Пустой карте заказывать нечего; сам проход no-op, если дописывать
+        // нечего, так что «релейаут → проход → релейаут» не зацикливается.
+        self.stream_image_sizes_dirty |= !self.stream_image_sizes.is_empty();
         if let Some(w) = self.window.as_ref() {
             w.request_redraw();
         }
@@ -10968,6 +11006,8 @@ impl Lumen {
             // иначе chunk-и допишутся в DOM предыдущей страницы.
             self.preload_dispatched.clear();
             self.stream_images_requested.clear();
+            self.stream_image_sizes.clear();
+            self.stream_image_sizes_dirty = false;
             self.stream_sheet = lumen_css_parser::Stylesheet::default();
             self.stream_layout_seeded = false;
             self.stream_builder = None;
@@ -11427,6 +11467,64 @@ impl Lumen {
             lumen_layout::collect_image_requests(&doc, viewport)
         };
         self.spawn_image_requests(requests);
+    }
+
+    /// BUG-735: разнести intrinsic-размеры уже декодированных картинок по `<img>`
+    /// живого документа и, если DOM от этого изменился, запросить релейаут.
+    ///
+    /// Третий путь загрузки картинок — streaming/динамический
+    /// ([`Self::spawn_image_requests`]) — регистрировал пиксели в рендерере, но
+    /// никогда не сообщал размер DOM-у: `apply_intrinsic_size` звали только
+    /// финальный `fetch_and_decode_images` и lazy-путь. Для клиентски
+    /// отрисованной страницы (где к моменту появления `<img>` финальный pipeline
+    /// уже отработал — BUG-730) это значит **все** картинки: без intrinsic-пары
+    /// нет и соотношения сторон, поэтому `height: auto` даёт ноль.
+    ///
+    /// Проход коалесцирован: арм `ImageDecoded` только копит размеры и взводит
+    /// флаг, а разнос+релейаут делается один раз за кадр — сотня декодов стоит
+    /// одного релейаута, а не сотни. Сходимость держится на том, что
+    /// `apply_intrinsic_size` возвращает `false`, когда дописывать нечего:
+    /// второй проход по тем же узлам DOM не меняет и релейаут не заказывает.
+    /// Петли «релейаут → новый запрос → новый декод» нет — `spawn_image_requests`
+    /// дедуплицируется через `stream_images_requested`.
+    fn apply_stream_intrinsic_sizes(&mut self) {
+        if !self.stream_image_sizes_dirty {
+            return;
+        }
+        self.stream_image_sizes_dirty = false;
+        let Some(viewport) = self.relayout_viewport() else {
+            // Вьюпорта ещё нет (рендерер не сконфигурирован) — размеры остаются
+            // в карте, проход повторится на кадре, когда он появится.
+            self.stream_image_sizes_dirty = true;
+            return;
+        };
+        let changed = {
+            let Some(src) = self.layout_source.as_ref() else { return };
+            let Ok(mut doc) = src.document.lock() else { return };
+            // Тот же picker, что эмитит ключи `src` в `DrawImage`, — url из
+            // запроса совпадает с ключом карты по построению.
+            let requests = lumen_layout::collect_image_requests(&doc, viewport);
+            let mut changed = false;
+            for req in requests {
+                if req.is_lazy {
+                    continue;
+                }
+                let Some(&(w, h)) = self.stream_image_sizes.get(&req.url) else {
+                    continue;
+                };
+                changed |= apply_intrinsic_size(&mut doc, req.node_id, w, h);
+            }
+            changed
+        };
+        if !changed {
+            return;
+        }
+        // Дописанные `width`/`height` — презентационный хинт, то есть вход
+        // каскада. Кэш инкрементального рестайла (BUG-341) знает только о
+        // мутациях, пришедших из JS, поэтому мутацию со стороны шелла ему нужно
+        // объявить сбросом кэша — иначе стиль `<img>` переиспользуется прежний.
+        self.page_prev_cascade_styles = None;
+        self.relayout_raf_dirty();
     }
 
     /// Fetch+decode every not-yet-requested non-lazy image in `requests` on its
@@ -12021,6 +12119,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // Сбрасываем состояние предыдущего streaming-цикла — новая страница.
         self.preload_dispatched.clear();
         self.stream_images_requested.clear();
+        self.stream_image_sizes.clear();
+        self.stream_image_sizes_dirty = false;
         self.stream_sheet = lumen_css_parser::Stylesheet::default();
         self.stream_layout_seeded = false;
         // Record navigation start for the initial streaming load.
@@ -12150,6 +12250,16 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // что эмитит layout в `DrawImage`), кладём в декод-кэш и просим
                 // redraw — следующий кадр заменит placeholder реальной картинкой.
                 let image = *image;
+                // BUG-735: пиксели у рендерера — это ещё не размер для layout.
+                // Intrinsic-пара доезжает до DOM только через
+                // `apply_intrinsic_size`, а этот путь её никогда не звал, поэтому
+                // на клиентски отрисованной странице (все картинки приходят
+                // именно сюда, BUG-730) `height: auto` честно считался нулём.
+                // Запоминаем размер и помечаем проход — разнесём по узлам одним
+                // коалесцированным проходом на ближайшем кадре.
+                self.stream_image_sizes
+                    .insert(src.clone(), (image.width, image.height));
+                self.stream_image_sizes_dirty = true;
                 if let Some(r) = self.renderer.as_mut() {
                     // BUG-272 срез 17: cache-insert returns the Arc handle; register
                     // with it so raw_images shares the CPU cache's allocation.
@@ -15502,6 +15612,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // Step 1.6: content-visibility: auto (BB-4) — пропущенный узел
                 // вошёл в расширенный viewport → ratchet relevant + relayout.
                 self.maybe_expand_cv_relevant();
+                // Step 1.7 (BUG-735): картинки, декодированные streaming/
+                // динамическим путём с прошлого кадра, отдают DOM-у свои
+                // intrinsic-размеры (коалесцированно: одна пачка — один релейаут).
+                self.apply_stream_intrinsic_sizes();
 
                 // Fast-scroll деградация (EXPERIMENT.md §2 срез 2, принцип
                 // пользователя 2026-07-10: чем быстрее скролл, тем меньше
@@ -23050,6 +23164,8 @@ impl Lumen {
             stream_layout_seeded: self.stream_layout_seeded,
             preload_dispatched: std::mem::take(&mut self.preload_dispatched),
             stream_images_requested: std::mem::take(&mut self.stream_images_requested),
+            stream_image_sizes: std::mem::take(&mut self.stream_image_sizes),
+            stream_image_sizes_dirty: self.stream_image_sizes_dirty,
             ime_composing: self.ime_composing.take(),
             bfcache: std::mem::replace(&mut self.bfcache, BfCache::new(16)),
             frozen_styles: std::mem::take(&mut self.frozen_styles),
@@ -23133,6 +23249,8 @@ impl Lumen {
         self.stream_layout_seeded = snap.stream_layout_seeded;
         self.preload_dispatched = snap.preload_dispatched;
         self.stream_images_requested = snap.stream_images_requested;
+        self.stream_image_sizes = snap.stream_image_sizes;
+        self.stream_image_sizes_dirty = snap.stream_image_sizes_dirty;
         self.ime_composing = snap.ime_composing;
         self.bfcache = snap.bfcache;
         self.frozen_styles = snap.frozen_styles;
@@ -23226,6 +23344,8 @@ impl Lumen {
         self.stream_layout_seeded = false;
         self.preload_dispatched = std::collections::HashSet::new();
         self.stream_images_requested = std::collections::HashSet::new();
+        self.stream_image_sizes = HashMap::new();
+        self.stream_image_sizes_dirty = false;
         self.ime_composing = None;
         self.bfcache = BfCache::new(16);
         self.frozen_styles = HashMap::new();
@@ -27945,6 +28065,51 @@ mod tests {
         let (w, h) = img_dims(r#"<img src="p.png" width="50%">"#, 120, 80);
         assert_eq!(w.as_deref(), Some("50%"));
         assert_eq!(h.as_deref(), Some("80"));
+    }
+
+    // ── BUG-735: сходимость повторного прохода intrinsic-размеров ───────────
+    //
+    // Streaming/динамический путь раздаёт размеры проходом
+    // `Lumen::apply_stream_intrinsic_sizes`, который просит релейаут ровно
+    // тогда, когда `apply_intrinsic_size` сообщил об изменении DOM. Проход сам
+    // заказывается после каждого релейаута (новый `<img>` с уже декодированным
+    // `src` своего `ImageDecoded` не получит — запрос дедуплицирован по URL),
+    // поэтому «ничего не дописал → false» — это то, на чём держится отсутствие
+    // петли «релейаут → проход → релейаут».
+
+    /// Parse `html`, run `apply_intrinsic_size` twice with the same intrinsic
+    /// size, and return both calls' change flags.
+    fn img_apply_twice(html: &str, iw: u32, ih: u32) -> (bool, bool) {
+        let mut doc = lumen_html_parser::parse(html);
+        let img = find_img(&doc, doc.root()).expect("img present");
+        let first = apply_intrinsic_size(&mut doc, img, iw, ih);
+        let second = apply_intrinsic_size(&mut doc, img, iw, ih);
+        (first, second)
+    }
+
+    #[test]
+    fn bug735_first_apply_changes_dom_second_does_not() {
+        let (first, second) = img_apply_twice(r#"<img src="p.png">"#, 120, 80);
+        assert!(first, "первый вызов дописывает width/height");
+        assert!(!second, "повторный вызов не меняет DOM — релейаут не нужен");
+    }
+
+    #[test]
+    fn bug735_author_dimensions_report_no_change() {
+        // Автор задал оба размера — дописывать нечего с самого начала.
+        let (first, second) =
+            img_apply_twice(r#"<img src="p.png" width="10" height="20">"#, 120, 80);
+        assert!(!first);
+        assert!(!second);
+    }
+
+    #[test]
+    fn bug735_half_filled_reports_change_once() {
+        // Задана только ширина → дописывается высота из соотношения (изменение),
+        // второй проход уже видит обе и молчит.
+        let (first, second) = img_apply_twice(r#"<img src="p.png" width="240">"#, 120, 80);
+        assert!(first);
+        assert!(!second);
     }
 
     // ── BUG-171 этап 2: off-UI-thread финальный pipeline ────────────────────
