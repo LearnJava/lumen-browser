@@ -1,4 +1,4 @@
-# BUG-702 — `Animation.prototype.commitStyles`/`.persist` missing entirely
+# BUG-704 — `Animation.prototype.commitStyles`/`.persist` missing entirely
 
 **Статус:** OPEN
 **Компонент:** js (`crates/js/src/dom.rs:12954-13070`, Web Animations `WEB_API_SHIM` — `Animation.prototype`)
