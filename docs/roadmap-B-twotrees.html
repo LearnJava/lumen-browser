@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-09",
  "counts": {
-  "open": 308,
+  "open": 310,
   "fixed": 351,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 659,
+ "total_bugs": 661,
  "phases": [
   {
    "id": "P0",
@@ -3900,9 +3900,13 @@
       {
        "id": "WPT-VENDOR-url",
        "title": "WPT: вендорить + прогнать категорию `url`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root url --recursive`, ~2:19, 50 файлов + внекатегорийный `common/subset-tests-by-key.js`, 44 отобранных id) — **39/44 harness OK, 1742/7451 сабтестов**, крупнейший провальный кластер бэклога на сегодня. Заведено два номера: [BUG-693](bugs/BUG-693-OPEN.md) — весь JS-видимый URL-парсер (`_lumen_parse_url`/`_url_resolve`, `dom.rs`) оказался рукописным строковым сплиттером вместо алгоритма WHATWG URL Standard: нет IDNA/punycode, не режется пробел/таб/перевод строки, userinfo отбрасывается, `_url_resolve` считает любую строку `scheme:...` уже абсолютной (не резолвит `http:foo.com` относительно базы), сеттеры не валидируют — `url-constructor.any.html` 223/899, `a-element*` 5/1313, `url-setters*` 116/1102, `IdnaTestV2.any.html` 987/2671, `toascii.window.html` 193/784. [BUG-694](bugs/BUG-694-OPEN.md) — `URLSearchParams` не итерируем (нет `Symbol.iterator`), `entries()`/`keys()`/`values()` отдают `Array` вместо итератора, копирующий конструктор `new URLSearchParams(existingParams)` протекает через перечислимое внутреннее поле `_p` (`_p=a%2Cb` вместо `a=b`) — `urlencoded-parser.any.html` 0/105. Два новых номера бага",
+       "bugs": [
+        "BUG-693",
+        "BUG-694"
+       ]
       },
       {
        "id": "WPT-VENDOR-urlpattern",
@@ -9394,6 +9398,20 @@
    "status": "open",
    "title": "CSP `upgrade-insecure-requests` directive is parsed into `CspPolicy::upgrade_insecure_requests` (`csp.rs:188-190`, unit-tested) but the field is read nowhere el…",
    "component": "network (`crates/network/src/csp.rs` — `CspPolicy::upgrade_insecure_requests`; gap spans `HttpClient::fetch*` in `lib.rs`, `mixed_content.rs`, `crates/storage/src/csp_policies.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-693": {
+   "status": "open",
+   "title": "The entire JS-visible URL parsing/serialization surface is a ~35-line ad-hoc string-splitter, not the WHATWG URL Standard state machine: no input sanitization (…",
+   "component": "js (`crates/js/src/dom.rs:4633` — `_lumen_parse_url`; `dom.rs:8074` — `_url_resolve`; feeds `URL`/`location`/every `<a>`/`<area>` IDL accessor via `_lumen_reflect_url`/`_lumen_hyperlink_url_get`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-694": {
+   "status": "open",
+   "title": "`URLSearchParams` has no `Symbol.iterator` (same defect class as `Headers`, [BUG-369](bugs/BUG-369-OPEN.md)) — `for...of`/spread/`Array.from()` all fail with \"i…",
+   "component": "js (`crates/js/src/dom.rs:7974-8073` — `URLSearchParams` constructor + prototype)",
    "date": null,
    "debtor": false
   }
