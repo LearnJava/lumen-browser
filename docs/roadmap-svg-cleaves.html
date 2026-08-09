@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-09",
  "counts": {
-  "open": 316,
+  "open": 317,
   "fixed": 360,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 676,
+ "total_bugs": 677,
  "phases": [
   {
    "id": "P0",
@@ -4053,9 +4053,9 @@
       {
        "id": "WPT-VENDOR-webgpu",
        "title": "WPT: вендорить + прогнать категорию `webgpu`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). нет compute-конвейера GPU (растеризация — своя)"
+       "note": "Скоуп: 🚫 (вне скоупа, но не по причине пустого движка — `crates/js/src/webgpu.rs` реально реализует WebGPU Stage 3 поверх `wgpu`, только неактивен без Cargo-фичи `webgpu`, которую `lumen-shell` пока не подключает; на дефолтной V8-сборке `navigator.gpu` остаётся Phase-0-шимом). DONE 2026-08-09: вендорена целиком (апстримная директория `webgpu/` в WPT намеренно пуста — CTS вендорится отдельно как `gpuweb/cts`, не входит в web-platform-tests, `README.md`: «checked into the browser repository as non-exported wpt tests»), `run_report.py --all --root webgpu --recursive` корректно даёт `no tests selected` (0/0). Живая проба (`--mcp-live-port`) на этом же основании, что и `eyedropper`/`webauthn` («пустой прогон ≠ отсутствие находки»): нашла [BUG-712](bugs/BUG-712-OPEN.md) — `navigator.gpu` собран как голый объектный литерал без интерфейса `GPU` (`globalThis.GPU === undefined`, `instanceof` бросает `ReferenceError`), тот же класс дефекта, что [BUG-711](bugs/BUG-711-OPEN.md) у WebGL, при этом все остальные интерфейсы файла (`GPUAdapter`/`GPUDevice`/`GPUCanvasContext`) корректно constructor/prototype-based — подтверждено живьём. Новый номер: BUG-712"
       },
       {
        "id": "WPT-VENDOR-webhid",
@@ -9493,6 +9493,13 @@
    "component": "js (`crates/js/src/webgl_canvas.rs` — `WEBGL_SHIM`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-712": {
+   "status": "open",
+   "title": "`navigator.gpu` is a plain object literal with no `GPU` interface identity — `globalThis.GPU` doesn't exist anywhere in the shim, so `navigator.gpu instanceof G…",
+   "component": "js (`crates/js/src/webgpu.rs` — `WEBGPU_SHIM`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -9949,6 +9956,9 @@
   ],
   "js (`crates/js/src/webgl_canvas.rs` — `WEBGL_SHIM`)": [
    "BUG-711"
+  ],
+  "js (`crates/js/src/webgpu.rs` — `WEBGPU_SHIM`)": [
+   "BUG-712"
   ],
   "js (`dom.rs` `WEB_API_SHIM`)": [
    "BUG-309"

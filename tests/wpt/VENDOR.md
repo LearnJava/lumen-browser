@@ -243,6 +243,7 @@ paths) are unaffected — those stay inline, they're not the rows that grow unbo
 | `tests/wpt/webcodecs/` | `webcodecs/` | Test category, added 2026-08-09 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VENDOR-webcodecs`, `docs/wpt-status.md`), scope 🚫 (no hardware/software codec pipeline). Same pinned commit, `git… [Details](../../docs/wpt-vendor-notes/webcodecs.md). |
 | `tests/wpt/webdriver/` | `webdriver/` | Test category, added 2026-08-09 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VENDOR-webdriver`, `docs/wpt-status.md`), scope 🚫 (WPT's own WebDriver/BiDi protocol conformance suite, not a web-page… [Details](../../docs/wpt-vendor-notes/webdriver.md). |
 | `tests/wpt/webgl/` | `webgl/` | Test category, added 2026-08-09 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VENDOR-webgl`, `docs/wpt-status.md`), scope ⬜ (candidate — WebGL 1.0 is genuinely implemented, a software backend with a… [Details](../../docs/wpt-vendor-notes/webgl.md). |
+| `tests/wpt/webgpu/` | `webgpu/` | Test category, added 2026-08-09 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VENDOR-webgpu`, `docs/wpt-status.md`), scope 🚫 — but not for the reason the roadmap note used to give ("no GPU compute pipeline"): `crates/js/src/webgpu.rs`… [Details](../../docs/wpt-vendor-notes/webgpu.md). |
 
 Each vendored top-level directory carries its own `LICENSE-WPT.md` (WPT is
 3-clause BSD, copyright web-platform-tests contributors) alongside the code.
