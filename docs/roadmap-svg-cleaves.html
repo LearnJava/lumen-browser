@@ -3997,9 +3997,9 @@
       {
        "id": "WPT-VENDOR-web-nfc",
        "title": "WPT: вендорить + прогнать категорию `web-nfc`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). аппаратный API (NFC)"
+       "note": "Скоуп: 🚫 (вне скоупа). аппаратный API (NFC). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root web-nfc --recursive`, 20 файлов, 11 отобранных id) — **1/11 harness OK, 0/1 сабтестов**. 9 TIMEOUT — стандартный TLS-гэп `UnknownIssuer` ([BUG-657](bugs/BUG-657-OPEN.md)) на `.https.`-файлах. Единственный исполнившийся не-`.https.` тест (`nfc_insecure_context.html`) формально OK, но его единственный сабтест FAIL: `assert_false(isSecureContext)` got true — та же причина, что в `web-locks`, переподтверждение [BUG-399](bugs/BUG-399-OPEN.md). Соседний `.https.`-тест ERROR вместо TIMEOUT — переподтверждение [BUG-380](bugs/BUG-380-OPEN.md) (утечка результатов предыдущего теста). Живая проба подтвердила: `navigator.nfc`/`NDEFReader`/`NDEFMessage`/`NDEFRecord`/`NDEFReadingEvent` отсутствуют целиком — ожидаемо для 🚫-скоупа, не баг. Новый номер бага не заводился"
       },
       {
        "id": "WPT-VENDOR-web-otp",
