@@ -5642,7 +5642,10 @@ function _lumen_pump_sse() {
 }
 
 function EventSource(url, opts) {
-    this.url = String(url || '');
+    var _rawUrl = String(url);
+    // Resolve relative to the document's base URL (HTML Living Standard §9.2.2);
+    // an unresolvable URL falls back to the raw string (throwing SyntaxError is BUG-363).
+    try { this.url = new URL(_rawUrl, _lumen_loc_href).href; } catch (e) { this.url = _rawUrl; }
     this.readyState = 0; // CONNECTING
     this.withCredentials = !!(opts && opts.withCredentials);
     this.onopen = null;
@@ -8253,6 +8256,8 @@ function _url_resolve(href, base) {
     // Already absolute?
     if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return href;
     if (!base) return href;
+    // Empty relative reference resolves to the base itself (RFC 3986 §4.2 same-document reference).
+    if (href === '') return String(base);
     var bp = _lumen_parse_url(String(base));
     // Protocol-relative
     if (href.slice(0, 2) === '//') return bp.protocol + href;
@@ -20195,6 +20200,109 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(r, lumen_core::JsValue::Number(0.0));
+        }
+
+        #[test]
+        fn eventsource_resolves_relative_url_and_url_getter_is_absolute() {
+            let rt = V8JsRuntime::new().unwrap();
+            rt.install_dom(
+                make_doc(),
+                "https://example.com/eventsource/page.html",
+                None, None, None, None, None, None, None, None, false,
+            )
+            .unwrap();
+            let r = rt
+                .eval("new EventSource('resources/message.py').url")
+                .unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String(
+                    "https://example.com/eventsource/resources/message.py".into()
+                )
+            );
+        }
+
+        #[test]
+        fn eventsource_empty_url_resolves_to_document_url() {
+            let rt = V8JsRuntime::new().unwrap();
+            rt.install_dom(
+                make_doc(),
+                "https://example.com/eventsource/page.html",
+                None, None, None, None, None, None, None, None, false,
+            )
+            .unwrap();
+            let r = rt.eval("new EventSource('').url").unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String("https://example.com/eventsource/page.html".into())
+            );
+        }
+
+        #[test]
+        fn eventsource_stringifies_null_and_undefined_instead_of_empty() {
+            // Side-fix noted in BUG-362: `String(url)` instead of `String(url || '')`.
+            let rt = V8JsRuntime::new().unwrap();
+            rt.install_dom(
+                make_doc(),
+                "https://example.com/eventsource/page.html",
+                None, None, None, None, None, None, None, None, false,
+            )
+            .unwrap();
+            let r = rt
+                .eval("[new EventSource(null).url, new EventSource(undefined).url]")
+                .unwrap();
+            match r {
+                lumen_core::JsValue::Array(arr) => {
+                    assert_eq!(
+                        arr[0],
+                        lumen_core::JsValue::String("https://example.com/eventsource/null".into())
+                    );
+                    assert_eq!(
+                        arr[1],
+                        lumen_core::JsValue::String(
+                            "https://example.com/eventsource/undefined".into()
+                        )
+                    );
+                }
+                other => panic!("expected array, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn eventsource_connects_using_resolved_absolute_url() {
+            use lumen_core::ext::JsSseEvent;
+            struct RecordingSseProvider {
+                seen: Arc<Mutex<Option<String>>>,
+            }
+            impl lumen_core::ext::JsSseProvider for RecordingSseProvider {
+                fn connect_sse(
+                    &self,
+                    url: &str,
+                ) -> lumen_core::error::Result<Box<dyn lumen_core::ext::JsSseSession>> {
+                    *self.seen.lock().unwrap() = Some(url.to_string());
+                    Ok(Box::new(MockSseSession {
+                        queue: std::sync::Mutex::new(std::collections::VecDeque::from(vec![
+                            JsSseEvent::Open,
+                        ])),
+                    }))
+                }
+            }
+            let seen: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let rt = V8JsRuntime::new().unwrap();
+            let provider: Arc<dyn lumen_core::ext::JsSseProvider> =
+                Arc::new(RecordingSseProvider { seen: Arc::clone(&seen) });
+            rt.install_dom(
+                make_doc(),
+                "https://example.com/eventsource/page.html",
+                None, None, Some(provider), None, None, None, None, None, false,
+            )
+            .unwrap();
+            rt.eval("var es = new EventSource('resources/message.py');")
+                .unwrap();
+            assert_eq!(
+                seen.lock().unwrap().as_deref(),
+                Some("https://example.com/eventsource/resources/message.py")
+            );
         }
 
         #[test]

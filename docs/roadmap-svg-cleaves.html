@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-09",
  "counts": {
-  "open": 311,
-  "fixed": 352,
+  "open": 310,
+  "fixed": 354,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 663,
+ "total_bugs": 664,
  "phases": [
   {
    "id": "P0",
@@ -3597,7 +3597,7 @@
        "title": "WPT: вендорить + прогнать категорию `screen-wake-lock`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root screen-wake-lock --recursive`, ~4 мин 39 с, 21 файл, 16 исполнившихся id) — **2/16 harness OK, 1/2 сабтестов**. 13/16 id — `.https.`, TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`; 2 ERROR — session/URL-reuse артефакт (BUG-380). Оба реально исполнившихся не-`.https.` теста — реконфирмации: `wakelock-supported-by-permissions-policy.html` → [BUG-361](bugs/BUG-361-OPEN.md) (`document.permissionsPolicy.features()` всегда `[]`); `wakelock-insecure-context.any.html` формально PASS, но по неверной причине — живая проба (`--mcp-live-port`) нашла [BUG-669](bugs/BUG-669-OPEN.md): `WakeLock`-интерфейс никогда не выставляется на `globalThis` (только `WakeLockSentinel` и `navigator.wakeLock`), поэтому `'WakeLock' in self` всегда `false`, даже в контексте, который сам движок считает secure (реконфирмация [BUG-399](bugs/BUG-399-OPEN.md), `isSecureContext` захардкожен `true`) — `navigator.wakeLock.request('screen')` при этом реально работает и резолвится",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root screen-wake-lock --recursive`, ~4 мин 39 с, 21 файл, 16 исполнившихся id) — **2/16 harness OK, 1/2 сабтестов**. 13/16 id — `.https.`, TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`; 2 ERROR — session/URL-reuse артефакт (BUG-380). Оба реально исполнившихся не-`.https.` теста — реконфирмации: `wakelock-supported-by-permissions-policy.html` → [BUG-361](bugs/BUG-361-FIXED.md) (`document.permissionsPolicy.features()` всегда `[]`); `wakelock-insecure-context.any.html` формально PASS, но по неверной причине — живая проба (`--mcp-live-port`) нашла [BUG-669](bugs/BUG-669-OPEN.md): `WakeLock`-интерфейс никогда не выставляется на `globalThis` (только `WakeLockSentinel` и `navigator.wakeLock`), поэтому `'WakeLock' in self` всегда `false`, даже в контексте, который сам движок считает secure (реконфирмация [BUG-399](bugs/BUG-399-OPEN.md), `isSecureContext` захардкожен `true`) — `navigator.wakeLock.request('screen')` при этом реально работает и резолвится",
        "bugs": [
         "BUG-669"
        ]
@@ -3905,7 +3905,7 @@
        "title": "WPT: вендорить + прогнать категорию `user-timing`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root user-timing --recursive`, ~1:42, 44 файла, 36 отобранных id) — **27/36 harness OK, 66/176 сабтестов**. Заведён [BUG-696](bugs/BUG-696-OPEN.md): `performance.mark()`/`.measure()` (`dom.rs:8366-8392`) не валидируют аргументы вовсе — ни `SyntaxError` на зарезервированных именах вроде `navigationStart`, ни `TypeError` на невалидных mark-options (`123`/`NaN`/строка/отрицательный `startTime`), ни `SyntaxError` на несуществующих именованных метках в `measure()`, `detail` не клонируется вовсе. Второстепенный сигнал — реконфирмация [BUG-687](bugs/BUG-687-OPEN.md) (`PerformanceMark`/`PerformanceMeasure` — plain-объекты) и [BUG-360](bugs/BUG-360-OPEN.md) (`<body onload=\"...\">` мёртв, 7 TIMEOUT-файлов), плюс известный невендоренный `idlharness.js`. Один новый номер бага",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root user-timing --recursive`, ~1:42, 44 файла, 36 отобранных id) — **27/36 harness OK, 66/176 сабтестов**. Заведён [BUG-696](bugs/BUG-696-OPEN.md): `performance.mark()`/`.measure()` (`dom.rs:8366-8392`) не валидируют аргументы вовсе — ни `SyntaxError` на зарезервированных именах вроде `navigationStart`, ни `TypeError` на невалидных mark-options (`123`/`NaN`/строка/отрицательный `startTime`), ни `SyntaxError` на несуществующих именованных метках в `measure()`, `detail` не клонируется вовсе. Второстепенный сигнал — реконфирмация [BUG-687](bugs/BUG-687-OPEN.md) (`PerformanceMark`/`PerformanceMeasure` — plain-объекты) и [BUG-360](bugs/BUG-360-FIXED.md) (`<body onload=\"...\">` мёртв на момент прогона, 7 TIMEOUT-файлов — фикс влит в main параллельно тем же днём, повторный прогон не переснят), плюс известный невендоренный `idlharness.js`. Один новый номер бага",
        "bugs": [
         "BUG-696"
        ]
@@ -7094,17 +7094,17 @@
    "debtor": false
   },
   "BUG-361": {
-   "status": "open",
+   "status": "fixed",
    "title": "`document.permissionsPolicy.features()` отдаёт `Object.keys(_ppStore)` — ключи политики, объявленной HTTP-заголовком `Permissions-Policy`, — вместо требуемого с…",
    "component": "js (`crates/js/src/permissions_policy.rs:47-49` `FeaturePolicy.prototype.features`)",
-   "date": null,
+   "date": "2026-08-09",
    "debtor": false
   },
   "BUG-362": {
-   "status": "open",
-   "title": "`EventSource` не резолвит относительный URL относительно базы документа: `new EventSource(\"resources/message.py\")` даёт `[JS SSE] connect error: … missing schem…",
-   "component": "js (`crates/js/src/dom.rs:8194` — конструктор `EventSource`; `crates/js/src/v8_runtime.rs:2646` — биндинг `_lumen_sse_connect`)",
-   "date": null,
+   "status": "fixed",
+   "title": "`EventSource` не резолвил относительный URL относительно базы документа: `new EventSource(\"resources/message.py\")` давал `[JS SSE] connect error: … missing sche…",
+   "component": "js (`crates/js/src/dom.rs` — конструктор `EventSource`, функция `_url_resolve`)",
+   "date": "2026-08-09",
    "debtor": false
   },
   "BUG-363": {
@@ -9416,6 +9416,13 @@
    "component": "js (`crates/js/src/dom.rs:8366-8392` — `performance.mark`/`performance.measure` in `WEB_API_SHIM`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-697": {
+   "status": "open",
+   "title": "`document.permissionsPolicy.allowsFeature(name)` returns `true` for any unrecognized feature name (`'made-up-xyz'`), not just for real-but-unlisted ones — spec…",
+   "component": "js (`crates/js/src/permissions_policy.rs:37-44` — `FeaturePolicy.prototype.allowsFeature`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -9818,6 +9825,9 @@
   ],
   "js (`crates/js/src/navigator_bindings.rs:213-225` -- `_screen` object literal)": [
    "BUG-559"
+  ],
+  "js (`crates/js/src/permissions_policy.rs:37-44` — `FeaturePolicy.prototype.allowsFeature`)": [
+   "BUG-697"
   ],
   "js (`crates/js/src/storage_buckets.rs`)": [
    "BUG-547"

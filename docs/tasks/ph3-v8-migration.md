@@ -1506,7 +1506,7 @@ this precedent rather than treated as risk.
 
 **Zero engine divergences in this slice** — 73 of 73 passed on the first run with untouched test
 bodies. Unlike the two earlier slices this one closed no bugs: the `BUGS.md` pre-check flagged
-three OPEN EventSource/Worker defects ([BUG-362](../../bugs/BUG-362-OPEN.md),
+three OPEN EventSource/Worker defects ([BUG-362](../../bugs/BUG-362-FIXED.md),
 [BUG-363](../../bugs/BUG-363-OPEN.md), [BUG-364](../../bugs/BUG-364-OPEN.md)) and none of them are
 V8-vs-QuickJS divergences — they are engine-agnostic shim gaps (relative-URL resolution, WebIDL
 shape of `EventSource`, `Worker` fetching no script) that the ported suite does not cover on

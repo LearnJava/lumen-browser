@@ -127,7 +127,7 @@ reg!("_lumen_set_inner_html", move |node_id: u32, html: String| {
 - **Ложноположительные проверки.** Любой тест вида «`el.innerHTML = s;
   assert_equals(el.innerHTML, s)`» здесь зелёный, ничего не проверяя, —
   тот же класс ложноположительного, что зафиксирован в
-  [BUG-362](BUG-362-OPEN.md)/`eventsource-url.any.html` и в `eye_dropper::tests`
+  [BUG-362](BUG-362-FIXED.md)/`eventsource-url.any.html` и в `eye_dropper::tests`
   ([BUG-365](BUG-365-OPEN.md)). Верифицировать фикс нужно по `childNodes`/
   `children`, а не по round-trip строки.
 
