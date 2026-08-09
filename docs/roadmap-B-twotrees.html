@@ -73,7 +73,7 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-08-06",
+ "generated": "2026-08-09",
  "counts": {
   "open": 313,
   "fixed": 342,
@@ -3853,9 +3853,9 @@
       {
        "id": "WPT-VENDOR-trust-tokens",
        "title": "WPT: вендорить + прогнать категорию `trust-tokens`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). ad-tech (Privacy Sandbox)"
+       "note": "Скоуп: 🚫 (вне скоупа). ad-tech (Privacy Sandbox). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root trust-tokens --recursive`, ~1:07, 5 файлов, 3 отобранных id) — **0/3 harness OK**, все TIMEOUT на HTTPS-порт-гэпе. API не реализован; пробой контейнера уровнем выше (`Request({privateToken})`) подтверждена реконфирмация уже открытого BUG-370 (конструктор игнорирует любые поля init), новых номеров не заведено"
       },
       {
        "id": "WPT-VENDOR-trusted-types",
