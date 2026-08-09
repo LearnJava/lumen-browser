@@ -294,26 +294,44 @@ const CREDENTIALS_SHIM: &str = r#"(function(){
   }
 
   // Constructor stubs so `instanceof` checks in relying-party code work, and so
-  // response objects carry the right prototype.
+  // response objects carry the right prototype. Each `.prototype = Object.create(...)`
+  // reassignment loses the default `.constructor` own-property, so it is restored
+  // explicitly below (WebIDL requires `X.prototype.constructor === X`).
   function AuthenticatorResponse(){}
   function AuthenticatorAttestationResponse(){}
   AuthenticatorAttestationResponse.prototype = Object.create(AuthenticatorResponse.prototype);
+  AuthenticatorAttestationResponse.prototype.constructor = AuthenticatorAttestationResponse;
   function AuthenticatorAssertionResponse(){}
   AuthenticatorAssertionResponse.prototype = Object.create(AuthenticatorResponse.prototype);
+  AuthenticatorAssertionResponse.prototype.constructor = AuthenticatorAssertionResponse;
   function Credential(){}
   function PublicKeyCredential(){ throw new TypeError('Illegal constructor'); }
   PublicKeyCredential.prototype = Object.create(Credential.prototype);
+  PublicKeyCredential.prototype.constructor = PublicKeyCredential;
   function OTPCredential(){ throw new TypeError('Illegal constructor'); }
   OTPCredential.prototype = Object.create(Credential.prototype);
+  OTPCredential.prototype.constructor = OTPCredential;
   // FedCM §5 — token is populated by IDP redirect in Phase 1 (shell integration).
   function IdentityCredential(){ throw new TypeError('Illegal constructor'); }
   IdentityCredential.prototype = Object.create(Credential.prototype);
+  IdentityCredential.prototype.constructor = IdentityCredential;
   // FedCM §5.1 — getUserInfo() fetches accounts from IDP accounts endpoint.
-  function IdentityProvider(){}
+  function IdentityProvider(){ throw new TypeError('Illegal constructor'); }
   IdentityProvider.getUserInfo = function(){
     return Promise.reject(mkErr('NotSupportedError', 'FedCM IdentityProvider.getUserInfo() is not supported'));
   };
-  function CredentialsContainer(){}
+  // Legacy no-constructor interface (WebIDL): `new CredentialsContainer()` and
+  // `CredentialsContainer()` both throw; the singleton below is built via
+  // `Object.create(CredentialsContainer.prototype)`, which never invokes this.
+  function CredentialsContainer(){ throw new TypeError('Illegal constructor'); }
+  function defMethod(obj, name, fn){
+    Object.defineProperty(obj, name, { value: fn, writable: true, configurable: true, enumerable: false });
+  }
+  if (typeof Symbol !== 'undefined' && Symbol.toStringTag) {
+    Object.defineProperty(CredentialsContainer.prototype, Symbol.toStringTag, {
+      value: 'CredentialsContainer', writable: false, configurable: true, enumerable: false,
+    });
+  }
 
   function makeAttestation(o){
     var resp = Object.create(AuthenticatorAttestationResponse.prototype);
@@ -367,7 +385,11 @@ const CREDENTIALS_SHIM: &str = r#"(function(){
 
   var container = Object.create(CredentialsContainer.prototype);
 
-  container.create = function(options){
+  // Methods live on the prototype (not the instance) so `Object.keys(navigator.credentials)`
+  // / `for...in` stay empty and `for...in` doesn't enumerate them, matching a real
+  // `CredentialsContainer` — WebIDL operations are non-enumerable own properties of
+  // the interface prototype, not of the platform object instance.
+  defMethod(CredentialsContainer.prototype, 'create', function(options){
     return new Promise(function(resolve, reject){
       try {
         if (!options || !options.publicKey) { reject(mkErr('NotSupportedError', 'publicKey options required')); return; }
@@ -395,9 +417,9 @@ const CREDENTIALS_SHIM: &str = r#"(function(){
         resolve(makeAttestation(o));
       } catch(e) { reject(e); }
     });
-  };
+  });
 
-  container.get = function(options){
+  defMethod(CredentialsContainer.prototype, 'get', function(options){
     return new Promise(function(resolve, reject){
       try {
         if (!options) { reject(mkErr('NotSupportedError', 'options required')); return; }
@@ -421,11 +443,11 @@ const CREDENTIALS_SHIM: &str = r#"(function(){
         resolve(makeAssertion(o));
       } catch(e) { reject(e); }
     });
-  };
+  });
 
   // Non-WebAuthn credential types (password/federated) are not stored.
-  container.preventSilentAccess = function(){ return Promise.resolve(); };
-  container.store = function(c){ return Promise.resolve(c); };
+  defMethod(CredentialsContainer.prototype, 'preventSilentAccess', function(){ return Promise.resolve(); });
+  defMethod(CredentialsContainer.prototype, 'store', function(c){ return Promise.resolve(c); });
 
   PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable = function(){
     var ok = (typeof _lumen_webauthn_uvpa === 'function') ? !!_lumen_webauthn_uvpa() : false;
@@ -650,6 +672,80 @@ mod v8_fedcm {
                 "(function(){ try { new IdentityCredential(); return false; } catch(e) { return e instanceof TypeError; } })()"
             ),
             "IdentityCredential constructor should throw TypeError"
+        );
+    }
+
+    // BUG-366: `navigator.credentials` WebIDL conformance.
+
+    #[test]
+    fn credentials_methods_are_not_own_enumerable_properties() {
+        let rt = with_credentials_shim();
+        assert!(
+            js_bool(
+                &rt,
+                "Object.keys(navigator.credentials).length === 0 && \
+                 !navigator.credentials.hasOwnProperty('create') && \
+                 !navigator.credentials.hasOwnProperty('get')"
+            ),
+            "create/get/preventSilentAccess/store must live on the prototype, not as \
+             enumerable own properties of the navigator.credentials instance"
+        );
+        assert!(
+            js_bool(&rt, "typeof navigator.credentials.create === 'function'"),
+            "create should still be reachable through the prototype chain"
+        );
+    }
+
+    #[test]
+    fn credentials_container_constructor_throws_illegal_constructor() {
+        let rt = with_credentials_shim();
+        assert!(
+            js_bool(
+                &rt,
+                "(function(){ try { new CredentialsContainer(); return false; } catch(e) { return e instanceof TypeError; } })()"
+            ),
+            "CredentialsContainer constructor should throw TypeError"
+        );
+    }
+
+    #[test]
+    fn identity_provider_constructor_throws_illegal_constructor() {
+        let rt = with_credentials_shim();
+        assert!(
+            js_bool(
+                &rt,
+                "(function(){ try { new IdentityProvider(); return false; } catch(e) { return e instanceof TypeError; } })()"
+            ),
+            "IdentityProvider constructor should throw TypeError"
+        );
+    }
+
+    #[test]
+    fn credentials_container_has_tostringtag() {
+        let rt = with_credentials_shim();
+        assert!(
+            js_bool(
+                &rt,
+                "Object.prototype.toString.call(navigator.credentials) === '[object CredentialsContainer]'"
+            ),
+            "navigator.credentials should stringify via its Symbol.toStringTag, not '[object Object]'"
+        );
+    }
+
+    #[test]
+    fn identity_credential_prototype_constructor_matches_own_class() {
+        let rt = with_credentials_shim();
+        assert!(
+            js_bool(&rt, "IdentityCredential.prototype.constructor === IdentityCredential"),
+            "IdentityCredential.prototype.constructor must not fall through to Credential"
+        );
+        assert!(
+            js_bool(&rt, "PublicKeyCredential.prototype.constructor === PublicKeyCredential"),
+            "PublicKeyCredential.prototype.constructor must not fall through to Credential"
+        );
+        assert!(
+            js_bool(&rt, "OTPCredential.prototype.constructor === OTPCredential"),
+            "OTPCredential.prototype.constructor must not fall through to Credential"
         );
     }
 }

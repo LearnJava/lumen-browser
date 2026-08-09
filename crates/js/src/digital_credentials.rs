@@ -37,20 +37,30 @@ const DIGITAL_CREDENTIALS_SHIM: &str = r#"(function() {
 
   // ── navigator.credentials.get({digital: ...}) hook (§5.1) ────────────────
   // Intercept options.digital inside the existing credentials container shim.
-
-  if (typeof navigator !== 'undefined' && navigator.credentials &&
-      typeof navigator.credentials._get_original === 'undefined') {
-    var _orig = navigator.credentials.get;
-    navigator.credentials._get_original = _orig;
-    navigator.credentials.get = function(options) {
-      if (options && options.digital != null) {
-        // Phase 0: reject — no digital wallet integration
-        return Promise.reject(
-          new DOMException('Digital credential requests are not supported in this browser', 'NotSupportedError')
-        );
-      }
-      return _orig.apply(this, arguments);
-    };
+  // Patches `CredentialsContainer.prototype.get` (not the `navigator.credentials`
+  // instance): `install_dom` builds a fresh V8 context per navigation and this
+  // installer runs exactly once per context, so no cross-navigation re-wrap guard
+  // is needed. The unwrapped `_orig` is captured only in this closure — never
+  // exposed as a property on `navigator.credentials` — so page script can neither
+  // enumerate it, use it to fingerprint Lumen, nor call it directly to bypass the
+  // `options.digital` rejection below.
+  if (typeof navigator !== 'undefined' && navigator.credentials) {
+    var _proto = Object.getPrototypeOf(navigator.credentials);
+    if (_proto && typeof _proto.get === 'function') {
+      var _orig = _proto.get;
+      Object.defineProperty(_proto, 'get', {
+        value: function(options) {
+          if (options && options.digital != null) {
+            // Phase 0: reject — no digital wallet integration
+            return Promise.reject(
+              new DOMException('Digital credential requests are not supported in this browser', 'NotSupportedError')
+            );
+          }
+          return _orig.apply(this, arguments);
+        },
+        writable: true, configurable: true, enumerable: false,
+      });
+    }
   }
 
   // ── _lumen_digital_credential_get ────────────────────────────────────────
@@ -150,5 +160,58 @@ mod tests {
                 .unwrap();
             assert_eq!(ok, JsValue::Bool(true));
         });
+    }
+
+    /// Runtime with the real `CredentialsContainer` shim ([`crate::credentials`])
+    /// installed first, then this file's digital-credentials wrap — the actual
+    /// install order used by `v8_runtime.rs::install_dom`.
+    fn with_real_credentials_container() -> V8JsRuntime {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(
+            r#"
+                var window = globalThis;
+                var navigator = {};
+                function atob(s) { return s; }
+                function btoa(s) { return s; }
+                function TextEncoder() {}
+                TextEncoder.prototype.encode = function(s) { return new Uint8Array(0); };
+                function DOMException(msg, name) {
+                    var e = new Error(msg); e.name = name || 'DOMException'; return e;
+                }
+                globalThis.DOMException = DOMException;
+            "#,
+        )
+        .unwrap();
+        crate::credentials::install_credentials_bindings_v8(&rt).unwrap();
+        install_digital_credentials_api_v8(&rt).unwrap();
+        rt
+    }
+
+    // BUG-366 (2): digital-credentials wrap must not leak an `_get_original`
+    // reference (fingerprint marker + unwrapped-`get` bypass) onto the public
+    // `navigator.credentials` object.
+    #[test]
+    fn digital_wrap_does_not_leak_get_original_property() {
+        let rt = with_real_credentials_container();
+        let ok = rt
+            .eval("!('_get_original' in navigator.credentials) && typeof navigator.credentials._get_original === 'undefined'")
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
+    }
+
+    #[test]
+    fn digital_wrap_still_rejects_digital_get_on_real_container() {
+        let rt = with_real_credentials_container();
+        let ok = rt
+            .eval(
+                r#"
+                (function() {
+                    var p = navigator.credentials.get({ digital: { providers: [] } });
+                    return p instanceof Promise;
+                })()
+                "#,
+            )
+            .unwrap();
+        assert_eq!(ok, JsValue::Bool(true));
     }
 }

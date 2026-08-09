@@ -75,7 +75,7 @@ not exist in headless mode are 'denied'; everything else is 'granted'». Спи�
 * **`navigator.permissions` перезаписываем** любым скриптом на странице —
   третья сторона может подменить его целиком, и всё, что спрашивает разрешения
   после неё, получит подделанные ответы. Тот же класс, что
-  [BUG-366](BUG-366-OPEN.md).
+  [BUG-366](BUG-366-FIXED.md).
 * **Отсутствие `EventTarget`** означает, что штатный приём «подписаться на
   `permissionStatus.change` и отреагировать на отзыв разрешения» не работает —
   подписка не бросает ошибку, просто никогда не срабатывает
@@ -103,7 +103,7 @@ not exist in headless mode are 'denied'; everything else is 'granted'». Спи�
 
 * [BUG-385](BUG-385-OPEN.md) — Local Font Access; вместе с этим багом
   определяет поведение по умолчанию при появлении перечисления шрифтов.
-* [BUG-366](BUG-366-OPEN.md) — `navigator.credentials`: тот же класс дефекта
+* [BUG-366](BUG-366-FIXED.md) — `navigator.credentials`: тот же класс дефекта
   (методы на экземпляре вместо прототипа, контейнер перезаписываем).
 * [BUG-361](BUG-361-FIXED.md) — соседний слой той же темы: `permissionsPolicy`
   не сообщает список поддерживаемых фич.

@@ -67,7 +67,7 @@ after: enumerable?             = {"e":true,"w":true,"c":true}
 * `Symbol.toStringTag` не выставлен ни на одном из двух прототипов;
 * синглтон ставится присваиванием `navigator.fonts = new FontAccessManager()`
   (`local_font_access.rs:81-83`), а не геттером на `Navigator.prototype`, —
-  тот же класс, что [BUG-366](BUG-366-OPEN.md) для `navigator.credentials`;
+  тот же класс, что [BUG-366](BUG-366-FIXED.md) для `navigator.credentials`;
 * точка входа `queryLocalFonts()` не устанавливается вовсе.
 
 Нативных биндингов, о которых говорит doc-комментарий («Phase 1:
@@ -121,7 +121,7 @@ after: enumerable?             = {"e":true,"w":true,"c":true}
   окажется поведение по умолчанию, когда перечисление шрифтов появится.
 * [BUG-361](BUG-361-FIXED.md) — `document.permissionsPolicy.features()` пуст,
   из-за чего падает единственный исполнившийся тест категории.
-* [BUG-366](BUG-366-OPEN.md) — тот же класс дефекта формы WebIDL на
+* [BUG-366](BUG-366-FIXED.md) — тот же класс дефекта формы WebIDL на
   `navigator.credentials`.
 * [BUG-379](BUG-379-OPEN.md) — движковые собственные свойства глобала как
   отпечаток.
