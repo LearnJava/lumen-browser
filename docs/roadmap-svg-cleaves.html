@@ -4148,9 +4148,9 @@
       {
        "id": "WPT-VENDOR-webrtc-identity",
        "title": "WPT: вендорить + прогнать категорию `webrtc-identity`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). WebRTC — нет конвейера"
+       "note": "Скоуп: 🚫 (вне скоупа, подтверждено точно). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root webrtc-identity --recursive`, ~57с, 5 файлов, 4 id) — **1/4 harness OK, 0/1 сабтестов**. 3 `.https.` файла — TLS-гэп BUG-657 (один попутно словил BUG-380-паттерн). Единственный исполнившийся тест падает на отсутствии валидации `peerIdentity` в конструкторе — тот же корень, что BUG-721. Новых багов не заведено"
       },
       {
        "id": "WPT-VENDOR-webrtc-priority",
