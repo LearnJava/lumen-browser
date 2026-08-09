@@ -4067,6 +4067,24 @@ impl V8JsRuntime {
         }
     }
 
+    // ── ES module registry bridge (BUG-571) ─────────────────────────────────
+    // A `<script type=module>` inserted by page script is prepared entirely in
+    // the shim (`_lumen_script_prepare`), which has no way to reach the
+    // thread-local module map the loader compiles from. These two natives are
+    // that bridge: the shim registers the module body, then calls `import()`,
+    // whose host callback finds the source under the specifier it just wrote.
+    // Both are plain map writes — no re-entry into V8, which the compat-layer
+    // closure signature could not do anyway.
+    reg!("_lumen_esm_register", move |specifier: String, source: String| {
+        crate::v8_esm::register_source(&specifier, &source);
+    });
+    // Inline module bodies have no URL, so the loader mints a virtual
+    // `lumen://inline-N` specifier for them; it is returned to the shim to be
+    // handed straight back to `import()`.
+    reg!("_lumen_esm_register_inline", move |source: String| -> String {
+        crate::v8_esm::register_inline(&source)
+    });
+
     // ── Microtask drain ─────────────────────────────────────────────────────
     // TODO(v8-s3): needs isolate access — draining V8's microtask queue requires
     // `scope.perform_microtask_checkpoint()` on the isolate, which compat-layer
