@@ -49,7 +49,7 @@ HTML LS §7.3.3 (`Window` named properties object) требует, чтобы о
 скрипта. В шиме такого слоя нет: глобал — обычный объект, наполняемый только
 самим шимом и `var`-объявлениями страницы.
 
-Гэп был замечен и записан походя в [BUG-360](BUG-360-OPEN.md) («Тем же тестом
+Гэп был замечен и записан походя в [BUG-360](BUG-360-FIXED.md) («Тем же тестом
 вскрыт соседний гэп: named access on Window»), но не заведён отдельно; причина
 у него другая (не диспатч событий, а разрешение имён на глобале), и чинится он
 в другом месте, поэтому выделен сюда.
@@ -87,7 +87,7 @@ HTML LS §7.3.3 (`Window` named properties object) требует, чтобы о
 
 ## Связанные
 
-* [BUG-360](BUG-360-OPEN.md) — где этот гэп был впервые замечен как побочный.
+* [BUG-360](BUG-360-FIXED.md) — где этот гэп был впервые замечен как побочный.
 * [BUG-280](BUG-280-FIXED.md) — `window` уже стал настоящим глобалом; этот баг
   — следующий слой той же темы.
 * [BUG-381](BUG-381-OPEN.md) — измерение которого этот баг закрывает на трёх
@@ -338,7 +338,7 @@ TIMEOUT is this bug, confirmed by checking which identifier the runtime
 error names).
 
 **2 files, new shape — inside a `window.onload = function() {...}` handler**
-(not the `<body onload="...">` HTML-attribute form [BUG-360](BUG-360-OPEN.md)
+(not the `<body onload="...">` HTML-attribute form [BUG-360](BUG-360-FIXED.md)
 covers — this is a JS-side property assignment, confirmed separately to work
 correctly via a minimal probe page; the throw happens *inside* the handler
 body once it runs): `last-successful-iframe.html` (bare `iframe`, thrown from

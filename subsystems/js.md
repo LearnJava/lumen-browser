@@ -23,6 +23,24 @@ the time — read dates.
 
 ## Done
 
+- **`on<type>` event handler content/IDL attributes on live elements (BUG-360, P3,
+  2026-08-09).** `<div onclick="…">`/`el.onclick = fn` now actually fire — previously the
+  attribute was never compiled and all three live dispatch paths (`_lumen_dispatch`,
+  `_lumen_dispatch_bubble`, `_lumen_dispatch_rich`) only consulted `_lumen_listeners`
+  (`addEventListener`), ignoring `on<type>` entirely, so even a manually-assigned
+  `el.onclick` never ran. New `_lumen_on_handlers` table (`nid:type` key, cleared by
+  `_lumen_gc_collect` alongside `_lumen_listeners`) backs a curated
+  `_LUMEN_EVENT_HANDLER_ATTRS` accessor list (GlobalEventHandlers) on every live element;
+  `<body onload>` forwards to `window.onload` per HTML LS §8.1.7.3 (the one attribute in
+  that forwarding set actually evidenced by a failure — `check-layout-th.js`'s
+  `<body onload="checkLayout(...)">` idiom, blocking dozens of `css/css-overflow`/
+  `css-sizing`/`css-scrollbars` WPT files). 11 tests in `dom.rs::tests::v8_inline_event_handlers`.
+  **Non-obvious:** `WEB_API_SHIM` (`dom.rs:324`) is a plain `"..."` Rust string, not a raw
+  string — a bare `"` anywhere inside it (even in a `//` comment) silently truncates the
+  literal and turns everything after it into raw Rust source until the next stray `"`,
+  producing a wall of "character literal"/"unknown prefix" errors anchored deep inside
+  unrelated JS, nowhere near the actual mistake. Cost real time on this fix; see the
+  warning comment now sitting right above the `const` declaration.
 - **`dom.rs` test monolith, timing/observer families ([P1] P3-v8-s12b-24-perf-observers,
   2026-07-30).** Performance API + PerformanceObserver (incl. the single-type observe form),
   `queueMicrotask` + rAF/cAF with EE-5 vsync batching, and

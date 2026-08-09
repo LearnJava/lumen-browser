@@ -1,6 +1,6 @@
 # BUG-360 — event-handler content attributes (`onclick="…"`, `onencrypted="…"`, …) never fire, and live elements' `dispatchEvent` ignores the `on<type>` IDL property
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-09
 **Компонент:** js (`crates/js/src/dom.rs:5929` — live-element `dispatchEvent`; `dom.rs:3813` `_lumen_dispatch`, `dom.rs:3831` `_lumen_dispatch_bubble`, `dom.rs:3869` `_lumen_dispatch_rich` — все три читают только `_lumen_listeners`; контраст: `dom.rs:3391` `EventTarget.prototype.dispatchEvent`, который `on<type>` как раз вызывает)
 **Найден:** P2, WPT-VENDOR-encrypted-media (2026-07-28), `run_report.py --all --root encrypted-media --recursive`, тест `media-element-event-handler-attributes.html`
 
@@ -196,3 +196,75 @@ cluster (48 of 69). Root-caused via `--processes 1 --limit 3` on a
 sub-sample + grep for `onload\s*=` in the vendored source, same method as
 срез 32. `.ini` under `tests/wpt/metadata/css/css-sizing/`, file-level
 `expected: TIMEOUT`.
+
+## Фикс (P3, 2026-08-09)
+
+Реализованы все 3 пункта из «Возможный фикс» (named access on Window —
+п.4 — не входил в скоуп, ушёл отдельным BUG-384, см. ниже):
+
+**Хранилище (п.2).** Новая таблица `_lumen_on_handlers` (`crates/js/src/dom.rs`,
+рядом с `_lumen_listeners`), ключ `String(nid) + ':' + type` (без префикса
+`on`) → текущая функция-обработчик. Табличное хранение, а не expando на
+кэшированной обёртке элемента, выбрано так, чтобы бабблящий диспатч мог
+проверить «есть ли обработчик у этого предка» по одному nid, не вызывая
+`_lumen_make_element` на каждом шаге ради простой проверки. `_lumen_gc_collect`
+чистит `_lumen_on_handlers` по тому же префиксу nid, что и `_lumen_listeners`
+— обработчик живёт ровно столько же, сколько остальное per-nid состояние узла
+(шелл вызывает `_lumen_gc_collect` только для отсоединённых узлов с нулём
+живых JS-ссылок).
+
+**Компиляция контент-атрибута (п.3).** `_lumen_compile_inline_handler(body)` —
+`new Function('event', body)` в try/catch; непарсящееся тело даёт `null`
+(обработчик не ставится), а не бросает. Компиляция триггерится в трёх местах:
+(a) при первой постройке живой обёртки элемента (`_lumen_build_element`)
+сканированием `_lumen_get_attr_names(nid)` на префикс `on` — покрывает и
+атрибуты из HTML-парсера, и `setAttribute`, случившийся до первого JS-доступа
+к узлу; (b) из `setAttribute`, когда имя атрибута начинается с `on`; (c) из
+`removeAttribute` — очищает обработчик. `getAttribute('onclick')` по-прежнему
+отдаёт исходный текст атрибута — компиляция не трогает атрибутную таблицу.
+
+**Диспатч (п.1).** Все три живых пути диспатча (`_lumen_dispatch`,
+`_lumen_dispatch_bubble`, `_lumen_dispatch_rich` — последние два обслуживают
+реальный пользовательский ввод через `_lumen_dispatch_mouse_event`/
+`_lumen_dispatch_key_event`) вызывают `on<type>` после явных
+`addEventListener`-слушателей на той же цели, тем же порядком, что и
+`EventTarget.prototype.dispatchEvent` (`dom.rs:406-430`) и уже существовавший
+`_lumen_dispatch_focus_event` для focus/blur.
+
+**`el.on<type>` как IDL-свойство.** Curated список `_LUMEN_EVENT_HANDLER_ATTRS`
+(GlobalEventHandlers HTML LS §8.1.7.2 + `onencrypted`/`onwaitingforkey`) —
+геттер/сеттер на каждой живой обёртке элемента (не Text/Comment), читающие и
+пишущие через `_lumen_get_on_handler`/`_lumen_set_on_handler`. Не входящие в
+список имена (`onFooBar`) по-прежнему компилируются и диспатчатся из
+контент-атрибута (диспатч читает таблицу напрямую по имени, не через
+accessor), но не получают JS-свойство на элементе — соответствует спеке
+(произвольные имена не являются настоящими IDL-атрибутами).
+
+**`<body onload>` → `window.onload` (HTML LS §8.1.7.3).** Единственный
+форвардящийся атрибут из «Window-reflecting body element event handler set» —
+это именно тот сценарий, который блокирует `check-layout-th.js`
+(`<body onload="checkLayout(...)">`, срезы 11/22/24/33 выше) и
+`test_variable_legal_values.html`. Форвард безопасен без риска двойного
+срабатывания: `load` никогда не диспатчится через баблинг по узлам, только
+через отдельный цикл слушателей в `_lumen_apply_ready_state('complete')`.
+Остальные четыре имени того же спекового набора (`onblur`/`onerror`/
+`onfocus`/`onresize`/`onscroll`) остались обычными локальными обработчиками
+элемента — узкое известное отклонение от спеки, не покрытое ни одним
+известным падением этого бага.
+
+**Побочно замеченный гэп из симптома** (`HTMLElement.click()` отсутствует на
+живом элементе) — не чинился, отдельного бага не заводилось (как и в
+исходном отчёте).
+
+11 новых регресс-тестов в `dom::tests::v8_inline_event_handlers` (компиляция
+из атрибута, диспатч через `dispatchEvent` и через `_lumen_dispatch_bubble`,
+`setAttribute`/`removeAttribute`, присвоенный `el.onclick = fn`, непарсящееся
+тело, `<body onload>`-форвард и его порядок относительно `_lumen_gc_collect`).
+`cargo test -p lumen-js --features v8-backend --lib` 2530/2530 зелёных,
+`cargo clippy -p lumen-js --features v8-backend --all-targets -- -D warnings`
+чисто. Подтверждено `--dump-layout`-пробой на исходном repro из симптома
+(`.tmp/probe-bug360.html`): все 4 прежде-`undefined` значения теперь корректны
+(`onclick` — `function`, оба клика реально срабатывают).
+
+Named access on Window (третий гэп из «Масштаб») в скоуп не входил —
+отслеживается отдельно как [BUG-384](BUG-384-OPEN.md).

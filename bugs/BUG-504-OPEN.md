@@ -80,7 +80,7 @@ contribution):
 `scrollbar-gutter-propagation-{001,002,003,007}.html`.
 
 Once `scrollable-overflow-transform-*`/`scrollable-overflow-with-nested-
-elements-*` (currently masked by [BUG-360](BUG-360-OPEN.md), body `onload`
+elements-*` (currently masked by [BUG-360](BUG-360-FIXED.md), body `onload`
 never firing) start actually running `checkLayout`, most of that family will
 also land on this bug.
 
