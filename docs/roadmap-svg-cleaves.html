@@ -3905,7 +3905,7 @@
        "title": "WPT: вендорить + прогнать категорию `user-timing`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root user-timing --recursive`, ~1:42, 44 файла, 36 отобранных id) — **27/36 harness OK, 66/176 сабтестов**. Заведён [BUG-696](bugs/BUG-696-OPEN.md): `performance.mark()`/`.measure()` (`dom.rs:8366-8392`) не валидируют аргументы вовсе — ни `SyntaxError` на зарезервированных именах вроде `navigationStart`, ни `TypeError` на невалидных mark-options (`123`/`NaN`/строка/отрицательный `startTime`), ни `SyntaxError` на несуществующих именованных метках в `measure()`, `detail` не клонируется вовсе. Второстепенный сигнал — реконфирмация [BUG-687](bugs/BUG-687-OPEN.md) (`PerformanceMark`/`PerformanceMeasure` — plain-объекты) и [BUG-360](bugs/BUG-360-OPEN.md) (`<body onload=\"...\">` мёртв, 7 TIMEOUT-файлов), плюс известный невендоренный `idlharness.js`. Один новый номер бага",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root user-timing --recursive`, ~1:42, 44 файла, 36 отобранных id) — **27/36 harness OK, 66/176 сабтестов**. Заведён [BUG-696](bugs/BUG-696-OPEN.md): `performance.mark()`/`.measure()` (`dom.rs:8366-8392`) не валидируют аргументы вовсе — ни `SyntaxError` на зарезервированных именах вроде `navigationStart`, ни `TypeError` на невалидных mark-options (`123`/`NaN`/строка/отрицательный `startTime`), ни `SyntaxError` на несуществующих именованных метках в `measure()`, `detail` не клонируется вовсе. Второстепенный сигнал — реконфирмация [BUG-687](bugs/BUG-687-OPEN.md) (`PerformanceMark`/`PerformanceMeasure` — plain-объекты) и [BUG-360](bugs/BUG-360-FIXED.md) (`<body onload=\"...\">` мёртв на момент прогона, 7 TIMEOUT-файлов — фикс влит в main параллельно тем же днём, повторный прогон не переснят), плюс известный невендоренный `idlharness.js`. Один новый номер бага",
        "bugs": [
         "BUG-696"
        ]
@@ -3913,9 +3913,9 @@
       {
        "id": "WPT-VENDOR-vibration",
        "title": "WPT: вендорить + прогнать категорию `vibration`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). аппаратный API (вибро)"
+       "note": "Скоуп: 🚫 (вне скоупа). аппаратный API (вибро). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root vibration --recursive`, ~44 с, 16 файлов — 11 `-manual`, 4 отобранных id) — **2/4 harness OK, 0/9 сабтестов**. `navigator.vibrate` отсутствует целиком (ожидаемо для 🚫-скоупа, не баг). `idlharness.window.html` — TIMEOUT, известный класс «`/resources/idlharness.js`+`WebIDLParser.js` не вендорены». `silent-ignore.html` — TIMEOUT объяснён живой пробой (не движковый баг): тест регистрирует `test()` только если `navigator.vibrate` определён, а `testharness.js`'s `Tests.prototype.all_done()` (`tests/wpt/resources/testharness.js:3875-3876`) требует `this.tests.length > 0`, чтобы вообще считать страницу завершённой — раздел «дом-загрузка»/`setTimeout(…,0)` внутри `load`-хендлера отработали штатно (проверено отдельными живыми пробами), сама семантика апстримная и одинаково «зависла» бы в любом браузере на устройстве без вибро. `document.permissionsPolicy.features()` пуст — переподтверждение уже открытого [BUG-361](bugs/BUG-361-OPEN.md), новый номер не заводился"
       },
       {
        "id": "WPT-VENDOR-video-rvfc",
