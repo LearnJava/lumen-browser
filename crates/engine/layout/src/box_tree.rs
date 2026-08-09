@@ -4015,6 +4015,29 @@ fn probe_display(
     }
 }
 
+/// Порождает ли элемент содержимое, которое можно уплощить в `InlineSegment`-ы.
+///
+/// `<img>` и form controls исключены: это replaced-элементы, у них есть
+/// собственная высота, которой у сегмента нет — как сегмент такой элемент
+/// схлопывается в высоту строки ([BUG-728]). Они получают собственный бокс
+/// (`BoxKind::Image` / `BoxKind::FormControl`), как и всё блочно-уровневое.
+///
+/// `display` передаётся отдельно, чтобы вызывающий не считал стиль дважды:
+/// [`collect_inline_segments`] к этому месту уже имеет вычисленный
+/// `ComputedStyle` узла, а [`is_inline_content`] берёт `display` из кэша.
+fn produces_inline_segments(doc: &Document, id: NodeId, display: Display) -> bool {
+    if is_image_element(doc, id) || is_form_control_element(doc, id) {
+        return false;
+    }
+    // Inline-семантика: чистый `inline` или его flex/grid-варианты.
+    // Phase 0 layout не делает реального flex/grid — флэт-семантика
+    // блока для outer-display, но inline-family остаётся inline.
+    matches!(
+        display,
+        Display::Inline | Display::InlineFlex | Display::InlineGrid
+    )
+}
+
 /// `<img>` в Phase 0 — block-level replaced element, не inline-контент:
 /// он порождает собственный `BoxKind::Image`, а не вливается в `InlineRun`.
 /// Inline-replaced (картинка внутри строки текста) — отдельная задача;
@@ -4037,12 +4060,10 @@ fn is_inline_content(
             if is_image_element(doc, id) || is_form_control_element(doc, id) {
                 return false;
             }
-            // Inline-семантика: чистый `inline` или его flex/grid-варианты.
-            // Phase 0 layout не делает реального flex/grid — флэт-семантика
-            // блока для outer-display, но inline-family остаётся inline.
-            matches!(
+            produces_inline_segments(
+                doc,
+                id,
                 probe_display(doc, sheet, id, inherited, viewport, dark_mode, counters),
-                Display::Inline | Display::InlineFlex | Display::InlineGrid
             )
         }
         _ => false,
@@ -4165,8 +4186,10 @@ fn build_anon_text_item(
     // Each anonymous text item is its own inline context — ::first-letter does not
     // apply to anonymous flex/grid items, so disable the candidate flag.
     let mut need_first_letter = false;
+    // `id` — текстовый узел, у него нет потомков: escape-ов быть не может.
+    let mut escapes = Vec::new();
     collect_inline_segments(
-        doc, sheet, id, parent, viewport, &mut segs, flat, counters, registry,
+        doc, sheet, id, parent, viewport, &mut segs, &mut escapes, flat, counters, registry,
         &mut need_first_letter, dark_mode,
     );
     if segs.is_empty() {
@@ -4250,6 +4273,92 @@ fn apply_first_letter_pseudo(
     });
 }
 
+/// Собирает поток inline-контента блочного контейнера в элементы будущего ряда,
+/// разрезая его на местах [`InlineEscape`] (CSS 2.1 §9.2.1.1, [BUG-728]).
+///
+/// Сегменты между двумя escape-ами становятся отдельным `InlineRun`, каждый
+/// escape — собственным боксом ровно на своём месте потока. `::first-letter`
+/// применяется к каждому куску отдельно: маркер `PseudoKind::FirstLetter` стоит
+/// ровно на одном сегменте, поэтому для остальных кусков это no-op — так
+/// индексы escape-ов не сбиваются вставкой сегмента-остатка.
+#[allow(clippy::too_many_arguments)]
+fn split_inline_pieces(
+    doc: &Document,
+    sheet: &Stylesheet,
+    id: NodeId,
+    style: &ComputedStyle,
+    viewport: Size,
+    flat: &FlatTree,
+    counters: &CounterMap,
+    registry: &CounterStyleRegistry,
+    dark_mode: bool,
+    prev_index: Option<&crate::incremental::ReuseIndex>,
+    segs: Vec<InlineSegment>,
+    escapes: Vec<InlineEscape>,
+    out_items: &mut Vec<LayoutBox>,
+) {
+    let push_run = |chunk: Vec<InlineSegment>, out_items: &mut Vec<LayoutBox>| {
+        if chunk.is_empty() {
+            return;
+        }
+        let mut chunk = chunk;
+        apply_first_letter_pseudo(&mut chunk, doc, id, sheet, style, viewport, dark_mode);
+        out_items.push(anon_inline_run(id, style, chunk, BoxRole::AnonymousInlineRun));
+    };
+    let mut rest = segs;
+    // Escape-ы приходят в порядке обхода, их `at` не убывает; идём с конца,
+    // чтобы отрезать хвост `split_off`-ом без сдвигов уже отданных индексов.
+    let mut tails: Vec<(Vec<InlineSegment>, NodeId, ComputedStyle)> = Vec::new();
+    for esc in escapes.into_iter().rev() {
+        let at = esc.at.min(rest.len());
+        tails.push((rest.split_off(at), esc.node, esc.inherited));
+    }
+    push_run(std::mem::take(&mut rest), out_items);
+    for (tail, node, inherited) in tails.into_iter().rev() {
+        let child = build_box_or_reuse(
+            doc, sheet, node, &inherited, viewport, flat, counters, registry, dark_mode, prev_index,
+        );
+        if !matches!(child.kind, BoxKind::Skip) {
+            out_items.push(child);
+        }
+        push_run(tail, out_items);
+    }
+}
+
+/// CSS Pseudo-elements L4 §5.3: `::first-line` относится к первой строке блока,
+/// то есть к первому `InlineRun` его inline-контекста. Один сброс потока может
+/// дать несколько прогонов (разрезы по [`InlineEscape`]), поэтому стиль ищет
+/// первый подходящий бокс среди только что добавленных и взводит `assigned`,
+/// чтобы следующие сбросы его не перетёрли.
+fn assign_first_line_style(
+    fresh: &mut [LayoutBox],
+    first_line_style: &Option<Box<ComputedStyle>>,
+    assigned: &mut bool,
+) {
+    if *assigned {
+        return;
+    }
+    for item in fresh {
+        if let BoxKind::InlineRun { first_line_style: ref mut fls, .. } = item.kind {
+            *fls = first_line_style.clone();
+            *assigned = true;
+            return;
+        }
+    }
+}
+
+/// Разрывает ли бокс анонимный inline-ряд: блочно-уровневый потомок, всплывший
+/// из inline-элемента, не может делить line box с текстом (CSS 2.1 §9.2.1.1).
+/// Анонимные прогоны и пробелы (`BoxRole::AnonymousInlineRun`) наследуют
+/// `display` блока-родителя, поэтому по стилю их отличить нельзя — только по роли.
+fn breaks_inline_row(b: &LayoutBox) -> bool {
+    !matches!(b.origin.role, BoxRole::AnonymousInlineRun)
+        && !matches!(
+            b.style.display,
+            Display::Inline | Display::InlineBlock | Display::InlineFlex | Display::InlineGrid
+        )
+}
+
 fn anon_inline_block_row(node: NodeId, parent: &ComputedStyle, items: Vec<LayoutBox>) -> LayoutBox {
     LayoutBox {
         node,
@@ -4317,6 +4426,28 @@ fn control_value_segments(
     out
 }
 
+/// Потомок inline-элемента, который нельзя уплотнить в [`InlineSegment`].
+///
+/// CSS 2.1 §9.2.1.1: блочно-уровневый потомок разрезает окружающий inline-бокс,
+/// а replaced-элемент (`<img>`, form control) обязан сохранить собственную
+/// высоту. У сегмента высоты нет вовсе — до [BUG-728] такой потомок уплощался
+/// вместе с текстом и схлопывался в высоту строки. Вместо этого
+/// [`collect_inline_segments`] откладывает узел сюда, а строитель блочного
+/// контейнера собирает ему настоящий бокс и вставляет на то же место потока.
+#[derive(Debug, Clone)]
+struct InlineEscape {
+    /// Сколько сегментов уже собрано к моменту встречи узла: бокс встаёт
+    /// ровно после них и перед всеми последующими.
+    at: usize,
+    /// DOM-узел, которому нужен собственный `LayoutBox`.
+    node: NodeId,
+    /// Стиль родительского inline-элемента — то, от чего узел наследует.
+    /// Блочный контейнер строит бокс далеко от места находки, и его
+    /// собственный стиль здесь не подходит: цвет/шрифт `<span>`-а между ними
+    /// был бы потерян.
+    inherited: ComputedStyle,
+}
+
 /// Рекурсивно собирает `InlineSegment`-ы из поддерева inline-контента.
 ///
 /// `need_first_letter` — starts `true` for the first call on a block container; set to `false`
@@ -4324,6 +4455,8 @@ fn control_value_segments(
 /// Callers must initialize to `true` and pass through all recursive calls within the same run.
 /// After collection, `apply_first_letter_pseudo` overrides the `PseudoKind::FirstLetter`
 /// segment's style via `compute_pseudo_element_style(node, "first-letter")`.
+///
+/// `escapes` собирает узлы, которым нужен собственный бокс — см. [`InlineEscape`].
 #[allow(clippy::too_many_arguments)]
 fn collect_inline_segments(
     doc: &Document,
@@ -4332,6 +4465,7 @@ fn collect_inline_segments(
     inherited: &ComputedStyle,
     viewport: Size,
     out: &mut Vec<InlineSegment>,
+    escapes: &mut Vec<InlineEscape>,
     flat: &FlatTree,
     counters: &CounterMap,
     registry: &CounterStyleRegistry,
@@ -4498,39 +4632,14 @@ fn collect_inline_segments(
             if s.display == Display::None {
                 return;
             }
-            // Inline-replaced image: emit as a fixed-width, non-breakable segment.
-            if is_image_element(doc, id) {
-                let src = resolve_image_source(doc, id, viewport);
-                let em = s.font_size;
-                let w = s.width
-                    .as_ref()
-                    .and_then(|l| l.resolve(em, None, viewport))
-                    .or_else(|| src.intrinsic_width.map(|v| v as f32))
-                    .unwrap_or(em * 2.0);
-                let pre = s.margin_left.resolve_or_zero(em, 0.0, viewport)
-                    + s.border_left_width
-                    + s.padding_left.resolve_or_zero(em, 0.0, viewport);
-                let post = s.padding_right.resolve_or_zero(em, 0.0, viewport)
-                    + s.border_right_width
-                    + s.margin_right.resolve_or_zero(em, 0.0, viewport);
-                let alt = doc.get(id).get_attr("alt").unwrap_or("").to_string();
-                let img_is_lazy = doc.get(id).get_attr("loading")
-                    .is_some_and(|v| v.eq_ignore_ascii_case("lazy"));
-                out.push(InlineSegment {
-                    text: alt,
-                    style: s,
-                    pre_space: pre,
-                    post_space: post,
-                    is_element_box: true,
-                    img_src: Some(src.url),
-                    img_is_lazy,
-                    img_width: w,
-                    forced_break: false,
-                    pseudo_kind: PseudoKind::None,
-                    source_node: id,
-                    source_char_offset: 0,
-                    bidi_level: 0,
-                });
+            // BUG-728: всё, что не порождает сегментов — блочно-уровневый
+            // потомок (CSS 2.1 §9.2.1.1 разрезает вокруг него inline-бокс),
+            // `<img>`, form control — уходит вызывающему за собственным боксом.
+            // Уплощение в сегмент стоило бы такому потомку высоты: у сегмента
+            // её нет, вертикальный размер строки считается по метрикам шрифта,
+            // и `<img width=50 height=50>` внутри `<a>` рисовался 50×16.8.
+            if !produces_inline_segments(doc, id, s.display) {
+                escapes.push(InlineEscape { at: out.len(), node: id, inherited: inherited.clone() });
                 return;
             }
             // Compute horizontal inline box model: margin + border + padding.
@@ -4559,7 +4668,7 @@ fn collect_inline_segments(
             }
             let children: Vec<NodeId> = flat.children_of(doc, id).to_vec();
             for child_id in children {
-                collect_inline_segments(doc, sheet, child_id, &s, viewport, out, flat, counters, registry, need_first_letter, dark_mode);
+                collect_inline_segments(doc, sheet, child_id, &s, viewport, out, escapes, flat, counters, registry, need_first_letter, dark_mode);
             }
             // CSS Pseudo-elements L4 §4 — ::after in inline formatting context.
             if let Some(ps) =
@@ -5831,6 +5940,10 @@ fn build_box_inner(
                 // Результат: InlineRun (чистый текст) или InlineBlockRow (смешанный).
                 let mut row_items: Vec<LayoutBox> = Vec::new();
                 let mut pending: Vec<InlineSegment> = Vec::new();
+                // BUG-728: потомки inline-элементов, которым нужен собственный
+                // бокс. Индексы `at` считаются по общему `pending`, поэтому
+                // вектор один на весь цикл, как и `pending`.
+                let mut pending_escapes: Vec<InlineEscape> = Vec::new();
                 // CSS §4.1.2 white-space collapsing: whitespace between
                 // inline-level siblings collapses to a single space.
                 let mut had_ws = false;
@@ -5886,22 +5999,23 @@ fn build_box_inner(
                         {
                             last.text.push(' ');
                         }
-                        collect_inline_segments(doc, sheet, cid, &style, viewport, &mut pending, flat, counters, registry, &mut need_first_letter, dark_mode);
+                        collect_inline_segments(doc, sheet, cid, &style, viewport, &mut pending, &mut pending_escapes, flat, counters, registry, &mut need_first_letter, dark_mode);
                         had_ws = false;
                         i += 1;
                     } else if is_inline_block(doc, sheet, cid, &style, viewport, dark_mode, counters)
                     {
-                        if !pending.is_empty() {
-                            let mut segs = std::mem::take(&mut pending);
-                            apply_first_letter_pseudo(&mut segs, doc, id, sheet, &style, viewport, dark_mode);
-                            let mut run = anon_inline_run(id, &style, segs, BoxRole::AnonymousInlineRun);
-                            if !first_line_assigned {
-                                if let BoxKind::InlineRun { first_line_style: ref mut fls, .. } = run.kind {
-                                    *fls = first_line_style.clone();
-                                }
-                                first_line_assigned = true;
-                            }
-                            row_items.push(run);
+                        if !pending.is_empty() || !pending_escapes.is_empty() {
+                            let from = row_items.len();
+                            split_inline_pieces(
+                                doc, sheet, id, &style, viewport, flat, counters, registry,
+                                dark_mode, prev_index,
+                                std::mem::take(&mut pending),
+                                std::mem::take(&mut pending_escapes),
+                                &mut row_items,
+                            );
+                            assign_first_line_style(
+                                &mut row_items[from..], &first_line_style, &mut first_line_assigned,
+                            );
                         }
                         // Whitespace between inline-blocks → collapsed space gap.
                         if had_ws && !row_items.is_empty() {
@@ -5929,16 +6043,18 @@ fn build_box_inner(
                         break;
                     }
                 }
-                if !pending.is_empty() {
-                    let mut segs = std::mem::take(&mut pending);
-                    apply_first_letter_pseudo(&mut segs, doc, id, sheet, &style, viewport, dark_mode);
-                    let mut run = anon_inline_run(id, &style, segs, BoxRole::AnonymousInlineRun);
-                    if !first_line_assigned
-                        && let BoxKind::InlineRun { first_line_style: ref mut fls, .. } = run.kind
-                    {
-                        *fls = first_line_style.clone();
-                    }
-                    row_items.push(run);
+                if !pending.is_empty() || !pending_escapes.is_empty() {
+                    let from = row_items.len();
+                    split_inline_pieces(
+                        doc, sheet, id, &style, viewport, flat, counters, registry,
+                        dark_mode, prev_index,
+                        std::mem::take(&mut pending),
+                        std::mem::take(&mut pending_escapes),
+                        &mut row_items,
+                    );
+                    assign_first_line_style(
+                        &mut row_items[from..], &first_line_style, &mut first_line_assigned,
+                    );
                 }
 
                 // CSS Pseudo-elements L4 §5.1 — apply ::first-letter style.
@@ -5986,17 +6102,34 @@ fn build_box_inner(
                     }
                 }
 
-                match row_items.len() {
-                    0 => {}
-                    // Единственный чисто-текстовый run — без лишней обёртки.
-                    1 if matches!(row_items[0].kind, BoxKind::InlineRun { .. }) => {
-                        children.push(row_items.remove(0));
+                // BUG-728 / CSS 2.1 §9.2.1.1: блочно-уровневый бокс, всплывший
+                // из inline-элемента, разрывает inline-контекст — контент до
+                // него и после него образуют РАЗНЫЕ анонимные группы, а сам он
+                // становится блочным сиблингом. Без escape-ов цикл вырождается
+                // в прежнюю одну группу на весь ряд.
+                let mut group: Vec<LayoutBox> = Vec::new();
+                let flush_group = |group: &mut Vec<LayoutBox>, children: &mut Vec<LayoutBox>| {
+                    match group.len() {
+                        0 => {}
+                        // Единственный чисто-текстовый run — без лишней обёртки.
+                        1 if matches!(group[0].kind, BoxKind::InlineRun { .. }) => {
+                            children.push(group.remove(0));
+                        }
+                        // Несколько элементов или inline-block → InlineBlockRow.
+                        _ => {
+                            children.push(anon_inline_block_row(id, &style, std::mem::take(group)));
+                        }
                     }
-                    // Несколько элементов или inline-block → InlineBlockRow.
-                    _ => {
-                        children.push(anon_inline_block_row(id, &style, row_items));
+                };
+                for item in row_items.drain(..) {
+                    if breaks_inline_row(&item) {
+                        flush_group(&mut group, &mut children);
+                        children.push(item);
+                    } else {
+                        group.push(item);
                     }
                 }
+                flush_group(&mut group, &mut children);
             } else {
                 children.push(build_box_or_reuse(doc, sheet, child_id, &style, viewport, flat, counters, registry, dark_mode, prev_index));
                 i += 1;
