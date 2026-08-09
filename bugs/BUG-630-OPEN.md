@@ -90,7 +90,7 @@ should be checked for the same ✅→🟡 drift class as [BUG-368](BUG-368-OPEN.
 - [BUG-569](BUG-569-OPEN.md): `HTMLImageElement.prototype.decode()` missing —
   narrower (one method), but same root cause class (no async decode
   task/state to hook into).
-- [BUG-360](BUG-360-OPEN.md): inline `onclick=`-style attribute handlers never
+- [BUG-360](BUG-360-FIXED.md): inline `onclick=`-style attribute handlers never
   compile — different mechanism (affects attribute-style handlers even when
   the underlying event *would* fire); does not explain this bug, since here
   `addEventListener('load'/'error', ...)` never fires either, because no

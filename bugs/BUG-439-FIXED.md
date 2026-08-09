@@ -46,7 +46,7 @@ document.getElementById('btn').dispatchEvent(
 
 - [BUG-437](BUG-437-FIXED.md) — нативный клик по submit-кнопке (починен: шаг 11 теперь выполняется).
 - [BUG-383](BUG-383-OPEN.md) — в шиме нет `element.click()`, `form.submit()`, `form.requestSubmit()`.
-- [BUG-360](BUG-360-OPEN.md) — живой диспатч читает только `addEventListener`, `on<type>`-атрибуты мертвы.
+- [BUG-360](BUG-360-FIXED.md) — живой диспатч читает только `addEventListener`, `on<type>`-атрибуты мертвы.
 
 ## Обновление 2026-07-29 (BUG-383)
 

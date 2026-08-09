@@ -45,7 +45,7 @@ every test that clicks/hovers/focuses/queries a `::scroll-marker` or
 computed values, fails or (when the test also awaits a `MutationObserver`/
 focus-change that can now never happen) hangs to a harness-level `TIMEOUT`
 with zero registered subtests, the same externally-visible shape as
-[BUG-360](BUG-360-OPEN.md) but a different mechanism — no missing pseudo-box
+[BUG-360](BUG-360-FIXED.md) but a different mechanism — no missing pseudo-box
 ever fires the awaited condition.
 
 `-webkit-box` (legacy flexbox `display` value, `webkit-box-computed.html`)

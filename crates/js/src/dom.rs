@@ -320,6 +320,14 @@ fn set_attribute(doc: &mut Document, id: NodeId, name: &str, value: &str) {
 /// `parentElement` and `children` are defined as non-enumerable via
 /// `Object.defineProperty` to avoid parent↔child infinite recursion when the
 /// V8 compat layer serializes the returned object.
+///
+/// This is a plain `"..."` Rust string, **not** a raw string (`r#"..."#`) —
+/// every literal `"` anywhere below, including inside `//` comments, must be
+/// written as `\"` or it silently closes this string early. rustc then parses
+/// the remaining JS as Rust source until the next stray `"` (or the real
+/// closing `";` far below), producing a wall of unrelated-looking
+/// "character literal"/"unknown prefix" errors anchored deep inside the JS,
+/// not at the actual offending quote (BUG-360 postmortem, 2026-08-09).
 #[cfg(feature = "v8-backend")]
 pub(crate) const WEB_API_SHIM: &str = "
 function _lumen_u2n(v) { return v !== undefined ? v : null; }
@@ -830,6 +838,111 @@ CompositionEvent.prototype.constructor = CompositionEvent;
 
 var _lumen_listeners = {};
 
+// ── on<type> event handler IDL attributes (BUG-360) ──────────────────────────
+// Key: String(nid) + ':' + type (no 'on' prefix) → the current handler
+// function, or absent. Backed by a table (keyed by nid) rather than a plain
+// expando on the element wrapper so the bubbling dispatch loop can check for
+// a handler at each ancestor by nid alone — no need to force
+// `_lumen_make_element` on every hop just to ask 'does it have an onclick'.
+// Cleared together with `_lumen_listeners` for a nid in `_lumen_gc_collect`,
+// same lifetime as the rest of that node's per-nid JS-side state.
+var _lumen_on_handlers = {};
+
+// HTML LS §8.1.7.2.1 'the event handler content attribute' algorithm,
+// simplified: compile the attribute's text as a function body. An unparsable
+// body yields no handler rather than throwing.
+function _lumen_compile_inline_handler(body) {
+    try { return new Function('event', String(body)); } catch (e) { return null; }
+}
+
+// HTML LS §8.1.7.3: on <body>/<frameset>, a handful of event handler IDL
+// attributes forward to the Window object instead of storing locally. Only
+// `onload` is wired here — it is the one actually evidenced in this bug
+// (`<body onload=\"…\">` driving check-layout-th.js and similar WPT harnesses)
+// and it is safe to forward unconditionally because the `load` event never
+// dispatches through node bubbling (see `_lumen_fire_page_lifecycle`), so
+// there is no double-fire risk. The rest of the spec's 'Window-reflecting
+// body element event handler set' (onblur/onerror/onfocus/onresize/onscroll)
+// is left as an ordinary per-element handler — a known, narrower deviation.
+var _LUMEN_BODY_FORWARDED_TO_WINDOW = { onload: 1 };
+
+// Store (or, for a non-function value, clear) the handler backing the
+// `on<type>` IDL attribute named `attrName` (e.g. 'onclick') on element `nid`.
+function _lumen_set_on_handler(nid, attrName, fn) {
+    if (typeof fn !== 'function') fn = null;
+    var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
+    if ((tag === 'BODY' || tag === 'FRAMESET') && _LUMEN_BODY_FORWARDED_TO_WINDOW[attrName]) {
+        window[attrName] = fn;
+        return;
+    }
+    var key = String(nid) + ':' + attrName.slice(2);
+    if (fn) _lumen_on_handlers[key] = fn;
+    else delete _lumen_on_handlers[key];
+}
+
+function _lumen_get_on_handler(nid, attrName) {
+    var tag = (_lumen_get_tag_name(nid) || '').toUpperCase();
+    if ((tag === 'BODY' || tag === 'FRAMESET') && _LUMEN_BODY_FORWARDED_TO_WINDOW[attrName]) {
+        return window[attrName] || null;
+    }
+    var key = String(nid) + ':' + attrName.slice(2);
+    return _lumen_on_handlers[key] || null;
+}
+
+// Compile an event-handler *content attribute*'s text and install it.
+function _lumen_compile_and_set_on_handler(nid, attrName, body) {
+    _lumen_set_on_handler(nid, attrName, _lumen_compile_inline_handler(body));
+}
+
+// True for any HTML attribute name in the `on*` content-attribute shape
+// (`onclick`, `onencrypted`, …) — deliberately generic (not limited to the
+// curated `_LUMEN_EVENT_HANDLER_ATTRS` list below) so dispatch honours a
+// handler compiled from an attribute name the engine has no dedicated IDL
+// accessor for, matching how a content attribute always wins over 'there is
+// no such IDL property'.
+function _lumen_is_on_attr_name(name) {
+    return name.length > 2 && name.charCodeAt(0) === 111 /* 'o' */ && name.charCodeAt(1) === 110 /* 'n' */;
+}
+
+// HTML LS §8.1.7.2 — event handler content attributes exposed as `on<type>`
+// IDL attributes on every HTML element (the GlobalEventHandlers mixin), plus
+// the couple of media-specific ones (onencrypted/onwaitingforkey) the spec's
+// table also lists as generic 'on all HTML elements' entries. Defines
+// `el.onclick`-style accessors; the underlying dispatch/compile machinery
+// above works for *any* on-prefixed attribute name regardless of this list.
+var _LUMEN_EVENT_HANDLER_ATTRS = [
+    'onabort', 'onauxclick', 'onbeforeinput', 'onbeforematch', 'onbeforetoggle',
+    'onblur', 'oncancel', 'oncanplay', 'oncanplaythrough', 'onchange', 'onclick',
+    'onclose', 'oncontextlost', 'oncontextmenu', 'oncontextrestored', 'oncopy',
+    'oncuechange', 'oncut', 'ondblclick', 'ondrag', 'ondragend', 'ondragenter',
+    'ondragleave', 'ondragover', 'ondragstart', 'ondrop', 'ondurationchange',
+    'onemptied', 'onencrypted', 'onended', 'onerror', 'onfocus', 'onformdata',
+    'oninput', 'oninvalid', 'onkeydown', 'onkeypress', 'onkeyup', 'onload',
+    'onloadeddata', 'onloadedmetadata', 'onloadstart', 'onmousedown',
+    'onmouseenter', 'onmouseleave', 'onmousemove', 'onmouseout', 'onmouseover',
+    'onmouseup', 'onmousewheel', 'onpaste', 'onpause', 'onplay', 'onplaying',
+    'onprogress', 'onratechange', 'onreset', 'onresize', 'onscroll',
+    'onscrollend', 'onsecuritypolicyviolation', 'onseeked', 'onseeking',
+    'onselect', 'onslotchange', 'onstalled', 'onsubmit', 'onsuspend',
+    'ontimeupdate', 'ontoggle', 'ontouchcancel', 'ontouchend', 'ontouchmove',
+    'ontouchstart', 'ontransitioncancel', 'ontransitionend', 'ontransitionrun',
+    'ontransitionstart', 'onvolumechange', 'onwaiting', 'onwaitingforkey',
+    'onwheel'
+];
+
+// Define the `el.on<type>` accessor pair for one curated handler name on a
+// freshly built element wrapper. Split out of `_lumen_build_element` so the
+// getter/setter closures only capture `nid`/`attrName`, not the whole
+// per-element local scope.
+function _lumen_define_on_handler_prop(obj, nid, attrName) {
+    Object.defineProperty(obj, attrName, {
+        get: function() { return _lumen_get_on_handler(nid, attrName); },
+        set: function(v) { _lumen_set_on_handler(nid, attrName, v); },
+        enumerable: true,
+        configurable: true,
+    });
+}
+
 function _lumen_add_listener(nid, type, fn) {
     if (typeof fn !== 'function') return;
     var key = String(nid) + ':' + String(type);
@@ -846,11 +959,18 @@ function _lumen_rm_listener(nid, type, fn) {
 function _lumen_dispatch(nid, event) {
     var key = String(nid) + ':' + event.type;
     var arr = _lumen_listeners[key];
-    if (!arr || arr.length === 0) return !event.defaultPrevented;
-    var copy = arr.slice(); // snapshot in case a handler mutates the list
-    for (var i = 0; i < copy.length; i++) {
-        try { copy[i].call(null, event); } catch(e) {}
-        if (event._stopImmediate) break;
+    if (arr && arr.length > 0) {
+        var copy = arr.slice(); // snapshot in case a handler mutates the list
+        for (var i = 0; i < copy.length; i++) {
+            try { copy[i].call(null, event); } catch(e) {}
+            if (event._stopImmediate) break;
+        }
+    }
+    // BUG-360: on<type> IDL attribute (el.onclick = fn / onclick=\"…\") fires
+    // after explicit listeners, same ordering as EventTarget.prototype.dispatchEvent.
+    if (!event._stopImmediate) {
+        var onFn = _lumen_get_on_handler(nid, 'on' + event.type);
+        if (onFn) { try { onFn.call(_lumen_make_element(nid), event); } catch(e) {} }
     }
     return !event.defaultPrevented;
 }
@@ -868,13 +988,20 @@ function _lumen_dispatch_bubble(start_nid, type) {
     while (cur !== null && cur !== undefined) {
         var key = String(cur) + ':' + String(type);
         var arr = _lumen_listeners[key];
-        if (arr) {
-            var copy = arr.slice();
+        var onFn = _lumen_get_on_handler(cur, 'on' + type);
+        if (arr || onFn) {
             var el = _lumen_make_element(cur);
-            for (var i = 0; i < copy.length; i++) {
-                if (evt.cancelBubble) break;
-                try { copy[i].call(el, evt); } catch(e) {}
-                if (evt._stopImmediate) break;
+            if (arr) {
+                var copy = arr.slice();
+                for (var i = 0; i < copy.length; i++) {
+                    if (evt.cancelBubble) break;
+                    try { copy[i].call(el, evt); } catch(e) {}
+                    if (evt._stopImmediate) break;
+                }
+            }
+            // BUG-360: on<type> fires after explicit listeners at this target.
+            if (onFn && !evt.cancelBubble && !evt._stopImmediate) {
+                try { onFn.call(el, evt); } catch(e) {}
             }
         }
         if (evt.cancelBubble) break;
@@ -905,13 +1032,20 @@ function _lumen_dispatch_rich(start_nid, event) {
     while (cur !== null && cur !== undefined) {
         var key = String(cur) + ':' + event.type;
         var arr = _lumen_listeners[key];
-        if (arr) {
-            var copy = arr.slice();
+        var onFn = _lumen_get_on_handler(cur, 'on' + event.type);
+        if (arr || onFn) {
             var el = _lumen_make_element(cur);
-            for (var i = 0; i < copy.length; i++) {
-                if (event.cancelBubble) break;
-                try { copy[i].call(el, event); } catch(e) {}
-                if (event._stopImmediate) break;
+            if (arr) {
+                var copy = arr.slice();
+                for (var i = 0; i < copy.length; i++) {
+                    if (event.cancelBubble) break;
+                    try { copy[i].call(el, event); } catch(e) {}
+                    if (event._stopImmediate) break;
+                }
+            }
+            // BUG-360: on<type> fires after explicit listeners at this target.
+            if (onFn && !event.cancelBubble && !event._stopImmediate) {
+                try { onFn.call(el, event); } catch(e) {}
             }
         }
         if (event.cancelBubble || !event.bubbles) break;
@@ -2676,10 +2810,22 @@ function _lumen_build_element(nid) {
         setAttribute:    function(n, v) {
             var attrName = String(n);
             var oldVal   = _lumen_u2n(_lumen_get_attr(nid, attrName));
-            _lumen_set_attr(nid, attrName, String(v));
-            _lumen_ce_maybe_attr_changed(nid, attrName, oldVal, String(v));
+            var newVal   = String(v);
+            _lumen_set_attr(nid, attrName, newVal);
+            // BUG-360: (re)compile `on<type>` content attributes into a handler
+            // as soon as they are set programmatically, not just at parse time.
+            if (_lumen_is_on_attr_name(attrName)) {
+                _lumen_compile_and_set_on_handler(nid, attrName, newVal);
+            }
+            _lumen_ce_maybe_attr_changed(nid, attrName, oldVal, newVal);
         },
-        removeAttribute: function(n)    { _lumen_remove_attr(nid, String(n)); },
+        removeAttribute: function(n)    {
+            var attrName = String(n);
+            _lumen_remove_attr(nid, attrName);
+            if (_lumen_is_on_attr_name(attrName)) {
+                _lumen_set_on_handler(nid, attrName, null);
+            }
+        },
         hasAttribute:    function(n)    { return _lumen_get_attr(nid, String(n)) !== undefined; },
         // DOM §4.9.2: hasAttributes() — true iff the element carries any attribute.
         hasAttributes:   function()     { return _lumen_get_attr_names(nid).length > 0; },
@@ -3825,6 +3971,25 @@ function _lumen_build_element(nid) {
             set: function(v) { _lumen_set_text_content(nid, String(v)); },
             enumerable: true, configurable: true,
         });
+    } else {
+        // BUG-360: `el.on<type>` IDL attributes (GlobalEventHandlers, elements
+        // only — Text/Comment nodes do not implement it). Define the curated
+        // accessor pair for each standard name, then seed the backing table
+        // from whatever `on*` content attributes this node already carries
+        // (HTML-parsed markup or a `setAttribute` call that landed before this
+        // wrapper was first built) — that keeps `<div onclick=\"…\">` and
+        // `el.setAttribute('onclick', …)` behaving identically regardless of
+        // which one races the wrapper into existence first.
+        for (var _ehi = 0; _ehi < _LUMEN_EVENT_HANDLER_ATTRS.length; _ehi++) {
+            _lumen_define_on_handler_prop(_obj, nid, _LUMEN_EVENT_HANDLER_ATTRS[_ehi]);
+        }
+        var _attrNames = _lumen_get_attr_names(nid);
+        for (var _ani = 0; _ani < _attrNames.length; _ani++) {
+            var _an = _attrNames[_ani];
+            if (_lumen_is_on_attr_name(_an)) {
+                _lumen_compile_and_set_on_handler(nid, _an, _lumen_u2n(_lumen_get_attr(nid, _an)) || '');
+            }
+        }
     }
     // BUG-322: give the wrapper a real [[Prototype]] chain — Text.prototype for
     // text nodes, Comment.prototype for comment nodes, the tag-appropriate
@@ -13140,6 +13305,7 @@ window.reportError = reportError;
 // have been detached from the document and have zero live JS references.
 // Purges JS-side per-node caches so dead nodes don't retain memory through maps:
 //   - _lumen_listeners        keyed by 'nid:eventtype'
+//   - _lumen_on_handlers      keyed by 'nid:type' (BUG-360 on<type> IDL attributes)
 //   - _input_values           keyed by nid
 //   - _lumen_element_wrappers keyed by nid (BUG-291 identity cache)
 // The arena itself is append-only in Phase 1; physical compaction is Phase 3.
@@ -13151,6 +13317,11 @@ function _lumen_gc_collect(nids) {
         for (var key in _lumen_listeners) {
             if (key.length > plen && key.substring(0, plen) === prefix) {
                 delete _lumen_listeners[key];
+            }
+        }
+        for (var okey in _lumen_on_handlers) {
+            if (okey.length > plen && okey.substring(0, plen) === prefix) {
+                delete _lumen_on_handlers[okey];
             }
         }
         delete _input_values[nid];
@@ -18881,6 +19052,181 @@ mod tests {
             let rt = v8_runtime_with_cache_backend();
             let r = rt.eval("_lumen_cache_delete('https://example.com/', 'v1', 'https://example.com/nosuchurl')").unwrap();
             assert_eq!(r, lumen_core::JsValue::Bool(false));
+        }
+    }
+
+    /// BUG-360: `on<type>` event handler content attributes / IDL attributes on
+    /// live elements. Covers both compilation (parser-shaped attribute via
+    /// `innerHTML`, `setAttribute`, `removeAttribute`) and the three live
+    /// dispatch paths (`Element.dispatchEvent`, `_lumen_dispatch_bubble` — the
+    /// path real mouse/keyboard input takes — and direct assignment
+    /// `el.onclick = fn`), plus the `<body onload>` → `window.onload` forward.
+    #[cfg(feature = "v8-backend")]
+    mod v8_inline_event_handlers {
+        use super::*;
+        use crate::v8_runtime::V8JsRuntime;
+
+        fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
+            let rt = V8JsRuntime::new().unwrap();
+            rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+            rt.install_dom(doc, "", None, None, None, None, None, None, None, None, false)
+                .unwrap();
+            rt
+        }
+
+        #[test]
+        fn onclick_content_attribute_is_a_compiled_function() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "document.body.innerHTML = '<div id=\"d1\" onclick=\"window.hit=1\"></div>';",
+            )
+            .unwrap();
+            let result = rt.eval("typeof document.getElementById('d1').onclick").unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("function".into()));
+        }
+
+        #[test]
+        fn getattribute_still_returns_raw_source_after_compilation() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "document.body.innerHTML = '<div id=\"d1\" onclick=\"window.hit=1\"></div>';",
+            )
+            .unwrap();
+            let result = rt
+                .eval("document.getElementById('d1').getAttribute('onclick')")
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("window.hit=1".into()));
+        }
+
+        #[test]
+        fn dispatch_event_fires_onclick_content_attribute() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "document.body.innerHTML = '<div id=\"d1\" onclick=\"window.hit=1\"></div>'; \
+                 document.getElementById('d1').dispatchEvent(new Event('click'));",
+            )
+            .unwrap();
+            let result = rt.eval("window.hit").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(1.0));
+        }
+
+        #[test]
+        fn bubble_dispatch_fires_onclick_content_attribute() {
+            // _lumen_dispatch_bubble is the path the shell drives for real mouse
+            // clicks (see _lumen_dispatch_mouse_event) — this is the exact gap
+            // BUG-360 reported: dispatchEvent() alone is not enough.
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "document.body.innerHTML = '<div id=\"d1\" onclick=\"window.hit=1\"></div>'; \
+                 _lumen_dispatch_bubble(document.getElementById('d1').__nid__, 'click');",
+            )
+            .unwrap();
+            let result = rt.eval("window.hit").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(1.0));
+        }
+
+        #[test]
+        fn assigned_onclick_property_fires_on_bubble_dispatch() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "document.getElementById('main').onclick = function() { window.hit = 1; }; \
+                 _lumen_dispatch_bubble(document.getElementById('main').__nid__, 'click');",
+            )
+            .unwrap();
+            let result = rt.eval("window.hit").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(1.0));
+        }
+
+        #[test]
+        fn gc_collect_clears_on_handler_alongside_listeners() {
+            // _lumen_gc_collect purges _lumen_listeners for a nid; BUG-360 adds
+            // _lumen_on_handlers to that same purge so a node's on<type> handler
+            // has the same lifetime as its other per-nid JS-side state (the shell
+            // only calls this for detached nodes with zero live JS references, so
+            // "still gets dispatched to afterwards" is the regression to guard).
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var el = document.getElementById('main'); \
+                 el.onclick = function() { window.hit = 1; }; \
+                 _lumen_gc_collect([el.__nid__]); \
+                 _lumen_dispatch_bubble(el.__nid__, 'click');",
+            )
+            .unwrap();
+            let result = rt.eval("window.hit").unwrap();
+            assert!(
+                matches!(result, lumen_core::JsValue::Null | lumen_core::JsValue::Undefined),
+                "expected window.hit to be unset, got {result:?}"
+            );
+        }
+
+        #[test]
+        fn set_attribute_after_wrapper_built_compiles_handler() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var el = document.getElementById('main'); \
+                 el.setAttribute('onclick', 'window.hit = 1'); \
+                 _lumen_dispatch_bubble(el.__nid__, 'click');",
+            )
+            .unwrap();
+            let result = rt.eval("window.hit").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(1.0));
+        }
+
+        #[test]
+        fn remove_attribute_clears_handler() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "document.body.innerHTML = '<div id=\"d1\" onclick=\"window.hit=1\"></div>'; \
+                 document.getElementById('d1').removeAttribute('onclick'); \
+                 _lumen_dispatch_bubble(document.getElementById('d1').__nid__, 'click');",
+            )
+            .unwrap();
+            // Spec-conforming: an unset event handler IDL attribute reads back
+            // as `null`, not `undefined`.
+            let handler = rt.eval("document.getElementById('d1').onclick").unwrap();
+            assert_eq!(handler, lumen_core::JsValue::Null);
+            let result = rt.eval("window.hit").unwrap();
+            assert!(
+                matches!(result, lumen_core::JsValue::Null | lumen_core::JsValue::Undefined),
+                "expected window.hit to be unset, got {result:?}"
+            );
+        }
+
+        #[test]
+        fn unparsable_handler_body_does_not_throw_and_leaves_no_handler() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt.eval(
+                "document.body.innerHTML = '<div id=\"d1\" onclick=\"(((\"></div>'; \
+                 typeof document.getElementById('d1').onclick",
+            );
+            assert_eq!(result.unwrap(), lumen_core::JsValue::String("object".into()));
+        }
+
+        #[test]
+        fn body_onload_attribute_forwards_to_window_onload() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("document.body.setAttribute('onload', 'window.hit = 1');")
+                .unwrap();
+            let is_fn = rt.eval("typeof window.onload").unwrap();
+            assert_eq!(is_fn, lumen_core::JsValue::String("function".into()));
+            let same = rt.eval("document.body.onload === window.onload").unwrap();
+            assert_eq!(same, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn body_onload_fires_at_document_complete_not_via_bubble() {
+            // Confirms the forward doesn't get double-invoked: `load` never
+            // dispatches through node bubbling, only through the window-level
+            // listener loop in `_lumen_apply_ready_state('complete')`.
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "document.body.setAttribute('onload', 'window.hitCount = (window.hitCount||0)+1'); \
+                 _lumen_apply_ready_state('interactive'); \
+                 _lumen_apply_ready_state('complete');",
+            )
+            .unwrap();
+            let result = rt.eval("window.hitCount").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Number(1.0));
         }
     }
 
