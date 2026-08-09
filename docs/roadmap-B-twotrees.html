@@ -4008,9 +4008,9 @@
       {
        "id": "WPT-VENDOR-web-locks",
        "title": "WPT: вендорить + прогнать категорию `web-locks`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root web-locks --recursive`, 47 файлов, 40 отобранных id) — **1/40 harness OK, 0/1 сабтестов**. 34 TIMEOUT + 5 ERROR — стандартный TLS-гэп `UnknownIssuer` ([BUG-657](bugs/BUG-657-OPEN.md)) на `.https.`-файлах. Единственный исполнившийся не-`.https.` тест (`non-secure-context.any.html`) формально OK, но его единственный сабтест FAIL: `navigator.locks` доступен в небезопасном контексте. Живая проба подтвердила API работает функционально, но `window.isSecureContext` захардкожен `true` — переподтверждение уже открытого [BUG-399](bugs/BUG-399-OPEN.md). Новый номер бага не заводился"
       },
       {
        "id": "WPT-VENDOR-web-nfc",
