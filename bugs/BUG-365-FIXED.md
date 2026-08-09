@@ -1,9 +1,42 @@
 # BUG-365 — `EyeDropper.open()` всегда падает с `ReferenceError: _lumen_eye_dropper_open is not defined`: нативная привязка не установлена, `?.` не защищает необъявленный идентификатор, а 6 юнит-тестов при этом зелёные
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-09
 **Компонент:** js (`crates/js/src/eye_dropper.rs:58` — тело шима; установка шима — `crates/js/src/v8_runtime.rs:4249`, единственный оставшийся движок)
 **Найден:** P2, WPT-VENDOR-eyedropper (2026-07-28), проба `--dump-layout` вне WPT (сам WPT-тест категории — SKIP по testdriver)
 **Актуализировано:** P1, 2026-08-04 (P3-v8-post-audit) — rquickjs-путь установки шима (был `lib.rs:1187`) удалён целиком в S12b-F2/F3; дефект не зависел от rquickjs и полностью переживает снос движка
+
+## Фикс (P3, 2026-08-09)
+
+1. Небезопасное чтение привязки `_lumen_eye_dropper_open?.call?.(null)` заменено на
+   `typeof globalThis._lumen_eye_dropper_open === 'function' ? ... : null` — `?.`
+   не защищает от `ReferenceError` на необъявленном идентификаторе, `typeof` защищает.
+   Нативной привязки по-прежнему нет (платформенный пикер не реализован), поэтому
+   `open()` теперь предсказуемо доходит до документированного фолбэка и резолвится
+   `{ sRGBHex: '#ffffff' }` вместо падения `ReferenceError`.
+2. Мёртвая `extern "C" fn _lumen_eye_dropper_open` (C-ABI-заглушка, никак не связанная
+   с JS-глобалом того же имени, нигде не вызывалась) удалена из `eye_dropper.rs` —
+   решение по пункту 2 «возможного фикса» ниже: честно оставить API стабом, а не
+   регистрировать привязку без платформенной реализации.
+3. Сопутствующие WebIDL-отклонения исправлены: `constructor()` больше не принимает
+   `options` (спека: конструктор без аргументов) → `EyeDropper.length === 0`, и у
+   инстанса больше нет собственного свойства `options`; добавлен
+   `EyeDropper.prototype[Symbol.toStringTag] = 'EyeDropper'`.
+4. `test_eye_dropper_resolve_value` переписан: вместо `.then(...)` без ожидания
+   теперь глобалы `__ok`/`__err` заполняются в `.then(resolve, reject)`, второй
+   `eval` читает результат (микрозадачи V8 дренируются между двумя вызовами `eval`,
+   `MicrotasksPolicy::kAuto`, тот же паттерн, что `shared_storage.rs::promise_result`).
+   Добавлены `test_eye_dropper_constructor_length_is_zero`,
+   `test_eye_dropper_no_stray_options_property`, `test_eye_dropper_to_string_tag`.
+   `cargo test -p lumen-js --features v8-backend eye_dropper` — 9/9 зелёных.
+
+**Не исправлено, вынесено в [BUG-698](BUG-698-OPEN.md):** проверка transient user
+activation (спека WICG требует `NotAllowedError` без предшествующего пользовательского
+жеста) — в кодовой базе нет инфраструктуры отслеживания активации ни для одного API
+(grep по `user activation`/`UserActivation`/`transient activation` — пусто), заводить
+её ради одного `EyeDropper` вне скоупа точечного бага; тот же класс пробела уже
+отдельно заведён на [BUG-390](BUG-390-OPEN.md) (`requestFullscreen`),
+[BUG-655](BUG-655-OPEN.md) (`requestPointerLock`),
+[BUG-667](BUG-667-OPEN.md) (`getScreenDetails`).
 
 ## Симптом
 
@@ -110,20 +143,11 @@ const result = _lumen_eye_dropper_open?.call?.(null);
 бросает `TypeError`, `open` лежит на прототипе, ранний отказ по прерванному
 сигналу — `DOMException` с `name === "AbortError"`.
 
-## Возможный фикс (не реализован в этой сессии)
+## Возможный фикс (план на момент находки — пункты 1/2/4 реализованы, см. «Фикс» выше)
 
-1. Читать привязку безопасно: `const fn = globalThis._lumen_eye_dropper_open;
-   const result = typeof fn === 'function' ? fn() : null;` — этого одного
-   достаточно, чтобы оживить документированный `#ffffff`-фолбэк и превратить
-   отказ в предсказуемый результат вместо `ReferenceError`.
-2. Решить судьбу нативной части: либо зарегистрировать реальный глобал
-   `_lumen_eye_dropper_open` (V8: рядом с прочими `_lumen_*` в
-   `v8_runtime.rs`), либо снять мёртвую `extern "C"`-заглушку
-   (`eye_dropper.rs:24`) и честно оставить API стабом.
-3. Добавить проверку пользовательской активации с отказом `NotAllowedError`.
-4. Переписать `test_eye_dropper_resolve_value` так, чтобы он ждал разрешения
-   промиса и падал на отклонении, — иначе фикс невозможно верифицировать
-   существующим набором.
-
-Не чинится в этой сессии — P2-wpt вендорит и обследует, фиксы кода — дорожка P3
-(`CLAUDE.md`, назначения разработчиков).
+1. ~~Читать привязку безопасно~~ — сделано.
+2. ~~Решить судьбу нативной части~~ — сделано (снята мёртвая заглушка, честный стаб).
+3. Добавить проверку пользовательской активации с отказом `NotAllowedError` —
+   **не сделано**, вынесено в [BUG-698](BUG-698-OPEN.md) (нет инфраструктуры
+   отслеживания активации ни для одного API в кодовой базе).
+4. ~~Переписать `test_eye_dropper_resolve_value`~~ — сделано.

@@ -80,7 +80,7 @@ IdentityCredential.prototype.constructor    = Credential
 
 4. **`Symbol.toStringTag` отсутствует.** `Object.prototype.toString.call(navigator.credentials)`
    даёт `[object Object]` вместо `[object CredentialsContainer]`. Тот же пункт,
-   что в [BUG-365](BUG-365-OPEN.md) для `EyeDropper`.
+   что в [BUG-365](BUG-365-FIXED.md) для `EyeDropper`.
 
 5. **`IdentityCredential.prototype.constructor === Credential`.** Строка 300
    (`IdentityCredential.prototype = Object.create(Credential.prototype)`)
@@ -97,7 +97,7 @@ IdentityCredential.prototype.constructor    = Credential
 отклоняется `NotSupportedError` — ровно так, как обещает шапка модуля
 («FedCM API … is Phase 0: always rejects with `NotSupportedError`»), то есть
 **сам FedCM-стаб ведёт себя как задокументировано** и отдельным багом не
-является. Это существенное отличие от `eyedropper`/[BUG-365](BUG-365-OPEN.md),
+является. Это существенное отличие от `eyedropper`/[BUG-365](BUG-365-FIXED.md),
 где стаб был сломан относительно собственной документации.
 
 ## Масштаб
