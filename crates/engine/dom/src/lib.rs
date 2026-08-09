@@ -1010,6 +1010,34 @@ pub struct Document {
     /// editor should stay editable across tab hibernation.
     #[serde(default)]
     design_mode: bool,
+    /// WHATWG Encoding Standard canonical name of the encoding this document
+    /// was decoded with (e.g. `"UTF-8"`, `"windows-1251"`) — backs
+    /// `document.characterSet`/`charset`/`inputEncoding` (DOM §7.3, BUG-358).
+    /// Set once by the shell right after `lumen_encoding::detect()` runs
+    /// (`parse_and_layout`), before any script observes it.
+    ///
+    /// Serialised: this is a fact about how the document's bytes were decoded,
+    /// not runtime UI state — it stays valid (and must stay readable) across
+    /// bfcache restore, unlike `js_refs`/`pointer_captures`.
+    #[serde(default = "default_character_set")]
+    character_set: String,
+    /// MIME type of this document (e.g. `"text/html"`) — backs
+    /// `document.contentType` (DOM §4.5, BUG-358). Set once by the shell from
+    /// the `content_type` hint `parse_and_layout` already receives.
+    #[serde(default = "default_content_type")]
+    content_type: String,
+}
+
+/// Default for [`Document::character_set`] — matches [`Document::new`] and
+/// the Encoding Standard's canonical name for `"utf-8"`.
+fn default_character_set() -> String {
+    "UTF-8".to_string()
+}
+
+/// Default for [`Document::content_type`] — matches [`Document::new`] and
+/// every `PageSource::load_bytes` HTML variant's hardcoded content type.
+fn default_content_type() -> String {
+    "text/html".to_string()
 }
 
 impl Default for Document {
@@ -1042,6 +1070,8 @@ impl Document {
             pointer_captures: HashMap::new(),
             dirty_values: HashMap::new(),
             design_mode: false,
+            character_set: default_character_set(),
+            content_type: default_content_type(),
         }
     }
 
@@ -1053,6 +1083,28 @@ impl Document {
     /// Set `document.designMode`. Driven by the JS shim's setter.
     pub fn set_design_mode(&mut self, enabled: bool) {
         self.design_mode = enabled;
+    }
+
+    /// `document.characterSet`/`charset`/`inputEncoding` (DOM §7.3, BUG-358).
+    pub fn character_set(&self) -> &str {
+        &self.character_set
+    }
+
+    /// Set the document's encoding name. Called once by the shell right after
+    /// `lumen_encoding::detect()` runs.
+    pub fn set_character_set(&mut self, character_set: String) {
+        self.character_set = character_set;
+    }
+
+    /// `document.contentType` (DOM §4.5, BUG-358).
+    pub fn content_type(&self) -> &str {
+        &self.content_type
+    }
+
+    /// Set the document's MIME type. Called once by the shell from the
+    /// `content_type` hint already passed into `parse_and_layout`.
+    pub fn set_content_type(&mut self, content_type: String) {
+        self.content_type = content_type;
     }
 
     pub fn root(&self) -> NodeId {

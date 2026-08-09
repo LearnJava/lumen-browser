@@ -4253,6 +4253,18 @@ var document = {
     set title(v) { _lumen_set_document_title(String(v)); },
     get cookie()  { return _lumen_cookie_get(); },
     set cookie(v) { _lumen_cookie_set(String(v)); },
+    // DOM §7.3 / DOM §4.5 (BUG-358): document-metadata IDL attributes — the live
+    // `document` never defined these at all (mirrors `_lumen_build_detached_document`'s
+    // hardcoded block above, but reads real per-load state). `charset`/`inputEncoding`
+    // are legacy aliases of `characterSet` (HTML LS), hence the shared native.
+    get characterSet()  { return _lumen_get_document_character_set(); },
+    get charset()       { return _lumen_get_document_character_set(); },
+    get inputEncoding() { return _lumen_get_document_character_set(); },
+    get compatMode()    { return _lumen_get_document_compat_mode(); },
+    get contentType()   { return _lumen_get_document_content_type(); },
+    get URL()           { return _lumen_loc_href; },
+    get documentURI()   { return _lumen_loc_href; },
+    get location()      { return location; },
     get body()   {
         var bid = _lumen_u2n(_lumen_get_body());
         return bid !== null ? _lumen_make_element(bid) : null;

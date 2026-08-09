@@ -69,6 +69,26 @@ impl Encoding {
         }
     }
 
+    /// Каноничное имя кодировки по таблице «Names and labels» WHATWG Encoding
+    /// Standard — именно эта капитализация (`"UTF-8"`, `"IBM866"`, но
+    /// `"windows-1251"` с маленькой w) ожидается в `document.characterSet`
+    /// (DOM §7.3, BUG-358). Отличается от [`Encoding::name`], который всегда
+    /// в lowercase — то, что хочет `TextDecoder.prototype.encoding`
+    /// (Encoding Standard §4.1 get-encoding-name лоуеркейсит имя всегда).
+    #[must_use]
+    pub fn canonical_name(self) -> &'static str {
+        match self {
+            Self::Utf8 => "UTF-8",
+            Self::Utf16Le => "UTF-16LE",
+            Self::Utf16Be => "UTF-16BE",
+            Self::Utf32Le => "UTF-32LE",
+            Self::Utf32Be => "UTF-32BE",
+            Self::Windows1251 => "windows-1251",
+            Self::Koi8R => "KOI8-R",
+            Self::Cp866 => "IBM866",
+        }
+    }
+
     /// Парсит label кодировки (case-insensitive, с алиасами).
     ///
     /// Алиасы взяты из WHATWG Encoding Standard, оставлены только нужные
