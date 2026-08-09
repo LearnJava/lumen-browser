@@ -6770,6 +6770,9 @@ function Response(body, init) {
 // dedicated HashMap entry, so subsequent fetch() calls cannot clobber this body.
 Response._fromFetchCache = function(status, statusText, headers) {
     var r = Object.create(Response.prototype);
+    // Marks the response as owning a private body copy (stream slot + stream
+    // queue), so _consumeBody never reaches for the shared FetchCache slot.
+    r._from_fetch_cache = true;
     r.status = status;
     r.statusText = statusText;
     r.ok = status >= 200 && status < 300;
@@ -6821,6 +6824,22 @@ Response.prototype._consumeBody = function() {
             _lumen_stream_free(h);
             this._stream_handle = 0;
             return Promise.resolve(bytes);
+        }
+        // BUG-703: the per-response slot is released the moment every byte sits
+        // in this stream own queue — a body up to _RS_CHUNK drains on the eager
+        // pull the ReadableStream constructor performs, i.e. before fetch() has
+        // even resolved. Read the bytes back from that queue. Falling through to
+        // the process-wide FetchCache slot below instead handed the response the
+        // body of whatever request finished last: on a page with concurrent
+        // fetches (webpack chunk loaders, microfrontend loaders) scripts arrived
+        // as each other bodies and never registered.
+        if (this._from_fetch_cache) {
+            var q = (this.body && this.body._rs_ctrl) ? this.body._rs_ctrl._queue : [];
+            var total = 0, qi;
+            for (qi = 0; qi < q.length; qi++) { total += q[qi].length; }
+            var joined = new Uint8Array(total), off = 0;
+            for (qi = 0; qi < q.length; qi++) { joined.set(q[qi], off); off += q[qi].length; }
+            return Promise.resolve(joined);
         }
         // Fallback for legacy callers that set _body = null without a stream slot.
         var len2 = _lumen_fetch_body_length();
