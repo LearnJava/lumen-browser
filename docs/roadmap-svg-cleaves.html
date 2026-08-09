@@ -57,8 +57,8 @@
 {
  "generated": "2026-08-09",
  "counts": {
-  "open": 312,
-  "fixed": 347,
+  "open": 310,
+  "fixed": 349,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -7049,17 +7049,17 @@
    "debtor": false
   },
   "BUG-356": {
-   "status": "open",
-   "title": "`<a>`/`<link>` не рефлектят `href` вовсе: чтение `href` у распарсенного живого якоря даёт `undefined`, присваивание `a.href = …` заводит обычное JS-свойство и н…",
-   "component": "js (`crates/js/src/dom.rs:4554-4571` — генерируемые пустые HTML*Element-интерфейсы, включая `HTMLAnchorElement`; `dom.rs:5499` `_lumen_make_element`)",
-   "date": null,
+   "status": "fixed",
+   "title": "`<a>`/`<link>` не рефлектили `href` вовсе, и URL-декомпозиционные IDL-атрибуты (`protocol`/`host`/`hostname`/`port`/`pathname`/`search`/`hash`/`origin`, микс `H…",
+   "component": "js (`crates/js/src/dom.rs` — `HTMLAnchorElement`/`HTMLAreaElement` prototypes)",
+   "date": "2026-08-09",
    "debtor": false
   },
   "BUG-357": {
-   "status": "open",
-   "title": "`TextDecoder` — заглушка «только UTF-8», label обрабатывается как непрозрачная строка. Шесть отклонений от Encoding Standard: (1) нет таблицы label→encoding — `…",
-   "component": "js (`crates/js/src/dom.rs:9189-9291` — чисто-JS пара `TextEncoder`/`TextDecoder`; `dom.rs:8734-8752` `TextDecoderStream`, оборачивающий тот же объект)",
-   "date": null,
+   "status": "fixed",
+   "title": "`TextDecoder` была заглушкой «только UTF-8», label обрабатывался как непрозрачная строка. Шесть отклонений от Encoding Standard: (1) нет таблицы label→encoding;…",
+   "component": "js (`crates/js/src/dom.rs` — `TextEncoder`/`TextDecoder`; `crates/js/src/v8_runtime.rs` native bridge; `crates/engine/encoding` decoder)",
+   "date": "2026-08-09",
    "debtor": false
   },
   "BUG-358": {

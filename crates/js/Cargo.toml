@@ -41,6 +41,15 @@ lumen-image = { workspace = true, features = ["avif"] }
 # (`lumen_html_parser::parse`). Workspace-internal crate, no new external dependency;
 # no cycle (html-parser depends only on lumen-dom, not on lumen-js).
 lumen-html-parser = { workspace = true }
+# lumen-encoding: needed for a spec-correct TextDecoder (BUG-357) — label
+# canonicalization (`Encoding::from_label`) and real multi-encoding decode
+# (`decode_to_string_opts`) for the browser's supported encoding set (UTF-8/16/32,
+# windows-1251, KOI8-R, IBM866), reusing the same decoder the shell already runs
+# for `<meta charset>` documents. Workspace-internal crate, no new external
+# dependency (tech-stack.md §"Что НЕ берём как зависимости" explicitly rejects
+# `encoding_rs` in favor of this crate's own tables); no cycle (lumen-encoding
+# depends only on lumen-core, not on lumen-js).
+lumen-encoding = { workspace = true }
 # Permanent: OS CSPRNG bytes for Web Crypto API (getRandomValues/randomUUID).
 # Minimal dep — delegates directly to OS (CryptGenRandom/getrandom syscall).
 getrandom = "0.2"

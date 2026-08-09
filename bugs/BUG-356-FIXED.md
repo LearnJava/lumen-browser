@@ -1,6 +1,6 @@
 # BUG-356 — `<a>`/`<link>` do not reflect `href` at all, and the URL-decomposition IDL attributes are missing on every element
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-09
 **Компонент:** js (`crates/js/src/dom.rs:4554-4571` — the generated bare HTML\*Element interfaces, incl. `HTMLAnchorElement`; `crates/js/src/dom.rs:5499` `_lumen_make_element` — the live element object literal that decides which properties an element wrapper gets)
 **Найден:** P2, WPT-VENDOR-encoding (2026-07-27), `run_report.py --all --root encoding --recursive`
 
@@ -112,3 +112,59 @@ older libraries.
 
 Not fixed in this session — P2-wpt vendors and surveys, code fixes are P3's lane
 (`CLAUDE.md` developer assignments).
+
+## Фикс (P3, 2026-08-09)
+
+Part 1 (`href` reflection) turned out to already be closed as a side effect of
+[BUG-383](BUG-383-FIXED.md) (2026-07-29, the IDL-reflection unification): `href`
+is installed as a `url`-kind entry on `HTMLAnchorElement.prototype`/
+`HTMLAreaElement.prototype`/`HTMLLinkElement.prototype` (`dom.rs`, the
+`_lumen_install_reflection` calls right before the block below), which already
+reads through `_lumen_reflect_url` on every get and writes the raw attribute on
+every set — the `undefined`/dead-setter symptom from the original probe no
+longer reproduces. Only part 2, the `HTMLHyperlinkElementUtils` decomposition
+mixin, was still missing; that is the part fixed here.
+
+Added right after the `<a>`/`<area>` reflection tables in `dom.rs`:
+
+- `_lumen_hyperlink_url_get(self)` — resolves the live `href` attribute via the
+  existing `_lumen_reflect_url` (document-base-URL resolution, already used by
+  the `href` getter itself) and parses it with `_lumen_parse_url`; returns
+  `null` when there is no `href` (an absent/empty attribute), so every getter
+  below can fall back to `''` — matches the spec's "if this's url is null" case.
+- `_lumen_hyperlink_url_set(self, mutate)` — the inverse: decomposes the
+  current `href`, lets `mutate` edit the parsed parts, re-serializes
+  (`protocol + '//' + host + pathname + search + hash`) and writes the result
+  back via `_lumen_set_attr(n, 'href', …)`. No-op when there is no `href` yet,
+  per spec (setting `a.protocol` on an anchor with no `href` does nothing).
+- `_lumen_install_hyperlink_utils(proto)` installs `protocol`/`hostname`/
+  `host`/`port`/`pathname`/`search`/`hash` as paired get/set accessors built on
+  the two functions above, plus a read-only `origin`, plus inert `username`/
+  `password` stubs (get `''`, set no-op) — same fidelity as `URL.prototype`,
+  which doesn't model credentials either. Called once each for
+  `HTMLAnchorElement.prototype` and `HTMLAreaElement.prototype`.
+  `HTMLLinkElement` is deliberately not touched — it reflects `href` but is not
+  part of the `HTMLHyperlinkElementUtils` mixin.
+
+All accessors read/write through the live attribute on every call (no caching
+at wrapper-construction time), same requirement called out in the "possible
+fix" section above — element wrappers are interned per nid
+(`_lumen_element_wrappers`) and outlive attribute mutations. BUG-346 (dot-segment
+collapsing) was already fixed by the time this landed, so the new getters don't
+inherit that wrong answer.
+
+Verified outside WPT with a `--dump-layout` probe (getters, setters, the
+`<area>` mixin, `<link>` correctly *not* getting it, and the exact WPT idiom
+from this bug's original report — `a.href = base + '?' + input; a.search.substr(1)`).
+Added 8 regression tests in `dom::tests::v8_nav_url_storage`
+(`anchor_href_reflects_content_attribute`, `anchor_url_decomposition_getters`,
+`anchor_search_substr_matches_wpt_encoder_idiom`,
+`anchor_without_href_decomposition_is_empty`,
+`anchor_decomposition_setters_rewrite_href`,
+`anchor_host_setter_updates_hostname_and_port`,
+`area_href_and_decomposition`, `link_does_not_get_url_decomposition_mixin`).
+`cargo test -p lumen-js --features v8-backend --lib` 2514/2514 green (2506
+pre-existing + 8 new). `cargo clippy -p lumen-js -- -D warnings` still fails on
+15 pre-existing dead-code errors unrelated to this change (`offscreen_canvas.rs`,
+`worker.rs`) — confirmed identical on `main` before this fix, not introduced
+here.

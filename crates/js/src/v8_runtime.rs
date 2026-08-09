@@ -3017,6 +3017,49 @@ impl V8JsRuntime {
         );
     }
 
+    // ── TextDecoder (WHATWG Encoding Standard §8–9) ───────────────────────────
+    // BUG-357: label canonicalization/RangeError, real multi-encoding decode,
+    // fatal-mode error detection and BOM handling are bridged to
+    // `lumen_encoding` — the same decoder the shell already runs for
+    // `<meta charset>` documents — rather than a new dependency (tech-stack.md
+    // explicitly rejects `encoding_rs` in favor of this crate's own tables).
+    // Its decode is a stateless whole-buffer function (no incremental decoder
+    // object), so streaming (`{stream:true}`) chunk-boundary handling — and
+    // the one-BOM-check-per-stream rule for `ignoreBOM` — lives JS-side in the
+    // WEB_API_SHIM `TextDecoder` wrapper; these natives are plain functions.
+    // _lumen_text_encoding_for_label(label) → canonical name (lowercase) or
+    //   undefined if the label is unknown (including the encodings this
+    //   browser doesn't implement, e.g. Shift_JIS/GBK/windows-1252 — see the
+    //   dependency-policy note above; this is a deliberate scope decision,
+    //   not a bug).
+    // _lumen_text_decode(canonical, bytes, ignoreBOM, fatal) → decoded string,
+    //   or undefined if `fatal` and decoding produced a replacement character
+    //   (lumen_encoding never panics or hard-fails — every decode error, from
+    //   any of the supported encodings, surfaces as U+FFFD, so its presence
+    //   is an exact fatal-mode signal).
+    {
+        reg!(
+            "_lumen_text_encoding_for_label",
+            move |label: String| -> Option<String> {
+                lumen_encoding::Encoding::from_label(&label).map(|enc| enc.name().to_string())
+            }
+        );
+
+        reg!(
+            "_lumen_text_decode",
+            move |canonical: String, bytes: Vec<u8>, ignore_bom: bool, fatal: bool| -> Option<String> {
+                let encoding = lumen_encoding::Encoding::from_label(&canonical)
+                    .unwrap_or(lumen_encoding::Encoding::Utf8);
+                let out = lumen_encoding::decode_to_string_opts(encoding, &bytes, ignore_bom);
+                if fatal && out.contains('\u{FFFD}') {
+                    None
+                } else {
+                    Some(out)
+                }
+            }
+        );
+    }
+
     // ── Server-Sent Events API (HTML Living Standard §9.2) ───────────────────
     // Phase 0 model: background recv thread buffers events, JS polls.
     // _lumen_sse_connect(url) → handle u32 (0 = error / no provider)
