@@ -1,7 +1,7 @@
 # BUG-363 — `EventSource` не соответствует WebIDL: константы только на конструкторе, вызов без `new` не бросает, интерфейс не наследует `EventTarget`, атрибуты записываемые, невалидный URL не бросает `SyntaxError`
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/dom.rs:8193-8253` — конструктор `EventSource` и его прототип)
+**Статус:** FIXED 2026-08-09
+**Компонент:** js (`crates/js/src/dom.rs` — конструктор `EventSource` и его прототип)
 **Найден:** P2, WPT-VENDOR-eventsource (2026-07-28), `run_report.py --all --root eventsource --recursive`
 
 ## Симптом
@@ -109,29 +109,56 @@ EventSource.CLOSED = 2;
 клиентском коде SSE; п.3 значит, что `EventSource` не работает ни с одним
 универсальным кодом, ожидающим `EventTarget`.
 
-## Возможный фикс (не реализован в этой сессии)
+## Фикс
 
-- п.1: продублировать три константы на `EventSource.prototype` (не забыть, что
-  по WebIDL они неперечисляемые, неизменяемые и неконфигурируемые).
-- п.2: `if (!new.target) throw new TypeError("Failed to construct 'EventSource':
-  Please use the 'new' operator")` первой строкой конструктора.
-- п.3: назначить прототип от `EventTarget.prototype` и снять самодельные
-  `addEventListener`/`removeEventListener`, переведя `_lumen_sse_fire` на общий
-  диспатч. Это самый крупный пункт; связан с BUG-360 (живые пути диспатча
-  читают только реестр `addEventListener`) — чинить согласованно.
-- п.4, п.5: перевести `url`/`readyState`/`withCredentials` на
-  `Object.defineProperty` с геттерами поверх приватных полей, а
-  `onopen`/`onmessage`/`onerror` — на accessor-свойства прототипа.
-- п.6: бросать `SyntaxError` DOMException при неудаче парсинга — естественно
-  делается тем же изменением, что BUG-362 (резолв через `new URL(...)` в
-  `try`/`catch`).
-- п.7: не трогать `readyState` в конструкторе; оставлять `0` и доставлять отказ
-  асинхронным `error`-событием, как уже делает существующий `setTimeout(…, 0)`
-  рядом (`dom.rs:8220`).
+Весь блок (`_lumen_sse_fire`, `_lumen_sse_pump_one`, `_lumen_pump_sse`,
+`EventSource` и его прототип) переписан по семи пунктам разом — один объект,
+одни и те же строки, чинить по отдельности означало трогать их несколько раз:
 
-Пункты 1, 2, 6, 7 — небольшие локальные правки; пункт 3 — отдельная работа.
-Заведено одним багом, потому что это один объект и один блок кода, и чинить их
-по отдельности означает трогать те же строки несколько раз.
+- **п.1** — константы `CONNECTING`/`OPEN`/`CLOSED` теперь ставятся и на
+  `EventSource`, и на `EventSource.prototype` через общий цикл
+  `Object.defineProperty(...,{value,enumerable:true})` (writable/configurable
+  по умолчанию `false` — совпадает с атрибутами WebIDL-константы).
+- **п.2** — первая строка конструктора: `if (!new.target) throw new
+  TypeError(...)`.
+- **п.3** — `EventSource.prototype = Object.create(EventTarget.prototype)`,
+  конструктор вызывает `EventTarget.call(this)`. Самодельные
+  `addEventListener`/`removeEventListener` сняты — используются унаследованные
+  из `EventTarget.prototype` (уже существовавший в шиме базовый класс,
+  `dom.rs:392` — используется WebHID/WebUSB/Bluetooth/WebSerial/Navigation
+  API и др., так что `_listeners` теперь в формате
+  `{callback,capture,once}[]`, а не массив голых функций).
+  `_lumen_sse_fire` больше не дублирует диспатч onopen/onmessage/onerror и
+  ручной перебор `_listeners` — просто `ev.type = type; es.dispatchEvent(ev)`;
+  `EventTarget.prototype.dispatchEvent` уже умеет и слушателей, и
+  `this['on'+type]`.
+- **п.4, п.5** — `url`/`readyState`/`withCredentials`/`onopen`/`onmessage`/
+  `onerror` — accessor-свойства на `EventSource.prototype`
+  (`Object.defineProperty`), читающие/пишущие приватные поля инстанса
+  (`_url`/`_readyState`/`_withCredentials`/`_onopen`/`_onmessage`/`_onerror`).
+  Все внутренние присваивания в конструкторе и в `_lumen_sse_pump_one`
+  переведены на приватные поля напрямую (иначе присваивание через
+  геттер-без-сеттера в нестрогом режиме молча не сработало бы).
+- **п.6** — `new URL(_rawUrl, _lumen_loc_href)` теперь в `try`/`catch`,
+  неудача даёт `throw new DOMException(..., 'SyntaxError')` вместо фолбэка на
+  исходную строку. **Не закрывает WPT-кейс `eventsource-constructor-url-bogus`
+  целиком** — самодельный `_lumen_parse_url` (BUG-693) принимает пробелы в
+  хосте (`"http://this is invalid/"` даёт непустой `protocol`, поэтому `new
+  URL(...)` для него не бросает), это лежит на стороне парсера URL, не этого
+  бага.
+- **п.7** — `readyState` не трогается в теле конструктора; при неудачном
+  `_lumen_sse_connect` он остаётся `0` (CONNECTING), а `setTimeout(fn, 0)`
+  (уже существовавший, теперь дополнительно выставляет `_readyState = 2`
+  перед `error`) доставляет отказ асинхронно.
 
-Не чинится в этой сессии — P2-wpt вендорит и обследует, фиксы кода — дорожка P3
-(`CLAUDE.md`, назначения разработчиков).
+12 новых/переписанных unit-тестов в `dom::tests::v8_ws_sse`
+(`cargo test -p lumen-js --features v8-backend eventsource`, 23/23 зелёных):
+константы на интерфейсе и прототипе, `TypeError` без `new`, `SyntaxError`
+DOMException на нерезолвящийся URL, `instanceof EventTarget` +
+`dispatchEvent` работает с произвольным именем события, readonly-геттеры
+(присваивание молча игнорируется, значение не меняется), `onmessage` —
+accessor прототипа (не собственное свойство инстанса до и после присваивания).
+Существовавший тест `eventsource_constructor_no_provider_sets_closed`
+переименован и переписан на новое поведение (readyState синхронно `0`, только
+после `_lumen_tick_timers()` — `2`). Полный прогон `cargo test -p lumen-js
+--features v8-backend` (2544 теста) — без регрессий.
