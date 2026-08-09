@@ -1,0 +1,5 @@
+# WPT vendor notes — `network-error-logging`
+
+## Прогон и находки (`docs/wpt-status.md`)
+
+Вендорена целиком 2026-08-05 (коммит `35be3b44`, `tests/wpt/network-error-logging/`, 30 файлов: `META.yml`, `README.md`, `LICENSE-WPT.md` скопирован из соседней `netinfo`, 12 корневых тестовых файлов, `support/` — 15 файлов). Ни variant-ов, ни `testdriver.js` — все 12 отобранных id `.https.`. Прогон `run_report.py --all --root network-error-logging --recursive` (~3:30, первая попытка упала с EXIT 1 на `WebSocket connection closed` после серии подряд идущих ошибок — процесс не восстановился, повторный прогон прошёл штатно): **0/12 harness OK**, 100% TIMEOUT на уже задокументированном TLS-гэпе WPT-RUN-2 `UnknownIssuer` (`tests/wpt/certs/README.md`) — навигация ни на один `.https.`-URL не проходит. NEL (Network Error Logging) — чисто HTTP-заголовочный механизм (`Report-To`/`NEL` response-заголовки), не JS API; грепом (`crates/`) подтверждено отсутствие какой-либо реализации, но пробовать нечего — нет ни навигации, ни живого JS-объекта для пробы. Новый баг не заведён — известный гэп, не находка категории

@@ -1,0 +1,9 @@
+# WPT vendor notes — `content-index`
+
+## Vendoring (`tests/wpt/VENDOR.md`)
+
+Test category, added 2026-07-25 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VENDOR-content-index`, `docs/wpt-status.md`), in-scope (⬜, WICG Content Index API — already partially implemented in Lumen as a Phase 0 in-memory shim, `crates/js/src/content_index.rs`, `ContentIndex.add`/`getAll`/`delete` on `ServiceWorkerRegistration.index`). Same pinned commit, `git sparse-checkout` at the same commit hash, 6 files (`META.yml`, `WEB_FEATURES.yml`, `content-index.https.window.js`, `idlharness.https.any.js`, `resources.js`, `resources/sw.js`). No out-of-category helpers. `run_report.py --all --root content-index --recursive` completed fully (2 selected ids, both `.https.`-only): both TIMEOUT — the same HTTPS-port gap of the minimal executor as `WebCryptoAPI`/`ai`/`compute-pressure`/`contacts`, so the existing shim was never exercised. Not filed as a separate BUG-NNN — first pass, a known infra gap. 0/2 harness OK, 0/0 subtests. See `docs/wpt-status.md` for details.
+
+## Прогон и находки (`docs/wpt-status.md`)
+
+Вендорена целиком 2026-07-25 (`tests/wpt/content-index/`, 6 файлов: `META.yml`, `WEB_FEATURES.yml`, `content-index.https.window.js`, `idlharness.https.any.js`, `resources.js`, `resources/sw.js`), скоуп ⬜ (Content Index API, WICG, уже частично реализована в Lumen как Phase 0 in-memory shim — `crates/js/src/content_index.rs` — `ContentIndex.add`/`getAll`/`delete` на `ServiceWorkerRegistration.index`). Без внекатегорийных хелперов. `run_report.py --all --root content-index --recursive`: 2 отобранных id, оба `.https.`-тесты — TIMEOUT (HTTPS-порт-гэп минимального исполнителя, тот же класс, что `WebCryptoAPI`/`ai`/`compute-pressure`/`contacts`). 0/2 harness OK, 0/0 сабтестов. Не заводился отдельный BUG-NNN — первый проход категории, известный инфраструктурный гэп

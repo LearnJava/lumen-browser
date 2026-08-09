@@ -1,0 +1,5 @@
+# WPT vendor notes — `payment-method-id`
+
+## Прогон и находки (`docs/wpt-status.md`)
+
+Вендорена целиком 2026-08-05 (коммит `35be3b44`, `tests/wpt/payment-method-id/`, 1 файл: `META.yml`, `payment-request-ctor-pmi-handling.https.sub.html`; `LICENSE-WPT.md` скопирован из соседней `payment-method-basic-card`). `run_report.py --all --root payment-method-id --recursive` (~36 с, 1 id): **0/1 harness OK**. Единственный тест — TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer` (`.https.sub.html`), не исполнился. Тест проверяет валидацию payment method identifier (стандартный URL-PMI и `[a-z0-9]`-дефис-формат) в конструкторе `PaymentRequest` — живая проба (`--mcp-live-port`, 6 кейсов: валидный URL-PMI, валидный unicode-хост, 4 синтаксически невалидных PMI) подтвердила, что конструктор не бросает ни в одном случае — то же отсутствие валидации, что уже описано [BUG-646](../bugs/BUG-646-OPEN.md) (конструктор проверяет только `typeof === 'object'` на `methodData`/`details`, `supportedMethods` не читается вовсе). Новый баг не заведён — совпадает с уже описанным дефектом

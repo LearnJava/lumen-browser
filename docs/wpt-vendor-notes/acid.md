@@ -1,0 +1,9 @@
+# WPT vendor notes — `acid`
+
+## Vendoring (`tests/wpt/VENDOR.md`)
+
+Test category, added 2026-07-23 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VENDOR-acid`, `docs/wpt-status.md`), included despite its 🚫 scope note (historical Acid1/2/3, not an actual spec) by the same standing user decision as `accelerometer`. Same pinned commit, `git sparse-checkout` at the same commit hash, 30 files (`acid2/`, `acid3/`). No out-of-category helpers. Of the 3 manifest-selected ids, 2 (`acid2/reftest.html`, `acid3/test.html`) are WPT-manifest type `reftest` — unsupported by the minimal executor (S8 reftests is still a future slice), same class of gap as `accessibility`'s crashtests; the remaining one (`acid3/numbered-tests.html`, type `testharness`) ran and TIMEOUT — it's Acid3's own multi-window/iframe scoring harness, outside this executor's single-window model. See `docs/wpt-status.md` for the run results.
+
+## Прогон и находки (`docs/wpt-status.md`)
+
+Вендорена целиком 2026-07-23 (`tests/wpt/acid/`, 30 файлов: `acid2/`, `acid3/`), включена несмотря на скоуп 🚫 (исторические Acid1/2/3, не актуальный спек) по тому же постоянному решению пользователя, что и `accelerometer`. Внекатегорийных хелперов не обнаружено. Прогон `run_report.py --all --root acid --recursive`: 3 отобранных id. 2 — WPT-манифест тип `reftest` (`acid2/reftest.html` matches `px-reference.html`; `acid3/test.html` matches `reference.sub.html`) — исполнитель вообще не реализует reftest (`Unsupported test type reftest for product lumen`, S8 в `docs/tasks/p2-wpt-integration.md` всё ещё будущий срез), тот же класс гэпа, что `crashtest` в `accessibility`. 1 — `acid3/numbered-tests.html` (тип `testharness`, собственный скоринг-харнесс Acid3 на несколько окон/фреймов) — TIMEOUT, вне однооконной модели минимального исполнителя. 0/1 harness OK. Не заводился отдельный BUG-NNN — первый проход, см. методологию выше

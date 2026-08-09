@@ -1,0 +1,5 @@
+# WPT vendor notes — `netinfo`
+
+## Прогон и находки (`docs/wpt-status.md`)
+
+Вендорена целиком 2026-08-05 (коммит `35be3b44`, `tests/wpt/netinfo/`, 4 файла: `META.yml`, `WEB_FEATURES.yml`, `LICENSE-WPT.md` скопирован из соседней `navigation-timing`, `idlharness.any.js`, `netinfo-basics.html`). Ни variant-ов, ни `.https.`-файлов, ни `testdriver.js` — самый дешёвый профиль; 2 отобранных id. Прогон `run_report.py --all --root netinfo --recursive` (~30с): **1/2 harness OK, 5/6 сабтестов passed (83%)**. `netinfo-basics.html`: единственный провал — `navigator.connection.downlinkMax` не реализован у Phase-1-заглушки `NetworkInformation` (`crates/js/src/dom.rs:12828-12847`, объявлен в коде комментарием как "Phase 1 stub"), при этом `type`/`saveData`/`effectiveType`/`rtt`/`downlink` присутствуют и проходят проверки. Заведён [BUG-641](../bugs/BUG-641-OPEN.md). `idlharness.any.html` TIMEOUT — `HTTP 404` на невендоренный `/resources/idlharness.js`+`WebIDLParser.js` (тот же класс, что уже задокументирован для `FileAPI`/`animation-worklet` в `tests/wpt/VENDOR.md`), не новая находка
