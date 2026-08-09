@@ -18843,7 +18843,19 @@ impl Lumen {
     /// Builds a serialised JSON of `nav_back` + current + `nav_fwd` with the
     /// shell-assigned `nav_key` for each entry and pushes it via
     /// `_lumen_navigation_set_state`.
-    fn commit_nav_state(&self) {
+    ///
+    /// BUG-352: also the single point every navigation path (full-document
+    /// load, same-document popstate, JS-intercepted push/replace) funnels
+    /// through once `self.source`/`self.display_url` has its final value —
+    /// so it doubles as the trigger to refresh the engine-drawn chrome's
+    /// `#omniInput` (`relayout_chrome_host`/`chrome_omnibox_value` reads
+    /// `current_display_url()`). Without this, the omnibox only ever
+    /// refreshed from the omnibox's own key handler (CC-7) — every other
+    /// way the URL can change (a clicked link, `history.back()`/`forward()`,
+    /// BiDi/MCP `navigate`, which is exactly `wptrunner`'s navigation model)
+    /// left it showing whatever URL was on screen at the last keystroke,
+    /// click or resize, indefinitely.
+    fn commit_nav_state(&mut self) {
         fn state_value(raw: Option<&str>) -> serde_json::Value {
             match raw {
                 Some(s) => serde_json::from_str(s).unwrap_or_else(|_| serde_json::Value::String(s.to_owned())),
@@ -18890,6 +18902,12 @@ impl Lumen {
             self.js_ctx.as_ref(),
             format!("_lumen_navigation_set_state({quoted})"),
         );
+        // BUG-352: see doc comment above — keeps the omnibox in sync with
+        // every navigation, not just omnibox-driven ones. No-op off the
+        // flag (`relayout_chrome_host` early-returns when `chrome_doc`/the
+        // renderer aren't ready yet, e.g. the very first call before the
+        // window exists).
+        self.relayout_chrome_host();
     }
 
     fn fire_navigate_success(&self) {
@@ -19210,6 +19228,11 @@ impl Lumen {
         self.display_url = None;
         self.current_history_state_json = String::from("null");
         self.source = source;
+        // BUG-352: `navigate_replace` doesn't route through `commit_nav_state`
+        // (that call updates JS's `window.navigation`, not needed for a plain
+        // `location.replace()`-style navigation), so it needs its own chrome
+        // refresh — see `commit_nav_state`'s doc comment for why this matters.
+        self.relayout_chrome_host();
         self.reload();
     }
 
