@@ -35,6 +35,12 @@ lumen-font = { workspace = true }
 # external dep); `avif` feature matches the shell's existing choice (already requires
 # cmake+nasm on the build host for the shell binary, so this adds no new toolchain need).
 lumen-image = { workspace = true, features = ["avif"] }
+# lumen-html-parser: needed for real innerHTML/outerHTML/insertAdjacentHTML fragment
+# parsing (BUG-368/BUG-351) — `_lumen_set_inner_html` was a Phase-0 text-only stub;
+# reuses the same tree builder the shell already drives for full-document parsing
+# (`lumen_html_parser::parse`). Workspace-internal crate, no new external dependency;
+# no cycle (html-parser depends only on lumen-dom, not on lumen-js).
+lumen-html-parser = { workspace = true }
 # Permanent: OS CSPRNG bytes for Web Crypto API (getRandomValues/randomUUID).
 # Minimal dep — delegates directly to OS (CryptGenRandom/getrandom syscall).
 getrandom = "0.2"
