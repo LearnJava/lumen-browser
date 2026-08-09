@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-09",
  "counts": {
-  "open": 320,
-  "fixed": 366,
+  "open": 321,
+  "fixed": 367,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 686,
+ "total_bugs": 688,
  "phases": [
   {
    "id": "P0",
@@ -9599,6 +9599,20 @@
    "component": "js (`crates/js/src/dom.rs` — `Response._fromFetchCache`, `Response.prototype._consumeBody`)",
    "date": "2026-08-09",
    "debtor": false
+  },
+  "BUG-722": {
+   "status": "fixed",
+   "title": "`<link rel=stylesheet>`, вставленный скриптом, загружался и применялся шеллом, но со стороны JS не давал ни `load`, ни `error` (ни через `link.onload`, ни через…",
+   "component": "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`, машинерия `_lumen_resource_*`)",
+   "date": "2026-08-09",
+   "debtor": false
+  },
+  "BUG-723": {
+   "status": "open",
+   "title": "На странице по схеме `file://` всё, что шим грузит своим `fetch`, падает с `TypeError: fetch: network error`, и элемент получает `error` вместо `load`: воспроиз…",
+   "component": "js (`crates/js/src/dom.rs` — `_url_resolve` + `fetch`), network (провайдер `JsFetchProvider`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -9956,6 +9970,9 @@
   "js (`crates/js/src/dom.rs` — `PerformanceObserver`/`_perf_entries` shim, ~line 8409-8460)": [
    "BUG-673"
   ],
+  "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`, машинерия `_lumen_resource_*`)": [
+   "BUG-722"
+  ],
   "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`: `queueMicrotask`, конструктор `PromiseRejectionEvent`)": [
    "BUG-702"
   ],
@@ -9970,6 +9987,9 @@
   ],
   "js (`crates/js/src/dom.rs` — `_sw_make_registration`, ~line 4843) + all seven `ServiceWorkerRegistration.prototype`-attaching modules (`push_api.rs`, `background_sync.rs`, `periodic_sync.rs`, `background_fetch.rs`, `cookie_store.rs`, `content_index.rs`, `notifications_bindings.rs`)": [
    "BUG-657"
+  ],
+  "js (`crates/js/src/dom.rs` — `_url_resolve` + `fetch`), network (провайдер `JsFetchProvider`)": [
+   "BUG-723"
   ],
   "js (`crates/js/src/dom.rs` — `devicePixelRatio` никогда не проставляется на глобал вне `window_management.rs`)": [
    "BUG-515"

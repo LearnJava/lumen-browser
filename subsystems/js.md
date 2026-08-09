@@ -140,6 +140,21 @@ the time — read dates.
   import in that position would take the entire shim down instead of just module scripts.
   **Gap:** `run_dump` never ticks timers, so under `--dump-layout` only the synchronous inline
   path is observable; external/module scripts need a live window (same as any `setTimeout`).
+- **The same machinery now carries `<link rel=stylesheet>` ([P3], 2026-08-09, closes
+  [BUG-722](../bugs/BUG-722-FIXED.md)).** The block above was written strictly for `<script>`,
+  so a dynamically inserted stylesheet link fired neither `load` nor `error` — the shell picks
+  such a sheet up for the cascade on its next tree walk, but nothing ever told the page. Since
+  `'onload' in link` is `true`, feature detection in the wild takes the event branch over its
+  timer fallback, and a loader shaped like `'onload' in o ? o.onload = a : setTimeout(a, 50)`
+  waits forever. Everything is renamed `_lumen_script_*` → `_lumen_resource_*` and the pending
+  map holds the element **kind** (`'script' | 'link'`) instead of `true`; `_lumen_link_prepare`
+  is the `<link>` branch. **Non-obvious:** the `load` is driven by the shim's *own* `fetch` of
+  the href, not by a report from the cascade loader — the shell re-collects link hrefs from the
+  whole tree (`main.rs::collect_link_hrefs`) and has no per-node completion signal to forward.
+  So `load` means "the bytes arrived" (a second, cache-warm request), not "the sheet is in the
+  cascade" — the same approximation the `<script>` path already makes. Deliberately narrow:
+  `rel=stylesheet` only (giving `preload`/`prefetch` an event would mean fetching resources the
+  page never asked for) and `createElement`-minted links only, exactly like scripts.
 
 - **Document Picture-in-Picture reaches a real OS window ([P1] P3-pip, 2026-07-17).**
   `documentPictureInPicture.requestWindow({width,height})` (`document_pip.rs`) called
