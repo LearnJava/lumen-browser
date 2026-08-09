@@ -3973,9 +3973,9 @@
       {
        "id": "WPT-VENDOR-wai-aria",
        "title": "WPT: вендорить + прогнать категорию `wai-aria`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root wai-aria --recursive`, 274 файла, 32 отобранных id из них — 234 `manual/`-файла вне выборки) — **31/32 harness OK, 6/437 сабтестов**. Доминирующий отказ (337/355 FAIL) — `TypeError: element.getRootNode is not a function`, реконфирмация уже открытого [BUG-599](bugs/BUG-599-OPEN.md). 4 FAIL `Browsing context for element was detached` — реконфирмация [BUG-622](bugs/BUG-622-OPEN.md) (`document.defaultView` отсутствует). 1 FAIL `shadowRoot.append is not a function` — реконфирмация [BUG-676](bugs/BUG-676-OPEN.md). Остальные 8 FAIL — черновая ARIA Actions IDL-рефлексия (`.tentative.`) отсутствует целиком, ожидаемо, не баг. `idlharness.window.html` — TIMEOUT, известный класс. Новый номер бага не заводился"
       },
       {
        "id": "WPT-VENDOR-wasm",
