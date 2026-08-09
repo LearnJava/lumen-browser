@@ -3948,9 +3948,9 @@
       {
        "id": "WPT-VENDOR-visual-viewport",
        "title": "WPT: вендорить + прогнать категорию `visual-viewport`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root visual-viewport --recursive`, ~1:40, 19 отобранных id из 32 файлов, 10 `-manual` исключены отбором) — **11/19 harness OK, 0/22 сабтестов**. `window.visualViewport` отсутствует целиком — реконфирмация уже открытого [BUG-481](bugs/BUG-481-OPEN.md), форма отказа (FAIL/TIMEOUT/ERROR) зависит от места первого обращения относительно `test()`-обёртки. Iframe-файлы — реконфирмация [BUG-480](bugs/BUG-480-OPEN.md). Новый номер бага не заводился"
       },
       {
        "id": "WPT-VENDOR-wai-aria",
