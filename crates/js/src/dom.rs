@@ -5565,16 +5565,8 @@ var history = {
 var _sse_instances = [];
 
 function _lumen_sse_fire(es, type, ev) {
-    ev.target = es;
-    if (type === 'message' && typeof es.onmessage === 'function') {
-        try { es.onmessage(ev); } catch(e) {}
-    } else if (type === 'open' && typeof es.onopen === 'function') {
-        try { es.onopen(ev); } catch(e) {}
-    } else if (type === 'error' && typeof es.onerror === 'function') {
-        try { es.onerror(ev); } catch(e) {}
-    }
-    var arr = es._listeners[type];
-    if (arr) { for (var i = 0; i < arr.length; i++) { try { arr[i](ev); } catch(e) {} } }
+    ev.type = type;
+    es.dispatchEvent(ev);
 }
 
 function _lumen_sse_pump_one(es) {
@@ -5584,11 +5576,11 @@ function _lumen_sse_pump_one(es) {
         try {
             var ev = JSON.parse(raw);
             if (ev.t === 'open') {
-                if (es.readyState === 2) { continue; }
-                es.readyState = 1;
+                if (es._readyState === 2) { continue; }
+                es._readyState = 1;
                 _lumen_sse_fire(es, 'open', new Event('open', { isTrusted: true }));
             } else if (ev.t === 'message') {
-                if (es.readyState === 2) { continue; }
+                if (es._readyState === 2) { continue; }
                 var type = ev.event || 'message';
                 var me = new MessageEvent(ev.data != null ? ev.data : '', { isTrusted: true });
                 me.type = type;
@@ -5603,17 +5595,17 @@ function _lumen_sse_pump_one(es) {
                 // Server-initiated close: per spec fire error with CONNECTING, then reconnect.
                 _lumen_sse_close(es._handle);
                 es._handle = 0;
-                if (es.readyState !== 2) {
-                    es.readyState = 0; // CONNECTING
+                if (es._readyState !== 2) {
+                    es._readyState = 0; // CONNECTING
                     var errEv = new Event('error', { isTrusted: true });
                     _lumen_sse_fire(es, 'error', errEv);
                     es._reconnecting = true;
                     (function(target, delay) {
                         setTimeout(function() {
-                            if (!target._reconnecting || target.readyState === 2) return;
+                            if (!target._reconnecting || target._readyState === 2) return;
                             target._reconnecting = false;
-                            var h = _lumen_sse_connect(target.url);
-                            if (!h) { target.readyState = 2; return; }
+                            var h = _lumen_sse_connect(target._url);
+                            if (!h) { target._readyState = 2; return; }
                             target._handle = h;
                         }, delay);
                     })(es, es._retryMs);
@@ -5621,7 +5613,7 @@ function _lumen_sse_pump_one(es) {
                 break;
             } else if (ev.t === 'error') {
                 // Network or protocol error: fire error and close (no reconnect for hard errors).
-                es.readyState = 2;
+                es._readyState = 2;
                 var err = new Event('error', { isTrusted: true });
                 err.message = ev.message;
                 _lumen_sse_fire(es, 'error', err);
@@ -5635,44 +5627,62 @@ function _lumen_sse_pump_one(es) {
 function _lumen_pump_sse() {
     for (var i = _sse_instances.length - 1; i >= 0; i--) {
         _lumen_sse_pump_one(_sse_instances[i]);
-        if (_sse_instances[i].readyState === 2 && !_sse_instances[i]._handle) {
+        if (_sse_instances[i]._readyState === 2 && !_sse_instances[i]._handle) {
             _sse_instances.splice(i, 1);
         }
     }
 }
 
+// EventSource (HTML Living Standard §9.2): extends EventTarget (BUG-363 pt.3)
+// so addEventListener/dispatchEvent are the shared mechanism rather than a
+// private ad-hoc registry. url/readyState/withCredentials are readonly
+// accessor properties backed by private instance fields (pt.4);
+// onopen/onmessage/onerror are accessor properties too (pt.5), which lets
+// EventTarget.prototype.dispatchEvent's generic `this['on' + type]` lookup
+// pick them up without EventSource-specific dispatch code.
 function EventSource(url, opts) {
+    if (!new.target) {
+        throw new TypeError(\"Failed to construct 'EventSource': Please use the 'new' operator, this DOM object constructor cannot be called as a function.\");
+    }
+    EventTarget.call(this);
     var _rawUrl = String(url);
-    // Resolve relative to the document's base URL (HTML Living Standard §9.2.2);
-    // an unresolvable URL falls back to the raw string (throwing SyntaxError is BUG-363).
-    try { this.url = new URL(_rawUrl, _lumen_loc_href).href; } catch (e) { this.url = _rawUrl; }
-    this.readyState = 0; // CONNECTING
-    this.withCredentials = !!(opts && opts.withCredentials);
-    this.onopen = null;
-    this.onmessage = null;
-    this.onerror = null;
-    this._listeners = {};
+    // Resolve relative to the document's base URL (HTML Living Standard §9.2.2
+    // step 3); a URL the parser rejects outright throws SyntaxError (BUG-363
+    // pt.6). Note: the shim's URL parser (BUG-693) is lenient about malformed
+    // authorities, so some invalid URLs still resolve instead of throwing —
+    // that gap is tracked separately, not reopened here.
+    var _resolved;
+    try { _resolved = new URL(_rawUrl, _lumen_loc_href).href; }
+    catch (e) { throw new DOMException(\"Failed to construct 'EventSource': The URL '\" + _rawUrl + \"' is invalid.\", 'SyntaxError'); }
+    this._url = _resolved;
+    this._readyState = 0; // CONNECTING
+    this._withCredentials = !!(opts && opts.withCredentials);
+    this._onopen = null;
+    this._onmessage = null;
+    this._onerror = null;
     this._handle = 0;
     this._lastEventId = '';
     this._retryMs = 3000; // default reconnect delay (HTML Living Standard §9.2.7)
     this._reconnecting = false;
     // Origin best-effort: scheme+host of the target URL (for MessageEvent.origin).
     this._origin = '';
-    var _sep = this.url.indexOf('://');
+    var _sep = this._url.indexOf('://');
     if (_sep >= 0) {
-        var _rest = this.url.slice(_sep + 3);
+        var _rest = this._url.slice(_sep + 3);
         var _end = _rest.length;
         var _slash = _rest.indexOf('/'); if (_slash >= 0 && _slash < _end) _end = _slash;
         var _q = _rest.indexOf('?'); if (_q >= 0 && _q < _end) _end = _q;
         var _hash = _rest.indexOf('#'); if (_hash >= 0 && _hash < _end) _end = _hash;
-        this._origin = this.url.slice(0, _sep + 3) + _rest.slice(0, _end);
+        this._origin = this._url.slice(0, _sep + 3) + _rest.slice(0, _end);
     }
     var self = this;
-    var h = _lumen_sse_connect(this.url);
+    var h = _lumen_sse_connect(this._url);
     if (!h) {
-        // No provider, or the connection could not be established: fail per spec.
-        this.readyState = 2; // CLOSED
+        // No provider, or the connection could not be established. Per spec
+        // readyState stays CONNECTING synchronously (BUG-363 pt.7); the queued
+        // failure task is what transitions it to CLOSED and fires 'error'.
         setTimeout(function() {
+            self._readyState = 2; // CLOSED
             var e = new Event('error', { isTrusted: true });
             e.message = 'EventSource connection failed';
             _lumen_sse_fire(self, 'error', e);
@@ -5684,27 +5694,49 @@ function EventSource(url, opts) {
     // Phase 0: no persistent event loop — caller must invoke _lumen_pump_sse()
     // after setting onopen/onmessage to receive queued events.
 }
-EventSource.prototype.addEventListener = function(type, fn) {
-    if (typeof fn !== 'function') return;
-    if (!this._listeners[type]) this._listeners[type] = [];
-    this._listeners[type].push(fn);
-};
-EventSource.prototype.removeEventListener = function(type, fn) {
-    if (!this._listeners[type]) return;
-    var idx = this._listeners[type].indexOf(fn);
-    if (idx >= 0) this._listeners[type].splice(idx, 1);
-};
+EventSource.prototype = Object.create(EventTarget.prototype);
+EventSource.prototype.constructor = EventSource;
 EventSource.prototype.close = function() {
     if (this._handle) {
         _lumen_sse_close(this._handle);
         this._handle = 0;
     }
     this._reconnecting = false; // cancel any pending reconnect
-    this.readyState = 2; // CLOSED
+    this._readyState = 2; // CLOSED
 };
-EventSource.CONNECTING = 0;
-EventSource.OPEN = 1;
-EventSource.CLOSED = 2;
+Object.defineProperty(EventSource.prototype, 'url', {
+    get: function() { return this._url; }, enumerable: true, configurable: true,
+});
+Object.defineProperty(EventSource.prototype, 'readyState', {
+    get: function() { return this._readyState; }, enumerable: true, configurable: true,
+});
+Object.defineProperty(EventSource.prototype, 'withCredentials', {
+    get: function() { return this._withCredentials; }, enumerable: true, configurable: true,
+});
+Object.defineProperty(EventSource.prototype, 'onopen', {
+    get: function() { return this._onopen; },
+    set: function(fn) { this._onopen = (typeof fn === 'function') ? fn : null; },
+    enumerable: true, configurable: true,
+});
+Object.defineProperty(EventSource.prototype, 'onmessage', {
+    get: function() { return this._onmessage; },
+    set: function(fn) { this._onmessage = (typeof fn === 'function') ? fn : null; },
+    enumerable: true, configurable: true,
+});
+Object.defineProperty(EventSource.prototype, 'onerror', {
+    get: function() { return this._onerror; },
+    set: function(fn) { this._onerror = (typeof fn === 'function') ? fn : null; },
+    enumerable: true, configurable: true,
+});
+// WebIDL constants live on both the interface object and its prototype
+// (BUG-363 pt.1); default descriptor flags (writable:false, configurable:
+// false) match the WebIDL constant property attributes.
+(function(constants) {
+    for (var name in constants) {
+        Object.defineProperty(EventSource, name, { value: constants[name], enumerable: true });
+        Object.defineProperty(EventSource.prototype, name, { value: constants[name], enumerable: true });
+    }
+})({ CONNECTING: 0, OPEN: 1, CLOSED: 2 });
 
 // ── IME Composition events (UI Events Specification §5.3) ─────────────────────
 // Слушатели compositionstart/compositionupdate/compositionend:
@@ -19933,13 +19965,18 @@ mod tests {
         }
 
         #[test]
-        fn eventsource_constructor_no_provider_sets_closed() {
-            // Without an sse_provider, _lumen_sse_connect returns 0 → readyState CLOSED.
+        fn eventsource_constructor_no_provider_stays_connecting_then_closes_async() {
+            // Without an sse_provider, _lumen_sse_connect returns 0. Per spec
+            // (HTML LS §9.2.2) readyState stays CONNECTING synchronously
+            // (BUG-363 pt.7); the queued failure task transitions it to CLOSED
+            // and fires 'error'.
             let rt = v8_runtime_with_dom(make_doc());
-            let r = rt
+            let sync = rt
                 .eval("var es = new EventSource('https://x/sse'); es.readyState")
                 .unwrap();
-            assert_eq!(r, lumen_core::JsValue::Number(2.0));
+            assert_eq!(sync, lumen_core::JsValue::Number(0.0));
+            let after = rt.eval("_lumen_tick_timers(); es.readyState").unwrap();
+            assert_eq!(after, lumen_core::JsValue::Number(2.0));
         }
 
         #[test]
@@ -20200,6 +20237,128 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(r, lumen_core::JsValue::Number(0.0));
+        }
+
+        #[test]
+        fn eventsource_constants_on_both_interface_and_prototype() {
+            // BUG-363 pt.1: constants must be visible via the interface object
+            // AND the prototype (so instances see them through the chain too).
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var es = new EventSource('https://x/sse');
+                     [EventSource.CONNECTING, EventSource.prototype.CONNECTING,
+                      es.CONNECTING, es.OPEN, es.CLOSED]",
+                )
+                .unwrap();
+            match r {
+                lumen_core::JsValue::Array(arr) => {
+                    assert_eq!(arr[0], lumen_core::JsValue::Number(0.0));
+                    assert_eq!(arr[1], lumen_core::JsValue::Number(0.0));
+                    assert_eq!(arr[2], lumen_core::JsValue::Number(0.0));
+                    assert_eq!(arr[3], lumen_core::JsValue::Number(1.0));
+                    assert_eq!(arr[4], lumen_core::JsValue::Number(2.0));
+                }
+                other => panic!("expected array, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn eventsource_without_new_throws_typeerror() {
+            // BUG-363 pt.2: calling the constructor as a plain function must throw.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval("try { EventSource('https://x/sse'); 'no throw'; } catch (e) { e instanceof TypeError ? 'TypeError' : String(e); }").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("TypeError".into()));
+        }
+
+        #[test]
+        fn eventsource_unparsable_url_throws_syntaxerror_domexception() {
+            // BUG-363 pt.6: a URL the parser rejects outright (no scheme at all,
+            // no document base to resolve against) throws a SyntaxError DOMException.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "try { new EventSource('not a url at all'); 'no throw'; }
+                     catch (e) { e instanceof DOMException && e.name === 'SyntaxError' ? 'SyntaxError' : String(e); }",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("SyntaxError".into()));
+        }
+
+        #[test]
+        fn eventsource_extends_event_target_and_dispatches_generically() {
+            // BUG-363 pt.3: EventSource must inherit EventTarget so dispatchEvent
+            // and the shared listener registry work like any other EventTarget.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var es = new EventSource('https://x/sse');
+                     var got = null;
+                     es.addEventListener('ping', function(e) { got = e.type; });
+                     var ok = (es instanceof EventTarget) && (typeof es.dispatchEvent === 'function');
+                     es.dispatchEvent(new Event('ping'));
+                     [ok, got]",
+                )
+                .unwrap();
+            match r {
+                lumen_core::JsValue::Array(arr) => {
+                    assert_eq!(arr[0], lumen_core::JsValue::Bool(true));
+                    assert_eq!(arr[1], lumen_core::JsValue::String("ping".into()));
+                }
+                other => panic!("expected array, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn eventsource_url_readystate_withcredentials_are_readonly() {
+            // BUG-363 pt.4: url/readyState/withCredentials are readonly attributes,
+            // not writable own data properties.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var es = new EventSource('https://x/sse');
+                     var beforeUrl = es.url, beforeState = es.readyState;
+                     es.url = 'zzz'; es.readyState = 99; es.withCredentials = true;
+                     [es.url === beforeUrl, es.readyState === beforeState, es.withCredentials === false,
+                      es.hasOwnProperty('url'), es.hasOwnProperty('readyState')]",
+                )
+                .unwrap();
+            match r {
+                lumen_core::JsValue::Array(arr) => {
+                    // Assignment is silently ignored (getter-only, non-strict mode) …
+                    assert_eq!(arr[0], lumen_core::JsValue::Bool(true));
+                    assert_eq!(arr[1], lumen_core::JsValue::Bool(true));
+                    assert_eq!(arr[2], lumen_core::JsValue::Bool(true));
+                    // … and the accessors live on the prototype, not the instance.
+                    assert_eq!(arr[3], lumen_core::JsValue::Bool(false));
+                    assert_eq!(arr[4], lumen_core::JsValue::Bool(false));
+                }
+                other => panic!("expected array, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn eventsource_onmessage_is_prototype_accessor_not_own_property() {
+            // BUG-363 pt.5: onopen/onmessage/onerror are accessor properties on
+            // the prototype, so a fresh instance has no matching own property.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var es = new EventSource('https://x/sse');
+                     var ownBefore = es.hasOwnProperty('onmessage');
+                     var fn = function() {};
+                     es.onmessage = fn;
+                     [ownBefore, es.onmessage === fn, es.hasOwnProperty('onmessage')]",
+                )
+                .unwrap();
+            match r {
+                lumen_core::JsValue::Array(arr) => {
+                    assert_eq!(arr[0], lumen_core::JsValue::Bool(false));
+                    assert_eq!(arr[1], lumen_core::JsValue::Bool(true));
+                    assert_eq!(arr[2], lumen_core::JsValue::Bool(false));
+                }
+                other => panic!("expected array, got {other:?}"),
+            }
         }
 
         #[test]

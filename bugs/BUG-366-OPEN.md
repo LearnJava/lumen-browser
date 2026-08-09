@@ -40,7 +40,7 @@ IdentityCredential.prototype.constructor    = Credential
    должно быть функцией, а `navigator.credentials.hasOwnProperty('get')` —
    `false`. Сейчас ровно наоборот, и `CredentialsContainer.prototype` содержит
    только `constructor`. Тот же класс дефекта, что пункт про обработчики
-   событий в [BUG-363](BUG-363-OPEN.md) для `EventSource`.
+   событий в [BUG-363](BUG-363-FIXED.md) для `EventSource`.
 
    Практическое следствие, а не только буквоедство: перечислимость. Все четыре
    метода видны в `Object.keys(navigator.credentials)` и в `for...in`, тогда
