@@ -75,8 +75,8 @@
 {
  "generated": "2026-08-09",
  "counts": {
-  "open": 310,
-  "fixed": 349,
+  "open": 308,
+  "fixed": 351,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -3301,14 +3301,14 @@
        "title": "WPT: вендорить + прогнать категорию `page-lifecycle`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root page-lifecycle --recursive`, ~1 мин, 5 id) — **0/5 harness OK, 0/3 сабтестов**. Три iframe-теста TIMEOUT — реконфирмация [BUG-480](bugs/BUG-480-OPEN.md) (`<iframe>` не имеет отдельного browsing context, `load` не срабатывает). `freeze.html` TIMEOUT — реконфирмация [BUG-359](bugs/BUG-359-OPEN.md) (`window.open` с относительным URL). `idlharness.html` TIMEOUT — известный невендоренный `/resources/idlharness.js`+`WebIDLParser.js` (класс `FileAPI`/`animation-worklet`/`netinfo`). Новых багов не заведено"
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root page-lifecycle --recursive`, ~1 мин, 5 id) — **0/5 harness OK, 0/3 сабтестов**. Три iframe-теста TIMEOUT — реконфирмация [BUG-480](bugs/BUG-480-OPEN.md) (`<iframe>` не имеет отдельного browsing context, `load` не срабатывает). `freeze.html` TIMEOUT — реконфирмация [BUG-359](bugs/BUG-359-FIXED.md) (`window.open` с относительным URL). `idlharness.html` TIMEOUT — известный невендоренный `/resources/idlharness.js`+`WebIDLParser.js` (класс `FileAPI`/`animation-worklet`/`netinfo`). Новых багов не заведено"
       },
       {
        "id": "WPT-VENDOR-page-visibility",
        "title": "WPT: вендорить + прогнать категорию `page-visibility`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root page-visibility --recursive`, ~1 мин 36 с, 11 отобранных id из 13 вендоренных файлов — 2 `-manual` раннер исключает) — **1/11 harness OK, 4/10 сабтестов**. Единственный проходящий тест — `test_attributes_exist.html` (не использует `<body onload>`, запускает проверку прямым `<script>`). Три файла (`test_default_view.html`, `test_read_only.html`, `test_child_document.html`) TIMEOUT с нулём зарегистрированных сабтестов — реконфирмация [BUG-360](bugs/BUG-360-OPEN.md) (`<body onload=\"…\">` не компилируется в обработчик). Три файла (`iframe-session-history.html`, `iframe-unload.html`, `onvisibilitychange.html`) TIMEOUT — реконфирмация [BUG-480](bugs/BUG-480-OPEN.md) (`<iframe>` не имеет отдельного browsing context, `load` не срабатывает). Два файла (`unload.html`, `unload-bubbles.html`) TIMEOUT — реконфирмация [BUG-359](bugs/BUG-359-OPEN.md) (`window.open` с относительным URL). `minimize.html` ERROR — ожидаемый гэп раннера (`action 'minimize_window' not implemented by Lumen's minimal WPT executor`, класс уже задокументированного `send_keys`-гэпа), не движковый баг. `visibility-state-entry.tentative.html` ERROR — `VisibilityStateEntry` (tentative Performance Timeline API) не реализован, ожидаемо для tentative-спеки. Новых багов не заведено"
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root page-visibility --recursive`, ~1 мин 36 с, 11 отобранных id из 13 вендоренных файлов — 2 `-manual` раннер исключает) — **1/11 harness OK, 4/10 сабтестов**. Единственный проходящий тест — `test_attributes_exist.html` (не использует `<body onload>`, запускает проверку прямым `<script>`). Три файла (`test_default_view.html`, `test_read_only.html`, `test_child_document.html`) TIMEOUT с нулём зарегистрированных сабтестов — реконфирмация [BUG-360](bugs/BUG-360-OPEN.md) (`<body onload=\"…\">` не компилируется в обработчик). Три файла (`iframe-session-history.html`, `iframe-unload.html`, `onvisibilitychange.html`) TIMEOUT — реконфирмация [BUG-480](bugs/BUG-480-OPEN.md) (`<iframe>` не имеет отдельного browsing context, `load` не срабатывает). Два файла (`unload.html`, `unload-bubbles.html`) TIMEOUT — реконфирмация [BUG-359](bugs/BUG-359-FIXED.md) (`window.open` с относительным URL). `minimize.html` ERROR — ожидаемый гэп раннера (`action 'minimize_window' not implemented by Lumen's minimal WPT executor`, класс уже задокументированного `send_keys`-гэпа), не движковый баг. `visibility-state-entry.tentative.html` ERROR — `VisibilityStateEntry` (tentative Performance Timeline API) не реализован, ожидаемо для tentative-спеки. Новых багов не заведено"
       },
       {
        "id": "WPT-VENDOR-paint-timing",
@@ -3774,7 +3774,7 @@
        "title": "WPT: вендорить + прогнать категорию `storage-access-api`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root storage-access-api --recursive`, 11:39, 40 файлов, 40 отобранных id) — **3/40 harness OK, 2/9 сабтестов**. Новая находка — [BUG-682](bugs/BUG-682-OPEN.md): `requestStorageAccess`/`hasStorageAccess`/`requestStorageAccessFor`/`hasUnpartitionedCookieAccess` определены только в литерале живого `document` (`dom.rs:4423-4433`), но не в `_lumen_build_detached_document` (`DOMParser.parseFromString` и т.п.) — второй независимый экземпляр класса [BUG-358](bugs/BUG-358-OPEN.md)/[BUG-359](bugs/BUG-359-OPEN.md) (два несинхронизированных Document-литерала), на этот раз в обратную сторону. Остальной сигнал двух исполнившихся не-`.https.` тестов — реконфирмация: [BUG-399](bugs/BUG-399-OPEN.md) (`window.isSecureContext` захардкожен `true`), [BUG-480](bugs/BUG-480-OPEN.md) (`<iframe>` без browsing context), [BUG-574](bugs/BUG-574-OPEN.md) (`Node.contains` отсутствует). Остальные 37 `.https.` id — TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`. Один новый номер бага",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root storage-access-api --recursive`, 11:39, 40 файлов, 40 отобранных id) — **3/40 harness OK, 2/9 сабтестов**. Новая находка — [BUG-682](bugs/BUG-682-OPEN.md): `requestStorageAccess`/`hasStorageAccess`/`requestStorageAccessFor`/`hasUnpartitionedCookieAccess` определены только в литерале живого `document` (`dom.rs:4423-4433`), но не в `_lumen_build_detached_document` (`DOMParser.parseFromString` и т.п.) — второй независимый экземпляр класса [BUG-358](bugs/BUG-358-OPEN.md)/[BUG-359](bugs/BUG-359-FIXED.md) (два несинхронизированных Document-литерала), на этот раз в обратную сторону. Остальной сигнал двух исполнившихся не-`.https.` тестов — реконфирмация: [BUG-399](bugs/BUG-399-OPEN.md) (`window.isSecureContext` захардкожен `true`), [BUG-480](bugs/BUG-480-OPEN.md) (`<iframe>` без browsing context), [BUG-574](bugs/BUG-574-OPEN.md) (`Node.contains` отсутствует). Остальные 37 `.https.` id — TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`. Один новый номер бага",
        "bugs": [
         "BUG-682"
        ]
@@ -7081,17 +7081,17 @@
    "debtor": false
   },
   "BUG-358": {
-   "status": "open",
+   "status": "fixed",
    "title": "Живой глобальный `document` не отдаёт НИ ОДНОГО атрибута метаданных документа: `characterSet`, `charset`, `inputEncoding`, `compatMode`, `contentType`, `URL`, `…",
    "component": "js (`crates/js/src/dom.rs:6989+` — рукописный литерал `var document = {…}`, стоящий за живым глобальным документом; сравни `dom.rs:4728-4769` `_lumen_build_detached_document`, где эти же атрибуты определены)",
-   "date": null,
+   "date": "2026-08-09",
    "debtor": false
   },
   "BUG-359": {
-   "status": "open",
-   "title": "Междокументная навигация не резолвит относительные URL: `window.open(\"support/x.html\")` со страницы `http://…/encoding-detection/…html` уходит в сеть как есть и…",
-   "component": "js (`crates/js/src/dom.rs:11540` `window.open`; `dom.rs:7450-7475` `_lumen_navigate_or_fragment`), shell (`crates/shell/src/main.rs:600-614` `resolve_js_navigation`, `main.rs:12836-12852` — слив popup-запросов)",
-   "date": null,
+   "status": "fixed",
+   "title": "Междокументная навигация не резолвила относительные URL: `window.open(\"support/x.html\")` со страницы `http://…/encoding-detection/…html` уходила в сеть как есть…",
+   "component": "js (`crates/js/src/dom.rs` `window.open`; `_lumen_navigate_or_fragment`), shell (`crates/shell/src/main.rs:600-614` `resolve_js_navigation`, `main.rs:12836-12852` — слив popup-запросов, не тронут)",
+   "date": "2026-08-09",
    "debtor": false
   },
   "BUG-360": {

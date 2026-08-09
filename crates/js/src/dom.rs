@@ -4758,7 +4758,7 @@ function _lumen_navigate_or_fragment(rawUrl, replace) {
             return;
         }
     }
-    _lumen_navigate(url, replace);
+    _lumen_navigate(resolved !== null ? resolved : url, replace);
 }
 // Dispatch a `hashchange` event to window.onhashchange + addEventListener('hashchange').
 function _lumen_fire_hashchange(oldURL, newURL) {
@@ -8944,6 +8944,9 @@ window.open = function(url, target, features) {
   url     = (url     == null) ? '' : String(url);
   target  = (target  == null) ? '_blank' : String(target);
   features = (features == null) ? '' : String(features);
+  if (url !== '') {
+    try { url = new URL(url, _lumen_loc_href).href; } catch (e) {}
+  }
   _lumen_window_open(url, target, features);
   // Return a minimal stub so callers can call .close() / read .location.href
   // without throwing. Real cross-window messaging is not yet supported.
@@ -20064,6 +20067,35 @@ mod tests {
             assert!(matches!(req, Some(NavigateRequest::Reload)));
         }
 
+        // BUG-359: cross-document `location.href =`/`assign()`/`replace()` must
+        // resolve a relative target against the current document URL before
+        // queuing the navigation request — previously the resolved URL was
+        // computed only to decide fragment-vs-cross-document and then thrown
+        // away, leaving the raw relative string to reach the shell/network layer.
+        #[test]
+        fn location_assign_resolves_relative_url() {
+            let rt = v8_runtime_with_url("https://example.com/dir/page.html");
+            rt.eval("location.assign('support/x.html')").unwrap();
+            let req = rt.take_navigate_request();
+            assert!(matches!(req, Some(NavigateRequest::Push(u)) if u == "https://example.com/dir/support/x.html"));
+        }
+
+        #[test]
+        fn location_href_setter_resolves_relative_url() {
+            let rt = v8_runtime_with_url("https://example.com/dir/page.html");
+            rt.eval("location.href = 'support/x.html'").unwrap();
+            let req = rt.take_navigate_request();
+            assert!(matches!(req, Some(NavigateRequest::Push(u)) if u == "https://example.com/dir/support/x.html"));
+        }
+
+        #[test]
+        fn location_replace_resolves_relative_url() {
+            let rt = v8_runtime_with_url("https://example.com/dir/page.html");
+            rt.eval("location.replace('support/x.html')").unwrap();
+            let req = rt.take_navigate_request();
+            assert!(matches!(req, Some(NavigateRequest::Replace(u)) if u == "https://example.com/dir/support/x.html"));
+        }
+
         #[test]
         fn no_navigate_request_when_no_navigation() {
             let rt = v8_runtime_with_url("https://example.com/");
@@ -23743,6 +23775,28 @@ mod tests {
             // Second drain must be empty.
             let second = rt.take_window_open_requests();
             assert_eq!(second.len(), 0);
+        }
+
+        // BUG-359: `window.open("relative.html")` must resolve against the
+        // opener's document URL before being queued — previously the raw
+        // string reached the shell/network layer and failed with
+        // `missing scheme`.
+        #[test]
+        fn window_open_resolves_relative_url() {
+            let rt = v8_runtime_deterministic(make_doc(), "https://example.com/dir/page.html");
+            rt.eval("window.open('support/x.html')").unwrap();
+            let reqs = rt.take_window_open_requests();
+            assert_eq!(reqs.len(), 1);
+            assert_eq!(reqs[0].url, "https://example.com/dir/support/x.html");
+        }
+
+        #[test]
+        fn window_open_stub_location_href_resolves_relative_url() {
+            let rt = v8_runtime_deterministic(make_doc(), "https://example.com/dir/page.html");
+            assert!(bool_eval(
+                &rt,
+                "var w = window.open('support/x.html'); w.location.href === 'https://example.com/dir/support/x.html'"
+            ));
         }
 
         // ── Web Animations API ─────────────────────────────────────────────────
