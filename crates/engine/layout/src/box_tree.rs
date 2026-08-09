@@ -6351,8 +6351,13 @@ fn preferred_inline_block_width(
     // % ширины на этом этапе не разрешима — трактуем как отсутствие.
     let pl = s.padding_left.resolve_or_zero(em, 0.0, viewport);
     let pr = s.padding_right.resolve_or_zero(em, 0.0, viewport);
+    // CSS Sizing L3 §5.2.1 (BUG-742): процентная `width` в intrinsic-контексте
+    // неразрешима и ведёт себя как `auto` — вклад считается по содержимому.
+    // `percent_basis: None` (а не `Some(0.0)`) — единственное отличие от
+    // остальных длин: иначе `width: 100%` давала бы 0 и целиком стирала вклад
+    // поддерева, оставляя от бокса только его собственные padding + border.
     if let Some(w_len) = &s.width
-        && let Some(w) = w_len.resolve(em, Some(0.0), viewport)
+        && let Some(w) = w_len.resolve(em, None, viewport)
     {
         let outer = match s.box_sizing {
             BoxSizing::ContentBox => w + pl + pr
@@ -6465,10 +6470,12 @@ fn max_content_outer_width(
     let pl = s.padding_left.resolve_or_zero(em, 0.0, viewport);
     let pr = s.padding_right.resolve_or_zero(em, 0.0, viewport);
     // Explicit non-intrinsic CSS width takes precedence (same logic as
-    // preferred_inline_block_width).
+    // preferred_inline_block_width). A percentage width is *not* explicit here:
+    // it is unresolvable in an intrinsic context and behaves as `auto`
+    // (CSS Sizing L3 §5.2.1, BUG-742) — hence `percent_basis: None`.
     if let Some(w_len) = &s.width
         && !w_len.is_intrinsic()
-        && let Some(w) = w_len.resolve(em, Some(0.0), viewport)
+        && let Some(w) = w_len.resolve(em, None, viewport)
     {
         let outer = match s.box_sizing {
             BoxSizing::ContentBox => w + pl + pr + s.border_left_width + s.border_right_width,
@@ -6553,9 +6560,11 @@ fn min_content_outer_width(
     let em = s.font_size;
     let pl = s.padding_left.resolve_or_zero(em, 0.0, viewport);
     let pr = s.padding_right.resolve_or_zero(em, 0.0, viewport);
+    // Percentage width behaves as `auto` here — see [`max_content_outer_width`]
+    // (CSS Sizing L3 §5.2.1, BUG-742).
     if let Some(w_len) = &s.width
         && !w_len.is_intrinsic()
-        && let Some(w) = w_len.resolve(em, Some(0.0), viewport)
+        && let Some(w) = w_len.resolve(em, None, viewport)
     {
         let outer = match s.box_sizing {
             BoxSizing::ContentBox => w + pl + pr + s.border_left_width + s.border_right_width,
@@ -14547,6 +14556,82 @@ mod tests {
         let b = find_by_id_all(&root, &doc, "b").expect("#b box not found");
         assert_eq!(a.rect.y, b.rect.y);
         assert!(b.rect.x >= a.rect.x + a.rect.width, "второй бокс должен стоять справа от первого");
+    }
+
+    // ── BUG-742: процентная width в intrinsic-контексте ведёт себя как auto ───
+
+    /// CSS Sizing L3 §5.2.1: в intrinsic-расчёте процент неразрешим, поэтому
+    /// `width: <%>` трактуется как `auto` и вклад берётся из содержимого. До
+    /// BUG-742 процент резолвился против нуля, и от поддерева оставались одни
+    /// padding + border самого бокса (кнопка CTA `tbank.ru` — 32 px вместо 154).
+    ///
+    /// Листья опять размечены в CSS: `super::layout` идёт без `TextMeasurer`.
+    const PCT_CSS: &str = "#outer { display: block; width: 600px; } \
+         .leaf { display: block; width: 120px; height: 10px; } \
+         #t { display: inline-block; }";
+    const PCT_HTML: &str = r#"<div id="outer"><span id="t">
+        <span id="p"><i class="leaf"></i></span></span></div>"#;
+
+    /// Ширины боксов `#t` (shrink-to-fit) и `#p` (процентный) по одному прогону.
+    fn pct_widths(css: &str) -> (f32, f32) {
+        let doc = lumen_html_parser::parse(PCT_HTML);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let t = find_by_id_all(&root, &doc, "t").expect("#t box not found");
+        let p = find_by_id_all(&root, &doc, "p").expect("#p box not found");
+        (t.rect.width, p.rect.width)
+    }
+
+    /// `width: 100%` внутри shrink-to-fit: контейнер обтягивает лист (120), а не
+    /// схлопывается в 0.
+    #[test]
+    fn bug742_percent_width_does_not_erase_content_contribution() {
+        let css = format!("{PCT_CSS} #p {{ display: block; width: 100%; }}");
+        assert_eq!(pct_widths(&css), (120.0, 120.0));
+    }
+
+    /// Padding процентного бокса складывается с вкладом содержимого, а не
+    /// заменяет его: 120 + 16 + 16 (`box-sizing: border-box` — ровно форма
+    /// кнопки CTA `tbank.ru`).
+    #[test]
+    fn bug742_percent_width_box_keeps_its_padding_on_top_of_content() {
+        let css = format!(
+            "{PCT_CSS} #p {{ display: block; width: 100%; padding: 0 16px; \
+             box-sizing: border-box; }}"
+        );
+        assert_eq!(pct_widths(&css), (152.0, 152.0));
+    }
+
+    /// Процент по-прежнему разрешается на самой раскладке — как auto он ведёт
+    /// себя только в intrinsic-расчёте: 50% от обтянутых 120 дают 60.
+    #[test]
+    fn bug742_percent_still_resolves_against_the_used_width() {
+        let css = format!("{PCT_CSS} #p {{ display: block; width: 50%; }}");
+        assert_eq!(pct_widths(&css), (120.0, 60.0));
+    }
+
+    /// `calc()` с процентом внутри неразрешим целиком — тоже auto.
+    #[test]
+    fn bug742_calc_with_percent_is_treated_as_auto_too() {
+        let css = format!("{PCT_CSS} #p {{ display: block; width: calc(100% - 20px); }}");
+        assert_eq!(pct_widths(&css), (120.0, 100.0));
+    }
+
+    /// Абсолютная `width` — по-прежнему явная: она задаёт и intrinsic-вклад,
+    /// и использованную ширину (страховка от «починили процент, сломали px»).
+    #[test]
+    fn bug742_absolute_width_still_wins_over_content() {
+        let css = format!("{PCT_CSS} #p {{ display: block; width: 300px; }}");
+        assert_eq!(pct_widths(&css), (300.0, 300.0));
+    }
+
+    /// Тесный родитель: shrink-to-fit ограничен доступной шириной, процентный
+    /// бокс тянется по ней, а не по своему min-content (Edge: 60 / 60).
+    #[test]
+    fn bug742_percent_width_follows_a_narrow_containing_block() {
+        let css = format!("{PCT_CSS} #p {{ display: block; width: 100%; }}")
+            .replace("#outer { display: block; width: 600px; }", "#outer { display: block; width: 60px; }");
+        assert_eq!(pct_widths(&css), (60.0, 60.0));
     }
 
     // ── Hyphenation helpers ───────────────────────────────────────────────────
