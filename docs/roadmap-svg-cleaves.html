@@ -58,11 +58,11 @@
  "generated": "2026-08-10",
  "counts": {
   "open": 327,
-  "fixed": 378,
+  "fixed": 379,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 705,
+ "total_bugs": 706,
  "phases": [
   {
    "id": "P0",
@@ -9708,16 +9708,23 @@
    "debtor": false
   },
   "BUG-739": {
-   "status": "open",
-   "title": "`display:inline-flex` и `display:inline-grid` не создают бокс вообще: содержимое уплощается в `InlineRun` родителя, как при `display:inline` — ни фона, ни рамки…",
-   "component": "layout (`crates/engine/layout/src/box_tree.rs` — построение дерева боксов)",
-   "date": null,
+   "status": "fixed",
+   "title": "`display:inline-flex` и `display:inline-grid` не создавали бокс вообще: содержимое уплощалось в `InlineRun` родителя, как при `display:inline` — ни фона, ни рам…",
+   "component": "layout (`crates/engine/layout/src/box_tree.rs` — `produces_inline_segments`, `is_atomic_inline_level`, shrink-to-fit в `lay_out`)",
+   "date": "2026-08-10",
    "debtor": false
   },
   "BUG-740": {
    "status": "open",
    "title": "`display:grid` с несколькими колонками меряется блочным правилом «самый широкий ребёнок» вместо суммы колонок: `grid-template-columns:auto auto` с двумя элемент…",
    "component": "layout (`crates/engine/layout/src/box_tree.rs` — те же три функции intrinsic-ширины)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-741": {
+   "status": "open",
+   "title": "Текст перед atomic inline-level боксом переносит его на следующую строку, хотя место в строке есть: `before <span style=\"display:inline-block\">X</span> after` д…",
+   "component": "layout (`crates/engine/layout/src/box_tree.rs` — ветка `BoxKind::InlineBlockRow` в `lay_out`)",
    "date": null,
    "debtor": false
   }
@@ -10355,11 +10362,14 @@
   "layout (`crates/engine/layout/src/box_tree.rs` — `max_content_outer_width`, `min_content_outer_width_of_contents`, `preferred_inline_block_width`)": [
    "BUG-737"
   ],
+  "layout (`crates/engine/layout/src/box_tree.rs` — `produces_inline_segments`, `is_atomic_inline_level`, shrink-to-fit в `lay_out`)": [
+   "BUG-739"
+  ],
+  "layout (`crates/engine/layout/src/box_tree.rs` — ветка `BoxKind::InlineBlockRow` в `lay_out`)": [
+   "BUG-741"
+  ],
   "layout (`crates/engine/layout/src/box_tree.rs` — ветка `is_image_element`, auto-ширина замещаемого элемента)": [
    "BUG-734"
-  ],
-  "layout (`crates/engine/layout/src/box_tree.rs` — построение дерева боксов)": [
-   "BUG-739"
   ],
   "layout (`crates/engine/layout/src/box_tree.rs` — те же три функции intrinsic-ширины)": [
    "BUG-738",
