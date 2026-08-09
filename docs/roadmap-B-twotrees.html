@@ -4152,9 +4152,9 @@
       {
        "id": "WPT-VENDOR-webrtc-extensions",
        "title": "WPT: вендорить + прогнать категорию `webrtc-extensions`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). WebRTC — нет конвейера"
+       "note": "Скоуп: 🚫 (вне скоупа). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root webrtc-extensions --recursive`, ~52с, 13 файлов, 10 id) — **6/10 harness OK, 2/51 сабтестов**. Все падения — уже задокументированные дефекты: BUG-721 (getConfiguration/setConfiguration), no-op заглушки addTransceiver/getSenders/getReceivers (документированный скоуп webrtc_stub.rs), Phase 1 \"нет захвата видео\", BUG-380 (переиспользование browsing context). Новых багов не заведено"
       },
       {
        "id": "WPT-VENDOR-webrtc-ice",
