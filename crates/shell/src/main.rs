@@ -10341,6 +10341,10 @@ impl Lumen {
                 self.fetch_and_register_lazy_images(lazy_reqs);
             }
         }
+        // BUG-727: images the page added after load land here — this is the one
+        // post-layout point every relayout producer routes through, so a
+        // script-appended `<img>` is picked up whichever path relaid it out.
+        self.spawn_dynamic_image_loads(viewport);
         if let Some(w) = self.window.as_ref() {
             w.request_redraw();
         }
@@ -11398,8 +11402,39 @@ impl Lumen {
     /// каждый `src` грузится один раз за навигацию; `loading="lazy"` пропускается
     /// (грузится по близости к viewport уже после `LoadDone`).
     fn spawn_stream_image_loads(&mut self, doc: &lumen_dom::Document, viewport: Size) {
-        let Some(base) = self.source.resource_base() else { return };
         let requests = lumen_layout::collect_image_requests(doc, viewport);
+        self.spawn_image_requests(requests);
+    }
+
+    /// BUG-727: same pass over the **live** document, run after every relayout
+    /// that applied a DOM mutation.
+    ///
+    /// [`Self::spawn_stream_image_loads`] only ever sees the partial DOM the
+    /// HTML streamer hands it, i.e. markup that arrived over the wire. An
+    /// `<img>` that a script appends (or an existing one whose `src` a script
+    /// rewrites) after the load finished was therefore never fetched at all —
+    /// no request, no decode, and paint drew the grey placeholder box forever.
+    /// That is the normal way a client-rendered page shows pictures: on
+    /// `tbank.ru` not one of its 33 images was ever requested.
+    ///
+    /// Dedup still goes through `stream_images_requested`, so an image already
+    /// fetched during streaming is not re-fetched, and a URL is requested once
+    /// per navigation no matter how many relayouts see it.
+    fn spawn_dynamic_image_loads(&mut self, viewport: Size) {
+        let requests = {
+            let Some(src) = self.layout_source.as_ref() else { return };
+            let Ok(doc) = src.document.lock() else { return };
+            lumen_layout::collect_image_requests(&doc, viewport)
+        };
+        self.spawn_image_requests(requests);
+    }
+
+    /// Fetch+decode every not-yet-requested non-lazy image in `requests` on its
+    /// own thread, reporting back through `LoadEvent::ImageDecoded`. Shared by
+    /// the streaming ([`Self::spawn_stream_image_loads`]) and post-load
+    /// ([`Self::spawn_dynamic_image_loads`]) producers.
+    fn spawn_image_requests(&mut self, requests: Vec<lumen_layout::ImageRequest>) {
+        let Some(base) = self.source.resource_base() else { return };
         // BUG-172: stamp the decode with this navigation's generation so the cache
         // entry is shared with the final pipeline pass (same generation) and a
         // stale producer from a superseded navigation bypasses the cache.
@@ -29885,6 +29920,36 @@ mod tests {
             }
         }
         assert_eq!(dispatched, vec!["a.png".to_owned()], "lazy пропущен, дубль a.png схлопнут");
+    }
+
+    #[test]
+    fn post_load_image_discovery_dispatches_only_the_new_src() {
+        // BUG-727: второй проход (`spawn_dynamic_image_loads` после релейаута
+        // JS-мутации) видит весь документ целиком, а не только доехавшую по сети
+        // разметку. Дедуп через тот же `stream_images_requested` обязан пропустить
+        // уже загруженное и выдать ровно появившийся `<img>` — иначе каждый
+        // релейаут перекачивал бы всю страницу заново.
+        let vp = Size::new(300.0, 300.0);
+        let mut requested: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut dispatch = |html: &str| -> Vec<String> {
+            let doc = lumen_html_parser::parse(html);
+            lumen_layout::collect_image_requests(&doc, vp)
+                .into_iter()
+                .filter(|r| !r.is_lazy)
+                .filter(|r| requested.insert(r.url.clone()))
+                .map(|r| r.url)
+                .collect()
+        };
+
+        assert_eq!(dispatch(r#"<img src="a.png">"#), vec!["a.png".to_owned()]);
+        // Скрипт дописал вторую картинку — приехала только она.
+        assert_eq!(
+            dispatch(r#"<img src="a.png"><img src="b.png">"#),
+            vec!["b.png".to_owned()],
+            "a.png уже запрошена, повторно не уходит"
+        );
+        // Ничего не менялось — ни одного запроса.
+        assert!(dispatch(r#"<img src="a.png"><img src="b.png">"#).is_empty());
     }
 }
 

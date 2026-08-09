@@ -462,6 +462,26 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_returns_every_entry_without_touching_lru() {
+        // BUG-726: снимок кэша нужен CPU-растеризатору целиком и не должен
+        // подменять жертву следующей эвикции — иначе один снимок экрана менял бы
+        // то, какая картинка выживет.
+        let img_bytes = bytes(10, 10);
+        let mut cache = ImageDecodeCache::with_budget(img_bytes * 2);
+        cache.insert(key("a"), make_image(10, 10));
+        cache.insert(key("b"), make_image(10, 10));
+
+        let mut keys: Vec<String> = cache.snapshot().into_iter().map(|(k, _)| k).collect();
+        keys.sort();
+        assert_eq!(keys, vec!["a".to_owned(), "b".to_owned()]);
+
+        // "a" — самая старая; снимок её не «освежил», поэтому вытесняется именно она.
+        cache.insert(key("c"), make_image(10, 10));
+        assert!(!cache.contains(&key("a")), "snapshot не должен спасать LRU-жертву");
+        assert!(cache.contains(&key("b")) && cache.contains(&key("c")));
+    }
+
+    #[test]
     fn on_memory_pressure_restores_budget() {
         let img_bytes = bytes(10, 10);
         let budget = img_bytes * 10;
