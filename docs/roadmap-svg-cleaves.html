@@ -58,11 +58,11 @@
  "generated": "2026-08-09",
  "counts": {
   "open": 312,
-  "fixed": 344,
+  "fixed": 345,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 656,
+ "total_bugs": 657,
  "phases": [
   {
    "id": "P0",
@@ -3852,9 +3852,12 @@
       {
        "id": "WPT-VENDOR-ua-client-hints",
        "title": "WPT: вендорить + прогнать категорию `ua-client-hints`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root ua-client-hints --recursive`, ~1 мин, 4 файла, 2 отобранных id) — **0/2 harness OK**, оба `.https.` TIMEOUT на задокументированном TLS-гэпе `UnknownIssuer`. Функциональная часть `navigator.userAgentData` (Phase 0, статический профиль Chrome 114) корректна — все ассерты `useragentdata.https.any.js` прошли бы. Заведён [BUG-690](bugs/BUG-690-OPEN.md) живой пробой (`--mcp-live-port`): `NavigatorUAData` форгуем через `new` (спека не определяет конструктор) и не имеет `Symbol.toStringTag` — тот же класс, что [BUG-672](bugs/BUG-672-OPEN.md)/[BUG-677](bugs/BUG-677-OPEN.md). Один новый номер бага",
+       "bugs": [
+        "BUG-690"
+       ]
       },
       {
        "id": "WPT-VENDOR-uievents",
@@ -7012,10 +7015,10 @@
    "debtor": false
   },
   "BUG-352": {
-   "status": "open",
-   "title": "Адресная строка (omnibox) после нескольких быстрых навигаций подряд в одном окне/вкладке (типичный паттерн `wptrunner`) визуально превращается в наложенную кашу…",
-   "component": "paint (`crates/engine/paint/src/renderer.rs` frame-skip/`content_generation`/page-band caching — подозреваемое место)",
-   "date": null,
+   "status": "fixed",
+   "title": "Адресная строка (omnibox) после нескольких быстрых навигаций подряд в одном окне/вкладке (типичный паттерн `wptrunner`) не отражала текущий URL — `relayout_chro…",
+   "component": "shell (`crates/shell/src/main.rs::commit_nav_state`)",
+   "date": "2026-08-09",
    "debtor": false
   },
   "BUG-353": {
@@ -9348,6 +9351,13 @@
    "component": "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`, `_lumen_build_element` `dom.rs:2607-2707`, `createElement`/`createElementNS` `dom.rs:4310-4341`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-690": {
+   "status": "open",
+   "title": "`NavigatorUAData` is a plain `function NavigatorUAData() {}` with no `new.target` guard and no `[Symbol.toStringTag]` — `new NavigatorUAData()` succeeds from pa…",
+   "component": "js (`crates/js/src/ua_client_hints.rs` — `UA_CLIENT_HINTS_SHIM`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -10108,9 +10118,6 @@
   "paint (`WgpuBackend`/`renderer.rs`) — wgpu-рендеринг расходится с femtovg": [
    "BUG-277"
   ],
-  "paint (`crates/engine/paint/src/renderer.rs` frame-skip/`content_generation`/page-band caching — подозреваемое место)": [
-   "BUG-352"
-  ],
   "paint (`display_list.rs::emit_background_image`) — дефект дисплей-листа, не бэкенда": [
    "BUG-631"
   ],
@@ -10208,6 +10215,9 @@
   ],
   "shell (`crates/shell/src/main.rs::collect_scripts_ordered`/`run_scripts_with_dom`), js (`crates/js/src/dom.rs` -- `HTMLScriptElement` reflection only, no insertion hook)": [
    "BUG-571"
+  ],
+  "shell (`crates/shell/src/main.rs::commit_nav_state`)": [
+   "BUG-352"
   ],
   "shell (`crates/shell/src/main.rs::fetch_stylesheet_text`)": [
    "BUG-509"
