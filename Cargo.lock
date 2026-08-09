@@ -2307,6 +2307,7 @@ dependencies = [
  "lumen-core",
  "lumen-css-parser",
  "lumen-dom",
+ "lumen-encoding",
  "lumen-font",
  "lumen-html-parser",
  "lumen-image",

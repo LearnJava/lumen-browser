@@ -27,7 +27,7 @@ pub mod hyphenation_impl;
 mod tables;
 pub mod unicode_provider;
 
-pub use decoder::{decode, decode_to_string};
+pub use decoder::{decode, decode_to_string, decode_to_string_opts};
 pub use detect::{detect, sniff_meta_charset};
 pub use ext_impl::HeuristicDetector;
 pub use hyphenation_impl::KnuthLiangHyphenation;

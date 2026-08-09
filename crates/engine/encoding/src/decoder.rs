@@ -16,24 +16,40 @@ pub fn decode(encoding: Encoding, bytes: &[u8]) -> String {
 }
 
 /// То же, что [`decode`], но с явным именем — для случаев, когда из
-/// контекста не очевидно, что возвращается `String`.
+/// контекста не очевидно, что возвращается `String`. Всегда снимает ведущий
+/// BOM (если он есть) — так исторически ведёт себя detect/charset-sniff путь.
 #[must_use]
 pub fn decode_to_string(encoding: Encoding, bytes: &[u8]) -> String {
+    decode_to_string_opts(encoding, bytes, /*ignore_bom=*/ false)
+}
+
+/// То же, что [`decode_to_string`], но с контролем над тем, снимать ли
+/// ведущий BOM — нужно для `TextDecoder`'s `ignoreBOM` (WHATWG Encoding
+/// §9.1): `ignore_bom=true` оставляет BOM-байты как обычный символ текста
+/// вместо того, чтобы их срезать. У однобайтовых кодировок BOM не бывает,
+/// поэтому для них `ignore_bom` ни на что не влияет.
+#[must_use]
+pub fn decode_to_string_opts(encoding: Encoding, bytes: &[u8], ignore_bom: bool) -> String {
     match encoding {
-        Encoding::Utf8 => decode_utf8(bytes),
-        Encoding::Utf16Le => decode_utf16(bytes, /*little_endian=*/ true),
-        Encoding::Utf16Be => decode_utf16(bytes, /*little_endian=*/ false),
-        Encoding::Utf32Le => decode_utf32(bytes, /*little_endian=*/ true),
-        Encoding::Utf32Be => decode_utf32(bytes, /*little_endian=*/ false),
+        Encoding::Utf8 => decode_utf8(bytes, ignore_bom),
+        Encoding::Utf16Le => decode_utf16(bytes, /*little_endian=*/ true, ignore_bom),
+        Encoding::Utf16Be => decode_utf16(bytes, /*little_endian=*/ false, ignore_bom),
+        Encoding::Utf32Le => decode_utf32(bytes, /*little_endian=*/ true, ignore_bom),
+        Encoding::Utf32Be => decode_utf32(bytes, /*little_endian=*/ false, ignore_bom),
         Encoding::Windows1251 => decode_single_byte(bytes, &WIN1251),
         Encoding::Koi8R => decode_single_byte(bytes, &KOI8_R),
         Encoding::Cp866 => decode_single_byte(bytes, &CP866),
     }
 }
 
-fn decode_utf8(bytes: &[u8]) -> String {
-    // BOM EF BB BF: если есть в начале — режем, остальное декодируем lossy.
-    let trimmed = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+fn decode_utf8(bytes: &[u8], ignore_bom: bool) -> String {
+    // BOM EF BB BF: если есть в начале и его не просили сохранить — режем,
+    // остальное декодируем lossy.
+    let trimmed = if ignore_bom {
+        bytes
+    } else {
+        bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes)
+    };
     String::from_utf8_lossy(trimmed).into_owned()
 }
 
@@ -45,10 +61,13 @@ fn decode_utf8(bytes: &[u8]) -> String {
 /// совпадает с указанным порядком, всё в порядке; если нет — снимается
 /// тоже (так удобнее для тестов), но в реальной жизни такой mismatch
 /// невозможен, потому что detector прислал бы Encoding под BOM.
-fn decode_utf16(bytes: &[u8], little_endian: bool) -> String {
+fn decode_utf16(bytes: &[u8], little_endian: bool, ignore_bom: bool) -> String {
     // Снять BOM любого варианта (LE: FF FE, BE: FE FF) — детектор уже
     // выбрал правильный Encoding по BOM-у, наша задача — пропустить байты.
-    let bytes = if bytes.starts_with(&[0xFF, 0xFE]) || bytes.starts_with(&[0xFE, 0xFF]) {
+    // Если попросили сохранить BOM (ignore_bom=true) — не трогаем.
+    let bytes = if !ignore_bom
+        && (bytes.starts_with(&[0xFF, 0xFE]) || bytes.starts_with(&[0xFE, 0xFF]))
+    {
         &bytes[2..]
     } else {
         bytes
@@ -110,9 +129,10 @@ fn decode_utf16(bytes: &[u8], little_endian: bool) -> String {
 /// независимо от endian (defensive — detector обычно уже выбрал верный
 /// вариант). Ошибки: code point вне Unicode (> U+10FFFF), surrogate
 /// (U+D800..=U+DFFF), нецелое число байт — replacement U+FFFD.
-fn decode_utf32(bytes: &[u8], little_endian: bool) -> String {
-    let bytes = if bytes.starts_with(&[0xFF, 0xFE, 0x00, 0x00])
-        || bytes.starts_with(&[0x00, 0x00, 0xFE, 0xFF])
+fn decode_utf32(bytes: &[u8], little_endian: bool, ignore_bom: bool) -> String {
+    let bytes = if !ignore_bom
+        && (bytes.starts_with(&[0xFF, 0xFE, 0x00, 0x00])
+            || bytes.starts_with(&[0x00, 0x00, 0xFE, 0xFF]))
     {
         &bytes[4..]
     } else {
@@ -183,6 +203,37 @@ mod tests {
     fn utf8_bom_is_stripped() {
         let bytes = b"\xEF\xBB\xBF\xD0\x9F\xD1\x80\xD0\xB8\xD0\xB2\xD0\xB5\xD1\x82";
         assert_eq!(decode(Encoding::Utf8, bytes), "Привет");
+    }
+
+    #[test]
+    fn utf8_bom_kept_with_ignore_bom() {
+        let bytes = b"\xEF\xBB\xBFA";
+        let out = decode_to_string_opts(Encoding::Utf8, bytes, /*ignore_bom=*/ true);
+        assert_eq!(out, "\u{FEFF}A");
+    }
+
+    #[test]
+    fn utf16_le_bom_kept_with_ignore_bom() {
+        let bytes = &[0xFF, 0xFE, 0x41, 0x00];
+        let out = decode_to_string_opts(Encoding::Utf16Le, bytes, /*ignore_bom=*/ true);
+        assert_eq!(out, "\u{FEFF}A");
+    }
+
+    #[test]
+    fn utf32_le_bom_kept_with_ignore_bom() {
+        let bytes = &[0xFF, 0xFE, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00];
+        let out = decode_to_string_opts(Encoding::Utf32Le, bytes, /*ignore_bom=*/ true);
+        assert_eq!(out, "\u{FEFF}A");
+    }
+
+    #[test]
+    fn single_byte_encoding_ignores_ignore_bom_flag() {
+        // No BOM concept for single-byte encodings — the flag is a no-op.
+        let bytes = &[0xCF, 0xF0, 0xE8, 0xE2, 0xE5, 0xF2]; // "Привет" in windows-1251
+        assert_eq!(
+            decode_to_string_opts(Encoding::Windows1251, bytes, true),
+            decode_to_string_opts(Encoding::Windows1251, bytes, false)
+        );
     }
 
     #[test]
