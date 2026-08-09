@@ -55,14 +55,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-08-09",
+ "generated": "2026-08-10",
  "counts": {
-  "open": 323,
-  "fixed": 375,
+  "open": 325,
+  "fixed": 376,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 698,
+ "total_bugs": 701,
  "phases": [
   {
    "id": "P0",
@@ -9671,6 +9671,27 @@
    "component": "не изолирован (layout / paint / js)",
    "date": null,
    "debtor": false
+  },
+  "BUG-734": {
+   "status": "fixed",
+   "title": "`<img>` с одной стороной из CSS и второй `auto` получал не пропорциональный, а **сырой intrinsic-размер по второй оси**: `width: 100px; height: auto` на картинк…",
+   "component": "layout (`crates/engine/layout/src/box_tree.rs` — ветка `is_image_element`, auto-ширина замещаемого элемента)",
+   "date": "2026-08-09",
+   "debtor": false
+  },
+  "BUG-735": {
+   "status": "open",
+   "title": "Картинке, декодированной streaming/динамическим путём, никогда не сообщается intrinsic-размер: арм `ImageDecoded` делает только `register_image` + `request_redr…",
+   "component": "shell (`crates/shell/src/main.rs` — `spawn_image_requests` / арм `LoadEvent::ImageDecoded`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-736": {
+   "status": "open",
+   "title": "`<img>` как flex-элемент игнорирует и размер контейнера, и своё соотношение: по главной оси вылезает сырым intrinsic-размером, по поперечной растягивается до вы…",
+   "component": "layout (`crates/engine/layout/src/box_tree.rs` — `lay_out_flex`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -10300,6 +10321,12 @@
   "layout (`crates/engine/layout/src/box_tree.rs` — `collect_inline_segments` / `InlineSegment`)": [
    "BUG-728"
   ],
+  "layout (`crates/engine/layout/src/box_tree.rs` — `lay_out_flex`)": [
+   "BUG-736"
+  ],
+  "layout (`crates/engine/layout/src/box_tree.rs` — ветка `is_image_element`, auto-ширина замещаемого элемента)": [
+   "BUG-734"
+  ],
   "layout (`crates/engine/layout/src/incremental.rs::graft_geometry_with_cascade` + `lay_out`'s O(1) translate fast path для `DirtyBits::CLEAN`)": [
    "BUG-355"
   ],
@@ -10608,6 +10635,9 @@
   ],
   "shell (`crates/shell/src/main.rs::render_current_page_to_png`), image (`decode_cache.rs`)": [
    "BUG-729"
+  ],
+  "shell (`crates/shell/src/main.rs` — `spawn_image_requests` / арм `LoadEvent::ImageDecoded`)": [
+   "BUG-735"
   ],
   "shell (`crates/shell/src/main.rs` — `spawn_stream_image_loads` / `apply_relayout_result`)": [
    "BUG-730"

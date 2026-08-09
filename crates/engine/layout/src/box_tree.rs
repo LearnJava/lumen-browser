@@ -5428,21 +5428,52 @@ fn build_box_inner(
             } else if is_image_element(doc, id) {
                 let src = resolve_image_source(doc, id, viewport);
                 let alt = doc.get(id).get_attr("alt").unwrap_or("").to_string();
-                // Intrinsic dimensions у выбранного `<source>` действуют как
+                // Intrinsic dimensions у выбранного `<source>` (а для голого
+                // `<img>` — его собственные `width`/`height` атрибуты, куда
+                // shell кладёт размер декодированной картинки) действуют как
                 // presentational hint: заполняют только пустые слоты, не
                 // перекрывают ни CSS-каскад, ни собственные `<img width|
                 // height>` атрибуты (последние уже легли в style через
                 // `apply_image_presentational_hints`). HTML5 §10 «mapped
                 // attributes»: hint = UA-rule с specificity 0.
-                if style.width.is_none()
-                    && let Some(w) = src.intrinsic_width
-                {
-                    Arc::make_mut(&mut style).width = Some(Length::Px(w as f32));
-                }
-                if style.height.is_none()
-                    && let Some(h) = src.intrinsic_height
-                {
-                    Arc::make_mut(&mut style).height = Some(Length::Px(h as f32));
+                //
+                // BUG-734: когда известны ОБЕ стороны, это не два независимых
+                // hint-а, а intrinsic **соотношение** — CSS Sizing L4 §4.1
+                // («`aspect-ratio: auto` на замещаемом элементе = intrinsic
+                // ratio») и CSS 2.1 §10.6.2. Подставлять сырое значение в
+                // пустой слот нельзя: `width: 100px; height: auto` дало бы
+                // 100×<intrinsic h> вместо 100×(100/ratio), а самый частый в
+                // вебе `max-width: 100%` не пересчитывал бы высоту после
+                // клампа ширины. Поэтому ratio уезжает в `style.aspect_ratio`
+                // (если author его не задал), а сырой размер подставляется
+                // ровно в одном случае «обе стороны auto» — и только в
+                // ширину: высоту из неё выведет ratio-ветка, и она же
+                // отработает после `min-`/`max-width`.
+                let intrinsic_ratio = match (src.intrinsic_width, src.intrinsic_height) {
+                    (Some(w), Some(h)) if w > 0 && h > 0 => Some((w as f32, h as f32)),
+                    _ => None,
+                };
+                if let Some((iw, ih)) = intrinsic_ratio {
+                    let st = Arc::make_mut(&mut style);
+                    if st.aspect_ratio.is_none() {
+                        st.aspect_ratio = Some((iw, ih));
+                    }
+                    if st.width.is_none() && st.height.is_none() {
+                        st.width = Some(Length::Px(iw));
+                    }
+                } else {
+                    // Известна одна сторона — ratio не построить, поведение
+                    // прежнее: hint заполняет пустой слот.
+                    if style.width.is_none()
+                        && let Some(w) = src.intrinsic_width
+                    {
+                        Arc::make_mut(&mut style).width = Some(Length::Px(w as f32));
+                    }
+                    if style.height.is_none()
+                        && let Some(h) = src.intrinsic_height
+                    {
+                        Arc::make_mut(&mut style).height = Some(Length::Px(h as f32));
+                    }
                 }
                 let is_lazy = doc.get(id).get_attr("loading")
                     .is_some_and(|v| v.eq_ignore_ascii_case("lazy"));
@@ -7677,6 +7708,24 @@ fn lay_out_inner(
     b.rect.width = if is_replaced {
         if let Some((pw, _)) = field_intrinsic {
             pw + s.border_left_width + s.border_right_width
+        } else if let Some((aw, ah)) = s.aspect_ratio
+            && aw > 0.0
+            && ah > 0.0
+            && s.width.is_none()
+            && let Some(h_len) = &s.height
+            && let Some(h) = h_len.resolve(em, available_height, viewport)
+        {
+            // BUG-734 / CSS 2.1 §10.6.2: `width: auto` + definite height +
+            // известное соотношение → ширина выводится из высоты. Симметрично
+            // ratio-ветке высоты ниже, поэтому считается в border-box
+            // пространстве (у картинок padding/border почти всегда нулевые).
+            let h_bb = match s.box_sizing {
+                BoxSizing::ContentBox => {
+                    h + padding_top + padding_bottom + s.border_top_width + s.border_bottom_width
+                }
+                BoxSizing::BorderBox => h,
+            };
+            (h_bb * aw / ah).max(0.0)
         } else {
             0.0
         }
@@ -13962,6 +14011,104 @@ mod tests {
         let div = layout_div("div { width: 200px; }", 800.0, 600.0);
         assert_eq!(div.rect.width, 200.0);
         assert_eq!(div.rect.height, 0.0);
+    }
+
+    // ── BUG-734: intrinsic aspect ratio of a replaced element ─────────────────
+
+    /// Border box of the first `BoxKind::Image` produced by laying out
+    /// `html` + `css` in an 800×600 viewport.
+    ///
+    /// The `<img width|height>` attributes stand in for the decoded intrinsic
+    /// size: layout has no decoder, and the shell delivers the real size the
+    /// same way (`apply_intrinsic_size` fills the empty attribute slots).
+    fn img_border_box(html: &str, css: &str) -> (f32, f32) {
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        fn find(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            if matches!(b.kind, super::BoxKind::Image { .. }) {
+                return Some(b);
+            }
+            b.children.iter().find_map(find)
+        }
+        let img = find(&root).expect("Image box not found");
+        (img.rect.width, img.rect.height)
+    }
+
+    /// `<img>` 852×725, CSS задаёт только ширину — высота обязана прийти из
+    /// intrinsic-соотношения, а не из сырого intrinsic-значения (CSS 2.1
+    /// §10.6.2). До BUG-734 давало 100×725.
+    #[test]
+    fn bug734_css_width_with_height_auto_uses_intrinsic_ratio() {
+        let (w, h) = img_border_box(
+            r#"<img width="852" height="725" src="x.png">"#,
+            "img { width: 100px; height: auto; }",
+        );
+        assert_eq!(w, 100.0);
+        assert!((h - 85.09).abs() < 0.1, "height={h}");
+    }
+
+    /// Самый частый в вебе responsive-идиом: `max-width: 100%` + `height:
+    /// auto`. Высота считается уже ПОСЛЕ клампа ширины, иначе картинка
+    /// растягивается по вертикали во столько же раз, во сколько сжата ширина.
+    #[test]
+    fn bug734_max_width_clamp_rescales_auto_height() {
+        let (w, h) = img_border_box(
+            r#"<div><img width="852" height="725" src="x.png"></div>"#,
+            "div { width: 100px; } img { max-width: 100%; height: auto; }",
+        );
+        assert_eq!(w, 100.0);
+        assert!((h - 85.09).abs() < 0.1, "height={h}");
+    }
+
+    /// Симметричный случай: задана высота, ширина `auto`. До BUG-734 ширина
+    /// оставалась сырым intrinsic-значением (852 вместо 117.5).
+    #[test]
+    fn bug734_css_height_with_width_auto_uses_intrinsic_ratio() {
+        let (w, h) = img_border_box(
+            r#"<img width="852" height="725" src="x.png">"#,
+            "img { height: 100px; width: auto; }",
+        );
+        assert!((w - 117.52).abs() < 0.1, "width={w}");
+        assert_eq!(h, 100.0);
+    }
+
+    /// Обе стороны `auto` — картинка рисуется натуральным размером
+    /// (поведение до BUG-734 сохранено).
+    #[test]
+    fn bug734_both_axes_auto_keep_natural_size() {
+        let (w, h) = img_border_box(r#"<img width="852" height="725" src="x.png">"#, "");
+        assert_eq!((w, h), (852.0, 725.0));
+    }
+
+    /// Обе стороны заданы автором — соотношение не вмешивается.
+    #[test]
+    fn bug734_both_axes_specified_ignore_ratio() {
+        let (w, h) = img_border_box(
+            r#"<img width="852" height="725" src="x.png">"#,
+            "img { width: 300px; height: 40px; }",
+        );
+        assert_eq!((w, h), (300.0, 40.0));
+    }
+
+    /// Author-ский `aspect-ratio` перекрывает intrinsic-соотношение
+    /// (CSS Sizing L4 §4.1: intrinsic ratio подставляется только под
+    /// `aspect-ratio: auto`, то есть под initial-значение).
+    #[test]
+    fn bug734_author_aspect_ratio_beats_intrinsic() {
+        let (w, h) = img_border_box(
+            r#"<img width="852" height="725" src="x.png">"#,
+            "img { width: 100px; height: auto; aspect-ratio: 1 / 1; }",
+        );
+        assert_eq!((w, h), (100.0, 100.0));
+    }
+
+    /// Картинка без известного intrinsic-размера (ни одного атрибута — shell
+    /// ещё не декодировал): соотношения нет, коробка нулевая, как и раньше.
+    #[test]
+    fn bug734_unknown_intrinsic_size_stays_collapsed() {
+        let (w, h) = img_border_box(r#"<img src="x.png">"#, "img { height: auto; }");
+        assert_eq!((w, h), (0.0, 0.0));
     }
 
     // ── Hyphenation helpers ───────────────────────────────────────────────────
