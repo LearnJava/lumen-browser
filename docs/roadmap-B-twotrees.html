@@ -75,8 +75,8 @@
 {
  "generated": "2026-08-09",
  "counts": {
-  "open": 312,
-  "fixed": 345,
+  "open": 310,
+  "fixed": 347,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -7040,17 +7040,17 @@
    "debtor": false
   },
   "BUG-353": {
-   "status": "open",
-   "title": "`element.focus()`/`blur()` отсутствуют на ЛЮБОМ элементе (включая `<input>`/`<textarea>`/`document.body`), `document.activeElement` отсутствует вовсе, `document…",
-   "component": "js (`crates/js/src/dom.rs` — живой `Element`/`HTMLElement` и объект `document`), shell (`crates/shell/src/main.rs::focused_node` — уже существующее нативное состояние фокуса)",
-   "date": null,
+   "status": "fixed",
+   "title": "`element.focus()`/`blur()`/`document.activeElement` — already fixed by [BUG-381](bugs/BUG-381-FIXED.md) two days after this bug was filed, re-verified live on t…",
+   "component": "js (`crates/js/src/dom.rs`), shell (`crates/shell/src/main.rs::focused_node`), dom (`crates/engine/dom/src/lib.rs::find_editing_host`)",
+   "date": "2026-08-09",
    "debtor": false
   },
   "BUG-354": {
-   "status": "open",
-   "title": "`PerformanceObserver.supportedEntryTypes` возвращает фиксированный список из 12 типов, из которых **пять не реализованы вовсе**: `element`, `event`, `first-inpu…",
-   "component": "js (`crates/js/src/dom.rs:11067-11074` — захардкоженный аксессор `supportedEntryTypes`, плюс `observe()` рядом)",
-   "date": null,
+   "status": "fixed",
+   "title": "`PerformanceObserver.supportedEntryTypes` возвращал фиксированный список из 12 типов, из которых пять не реализованы вовсе (`element`/`event`/`first-input`/`lon…",
+   "component": "js (`crates/js/src/dom.rs` — `PerformanceObserver.supportedEntryTypes`/`observe()`)",
+   "date": "2026-08-09",
    "debtor": false
   },
   "BUG-355": {
