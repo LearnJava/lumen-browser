@@ -42,7 +42,7 @@ function CreateDocumentViaDOMParser() {
 ## Причина
 
 То же архитектурное расхождение, что и [BUG-358](BUG-358-OPEN.md)/
-[BUG-359](BUG-359-OPEN.md): в шиме два независимых Document —
+[BUG-359](BUG-359-FIXED.md): в шиме два независимых Document —
 `_lumen_build_detached_document` (используется `DOMParser.parseFromString`,
 `DOMImplementation.createHTMLDocument`/`createDocument`/`createXMLDocument`) и
 рукописный литерал живого глобального `document`. BUG-358 нашёл расхождение в

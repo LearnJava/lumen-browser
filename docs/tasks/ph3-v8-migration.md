@@ -1555,7 +1555,7 @@ with untouched bodies, no loose microtask-tolerant assertions in this range (the
 [BUG-375](../../bugs/BUG-375-OPEN.md) (only `URL.prototype.href` has a working setter; the other
 nine swallow assignment silently), [BUG-346](../../bugs/BUG-346-OPEN.md) (`Url::resolve` keeps
 `.`/`..` dot-segments) and the `location`-adjacent
-[BUG-359](../../bugs/BUG-359-OPEN.md)/[BUG-358](../../bugs/BUG-358-OPEN.md). All are
+[BUG-359](../../bugs/BUG-359-FIXED.md)/[BUG-358](../../bugs/BUG-358-OPEN.md). All are
 engine-agnostic (shim / `lumen-core` / shell), which is exactly why the 19 green `URL` tests do not
 touch them: the suite pins Lumen's Phase-0 plumbing, not the spec. Worth recording the reason
 `url_resolve_relative_path` (`new URL('../other.html', base).pathname === '/other.html'`) is green

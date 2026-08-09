@@ -1,7 +1,7 @@
 # BUG-359 — cross-document navigation never resolves relative URLs: `window.open("support/x.html")` and `location.href = "support/x.html"` both fail with `missing scheme`
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/dom.rs:11540` `window.open`; `crates/js/src/dom.rs:7450-7475` `_lumen_navigate_or_fragment`), shell (`crates/shell/src/main.rs:600-614` `resolve_js_navigation`, `crates/shell/src/main.rs:12836-12852` — the `window.open` popup drain)
+**Статус:** FIXED 2026-08-09
+**Компонент:** js (`crates/js/src/dom.rs` `window.open`, `_lumen_navigate_or_fragment`), shell (`crates/shell/src/main.rs:600-614` `resolve_js_navigation`, `crates/shell/src/main.rs:12836-12852` — the `window.open` popup drain, unchanged)
 **Найден:** P2, WPT-VENDOR-encoding-detection (2026-07-27), `run_report.py --all --root encoding-detection --recursive`
 
 ## Симптом
@@ -117,3 +117,46 @@ navigation-side counterpart.
 
 Not fixed in this session — P2-wpt vendors and surveys, code fixes are P3's lane
 (`CLAUDE.md` developer assignments).
+
+## Фикс (P3, 2026-08-09)
+
+Both URL-resolution half-fixes from "Возможный фикс" applied, exactly as
+scoped — the popup/`postMessage` half (second barrier) is intentionally left
+alone, it's a separate, much larger feature (real second browsing context),
+not a defect.
+
+- `_lumen_navigate_or_fragment` (`dom.rs`, shared backend of `location.href =`
+  / `.assign()` / `.replace()`): the cross-document branch now passes
+  `resolved` (already computed via `new URL(url, _lumen_loc_href).href` a few
+  lines above, previously used only to decide same-document-vs-cross-document
+  and then discarded) to `_lumen_navigate` instead of the raw `url`, falling
+  back to the raw string when `resolved` is `null` (invalid URL — unchanged
+  behaviour, `_lumen_navigate` still receives something to report as an error
+  downstream).
+- `window.open` (`dom.rs`): resolves its `url` argument against
+  `_lumen_loc_href` the same way, before calling `_lumen_window_open` — so
+  both the queued popup request and the stub's `location.href` carry the
+  resolved absolute URL. Falls back to the raw string on a `new URL()` throw
+  (matches the `location` half's fallback).
+- `resolve_js_navigation` (`main.rs:600`) and the popup drain (`main.rs:13183`)
+  needed **no change** — both already assumed a pre-resolved absolute URL per
+  their own doc comment ("relative URLs already resolved to absolute by the
+  JS engine"); the bug was purely that the JS side never honoured that
+  invariant.
+
+5 new regression tests (`cargo test -p lumen-js --features v8-backend --lib`,
+2519/2519 green): `location_assign_resolves_relative_url`,
+`location_href_setter_resolves_relative_url`,
+`location_replace_resolves_relative_url`,
+`window_open_resolves_relative_url`,
+`window_open_stub_location_href_resolves_relative_url` — each asserts the
+queued `NavigateRequest`/`PopupRequest` carries the fully-resolved URL
+(`https://example.com/dir/page.html` + `support/x.html` →
+`https://example.com/dir/support/x.html`), reproducing the exact WPT idiom
+from the symptom. `cargo clippy -p lumen-js --features v8-backend --all-targets
+-- -D warnings` clean.
+
+Residual: the `-late.tentative.html` popup/`postMessage` round-trip tests
+still won't pass — that's the documented second barrier (no real second
+browsing context, `window.open` returns a stub with a no-op `postMessage`),
+tracked separately, not part of this bug's scope.
