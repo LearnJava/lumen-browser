@@ -2,7 +2,7 @@
 
 **Статус:** FIXED 2026-08-09
 **Компонент:** js (`crates/js/src/dom.rs:8915-9017` — `MessagePort`/`MessageChannel` in `WEB_API_SHIM`)
-**Найден:** while root-causing [BUG-702](BUG-702-OPEN.md) (tbank.ru `react.js`+`platform.js` infinite-loop hang)
+**Найден:** while root-causing [BUG-702](BUG-702-FIXED.md) (tbank.ru `react.js`+`platform.js` infinite-loop hang)
 
 ## Симптом
 
@@ -37,7 +37,7 @@ indistinguishable from a hard hang (100% CPU, `--dump-layout` never returns).
 A second, independent `MessageChannel`-based producer running concurrently
 (in the tbank.ru case: a core-js `Promise`-polyfill-detection routine's own
 `setImmediate` fallback, which also uses `MessageChannel`) is what keeps the
-combined microtask queue from ever quiescing on its own — see [BUG-702](BUG-702-OPEN.md)
+combined microtask queue from ever quiescing on its own — see [BUG-702](BUG-702-FIXED.md)
 for the full bisection trail that isolated this down to a 54 KB, fully offline
 reproduction (`react.js` + a reduced `platform.js` that does nothing but
 install the core-js Promise-polyfill-detection code, then require React's

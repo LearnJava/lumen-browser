@@ -76,11 +76,11 @@
  "generated": "2026-08-09",
  "counts": {
   "open": 318,
-  "fixed": 360,
+  "fixed": 361,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 678,
+ "total_bugs": 679,
  "phases": [
   {
    "id": "P0",
@@ -9460,10 +9460,10 @@
    "debtor": false
   },
   "BUG-702": {
-   "status": "open",
-   "title": "`https://www.tbank.ru/auth/login/` вешает JS-движок бесконечным циклом. Первопричина №1 — [BUG-706](bugs/BUG-706-FIXED.md) (`MessagePort` microtask vs task), ис…",
-   "component": "js (V8-движок; исправленный триггер №1 — `MessageChannel`/[BUG-706](bugs/BUG-706-FIXED.md); второй, ещё не исправленный триггер — строго локализован до webpack-модуля `41760` в `platform.js`, внутренности Tramvai-роутера T-Bank/Авито)",
-   "date": null,
+   "status": "fixed",
+   "title": "`https://www.tbank.ru/auth/login/` вешал JS-движок бесконечным циклом (100% CPU, стабильная память). Четыре раунда бисекции (Node+acorn ddmin по модулям/stateme…",
+   "component": "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`: `queueMicrotask`, конструктор `PromiseRejectionEvent`)",
+   "date": "2026-08-09",
    "debtor": false
   },
   "BUG-703": {
@@ -9526,6 +9526,13 @@
    "status": "open",
    "title": "`HIDManager`/`HIDDevice` are plain `class X extends EventTarget` with no constructor guard — `new HIDManager()`/`new HIDDevice(1,2,'x')` both construct successf…",
    "component": "js (`crates/js/src/webhid.rs` — `WEBHID_SHIM`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-714": {
+   "status": "open",
+   "title": "`unhandledrejection`/`rejectionhandled` не диспатчатся никогда: отклонённый без обработчика промис не вызывает ни `window.onunhandledrejection`, ни слушателя че…",
+   "component": "js (`crates/js/src/v8_runtime.rs` — уровень изолята)",
    "date": null,
    "debtor": false
   }
@@ -9718,9 +9725,6 @@
   "js (V8-движок, гидратация React)": [
    "BUG-703"
   ],
-  "js (V8-движок; исправленный триггер №1 — `MessageChannel`/[BUG-706](bugs/BUG-706-FIXED.md); второй, ещё не исправленный триггер — строго локализован до webpack-модуля `41760` в `platform.js`, внутренности Tramvai-роутера T-Bank/Авито)": [
-   "BUG-702"
-  ],
   "js (WEB_API_SHIM, dom.rs)": [
    "BUG-302",
    "BUG-305",
@@ -9891,6 +9895,9 @@
   "js (`crates/js/src/dom.rs` — `PerformanceObserver`/`_perf_entries` shim, ~line 8409-8460)": [
    "BUG-673"
   ],
+  "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`: `queueMicrotask`, конструктор `PromiseRejectionEvent`)": [
+   "BUG-702"
+  ],
   "js (`crates/js/src/dom.rs` — `Window`-шим)": [
    "BUG-529"
   ],
@@ -9969,6 +9976,9 @@
   ],
   "js (`crates/js/src/v8_runtime.rs::_lumen_create_element`/`_lumen_create_element_ns`, `v8_compat.rs::IntoJsReturn for u32`)": [
    "BUG-457"
+  ],
+  "js (`crates/js/src/v8_runtime.rs` — уровень изолята)": [
+   "BUG-714"
   ],
   "js (`crates/js/src/view_transitions.rs`)": [
    "BUG-545"
