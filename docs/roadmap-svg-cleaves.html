@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-09",
  "counts": {
-  "open": 320,
+  "open": 322,
   "fixed": 361,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 681,
+ "total_bugs": 683,
  "phases": [
   {
    "id": "P0",
@@ -4088,9 +4088,13 @@
       {
        "id": "WPT-VENDOR-webmessaging",
        "title": "WPT: вендорить + прогнать категорию `webmessaging`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root webmessaging --recursive`, ~11:30, 171 файл + 7 внекатегорийных зависимостей довендорены в этой же сессии — `common/get-host-info.sub.js`, `common/gc.js`, `common/utils.js`, `common/dispatcher/dispatcher.js`, `html/anonymous-iframe/resources/common.js`, `html/cross-origin-embedder-policy/credentialless/resources/common.js`, `service-workers/service-worker/resources/test-helpers.sub.js`, 136 отобранных id) — **77/136 harness OK, 82/206 сабтестов**. Большинство провалов — уже задокументированные TLS-гэп (BUG-657) и отсутствие browsing context у iframe/window.open (BUG-480/BUG-359). Найдены [BUG-717](bugs/BUG-717-OPEN.md) (`window.postMessage` не клонирует сообщение и не валидирует `targetOrigin`) и [BUG-718](bugs/BUG-718-OPEN.md) (`BroadcastChannel.postMessage` клонирует через `JSON.stringify` вместо `structuredClone`). Новые номера: BUG-717, BUG-718",
+       "bugs": [
+        "BUG-717",
+        "BUG-718"
+       ]
       },
       {
        "id": "WPT-VENDOR-webmidi",
@@ -9533,6 +9537,20 @@
    "status": "open",
    "title": "`unhandledrejection`/`rejectionhandled` не диспатчатся никогда: отклонённый без обработчика промис не вызывает ни `window.onunhandledrejection`, ни слушателя че…",
    "component": "js (`crates/js/src/v8_runtime.rs` — уровень изолята)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-717": {
+   "status": "open",
+   "title": "`window.postMessage` passes the message through by reference instead of structured-cloning it (`assert_not_equals(e.data[0], x)` fails — same object comes back)…",
+   "component": "js (`crates/js/src/dom.rs:8206-8224` — `window.postMessage`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-718": {
+   "status": "open",
+   "title": "`postMessage()` clones the payload via `JSON.stringify` instead of structured clone: calling with zero arguments doesn't throw (`message` is a required WebIDL a…",
+   "component": "js (`crates/js/src/broadcast_channel.rs:193-219` — `BroadcastChannel.prototype.postMessage`)",
    "date": null,
    "debtor": false
   }
