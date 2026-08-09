@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-09",
  "counts": {
-  "open": 313,
-  "fixed": 342,
+  "open": 312,
+  "fixed": 344,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 655,
+ "total_bugs": 656,
  "phases": [
   {
    "id": "P0",
@@ -3842,9 +3842,12 @@
       {
        "id": "WPT-VENDOR-trusted-types",
        "title": "WPT: вендорить + прогнать категорию `trusted-types`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root trusted-types --recursive`, ~24 мин, 339 файлов, 232 отобранных id) — **98/230 harness OK, 576/2465 сабтестов**. Заведён [BUG-689](bugs/BUG-689-OPEN.md): весь `Attr`/`NamedNodeMap`-подраздел DOM §4.9 отсутствует вовсе — `Element.attributes` не `NamedNodeMap`, `document.createAttribute()`/`createAttributeNS()` и `getAttributeNode(NS)`/`setAttributeNode(NS)` бросают `TypeError`; известный по формулировке BUG-309 («no Attr node objects») пробел, ранее нигде не заведённый отдельно — 447× `Cannot read properties of undefined (reading 'length')` + 324× `createAttributeNS is not a function` доминируют в сигнале прогона. Второстепенный сигнал — реконфирмация уже открытого [BUG-568](bugs/BUG-568-OPEN.md) (`document.write`/`.writeln` отсутствуют), TLS `UnknownIssuer` на `.https.`-файлах (тот же гэп, что `top-level-storage-access-api`). Один новый номер бага",
+       "bugs": [
+        "BUG-689"
+       ]
       },
       {
        "id": "WPT-VENDOR-ua-client-hints",
@@ -7002,10 +7005,10 @@
    "debtor": false
   },
   "BUG-351": {
-   "status": "open",
-   "title": "`outerHTML` и `insertAdjacentHTML` отсутствуют целиком на живом (не-DOMParser) `Element` — обе части DOM Parsing spec «Extensions to the Element interface». `in…",
+   "status": "fixed",
+   "title": "`outerHTML` и `insertAdjacentHTML` отсутствовали целиком на живом (не-DOMParser) `Element` — обе части DOM Parsing spec «Extensions to the Element interface». Ш…",
    "component": "js (`crates/js/src/dom.rs` — live-DOM `Element` object literal)",
-   "date": null,
+   "date": "2026-08-06",
    "debtor": false
   },
   "BUG-352": {
@@ -7121,10 +7124,10 @@
    "debtor": false
   },
   "BUG-368": {
-   "status": "open",
-   "title": "`innerHTML` на живом DOM — текстовая заглушка, обе половины помечены в коде как «Phase 0»: геттер возвращает `collect_text_content` (буквально `textContent`), с…",
-   "component": "js (`crates/js/src/v8_runtime.rs:1554-1574` — привязки на единственном движке V8; ранее существовал зеркальный rquickjs-путь на `dom.rs:878-899`, удалён целиком в S12b-F3; потребители — `dom.rs:5546-5547`, `4255-4256`, `4322-4323`, `6307`/`6313`)",
-   "date": null,
+   "status": "fixed",
+   "title": "`innerHTML` на живом DOM был текстовой заглушкой «Phase 0» — геттер возвращал `collect_text_content` (буквально `textContent`), сеттер вызывал `set_text_content…",
+   "component": "js (`crates/js/src/v8_runtime.rs:1554-1574` — привязки на единственном движке V8)",
+   "date": "2026-08-06",
    "debtor": false
   },
   "BUG-369": {
@@ -9336,6 +9339,13 @@
    "status": "open",
    "title": "`Touch`/`TouchList`/`TouchEvent` global constructors don't exist at all (`ReferenceError`), and `GlobalEventHandlers` has no `ontouchstart`/`ontouchmove`/`ontou…",
    "component": "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`; analogous constructors at `dom.rs:437` `UIEvent`, `dom.rs:445` `MouseEvent`, `dom.rs:536-554` `PointerEvent`, no equivalent for Touch)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-689": {
+   "status": "open",
+   "title": "The whole `Attr`/`NamedNodeMap` half of DOM §4.9 is missing: `Element.attributes` is `undefined` (not a `NamedNodeMap`), `document.createAttribute()`/`createAtt…",
+   "component": "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`, `_lumen_build_element` `dom.rs:2607-2707`, `createElement`/`createElementNS` `dom.rs:4310-4341`)",
    "date": null,
    "debtor": false
   }
