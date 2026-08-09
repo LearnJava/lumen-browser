@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-09",
  "counts": {
-  "open": 322,
-  "fixed": 373,
+  "open": 323,
+  "fixed": 375,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 695,
+ "total_bugs": 698,
  "phases": [
   {
    "id": "P0",
@@ -9628,10 +9628,10 @@
    "debtor": false
   },
   "BUG-725": {
-   "status": "open",
+   "status": "fixed",
    "title": "`https://www.tbank.ru/` после закрытия [BUG-703](bugs/BUG-703-FIXED.md) строит правильный DOM (2382 элемента против 2380 в эталонном headless Edge) и рисует тек…",
-   "component": "layout (`crates/engine/layout/src/box_tree.rs`, inline formatting)",
-   "date": null,
+   "component": "layout (разобран на подбаги)",
+   "date": "2026-08-09",
    "debtor": false
   },
   "BUG-726": {
@@ -9667,6 +9667,27 @@
    "title": "Любая картинка, попавшая в DOM после завершения загрузки, не запрашивалась вообще — ни запроса, ни декода, пейнт вечно рисовал серый плейсхолдер. Затронуты все…",
    "component": "shell (`crates/shell/src/main.rs` — `spawn_stream_image_loads` / `apply_relayout_result`)",
    "date": "2026-08-09",
+   "debtor": false
+  },
+  "BUG-731": {
+   "status": "fixed",
+   "title": "`font-size` считает только pre-pass `apply_font_size` (он идёт до main-pass, потому что `em`/`%` остальных свойств меряются от готового размера) — и делал это в…",
+   "component": "layout (`crates/engine/layout/src/style.rs` — `apply_font_size`, `parse_font_shorthand`, `is_font_size_token`, `apply_declaration`)",
+   "date": "2026-08-09",
+   "debtor": false
+  },
+  "BUG-732": {
+   "status": "open",
+   "title": "Шесть базовых DOM/CSSOM-точек отсутствуют, воспроизводится на тривиальной локальной странице: `Node.contains`, `Node.compareDocumentPosition`, `Element.attribut…",
+   "component": "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-733": {
+   "status": "open",
+   "title": "Остаток расхождения `https://www.tbank.ru/` с эталонным headless Edge после закрытия [BUG-725](bugs/BUG-725-FIXED.md) и всех выделенных из неё дефектов. Заявка…",
+   "component": "не изолирован (layout / paint / js)",
+   "date": null,
    "debtor": false
   }
  },
@@ -10025,6 +10046,9 @@
   "js (`crates/js/src/dom.rs` — `PerformanceObserver`/`_perf_entries` shim, ~line 8409-8460)": [
    "BUG-673"
   ],
+  "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`)": [
+   "BUG-732"
+  ],
   "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`), shell (`crates/shell/src/main.rs` — парсерный путь)": [
    "BUG-486"
   ],
@@ -10294,9 +10318,6 @@
   "layout (`crates/engine/layout/src/box_tree.rs` — `collect_inline_segments` / `InlineSegment`)": [
    "BUG-728"
   ],
-  "layout (`crates/engine/layout/src/box_tree.rs`, inline formatting)": [
-   "BUG-725"
-  ],
   "layout (`crates/engine/layout/src/incremental.rs::graft_geometry_with_cascade` + `lay_out`'s O(1) translate fast path для `DirtyBits::CLEAN`)": [
    "BUG-355"
   ],
@@ -10311,6 +10332,9 @@
   ],
   "layout (`crates/engine/layout/src/style.rs::restyle_root_set_for_node_change`)": [
    "BUG-349"
+  ],
+  "layout (`crates/engine/layout/src/style.rs` — `apply_font_size`, `parse_font_shorthand`, `is_font_size_token`, `apply_declaration`)": [
+   "BUG-731"
   ],
   "layout (`crates/engine/layout/src/style.rs` — `expand_border_4`)": [
    "BUG-724"
@@ -10341,6 +10365,9 @@
   ],
   "layout (процентная резолюция против containing block)": [
    "BUG-468"
+  ],
+  "layout (разобран на подбаги)": [
+   "BUG-725"
   ],
   "layout / css-parser (`@color-profile`, `color()`)": [
    "BUG-282"
@@ -10685,6 +10712,9 @@
   ],
   "wptrunner-интеграция (`browsers/lumen.py` `env_options`)": [
    "BUG-301"
+  ],
+  "не изолирован (layout / paint / js)": [
+   "BUG-733"
   ],
   "неясно — вероятно порядок загрузки скриптов в шелле или тайминг, специфичный для wptrunner/BiDi-навигации": [
    "BUG-506"
