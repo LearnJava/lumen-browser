@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-09",
  "counts": {
-  "open": 310,
-  "fixed": 357,
+  "open": 313,
+  "fixed": 359,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 667,
+ "total_bugs": 672,
  "phases": [
   {
    "id": "P0",
@@ -3962,23 +3962,16 @@
       {
        "id": "WPT-VENDOR-web-animations",
        "title": "WPT: вендорить + прогнать категорию `web-animations`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root web-animations --recursive`, ~4 мин, 236 файлов, 139 отобранных id) — **121/139 harness OK, 930/4147 сабтестов** (необычно высокая доля для этого бэклога). Первый прогон (128/139, 723/3625) шёл на устаревшем shared-бинарнике root-worktree и выглядел как регресс BUG-346 (`../../testcommon.js` не схлопывался) — юнит-тест подтвердил, что исходники уже чинят это корректно, пересборка в слоте вернула правильные цифры; см. bugs/BUG-346-FIXED.md. Реконфирмация открытого BUG-670 (`getComputedTiming` отсутствует, крупнейший драйвер, ~556 вхождений). Новый номер бага: BUG-704 (`Animation.prototype.commitStyles`/`.persist` отсутствуют целиком, 62 сайта)"
       },
       {
        "id": "WPT-VENDOR-web-based-payment-handler",
        "title": "WPT: вендорить + прогнать категорию `web-based-payment-handler`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). Payment Request API"
-      },
-      {
-       "id": "WPT-VENDOR-web-bundle",
-       "title": "WPT: вендорить + прогнать категорию `web-bundle`",
-       "status": "planned",
-       "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: 🚫 (вне скоупа). Payment Handler API (service-worker-based payment app registration — distinct from Payment Request API). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root web-based-payment-handler --recursive`, ~3 мин 15 с, 8 отобранных id из 10 вендоренных файлов — 6 `-manual` исключены отбором) — **0/8 harness OK**. Все 8 TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`. Живая проба (`--mcp-live-port`) объекта, на котором держится вся категория — `ServiceWorkerRegistration` — подтвердила: глобал `undefined` на реальной странице, переподтверждение уже открытого [BUG-657](bugs/BUG-657-OPEN.md); `PaymentRequestEvent`/`CanMakePaymentEvent`/`PaymentManager` отсутствуют целиком, ожидаемо для 🚫-скоупа, не баг. Новый номер бага не заводился"
       },
       {
        "id": "WPT-VENDOR-web-extensions",
@@ -7122,10 +7115,10 @@
    "debtor": false
   },
   "BUG-366": {
-   "status": "open",
-   "title": "`navigator.credentials` нарушает WebIDL по пяти пунктам сразу. (1) Методы `create`/`get`/`preventSilentAccess`/`store` присвоены самому инстансу (`credentials.r…",
-   "component": "js (`crates/js/src/credentials.rs:358-418` — тело шима `CredentialsContainer`; `crates/js/src/digital_credentials.rs:42-44` — утечка `_get_original`; установка — `crates/js/src/v8_runtime.rs:3881`/`3886`, `crates/js/src/lib.rs:1053`)",
-   "date": null,
+   "status": "fixed",
+   "title": "`navigator.credentials` нарушал WebIDL по пяти пунктам сразу — все пять исправлены. (1) `create`/`get`/`preventSilentAccess`/`store` перенесены на `CredentialsC…",
+   "component": "js (`crates/js/src/credentials.rs` — тело шима `CredentialsContainer`; `crates/js/src/digital_credentials.rs` — обёртка `get`; установка — `crates/js/src/v8_runtime.rs:4596`/`4601`)",
+   "date": "2026-08-09",
    "debtor": false
   },
   "BUG-367": {
@@ -9437,6 +9430,41 @@
    "component": "js (`crates/js/src/wasm/parser.rs:547-599` — `parse_element_section`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-701": {
+   "status": "fixed",
+   "title": "`document.write()`/`document.writeln()` отсутствовали целиком (`TypeError: document.write is not a function`) — найдено на живой странице `https://www.tbank.ru/…",
+   "component": "js (`crates/js/src/dom.rs` — `document` в `WEB_API_SHIM`)",
+   "date": "2026-08-09",
+   "debtor": false
+  },
+  "BUG-702": {
+   "status": "open",
+   "title": "`https://www.tbank.ru/auth/login/` вешает JS-движок бесконечным циклом (100% CPU, `--dump-layout` не завершается, `timeout 120` → exit 124) — бисекцией изолиров…",
+   "component": "js (V8-движок, синхронное исполнение classic-скриптов в `run_scripts_with_dom`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-703": {
+   "status": "open",
+   "title": "`https://www.tbank.ru/` не завершает гидратацию React — после полной загрузки (readyState complete, все 43 скрипта выполнились без ошибок, консоль пуста) DOM ос…",
+   "component": "js (V8-движок, гидратация React)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-704": {
+   "status": "open",
+   "title": "`Animation.prototype.commitStyles`/`.persist` missing entirely (`grep` — zero hits) — second-largest failure cluster of the `web-animations` run after [BUG-670]…",
+   "component": "js (`crates/js/src/dom.rs:12954-13070` — Web Animations `WEB_API_SHIM`, `Animation.prototype`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-705": {
+   "status": "open",
+   "title": "`document.scripts`/`.images`/`.forms`/`.links`/`.anchors`/`.embeds`/`.plugins` all `undefined` (`document.scripts.length` throws `TypeError`) — these are live,…",
+   "component": "js (`crates/js/src/dom.rs` — `Document` object literal, none of these seven accessors exist)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -9624,6 +9652,12 @@
   "js (V8 ESM, `crates/js/src/v8_esm.rs` + `crates/shell/src/main.rs`)": [
    "BUG-459"
   ],
+  "js (V8-движок, гидратация React)": [
+   "BUG-703"
+  ],
+  "js (V8-движок, синхронное исполнение classic-скриптов в `run_scripts_with_dom`)": [
+   "BUG-702"
+  ],
   "js (WEB_API_SHIM, dom.rs)": [
    "BUG-302",
    "BUG-305",
@@ -9673,6 +9707,9 @@
   ],
   "js (`crates/js/src/dom.rs:12772` — `window.getComputedStyle`)": [
    "BUG-539"
+  ],
+  "js (`crates/js/src/dom.rs:12954-13070` — Web Animations `WEB_API_SHIM`, `Animation.prototype`)": [
+   "BUG-704"
   ],
   "js (`crates/js/src/dom.rs:14124-14128` `HTMLOptionsCollection.prototype`)": [
    "BUG-576"
@@ -9779,6 +9816,9 @@
   "js (`crates/js/src/dom.rs` -- only `tagName`/`nodeName` reflected, no `localName`)": [
    "BUG-575"
   ],
+  "js (`crates/js/src/dom.rs` — `Document` object literal, none of these seven accessors exist)": [
+   "BUG-705"
+  ],
   "js (`crates/js/src/dom.rs` — `PerformanceObserver`/`_perf_entries` shim, ~line 8409-8460)": [
    "BUG-673"
   ],
@@ -9799,6 +9839,9 @@
   ],
   "js (`crates/js/src/dom.rs` — `document.scrollingElement` нигде не определён)": [
    "BUG-525"
+  ],
+  "js (`crates/js/src/dom.rs` — `document` в `WEB_API_SHIM`)": [
+   "BUG-701"
   ],
   "js (`crates/js/src/dom.rs` — live-DOM `Element` object literal)": [
    "BUG-351"
