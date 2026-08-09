@@ -3976,9 +3976,9 @@
       {
        "id": "WPT-VENDOR-web-extensions",
        "title": "WPT: вендорить + прогнать категорию `web-extensions`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). модель расширений — отдельная архитектура"
+       "note": "Скоуп: 🚫 (вне скоупа). модель расширений — отдельная архитектура. DONE 2026-08-09: вендорена целиком (`--all --root web-extensions --recursive`, 13 upstream-файлов) — **0 отобранных id** («no tests selected»), весь корпус — тип `.extension.js` (WebExtension-загрузка), который `run_report.py`'s селектор не распознаёт и который Lumen не умеет исполнять вовсе (нет `--load-extension`). Живая проба (`--mcp-live-port`) подтвердила: `typeof browser`/`typeof chrome` === `undefined`, ни одного `browser`/`extension`/`webext`-подобного ключа на `window` — ожидаемо, не баг. Новый номер бага не заводился"
       },
       {
        "id": "WPT-VENDOR-web-install",
