@@ -78,7 +78,7 @@ executed at all, in a page that has already finished its initial parse".
 
 ## Блокирует BUG-703 (P3, 2026-08-09)
 
-Диагностика [BUG-703](BUG-703-OPEN.md) (`https://www.tbank.ru/` не рендерит
+Диагностика [BUG-703](BUG-703-FIXED.md) (`https://www.tbank.ru/` не рендерит
 React) упёрлась ровно в этот дефект: webpack-загрузчик чанков
 (`a.l` в `platform.<hash>.js`) создаёт `<script>`, вешает `onload`/`onerror`,
 кладёт его в `document.head` и ставит сторожевой `setTimeout(..., 24e4)`.

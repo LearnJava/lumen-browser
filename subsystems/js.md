@@ -155,6 +155,23 @@ the time — read dates.
   cascade" — the same approximation the `<script>` path already makes. Deliberately narrow:
   `rel=stylesheet` only (giving `preload`/`prefetch` an event would mean fetching resources the
   page never asked for) and `createElement`-minted links only, exactly like scripts.
+- **`document.currentScript` ([P3], 2026-08-09, closes
+  [BUG-486](../bugs/BUG-486-FIXED.md), last blocker of
+  [BUG-703](../bugs/BUG-703-FIXED.md)).** Missing from the engine outright until now. It is a
+  **stack** (`_lumen_current_script_stack`), not a single slot: a classic script may
+  synchronously insert and run another one, and the outer script has to see itself again once
+  the inner one returns. Push/pop brackets the body on both execution paths — the dynamic one
+  in `_lumen_script_execute_classic(text, nid)` and the parser one in the shell, where
+  `ScriptSource` now carries the `<script>`'s `NodeId` all the way through
+  `resolve_script_sources` into `run_scripts_with_dom` (which brackets each classic `eval`,
+  error branches included, or one throwing script would leave a stale value behind for every
+  script after it). Modules, event handlers and any asynchronous callback read `null` for
+  free — the stack is empty by the time a task or microtask runs, which is exactly the spec's
+  rule. **Non-obvious:** the property must also exist on detached documents (always `null`)
+  — feature detection that reads `undefined` there takes a different branch. **Why it
+  matters beyond WPT:** self-locating bundles key themselves off it; tbank.ru's 44 micro-block
+  bundles all registered under the key `undefined` (`currentScript.dataset.mmid`), overwriting
+  each other, so the app found none of its 81 blocks and rendered a blank page.
 
 - **Document Picture-in-Picture reaches a real OS window ([P1] P3-pip, 2026-07-17).**
   `documentPictureInPicture.requestWindow({width,height})` (`document_pip.rs`) called

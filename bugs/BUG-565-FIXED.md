@@ -52,7 +52,7 @@ skips its setup step, so the failure is not scoped to `document-metadata` —
 entire WPT corpus (test setup routinely injects `<link>`/`<meta>`/`<style>`
 via it) and any category touching page metadata will hit the same throw.
 
-## Исправлено (P3, 2026-08-09, в ходе разбора [BUG-703](BUG-703-OPEN.md))
+## Исправлено (P3, 2026-08-09, в ходе разбора [BUG-703](BUG-703-FIXED.md))
 
 Добавлены нативный `_lumen_get_head` (сосед `_lumen_get_body`, тот же обход
 дерева — первый `<head>` в порядке документа) и геттер `document.head` в

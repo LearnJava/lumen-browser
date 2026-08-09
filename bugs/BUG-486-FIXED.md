@@ -1,8 +1,9 @@
 # BUG-486: `document.currentScript` is entirely missing
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-09 (P3, при разборе [BUG-703](BUG-703-FIXED.md))
 **Дата:** 2026-08-02
-**Компонент:** js (`crates/js/src/dom.rs` — live `document` object literal)
+**Компонент:** js (`crates/js/src/dom.rs` — live `document` object literal),
+shell (`crates/shell/src/main.rs` — парсерный путь исполнения скриптов)
 **Найден:** WPT-RUN-3 срез 6 (`ROADMAP.md`) — массовый прогон `css/css-cascade`
 
 ## Механизм
@@ -72,7 +73,43 @@ run completes; `null` for the async/deferred/module cases per HTML LS
 `v8_runtime.rs` V8 path) need the tracking hook wherever they currently
 invoke a `<script>`'s source text.
 
+## Фикс (2026-08-09)
+
+Стек, а не одиночный слот: классический скрипт может синхронно вставить и
+выполнить другой, и внешний обязан снова увидеть себя, когда вложенный вернёт
+управление.
+
+- `crates/js/src/dom.rs` — `_lumen_current_script_stack` +
+  `_lumen_push_current_script`/`_lumen_pop_current_script`; пуш/поп обрамляют
+  тело в `_lumen_script_execute_classic(text, nid)` (динамический путь: и
+  inline, и внешний `<script src>`), геттер `document.currentScript` отдаёт
+  вершину стека либо `null`. У detached-документа
+  (`_lumen_build_detached_document`) свойство есть и всегда `null` — иначе
+  фича-детект читает `undefined`.
+- `crates/shell/src/main.rs` — парсерный путь: `ScriptSource::Inline`/`External`
+  теперь несут `NodeId` своего `<script>`, `resolve_script_sources` протаскивает
+  его до `run_scripts_with_dom`, который обрамляет каждый классический `eval`
+  парой push/pop (включая ветки ошибок — иначе один упавший скрипт оставил бы
+  протухшее значение всем следующим).
+- Модули, обработчики событий и любые асинхронные колбэки читают `null`: стек к
+  моменту задачи/микрозадачи уже пуст — ровно то, что требует спека.
+
+Тесты (`cargo test -p lumen-js --features v8-backend current_script`, 4/4):
+элемент виден изнутри себя вместе с `dataset`; `null` снаружи и свойство
+существует; вложенный скрипт восстанавливает внешний; бросивший скрипт не
+оставляет протухшего значения. Плюс
+`resolve_script_sources_passes_inline_through` в shell проверяет, что каждое
+тело несёт id своего элемента.
+
+Проверка на живой странице (`tbank.ru`): микроблоки перестали регистрироваться
+под ключом `undefined`, DOM 299 → 2382 элемента — подробности в
+[BUG-703](BUG-703-FIXED.md).
+
 ## .ini
 
 Committed `.ini` under `tests/wpt/metadata/css/css-cascade/` for the 3
-attributed files, `expected: FAIL` per the actual run.
+attributed files, `expected: FAIL` per the actual run. **Не пересматривались
+этим фиксом намеренно:** за `currentScript` в тех же трёх файлах немедленно
+встаёт [BUG-384](BUG-384-OPEN.md) (named access on Window), так что зелёными
+они не станут; актуализировать метаданные должен прогон категории (P2), а не
+догадка.

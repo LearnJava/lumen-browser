@@ -22436,6 +22436,14 @@ fn apply_border_side_shorthand(
 fn expand_border_4(val: &str) -> [&str; 4] {
     let parts: Vec<&str> = val.split_whitespace().collect();
     match parts.len() {
+        // Пустое (или состоящее из одних пробелов) значение — невалидное
+        // объявление вида `border-radius: ;`. React-приложения пишут такие
+        // пустышки в inline-стиль пачками (`style="height: ; color: ;"`) для
+        // «неустановленных» пропсов, поэтому это не экзотика: до BUG-724 ветка
+        // `_` индексировала пустой `parts` и роняла поток `lumen-engine`
+        // целиком. Четыре пустых токена ниже не парсятся ни одним из
+        // потребителей — объявление игнорируется, как и требует CSS.
+        0 => [val; 4],
         1 => [parts[0], parts[0], parts[0], parts[0]],
         2 => [parts[0], parts[1], parts[0], parts[1]],
         3 => [parts[0], parts[1], parts[2], parts[1]],
@@ -33602,6 +33610,25 @@ mod tests {
         let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.offset_anchor, None);
+    }
+
+    /// BUG-724: пустое значение 1-4-токенного шорткода не должно ронять поток
+    /// вёрстки. React-приложения пишут `style="border-radius: ; height: ;"` для
+    /// неустановленных пропсов, и до фикса первый такой узел валил
+    /// `lumen-engine` паникой `index out of bounds` в `expand_border_4`.
+    #[test]
+    fn empty_border_shorthand_is_ignored_not_panic() {
+        let doc = lumen_html_parser::parse(
+            "<div style=\"border-radius: ; border-width: ; border-color: ;\"></div>",
+        );
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(s.border_top_left_radius, Length::Px(0.0));
+        assert_eq!(s.border_top_width, 0.0);
+        assert_eq!(expand_border_4(""), ["", "", "", ""]);
+        assert_eq!(expand_border_4("   "), ["   ", "   ", "   ", "   "]);
     }
 
     // --- border-radius elliptical (CSS Backgrounds L3 §5.5) ---
