@@ -3249,6 +3249,19 @@ pub struct ComputedStyle {
     pub color_space: ColorSpace,
     pub background_color: Option<CssColor>,
     pub font_size: f32,
+    /// CSS Viewport L1 §5 — the element's *effective* `zoom`: its own declared
+    /// `zoom` multiplied by every ancestor's, since `zoom` compounds down the
+    /// tree. Initial (and the value for a page that never declares `zoom`):
+    /// `1.0`, which makes every scaling site below a no-op.
+    ///
+    /// Unlike `transform: scale()`, `zoom` affects *layout*: it multiplies the
+    /// computed value of the element's absolute lengths and font-size, so the
+    /// box genuinely occupies less space rather than merely being painted
+    /// smaller. Applied by [`apply_zoom_to_lengths`] after the main cascade
+    /// pass; relative units need no separate handling because they resolve
+    /// against bases (`font_size`, the containing block) that are themselves
+    /// already zoomed.
+    pub effective_zoom: f32,
     pub line_height: f32,
     /// CSS2 §10.8.1 / CSS Fonts L5 §4 — whether `line-height` was specified as a
     /// relative value (`normal` or a unitless `<number>`) that scales with the
@@ -6686,6 +6699,8 @@ impl ComputedStyle {
             color_space: ColorSpace::Srgb,
             background_color: None,
             font_size: 16.0,
+            // No ancestor and no declaration yet — `zoom` starts neutral.
+            effective_zoom: 1.0,
             line_height: 1.2,
             line_height_is_relative: true,
             line_height_step: 0.0,
@@ -7005,6 +7020,112 @@ fn note_compute_style() {
 /// Computes the `ComputedStyle` for `node` by running the CSS cascade.
 ///
 /// `dark_mode` is forwarded to `@media (prefers-color-scheme: dark)` matching.
+/// CSS Viewport L1 §5 — parse the specified value of `zoom`.
+///
+/// Accepted: a non-negative `<number>` (`0.8`, `.8`, `1`), a `<percentage>`
+/// (`80%`), and the keywords `normal` / `reset`, both of which mean "no scaling
+/// of my own" and so yield `1.0`. (`reset`'s real WebKit semantics — ignore the
+/// ancestors' zoom rather than merely contributing 1.0 — are not modelled;
+/// nothing in the wild depends on it and it would need a separate flag.)
+///
+/// Returns `None` when the value does not parse, in which case the caller must
+/// leave the previous value alone — an invalid declaration is ignored, per
+/// CSS Syntax, not treated as `1.0`.
+fn parse_zoom(value: &str) -> Option<f32> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("normal") || v.eq_ignore_ascii_case("reset") {
+        return Some(1.0);
+    }
+    let factor = if let Some(pct) = v.strip_suffix('%') {
+        pct.trim().parse::<f32>().ok()? / 100.0
+    } else {
+        v.parse::<f32>().ok()?
+    };
+    // A negative or non-finite zoom is invalid; a zero one would collapse the
+    // subtree to nothing, which no page means and which would divide by zero
+    // when un-zooming. Both are rejected so the declaration is simply dropped.
+    if !factor.is_finite() || factor <= 0.0 {
+        return None;
+    }
+    Some(factor)
+}
+
+/// Scale one already-computed absolute length by `z`. Only `Px` is touched:
+/// every other unit resolves later against a basis (`font_size`, the containing
+/// block, the viewport) that is itself already zoomed, so scaling here too
+/// would apply the factor twice.
+fn zoom_length(len: &mut Length, z: f32) {
+    if let Length::Px(v) = len {
+        *v *= z;
+    }
+}
+
+/// Same for a `<length> | auto` field — `auto` carries no length to scale.
+fn zoom_length_or_auto(len: &mut LengthOrAuto, z: f32) {
+    if let LengthOrAuto::Length(l) = len {
+        zoom_length(l, z);
+    }
+}
+
+/// CSS Viewport L1 §5 — fold the element's effective `zoom` into its computed
+/// box-model lengths.
+///
+/// Runs after the main cascade pass, so it sees the winning declarations. Every
+/// property scaled here is **non-inherited**, which is what makes a blanket
+/// multiply correct: the value is either specified on this element (and so has
+/// not been scaled by anyone) or is the initial `0`/`auto`/`none` (where
+/// scaling is a no-op). Inherited length properties are deliberately absent —
+/// they arrive already carrying the ancestors' zoom, so touching them would
+/// double-apply it.
+///
+/// `font_size` is handled by the caller rather than here, because it is the one
+/// value whose correct factor depends on whether the element specified it (see
+/// the call site).
+fn apply_zoom_to_lengths(style: &mut ComputedStyle, z: f32) {
+    if (z - 1.0).abs() < f32::EPSILON {
+        return;
+    }
+    for len in [
+        &mut style.width,
+        &mut style.height,
+        &mut style.min_width,
+        &mut style.max_width,
+        &mut style.min_height,
+        &mut style.max_height,
+    ] {
+        if let Some(l) = len.as_mut() {
+            zoom_length(l, z);
+        }
+    }
+    for len in [
+        &mut style.margin_top,
+        &mut style.margin_right,
+        &mut style.margin_bottom,
+        &mut style.margin_left,
+        &mut style.top,
+        &mut style.right,
+        &mut style.bottom,
+        &mut style.left,
+    ] {
+        zoom_length_or_auto(len, z);
+    }
+    for len in [
+        &mut style.padding_top,
+        &mut style.padding_right,
+        &mut style.padding_bottom,
+        &mut style.padding_left,
+        &mut style.row_gap,
+        &mut style.column_gap,
+    ] {
+        zoom_length(len, z);
+    }
+    // Border widths are already resolved to px by the cascade.
+    style.border_top_width *= z;
+    style.border_right_width *= z;
+    style.border_bottom_width *= z;
+    style.border_left_width *= z;
+}
+
 pub fn compute_style(
     doc: &Document,
     node: NodeId,
@@ -7030,6 +7151,9 @@ pub fn compute_style(
         // `unicode-bidi` не наследуется (CSS Writing Modes L4 §2.2).
         unicode_bidi: UnicodeBidi::Normal,
         font_size: inherited.font_size,
+        // Seeded from the parent so the value compounds; the element's own
+        // `zoom` declaration is folded in by the pre-pass below.
+        effective_zoom: inherited.effective_zoom,
         line_height: inherited.line_height,
         line_height_is_relative: inherited.line_height_is_relative,
         line_height_step: inherited.line_height_step,
@@ -7964,11 +8088,34 @@ pub fn compute_style(
     // Pre-pass: применяем font-size раньше, потому что em/% других свойств
     // считаются относительно computed font-size этого же элемента, а em для
     // самого font-size — относительно inherited (родительского) font-size.
+    // Pre-pass: `zoom` (CSS Viewport L1 §5) must be known before font-size and
+    // before any other length is resolved, because it multiplies all of them.
+    // `matched` is cascade-sorted, so the last parseable declaration wins.
+    let mut own_zoom = 1.0f32;
+    for (_, _, _, _, _, _, decl) in &matched {
+        if decl.property.eq_ignore_ascii_case("zoom")
+            && let Some(z) = parse_zoom(&decl.value)
+        {
+            own_zoom = z;
+        }
+    }
+    style.effective_zoom = inherited.effective_zoom * own_zoom;
+
     let parent_fs = inherited.font_size;
     let is_quirks = doc.mode() == DocumentMode::Quirks;
+    let mut has_own_font_size = false;
     for (_, _, _, _, _, _, decl) in &matched {
+        if decl.property.eq_ignore_ascii_case("font-size") {
+            has_own_font_size = true;
+        }
         apply_font_size(&mut style, decl, parent_fs, ua_baseline_font_size, viewport, is_quirks);
     }
+
+    // A font-size specified *here* has not been zoomed by anyone, so it takes
+    // the full compounded factor. One merely inherited already carries every
+    // ancestor's zoom and needs only this element's own contribution — applying
+    // `effective_zoom` to it would re-apply the ancestors'.
+    style.font_size *= if has_own_font_size { style.effective_zoom } else { own_zoom };
 
     // Pre-pass: применяем color-scheme раньше main-pass, чтобы системные
     // цвета (Canvas, ButtonFace, …) резолвились против правильной темы
@@ -8110,6 +8257,12 @@ pub fn compute_style(
     };
 
     apply_webkit_scrollbar_pseudos(doc, node, sheet, &mut style, viewport, dark_mode);
+
+    // Last, so every earlier pass has already written its box-model lengths and
+    // each is scaled exactly once. `font_size` was handled next to the cascade's
+    // font-size pre-pass and is deliberately not re-scaled here.
+    let z = style.effective_zoom;
+    apply_zoom_to_lengths(&mut style, z);
 
     style
 }
