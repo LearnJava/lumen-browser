@@ -5619,9 +5619,14 @@ var customElements = {
 // _LUMEN_PAGE_URL injected by Rust before this shim runs.
 function _lumen_parse_url(url) {
     var href = String(url || '');
-    var protocol = '', hostname = '', host = '', port = '', pathname = '/', search = '', hash = '', origin = '';
+    var protocol = '', username = '', password = '';
+    var hostname = '', host = '', port = '', pathname = '/', search = '', hash = '', origin = '';
     var sIdx = href.indexOf('://');
-    if (sIdx >= 0) {
+    // `hasAuthority` is what tells an authority-bearing URL (`https://h/p`) from
+    // an opaque-path one (`mailto:a@b`) when the components are serialized back
+    // into an href — the host being empty is not a reliable substitute.
+    var hasAuthority = sIdx >= 0;
+    if (hasAuthority) {
         protocol = href.slice(0, sIdx + 1);
         var rest = href.slice(sIdx + 3);
         var splitAt = rest.length;
@@ -5630,8 +5635,16 @@ function _lumen_parse_url(url) {
         }
         var authority = rest.slice(0, splitAt);
         rest = rest.slice(splitAt);
-        var atIdx = authority.indexOf('@');
-        if (atIdx >= 0) authority = authority.slice(atIdx + 1);
+        // URL Standard §4.4: the *last* '@' ends the userinfo, since '@' itself
+        // is legal (percent-encoded aside) inside a username or password.
+        var atIdx = authority.lastIndexOf('@');
+        if (atIdx >= 0) {
+            var creds = authority.slice(0, atIdx);
+            authority = authority.slice(atIdx + 1);
+            var credColon = creds.indexOf(':');
+            username = credColon >= 0 ? creds.slice(0, credColon) : creds;
+            password = credColon >= 0 ? creds.slice(credColon + 1) : '';
+        }
         var portColon = authority.lastIndexOf(':');
         if (portColon > authority.lastIndexOf(']')) {
             hostname = authority.slice(0, portColon); port = authority.slice(portColon + 1);
@@ -5652,8 +5665,10 @@ function _lumen_parse_url(url) {
             pathname = href.slice(cIdx + 1);
         }
     }
-    return { href: href, protocol: protocol, hostname: hostname, host: host, port: port,
-             pathname: pathname, search: search, hash: hash, origin: origin };
+    return { href: href, protocol: protocol, username: username, password: password,
+             hostname: hostname, host: host, port: port,
+             pathname: pathname, search: search, hash: hash, origin: origin,
+             hasAuthority: hasAuthority };
 }
 var _lumen_loc_parts = _lumen_parse_url(typeof _LUMEN_PAGE_URL !== 'undefined' ? _LUMEN_PAGE_URL : '');
 var _lumen_loc_href  = _lumen_loc_parts.href;
@@ -9588,20 +9603,15 @@ var queueMicrotask = (function() {
 
 // ── URLSearchParams (WHATWG URL §5) ──────────────────────────────────────────
 function URLSearchParams(init) {
-    this._p = [];
+    // `_p` (the pair list) and `_url` (the URL this object is the `searchParams`
+    // of, or null) are implementation slots, not web-visible properties — a
+    // plain assignment would make them enumerable own properties and leak into
+    // any `for…in` / `Object.keys` the page runs over the object (BUG-375 §5).
+    Object.defineProperty(this, '_p',   { value: [],   writable: true, enumerable: false, configurable: true });
+    Object.defineProperty(this, '_url', { value: null, writable: true, enumerable: false, configurable: true });
     if (init === undefined || init === null) return;
     if (typeof init === 'string') {
-        var s = (init.length > 0 && init[0] === '?') ? init.slice(1) : init;
-        if (!s) return;
-        var pairs = s.split('&');
-        for (var i = 0; i < pairs.length; i++) {
-            var pair = pairs[i];
-            if (!pair) continue;
-            var eq = pair.indexOf('=');
-            var k = eq >= 0 ? pair.slice(0, eq) : pair;
-            var v = eq >= 0 ? pair.slice(eq + 1) : '';
-            this._p.push([_usp_decode(k), _usp_decode(v)]);
-        }
+        this._p = _usp_parse(init);
     } else if (Array.isArray(init)) {
         for (var i = 0; i < init.length; i++) {
             var entry = init[i];
@@ -9616,6 +9626,34 @@ function URLSearchParams(init) {
         }
     }
 }
+// Application/x-www-form-urlencoded parse (WHATWG URL §5.1), shared by the
+// `URLSearchParams` constructor and by the URL -> searchParams resync that
+// follows every mutation of a URL's query component.
+function _usp_parse(init) {
+    var s = String(init);
+    if (s.length > 0 && s[0] === '?') s = s.slice(1);
+    var out = [];
+    if (!s) return out;
+    var pairs = s.split('&');
+    for (var i = 0; i < pairs.length; i++) {
+        var pair = pairs[i];
+        if (!pair) continue;
+        var eq = pair.indexOf('=');
+        var k = eq >= 0 ? pair.slice(0, eq) : pair;
+        var v = eq >= 0 ? pair.slice(eq + 1) : '';
+        out.push([_usp_decode(k), _usp_decode(v)]);
+    }
+    return out;
+}
+// Push a mutated pair list back into the owning URL (WHATWG URL §5.2 `update`
+// steps). Without this the object returned by `url.searchParams` and `url.href`
+// drift apart permanently after the first `set`/`append`/`delete`/`sort`.
+function _usp_update(sp) {
+    if (!sp._url) return;
+    var q = sp.toString();
+    sp._url._search = q ? '?' + q : '';
+    _lumen_url_reserialize(sp._url, true);
+}
 function _usp_decode(s) {
     try { return decodeURIComponent(s.split('+').join(' ')); } catch(e) { return s; }
 }
@@ -9625,10 +9663,12 @@ function _usp_encode(s) {
 }
 URLSearchParams.prototype.append = function(name, value) {
     this._p.push([String(name), String(value)]);
+    _usp_update(this);
 };
 URLSearchParams.prototype.delete = function(name) {
     var n = String(name);
     this._p = this._p.filter(function(e) { return e[0] !== n; });
+    _usp_update(this);
 };
 URLSearchParams.prototype.get = function(name) {
     var n = String(name);
@@ -9653,9 +9693,11 @@ URLSearchParams.prototype.set = function(name, value) {
         return false;
     });
     if (!found) this._p.push([n, v]);
+    _usp_update(this);
 };
 URLSearchParams.prototype.sort = function() {
     this._p.sort(function(a, b) { return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0; });
+    _usp_update(this);
 };
 URLSearchParams.prototype.toString = function() {
     return this._p.map(function(e) { return _usp_encode(e[0]) + '=' + _usp_encode(e[1]); }).join('&');
@@ -9715,43 +9757,179 @@ function _url_resolve(href, base) {
     }
     return bp.protocol + '//' + bp.host + out.join('/');
 }
+// Implementation slots of a URL object. They are defined non-enumerable so a
+// page walking the object (`for…in`, `Object.keys`) sees only the WebIDL
+// attributes, which live on the prototype (BUG-375 §5).
+var _LUMEN_URL_SLOTS = ['_href', '_protocol', '_username', '_password', '_hostname',
+                        '_host', '_port', '_pathname', '_search', '_hash', '_origin',
+                        '_authority', '_sp'];
+function _lumen_url_define_slots(u) {
+    for (var i = 0; i < _LUMEN_URL_SLOTS.length; i++) {
+        Object.defineProperty(u, _LUMEN_URL_SLOTS[i],
+            { value: null, writable: true, enumerable: false, configurable: true });
+    }
+}
+// Copy a `_lumen_parse_url` result into the slots of `u`. Unless `keepSp` is
+// set the lazily-created `searchParams` object is refilled from the new query,
+// since per spec it is the *same* object for the lifetime of the URL and must
+// track every change to `href`/`search`.
+function _lumen_url_adopt(u, p, keepSp) {
+    u._href      = p.href;
+    u._protocol  = p.protocol;
+    u._username  = p.username;
+    u._password  = p.password;
+    u._hostname  = p.hostname;
+    u._host      = p.host;
+    u._port      = p.port;
+    u._pathname  = p.pathname;
+    u._search    = p.search;
+    u._hash      = p.hash;
+    u._origin    = p.origin;
+    u._authority = p.hasAuthority;
+    if (!keepSp && u._sp) u._sp._p = _usp_parse(u._search);
+}
+// URL Standard §4.1 `URL serializer` — assemble an href out of the components.
+function _lumen_url_serialize(u) {
+    var out = u._protocol;
+    if (u._authority) {
+        out += '//';
+        if (u._username || u._password) {
+            out += u._username;
+            if (u._password) out += ':' + u._password;
+            out += '@';
+        }
+        out += u._host;
+    }
+    return out + u._pathname + u._search + u._hash;
+}
+// Rebuild `href` after a component was written, then re-parse it so every other
+// component (notably `host`/`origin`) is re-derived from one source of truth
+// instead of being patched by hand at each of the nine setters. Re-parsing
+// through `_lumen_parse_url` also keeps a single URL parser in the shim.
+function _lumen_url_reserialize(u, keepSp) {
+    _lumen_url_adopt(u, _lumen_parse_url(_lumen_url_serialize(u)), keepSp);
+}
+// Characters a username/password may carry literally (URL Standard §1.3 userinfo
+// percent-encode set); everything else — ':', '@', '/', '?', '#' included — is
+// percent-encoded so it cannot break out of the userinfo when re-serialized.
+var _LUMEN_USERINFO_SAFE = \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~!$&'()*+,;=%\";
+function _lumen_url_userinfo_encode(v) {
+    var s = String(v), out = '';
+    for (var i = 0; i < s.length; i++) {
+        var c = s[i];
+        if (_LUMEN_USERINFO_SAFE.indexOf(c) >= 0) { out += c; continue; }
+        try { out += encodeURIComponent(c); } catch (e) { out += c; }
+    }
+    return out;
+}
+// Cut a host-ish setter value at the first character that would end the host in
+// a real URL parse, so `u.hostname = 'a/b'` cannot smuggle a path into the host.
+function _lumen_url_cut_host(v) {
+    var s = String(v);
+    for (var i = 0; i < s.length; i++) {
+        if (s[i] === '/' || s[i] === '?' || s[i] === '#') return s.slice(0, i);
+    }
+    return s;
+}
 function URL(href, base) {
     if (arguments.length === 0) throw new TypeError('URL constructor: at least 1 argument required');
     var resolved = _url_resolve(String(href), base ? String(base) : (typeof location !== 'undefined' ? location.href : ''));
     var p = _lumen_parse_url(resolved);
     if (!p.protocol) throw new TypeError('URL constructor: invalid URL: ' + href);
-    this._href     = p.href;
-    this._protocol = p.protocol;
-    this._hostname = p.hostname;
-    this._host     = p.host;
-    this._port     = p.port;
-    this._pathname = p.pathname;
-    this._search   = p.search;
-    this._hash     = p.hash;
-    this._origin   = p.origin;
-    this._sp       = null; // lazy URLSearchParams
+    _lumen_url_define_slots(this);
+    _lumen_url_adopt(this, p);
+    this._sp = null; // lazy URLSearchParams
 }
 (function() {
+    // A component without a setter stays getter-only on purpose: an assignment
+    // to it must throw a TypeError in strict mode. The former `set: setter ||
+    // function() {}` swallowed such writes without a trace (BUG-375 §2).
     function prop(key, getter, setter) {
-        Object.defineProperty(URL.prototype, key, {
-            get: getter,
-            set: setter || function() {},
-            enumerable: true, configurable: true
-        });
+        var desc = { get: getter, enumerable: true, configurable: true };
+        if (setter) desc.set = setter;
+        Object.defineProperty(URL.prototype, key, desc);
     }
-    prop('href',     function() { return this._href; },     function(v) { var p=_lumen_parse_url(String(v)); this._href=p.href; this._protocol=p.protocol; this._hostname=p.hostname; this._host=p.host; this._port=p.port; this._pathname=p.pathname; this._search=p.search; this._hash=p.hash; this._origin=p.origin; this._sp=null; });
-    prop('protocol', function() { return this._protocol; });
-    prop('hostname', function() { return this._hostname; });
-    prop('host',     function() { return this._host; });
-    prop('port',     function() { return this._port; });
-    prop('pathname', function() { return this._pathname; });
-    prop('search',   function() { return this._search; });
-    prop('hash',     function() { return this._hash; });
-    prop('origin',   function() { return this._origin; });
-    prop('username', function() { return ''; });
-    prop('password', function() { return ''; });
-    prop('searchParams', function() {
-        if (!this._sp) this._sp = new URLSearchParams(this._search);
+    prop('href', function() { return this._href; }, function(v) {
+        _lumen_url_adopt(this, _lumen_parse_url(String(v)));
+    });
+    prop('protocol', function() { return this._protocol; }, function(v) {
+        var m = /^([a-zA-Z][a-zA-Z0-9+.-]*):?$/.exec(String(v));
+        if (!m) return; // not a scheme — URL Standard §4.5 says ignore
+        this._protocol = m[1].toLowerCase() + ':';
+        _lumen_url_reserialize(this);
+    });
+    prop('username', function() { return this._username; }, function(v) {
+        if (!this._host) return; // a URL with no host cannot have credentials
+        this._username = _lumen_url_userinfo_encode(v);
+        _lumen_url_reserialize(this);
+    });
+    prop('password', function() { return this._password; }, function(v) {
+        if (!this._host) return;
+        this._password = _lumen_url_userinfo_encode(v);
+        _lumen_url_reserialize(this);
+    });
+    prop('hostname', function() { return this._hostname; }, function(v) {
+        if (!this._authority) return; // opaque path — no host to replace
+        // The hostname setter stops at ':' without touching the port (§4.5).
+        var h = _lumen_url_cut_host(v).split(':')[0];
+        if (!h) return; // empty host is not a valid replacement
+        this._hostname = h;
+        this._host = this._port ? h + ':' + this._port : h;
+        _lumen_url_reserialize(this);
+    });
+    prop('host', function() { return this._host; }, function(v) {
+        if (!this._authority) return;
+        var h = _lumen_url_cut_host(v);
+        if (!h) return;
+        this._host = h;
+        _lumen_url_reserialize(this);
+    });
+    prop('port', function() { return this._port; }, function(v) {
+        if (!this._authority || !this._host) return;
+        var s = String(v);
+        if (s === '') { this._port = ''; this._host = this._hostname; _lumen_url_reserialize(this); return; }
+        var digits = '';
+        for (var i = 0; i < s.length && s[i] >= '0' && s[i] <= '9'; i++) digits += s[i];
+        if (!digits) return; // non-numeric port — ignore
+        this._port = String(parseInt(digits, 10));
+        this._host = this._hostname + ':' + this._port;
+        _lumen_url_reserialize(this);
+    });
+    prop('pathname', function() { return this._pathname; }, function(v) {
+        if (!this._authority) return; // opaque path is not settable (§4.5)
+        var s = String(v);
+        // '?' and '#' are percent-encoded rather than allowed to re-split the
+        // URL, so writing a path can never silently move data into the query.
+        s = s.split('?').join('%3F').split('#').join('%23');
+        this._pathname = s.charAt(0) === '/' ? s : '/' + s;
+        _lumen_url_reserialize(this);
+    });
+    prop('search', function() { return this._search; }, function(v) {
+        var s = String(v);
+        if (s === '') {
+            this._search = '';
+        } else {
+            if (s.charAt(0) === '?') s = s.slice(1);
+            this._search = '?' + s.split('#').join('%23');
+        }
+        _lumen_url_reserialize(this);
+    });
+    prop('hash', function() { return this._hash; }, function(v) {
+        var s = String(v);
+        if (s === '') {
+            this._hash = '';
+        } else {
+            if (s.charAt(0) === '#') s = s.slice(1);
+            this._hash = '#' + s;
+        }
+        _lumen_url_reserialize(this);
+    });
+    prop('origin', function() { return this._origin; }); // readonly per spec
+    prop('searchParams', function() {                    // readonly per spec
+        if (!this._sp) {
+            this._sp = new URLSearchParams(this._search);
+            this._sp._url = this; // mutations flow back into href
+        }
         return this._sp;
     });
     URL.prototype.toString = function() { return this._href; };
@@ -12645,7 +12823,9 @@ function _lumen_hyperlink_url_set(self, mutate) {
     if (abs === '') return;
     var p = _lumen_parse_url(abs);
     mutate(p);
-    var authority = p.hostname + (p.port ? ':' + p.port : '');
+    var creds = '';
+    if (p.username || p.password) creds = p.username + (p.password ? ':' + p.password : '') + '@';
+    var authority = creds + p.hostname + (p.port ? ':' + p.port : '');
     _lumen_set_attr(n, 'href', p.protocol + '//' + authority + (p.pathname || '/') + (p.search || '') + (p.hash || ''));
 }
 function _lumen_install_hyperlink_utils(proto) {
@@ -12671,10 +12851,11 @@ function _lumen_install_hyperlink_utils(proto) {
         get: function() { var p = _lumen_hyperlink_url_get(this); return p ? p.origin : ''; },
         enumerable: true, configurable: true
     });
-    // Credentials are not modeled anywhere in the URL machinery (URL.prototype
-    // does the same) — present the accessors, keep them inert.
-    Object.defineProperty(proto, 'username', { get: function() { return ''; }, set: function() {}, enumerable: true, configurable: true });
-    Object.defineProperty(proto, 'password', { get: function() { return ''; }, set: function() {}, enumerable: true, configurable: true });
+    // Credentials come out of the same parse as the other components (BUG-375
+    // taught `_lumen_parse_url` about userinfo), so these are real accessors
+    // rather than the inert stubs they used to be.
+    part('username', function(p, v) { p.username = _lumen_url_userinfo_encode(v); });
+    part('password', function(p, v) { p.password = _lumen_url_userinfo_encode(v); });
 }
 _lumen_install_hyperlink_utils(HTMLAnchorElement.prototype);
 _lumen_install_hyperlink_utils(HTMLAreaElement.prototype);
@@ -23393,6 +23574,207 @@ mod tests {
             let rt = v8_runtime_with_dom(make_doc());
             let r = rt.eval("typeof window.URL === 'function'").unwrap();
             assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        // ── BUG-375: every URL component is settable, not just `href` ───────────────
+
+        /// All nine writable components must take an assignment and be visible
+        /// in the re-serialized `href` — they used to hit an empty setter.
+        #[test]
+        fn url_component_setters_rewrite_href() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var out = [];\
+                     function mk() { return new URL('https://a.example/orig?old=1#o'); }\
+                     var u = mk(); u.protocol = 'ftp:';        out.push(u.protocol);\
+                     u = mk(); u.hostname = 'b.example';       out.push(u.hostname);\
+                     u = mk(); u.host = 'b.example:99';        out.push(u.host);\
+                     u = mk(); u.port = '99';                  out.push(u.port);\
+                     u = mk(); u.pathname = '/changed';        out.push(u.pathname);\
+                     u = mk(); u.search = '?uuid=1';           out.push(u.search);\
+                     u = mk(); u.hash = '#frag';               out.push(u.hash);\
+                     u = mk(); u.username = 'usr';             out.push(u.username);\
+                     u = mk(); u.password = 'pw';              out.push(u.password);\
+                     out.join('|');",
+                )
+                .unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String(
+                    "ftp:|b.example|b.example:99|99|/changed|?uuid=1|#frag|usr|pw".into()
+                )
+            );
+        }
+
+        /// The whole point of the setters: `href` must carry the change, so the
+        /// URL the page finally uses is the one it built.
+        #[test]
+        fn url_search_setter_reaches_href() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var u = new URL('https://a.example/track');\
+                     u.search = '?uuid=1&dispatch=track';\
+                     u.href;",
+                )
+                .unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String("https://a.example/track?uuid=1&dispatch=track".into())
+            );
+        }
+
+        /// A setter change must be re-derived across components, not patched in
+        /// place: writing `port` has to move `host` and `origin` with it.
+        #[test]
+        fn url_port_setter_updates_host_and_origin() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var u = new URL('https://a.example/p');\
+                     u.port = '8443';\
+                     u.host + '|' + u.origin + '|' + u.href;",
+                )
+                .unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String(
+                    "a.example:8443|https://a.example:8443|https://a.example:8443/p".into()
+                )
+            );
+        }
+
+        /// Credentials live in the parsed URL and must be reported, not faked
+        /// as the empty string.
+        #[test]
+        fn url_credentials_come_from_the_parse() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var u = new URL('https://user:pw@a.example/x');\
+                     u.username + '|' + u.password + '|' + u.host;",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("user|pw|a.example".into()));
+        }
+
+        /// A username may not smuggle a host past the serializer.
+        #[test]
+        fn url_username_setter_percent_encodes_delimiters() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var u = new URL('https://a.example/x');\
+                     u.username = 'e@vil/y';\
+                     u.host + '|' + u.username;",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("a.example|e%40vil%2Fy".into()));
+        }
+
+        /// `searchParams` mutations must flow back into `href` — the object and
+        /// the URL used to drift apart permanently after the first `set`.
+        #[test]
+        fn url_search_params_mutation_updates_href() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var u = new URL('https://a.example/x?a=1');\
+                     u.searchParams.set('a', '2');\
+                     u.searchParams.append('b', '3');\
+                     u.href + '|' + u.search;",
+                )
+                .unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String("https://a.example/x?a=2&b=3|?a=2&b=3".into())
+            );
+        }
+
+        /// …and the link is two-way: writing `search` must be seen by the very
+        /// same `searchParams` object the page is already holding.
+        #[test]
+        fn url_search_setter_refreshes_search_params() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var u = new URL('https://a.example/x?a=1');\
+                     var sp = u.searchParams;\
+                     u.search = '?b=9';\
+                     (sp === u.searchParams) + '|' + sp.get('b') + '|' + sp.get('a');",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("true|9|null".into()));
+        }
+
+        /// A readonly attribute must stay getter-only so strict mode reports the
+        /// write instead of swallowing it.
+        #[test]
+        fn url_readonly_attributes_throw_in_strict_mode() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "'use strict';\
+                     var u = new URL('https://a.example/x');\
+                     var got = [];\
+                     try { u.origin = 'https://evil.example'; got.push('no-throw'); }\
+                     catch (e) { got.push(e instanceof TypeError); }\
+                     try { u.searchParams = null; got.push('no-throw'); }\
+                     catch (e) { got.push(e instanceof TypeError); }\
+                     got.join('|') + '|' + u.origin;",
+                )
+                .unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String("true|true|https://a.example".into())
+            );
+        }
+
+        /// Implementation slots must not be enumerable own properties.
+        #[test]
+        fn url_internals_are_not_web_visible() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var u = new URL('https://a.example/x?a=1');\
+                     u.searchParams;\
+                     Object.keys(u).length + '|' + Object.keys(u.searchParams).length;",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("0|0".into()));
+        }
+
+        /// An opaque-path URL has no authority: host-ish setters are no-ops
+        /// there rather than turning `mailto:` into a hostful URL.
+        #[test]
+        fn url_opaque_path_ignores_host_setters() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var u = new URL('mailto:a@b.example');\
+                     u.hostname = 'evil.example';\
+                     u.pathname = '/x';\
+                     u.href;",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("mailto:a@b.example".into()));
+        }
+
+        /// An invalid value is ignored per spec — and must not corrupt the URL.
+        #[test]
+        fn url_invalid_setter_values_are_ignored() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var u = new URL('https://a.example/x');\
+                     u.protocol = '1nvalid:';\
+                     u.port = 'abc';\
+                     u.hostname = '';\
+                     u.href;",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("https://a.example/x".into()));
         }
 
         // ── BUG-356: HTMLHyperlinkElementUtils on <a>/<area> ────────────────────────

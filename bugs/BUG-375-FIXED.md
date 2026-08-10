@@ -1,7 +1,7 @@
 # BUG-375 — у `URL` работает ровно один сеттер (`href`): остальные девять (`protocol`/`hostname`/`host`/`port`/`pathname`/`search`/`hash`/`username`/`password`) установлены как пустые функции и молча проглатывают присваивание даже в strict mode; `searchParams` не связан обратно с `href`; `username`/`password` всегда пустые
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/dom.rs:10755-10790` — IIFE, объявляющая аксессоры `URL.prototype` через локальный хелпер `prop(key, getter, setter)`; ключевая строка `dom.rs:10759`: `set: setter || function() {}`. Конструктор — `dom.rs:10739-10754`)
+**Статус:** FIXED 2026-08-10 (ветка `p3-bug-375`)
+**Компонент:** js (`crates/js/src/dom.rs` — IIFE, объявляющая аксессоры `URL.prototype` через локальный хелпер `prop(key, getter, setter)`; ключевая строка была `set: setter || function() {}`. Конструктор `URL`; плюс `_lumen_parse_url`, блок `URLSearchParams`, миксин `_lumen_install_hyperlink_utils`)
 **Найден:** P2, WPT-VENDOR-fledge (2026-07-28), проба `--dump-layout` вне WPT (`.tmp/fledge-probe2.html`)
 
 ## Симптом
@@ -105,6 +105,63 @@ FLEDGEUTIL.createTrackerURL = https://a.example/fledge/tentative/resources/reque
 4. `username`/`password` — брать из разбора, а не возвращать `''`.
 5. Внутренние поля перенести в неперечисляемые слоты
    (`Object.defineProperty(this,'_href',{enumerable:false,…})` или `WeakMap`).
+
+## Что сделано (2026-08-10)
+
+Все пять пунктов закрыты по плану выше.
+
+1. **Ре-сериализация.** Добавлены `_lumen_url_serialize(u)` (URL Standard §4.1)
+   и `_lumen_url_reserialize(u, keepSp)`: сеттер пишет **только свой** компонент,
+   после чего href собирается из компонентов и **заново разбирается** тем же
+   `_lumen_parse_url`. Второго парсера URL в JS не появилось, а производные
+   компоненты (`host` при записи `port`, `origin` при записи `hostname`) больше
+   не приходится чинить руками в каждом из девяти сеттеров — они выводятся из
+   одного источника. Написаны все девять сеттеров; невалидное значение
+   игнорируется по спеке (`u.protocol = '1nvalid:'`, `u.port = 'abc'`,
+   `u.hostname = ''` — href не меняется), у opaque-path URL (`mailto:`)
+   host-сеттеры и `pathname` — no-op.
+2. **`set: setter || function() {}` убран.** Дескриптор теперь получает `set`
+   только когда сеттер реально передан, поэтому `origin` и `searchParams`
+   остались getter-only и в strict mode дают `TypeError` вместо тихой потери.
+   Прочие вхождения `function() {}` в `dom.rs` проверены: это no-op *методы*
+   (`Range.detach`, `window.focus`, …), а не пустые сеттеры — единственными
+   однотипными были `username`/`password` у `<a>`/`<area>` (см. п.4).
+3. **`searchParams` связан в обе стороны.** У `URLSearchParams` появился слот
+   `_url`; `append`/`delete`/`set`/`sort` зовут `_usp_update`, который
+   переписывает `_search` владельца и ре-сериализует href. Обратно: любое
+   изменение `search`/`href` перезаполняет пары **того же самого** объекта
+   (спека требует, чтобы `url.searchParams` всегда возвращал один объект), а не
+   сбрасывает его в `null`, как раньше делал сеттер `href`.
+4. **`username`/`password` — из разбора.** `_lumen_parse_url` больше не
+   выбрасывает userinfo: он режет authority по **последнему** `@` (§4.4) и
+   отдаёт `username`/`password`. Сеттеры процент-кодируют всё вне userinfo-набора
+   (`u.username = 'e@vil/y'` → `e%40vil%2Fy`), так что учётные данные не могут
+   подменить host при сборке href. Заодно перестали быть инертными заглушками
+   те же аксессоры у `<a>`/`<area>` — их комментарий прямо ссылался на
+   `URL.prototype` как на образец, а `_lumen_hyperlink_url_set` теперь сохраняет
+   учётные данные при правке любого компонента ссылки.
+5. **Внутренние поля скрыты.** Тринадцать слотов `URL` и два слота
+   `URLSearchParams` объявляются через `Object.defineProperty` с
+   `enumerable:false`. `Object.keys(url)` теперь `[]`, `for…in` даёт 14 имён —
+   это ровно WebIDL-атрибуты и операции прототипа (12 аксессоров + `toString` +
+   `toJSON`); в заявке ожидалось 13, потому что `toJSON` не был посчитан.
+
+Дополнительно: `_lumen_parse_url` отдаёт `hasAuthority` — по пустому host
+отличить `mailto:a@b` от `https://` нельзя, а сериализатору это нужно, чтобы не
+дописать `//` в opaque-path URL.
+
+**Проверено.** 11 новых юнит-тестов (`dom::tests::v8_nav_url_storage::url_*`) и
+живая проба на собранном `dev-release` (`.tmp/url375.html`,
+`--dump-display-list`): все девять сеттеров доходят до `href`, `origin` кидает
+`TypeError`, `sp === u.searchParams` после мутации, `ownKeys: []`,
+`anchor: https://me@x.example/p`.
+
+## Остаток (не этот баг)
+
+Парсер URL остаётся ручным строкосплиттером без IDNA/punycode и без нормализации
+табов/переводов строки — это [BUG-693](BUG-693-OPEN.md), отдельная заявка.
+`URLSearchParams` по-прежнему не итерируем и ломает copy-конструктор —
+[BUG-694](BUG-694-OPEN.md).
 
 ## Заметки
 

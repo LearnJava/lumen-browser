@@ -89,7 +89,7 @@ the WHATWG URL Standard's parsing algorithm:
   URL setter algorithm, just field reassignment on the return value of
   `_lumen_parse_url` (see `_lumen_hyperlink_url_set`, `dom.rs:10969`, and the
   analogous `URL.prototype` setters, already flagged from a different angle
-  by [BUG-375](BUG-375-OPEN.md) — that bug is about *most* `URL.prototype`
+  by [BUG-375](BUG-375-FIXED.md) — that bug is about *most* `URL.prototype`
   setters being literal no-op stubs; this one is that even the one that
   *is* wired (`protocol`, `hostname`, …) does not implement the spec's
   validation/normalization steps).

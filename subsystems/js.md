@@ -155,8 +155,21 @@ the time — read dates.
   `local_storage_persists_across_runtimes` builds two runtimes over a shared
   `Arc<Mutex<WebStorage>>` and passes, so the isolate-lifecycle worry the scoping note raised for
   the IndexedDB reload cluster does not apply. Green 67/67 with untouched bodies; the 19 `URL`
-  tests pin Lumen's own Phase-0 plumbing, *not* the spec — `URL.prototype` setters are still dead
-  (BUG-375) and `Url::resolve` still keeps dot-segments (BUG-346), both engine-agnostic.
+  tests pin Lumen's own Phase-0 plumbing, *not* the spec — `URL.prototype` setters were still dead
+  (BUG-375, fixed 2026-08-10) and `Url::resolve` still kept dot-segments (BUG-346), both
+  engine-agnostic.
+- **`URL` component setters go through re-serialization, not per-setter patching (BUG-375,
+  2026-08-10).** A `URL` object keeps its components in non-enumerable slots; each of the nine
+  writable setters writes only its own slot and then calls `_lumen_url_reserialize`, which rebuilds
+  the href with `_lumen_url_serialize` (URL Standard §4.1) and re-parses it through the *same*
+  `_lumen_parse_url` the constructor uses. Derived components (`host` after a `port` write,
+  `origin` after a `hostname` write) therefore fall out of one parse instead of being maintained by
+  hand nine times, and the shim still has exactly one URL parser. **Non-obvious:** the parse result
+  carries `hasAuthority`, because an empty `host` does not distinguish an authority-bearing URL
+  from an opaque-path one (`mailto:a@b`) — the serializer needs it to decide whether to emit `//`,
+  and the host-ish setters need it to know they must be no-ops. A component whose spec attribute is
+  readonly (`origin`, `searchParams`) is defined with **no** `set` at all; the previous
+  `set: setter || function() {}` idiom made strict-mode writes silently disappear.
 - **`dom.rs` test monolith, mock-provider families ([P1] P3-v8-s12b-24-ws-sse, 2026-07-29).**
   WebSocket (incl. mock session + binary mode), EventSource/SSE, fetch bindings and IME +
   bfcache — 73 tests — now in `dom.rs::tests::v8_ws_sse`; QuickJS copies deleted. **Non-obvious:**
