@@ -214,6 +214,10 @@ impl CookieJar {
     /// 3. Path-match: RFC 6265 §5.1.4 — equal или prefix с разделителем.
     /// 4. Если cookie.secure — request должен идти через HTTPS.
     /// 5. Cookie не expired относительно `now_unix`.
+    ///
+    /// `request_path` — request-target; query/fragment допускаются и
+    /// отбрасываются перед path-match (иначе cookie с `Path=/auth/step`
+    /// не совпала бы с запросом `/auth/step?cid=42`).
     pub fn get_for_request(
         &self,
         request_host: &str,
@@ -263,7 +267,7 @@ impl CookieJar {
             if !domain_matches(&request_host_lc, &c.domain) {
                 continue;
             }
-            if !path_matches(request_path, &c.path) {
+            if !path_matches(uri_path(request_path), &c.path) {
                 continue;
             }
             out.push(c);
@@ -310,6 +314,47 @@ fn path_matches(request_path: &str, cookie_path: &str) -> bool {
     )
 }
 
+/// Отбросить query и fragment: caller-ы (network, JS) передают сюда
+/// request-target вида `/auth/step?cid=42`, а и §5.1.4, и `path_matches`
+/// определены над uri-path.
+fn uri_path(request_path: &str) -> &str {
+    match request_path.find(['?', '#']) {
+        Some(i) => &request_path[..i],
+        None => request_path,
+    }
+}
+
+/// RFC 6265 §5.1.4 — default-path запроса: путь, который получает cookie,
+/// пришедшая **без** атрибута `Path`.
+///
+/// Это НЕ путь запроса: из него отбрасывается всё после правого `/`
+/// (`/auth/authorize` → `/auth`), потому что cookie принадлежит «каталогу»
+/// ресурса, а не самому ресурсу. Полный путь на этом месте делает cookie
+/// невидимой для соседних путей того же каталога — типичная поломка
+/// редирект-цепочек логина ([BUG-756](../../../bugs/BUG-756-FIXED.md)).
+///
+/// Query/fragment во входной строке допускаются и отбрасываются.
+///
+/// ```text
+/// /auth/authorize?x=1 → /auth
+/// /auth/             → /auth
+/// /index.html        → /
+/// /                  → /
+/// ""                 → /
+/// foo                → /   (не начинается с `/`)
+/// ```
+pub fn default_path(request_path: &str) -> &str {
+    let path = uri_path(request_path);
+    if !path.starts_with('/') {
+        return "/";
+    }
+    match path.rfind('/') {
+        // Единственный `/` — он же ведущий: default-path это корень.
+        Some(0) | None => "/",
+        Some(i) => &path[..i],
+    }
+}
+
 /// Распарсить значение HTTP-заголовка `Set-Cookie` в `Cookie`. Без PSL
 /// проверок — backward-compat wrapper над [`parse_set_cookie_with_psl`]
 /// для caller-ов, у которых PSL не подключён.
@@ -327,7 +372,9 @@ fn path_matches(request_path: &str, cookie_path: &str) -> bool {
 /// - `Max-Age=<seconds>` — приоритетнее Expires; expires_at = now + N;
 ///   отрицательное / 0 / нечисловое значение → session cookie;
 /// - `Domain=<domain>` — leading-dot strip (RFC 6265 §5.2.3);
-/// - `Path=<path>` — иначе default_path;
+/// - `Path=<path>` — иначе `default_path` (берётся дословно; caller обязан
+///   передать сюда уже вычисленный default-path запроса — [`default_path`],
+///   а не путь запроса);
 /// - `Secure` (без значения);
 /// - `HttpOnly` (без значения);
 /// - `SameSite=Strict|Lax|None` — иначе default Lax.
@@ -608,12 +655,17 @@ impl CookieProvider for CookieJarProvider {
         &self,
         header: &str,
         host: &str,
-        default_path: &str,
+        request_path: &str,
         is_secure: bool,
         top_level_site: Option<&str>,
     ) {
         let now = now_unix();
-        let Some(cookie) = parse_set_cookie(header, host, default_path, now) else {
+        // RFC 6265 §5.3 шаг 7: без атрибута `Path` cookie получает
+        // default-path запроса (§5.1.4), а не сам путь запроса. Вывод
+        // делается здесь, на границе трейта, чтобы правило хранения жило
+        // рядом с `path_matches` и было общим для всех caller-ов
+        // (network-hop, `document.cookie`).
+        let Some(cookie) = parse_set_cookie(header, host, default_path(request_path), now) else {
             return;
         };
         // RFC 6265bis §5.2: SameSite=None requires Secure attribute.
@@ -700,6 +752,42 @@ mod tests {
         assert!(path_matches("/", "/"));
         assert!(path_matches("/anything", "/"));
         assert!(path_matches("/anything/deep", "/"));
+    }
+
+    // ── default_path (RFC 6265 §5.1.4) ──
+
+    #[test]
+    fn default_path_drops_last_segment() {
+        // Главный случай BUG-756: cookie, поставленная на /auth/authorize
+        // без Path, принадлежит каталогу /auth, а не самому ресурсу.
+        assert_eq!(default_path("/auth/authorize"), "/auth");
+        assert_eq!(default_path("/a/b/c"), "/a/b");
+    }
+
+    #[test]
+    fn default_path_trailing_slash() {
+        assert_eq!(default_path("/auth/"), "/auth");
+    }
+
+    #[test]
+    fn default_path_single_segment_is_root() {
+        assert_eq!(default_path("/index.html"), "/");
+        assert_eq!(default_path("/"), "/");
+    }
+
+    #[test]
+    fn default_path_malformed_is_root() {
+        // Пустой путь и путь без ведущего `/` — §5.1.4 требует "/".
+        assert_eq!(default_path(""), "/");
+        assert_eq!(default_path("foo"), "/");
+        assert_eq!(default_path("foo/bar"), "/");
+    }
+
+    #[test]
+    fn default_path_ignores_query_and_fragment() {
+        assert_eq!(default_path("/auth/authorize?state=x&client_id=y"), "/auth");
+        assert_eq!(default_path("/auth/authorize#frag"), "/auth");
+        assert_eq!(default_path("/?q=1"), "/");
     }
 
     // ── CookieJar CRUD ──
@@ -1187,5 +1275,58 @@ mod tests {
         )
         .unwrap();
         assert_eq!(c.domain, "xn--e1afmkfd.xn--p1ai");
+    }
+
+    // ── CookieProvider: default-path на редирект-цепочке (BUG-756) ──
+
+    fn provider() -> CookieJarProvider {
+        CookieJarProvider::new(Arc::new(make_jar()))
+    }
+
+    #[test]
+    fn provider_set_cookie_without_path_uses_default_path() {
+        // Hop 1: /auth/authorize ставит cookie без Path → Path=/auth.
+        let p = provider();
+        p.process_set_cookie(
+            "SSO_CSRF=abc123",
+            "id.example.com",
+            "/auth/authorize?state=x",
+            false,
+            None,
+        );
+        // Hop 2: соседний путь того же каталога — cookie обязана уйти.
+        assert_eq!(
+            p.get_for_request("id.example.com", "/auth/step?cid=42", false, None, false),
+            "SSO_CSRF=abc123",
+        );
+        // Каталог выше — не должна.
+        assert_eq!(
+            p.get_for_request("id.example.com", "/other", false, None, false),
+            "",
+        );
+    }
+
+    #[test]
+    fn provider_explicit_path_attribute_wins() {
+        // Явный Path не трогаем — default-path применяется только к его
+        // отсутствию (RFC 6265 §5.3 шаг 7).
+        let p = provider();
+        p.process_set_cookie(
+            "k=v; Path=/auth/authorize",
+            "id.example.com",
+            "/auth/authorize",
+            false,
+            None,
+        );
+        assert_eq!(
+            p.get_for_request("id.example.com", "/auth/step", false, None, false),
+            "",
+        );
+        // …и совпадает с запросом, несущим query, — path-match смотрит на
+        // uri-path, а не на request-target целиком.
+        assert_eq!(
+            p.get_for_request("id.example.com", "/auth/authorize?x=1", false, None, false),
+            "k=v",
+        );
     }
 }

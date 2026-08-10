@@ -79,7 +79,7 @@ document.baseURI  https://www.tbank.ru/login/?redirectTo=/invest/portfolio/
 
 ## Смежные
 
-* [BUG-756](BUG-756-OPEN.md) — второй дефект, найденный на той же цепочке
+* [BUG-756](BUG-756-FIXED.md) — второй дефект, найденный на той же цепочке
   (cookie default-path); именно он блокирует логин, этот — нет.
 * [BUG-438](BUG-438-OPEN.md) — успешный ответ `navigate` о несостоявшейся
   загрузке; пересекается пунктом 4 «как чинить».

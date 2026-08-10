@@ -1,6 +1,6 @@
 # BUG-756 — cookie default-path берётся как полный путь запроса вместо RFC 6265 §5.1.4: кука, поставленная без `Path`, не доезжает до соседнего пути
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-10
 **Компонент:** network (`crates/network/src/lib.rs:2566-2567` — вычисление
 `default_path` перед `jar.process_set_cookie`); потребитель —
 `crates/storage/src/cookies.rs::parse_set_cookie_with_psl` (строка
@@ -93,6 +93,45 @@ fn default_path(uri_path: &str) -> &str {
 Внимание при правке: `parse_set_cookie*` — публичный API, `default_path`
 приходит снаружи; менять надо **источник**, иначе поведение разъедется между
 network и другими вызывающими.
+
+## Исправление (2026-08-10)
+
+Правило §5.1.4 переехало в `lumen-storage` и стало публичным —
+`crates/storage/src/cookies.rs::default_path`, соседняя функция к
+`path_matches`, как и предполагалось в «Как чинить». Применяется оно **не в
+`network`**, а на границе трейта: `CookieJarProvider::process_set_cookie`
+(`cookies.rs`) выводит default-path из полученного request-path. Причина —
+`lumen-network` не зависит от `lumen-storage` (deps: `lumen-core`, `lumen-ipc`),
+так что «network вызывает функцию из storage» стоило бы новой зависимости
+поперёк слоёв; граница трейта `CookieProvider` даёт то же «одно место», зато
+общее для всех caller-ов — сетевого hop-а и `document.cookie`
+(`v8_runtime.rs`), — и не трогает публичный `parse_set_cookie*`, который
+по-прежнему берёт default-path дословно (его doc-комментарий теперь явно
+отсылает к `default_path`).
+
+`network` перестал вычислять путь: отдаёт request-target hop-а как есть.
+Контракт трейта переформулирован в `crates/core/src/ext.rs` — параметр
+переименован `default_path` → `request_path` с явным «pass the request path
+as-is, *not* a pre-computed default-path».
+
+**Второй дефект того же шва, закрыт заодно.** `CookieJar::get_for_request`
+матчил путь вместе с query: `path_matches("/auth/step?cid=42", "/auth/step")`
+даёт `false` (после prefix-а идёт `?`, а не `/`), то есть cookie с **явным**
+`Path=/auth/step` не уходила на тот же путь с query-строкой. Оба входа теперь
+нормализуются одним внутренним `uri_path()`. Отдельным багом не заводился:
+это та же ошибка — сырой request-target в роли пути, — и держать половину
+шва сломанной, переписывая вторую, смысла нет.
+
+`SameSite=Lax` на cross-site (см. ниже) не трогался — отдельная тема.
+
+Тесты: `default_path_*` (6 случаев §5.1.4, включая query/fragment и
+malformed), `provider_set_cookie_without_path_uses_default_path` /
+`provider_explicit_path_attribute_wins` (сквозной hop-сценарий на реальном
+jar) в `lumen-storage`; `redirect_hop_passes_own_request_path_to_cookie_jar`
+в `lumen-network` (mock-jar на 303-цепочке — фиксирует, что network отдаёт
+путь именно того hop-а, который принёс `Set-Cookie`). Плюс живой прогон
+репро-таблицы выше на локальном сервере: обе цели получают
+`Cookie: SSO_CSRF=abc123`.
 
 ## Смежные наблюдения (не часть этого бага)
 

@@ -2563,10 +2563,13 @@ fn fetch_with_redirect(
         // Persist Set-Cookie headers (RFC 6265 §5.3) on every hop.
         // Best-effort: cookie errors never fail the fetch.
         if let Some(jar) = cookie_jar {
-            let req_path = url.path_and_query();
-            let default_path = req_path.split('?').next().unwrap_or("/");
+            // Путь ЭТОГО hop-а, как есть: default-path (§5.1.4) выводит сам
+            // jar — правило хранения живёт рядом с path-match. Здесь его
+            // дублировать нельзя: полный путь запроса в роли default-path
+            // прятал cookie от соседних путей каталога (BUG-756).
+            let request_path = url.path_and_query();
             for val in all_header_values(&resp.headers, "set-cookie") {
-                jar.process_set_cookie(val, &host_ascii, default_path, is_tls, top_level_site);
+                jar.process_set_cookie(val, &host_ascii, &request_path, is_tls, top_level_site);
             }
         }
 
@@ -5737,6 +5740,72 @@ mod tests {
             Event::RequestCompleted { status, .. } => assert_eq!(*status, 200),
             other => panic!("expected RequestCompleted(200), got {other:?}"),
         }
+
+        server.join().unwrap();
+    }
+
+    /// Mock cookie-jar: только записывает, с каким request-path network
+    /// зовёт обе стороны cookie-обмена. Правило default-path (RFC 6265
+    /// §5.1.4) сознательно НЕ повторяет — оно живёт в `lumen-storage`.
+    #[derive(Default)]
+    struct RecordingJar {
+        /// `(значение Set-Cookie, request-path hop-а)`.
+        set_calls: Mutex<Vec<(String, String)>>,
+        /// request-path каждого запроса, для которого спрашивали `Cookie:`.
+        get_paths: Mutex<Vec<String>>,
+    }
+
+    impl CookieProvider for RecordingJar {
+        fn get_for_request(
+            &self,
+            _host: &str,
+            path: &str,
+            _is_secure: bool,
+            _top_level_site: Option<&str>,
+            _is_cross_site: bool,
+        ) -> String {
+            self.get_paths.lock().unwrap().push(path.to_owned());
+            String::new()
+        }
+
+        fn process_set_cookie(
+            &self,
+            header: &str,
+            _host: &str,
+            request_path: &str,
+            _is_secure: bool,
+            _top_level_site: Option<&str>,
+        ) {
+            self.set_calls
+                .lock()
+                .unwrap()
+                .push((header.to_owned(), request_path.to_owned()));
+        }
+    }
+
+    #[test]
+    fn redirect_hop_passes_own_request_path_to_cookie_jar() {
+        // BUG-756: default-path выводит jar, поэтому network обязан отдать
+        // путь ИМЕННО того hop-а, который принёс Set-Cookie (не цель
+        // редиректа и не заранее «обрезанный» путь).
+        let (port, server) = mock_http_server(2, |i| match i {
+            1 => b"HTTP/1.1 303 See Other\r\nLocation: /auth/step?cid=42\r\nSet-Cookie: SSO_CSRF=abc123\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+            2 => b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".to_vec(),
+            _ => unreachable!(),
+        });
+
+        let jar = Arc::new(RecordingJar::default());
+        let client = HttpClient::new().with_cookie_jar(jar.clone(), None);
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/auth/authorize?state=x")).unwrap();
+        assert_eq!(client.fetch(&url).expect("fetch"), b"ok");
+
+        let sets = jar.set_calls.lock().unwrap().clone();
+        assert_eq!(sets.len(), 1, "ровно один Set-Cookie, got {sets:?}");
+        assert_eq!(sets[0].0, "SSO_CSRF=abc123");
+        assert_eq!(sets[0].1, "/auth/authorize?state=x");
+
+        let gets = jar.get_paths.lock().unwrap().clone();
+        assert_eq!(gets, vec!["/auth/authorize?state=x", "/auth/step?cid=42"]);
 
         server.join().unwrap();
     }

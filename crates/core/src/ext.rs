@@ -364,14 +364,16 @@ pub trait CookieProvider: Send + Sync {
     /// Process a `Set-Cookie` header received from a response.
     ///
     /// `host` — request host (the domain used to derive the cookie domain),
-    /// `default_path` — request path used as the default cookie path,
+    /// `request_path` — path of the request that carried this header; the
+    ///   implementation derives the RFC 6265 §5.1.4 default-path from it
+    ///   (i.e. pass the request path as-is, *not* a pre-computed default-path),
     /// `is_secure` — whether the request was over HTTPS,
     /// `top_level_site` — registrable domain of the top-level page.
     fn process_set_cookie(
         &self,
         header: &str,
         host: &str,
-        default_path: &str,
+        request_path: &str,
         is_secure: bool,
         top_level_site: Option<&str>,
     );
