@@ -1518,11 +1518,22 @@ function isWriteParams(data) {
     && data.type !== undefined;
 }
 
+// Commands run one after another in call order, even when the caller does not
+// await them: a stream is a queue, and `w.write('a'); w.truncate(1); w.close();`
+// must not let the close commit before the write has landed. Each operation
+// resolves with its own outcome; the queue itself absorbs failures so one
+// rejected write does not strand every command behind it.
+function enqueue(st, operation) {
+  var result = st.queue.then(operation);
+  st.queue = result.then(function() {}, function() {});
+  return result;
+}
+
 // The one place implementing FS §7.1's write algorithm — `write()`, `seek()`,
 // `truncate()` and the underlying sink's `write()` all route through it, so a
 // `{type:'seek'}` command and a `seek()` call cannot drift apart.
 function writeCommand(st, data) {
-  return promiseTry(function() {
+  return enqueue(st, function() {
     if (st.closed) throw new TypeError('FileSystemWritableFileStream is closed');
     var type = 'write';
     var payload = data;
@@ -1578,7 +1589,12 @@ function commitWrite(st) {
 
 function makeWritable(handleId) {
   var stream = new FileSystemWritableFileStream(BRAND);
-  var st = { id: String(handleId == null ? '' : handleId), position: 0, closed: false };
+  var st = {
+    id: String(handleId == null ? '' : handleId),
+    position: 0,
+    closed: false,
+    queue: Promise.resolve(),
+  };
   WRITE_STATE.set(stream, st);
   if (WritableStreamBase) {
     // The stream really is a `WritableStream`: its sink is the FS write
@@ -1586,7 +1602,7 @@ function makeWritable(handleId) {
     // the same bytes through the same path.
     WritableStreamBase.call(stream, {
       write: function(chunk) { return writeCommand(st, chunk); },
-      close: function() { return commitWrite(st); },
+      close: function() { return enqueue(st, function() { return commitWrite(st); }); },
       abort: function() { st.closed = true; },
     });
   }
@@ -1595,38 +1611,41 @@ function makeWritable(handleId) {
 
 FileSystemWritableFileStream.prototype.write = function(data) {
   var self = this;
-  return promiseTry(function() {
-    var st = writeStateOf(self);
+  var st;
+  try {
+    st = writeStateOf(self);
     if (self.locked) throw new TypeError('FileSystemWritableFileStream is locked');
-    return writeCommand(st, data);
-  });
+  } catch (e) {
+    return Promise.reject(e);
+  }
+  return writeCommand(st, data);
 };
 
+// Every entry point below joins the queue *synchronously*, so the order the
+// commands run in is the order the page issued them — deferring the `enqueue`
+// call by even one microtask would let a later command overtake an earlier one.
 FileSystemWritableFileStream.prototype.seek = function(position) {
-  var self = this;
-  return promiseTry(function() {
-    return writeCommand(writeStateOf(self), { type: 'seek', position: position });
-  });
+  var st;
+  try { st = writeStateOf(this); } catch (e) { return Promise.reject(e); }
+  return writeCommand(st, { type: 'seek', position: position });
 };
 
 FileSystemWritableFileStream.prototype.truncate = function(size) {
-  var self = this;
-  return promiseTry(function() {
-    return writeCommand(writeStateOf(self), { type: 'truncate', size: size });
-  });
+  var st;
+  try { st = writeStateOf(this); } catch (e) { return Promise.reject(e); }
+  return writeCommand(st, { type: 'truncate', size: size });
 };
 
 FileSystemWritableFileStream.prototype.close = function() {
-  var self = this;
-  return promiseTry(function() {
-    var st = writeStateOf(self);
-    // Go through the base class where there is one, so the stream ends up in
-    // the 'closed' state its own `locked`/`getWriter` contract talks about.
-    if (WritableStreamBase && typeof self._ws_state === 'string') {
-      return WritableStreamBase.prototype.close.call(self);
-    }
-    return commitWrite(st);
-  });
+  var st;
+  try { st = writeStateOf(this); } catch (e) { return Promise.reject(e); }
+  // Go through the base class where there is one, so the stream ends up in the
+  // 'closed' state its own `locked`/`getWriter` contract talks about; the base
+  // reaches the same commit through the sink.
+  if (WritableStreamBase && typeof this._ws_state === 'string') {
+    return WritableStreamBase.prototype.close.call(this);
+  }
+  return enqueue(st, function() { return commitWrite(st); });
 };
 
 // ── Picker option validation (FS §8.1) ───────────────────────────────────────
@@ -2596,4 +2615,405 @@ mod tests_v8 {
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    // ── BUG-374 points 7, 9, 10: what the objects actually do ────────────────
+
+    /// Settle `expr` and report the rejection's `name` (or `resolved`).
+    ///
+    /// Picker-option validation raises plain `TypeError`s, which
+    /// [`await_rejection`] cannot tell apart from each other by message alone.
+    fn rejection_name(rt: &V8JsRuntime, expr: &str) -> String {
+        rt.eval(&format!(
+            "var __n = 'never settled'; \
+             ({expr}).then(function() {{ __n = 'resolved'; }}, \
+                           function(e) {{ __n = String(e && e.name); }});"
+        ))
+        .unwrap();
+        string_eval(rt, "String(__n)")
+    }
+
+    /// A writable stream over a real file in a writable grant.
+    fn opfs_writable(tag: &str) -> (V8JsRuntime, std::path::PathBuf) {
+        let (rt, dir, pid) = opfs_case(tag, true);
+        rt.eval(&format!(
+            r#"
+            var __w = null;
+            {ROOT}('root', '{pid}')
+              .getFileHandle('out.bin', {{ create: true }})
+              .then(function(fh) {{ return fh.createWritable(); }})
+              .then(function(s) {{ __w = s; }});
+            "#
+        ))
+        .unwrap();
+        assert!(bool_eval(&rt, "__w !== null"), "createWritable never resolved");
+        (rt, dir)
+    }
+
+    /// Point 7: `truncate()` used to return a resolved promise and do nothing,
+    /// so code that truncated a file before rewriting it got the old bytes with
+    /// the new ones appended.
+    #[test]
+    fn truncate_shortens_the_written_file() {
+        let (rt, dir) = opfs_writable("truncate");
+        rt.eval("__w.write('hello world'); __w.truncate(5); __w.close();").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join("out.bin")).unwrap_or_default(),
+            "hello"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Point 7: `seek()` was the other no-op — every write appended, wherever
+    /// the caller had positioned the stream.
+    #[test]
+    fn seek_writes_at_the_position() {
+        let (rt, dir) = opfs_writable("seek");
+        rt.eval("__w.write('abc'); __w.seek(0); __w.write('X'); __w.close();").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join("out.bin")).unwrap_or_default(),
+            "Xbc"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FS §7.1's `WriteParams` dictionary — `write({type, position, size, data})`
+    /// used to fall into `String(data)` whole and land in the file as
+    /// `[object Object]`.
+    #[test]
+    fn write_params_dictionary_is_understood() {
+        let (rt, dir) = opfs_writable("write_params");
+        rt.eval(
+            "__w.write({type:'write', data:'abcdef'}); \
+             __w.write({type:'write', position:1, data:'ZZ'}); \
+             __w.write({type:'truncate', size:4}); \
+             __w.close();",
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join("out.bin")).unwrap_or_default(),
+            "aZZd"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A `seek` command with no position and an unknown command type are the two
+    /// shapes the spec rejects rather than silently ignores.
+    #[test]
+    fn malformed_write_commands_reject() {
+        let (rt, dir) = opfs_writable("write_params_bad");
+        assert_eq!(rejection_name(&rt, "__w.write({type:'seek'})"), "SyntaxError");
+        assert_eq!(rejection_name(&rt, "__w.write({type:'truncate'})"), "SyntaxError");
+        assert_eq!(rejection_name(&rt, "__w.write({type:'nope', data:'x'})"), "TypeError");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Point 7: bytes are bytes. `write()` used to push everything through
+    /// `String(data)`, so a typed array became the text `0,1,255` and a `Blob`
+    /// became the literal `[object Blob]`.
+    #[test]
+    fn binary_chunks_are_written_verbatim() {
+        let (rt, dir) = opfs_writable("binary");
+        rt.eval("__w.write(new Uint8Array([0, 1, 255, 65])); __w.close();").unwrap();
+        assert_eq!(
+            std::fs::read(dir.join("out.bin")).unwrap_or_default(),
+            vec![0u8, 1, 255, 65]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Non-ASCII text survives the base64 hop to Rust as UTF-8.
+    #[test]
+    fn utf8_text_round_trips() {
+        let (rt, dir) = opfs_writable("utf8");
+        rt.eval(r#"__w.write('привет \u{1F600}'); __w.close();"#).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join("out.bin")).unwrap_or_default(),
+            "привет \u{1F600}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Point 6, the half that mattered at runtime: iterating a directory yields
+    /// handles that *work*. They used to be built on an empty grant id, so the
+    /// names were right and everything behind them was empty.
+    #[test]
+    fn iterated_entries_carry_a_working_grant() {
+        let (rt, dir, pid) = opfs_case("iterate", true);
+        std::fs::write(dir.join("a.txt"), b"payload").unwrap();
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("sub").join("inner.txt"), b"deep").unwrap();
+        rt.eval(&format!(
+            r#"
+            var __names = [], __sizes = [], __inner = 'none';
+            (async function() {{
+              var root = {ROOT}('root', '{pid}');
+              for await (var pair of root) {{
+                __names.push(pair[0] + ':' + pair[1].kind);
+                if (pair[1].kind === 'file') {{
+                  var f = await pair[1].getFile();
+                  __sizes.push(pair[0] + '=' + f.size);
+                }} else {{
+                  for await (var child of pair[1]) {{ __inner = child[0]; }}
+                }}
+              }}
+            }})();
+            "#
+        ))
+        .unwrap();
+        assert_eq!(string_eval(&rt, "__names.sort().join(',')"), "a.txt:file,sub:directory");
+        assert_eq!(string_eval(&rt, "__sizes.join(',')"), "a.txt=7");
+        assert_eq!(string_eval(&rt, "__inner"), "inner.txt");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Point 5: two handles on the same entry compare equal even though each
+    /// carries its own freshly minted grant token.
+    #[test]
+    fn is_same_entry_sees_through_distinct_tokens() {
+        let (rt, dir, pid) = opfs_case("same_entry", true);
+        rt.eval(&format!(
+            r#"
+            var __same = null, __diff = null, __uid = null;
+            (async function() {{
+              var root = {ROOT}('root', '{pid}');
+              var a = await root.getFileHandle('a.txt', {{ create: true }});
+              var b = await root.getFileHandle('a.txt', {{ create: true }});
+              var c = await root.getFileHandle('c.txt', {{ create: true }});
+              __same = await a.isSameEntry(b);
+              __diff = await a.isSameEntry(c);
+              __uid  = (await a.getUniqueId()) === (await b.getUniqueId());
+            }})();
+            "#
+        ))
+        .unwrap();
+        assert!(bool_eval(&rt, "__same === true"), "two handles on one file compared unequal");
+        assert!(bool_eval(&rt, "__diff === false"));
+        assert!(bool_eval(&rt, "__uid === true"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Point 5: `queryPermission` answers from the grant behind the handle — a
+    /// writable sandbox grant is `granted` for both modes, a picked read-only
+    /// directory says `prompt` for `readwrite` rather than claiming a write
+    /// permission the next call would contradict.
+    #[test]
+    fn permission_answers_follow_the_grant() {
+        let (rt, dir, pid) = opfs_case("perm_rw", true);
+        let (rt_ro, dir_ro, pid_ro) = opfs_case("perm_ro", false);
+        rt.eval(&format!("var __d = {ROOT}('root', '{pid}');")).unwrap();
+        rt_ro.eval(&format!("var __d = {ROOT}('root', '{pid_ro}');")).unwrap();
+
+        assert_eq!(string_eval_await(&rt, "__d.queryPermission()"), "granted");
+        assert_eq!(
+            string_eval_await(&rt, "__d.queryPermission({mode:'readwrite'})"),
+            "granted"
+        );
+        assert_eq!(string_eval_await(&rt_ro, "__d.queryPermission()"), "granted");
+        assert_eq!(
+            string_eval_await(&rt_ro, "__d.requestPermission({mode:'readwrite'})"),
+            "prompt"
+        );
+        assert_eq!(rejection_name(&rt, "__d.queryPermission({mode:'write'})"), "TypeError");
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&dir_ro);
+    }
+
+    /// Settle `expr` and read the fulfilled value back as a string.
+    fn string_eval_await(rt: &V8JsRuntime, expr: &str) -> String {
+        rt.eval(&format!(
+            "var __s = 'never settled'; \
+             ({expr}).then(function(v) {{ __s = String(v); }}, \
+                           function(e) {{ __s = 'rejected:' + (e && e.name); }});"
+        ))
+        .unwrap();
+        string_eval(rt, "String(__s)")
+    }
+
+    /// Point 5: `remove()` and `move()` — both were missing outright.
+    #[test]
+    fn remove_and_move_act_on_the_file_system() {
+        let (rt, dir, pid) = opfs_case("remove_move", true);
+        rt.eval(&format!(
+            r#"
+            var __moved = 'none', __removed = 'none';
+            (async function() {{
+              var root = {ROOT}('root', '{pid}');
+              var f = await root.getFileHandle('before.txt', {{ create: true }});
+              await f.move('after.txt');
+              __moved = f.name;
+              var g = await root.getFileHandle('gone.txt', {{ create: true }});
+              await g.remove();
+              __removed = 'ok';
+            }})();
+            "#
+        ))
+        .unwrap();
+        assert_eq!(string_eval(&rt, "__moved"), "after.txt");
+        assert_eq!(string_eval(&rt, "__removed"), "ok");
+        assert!(dir.join("after.txt").is_file(), "move() did not rename the file");
+        assert!(!dir.join("before.txt").exists(), "the old name survived move()");
+        assert!(!dir.join("gone.txt").exists(), "remove() did not delete the file");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A read-only grant refuses both, rather than reporting success.
+    #[test]
+    fn remove_refuses_a_read_only_grant() {
+        let (rt, dir, pid) = opfs_case("remove_ro", false);
+        std::fs::write(dir.join("keep.txt"), b"x").unwrap();
+        rt.eval(&format!(
+            r#"
+            var __p = null;
+            (async function() {{
+              var root = {ROOT}('root', '{pid}');
+              __p = await root.getFileHandle('keep.txt');
+            }})();
+            "#
+        ))
+        .unwrap();
+        assert_eq!(rejection_name(&rt, "__p.remove()"), "NotAllowedError");
+        assert!(dir.join("keep.txt").is_file(), "a read-only grant deleted a file");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Point 10: the pickers took an options dictionary and ignored it whole.
+    /// Every case here is a `TypeError` the spec states, and every one of them
+    /// used to open the dialog instead.
+    #[test]
+    fn picker_options_are_validated() {
+        let rt = with_fsa();
+        let cases = [
+            "showOpenFilePicker({types:[], excludeAcceptAllOption:true})",
+            "showOpenFilePicker({types:[{accept:{'image':['.png']}}]})",
+            "showOpenFilePicker({types:[{accept:{'text/plain;charset=utf-8':['.txt']}}]})",
+            "showOpenFilePicker({types:[{accept:{'text/plain':['txt']}}]})",
+            "showOpenFilePicker({types:[{accept:{'text/plain':['.TXT']}}]})",
+            "showOpenFilePicker({types:[{accept:{'text/plain':['.txt.']}}]})",
+            "showOpenFilePicker({types:[{accept:{'text/plain':['.abcdefghijklmnop']}}]})",
+            "showOpenFilePicker({types:[{}]})",
+            "showOpenFilePicker({startIn:'nowhere'})",
+            "showOpenFilePicker({id:'has spaces'})",
+            "showSaveFilePicker({id:'0123456789012345678901234567890123'})",
+            "showDirectoryPicker({startIn:'nowhere'})",
+        ];
+        for case in cases {
+            assert_eq!(rejection_name(&rt, case), "TypeError", "accepted: {case}");
+        }
+    }
+
+    /// …and the shapes the spec allows still reach the picker.
+    #[test]
+    fn valid_picker_options_are_accepted() {
+        let rt = with_fsa();
+        let cases = [
+            "showOpenFilePicker({types:[{description:'Text', accept:{'text/plain':['.txt','.md']}}]})",
+            "showOpenFilePicker({startIn:'documents', id:'lumen_test-1'})",
+            "showOpenFilePicker({types:[], excludeAcceptAllOption:false})",
+            "showDirectoryPicker({startIn:__dh})",
+        ];
+        for case in cases {
+            assert_eq!(rejection_name(&rt, case), "resolved", "rejected: {case}");
+        }
+    }
+
+    /// Point 9: all three interfaces are `[Serializable]`. A clone used to come
+    /// back as a plain `{}` — same properties, no class, no grant.
+    ///
+    /// The registry is the one `dom.rs`'s shim publishes; this harness does not
+    /// evaluate that shim, so the test stands one in of the same shape and
+    /// checks what the *cloner* produces.
+    #[test]
+    fn handles_register_a_structured_clone() {
+        let (rt, dir, pid) = opfs_case("serializable", true);
+        rt.eval(
+            r#"
+            var CLONERS = [];
+            Object.defineProperty(window, '__lumen_platform_cloners', {
+              value: {
+                register: function(test, clone) { CLONERS.push([test, clone]); },
+                find: function(v) {
+                  for (var i = 0; i < CLONERS.length; i++) {
+                    if (CLONERS[i][0](v)) return CLONERS[i][1];
+                  }
+                  return null;
+                }
+              },
+              configurable: true
+            });
+            "#,
+        )
+        .unwrap();
+        rt.eval(super::FSAL_SHIM).unwrap();
+        rt.eval(&format!(
+            r#"
+            var __ok = null;
+            (async function() {{
+              var root = {ROOT}('root', '{pid}');
+              var f = await root.getFileHandle('cloned.txt', {{ create: true }});
+              var clone = window.__lumen_platform_cloners.find(f)(f);
+              __ok = (clone instanceof FileSystemFileHandle)
+                  && (clone !== f) && clone.name === 'cloned.txt'
+                  && (await clone.isSameEntry(f))
+                  && window.__lumen_platform_cloners.find(root)(root) instanceof
+                       FileSystemDirectoryHandle;
+            }})();
+            "#
+        ))
+        .unwrap();
+        assert!(bool_eval(&rt, "__ok === true"), "the clone lost its class or its grant");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Point 7, the inheritance half: the class extends whatever
+    /// `WritableStream` the runtime has, and the stream's sink is the FS write
+    /// algorithm — so `getWriter().write(chunk)` commits the same bytes as
+    /// `stream.write(chunk)`.
+    ///
+    /// The base here is a stand-in (the real one comes from `dom.rs`'s shim,
+    /// which this harness does not evaluate). What it can prove is the wiring:
+    /// the prototype chain, and that the sink handed to the base is the one that
+    /// reaches Rust.
+    #[test]
+    fn writable_extends_the_runtime_writable_stream() {
+        let (rt, dir, pid) = opfs_case("stream_base", true);
+        rt.eval(
+            r#"
+            function WritableStream(sink) { this._ws_sink = sink; this._ws_state = 'writable'; }
+            WritableStream.prototype.getWriter = function() {
+              var sink = this._ws_sink;
+              return { write: function(chunk) { return sink.write(chunk); } };
+            };
+            WritableStream.prototype.close = function() {
+              var sink = this._ws_sink;
+              return Promise.resolve().then(function() { return sink.close(); });
+            };
+            globalThis.WritableStream = WritableStream;
+            "#,
+        )
+        .unwrap();
+        rt.eval(super::FSAL_SHIM).unwrap();
+        rt.eval(&format!(
+            r#"
+            var __w = null, __chain = null;
+            (async function() {{
+              var root = {ROOT}('root', '{pid}');
+              var f = await root.getFileHandle('stream.txt', {{ create: true }});
+              __w = await f.createWritable();
+              __chain = (__w instanceof FileSystemWritableFileStream)
+                     && (__w instanceof WritableStream);
+              await __w.getWriter().write('through the writer');
+              await __w.close();
+            }})();
+            "#
+        ))
+        .unwrap();
+        assert!(bool_eval(&rt, "__chain === true"), "not a WritableStream subclass");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("stream.txt")).unwrap_or_default(),
+            "through the writer"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
 }
