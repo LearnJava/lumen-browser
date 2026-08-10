@@ -23,6 +23,31 @@ the time — read dates.
 
 ## Done
 
+- **One `FileSystemDirectoryHandle`, and `navigator.storage.getDirectory()` returns
+  it over a real sandbox (BUG-372, P3, 2026-08-10).** `storage_manager.rs` used to
+  define a second class of that name inside its shim's IIFE and resolve
+  `getDirectory()` to *that*, so the engine had two same-named classes with disjoint
+  method sets and every method of the one a page actually got answered without a file
+  system behind it (`getFileHandle()` → an object literal with no `getFile()`,
+  `removeEntry()` → a successful promise that removed nothing). The stub is gone;
+  `getDirectory()` reads `window.FileSystemDirectoryHandle` **at call time** — so the
+  two shims' install order no longer matters — and rejects if it is missing rather
+  than substituting a look-alike. Behind it: `filesystem_access::opfs_root_entry_json`
+  creates `<exe_dir>/data/opfs/<origin-slug>/` (portable-data convention, not
+  `%APPDATA%`; slug = readable prefix + FNV-1a of the *full* origin, because an opaque
+  origin is a whole URL) and hands out an ordinary `DIR_REG` grant for it. `DirGrant`
+  gained `writable`: the OPFS subtree is writable and subdirectories inherit it, a
+  picked directory stays read-only, which is what tells `{create:true}` apart from
+  `NotAllowedError`. The directory natives now take `create`/`recursive` and answer
+  with a **DOMException name** (`{"error":"…"}`) instead of `null` — "missing",
+  "read-only grant" and "wrong kind" are three different answers, and collapsing them
+  into one falsy value was half the bug. `_lumen_fs_resolve` compares two grant ids in
+  Rust (no path crosses into JS); `_lumen_writable_from_token` lets an OPFS file
+  handle write straight to its file, because routing it through the save dialog would
+  have replaced one silent wrong answer with another. Entry names are validated in
+  Rust (`valid_entry_name`) — without that, `{create:true}` is a write-anywhere
+  primitive. Residual: directory listings still yield grant-less handles
+  ([BUG-750](../bugs/BUG-750-OPEN.md)).
 - **File-API grants are unguessable, origin-bound and page-scoped; the natives are
   off the global object (BUG-371, P3, 2026-08-10).** The documented "JS only receives
   an opaque token" model did not hold: all ten `file_input`/`filesystem_access`

@@ -58,11 +58,11 @@
  "generated": "2026-08-10",
  "counts": {
   "open": 325,
-  "fixed": 389,
+  "fixed": 390,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 714,
+ "total_bugs": 715,
  "phases": [
   {
    "id": "P0",
@@ -7182,10 +7182,10 @@
    "debtor": false
   },
   "BUG-372": {
-   "status": "open",
-   "title": "В движке **два** разных класса с именем `FileSystemDirectoryHandle`, и `navigator.storage.getDirectory()` отдаёт не тот: `storage_manager.rs` определяет заглушк…",
-   "component": "js (`crates/js/src/storage_manager.rs:40-61` заглушечный класс в IIFE, `:99-104` `getDirectory`; `crates/js/src/filesystem_access.rs:574-659` настоящий класс; порядок `crates/js/src/lib.rs:1294`→`:1332`)",
-   "date": null,
+   "status": "fixed",
+   "title": "В движке было **два** разных класса с именем `FileSystemDirectoryHandle`, и `navigator.storage.getDirectory()` отдавал не тот: `storage_manager.rs` определял за…",
+   "component": "js (`crates/js/src/storage_manager.rs` — заглушечный класс в IIFE + `getDirectory`; `crates/js/src/filesystem_access.rs` — настоящий класс и реестр каталогов; `crates/js/src/file_input.rs` — реестр токенов)",
+   "date": "2026-08-10",
    "debtor": false
   },
   "BUG-373": {
@@ -9784,6 +9784,13 @@
    "component": "js (`crates/js/src/dom.rs` — `_lumen_fetch`), core (`crates/core/src/ext.rs::JsFetchProvider`), network (`crates/network/src/lib.rs`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-750": {
+   "status": "open",
+   "title": "Перебор каталога отдаёт handle-ы **без гранта**: `entries()`/`values()`/`keys()` строят `new FileSystemFileHandle(e.name, '', 0)` / `new FileSystemDirectoryHand…",
+   "component": "js (`crates/js/src/filesystem_access.rs` — `FileSystemDirectoryHandle.prototype.entries`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -10224,6 +10231,9 @@
   ],
   "js (`crates/js/src/eye_dropper.rs` — тело шима `open()`)": [
    "BUG-698"
+  ],
+  "js (`crates/js/src/filesystem_access.rs` — `FileSystemDirectoryHandle.prototype.entries`)": [
+   "BUG-750"
   ],
   "js (`crates/js/src/highlight_api.rs` — `HIGHLIGHT_API_SHIM`)": [
    "BUG-534"
