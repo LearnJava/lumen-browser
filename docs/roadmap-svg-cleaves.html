@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-10",
  "counts": {
-  "open": 314,
+  "open": 315,
   "fixed": 409,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 723,
+ "total_bugs": 724,
  "phases": [
   {
    "id": "P0",
@@ -9851,6 +9851,13 @@
    "component": "js (`crates/js/src/dom.rs` — `navigator.userActivation`; потребители: `_lumen_fs_request_error` там же, `crates/js/src/filesystem_access.rs:2601`, `crates/js/src/local_font_access.rs:151`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-759": {
+   "status": "open",
+   "title": "Гейт `scripts/scoped-test.sh` падает с `exit 101` на `credentials::tests::create_without_provider_rejects_not_allowed`: `assertion left == right failed, left: \"…",
+   "component": "js (`crates/js/src/credentials.rs:516-540` — `create_without_provider_rejects_not_allowed` / `create_and_get_through_installed_provider`, процесс-глобальный слот провайдера)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -10069,6 +10076,9 @@
   ],
   "js (`crates/js/src/cookie_store.rs`)": [
    "BUG-546"
+  ],
+  "js (`crates/js/src/credentials.rs:516-540` — `create_without_provider_rejects_not_allowed` / `create_and_get_through_installed_provider`, процесс-глобальный слот провайдера)": [
+   "BUG-759"
   ],
   "js (`crates/js/src/credentials.rs` — `CREDENTIALS_SHIM`) + network (`crates/network/src/webauthn.rs` — `VirtualAuthenticator`)": [
    "BUG-709"
