@@ -1,6 +1,6 @@
 # BUG-373 — все 9 `new DOMException(...)` в `filesystem_access.rs` переданы аргументами наоборот: `.name` получает человеческий текст, `.message` — имя ошибки, поэтому каждое отклонение File System Access непроверяемо (`e.name === 'AbortError'` всегда false)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-10 (P3, ветка `p3-bug-373`)
 **Компонент:** js (`crates/js/src/filesystem_access.rs` — строки 561, 628, 630, 643, 645, 653, 667, 679, 693)
 **Найден:** P2, WPT-VENDOR-file-system-access (2026-07-28), проба `--dump-layout` вне WPT (`.tmp/fsa-probe.html`)
 
@@ -89,9 +89,50 @@ catch (e) { if (e.name === 'AbortError') return; throw e; }
 `typeof …then === 'function'` (см. [[feedback_green_test_can_mask_broken_feature]];
 тот же способ маскировки, что у BUG-365 в `eye_dropper::tests`).
 
+## Исправлено (P3, 2026-08-10)
+
+Из девяти мест к моменту фикса оставалось четыре: перезапись модуля под
+[BUG-372](BUG-372-FIXED.md) убрала пять заглушечных `throw` из
+`getFileHandle`/`getDirectoryHandle`/`removeEntry` вместе с их текстами, а
+пришедший им на смену хелпер `fsThrow(name, message)` уже строил
+`new DOMException(message, name)` правильно. Оставшиеся четыре — три пикера
+(`showOpenFilePicker`/`showSaveFilePicker`/`showDirectoryPicker`,
+`AbortError`) и `createWritable()` при отказе в записи (`NotAllowedError`) —
+переставлены в порядок `(message, name)`.
+
+Проверка обратного порядка по всему крейту (`new DOMException('<Имя>Error'`,
+включая многострочные вызовы) больше не даёт ни одного попадания в
+`filesystem_access.rs`. Единственное соседнее совпадение —
+`eye_dropper.rs:30/36/52`, где оба аргумента равны `'AbortError'`, поэтому
+`name` там верен, а неточен только текст `message` (в скоуп не входит,
+относится к BUG-365).
+
+**Пять новых тестов** (`filesystem_access::tests_v8`) впервые смотрят внутрь
+отклонения — `"<instanceof DOMException>|<name>|<message>"` целиком:
+`cancelled_{open,save,directory}_picker_rejects_with_abort_error`,
+`refused_write_permission_rejects_with_not_allowed_error` и
+`missing_entry_rejects_with_not_found_error` (последний закрепляет уже
+корректный путь `fsThrow`, чтобы два способа поднять исключение в модуле не
+разъехались). A/B на возвращённом дефекте: четыре из пяти краснеют ровно
+перестановкой (`true|The user aborted a request.|AbortError` вместо
+`true|AbortError|The user aborted a request.`), пятый остаётся зелёным.
+
+Побочно вскрылось, почему 34 старых теста не могли увидеть баг даже при
+желании: `DOMException` в V8 появляется только из `install_dom`
+(`v8_runtime.rs`, `DOM_EXCEPTION_POLYFILL`), а тестовая обвязка модуля его не
+зовёт — до этой правки любой `throw new DOMException(...)` в шиме превращался
+в `ReferenceError`, и отклонение вообще не было `DOMException`. Полифилл
+поднят до `pub(crate)`, обвязка `with_fsa_for` теперь исполняет его сразу
+после DOM-заглушек: тест сверяется с настоящим конструктором движка, а не с
+собственноручно написанным двойником — иначе утверждение о порядке аргументов
+доказывало бы само себя.
+
+`cargo test -p lumen-js --features v8-backend --lib filesystem_access` —
+52/52, `cargo clippy -p lumen-js --all-targets --features v8-backend` чист.
+
 ## Заметки
 
 - Проба и вывод целиком: `.tmp/fsa-probe.html`, `.tmp/fsa-probe.log`.
 - Стоит грепнуть остальные шимы на тот же перевёрнутый порядок — здесь он
   единообразен по всему файлу, что похоже на однократную ошибку автора модуля,
-  но проверка дешёвая.
+  но проверка дешёвая. — Сделано, см. выше.

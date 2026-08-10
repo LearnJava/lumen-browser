@@ -915,7 +915,7 @@ FileSystemFileHandle.prototype.createWritable = function() {
     }
     var handleId = NAT_SAVE_PICKER ? NAT_SAVE_PICKER(suggested) : null;
     if (handleId == null) {
-      throw new DOMException('NotAllowedError', 'Write permission denied or user cancelled');
+      throw new DOMException('Write permission denied or user cancelled', 'NotAllowedError');
     }
     return new FileSystemWritableFileStream(handleId);
   });
@@ -1053,7 +1053,7 @@ function showOpenFilePicker(_options) {
   return Promise.resolve().then(function() {
     var info = NAT_OPEN_PICKER ? NAT_OPEN_PICKER() : null;
     if (info == null) {
-      throw new DOMException('AbortError', 'The user aborted a request.');
+      throw new DOMException('The user aborted a request.', 'AbortError');
     }
     var p = JSON.parse(info);
     return [new FileSystemFileHandle(p.name, p.token, p.size)];
@@ -1065,7 +1065,7 @@ function showSaveFilePicker(options) {
     var suggested = (options && options.suggestedName) ? options.suggestedName : 'file.txt';
     var handleId = NAT_SAVE_PICKER ? NAT_SAVE_PICKER(suggested) : null;
     if (handleId == null) {
-      throw new DOMException('AbortError', 'The user aborted a request.');
+      throw new DOMException('The user aborted a request.', 'AbortError');
     }
     var handle = new FileSystemFileHandle(suggested, '', 0);
     handle.createWritable = function() {
@@ -1079,7 +1079,7 @@ function showDirectoryPicker(_options) {
   return Promise.resolve().then(function() {
     var info = NAT_DIR_PICKER ? NAT_DIR_PICKER() : null;
     if (info == null) {
-      throw new DOMException('AbortError', 'The user aborted a request.');
+      throw new DOMException('The user aborted a request.', 'AbortError');
     }
     var p = JSON.parse(info);
     return new FileSystemDirectoryHandle(p.name, p.path_id);
@@ -1260,6 +1260,11 @@ mod tests_v8 {
     fn with_fsa_for(origin: &str) -> V8JsRuntime {
         let rt = V8JsRuntime::new().unwrap();
         rt.eval(STUBS).unwrap();
+        // On a page `install_dom` runs first and brings `DOMException` with it;
+        // here nothing does, so every `throw new DOMException(...)` in the shim
+        // used to become a `ReferenceError` and no test could look at what the
+        // module actually rejects with (BUG-373).
+        rt.eval(crate::v8_runtime::DOM_EXCEPTION_POLYFILL).unwrap();
         crate::file_input::install_file_input_bindings_v8(&rt, origin).unwrap();
         super::install_filesystem_access_v8(&rt, origin).unwrap();
         // The real `_lumen_show_*_picker` natives spawn a blocking native OS dialog
@@ -1777,5 +1782,105 @@ mod tests_v8 {
         assert!(path.ends_with(super::origin_slug(ORIGIN)));
         assert!(super::dir_reg().lock().unwrap().get_grant(&id, "https://other.test").is_none());
         let _ = std::fs::remove_dir_all(&path);
+    }
+
+    // ── BUG-373: which field carries the error name ──────────────────────────
+
+    /// The harness of `with_fsa_for`, but every picker native answers `null` —
+    /// the "user closed the dialog" path. The shim captures its natives at eval
+    /// time (BUG-371), so the mocks go in before `FSAL_SHIM` is re-evaluated.
+    fn with_cancelling_pickers(origin: &str) -> V8JsRuntime {
+        let rt = with_fsa_for(origin);
+        rt.eval(
+            r#"
+            globalThis._lumen_show_open_file_picker  = function() { return null; };
+            globalThis._lumen_show_save_file_picker  = function() { return null; };
+            globalThis._lumen_show_directory_picker  = function() { return null; };
+            "#,
+        )
+        .unwrap();
+        rt.eval(super::FSAL_SHIM).unwrap();
+        rt
+    }
+
+    /// Settle `expr` (a promise the caller expects to reject) and report the
+    /// rejection as `"<is a DOMException>|<name>|<message>"`.
+    ///
+    /// Every older test here stops at "the call returned a promise", which is
+    /// exactly why nine swapped constructor arguments stayed green (BUG-373):
+    /// a rejection can only be told apart by `name`, so a test that never reads
+    /// it cannot see the two fields trade places.
+    fn await_rejection(rt: &V8JsRuntime, expr: &str) -> String {
+        rt.eval(&format!(
+            r#"
+            var __rej = 'never settled';
+            ({expr}).then(
+              function() {{ __rej = 'resolved'; }},
+              function(e) {{
+                __rej = (e instanceof DOMException) + '|' + e.name + '|' + e.message;
+              }});
+            "#
+        ))
+        .unwrap();
+        string_eval(rt, "String(__rej)")
+    }
+
+    /// A cancelled open picker is the case the spec expects callers to swallow
+    /// (`if (e.name === 'AbortError') return;`). With the arguments swapped the
+    /// name was the human sentence, so a cancel was indistinguishable from a
+    /// real failure and every dialog dismissal reached the error branch.
+    #[test]
+    fn cancelled_open_picker_rejects_with_abort_error() {
+        let rt = with_cancelling_pickers("https://abort-open.fsal.test");
+        assert_eq!(
+            await_rejection(&rt, "window.showOpenFilePicker()"),
+            "true|AbortError|The user aborted a request."
+        );
+    }
+
+    #[test]
+    fn cancelled_save_picker_rejects_with_abort_error() {
+        let rt = with_cancelling_pickers("https://abort-save.fsal.test");
+        assert_eq!(
+            await_rejection(&rt, "window.showSaveFilePicker()"),
+            "true|AbortError|The user aborted a request."
+        );
+    }
+
+    #[test]
+    fn cancelled_directory_picker_rejects_with_abort_error() {
+        let rt = with_cancelling_pickers("https://abort-dir.fsal.test");
+        assert_eq!(
+            await_rejection(&rt, "window.showDirectoryPicker()"),
+            "true|AbortError|The user aborted a request."
+        );
+    }
+
+    /// The one non-picker site: a handle with no sandbox grant falls through to
+    /// the save dialog, and a refused dialog must say `NotAllowedError`.
+    #[test]
+    fn refused_write_permission_rejects_with_not_allowed_error() {
+        let rt = with_cancelling_pickers("https://abort-write.fsal.test");
+        assert_eq!(
+            await_rejection(&rt, "new FileSystemFileHandle('x.txt', '', 0).createWritable()"),
+            "true|NotAllowedError|Write permission denied or user cancelled"
+        );
+    }
+
+    /// The `fsThrow` path already ordered its arguments correctly; this pins it
+    /// so the two ways this module raises a DOMException cannot drift apart.
+    /// It also covers the live probe from the bug report verbatim:
+    /// `getFileHandle('nope.txt')` reported `name='File not found: nope.txt'`.
+    #[test]
+    fn missing_entry_rejects_with_not_found_error() {
+        let (rt, dir, pid) = opfs_case("missing_entry", true);
+        assert_eq!(
+            await_rejection(
+                &rt,
+                &format!("new FileSystemDirectoryHandle('root', '{pid}').getFileHandle('nope.txt')")
+            ),
+            "true|NotFoundError|Cannot open file: nope.txt"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

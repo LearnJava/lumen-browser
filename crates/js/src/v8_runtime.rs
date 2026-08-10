@@ -117,7 +117,12 @@ const V8_CMD_QUEUE_BOUND: usize = 64;
 /// built-in (`Context::full()`); V8 has no web-platform globals. Mirrors the
 /// probed quickjs-ng shape: legacy numeric `code` derived from the WHATWG DOM
 /// §4.3 name table, full constant table on the constructor, `instanceof Error`.
-const DOM_EXCEPTION_POLYFILL: &str = r#"(function() {
+///
+/// Visible to the crate so a module shim's own tests can stand up the engine's
+/// real constructor instead of a hand-written twin: a test that asserts which
+/// argument becomes `name` (BUG-373) proves nothing against a stub it wrote
+/// itself.
+pub(crate) const DOM_EXCEPTION_POLYFILL: &str = r#"(function() {
   if (typeof globalThis.DOMException !== 'undefined') return;
   var LEGACY_CODES = {
     IndexSizeError: 1, DOMStringSizeError: 2, HierarchyRequestError: 3,
