@@ -101,7 +101,7 @@ Object.getOwnPropertyNames(div).length = 134,  "click" среди них нет
 общий геттер/сеттер поверх `_lumen_get_attr`/`_lumen_set_attr`, из которой
 свойства ставятся циклом. `url`-вид (`href`, `src`, `action`, `formAction`,
 `cite`, `poster`) должен резолвиться относительно base URL документа — что
-сегодня невозможно, пока открыт [BUG-377](BUG-377-OPEN.md) (`Node.baseURI`).
+сегодня невозможно, пока открыт [BUG-377](BUG-377-FIXED.md) (`Node.baseURI`).
 Методы активации (`click`, `select`, `setSelectionRange`, `submit`, `reset`)
 логично класть на общий прототип вместе с `focus`/`blur` из BUG-381 — это же
 снимет и часть BUG-367 (пустой `Element.prototype`).
@@ -111,7 +111,7 @@ Object.getOwnPropertyNames(div).length = 134,  "click" среди них нет
 * [BUG-381](BUG-381-OPEN.md) — `focus()`/`blur()`/`tabIndex`/`autofocus`
   отсутствуют по той же причине и чинятся в той же точке.
 * [BUG-367](BUG-367-FIXED.md) — все члены лежат own-свойствами, прототип пуст.
-* [BUG-377](BUG-377-OPEN.md) — без `baseURI` нельзя правильно рефлектировать
+* [BUG-377](BUG-377-FIXED.md) — без `baseURI` нельзя правильно рефлектировать
   URL-атрибуты.
 * [BUG-305](BUG-305-FIXED.md) — точечное добавление `src`: пример того, как
   список рос вручную.
@@ -131,7 +131,7 @@ Object.getOwnPropertyNames(div).length = 134,  "click" среди них нет
 документа: внутренний `_lumen_document_base_url()` (первый `<base href>`,
 разрешённый относительно URL страницы, иначе сам URL страницы) поверх уже
 существовавшего `_url_resolve` — то есть ожидание «нельзя, пока открыт
-[BUG-377](BUG-377-OPEN.md)» не подтвердилось: публичный `Node.baseURI` для
+[BUG-377](BUG-377-FIXED.md)» не подтвердилось: публичный `Node.baseURI` для
 этого не нужен и остаётся за BUG-377.
 
 `type`/`name`/`src` перестали быть own-свойствами каждого элемента, поэтому
