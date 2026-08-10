@@ -76,11 +76,11 @@
  "generated": "2026-08-10",
  "counts": {
   "open": 326,
-  "fixed": 384,
+  "fixed": 385,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 710,
+ "total_bugs": 711,
  "phases": [
   {
    "id": "P0",
@@ -9677,10 +9677,10 @@
    "debtor": false
   },
   "BUG-732": {
-   "status": "open",
-   "title": "Шесть базовых DOM/CSSOM-точек отсутствуют, воспроизводится на тривиальной локальной странице: `Node.contains`, `Node.compareDocumentPosition`, `Element.attribut…",
-   "component": "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`)",
-   "date": null,
+   "status": "fixed",
+   "title": "Шесть базовых DOM/CSSOM-точек отсутствовали, воспроизводилось на тривиальной локальной странице: `Node.contains`, `Node.compareDocumentPosition`, `Element.attri…",
+   "component": "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`) + layout/shell (снимок custom properties)",
+   "date": "2026-08-10",
    "debtor": false
   },
   "BUG-733": {
@@ -9772,6 +9772,13 @@
    "title": "Абсолютно позиционированный не-replaced бокс с `width: auto` и `auto`-инсетой растягивается на всю ширину содержащего блока вместо shrink-to-fit (CSS 2.1 §10.3.…",
    "component": "layout (`crates/engine/layout/src/box_tree.rs` — размещение `position: absolute`/`fixed`)",
    "date": "2026-08-10",
+   "debtor": false
+  },
+  "BUG-746": {
+   "status": "open",
+   "title": "`document.styleSheets` отсутствует целиком (`typeof === \"undefined\"`), а вместе с ним и весь CSSOM таблиц стилей: нет ни `StyleSheetList`, ни `CSSStyleSheet`/`C…",
+   "component": "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`) + shell/layout (публикация разобранных таблиц в JS-рантайм)",
+   "date": null,
    "debtor": false
   }
  },
@@ -10130,8 +10137,11 @@
   "js (`crates/js/src/dom.rs` — `PerformanceObserver`/`_perf_entries` shim, ~line 8409-8460)": [
    "BUG-673"
   ],
-  "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`)": [
+  "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`) + layout/shell (снимок custom properties)": [
    "BUG-732"
+  ],
+  "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`) + shell/layout (публикация разобранных таблиц в JS-рантайм)": [
+   "BUG-746"
   ],
   "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`), shell (`crates/shell/src/main.rs` — парсерный путь)": [
    "BUG-486"
