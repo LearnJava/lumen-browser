@@ -67,18 +67,22 @@ performs neither of:
   (single-screen stub, correctly reported as `false`, matching `isExtended.tentative.https.window.js`'s
   only non-permission assertion `typeof self.screen.isExtended === 'boolean'`), not a defect.
 - `navigator.permissions.query({name:'window-management'})` always answering `'granted'` — this
-  is the pre-existing, already-filed [BUG-386](bugs/BUG-386-OPEN.md) defect (no permission-name
+  was the pre-existing, already-filed [BUG-386](bugs/BUG-386-FIXED.md) defect (no permission-name
   validation, and by extension no real per-permission state store at all); reconfirmed here as
   the same generic gap, not a `window-management`-specific bug on its own.
+  **Stale since 2026-08-10** — BUG-386 is fixed and `window-management` now answers `'denied'`
+  (no window placement exists, so that is the truthful answer). The probe transcript above
+  records the old behaviour.
 
 ## Предлагаемый фикс
 
 Both checks are small, localized additions to the top of `navigator.getScreenDetails` in
 `window_management.rs` before building/resolving `ScreenDetails`: (1) reject with
 `DOMException('...', 'NotAllowedError')` when the `window-management` permission state is not
-`'granted'` — this requires `navigator.permissions` to gain a real writable per-permission
-store first (currently a stateless computed function, the same gap BUG-386 already targets),
-so this half is blocked on that store existing; (2) reject with
+`'granted'` — no longer blocked on BUG-386 as of 2026-08-10 (`window-management` is a
+recognised name answering `'denied'`), but note the consequence: a literal gate makes
+`getScreenDetails()` reject unconditionally until there is a way for the user to grant the
+permission, so gate and grant path have to land together; (2) reject with
 `DOMException('...', 'InvalidStateError')` when the calling context lacks transient user
 activation, mirroring whatever activation-tracking primitive BUG-666's fix introduces for
 `getDisplayMedia` — the two bugs share the same missing primitive and should likely land

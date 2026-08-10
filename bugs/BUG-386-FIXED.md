@@ -1,10 +1,12 @@
 # BUG-386 — `navigator.permissions.query()` отвечает `granted` на любое имя вне списка из 11 запрещённых, включая нереализованные и выдуманные; `PermissionStatus` — не `EventTarget`, поля записываемы
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/dom.rs:7865-7890` — `WEB_API_SHIM`, секция
-«Permissions API (W3C Permissions §5)»: `_perm_denied` + `navigator.permissions`)
+**Статус:** FIXED 2026-08-10
+**Компонент:** js (`crates/js/src/permissions.rs` — новый модуль; до фикса —
+`crates/js/src/dom.rs`, `WEB_API_SHIM`, секция «Permissions API (W3C
+Permissions §5)»: `_perm_denied` + `navigator.permissions`)
 **Найден:** P2, WPT-VENDOR-font-access (2026-07-28), проба `--dump-layout`
 (`.tmp/fa-probe3.html`)
+**Исправлен:** P3, 2026-08-10
 
 ## Симптом
 
@@ -98,6 +100,71 @@ not exist in headless mode are 'denied'; everything else is 'granted'». Спи�
 Регрессия проверяется без WPT: страница, утверждающая, что
 `navigator.permissions.query({name:'заведомо-нет-такого'})` отклоняется, а
 `query({name:'local-fonts'})` даёт `denied`, пока реализации нет.
+
+## Как починено (P3, 2026-08-10)
+
+Реализация переехала из `WEB_API_SHIM` в свой модуль
+[`crates/js/src/permissions.rs`](../crates/js/src/permissions.rs) — рядом с
+`local_font_access.rs`, по тому же образцу (шим + свои юнит-тесты).
+
+**Пункт 1 — реестр имён.** 34 имени реестра W3C; всё остальное отклоняется
+`TypeError`-ом с текстом WebIDL про `enumeration PermissionName`. Ошибки
+конверсии дескриптора (не объект, нет `name`) — тоже отклонение, а не
+синхронный throw: `query` объявлен возвращающим промис. Лишние члены
+дескриптора (`sysex`, `userVisibleOnly`, `panTiltZoom`) игнорируются, как
+положено словарю.
+
+**Пункт 2 — состояние описывает то, что действительно происходит.** У каждого
+распознаваемого имени состояние проставлено явно, ветки «по умолчанию» нет —
+новое имя нельзя добавить, не классифицировав его (гейт
+`every_recognised_name_has_a_state`). Правило: `granted` только там, где вызов
+API сегодня даёт заявленный наблюдаемый эффект, иначе `denied`.
+
+| Состояние | Имена | Почему |
+|---|---|---|
+| `granted` | `clipboard-read`, `clipboard-write` | `readText()`/`writeText()` ходят в буфер ОС через `_lumen_clipboard_read`/`_lumen_clipboard_write` |
+| `granted` | `storage-access`, `top-level-storage-access` | хранилище не партиционировано по top-level site, так что непартиционированный доступ у страницы уже есть |
+| `granted` | `idle-detection` | `IdleDetector.start()` реально опрашивает `__lumen_idle_get_idle_ms` и диспатчит `change`; `IdleDetector.requestPermission()` и так отвечает `granted` — два ответа обязаны совпадать |
+| живой опрос | `notifications` | читается с `Notification.permission` при каждом запросе: это собственный ответ движка на тот же вопрос, и копия в таблице разъехалась бы с оригиналом ('default' спеки → 'prompt') |
+| `denied` | остальные 28 | заглушка, резолвящаяся ничего не сделав (`wakeLock.request`, `storage.persist`, `requestPointerLock`, background-*), API, который всегда падает (`geolocation` зовёт error-колбэк с `PERMISSION_DENIED` — `FakeCoords` в воркспейсе никто не конструирует), или которого нет вовсе |
+
+`local-fonts` → `denied` — это то, что держит гейт `queryLocalFonts()`
+закрытым: перечисление шрифтов ОС не включится молча в тот день, когда
+появятся нативы Phase 1 ([BUG-385](BUG-385-FIXED.md)).
+
+**Пункт 3 — форма.** `PermissionStatus` наследует шимовый `EventTarget`
+(`Reflect.construct`, чтобы тело базы отработало в обход собственного
+конструктора-заглушки), так что `addEventListener('change', …)` ведёт в реально
+работающий диспатч. `name`/`state` — readonly-геттеры прототипа поверх
+приватного `WeakMap`; `state` пересчитывается на каждом чтении, поэтому не
+может устареть, а `status.state = 'granted'` больше не «повышает» уже
+полученный ответ. `onchange` — аксессор обработчика, есть `Symbol.toStringTag`,
+ни `Permissions`, ни `PermissionStatus` со страницы не конструируются.
+
+Чтобы механизм `change` не остался украшением, внутренний
+`_lumen_permission_state_changed(name)` вызывается из
+`Notification.requestPermission()` — и только при реальном сдвиге значения:
+событие о неизменившемся состоянии врало бы о движке. Имя `_lumen_*` прячет и
+замораживает пасс BUG-378, так что со страницы его не позвать.
+
+**Пункт 4 — не сделан, и не здесь.** `navigator.permissions` как аксессор
+`Navigator.prototype` требует интерфейса `Navigator`, которого в движке нет
+вовсе: `navigator` — объектный литерал в `WEB_API_SHIM`, все ~48 членов —
+собственные данные. Это [BUG-624](BUG-624-OPEN.md), одна правка на весь объект.
+Взят прецедент `navigator.credentials` ([BUG-366](BUG-366-FIXED.md)):
+незаписываемое собственное свойство, так что подменить контейнер целиком и
+отвечать за движок третья сторона уже не может.
+
+**Проверка.** 33 теста: 25 в `permissions.rs` (реестр, состояния, форма,
+диспатч `change`), 4 в `dom.rs` на реальном пути установки — модуль тестируется
+против стаба `EventTarget`, потому что в чистом V8 его нет, и эти четыре
+закрывают разрыв, — 2 в `notifications_bindings.rs` на проводку уведомления и 2
+обновлённых. Плюс проба `--dump-layout` на живой странице
+(`.tmp/probe-386.html`): выдуманное имя отклоняется `TypeError`-ом,
+`local-fonts`/`geolocation`/`notifications`/`persistent-storage` дают `denied`,
+дескриптор `navigator.permissions` — `{w:false,e:true,c:true}`, присваивание не
+проходит, `Object.prototype.toString.call(status)` = `[object
+PermissionStatus]`, `status instanceof EventTarget` = `true`.
 
 ## Связанные
 

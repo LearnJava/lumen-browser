@@ -23,6 +23,35 @@ the time — read dates.
 
 ## Done
 
+- **`permissions.query()` recognises names instead of saying yes to all of them
+  (BUG-386, P3, 2026-08-10).** The Permissions API used to be 25 lines of
+  `WEB_API_SHIM`: one `_perm_denied` array of 11 names and `granted` for
+  everything else, including names the engine had never heard of. That is not a
+  default policy but a missing WebIDL conversion — and it destroys the one thing
+  `query()` is for, since a page asks `query({name: 'X'})` precisely to learn
+  whether `X` exists. Now a module of its own, `permissions.rs`, built on two
+  rules: **(1)** a 34-name registry, everything else rejected with a `TypeError`
+  (rejection, never a synchronous throw — `query` returns a promise); **(2)**
+  every recognised name carries an explicit state, with no fallback branch, so a
+  new name cannot be added without classifying it (the
+  `every_recognised_name_has_a_state` gate). `granted` is reserved for
+  operations that really have their specified effect today — the clipboard
+  natives, unpartitioned cookies, `IdleDetector`'s OS idle polling — and
+  everything else is `denied`, which is what keeps `queryLocalFonts()`'s gate
+  shut until OS font enumeration has a way to ask the user. `notifications` is
+  not a table entry at all: it is read off `Notification.permission` at query
+  time, because copying the engine's own answer into a table only lets the two
+  drift. `PermissionStatus` extends the shim's `EventTarget` via
+  `Reflect.construct` (so the base's body runs without going through the
+  throwing no-constructor stub), `name`/`state` are readonly prototype getters
+  over a private `WeakMap` and `state` recomputes on every read, so it cannot go
+  stale. To keep the `change` machinery from being ornamental, the internal
+  `_lumen_permission_state_changed(name)` is called from
+  `Notification.requestPermission()` — and only on a real move, since an event
+  for an unchanged value would misreport the engine. `navigator.permissions` is
+  a non-writable own property (the BUG-366 precedent); the spec's
+  `Navigator.prototype` accessor is impossible while there is no `Navigator`
+  interface at all ([BUG-624](../bugs/BUG-624-OPEN.md)).
 - **`queryLocalFonts()` exists, and the 2020-draft `navigator.fonts` is gone
   (BUG-385, P3, 2026-08-10).** `local_font_access.rs` implemented a WICG draft that
   was dropped before the API shipped: `navigator.fonts.query()` — a surface no
@@ -37,8 +66,10 @@ the time — read dates.
   non-enumerable globals, argument conversion reported as a rejection. The §2
   gates (transient activation → `SecurityError`, `local-fonts` permission →
   `NotAllowedError`) are written **now**, fail-closed, even though Phase 0 has
-  nothing to withhold — Phase 1 must not be able to land without them while
-  [BUG-386](../bugs/BUG-386-OPEN.md) still answers `granted` by default. OS font
+  nothing to withhold — Phase 1 must not be able to land without them, which at
+  the time meant [BUG-386](../bugs/BUG-386-FIXED.md) answering `granted` by
+  default (fixed 2026-08-10: `local-fonts` is `denied`, so the gate is what
+  holds the branch shut). OS font
   enumeration stays unimplemented (`[]`); the natives are captured in closure
   scope at install time, so page script cannot shadow their names to feed the
   shim a font list of its own.
