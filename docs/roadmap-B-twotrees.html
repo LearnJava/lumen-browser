@@ -76,11 +76,11 @@
  "generated": "2026-08-10",
  "counts": {
   "open": 321,
-  "fixed": 397,
+  "fixed": 398,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 718,
+ "total_bugs": 719,
  "phases": [
   {
    "id": "P0",
@@ -2534,7 +2534,8 @@
         "BUG-378",
         "BUG-379",
         "BUG-380",
-        "BUG-752"
+        "BUG-752",
+        "BUG-754"
        ]
       },
       {
@@ -7252,10 +7253,10 @@
    "debtor": false
   },
   "BUG-379": {
-   "status": "open",
+   "status": "fixed",
    "title": "Защита от детекта автоматизации сама является отпечатком: цикл по `_automationGlobals` **создаёт** все 15 маркеров (`__playwright`, `__pwInitScripts`, `__seleni…",
-   "component": "js (`crates/js/src/surface_api.rs:163-181`, устанавливается на единственном оставшемся движке V8: `v8_runtime.rs:4311`)",
-   "date": null,
+   "component": "js (`crates/js/src/surface_api.rs` — цикл по `_automationGlobals` удалён; шим ставится на единственном движке V8: `v8_runtime.rs:4311`)",
+   "date": "2026-08-10",
    "debtor": false
   },
   "BUG-380": {
@@ -9831,6 +9832,13 @@
    "status": "open",
    "title": "725 внутренних имён движка по-прежнему **читаются** с глобала по известному имени: `typeof window._lumen_get_attr === 'function'`, `Object.getOwnPropertyNames(w…",
    "component": "js (`crates/js/src/dom.rs::WEB_API_SHIM` — 246 top-level `var`/`function _lumen_…`; регистрация нативов из Rust — `crates/js/src/v8_compat.rs::register_v8_native`/`_scoped`, 468 имён; плюс top-level объявления ~120 модульных шимов `crates/js/src/*.rs`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-754": {
+   "status": "open",
+   "title": "Остаток [BUG-379](bugs/BUG-379-FIXED.md): модель анти-фингерпринта смешанная и требует явного решения. `navigator.webdriver` отсутствует полностью (`!('webdrive…",
+   "component": "js (`crates/js/src/dom.rs` — литерал `navigator`; намеренное отсутствие задокументировано в `crates/js/src/surface_api.rs`), тесты, закрепляющие текущую модель: `crates/js/src/surface_api.rs::tests::webdriver_absent_in_navigator`, `crates/js/tests/cases/no_automation_markers.rs::webdriver_not_in_navigator`, `crates/driver/tests/cases/antidetect_surface_api.rs::navigator_webdriver_is_absent`",
    "date": null,
    "debtor": false
   }

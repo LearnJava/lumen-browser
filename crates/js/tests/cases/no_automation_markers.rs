@@ -44,6 +44,39 @@ fn bool_eval(rt: &V8JsRuntime, script: &str) -> bool {
     }
 }
 
+/// Assert a marker name is **absent** from `window`, not merely readable as
+/// `undefined`.
+///
+/// BUG-379: `typeof window.__x === 'undefined'` — what every test here used to
+/// assert — is the one detector variant that a `{ get: () => undefined }`
+/// property satisfies, so it stayed green while all fifteen markers really
+/// were own properties of the global. Detectors use `getOwnPropertyNames` /
+/// `in` / `hasOwnProperty`, which distinguish the two states; so does this.
+fn assert_marker_absent(rt: &V8JsRuntime, name: &str) {
+    assert!(
+        bool_eval(rt, &format!("typeof window.{name} === 'undefined'")),
+        "window.{name} must read as undefined"
+    );
+    assert!(
+        bool_eval(rt, &format!("!('{name}' in window)")),
+        "'{name}' in window must be false — an undefined-returning property is itself a marker"
+    );
+    assert!(
+        bool_eval(
+            rt,
+            &format!("!Object.prototype.hasOwnProperty.call(window, '{name}')")
+        ),
+        "window.hasOwnProperty('{name}') must be false"
+    );
+    assert!(
+        bool_eval(
+            rt,
+            &format!("Object.getOwnPropertyNames(window).indexOf('{name}') === -1")
+        ),
+        "'{name}' must not appear in Object.getOwnPropertyNames(window)"
+    );
+}
+
 // ── navigator.webdriver ──────────────────────────────────────────────────────
 
 #[test]
@@ -98,28 +131,19 @@ fn no_cdc_variables() {
 #[test]
 fn playwright_global_absent() {
     let rt = make_rt();
-    assert!(
-        bool_eval(&rt, "typeof window.__playwright === 'undefined'"),
-        "__playwright must be absent (Playwright detection marker)"
-    );
+    assert_marker_absent(&rt, "__playwright");
 }
 
 #[test]
 fn playwright_init_scripts_absent() {
     let rt = make_rt();
-    assert!(
-        bool_eval(&rt, "typeof window.__pwInitScripts === 'undefined'"),
-        "__pwInitScripts must be absent"
-    );
+    assert_marker_absent(&rt, "__pwInitScripts");
 }
 
 #[test]
 fn playwright_exec_path_absent() {
     let rt = make_rt();
-    assert!(
-        bool_eval(&rt, "typeof window.__pwExecPath === 'undefined'"),
-        "__pwExecPath must be absent"
-    );
+    assert_marker_absent(&rt, "__pwExecPath");
 }
 
 // ── Selenium / WebDriver markers ─────────────────────────────────────────────
@@ -127,28 +151,31 @@ fn playwright_exec_path_absent() {
 #[test]
 fn selenium_unwrapped_absent() {
     let rt = make_rt();
-    assert!(
-        bool_eval(&rt, "typeof window.__selenium_unwrapped === 'undefined'"),
-        "__selenium_unwrapped must be absent"
-    );
+    assert_marker_absent(&rt, "__selenium_unwrapped");
+    assert_marker_absent(&rt, "__selenium_evaluate");
 }
 
 #[test]
 fn webdriver_evaluate_absent() {
     let rt = make_rt();
-    assert!(
-        bool_eval(&rt, "typeof window.__webdriver_evaluate === 'undefined'"),
-        "__webdriver_evaluate must be absent"
-    );
+    assert_marker_absent(&rt, "__webdriver_evaluate");
 }
 
 #[test]
 fn webdriver_script_fn_absent() {
     let rt = make_rt();
-    assert!(
-        bool_eval(&rt, "typeof window.__webdriver_script_fn === 'undefined'"),
-        "__webdriver_script_fn must be absent"
-    );
+    assert_marker_absent(&rt, "__webdriver_script_fn");
+    assert_marker_absent(&rt, "__webdriver_script_func");
+}
+
+// ── Watir markers ────────────────────────────────────────────────────────────
+
+#[test]
+fn watir_dialog_hooks_absent() {
+    let rt = make_rt();
+    for name in ["__lastWatirAlert", "__lastWatirConfirm", "__lastWatirPrompt"] {
+        assert_marker_absent(&rt, name);
+    }
 }
 
 // ── PhantomJS markers ────────────────────────────────────────────────────────
@@ -156,19 +183,13 @@ fn webdriver_script_fn_absent() {
 #[test]
 fn call_phantom_absent() {
     let rt = make_rt();
-    assert!(
-        bool_eval(&rt, "typeof window.callPhantom === 'undefined'"),
-        "callPhantom must be absent (PhantomJS detection marker)"
-    );
+    assert_marker_absent(&rt, "callPhantom");
 }
 
 #[test]
 fn phantom_global_absent() {
     let rt = make_rt();
-    assert!(
-        bool_eval(&rt, "typeof window._phantom === 'undefined'"),
-        "_phantom must be absent"
-    );
+    assert_marker_absent(&rt, "_phantom");
 }
 
 // ── DOM Automation controller ────────────────────────────────────────────────
@@ -176,16 +197,26 @@ fn phantom_global_absent() {
 #[test]
 fn dom_automation_absent() {
     let rt = make_rt();
+    assert_marker_absent(&rt, "domAutomation");
+    assert_marker_absent(&rt, "domAutomationController");
+}
+
+// ── The whole surface at once ─────────────────────────────────────────────────
+
+/// BUG-379's one-line detector, verbatim in spirit: enumerate the global's own
+/// property names and look for any automation-tool prefix. `false` in Chrome
+/// and Firefox — must be `false` here.
+#[test]
+fn one_line_prefix_detector_finds_nothing() {
+    let rt = make_rt();
     assert!(
-        bool_eval(&rt, "typeof window.domAutomation === 'undefined'"),
-        "domAutomation must be absent"
-    );
-    assert!(
-        bool_eval(
+        !bool_eval(
             &rt,
-            "typeof window.domAutomationController === 'undefined'"
+            "Object.getOwnPropertyNames(window).some(function(n) { \
+               return /^(__webdriver|__selenium|__playwright|__pw|__lastWatir|_phantom|callPhantom|domAutomation|cdc_)/.test(n); \
+             })"
         ),
-        "domAutomationController must be absent"
+        "no automation-marker name may be an own property of window"
     );
 }
 

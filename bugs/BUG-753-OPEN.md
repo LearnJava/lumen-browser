@@ -71,5 +71,5 @@ Rust, передавать шиму аргументами IIFE (или одни
   тест `internal_globals::tests::shim_has_no_top_level_lexical_declarations`.
 - Смежное: [BUG-378](BUG-378-FIXED.md) (перечислимость и подмена — закрыты),
   [BUG-371](BUG-371-FIXED.md) (те же нативы для File System Access, закрыт
-  удалением), [BUG-379](BUG-379-OPEN.md) (маркеры автоматизации
+  удалением), [BUG-379](BUG-379-FIXED.md) (маркеры автоматизации
   `surface_api.rs` — 15 имён, создаваемых защитой от детекта).
