@@ -6242,31 +6242,11 @@ navigator.clipboard = {
 };
 
 // ── Permissions API (W3C Permissions §5) ─────────────────────────────────────
-// navigator.permissions.query({ name }) → Promise<PermissionStatus>
-//
-// Lumen is a single-user desktop app.  Sensors and AV hardware that do not
-// exist in headless mode are 'denied'; everything else is 'granted'.  When P3
-// adds per-site permission UI the state values can be updated at runtime.
-function PermissionStatus(name, state) {
-    this.name     = name;
-    this.state    = state;
-    this.onchange = null;
-}
-var _perm_denied = [
-    'microphone', 'camera', 'midi', 'speaker-selection',
-    'ambient-light-sensor', 'accelerometer', 'gyroscope', 'magnetometer',
-    'display-capture', 'screen-wake-lock', 'nfc',
-];
-navigator.permissions = {
-    query: function(descriptor) {
-        if (!descriptor || typeof descriptor.name !== 'string') {
-            return Promise.reject(new TypeError('permissions.query: descriptor must have a name'));
-        }
-        var name  = descriptor.name;
-        var state = _perm_denied.indexOf(name) >= 0 ? 'denied' : 'granted';
-        return Promise.resolve(new PermissionStatus(name, state));
-    },
-};
+// Lives in `crates/js/src/permissions.rs`, not here: BUG-386 replaced the 25
+// lines that used to sit at this spot — one deny list of 11 names and `granted`
+// for everything else, including names this engine has never heard of — with a
+// recognised-name registry that rejects the rest with a TypeError, and a
+// PermissionStatus that is a real EventTarget.
 
 // ── Timer queue (HTML LS §8.6 «timers») ──────────────────────────────────────
 // Timers are stored as a JS-side array; Rust drains them each event loop tick
@@ -10834,7 +10814,6 @@ window.btoa                  = btoa;
 window.atob                  = atob;
 window.MessageChannel        = MessageChannel;
 window.MessagePort           = MessagePort;
-window.PermissionStatus      = PermissionStatus;
 // W3C Secure Contexts §3.1: local-file and localhost are considered secure.
 window.isSecureContext       = true;
 // Set by Rust via _LUMEN_CROSS_ORIGIN_ISOLATED global (COOP=same-origin + COEP=require-corp).
@@ -33824,6 +33803,65 @@ mod tests {
             )
             .unwrap();
             assert!(bool_eval(&rt, "rejected"));
+        }
+
+        // The four below run against the real install (`crates/js/src/permissions.rs`
+        // over `WEB_API_SHIM`'s own `EventTarget`), which the module's own unit
+        // tests cannot reach — they stub `EventTarget` because plain V8 has none.
+
+        /// BUG-386: an unrecognised name used to come back `granted`, which is
+        /// what broke feature detection — a page cannot tell "supported" from
+        /// "never heard of it" if the answer is always yes.
+        #[test]
+        fn navigator_permissions_unknown_name_rejects_with_type_error() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var out = 'never settled'; \
+                 navigator.permissions.query({ name: 'totally-made-up-permission-xyz' }).then( \
+                   function(ps) { out = 'resolved:' + ps.state; }, \
+                   function(e) { out = 'rejected:' + (e instanceof TypeError); });",
+            )
+            .unwrap();
+            assert!(bool_eval(&rt, "out === 'rejected:true'"));
+        }
+
+        /// `local-fonts` is what holds `queryLocalFonts()`'s gate shut until OS
+        /// font enumeration can actually ask the user (BUG-385).
+        #[test]
+        fn navigator_permissions_local_fonts_denied() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var state = null; \
+                 navigator.permissions.query({ name: 'local-fonts' }).then(function(ps) { state = ps.state; });",
+            )
+            .unwrap();
+            assert!(bool_eval(&rt, "state === 'denied'"));
+        }
+
+        /// The subscription path has to be wired to the shim's real
+        /// `EventTarget`, not to an inert `onchange` field.
+        #[test]
+        fn navigator_permissions_status_is_a_real_event_target() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var status = null; \
+                 navigator.permissions.query({ name: 'camera' }).then(function(ps) { status = ps; });",
+            )
+            .unwrap();
+            assert!(bool_eval(&rt, "status instanceof EventTarget"));
+            assert!(bool_eval(&rt, "status instanceof PermissionStatus"));
+            assert!(bool_eval(&rt, "typeof status.addEventListener === 'function'"));
+            assert!(bool_eval(&rt, "navigator.permissions instanceof Permissions"));
+        }
+
+        /// A third-party script must not be able to swap the container out and
+        /// answer for the engine (the BUG-366 class).
+        #[test]
+        fn navigator_permissions_is_not_overwritable() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("navigator.permissions = { query: function() { return 'forged'; } };")
+                .unwrap();
+            assert!(bool_eval(&rt, "navigator.permissions instanceof Permissions"));
         }
 
         // ── isSecureContext / crossOriginIsolated tests ────────────────────────────

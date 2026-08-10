@@ -4960,6 +4960,7 @@ impl V8JsRuntime {
         install_v8!(paint_worklet::install_paint_worklet_api_v8);
         install_v8!(payment_request::install_payment_request_v8);
         install_v8!(periodic_sync::install_periodic_sync_v8);
+        install_v8!(permissions::install_permissions_api_v8);
         install_v8!(permissions_policy::install_permissions_policy_bindings_v8);
         install_v8!(pip_bindings::install_pip_bindings_v8);
         // W3C Pointer Events Level 3 §4.1 — takes `pointer_capture_nid` by ref since the
