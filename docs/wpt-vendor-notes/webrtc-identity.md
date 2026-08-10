@@ -29,7 +29,7 @@ certificate: UnknownIssuer`) — the already-documented TLS gap
 tripped the stale-browsing-context assertion
 (`AssertionError: Got results from RTCPeerConnection-constructor.html,
 expected RTCPeerConnection-getIdentityAssertion.sub.https.html`) — the same
-session-reuse mechanism as [BUG-380](../../bugs/BUG-380-OPEN.md), triggered
+session-reuse mechanism as [BUG-380](../../bugs/BUG-380-FIXED.md), triggered
 here by the failed TLS navigation rather than a genuine second finding.
 
 The one non-`.https.` file, `RTCPeerConnection-constructor.html`, ran to

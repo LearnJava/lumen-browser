@@ -12,7 +12,7 @@ orientation-event --recursive`, ~7 мин, 27 отобранных id из 33
 вендоренных файлов, 10 `-manual` исключены раннером): **0/27 harness
 OK, 0/0 сабтестов**. 26/27 — известный TLS-гэп `UnknownIssuer` (все
 `.https.`); 1/27 (`idlharness.https.window.html`) — реконфирмация
-[BUG-380](BUG-380-OPEN.md) (browsing context переиспользуется, отдаёт
+[BUG-380](BUG-380-FIXED.md) (browsing context переиспользуется, отдаёт
 результаты предыдущего теста). Прогон не даёт нового сигнала сам по
 себе — находка получена живой пробой поверх реализации, по правилу
 «категория 🚫 не значит находок нет» ([[reference_wpt_run_report_invocation_recipe]]).

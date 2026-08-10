@@ -46,7 +46,7 @@ already-documented gap, nothing new:
   `RTCRtpEncodingParameters-scaleResolutionDownTo.https.html` ERROR: both
   "Got results from X, expected Y" / "WebSocket connection closed" —
   the already-documented browsing-context reuse crosstalk
-  [BUG-380](../../bugs/BUG-380-OPEN.md), tripped here because the
+  [BUG-380](../../bugs/BUG-380-FIXED.md), tripped here because the
   preceding TIMEOUT/hung test left stale state before the next
   navigation.
 
@@ -73,4 +73,4 @@ webrtc-extensions --recursive` — ~52 с, **6/10 harness OK, 2/51
 4 сабтеста — `NotAllowedError: Video capture is not available in Lumen
 Phase 1` (ожидаемое ограничение Phase 1); 2 ERROR — уже задокументированное
 переиспользование browsing context между тестами
-([BUG-380](../bugs/BUG-380-OPEN.md)). Новый BUG-NNN не заводился.
+([BUG-380](../bugs/BUG-380-FIXED.md)). Новый BUG-NNN не заводился.

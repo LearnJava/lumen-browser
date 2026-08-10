@@ -8,7 +8,7 @@
 
 `run_report.py --all --root webrtc-stats --recursive`: **0/8 harness OK,
 0/23 subtests** — every file either TIMEOUTs or ERRORs (the ERRORs are the
-already-known [BUG-380](BUG-380-OPEN.md) stale-result-reuse artifact that
+already-known [BUG-380](BUG-380-FIXED.md) stale-result-reuse artifact that
 follows a TIMEOUT). Representative failures:
 
 ```

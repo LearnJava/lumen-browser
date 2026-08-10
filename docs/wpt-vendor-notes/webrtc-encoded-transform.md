@@ -26,7 +26,7 @@ pull `testdriver.js` (~45%), 30 `.https.*` files.
 passed**. Breakdown of the 31 unexpected results: 27 TIMEOUT (mostly the
 already-documented TLS gap [BUG-657](../../bugs/BUG-657-OPEN.md),
 `UnknownIssuer` on `.https.` navigation) and 4 ERROR (the already-documented
-session-reuse crosstalk [BUG-380](../../bugs/BUG-380-OPEN.md) — "Got results
+session-reuse crosstalk [BUG-380](../../bugs/BUG-380-FIXED.md) — "Got results
 from X, expected Y" on the four `RTC*Frame-clone`/`-metadata`/
 `insertable-streams-audio` files that ran back-to-back). Every one of the
 21 subtests that actually executed failed with a plain `ReferenceError`
@@ -54,7 +54,7 @@ variant-фан-аута). `run_report.py --all --root webrtc-encoded-transform
 Из 31 неожиданного исхода 27 — TIMEOUT (в основном уже задокументированный
 TLS-гэп [BUG-657](../bugs/BUG-657-OPEN.md), `UnknownIssuer` на `.https.`-
 навигации) и 4 — ERROR (уже задокументированное переиспользование
-результатов сессии, [BUG-380](../bugs/BUG-380-OPEN.md): «Got results from
+результатов сессии, [BUG-380](../bugs/BUG-380-FIXED.md): «Got results from
 X, expected Y» на четырёх файлах `RTC*Frame-clone`/`-metadata`/
 `insertable-streams-audio`, исполнившихся подряд). Все 21 реально
 исполнившихся сабтеста падают на простой `ReferenceError: <API> is not

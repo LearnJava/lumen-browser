@@ -61,7 +61,11 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   `LumenTestharnessExecutor.do_test` (S4): `browsingContext.navigate` then
   `script.evaluate`-polls for `tests/wpt/resources/testharnessreport.js`'s
   JSON result global, tolerating the transient "JS context not available"
-  BiDi error while the new document's JS runtime is still installing.
+  BiDi error while the new document's JS runtime is still installing. Clears
+  that global and marks the outgoing document before every navigation
+  ([BUG-380](../../bugs/BUG-380-FIXED.md)) — a navigation that fails to load
+  answers successfully over BiDi while leaving the previous document live, so
+  without the reset the next test read the previous test's result.
 - `tests/wpt/resources/testharness.js` — vendored upstream client-side test harness.
 - `tests/wpt/resources/check-layout-th.js` — vendored upstream self-checking
   layout helper (`WPT-RUN-1`, `ROADMAP.md`): reads `data-expected-*`
@@ -109,6 +113,17 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   LUMEN_PROFILE=dev-release <venv>/python tests/wpt/verify_devx6_bidi_scenarios.py
   ```
 
+- `tests/wpt/verify_bug380_navigation_staleness.py` — **ours** —
+  [BUG-380](../../bugs/BUG-380-FIXED.md) regression check: drives the real
+  `LumenTestharnessExecutor._run_testharness` coroutine over two navigations
+  (one that loads, one to a dead port) against a spawned `lumen --bidi-port`,
+  and fails if the second inherits the first's testharness result instead of
+  erroring out. Run with:
+
+  ```bash
+  LUMEN_PROFILE=dev-release <venv>/python tests/wpt/verify_bug380_navigation_staleness.py
+  ```
+
 - `tests/wpt/run_smoke.py` — **ours** (S4) — minimal driver that calls
   `wptcommandline`/`wptrunner.run_tests` directly against the smoke test (see
   its own docstring for why this isn't `tools/wpt/wpt`). Passes
@@ -118,8 +133,10 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   per failing test. One `lumen.exe` process now runs the whole selected test
   set, reusing a single browsing context (`LumenBidiProtocol.context_id`,
   `executorlumen.py`) that gets a fresh `browsingContext.navigate` per test —
-  still test-isolated, just not process-isolated. The browser still restarts
-  on an actual crash/hang. Run with:
+  still test-isolated, just not process-isolated. That isolation rests on the
+  navigation actually loading, which is why the executor also resets the result
+  global explicitly ([BUG-380](../../bugs/BUG-380-FIXED.md)). The browser still
+  restarts on an actual crash/hang. Run with:
 
   ```bash
   LUMEN_PROFILE=dev-release <venv>/python tests/wpt/run_smoke.py

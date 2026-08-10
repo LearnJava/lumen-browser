@@ -32,7 +32,7 @@ out-of-category vendoring needed.
 TIMEOUT directly; the other 3 (`hardware-capability-stats.https.html`,
 `outbound-rtp.https.html`, `supported-stats.https.html`) ERROR with
 `AssertionError: Got results from <prior test>, expected <this test>` — the
-already-documented [BUG-380](../../bugs/BUG-380-OPEN.md) stale-result-reuse
+already-documented [BUG-380](../../bugs/BUG-380-FIXED.md) stale-result-reuse
 artifact that always follows a TIMEOUT in the browsing context, not an
 independent finding.
 
@@ -72,6 +72,6 @@ webrtc-stats --recursive` — ~82 с, **0/8 harness OK, 0/23 сабтестов*
 никогда, а инстансы `RTCPeerConnection` не связаны друг с другом вовсе, так
 что любой канонический двухпировый тест виснет до таймаута враннера. Три
 файла из восьми дополнительно дают `AssertionError` (уже известный дрейф
-[BUG-380](../bugs/BUG-380-OPEN.md) — переиспользование результата
+[BUG-380](../bugs/BUG-380-FIXED.md) — переиспользование результата
 предыдущего теста после TIMEOUT), не самостоятельная находка. Новый номер:
 BUG-727.
