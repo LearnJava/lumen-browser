@@ -122,6 +122,10 @@ pub fn active_document_origin() -> String {
 }
 
 /// Record the origin the current document's file-API bindings are bound to.
+///
+/// Only the V8 install path binds anything, so on a build without that backend
+/// there is nothing to record.
+#[cfg(feature = "v8-backend")]
 fn set_active_document_origin(origin: &str) {
     *ACTIVE_ORIGIN.lock().unwrap_or_else(|e| e.into_inner()) = origin.to_string();
 }
@@ -133,6 +137,9 @@ struct FileGrant {
     /// Origin the grant was issued to — checked on every redemption.
     origin: String,
     /// Absolute path the token unlocks. Never exposed to JS.
+    // Only the (v8-gated) read binding redeems a grant; the registry is still
+    // written on a backend-less build, so the field is dead there, not unused.
+    #[cfg_attr(not(feature = "v8-backend"), allow(dead_code))]
     path: PathBuf,
 }
 
