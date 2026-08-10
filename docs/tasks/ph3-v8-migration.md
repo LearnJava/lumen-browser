@@ -1552,7 +1552,7 @@ reload cluster (8 tests) can be scheduled as ordinary work, not as risk.
 with untouched bodies, no loose microtask-tolerant assertions in this range (the
 `_lumen_drain_microtasks` clusters are all downstream). No bugs closed either — but unlike
 `v8_ws_sse`, here the pre-check found OPEN defects sitting *directly* on the ported APIs:
-[BUG-375](../../bugs/BUG-375-OPEN.md) (only `URL.prototype.href` has a working setter; the other
+[BUG-375](../../bugs/BUG-375-FIXED.md) (only `URL.prototype.href` has a working setter; the other
 nine swallow assignment silently), [BUG-346](../../bugs/BUG-346-OPEN.md) (`Url::resolve` keeps
 `.`/`..` dot-segments) and the `location`-adjacent
 [BUG-359](../../bugs/BUG-359-FIXED.md)/[BUG-358](../../bugs/BUG-358-OPEN.md). All are
