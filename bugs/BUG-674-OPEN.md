@@ -8,7 +8,7 @@
 
 `_sw_origin` (`dom.rs:4805`) is computed once from `location` but is an ordinary writable global — any page script can reassign it. Worse, the natives it feeds (`_lumen_sw_register`, `_lumen_sw_has_registration`, `_lumen_sw_unregister`, `_lumen_sw_persist`, `_lumen_sw_load`, and the whole `_lumen_cache_*` family for Cache Storage) are themselves plain `window`-visible functions (`reg!` macro registration, `v8_runtime.rs:1900`-1940 and following) that accept `origin` as a caller-supplied string with **no server-side binding to the actual browsing context's navigated origin** — `grep -n "current_origin\|page_origin\|effective_origin" crates/js/src/v8_runtime.rs` returns nothing. The Rust-side `SwMap`/`CacheMap` key on whatever string the JS call passes, not on anything the engine independently knows about the page.
 
-This is the same defect class as [BUG-371](BUG-371-OPEN.md) (`file-system-access`'s `_lumen_file_read_text` family: capability-bearing natives exposed as plain `window` properties with a guessable/forgeable argument instead of an unforgeable per-origin token) — here the forgeable argument is the origin string itself, for the entire Service Worker registry and Cache Storage.
+This is the same defect class as [BUG-371](BUG-371-FIXED.md) (`file-system-access`'s `_lumen_file_read_text` family: capability-bearing natives exposed as plain `window` properties with a guessable/forgeable argument instead of an unforgeable per-origin token) — here the forgeable argument is the origin string itself, for the entire Service Worker registry and Cache Storage.
 
 ## Живое воспроизведение
 

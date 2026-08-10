@@ -1179,6 +1179,10 @@ impl V8JsRuntime {
         };
         let monotonic_clock = self.deterministic_monotonic.load(Ordering::Relaxed);
         let deterministic_clock_ms = Arc::clone(&self.deterministic_clock_ms);
+        // BUG-371: the file-API grants are bound to this document's origin.
+        // Derived here, before `page_url` is moved into the `self.run` closure
+        // below, and never taken from a JS argument.
+        let page_origin = crate::file_input::origin_for_url(page_url);
         let page_url = page_url.to_owned();
         // BUG-295: session-level `navigator.userAgent` override, if any.
         let ua_override = global_user_agent_override();
@@ -4696,8 +4700,21 @@ impl V8JsRuntime {
         install_v8!(element_internals::install_element_internals_bindings_v8);
         install_v8!(es2026_proposals::install_es2026_proposals_v8);
         install_v8!(eye_dropper::install_eye_dropper_bindings_v8);
-        install_v8!(file_input::install_file_input_bindings_v8);
-        install_v8!(filesystem_access::install_filesystem_access_v8);
+        // BUG-371: both file APIs take the document origin their grants are
+        // bound to, so they get explicit-arg calls rather than `install_v8!`.
+        if let Err(e) = crate::file_input::install_file_input_bindings_v8(self, &page_origin) {
+            eprintln!("v8: file_input::install_file_input_bindings_v8 failed: {e}");
+        }
+        if let Err(e) = crate::filesystem_access::install_filesystem_access_v8(self, &page_origin) {
+            eprintln!("v8: filesystem_access::install_filesystem_access_v8 failed: {e}");
+        }
+        // BUG-371 point 1: both shims have now captured the natives they need,
+        // so take the whole file-API surface off the global object. Runs even if
+        // one of the two installs above failed — a half-installed shim must not
+        // leave `__lumen_file_read_text` sitting on `window`.
+        if let Err(e) = crate::file_input::seal_file_natives_v8(self) {
+            eprintln!("v8: file_input::seal_file_natives_v8 failed: {e}");
+        }
         install_v8!(form_validation::install_form_validation_bindings_v8);
         install_v8!(gamepad::install_gamepad_bindings_v8);
         install_v8!(generic_sensor::install_generic_sensor_bindings_v8);

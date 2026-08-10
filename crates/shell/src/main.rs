@@ -8624,9 +8624,15 @@ impl Lumen {
         if self.js_present {
             // Register each path with an opaque token before delivering to JS.
             // JS never receives raw filesystem paths — only tokens.
-            let tokens: Vec<u64> = entries
+            // BUG-371: the grant is bound to an origin, and only the origin the
+            // page's own bindings were installed with can redeem it. Read back
+            // from the install path rather than re-derived from `self.source` —
+            // a mismatch would not fail loudly, every read would just come back
+            // empty.
+            let origin = lumen_js::file_input::active_document_origin();
+            let tokens: Vec<String> = entries
                 .iter()
-                .map(|e| lumen_js::file_input::register_file_token(&e.path))
+                .map(|e| lumen_js::file_input::register_file_token(&e.path, &origin))
                 .collect();
             let json = platform::file_dialog::entries_to_json_with_tokens(&entries, &tokens);
             // ADR-016 M2.2c-2d: fire-and-forget file-list delivery через маршрутизатор —

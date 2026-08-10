@@ -23,6 +23,34 @@ the time — read dates.
 
 ## Done
 
+- **File-API grants are unguessable, origin-bound and page-scoped; the natives are
+  off the global object (BUG-371, P3, 2026-08-10).** The documented "JS only receives
+  an opaque token" model did not hold: all ten `file_input`/`filesystem_access`
+  natives were plain `window` properties and all three registries
+  (`FILE_REGISTRY`/`DIR_REG`/`WRITE_REG`) were process-global with counters starting
+  at 1, so any page could read every file the user had ever picked, walk a granted
+  directory (`_lumen_dir_get_file` *mints* new read tokens), or overwrite another
+  page's open save handle — by enumerating `1, 2, 3, …`. Three mechanisms now:
+  (1) ids are 128 bits of `getrandom` entropy as a 32-char hex **string**
+  (`file_input::new_grant_id`) — an `f64` cannot carry that, hence all ten natives
+  moved from numeric to string parameters and the JSON carries `"token":"…"`;
+  (2) every registry entry records its issuing origin (`file_input::origin_for_url`
+  — tuple origin for URLs with a host, the full URL for `file:`/`data:`/`about:`, so
+  two local pages never share one), and the reader's origin is captured **in Rust**
+  at install time from `page_url`, never taken from a JS argument (unlike the
+  SW/Cache natives, where origin is a forgeable argument); (3) installing a
+  document's bindings revokes the previous document's grants on that same origin, so
+  a token does not outlive its page. On top of that `install_dom` calls
+  `file_input::seal_file_natives_v8` once both shims have copied the bindings into
+  closure variables, deleting all eleven names (ten natives + the
+  `__lumen_fs_internal` bridge) from the global object — `FSAL_SHIM` moved into an
+  IIFE for this. `File`'s token and the handles' internals
+  (`_token`/`_size`/`_pathId`/`_id`/`_closed`) live in `WeakMap`s and the public
+  `File` constructor no longer accepts `_token` from its options dictionary. The
+  shell reads the origin back via `file_input::active_document_origin()` rather than
+  re-deriving it from `PageSource` — a second derivation would drift silently (every
+  read would just return an empty string). WebIDL shape of the handles stays with
+  [BUG-374](../bugs/BUG-374-OPEN.md).
 - **`on<type>` event handler content/IDL attributes on live elements (BUG-360, P3,
   2026-08-09).** `<div onclick="…">`/`el.onclick = fn` now actually fire — previously the
   attribute was never compiled and all three live dispatch paths (`_lumen_dispatch`,

@@ -48,16 +48,19 @@ pub fn open_file_dialog(_accept: &str, multiple: bool) -> Vec<FilePickerEntry> {
 /// Phase 1 format: shell registers each path via `lumen_js::file_input::register_file_token`
 /// before calling this, and passes the resulting tokens here.  JS receives tokens only —
 /// never raw file system paths.
+///
+/// BUG-371 widened a token from a sequential `u64` to 128 unguessable bits, so
+/// it is emitted as a JSON *string* — an `f64` cannot carry it losslessly.
 #[cfg(feature = "v8")]
-pub fn entries_to_json_with_tokens(entries: &[FilePickerEntry], tokens: &[u64]) -> String {
+pub fn entries_to_json_with_tokens(entries: &[FilePickerEntry], tokens: &[String]) -> String {
     let items: Vec<String> = entries
         .iter()
         .zip(tokens.iter())
-        .map(|(e, &token)| {
+        .map(|(e, token)| {
             format!(
                 r#"{{"name":{name},"token":{token},"size":{size},"mime_type":{mime},"last_modified_ms":{ts}}}"#,
                 name = json_str(&e.name),
-                token = token,
+                token = json_str(token),
                 size = e.size,
                 mime = json_str(&e.mime_type),
                 ts = e.last_modified_ms,
@@ -171,9 +174,10 @@ mod tests {
             mime_type: "application/pdf".to_string(),
             last_modified_ms: 9999,
         };
-        let json = entries_to_json_with_tokens(&[e], &[42]);
+        let json = entries_to_json_with_tokens(&[e], &["a1b2".to_string()]);
         assert!(json.contains("\"name\":\"report.pdf\""));
-        assert!(json.contains("\"token\":42"));
+        // BUG-371: the token is an unguessable string, so it is quoted in JSON.
+        assert!(json.contains("\"token\":\"a1b2\""));
         assert!(json.contains("\"size\":4096"));
         // Path must NOT appear in token-based JSON
         assert!(!json.contains("path"), "raw path must not be in token JSON");
@@ -197,9 +201,9 @@ mod tests {
                 last_modified_ms: 1000,
             },
         ];
-        let json = entries_to_json_with_tokens(&entries, &[7, 8]);
-        assert!(json.contains("\"token\":7"));
-        assert!(json.contains("\"token\":8"));
+        let json = entries_to_json_with_tokens(&entries, &["t7".to_string(), "t8".to_string()]);
+        assert!(json.contains("\"token\":\"t7\""));
+        assert!(json.contains("\"token\":\"t8\""));
         assert!(json.contains("\"name\":\"a.txt\""));
         assert!(json.contains("\"name\":\"b.png\""));
     }

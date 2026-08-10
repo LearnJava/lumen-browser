@@ -14,47 +14,156 @@
 //! `__lumen_file_read_base64(token)` but those only work for pre-registered tokens —
 //! they cannot access arbitrary paths.
 //!
+//! [BUG-371] made that model actually hold. It previously did not: the two read
+//! bindings were plain `window` properties and the token space was the dense
+//! integer range starting at 1, shared process-wide across every page and every
+//! navigation — so any page could read every file the user had ever picked by
+//! enumerating `1, 2, 3, …`. Three things changed:
+//!
+//! 1. **Unguessable tokens.** A token is 128 bits of OS entropy rendered as
+//!    32 hex characters ([`new_grant_id`]), not a counter. It is a JS *string*,
+//!    not a number — an `f64` cannot carry 128 bits, and the earlier `u64`
+//!    counter could not be widened without silent precision loss.
+//! 2. **Grants are bound to the granting origin.** Every registry entry records
+//!    the origin it was issued to ([`origin_for_url`]); the read bindings capture
+//!    the installing document's origin in Rust at install time (never taken from
+//!    a JS argument) and refuse tokens issued to any other origin.
+//! 3. **Grants die on navigation.** Installing the bindings for a document
+//!    revokes every grant previously issued to that same origin
+//!    ([`revoke_grants_for_origin`]), so a token does not outlive the page it
+//!    was handed to.
+//!
+//! On top of that the bindings themselves are removed from the global object
+//! once both file-API shims have captured them ([`seal_file_natives_v8`]), and
+//! the token lives in a `WeakMap` private slot rather than as a web-visible
+//! `File._token` property.
+//!
 //! # Registered native bindings
 //!
 //! | Name | Signature | Description |
 //! |---|---|---|
-//! | `__lumen_file_read_text` | `(token: f64) → String` | Read file bytes as UTF-8 (lossy) |
-//! | `__lumen_file_read_base64` | `(token: f64) → String` | Read file bytes as base64 |
+//! | `__lumen_file_read_text` | `(token: String) → String` | Read file bytes as UTF-8 (lossy) |
+//! | `__lumen_file_read_base64` | `(token: String) → String` | Read file bytes as base64 |
+//!
+//! Both are deleted from the global object by [`seal_file_natives_v8`] after the
+//! shims capture them into closure variables.
 //!
 //! # Shell wiring (main.rs)
 //!
-//! 1. `open_file_picker` calls `register_file_token(path)` for each selected file.
+//! 1. `open_file_picker` calls `register_file_token(path, origin)` for each selected
+//!    file, where `origin` is [`origin_for_url`] of the page the `<input>` lives in.
 //! 2. Tokens are included in the JSON passed to `_lumen_deliver_file_list(nid, json)`.
 //! 3. JSON shape: `[{name, token, size, mime_type, last_modified_ms}, ...]`
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
+
+// ── Grant identifiers ─────────────────────────────────────────────────────────
+
+/// Generate an unguessable grant id: 128 bits of OS entropy as 32 hex chars.
+///
+/// Returns `None` if the OS entropy source fails — callers must then refuse to
+/// issue a grant rather than fall back to anything predictable, which is exactly
+/// the defect [BUG-371] was about.
+pub(crate) fn new_grant_id() -> Option<String> {
+    let mut bytes = [0u8; 16];
+    if getrandom::getrandom(&mut bytes).is_err() {
+        eprintln!("lumen-js: OS entropy unavailable — refusing to issue a file grant");
+        return None;
+    }
+    let mut out = String::with_capacity(32);
+    for b in bytes {
+        out.push(char::from_digit((b >> 4) as u32, 16)?);
+        out.push(char::from_digit((b & 0x0f) as u32, 16)?);
+    }
+    Some(out)
+}
+
+/// Origin string a file grant is bound to, derived from the document's URL.
+///
+/// For URLs with a real host this is `scheme://host[:port]` — the usual tuple
+/// origin. Everything else (`file:`, `data:`, `about:`) has an opaque origin per
+/// spec; approximating that with the full URL string is stricter than a shared
+/// `"file://"` bucket, so two local pages never inherit each other's grants.
+///
+/// Both sides of the grant — the shell that registers a path and the JS bindings
+/// that redeem the token — must derive the origin through this one function, or
+/// every redemption fails.
+pub fn origin_for_url(url: &str) -> String {
+    match lumen_core::url::Url::parse(url) {
+        Ok(u) if !u.host().is_empty() => {
+            let port = u.port().map(|p| format!(":{p}")).unwrap_or_default();
+            format!("{}://{}{}", u.scheme(), u.host().to_ascii_lowercase(), port)
+        }
+        _ => url.to_string(),
+    }
+}
+
+/// Origin the most recently installed document bound its file grants to.
+///
+/// Written by `install_file_input_bindings_v8`, read by the shell — see
+/// [`active_document_origin`] for why it exists.
+static ACTIVE_ORIGIN: LazyLock<Mutex<String>> = LazyLock::new(|| Mutex::new(String::new()));
+
+/// Origin the file-API bindings of the current document were installed with.
+///
+/// The shell registers picked paths from the UI thread and has no handle on the
+/// JS runtime, so it cannot ask it directly; re-deriving the origin from
+/// `PageSource` instead would duplicate the shell's `page_url` construction and
+/// drift from it silently (a mismatch does not fail loudly — every read just
+/// returns an empty string). Reading back what the install path actually used
+/// keeps the two ends in step by construction.
+///
+/// One document at a time: `install_dom` runs once per page load (main document
+/// and bfcache thaw), and workers install their own bindings through
+/// `worker.rs`, not through this path.
+pub fn active_document_origin() -> String {
+    ACTIVE_ORIGIN.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// Record the origin the current document's file-API bindings are bound to.
+fn set_active_document_origin(origin: &str) {
+    *ACTIVE_ORIGIN.lock().unwrap_or_else(|e| e.into_inner()) = origin.to_string();
+}
 
 // ── File token registry ───────────────────────────────────────────────────────
 
-static NEXT_TOKEN: AtomicU64 = AtomicU64::new(1);
+/// One file-read grant: the path it unlocks and the origin it was issued to.
+struct FileGrant {
+    /// Origin the grant was issued to — checked on every redemption.
+    origin: String,
+    /// Absolute path the token unlocks. Never exposed to JS.
+    path: PathBuf,
+}
 
 // The token registry is written by the shell (UI thread, `register_file_token`)
 // and read by the JS file-read bindings (which run on the dedicated JS thread
 // after B-1). A process-global `Mutex` shares it correctly across both threads;
 // a `thread_local` would split it once the runtime moved off the UI thread.
-// Tokens are globally unique (`NEXT_TOKEN`), so a shared map is sound.
-static FILE_REGISTRY: LazyLock<Mutex<HashMap<u64, PathBuf>>> =
+// Being process-global is what made BUG-371 exploitable, so entries now carry
+// the origin they belong to and are matched against the reader's own origin.
+static FILE_REGISTRY: LazyLock<Mutex<HashMap<String, FileGrant>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-fn registry() -> std::sync::MutexGuard<'static, HashMap<u64, PathBuf>> {
+fn registry() -> std::sync::MutexGuard<'static, HashMap<String, FileGrant>> {
     FILE_REGISTRY.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Register a file path and return an opaque token for JS access.
+/// Register a file path for `origin` and return an opaque token for JS access.
 ///
 /// Must be called **from Rust** (shell side) before delivering the file list to JS.
-/// The returned token is safe to pass to JS — it grants read access only to this
-/// specific file, not to arbitrary paths.
-pub fn register_file_token(path: &str) -> u64 {
-    let token = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
-    registry().insert(token, PathBuf::from(path));
+/// The returned token grants read access to this one file *and only from `origin`*
+/// — pass the same [`origin_for_url`] value the document's JS runtime was
+/// installed with. Returns an empty string if no unguessable token could be
+/// generated; that token registers nothing and reads nothing.
+pub fn register_file_token(path: &str, origin: &str) -> String {
+    let Some(token) = new_grant_id() else {
+        return String::new();
+    };
+    registry().insert(
+        token.clone(),
+        FileGrant { origin: origin.to_string(), path: PathBuf::from(path) },
+    );
     token
 }
 
@@ -63,9 +172,25 @@ pub fn clear_file_registry() {
     registry().clear();
 }
 
+/// Revoke every file grant issued to `origin`.
+///
+/// Called when a document of that origin is (re)loaded: a grant must not outlive
+/// the page it was handed to, otherwise the next document on the same origin
+/// silently inherits the previous one's file access (BUG-371 point 3).
+pub fn revoke_grants_for_origin(origin: &str) {
+    registry().retain(|_, g| g.origin != origin);
+}
+
 #[cfg(feature = "v8-backend")]
-fn read_file_bytes_for_token(token: u64) -> Option<Vec<u8>> {
-    let path = registry().get(&token).cloned()?;
+fn read_file_bytes_for_token(token: &str, origin: &str) -> Option<Vec<u8>> {
+    let path = {
+        let reg = registry();
+        let grant = reg.get(token)?;
+        if grant.origin != origin {
+            return None;
+        }
+        grant.path.clone()
+    };
     std::fs::read(&path).ok()
 }
 
@@ -105,24 +230,33 @@ fn to_base64(bytes: &[u8]) -> String {
 /// Must run after `dom::install_dom_bindings` (needs `_lumen_make_element`,
 /// `_lumen_set_attr`, `_lumen_get_attr`, `_lumen_dispatch_bubble`, and `Blob`
 /// — `File.prototype` extends `Blob.prototype`).
+///
+/// `origin` is the installing document's origin ([`origin_for_url`]). It is
+/// captured here, in Rust, and compared against every redeemed token — a page
+/// can neither read it nor pass a different one (BUG-371 point 3). Installing
+/// also revokes any grant left over from the previous document on this origin.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_file_input_bindings_v8(
     rt: &crate::v8_runtime::V8JsRuntime,
+    origin: &str,
 ) -> lumen_core::JsResult<()> {
     use crate::v8_compat::into_v8_fn1;
     use lumen_core::ext::JsRuntime as _;
 
-    let read_text = into_v8_fn1(move |token: f64| -> String {
-        let t = token as u64;
-        read_file_bytes_for_token(t)
+    revoke_grants_for_origin(origin);
+    set_active_document_origin(origin);
+
+    let text_origin = origin.to_string();
+    let read_text = into_v8_fn1(move |token: String| -> String {
+        read_file_bytes_for_token(&token, &text_origin)
             .map(|b| String::from_utf8_lossy(&b).into_owned())
             .unwrap_or_default()
     });
     rt.register_native("__lumen_file_read_text", read_text)?;
 
-    let read_base64 = into_v8_fn1(move |token: f64| -> String {
-        let t = token as u64;
-        read_file_bytes_for_token(t)
+    let b64_origin = origin.to_string();
+    let read_base64 = into_v8_fn1(move |token: String| -> String {
+        read_file_bytes_for_token(&token, &b64_origin)
             .map(|b| to_base64(&b))
             .unwrap_or_default()
     });
@@ -132,10 +266,62 @@ pub(crate) fn install_file_input_bindings_v8(
     Ok(())
 }
 
+/// Remove the file-API natives and the cross-shim bridge from the global object
+/// (BUG-371 point 1).
+///
+/// Both shims copy the bindings they need into closure variables at install
+/// time, so deleting the globals afterwards costs them nothing while taking the
+/// whole surface — `__lumen_file_read_*`, the six File System Access natives and
+/// the `__lumen_fs_internal` bridge — out of reach of page script.
+///
+/// Called by `install_dom` **after** both `install_file_input_bindings_v8` and
+/// `install_filesystem_access_v8`, rather than from the tail of either shim: if
+/// one of the two installs fails (they are best-effort, see the `install_v8!`
+/// orchestration), the sealing must still happen.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn seal_file_natives_v8(
+    rt: &crate::v8_runtime::V8JsRuntime,
+) -> lumen_core::JsResult<()> {
+    use lumen_core::ext::JsRuntime as _;
+    rt.eval(SEAL_FILE_NATIVES)?;
+    Ok(())
+}
+
+/// Deletion list for [`seal_file_natives_v8`]. Kept as one script so a single
+/// `eval` covers both modules' natives.
+#[cfg(feature = "v8-backend")]
+const SEAL_FILE_NATIVES: &str = r#"
+(function() {
+  var names = [
+    '__lumen_file_read_text', '__lumen_file_read_base64', '__lumen_fs_internal',
+    '_lumen_show_open_file_picker', '_lumen_show_save_file_picker',
+    '_lumen_show_directory_picker', '_lumen_dir_entries',
+    '_lumen_dir_get_file', '_lumen_dir_get_subdir',
+    '_lumen_writable_write_text', '_lumen_writable_close'
+  ];
+  for (var i = 0; i < names.length; i++) {
+    try { delete globalThis[names[i]]; } catch (e) {}
+  }
+})();
+"#;
+
 #[cfg(feature = "v8-backend")]
 const FILE_INPUT_SHIM: &str = r#"
 (function() {
 'use strict';
+
+// BUG-371 point 1: copy the natives into closure variables now — `install_dom`
+// deletes them from the global object right after the two file-API shims are
+// installed, so from then on this closure is the only way to reach them.
+var NAT_READ_TEXT = (typeof __lumen_file_read_text === 'function') ? __lumen_file_read_text : null;
+var NAT_READ_B64  = (typeof __lumen_file_read_base64 === 'function') ? __lumen_file_read_base64 : null;
+
+// BUG-371 point 4: the grant token is a private slot keyed by the File object,
+// not a `_token` property. As an own property it was enumerable *and* writable,
+// so `new File([], 'x', {_token: n}).text()` was a one-step call into
+// `__lumen_file_read_text(n)` — the constructor took `_token` straight out of
+// the public options dictionary.
+var FILE_TOKENS = new WeakMap();
 
 // ── File class (W3C File API §4) ──────────────────────────────────────────────
 function File(bits, name, options) {
@@ -150,8 +336,9 @@ function File(bits, name, options) {
   this.lastModified = (typeof options.lastModified === 'number')
     ? options.lastModified
     : (typeof Date !== 'undefined' ? Date.now() : 0);
-  // Opaque token for Phase 1 native reads (set by _lumen_deliver_file_list)
-  if (typeof options._token === 'number') this._token = options._token;
+  // No `_token` handling here on purpose (BUG-371 point 4): the public
+  // constructor must not be able to mint a read grant. Tokens reach a File only
+  // through `makeTokenFile` below, which the page cannot call once sealed.
   // Phase 0: optionally initialise from string bits
   if (Array.isArray(bits) && bits.length > 0) {
     var joined = bits.join('');
@@ -170,10 +357,11 @@ File.prototype.constructor = File;
 // File.prototype.text() — W3C File API §4.3
 // Returns a Promise resolving to the file's contents as a UTF-8 string.
 File.prototype.text = function() {
-  if (typeof this._token === 'number') {
-    if (typeof __lumen_file_read_text === 'function') {
+  var token = FILE_TOKENS.get(this);
+  if (typeof token === 'string') {
+    if (NAT_READ_TEXT) {
       try {
-        return Promise.resolve(__lumen_file_read_text(this._token));
+        return Promise.resolve(NAT_READ_TEXT(token));
       } catch(e) {}
     }
     return Promise.resolve('');
@@ -184,10 +372,11 @@ File.prototype.text = function() {
 // File.prototype.arrayBuffer() — W3C File API §4.3
 // Returns a Promise resolving to an ArrayBuffer with the raw file bytes.
 File.prototype.arrayBuffer = function() {
-  if (typeof this._token === 'number') {
-    if (typeof __lumen_file_read_base64 === 'function') {
+  var token = FILE_TOKENS.get(this);
+  if (typeof token === 'string') {
+    if (NAT_READ_B64) {
       try {
-        var b64 = __lumen_file_read_base64(this._token);
+        var b64 = NAT_READ_B64(token);
         var bin = (typeof atob === 'function') ? atob(b64) : '';
         var buf = new ArrayBuffer(bin.length);
         var v = new Uint8Array(buf);
@@ -235,6 +424,26 @@ File.prototype.slice = function(start, end, contentType) {
 
 window.File = File;
 
+// ── Token-bearing File factory (internal) ────────────────────────────────────
+// The only way a read grant gets attached to a File. Used below by
+// `_lumen_deliver_file_list` and, through the `__lumen_fs_internal` bridge, by
+// the File System Access shim's `FileSystemFileHandle.getFile()`.
+function makeTokenFile(name, token, size, type, lastModified) {
+  var f = new File([], name, { type: type || '', lastModified: lastModified || 0 });
+  f.size = size || 0;
+  if (typeof token === 'string' && token) FILE_TOKENS.set(f, token);
+  return f;
+}
+
+// Cross-shim bridge: `filesystem_access.rs`'s shim is a separate script in the
+// same context and has no other way to reach `FILE_TOKENS`. Non-enumerable and
+// configurable — `install_dom` deletes it once that shim has captured it, so the
+// page never observes it (BUG-371 point 1).
+Object.defineProperty(globalThis, '__lumen_fs_internal', {
+  value: { makeTokenFile: makeTokenFile },
+  writable: true, enumerable: false, configurable: true
+});
+
 // ── FileList class (W3C File API §7) ─────────────────────────────────────────
 function FileList(files) {
   this._files = files || [];
@@ -262,21 +471,17 @@ window._lumen_file_lists = {};
 // ── Deliver from shell after OS dialog closes ─────────────────────────────────
 // Called via eval_js: _lumen_deliver_file_list(nid, '[{name,token,size,...}]')
 // Shell registers paths via lumen_js::file_input::register_file_token() first,
-// so filesJson contains opaque tokens rather than raw path strings.
+// so filesJson carries opaque 128-bit hex tokens rather than raw path strings.
+// A page calling this itself gains nothing: a token it did not receive is
+// unguessable, and one from another origin is rejected Rust-side (BUG-371).
 window._lumen_deliver_file_list = function(nid, filesJson) {
   var infos;
   try { infos = JSON.parse(filesJson); } catch(e) { infos = []; }
   if (!Array.isArray(infos)) infos = [];
 
   var objs = infos.map(function(f) {
-    var opts = {
-      type: f.mime_type || '',
-      lastModified: f.last_modified_ms || 0
-    };
-    if (typeof f.token === 'number') opts._token = f.token;
-    var fo = new File([], f.name || '', opts);
-    fo.size = f.size || 0;
-    return fo;
+    return makeTokenFile(
+      f.name || '', f.token, f.size || 0, f.mime_type || '', f.last_modified_ms || 0);
   });
 
   window._lumen_file_lists[nid] = new FileList(objs);
@@ -314,10 +519,45 @@ mod tests {
 
     #[test]
     fn register_file_token_unique() {
-        let t1 = register_file_token("/tmp/a.txt");
-        let t2 = register_file_token("/tmp/b.txt");
+        let t1 = register_file_token("/tmp/a.txt", "https://a.example");
+        let t2 = register_file_token("/tmp/b.txt", "https://a.example");
         assert_ne!(t1, t2, "tokens must be unique");
-        assert!(t1 > 0 && t2 > 0);
+        assert_eq!(t1.len(), 32, "token must be 128 bits of hex");
+        assert!(t1.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    /// BUG-371: the old token space was `1, 2, 3, …`, so a page could read every
+    /// file the user had ever picked by enumerating small integers.
+    #[test]
+    fn register_file_token_is_not_a_counter() {
+        let tokens: std::collections::HashSet<String> = (0..8)
+            .map(|i| register_file_token(&format!("/tmp/{i}.txt"), "https://a.example"))
+            .collect();
+        assert_eq!(tokens.len(), 8, "tokens must not collide");
+        for n in 1..=64u64 {
+            assert!(
+                !tokens.contains(&n.to_string()),
+                "small integer {n} must never be a valid token"
+            );
+        }
+    }
+
+    #[test]
+    fn revoke_grants_for_origin_only_hits_that_origin() {
+        let keep = register_file_token("/tmp/keep.txt", "https://keep.example");
+        let drop = register_file_token("/tmp/drop.txt", "https://drop.example");
+        revoke_grants_for_origin("https://drop.example");
+        let reg = registry();
+        assert!(reg.contains_key(&keep), "other origins must survive a revoke");
+        assert!(!reg.contains_key(&drop), "revoked origin's grants must be gone");
+    }
+
+    #[test]
+    fn origin_for_url_tuple_and_opaque() {
+        assert_eq!(origin_for_url("https://a.example/x/y?q=1"), "https://a.example");
+        assert_eq!(origin_for_url("http://a.example:8080/x"), "http://a.example:8080");
+        // No host → opaque; two local files must not share an origin.
+        assert_ne!(origin_for_url("file:///c/a.html"), origin_for_url("file:///c/b.html"));
     }
 }
 
@@ -391,10 +631,21 @@ mod v8_tests {
         window.btoa = btoa; window.atob = atob;
     "#;
 
+    /// Origin every V8 test here installs under; grants must be registered with
+    /// the same string or the read bindings reject them (BUG-371).
+    const TEST_ORIGIN: &str = "https://file-input.test";
+
     fn with_file_input() -> V8JsRuntime {
+        with_file_input_origin(TEST_ORIGIN)
+    }
+
+    /// Installing revokes every grant previously issued to `origin`, so a test
+    /// that needs a live grant must build its runtime **first** and use an
+    /// origin no concurrently running test shares.
+    fn with_file_input_origin(origin: &str) -> V8JsRuntime {
         let rt = V8JsRuntime::new().unwrap();
         rt.eval(STUBS).unwrap();
-        install_file_input_bindings_v8(&rt).unwrap();
+        install_file_input_bindings_v8(&rt, origin).unwrap();
         rt
     }
 
@@ -460,10 +711,10 @@ mod v8_tests {
     }
 
     #[test]
-    fn deliver_file_list_token_stored() {
+    fn deliver_file_list_builds_file_objects() {
         let rt = with_file_input();
         rt.eval(
-            "_lumen_deliver_file_list(42, '[{\"name\":\"photo.jpg\",\"token\":99,\"size\":2048,\"mime_type\":\"image/jpeg\",\"last_modified_ms\":1000}]')"
+            "_lumen_deliver_file_list(42, '[{\"name\":\"photo.jpg\",\"token\":\"deadbeef\",\"size\":2048,\"mime_type\":\"image/jpeg\",\"last_modified_ms\":1000}]')"
         ).unwrap();
         assert!(js_bool(
             &rt,
@@ -471,8 +722,121 @@ mod v8_tests {
              _lumen_file_lists[42].length === 1 && \
              _lumen_file_lists[42][0].name === 'photo.jpg' && \
              _lumen_file_lists[42][0].size === 2048 && \
-             _lumen_file_lists[42][0]._token === 99"
+             _lumen_file_lists[42][0].type === 'image/jpeg'"
         ));
+    }
+
+    /// BUG-371 point 4: the delivered token must not be readable off the File,
+    /// and the public constructor must not accept one.
+    #[test]
+    fn delivered_token_is_not_web_visible() {
+        let rt = with_file_input();
+        rt.eval(
+            "_lumen_deliver_file_list(42, '[{\"name\":\"photo.jpg\",\"token\":\"deadbeef\",\"size\":1,\"mime_type\":\"\",\"last_modified_ms\":0}]')"
+        ).unwrap();
+        assert!(
+            js_bool(
+                &rt,
+                "var f = _lumen_file_lists[42][0]; \
+                 f._token === undefined && \
+                 Object.getOwnPropertyNames(f).indexOf('_token') < 0 && \
+                 Object.getOwnPropertySymbols(f).length === 0"
+            ),
+            "token must live in a private slot, not on the File object"
+        );
+        assert!(
+            js_bool(
+                &rt,
+                "var g = new File([], 'x', {_token: 'deadbeef'}); g._token === undefined"
+            ),
+            "File constructor must ignore a page-supplied _token"
+        );
+    }
+
+    /// BUG-371 point 1: after `install_dom` seals the file API, page script can
+    /// no longer reach the read bindings, but `File.text()` still works.
+    #[test]
+    fn sealing_removes_natives_but_keeps_file_read_working() {
+        use std::io::Write;
+        let mut tmp = std::env::temp_dir();
+        tmp.push("lumen_file_input_seal_test.txt");
+        {
+            let mut f = std::fs::File::create(&tmp).unwrap();
+            f.write_all(b"sealed content").unwrap();
+        }
+        let rt = with_file_input_origin("https://seal.test");
+        let token = register_file_token(tmp.to_str().unwrap(), "https://seal.test");
+        seal_file_natives_v8(&rt).unwrap();
+        assert!(
+            js_bool(
+                &rt,
+                "typeof globalThis.__lumen_file_read_text === 'undefined' && \
+                 typeof globalThis.__lumen_file_read_base64 === 'undefined' && \
+                 typeof globalThis.__lumen_fs_internal === 'undefined' && \
+                 Object.getOwnPropertyNames(globalThis).indexOf('__lumen_file_read_text') < 0"
+            ),
+            "natives must be gone from the global object after sealing"
+        );
+
+        rt.eval(&format!(
+            "_lumen_deliver_file_list(1, '[{{\"name\":\"a.txt\",\"token\":\"{token}\",\"size\":14,\"mime_type\":\"\",\"last_modified_ms\":0}}]'); \
+             var out = null; _lumen_file_lists[1][0].text().then(function(t) {{ out = t; }});"
+        ))
+        .unwrap();
+        assert_eq!(
+            rt.eval("out").unwrap(),
+            JsValue::String("sealed content".into()),
+            "the shim keeps its captured binding after sealing"
+        );
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// BUG-371 point 3: a token issued to one origin is worthless on another.
+    #[test]
+    fn read_rejects_token_from_another_origin() {
+        use std::io::Write;
+        let mut tmp = std::env::temp_dir();
+        tmp.push("lumen_file_input_origin_test.txt");
+        {
+            let mut f = std::fs::File::create(&tmp).unwrap();
+            f.write_all(b"secret").unwrap();
+        }
+        let token = register_file_token(tmp.to_str().unwrap(), "https://victim.example");
+
+        let rt = with_file_input(); // installed under TEST_ORIGIN
+        let result = rt
+            .eval(&format!("__lumen_file_read_text('{token}')"))
+            .unwrap();
+        assert_eq!(
+            result,
+            JsValue::String(String::new()),
+            "a foreign origin's grant must not be redeemable"
+        );
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// BUG-371 point 3: reloading a document drops the grants of its previous
+    /// incarnation instead of letting them live for the whole process.
+    #[test]
+    fn install_revokes_previous_grants_of_same_origin() {
+        use std::io::Write;
+        let mut tmp = std::env::temp_dir();
+        tmp.push("lumen_file_input_revoke_test.txt");
+        {
+            let mut f = std::fs::File::create(&tmp).unwrap();
+            f.write_all(b"stale").unwrap();
+        }
+        let token = register_file_token(tmp.to_str().unwrap(), "https://reload.test");
+
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(STUBS).unwrap();
+        // Second document on the same origin — the first one's grant must die.
+        install_file_input_bindings_v8(&rt, "https://reload.test").unwrap();
+        let result = rt
+            .eval(&format!("__lumen_file_read_text('{token}')"))
+            .unwrap();
+        assert_eq!(result, JsValue::String(String::new()));
+        let _ = std::fs::remove_file(&tmp);
     }
 
     #[test]
@@ -525,7 +889,7 @@ mod v8_tests {
     #[test]
     fn native_read_text_returns_empty_for_unknown_token() {
         let rt = with_file_input();
-        let result = rt.eval("__lumen_file_read_text(999999)").unwrap();
+        let result = rt.eval("__lumen_file_read_text('999999')").unwrap();
         assert_eq!(
             result,
             JsValue::String(String::new()),
@@ -542,11 +906,10 @@ mod v8_tests {
             let mut f = std::fs::File::create(&tmp).unwrap();
             f.write_all(b"hello lumen").unwrap();
         }
-        let token = register_file_token(tmp.to_str().unwrap());
-
-        let rt = with_file_input();
+        let rt = with_file_input_origin("https://read-text.test");
+        let token = register_file_token(tmp.to_str().unwrap(), "https://read-text.test");
         let result = rt
-            .eval(&format!("__lumen_file_read_text({})", token))
+            .eval(&format!("__lumen_file_read_text('{token}')"))
             .unwrap();
         assert_eq!(result, JsValue::String("hello lumen".into()));
         let _ = std::fs::remove_file(&tmp);
@@ -561,12 +924,12 @@ mod v8_tests {
             let mut f = std::fs::File::create(&tmp).unwrap();
             f.write_all(b"\x00\x01\x02\xff").unwrap();
         }
-        let token = register_file_token(tmp.to_str().unwrap());
         let expected_b64 = to_base64(b"\x00\x01\x02\xff");
 
-        let rt = with_file_input();
+        let rt = with_file_input_origin("https://read-b64.test");
+        let token = register_file_token(tmp.to_str().unwrap(), "https://read-b64.test");
         let result = rt
-            .eval(&format!("__lumen_file_read_base64({})", token))
+            .eval(&format!("__lumen_file_read_base64('{token}')"))
             .unwrap();
         assert_eq!(result, JsValue::String(expected_b64));
         let _ = std::fs::remove_file(&tmp);
