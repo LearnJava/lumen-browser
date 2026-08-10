@@ -104,7 +104,7 @@ use lumen_layout::{LayoutBox, Mat4, PaintOrder, SnapContainer, StackingTree, Tra
 use lumen_layout::{StartingStyleTracker, compute_style_from_declarations, resolve_starting_style};
 use lumen_layout::{collect_scroll_containers, collect_snap_containers, find_scroll_container_at, find_snap_target, set_scroll_position};
 #[cfg(feature = "v8")]
-use lumen_layout::{collect_computed_styles, collect_layout_rects};
+use lumen_layout::{collect_computed_styles, collect_custom_properties, collect_layout_rects};
 use lumen_layout::style::{ComputedStyle, ScrollBehavior};
 use lumen_layout::computed_style_to_map;
 use lumen_paint::{
@@ -2828,6 +2828,15 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// `window.getComputedStyle()` and CSS property reads.
     #[allow(dead_code)]
     fn update_computed_styles(&self, styles: HashMap<u32, HashMap<String, String>>);
+    /// Push a fresh snapshot of resolved CSS custom properties into the JS
+    /// runtime (BUG-732).
+    ///
+    /// Published from every place that publishes computed styles — the two
+    /// snapshots are the two halves of what `window.getComputedStyle()` can
+    /// answer, and a page that gets only the first reports `""` for every
+    /// `var()`-declared value.
+    #[allow(dead_code)]
+    fn update_custom_properties(&self, props: HashMap<u32, Arc<HashMap<String, String>>>);
     /// Advance `document.readyState` to `"interactive"` and fire
     /// `readystatechange` + `DOMContentLoaded` on `document`.
     ///
@@ -3255,6 +3264,9 @@ impl PersistentJs for V8PersistentJs {
     }
     fn update_computed_styles(&self, styles: HashMap<u32, HashMap<String, String>>) {
         self.rt.update_computed_styles(styles);
+    }
+    fn update_custom_properties(&self, props: HashMap<u32, Arc<HashMap<String, String>>>) {
+        self.rt.update_custom_properties(props);
     }
     fn notify_dom_content_loaded(&self) {
         self.eval_js("_lumen_apply_ready_state('interactive')");
@@ -10472,6 +10484,7 @@ impl Lumen {
             {
                 let rects = collect_layout_rects(lb_ref);
                 let styles = collect_computed_styles(lb_ref);
+                let customs = collect_custom_properties(lb_ref);
                 let (vw, vh) = (viewport.width, viewport.height);
                 let dark_mode = self.dark_mode;
                 let reduced_motion = self.a11y_store.reduced_motion();
@@ -10484,6 +10497,7 @@ impl Lumen {
                 lazy_reqs = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
                     js.update_layout_rects(rects);
                     js.update_computed_styles(styles);
+                    js.update_custom_properties(customs);
                     js.update_viewport_size(vw, vh);
                     js.deliver_layout_observers();
                     // CSS MQ L4 §4.2: re-evaluate matchMedia() lists against the new
@@ -11236,10 +11250,12 @@ impl Lumen {
                     );
                     let rects = collect_layout_rects(lb_ref);
                     let styles = collect_computed_styles(lb_ref);
+                    let customs = collect_custom_properties(lb_ref);
                     let (vw, vh) = (viewport.width, viewport.height);
                     route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
                         js.update_layout_rects(rects);
                         js.update_computed_styles(styles);
+                        js.update_custom_properties(customs);
                         js.update_viewport_size(vw, vh);
                     });
                 }
@@ -11810,10 +11826,12 @@ impl Lumen {
             );
             let rects = collect_layout_rects(lb_ref);
             let styles = collect_computed_styles(lb_ref);
+            let customs = collect_custom_properties(lb_ref);
             let (vw, vh) = (viewport.width, viewport.height);
             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
                 js.update_layout_rects(rects);
                 js.update_computed_styles(styles);
+                js.update_custom_properties(customs);
                 js.update_viewport_size(vw, vh);
             });
         }
@@ -23134,10 +23152,12 @@ impl Lumen {
         {
             let rects = collect_layout_rects(lb_ref);
             let styles = collect_computed_styles(lb_ref);
+            let customs = collect_custom_properties(lb_ref);
             let (vw, vh) = (viewport.width, viewport.height);
             route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |js| {
                 js.update_layout_rects(rects);
                 js.update_computed_styles(styles);
+                js.update_custom_properties(customs);
                 js.update_viewport_size(vw, vh);
             });
         }

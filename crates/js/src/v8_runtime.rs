@@ -260,6 +260,15 @@ pub struct DomTouched {
     pub unattributed: bool,
 }
 
+/// Per-node snapshot of resolved CSS custom properties: node id → the map of
+/// `--name` → computed value that node declares or inherits.
+///
+/// The inner map is shared behind an `Arc` because custom properties inherit —
+/// one `:root` declaration is one allocation for every node under it (BUG-732).
+/// Produced by `lumen_layout::collect_custom_properties`, consumed by
+/// [`V8JsRuntime::update_custom_properties`].
+pub type CustomPropertySnapshot = HashMap<u32, Arc<HashMap<String, String>>>;
+
 /// V8-backed JS runtime implementing [`JsRuntime`].
 ///
 /// The isolate lives on a dedicated thread; methods block until the dispatched
@@ -301,6 +310,12 @@ pub struct V8JsRuntime {
     page_scroll_y: Arc<Mutex<f32>>,
     /// Computed CSS styles per node, updated after each relayout by the shell.
     computed_styles: Arc<Mutex<HashMap<u32, HashMap<String, String>>>>,
+    /// Resolved CSS custom properties per node (keys carry their `--` prefix),
+    /// updated after each relayout by the shell alongside [`Self::computed_styles`].
+    /// Kept in a separate map behind an `Arc` because custom properties inherit:
+    /// every node under a `:root`-declared set shares one allocation instead of
+    /// carrying its own copy of every variable (BUG-732).
+    custom_properties: Arc<Mutex<CustomPropertySnapshot>>,
     /// Pending popup window requests queued by JS `window.open()`.
     window_open_requests: Arc<Mutex<Vec<crate::dom::PopupRequest>>>,
     /// Console messages queued by `console.log/warn/error` calls in JS.
@@ -514,6 +529,7 @@ impl V8JsRuntime {
             pending_page_scrolls: Arc::new(Mutex::new(Vec::new())),
             page_scroll_y: Arc::new(Mutex::new(0.0)),
             computed_styles: Arc::new(Mutex::new(HashMap::new())),
+            custom_properties: Arc::new(Mutex::new(HashMap::new())),
             window_open_requests: Arc::new(Mutex::new(Vec::new())),
             console_messages: Arc::new(Mutex::new(Vec::new())),
             pending_history_url_updates: Arc::new(Mutex::new(Vec::new())),
@@ -803,6 +819,18 @@ impl V8JsRuntime {
     /// Mirrors [`crate::QuickJsRuntime::update_computed_styles`].
     pub fn update_computed_styles(&self, styles: HashMap<u32, HashMap<String, String>>) {
         *self.computed_styles.lock().unwrap_or_else(|e| e.into_inner()) = styles;
+    }
+
+    /// Push a fresh snapshot of resolved CSS custom properties into the JS
+    /// runtime, feeding `getComputedStyle(el).getPropertyValue('--x')`
+    /// (BUG-732). Published from the same places as
+    /// [`Self::update_computed_styles`] — a page whose custom properties are
+    /// never pushed answers `""` for every variable.
+    pub fn update_custom_properties(&self, props: CustomPropertySnapshot) {
+        *self
+            .custom_properties
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = props;
     }
 
     /// Update `document.hidden` / `document.visibilityState` and fire
@@ -1273,6 +1301,7 @@ impl V8JsRuntime {
             let pending_page_scrolls = Arc::clone(&self.pending_page_scrolls);
             let page_scroll_y = Arc::clone(&self.page_scroll_y);
             let computed_styles = Arc::clone(&self.computed_styles);
+            let custom_properties = Arc::clone(&self.custom_properties);
             let window_open_requests = Arc::clone(&self.window_open_requests);
             let console_messages = Arc::clone(&self.console_messages);
             let pending_history_url_updates = Arc::clone(&self.pending_history_url_updates);
@@ -3523,6 +3552,21 @@ impl V8JsRuntime {
         let cs = Arc::clone(&computed_styles);
         reg!("_lumen_get_computed_style", move |nid: u32, prop: String| -> String {
             cs.lock()
+                .unwrap()
+                .get(&nid)
+                .and_then(|m| m.get(&prop))
+                .cloned()
+                .unwrap_or_default()
+        });
+    }
+    // Resolved value of the custom property `prop` (`--`-prefixed) on node
+    // `nid`, or "" when the node declares/inherits none (BUG-732). Separate
+    // from `_lumen_get_computed_style` because custom properties live in their
+    // own inherited, `Arc`-shared map — see `V8JsRuntime::custom_properties`.
+    {
+        let cp = Arc::clone(&custom_properties);
+        reg!("_lumen_get_custom_property", move |nid: u32, prop: String| -> String {
+            cp.lock()
                 .unwrap()
                 .get(&nid)
                 .and_then(|m| m.get(&prop))

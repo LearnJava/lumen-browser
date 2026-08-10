@@ -1245,6 +1245,80 @@ fn collect_computed_styles_rec(
     }
 }
 
+// ──────────────── collect_custom_properties ────────────────
+
+/// Walks the layout tree and returns a map of `NodeId index → resolved custom
+/// properties` (CSS Variables L1 §3), keys carrying their `--` prefix.
+///
+/// Values are the *computed* ones: every `var()` / `env()` reference is
+/// substituted against the same node's map, so a chain like
+/// `--base: 8px; --gap: var(--base)` publishes `--gap: 8px`. A reference that
+/// cannot be resolved makes the property guaranteed-invalid, which
+/// `getPropertyValue()` reports as the empty string — that is what the empty
+/// value in the map means.
+///
+/// Published alongside — not inside — [`collect_computed_styles`], and behind
+/// an `Arc`, on purpose: custom properties inherit, so one `:root`-declared set
+/// is a single copy-on-write allocation shared by every node in the document
+/// ([`crate::style::CustomProps`]). Folding them into the per-node standard
+/// property map would re-materialise every variable on every node and multiply
+/// the cost of the snapshot the shell rebuilds after each relayout by the
+/// number of declared variables — on a design-system page (hundreds of
+/// `:root` variables, thousands of nodes) that is the whole snapshot again,
+/// several times over. Here each *distinct* map is resolved exactly once and
+/// every node inheriting it gets the same `Arc` (BUG-732).
+pub fn collect_custom_properties(
+    root: &LayoutBox,
+) -> std::collections::HashMap<u32, std::sync::Arc<std::collections::HashMap<String, String>>> {
+    let mut out = std::collections::HashMap::new();
+    // Keyed by the address of the source allocation — identity, never read.
+    let mut resolved: std::collections::HashMap<
+        usize,
+        std::sync::Arc<std::collections::HashMap<String, String>>,
+    > = std::collections::HashMap::new();
+    collect_custom_properties_rec(root, &mut out, &mut resolved);
+    out
+}
+
+fn collect_custom_properties_rec(
+    b: &LayoutBox,
+    out: &mut std::collections::HashMap<
+        u32,
+        std::sync::Arc<std::collections::HashMap<String, String>>,
+    >,
+    resolved: &mut std::collections::HashMap<
+        usize,
+        std::sync::Arc<std::collections::HashMap<String, String>>,
+    >,
+) {
+    // First box in tree order wins — see `collect_layout_rects_rec` for why
+    // several boxes can carry the same `NodeId`.
+    if !b.style.custom_props.is_empty() {
+        let key = b.style.custom_props.as_ptr() as usize;
+        let map = match resolved.get(&key) {
+            Some(m) => std::sync::Arc::clone(m),
+            None => {
+                let raw = b.style.custom_props.shared();
+                let m = std::sync::Arc::new(
+                    raw.iter()
+                        .map(|(name, value)| {
+                            let computed =
+                                crate::style::expand_vars_and_env(value, &raw).unwrap_or_default();
+                            (name.clone(), computed.trim().to_string())
+                        })
+                        .collect::<std::collections::HashMap<String, String>>(),
+                );
+                resolved.insert(key, std::sync::Arc::clone(&m));
+                m
+            }
+        };
+        out.entry(b.node.index() as u32).or_insert(map);
+    }
+    for child in &b.children {
+        collect_custom_properties_rec(child, out, resolved);
+    }
+}
+
 // ──────────────── collect_layout_rects ────────────────
 
 /// Walks the layout tree and returns a map of `NodeId index → [x, y, width, height]`
@@ -1555,6 +1629,65 @@ mod tests {
             Some("50px"),
             "style snapshot must describe the element's own box"
         );
+    }
+
+    /// BUG-732: `getComputedStyle(el).getPropertyValue('--x')` answered `""`
+    /// because nothing published custom properties at all. The snapshot carries
+    /// *computed* values — `var()` chains substituted, an unresolvable
+    /// reference reported as the empty string (guaranteed-invalid).
+    #[test]
+    fn custom_property_snapshot_resolves_var_chains() {
+        let root = lay_full(
+            "<html><body><div id=a>x</div></body></html>",
+            ":root{--base:8px;--gap:var(--base)} #a{--own:2px;--broken:var(--nope)}",
+        );
+        let props = collect_custom_properties(&root);
+        let div_nid = {
+            fn find(b: &LayoutBox, out: &mut Option<u32>) {
+                if b.style.custom_props.contains_key("--own") && out.is_none() {
+                    *out = Some(b.node.index() as u32);
+                }
+                for c in &b.children {
+                    find(c, out);
+                }
+            }
+            let mut found = None;
+            find(&root, &mut found);
+            found.expect("the div declaring --own must own a box")
+        };
+        let div = &props[&div_nid];
+        assert_eq!(div.get("--own").map(String::as_str), Some("2px"));
+        assert_eq!(
+            div.get("--gap").map(String::as_str),
+            Some("8px"),
+            "inherited var() chain must be substituted, not published raw"
+        );
+        assert_eq!(
+            div.get("--broken").map(String::as_str),
+            Some(""),
+            "an unresolvable var() is guaranteed-invalid, i.e. the empty string"
+        );
+    }
+
+    /// The whole point of the separate, `Arc`-shared snapshot: nodes that only
+    /// inherit a set of variables must share one allocation with the node that
+    /// declared it, not carry a copy each (see `collect_custom_properties`).
+    #[test]
+    fn custom_property_snapshot_shares_one_allocation_per_distinct_map() {
+        let root = lay_full(
+            "<html><body><div id=a><p>x</p></div></body></html>",
+            ":root{--base:8px}",
+        );
+        let props = collect_custom_properties(&root);
+        assert!(props.len() > 1, "every node inherits --base");
+        let mut maps = props.values();
+        let first = maps.next().expect("at least one node");
+        for other in maps {
+            assert!(
+                std::sync::Arc::ptr_eq(first, other),
+                "one declared set must stay one allocation across the document"
+            );
+        }
     }
 
     fn first_element_child(b: &LayoutBox) -> &LayoutBox {

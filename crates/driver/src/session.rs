@@ -377,6 +377,7 @@ impl InProcessSession {
         if let Some(rt) = self.js_runtime.as_ref() {
             rt.update_layout_rects(lumen_layout::collect_layout_rects(layout_root));
             rt.update_computed_styles(lumen_layout::collect_computed_styles(layout_root));
+            rt.update_custom_properties(lumen_layout::collect_custom_properties(layout_root));
             rt.update_viewport_size(self.viewport.width, self.viewport.height);
         }
 
