@@ -359,6 +359,11 @@ function Event(type, init) {
     this.type             = String(type || '');
     this.bubbles          = !!(init && init.bubbles);
     this.cancelable       = !!(init && init.cancelable);
+    // DOM LS §2.2 EventInit.composed — read out of the init dictionary like the
+    // other three flags. Lumen has no composed-tree retargeting yet, so nothing
+    // dispatches differently on it, but events that the spec requires to be
+    // composed (`fullscreenerror`, …) must still report it (BUG-390).
+    this.composed         = !!(init && init.composed);
     this.isTrusted        = !!(init && init.isTrusted);
     this.defaultPrevented = false;
     this.cancelBubble     = false;
@@ -937,6 +942,10 @@ var _LUMEN_EVENT_HANDLER_ATTRS = [
     'oncuechange', 'oncut', 'ondblclick', 'ondrag', 'ondragend', 'ondragenter',
     'ondragleave', 'ondragover', 'ondragstart', 'ondrop', 'ondurationchange',
     'onemptied', 'onencrypted', 'onended', 'onerror', 'onfocus', 'onformdata',
+    // Fullscreen §4.2 — declared as plain `null` properties on the element
+    // wrapper before BUG-390, i.e. an assignment landed on a throwaway wrapper
+    // and no dispatch path could ever find it back.
+    'onfullscreenchange', 'onfullscreenerror',
     'oninput', 'oninvalid', 'onkeydown', 'onkeypress', 'onkeyup', 'onload',
     'onloadeddata', 'onloadedmetadata', 'onloadstart', 'onmousedown',
     'onmouseenter', 'onmouseleave', 'onmousemove', 'onmouseout', 'onmouseover',
@@ -3423,8 +3432,15 @@ function _lumen_build_element(nid) {
         requestFullscreen: function(options) {
             var self = _obj;
             return new Promise(function(resolve, reject) {
-                if (!document.fullscreenEnabled) {
-                    reject(new TypeError('Fullscreen not enabled'));
+                // WHATWG Fullscreen §4.3 error preconditions (BUG-390). Before
+                // this list the only gate was `document.fullscreenEnabled`,
+                // hardcoded true — so the reject branch was dead and every
+                // refusal case (detached element, showing popover, no user
+                // activation) silently entered fullscreen instead.
+                var why = _lumen_fs_request_error(nid, self);
+                if (why !== null) {
+                    _lumen_fire_fullscreen_error(nid);
+                    reject(new TypeError('requestFullscreen(): ' + why));
                     return;
                 }
                 // Exit previous fullscreen element if it is a different node.
@@ -3455,8 +3471,9 @@ function _lumen_build_element(nid) {
                 resolve();
             });
         },
-        onfullscreenchange: null,
-        onfullscreenerror:  null,
+        // onfullscreenchange / onfullscreenerror live in
+        // _LUMEN_EVENT_HANDLER_ATTRS instead (BUG-390) — a plain null property
+        // here would be re-created empty by every _lumen_make_element call.
         onpointerlockchange: null,
         onpointerlockerror: null,
         // HTML LS §9.10 — drag-and-drop IDL attributes
@@ -5207,17 +5224,21 @@ var document = {
     },
     get fullscreenEnabled() { return true; },
     exitFullscreen: function() {
-        return new Promise(function(resolve) {
-            if (_fs_nid !== -1) {
-                var old = _fs_nid;
-                _lumen_remove_attr(_fs_nid, _FS_ATTR);
-                _fs_nid = -1;
-                // Notify shell to exit OS fullscreen.
-                if (typeof _lumen_fs_exit === 'function') { _lumen_fs_exit(); }
-                var prev = _lumen_make_element(old);
-                if (prev) { prev.dispatchEvent(new Event('fullscreenchange', { bubbles: true })); }
-                document.dispatchEvent(new Event('fullscreenchange'));
+        return new Promise(function(resolve, reject) {
+            // Fullscreen §4.4: with no fullscreen element the promise rejects
+            // with a TypeError instead of resolving on a no-op (BUG-390).
+            if (_fs_nid === -1) {
+                reject(new TypeError('exitFullscreen(): the document is not in fullscreen mode'));
+                return;
             }
+            var old = _fs_nid;
+            _lumen_remove_attr(_fs_nid, _FS_ATTR);
+            _fs_nid = -1;
+            // Notify shell to exit OS fullscreen.
+            if (typeof _lumen_fs_exit === 'function') { _lumen_fs_exit(); }
+            var prev = _lumen_make_element(old);
+            if (prev) { prev.dispatchEvent(new Event('fullscreenchange', { bubbles: true })); }
+            document.dispatchEvent(new Event('fullscreenchange'));
             resolve();
         });
     },
@@ -14346,6 +14367,60 @@ document.addEventListener('click', function(evt) {
 });
 
 // ── Fullscreen API helpers ────────────────────────────────────────────────────
+// WHATWG Fullscreen §4.3 — the error preconditions of requestFullscreen(),
+// evaluated in spec order. Returns null when the request may proceed, or a short
+// reason for the TypeError otherwise (BUG-390).
+var _LUMEN_FS_NS_HTML   = 'http://www.w3.org/1999/xhtml';
+var _LUMEN_FS_NS_SVG    = 'http://www.w3.org/2000/svg';
+var _LUMEN_FS_NS_MATHML = 'http://www.w3.org/1998/Math/MathML';
+
+function _lumen_fs_request_error(nid, el) {
+    // This is connected: a detached element can never be shown.
+    if (!_lumen_resource_is_connected(nid)) return 'element is not connected';
+    // This is an HTML element, or an svg / math element.
+    var ns = el.namespaceURI;
+    var local = String(el.localName || '').toLowerCase();
+    if (ns && ns !== _LUMEN_FS_NS_HTML
+        && !(ns === _LUMEN_FS_NS_SVG && local === 'svg')
+        && !(ns === _LUMEN_FS_NS_MATHML && local === 'math')) {
+        return 'element is neither an HTML element nor svg / math';
+    }
+    // This node document is fullscreen enabled.
+    if (!document.fullscreenEnabled) return 'the document is not fullscreen enabled';
+    // This popover visibility state is hidden: a showing popover and the
+    // fullscreen element are competing occupants of the top layer.
+    if (_lumen_get_attr(nid, _LPOP_ATTR) !== undefined) return 'element is a showing popover';
+    // Transient activation, or the algorithm is triggered by user generated
+    // orchestration. navigator.userActivation is the engine single answer to
+    // that question (the FSA and local-font gates read the same property); it
+    // currently reports active unconditionally, so this branch only starts
+    // firing once the engine tracks real gestures - BUG-758.
+    var activation = (typeof navigator !== 'undefined') ? navigator.userActivation : undefined;
+    if (activation && activation.isActive === false) return 'no transient user activation';
+    return null;
+}
+
+// WHATWG Fullscreen §4.3 error path: fire fullscreenerror for a request that
+// failed the checks above. The event targets the element and bubbles, so a
+// document-level listener sees it with target still pointing at the element; a
+// disconnected element has no ancestor chain to bubble along, so the event goes
+// straight to the document instead. document.onfullscreenerror is a plain
+// property of the document object rather than a per-nid entry in
+// _lumen_on_handlers, so neither dispatch path invokes it - call it here.
+function _lumen_fire_fullscreen_error(nid) {
+    var evt = new Event('fullscreenerror', { bubbles: true, cancelable: false, composed: true });
+    if (nid !== null && nid !== undefined && _lumen_resource_is_connected(nid)) {
+        _lumen_dispatch_rich(nid, evt);
+    } else {
+        evt.target = document;
+        evt.currentTarget = document;
+        document.dispatchEvent(evt);
+    }
+    if (typeof document.onfullscreenerror === 'function') {
+        try { document.onfullscreenerror.call(document, evt); } catch (e) {}
+    }
+}
+
 // Called by the shell (via eval_js) when fullscreen is exited externally, e.g.
 // the user pressed Escape or the OS window manager exited fullscreen mode.
 // This keeps JS state consistent with reality — _fs_nid → -1, fires events.
@@ -15695,6 +15770,154 @@ mod tests {
             assert!(bool_eval(&rt,
                 "'onfullscreenchange' in document && \
                  'onfullscreenerror' in document"
+            ));
+        }
+
+        // ── BUG-390: requestFullscreen() error preconditions ─────────────────────
+
+        /// A detached element can never be shown — Fullscreen §4.3 rejects with
+        /// a TypeError instead of entering fullscreen (WPT `promises-reject`).
+        #[test]
+        fn request_fullscreen_rejects_for_detached_element() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var res = 'pending'; \
+                 document.createElement('span').requestFullscreen().then( \
+                     function() { res = 'resolved'; }, \
+                     function(e) { res = e.constructor.name; });"
+            )
+            .unwrap();
+            assert!(bool_eval(&rt, "res === 'TypeError'"));
+            assert!(bool_eval(&rt, "document.fullscreenElement === null"));
+        }
+
+        /// The rejected request also fires `fullscreenerror`; a detached element
+        /// has no ancestor chain, so the event goes to the document.
+        #[test]
+        fn request_fullscreen_detached_fires_fullscreenerror_on_document() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var ev = null; \
+                 document.addEventListener('fullscreenerror', function(e) { ev = e; }); \
+                 document.createElement('span').requestFullscreen().catch(function() {});"
+            )
+            .unwrap();
+            assert!(bool_eval(&rt,
+                "ev !== null && ev.type === 'fullscreenerror' && ev.bubbles === true && \
+                 ev.cancelable === false && ev.composed === true"
+            ));
+        }
+
+        /// For a connected element the event targets the element itself and
+        /// bubbles up to the document listener (WPT
+        /// `element-request-fullscreen-not-allowed` / `document-onfullscreenerror`).
+        #[test]
+        fn request_fullscreen_error_targets_the_element_and_bubbles() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var ev = null; \
+                 document.addEventListener('fullscreenerror', function(e) { ev = e; }); \
+                 var d = document.getElementById('main'); \
+                 d.setAttribute('popover', ''); \
+                 d.showPopover(); \
+                 var res = 'pending'; \
+                 d.requestFullscreen().then(function() { res = 'resolved'; }, \
+                                            function(e) { res = e.constructor.name; });"
+            )
+            .unwrap();
+            assert!(bool_eval(&rt, "res === 'TypeError'"));
+            assert!(bool_eval(&rt,
+                "ev !== null && ev.target === document.getElementById('main')"
+            ));
+            assert!(bool_eval(&rt, "document.fullscreenElement === null"));
+        }
+
+        /// `document.onfullscreenerror` is a plain property of the document
+        /// object, so the fire helper has to invoke it explicitly.
+        #[test]
+        fn request_fullscreen_error_calls_document_on_handler() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var seen = null; \
+                 document.onfullscreenerror = function(e) { seen = e.type; }; \
+                 document.createElement('span').requestFullscreen().catch(function() {});"
+            )
+            .unwrap();
+            assert!(bool_eval(&rt, "seen === 'fullscreenerror'"));
+        }
+
+        /// Without transient activation the request is refused. Lumen's
+        /// `navigator.userActivation` reports active unconditionally (BUG-758),
+        /// so the gate is exercised here by overriding that single signal.
+        #[test]
+        fn request_fullscreen_rejects_without_transient_activation() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "Object.defineProperty(navigator, 'userActivation', { \
+                     value: { isActive: false, hasBeenActive: true }, configurable: true }); \
+                 var res = 'pending'; \
+                 document.body.requestFullscreen().then(function() { res = 'resolved'; }, \
+                                                        function(e) { res = e.constructor.name; });"
+            )
+            .unwrap();
+            assert!(bool_eval(&rt, "res === 'TypeError'"));
+            assert!(bool_eval(&rt, "document.fullscreenElement === null"));
+        }
+
+        /// The happy path still resolves — the new checks must not gate a
+        /// connected, non-popover element under the default activation model.
+        #[test]
+        fn request_fullscreen_resolves_for_connected_element() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var res = 'pending'; \
+                 document.body.requestFullscreen().then(function() { res = 'resolved'; }, \
+                                                        function(e) { res = e.constructor.name; });"
+            )
+            .unwrap();
+            assert!(bool_eval(&rt, "res === 'resolved'"));
+            assert!(bool_eval(&rt, "document.fullscreenElement !== null"));
+        }
+
+        /// Fullscreen §4.4: exiting when nothing is fullscreen rejects with a
+        /// TypeError (WPT `promises-reject`, second assertion).
+        #[test]
+        fn exit_fullscreen_rejects_when_not_in_fullscreen() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var res = 'pending'; \
+                 document.exitFullscreen().then(function() { res = 'resolved'; }, \
+                                                function(e) { res = e.constructor.name; });"
+            )
+            .unwrap();
+            assert!(bool_eval(&rt, "res === 'TypeError'"));
+        }
+
+        /// `el.onfullscreenerror = fn` used to land on the wrapper object only,
+        /// where no dispatch path looks; it now routes through the per-nid
+        /// handler table like `onclick` and therefore actually fires.
+        #[test]
+        fn element_onfullscreenerror_handler_fires() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var seen = null; \
+                 var d = document.getElementById('main'); \
+                 d.onfullscreenerror = function(e) { seen = e.type; }; \
+                 d.setAttribute('popover', ''); \
+                 d.showPopover(); \
+                 d.requestFullscreen().catch(function() {});"
+            )
+            .unwrap();
+            assert!(bool_eval(&rt, "seen === 'fullscreenerror'"));
+        }
+
+        /// DOM LS §2.2: `composed` comes out of the EventInit dictionary.
+        #[test]
+        fn event_composed_reflects_init_dict() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(&rt,
+                "new Event('x', { composed: true }).composed === true && \
+                 new Event('x').composed === false"
             ));
         }
 

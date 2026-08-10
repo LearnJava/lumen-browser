@@ -23,7 +23,7 @@
 `transient activation`/`hasTransientActivation` в `crates/js/src`, ноль
 попаданий. Тот же класс пробела уже отдельно заведён на:
 
-- [BUG-390](BUG-390-OPEN.md) — `requestFullscreen()`;
+- [BUG-390](BUG-390-FIXED.md) — `requestFullscreen()`;
 - [BUG-655](BUG-655-OPEN.md) — `requestPointerLock()`;
 - [BUG-667](BUG-667-OPEN.md) — `getScreenDetails()` (permission-state вариант того же класса).
 

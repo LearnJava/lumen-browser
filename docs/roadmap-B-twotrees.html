@@ -76,11 +76,11 @@
  "generated": "2026-08-10",
  "counts": {
   "open": 315,
-  "fixed": 407,
+  "fixed": 408,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 722,
+ "total_bugs": 723,
  "phases": [
   {
    "id": "P0",
@@ -7330,10 +7330,10 @@
    "debtor": false
   },
   "BUG-390": {
-   "status": "open",
-   "title": "`requestFullscreen()` реализует только happy path: единственная проверка — захардкоженный `fullscreenEnabled` (`return true` всегда), ветка `reject` мертва; ни…",
-   "component": "js (`crates/js/src/dom.rs:5650-5671` — `requestFullscreen`, `crates/js/src/dom.rs:7171` — `document.fullscreenEnabled`)",
-   "date": null,
+   "status": "fixed",
+   "title": "`requestFullscreen()` реализовывал только happy path: единственная проверка — захардкоженный `fullscreenEnabled` (`return true` всегда), ветка `reject` мертва;…",
+   "component": "js (`crates/js/src/dom.rs` — `requestFullscreen`/`exitFullscreen` в `WEB_API_SHIM`)",
+   "date": "2026-08-10",
    "debtor": false
   },
   "BUG-391": {
@@ -9862,6 +9862,13 @@
    "component": "network (`crates/network/src/lib.rs:1041` — `type PageResponse = (Vec<u8>, Vec<(String, String)>)`; `Response` без URL, `lib.rs:461`; цепочка проходится внутри `fetch_with_redirect`, `lib.rs:2601`), shell (`crates/shell/src/main.rs:3577` — `base: ResourceBase::Url(url.clone())`)",
    "date": "2026-08-10",
    "debtor": false
+  },
+  "BUG-758": {
+   "status": "open",
+   "title": "Движок не отслеживает transient user activation вовсе: `navigator.userActivation` — замороженный литерал `{ isActive: true, hasBeenActive: true }`, то есть на в…",
+   "component": "js (`crates/js/src/dom.rs` — `navigator.userActivation`; потребители: `_lumen_fs_request_error` там же, `crates/js/src/filesystem_access.rs:2601`, `crates/js/src/local_font_access.rs:151`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -10263,6 +10270,9 @@
   ],
   "js (`crates/js/src/dom.rs` — `document` в `WEB_API_SHIM`)": [
    "BUG-701"
+  ],
+  "js (`crates/js/src/dom.rs` — `navigator.userActivation`; потребители: `_lumen_fs_request_error` там же, `crates/js/src/filesystem_access.rs:2601`, `crates/js/src/local_font_access.rs:151`)": [
+   "BUG-758"
   ],
   "js (`crates/js/src/dom.rs` — live-DOM `Element` object literal)": [
    "BUG-351"
