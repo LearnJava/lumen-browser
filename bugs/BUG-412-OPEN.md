@@ -51,5 +51,5 @@ HTML LS §3.1.5 «DOM tree accessors»: `document.getElementsByName(elementName)
 и отдельного бага не требует.
 
 Смежно (в этот баг не входит): именованный доступ через `window.<name>` тоже отсутствует —
-это уже заведённый [BUG-384](BUG-384-OPEN.md) (проба: `window.n1` === `undefined` при
+это уже заведённый [BUG-384](BUG-384-FIXED.md) (проба: `window.n1` === `undefined` при
 `<img name=n1>` в документе).

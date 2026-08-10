@@ -51,7 +51,7 @@ file's full subtest list (no other defect masked underneath):
 
 Note: all three of these files' `<main id=main>` markup also relies on named
 access on Window for other assertions elsewhere in the same pattern family
-(the [BUG-384](BUG-384-OPEN.md) mechanism) — but `document.currentScript`
+(the [BUG-384](BUG-384-FIXED.md) mechanism) — but `document.currentScript`
 fails **first**, before named access on `main` is ever exercised, so
 `document.currentScript` is the correct primary/blocking attribution for
 these three files. Fixing this bug alone will not turn every subtest green —
@@ -110,6 +110,6 @@ invoke a `<script>`'s source text.
 Committed `.ini` under `tests/wpt/metadata/css/css-cascade/` for the 3
 attributed files, `expected: FAIL` per the actual run. **Не пересматривались
 этим фиксом намеренно:** за `currentScript` в тех же трёх файлах немедленно
-встаёт [BUG-384](BUG-384-OPEN.md) (named access on Window), так что зелёными
+встаёт [BUG-384](BUG-384-FIXED.md) (named access on Window), так что зелёными
 они не станут; актуализировать метаданные должен прогон категории (P2), а не
 догадка.

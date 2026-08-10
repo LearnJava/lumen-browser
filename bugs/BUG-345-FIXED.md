@@ -35,7 +35,7 @@ tests: 2/2 harness OK; subtests: 2/6 passed
 No `TIMEOUT`/hang anywhere in either run's log. `designmode-iscontenteditable.html`
 completes its harness cleanly; 4 of its 6 subtests still FAIL, but on an ordinary
 `ReferenceError: ceInherit is not defined` — the already-tracked
-[BUG-384](BUG-384-OPEN.md) (named access on `window` for id'd elements not
+[BUG-384](BUG-384-FIXED.md) (named access on `window` for id'd elements not
 implemented) — not a hang. `plaintext-only.html` (the sibling file in the same
 category) now passes 2/2, confirming [BUG-344](BUG-344-FIXED.md)'s fix is live.
 
@@ -77,7 +77,7 @@ spending further bisection budget on a P3 bug-fix task.
 ## Остаточная находка
 
 None new. The 4 residual subtest FAILs in `designmode-iscontenteditable.html`
-are [BUG-384](BUG-384-OPEN.md) (already open); no hang, no new defect.
+are [BUG-384](BUG-384-FIXED.md) (already open); no hang, no new defect.
 
 ## Гочи, встреченные в ходе проверки
 

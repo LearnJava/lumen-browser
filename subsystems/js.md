@@ -946,6 +946,29 @@ the time — read dates.
   [BUG-747](../bugs/BUG-747-OPEN.md). 4 unit tests; `create_document_builds_xml_document` was corrected
   on the merits (it asserted `documentElement.tagName === 'SVG'`, encoding the very defect removed).
 
+- **Named access on Window (HTML LS §7.3.3, [BUG-384](../bugs/BUG-384-FIXED.md), 2026-08-10).** An
+  element with an `id` — and `img`/`form`/`iframe`/`embed`/`object` with a `name` — is reachable as
+  `window.x`, as the bare identifier `x`, and answers `true` to `'x' in window`. The property used to
+  not exist at all, so the `<div id=app>` + bare `app` idiom threw `ReferenceError` on the first line
+  and took the whole script with it. Implemented as a V8 named-property interceptor on the **global
+  object template** (`v8_runtime.rs::window_named_properties_template`, wired through
+  `v8::ContextOptions { global_template }` in `v8_thread_main`) — deliberately not a line in
+  `WEB_API_SHIM`, because the shim cannot see a name that fails to resolve. `PropertyHandlerFlags::
+  NON_MASKING` is what buys the spec's resolution order for free: V8 consults the interceptor **only**
+  for names that resolve nowhere else, so own `Window` properties and page `var`/`function`
+  declarations keep winning with no bookkeeping on our side. Non-obvious details for anyone touching
+  this: the interceptor is installed at context creation, long before a document exists, and the
+  document is published into a **thread-local** by every `install_dom` (so it follows navigation and
+  is simply inert in worker isolates); the lookup takes the document with `try_lock`, never `lock`,
+  because the interceptor fires on *any* global-name miss including one made by JS that a native
+  called while holding the document lock (a blocking take would deadlock the JS thread against
+  itself); and the returned value is built by calling the shim's own `_lumen_make_element`, so
+  `window.probe === document.getElementById('probe')` holds by identity. Measured cost (A/B on one
+  build): reads of an *existing* global are unchanged — the interceptor does not deoptimize global
+  variable access — while an unresolved name costs ~0.75 µs vs ~0.02 µs on an 8-node document, an
+  O(n) tree walk per miss. Spec simplifications: several matches yield the first in tree order rather
+  than an `HTMLCollection`, a matching `iframe` yields the element rather than its `contentWindow`.
+
 ## Deferred
 
 - WebGL: GLSL execution (per-vertex colour / texture sampling — currently flat `uniform4f` fill), `drawElements` / indexed draws, real textures. Backend stub lives in `lumen_paint::webgl`.

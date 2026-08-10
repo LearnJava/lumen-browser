@@ -44,12 +44,12 @@ a second gap the same test trips over after the first.
 `apply-top-level`, `apply-within-mixin`, `contents-rule` (6),
 `contents-nested-declarations(-fallback)`, `mixin-shadow-dom`,
 `mixin-layers` (4, additionally needs bare-id named access —
-[BUG-384](BUG-384-OPEN.md) — since `e1`/`e2`/`e3`/`e4` are read as globals),
+[BUG-384](BUG-384-FIXED.md) — since `e1`/`e2`/`e3`/`e4` are read as globals),
 `mixin-cssom.tentative`/`mixin-invalidation.tentative` (CSSOM surface,
 [BUG-471](BUG-471-OPEN.md)). Not filing the sibling `css-mixins/functions/`
 subdirectory under this bug — those 20 files test `@function` itself
 (partially implemented) and fail almost entirely on already-open
-[BUG-471](BUG-471-OPEN.md)/[BUG-384](BUG-384-OPEN.md) or the documented
+[BUG-471](BUG-471-OPEN.md)/[BUG-384](BUG-384-FIXED.md) or the documented
 CSS-SPECS.md T3 deferred scope (`returns` typing, conditional group rules),
 not on a missing `@mixin`/`@apply`/`@contents` construct.
 

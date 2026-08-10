@@ -19,7 +19,7 @@ FAIL document.caretRangeFromPoint() (no supplied coordinates) returns Range with
 offset 0") — это отдельный, ранее не заводившийся дефект (эта заглушка не
 является причиной ни одного FAIL/TIMEOUT в текущем срезе — все встреченные
 `caretPositionFromPoint`-провалы объясняются уже открытыми
-[BUG-384](BUG-384-OPEN.md) и [BUG-462](BUG-462-OPEN.md), см. `.ini`).
+[BUG-384](BUG-384-FIXED.md) и [BUG-462](BUG-462-OPEN.md), см. `.ini`).
 
 ## Масштаб находки
 

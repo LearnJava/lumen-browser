@@ -65,7 +65,7 @@ reached — masked, same pattern as BUG-384's masking elsewhere in this
 slice. `revert-rule-to-var.html`'s single subtest fails identically at
 `assert_true(CSS.supports('color:revert-rule'))` (gap 1 alone, since `color`
 is a known property) — its `getComputedStyle(target)` line (bare identifier,
-[BUG-384](BUG-384-OPEN.md) territory) is never reached either.
+[BUG-384](BUG-384-FIXED.md) territory) is never reached either.
 
 ## Масштаб находки
 
