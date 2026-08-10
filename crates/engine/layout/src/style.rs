@@ -34005,6 +34005,131 @@ mod tests {
         assert_eq!(expand_border_4("   "), ["   ", "   ", "   ", "   "]);
     }
 
+    // --- CSS Viewport L1 §5 — `zoom` ---
+
+    /// Style one element from an inline `style` attribute.
+    fn zoom_test_style(html: &str) -> ComputedStyle {
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false)
+    }
+
+    #[test]
+    fn zoom_parses_numbers_percentages_and_keywords() {
+        let approx = |got: Option<f32>, want: f32| {
+            assert!(got.is_some_and(|g| (g - want).abs() < 1e-6), "got {got:?}, want {want}");
+        };
+        approx(parse_zoom("0.8"), 0.8);
+        approx(parse_zoom(".8"), 0.8);
+        approx(parse_zoom("80%"), 0.8);
+        approx(parse_zoom("  1.5  "), 1.5);
+        // `normal`/`reset` contribute no scaling of their own.
+        approx(parse_zoom("normal"), 1.0);
+        approx(parse_zoom("RESET"), 1.0);
+        // Invalid values yield None so the caller drops the declaration rather
+        // than resetting an already-cascaded value to 1.
+        assert_eq!(parse_zoom("-0.5"), None);
+        assert_eq!(parse_zoom("0"), None);
+        assert_eq!(parse_zoom("auto"), None);
+        assert_eq!(parse_zoom(""), None);
+    }
+
+    /// The core of the property: `zoom` shrinks the box itself, not just its
+    /// painted appearance, so the computed lengths come out already scaled.
+    #[test]
+    fn zoom_scales_own_lengths_and_font_size() {
+        let s = zoom_test_style(
+            "<div style=\"zoom: 0.5; width: 100px; padding-left: 20px; \
+             margin-top: 8px; font-size: 40px; border-left: 4px solid red\"></div>",
+        );
+        assert_eq!(s.width, Some(Length::Px(50.0)));
+        assert_eq!(s.padding_left, Length::Px(10.0));
+        assert_eq!(s.margin_top, LengthOrAuto::Length(Length::Px(4.0)));
+        assert!((s.font_size - 20.0).abs() < 0.01, "font_size = {}", s.font_size);
+        assert!((s.border_left_width - 2.0).abs() < 0.01);
+        assert!((s.effective_zoom - 0.5).abs() < 1e-6);
+    }
+
+    /// This is the shape tbank.ru relies on: a fixed-width container that only
+    /// fits the viewport once `zoom` is applied.
+    #[test]
+    fn zoom_shrinks_fixed_min_and_max_width_container() {
+        let s = zoom_test_style(
+            "<div style=\"zoom: 0.8; min-width: 1104px; max-width: 1104px\"></div>",
+        );
+        assert_eq!(s.min_width, Some(Length::Px(1104.0 * 0.8)));
+        assert_eq!(s.max_width, Some(Length::Px(1104.0 * 0.8)));
+    }
+
+    /// `zoom` multiplies down the tree, and an *inherited* font-size must take
+    /// only the element's own factor — the ancestors' is already baked into the
+    /// value it inherited.
+    #[test]
+    fn zoom_compounds_through_the_tree() {
+        let doc = lumen_html_parser::parse(
+            "<div style=\"zoom: 0.5; font-size: 40px\">\
+             <span style=\"zoom: 0.5; width: 100px\"></span></div>",
+        );
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let vp = Size::new(800.0, 600.0);
+        let outer = doc.get(doc.body().unwrap()).children[0];
+        let outer_style = compute_style(&doc, outer, &sheet, &root, vp, false);
+        let inner = doc.get(outer).children[0];
+        let inner_style = compute_style(&doc, inner, &sheet, &outer_style, vp, false);
+
+        assert!((outer_style.font_size - 20.0).abs() < 0.01);
+        // 0.5 × 0.5 — the ancestor's factor and its own.
+        assert!((inner_style.effective_zoom - 0.25).abs() < 1e-6);
+        assert_eq!(inner_style.width, Some(Length::Px(25.0)));
+        // Inherited 20px, scaled once by the inner element's own 0.5 — not by
+        // the compounded 0.25, which would re-apply the parent's zoom.
+        assert!(
+            (inner_style.font_size - 10.0).abs() < 0.01,
+            "font_size = {}",
+            inner_style.font_size
+        );
+    }
+
+    /// Relative units must not be scaled here: they resolve later against a
+    /// basis that is itself already zoomed, so touching them would apply the
+    /// factor twice. `10em` against the zoomed 10px font-size is the intended
+    /// 100px, whereas a pre-scaled `5em` would collapse to 50px.
+    #[test]
+    fn zoom_leaves_relative_units_to_their_zoomed_basis() {
+        let s = zoom_test_style(
+            "<div style=\"zoom: 0.5; font-size: 20px; width: 10em; padding-left: 50%\"></div>",
+        );
+        assert!((s.font_size - 10.0).abs() < 0.01);
+        assert_eq!(s.width, Some(Length::Em(10.0)));
+        assert_eq!(s.padding_left, Length::Percent(50.0));
+    }
+
+    /// The initial value is 1.0, so a page that never mentions `zoom` computes
+    /// exactly as before — this is what keeps the change neutral for every
+    /// existing test page.
+    #[test]
+    fn absent_zoom_leaves_lengths_untouched() {
+        let s = zoom_test_style(
+            "<div style=\"width: 100px; padding-left: 20px; font-size: 40px\"></div>",
+        );
+        assert!((s.effective_zoom - 1.0).abs() < f32::EPSILON);
+        assert_eq!(s.width, Some(Length::Px(100.0)));
+        assert_eq!(s.padding_left, Length::Px(20.0));
+        assert!((s.font_size - 40.0).abs() < 0.01);
+    }
+
+    /// An unparseable `zoom` is ignored (CSS Syntax): the element keeps the
+    /// neutral factor instead of being scaled by a garbage value.
+    #[test]
+    fn invalid_zoom_declaration_is_ignored() {
+        let s = zoom_test_style("<div style=\"zoom: banana; width: 100px\"></div>");
+        assert!((s.effective_zoom - 1.0).abs() < f32::EPSILON);
+        assert_eq!(s.width, Some(Length::Px(100.0)));
+    }
+
     // --- border-radius elliptical (CSS Backgrounds L3 §5.5) ---
 
     #[test]
