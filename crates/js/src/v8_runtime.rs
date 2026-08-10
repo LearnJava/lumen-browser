@@ -7332,7 +7332,7 @@ mod tests {
         Arc::new(Mutex::new(d))
     }
 
-    /// The bug's own regression check, verbatim from `BUG-384-OPEN.md`: a
+    /// The bug's own regression check, verbatim from `BUG-384-FIXED.md`: a
     /// `<div id="probe">` must be reachable as `window.probe`, as the bare
     /// identifier `probe`, and must answer `true` to `'probe' in window`.
     /// Before the fix all three were `undefined`/`false` — a bare reference
