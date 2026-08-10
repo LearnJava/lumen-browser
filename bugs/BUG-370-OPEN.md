@@ -131,7 +131,7 @@ Response.proto members = _consumeBody,arrayBuffer,blob,clone,constructor,json,te
 
 Нет `formData()` и `bytes()` (последний добавлен в спеку в 2024).
 
-## C. Общее для обоих (и для `Headers` — см. [BUG-369](BUG-369-OPEN.md))
+## C. Общее для обоих (и для `Headers` — см. [BUG-369](BUG-369-FIXED.md))
 
 ### C1. Все атрибуты — собственные свойства инстанса, а не геттеры прототипа
 
@@ -236,7 +236,7 @@ target/dev-release/lumen.exe --dump-layout .tmp/probe-fetch2.html
 
 ## Связанные
 
-- [BUG-369](BUG-369-OPEN.md) — та же проба, `Headers`: не итерируем, не копируется.
+- [BUG-369](BUG-369-FIXED.md) — та же проба, `Headers`: не итерируем, не копируется.
 - [BUG-347](BUG-347-FIXED.md) — `fetch()` не резолвит относительные URL; A2 —
   соседняя строка того же шима, исправлена вместе с ним 2026-08-06.
 - [BUG-346](BUG-346-FIXED.md), [BUG-359](BUG-359-FIXED.md), [BUG-362](BUG-362-FIXED.md) —

@@ -28,7 +28,7 @@ Two independent gaps in `window`'s exotic-object behavior:
    `Symbol.toStringTag`, so `Object.prototype.toString.call(window)` answers
    the generic `[object Object]` instead of `[object Window]` — the same
    class of defect already tracked for `Headers`/`Response`/
-   `CredentialsContainer`/etc. in [BUG-369](bugs/BUG-369-OPEN.md)/
+   `CredentialsContainer`/etc. in [BUG-369](bugs/BUG-369-FIXED.md)/
    [BUG-366](bugs/BUG-366-FIXED.md), here on the global object itself.
 2. `window`'s indexed-property `[[DefineOwnProperty]]`/`[[Set]]` don't
    implement the WebIDL "index in `[0, 2**32-2]` with no indexed setter for

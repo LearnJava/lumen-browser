@@ -58,11 +58,11 @@
  "generated": "2026-08-10",
  "counts": {
   "open": 326,
-  "fixed": 386,
+  "fixed": 387,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 712,
+ "total_bugs": 713,
  "phases": [
   {
    "id": "P0",
@@ -7161,10 +7161,10 @@
    "debtor": false
   },
   "BUG-369": {
-   "status": "open",
-   "title": "`Headers` — ES5-конструктор поверх массива `this._map`, а не WebIDL-интерфейс; расходится с Fetch §2.2 по 8 пунктам. Главный: **не итерируем** — `Symbol.iterato…",
-   "component": "js (`crates/js/src/dom.rs:8845-8881` — конструктор `Headers` и весь его прототип: `_key` 8856, `append` 8857, `set` 8861, `get` 8866, `entries`/`keys`/`values` 8879-8881)",
-   "date": null,
+   "status": "fixed",
+   "title": "`Headers` был ES5-конструктором поверх массива `this._map`, а не WebIDL-интерфейсом, и расходился с Fetch §2.2 по 8 пунктам: не итерируем (`Symbol.iterator` отс…",
+   "component": "js (`crates/js/src/dom.rs` — `Headers` в `WEB_API_SHIM`)",
+   "date": "2026-08-10",
    "debtor": false
   },
   "BUG-370": {
@@ -9409,7 +9409,7 @@
   },
   "BUG-694": {
    "status": "open",
-   "title": "`URLSearchParams` has no `Symbol.iterator` (same defect class as `Headers`, [BUG-369](bugs/BUG-369-OPEN.md)) — `for...of`/spread/`Array.from()` all fail with \"i…",
+   "title": "`URLSearchParams` has no `Symbol.iterator` (same defect class as `Headers`, [BUG-369](bugs/BUG-369-FIXED.md)) — `for...of`/spread/`Array.from()` all fail with \"…",
    "component": "js (`crates/js/src/dom.rs:7974-8073` — `URLSearchParams` constructor + prototype)",
    "date": null,
    "debtor": false
@@ -9768,6 +9768,13 @@
    "status": "open",
    "title": "Все ~220 членов живой обёртки узла — собственные свойства инстанса, а не операции прототипа: `Object.getOwnPropertyNames(host).length` = 217 против 3 у `Element…",
    "component": "js (`crates/js/src/dom.rs` — объектный литерал в `_lumen_build_element`; почти пустые `Element.prototype`/`Node.prototype`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-748": {
+   "status": "open",
+   "title": "У скоупа service worker свой независимый мини-шим `Headers`/`Response`, оставшийся в дофиксовом виде ([BUG-369](bugs/BUG-369-FIXED.md)) и ещё беднее: хранилище…",
+   "component": "js (`crates/js/src/sw_worker.rs` — шим глобального скоупа service worker)",
    "date": null,
    "debtor": false
   }
@@ -10222,6 +10229,9 @@
   ],
   "js (`crates/js/src/surface_api.rs` рядом с `navigator.doNotTrack`, строки 116-121) + network (`crates/network/src/http/headers.rs::build_request_headers`)": [
    "BUG-397"
+  ],
+  "js (`crates/js/src/sw_worker.rs` — шим глобального скоупа service worker)": [
+   "BUG-748"
   ],
   "js (`crates/js/src/typed_om_api.rs`)": [
    "BUG-554"

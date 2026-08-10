@@ -52,7 +52,7 @@ HTML-аксессоров), но независимая находка, не п�
 а не через `class Selection {}` + `Object.setPrototypeOf`/`new`, поэтому
 глобального имени `Selection` просто негде взяться — тот же класс дефекта,
 что уже документирован для `Headers`/`Response` в
-[BUG-369](BUG-369-OPEN.md)/[BUG-370](BUG-370-OPEN.md) (ES5-объект вместо
+[BUG-369](BUG-369-FIXED.md)/[BUG-370](BUG-370-OPEN.md) (ES5-объект вместо
 WebIDL-интерфейса), но для `Selection` отдельно не заводился.
 
 ## Дальше

@@ -1,8 +1,9 @@
 # BUG-369 — `Headers` не итерируем и не копируется из другого `Headers`: `entries()`/`keys()`/`values()` возвращают массивы вместо итераторов, `Symbol.iterator` отсутствует, `new Headers(headers)` молча даёт пустой набор; плюс нет валидации имён, guard-а запрещённых заголовков и `getSetCookie`, а внутренние `_map`/`_key` торчат наружу
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/dom.rs:8845-8880` — конструктор `Headers` и весь его прототип: `_key` 8856, `append` 8857, `set` 8861, `get` 8866, `has` 8871, `delete` 8872, `forEach` 8876, `entries` 8879, `keys` 8880, `values` 8881)
+**Статус:** FIXED 2026-08-10
+**Компонент:** js (`crates/js/src/dom.rs` — конструктор `Headers` и весь его прототип)
 **Найден:** P2, WPT-VENDOR-fetch (2026-07-28), проба `--dump-layout` вне WPT
+**Исправлен:** P3, ветка `p3-bug-369`, 2026-08-10
 
 ## Симптом
 
@@ -172,9 +173,84 @@ target/dev-release/lumen.exe --dump-layout .tmp/probe-fetch.html
 `headers-no-cors.any.js`), плюс `Headers` используется как вспомогательный
 инструмент почти во всех остальных подкатегориях.
 
+## Исправление (2026-08-10)
+
+`Headers` переписан как WebIDL-интерфейс. Весь конструктор с прототипом переехал
+внутрь IIFE в `WEB_API_SHIM`; список заголовков и guard живут в `WeakMap`,
+замкнутой в этом IIFE, — до них нет дороги ни чтением, ни записью, поэтому
+`_map`/`_key` исчезли из наблюдаемого мира целиком (не «стали неперечислимыми»,
+а именно исчезли).
+
+По пунктам заявки:
+
+1. **Итерируемость.** `Headers.prototype[Symbol.iterator]` — тот же самый объект
+   функции, что и `entries` (WebIDL `iterable<>`, не копия), поэтому
+   `for (const [k, v] of headers)` и `Array.from(h)` работают.
+2. **Итераторы.** `entries()`/`keys()`/`values()` возвращают объект с `next()` и
+   `[Symbol.iterator]() === this`, с общим прототипом и
+   `Symbol.toStringTag = 'Headers Iterator'`.
+3. **Копирование.** `fill()` (Fetch §2.2.5) различает три формы `init`: другой
+   `Headers` (определяется по членству в приватной `WeakMap` — не по `instanceof`
+   и не по утиной типизации), любой iterable пар и запись-объект.
+   `new Headers(anotherHeaders)` копирует список дословно, включая дубликаты имён.
+4. **Валидация.** Имя проверяется по RFC 7230 tchar, значение нормализуется
+   (обрезка HTTP-пробелов) и проверяется на NUL/CR/LF; нарушение — `TypeError`.
+5. **Guard.** Реализованы все пять значений. `Request` получает `request`
+   (или `request-no-cors` при `mode: 'no-cors'`), `Response` — `response`,
+   `Response.error()`/`Response.redirect()` — `immutable`. Запрещённые
+   request-заголовки (список + префиксы `proxy-`/`sec-`) молча игнорируются,
+   `set-cookie` не проходит через response-guard, мутация immutable бросает
+   `TypeError`. `new Request(url, {method: 'CONNECT'})` бросает `TypeError`.
+   Сетевой путь (`Response._fromFetchCache`) наполняет список **до** установки
+   guard-а, иначе движок сам бы выбросил `Set-Cookie` из каждого ответа.
+6. **`getSetCookie()`** возвращает отдельные значения, а не склейку через `, `.
+7. **Приватность.** `JSON.stringify(new Headers({a:'1'}))` → `{}`, `for..in` — пусто,
+   методы прототипа неперечислимы.
+8. **Брендинг.** `Symbol.toStringTag = 'Headers'`, вызов без `new` бросает
+   `TypeError` (`new.target`), `Headers.length === 0` (аргумент читается из
+   `arguments`, а не объявляется).
+
+Порядок обхода — спековый «sort and combine» (§2.2.3): имена отсортированы,
+одноимённые значения склеены через `, `, кроме `set-cookie`, который даёт по
+записи на значение. Этот же порядок использует `forEach`.
+
+Guard не выводится в публичный API, поэтому `Response`/`Request` дотягиваются до
+него через два внутренних глобала, назначаемых изнутри замыкания:
+`_lumen_headers_new(init, guard)` (guard до наполнения) и
+`_lumen_headers_set_guard(h, guard)` (guard после наполнения — сетевой путь и
+`clone()`).
+
+Побочно починены два места, которые держались на том, что `entries()` отдавал
+массив: `Response.prototype.clone` и `Request.prototype.clone` теперь копируют
+список дословно (`new Headers(this.headers)`) и заново вешают guard — через
+конструктор `Response` клон терял бы `Set-Cookie` на каждом вызове. И ветка
+`fetch()`, определяющая `Content-Type` из `init.headers`: она обходила инициализатор
+через `for..in`, а у нового `Headers` собственных перечислимых свойств нет — добавлена
+явная ветка `initHeaders instanceof Headers`.
+
+Тесты: 16 новых в `dom.rs` (`mod v8_ws_sse`), по одному-двум на каждый пункт.
+Проверено и на живой странице (`--dump-display-list`, дефолтная V8-сборка):
+все 16 проб заявки дают спековый результат.
+
+## Не входит в этот фикс
+
+- Фильтрация response-заголовков по CORS (guard `response` здесь блокирует только
+  мутацию, а не чтение) — вне движка, у которого нет CORS-слоя.
+- `Response.redirect()` по-прежнему пишет `r.url` вместо заголовка `Location` и не
+  бросает `RangeError` на не-редиректном статусе; `Response.error()` не выставляет
+  `type = 'error'` — это [BUG-370](BUG-370-OPEN.md), который прямо владеет
+  «корректным `Response.error()`/`redirect()`».
+- Мини-шим `Headers`/`Response` в скоупе service worker
+  (`crates/js/src/sw_worker.rs`) — отдельный объект того же класса дефекта,
+  выделен в [BUG-748](BUG-748-OPEN.md).
+
 ## Связанные
 
 - [BUG-370](BUG-370-OPEN.md) — та же проба, `Request`/`Response`: нет Body-mixin
   на `Request`, `Response.json()`, корректного `Response.error()`/`redirect()`.
+- [BUG-694](BUG-694-OPEN.md) — ровно тот же класс на `URLSearchParams`: нет
+  `Symbol.iterator`, `entries()` отдаёт массив, копирующий конструктор кладёт
+  внутреннее поле `_p` отдельным параметром.
+- [BUG-748](BUG-748-OPEN.md) — тот же класс в шиме service worker.
 - [BUG-367](BUG-367-FIXED.md), [BUG-366](BUG-366-FIXED.md) — тот же класс «внутренний
   слот торчит наружу перечислимым и записываемым», на `Element` и `navigator.credentials`.
