@@ -75,8 +75,8 @@
 {
  "generated": "2026-08-10",
  "counts": {
-  "open": 316,
-  "fixed": 406,
+  "open": 315,
+  "fixed": 407,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -9857,10 +9857,10 @@
    "debtor": false
   },
   "BUG-757": {
-   "status": "open",
+   "status": "fixed",
    "title": "После HTTP-редиректа URL документа не обновляется: контент приходит с финального адреса, а `location.href`/`location.pathname`/`document.URL`/`document.baseURI`…",
    "component": "network (`crates/network/src/lib.rs:1041` — `type PageResponse = (Vec<u8>, Vec<(String, String)>)`; `Response` без URL, `lib.rs:461`; цепочка проходится внутри `fetch_with_redirect`, `lib.rs:2601`), shell (`crates/shell/src/main.rs:3577` — `base: ResourceBase::Url(url.clone())`)",
-   "date": null,
+   "date": "2026-08-10",
    "debtor": false
   }
  },

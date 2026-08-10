@@ -142,4 +142,4 @@ jar) в `lumen-storage`; `redirect_hop_passes_own_request_path_to_cookie_jar`
   safe-навигации; на этом сценарии не сработало (все куки `SameSite=None`), но
   на других сайтах со сквозным логином сработает.
 * Второй дефект, найденный на этой же цепочке, — URL документа не обновляется
-  после HTTP-редиректа: [BUG-757](BUG-757-OPEN.md).
+  после HTTP-редиректа: [BUG-757](BUG-757-FIXED.md).

@@ -1033,12 +1033,40 @@ const STREAM_BODY_READ: usize = 8 * 1024;
 /// читаемыми (без него clippy::type_complexity ругается на `Option<&mut dyn …>`).
 type ChunkSink<'a> = &'a mut dyn FnMut(&[u8]);
 
+/// Как [`ChunkSink`], но порция сопровождается URL hop-а, чьё тело стримится.
+///
+/// Публичный вариант для [`HttpClient::fetch_page_streaming`]: shell на каждом
+/// chunk-е запускает preload-сканер и резолвит найденные `href` относительно
+/// базы документа, а база — финальный URL, известный только внутри
+/// [`fetch_with_redirect`]. Без второго аргумента прогрессивные preload-запросы
+/// после редиректа уходили на до-редиректный адрес ([BUG-757]) — сам документ
+/// при этом уже был корректен, потому что его база берётся из `PageResponse`,
+/// то есть после стриминга.
+///
+/// [BUG-757]: https://github.com/LearnJava/lumen-browser/blob/main/bugs/BUG-757-FIXED.md
+pub type PageChunkSink<'a> = &'a mut dyn FnMut(&[u8], &Url);
+
 /// Разобранная head-секция ответа: `(status, headers, server_wants_close)`.
 type ResponseHead = (u16, Vec<(String, String)>, bool);
 
-/// Тело документа + заголовки финального ответа — возврат `fetch_page` /
-/// `fetch_page_streaming` (алиас держит сигнатуру под порогом type_complexity).
-type PageResponse = (Vec<u8>, Vec<(String, String)>);
+/// Ответ на навигационный запрос — возврат [`HttpClient::fetch_page`] /
+/// [`HttpClient::fetch_page_streaming`].
+///
+/// `final_url` — адрес hop-а, который отдал финальный (не-3xx) ответ; для
+/// запроса без редиректов он равен запрошенному URL. Поле обязательное, а не
+/// `Option`: без него caller подставлял запрошенный URL как базу документа, и
+/// после серверного редиректа `location.*`/`document.baseURI`/относительные
+/// подресурсы уезжали на до-редиректный адрес ([BUG-757]).
+///
+/// [BUG-757]: https://github.com/LearnJava/lumen-browser/blob/main/bugs/BUG-757-FIXED.md
+pub struct PageResponse {
+    /// Полное декодированное тело документа.
+    pub body: Vec<u8>,
+    /// Заголовки финального ответа.
+    pub headers: Vec<(String, String)>,
+    /// URL, с которого получен финальный ответ (после всех редиректов).
+    pub final_url: Url,
+}
 
 /// Framing тела ответа, определённый по заголовкам. Управляет
 /// инкрементальным чтением тела в streaming-пути.
@@ -2193,6 +2221,18 @@ fn destination_to_resource_type(dest: RequestDestination) -> lumen_core::ext::Re
     }
 }
 
+/// Пройти цепочку редиректов и вернуть финальный (не-3xx) ответ **вместе с
+/// URL hop-а, который его отдал**.
+///
+/// Второй элемент — единственный способ узнать снаружи, куда доехал запрос:
+/// цепочка проходится рекурсией внутри этой функции, а `Response` адреса не
+/// несёт. Он учитывает и HSTS-upgrade (`http` → `https`), потому что берётся
+/// из `url` уже после апгрейда. Возврат кортежем, а не полем `Option<Url>` в
+/// `Response`: URL финального hop-а — свойство обхода цепочки, а не ответа, и
+/// тотальный тип не даёт caller-у молча подставить запрошенный URL вместо
+/// финального ([BUG-757]).
+///
+/// [BUG-757]: https://github.com/LearnJava/lumen-browser/blob/main/bugs/BUG-757-FIXED.md
 #[allow(clippy::too_many_arguments)]
 fn fetch_with_redirect(
     url: &Url,
@@ -2230,13 +2270,15 @@ fn fetch_with_redirect(
     // PH1-2a: streaming body sink for the final 2xx response (progressive HTML).
     // Threaded to the actual-request `fetch_single` and along redirect hops;
     // `None` for every fetch path except top-level navigation streaming.
-    mut stream_sink: Option<ChunkSink<'_>>,
+    // BUG-757: каждый chunk отдаётся вместе с URL СВОЕГО hop-а — только здесь
+    // он известен, а sink срабатывает лишь на 2xx-теле, то есть на финальном.
+    mut stream_sink: Option<PageChunkSink<'_>>,
     // BUG-292: `true` when this is a top-level document navigation (main frame),
     // not a subresource. Propagated verbatim across redirect hops (a redirected
     // navigation is still a navigation) and passed into the EasyList filter
     // context so typed `$`-option rules do not over-block the main document.
     is_top_level: bool,
-) -> Result<Response> {
+) -> Result<(Response, Url)> {
     if hops_left == 0 {
         return Err(Error::Network("too many redirects".to_owned()));
     }
@@ -2484,6 +2526,19 @@ fn fetch_with_redirect(
             });
         }
 
+        // BUG-757: адаптер `PageChunkSink` → `ChunkSink`. Живёт ровно на время
+        // одного hop-а и подставляет его URL; протокольные уровни ниже про URL
+        // не знают и знать не должны. `stream_sink` заимствуется только здесь,
+        // поэтому остаётся доступным для рекурсии по редиректу ниже.
+        let streams_body = stream_sink.is_some();
+        let mut hop_adapter = |chunk: &[u8]| {
+            if let Some(s) = stream_sink.as_mut() {
+                s(chunk, url);
+            }
+        };
+        let hop_sink: Option<ChunkSink<'_>> =
+            streams_body.then_some(&mut hop_adapter as ChunkSink<'_>);
+
         let mut resp = match fetch_single(
             pool,
             h2_pool,
@@ -2505,7 +2560,7 @@ fn fetch_with_redirect(
             socks5_proxy,
             h3_alt_svc,
             h3_pool,
-            stream_sink.as_mut().map(|f| &mut **f as ChunkSink<'_>),
+            hop_sink,
         ) {
             Ok(r) => r,
             Err(e) => return Err(emit_request_failed(sink, tab_id, url, e)),
@@ -2582,13 +2637,13 @@ fn fetch_with_redirect(
                 // успехом; для 4xx/5xx — нет (caller получает Err по статусу,
                 // тело туда не доходит).
                 resp.body = apply_content_encoding(resp.body, &resp.headers, decoders)?;
-                return Ok(resp);
+                return Ok((resp, url.clone()));
             }
             // 304 Not Modified: conditional GET confirmed the cached copy is
             // still valid. Return the response as-is (empty body); caller is
             // responsible for substituting the cached body and updating cache
             // metadata via HttpCache::revalidate().
-            304 => return Ok(resp),
+            304 => return Ok((resp, url.clone())),
             301 | 302 | 303 | 307 | 308 => {
                 let location = header_value(&resp.headers, "location")
                     .ok_or_else(|| Error::Network("redirect without Location".to_owned()))?;
@@ -3229,7 +3284,7 @@ impl HttpClient {
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
                     false, // BUG-292: subresource, not a document navigation
         )
-        .map(|resp| resp.body)
+        .map(|(resp, _final_url)| resp.body)
     }
 
     pub fn fetch_range(
@@ -3240,7 +3295,7 @@ impl HttpClient {
     ) -> Result<RangeResponse> {
         let accept_encoding = self.accept_encoding_header();
         let request = RangeRequest::Single(range);
-        let resp = fetch_with_redirect(
+        let (resp, _final_url) = fetch_with_redirect(
             url,
             5,
             &self.pool,
@@ -3316,7 +3371,7 @@ impl HttpClient {
             ));
         }
         let accept_encoding = self.accept_encoding_header();
-        let resp = fetch_with_redirect(
+        let (resp, _final_url) = fetch_with_redirect(
             url,
             5,
             &self.pool,
@@ -3410,7 +3465,7 @@ impl HttpClient {
             }
             if !snap.conditional_headers.is_empty() {
                 // Stale entry with validators — conditional GET.
-                let resp = fetch_with_redirect(
+                let (resp, _final_url) = fetch_with_redirect(
                     url,
                     5,
                     &self.pool,
@@ -3449,7 +3504,7 @@ impl HttpClient {
             }
         }
 
-        let resp = fetch_with_redirect(
+        let (resp, _final_url) = fetch_with_redirect(
             url,
             5,
             &self.pool,
@@ -3513,7 +3568,7 @@ impl HttpClient {
             extra.push_str(&format!("If-Modified-Since: {lm}\r\n"));
         }
         let accept_encoding = self.accept_encoding_header();
-        let resp = fetch_with_redirect(
+        let (resp, _final_url) = fetch_with_redirect(
             url,
             5,
             &self.pool,
@@ -3574,15 +3629,23 @@ pub enum ConditionalFetch {
 
 impl HttpClient {
     /// Fetch a top-level page and return the response body together with all
-    /// response headers. Unlike `NetworkTransport::fetch`, this exposes headers
-    /// so the shell can read `Cross-Origin-Opener-Policy` / `Cross-Origin-Embedder-Policy`
-    /// to compute `crossOriginIsolated` for the JS context.
-    #[allow(clippy::type_complexity)]
+    /// response headers and the URL the final response came from. Unlike
+    /// `NetworkTransport::fetch`, this exposes headers so the shell can read
+    /// `Cross-Origin-Opener-Policy` / `Cross-Origin-Embedder-Policy` to compute
+    /// `crossOriginIsolated` for the JS context — and `final_url`, which the
+    /// shell uses as the document's base URL (BUG-757).
+    ///
+    /// Кэш-хит отдаёт запрошенный URL как `final_url`: `HttpCache` ключуется
+    /// запрошенным адресом (`cache.store(&url_str, …)` ниже кладёт тело
+    /// финального hop-а под него), финальный адрес в снапшоте не хранится.
+    /// Для навигации это не проявляется — shell ходит сюда с выключенным
+    /// `http_cache`, — но при включении кэша редирект-база потеряется; чинить
+    /// придётся вместе с ключом кэша.
     pub fn fetch_page(&self, url: &Url) -> Result<PageResponse> {
         if let Some(ref interceptor) = self.interceptor {
             let origin = build_origin(url);
             if let Some(body) = interceptor.intercept(url, &origin) {
-                return Ok((body, Vec::new()));
+                return Ok(PageResponse { body, headers: Vec::new(), final_url: url.clone() });
             }
         }
         let url_str = url.to_string();
@@ -3592,10 +3655,14 @@ impl HttpClient {
             && let Some(snap) = cache.get(&url_str)
         {
             if snap.is_fresh {
-                return Ok((snap.body, Vec::new()));
+                return Ok(PageResponse {
+                    body: snap.body,
+                    headers: Vec::new(),
+                    final_url: url.clone(),
+                });
             }
             if !snap.conditional_headers.is_empty() {
-                let resp = fetch_with_redirect(
+                let (resp, final_url) = fetch_with_redirect(
                     url, 5, &self.pool, self.h2_pool.as_deref(), self.resolver.as_ref(),
                     self.tls_profile, self.fingerprint_profile, self.sink.as_deref(),
                     self.filter.as_deref(), self.hsts.as_deref(), self.credentials.as_deref(),
@@ -3610,13 +3677,21 @@ impl HttpClient {
                 )?;
                 if resp.status == 304 {
                     cache.revalidate(&url_str, &resp.headers);
-                    return Ok((snap.body, Vec::new()));
+                    return Ok(PageResponse {
+                        body: snap.body,
+                        headers: Vec::new(),
+                        final_url,
+                    });
                 }
                 cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
-                return Ok((resp.body, resp.headers));
+                return Ok(PageResponse {
+                    body: resp.body,
+                    headers: resp.headers,
+                    final_url,
+                });
             }
         }
-        let resp = fetch_with_redirect(
+        let (resp, final_url) = fetch_with_redirect(
             url, 5, &self.pool, self.h2_pool.as_deref(), self.resolver.as_ref(),
             self.tls_profile, self.fingerprint_profile, self.sink.as_deref(),
             self.filter.as_deref(), self.hsts.as_deref(), self.credentials.as_deref(),
@@ -3632,15 +3707,15 @@ impl HttpClient {
         if let Some(cache) = &self.http_cache {
             cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
         }
-        Ok((resp.body, resp.headers))
+        Ok(PageResponse { body: resp.body, headers: resp.headers, final_url })
     }
 
     /// Как [`HttpClient::fetch_page`], но тело финального 2xx-ответа стримится
     /// с сокета: каждая декодированная порция передаётся в `on_chunk` ещё до
     /// полного скачивания (PH1-2a — прогрессивный рендеринг страницы в shell).
     ///
-    /// Возвращаемый `(body, headers)` идентичен `fetch_page` — полное
-    /// декодированное тело + заголовки финального ответа. `on_chunk` —
+    /// Возвращаемый [`PageResponse`] идентичен `fetch_page` — полное
+    /// декодированное тело, заголовки и URL финального ответа. `on_chunk` —
     /// best-effort preview: для HTTP/2, прокси-CONNECT и кэш-хитов порции
     /// доставляются одним куском (или после полной загрузки), но итоговое тело
     /// всегда корректно. caller должен использовать именно возвращаемое тело
@@ -3648,13 +3723,13 @@ impl HttpClient {
     pub fn fetch_page_streaming(
         &self,
         url: &Url,
-        on_chunk: ChunkSink<'_>,
+        on_chunk: PageChunkSink<'_>,
     ) -> Result<PageResponse> {
         if let Some(ref interceptor) = self.interceptor {
             let origin = build_origin(url);
             if let Some(body) = interceptor.intercept(url, &origin) {
-                on_chunk(&body);
-                return Ok((body, Vec::new()));
+                on_chunk(&body, url);
+                return Ok(PageResponse { body, headers: Vec::new(), final_url: url.clone() });
             }
         }
         let url_str = url.to_string();
@@ -3664,11 +3739,15 @@ impl HttpClient {
             && let Some(snap) = cache.get(&url_str)
         {
             if snap.is_fresh {
-                on_chunk(&snap.body);
-                return Ok((snap.body, Vec::new()));
+                on_chunk(&snap.body, url);
+                return Ok(PageResponse {
+                    body: snap.body,
+                    headers: Vec::new(),
+                    final_url: url.clone(),
+                });
             }
             if !snap.conditional_headers.is_empty() {
-                let resp = fetch_with_redirect(
+                let (resp, final_url) = fetch_with_redirect(
                     url, 5, &self.pool, self.h2_pool.as_deref(), self.resolver.as_ref(),
                     self.tls_profile, self.fingerprint_profile, self.sink.as_deref(),
                     self.filter.as_deref(), self.hsts.as_deref(), self.credentials.as_deref(),
@@ -3685,14 +3764,22 @@ impl HttpClient {
                     cache.revalidate(&url_str, &resp.headers);
                     // 304: streamed nothing (revalidate body is empty); deliver
                     // the cached body as the progressive preview.
-                    on_chunk(&snap.body);
-                    return Ok((snap.body, Vec::new()));
+                    on_chunk(&snap.body, &final_url);
+                    return Ok(PageResponse {
+                        body: snap.body,
+                        headers: Vec::new(),
+                        final_url,
+                    });
                 }
                 cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
-                return Ok((resp.body, resp.headers));
+                return Ok(PageResponse {
+                    body: resp.body,
+                    headers: resp.headers,
+                    final_url,
+                });
             }
         }
-        let resp = fetch_with_redirect(
+        let (resp, final_url) = fetch_with_redirect(
             url, 5, &self.pool, self.h2_pool.as_deref(), self.resolver.as_ref(),
             self.tls_profile, self.fingerprint_profile, self.sink.as_deref(),
             self.filter.as_deref(), self.hsts.as_deref(), self.credentials.as_deref(),
@@ -3708,7 +3795,7 @@ impl HttpClient {
         if let Some(cache) = &self.http_cache {
             cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
         }
-        Ok((resp.body, resp.headers))
+        Ok(PageResponse { body: resp.body, headers: resp.headers, final_url })
     }
 }
 
@@ -3739,7 +3826,7 @@ impl NetworkTransport for HttpClient {
                 return Ok(snap.body);
             }
             if !snap.conditional_headers.is_empty() {
-                let resp = fetch_with_redirect(
+                let (resp, _final_url) = fetch_with_redirect(
                     url,
                     5,
                     &self.pool,
@@ -3778,7 +3865,7 @@ impl NetworkTransport for HttpClient {
             }
         }
 
-        let resp = fetch_with_redirect(
+        let (resp, _final_url) = fetch_with_redirect(
             url,
             5,
             &self.pool,
@@ -3857,7 +3944,7 @@ impl JsFetchProvider for HttpClient {
         }
         let accept_encoding = self.accept_encoding_header();
         let destination = self.mixed_content.as_ref().map(|_| RequestDestination::Other);
-        let resp = fetch_with_redirect(
+        let (resp, _final_url) = fetch_with_redirect(
             &url,
             5,
             &self.pool,
@@ -5323,8 +5410,8 @@ mod tests {
         let client = HttpClient::new();
         let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
         let mut streamed = Vec::new();
-        let (body, _h) = client
-            .fetch_page_streaming(&url, &mut |c| streamed.extend_from_slice(c))
+        let PageResponse { body, .. } = client
+            .fetch_page_streaming(&url, &mut |c, _u| streamed.extend_from_slice(c))
             .expect("streaming fetch");
         assert_eq!(streamed, b"hello world", "streamed chunks must reconstruct the body");
         assert_eq!(body, b"hello world", "returned body must be the full decoded body");
@@ -5341,8 +5428,8 @@ mod tests {
         let client = HttpClient::new();
         let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
         let mut streamed = Vec::new();
-        let (body, _h) = client
-            .fetch_page_streaming(&url, &mut |c| streamed.extend_from_slice(c))
+        let PageResponse { body, .. } = client
+            .fetch_page_streaming(&url, &mut |c, _u| streamed.extend_from_slice(c))
             .expect("streaming fetch");
         assert_eq!(streamed, b"hello world");
         assert_eq!(body, b"hello world");
@@ -5369,8 +5456,8 @@ mod tests {
             .with_content_decoder(std::sync::Arc::new(crate::BrotliContentDecoder::new()));
         let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
         let mut streamed = Vec::new();
-        let (body, _h) = client
-            .fetch_page_streaming(&url, &mut |c| streamed.extend_from_slice(c))
+        let PageResponse { body, .. } = client
+            .fetch_page_streaming(&url, &mut |c, _u| streamed.extend_from_slice(c))
             .expect("streaming fetch");
         // sink получает декодированные байты; возвращаемое тело тоже декодировано.
         assert_eq!(streamed, b"Hello, World!");
@@ -5388,12 +5475,72 @@ mod tests {
         let client = HttpClient::new();
         let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
         let mut streamed = Vec::new();
-        let (body, _h) = client
-            .fetch_page_streaming(&url, &mut |c| streamed.extend_from_slice(c))
+        let PageResponse { body, .. } = client
+            .fetch_page_streaming(&url, &mut |c, _u| streamed.extend_from_slice(c))
             .expect("streaming fetch");
         // Тело 302-редиректа (пустое) НЕ стримится — только финальный 200.
         assert_eq!(streamed, b"done");
         assert_eq!(body, b"done");
+        server.join().unwrap();
+    }
+
+    /// BUG-757: после редиректа наружу отдаётся адрес hop-а, который ответил
+    /// 200, а не запрошенный. Это URL документа для shell (`location.*`,
+    /// `document.baseURI`, база относительных подресурсов).
+    #[test]
+    fn fetch_page_reports_final_url_after_redirect() {
+        let (port, server) = mock_http_server(2, move |i| match i {
+            1 => b"HTTP/1.1 301 Moved Permanently\r\nLocation: /auth/login/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+            2 => b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nhi".to_vec(),
+            _ => unreachable!(),
+        });
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/login/")).unwrap();
+        let page = client.fetch_page(&url).expect("fetch");
+        assert_eq!(page.body, b"hi");
+        assert_eq!(page.final_url.as_str(), format!("http://127.0.0.1:{port}/auth/login/"));
+        server.join().unwrap();
+    }
+
+    /// Тот же контракт у streaming-пути — shell грузит навигацию именно им.
+    #[test]
+    fn fetch_page_streaming_reports_final_url_after_redirect() {
+        let (port, server) = mock_http_server(2, move |i| match i {
+            1 => b"HTTP/1.1 302 Found\r\nLocation: /b/c/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+            2 => b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\ndone".to_vec(),
+            _ => unreachable!(),
+        });
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/a/")).unwrap();
+        // Порции тела сопровождаются URL своего hop-а: shell резолвит от него
+        // preload-хинты ещё до конца загрузки, и до BUG-757 они уходили от
+        // до-редиректного адреса.
+        let mut chunk_urls: Vec<String> = Vec::new();
+        let page = client
+            .fetch_page_streaming(&url, &mut |_, u| chunk_urls.push(u.to_string()))
+            .expect("streaming fetch");
+        let expected = format!("http://127.0.0.1:{port}/b/c/");
+        assert_eq!(page.final_url.as_str(), expected);
+        assert!(!chunk_urls.is_empty(), "тело финального ответа не стримилось");
+        assert!(
+            chunk_urls.iter().all(|u| *u == expected),
+            "chunk-sink получил не финальный URL: {chunk_urls:?}"
+        );
+        server.join().unwrap();
+    }
+
+    /// Негативный контроль к двум тестам выше: без редиректа `final_url` —
+    /// ровно запрошенный адрес (иначе они бы проходили и на «всегда отдаём
+    /// что-то отличное от запроса»).
+    #[test]
+    fn fetch_page_final_url_without_redirect_is_the_request_url() {
+        let (port, server) = mock_http_server(1, move |_| {
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nhi".to_vec()
+        });
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/login/")).unwrap();
+        let page = client.fetch_page(&url).expect("fetch");
+        assert_eq!(page.final_url.as_str(), url.as_str());
         server.join().unwrap();
     }
 

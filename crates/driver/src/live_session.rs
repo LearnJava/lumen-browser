@@ -41,9 +41,12 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 /// [`BrowserSession`] adapter that drives a live `lumen-shell` window through
 /// its [`AutomationHandle`] channel (SDC-2).
 ///
-/// One instance is bound to one live window process; `current_url` is
-/// tracked locally (updated on every successful `navigate()`) since the
-/// automation channel has no dedicated "current URL" query.
+/// One instance is bound to one live window process. The automation channel
+/// has no dedicated "current URL" query, so `current_url` keeps the address of
+/// the last requested navigation; it is only a fallback — the reader
+/// ([`BrowserSession::current_url`]) asks the document itself, because the
+/// requested address and the document's real one diverge on every server
+/// redirect (BUG-757).
 pub struct LiveWindowSession {
     handle: AutomationHandle,
     current_url: Mutex<String>,
@@ -193,8 +196,24 @@ impl BrowserSession for LiveWindowSession {
         }
     }
 
+    /// URL текущего документа живого окна.
+    ///
+    /// BUG-757: локальный слепок хранит адрес, который *запросили*, поэтому
+    /// после серверного редиректа (и после любой навигации, инициированной
+    /// самой страницей) он врёт. Авторитетный источник — сам документ, и он же
+    /// теперь корректен, потому что база документа строится из финального URL
+    /// ответа. Слепок остаётся фолбэком на случай, когда JS-контекста ещё нет
+    /// (окно между навигациями, страница без исполненных скриптов) — там
+    /// «адрес, который запросили» единственное, что вообще известно.
     fn current_url(&self) -> String {
-        self.current_url.lock().map(|g| g.clone()).unwrap_or_default()
+        let snapshot = self.current_url.lock().map(|g| g.clone()).unwrap_or_default();
+        match self.execute(AutomationCommand::Eval("location.href".to_owned())) {
+            Ok(AutomationReply::Eval(json)) => serde_json::from_str::<String>(&json)
+                .ok()
+                .filter(|u| !u.is_empty())
+                .unwrap_or(snapshot),
+            _ => snapshot,
+        }
     }
 
     // ── Инструменты ────────────────────────────────────────────────────────
