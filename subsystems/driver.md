@@ -57,7 +57,12 @@ headless pipeline without winit/wgpu/ffmpeg.
   every `Navigate` so `console_log()` reflects only the current page). `current_url()` changed
   from `&str` to owned `String` across the whole `BrowserSession` trait (all implementors
   updated) — the old borrow-tied signature would have forced `LiveWindowSession` to leak
-  memory on every read to satisfy the lifetime. Layout/computed-style/network-log/
+  memory on every read to satisfy the lifetime. **BUG-757 (2026-08-10):**
+  `LiveWindowSession::current_url()` no longer returns that local snapshot — it evaluates
+  `location.href` in the live document. The snapshot records the address that was
+  *requested*, which diverges from the document's own after a server redirect (and after
+  any page-initiated navigation, which never touched it at all); it survives only as the
+  fallback for "no JS context yet". Layout/computed-style/network-log/
   fingerprint-isolation methods are local stub defaults (documented per-method) — the
   automation channel doesn't carry those commands yet.
 
