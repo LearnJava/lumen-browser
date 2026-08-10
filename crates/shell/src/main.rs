@@ -149,6 +149,12 @@ enum LoadEvent {
     /// устаревших событий гонки навигаций (быстрый back/forward или клик по двум
     /// ссылкам подряд), которые иначе подмешали бы DOM/CSS прошлой страницы.
     EarlyPreloadHints(Vec<lumen_html_parser::PreloadHint>, ResourceBase, u64),
+    /// BUG-757: база документа стала известна и отличается от запрошенного
+    /// адреса (сервер ответил редиректом). Отправляется из streaming-потока,
+    /// как только тело потекло с финального hop-а — то есть ДО того, как
+    /// частичный DOM начнёт заказывать картинки и шрифты, которые UI-поток
+    /// резолвит относительно базы. Последнее поле — generation навигации (U-1).
+    DocumentBase(ResourceBase, u64),
     /// Очередной chunk сырых байт HTML. UTF-8 границы не выравниваются —
     /// `IncrementalTreeBuilder::feed_bytes` буферизует незавершённые
     /// code-point-ы внутри. Последнее поле — generation навигации (U-1).
@@ -1020,6 +1026,7 @@ fn run_window_mode(
         pending_post_reload_traversal: None,
         traversal_crossed_document: false,
         load_generation: 0,
+        document_base: None,
         engine_thread: spawn_engine_thread_if_enabled(),
         engine_job_generation: 0,
         engine_applied_generation: 0,
@@ -3615,11 +3622,15 @@ impl PageSource {
     /// (File/Snapshot/Static) делегирует в `load_bytes` без вызовов `on_chunk`
     /// — caller сам нарежет уже-загруженное тело. Возвращаемый `RawPage.bytes`
     /// — полное декодированное тело (как у `load_bytes`).
+    ///
+    /// Второй аргумент `on_chunk` — URL, с которого течёт тело: после
+    /// редиректа он отличается от запрошенного, и относительные ссылки в
+    /// потоке (preload-хинты) обязаны резолвиться именно от него (BUG-757).
     fn load_bytes_streaming(
         &self,
         sink: Arc<dyn EventSink>,
         cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
-        on_chunk: &mut dyn FnMut(&[u8]),
+        on_chunk: &mut dyn FnMut(&[u8], &lumen_core::url::Url),
     ) -> Result<RawPage, Box<dyn Error>> {
         let PageSource::Url(url) = self else {
             return self.load_bytes(sink, cookie_jar);
@@ -3654,9 +3665,9 @@ impl PageSource {
         let cross_origin_isolated = lumen_network::CrossOriginIsolationState::from_headers(coop, coep)
             .is_cross_origin_isolated();
         Ok(RawPage {
-            // BUG-757: см. `load_bytes` — база из финального URL ответа.
-            // Preload-хинты, отданные из `on_chunk` выше, ещё резолвятся от
-            // запрошенного URL: их база захвачена в замыкание до запроса.
+            // BUG-757: см. `load_bytes` — база из финального URL ответа. Тот же
+            // адрес приходит и в `on_chunk` (вторым аргументом), поэтому
+            // preload-хинты из потока резолвятся от той же базы, что документ.
             base: ResourceBase::Url(final_url.to_string()),
             bytes,
             content_type: Some("text/html"),
@@ -7808,6 +7819,13 @@ struct Lumen {
     /// `user_event` drops events whose generation is stale (a superseded
     /// navigation), so a slow earlier load can't paint over a newer page.
     load_generation: u64,
+    /// BUG-757: реальная база текущего документа и generation навигации, в
+    /// которой она получена. Заполняется, когда сервер увёл запрос редиректом:
+    /// `self.source` хранит ЗАПРОШЕННЫЙ адрес, и подресурсы частичного DOM
+    /// (картинки, `@font-face`) уходили бы от него. Пара с generation вместо
+    /// сброса на каждой навигации — устаревшая база просто перестаёт
+    /// подходить (см. [`Self::document_resource_base`]).
+    document_base: Option<(ResourceBase, u64)>,
     /// ADR-016 M2.2: долгоживущий движковый поток. `Some` только при
     /// `LUMEN_ENGINE_THREAD=1`; иначе `None` и поведение shell неизменно (весь
     /// relayout синхронный). Через него маршрутизируется off-thread layout
@@ -11485,13 +11503,25 @@ impl Lumen {
             // загрузки. Для File/Snapshot/Static тело уже в памяти, поэтому его
             // достаточно нарезать на STREAM_CHUNK_BYTES (прежнее поведение).
             let raw = if let PageSource::Url(url) = &source {
-                let base = ResourceBase::Url(url.clone());
+                // BUG-757: база preload-хинтов — адрес, с которого РЕАЛЬНО
+                // течёт тело (его приносит сам chunk), а не запрошенный: после
+                // редиректа они разные, и относительный `src` уходил на
+                // до-редиректный путь ещё до того, как документ получал
+                // правильную базу. Пересобираем строку только при смене hop-а.
+                let mut base = ResourceBase::Url(url.clone());
                 let chunk_proxy = proxy.clone();
                 // Separate clones for prefetch warm-up: `cookie_jar`/`sink` below are
                 // moved into the streaming call, so the per-chunk closure keeps its own.
                 let cj_prefetch = Some(Arc::clone(&cookie_jar));
                 let sink_prefetch = Arc::clone(&sink);
-                let mut on_chunk = |chunk: &[u8]| {
+                let mut on_chunk = |chunk: &[u8], hop_url: &lumen_core::url::Url| {
+                    if !matches!(&base, ResourceBase::Url(u) if u == hop_url.as_str()) {
+                        base = ResourceBase::Url(hop_url.to_string());
+                        // UI-поток резолвит картинки/шрифты частичного DOM от
+                        // своей копии базы — сообщаем ему новую (BUG-757).
+                        let _ = chunk_proxy
+                            .send_event(LoadEvent::DocumentBase(base.clone(), generation));
+                    }
                     feed_preload_and_emit(
                         &mut preload_scanner,
                         chunk,
@@ -11695,12 +11725,28 @@ impl Lumen {
         self.relayout_raf_dirty();
     }
 
+    /// База для разрешения относительных подресурсов текущего документа.
+    ///
+    /// BUG-757: это НЕ `self.source.resource_base()` — там лежит запрошенный
+    /// адрес, а после серверного редиректа документ приехал с другого, и от
+    /// него же обязаны резолвиться его картинки, шрифты и ссылки. Реальная база
+    /// приходит из загрузчика (`LoadEvent::DocumentBase`) и годится только для
+    /// той навигации, в которой получена, — отсюда сверка generation. Событие
+    /// шлётся ровно при расхождении адресов, поэтому без редиректа (и для
+    /// несетевых источников) ответ ровно прежний.
+    fn document_resource_base(&self) -> Option<ResourceBase> {
+        match &self.document_base {
+            Some((base, generation)) if *generation == self.load_generation => Some(base.clone()),
+            _ => self.source.resource_base(),
+        }
+    }
+
     /// Fetch+decode every not-yet-requested non-lazy image in `requests` on its
     /// own thread, reporting back through `LoadEvent::ImageDecoded`. Shared by
     /// the streaming ([`Self::spawn_stream_image_loads`]) and post-load
     /// ([`Self::spawn_dynamic_image_loads`]) producers.
     fn spawn_image_requests(&mut self, requests: Vec<lumen_layout::ImageRequest>) {
-        let Some(base) = self.source.resource_base() else { return };
+        let Some(base) = self.document_resource_base() else { return };
         // BUG-172: stamp the decode with this navigation's generation so the cache
         // entry is shared with the final pipeline pass (same generation) and a
         // stale producer from a superseded navigation bypasses the cache.
@@ -11959,7 +12005,7 @@ impl Lumen {
         // registers it in page_font_registry, rebuilds MultiFontMeasurer, and
         // triggers a relayout — FOUT (Flash Of Unstyled Text) swap pattern.
         if !page.pending_web_fonts.is_empty() {
-            let base_opt = self.source.resource_base();
+            let base_opt = self.document_resource_base();
             for pf in page.pending_web_fonts {
                 if let Some(base) = base_opt.clone() {
                     let sink = Arc::clone(&self.event_sink);
@@ -12390,6 +12436,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // `preload_dispatched` запоминает URL, чтобы финальный scan
                 // в LoadDone их не дублировал.
                 dispatch_preload_hints(&hints, &base, &self.event_sink, &mut self.preload_dispatched);
+            }
+            LoadEvent::DocumentBase(base, generation) => {
+                if generation != self.load_generation { return; }
+                self.document_base = Some((base, generation));
             }
             LoadEvent::HtmlChunk(chunk, generation) => {
                 if generation != self.load_generation { return; }
