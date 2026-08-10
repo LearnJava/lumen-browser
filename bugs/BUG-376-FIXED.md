@@ -1,6 +1,6 @@
 # BUG-376 — `window.location = 'url'` не навигирует, а заменяет объект `Location` строкой; присваивание `location.pathname`/`search`/`protocol`/`host`/`port`/`hostname` тоже не навигирует, а молча портит объект, оставляя `href` прежним
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-10
 **Компонент:** js (`crates/js/src/dom.rs:7412-7428` — литерал `var location = {…}`: аксессоры только у `href` и `hash`, остальные семь компонентов — data-поля; сам `var` делает `window.location` записываемым data-свойством)
 **Найден:** P2, WPT-VENDOR-fledge (2026-07-28), проба `--dump-layout` вне WPT (`.tmp/fledge-probe3.html`)
 
@@ -112,3 +112,58 @@ var location = {
 - Проба и вывод целиком: `.tmp/fledge-probe3.html`, `.tmp/fledge-probe3.log`;
   дескрипторы `window.location` — в `.tmp/fledge-probe2.log`
   (`LOC2.location assignable? = value=object get=undefined writable=true configurable=false`).
+
+## Исправление (2026-08-10)
+
+Все три пункта закрыты в `crates/js/src/dom.rs` (`WEB_API_SHIM`).
+
+**§1 — `window.location = url`.** `var location = {…}` заменён на аксессор
+глобала, определённый через `Object.defineProperty(globalThis, 'location', …)`
+с `configurable:false` и сеттером, форвардящим на `href` — это и есть
+`[LegacyUnforgeable]` + `[PutForwards=href]` (HTML LS §7.3.5). Присваивание
+теперь навигирует, объект `Location` не разрушается, и остаток скрипта
+страницы продолжает работать.
+
+Побочное, но обязательное следствие: `location` пришлось убрать из литерала
+`var window = {…}`. Цикл копирования `window`→`globalThis` в конце шима
+переносит data-свойства простым присваиванием (`globalThis[k] = d.value`), а
+это — [[Set]], то есть вызов только что заведённого навигирующего сеттера:
+ложная полная навигация на текущий URL при каждой загрузке страницы. После
+`window = globalThis` (там же, ниже) `window.location` и так резолвится в тот
+же аксессор.
+
+**§2 — компоненты.** `protocol`/`host`/`hostname`/`port`/`pathname`/`search`
+переведены из data-полей в аксессоры. Сеттер не патчит `_lumen_loc_parts`
+вручную, а делегирует запись временному объекту `URL` и навигирует на
+получившийся `href`: вся машинерия разбора, процентного кодирования и
+ре-сериализации уже принадлежит `URL.prototype` после BUG-375, а второй,
+расходящийся с ним URL-писатель в шиме не нужен. Запись, которую URL Standard
+игнорирует (opaque path, невалидная схема, нечисловой порт), не меняет `href`
+и не навигирует никуда — вместо прежнего «поле поменялось, `href` соврал».
+
+`_lumen_location_update` (движковый коммит URL) переписан так, что пишет
+**только** в backing-переменные `_lumen_loc_parts`/`_lumen_loc_href`/
+`_lumen_loc_hash`. Раньше он писал в те же слоты `location.*`, что и страница;
+после перевода их в навигирующие сеттеры это превратило бы каждую
+зафиксированную движком навигацию в новый запрос навигации.
+
+**§3 — интерфейс.** Заведён конструктор `Location` (`TypeError: Illegal
+constructor`) с `Symbol.toStringTag` на прототипе; сам объект создаётся через
+`Object.create(Location.prototype)`, а все его члены определены как **own
+non-configurable** свойства — так требует `[LegacyUnforgeable]`, и именно
+поэтому `delete location.assign` теперь `false`, а не тихое разрушение API для
+всех последующих скриптов. `window.Location` есть, `location instanceof
+Location` истинно, `Object.prototype.toString.call(location)` даёт
+`[object Location]`.
+
+Попутно `document.location` получил сеттер (`[PutForwards=href]`): раньше
+геттер был, а присваивание молча проглатывалось.
+
+**Проверка.** 17 новых unit-тестов в `dom.rs` (навигация от `window.location =`,
+`location =`, `document.location =`; по тесту на каждый компонентный сеттер;
+игнорируемая запись не навигирует и не рассинхронизирует объект; дескриптор
+глобала; форма интерфейса; неудаляемость членов). `cargo test -p lumen-js
+--features v8-backend` — 2702 passed. Живая проба на собранном `lumen.exe`
+(`--dump-layout`) подтвердила форму интерфейса, `cfg=false` у дескрипторов
+компонентов и глобала, `delete location.assign === false` и отсутствие ложной
+навигации при загрузке страницы.

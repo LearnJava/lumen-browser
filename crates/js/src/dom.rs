@@ -4905,7 +4905,10 @@ var document = {
     get contentType()   { return _lumen_get_document_content_type(); },
     get URL()           { return _lumen_loc_href; },
     get documentURI()   { return _lumen_loc_href; },
-    get location()      { return location; },
+    // `Document.location` is `[PutForwards=href]` like `window.location`, so an
+    // assignment navigates rather than being silently swallowed.
+    get location()      { return _lumen_location; },
+    set location(v)     { _lumen_location.href = v; },
     get body()   {
         var bid = _lumen_u2n(_lumen_get_body());
         return bid !== null ? _lumen_make_element(bid) : null;
@@ -5673,35 +5676,91 @@ function _lumen_parse_url(url) {
 var _lumen_loc_parts = _lumen_parse_url(typeof _LUMEN_PAGE_URL !== 'undefined' ? _LUMEN_PAGE_URL : '');
 var _lumen_loc_href  = _lumen_loc_parts.href;
 var _lumen_loc_hash  = _lumen_loc_parts.hash;
+// Engine-side URL commit. Writes the backing state ONLY — never through the
+// Location accessors, whose setters navigate (HTML LS §7.10.5). Routing an
+// internal update through them would turn every committed navigation into a
+// fresh navigation request. Previously the components were plain data fields on
+// the `location` literal, so the engine and the page wrote to the same slots —
+// which is exactly why a page write updated the field and navigated nowhere
+// (BUG-376 §2).
 function _lumen_location_update(url) {
-    var p = _lumen_parse_url(url);
-    _lumen_loc_href    = p.href;
-    location.protocol  = p.protocol;
-    location.hostname  = p.hostname;
-    location.host      = p.host;
-    location.port      = p.port;
-    location.pathname  = p.pathname;
-    location.search    = p.search;
-    _lumen_loc_hash    = p.hash;
-    location.origin    = p.origin;
+    _lumen_loc_parts = _lumen_parse_url(url);
+    _lumen_loc_href  = _lumen_loc_parts.href;
+    _lumen_loc_hash  = _lumen_loc_parts.hash;
 }
-var location = {
-    get href()    { return _lumen_loc_href; },
-    set href(v)   { _lumen_navigate_or_fragment(String(v || ''), false); },
-    protocol:  _lumen_loc_parts.protocol,
-    hostname:  _lumen_loc_parts.hostname,
-    host:      _lumen_loc_parts.host,
-    port:      _lumen_loc_parts.port,
-    pathname:  _lumen_loc_parts.pathname,
-    search:    _lumen_loc_parts.search,
-    get hash()    { return _lumen_loc_hash; },
-    set hash(v)   { _lumen_set_location_hash(v); },
-    origin:    _lumen_loc_parts.origin,
-    assign:    function(url) { _lumen_navigate_or_fragment(String(url || ''), false); },
-    replace:   function(url) { _lumen_navigate_or_fragment(String(url || ''), true); },
-    reload:    function()    { _lumen_reload(); },
-    toString:  function()    { return this.href; }
-};
+// ── Location (HTML LS §7.10.5) ──────────────────────────────────────────────
+// `Location` is `[LegacyUnforgeable]`: every member is an OWN, non-configurable
+// property of the object, not an inherited one, so a page cannot
+// `delete location.assign` out from under the scripts that come after it
+// (BUG-376 §3). Only `constructor` and `Symbol.toStringTag` live on the
+// prototype — the same shape a real browser exposes.
+function Location() { throw new TypeError('Illegal constructor'); }
+if (typeof Symbol !== 'undefined' && Symbol.toStringTag) {
+    Object.defineProperty(Location.prototype, Symbol.toStringTag,
+        { value: 'Location', configurable: true });
+}
+// A component setter re-serializes the current URL with that one component
+// replaced and navigates to the result. The write is delegated to a throwaway
+// `URL` object because `URL.prototype` already owns every parsing, encoding and
+// re-serialization rule (BUG-375) — hand-patching `_lumen_loc_parts` here would
+// be a second, divergent URL writer. A component write that the URL Standard
+// ignores (opaque path, invalid scheme, non-numeric port, …) leaves `href`
+// untouched and therefore navigates nowhere, which is the required behaviour.
+function _lumen_location_set_component(name, value) {
+    var u;
+    try { u = new URL(_lumen_loc_href); } catch (e) { return; }
+    try { u[name] = value; } catch (e) { return; }
+    if (u.href === _lumen_loc_href) return;
+    _lumen_navigate_or_fragment(u.href, false);
+}
+var _lumen_location = (function() {
+    var loc = Object.create(Location.prototype);
+    function accessor(name, getter, setter) {
+        var d = { get: getter, enumerable: true, configurable: false };
+        if (setter) d.set = setter;
+        Object.defineProperty(loc, name, d);
+    }
+    function component(name) {
+        accessor(name,
+            function()  { return _lumen_loc_parts[name]; },
+            function(v) { _lumen_location_set_component(name, v); });
+    }
+    accessor('href',
+        function()  { return _lumen_loc_href; },
+        function(v) { _lumen_navigate_or_fragment(String(v || ''), false); });
+    component('protocol');
+    component('host');
+    component('hostname');
+    component('port');
+    component('pathname');
+    component('search');
+    // `hash` keeps its dedicated path: a fragment write is a same-document
+    // navigation that also pushes a history entry and fires `hashchange`.
+    accessor('hash',
+        function()  { return _lumen_loc_hash; },
+        function(v) { _lumen_set_location_hash(v); });
+    accessor('origin', function() { return _lumen_loc_parts.origin; }); // readonly per spec
+    function method(name, fn) {
+        Object.defineProperty(loc, name,
+            { value: fn, writable: false, enumerable: true, configurable: false });
+    }
+    method('assign',   function(url) { _lumen_navigate_or_fragment(String(url || ''), false); });
+    method('replace',  function(url) { _lumen_navigate_or_fragment(String(url || ''), true); });
+    method('reload',   function()    { _lumen_reload(); });
+    method('toString', function()    { return _lumen_loc_href; });
+    return loc;
+})();
+// `window.location` is `[LegacyUnforgeable]` + `[PutForwards=href]` (HTML LS
+// §7.3.5): an accessor that cannot be redefined, not the writable `var` binding
+// this used to be. `window.location = url` now navigates instead of replacing
+// the Location object with a string and leaving the rest of the page with a
+// broken, unrecoverable `location` (`configurable:false` made it unrestorable —
+// BUG-376 §1).
+Object.defineProperty(globalThis, 'location', {
+    get: function()  { return _lumen_location; },
+    set: function(v) { _lumen_location.href = v; },
+    enumerable: true, configurable: false
+});
 // HTML LS Location.hash setter: same-document fragment navigation.
 // Mutates only the fragment of the current URL; updates location + history
 // without a page reload and fires `hashchange`. Internal updates use the
@@ -9425,7 +9484,13 @@ var window = {
     // Nothing dispatches to them yet — see BUG-716.
     onunhandledrejection: null,
     onrejectionhandled: null,
-    location: location,
+    // `location` is deliberately absent here: it is defined directly on
+    // `globalThis` as an unforgeable accessor (see `Location` above), and
+    // `window` becomes `globalThis` at the end of this shim, so `window.location`
+    // resolves to that accessor. Listing it here would make the window→globalThis
+    // copy loop below re-ASSIGN it (`globalThis[k] = d.value`, the plain-value
+    // branch), which now runs the navigating setter and would fire a spurious
+    // full navigation to the current URL on every page load.
     navigator: navigator,
     alert: alert,
     confirm: confirm,
@@ -23132,6 +23197,169 @@ mod tests {
                 .eval("var before = history.length; location.hash='d'; history.length - before;")
                 .unwrap();
             assert_eq!(delta, lumen_core::JsValue::Number(1.0));
+        }
+
+        // ── BUG-376: `window.location =` and the component setters ───────────
+        // §1 — the single most common navigation idiom on the web. `location`
+        // used to be a writable `var` binding, so this assignment replaced the
+        // Location object with a bare string: no navigation happened AND every
+        // later `location.*` access in the page was broken beyond repair
+        // (`configurable:false` made it unrestorable).
+        #[test]
+        fn window_location_assignment_navigates() {
+            let rt = v8_runtime_with_url("https://start.example/");
+            rt.eval("window.location = 'https://target.example/page'").unwrap();
+            let req = rt.take_navigate_request();
+            assert!(matches!(req, Some(NavigateRequest::Push(u)) if u == "https://target.example/page"));
+        }
+
+        #[test]
+        fn window_location_assignment_keeps_location_object() {
+            let rt = v8_runtime_with_url("https://start.example/");
+            rt.eval("window.location = 'https://target.example/'").unwrap();
+            assert_eq!(rt.eval("typeof window.location").unwrap(), lumen_core::JsValue::String("object".into()));
+            assert_eq!(rt.eval("typeof window.location.assign").unwrap(), lumen_core::JsValue::String("function".into()));
+        }
+
+        // The bare `location = url` form must behave identically: the accessor
+        // lives on the global object, so an unqualified assignment reaches it.
+        #[test]
+        fn bare_location_assignment_navigates() {
+            let rt = v8_runtime_with_url("https://start.example/");
+            rt.eval("location = 'https://target.example/bare'").unwrap();
+            let req = rt.take_navigate_request();
+            assert!(matches!(req, Some(NavigateRequest::Push(u)) if u == "https://target.example/bare"));
+        }
+
+        // `Document.location` is `[PutForwards=href]` too.
+        #[test]
+        fn document_location_assignment_navigates() {
+            let rt = v8_runtime_with_url("https://start.example/");
+            rt.eval("document.location = 'https://target.example/doc'").unwrap();
+            let req = rt.take_navigate_request();
+            assert!(matches!(req, Some(NavigateRequest::Push(u)) if u == "https://target.example/doc"));
+        }
+
+        // The global `location` property is `[LegacyUnforgeable]`: an accessor
+        // that cannot be redefined or shadowed by a plain value.
+        #[test]
+        fn window_location_is_unforgeable_accessor() {
+            let rt = v8_runtime_with_url("https://example.com/");
+            let d = rt
+                .eval(
+                    "var d = Object.getOwnPropertyDescriptor(globalThis, 'location'); \
+                     (typeof d.get) + '/' + (typeof d.set) + '/' + d.configurable",
+                )
+                .unwrap();
+            assert_eq!(d, lumen_core::JsValue::String("function/function/false".into()));
+        }
+
+        // §2 — component setters navigate instead of silently mutating a field
+        // and leaving `href`/`toString()` describing the old URL.
+        #[test]
+        fn location_pathname_setter_navigates() {
+            let rt = v8_runtime_with_url("https://example.com/dir/page.html?q=1");
+            rt.eval("location.pathname = '/hijacked'").unwrap();
+            let req = rt.take_navigate_request();
+            assert!(matches!(req, Some(NavigateRequest::Push(u)) if u == "https://example.com/hijacked?q=1"));
+        }
+
+        #[test]
+        fn location_search_setter_navigates() {
+            let rt = v8_runtime_with_url("https://example.com/page");
+            rt.eval("location.search = '?injected=1'").unwrap();
+            let req = rt.take_navigate_request();
+            assert!(matches!(req, Some(NavigateRequest::Push(u)) if u == "https://example.com/page?injected=1"));
+        }
+
+        #[test]
+        fn location_protocol_setter_navigates() {
+            let rt = v8_runtime_with_url("http://example.com/page");
+            rt.eval("location.protocol = 'https'").unwrap();
+            let req = rt.take_navigate_request();
+            assert!(matches!(req, Some(NavigateRequest::Push(u)) if u == "https://example.com/page"));
+        }
+
+        #[test]
+        fn location_hostname_setter_navigates_keeping_port() {
+            let rt = v8_runtime_with_url("https://example.com:8080/page");
+            rt.eval("location.hostname = 'other.example'").unwrap();
+            let req = rt.take_navigate_request();
+            assert!(matches!(req, Some(NavigateRequest::Push(u)) if u == "https://other.example:8080/page"));
+        }
+
+        #[test]
+        fn location_host_setter_navigates() {
+            let rt = v8_runtime_with_url("https://example.com/page");
+            rt.eval("location.host = 'other.example:9000'").unwrap();
+            let req = rt.take_navigate_request();
+            assert!(matches!(req, Some(NavigateRequest::Push(u)) if u == "https://other.example:9000/page"));
+        }
+
+        #[test]
+        fn location_port_setter_navigates() {
+            let rt = v8_runtime_with_url("https://example.com/page");
+            rt.eval("location.port = '8443'").unwrap();
+            let req = rt.take_navigate_request();
+            assert!(matches!(req, Some(NavigateRequest::Push(u)) if u == "https://example.com:8443/page"));
+        }
+
+        // A write the URL Standard ignores must navigate nowhere rather than
+        // half-applying and desynchronising the object.
+        #[test]
+        fn location_port_setter_ignores_non_numeric() {
+            let rt = v8_runtime_with_url("https://example.com/page");
+            rt.eval("location.port = 'abc'").unwrap();
+            assert!(rt.take_navigate_request().is_none());
+            assert_eq!(
+                rt.eval("location.href").unwrap(),
+                lumen_core::JsValue::String("https://example.com/page".into())
+            );
+        }
+
+        // The object never lies about itself: until the navigation is committed
+        // by the engine, every component still describes the current URL.
+        #[test]
+        fn location_component_setter_keeps_object_consistent() {
+            let rt = v8_runtime_with_url("https://example.com/page");
+            rt.eval("location.search = '?injected=1'").unwrap();
+            let s = rt
+                .eval("location.href + '|' + location.search + '|' + location.toString()")
+                .unwrap();
+            assert_eq!(
+                s,
+                // `search` is still empty — the page URL carries no query until
+                // the engine commits the navigation the setter requested.
+                lumen_core::JsValue::String(
+                    "https://example.com/page||https://example.com/page".into()
+                )
+            );
+        }
+
+        // §3 — `Location` exists as an interface.
+        #[test]
+        fn location_interface_shape() {
+            let rt = v8_runtime_with_url("https://example.com/");
+            assert_eq!(rt.eval("typeof Location").unwrap(), lumen_core::JsValue::String("function".into()));
+            assert_eq!(rt.eval("location instanceof Location").unwrap(), lumen_core::JsValue::Bool(true));
+            assert_eq!(
+                rt.eval("Object.prototype.toString.call(location)").unwrap(),
+                lumen_core::JsValue::String("[object Location]".into())
+            );
+            assert_eq!(
+                rt.eval("location.constructor.name").unwrap(),
+                lumen_core::JsValue::String("Location".into())
+            );
+        }
+
+        // Unforgeable members: a page cannot delete `assign` and break the
+        // scripts that run after it.
+        #[test]
+        fn location_members_are_not_deletable() {
+            let rt = v8_runtime_with_url("https://example.com/");
+            assert_eq!(rt.eval("delete location.assign").unwrap(), lumen_core::JsValue::Bool(false));
+            assert_eq!(rt.eval("typeof location.assign").unwrap(), lumen_core::JsValue::String("function".into()));
+            assert_eq!(rt.eval("delete location.href").unwrap(), lumen_core::JsValue::Bool(false));
         }
 
         #[test]
