@@ -7,3 +7,22 @@ Test category, added 2026-07-28 by the WPT-VENDOR backlog (`ROADMAP.md` `WPT-VEN
 ## Прогон и находки (`docs/wpt-status.md`)
 
 Вендорена целиком 2026-07-28 (коммит `35be3b44`, `tests/wpt/file-system-access/`, 43 файла: `META.yml`/`WEB_FEATURES.yml`/`README.md`, **5** исполняемых тестов (`getDirectory.https.any.js`, `idlharness.https.any.js`, `opaque-origin.https.window.js`, `sandboxed_FileSystemDirectoryHandle-move.https.any.js`, `showPicker-errors.https.window.js`), 29 `local_*-manual.https.html` — ручных демо, автоматизировать которые не даёт сама спека (пикер требует пользовательского выбора файла), `resources/` — `test-helpers.js`/`local-fs-test-helpers.js`/`opaque-origin-sandbox.html`/`data/testfile.txt`, `script-tests/`, `LICENSE-WPT.md`), скоуп ⬜ (кандидат). **Соотношение 29 ручных к 5 исполняемым — определяющее свойство категории.** Здесь, в отличие от `eyedropper`/`accname`/`core-aam`/`dpub-aam`/`editing`, глоб `run_report.py` и wptrunner сходятся (оба дают 5): все ручные файлы несут суффикс `-manual` в имени, а не лежат в каталоге `manual/`. `run_report.py --all --root file-system-access --recursive` — **2 мин 30 с, 0/5 harness OK, 0/0 сабтестов**: все 5 id — `.https.`, все 5 TIMEOUT по HTTPS-порт-гэпу (`invalid url: invalid port: "None"`). Ни одного SKIP: `testdriver.js` тянут 29 из 42 файлов, но все 29 — те самые `-manual`, которые манифест не отбирает, поэтому категория до testdriver-ветки вообще не доходит и стоит 2.5 мин против 52 мин у `fenced-frame`. Все находки дала проба `--dump-layout`, и она окупилась необычно хорошо, потому что API в Lumen **реализован** (`crates/js/src/filesystem_access.rs`, оба движка) — это вторая после `eyedropper` категория, где ценность даёт не прогон, а реализованность: [BUG-371](../bugs/BUG-371-FIXED.md) (все 10 нативов — глобалы страницы поверх процесс-глобальных реестров с последовательными id: перебором `1,2,3…` читаются файлы и каталоги, выданные другому origin, и перехватывается чужой save-handle), [BUG-372](../bugs/BUG-372-FIXED.md) (в движке **два** класса `FileSystemDirectoryHandle`; `navigator.storage.getDirectory()` отдаёт замкнутую заглушку из `storage_manager.rs`, чей `removeEntry()` молча резолвится, ничего не удаляя — прямо измеряется вендоренным `getDirectory.https.any.js`), [BUG-373](../bugs/BUG-373-FIXED.md) (все 9 `new DOMException(...)` в модуле с перепутанными `name`/`message`, поэтому `e.name === 'AbortError'` никогда не истинно — исправлено 2026-08-10), [BUG-374](../bugs/BUG-374-FIXED.md) (10 расхождений с WebIDL: нет базового `FileSystemHandle`, публичные конструкторы, записываемые `name`/`kind`, нет async-итерации каталога, `FileSystemWritableFileStream` не наследует `WritableStream`, опции пикеров и пользовательская активация не проверяются вовсе — это 37 из 37 сабтестов `showPicker-errors.https.window.js`). `CAPABILITIES.md` пришлось перевести File System Access с ✅ на 🟡 — тот же класс дрейфа, что у `innerHTML` и fetch.
+
+## Статус находок (2026-08-10)
+
+Все четыре находки этой категории закрыты: [BUG-371](../../bugs/BUG-371-FIXED.md)
+(модель выдачи грантов), [BUG-372](../../bugs/BUG-372-FIXED.md) (OPFS-корень),
+[BUG-373](../../bugs/BUG-373-FIXED.md) (порядок аргументов `DOMException`),
+[BUG-374](../../bugs/BUG-374-FIXED.md) (WebIDL-форма интерфейсов — все десять
+пунктов, включая валидацию опций пикеров, то есть 34 из 37 сабтестов
+`showPicker-errors.https.window.js`). Заодно закрыт
+[BUG-750](../../bugs/BUG-750-FIXED.md).
+
+Остаток по категории — не в самом API: оставшиеся 3 сабтеста
+`showPicker-errors` требуют `SecurityError` без транзиентной активации, а
+`navigator.userActivation.isActive` в движке захардкожен в `true`
+([BUG-751](../../bugs/BUG-751-OPEN.md)). `idlharness.https.any.js` по-прежнему
+не измеряет ничего: TIMEOUT по HTTPS-порт-гэпу, и `idlharness.js`/
+`WebIDLParser.js` в дереве не вендорены — форма интерфейсов проверена пробой
+`--dump-display-list` и юнит-тестами `filesystem_access::tests_v8`, а не
+прогоном.
