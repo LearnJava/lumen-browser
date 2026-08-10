@@ -63,7 +63,7 @@ BUG-346/gc.js, эти тесты используют `for await` на испо�
 
 Тот же класс дефекта, что уже открыт для `Report`/`ReportingObserver`
 ([BUG-629](BUG-629-OPEN.md)), `FileSystemFileHandle`
-([BUG-374](BUG-374-OPEN.md)), `Serial`/`SerialPort`
+([BUG-374](BUG-374-FIXED.md)), `Serial`/`SerialPort`
 ([BUG-672](BUG-672-OPEN.md)) и `StorageManager`/`StorageBucket`/
 `StorageBucketManager` ([BUG-681](BUG-681-OPEN.md)) — седьмая-девятая
 независимая поверхность одного системного паттерна (ни один шим не

@@ -253,7 +253,7 @@ removeEntry=resolved | afterRemove=NotFoundError | removeDir=resolved
 
 ### Остаток
 
-[BUG-750](BUG-750-OPEN.md) — `entries()`/`values()`/`keys()` отдают handle-ы без
+[BUG-750](BUG-750-FIXED.md) — `entries()`/`values()`/`keys()` отдают handle-ы без
 гранта. Для выбранного каталога это сознательное ограничение BUG-371, для OPFS —
 бессмысленное; вынесено отдельно, потому что затрагивает модель прав, а не
 класс handle-а.

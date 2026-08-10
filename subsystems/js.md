@@ -30,9 +30,10 @@ the time — read dates.
   method sets and every method of the one a page actually got answered without a file
   system behind it (`getFileHandle()` → an object literal with no `getFile()`,
   `removeEntry()` → a successful promise that removed nothing). The stub is gone;
-  `getDirectory()` reads `window.FileSystemDirectoryHandle` **at call time** — so the
-  two shims' install order no longer matters — and rejects if it is missing rather
-  than substituting a look-alike. Behind it: `filesystem_access::opfs_root_entry_json`
+  `getDirectory()` builds the root through the private `__lumen_fsa_internal` factory
+  `filesystem_access.rs` publishes (BUG-374 took the public constructor away) and
+  rejects with `NotSupportedError` if that shim did not install, rather than
+  substituting a look-alike. Behind it: `filesystem_access::opfs_root_entry_json`
   creates `<exe_dir>/data/opfs/<origin-slug>/` (portable-data convention, not
   `%APPDATA%`; slug = readable prefix + FNV-1a of the *full* origin, because an opaque
   origin is a whole URL) and hands out an ordinary `DIR_REG` grant for it. `DirGrant`
@@ -46,8 +47,42 @@ the time — read dates.
   handle write straight to its file, because routing it through the save dialog would
   have replaced one silent wrong answer with another. Entry names are validated in
   Rust (`valid_entry_name`) — without that, `{create:true}` is a write-anywhere
-  primitive. Residual: directory listings still yield grant-less handles
-  ([BUG-750](../bugs/BUG-750-OPEN.md)).
+  primitive. Directory listings mint a grant per entry
+  (BUG-750, closed with BUG-374 below).
+- **File System Access is a WebIDL hierarchy, and none of it is constructible from
+  page script (BUG-374, P3, 2026-08-10).** `FSAL_SHIM` used to define three unrelated
+  ES5 constructor functions. Ten reported divergences followed from that one shape:
+  no `FileSystemHandle` base on the global (so `if (window.FileSystemHandle)`
+  feature-detects concluded the API was missing), public constructors that took the
+  internal grant id as an argument, `kind`/`name` as enumerable **writable own data
+  properties** (`fileHandle.kind = 'directory'` was accepted, after which the object
+  lied about its own type), no `Symbol.toStringTag`, no
+  `queryPermission`/`requestPermission`/`remove`/`getUniqueId`/`move`, no async
+  iteration of a directory, a writable stream that was not a `WritableStream` and
+  whose `seek`/`truncate` returned a resolved promise and did nothing, no
+  `FileSystemSyncAccessHandle`, no `[Serializable]`, and pickers that took an options
+  dictionary and ignored it whole. Three transferable points:
+  * **`isSameEntry` cannot compare grant tokens.** Every `getFileHandle()` mints a
+    fresh one, so two handles on the same file compared unequal. Comparison goes
+    through `_lumen_fs_unique_id`, a per-path label drawn from the same CSPRNG as a
+    grant id — *not* a hash of the path, which would let a page confirm a guessed
+    absolute path by comparing digests.
+  * **A writable stream is a queue.** Commands join it synchronously at call time, so
+    `w.write(x); w.truncate(1); w.close();` without `await` cannot commit before the
+    write lands. Deferring the enqueue by even one microtask lets a later command
+    overtake an earlier one — which is exactly how the first version of the tests
+    failed, with an empty file.
+  * **A handle caches nothing the file system owns.** `getFile()` re-stats through
+    `_lumen_fs_file_size`: the size captured when the handle was created goes stale
+    the moment anything writes, and a `File` that reads new contents while reporting
+    the old length is a silent wrong answer (the live probe caught `hello/0`).
+
+  `structuredClone` gained an extension point for `[Serializable]` platform
+  interfaces (`window.__lumen_platform_cloners` in `dom.rs`, a closed-over
+  (test, clone) list) — a platform object cloned as a plain object loses its class and
+  its internal slots. The picker gate reads `navigator.userActivation`, which the
+  engine hardcodes to `isActive: true`, so it is structurally right and currently
+  inert ([BUG-751](../bugs/BUG-751-OPEN.md)).
 - **File-API grants are unguessable, origin-bound and page-scoped; the natives are
   off the global object (BUG-371, P3, 2026-08-10).** The documented "JS only receives
   an opaque token" model did not hold: all ten `file_input`/`filesystem_access`
@@ -75,7 +110,7 @@ the time — read dates.
   shell reads the origin back via `file_input::active_document_origin()` rather than
   re-deriving it from `PageSource` — a second derivation would drift silently (every
   read would just return an empty string). WebIDL shape of the handles stays with
-  [BUG-374](../bugs/BUG-374-OPEN.md).
+  [BUG-374](../bugs/BUG-374-FIXED.md).
 - **`on<type>` event handler content/IDL attributes on live elements (BUG-360, P3,
   2026-08-09).** `<div onclick="…">`/`el.onclick = fn` now actually fire — previously the
   attribute was never compiled and all three live dispatch paths (`_lumen_dispatch`,

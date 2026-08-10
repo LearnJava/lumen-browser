@@ -45,7 +45,7 @@ Promise'ом с нужными полями, `toJSON()` отдаёт корре�
 Тот же класс дефекта, что уже открыт для `SerialPort`/`Serial`
 ([BUG-672](BUG-672-OPEN.md)), `Report`/`ReportingObserver`
 ([BUG-629](BUG-629-OPEN.md)), `FileSystemFileHandle`
-([BUG-374](BUG-374-OPEN.md)) и `FaceDetector`/`BarcodeDetector`/`TextDetector`
+([BUG-374](BUG-374-FIXED.md)) и `FaceDetector`/`BarcodeDetector`/`TextDetector`
 ([BUG-677](BUG-677-OPEN.md)) — интерфейс без спекового конструктора,
 подделываемый со страницы; здесь дополнительно совпадает и с отсутствующим
 `Symbol.toStringTag`, второй частью того же BUG-677. Функциональный WPT-сигнал

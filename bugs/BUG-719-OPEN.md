@@ -50,7 +50,7 @@ MIDIConnectionEvent(...)'` usage — not affected.)
 
 Same class of defect already open for `Report`/`ReportingObserver`
 ([BUG-629](BUG-629-OPEN.md)), `FileSystemFileHandle`
-([BUG-374](BUG-374-OPEN.md)), `Serial`/`SerialPort`
+([BUG-374](BUG-374-FIXED.md)), `Serial`/`SerialPort`
 ([BUG-672](BUG-672-OPEN.md)) and `HIDManager`/`HIDDevice`
 ([BUG-713](BUG-713-OPEN.md)) — a forged instance, indistinguishable via
 `instanceof MIDIPort`/`instanceof MIDIAccess` etc. from one legitimately

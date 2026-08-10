@@ -360,6 +360,9 @@ const SEAL_FILE_NATIVES: &str = r#"
     '_lumen_dir_get_file', '_lumen_dir_get_subdir', '_lumen_dir_remove_entry',
     '_lumen_fs_resolve', '_lumen_fs_permission', '_lumen_fs_unique_id',
     '_lumen_fs_remove', '_lumen_fs_move',
+    '_lumen_fs_file_size', '_lumen_sync_open', '_lumen_sync_size',
+    '_lumen_sync_read', '_lumen_sync_write', '_lumen_sync_truncate',
+    '_lumen_sync_flush', '_lumen_sync_close',
     '_lumen_writable_write_bytes', '_lumen_writable_truncate',
     '_lumen_writable_close', '_lumen_writable_from_token'
   ];

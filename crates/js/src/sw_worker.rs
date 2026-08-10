@@ -221,8 +221,11 @@ fn sw_globals_shim(scope_str: &str) -> String {
 }
 
 /// Encode bytes as standard base64.
+///
+/// Also used by [`crate::filesystem_access`] for the same reason as
+/// [`base64_decode`]: file bytes cannot cross into JS as a string.
 #[cfg(feature = "v8-backend")]
-fn base64_encode(data: &[u8]) -> String {
+pub(crate) fn base64_encode(data: &[u8]) -> String {
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {

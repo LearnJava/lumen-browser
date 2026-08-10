@@ -28,11 +28,16 @@
 //!
 //! # JS classes
 //!
+//! The WebIDL hierarchy of FS §4-§7, none of it constructible from page script
+//! (BUG-374) — the only way to a handle is an API that hands one out.
+//!
 //! | Class | Description |
 //! |---|---|
-//! | `FileSystemFileHandle` | `.name`, `.kind='file'`, `.getFile()`, `.createWritable()` |
-//! | `FileSystemDirectoryHandle` | `.name`, `.kind='directory'`, `.entries()`, `.getFileHandle()`, `.getDirectoryHandle()` |
-//! | `FileSystemWritableFileStream` | `.write(data)`, `.seek(pos)`, `.truncate(size)`, `.close()` |
+//! | `FileSystemHandle` | base interface: readonly `kind`/`name`, `isSameEntry()`, `queryPermission()`, `requestPermission()`, `remove()`, `getUniqueId()` |
+//! | `FileSystemFileHandle` | `.getFile()`, `.createWritable()`, `.createSyncAccessHandle()`, `.move()` |
+//! | `FileSystemDirectoryHandle` | async iterable; `.entries()`, `.values()`, `.keys()`, `.getFileHandle()`, `.getDirectoryHandle()`, `.removeEntry()`, `.resolve()` |
+//! | `FileSystemWritableFileStream` | `extends WritableStream`; `.write(data\|WriteParams)`, `.seek(pos)`, `.truncate(size)`, `.close()` |
+//! | `FileSystemSyncAccessHandle` | unbuffered OPFS access: `.read()`, `.write()`, `.truncate()`, `.getSize()`, `.flush()`, `.close()` |
 //!
 //! # Native bindings registered here
 //!
@@ -50,6 +55,12 @@
 //! | `_lumen_fs_unique_id` | `(path_id, token) → Option<String>` | Stable opaque per-entry label (`getUniqueId`, `isSameEntry`) |
 //! | `_lumen_fs_remove` | `(path_id, token, recursive: bool) → String` | Remove the handle's own entry → `""` or a DOMException name |
 //! | `_lumen_fs_move` | `(token, dest_dir_id, new_name) → String` | Rename/move a file → JSON `{name,token,size}` or `{error}` |
+//! | `_lumen_fs_file_size` | `(token: String) → f64` | Current size of the entry, or `-1` |
+//! | `_lumen_sync_open` | `(token: String) → Option<String>` | Open an OPFS file for sync access → handle id |
+//! | `_lumen_sync_size` / `_lumen_sync_flush` / `_lumen_sync_close` | `(id) → f64` / `bool` / `bool` | Size, flush, close |
+//! | `_lumen_sync_read` | `(id, at: f64, len: f64) → String` | Read at a position → base64 |
+//! | `_lumen_sync_write` | `(id, at: f64, data_b64) → f64` | Write at a position → byte count, or `-1` |
+//! | `_lumen_sync_truncate` | `(id: String, size: f64) → bool` | Resize the open file |
 //! | `_lumen_writable_write_bytes` | `(handle_id, position: f64, data_b64) → bool` | Write base64 bytes at a file position |
 //! | `_lumen_writable_truncate` | `(handle_id: String, size: f64) → bool` | Resize the pending buffer |
 //! | `_lumen_writable_close` | `(handle_id: String) → bool` | Flush and close writable stream |
@@ -169,6 +180,43 @@ static WRITE_REG: OnceLock<Mutex<WriteRegistry>> = OnceLock::new();
 #[cfg(feature = "v8-backend")]
 fn write_reg() -> &'static Mutex<WriteRegistry> {
     WRITE_REG.get_or_init(|| Mutex::new(WriteRegistry::new()))
+}
+
+// ── Sync-access-handle registry ────────────────────────────────────────────────
+
+/// One open `FileSystemSyncAccessHandle`: an actual OS file handle, since the
+/// interface's whole point is that reads and writes take effect immediately
+/// rather than being buffered until `close()` (FS §7.2).
+#[cfg(feature = "v8-backend")]
+struct SyncHandle {
+    /// Origin the grant was issued to — checked on every call.
+    origin: String,
+    /// Open read-write file. Never exposed to JS; only the id is.
+    file: std::fs::File,
+}
+
+#[cfg(feature = "v8-backend")]
+static SYNC_REG: OnceLock<Mutex<HashMap<String, SyncHandle>>> = OnceLock::new();
+
+#[cfg(feature = "v8-backend")]
+fn sync_reg() -> &'static Mutex<HashMap<String, SyncHandle>> {
+    SYNC_REG.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Run `f` over the open file behind `id`, or `None` if `id` was not issued to
+/// `origin`.
+#[cfg(feature = "v8-backend")]
+fn with_sync_file<T>(
+    id: &str,
+    origin: &str,
+    f: impl FnOnce(&mut std::fs::File) -> Option<T>,
+) -> Option<T> {
+    let mut reg = sync_reg().lock().unwrap_or_else(|e| e.into_inner());
+    let handle = reg.get_mut(id)?;
+    if handle.origin != origin {
+        return None;
+    }
+    f(&mut handle.file)
 }
 
 // ── Directory-handle registry ──────────────────────────────────────────────────
@@ -617,6 +665,8 @@ pub(crate) fn install_filesystem_access_v8(
     // stays reachable, including a save-handle it left open.
     dir_reg().lock().unwrap_or_else(|e| e.into_inner()).revoke_origin(origin);
     write_reg().lock().unwrap_or_else(|e| e.into_inner()).revoke_origin(origin);
+    // Including any file the previous document still had open for sync access.
+    sync_reg().lock().unwrap_or_else(|e| e.into_inner()).retain(|_, h| h.origin != origin);
 
     let open_origin = origin.to_string();
     let open_picker = into_v8_fn0(move || -> Option<String> {
@@ -1024,6 +1074,115 @@ pub(crate) fn install_filesystem_access_v8(
         });
     rt.register_native("_lumen_fs_move", fs_move)?;
 
+    // A handle caches the size it was created with, and the file changes under
+    // it: after `truncate(5)` the page's own `getFile().size` still reported the
+    // length the entry had when `getFileHandle()` ran, while `text()` already
+    // returned the new contents (BUG-374, found by the live probe).
+    let size_origin = origin.to_string();
+    let fs_file_size = into_v8_fn1(move |token: String| -> f64 {
+        match crate::file_input::path_for_token(&token, &size_origin) {
+            Some(path) => std::fs::metadata(&path).map(|m| m.len() as f64).unwrap_or(-1.0),
+            None => -1.0,
+        }
+    });
+    rt.register_native("_lumen_fs_file_size", fs_file_size)?;
+
+    // ── FileSystemSyncAccessHandle (FS §7.2) ──────────────────────────────────
+    // Unbuffered, synchronous access to one OPFS file. Every call answers from
+    // the open file itself, so a page can read back what it just wrote without
+    // closing anything.
+
+    let sync_open_origin = origin.to_string();
+    let sync_open = into_v8_fn1(move |token: String| -> Option<String> {
+        // Only a file the origin owns outright: a picked file carries a read
+        // grant, and the spec exposes this interface on OPFS handles only.
+        let path = crate::file_input::writable_path_for_token(&token, &sync_open_origin)?;
+        let file = std::fs::OpenOptions::new().read(true).write(true).open(&path).ok()?;
+        let id = crate::file_input::new_grant_id()?;
+        sync_reg()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id.clone(), SyncHandle { origin: sync_open_origin.clone(), file });
+        Some(id)
+    });
+    rt.register_native("_lumen_sync_open", sync_open)?;
+
+    let sync_size_origin = origin.to_string();
+    let sync_size = into_v8_fn1(move |id: String| -> f64 {
+        with_sync_file(&id, &sync_size_origin, |f| f.metadata().ok().map(|m| m.len() as f64))
+            .unwrap_or(-1.0)
+    });
+    rt.register_native("_lumen_sync_size", sync_size)?;
+
+    let sync_read_origin = origin.to_string();
+    let sync_read = into_v8_fn3(move |id: String, at: f64, len: f64| -> String {
+        use std::io::{Read as _, Seek as _, SeekFrom};
+        if !(0.0..=(u64::MAX as f64)).contains(&at) || !(0.0..=(u32::MAX as f64)).contains(&len) {
+            return String::new();
+        }
+        with_sync_file(&id, &sync_read_origin, |f| {
+            f.seek(SeekFrom::Start(at as u64)).ok()?;
+            let mut buf = vec![0u8; len as usize];
+            let mut filled = 0usize;
+            // `read` may stop short of the buffer without being at EOF.
+            while filled < buf.len() {
+                match f.read(&mut buf[filled..]) {
+                    Ok(0) => break,
+                    Ok(n) => filled += n,
+                    Err(_) => return None,
+                }
+            }
+            buf.truncate(filled);
+            Some(crate::sw_worker::base64_encode(&buf))
+        })
+        .unwrap_or_default()
+    });
+    rt.register_native("_lumen_sync_read", sync_read)?;
+
+    let sync_write_origin = origin.to_string();
+    let sync_write = into_v8_fn3(move |id: String, at: f64, data_b64: String| -> f64 {
+        use std::io::{Seek as _, SeekFrom, Write as _};
+        let Some(bytes) = crate::sw_worker::base64_decode(&data_b64) else {
+            return -1.0;
+        };
+        if !(0.0..=(u64::MAX as f64)).contains(&at) {
+            return -1.0;
+        }
+        with_sync_file(&id, &sync_write_origin, |f| {
+            f.seek(SeekFrom::Start(at as u64)).ok()?;
+            f.write_all(&bytes).ok()?;
+            Some(bytes.len() as f64)
+        })
+        .unwrap_or(-1.0)
+    });
+    rt.register_native("_lumen_sync_write", sync_write)?;
+
+    let sync_truncate_origin = origin.to_string();
+    let sync_truncate = into_v8_fn2(move |id: String, size: f64| -> bool {
+        if !(0.0..=(u64::MAX as f64)).contains(&size) {
+            return false;
+        }
+        with_sync_file(&id, &sync_truncate_origin, |f| f.set_len(size as u64).ok()).is_some()
+    });
+    rt.register_native("_lumen_sync_truncate", sync_truncate)?;
+
+    let sync_flush_origin = origin.to_string();
+    let sync_flush = into_v8_fn1(move |id: String| -> bool {
+        use std::io::Write as _;
+        with_sync_file(&id, &sync_flush_origin, |f| f.flush().ok()).is_some()
+    });
+    rt.register_native("_lumen_sync_flush", sync_flush)?;
+
+    let sync_close_origin = origin.to_string();
+    let sync_close = into_v8_fn1(move |id: String| -> bool {
+        let mut reg = sync_reg().lock().unwrap_or_else(|e| e.into_inner());
+        match reg.get(&id) {
+            Some(h) if h.origin == sync_close_origin => reg.remove(&id).is_some(),
+            _ => false,
+        }
+    });
+    rt.register_native("_lumen_sync_close", sync_close)?;
+
     let close_origin = origin.to_string();
     let writable_close = into_v8_fn1(move |handle_id: String| -> bool {
         write_reg()
@@ -1080,6 +1239,14 @@ var NAT_FS_PERM      = nat('_lumen_fs_permission');
 var NAT_FS_UNIQUE    = nat('_lumen_fs_unique_id');
 var NAT_FS_REMOVE    = nat('_lumen_fs_remove');
 var NAT_FS_MOVE      = nat('_lumen_fs_move');
+var NAT_FS_SIZE      = nat('_lumen_fs_file_size');
+var NAT_SYNC_OPEN    = nat('_lumen_sync_open');
+var NAT_SYNC_SIZE    = nat('_lumen_sync_size');
+var NAT_SYNC_READ    = nat('_lumen_sync_read');
+var NAT_SYNC_WRITE   = nat('_lumen_sync_write');
+var NAT_SYNC_TRUNC   = nat('_lumen_sync_truncate');
+var NAT_SYNC_FLUSH   = nat('_lumen_sync_flush');
+var NAT_SYNC_CLOSE   = nat('_lumen_sync_close');
 var NAT_WRITE_BYTES  = nat('_lumen_writable_write_bytes');
 var NAT_WRITE_TRUNC  = nat('_lumen_writable_truncate');
 var NAT_WRITE_CLOSE  = nat('_lumen_writable_close');
@@ -1262,6 +1429,14 @@ FileSystemFileHandle.prototype.getFile = function() {
   var self = this;
   return promiseTry(function() {
     var st = stateOf(self);
+    // Re-stat rather than trust the size the handle was created with: the file
+    // changes under a handle (a `truncate()` through this very API is enough),
+    // and a `File` that reads the new contents while reporting the old length
+    // is a silent wrong answer.
+    if (NAT_FS_SIZE && st.token) {
+      var current = NAT_FS_SIZE(st.token);
+      if (current >= 0) st.size = current;
+    }
     if (FS_INTERNAL) return FS_INTERNAL.makeTokenFile(st.name, st.token, st.size, '', 0);
     // No bridge (the file-input shim failed to install): hand back a plain,
     // grant-less File rather than inventing a second token path.
@@ -1314,6 +1489,21 @@ FileSystemFileHandle.prototype.move = function(destination, newName) {
     st.name = String(moved.name);
     st.token = String(moved.token);
     st.size = Number(moved.size) || 0;
+  });
+};
+
+// FS §7.2 — unbuffered synchronous access to one OPFS file. Defined further
+// down, once `fromBase64` and the state map it needs exist.
+FileSystemFileHandle.prototype.createSyncAccessHandle = function() {
+  var self = this;
+  return promiseTry(function() {
+    var st = stateOf(self);
+    var id = (NAT_SYNC_OPEN && st.token) ? NAT_SYNC_OPEN(st.token) : null;
+    if (id == null) {
+      fsThrow('NotAllowedError',
+        'A sync access handle is only available for a file in the origin private file system');
+    }
+    return makeSyncAccessHandle(id);
   });
 };
 
@@ -1648,6 +1838,118 @@ FileSystemWritableFileStream.prototype.close = function() {
   return enqueue(st, function() { return commitWrite(st); });
 };
 
+// ── FileSystemSyncAccessHandle (FS §7.2) ─────────────────────────────────────
+
+function FileSystemSyncAccessHandle(brand) {
+  if (brand !== BRAND) illegalConstructor();
+}
+defineToStringTag(FileSystemSyncAccessHandle, 'FileSystemSyncAccessHandle');
+
+// stream -> {id, closed}
+var SYNC_STATE = new WeakMap();
+
+function fromBase64(text) {
+  var lookup = {};
+  for (var c = 0; c < B64_CHARS.length; c++) lookup[B64_CHARS[c]] = c;
+  var bytes = [];
+  var buffer = 0;
+  var bits = 0;
+  for (var i = 0; i < text.length; i++) {
+    var value = lookup[text[i]];
+    if (value === undefined) continue;
+    buffer = (buffer << 6) | value;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      bytes.push((buffer >> bits) & 255);
+    }
+  }
+  return new Uint8Array(bytes);
+}
+
+function makeSyncAccessHandle(id) {
+  var handle = new FileSystemSyncAccessHandle(BRAND);
+  SYNC_STATE.set(handle, { id: String(id), closed: false });
+  return handle;
+}
+
+// Every member here is synchronous by design — that is the whole difference
+// from `FileSystemWritableFileStream`, and why the natives behind it act on an
+// open OS file rather than on a buffer flushed at close.
+function syncStateOf(handle) {
+  var st = (handle !== null && typeof handle === 'object') ? SYNC_STATE.get(handle) : undefined;
+  if (st === undefined) throw new TypeError('Illegal invocation');
+  if (st.closed) fsThrow('InvalidStateError', 'The sync access handle is closed');
+  return st;
+}
+
+function syncOffset(options) {
+  var at = (options && options.at !== undefined && options.at !== null) ? Number(options.at) : 0;
+  if (!isFinite(at) || at < 0) throw new TypeError("Invalid 'at': not a file position");
+  return Math.floor(at);
+}
+
+function viewBytes(buffer) {
+  if (buffer instanceof ArrayBuffer) return new Uint8Array(buffer);
+  if (ArrayBuffer.isView(buffer)) {
+    return new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  }
+  throw new TypeError('The provided value is not of type BufferSource');
+}
+
+FileSystemSyncAccessHandle.prototype.read = function(buffer, options) {
+  var st = syncStateOf(this);
+  var target = viewBytes(buffer);
+  var at = syncOffset(options);
+  if (!NAT_SYNC_READ) fsThrow('InvalidStateError', 'read() is unavailable');
+  var bytes = fromBase64(NAT_SYNC_READ(st.id, at, target.length));
+  target.set(bytes.subarray(0, target.length));
+  return bytes.length;
+};
+
+FileSystemSyncAccessHandle.prototype.write = function(buffer, options) {
+  var st = syncStateOf(this);
+  var source = viewBytes(buffer);
+  var at = syncOffset(options);
+  if (!NAT_SYNC_WRITE) fsThrow('InvalidStateError', 'write() is unavailable');
+  var written = NAT_SYNC_WRITE(st.id, at, toBase64(source));
+  if (written < 0) fsThrow('InvalidStateError', 'The file could not be written');
+  return written;
+};
+
+FileSystemSyncAccessHandle.prototype.truncate = function(newSize) {
+  var st = syncStateOf(this);
+  var size = Number(newSize);
+  if (!isFinite(size) || size < 0) throw new TypeError('truncate(): invalid size');
+  if (!NAT_SYNC_TRUNC || !NAT_SYNC_TRUNC(st.id, Math.floor(size))) {
+    fsThrow('InvalidStateError', 'The file could not be resized');
+  }
+};
+
+FileSystemSyncAccessHandle.prototype.getSize = function() {
+  var st = syncStateOf(this);
+  var size = NAT_SYNC_SIZE ? NAT_SYNC_SIZE(st.id) : -1;
+  if (size < 0) fsThrow('InvalidStateError', 'The file size is not available');
+  return size;
+};
+
+FileSystemSyncAccessHandle.prototype.flush = function() {
+  var st = syncStateOf(this);
+  if (!NAT_SYNC_FLUSH || !NAT_SYNC_FLUSH(st.id)) {
+    fsThrow('InvalidStateError', 'The file could not be flushed');
+  }
+};
+
+// Idempotent per FS §7.2: closing a closed handle is not an error, unlike every
+// other member, which throws once the handle is closed.
+FileSystemSyncAccessHandle.prototype.close = function() {
+  var st = (this !== null && typeof this === 'object') ? SYNC_STATE.get(this) : undefined;
+  if (st === undefined) throw new TypeError('Illegal invocation');
+  if (st.closed) return;
+  st.closed = true;
+  if (NAT_SYNC_CLOSE) NAT_SYNC_CLOSE(st.id);
+};
+
 // ── Picker option validation (FS §8.1) ───────────────────────────────────────
 
 var WELL_KNOWN_DIRS = ['desktop', 'documents', 'downloads', 'music', 'pictures', 'videos'];
@@ -1814,6 +2116,7 @@ if (typeof window !== 'undefined') {
   window.FileSystemFileHandle          = FileSystemFileHandle;
   window.FileSystemDirectoryHandle     = FileSystemDirectoryHandle;
   window.FileSystemWritableFileStream  = FileSystemWritableFileStream;
+  window.FileSystemSyncAccessHandle    = FileSystemSyncAccessHandle;
   window.showOpenFilePicker            = showOpenFilePicker;
   window.showSaveFilePicker            = showSaveFilePicker;
   window.showDirectoryPicker           = showDirectoryPicker;
@@ -2107,15 +2410,6 @@ mod tests_v8 {
             &rt,
             "typeof window.showDirectoryPicker === 'function'"
         ));
-    }
-
-    /// Resolve `expr` (a Promise) and read the settled value back. V8 drains
-    /// pending microtasks at the end of each `eval`, so the second call sees the
-    /// result of the first (S12b-B8 finding).
-    fn await_bool(rt: &V8JsRuntime, expr: &str) -> bool {
-        rt.eval(&format!("var __r = null; ({expr}).then(function(v) {{ __r = v; }});"))
-            .unwrap();
-        matches!(rt.eval("__r").unwrap(), JsValue::Bool(true))
     }
 
     // ── BUG-374: the WebIDL shape of the interface hierarchy ─────────────────
@@ -3013,6 +3307,121 @@ mod tests_v8 {
             std::fs::read_to_string(dir.join("stream.txt")).unwrap_or_default(),
             "through the writer"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+
+    // ── BUG-374 point 8: FileSystemSyncAccessHandle ──────────────────────────
+
+    /// The interface was missing outright. It is the OPFS write path every
+    /// wasm-backed database uses, and unlike the writable stream it is
+    /// unbuffered: what one call writes, the next call reads back.
+    #[test]
+    fn sync_access_handle_reads_back_what_it_wrote() {
+        let (rt, dir, pid) = opfs_case("sync_rw", true);
+        rt.eval(&format!(
+            r#"
+            var __shape = null, __written = null, __size = null, __read = null;
+            (async function() {{
+              var root = {ROOT}('root', '{pid}');
+              var f = await root.getFileHandle('sync.bin', {{ create: true }});
+              var h = await f.createSyncAccessHandle();
+              __shape = (h instanceof FileSystemSyncAccessHandle) + ',' +
+                        Object.prototype.toString.call(h);
+              __written = h.write(new Uint8Array([115, 121, 110, 99, 33]), {{ at: 0 }});
+              __size = h.getSize();
+              var buf = new Uint8Array(2);
+              var n = h.read(buf, {{ at: 2 }});
+              __read = n + ':' + buf[0] + ',' + buf[1];
+              h.flush();
+              h.close();
+            }})();
+            "#
+        ))
+        .unwrap();
+        assert_eq!(
+            string_eval(&rt, "String(__shape)"),
+            "true,[object FileSystemSyncAccessHandle]"
+        );
+        assert_eq!(string_eval(&rt, "String(__written)"), "5");
+        assert_eq!(string_eval(&rt, "String(__size)"), "5");
+        assert_eq!(string_eval(&rt, "String(__read)"), "2:110,99");
+        assert_eq!(std::fs::read(dir.join("sync.bin")).unwrap_or_default(), b"sync!".to_vec());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `truncate()` is real here too, `close()` is idempotent, and every other
+    /// member throws `InvalidStateError` once the handle is closed.
+    #[test]
+    fn sync_access_handle_truncates_and_closes() {
+        let (rt, dir, pid) = opfs_case("sync_close", true);
+        rt.eval(&format!(
+            r#"
+            var __after = null, __closed = null, __again = null;
+            (async function() {{
+              var root = {ROOT}('root', '{pid}');
+              var f = await root.getFileHandle('sync.bin', {{ create: true }});
+              var h = await f.createSyncAccessHandle();
+              h.write(new Uint8Array([1, 2, 3, 4, 5, 6]), {{ at: 0 }});
+              h.truncate(3);
+              __after = h.getSize();
+              h.close();
+              try {{ h.getSize(); __closed = 'no throw'; }} catch (e) {{ __closed = e.name; }}
+              try {{ h.close(); __again = 'ok'; }} catch (e) {{ __again = e.name; }}
+            }})();
+            "#
+        ))
+        .unwrap();
+        assert_eq!(string_eval(&rt, "String(__after)"), "3");
+        assert_eq!(string_eval(&rt, "String(__closed)"), "InvalidStateError");
+        assert_eq!(string_eval(&rt, "String(__again)"), "ok");
+        assert_eq!(std::fs::read(dir.join("sync.bin")).unwrap_or_default(), vec![1u8, 2, 3]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FS §7.2 puts this interface on OPFS handles only. A picked file carries a
+    /// read grant, so it must be refused rather than silently opened for writing.
+    #[test]
+    fn sync_access_handle_refuses_a_read_only_grant() {
+        let (rt, dir, pid) = opfs_case("sync_ro", false);
+        std::fs::write(dir.join("keep.txt"), b"x").unwrap();
+        rt.eval(&format!(
+            r#"
+            var __h = null;
+            (async function() {{
+              __h = await {ROOT}('root', '{pid}').getFileHandle('keep.txt');
+            }})();
+            "#
+        ))
+        .unwrap();
+        assert_eq!(
+            rejection_name(&rt, "__h.createSyncAccessHandle()"),
+            "NotAllowedError"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The size a handle was created with goes stale the moment anything writes
+    /// through it: `getFile()` reported the old length while `text()` already
+    /// returned the new contents (found by the live probe, `hello/0`).
+    #[test]
+    fn get_file_reports_the_current_size() {
+        let (rt, dir, pid) = opfs_case("stale_size", true);
+        rt.eval(&format!(
+            r#"
+            var __size = null;
+            (async function() {{
+              var root = {ROOT}('root', '{pid}');
+              var f = await root.getFileHandle('grow.txt', {{ create: true }});
+              var w = await f.createWritable();
+              await w.write('0123456789');
+              await w.close();
+              __size = (await f.getFile()).size;
+            }})();
+            "#
+        ))
+        .unwrap();
+        assert_eq!(string_eval(&rt, "String(__size)"), "10");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

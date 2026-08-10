@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-10",
  "counts": {
-  "open": 324,
-  "fixed": 391,
+  "open": 323,
+  "fixed": 393,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 715,
+ "total_bugs": 716,
  "phases": [
   {
    "id": "P0",
@@ -2498,7 +2498,9 @@
         "BUG-371",
         "BUG-372",
         "BUG-373",
-        "BUG-374"
+        "BUG-374",
+        "BUG-750",
+        "BUG-751"
        ]
       },
       {
@@ -3655,7 +3657,7 @@
        "title": "WPT: вендорить + прогнать категорию `serial`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). аппаратный API (Serial). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root serial --recursive`, ~3 мин 51 с, 18 файлов, 10 отобранных id, 5 `*-manual.https.html` исключены фильтром раннера) — **0/10 harness OK**. Все 10 — `.https.`, все TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`, ни один не исполнился. Serial API реально реализован как Phase 0 заглушка (`crates/js/src/serial.rs`) и соответствует своему doc-комментарию (`requestPort()`→`NotSupportedError`, `getPorts()`→`[]`) — не баг. Живая проба (`--mcp-live-port`) на контейнере (прототипная цепочка исправна, `navigator.serial instanceof EventTarget === true`, в отличие от класса BUG-664/BUG-668) нашла независимую находку — [BUG-672](bugs/BUG-672-OPEN.md): `Serial`/`SerialPort` — обычные ES6-классы без guard на `new.target`, `new SerialPort()`/`new Serial()` конструируются успешно, хотя спека не определяет конструктор ни для одного из них (тот же класс, что [BUG-629](bugs/BUG-629-OPEN.md)/[BUG-374](bugs/BUG-374-OPEN.md), новая поверхность). Один новый номер бага",
+       "note": "Скоуп: 🚫 (вне скоупа). аппаратный API (Serial). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root serial --recursive`, ~3 мин 51 с, 18 файлов, 10 отобранных id, 5 `*-manual.https.html` исключены фильтром раннера) — **0/10 harness OK**. Все 10 — `.https.`, все TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`, ни один не исполнился. Serial API реально реализован как Phase 0 заглушка (`crates/js/src/serial.rs`) и соответствует своему doc-комментарию (`requestPort()`→`NotSupportedError`, `getPorts()`→`[]`) — не баг. Живая проба (`--mcp-live-port`) на контейнере (прототипная цепочка исправна, `navigator.serial instanceof EventTarget === true`, в отличие от класса BUG-664/BUG-668) нашла независимую находку — [BUG-672](bugs/BUG-672-OPEN.md): `Serial`/`SerialPort` — обычные ES6-классы без guard на `new.target`, `new SerialPort()`/`new Serial()` конструируются успешно, хотя спека не определяет конструктор ни для одного из них (тот же класс, что [BUG-629](bugs/BUG-629-OPEN.md)/[BUG-374](bugs/BUG-374-FIXED.md), новая поверхность). Один новый номер бага",
        "bugs": [
         "BUG-672"
        ]
@@ -7196,10 +7198,10 @@
    "debtor": false
   },
   "BUG-374": {
-   "status": "open",
+   "status": "fixed",
    "title": "File System Access выставлен как три несвязанных ES5-конструктора вместо WebIDL-иерархии, 10 независимых расхождений (все — вывод пробы): нет базового `FileSyst…",
    "component": "js (`crates/js/src/filesystem_access.rs:499-711` — `FSAL_SHIM` целиком)",
-   "date": null,
+   "date": "2026-08-10",
    "debtor": false
   },
   "BUG-375": {
@@ -9786,9 +9788,16 @@
    "debtor": false
   },
   "BUG-750": {
-   "status": "open",
+   "status": "fixed",
    "title": "Перебор каталога отдаёт handle-ы **без гранта**: `entries()`/`values()`/`keys()` строят `new FileSystemFileHandle(e.name, '', 0)` / `new FileSystemDirectoryHand…",
    "component": "js (`crates/js/src/filesystem_access.rs` — `FileSystemDirectoryHandle.prototype.entries`)",
+   "date": "2026-08-10",
+   "debtor": false
+  },
+  "BUG-751": {
+   "status": "open",
+   "title": "`navigator.userActivation` захардкожен в `{isActive:true, hasBeenActive:true}` — транзиентной активации как состояния документа в движке нет, поэтому каждый гей…",
+   "component": "js (`crates/js/src/dom.rs` — `navigator.userActivation`), плюс путь диспатча пользовательских событий",
    "date": null,
    "debtor": false
   }
@@ -10231,9 +10240,6 @@
   ],
   "js (`crates/js/src/eye_dropper.rs` — тело шима `open()`)": [
    "BUG-698"
-  ],
-  "js (`crates/js/src/filesystem_access.rs` — `FileSystemDirectoryHandle.prototype.entries`)": [
-   "BUG-750"
   ],
   "js (`crates/js/src/highlight_api.rs` — `HIGHLIGHT_API_SHIM`)": [
    "BUG-534"

@@ -39,7 +39,7 @@ ES6 `class X extends EventTarget`, поэтому `new SerialPort()`/`new Serial
 
 Тот же класс дефекта, что уже открыт для `Report`/`ReportingObserver`
 ([BUG-629](BUG-629-OPEN.md)) и `FileSystemFileHandle`
-([BUG-374](BUG-374-OPEN.md)) — подделываемый объект, неотличимый через
+([BUG-374](BUG-374-FIXED.md)) — подделываемый объект, неотличимый через
 `instanceof SerialPort`/`instanceof Serial` от настоящего, выданного
 движком. Здесь — третья независимая поверхность того же системного паттерна
 (`SERIAL_SHIM` не ставит guard на `new.target`/не блокирует конструктор).
