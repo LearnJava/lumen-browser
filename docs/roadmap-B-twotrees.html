@@ -75,8 +75,8 @@
 {
  "generated": "2026-08-10",
  "counts": {
-  "open": 317,
-  "fixed": 405,
+  "open": 316,
+  "fixed": 406,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -9850,10 +9850,10 @@
    "debtor": false
   },
   "BUG-756": {
-   "status": "open",
+   "status": "fixed",
    "title": "Cookie default-path берётся как ПОЛНЫЙ путь запроса (`req_path.split('?').next()`), тогда как RFC 6265 §5.1.4 требует отбросить всё после правого `/`. Кука, пос…",
    "component": "network (`crates/network/src/lib.rs:2566-2567` — вычисление `default_path` перед `jar.process_set_cookie`); потребители — `crates/storage/src/cookies.rs::parse_set_cookie_with_psl` и `path_matches`",
-   "date": null,
+   "date": "2026-08-10",
    "debtor": false
   },
   "BUG-757": {
