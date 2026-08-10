@@ -4547,6 +4547,14 @@ impl V8JsRuntime {
     });
 
     // CSS Typed OM API: element.attributeStyleMap / computedStyleMap()
+    //
+    // BUG-387: the two maps have **separate** backing bindings on purpose.
+    // `attributeStyleMap` reflects only the inline `style=""` attribute (that is
+    // what the spec says a mutable `StylePropertyMap` is), while
+    // `computedStyleMap()` must answer from the cascade — it reads the same
+    // `computed_styles` / `custom_properties` snapshots as
+    // `window.getComputedStyle` (`_lumen_get_computed_style`,
+    // `_lumen_get_custom_property` above), never the inline attribute.
     {
         let d = Arc::clone(&doc);
         reg!("_lumen_get_style_property", move |nid: u32, prop: String| -> String {
@@ -4554,8 +4562,7 @@ impl V8JsRuntime {
                 let node = doc.get(NodeId::from_index(nid as usize));
                 if let Some(style_attr) = node.get_attr("style") {
                     let parsed = _parse_style_string(style_attr);
-                    let kebab_prop = _camel_to_kebab(&prop);
-                    return parsed.get(&kebab_prop).cloned().unwrap_or_default();
+                    return parsed.get(&_css_property_key(&prop)).cloned().unwrap_or_default();
                 }
             }
             String::new()
@@ -4572,8 +4579,7 @@ impl V8JsRuntime {
                 } else {
                     std::collections::HashMap::new()
                 };
-                let kebab_prop = _camel_to_kebab(&prop);
-                parsed.insert(kebab_prop, val);
+                parsed.insert(_css_property_key(&prop), val);
                 let css_text = _serialize_style_map(&parsed);
                 set_attribute(&mut doc, node_id, "style", &css_text);
                 if old_style.as_deref() != Some(css_text.as_str()) {
@@ -4594,8 +4600,7 @@ impl V8JsRuntime {
                 } else {
                     std::collections::HashMap::new()
                 };
-                let kebab_prop = _camel_to_kebab(&prop);
-                parsed.remove(&kebab_prop);
+                parsed.remove(&_css_property_key(&prop));
                 let css_text = _serialize_style_map(&parsed);
                 if css_text.is_empty() {
                     remove_attribute(&mut doc, node_id, "style");
@@ -4615,15 +4620,53 @@ impl V8JsRuntime {
                 let node = doc.get(NodeId::from_index(nid as usize));
                 if let Some(style_attr) = node.get_attr("style") {
                     let parsed = _parse_style_string(style_attr);
-                    let kebab_prop = _camel_to_kebab(&prop);
-                    return parsed.contains_key(&kebab_prop);
+                    return parsed.contains_key(&_css_property_key(&prop));
                 }
             }
             false
         });
-        reg!("_lumen_get_style_entries", move |_nid: u32| -> String {
-            // Phase 0: return empty object for iteration (stub)
-            "[]".to_string()
+        // Declarations of the inline `style=""` attribute, as a JSON array of
+        // `[property, value]` pairs sorted by property name — the iteration
+        // source of `attributeStyleMap`. Used to return the literal `"[]"`
+        // (BUG-387): the map's `entries()`/`keys()`/`values()` were dead, and
+        // dead in a way that threw, since the JS shim called `.entries()` on
+        // that *string*.
+        let d = Arc::clone(&doc);
+        reg!("_lumen_get_style_entries", move |nid: u32| -> String {
+            let mut pairs: Vec<(String, String)> = Vec::new();
+            if let Ok(doc) = d.lock() {
+                let node = doc.get(NodeId::from_index(nid as usize));
+                if let Some(style_attr) = node.get_attr("style") {
+                    pairs = _parse_style_string(style_attr).into_iter().collect();
+                }
+            }
+            _style_entries_to_json(pairs)
+        });
+        // Iteration source of `computedStyleMap()`: the resolved cascade, i.e.
+        // exactly what `getComputedStyle` answers from — standard properties
+        // plus this node's resolved custom properties (BUG-732 keeps the latter
+        // in their own `Arc`-shared map, so they are merged here rather than
+        // stored per node).
+        let cs = Arc::clone(&computed_styles);
+        let cp = Arc::clone(&custom_properties);
+        reg!("_lumen_get_computed_style_entries", move |nid: u32| -> String {
+            let mut pairs: Vec<(String, String)> = Vec::new();
+            if let Ok(map) = cs.lock()
+                && let Some(m) = map.get(&nid)
+            {
+                pairs.extend(m.iter().map(|(k, v)| (k.clone(), v.clone())));
+            }
+            if let Ok(map) = cp.lock()
+                && let Some(m) = map.get(&nid)
+            {
+                // A custom property that could not be resolved is published
+                // with an empty value (guaranteed-invalid); the Typed OM map
+                // has nothing to hand out for it, so it is not an entry.
+                pairs.extend(
+                    m.iter().filter(|(_, v)| !v.is_empty()).map(|(k, v)| (k.clone(), v.clone())),
+                );
+            }
+            _style_entries_to_json(pairs)
         });
     }
 
@@ -5181,6 +5224,29 @@ fn _camel_to_kebab(prop: &str) -> String {
         }
     }
     result
+}
+
+/// Property name a Typed OM / CSSOM lookup uses as the map key.
+///
+/// A CSS custom property (`--`-prefixed) is **case-sensitive** and is never
+/// spelled camelCase, so it must reach the map verbatim: running it through
+/// [`_camel_to_kebab`] turns `--Foo` into `---foo` and loses the declaration
+/// (BUG-387). Everything else is an ASCII CSS property name that the Typed OM
+/// accepts in either spelling, so it is folded to kebab-case.
+fn _css_property_key(prop: &str) -> String {
+    if prop.starts_with("--") { prop.to_string() } else { _camel_to_kebab(prop) }
+}
+
+/// Serialises `[property, value]` pairs into the JSON array the Typed OM
+/// iteration bindings (`_lumen_get_style_entries`,
+/// `_lumen_get_computed_style_entries`) hand back to the JS shim.
+///
+/// Sorted by property name: both sources are `HashMap`s, so without this the
+/// iteration order of `attributeStyleMap` / `computedStyleMap()` would differ
+/// between runs of the same page.
+fn _style_entries_to_json(mut pairs: Vec<(String, String)>) -> String {
+    pairs.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+    serde_json::to_string(&pairs).unwrap_or_else(|_| "[]".to_string())
 }
 
 /// Mirrors `dom::find_element_by_tag`.
