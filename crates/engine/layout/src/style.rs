@@ -1184,6 +1184,56 @@ impl FontVariantCaps {
     }
 }
 
+/// CSS Fonts L4 §6.6 — `font-variant-emoji`.
+///
+/// Задаёт, какой вариант презентации выбирается для символа с эмодзи-формой:
+/// текстовый (монохромный) или эмодзи (цветной), — не трогая сам символ.
+/// Наследуется.
+///
+/// **Ограничение Lumen:** значение парсится, наследуется и публикуется в
+/// `getComputedStyle`, но на выбор глифа пока не влияет — presentation
+/// selection (variation selectors VS15/VS16, curated emoji-fallback в
+/// `femtovg_backend`) свойство не читает. Реализовано ради
+/// [CSS Color Adjust L1 §3.1](https://drafts.csswg.org/css-color-adjust-1/),
+/// который требует форсировать вычисленное значение в forced-colors mode
+/// (BUG-388).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FontVariantEmoji {
+    /// `normal` (initial) — презентацию выбирает UA по своим правилам.
+    #[default]
+    Normal,
+    /// `text` — текстовая (монохромная) презентация.
+    Text,
+    /// `emoji` — эмодзи-презентация (цветная).
+    Emoji,
+    /// `unicode` — презентация строго по правилам Unicode (только явные
+    /// variation selectors в тексте).
+    Unicode,
+}
+
+impl FontVariantEmoji {
+    /// Разбирает keyword `font-variant-emoji`. `None` — не наш токен.
+    pub fn from_keyword(kw: &str) -> Option<Self> {
+        match kw {
+            "normal" => Some(Self::Normal),
+            "text" => Some(Self::Text),
+            "emoji" => Some(Self::Emoji),
+            "unicode" => Some(Self::Unicode),
+            _ => None,
+        }
+    }
+
+    /// CSS-сериализация значения (для `getComputedStyle` и layout-дампов).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Text => "text",
+            Self::Emoji => "emoji",
+            Self::Unicode => "unicode",
+        }
+    }
+}
+
 /// Собирает набор OpenType-фич для `DrawText.font_features`.
 ///
 /// CSS Fonts L4 §6.4 (Font Feature Resolution) задаёт порядок: сперва фичи
@@ -3269,6 +3319,9 @@ pub struct ComputedStyle {
     pub font_weight: FontWeight,
     /// CSS Fonts L4 §6.2 — font-variant-caps (весь набор значений). Inherited.
     pub font_variant_caps: FontVariantCaps,
+    /// CSS Fonts L4 §6.6 — font-variant-emoji. Inherited. На выбор глифа пока
+    /// не влияет — см. [`FontVariantEmoji`].
+    pub font_variant_emoji: FontVariantEmoji,
     /// CSS Fonts L4 §2.5 — font-stretch (десятые доли процента; normal = 1000).
     /// Inherited.
     pub font_stretch: FontStretch,
@@ -6692,6 +6745,7 @@ impl ComputedStyle {
             font_style: FontStyle::Normal,
             font_weight: FontWeight::NORMAL,
             font_variant_caps: FontVariantCaps::Normal,
+            font_variant_emoji: FontVariantEmoji::Normal,
             font_stretch: FontStretch::NORMAL,
             font_family: default_font_family(),
             font_variation_settings: Vec::new(),
@@ -7036,6 +7090,7 @@ pub fn compute_style(
         font_style: inherited.font_style,
         font_weight: inherited.font_weight,
         font_variant_caps: inherited.font_variant_caps,
+        font_variant_emoji: inherited.font_variant_emoji,
         font_stretch: inherited.font_stretch,
         font_family: inherited.font_family.clone(),
         font_variation_settings: inherited.font_variation_settings.clone(),
@@ -8361,6 +8416,20 @@ fn apply_forced_colors_mode(doc: &Document, node: NodeId, style: &mut ComputedSt
     style.box_shadow.clear();
     style.text_shadow.clear();
 
+    // `scrollbar-color` computes to `auto` (§3.1): the system palette owns the
+    // scrollbar, an author thumb/track pair would punch a hole in it. `None`
+    // *is* the `auto` representation of the field (BUG-388).
+    style.scrollbar_color = None;
+
+    // `font-variant-emoji`: «If font-variant-emoji computes to normal or
+    // unicode, UAs should force any emoji on the page to its monochrome
+    // variant … by forcing the computed value … to text» (§3.1). An explicit
+    // `emoji` is the author asking for colour on purpose and survives, as does
+    // `text` (already monochrome) — so only the two neutral values move.
+    if matches!(style.font_variant_emoji, FontVariantEmoji::Normal | FontVariantEmoji::Unicode) {
+        style.font_variant_emoji = FontVariantEmoji::Text;
+    }
+
     // background-image: gradients / cross-fades / paint() are dropped;
     // `url()` images are kept (spec: forced to none unless a url()).
     for layer in &mut style.background_layers {
@@ -8607,6 +8676,7 @@ fn pseudo_inherited_style(parent: &ComputedStyle) -> ComputedStyle {
     style.font_style = parent.font_style;
     style.font_weight = parent.font_weight;
     style.font_variant_caps = parent.font_variant_caps;
+    style.font_variant_emoji = parent.font_variant_emoji;
     style.font_stretch = parent.font_stretch;
     style.font_family = parent.font_family.clone();
     style.font_variation_settings = parent.font_variation_settings.clone();
@@ -8712,6 +8782,7 @@ pub fn merge_pseudo_inherited(
         font_style,
         font_weight,
         font_variant_caps,
+        font_variant_emoji,
         font_stretch,
         font_optical_sizing,
         font_size_adjust,
@@ -15094,6 +15165,9 @@ fn apply_declaration(
                 style.font_style = parts.style.unwrap_or(FontStyle::Normal);
                 style.font_variant_caps =
                     if parts.small_caps { FontVariantCaps::SmallCaps } else { FontVariantCaps::Normal };
+                // `font` сбрасывает ВСЕ longhand-ы `font-variant`, включая те,
+                // что сам выразить не может (§6.10) — emoji-компоненту тоже.
+                style.font_variant_emoji = FontVariantEmoji::Normal;
                 style.font_weight = parts
                     .weight
                     .as_deref()
@@ -15142,18 +15216,35 @@ fn apply_declaration(
                 style.font_variant_caps = caps;
             }
         }
+        "font-variant-emoji" => {
+            // CSS Fonts L4 §6.6 — longhand: ровно один keyword.
+            if let Some(v) = FontVariantEmoji::from_keyword(val.trim()) {
+                style.font_variant_emoji = v;
+            }
+        }
         "font-variant" => {
             // CSS Fonts L4 §6.10 — shorthand над font-variant-{caps,ligatures,
-            // numeric,east-asian,position,alternates}. Реализована только
-            // caps-компонента, но сбросить её обязан любой валидный shorthand
-            // (CSS Cascade L4 §3.1): `font-variant: common-ligatures` должен
-            // вернуть caps в initial, а не оставить унаследованное small-caps.
-            // `none` (отключение лигатур) и любые нереализованные keyword-ы
-            // caps-компоненты не содержат — значит она в initial.
+            // numeric,east-asian,position,alternates,emoji}. Реализованы только
+            // caps- и emoji-компоненты, но сбросить их обязан любой валидный
+            // shorthand (CSS Cascade L4 §3.1): `font-variant: common-ligatures`
+            // должен вернуть caps в initial, а не оставить унаследованное
+            // small-caps. `none` (отключение лигатур) и любые нереализованные
+            // keyword-ы этих компонент не содержат — значит они в initial.
             style.font_variant_caps = val
                 .split_whitespace()
                 .find_map(FontVariantCaps::from_keyword)
                 .unwrap_or(FontVariantCaps::Normal);
+            // `normal` в shorthand-е принадлежит caps-компоненте (она стоит
+            // первой в грамматике), поэтому emoji-компоненту ищем только среди
+            // её собственных keyword-ов — иначе `font-variant: small-caps`
+            // ничего бы не сбросил, а `font-variant: normal` совпал бы дважды.
+            style.font_variant_emoji = val
+                .split_whitespace()
+                .find_map(|kw| match kw {
+                    "text" | "emoji" | "unicode" => FontVariantEmoji::from_keyword(kw),
+                    _ => None,
+                })
+                .unwrap_or(FontVariantEmoji::Normal);
         }
         "font-stretch" => {
             if let Some(fs) = FontStretch::parse(val) {
@@ -18356,6 +18447,14 @@ fn apply_css_wide_keyword(
         }
         "font-variant" | "font-variant-caps" => {
             style.font_variant_caps = if inh { inherited.font_variant_caps } else { init.font_variant_caps };
+            if prop == "font-variant" {
+                style.font_variant_emoji =
+                    if inh { inherited.font_variant_emoji } else { init.font_variant_emoji };
+            }
+        }
+        "font-variant-emoji" => {
+            style.font_variant_emoji =
+                if inh { inherited.font_variant_emoji } else { init.font_variant_emoji };
         }
         "font-stretch" => {
             style.font_stretch = if inh { inherited.font_stretch } else { init.font_stretch };
@@ -32205,6 +32304,154 @@ mod tests {
     fn forced_colors_off_keeps_author_colors() {
         let s = cascade_at("<div>", "div { color: red; }", &[0]);
         assert_eq!(s.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    // ── BUG-388: scrollbar-color / font-variant-emoji under forced colors ─────
+
+    #[test]
+    fn forced_colors_scrollbar_color_forced_to_auto() {
+        with_forced_colors(|| {
+            // WPT forced-colors-mode-54: author pair must not survive.
+            let s = cascade_at("<div>", "div { scrollbar-color: green red; }", &[0]);
+            assert_eq!(s.scrollbar_color, None, "scrollbar-color must compute to auto");
+        });
+    }
+
+    #[test]
+    fn forced_colors_off_keeps_author_scrollbar_color() {
+        let s = cascade_at("<div>", "div { scrollbar-color: green red; }", &[0]);
+        assert!(s.scrollbar_color.is_some(), "without forced colors the pair stays");
+    }
+
+    #[test]
+    fn forced_colors_scrollbar_color_forced_even_with_preserve_parent_color() {
+        // §3.2: `preserve-parent-color` exempts only `color`.
+        with_forced_colors(|| {
+            let s = cascade_at(
+                "<div>",
+                "div { scrollbar-color: green red; forced-color-adjust: preserve-parent-color; }",
+                &[0],
+            );
+            assert_eq!(s.scrollbar_color, None);
+        });
+    }
+
+    #[test]
+    fn forced_colors_scrollbar_color_kept_with_adjust_none() {
+        with_forced_colors(|| {
+            let s = cascade_at(
+                "<div>",
+                "div { scrollbar-color: green red; forced-color-adjust: none; }",
+                &[0],
+            );
+            assert!(s.scrollbar_color.is_some());
+        });
+    }
+
+    #[test]
+    fn forced_colors_font_variant_emoji_normal_and_unicode_become_text() {
+        // WPT forced-colors-mode-60: `normal`/`unicode` → `text`; `text`/`emoji`
+        // are left alone (§3.1 forces only the two neutral values).
+        with_forced_colors(|| {
+            for (author, expected) in [
+                ("normal", FontVariantEmoji::Text),
+                ("unicode", FontVariantEmoji::Text),
+                ("text", FontVariantEmoji::Text),
+                ("emoji", FontVariantEmoji::Emoji),
+            ] {
+                let css = format!("div {{ font-variant-emoji: {author}; }}");
+                let s = cascade_at("<div>", &css, &[0]);
+                assert_eq!(s.font_variant_emoji, expected, "author value `{author}`");
+            }
+        });
+    }
+
+    #[test]
+    fn forced_colors_font_variant_emoji_forced_without_author_declaration() {
+        // The initial value is `normal`, so an untouched element is forced too.
+        with_forced_colors(|| {
+            let s = cascade_at("<div>", "div { color: red; }", &[0]);
+            assert_eq!(s.font_variant_emoji, FontVariantEmoji::Text);
+        });
+    }
+
+    // ── font-variant-emoji (CSS Fonts L4 §6.6) ───────────────────────────────
+
+    #[test]
+    fn font_variant_emoji_longhand_parses_all_keywords() {
+        for (kw, expected) in [
+            ("normal", FontVariantEmoji::Normal),
+            ("text", FontVariantEmoji::Text),
+            ("emoji", FontVariantEmoji::Emoji),
+            ("unicode", FontVariantEmoji::Unicode),
+        ] {
+            let css = format!("div {{ font-variant-emoji: {kw}; }}");
+            let s = cascade_at("<div>", &css, &[0]);
+            assert_eq!(s.font_variant_emoji, expected, "keyword `{kw}`");
+        }
+    }
+
+    #[test]
+    fn font_variant_emoji_garbage_keeps_previous_value() {
+        let s = cascade_at("<div>", "div { font-variant-emoji: sideways; }", &[0]);
+        assert_eq!(s.font_variant_emoji, FontVariantEmoji::Normal);
+    }
+
+    #[test]
+    fn font_variant_emoji_is_inherited() {
+        let s = cascade_at(
+            "<div><span>x</span></div>",
+            "div { font-variant-emoji: emoji; }",
+            &[0, 0],
+        );
+        assert_eq!(s.font_variant_emoji, FontVariantEmoji::Emoji);
+    }
+
+    #[test]
+    fn font_variant_shorthand_carries_and_resets_emoji_component() {
+        let s = cascade_at("<div>", "div { font-variant: unicode; }", &[0]);
+        assert_eq!(s.font_variant_emoji, FontVariantEmoji::Unicode);
+        // Both components at once.
+        let s = cascade_at("<div>", "div { font-variant: small-caps emoji; }", &[0]);
+        assert_eq!(s.font_variant_caps, FontVariantCaps::SmallCaps);
+        assert_eq!(s.font_variant_emoji, FontVariantEmoji::Emoji);
+        // A shorthand that names no emoji component resets it to initial —
+        // the inherited `emoji` must not leak through (CSS Cascade L4 §3.1).
+        let s = cascade_at(
+            "<div><span>x</span></div>",
+            "div { font-variant: emoji; } span { font-variant: small-caps; }",
+            &[0, 0],
+        );
+        assert_eq!(s.font_variant_emoji, FontVariantEmoji::Normal);
+    }
+
+    #[test]
+    fn font_shorthand_resets_font_variant_emoji() {
+        let s = cascade_at(
+            "<div><span>x</span></div>",
+            "div { font-variant-emoji: emoji; } span { font: 12px serif; }",
+            &[0, 0],
+        );
+        assert_eq!(s.font_variant_emoji, FontVariantEmoji::Normal);
+    }
+
+    #[test]
+    fn font_variant_emoji_css_wide_keywords() {
+        // `inherit` pulls the parent value back after a local override.
+        let s = cascade_at(
+            "<div><span>x</span></div>",
+            "div { font-variant-emoji: emoji; } \
+             span { font-variant-emoji: text; font-variant-emoji: inherit; }",
+            &[0, 0],
+        );
+        assert_eq!(s.font_variant_emoji, FontVariantEmoji::Emoji);
+        // `initial` drops the inherited value.
+        let s = cascade_at(
+            "<div><span>x</span></div>",
+            "div { font-variant-emoji: emoji; } span { font-variant-emoji: initial; }",
+            &[0, 0],
+        );
+        assert_eq!(s.font_variant_emoji, FontVariantEmoji::Normal);
     }
 
     // ── order ─────────────────────────────────────────────────────────────────
