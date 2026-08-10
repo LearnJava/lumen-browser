@@ -58,11 +58,11 @@
  "generated": "2026-08-10",
  "counts": {
   "open": 321,
-  "fixed": 395,
+  "fixed": 396,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 716,
+ "total_bugs": 717,
  "phases": [
   {
    "id": "P0",
@@ -2515,7 +2515,8 @@
         "BUG-377",
         "BUG-378",
         "BUG-379",
-        "BUG-380"
+        "BUG-380",
+        "BUG-752"
        ]
       },
       {
@@ -2794,7 +2795,7 @@
        "title": "WPT: прогнать срез `html/misc`",
        "status": "done",
        "size": "M",
-       "note": "Скоуп: ⬜ (кандидат). Срез категории `html`, вынесен из `WPT-VENDOR-html` 2026-07-28. Дерево уже вендорено. DONE 2026-08-04: прогнан целиком по всем 14 под-каталогам (`--processes=4`) — **49/531 harness OK, 148/636 сабтестов**. Четыре https-тяжёлых под-каталога (`cross-origin-opener-policy`/`cross-origin-embedder-policy`/`document-isolation-policy`/`anonymous-iframe`, 321 id) почти целиком провалились на уже известном TLS-гэпе `UnknownIssuer` (см. `docs/wpt-status.md:26`) — не новые находки. Реальный сигнал дали лёгкие под-каталоги: `infrastructure` (22/146, 137/546 сабтестов) подтвердил уже заведённый [BUG-377](bugs/BUG-377-OPEN.md) (`document.baseURI`) и невендоренные `/common/utils.js`/`subset-tests-by-key.js`-хелперы; `obsolete` (14/14 harness OK, 5/53 сабтестов) дал самый плотный кластер новых багов — легаси-API секции HTML LS §obsolete целиком не реализованы. Семь новых багов: [BUG-605](bugs/BUG-605-OPEN.md) (`<marquee>` без `HTMLMarqueeElement`, `loop`/`scrollAmount`/`scrollDelay` не рефлексируют, нет UA `overflow:hidden`), [BUG-606](bugs/BUG-606-OPEN.md) (шесть независимых легаси-заглушек — `document.clear/captureEvents/releaseEvents`, `window.captureEvents/releaseEvents`, `document.all` unusual behaviors, `document.applets`, `HTMLScriptElement.event/htmlFor` — отсутствуют целиком), [BUG-607](bugs/BUG-607-OPEN.md) (`document.fgColor/linkColor/alinkColor/vlinkColor/bgColor` не реализованы), [BUG-608](bugs/BUG-608-OPEN.md) (`fetchPriority` отсутствует на `<script>`/`<img>`), [BUG-609](bugs/BUG-609-OPEN.md) (`HTMLOptionsCollection.length`-сеттер не растит `<select>` для валидных больших значений), [BUG-610](bugs/BUG-610-OPEN.md) (`MessageEvent.userActivation` отсутствует), [BUG-611](bugs/BUG-611-OPEN.md) (`HTMLLinkElement.relList` не реализован). Попутно подтверждены без новых номеров: BUG-485/BUG-565 (`document.head` отсутствует, `links/icon/*`), BUG-384 (именованный доступ на `window`, маскирует первый сабтест `fetchpriority`-тестов), BUG-601 (`DOMTokenList`-конструктор — соседствует, но не тот же дефект, что BUG-611). `the-xhtml-syntax` (0/12) — все TIMEOUT на XHTML-парсинге DTD-сущностей (`xhtml-mathml-dtd-entity-N.htm`), нишевая XML-фича, не расследовано глубже",
+       "note": "Скоуп: ⬜ (кандидат). Срез категории `html`, вынесен из `WPT-VENDOR-html` 2026-07-28. Дерево уже вендорено. DONE 2026-08-04: прогнан целиком по всем 14 под-каталогам (`--processes=4`) — **49/531 harness OK, 148/636 сабтестов**. Четыре https-тяжёлых под-каталога (`cross-origin-opener-policy`/`cross-origin-embedder-policy`/`document-isolation-policy`/`anonymous-iframe`, 321 id) почти целиком провалились на уже известном TLS-гэпе `UnknownIssuer` (см. `docs/wpt-status.md:26`) — не новые находки. Реальный сигнал дали лёгкие под-каталоги: `infrastructure` (22/146, 137/546 сабтестов) подтвердил уже заведённый [BUG-377](bugs/BUG-377-FIXED.md) (`document.baseURI`) и невендоренные `/common/utils.js`/`subset-tests-by-key.js`-хелперы; `obsolete` (14/14 harness OK, 5/53 сабтестов) дал самый плотный кластер новых багов — легаси-API секции HTML LS §obsolete целиком не реализованы. Семь новых багов: [BUG-605](bugs/BUG-605-OPEN.md) (`<marquee>` без `HTMLMarqueeElement`, `loop`/`scrollAmount`/`scrollDelay` не рефлексируют, нет UA `overflow:hidden`), [BUG-606](bugs/BUG-606-OPEN.md) (шесть независимых легаси-заглушек — `document.clear/captureEvents/releaseEvents`, `window.captureEvents/releaseEvents`, `document.all` unusual behaviors, `document.applets`, `HTMLScriptElement.event/htmlFor` — отсутствуют целиком), [BUG-607](bugs/BUG-607-OPEN.md) (`document.fgColor/linkColor/alinkColor/vlinkColor/bgColor` не реализованы), [BUG-608](bugs/BUG-608-OPEN.md) (`fetchPriority` отсутствует на `<script>`/`<img>`), [BUG-609](bugs/BUG-609-OPEN.md) (`HTMLOptionsCollection.length`-сеттер не растит `<select>` для валидных больших значений), [BUG-610](bugs/BUG-610-OPEN.md) (`MessageEvent.userActivation` отсутствует), [BUG-611](bugs/BUG-611-OPEN.md) (`HTMLLinkElement.relList` не реализован). Попутно подтверждены без новых номеров: BUG-485/BUG-565 (`document.head` отсутствует, `links/icon/*`), BUG-384 (именованный доступ на `window`, маскирует первый сабтест `fetchpriority`-тестов), BUG-601 (`DOMTokenList`-конструктор — соседствует, но не тот же дефект, что BUG-611). `the-xhtml-syntax` (0/12) — все TIMEOUT на XHTML-парсинге DTD-сущностей (`xhtml-mathml-dtd-entity-N.htm`), нишевая XML-фича, не расследовано глубже",
        "bugs": [
         "BUG-605",
         "BUG-606",
@@ -7219,10 +7220,10 @@
    "debtor": false
   },
   "BUG-377": {
-   "status": "open",
+   "status": "fixed",
    "title": "`Node.baseURI` (DOM Standard §4.4) не реализован ни для одного типа узла: `document.baseURI`, `body.baseURI`, `documentElement.baseURI`, `textNode.baseURI` — `u…",
    "component": "js (`crates/js/src/dom.rs` — ни живой `document`, ни `_lumen_build_detached_document`, ни фабрики узлов; `grep -n baseURI crates/js/src/` даёт ноль)",
-   "date": null,
+   "date": "2026-08-10",
    "debtor": false
   },
   "BUG-378": {
@@ -9798,6 +9799,13 @@
    "status": "open",
    "title": "`navigator.userActivation` захардкожен в `{isActive:true, hasBeenActive:true}` — транзиентной активации как состояния документа в движке нет, поэтому каждый гей…",
    "component": "js (`crates/js/src/dom.rs` — `navigator.userActivation`), плюс путь диспатча пользовательских событий",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-752": {
+   "status": "open",
+   "title": "Движок игнорирует `<base href>` при резолвинге подресурсов и ссылок: `<base href=\"/other/\">` + `<img src=\"pic.png\">` на `https://example.com/a/page.html` грузит…",
+   "component": "shell (`crates/shell/src/main.rs` — `ResourceBase`/`ResourceBase::resolve`, строится только из URL страницы), dom (`crates/engine/dom/src/lib.rs:1272` — `Document::base_href()`)",
    "date": null,
    "debtor": false
   }
