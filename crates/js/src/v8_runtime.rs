@@ -4614,17 +4614,13 @@ impl V8JsRuntime {
                 dirty.store(true, Ordering::Relaxed);
             }
         });
-        let d = Arc::clone(&doc);
-        reg!("_lumen_has_style_property", move |nid: u32, prop: String| -> bool {
-            if let Ok(doc) = d.lock() {
-                let node = doc.get(NodeId::from_index(nid as usize));
-                if let Some(style_attr) = node.get_attr("style") {
-                    let parsed = _parse_style_string(style_attr);
-                    return parsed.contains_key(&_css_property_key(&prop));
-                }
-            }
-            false
-        });
+        // No `_lumen_has_style_property` here any more (BUG-387): `has()` is
+        // now `get() !== undefined` on both maps, which is what §6.1 says it
+        // means and keeps the two answers from ever disagreeing. The old native
+        // answered a `contains_key` over the inline attribute and was reachable
+        // from the inline map only — exactly the kind of second reader this bug
+        // was about.
+        //
         // Declarations of the inline `style=""` attribute, as a JSON array of
         // `[property, value]` pairs sorted by property name — the iteration
         // source of `attributeStyleMap`. Used to return the literal `"[]"`
