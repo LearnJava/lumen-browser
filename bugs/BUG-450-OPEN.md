@@ -36,7 +36,7 @@ web-видимая разница: скрипты определяют подд�
 `'getContext' in el`, а `element.width` теперь молча пишет атрибут в разметку.
 
 Причина структурная: у Lumen нет per-tag прототипов (см. [BUG-449](BUG-449-OPEN.md) —
-интерфейсов Canvas 2D нет вовсе, [BUG-367](BUG-367-OPEN.md) — все члены `Element`
+интерфейсов Canvas 2D нет вовсе, [BUG-367](BUG-367-FIXED.md) — все члены `Element`
 собственные свойства экземпляра), поэтому «члены HTMLCanvasElement» физически негде
 разместить, кроме общей фабрики.
 
@@ -69,6 +69,6 @@ getContext.noarg = String(c.getContext())      →  null      (спека: TypeE
 1. Гейт членов canvas по тегу в `_lumen_build_element` (тег уже известен —
    `_lumen_get_tag_name(nid)` вызывается внутри самих методов, проверку нужно поднять
    на уровень установки члена). Радикальнее и правильнее — per-tag прототипы
-   (общий фикс с [BUG-449](BUG-449-OPEN.md)/[BUG-367](BUG-367-OPEN.md)).
+   (общий фикс с [BUG-449](BUG-449-OPEN.md)/[BUG-367](BUG-367-FIXED.md)).
 2. Убрать `toLowerCase()` и `|| ''` из `getContext`, добавить проверку
    `arguments.length === 0 → TypeError`.

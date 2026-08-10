@@ -1,7 +1,7 @@
 # BUG-367 — живая обёртка `Element` расходится с WebIDL: нет `localName`/`prefix`, `tagName` апперкейсится в чужом namespace, внутренний `__nid__` торчит наружу перечислимым и записываемым, все ~120 членов лежат на инстансе вместо прототипа
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/dom.rs:5516-5880` — объектный литерал `_lumen_build_element`, общая фабрика живых обёрток узлов; `dom.rs:5521` — `__nid__`; `dom.rs:5522-5523` — `tagName`/`nodeName`; `dom.rs:4599-4612` — `_lumen_element_prototype_for`; для сравнения корректный паттерн — `dom.rs:4669` и `_lumen_make_character_data` `dom.rs:4616-4640`)
+**Статус:** FIXED 2026-08-10 (пункты 1, 2, 3, 5; пункт 4 выделен в [BUG-747](BUG-747-OPEN.md))
+**Компонент:** js (`crates/js/src/dom.rs` — объектный литерал `_lumen_build_element`, общая фабрика живых обёрток узлов; `__nid__`; `tagName`/`nodeName`; `_lumen_element_prototype_for`; для сравнения корректный паттерн — `_lumen_make_doctype` и `_lumen_make_character_data`)
 **Найден:** P2, WPT-VENDOR-fenced-frame (2026-07-28), проба `--dump-layout` вне WPT
 
 ## Симптом
@@ -183,3 +183,75 @@ typeof HTMLUnknownElement = function ; HTMLUnknownElement.prototype -> HTMLEleme
    `HTMLUnknownElement` вместо `HTMLElement`.
 
 Пункты 1-3 и 5 — точечные и независимые; пункт 4 — переработка фабрики обёрток.
+
+## Исправление (2026-08-10, P3)
+
+Пункты 1, 2, 3 и 5 закрыты; пункт 4 (перенос ~120 членов с инстанса на прототип)
+выделен в отдельную заявку [BUG-747](BUG-747-OPEN.md) — это переработка фабрики
+обёрток, а не точечная правка, и он полностью независим от остальных четырёх.
+
+**Корень пунктов 1-2 оказался общим и лежал в нативном слое, а не в шиме.**
+`_lumen_get_tag_name` (`crates/js/src/v8_runtime.rs`) отдавал
+`name.local.to_ascii_uppercase()`, и это была ЕДИНСТВЕННАЯ дорога от арены к JS:
+локальное имя в исходном регистре наружу не выходило вообще. Поэтому `localName`
+нельзя было получить лениво в шиме (`tagName.toLowerCase()` вернул бы
+`lineargradient` для SVG `<linearGradient>`), а `tagName` нечем было
+разапперкейсить. Апперкейс при этом нужен внутри шима: на нём построен ключ
+таблицы `_lumen_html_tag_prototypes` и ~50 сравнений вида
+`_lumen_get_tag_name(nid) === 'IMG'`.
+
+Разведение этих двух ролей и есть фикс:
+
+1. Новый натив `_lumen_get_local_name(nid) -> Option<String>` отдаёт `name.local`
+   как есть (`None` для не-элементов). `_lumen_get_tag_name` не тронут, поэтому
+   ни таблица прототипов, ни сравнения тегов в шиме не задеты.
+2. `_lumen_qualified_tag_name(nid)` в шиме собирает веб-видимое имя: апперкейс
+   локального имени только при `namespaceURI === 'http://www.w3.org/1999/xhtml'`,
+   иначе локальное имя как есть; для не-элементов — прежняя нативная строка
+   (`#text`/`#comment`). На нём теперь сидят и `tagName`, и `nodeName`.
+3. `localName` — геттер поверх нового натива; `prefix` — геттер, всегда `null`
+   (Lumen не разбирает префиксы), то есть свойство ЕСТЬ и равно `null`, а не
+   отсутствует: `'prefix' in el` — именно то, что проверяет фича-детект.
+4. `__nid__` переопределяется после литерала
+   `Object.defineProperty(_obj, '__nid__', { value, enumerable:false, writable:false, configurable:false })`.
+   **Все четыре атрибута выписаны намеренно**: вызов ПЕРЕОПРЕДЕЛЯЕТ уже
+   существующее свойство литерала, а при переопределении опущенные атрибуты
+   наследуются от текущего дескриптора — умолчания `false` действуют только для
+   заново создаваемого свойства. Первая версия правки (скопированная с
+   `_lumen_make_doctype`, где объект пустой) оставила `writable: true`, и
+   перенаправление мутаций продолжало работать: тест поймал это как
+   `enum=false writable=true`.
+5. `_lumen_element_prototype_for` получил список известных HTML-тегов
+   `_LUMEN_KNOWN_HTML_TAGS` (конформные + устаревшие, но интерфейс-несущие;
+   восемь имён, которым спека прямо предписывает `HTMLUnknownElement` —
+   `applet`/`bgsound`/`blink`/`isindex`/`keygen`/`multicol`/`nextid`/`spacer` —
+   в список сознательно не входят). Неизвестный тег → `HTMLUnknownElement`,
+   имя с дефисом (валидное имя кастомного элемента) → `HTMLElement` по спеке.
+   Цепочка `HTMLUnknownElement.prototype → HTMLElement.prototype` уже
+   существовала, поэтому промах в списке максимум даст лишний
+   `instanceof HTMLUnknownElement`, но не сломает `instanceof HTMLElement`.
+
+**Проверка** — та же проба `--dump-layout`, что и в отчёте, на дефолтной
+(V8) `dev-release`-сборке (`.tmp/bug367-probe.html`):
+
+```
+div.localName = div                      div.prefix = null (in: true)
+body.localName = body                    documentElement.localName = html
+div.tagName = DIV                        svg rect tagName/localName/ns = rect / rect / http://www.w3.org/2000/svg
+svg linearGradient tagName = linearGradient
+__nid__ descriptor = enum=false writable=false conf=false
+Object.keys(host)[0] = tagName           Object.keys(host) has __nid__ = false
+a.__nid__ after overwrite attempt = 10 (was 10, b=12)
+dest children ids = a                    host children ids = b     ← appendChild(a) больше не двигает b
+<fencedframe>/<foo>/<abcd> = HTMLUnknownElement / HTMLElement=true
+<section>/<my-widget>/<div> = not-unknown / HTMLElement=true
+own props of host (пункт 4, отложен) = 217
+```
+
+Регрессионные тесты — `dom.rs`: `element_local_name_and_prefix`,
+`tag_name_upper_cased_only_in_html_namespace`, `nid_handle_is_hidden_and_immutable`,
+`unrecognized_tag_gets_html_unknown_element`. Существующий
+`create_document_builds_xml_document` правлен по существу: он ожидал
+`documentElement.tagName === 'SVG'`, то есть кодировал ровно тот безусловный
+апперкейс, который снят (WPT `DOMImplementation-createDocument.html` проверяет
+`localName === 'svg'`). Полный прогон `lumen-js --features v8-backend` — 2603/2603.

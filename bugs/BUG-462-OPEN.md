@@ -4,7 +4,7 @@
 **Дата:** 2026-08-02
 **Компонент:** js (`crates/js/src/dom.rs` — живая обёртка `Element`/`Document`, тот же
 `_lumen_build_element`/handwritten `var document = {…}` литерал, что в
-[BUG-358](BUG-358-OPEN.md)/[BUG-367](BUG-367-OPEN.md))
+[BUG-358](BUG-358-OPEN.md)/[BUG-367](BUG-367-FIXED.md))
 **Найден:** WPT-RUN-2 (`ROADMAP.md`, `docs/tasks/p2-wpt-runner-throughput.md`) — первый
 живой прогон вендоренного `/resources/testdriver.js` через новую поддержку
 `test_driver.click()` (`executorlumen.py`) на `css/css-display/display-contents-pseudo-click-target.html`.
@@ -42,7 +42,7 @@ detached-документ). `element.ownerDocument.contains` не определ
 - [BUG-415](BUG-415-OPEN.md) фиксирует отсутствие `contains`/`removeChild`/… на
   **отсоединённом** документе (`createHTMLDocument`/`new Document()`) — другой
   строитель (`_lumen_build_detached_document`), другой объект.
-- [BUG-367](BUG-367-OPEN.md) документирует, что `Node.prototype` в живом дереве несёт
+- [BUG-367](BUG-367-FIXED.md) документирует, что `Node.prototype` в живом дереве несёт
   только `constructor`/`hasChildNodes` (все прочие члены — собственные свойства
   инстанса), но не перечисляет `contains` явно как отсутствующий метод — эта
   находка называет конкретный метод и конкретный воспроизводимый WPT-репро.
