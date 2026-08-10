@@ -1184,6 +1184,56 @@ impl FontVariantCaps {
     }
 }
 
+/// CSS Fonts L4 §6.6 — `font-variant-emoji`.
+///
+/// Задаёт, какой вариант презентации выбирается для символа с эмодзи-формой:
+/// текстовый (монохромный) или эмодзи (цветной), — не трогая сам символ.
+/// Наследуется.
+///
+/// **Ограничение Lumen:** значение парсится, наследуется и публикуется в
+/// `getComputedStyle`, но на выбор глифа пока не влияет — presentation
+/// selection (variation selectors VS15/VS16, curated emoji-fallback в
+/// `femtovg_backend`) свойство не читает. Реализовано ради
+/// [CSS Color Adjust L1 §3.1](https://drafts.csswg.org/css-color-adjust-1/),
+/// который требует форсировать вычисленное значение в forced-colors mode
+/// (BUG-388).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FontVariantEmoji {
+    /// `normal` (initial) — презентацию выбирает UA по своим правилам.
+    #[default]
+    Normal,
+    /// `text` — текстовая (монохромная) презентация.
+    Text,
+    /// `emoji` — эмодзи-презентация (цветная).
+    Emoji,
+    /// `unicode` — презентация строго по правилам Unicode (только явные
+    /// variation selectors в тексте).
+    Unicode,
+}
+
+impl FontVariantEmoji {
+    /// Разбирает keyword `font-variant-emoji`. `None` — не наш токен.
+    pub fn from_keyword(kw: &str) -> Option<Self> {
+        match kw {
+            "normal" => Some(Self::Normal),
+            "text" => Some(Self::Text),
+            "emoji" => Some(Self::Emoji),
+            "unicode" => Some(Self::Unicode),
+            _ => None,
+        }
+    }
+
+    /// CSS-сериализация значения (для `getComputedStyle` и layout-дампов).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Text => "text",
+            Self::Emoji => "emoji",
+            Self::Unicode => "unicode",
+        }
+    }
+}
+
 /// Собирает набор OpenType-фич для `DrawText.font_features`.
 ///
 /// CSS Fonts L4 §6.4 (Font Feature Resolution) задаёт порядок: сперва фичи
@@ -3282,6 +3332,9 @@ pub struct ComputedStyle {
     pub font_weight: FontWeight,
     /// CSS Fonts L4 §6.2 — font-variant-caps (весь набор значений). Inherited.
     pub font_variant_caps: FontVariantCaps,
+    /// CSS Fonts L4 §6.6 — font-variant-emoji. Inherited. На выбор глифа пока
+    /// не влияет — см. [`FontVariantEmoji`].
+    pub font_variant_emoji: FontVariantEmoji,
     /// CSS Fonts L4 §2.5 — font-stretch (десятые доли процента; normal = 1000).
     /// Inherited.
     pub font_stretch: FontStretch,
@@ -6707,6 +6760,7 @@ impl ComputedStyle {
             font_style: FontStyle::Normal,
             font_weight: FontWeight::NORMAL,
             font_variant_caps: FontVariantCaps::Normal,
+            font_variant_emoji: FontVariantEmoji::Normal,
             font_stretch: FontStretch::NORMAL,
             font_family: default_font_family(),
             font_variation_settings: Vec::new(),
@@ -7160,6 +7214,7 @@ pub fn compute_style(
         font_style: inherited.font_style,
         font_weight: inherited.font_weight,
         font_variant_caps: inherited.font_variant_caps,
+        font_variant_emoji: inherited.font_variant_emoji,
         font_stretch: inherited.font_stretch,
         font_family: inherited.font_family.clone(),
         font_variation_settings: inherited.font_variation_settings.clone(),
@@ -8103,19 +8158,28 @@ pub fn compute_style(
 
     let parent_fs = inherited.font_size;
     let is_quirks = doc.mode() == DocumentMode::Quirks;
-    let mut has_own_font_size = false;
+    // Which basis the winning font-size resolved against decides the zoom factor
+    // below. No declaration applies → the value is the inherited (or UA-hinted
+    // `em`) one, i.e. parent-relative.
+    let mut fs_basis = FontSizeBasis::ParentRelative;
     for (_, _, _, _, _, _, decl) in &matched {
-        if decl.property.eq_ignore_ascii_case("font-size") {
-            has_own_font_size = true;
+        if let Some(basis) =
+            apply_font_size(&mut style, decl, parent_fs, ua_baseline_font_size, viewport, is_quirks)
+        {
+            fs_basis = basis;
         }
-        apply_font_size(&mut style, decl, parent_fs, ua_baseline_font_size, viewport, is_quirks);
     }
 
-    // A font-size specified *here* has not been zoomed by anyone, so it takes
-    // the full compounded factor. One merely inherited already carries every
-    // ancestor's zoom and needs only this element's own contribution — applying
-    // `effective_zoom` to it would re-apply the ancestors'.
-    style.font_size *= if has_own_font_size { style.effective_zoom } else { own_zoom };
+    // A font-size resolved from a zoom-independent basis (`16px`, `rem`, …) has
+    // not been scaled by anyone, so it takes the full compounded factor. One
+    // resolved against the parent's size (`em`, `%`, or plain inheritance)
+    // already carries every ancestor's zoom and needs only this element's own
+    // contribution — applying `effective_zoom` to it would re-apply the
+    // ancestors', once per level of nesting.
+    style.font_size *= match fs_basis {
+        FontSizeBasis::Absolute => style.effective_zoom,
+        FontSizeBasis::ParentRelative => own_zoom,
+    };
 
     // Pre-pass: применяем color-scheme раньше main-pass, чтобы системные
     // цвета (Canvas, ButtonFace, …) резолвились против правильной темы
@@ -8514,6 +8578,20 @@ fn apply_forced_colors_mode(doc: &Document, node: NodeId, style: &mut ComputedSt
     style.box_shadow.clear();
     style.text_shadow.clear();
 
+    // `scrollbar-color` computes to `auto` (§3.1): the system palette owns the
+    // scrollbar, an author thumb/track pair would punch a hole in it. `None`
+    // *is* the `auto` representation of the field (BUG-388).
+    style.scrollbar_color = None;
+
+    // `font-variant-emoji`: «If font-variant-emoji computes to normal or
+    // unicode, UAs should force any emoji on the page to its monochrome
+    // variant … by forcing the computed value … to text» (§3.1). An explicit
+    // `emoji` is the author asking for colour on purpose and survives, as does
+    // `text` (already monochrome) — so only the two neutral values move.
+    if matches!(style.font_variant_emoji, FontVariantEmoji::Normal | FontVariantEmoji::Unicode) {
+        style.font_variant_emoji = FontVariantEmoji::Text;
+    }
+
     // background-image: gradients / cross-fades / paint() are dropped;
     // `url()` images are kept (spec: forced to none unless a url()).
     for layer in &mut style.background_layers {
@@ -8760,6 +8838,7 @@ fn pseudo_inherited_style(parent: &ComputedStyle) -> ComputedStyle {
     style.font_style = parent.font_style;
     style.font_weight = parent.font_weight;
     style.font_variant_caps = parent.font_variant_caps;
+    style.font_variant_emoji = parent.font_variant_emoji;
     style.font_stretch = parent.font_stretch;
     style.font_family = parent.font_family.clone();
     style.font_variation_settings = parent.font_variation_settings.clone();
@@ -8865,6 +8944,7 @@ pub fn merge_pseudo_inherited(
         font_style,
         font_weight,
         font_variant_caps,
+        font_variant_emoji,
         font_stretch,
         font_optical_sizing,
         font_size_adjust,
@@ -9074,7 +9154,9 @@ fn compute_pseudo_element_style_inner(
     let parent_fs = parent.font_size;
     let is_quirks = doc.mode() == DocumentMode::Quirks;
     for (_, _, _, _, decl) in &matched {
-        apply_font_size(&mut style, decl, parent_fs, parent_fs, viewport, is_quirks);
+        // Pseudo-element style: the basis is irrelevant here — `zoom` is folded
+        // into the originating element's style, which this one inherits from.
+        let _ = apply_font_size(&mut style, decl, parent_fs, parent_fs, viewport, is_quirks);
     }
     let em_basis = style.font_size;
     let parent_weight = parent.font_weight;
@@ -15247,6 +15329,9 @@ fn apply_declaration(
                 style.font_style = parts.style.unwrap_or(FontStyle::Normal);
                 style.font_variant_caps =
                     if parts.small_caps { FontVariantCaps::SmallCaps } else { FontVariantCaps::Normal };
+                // `font` сбрасывает ВСЕ longhand-ы `font-variant`, включая те,
+                // что сам выразить не может (§6.10) — emoji-компоненту тоже.
+                style.font_variant_emoji = FontVariantEmoji::Normal;
                 style.font_weight = parts
                     .weight
                     .as_deref()
@@ -15295,18 +15380,35 @@ fn apply_declaration(
                 style.font_variant_caps = caps;
             }
         }
+        "font-variant-emoji" => {
+            // CSS Fonts L4 §6.6 — longhand: ровно один keyword.
+            if let Some(v) = FontVariantEmoji::from_keyword(val.trim()) {
+                style.font_variant_emoji = v;
+            }
+        }
         "font-variant" => {
             // CSS Fonts L4 §6.10 — shorthand над font-variant-{caps,ligatures,
-            // numeric,east-asian,position,alternates}. Реализована только
-            // caps-компонента, но сбросить её обязан любой валидный shorthand
-            // (CSS Cascade L4 §3.1): `font-variant: common-ligatures` должен
-            // вернуть caps в initial, а не оставить унаследованное small-caps.
-            // `none` (отключение лигатур) и любые нереализованные keyword-ы
-            // caps-компоненты не содержат — значит она в initial.
+            // numeric,east-asian,position,alternates,emoji}. Реализованы только
+            // caps- и emoji-компоненты, но сбросить их обязан любой валидный
+            // shorthand (CSS Cascade L4 §3.1): `font-variant: common-ligatures`
+            // должен вернуть caps в initial, а не оставить унаследованное
+            // small-caps. `none` (отключение лигатур) и любые нереализованные
+            // keyword-ы этих компонент не содержат — значит они в initial.
             style.font_variant_caps = val
                 .split_whitespace()
                 .find_map(FontVariantCaps::from_keyword)
                 .unwrap_or(FontVariantCaps::Normal);
+            // `normal` в shorthand-е принадлежит caps-компоненте (она стоит
+            // первой в грамматике), поэтому emoji-компоненту ищем только среди
+            // её собственных keyword-ов — иначе `font-variant: small-caps`
+            // ничего бы не сбросил, а `font-variant: normal` совпал бы дважды.
+            style.font_variant_emoji = val
+                .split_whitespace()
+                .find_map(|kw| match kw {
+                    "text" | "emoji" | "unicode" => FontVariantEmoji::from_keyword(kw),
+                    _ => None,
+                })
+                .unwrap_or(FontVariantEmoji::Normal);
         }
         "font-stretch" => {
             if let Some(fs) = FontStretch::parse(val) {
@@ -18509,6 +18611,14 @@ fn apply_css_wide_keyword(
         }
         "font-variant" | "font-variant-caps" => {
             style.font_variant_caps = if inh { inherited.font_variant_caps } else { init.font_variant_caps };
+            if prop == "font-variant" {
+                style.font_variant_emoji =
+                    if inh { inherited.font_variant_emoji } else { init.font_variant_emoji };
+            }
+        }
+        "font-variant-emoji" => {
+            style.font_variant_emoji =
+                if inh { inherited.font_variant_emoji } else { init.font_variant_emoji };
         }
         "font-stretch" => {
             style.font_stretch = if inh { inherited.font_stretch } else { init.font_stretch };
@@ -21901,9 +22011,9 @@ fn apply_font_size(
     ua_baseline_fs: f32,
     viewport: Size,
     is_quirks: bool,
-) {
+) -> Option<FontSizeBasis> {
     if decl.property != "font" && decl.property != "font-size" {
-        return;
+        return None;
     }
     // CSS Variables L1 §3.3: нераскрываемый `var()` делает декларацию invalid at
     // computed value time — она просто не применяется.
@@ -21914,17 +22024,15 @@ fn apply_font_size(
                 expanded = v;
                 expanded.as_str()
             }
-            None => return,
+            None => return None,
         }
     } else {
         decl.value.as_str()
     };
 
     if decl.property == "font" {
-        if let Some(parts) = parse_font_shorthand(raw) {
-            resolve_font_size(style, &parts.size, parent_fs, viewport, is_quirks);
-        }
-        return;
+        let parts = parse_font_shorthand(raw)?;
+        return resolve_font_size(style, &parts.size, parent_fs, viewport, is_quirks);
     }
     let val = raw;
     // CSS Cascade L4 §7: CSS-wide keywords. font-size — inherited; unset ==
@@ -21932,62 +22040,96 @@ fn apply_font_size(
     // `parent_fs` when the element has no font-size UA hint, since
     // `ua_baseline_fs` then equals `parent_fs` anyway).
     if let Some(kw) = parse_css_wide_keyword(val) {
-        style.font_size = match kw {
-            CssWideKeyword::Inherit | CssWideKeyword::Unset => parent_fs,
-            CssWideKeyword::Revert => ua_baseline_fs,
-            CssWideKeyword::Initial => ROOT_FONT_SIZE,
+        let (px, basis) = match kw {
+            CssWideKeyword::Inherit | CssWideKeyword::Unset => {
+                (parent_fs, FontSizeBasis::ParentRelative)
+            }
+            // The UA baseline is itself usually an `em` factor over the parent
+            // (`h1 { font-size: 2em }`), and where the element has no UA hint it
+            // *is* `parent_fs` — parent-relative either way.
+            CssWideKeyword::Revert => (ua_baseline_fs, FontSizeBasis::ParentRelative),
+            CssWideKeyword::Initial => (ROOT_FONT_SIZE, FontSizeBasis::Absolute),
         };
-        return;
+        style.font_size = px;
+        return Some(basis);
     }
-    resolve_font_size(style, val, parent_fs, viewport, is_quirks);
+    resolve_font_size(style, val, parent_fs, viewport, is_quirks)
+}
+
+/// What the winning `font-size` declaration resolved *against* — the one thing
+/// `zoom` needs to know about it (CSS Viewport L1 §5).
+///
+/// A parent-relative value (`em`, `%`, `ex`/`ch`, `inherit`) is computed from
+/// `parent_fs`, which already carries every ancestor's zoom, so only the
+/// element's *own* factor may be applied on top. An absolute one (`px`, `rem`,
+/// viewport units, `initial`) comes from a zoom-independent basis and therefore
+/// takes the full compounded `effective_zoom`. Multiplying the first kind by
+/// `effective_zoom` would re-apply the ancestors' factor once per level, so a
+/// tree of `em` sizes under a zoomed container would shrink geometrically.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum FontSizeBasis {
+    /// Resolved against the parent's (already zoomed) font-size.
+    ParentRelative,
+    /// Resolved against a basis no ancestor's `zoom` has touched.
+    Absolute,
 }
 
 /// Резолвит `<font-size>`-значение (без CSS-wide keyword-ов) в абсолютный px и
 /// записывает в `style.font_size`. `em`/`%` — от `parent_fs`, `rem` — от
 /// ROOT_FONT_SIZE, viewport-единицы — от `viewport`. Используется и longhand-ом
 /// `font-size`, и `<font-size>`-компонентом `font`-shorthand.
+///
+/// Возвращает [`FontSizeBasis`] применённого значения (`None` — значение не
+/// разобралось и `style.font_size` не тронут): вызывающему это нужно, чтобы
+/// решить, каким множителем `zoom` домножать результат.
 fn resolve_font_size(
     style: &mut ComputedStyle,
     val: &str,
     parent_fs: f32,
     viewport: Size,
     is_quirks: bool,
-) {
-    let Some(len) = parse_length_q(val, is_quirks) else {
-        return;
-    };
+) -> Option<FontSizeBasis> {
+    let len = parse_length_q(val, is_quirks)?;
     // Для font-size: em и % считаются от parent_fs; vh/vw/vmin/vmax — от viewport.
-    style.font_size = match &len {
-        Length::Px(v) => *v,
-        Length::Em(v) => *v * parent_fs,
-        Length::Rem(v) => *v * ROOT_FONT_SIZE,
+    let (px, basis) = match &len {
+        Length::Px(v) => (*v, FontSizeBasis::Absolute),
+        Length::Em(v) => (*v * parent_fs, FontSizeBasis::ParentRelative),
+        Length::Rem(v) => (*v * ROOT_FONT_SIZE, FontSizeBasis::Absolute),
         // CSS Values L4 §5.1.1 — font-relative units on `font-size` itself refer to
         // the *parent* font. Real ch/ex metrics for the parent are not available at
         // computed-value time, so use the spec `0.5em` fallback against `parent_fs`.
-        Length::Ch(v) | Length::Ex(v) => *v * 0.5 * parent_fs,
-        Length::Percent(v) => *v / 100.0 * parent_fs,
-        Length::Vh(v) => *v / 100.0 * viewport.height,
-        Length::Vw(v) => *v / 100.0 * viewport.width,
-        Length::Vmin(v) => *v / 100.0 * viewport.width.min(viewport.height),
-        Length::Vmax(v) => *v / 100.0 * viewport.width.max(viewport.height),
+        Length::Ch(v) | Length::Ex(v) => (*v * 0.5 * parent_fs, FontSizeBasis::ParentRelative),
+        Length::Percent(v) => (*v / 100.0 * parent_fs, FontSizeBasis::ParentRelative),
+        Length::Vh(v) => (*v / 100.0 * viewport.height, FontSizeBasis::Absolute),
+        Length::Vw(v) => (*v / 100.0 * viewport.width, FontSizeBasis::Absolute),
+        Length::Vmin(v) => {
+            (*v / 100.0 * viewport.width.min(viewport.height), FontSizeBasis::Absolute)
+        }
+        Length::Vmax(v) => {
+            (*v / 100.0 * viewport.width.max(viewport.height), FontSizeBasis::Absolute)
+        }
         // cq* units — resolved via CONTAINER_CQ thread-local (set during container re-layout).
         Length::Cqw(_) | Length::Cqh(_) | Length::Cqi(_) | Length::Cqb(_)
         | Length::Cqmin(_) | Length::Cqmax(_) => {
-            match len.resolve(parent_fs, None, viewport) {
-                Some(v) => v,
-                None => return,
-            }
+            (len.resolve(parent_fs, None, viewport)?, FontSizeBasis::Absolute)
         }
         // `calc()` для font-size: резолвим с em_basis = parent_fs и
         // percent_basis = parent_fs (для `%` внутри выражения). vh/vw
         // используют viewport, что уже делает CalcNode::resolve.
-        Length::Calc(node) => match node.resolve(parent_fs, Some(parent_fs), viewport) {
-            Some(v) => v,
-            None => return,
-        },
+        //
+        // Basis: a `calc()` may mix both kinds (`calc(1em + 2px)`); it is counted
+        // as parent-relative because under-applying `zoom` to the absolute term
+        // is a bounded error, while double-applying it to the relative one
+        // compounds once per nesting level.
+        Length::Calc(node) => (
+            node.resolve(parent_fs, Some(parent_fs), viewport)?,
+            FontSizeBasis::ParentRelative,
+        ),
         // Intrinsic keywords not meaningful for font-size — ignore.
-        Length::MinContent | Length::MaxContent | Length::FitContent(_) => return,
+        Length::MinContent | Length::MaxContent | Length::FitContent(_) => return None,
     };
+    style.font_size = px;
+    Some(basis)
 }
 
 /// Применяет `<line-height>`-значение в `style.line_height` (+ флаг
@@ -32360,6 +32502,154 @@ mod tests {
         assert_eq!(s.color, Color { r: 255, g: 0, b: 0, a: 255 });
     }
 
+    // ── BUG-388: scrollbar-color / font-variant-emoji under forced colors ─────
+
+    #[test]
+    fn forced_colors_scrollbar_color_forced_to_auto() {
+        with_forced_colors(|| {
+            // WPT forced-colors-mode-54: author pair must not survive.
+            let s = cascade_at("<div>", "div { scrollbar-color: green red; }", &[0]);
+            assert_eq!(s.scrollbar_color, None, "scrollbar-color must compute to auto");
+        });
+    }
+
+    #[test]
+    fn forced_colors_off_keeps_author_scrollbar_color() {
+        let s = cascade_at("<div>", "div { scrollbar-color: green red; }", &[0]);
+        assert!(s.scrollbar_color.is_some(), "without forced colors the pair stays");
+    }
+
+    #[test]
+    fn forced_colors_scrollbar_color_forced_even_with_preserve_parent_color() {
+        // §3.2: `preserve-parent-color` exempts only `color`.
+        with_forced_colors(|| {
+            let s = cascade_at(
+                "<div>",
+                "div { scrollbar-color: green red; forced-color-adjust: preserve-parent-color; }",
+                &[0],
+            );
+            assert_eq!(s.scrollbar_color, None);
+        });
+    }
+
+    #[test]
+    fn forced_colors_scrollbar_color_kept_with_adjust_none() {
+        with_forced_colors(|| {
+            let s = cascade_at(
+                "<div>",
+                "div { scrollbar-color: green red; forced-color-adjust: none; }",
+                &[0],
+            );
+            assert!(s.scrollbar_color.is_some());
+        });
+    }
+
+    #[test]
+    fn forced_colors_font_variant_emoji_normal_and_unicode_become_text() {
+        // WPT forced-colors-mode-60: `normal`/`unicode` → `text`; `text`/`emoji`
+        // are left alone (§3.1 forces only the two neutral values).
+        with_forced_colors(|| {
+            for (author, expected) in [
+                ("normal", FontVariantEmoji::Text),
+                ("unicode", FontVariantEmoji::Text),
+                ("text", FontVariantEmoji::Text),
+                ("emoji", FontVariantEmoji::Emoji),
+            ] {
+                let css = format!("div {{ font-variant-emoji: {author}; }}");
+                let s = cascade_at("<div>", &css, &[0]);
+                assert_eq!(s.font_variant_emoji, expected, "author value `{author}`");
+            }
+        });
+    }
+
+    #[test]
+    fn forced_colors_font_variant_emoji_forced_without_author_declaration() {
+        // The initial value is `normal`, so an untouched element is forced too.
+        with_forced_colors(|| {
+            let s = cascade_at("<div>", "div { color: red; }", &[0]);
+            assert_eq!(s.font_variant_emoji, FontVariantEmoji::Text);
+        });
+    }
+
+    // ── font-variant-emoji (CSS Fonts L4 §6.6) ───────────────────────────────
+
+    #[test]
+    fn font_variant_emoji_longhand_parses_all_keywords() {
+        for (kw, expected) in [
+            ("normal", FontVariantEmoji::Normal),
+            ("text", FontVariantEmoji::Text),
+            ("emoji", FontVariantEmoji::Emoji),
+            ("unicode", FontVariantEmoji::Unicode),
+        ] {
+            let css = format!("div {{ font-variant-emoji: {kw}; }}");
+            let s = cascade_at("<div>", &css, &[0]);
+            assert_eq!(s.font_variant_emoji, expected, "keyword `{kw}`");
+        }
+    }
+
+    #[test]
+    fn font_variant_emoji_garbage_keeps_previous_value() {
+        let s = cascade_at("<div>", "div { font-variant-emoji: sideways; }", &[0]);
+        assert_eq!(s.font_variant_emoji, FontVariantEmoji::Normal);
+    }
+
+    #[test]
+    fn font_variant_emoji_is_inherited() {
+        let s = cascade_at(
+            "<div><span>x</span></div>",
+            "div { font-variant-emoji: emoji; }",
+            &[0, 0],
+        );
+        assert_eq!(s.font_variant_emoji, FontVariantEmoji::Emoji);
+    }
+
+    #[test]
+    fn font_variant_shorthand_carries_and_resets_emoji_component() {
+        let s = cascade_at("<div>", "div { font-variant: unicode; }", &[0]);
+        assert_eq!(s.font_variant_emoji, FontVariantEmoji::Unicode);
+        // Both components at once.
+        let s = cascade_at("<div>", "div { font-variant: small-caps emoji; }", &[0]);
+        assert_eq!(s.font_variant_caps, FontVariantCaps::SmallCaps);
+        assert_eq!(s.font_variant_emoji, FontVariantEmoji::Emoji);
+        // A shorthand that names no emoji component resets it to initial —
+        // the inherited `emoji` must not leak through (CSS Cascade L4 §3.1).
+        let s = cascade_at(
+            "<div><span>x</span></div>",
+            "div { font-variant: emoji; } span { font-variant: small-caps; }",
+            &[0, 0],
+        );
+        assert_eq!(s.font_variant_emoji, FontVariantEmoji::Normal);
+    }
+
+    #[test]
+    fn font_shorthand_resets_font_variant_emoji() {
+        let s = cascade_at(
+            "<div><span>x</span></div>",
+            "div { font-variant-emoji: emoji; } span { font: 12px serif; }",
+            &[0, 0],
+        );
+        assert_eq!(s.font_variant_emoji, FontVariantEmoji::Normal);
+    }
+
+    #[test]
+    fn font_variant_emoji_css_wide_keywords() {
+        // `inherit` pulls the parent value back after a local override.
+        let s = cascade_at(
+            "<div><span>x</span></div>",
+            "div { font-variant-emoji: emoji; } \
+             span { font-variant-emoji: text; font-variant-emoji: inherit; }",
+            &[0, 0],
+        );
+        assert_eq!(s.font_variant_emoji, FontVariantEmoji::Emoji);
+        // `initial` drops the inherited value.
+        let s = cascade_at(
+            "<div><span>x</span></div>",
+            "div { font-variant-emoji: emoji; } span { font-variant-emoji: initial; }",
+            &[0, 0],
+        );
+        assert_eq!(s.font_variant_emoji, FontVariantEmoji::Normal);
+    }
+
     // ── order ─────────────────────────────────────────────────────────────────
 
     #[test]
@@ -34091,6 +34381,43 @@ mod tests {
             "font_size = {}",
             inner_style.font_size
         );
+    }
+
+    /// A font-size *specified* on a descendant is not automatically "unzoomed":
+    /// what matters is the basis it resolved against. `em`/`%` resolve against
+    /// the parent's already-zoomed size and must take only the element's own
+    /// factor, while `px` comes from nowhere and takes the compounded one.
+    /// Charging both to `effective_zoom` re-applies the ancestors' factor once
+    /// per level, so a tree of `em` sizes under a zoomed container shrinks
+    /// geometrically (0.8 → 0.64 → 0.512 …).
+    #[test]
+    fn zoom_font_size_takes_the_factor_its_basis_lacks() {
+        let doc = lumen_html_parser::parse(
+            "<div style=\"zoom: 0.5; font-size: 40px\">\
+             <span style=\"font-size: 1.5em\"></span>\
+             <span style=\"font-size: 150%\"></span>\
+             <span style=\"font-size: 20px\"></span>\
+             <span style=\"zoom: 0.5; font-size: 1.5em\"></span></div>",
+        );
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let vp = Size::new(800.0, 600.0);
+        let outer = doc.get(doc.body().unwrap()).children[0];
+        let outer_style = compute_style(&doc, outer, &sheet, &root, vp, false);
+        assert!((outer_style.font_size - 20.0).abs() < 0.01);
+
+        let kids = doc.get(outer).children.clone();
+        let fs = |i: usize| compute_style(&doc, kids[i], &sheet, &outer_style, vp, false).font_size;
+
+        // 1.5 × the parent's zoomed 20px. The parent's 0.5 is already in the
+        // basis; applying it again would give 15.
+        assert!((fs(0) - 30.0).abs() < 0.01, "em font-size = {}", fs(0));
+        // `%` resolves against the same basis as `em`.
+        assert!((fs(1) - 30.0).abs() < 0.01, "% font-size = {}", fs(1));
+        // A `px` size knows nothing of the ancestors' zoom, so it takes all of it.
+        assert!((fs(2) - 10.0).abs() < 0.01, "px font-size = {}", fs(2));
+        // Own zoom still applies on top of a parent-relative basis: 20 × 1.5 × 0.5.
+        assert!((fs(3) - 15.0).abs() < 0.01, "em + own zoom = {}", fs(3));
     }
 
     /// Relative units must not be scaled here: they resolve later against a

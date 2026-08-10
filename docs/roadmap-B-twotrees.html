@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-10",
  "counts": {
-  "open": 317,
-  "fixed": 402,
+  "open": 316,
+  "fixed": 404,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 719,
+ "total_bugs": 720,
  "phases": [
   {
    "id": "P0",
@@ -7309,17 +7309,17 @@
    "debtor": false
   },
   "BUG-387": {
-   "status": "open",
+   "status": "fixed",
    "title": "`element.computedStyleMap()` (CSS Typed OM) — тот же класс и та же нативная привязка, что мутируемый `attributeStyleMap`, и обе читают только инлайн-атрибут `st…",
-   "component": "js (`crates/js/src/typed_om_api.rs:76-89` — `StylePropertyMap.prototype.get`; нативная привязка `_lumen_get_style_property` в `crates/js/src/v8_runtime.rs:3658`/`crates/js/src/dom.rs:3105`)",
-   "date": null,
+   "component": "js (`crates/js/src/typed_om_api.rs` — `TYPED_OM_SHIM` целиком; привязки Typed OM в `crates/js/src/v8_runtime.rs`; `computedStyleMap()` в обёртке элемента, `crates/js/src/dom.rs`)",
+   "date": "2026-08-10",
    "debtor": false
   },
   "BUG-388": {
-   "status": "open",
-   "title": "Forced Colors Mode форсирует `color`/`background-color`/`border-*-color`/`outline-color`/`caret-color` верно (подтверждено WPT: `forced-colors-mode-27.html` 1/1…",
-   "component": "layout (`crates/engine/layout/src/style.rs:7996` — `apply_forced_colors_mode`)",
-   "date": null,
+   "status": "fixed",
+   "title": "Forced Colors Mode не форсировал `scrollbar-color` → `auto` и `font-variant-emoji` → `text`, как требует CSS Color Adjustment L1 §3.1. Три дефекта в одном симпт…",
+   "component": "layout (`crates/engine/layout/src/style.rs` — `apply_forced_colors_mode`; `selector_query.rs::computed_style_to_map`), css-parser",
+   "date": "2026-08-10",
    "debtor": false
   },
   "BUG-389": {
@@ -8458,7 +8458,7 @@
   },
   "BUG-554": {
    "status": "open",
-   "title": "CSS Typed OM: only `CSSStyleValue`/`CSSUnitValue`/`CSSKeywordValue`/partial `CSSNumericValue`/`StylePropertyMap.get` exist (139-line file) -- `CSS.<unit>()` fac…",
+   "title": "CSS Typed OM: only `CSSStyleValue`/`CSSUnitValue`/`CSSKeywordValue`/partial `CSSNumericValue` и две карты свойств (сами карты переписаны в [BUG-387](bugs/BUG-38…",
    "component": "js (`crates/js/src/typed_om_api.rs`)",
    "date": null,
    "debtor": false
@@ -9841,6 +9841,13 @@
    "component": "js (`crates/js/src/dom.rs` — литерал `navigator`; намеренное отсутствие задокументировано в `crates/js/src/surface_api.rs`), тесты, закрепляющие текущую модель: `crates/js/src/surface_api.rs::tests::webdriver_absent_in_navigator`, `crates/js/tests/cases/no_automation_markers.rs::webdriver_not_in_navigator`, `crates/driver/tests/cases/antidetect_surface_api.rs::navigator_webdriver_is_absent`",
    "date": null,
    "debtor": false
+  },
+  "BUG-755": {
+   "status": "open",
+   "title": "Forced Colors Mode включается ЕДИНСТВЕННЫМ способом — тумблером в a11y-панели живого окна; хранилище настройки in-memory с дефолтом `false`, персистентного пути…",
+   "component": "shell (`crates/shell/src/main.rs:1177` — `A11yPrefs::open_in_memory()`), automation (нет CLI-флага/переменной/BiDi-ручки), tooling (`tools/wptrunner/wptrunner/browsers/lumen.py`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -10800,6 +10807,9 @@
   ],
   "shell (`chrome_model_snapshot`, `panels/shields_panel.rs`, `panels/permission_panel.rs`), chrome (`ChromeModel::permissions`, `assets/chrome/chrome.html` `#permPopover`)": [
    "BUG-411"
+  ],
+  "shell (`crates/shell/src/main.rs:1177` — `A11yPrefs::open_in_memory()`), automation (нет CLI-флага/переменной/BiDi-ручки), tooling (`tools/wptrunner/wptrunner/browsers/lumen.py`)": [
+   "BUG-755"
   ],
   "shell (`crates/shell/src/main.rs::apply_loaded_page`), js (`crates/js/src/dom.rs:12769` `window.getComputedStyle`)": [
    "BUG-555"

@@ -178,7 +178,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `box-sizing` | ✅ | content-box, border-box |
 | `overflow` / `overflow-x` / `overflow-y` | ✅ | visible/hidden/clip; scroll ⬜ rendering |
 | `visibility` | ✅ | visible/hidden (space reserved) |
-| `zoom` | 🟡 | P3 2026-08-10: `<number>` / `<percentage>` / `normal` / `reset`, compounds down the tree (`ComputedStyle::effective_zoom`); scales `font-size` and the absolute (`px`) lengths of the non-inherited box-model properties — width/height/min/max, margin, padding, inset, border-width, row/column-gap. Relative units need no handling (they resolve against already-zoomed bases). Not scaled: inherited length properties (`text-indent`, `letter-spacing`, `word-spacing`) when specified on the zoomed element itself, `rem` (resolves against the unzoomed root font-size), and a `border-width` given in `em` (the cascade resolves it to px against the already-zoomed font-size, so the multiply here double-applies). `reset` is treated as `1.0` rather than as "ignore ancestors" |
+| `zoom` | 🟡 | P3 2026-08-10: `<number>` / `<percentage>` / `normal` / `reset`, compounds down the tree (`ComputedStyle::effective_zoom`); scales `font-size` and the absolute (`px`) lengths of the non-inherited box-model properties — width/height/min/max, margin, padding, inset, border-width, row/column-gap. Relative units need no handling (they resolve against already-zoomed bases); `font-size` takes the compounded factor only when it resolved from a zoom-independent basis (`px`/`rem`/viewport units, `FontSizeBasis`) — an `em`/`%`/inherited one takes just the element's own, since the ancestors' is already in the basis. Not scaled: `line-height` and inherited length properties (`text-indent`, `letter-spacing`, `word-spacing`) when specified on the zoomed element itself, `rem` (resolves against the unzoomed root font-size), a `calc()` font-size's absolute terms, and a `border-width` given in `em` (the cascade resolves it to px against the already-zoomed font-size, so the multiply here double-applies). `reset` is treated as `1.0` rather than as "ignore ancestors" |
 | `opacity` | ✅ | composited layer |
 | `aspect-ratio` | ✅ | auto, W/H ratio |
 | `text-overflow` | ✅ | clip, ellipsis |
@@ -206,7 +206,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `color` | ✅ | named/hex/rgb/rgba/hsl/hsla/oklch; currentColor |
 | `background-color` | ✅ | |
 | `color-scheme` | ✅ | UA switching wired: form controls + system-color resolution (style.rs:6394,6973,7020,12391) |
-| `forced-color-adjust` | ✅ | Forced Colors Mode (Color Adjust L1 §3): system-palette forcing post-pass in compute_style (element-aware LinkText/ButtonText/GrayText/Field pairs, shadows→none, non-url() background-image→none, bg transparency preserved); `(forced-colors: active)` media wired; shell a11y toggle relayouts (P4 2026-07-04) |
+| `forced-color-adjust` | ✅ | Forced Colors Mode (Color Adjust L1 §3): system-palette forcing post-pass in compute_style (element-aware LinkText/ButtonText/GrayText/Field pairs, shadows→none, non-url() background-image→none, bg transparency preserved, `scrollbar-color`→`auto`, `font-variant-emoji` `normal`/`unicode`→`text`); `(forced-colors: active)` media wired; shell a11y toggle relayouts (P4 2026-07-04, §3.1-добор P3 2026-08-10 BUG-388) |
 | `print-color-adjust` / `color-adjust` | 🟡 | parsed/stored; print rendering ⬜ |
 | `accent-color` | ✅ | parsed + wired to form controls (checkbox/radio/range/progress) in display_list.rs (P4 2026-06-14); 5 tests + graphic 110 |
 | `color-mix()` | ✅ | parse_color_mix() in style.rs (P4 2026-06-08); 3 tests |
@@ -218,6 +218,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 |----------|--------|-------|
 | `font` / `font-size` / `font-weight` / `font-style` / `font-family` | ✅ | |
 | `font-variant` / `font-variant-caps` | 🟡 | `font-variant-caps` ✅ весь набор (normal/small-caps/all-small-caps/petite-caps/all-petite-caps/unicase/titling-caps): капитель синтезируется в layout-е (`caps_synthesis`, box_tree.rs — заглавные × 0.8 + компенсация baseline; bundled-Inter без smcp/c2sc/pcap), `titling-caps` — фичей `titl` через `text_font_features`; тест 150 (P4 2026-07-29). Остальные longhand-ы shorthand-а `font-variant` — `-ligatures`/`-numeric`/`-east-asian`/`-position`/`-alternates` — ⬜ (shorthand их только сбрасывает) |
+| `font-variant-emoji` | 🟡 | Парсинг всех keyword-ов (`normal`/`text`/`emoji`/`unicode`), наследование, обе компоненты shorthand-ов `font-variant`/`font`, `getComputedStyle` (P3 2026-08-10, BUG-388). **Не влияет на выбор глифа**: presentation selection (VS15/VS16, curated emoji-fallback в `femtovg_backend`) свойство не читает. Реализовано ради CSS Color Adjust L1 §3.1, который требует форсировать вычисленное значение `normal`/`unicode` → `text` в forced-colors mode |
 | `font-stretch` | ✅ | keyword + `<percentage>` (клампится в 50–200%); два независимых пути до рендера: ось `wdth` в `DrawText::font_variation_axes` для variable-шрифтов и статический подбор face-а по `usWidthClass` из OS/2 — `DrawText::font_stretch` → `FontProvider::pick_face` (CSS Fonts L4 §5.2, оба порядка обхода: ≤100% предпочитает более узкий, >100% — более широкий). Дескриптор `font-stretch` у `@font-face` участвует в резолве `local()`. Тест 74 (геометрия) + 9 layout / 13 paint / 17 core-matcher тестов (P4 2026-07-29) |
 | `font-variation-settings` | ✅ | fvar+avar normalization; applied on CPU/wgpu paths, femtovg window renders default instance (see CAPABILITIES) |
 | `font-feature-settings` | ✅ | parse + ComputedStyle (inherited) + DrawText.font_features; shaper overrides default GSUB/GPOS set (liga/clig/calt/rlig/ccmp + kern) on CPU path & femtovg varied-text path; native femtovg text shapes itself (class BUG-109) |
@@ -579,7 +580,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 
 | Property | Status | Notes |
 |----------|--------|-------|
-| `scrollbar-width` / `scrollbar-color` / `scrollbar-gutter` | ✅ | width/color rendered; `scrollbar-gutter: stable` reserves the gutter on both inline (`content_width`) and block (`children_available_height`) axes |
+| `scrollbar-width` / `scrollbar-color` / `scrollbar-gutter` | ✅ | width/color rendered; `scrollbar-gutter: stable` reserves the gutter on both inline (`content_width`) and block (`children_available_height`) axes; `scrollbar-color` сериализуется в `getComputedStyle` (`auto` / пара `rgb()`) и форсируется в `auto` в forced-colors mode (P3 2026-08-10, BUG-388) |
 
 ### [T3] UI / Input
 

@@ -2,7 +2,7 @@
 
 **Статус:** OPEN
 **Дата:** 2026-08-04
-**Компонент:** js (`crates/js/src/typed_om_api.rs`, 139 lines total)
+**Компонент:** js (`crates/js/src/typed_om_api.rs`)
 **Найден:** WPT-RUN-3 срез 37 (`ROADMAP.md`) — массовый прогон `css/css-typed-om`
 
 ## Механизм
@@ -11,9 +11,17 @@
 (<https://www.w3.org/TR/css-typed-om-1/>): `CSSStyleValue` (base class, only
 a `toString`), `CSSUnitValue`, `CSSKeywordValue`, a partial `CSSNumericValue`
 (a `parse`-like helper, not the real numeric-value base class), and
-`StylePropertyMap`/`ComputedStylePropertyMap` with a bare `.get()`
-(cascade-vs-inline mixing already tracked separately as BUG-387). Confirmed
-by grep — no other Typed OM identifier appears anywhere in `crates/js/`:
+the two property maps. Confirmed by grep — no other Typed OM identifier
+appears anywhere in `crates/js/`:
+
+> Update 2026-08-10: the maps themselves are no longer part of this report.
+> [BUG-387](BUG-387-FIXED.md) rebuilt them — `StylePropertyMapReadOnly`
+> (base, what `computedStyleMap()` returns) + `StylePropertyMap` (mutable),
+> each with its own source, plus `getAll`/`has`/`size`/`entries`/`keys`/
+> `values`/`forEach`/`@@iterator`. The name `ComputedStylePropertyMap`, used
+> below and in the original text of this report, no longer exists. What is
+> listed below — the value-type hierarchy and the unit factories — is
+> untouched and still the whole of this bug.
 
 - **Unit factory functions** — the `CSS` namespace has no `CSS.px()`,
   `CSS.em()`, `CSS.number()`, `CSS.deg()`, `CSS.rad()`, `CSS.grad()`,

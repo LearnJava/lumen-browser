@@ -1223,6 +1223,27 @@
   <div class="ub-row">ALPHA <span class="ub-flip">BETA</span></div>
 </div><!-- /unicode-bidi card -->
 
+<!-- zoom demo card -->
+<style>
+  .zm-card { background:#1b263b; padding:8px; border-radius:4px; }
+  .zm-wrap { display:flex; gap:8px; margin-top:6px; align-items:flex-start; }
+  /* The same box three times — only the factor differs, and it changes the
+     space the box takes, not just how it is painted. */
+  .zm-box { width:90px; height:54px; border:4px solid #2255cc; padding:6px;
+            box-sizing:border-box; background:#cc2222; }
+  .zm-box > i { display:block; width:28px; height:18px; background:#22aa55; }
+  .zm-half { zoom:0.5; }
+  .zm-pct { zoom:80%; }
+</style>
+<div class="card zm-card">
+  <h4>zoom</h4>
+  <div class="zm-wrap">
+    <div class="zm-box"><i></i></div>
+    <div class="zm-box zm-half"><i></i></div>
+    <div class="zm-box zm-pct"><i></i></div>
+  </div>
+</div><!-- /zoom card -->
+
 <!-- masonry-auto-flow demo card -->
 <style>
   .maf-card { background:#0d1b2a; padding:8px; border-radius:4px; }
