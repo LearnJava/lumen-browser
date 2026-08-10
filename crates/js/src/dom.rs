@@ -7419,193 +7419,491 @@ function _rs_make_body_stream(bodyBytes, respRef) {
     return stream;
 }
 
-// Response (Fetch Standard §2.5)
-function Response(body, init) {
-    init = init || {};
-    this.status = init.status !== undefined ? init.status : 200;
-    this.statusText = init.statusText !== undefined ? init.statusText : '';
-    this.ok = this.status >= 200 && this.status < 300;
-    // Fetch §2.5: the guard is set to 'response' before init.headers is filled in,
-    // so a page cannot smuggle Set-Cookie through the Response constructor.
-    this.headers = _lumen_headers_new(init.headers || [], 'response');
-    this.redirected = false;
-    this.type = 'default';
-    this.url = '';
-    this.bodyUsed = false;
-    var bodyBytes = (body instanceof Uint8Array) ? body
-                  : (body == null ? new Uint8Array(0) : new TextEncoder().encode(String(body)));
-    this._body = bodyBytes;
-    this.body = _rs_make_body_stream(bodyBytes, this);
-}
-// _fromFetchCache — factory used by fetch() to build a Response that reads
-// the response body lazily from a per-response stream slot.
-// _lumen_stream_alloc() copies the body out of the single FetchCache slot into a
-// dedicated HashMap entry, so subsequent fetch() calls cannot clobber this body.
-Response._fromFetchCache = function(status, statusText, headers) {
-    var r = Object.create(Response.prototype);
-    // Marks the response as owning a private body copy (stream slot + stream
-    // queue), so _consumeBody never reaches for the shared FetchCache slot.
-    r._from_fetch_cache = true;
-    r.status = status;
-    r.statusText = statusText;
-    r.ok = status >= 200 && status < 300;
-    // Network path: the header list comes from the wire (Set-Cookie included), so
-    // it is filled first and only then locked behind the 'response' guard.
-    r.headers = _lumen_headers_set_guard(new Headers(headers), 'response');
-    r.redirected = false;
-    r.type = 'default';
-    r.url = '';
-    r.bodyUsed = false;
-    r._body = null; // consumed via stream slot
-    // Allocate a per-response slot — body survives until consumed or cancelled.
-    var handle = _lumen_stream_alloc();
-    r._stream_handle = handle;
-    var totalLen = _lumen_stream_length(handle);
-    var pos = 0;
-    var freed = false;
-    function freeHandle() {
-        if (!freed && handle > 0) { freed = true; _lumen_stream_free(handle); r._stream_handle = 0; }
+// ── Body mixin, Response, Request (Fetch Standard §2.3-2.6) — BUG-370 ────────
+// Both interfaces share one closure because they share the Body mixin and,
+// like Headers (BUG-369), they are WebIDL interfaces rather than ES5
+// constructors: every attribute is a read-only accessor on the prototype, every
+// operation is a prototype property, and the internal slots (byte buffer, Rust
+// stream handle, body source) live in WeakMaps the page cannot reach — so
+// JSON.stringify() on either yields {} instead of dumping the shim internals.
+//
+// The shim's own fetch()/Cache code needs two of those slots, so the closure
+// assigns them to pre-declared globals:
+//   _lumen_response_from_fetch_cache(status, statusText, headers, url)
+//        — the network-path factory: the body stays in the Rust FetchCache and
+//          is pulled lazily, so large bodies are never copied into JS eagerly;
+//   _lumen_body_source(obj)
+//        — the unserialised body a Request/Response was built from. fetch()
+//          needs it because Request.body is now a ReadableStream (Body mixin),
+//          not the raw string/FormData the caller passed.
+var _lumen_response_from_fetch_cache;
+var _lumen_body_source;
+var Response;
+var Request;
+(function() {
+    // instance → private slots. Absent ⇒ the receiver is not one of ours.
+    var RSTATE = new WeakMap();
+    var QSTATE = new WeakMap();
+    function rstate(r) {
+        var st = RSTATE.get(r);
+        if (!st) throw new TypeError('Illegal invocation: receiver is not a Response object');
+        return st;
     }
-    var stream = new ReadableStream({
-        pull: function(c) {
-            if (pos >= totalLen) { freeHandle(); c.close(); return; }
-            var size = Math.min(_RS_CHUNK, totalLen - pos);
-            var chunk = _lumen_stream_chunk(handle, pos, size);
-            c.enqueue(new Uint8Array(chunk));
-            pos += size;
-            if (pos >= totalLen) freeHandle();
-        },
-        cancel: function() { freeHandle(); pos = totalLen; }
-    });
-    var _orig = stream.getReader.bind(stream);
-    stream.getReader = function(opts) {
-        if (r.bodyUsed) throw new TypeError('body already consumed');
-        r.bodyUsed = true;
-        return _orig(opts);
-    };
-    r.body = stream;
-    return r;
-};
-Response.prototype._consumeBody = function() {
-    if (this.bodyUsed) return Promise.reject(new TypeError('body already consumed'));
-    if (this.body && this.body.locked) return Promise.reject(new TypeError('body stream is locked'));
-    this.bodyUsed = true;
-    if (this._body === null) {
-        // Body came from _fromFetchCache — read from the dedicated stream slot.
-        var h = this._stream_handle || 0;
+    function qstate(q) {
+        var st = QSTATE.get(q);
+        if (!st) throw new TypeError('Illegal invocation: receiver is not a Request object');
+        return st;
+    }
+    // WebIDL §3.7: prototype operations are {writable, enumerable, configurable},
+    // attributes are enumerable+configurable accessors with no setter.
+    function op(proto, name, fn) {
+        Object.defineProperty(proto, name, { value: fn, writable: true, enumerable: true, configurable: true });
+    }
+    function attr(proto, name, get) {
+        Object.defineProperty(proto, name, { get: get, enumerable: true, configurable: true });
+    }
+    function stat(ctor, name, fn) {
+        Object.defineProperty(ctor, name, { value: fn, writable: true, enumerable: true, configurable: true });
+    }
+
+    // Fetch §7.1 «extract a body» → {bytes, type, source}, or null for no body.
+    // `type` is the Content-Type the body implies; null when it implies none.
+    function extractBody(source) {
+        if (source === undefined || source === null) return null;
+        var bytes = null, type = null;
+        if (typeof source === 'string') {
+            bytes = new TextEncoder().encode(source);
+            type = 'text/plain;charset=UTF-8';
+        } else if (source instanceof URLSearchParams) {
+            bytes = new TextEncoder().encode(source.toString());
+            type = 'application/x-www-form-urlencoded;charset=UTF-8';
+        } else if (source instanceof FormData) {
+            var boundary = '----LumenFormBoundary' + Math.random().toString(36).slice(2, 10).toUpperCase();
+            bytes = source._toMultipart(boundary);
+            type = 'multipart/form-data; boundary=' + boundary;
+        } else if (source instanceof Blob) {
+            bytes = new Uint8Array(source._bytes);
+            if (source.type) type = source.type;
+        } else if (source instanceof ArrayBuffer) {
+            bytes = new Uint8Array(source.slice(0));
+        } else if (ArrayBuffer.isView(source)) {
+            bytes = new Uint8Array(source.buffer.slice(source.byteOffset, source.byteOffset + source.byteLength));
+        } else if (typeof source.getReader === 'function') {
+            // A ReadableStream body cannot be drained synchronously in Phase 0;
+            // it is still carried as `source` so fetch() can see what was passed.
+            bytes = new Uint8Array(0);
+        } else {
+            bytes = new TextEncoder().encode(String(source));
+            type = 'text/plain;charset=UTF-8';
+        }
+        return { bytes: bytes, type: type, source: source };
+    }
+
+    // Materialises the body bytes. `drain` frees the Rust stream slot; a peek
+    // (clone()) must leave it in place for the original to consume later.
+    function readBytes(st, drain) {
+        if (st.bytes !== null) return st.bytes;
+        var h = st.streamHandle || 0;
         if (h > 0) {
             var len = _lumen_stream_length(h);
-            var bytes = len > 0 ? new Uint8Array(_lumen_stream_chunk(h, 0, len)) : new Uint8Array(0);
-            _lumen_stream_free(h);
-            this._stream_handle = 0;
-            return Promise.resolve(bytes);
+            var out = len > 0 ? new Uint8Array(_lumen_stream_chunk(h, 0, len)) : new Uint8Array(0);
+            if (drain) { _lumen_stream_free(h); st.streamHandle = 0; }
+            return out;
         }
         // BUG-703: the per-response slot is released the moment every byte sits
-        // in this stream own queue — a body up to _RS_CHUNK drains on the eager
+        // in this stream's own queue — a body up to _RS_CHUNK drains on the eager
         // pull the ReadableStream constructor performs, i.e. before fetch() has
         // even resolved. Read the bytes back from that queue. Falling through to
         // the process-wide FetchCache slot below instead handed the response the
         // body of whatever request finished last: on a page with concurrent
-        // fetches (webpack chunk loaders, microfrontend loaders) scripts arrived
-        // as each other bodies and never registered.
-        if (this._from_fetch_cache) {
-            var q = (this.body && this.body._rs_ctrl) ? this.body._rs_ctrl._queue : [];
-            var total = 0, qi;
-            for (qi = 0; qi < q.length; qi++) { total += q[qi].length; }
+        // fetches (webpack chunk loaders) scripts arrived as each other's bodies.
+        if (st.fromFetchCache) {
+            var q = (st.stream && st.stream._rs_ctrl) ? st.stream._rs_ctrl._queue : [];
+            var total = 0, i;
+            for (i = 0; i < q.length; i++) { total += q[i].length; }
             var joined = new Uint8Array(total), off = 0;
-            for (qi = 0; qi < q.length; qi++) { joined.set(q[qi], off); off += q[qi].length; }
-            return Promise.resolve(joined);
+            for (i = 0; i < q.length; i++) { joined.set(q[i], off); off += q[i].length; }
+            return joined;
         }
-        // Fallback for legacy callers that set _body = null without a stream slot.
+        // Fallback for legacy callers that left the body in the shared slot.
         var len2 = _lumen_fetch_body_length();
-        return Promise.resolve(len2 > 0 ? new Uint8Array(_lumen_fetch_body_chunk(0, len2)) : new Uint8Array(0));
+        return len2 > 0 ? new Uint8Array(_lumen_fetch_body_chunk(0, len2)) : new Uint8Array(0);
     }
-    return Promise.resolve(this._body);
-};
-Response.prototype.text = function() {
-    return this._consumeBody().then(function(bytes) {
-        if (bytes instanceof Uint8Array) return new TextDecoder().decode(bytes);
-        return bytes == null ? '' : String(bytes);
-    });
-};
-Response.prototype.json = function() {
-    return this.text().then(function(t) { return JSON.parse(t); });
-};
-Response.prototype.arrayBuffer = function() {
-    return this._consumeBody().then(function(bytes) {
-        if (bytes instanceof Uint8Array) return bytes.buffer.slice(0);
-        return new Uint8Array(0).buffer;
-    });
-};
-Response.prototype.blob = function() {
-    return this._consumeBody().then(function(bytes) {
-        return new Blob([bytes]);
-    });
-};
-Response.prototype.clone = function() {
-    var r = new Response(this._body, {
-        status: this.status,
-        statusText: this.statusText,
-    });
-    // Fetch §2.5 «clone a response» copies the header list verbatim, so the copy is
-    // built guard-free and locked afterwards — going through the Response
-    // constructor would have the 'response' guard drop Set-Cookie on every clone.
-    r.headers = _lumen_headers_set_guard(new Headers(this.headers), 'response');
-    r.url = this.url;
-    return r;
-};
-Response.error = function() {
-    var r = new Response(null, { status: 0, statusText: '' });
-    // Fetch §2.5: a network-error response has immutable headers.
-    _lumen_headers_set_guard(r.headers, 'immutable');
-    return r;
-};
-Response.redirect = function(url, status) {
-    var r = new Response(null, { status: status || 302 });
-    r.url = String(url);
-    // Fetch §2.5: a redirect response has immutable headers.
-    _lumen_headers_set_guard(r.headers, 'immutable');
-    return r;
-};
 
-// Request (Fetch Standard §2.4) — minimal Phase 0 impl
-function Request(input, init) {
-    init = init || {};
-    // Fetch §5 «new Request(input, init)» step 6: request URL parsing is relative
-    // to the API base URL (the document base), same resolution `fetch()` applies.
-    this.url = _url_resolve(String(typeof input === 'string' ? input : (input.url || '')), _lumen_document_base_url());
-    this.method = (init.method || (typeof input === 'object' && input.method) || 'GET').toUpperCase();
-    // Fetch §5 step 12: CONNECT/TRACE/TRACK are forbidden methods.
-    if (this.method === 'CONNECT' || this.method === 'TRACE' || this.method === 'TRACK') {
-        throw new TypeError('Failed to construct Request: forbidden method ' + this.method);
+    // Fetch §2.3 «consume body»: one-shot, and a locked stream blocks it.
+    function consume(st) {
+        if (st.bodyUsed) return Promise.reject(new TypeError('body already consumed'));
+        if (st.stream && st.stream.locked) return Promise.reject(new TypeError('body stream is locked'));
+        st.bodyUsed = true;
+        return Promise.resolve(readBytes(st, true));
     }
-    // Fetch §5 step 30: the headers guard is 'request', or 'request-no-cors' when
-    // the request mode is no-cors — so a page cannot set Host/Cookie/Origin on it.
-    this.mode = init.mode || (typeof input === 'object' && input.mode) || 'cors';
-    this.headers = _lumen_headers_new(
-        init.headers || (typeof input === 'object' && input.headers) || [],
-        this.mode === 'no-cors' ? 'request-no-cors' : 'request');
-    this.body = init.body !== undefined ? init.body : null;
-    this.signal = init.signal || new AbortSignal();
-    this.credentials = init.credentials || 'same-origin';
-    this.cache = init.cache || 'default';
-    this.redirect = init.redirect || 'follow';
-    this.referrer = init.referrer || 'about:client';
-    this.integrity = init.integrity || '';
-}
-Request.prototype.clone = function() {
-    var r = new Request(this.url, {
-        method: this.method,
-        mode: this.mode,
-        body: this.body,
-        signal: this.signal,
+
+    // ── multipart/form-data + urlencoded parsing for body.formData() ─────────
+    function multipartBoundary(contentType) {
+        var params = contentType.split(';');
+        for (var i = 1; i < params.length; i++) {
+            var p = params[i].trim();
+            if (p.slice(0, 9).toLowerCase() !== 'boundary=') continue;
+            var v = p.slice(9).trim();
+            if (v.length >= 2 && v[0] === '\"' && v[v.length - 1] === '\"') v = v.slice(1, -1);
+            return v;
+        }
+        return null;
+    }
+    function contentDispositionName(head) {
+        var lines = head.split('\\r\\n');
+        for (var i = 0; i < lines.length; i++) {
+            if (lines[i].slice(0, 20).toLowerCase() !== 'content-disposition:') continue;
+            var parts = lines[i].split(';');
+            for (var j = 1; j < parts.length; j++) {
+                var p = parts[j].trim();
+                if (p.slice(0, 5).toLowerCase() !== 'name=') continue;
+                var v = p.slice(5).trim();
+                if (v.length >= 2 && v[0] === '\"' && v[v.length - 1] === '\"') v = v.slice(1, -1);
+                return v;
+            }
+        }
+        return null;
+    }
+    // Fetch §2.3 body.formData(): only urlencoded and multipart bodies parse.
+    function parseFormData(bytes, contentType) {
+        var essence = contentType.split(';')[0].trim().toLowerCase();
+        var text = new TextDecoder().decode(bytes);
+        var fd = new FormData();
+        if (essence === 'application/x-www-form-urlencoded') {
+            new URLSearchParams(text).forEach(function(v, k) { fd.append(k, v); });
+            return fd;
+        }
+        if (essence === 'multipart/form-data') {
+            var boundary = multipartBoundary(contentType);
+            if (boundary === null) throw new TypeError('multipart/form-data body has no boundary parameter');
+            var parts = text.split('--' + boundary);
+            for (var i = 1; i < parts.length; i++) {
+                var part = parts[i];
+                if (part.slice(0, 2) === '--') break; // closing delimiter
+                var sep = part.indexOf('\\r\\n\\r\\n');
+                if (sep < 0) continue;
+                var value = part.slice(sep + 4);
+                if (value.slice(-2) === '\\r\\n') value = value.slice(0, -2);
+                var name = contentDispositionName(part.slice(0, sep));
+                if (name !== null) fd.append(name, value);
+            }
+            return fd;
+        }
+        throw new TypeError('Failed to parse body as FormData: unsupported Content-Type ' + contentType);
+    }
+
+    // Installs the Body mixin (Fetch §2.3) on an interface prototype. `stateOf`
+    // resolves the receiver's private slots — the very same seven members must
+    // appear on Request and on Response.
+    function installBody(proto, stateOf) {
+        attr(proto, 'body', function() { return stateOf(this).stream; });
+        attr(proto, 'bodyUsed', function() { return stateOf(this).bodyUsed; });
+        op(proto, 'arrayBuffer', function() {
+            return consume(stateOf(this)).then(function(b) {
+                return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
+            });
+        });
+        op(proto, 'bytes', function() {
+            return consume(stateOf(this)).then(function(b) { return new Uint8Array(b); });
+        });
+        op(proto, 'blob', function() {
+            var ct = stateOf(this).headers.get('content-type');
+            return consume(stateOf(this)).then(function(b) { return new Blob([b], { type: ct || '' }); });
+        });
+        op(proto, 'text', function() {
+            return consume(stateOf(this)).then(function(b) { return new TextDecoder().decode(b); });
+        });
+        op(proto, 'json', function() {
+            return consume(stateOf(this)).then(function(b) { return JSON.parse(new TextDecoder().decode(b)); });
+        });
+        op(proto, 'formData', function() {
+            var ct = stateOf(this).headers.get('content-type') || '';
+            return consume(stateOf(this)).then(function(b) { return parseFormData(b, ct); });
+        });
+    }
+
+    // ── Response (Fetch Standard §2.6) ───────────────────────────────────────
+    // Statuses that must not carry a body, and the redirect status set.
+    function isNullBodyStatus(s) { return s === 101 || s === 103 || s === 204 || s === 205 || s === 304; }
+    var REDIRECT_STATUSES = [301, 302, 303, 307, 308];
+
+    function responseSlots(headers) {
+        return { status: 200, statusText: '', headers: headers, redirected: false,
+                 type: 'default', url: '', bodyUsed: false, bytes: new Uint8Array(0),
+                 source: null, stream: null, fromFetchCache: false, streamHandle: 0 };
+    }
+    // Wraps ready-made slots, bypassing the constructor's validation — error(),
+    // redirect(), clone() and the network factory all produce states the public
+    // constructor rejects (status 0, immutable headers, type 'error', …).
+    function rawResponse(slots) {
+        var r = Object.create(Response.prototype);
+        RSTATE.set(r, slots);
+        return r;
+    }
+
+    // `body`/`init` come off `arguments`, so Response.length is 0 (WebIDL: both
+    // arguments are optional).
+    Response = function Response() {
+        if (new.target === undefined) {
+            throw new TypeError('Failed to construct Response: please use the new operator');
+        }
+        var body = arguments[0];
+        var init = arguments[1];
+        init = (init === undefined || init === null) ? {} : Object(init);
+        var status = init.status === undefined ? 200 : Number(init.status);
+        if (!(status >= 200 && status <= 599)) {
+            throw new RangeError('Failed to construct Response: status ' + init.status + ' is outside 200-599');
+        }
+        if (body !== undefined && body !== null && isNullBodyStatus(status)) {
+            throw new TypeError('Failed to construct Response: status ' + status + ' must not carry a body');
+        }
+        // Fetch §2.6: the guard is 'response' before init.headers is filled in,
+        // so a page cannot smuggle Set-Cookie through the Response constructor.
+        var st = responseSlots(_lumen_headers_new(init.headers === undefined ? [] : init.headers, 'response'));
+        st.status = status;
+        st.statusText = init.statusText === undefined ? '' : String(init.statusText);
+        var extracted = extractBody(body);
+        if (extracted !== null) {
+            st.bytes = extracted.bytes;
+            st.source = extracted.source;
+            // Fetch §2.6 step 8: the body's implied Content-Type only fills a gap.
+            if (extracted.type !== null && !st.headers.has('content-type')) {
+                st.headers.set('content-type', extracted.type);
+            }
+        }
+        RSTATE.set(this, st);
+        // A null body stays null (`new Response().body === null`); only a real
+        // body gets a ReadableStream.
+        if (extracted !== null) st.stream = _rs_make_body_stream(st.bytes, st);
+    };
+    attr(Response.prototype, 'type', function() { return rstate(this).type; });
+    attr(Response.prototype, 'url', function() { return rstate(this).url; });
+    attr(Response.prototype, 'redirected', function() { return rstate(this).redirected; });
+    attr(Response.prototype, 'status', function() { return rstate(this).status; });
+    attr(Response.prototype, 'ok', function() { var s = rstate(this).status; return s >= 200 && s < 300; });
+    attr(Response.prototype, 'statusText', function() { return rstate(this).statusText; });
+    attr(Response.prototype, 'headers', function() { return rstate(this).headers; });
+    installBody(Response.prototype, rstate);
+    op(Response.prototype, 'clone', function() {
+        var st = rstate(this);
+        if (st.bodyUsed || (st.stream && st.stream.locked)) {
+            throw new TypeError('Failed to execute clone on Response: body is already used');
+        }
+        var bytes = readBytes(st, false);
+        // Fetch §2.6 «clone a response» copies the header list verbatim, so the
+        // copy is built guard-free and locked afterwards — going through the
+        // Response constructor would have the 'response' guard drop Set-Cookie.
+        var copy = responseSlots(_lumen_headers_set_guard(new Headers(st.headers), 'response'));
+        copy.status = st.status;
+        copy.statusText = st.statusText;
+        copy.redirected = st.redirected;
+        copy.type = st.type;
+        copy.url = st.url;
+        copy.bytes = bytes;
+        copy.source = st.source;
+        var r = rawResponse(copy);
+        if (st.stream !== null) copy.stream = _rs_make_body_stream(bytes, copy);
+        return r;
     });
-    // As in Response.clone: copy the header list verbatim (a guard-free Headers),
-    // then lock the copy behind the same guard the original carried.
-    r.headers = _lumen_headers_set_guard(new Headers(this.headers),
-        this.mode === 'no-cors' ? 'request-no-cors' : 'request');
-    return r;
-};
+    Object.defineProperty(Response.prototype, Symbol.toStringTag, { value: 'Response', configurable: true });
+    // Fetch §2.6 Response.error(): a network error — status 0, type 'error',
+    // immutable headers. Routing through the constructor (as the old shim did)
+    // hardcoded type = 'default', so `response.type === 'error'`, the canonical
+    // network-error test every CORS-aware caller uses, was never true.
+    stat(Response, 'error', function() {
+        var st = responseSlots(_lumen_headers_new([], 'immutable'));
+        st.status = 0;
+        st.type = 'error';
+        return rawResponse(st);
+    });
+    // Fetch §2.6 Response.redirect(url, status = 302): the serialised URL goes
+    // into the Location header — without it a redirect response is meaningless.
+    stat(Response, 'redirect', function(url) {
+        var status = arguments[1];
+        var s = status === undefined ? 302 : Number(status);
+        if (REDIRECT_STATUSES.indexOf(s) < 0) {
+            throw new RangeError('Failed to execute redirect on Response: ' + status + ' is not a redirect status');
+        }
+        var loc = _url_resolve(String(url), _lumen_document_base_url());
+        if (!loc) throw new TypeError('Failed to execute redirect on Response: cannot parse URL ' + url);
+        // Filled first, locked second: an immutable guard rejects every write.
+        var headers = _lumen_headers_new([], 'none');
+        headers.set('Location', loc);
+        var st = responseSlots(_lumen_headers_set_guard(headers, 'immutable'));
+        st.status = s;
+        return rawResponse(st);
+    });
+    // Fetch §2.6 Response.json(data, init) — the 2022 static factory, a
+    // different thing from the Response.prototype.json() body parser.
+    stat(Response, 'json', function(data) {
+        var text = JSON.stringify(data);
+        if (text === undefined) {
+            throw new TypeError('Failed to execute json on Response: value is not JSON-serializable');
+        }
+        // Handed over as bytes so extractBody implies no Content-Type of its own
+        // and `init.headers` keeps priority over the application/json default.
+        var r = new Response(new TextEncoder().encode(text), arguments[1]);
+        var st = RSTATE.get(r);
+        if (!st.headers.has('content-type')) st.headers.set('content-type', 'application/json');
+        return r;
+    });
+
+    // Network path: the header list comes off the wire (Set-Cookie included), so
+    // it is filled first and only then locked behind the 'response' guard.
+    // _lumen_stream_alloc() copies the body out of the single FetchCache slot
+    // into a dedicated entry, so later fetch() calls cannot clobber this body.
+    _lumen_response_from_fetch_cache = function(status, statusText, headers, url) {
+        var st = responseSlots(_lumen_headers_set_guard(new Headers(headers), 'response'));
+        st.status = status;
+        st.statusText = statusText;
+        st.url = url;
+        st.bytes = null; // consumed via the stream slot
+        st.fromFetchCache = true;
+        var r = rawResponse(st);
+        var handle = _lumen_stream_alloc();
+        st.streamHandle = handle;
+        var totalLen = _lumen_stream_length(handle);
+        var pos = 0, freed = false;
+        function freeHandle() {
+            if (!freed && handle > 0) { freed = true; _lumen_stream_free(handle); st.streamHandle = 0; }
+        }
+        var stream = new ReadableStream({
+            pull: function(c) {
+                if (pos >= totalLen) { freeHandle(); c.close(); return; }
+                var size = Math.min(_RS_CHUNK, totalLen - pos);
+                c.enqueue(new Uint8Array(_lumen_stream_chunk(handle, pos, size)));
+                pos += size;
+                if (pos >= totalLen) freeHandle();
+            },
+            cancel: function() { freeHandle(); pos = totalLen; }
+        });
+        var origGetReader = stream.getReader.bind(stream);
+        stream.getReader = function(opts) {
+            if (st.bodyUsed) throw new TypeError('body already consumed');
+            st.bodyUsed = true;
+            return origGetReader(opts);
+        };
+        st.stream = stream;
+        return r;
+    };
+
+    // ── Request (Fetch Standard §2.5) ────────────────────────────────────────
+    // Fetch §5 «normalize a method»: uppercase only these six.
+    var NORMALIZED_METHODS = ['DELETE', 'GET', 'HEAD', 'OPTIONS', 'POST', 'PUT'];
+    var FORBIDDEN_METHODS = ['CONNECT', 'TRACE', 'TRACK'];
+    var METHOD_TOKEN = /^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/;
+    function normalizeMethod(m) {
+        var s = String(m);
+        if (!METHOD_TOKEN.test(s)) {
+            throw new TypeError('Failed to construct Request: ' + s + ' is not a valid HTTP method');
+        }
+        var up = s.toUpperCase();
+        if (FORBIDDEN_METHODS.indexOf(up) >= 0) {
+            throw new TypeError('Failed to construct Request: forbidden method ' + s);
+        }
+        return NORMALIZED_METHODS.indexOf(up) >= 0 ? up : s;
+    }
+    function requestSlots() {
+        return { url: '', method: 'GET', headers: null, destination: '', referrer: 'about:client',
+                 referrerPolicy: '', mode: 'cors', credentials: 'same-origin', cache: 'default',
+                 redirect: 'follow', integrity: '', keepalive: false, signal: null,
+                 bodyUsed: false, bytes: null, source: null, stream: null,
+                 fromFetchCache: false, streamHandle: 0 };
+    }
+    // Only `input` is declared, so Request.length is 1 (WebIDL: `init` is optional).
+    Request = function Request(input) {
+        if (new.target === undefined) {
+            throw new TypeError('Failed to construct Request: please use the new operator');
+        }
+        var init = arguments[1];
+        init = (init === undefined || init === null) ? {} : Object(init);
+        // A Request input contributes every unset member; anything else is a URL.
+        var src = QSTATE.get(input) || null;
+        var st = requestSlots();
+        // Fetch §5 step 6: the request URL is parsed against the API base URL
+        // (the document base), the same resolution fetch() applies (BUG-347).
+        st.url = src !== null ? src.url : _url_resolve(String(input), _lumen_document_base_url());
+        st.mode = init.mode !== undefined ? String(init.mode) : (src !== null ? src.mode : 'cors');
+        st.credentials = init.credentials !== undefined ? String(init.credentials) : (src !== null ? src.credentials : 'same-origin');
+        st.cache = init.cache !== undefined ? String(init.cache) : (src !== null ? src.cache : 'default');
+        st.redirect = init.redirect !== undefined ? String(init.redirect) : (src !== null ? src.redirect : 'follow');
+        st.referrer = init.referrer !== undefined ? String(init.referrer) : (src !== null ? src.referrer : 'about:client');
+        st.referrerPolicy = init.referrerPolicy !== undefined ? String(init.referrerPolicy) : (src !== null ? src.referrerPolicy : '');
+        st.integrity = init.integrity !== undefined ? String(init.integrity) : (src !== null ? src.integrity : '');
+        st.keepalive = init.keepalive !== undefined ? !!init.keepalive : (src !== null ? src.keepalive : false);
+        st.signal = (init.signal !== undefined && init.signal !== null) ? init.signal
+                  : (src !== null ? src.signal : new AbortSignal());
+        // Fetch §5 steps 12-13: reject a non-token method and the three forbidden
+        // ones, and uppercase only the six normalised names (`patch` stays lower).
+        st.method = normalizeMethod(init.method !== undefined ? init.method : (src !== null ? src.method : 'GET'));
+        // Fetch §5 step 30: guard 'request', or 'request-no-cors' in no-cors mode,
+        // so a page cannot set Host/Cookie/Origin on the request.
+        st.headers = _lumen_headers_new(
+            init.headers !== undefined ? init.headers : (src !== null ? src.headers : []),
+            st.mode === 'no-cors' ? 'request-no-cors' : 'request');
+        var body = init.body !== undefined ? init.body : (src !== null ? src.source : null);
+        // Fetch §5 step 36: a GET/HEAD request cannot carry a body.
+        if (body !== undefined && body !== null && (st.method === 'GET' || st.method === 'HEAD')) {
+            throw new TypeError('Failed to construct Request: body is not allowed for ' + st.method);
+        }
+        var extracted = extractBody(body);
+        if (extracted !== null) {
+            st.bytes = extracted.bytes;
+            st.source = extracted.source;
+            if (extracted.type !== null && !st.headers.has('content-type')) {
+                st.headers.set('content-type', extracted.type);
+            }
+        } else {
+            st.bytes = new Uint8Array(0);
+        }
+        QSTATE.set(this, st);
+        if (extracted !== null) st.stream = _rs_make_body_stream(st.bytes, st);
+    };
+    attr(Request.prototype, 'url', function() { return qstate(this).url; });
+    attr(Request.prototype, 'method', function() { return qstate(this).method; });
+    attr(Request.prototype, 'headers', function() { return qstate(this).headers; });
+    attr(Request.prototype, 'destination', function() { return qstate(this).destination; });
+    attr(Request.prototype, 'referrer', function() { return qstate(this).referrer; });
+    attr(Request.prototype, 'referrerPolicy', function() { return qstate(this).referrerPolicy; });
+    attr(Request.prototype, 'mode', function() { return qstate(this).mode; });
+    attr(Request.prototype, 'credentials', function() { return qstate(this).credentials; });
+    attr(Request.prototype, 'cache', function() { return qstate(this).cache; });
+    attr(Request.prototype, 'redirect', function() { return qstate(this).redirect; });
+    attr(Request.prototype, 'integrity', function() { return qstate(this).integrity; });
+    attr(Request.prototype, 'keepalive', function() { return qstate(this).keepalive; });
+    attr(Request.prototype, 'signal', function() { return qstate(this).signal; });
+    installBody(Request.prototype, qstate);
+    op(Request.prototype, 'clone', function() {
+        var st = qstate(this);
+        if (st.bodyUsed || (st.stream && st.stream.locked)) {
+            throw new TypeError('Failed to execute clone on Request: body is already used');
+        }
+        var copy = requestSlots();
+        copy.url = st.url; copy.method = st.method; copy.destination = st.destination;
+        copy.referrer = st.referrer; copy.referrerPolicy = st.referrerPolicy;
+        copy.mode = st.mode; copy.credentials = st.credentials; copy.cache = st.cache;
+        copy.redirect = st.redirect; copy.integrity = st.integrity;
+        copy.keepalive = st.keepalive; copy.signal = st.signal;
+        copy.bytes = readBytes(st, false);
+        copy.source = st.source;
+        // As in Response.clone: copy the header list verbatim (guard-free), then
+        // lock the copy behind the same guard the original carried.
+        copy.headers = _lumen_headers_set_guard(new Headers(st.headers),
+            st.mode === 'no-cors' ? 'request-no-cors' : 'request');
+        var q = Object.create(Request.prototype);
+        QSTATE.set(q, copy);
+        if (st.stream !== null) copy.stream = _rs_make_body_stream(copy.bytes, copy);
+        return q;
+    });
+    Object.defineProperty(Request.prototype, Symbol.toStringTag, { value: 'Request', configurable: true });
+
+    _lumen_body_source = function(obj) {
+        if (obj === null || typeof obj !== 'object') return null;
+        var st = QSTATE.get(obj) || RSTATE.get(obj);
+        return st ? st.source : null;
+    };
+})();
 
 // ── FormData (XHR Spec §4 / Fetch Spec) ────────────────────────────────────
 // Stores an ordered list of (name, value) pairs. Values are always strings
@@ -7932,7 +8230,12 @@ TextDecoder.prototype.decode = function(buf, options) {
 // Supports request body: FormData → application/x-www-form-urlencoded,
 // string → text/plain;charset=UTF-8, Uint8Array/ArrayBuffer → application/octet-stream.
 // FormData → multipart/form-data with a generated boundary (Fetch spec §5.4 «extract a body»).
-function fetch(input, init) {
+// Declared under an internal name and published through defineProperty below:
+// a bare `function fetch()` at global scope lands as configurable:false, which
+// blocks every polyfill or test shim that swaps window.fetch out (BUG-370 C4).
+// Only `input` is declared, so fetch.length is 1 (WebIDL: `init` is optional).
+function _lumen_fetch(input) {
+    var init = arguments[1];
     try {
         // Fetch §4.1 step 13: an already-aborted signal rejects immediately with
         // its reason. Lumen's fetch is synchronous, so this pre-flight check is
@@ -7963,8 +8266,11 @@ function fetch(input, init) {
         var _fetchPriority = (init && init.priority) ? String(init.priority) : 'auto';
         if (_fetchPriority !== 'high' && _fetchPriority !== 'low') { _fetchPriority = 'auto'; }
 
+        // BUG-370: a Request now exposes the Body mixin, so `input.body` is a
+        // ReadableStream — the raw string/FormData/bytes the caller handed the
+        // constructor comes back through the shim-internal _lumen_body_source.
         var reqBody = (init && init.body !== undefined && init.body !== null) ? init.body
-                    : (typeof input === 'object' && input.body ? input.body : null);
+                    : _lumen_body_source(input);
 
         // AbortSignal.timeout(ms) deadline is enforced natively (the JS thread is
         // parked in the synchronous fetch, so the JS setTimeout can't fire): a
@@ -8076,9 +8382,7 @@ function fetch(input, init) {
                         }
                         var ahdrs = [];
                         for (var i = 0; i + 1 < arawHeaders.length; i += 2) { ahdrs.push([arawHeaders[i], arawHeaders[i + 1]]); }
-                        var aresp = Response._fromFetchCache(astatus, astatusText, ahdrs);
-                        aresp.url = url;
-                        resolve(aresp);
+                        resolve(_lumen_response_from_fetch_cache(astatus, astatusText, ahdrs, url));
                     });
                 }
                 setTimeout(poll, 0);
@@ -8121,13 +8425,16 @@ function fetch(input, init) {
         }
         // Use lazy Rust-side chunk reading: body stays in Rust FetchCache until consumed.
         // This avoids copying large response bodies into JS memory at response construction.
-        var resp = Response._fromFetchCache(status, statusText, hdrs);
-        resp.url = url;
-        return Promise.resolve(resp);
+        return Promise.resolve(_lumen_response_from_fetch_cache(status, statusText, hdrs, url));
     } catch(e) {
         return Promise.reject(e);
     }
 }
+// WebIDL §3.7: an operation on the global object is writable/enumerable/configurable.
+Object.defineProperty(_lumen_fetch, 'name', { value: 'fetch', configurable: true });
+Object.defineProperty(globalThis, 'fetch', {
+    value: _lumen_fetch, writable: true, enumerable: true, configurable: true,
+});
 
 // ── WebSocket API (RFC 6455 §§3–7) ─────────────────────────────────────────
 // Phase 0 model: synchronous connect; background recv thread queues events;
@@ -21105,6 +21412,304 @@ mod tests {
             assert_eq!(r, lumen_core::JsValue::String("GET".into()));
         }
 
+        // ── BUG-370: Request/Response as WebIDL interfaces ───────────────────────
+
+        /// A1: `Request` includes the Body mixin — the same seven members Response has.
+        #[test]
+        fn request_has_body_mixin() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var q = new Request('https://e.example/x', {method: 'POST', body: 'hi'}); \
+                     ['arrayBuffer','blob','bytes','formData','json','text'] \
+                        .every(function(m) { return typeof q[m] === 'function'; }) \
+                     && q.bodyUsed === false && q.body instanceof ReadableStream",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// A1: the mixin actually reads the body the constructor was given.
+        #[test]
+        fn request_text_returns_body() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var got = null; \
+                 new Request('https://e.example/x', {method: 'POST', body: 'payload'}) \
+                    .text().then(function(t) { got = t; });",
+            )
+            .unwrap();
+            let r = rt.eval("got").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("payload".into()));
+        }
+
+        /// A1: `keepalive`/`destination` are attributes, not `undefined`.
+        #[test]
+        fn request_keepalive_and_destination_defaults() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var q = new Request('https://e.example/x'); \
+                     q.keepalive === false && q.destination === ''",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// A3: both constructors require `new`, and `Request.length` is 1.
+        #[test]
+        fn request_and_response_require_new() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "function threw(f) { try { f(); return false; } catch (e) { return e instanceof TypeError; } } \
+                     threw(function() { Request('https://e.example/x'); }) \
+                     && threw(function() { Response(); }) \
+                     && Request.length === 1 && Response.length === 0",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// A3: Fetch §5 step 36 — a GET/HEAD request cannot carry a body.
+        #[test]
+        fn request_get_with_body_throws() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "try { new Request('https://e.example/x', {body: 'b'}); false; } \
+                     catch (e) { e instanceof TypeError; }",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// Fetch §5 «normalize a method»: only the six known names uppercase.
+        #[test]
+        fn request_method_normalisation_is_spec_scoped() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "new Request('https://e.example/x', {method: 'post'}).method + '|' + \
+                     new Request('https://e.example/x', {method: 'patch'}).method",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("POST|patch".into()));
+        }
+
+        /// B1: `Response.json(data, init)` — the static factory (spec since 2022).
+        #[test]
+        fn response_static_json_builds_json_response() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var got = null; \
+                 var r = Response.json({a: 1}); \
+                 var ct = r.headers.get('content-type'); \
+                 r.text().then(function(t) { got = t + '|' + ct; });",
+            )
+            .unwrap();
+            let r = rt.eval("got").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("{\"a\":1}|application/json".into()));
+        }
+
+        /// B2: `Response.error()` is a network error — `type === 'error'`.
+        #[test]
+        fn response_error_type_is_error() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var r = Response.error(); \
+                     r.type === 'error' && r.status === 0 && r.ok === false && r.body === null",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// B3: `Response.redirect()` sets `Location` and rejects a non-redirect code.
+        #[test]
+        fn response_redirect_sets_location_and_validates_status() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var r = Response.redirect('https://e.example/', 301); \
+                     var bad = false; \
+                     try { Response.redirect('https://e.example/', 200); } \
+                     catch (e) { bad = e instanceof RangeError; } \
+                     r.headers.get('Location') === 'https://e.example/' && r.status === 301 && bad",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// B4: status range and null-body statuses are validated.
+        #[test]
+        fn response_constructor_validates_status_and_body() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "function err(f) { try { f(); return ''; } catch (e) { return e.constructor.name; } } \
+                     err(function() { new Response(null, {status: 1000}); }) === 'RangeError' \
+                     && err(function() { new Response('b', {status: 204}); }) === 'TypeError' \
+                     && new Response(null, {status: 299}).ok === true \
+                     && new Response(null, {status: 300}).ok === false",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// B5: the body's implied Content-Type fills the header when init has none.
+        #[test]
+        fn response_derives_content_type_from_body() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "new Response('x').headers.get('content-type') + '|' + \
+                     new Response(new URLSearchParams('a=1')).headers.get('content-type') + '|' + \
+                     new Response('x', {headers: {'Content-Type': 'text/html'}}).headers.get('content-type')",
+                )
+                .unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String(
+                    "text/plain;charset=UTF-8|application/x-www-form-urlencoded;charset=UTF-8|text/html".into()
+                )
+            );
+        }
+
+        /// B6: `formData()` and `bytes()` complete the Body mixin on Response.
+        #[test]
+        fn response_form_data_parses_urlencoded_body() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var got = null; \
+                 new Response(new URLSearchParams('a=1&b=two')).formData() \
+                    .then(function(fd) { got = fd.get('a') + '/' + fd.get('b'); });",
+            )
+            .unwrap();
+            let r = rt.eval("got").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("1/two".into()));
+        }
+
+        /// B6: a multipart body round-trips through FormData → Response → formData().
+        #[test]
+        fn response_form_data_parses_multipart_body() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var got = null; \
+                 var fd = new FormData(); fd.append('k', 'v'); \
+                 new Response(fd).formData().then(function(out) { got = out.get('k'); });",
+            )
+            .unwrap();
+            let r = rt.eval("got").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("v".into()));
+        }
+
+        /// B6: `bytes()` hands back a Uint8Array of the body.
+        #[test]
+        fn response_bytes_returns_uint8array() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var got = null; \
+                 new Response('hi').bytes().then(function(b) { \
+                     got = (b instanceof Uint8Array) + ':' + b[0] + ',' + b[1]; });",
+            )
+            .unwrap();
+            let r = rt.eval("got").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("true:104,105".into()));
+        }
+
+        /// C1: attributes are read-only accessors on the prototype, not own data
+        /// properties — `req.method = 'DELETE'` must not rewrite the request.
+        #[test]
+        fn request_attributes_live_on_the_prototype() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var q = new Request('https://e.example/x', {method: 'POST'}); \
+                     q.method = 'DELETE'; \
+                     var d = Object.getOwnPropertyDescriptor(Request.prototype, 'method'); \
+                     q.method === 'POST' && Object.getOwnPropertyNames(q).length === 0 \
+                     && typeof d.get === 'function' && d.set === undefined",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// C2: internal slots are unreachable, so JSON.stringify yields `{}` on both
+        /// (it used to dump the whole request and *throw* on a Response's stream).
+        #[test]
+        fn request_and_response_stringify_to_empty_object() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "JSON.stringify(new Request('https://e.example/x')) + '|' + \
+                     JSON.stringify(new Response('x'))",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("{}|{}".into()));
+        }
+
+        /// C3: `Symbol.toStringTag` names the interface.
+        #[test]
+        fn request_and_response_have_to_string_tag() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "Object.prototype.toString.call(new Request('https://e.example/x')) + '|' + \
+                     Object.prototype.toString.call(new Response())",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("[object Request]|[object Response]".into()));
+        }
+
+        /// C4: WebIDL global operations are configurable, so a polyfill can swap
+        /// `fetch` out; the bare function declaration made it non-configurable.
+        #[test]
+        fn fetch_global_is_configurable() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var d = Object.getOwnPropertyDescriptor(globalThis, 'fetch'); \
+                     d.writable === true && d.enumerable === true && d.configurable === true \
+                     && fetch.name === 'fetch' && fetch.length === 1",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// A `Request` built from a `Request` inherits the body, and cloning a
+        /// consumed body is a TypeError (Fetch §2.3).
+        #[test]
+        fn request_clone_rejects_used_body() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var q = new Request('https://e.example/x', {method: 'POST', body: 'b'}); \
+                     var copy = new Request(q); \
+                     q.text().then(function() {}); \
+                     var threw = false; \
+                     try { q.clone(); } catch (e) { threw = e instanceof TypeError; } \
+                     copy.method === 'POST' && threw",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// `Response.clone()` still yields two independently readable bodies.
+        #[test]
+        fn response_clone_bodies_are_independent() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var got = null; \
+                 var r = new Response('shared'); \
+                 var c = r.clone(); \
+                 Promise.all([r.text(), c.text()]).then(function(v) { got = v.join('|'); });",
+            )
+            .unwrap();
+            let r = rt.eval("got").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("shared|shared".into()));
+        }
+
         #[test]
         fn window_has_abort_controller() {
             let rt = v8_runtime_with_dom(make_doc());
@@ -30545,6 +31150,32 @@ mod tests {
             rt
         }
 
+        /// Mock provider whose body is the URL's last path segment, so two
+        /// responses in flight at once can be told apart by their bodies.
+        struct EchoUrlFetch;
+        impl lumen_core::ext::JsFetchProvider for EchoUrlFetch {
+            fn fetch_sync(&self, url: &str, _method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+                let tail = url.rsplit('/').next().unwrap_or("");
+                Ok(lumen_core::ext::JsFetchResult {
+                    status: 200,
+                    status_text: "OK".into(),
+                    headers: vec![],
+                    body: format!("body-{tail}").into_bytes(),
+                })
+            }
+            fn fetch_with_body_sync(&self, url: &str, method: &str, _content_type: &str, _body: &[u8]) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+                self.fetch_sync(url, method)
+            }
+        }
+
+        /// Runtime whose fetch provider echoes the requested URL back as the body.
+        fn v8_runtime_with_echo_fetch() -> V8JsRuntime {
+            let rt = V8JsRuntime::new().unwrap();
+            let p: Arc<dyn lumen_core::ext::JsFetchProvider> = Arc::new(EchoUrlFetch);
+            rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, false).unwrap();
+            rt
+        }
+
         #[test]
         fn readable_stream_constructor_on_window() {
             let rt = v8_runtime_with_dom(make_doc());
@@ -30909,27 +31540,22 @@ mod tests {
         fn fetch_cache_response_reads_own_stream_queue_not_global_slot() {
             // BUG-703: a body up to _RS_CHUNK is drained into the stream's own
             // queue by the eager pull in the ReadableStream constructor, which
-            // frees the per-response slot (`_stream_handle` → 0). `_consumeBody`
-            // must then read that queue; falling through to the process-wide
-            // FetchCache slot handed the response another request's body.
-            let rt = v8_runtime_with_dom(make_doc());
+            // frees the per-response slot. Consuming the body must then read that
+            // queue; falling through to the process-wide FetchCache slot handed
+            // the response the body of whatever request finished last. Two fetches
+            // are issued before either body is read — with the fallback in play the
+            // first response reports the second one's body.
+            let rt = v8_runtime_with_echo_fetch();
             rt.eval(
-                "var r = Object.create(Response.prototype); \
-                 r._from_fetch_cache = true; \
-                 r._body = null; \
-                 r._stream_handle = 0; \
-                 r.bodyUsed = false; \
-                 r.body = new ReadableStream({ start: function(c) { \
-                     c.enqueue(new TextEncoder().encode('chunk-a')); \
-                     c.enqueue(new TextEncoder().encode('chunk-b')); \
-                     c.close(); \
-                 } }); \
-                 var got = null; \
-                 r.text().then(function(t) { got = t; });",
+                "var first = null, second = null; \
+                 var a = fetch('https://example.com/one'); \
+                 var b = fetch('https://example.com/two'); \
+                 a.then(function(r) { return r.text(); }).then(function(t) { first = t; }); \
+                 b.then(function(r) { return r.text(); }).then(function(t) { second = t; });",
             )
             .unwrap();
-            let r = rt.eval("got === 'chunk-achunk-b'").unwrap();
-            assert_eq!(r, lumen_core::JsValue::Bool(true));
+            let r = rt.eval("first + '|' + second").unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("body-one|body-two".into()));
         }
 
         #[test]
