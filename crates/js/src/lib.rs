@@ -99,6 +99,10 @@ pub mod dom_parser;
 pub mod gc_policy;
 pub mod svg;
 pub mod file_input;
+/// BUG-378: sealing pass that hides the engine's internal `_lumen_*` global
+/// names from enumeration and freezes the function-valued ones.
+#[cfg(feature = "v8-backend")]
+mod internal_globals;
 pub mod tc39_proposals;
 pub mod es2026_proposals;
 pub mod async_context;
