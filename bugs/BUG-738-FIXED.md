@@ -4,7 +4,7 @@
 **Компонент:** layout (`crates/engine/layout/src/box_tree.rs` —
 `max_content_outer_width`, `min_content_outer_width_of_contents`,
 `preferred_inline_block_width`)
-**Найден и исправлен:** P3 при разборе [BUG-733](BUG-733-OPEN.md), 2026-08-10
+**Найден и исправлен:** P3 при разборе [BUG-733](BUG-733-FIXED.md), 2026-08-10
 
 ## Симптом
 
@@ -40,7 +40,7 @@ containing block и выкладывается отдельным проходо
 выпадающую мега-панель `div.ab2vFRdG2 { position: absolute }`, внутри которой
 `div.ib2vFRdG2 { width: 1104px }`. Пункт «Частным лицам» раздувался с ширины
 своей подписи (140 px) до 1104 px, четыре таких пункта не помещались в строку —
-это и был пункт 1 [BUG-733](BUG-733-OPEN.md). После фикса (вместе с
+это и был пункт 1 [BUG-733](BUG-733-FIXED.md). После фикса (вместе с
 [BUG-737](BUG-737-FIXED.md)) — четыре пункта в строку по 140.3 / 83.9 / 93.3 /
 54.6 px в `<ul>` шириной 1042 px.
 

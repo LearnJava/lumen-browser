@@ -7,8 +7,8 @@ Block rect=(0.00, 0.00, 1024.00, 721.00)
       Skip rect=(0.00, 1.00, 0.00, 0.00)
       Block rect=(1.00, 1.00, 1022.00, 718.00) bg=#f5f5f5ff display=flex w=1022.00 h=718.00 overflow=hidden/hidden m=(1.00, 1.00, 1.00, 1.00)
         Block rect=(1.00, 1.00, 490.56, 150.00) bg=#ffffffff position=relative display=flex w=48.00% h=150.00 box-sizing=border-box p=(8.00, 8.00, 8.00, 8.00) bw=(1.00,1.00,1.00,1.00) bs=(solid,solid,solid,solid) bc=(#ddddddff,#ddddddff,#ddddddff,#ddddddff)
-          Block rect=(2.00, -18.00, 488.56, 14.40) position=absolute display=inline color=#666666ff fs=12.00
-            InlineRun rect=(2.00, -18.00, 488.56, 14.40) display=inline color=#666666ff fs=12.00
+          Block rect=(2.00, -18.00, 46.01, 14.40) position=absolute display=inline color=#666666ff fs=12.00
+            InlineRun rect=(2.00, -18.00, 46.01, 14.40) display=inline color=#666666ff fs=12.00
               seg[0] "flex-start" color=#666666ff fs=12.00
               line[0]:
                 frag[0] x=0.00 "flex-start"
@@ -49,8 +49,8 @@ Block rect=(0.00, 0.00, 1024.00, 721.00)
                 line[0]:
                   frag[0] x=0.00 "6"
         Block rect=(499.56, 1.00, 490.56, 150.00) bg=#ffffffff position=relative display=flex w=48.00% h=150.00 box-sizing=border-box p=(8.00, 8.00, 8.00, 8.00) bw=(1.00,1.00,1.00,1.00) bs=(solid,solid,solid,solid) bc=(#ddddddff,#ddddddff,#ddddddff,#ddddddff)
-          Block rect=(500.56, -18.00, 488.56, 14.40) position=absolute display=inline color=#666666ff fs=12.00
-            InlineRun rect=(500.56, -18.00, 488.56, 14.40) display=inline color=#666666ff fs=12.00
+          Block rect=(500.56, -18.00, 42.69, 14.40) position=absolute display=inline color=#666666ff fs=12.00
+            InlineRun rect=(500.56, -18.00, 42.69, 14.40) display=inline color=#666666ff fs=12.00
               seg[0] "flex-end" color=#666666ff fs=12.00
               line[0]:
                 frag[0] x=0.00 "flex-end"
@@ -91,8 +91,8 @@ Block rect=(0.00, 0.00, 1024.00, 721.00)
                 line[0]:
                   frag[0] x=0.00 "6"
         Block rect=(1.00, 182.50, 490.56, 150.00) bg=#ffffffff position=relative display=flex w=48.00% h=150.00 box-sizing=border-box p=(8.00, 8.00, 8.00, 8.00) bw=(1.00,1.00,1.00,1.00) bs=(solid,solid,solid,solid) bc=(#ddddddff,#ddddddff,#ddddddff,#ddddddff)
-          Block rect=(2.00, 163.50, 488.56, 14.40) position=absolute display=inline color=#666666ff fs=12.00
-            InlineRun rect=(2.00, 163.50, 488.56, 14.40) display=inline color=#666666ff fs=12.00
+          Block rect=(2.00, 163.50, 33.35, 14.40) position=absolute display=inline color=#666666ff fs=12.00
+            InlineRun rect=(2.00, 163.50, 33.35, 14.40) display=inline color=#666666ff fs=12.00
               seg[0] "center" color=#666666ff fs=12.00
               line[0]:
                 frag[0] x=0.00 "center"
@@ -133,8 +133,8 @@ Block rect=(0.00, 0.00, 1024.00, 721.00)
                 line[0]:
                   frag[0] x=0.00 "6"
         Block rect=(499.56, 182.50, 490.56, 150.00) bg=#ffffffff position=relative display=flex w=48.00% h=150.00 box-sizing=border-box p=(8.00, 8.00, 8.00, 8.00) bw=(1.00,1.00,1.00,1.00) bs=(solid,solid,solid,solid) bc=(#ddddddff,#ddddddff,#ddddddff,#ddddddff)
-          Block rect=(500.56, 163.50, 488.56, 14.40) position=absolute display=inline color=#666666ff fs=12.00
-            InlineRun rect=(500.56, 163.50, 488.56, 14.40) display=inline color=#666666ff fs=12.00
+          Block rect=(500.56, 163.50, 81.39, 14.40) position=absolute display=inline color=#666666ff fs=12.00
+            InlineRun rect=(500.56, 163.50, 81.39, 14.40) display=inline color=#666666ff fs=12.00
               seg[0] "space-between" color=#666666ff fs=12.00
               line[0]:
                 frag[0] x=0.00 "space-between"
@@ -175,8 +175,8 @@ Block rect=(0.00, 0.00, 1024.00, 721.00)
                 line[0]:
                   frag[0] x=0.00 "6"
         Block rect=(1.00, 364.00, 490.56, 150.00) bg=#ffffffff position=relative display=flex w=48.00% h=150.00 box-sizing=border-box p=(8.00, 8.00, 8.00, 8.00) bw=(1.00,1.00,1.00,1.00) bs=(solid,solid,solid,solid) bc=(#ddddddff,#ddddddff,#ddddddff,#ddddddff)
-          Block rect=(2.00, 345.00, 488.56, 14.40) position=absolute display=inline color=#666666ff fs=12.00
-            InlineRun rect=(2.00, 345.00, 488.56, 14.40) display=inline color=#666666ff fs=12.00
+          Block rect=(2.00, 345.00, 73.38, 14.40) position=absolute display=inline color=#666666ff fs=12.00
+            InlineRun rect=(2.00, 345.00, 73.38, 14.40) display=inline color=#666666ff fs=12.00
               seg[0] "space-around" color=#666666ff fs=12.00
               line[0]:
                 frag[0] x=0.00 "space-around"
@@ -217,8 +217,8 @@ Block rect=(0.00, 0.00, 1024.00, 721.00)
                 line[0]:
                   frag[0] x=0.00 "6"
         Block rect=(499.56, 364.00, 490.56, 150.00) bg=#ffffffff position=relative display=flex w=48.00% h=150.00 box-sizing=border-box p=(8.00, 8.00, 8.00, 8.00) bw=(1.00,1.00,1.00,1.00) bs=(solid,solid,solid,solid) bc=(#ddddddff,#ddddddff,#ddddddff,#ddddddff)
-          Block rect=(500.56, 345.00, 488.56, 14.40) position=absolute display=inline color=#666666ff fs=12.00
-            InlineRun rect=(500.56, 345.00, 488.56, 14.40) display=inline color=#666666ff fs=12.00
+          Block rect=(500.56, 345.00, 70.71, 14.40) position=absolute display=inline color=#666666ff fs=12.00
+            InlineRun rect=(500.56, 345.00, 70.71, 14.40) display=inline color=#666666ff fs=12.00
               seg[0] "space-evenly" color=#666666ff fs=12.00
               line[0]:
                 frag[0] x=0.00 "space-evenly"
@@ -259,8 +259,8 @@ Block rect=(0.00, 0.00, 1024.00, 721.00)
                 line[0]:
                   frag[0] x=0.00 "6"
         Block rect=(1.00, 545.50, 490.56, 150.00) bg=#ffffffff position=relative display=flex w=48.00% h=150.00 box-sizing=border-box p=(8.00, 8.00, 8.00, 8.00) bw=(1.00,1.00,1.00,1.00) bs=(solid,solid,solid,solid) bc=(#ddddddff,#ddddddff,#ddddddff,#ddddddff)
-          Block rect=(2.00, 526.50, 488.56, 14.40) position=absolute display=inline color=#666666ff fs=12.00
-            InlineRun rect=(2.00, 526.50, 488.56, 14.40) display=inline color=#666666ff fs=12.00
+          Block rect=(2.00, 526.50, 36.01, 14.40) position=absolute display=inline color=#666666ff fs=12.00
+            InlineRun rect=(2.00, 526.50, 36.01, 14.40) display=inline color=#666666ff fs=12.00
               seg[0] "stretch" color=#666666ff fs=12.00
               line[0]:
                 frag[0] x=0.00 "stretch"

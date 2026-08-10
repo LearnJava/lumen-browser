@@ -10367,6 +10367,40 @@ fn lay_out_multicol_children(
     cur_y - content_y
 }
 
+/// CSS 2.1 §10.3.7 — does an absolutely positioned box resolve its `auto`
+/// width by shrink-to-fit (BUG-745), or does it keep the legacy
+/// "stretch to the containing block" behaviour?
+///
+/// Shrink-to-fit is the spec rule for *non-replaced* boxes, so the replaced
+/// kinds (`<img>`, `<video>`, `<canvas>`, `<iframe>`, form controls) are
+/// excluded: §10.3.8 sizes them from their intrinsic dimensions instead, and
+/// their content is invisible to [`max_content_outer_width`] (an image's
+/// intrinsic width lives in `BoxKind::Image`, not in child boxes), so measuring
+/// them here would collapse them to their padding+border.
+///
+/// Two more kinds opt out because the intrinsic-width machinery does not model
+/// them:
+/// * `BoxKind::Table` already shrink-to-fits itself in `lay_out_inner` from
+///   `table_intrinsic_content_width` (column widths + border-spacing), which the
+///   block "widest child" rule of [`max_content_outer_width`] cannot reproduce;
+/// * `display: grid`/`inline-grid` — a grid's max-content width is the sum of
+///   its column max-contents plus gaps (the analogue of `flex_row_intrinsic_sum`
+///   for the row axis), and no such rule exists yet, so the block rule would
+///   under-measure a multi-column grid into one column's width. Stretching is
+///   the safer failure mode until that rule lands.
+fn abs_box_shrinks_to_fit(b: &LayoutBox) -> bool {
+    !matches!(
+        b.kind,
+        BoxKind::Skip
+            | BoxKind::Image { .. }
+            | BoxKind::Video { .. }
+            | BoxKind::Canvas { .. }
+            | BoxKind::Iframe { .. }
+            | BoxKind::FormControl { .. }
+            | BoxKind::Table
+    ) && !matches!(b.style.display, Display::Grid | Display::InlineGrid)
+}
+
 /// Positions absolutely/fixed-positioned deferred children of `parent`.
 /// Called after parent's height is finalized so `my_pcb` is complete.
 fn lay_out_abs_children(
@@ -10413,19 +10447,43 @@ fn lay_out_abs_children(
             c_em, cb.height, viewport,
         );
 
+        let c_ml = cs.margin_left.resolve_or_zero(c_em, cb.width, viewport);
+        let c_mr = cs.margin_right.resolve_or_zero(c_em, cb.width, viewport);
+        let c_mt = cs.margin_top.resolve_or_zero(c_em, cb.height, viewport);
+        let c_mb = cs.margin_bottom.resolve_or_zero(c_em, cb.height, viewport);
+
         // Доступная ширина для layout абсолютного child.
         let avail_w = if left.is_some() && right.is_some() && cs.width.is_none() {
+            // Обе инсеты заданы, ширина `auto` → ширина выводится из зазора
+            // между ними (CSS Position L3 §6), shrink-to-fit не применяется.
             (cb.width - left.unwrap_or(0.0) - right.unwrap_or(0.0)).max(0.0)
+        } else if cs.width.is_none() && abs_box_shrinks_to_fit(&parent.children[idx]) {
+            // CSS 2.1 §10.3.7 (BUG-745): у абсолютного не-replaced бокса с
+            // `width: auto` и хотя бы одной `auto`-инсетой используемая ширина —
+            // shrink-to-fit = min(max(min-content, available), max-content), а не
+            // ширина содержащего блока. Разница видна не только в самой ширине:
+            // ветка `right` ниже отсчитывает x от правого края содержащего блока
+            // назад на `child.rect.width`, поэтому растянутый бокс с
+            // `right: 16px` уезжал за левый край (`x = -16, w = 1024` вместо
+            // карточки в углу) — форма «тост/тултип/cookie-баннер, приклеенный
+            // к углу», пункт 4 BUG-733 на `tbank.ru`.
+            //
+            // `available` — свободное место содержащего блока за вычетом
+            // заданных инсет и margin'ов; max/min-content уже включают
+            // padding+border самого бокса (border-box), поэтому margin'ы
+            // возвращаются обратно: `lay_out` трактует свой `available_width`
+            // как margin-box.
+            let child = &parent.children[idx];
+            let free =
+                (cb.width - left.unwrap_or(0.0) - right.unwrap_or(0.0) - c_ml - c_mr).max(0.0);
+            let max_c = max_content_outer_width(child, measurer, viewport);
+            let min_c = min_content_outer_width(child, measurer, viewport);
+            max_c.min(min_c.max(free)) + c_ml + c_mr
         } else {
             cb.width
         };
 
         lay_out(&mut parent.children[idx], 0.0, 0.0, avail_w, None, measurer, viewport, my_pcb, hp, false);
-
-        let c_ml = cs.margin_left.resolve_or_zero(c_em, cb.width, viewport);
-        let c_mr = cs.margin_right.resolve_or_zero(c_em, cb.width, viewport);
-        let c_mt = cs.margin_top.resolve_or_zero(c_em, cb.height, viewport);
-        let c_mb = cs.margin_bottom.resolve_or_zero(c_em, cb.height, viewport);
 
         // CSS Position L3 §6: an abs-pos box with both `top` and `bottom` non-auto
         // and `height: auto` resolves its used height to fill the inset gap. Mirror of
@@ -15681,6 +15739,85 @@ mod tests {
         let root = super::layout(&doc, &sheet, Size::new(1024.0, 720.0));
         let bg = find_by_id_all(&root, &doc, "bg").expect("bg not found");
         assert_eq!(bg.rect.height, 40.0, "explicit height must win, got {}", bg.rect.height);
+    }
+
+    /// Lays out `#card` (abs-positioned, styled by `card_css`) inside a 400×200
+    /// relatively-positioned containing block holding one `inner_w`-wide child,
+    /// and returns the card's `(x, width)`. The child carries the whole
+    /// max-content contribution, so the result does not depend on a text
+    /// measurer being installed.
+    fn abs_card_x_w(card_css: &str, inner_w: &str) -> (f32, f32) {
+        let html = r#"<div id="cb"><div id="card"><div id="inner"></div></div></div>"#;
+        let css = format!(
+            "body {{ margin: 0 }} #cb {{ position: relative; width: 400px; height: 200px; }} \
+             #card {{ position: absolute; {card_css} }} \
+             #inner {{ width: {inner_w}; height: 20px; }}"
+        );
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(&css);
+        let root = super::layout(&doc, &sheet, Size::new(1024.0, 720.0));
+        let card = find_by_id_all(&root, &doc, "card").expect("card not found");
+        (card.rect.x, card.rect.width)
+    }
+
+    #[test]
+    fn bug745_abs_auto_width_shrinks_to_fit() {
+        // CSS 2.1 §10.3.7: `width: auto` + at least one `auto` inset → shrink-to-fit,
+        // not the containing block's width. With `right` given, the stretched width
+        // also pushed the box off the left edge, since x counts back from the cb's
+        // right edge by the used width.
+        let (x, w) = abs_card_x_w("right: 16px; top: 8px;", "60px");
+        assert_eq!(w, 60.0, "shrink-to-fit width must be 60, got {w}");
+        assert_eq!(x, 324.0, "x must be 400 - 16 - 60 = 324, got {x}");
+
+        let (x, w) = abs_card_x_w("left: 16px; top: 8px;", "60px");
+        assert_eq!(w, 60.0, "shrink-to-fit width must be 60, got {w}");
+        assert_eq!(x, 16.0, "x must be the left inset, got {x}");
+
+        // No insets at all: still shrink-to-fit (both insets are `auto`), the box
+        // just stays at its static position.
+        let (_, w) = abs_card_x_w("", "60px");
+        assert_eq!(w, 60.0, "static-position abs box must shrink to fit, got {w}");
+    }
+
+    #[test]
+    fn bug745_shrink_to_fit_capped_by_available_space() {
+        // shrink-to-fit = min(max(min-content, available), max-content). Three 200px
+        // inline-blocks give max-content 600 (one line) and min-content 200 (one per
+        // line), so the used width is the free space 400 − 16 = 384 — neither the
+        // 600px max-content nor the full 400px containing block.
+        let html = r#"<div id="cb"><div id="card"><span class="i"></span><span class="i"></span><span class="i"></span></div></div>"#;
+        let css = "body { margin: 0 } #cb { position: relative; width: 400px; height: 200px; } \
+                   #card { position: absolute; right: 16px; top: 8px; } \
+                   .i { display: inline-block; width: 200px; height: 20px; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(1024.0, 720.0));
+        let card = find_by_id_all(&root, &doc, "card").expect("card not found");
+        assert_eq!(card.rect.width, 384.0, "width must clamp to the free space 384, got {}", card.rect.width);
+        assert_eq!(card.rect.x, 0.0, "x must be 400 - 16 - 384 = 0, got {}", card.rect.x);
+    }
+
+    #[test]
+    fn bug745_shrink_to_fit_never_below_min_content() {
+        // The `max(min-content, available)` half of the formula: an unbreakable 1000px
+        // child overflows the 384px free space rather than being squeezed into it.
+        let (_, w) = abs_card_x_w("right: 16px; top: 8px;", "1000px");
+        assert_eq!(w, 1000.0, "min-content must not be squeezed, got {w}");
+    }
+
+    #[test]
+    fn bug745_explicit_width_and_both_insets_unaffected() {
+        // Both "anchored" branches keep their pre-BUG-745 behaviour: an explicit
+        // width wins over shrink-to-fit, and both insets given resolve the width
+        // from the gap between them.
+        let (x, w) = abs_card_x_w("right: 16px; top: 8px; width: 200px;", "60px");
+        assert_eq!(w, 200.0, "explicit width must win, got {w}");
+        assert_eq!(x, 184.0, "x must be 400 - 16 - 200 = 184, got {x}");
+
+        let (x, w) = abs_card_x_w("left: 10px; right: 10px; top: 8px;", "60px");
+        assert_eq!(w, 380.0, "both insets must fill the gap, got {w}");
+        assert_eq!(x, 10.0, "x must be the left inset, got {x}");
     }
 
     #[test]

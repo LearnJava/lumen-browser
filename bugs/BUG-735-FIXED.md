@@ -3,7 +3,7 @@
 **Статус:** FIXED 2026-08-10
 **Компонент:** shell (`crates/shell/src/main.rs` — `spawn_image_requests` →
 `LoadEvent::ImageDecoded` → его арм в `user_event`)
-**Найден:** P3 при разборе [BUG-733](BUG-733-OPEN.md), 2026-08-09
+**Найден:** P3 при разборе [BUG-733](BUG-733-FIXED.md), 2026-08-09
 **Исправлен:** P3, 2026-08-10
 
 ## Симптом
