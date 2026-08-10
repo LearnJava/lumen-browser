@@ -16,7 +16,8 @@ use crate::box_tree::{BoxKind, LayoutBox};
 use crate::style::{
     matches_complex, AlignValue, BorderStyle, BoxSizing, ClearSide, Color, CssColor,
     Cursor, Direction, Display, FilterFn, FloatSide, FontStretch, FontStyle, FontWeight,
-    FontVariantCaps, Isolation, Length, LengthOrAuto, MixBlendMode, Overflow, OutlineColor,
+    FontVariantCaps, FontVariantEmoji, Isolation, Length, LengthOrAuto, MixBlendMode, Overflow,
+    OutlineColor,
     OutlineStyle, PointerEvents, Position, TextAlign, TextDecorationLine, TextDecorationStyle,
     TextEmphasisStyle, TextOverflow, TextTransform, TransformFn, Visibility, WhiteSpace,
     WhiteSpaceCollapse,
@@ -734,10 +735,22 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         FontStyle::Italic => "italic",
         FontStyle::Oblique => "oblique",
     }.into());
-    // CSS Fonts L4 §6.10: shorthand сериализуется значением реализованной
-    // caps-компоненты — остальные longhand-ы всегда в initial.
-    m.insert("font-variant".into(), style.font_variant_caps.as_str().into());
+    // CSS Fonts L4 §6.10: shorthand сериализуется значениями реализованных
+    // компонент (caps + emoji) — остальные longhand-ы всегда в initial.
+    // Обе в initial → `normal`; иначе — только не-initial части, в порядке
+    // грамматики.
+    m.insert("font-variant".into(), {
+        let mut parts: Vec<&str> = Vec::with_capacity(2);
+        if style.font_variant_caps != FontVariantCaps::Normal {
+            parts.push(style.font_variant_caps.as_str());
+        }
+        if style.font_variant_emoji != FontVariantEmoji::Normal {
+            parts.push(style.font_variant_emoji.as_str());
+        }
+        if parts.is_empty() { "normal".to_string() } else { parts.join(" ") }
+    });
     m.insert("font-variant-caps".into(), style.font_variant_caps.as_str().into());
+    m.insert("font-variant-emoji".into(), style.font_variant_emoji.as_str().into());
     m.insert("font-stretch".into(), {
         let pct = style.font_stretch.0 as f32 / 10.0;
         if pct.fract() == 0.0 { format!("{}%", pct as i64) } else { format!("{}%", pct) }
@@ -815,6 +828,12 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     // ── Overflow / stacking ───────────────────────────────────────
     m.insert("overflow-x".into(), overflow_to_css(style.overflow_x).into());
     m.insert("overflow-y".into(), overflow_to_css(style.overflow_y).into());
+    // CSS Scrollbars L1 §3 — `auto | <color>{2}`. The field is `None` for
+    // `auto`, so an unstyled page answers `"auto"`, not `""` (BUG-388).
+    m.insert("scrollbar-color".into(), match style.scrollbar_color {
+        None => "auto".to_string(),
+        Some((thumb, track)) => format!("{} {}", color_to_css(thumb), color_to_css(track)),
+    });
     m.insert("z-index".into(), match style.z_index {
         None => "auto".into(),
         Some(n) => n.to_string(),
@@ -1456,5 +1475,49 @@ mod tests {
         // Only "#foo" matches; the rule appears once with the matching selector.
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].selector, "#foo");
+    }
+
+    // ── computed_style_to_map: BUG-388 additions ─────────────────────────────
+
+    /// `computed_style_to_map` for the first `<div>` box of the laid-out page.
+    fn div_computed_map(html: &str, css: &str) -> HashMap<String, String> {
+        let (doc, tree) = layout_tree(html, css);
+        let b = find_box_by_selector(&tree, &doc, "div").expect("div box exists");
+        computed_style_to_map(&b.style)
+    }
+
+    #[test]
+    fn computed_map_scrollbar_color_defaults_to_auto() {
+        // Before BUG-388 the key was absent entirely, so `getComputedStyle`
+        // answered "" where every other engine answers "auto".
+        let m = div_computed_map("<div>x</div>", "");
+        assert_eq!(m.get("scrollbar-color").map(String::as_str), Some("auto"));
+    }
+
+    #[test]
+    fn computed_map_scrollbar_color_serialises_pair() {
+        let m = div_computed_map("<div>x</div>", "div { scrollbar-color: lime red; }");
+        assert_eq!(
+            m.get("scrollbar-color").map(String::as_str),
+            Some("rgb(0, 255, 0) rgb(255, 0, 0)")
+        );
+    }
+
+    #[test]
+    fn computed_map_font_variant_emoji() {
+        let m = div_computed_map("<div>x</div>", "");
+        assert_eq!(m.get("font-variant-emoji").map(String::as_str), Some("normal"));
+        let m = div_computed_map("<div>x</div>", "div { font-variant-emoji: unicode; }");
+        assert_eq!(m.get("font-variant-emoji").map(String::as_str), Some("unicode"));
+    }
+
+    #[test]
+    fn computed_map_font_variant_shorthand_joins_implemented_components() {
+        let m = div_computed_map("<div>x</div>", "");
+        assert_eq!(m.get("font-variant").map(String::as_str), Some("normal"));
+        let m = div_computed_map("<div>x</div>", "div { font-variant: small-caps unicode; }");
+        assert_eq!(m.get("font-variant").map(String::as_str), Some("small-caps unicode"));
+        let m = div_computed_map("<div>x</div>", "div { font-variant-emoji: text; }");
+        assert_eq!(m.get("font-variant").map(String::as_str), Some("text"));
     }
 }

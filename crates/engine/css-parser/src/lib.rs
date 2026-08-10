@@ -166,6 +166,7 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "font-style",
     "font-variant",
     "font-variant-caps",
+    "font-variant-emoji",
     "font-variation-settings",
     "font-weight",
     "forced-color-adjust",
