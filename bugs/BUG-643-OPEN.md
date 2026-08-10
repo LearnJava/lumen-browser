@@ -90,7 +90,7 @@ TLS-гэп раньше, чем в этот баг; находка подтве�
 `DeviceOrientationEvent.requestPermission()`, и
 `DeviceMotionEvent.requestPermission()` безусловно резолвятся в
 `'granted'` (`device_sensors.rs:30-33`, `:48-51`) без какой-либо модели
-разрешений — тот же класс «нет валидации», что и [BUG-386](BUG-386-OPEN.md)
+разрешений — тот же класс «нет валидации», что и [BUG-386](BUG-386-FIXED.md)
 (`navigator.permissions.query()`), но другой, не связанный с ним
 механизм (собственный статический метод класса, а не
 `navigator.permissions`). Не выносится в отдельный баг: спека Device

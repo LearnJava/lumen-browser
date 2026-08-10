@@ -257,7 +257,16 @@ const NOTIFICATIONS_SHIM: &str = r#"(function() {
       } catch(e) {
         result = 'denied';
       }
+      var moved = (result !== _permission);
       _permission = result;
+      // W3C Permissions §"permission state change": navigator.permissions
+      // reports 'notifications' straight off Notification.permission, so any
+      // PermissionStatus the page holds for it has to hear about the move
+      // (BUG-386). Resolved at call time, not captured at install: the
+      // Permissions shim installs after this one.
+      if (moved && typeof _lumen_permission_state_changed === 'function') {
+        try { _lumen_permission_state_changed('notifications'); } catch(e) {}
+      }
       if (typeof callback === 'function') {
         try { callback(result); } catch(e) {}
       }
@@ -568,6 +577,46 @@ Notification.requestPermission().then(function(p) { result = p; });
         .unwrap();
         let perm = rt.eval("result").unwrap();
         assert_eq!(perm, JsValue::String("granted".to_string()));
+    }
+
+    /// BUG-386: `navigator.permissions` reads 'notifications' straight off
+    /// `Notification.permission`, so a `PermissionStatus` the page is holding
+    /// has to be told when `requestPermission()` moves it. The native is
+    /// swapped here because the shell currently hands the same value to both
+    /// halves of the install, so the value never moves on its own.
+    #[test]
+    fn request_permission_notifies_the_permissions_api_on_a_move() {
+        let rt = rt_with_notifications(false);
+        rt.eval(
+            r#"
+var notified = [];
+globalThis._lumen_permission_state_changed = function(name) { notified.push(name); };
+globalThis._lumen_notification_request_permission = function() { return 'granted'; };
+Notification.requestPermission();
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            rt.eval("notified.join(',')").unwrap(),
+            JsValue::String("notifications".to_string())
+        );
+    }
+
+    /// A second call changes nothing, so nothing is announced — a `change`
+    /// event for an unmoved value would misreport the engine's state.
+    #[test]
+    fn request_permission_is_silent_when_the_value_does_not_move() {
+        let rt = rt_with_notifications(false);
+        rt.eval(
+            r#"
+var notified = [];
+globalThis._lumen_permission_state_changed = function(name) { notified.push(name); };
+Notification.requestPermission();
+Notification.requestPermission();
+"#,
+        )
+        .unwrap();
+        assert_eq!(rt.eval("notified.length === 0").unwrap(), JsValue::Bool(true));
     }
 
     #[test]

@@ -36,10 +36,12 @@ in-memory заглушки, задокументированные собств�
 как значение, отдаваемое `storageBuckets.open()`). По WebIDL интерфейс без
 операции-конструктора при вызове с `new` обязан бросать `TypeError`.
 
-`navigator.permissions.query({name:'persistent-storage'})` также резолвится
-`granted` (реконфирмация [BUG-386](BUG-386-OPEN.md), который прямо перечисляет
+`navigator.permissions.query({name:'persistent-storage'})` также резолвился
+`granted` (реконфирмация [BUG-386](BUG-386-FIXED.md), который прямо перечисляет
 `persistent-storage` как один из непроверяемых нереализованных имён), не новая
-находка.
+находка. **Устарело с 2026-08-10:** BUG-386 закрыт, `persistent-storage`
+отвечает `denied` — `persist()`/`persisted()` по-прежнему резолвятся `true`, ни
+на что не влияя, и это расхождение теперь видно.
 
 ## Масштаб
 

@@ -73,6 +73,7 @@ pub mod media_stream_recording;
 pub mod serial;
 pub mod compute_pressure;
 pub mod csp;
+pub mod permissions;
 pub mod permissions_policy;
 pub mod web_codecs;
 pub mod ua_client_hints;
