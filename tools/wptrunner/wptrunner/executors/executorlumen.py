@@ -14,8 +14,22 @@ per run: `browsingContext.navigate` (blocks on Lumen's real
 `document.readyState == "complete"` signal, P2-wpt S1), then
 `script.evaluate` polled until `tests/wpt/resources/testharnessreport.js`'s
 `add_completion_callback` has stashed a JSON-stringified result on
-`window.__lumen_wpt_results` (a fresh navigation gives every test a fresh
-`window`, so no explicit reset between tests is needed).
+`window.__lumen_wpt_results`.
+
+A *successful* navigation does give every test a fresh `window`, but a
+**failed** one does not, and Lumen reports both the same way
+([BUG-380](../../../../bugs/BUG-380-FIXED.md)): `browsingContext.navigate`
+answers `{navigation, url}` for an unreachable URL just as it does for a real
+one (`bc_navigate` only surfaces an error when `LiveWindowSession::navigate`
+or the `DocumentReady` wait itself fails — a load that never completes is
+reported asynchronously and never reaches the BiDi reply), while the previous
+document, its `location.href` and all its globals stay live. Since this
+executor reuses one browsing context for the whole run, the next test would
+then read the *previous* test's `RESULTS_GLOBAL` — hence `RESET_EXPRESSION`,
+which both clears the result/testdriver slots and fingerprints the outgoing
+document with `STALE_GLOBAL` so a document that was never replaced is
+recognisable (a fresh document cannot carry the marker, verified for both
+same-URL reloads and cross-URL navigations).
 
 `test_driver.*` support (WPT-RUN-2, `docs/tasks/p2-wpt-runner-throughput.md`)
 reuses the exact same poll loop rather than the `channel`/`script.message`
@@ -43,7 +57,7 @@ import json
 import traceback
 
 from webdriver.bidi.client import BidiSession
-from webdriver.bidi.error import UnknownErrorException
+from webdriver.bidi.error import BidiException, UnknownErrorException
 from webdriver.bidi.modules.input import Actions
 from webdriver.bidi.modules.script import ContextTarget
 
@@ -55,20 +69,56 @@ from .protocol import Protocol
 #: on once `add_completion_callback` fires.
 RESULTS_GLOBAL = "__lumen_wpt_results"
 
+#: Global set on the document being navigated *away* from (`RESET_EXPRESSION`),
+#: so the poll loop can tell "this document was never replaced" from "the new
+#: document just hasn't produced a result yet" — a fresh document never carries
+#: it (BUG-380).
+STALE_GLOBAL = "__lumen_wpt_stale"
+
 #: Poll interval while waiting for `RESULTS_GLOBAL`/a testdriver action to
 #: appear (seconds).
 POLL_INTERVAL_S = 0.05
 
+#: How long `STALE_GLOBAL` may still be observed after `navigate` returned
+#: before the navigation is declared failed (seconds). `navigate` already
+#: blocked on `document.readyState == "complete"`, so a replaced document is
+#: normally visible on the first poll; this only absorbs the same
+#: document-swap lag the "JS context not available" retry below covers.
+NAV_SETTLE_S = 2.0
+
+#: Run in the outgoing document immediately before `browsingContext.navigate`:
+#: drops any result/testdriver state the *previous* test left behind (a failed
+#: navigation keeps that document alive, and one browsing context is reused for
+#: the whole run) and marks it, so a document still answering after the
+#: navigation is identifiable as the old one. Plain assignment rather than
+#: `delete`: `testharnessreport.js` sets `RESULTS_GLOBAL` on `window` and the
+#: poll below tests `!== undefined`, so this works regardless of property
+#: configurability.
+RESET_EXPRESSION = f"""(() => {{
+  window.{RESULTS_GLOBAL} = undefined;
+  window.__lumen_td_slot = undefined;
+  window.{STALE_GLOBAL} = true;
+}})()"""
+
 #: Single `script.evaluate` expression polled every iteration: returns a
-#: JSON-encoded `{"k": "r", "v": <RESULTS_GLOBAL string>}` once the harness
-#: completes, `{"k": "a", "v": [url, "action", {...}]}` once
+#: JSON-encoded `{"k": "s", "v": <location.href>}` while the pre-navigation
+#: document is still the live one, `{"k": "r", "v": <RESULTS_GLOBAL string>}`
+#: once the harness completes, `{"k": "a", "v": [url, "action", {...}]}` once
 #: `test_driver_internal` queues an action (arming
 #: `__wptrunner_testdriver_callback` if it isn't already, so a
 #: previously-queued action that arrived before this poll loop started gets
 #: drained too — `message-queue.js`'s `push()` only calls
 #: `__wptrunner_process_next_event()` on push, which itself no-ops without a
 #: callback armed), or `null` while neither has happened yet.
+#:
+#: The staleness check comes first deliberately: an async test whose completion
+#: callback fires *after* the runner moved on would otherwise re-populate
+#: `RESULTS_GLOBAL` on the un-replaced document and hand the next test the
+#: previous one's result all over again.
 POLL_EXPRESSION = f"""(() => {{
+  if (window.{STALE_GLOBAL} === true) {{
+    return JSON.stringify({{k: "s", v: String(location.href)}});
+  }}
   if (window.{RESULTS_GLOBAL} !== undefined) {{
     return JSON.stringify({{k: "r", v: window.{RESULTS_GLOBAL}}});
   }}
@@ -173,10 +223,21 @@ class LumenTestharnessExecutor(TestharnessExecutor):
         session = self.protocol.session
         context = self.protocol.context_id
 
-        await session.browsing_context.navigate(context=context, url=url, wait="complete")
+        await self._reset_and_mark(session, context)
+        try:
+            await session.browsing_context.navigate(context=context, url=url, wait="complete")
+        except BidiException as e:
+            # A navigation Lumen *does* reject (bad context, load timeout) —
+            # report it as this test's ERROR with the BiDi message instead of
+            # letting the traceback surface as an INTERNAL-ERROR. A navigation
+            # that merely fails to load is not this case: it answers
+            # successfully and is caught by the staleness check below.
+            raise ExecutorException(
+                "ERROR", f"browsingContext.navigate({url}) failed: {e}") from e
 
         loop = asyncio.get_running_loop()
         deadline = None if timeout is None else loop.time() + timeout + self.extra_timeout
+        settle_deadline = loop.time() + NAV_SETTLE_S
         while True:
             try:
                 # `await_promise=False` is deliberate: async tests
@@ -205,19 +266,43 @@ class LumenTestharnessExecutor(TestharnessExecutor):
             else:
                 if value.get("type") == "string":
                     outer = json.loads(value["value"])
-                    if outer["k"] == "r":
+                    if outer["k"] == "s":
+                        # The document that was live before `navigate` is still
+                        # answering: the new page never replaced it.
+                        if loop.time() > settle_deadline:
+                            raise ExecutorException(
+                                "ERROR",
+                                f"browsingContext.navigate({url}) reported success but the "
+                                f"document was never replaced (still at {outer['v']}); "
+                                f"the page did not load")
+                    elif outer["k"] == "r":
                         return json.loads(outer["v"])
-                    # outer["k"] == "a": [url, "action", {type, action, params, id}].
-                    # Dispatch and post the completion back, then keep polling
-                    # in the same loop — an action never ends the test itself.
-                    _, msg_type, payload = outer["v"]
-                    if msg_type == "action":
-                        await self._handle_action(session, context, payload)
+                    else:
+                        # outer["k"] == "a": [url, "action", {type, action, params, id}].
+                        # Dispatch and post the completion back, then keep polling
+                        # in the same loop — an action never ends the test itself.
+                        _, msg_type, payload = outer["v"]
+                        if msg_type == "action":
+                            await self._handle_action(session, context, payload)
             if deadline is not None and loop.time() > deadline:
                 raise ExecutorException(
                     "TIMEOUT",
                     f"Timed out waiting for testharnessreport.js results: {url}")
             await asyncio.sleep(POLL_INTERVAL_S)
+
+    async def _reset_and_mark(self, session, context):
+        """Clear the outgoing document's result/testdriver slots and mark it
+        (`RESET_EXPRESSION`). Best-effort: a context with no JS runtime yet
+        (the initial `about:blank`, before the first test) reports "JS context
+        not available" and has nothing to carry over anyway."""
+        try:
+            await session.script.evaluate(
+                expression=RESET_EXPRESSION,
+                target=ContextTarget(context),
+                await_promise=False)
+        except UnknownErrorException as e:
+            if "JS context not available" not in e.message:
+                raise
 
     async def _handle_action(self, session, context, payload):
         """Execute one `test_driver_internal.*` action and post its
