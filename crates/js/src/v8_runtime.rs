@@ -60,6 +60,170 @@ pub fn ensure_v8_platform() {
     });
 }
 
+// ── Window named properties (HTML LS §7.3.3) ──────────────────────────────────
+
+thread_local! {
+    /// Document the Window named-property interceptor resolves names against
+    /// (BUG-384). Written by every [`V8JsRuntime::install_dom`] from inside its
+    /// JS-thread job, so it always points at the document of the page currently
+    /// installed in this isolate. `None` before the first install — and forever
+    /// in worker isolates, which never call `install_dom` — where the whole
+    /// mechanism is simply inert.
+    static NAMED_ACCESS_DOC: std::cell::RefCell<Option<Arc<Mutex<lumen_dom::Document>>>> =
+        const { std::cell::RefCell::new(None) };
+    /// Re-entrancy guard for the interceptor. Building the returned element
+    /// wrapper calls back into JS (`_lumen_make_element`), and any global miss
+    /// inside that call — including the lookup of `_lumen_make_element` itself
+    /// before the shim has been evaluated — would re-enter the interceptor.
+    static NAMED_ACCESS_BUSY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Publish `doc` as the document the Window named-property interceptor resolves
+/// against (BUG-384). Must be called on the JS thread — the slot is
+/// thread-local, matching the isolate's single-thread ownership.
+fn set_named_access_document(doc: &Arc<Mutex<lumen_dom::Document>>) {
+    NAMED_ACCESS_DOC.with(|slot| *slot.borrow_mut() = Some(Arc::clone(doc)));
+}
+
+/// Resolve `name` against the current document's supported property names
+/// (HTML LS §7.3.3): any element whose `id` is `name`, plus `img`/`form`/
+/// `iframe`/`embed`/`object` whose `name` attribute is `name`. Returns the
+/// first match in tree order as its `NodeId` index, or `None` when the name is
+/// not a named property of this document.
+///
+/// Three deliberate simplifications against the spec, all in the direction of
+/// "resolve to something useful instead of throwing `ReferenceError`":
+/// several matches yield the first one rather than an `HTMLCollection`; a
+/// matching `iframe` yields the element rather than its `contentWindow`; and
+/// the lookup is a tree walk per miss rather than a maintained name index.
+///
+/// Uses `try_lock`, not `lock`: the interceptor fires on *any* global-name
+/// miss, including one made by JS that a native called while holding the
+/// document lock. A blocking lock there would deadlock the JS thread against
+/// itself; giving up instead only costs one unresolved name, which is exactly
+/// the pre-BUG-384 behaviour.
+fn named_access_lookup(name: &str) -> Option<u32> {
+    if name.is_empty() {
+        return None;
+    }
+    NAMED_ACCESS_DOC.with(|slot| {
+        let borrowed = slot.borrow();
+        let doc = borrowed.as_ref()?.try_lock().ok()?;
+        find_first_matching(&doc, doc.root(), &|node| match &node.data {
+            NodeData::Element { name: tag, .. } => {
+                node.get_attr("id") == Some(name)
+                    || (node.get_attr("name") == Some(name)
+                        && matches!(
+                            tag.local.as_str(),
+                            "img" | "form" | "iframe" | "embed" | "object"
+                        ))
+            }
+            _ => false,
+        })
+        .map(|n| n.index() as u32)
+    })
+}
+
+/// Build the JS wrapper for node `nid` by calling the shim's own
+/// `_lumen_make_element`, so a named-access hit yields the very same object
+/// identity `document.getElementById` would (the shim caches wrappers per node).
+///
+/// Returns `None` — leaving the name unresolved — when the shim has not been
+/// evaluated yet or the call throws; an exception is swallowed rather than left
+/// pending, because "this name is not a named property" is the only answer an
+/// interceptor that declines to intercept is allowed to give.
+fn named_access_wrapper<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    nid: u32,
+) -> Option<v8::Local<'s, v8::Value>> {
+    let ctx = scope.get_current_context();
+    let global = ctx.global(scope);
+    let key = v8::String::new(scope, "_lumen_make_element")?;
+    let factory = v8::Local::<v8::Function>::try_from(global.get(scope, key.into())?).ok()?;
+    let arg = v8::Integer::new_from_unsigned(scope, nid).into();
+    v8::tc_scope!(tc, scope);
+    let wrapper = factory.call(tc, global.into(), &[arg]);
+    if tc.has_caught() { None } else { wrapper }
+}
+
+/// Global-object template carrying the Window named-properties interceptor
+/// (HTML LS §7.3.3, BUG-384) — the object `v8::Context::new` builds the
+/// context's global from.
+///
+/// `NON_MASKING` is what makes the resolution order right without any bookkeeping
+/// on our side: V8 consults the interceptor **only** for names that resolve
+/// nowhere else, so real `Window` properties and the page's own `var`/`function`
+/// declarations keep winning, and a named element is reached only where the
+/// alternative was a `ReferenceError`. `ONLY_INTERCEPT_STRINGS` keeps symbol
+/// lookups (`Symbol.toStringTag`, `Symbol.unscopables`, …) off the path entirely.
+///
+/// The interceptor is installed at context-creation time, long before any
+/// document exists; [`named_access_lookup`] answers `None` until an
+/// `install_dom` publishes one, so the mechanism is inert rather than absent in
+/// that window.
+fn window_named_properties_template<'s>(
+    scope: &v8::PinScope<'s, '_, ()>,
+) -> v8::Local<'s, v8::ObjectTemplate> {
+    // Getter — resolves the name to an element wrapper, or declines.
+    let getter = |scope: &mut v8::PinScope,
+                  key: v8::Local<v8::Name>,
+                  _args: v8::PropertyCallbackArguments,
+                  mut rv: v8::ReturnValue<v8::Value>| {
+        if NAMED_ACCESS_BUSY.with(std::cell::Cell::get) {
+            return v8::Intercepted::kNo;
+        }
+        let Ok(key_str) = v8::Local::<v8::String>::try_from(key) else {
+            return v8::Intercepted::kNo;
+        };
+        let Some(nid) = named_access_lookup(&key_str.to_rust_string_lossy(scope)) else {
+            return v8::Intercepted::kNo;
+        };
+        NAMED_ACCESS_BUSY.with(|busy| busy.set(true));
+        let wrapper = named_access_wrapper(scope, nid);
+        NAMED_ACCESS_BUSY.with(|busy| busy.set(false));
+        match wrapper {
+            Some(value) => {
+                rv.set(value);
+                v8::Intercepted::kYes
+            }
+            None => v8::Intercepted::kNo,
+        }
+    };
+    // Query — the `'x' in window` / `hasOwnProperty` half. Without it V8 would
+    // fall back to calling the getter (building a wrapper object just to throw
+    // it away) for every existence check.
+    let query = |scope: &mut v8::PinScope,
+                 key: v8::Local<v8::Name>,
+                 _args: v8::PropertyCallbackArguments,
+                 mut rv: v8::ReturnValue<v8::Integer>| {
+        if NAMED_ACCESS_BUSY.with(std::cell::Cell::get) {
+            return v8::Intercepted::kNo;
+        }
+        let Ok(key_str) = v8::Local::<v8::String>::try_from(key) else {
+            return v8::Intercepted::kNo;
+        };
+        if named_access_lookup(&key_str.to_rust_string_lossy(scope)).is_none() {
+            return v8::Intercepted::kNo;
+        }
+        // WebIDL §3.9 named properties on a global: writable, enumerable and
+        // configurable (`[LegacyUnenumerableNamedProperties]` applies to
+        // `Document`, not to `Window`) — `PropertyAttribute::NONE`.
+        rv.set_int32(v8::PropertyAttribute::NONE.as_u32() as i32);
+        v8::Intercepted::kYes
+    };
+    let template = v8::ObjectTemplate::new(scope);
+    template.set_named_property_handler(
+        v8::NamedPropertyHandlerConfiguration::new()
+            .getter(getter)
+            .query(query)
+            .flags(
+                v8::PropertyHandlerFlags::NON_MASKING
+                    | v8::PropertyHandlerFlags::ONLY_INTERCEPT_STRINGS,
+            ),
+    );
+    template
+}
+
 // ── Thread-local state ────────────────────────────────────────────────────────
 
 /// V8 isolate + global context, owned exclusively by the JS thread.
@@ -189,7 +353,13 @@ fn v8_thread_main(
     let (context, baseline_globals) = {
         // scope! pins the HandleScope and gives scope: &mut PinnedRef<HandleScope<'_, ()>>
         v8::scope!(let scope, &mut isolate);
-        let ctx = v8::Context::new(scope, Default::default());
+        let ctx = v8::Context::new(
+            scope,
+            v8::ContextOptions {
+                global_template: Some(window_named_properties_template(scope)),
+                ..Default::default()
+            },
+        );
         // Snapshot the bare context's own global keys (S11) before entering it
         // for anything else — this is the baseline `suspend()` diffs against.
         let baseline = {
@@ -1206,6 +1376,11 @@ impl V8JsRuntime {
             // which have no URL of their own. Mirrors the `module_page_url`
             // write in `QuickJsRuntime::install_dom`.
             crate::v8_esm::set_page_url(&page_url);
+            // BUG-384: point the Window named-properties interceptor (installed
+            // on the global object template back at context creation) at this
+            // navigation's document. Done here, on the JS thread, because the
+            // slot it writes is thread-local to the isolate's owning thread.
+            set_named_access_document(&doc);
             // Disjoint field borrows: scope borrows isolate, native_fn_store is separate.
             let isolate = &mut inner.isolate;
             let context_global = &inner.context;
@@ -7122,4 +7297,123 @@ mod tests {
         assert_js_true(&rt, "document.activeElement.id === 'field'");
     }
 
+    // ── BUG-384: named access on Window (HTML LS §7.3.3) ─────────────────────
+
+    /// `html > body > (div#probe, img[name=logo], div[name=plain], div#Object)`.
+    /// Deliberately mixes the three cases the interceptor must tell apart: an
+    /// `id` (always a named property), a `name` on one of the five eligible
+    /// elements, and a `name` on an element that is *not* eligible — plus one
+    /// `id` that collides with an ECMAScript built-in.
+    fn make_named_access_doc() -> Arc<Mutex<lumen_dom::Document>> {
+        fn attr(doc: &mut lumen_dom::Document, id: lumen_dom::NodeId, name: &str, value: &str) {
+            if let lumen_dom::NodeData::Element { attrs, .. } = &mut doc.get_mut(id).data {
+                attrs.push(lumen_dom::Attribute {
+                    name: lumen_dom::QualName::html(name),
+                    value: value.into(),
+                });
+            }
+        }
+        let mut d = lumen_dom::Document::new();
+        let html = d.create_element(lumen_dom::QualName::html("html"));
+        let body = d.create_element(lumen_dom::QualName::html("body"));
+        let probe = d.create_element(lumen_dom::QualName::html("div"));
+        attr(&mut d, probe, "id", "probe");
+        let logo = d.create_element(lumen_dom::QualName::html("img"));
+        attr(&mut d, logo, "name", "logo");
+        let plain = d.create_element(lumen_dom::QualName::html("div"));
+        attr(&mut d, plain, "name", "plain");
+        let shadowing = d.create_element(lumen_dom::QualName::html("div"));
+        attr(&mut d, shadowing, "id", "Object");
+        d.append_child(d.root(), html);
+        d.append_child(html, body);
+        for child in [probe, logo, plain, shadowing] {
+            d.append_child(body, child);
+        }
+        Arc::new(Mutex::new(d))
+    }
+
+    /// The bug's own regression check, verbatim from `BUG-384-OPEN.md`: a
+    /// `<div id="probe">` must be reachable as `window.probe`, as the bare
+    /// identifier `probe`, and must answer `true` to `'probe' in window`.
+    /// Before the fix all three were `undefined`/`false` — a bare reference
+    /// threw `ReferenceError` and took the rest of the script with it.
+    #[test]
+    fn element_id_is_a_named_property_of_window() {
+        let rt = runtime_with_dom(make_named_access_doc(), "");
+        assert_js_true(&rt, "'probe' in window");
+        assert_js_true(&rt, "window.probe !== undefined && window.probe !== null");
+        assert_js_true(&rt, "probe.tagName === 'DIV'");
+        assert_js_true(&rt, "globalThis.probe === window.probe");
+    }
+
+    /// Named access must hand back the *same wrapper* `getElementById` does —
+    /// otherwise `window.probe === document.getElementById('probe')` is false
+    /// and identity-based code (event-listener bookkeeping, `Map` keys) breaks
+    /// in a way that is harder to spot than the missing property was.
+    #[test]
+    fn named_access_yields_the_same_wrapper_as_get_element_by_id() {
+        let rt = runtime_with_dom(make_named_access_doc(), "");
+        assert_js_true(&rt, "window.probe === document.getElementById('probe')");
+    }
+
+    /// Only `img`/`form`/`iframe`/`embed`/`object` expose their `name`
+    /// attribute as a named property (HTML LS §7.3.3); a `name` on any other
+    /// element is not a supported property name.
+    #[test]
+    fn name_attribute_is_named_property_only_on_eligible_elements() {
+        let rt = runtime_with_dom(make_named_access_doc(), "");
+        assert_js_true(&rt, "window.logo !== undefined && window.logo.tagName === 'IMG'");
+        assert_js_true(&rt, "window.plain === undefined");
+        assert_js_true(&rt, "!('plain' in window)");
+    }
+
+    /// A name that matches nothing must stay unresolved — the interceptor
+    /// declines, so the pre-existing `undefined`/`ReferenceError` behaviour is
+    /// untouched for everything that is not a named property.
+    #[test]
+    fn unmatched_name_stays_undefined() {
+        let rt = runtime_with_dom(make_named_access_doc(), "");
+        assert_js_true(&rt, "window.nosuchelement === undefined");
+        assert_js_true(&rt, "!('nosuchelement' in window)");
+        assert_js_true(&rt, "typeof nosuchelement === 'undefined'");
+    }
+
+    /// Resolution order (the reason the interceptor is `NON_MASKING`): a real
+    /// property of the global wins over an element with the same `id`. The
+    /// document deliberately contains a `<div id="Object">`; if named access
+    /// masked built-ins, `Object.keys` would be gone.
+    #[test]
+    fn real_globals_win_over_named_elements() {
+        let rt = runtime_with_dom(make_named_access_doc(), "");
+        assert_js_true(&rt, "typeof Object === 'function' && typeof Object.keys === 'function'");
+        assert_js_true(&rt, "typeof document === 'object'");
+    }
+
+    /// …and so does a page-script `var`, which is what HTML LS §7.3.3 requires
+    /// (the named-properties object sits *behind* the global's own properties).
+    #[test]
+    fn page_variable_wins_over_named_element() {
+        let rt = runtime_with_dom(make_named_access_doc(), "");
+        rt.eval("var probe = 42;").unwrap();
+        assert_js_true(&rt, "probe === 42");
+        assert_js_true(&rt, "window.probe === 42");
+    }
+
+    /// The lookup runs against the live document, not a snapshot taken at
+    /// install time: an element appended by script is immediately reachable by
+    /// name, and unreachable again once removed.
+    #[test]
+    fn named_access_follows_live_dom_mutations() {
+        let rt = runtime_with_dom(make_named_access_doc(), "");
+        assert_js_true(&rt, "window.later === undefined");
+        rt.eval(
+            "var el = document.createElement('div');\
+             el.setAttribute('id', 'later');\
+             document.body.appendChild(el);",
+        )
+        .unwrap();
+        assert_js_true(&rt, "window.later !== undefined && window.later.tagName === 'DIV'");
+        rt.eval("document.body.removeChild(el);").unwrap();
+        assert_js_true(&rt, "window.later === undefined");
+    }
 }
