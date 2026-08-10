@@ -1,6 +1,6 @@
 # BUG-385 — Local Font Access реализован по устаревшему черновику: есть `navigator.fonts.query()`, нет `queryLocalFonts()`; `FontData`/`FontAccessManager` конструируются со страницы и пишут поля прямо в получателя
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-10
 **Компонент:** js (`crates/js/src/local_font_access.rs` — `LOCAL_FONT_ACCESS_SHIM`
 целиком; устанавливается из `crates/js/src/lib.rs:1344`)
 **Найден:** P2, WPT-VENDOR-font-access (2026-07-28), проба `--dump-layout`
@@ -113,6 +113,66 @@ after: enumerable?             = {"e":true,"w":true,"c":true}
 Регрессия проверяется без WPT: страница, которая делает
 `window.FontData && window.FontData({family:'X'})` и утверждает
 `!('family' in window)`, плюс `typeof queryLocalFonts === 'function'`.
+
+## Что сделано (2026-08-10)
+
+`LOCAL_FONT_ACCESS_SHIM` переписан целиком по образцу
+[BUG-374](BUG-374-FIXED.md) (`FSAL_SHIM`) — ближайшего закрытого дефекта того
+же класса.
+
+1. **Точка входа.** `queryLocalFonts(options)` установлена на глобале, поэтому
+   доступна и как `self.queryLocalFonts`, и как `window.queryLocalFonts`, и
+   голым идентификатором. Она и интерфейсный объект `FontData` определены
+   `writable: true, enumerable: false, configurable: true` — по WebIDL ни то,
+   ни другое не перечисляется в `for (k in window)`.
+2. **Форма черновика 2020 года удалена.** `navigator.fonts` и
+   `FontAccessManager` не устанавливаются вовсе: ни один браузер их не
+   выставляет и ни один тест не вызывает, так что собственное перечисляемое
+   свойство `navigator` было отпечатком и ничем больше (класс BUG-379).
+   Отдельного решения сохранять алиас (пункт 1 «Как чинить») не нашлось.
+3. **`FontData`.** Конструктора нет: и `new FontData({…})`, и вызов как метода
+   получателя (`window.FontData({family:'LEAK'})`) бросают
+   `TypeError: Illegal constructor`, поэтому четыре глобала с общими именами на
+   `window` больше не заводятся. Четыре атрибута — readonly-геттеры на
+   прототипе поверх приватного `WeakMap` (own-properties нет вовсе:
+   `Object.keys(fd).length === 0`), геттер на чужом получателе — `Illegal
+   invocation`. Выставлен `Symbol.toStringTag = 'FontData'`. Единственный путь
+   к дескриптору — `queryLocalFonts()`.
+4. **Аргументы по WebIDL.** `QueryOptions` проверяется как словарь (не-объект,
+   кроме `undefined`/`null`, — `TypeError`), `postscriptNames` — как
+   `sequence<DOMString>` (требуется итерируемость, не «похоже на массив»).
+   Операция возвращает промис, поэтому ошибка конвертации отклоняет его, а не
+   бросает синхронно.
+5. **Гейты §2 — сразу и fail-closed.** Без транзиентной активации —
+   `SecurityError` (источник тот же, что у `showOpenFilePicker`:
+   `navigator.userActivation`, сейчас захардкожен в `isActive: true`, см.
+   [BUG-751](BUG-751-OPEN.md)). Разрешение `local-fonts` спрашивается по
+   спековому имени; всё, кроме явного `granted` — включая отсутствующий или
+   бросающий Permissions API — это `NotAllowedError`. Гейт не несёт нагрузки,
+   пока перечислять нечего; он написан сейчас именно потому, что Phase 1 иначе
+   приземлится без него (пункт 4 «Как чинить»).
+6. **Перечисления шрифтов ОС по-прежнему нет.** Phase 0 отвечает `[]` — это
+   единственный ответ, который ничего не выдаёт, пока
+   [BUG-386](BUG-386-OPEN.md) держит `local-fonts` разрешённым по умолчанию.
+   Нативные привязки Phase 1 захватываются в замыкание при установке (шим не
+   читает `_lumen*` с глобала в момент вызова — иначе страница могла бы
+   подменить имя и скормить шиму свой список); когда они появятся, ветка уже
+   фильтрует по `postscriptNames`.
+7. **Молчаливых подмен нет.** `blob()` без нативной привязки отклоняется
+   `NotSupportedError`: пустой `Blob` неотличим от нулевого файла шрифта.
+   Нативная привязка, которая бросила, или JSON, который не разобрался,
+   отклоняют промис — «шрифтов не установлено» для сломанного моста было бы
+   ложью.
+
+**Проверка.** 22 юнит-теста в модуле (`cargo test -p lumen-js --features
+v8-backend local_font_access`), включая регрессию из этого файла. Плюс проба
+`--dump-layout` на живой странице — по таблице симптомов выше:
+`typeof self.queryLocalFonts = function`, `navigator.fonts = undefined`,
+`FontAccessManager = undefined`, дескрипторы `{"e":false}`,
+`new FontData({})` → `TypeError: Illegal constructor`,
+`window.FontData({…})` → `TypeError` и «leaked globals = none»,
+`[object FontData]`, `family` — аксессор, `queryLocalFonts()` резолвится
+`isArray=true len=0`.
 
 ## Связанные
 

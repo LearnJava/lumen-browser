@@ -23,6 +23,25 @@ the time — read dates.
 
 ## Done
 
+- **`queryLocalFonts()` exists, and the 2020-draft `navigator.fonts` is gone
+  (BUG-385, P3, 2026-08-10).** `local_font_access.rs` implemented a WICG draft that
+  was dropped before the API shipped: `navigator.fonts.query()` — a surface no
+  browser exposes and no test calls, i.e. an own enumerable `navigator` property
+  that is a fingerprint and nothing else — while `queryLocalFonts()`, the entry
+  point every real page and all six upstream `font-access` tests start from, did
+  not exist. `FontData` was an ES5 constructor assigning its four fields onto
+  `this`, so `window.FontData({family: 'LEAK'})` (a plain call, no `new`) wrote
+  `family`/`style`/`fullName`/`postscriptName` onto `window` instead of throwing.
+  The shim now follows `FSAL_SHIM`'s WebIDL idiom: no constructor, readonly
+  prototype getters over a private `WeakMap`, `Symbol.toStringTag`,
+  non-enumerable globals, argument conversion reported as a rejection. The §2
+  gates (transient activation → `SecurityError`, `local-fonts` permission →
+  `NotAllowedError`) are written **now**, fail-closed, even though Phase 0 has
+  nothing to withhold — Phase 1 must not be able to land without them while
+  [BUG-386](../bugs/BUG-386-OPEN.md) still answers `granted` by default. OS font
+  enumeration stays unimplemented (`[]`); the natives are captured in closure
+  scope at install time, so page script cannot shadow their names to feed the
+  shim a font list of its own.
 - **One `FileSystemDirectoryHandle`, and `navigator.storage.getDirectory()` returns
   it over a real sandbox (BUG-372, P3, 2026-08-10).** `storage_manager.rs` used to
   define a second class of that name inside its shim's IIFE and resolve
