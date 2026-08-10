@@ -133,6 +133,28 @@ the time — read dates.
   its internal slots. The picker gate reads `navigator.userActivation`, which the
   engine hardcodes to `isActive: true`, so it is structurally right and currently
   inert ([BUG-751](../bugs/BUG-751-OPEN.md)).
+- **`FileSystemObserver` is a snapshot differ, not an OS watcher (BUG-389, P3,
+  2026-08-10).** There is no file-watching dependency in the workspace and none was
+  added: `_lumen_fs_observe` snapshots the observed subtree, `_lumen_fs_poll_changes`
+  re-snapshots and diffs, and one shared `setInterval` (100 ms) drives every live
+  observation. Four points worth carrying:
+  * **Two snapshots cannot show a rename.** A move looks exactly like a
+    disappearance plus an appearance, so `moved` is only reported when a poll saw
+    *exactly one* of each carrying identical metadata (kind, length, mtime — all
+    preserved by `rename`, none by a fresh write). Ambiguous polls stay two honest
+    records rather than one invented one; guessing here would report a `moved`
+    between two unrelated files that happened to change in the same tick.
+  * **What the snapshot omits is load-bearing.** It holds kind/length/mtime and
+    deliberately not the full `Metadata`: comparing access time would report
+    `modified` for a plain read.
+  * **The observation state lives in Rust, not in the shim.** A page that dropped
+    its observer must stop costing a directory walk per tick, and the origin check
+    has to happen where the grant registries are. Installing for a new document
+    revokes the previous one's observations exactly as it revokes its grants.
+  * **A poll tick is a test step, not a wall-clock wait.** The unit-test harness
+    stubs `setInterval` into a callback collector and exposes `__tick()`, so the
+    JS-level tests assert on delivered records without sleeping — and without the
+    flakiness a real 100 ms interval would bring.
 - **File-API grants are unguessable, origin-bound and page-scoped; the natives are
   off the global object (BUG-371, P3, 2026-08-10).** The documented "JS only receives
   an opaque token" model did not hold: all ten `file_input`/`filesystem_access`

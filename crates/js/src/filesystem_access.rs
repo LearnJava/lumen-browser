@@ -56,6 +56,9 @@
 //! | `_lumen_fs_remove` | `(path_id, token, recursive: bool) → String` | Remove the handle's own entry → `""` or a DOMException name |
 //! | `_lumen_fs_move` | `(token, dest_dir_id, new_name) → String` | Rename/move a file → JSON `{name,token,size}` or `{error}` |
 //! | `_lumen_fs_file_size` | `(token: String) → f64` | Current size of the entry, or `-1` |
+//! | `_lumen_fs_observe` | `(path_id, token, recursive: bool) → Option<String>` | Snapshot a subtree for `FileSystemObserver` → observation id |
+//! | `_lumen_fs_poll_changes` | `(id: String) → String` | Re-snapshot and diff → JSON array of change records |
+//! | `_lumen_fs_unobserve` | `(id: String) → bool` | Forget one observation |
 //! | `_lumen_sync_open` | `(token: String) → Option<String>` | Open an OPFS file for sync access → handle id |
 //! | `_lumen_sync_size` / `_lumen_sync_flush` / `_lumen_sync_close` | `(id) → f64` / `bool` / `bool` | Size, flush, close |
 //! | `_lumen_sync_read` | `(id, at: f64, len: f64) → String` | Read at a position → base64 |
@@ -217,6 +220,212 @@ fn with_sync_file<T>(
         return None;
     }
     f(&mut handle.file)
+}
+
+// ── Observation registry (FileSystemObserver) ──────────────────────────────────
+
+/// One entry of an observed tree as it looked at the previous poll.
+///
+/// Deliberately not the full `Metadata`: these three fields are what the change
+/// types of FS Observer §2 are derived from, and comparing anything else (access
+/// time, permissions) would report `modified` for a plain read.
+#[cfg(feature = "v8-backend")]
+#[derive(Clone, PartialEq, Eq)]
+struct ObsEntry {
+    /// Whether the entry is a directory. A symlink is never followed, so a
+    /// symlinked directory counts as a plain entry and is not descended into.
+    is_dir: bool,
+    /// File length in bytes; always 0 for a directory.
+    len: u64,
+    /// Last-modified time in milliseconds since the epoch, 0 if unavailable.
+    mtime_ms: u64,
+}
+
+/// One live `FileSystemObserver.observe()` registration.
+///
+/// Lumen has no OS file-watching dependency, so an observation is a *snapshot*
+/// of the observed subtree plus the diff taken against it on the next poll (the
+/// shim drives that poll from a shared `setInterval` while at least one
+/// observation is live). Everything FS Observer §2 describes is derivable from
+/// two consecutive snapshots — the one thing that is not is the identity of a
+/// moved entry, see [`diff_snapshots`].
+#[cfg(feature = "v8-backend")]
+struct Observation {
+    /// Origin the observation was issued to — checked on every poll.
+    origin: String,
+    /// Root of the observed subtree. Never exposed to JS.
+    root: PathBuf,
+    /// The observed handle is a file, not a directory: the snapshot then holds
+    /// exactly one entry, keyed by the empty path (the root is what changed).
+    root_is_file: bool,
+    /// Whether subdirectories are descended into (`observe(h, {recursive:true})`).
+    recursive: bool,
+    /// Write permission of the root grant, inherited by every grant minted for a
+    /// change record — the same rule `_lumen_dir_entries` applies to a listing.
+    writable: bool,
+    /// The tree as of the previous poll, keyed by path components relative to
+    /// [`Observation::root`].
+    snapshot: std::collections::BTreeMap<Vec<String>, ObsEntry>,
+    /// Set once the root itself became unreadable: an `errored` record was
+    /// delivered and this observation answers nothing further (FS Observer §3).
+    ended: bool,
+}
+
+#[cfg(feature = "v8-backend")]
+static OBS_REG: OnceLock<Mutex<HashMap<String, Observation>>> = OnceLock::new();
+
+#[cfg(feature = "v8-backend")]
+fn obs_reg() -> &'static Mutex<HashMap<String, Observation>> {
+    OBS_REG.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Depth cap for a recursive observation walk.
+///
+/// `DirEntry::metadata` does not follow symlinks, so a directory symlink
+/// pointing at an ancestor is already not descended into; this is the second
+/// line of defence against a pathological tree costing unbounded stack on a
+/// timer tick.
+#[cfg(feature = "v8-backend")]
+const OBS_MAX_DEPTH: usize = 32;
+
+#[cfg(feature = "v8-backend")]
+fn obs_entry_of(meta: &std::fs::Metadata) -> ObsEntry {
+    let is_dir = meta.is_dir();
+    ObsEntry {
+        is_dir,
+        len: if is_dir { 0 } else { meta.len() },
+        mtime_ms: meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0),
+    }
+}
+
+/// Snapshot of everything an observation covers, keyed by path components
+/// relative to its root.
+///
+/// `None` means the root itself is gone or unreadable — the caller turns that
+/// into the single `errored` record that ends the observation.
+#[cfg(feature = "v8-backend")]
+fn snapshot_tree(
+    root: &std::path::Path,
+    root_is_file: bool,
+    recursive: bool,
+) -> Option<std::collections::BTreeMap<Vec<String>, ObsEntry>> {
+    use std::collections::BTreeMap;
+
+    let mut out: BTreeMap<Vec<String>, ObsEntry> = BTreeMap::new();
+    if root_is_file {
+        // The observed entry *is* the root, so it is keyed by the empty relative
+        // path — which is also what `relativePathComponents` must be for it.
+        out.insert(Vec::new(), obs_entry_of(&std::fs::metadata(root).ok()?));
+        return Some(out);
+    }
+    if !root.is_dir() {
+        return None;
+    }
+
+    fn walk(
+        dir: &std::path::Path,
+        prefix: &mut Vec<String>,
+        recursive: bool,
+        depth: usize,
+        out: &mut BTreeMap<Vec<String>, ObsEntry>,
+    ) {
+        if depth > OBS_MAX_DEPTH {
+            return;
+        }
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        for entry in rd.flatten() {
+            let Some(name) = entry.file_name().to_str().map(str::to_string) else { continue };
+            let Ok(meta) = entry.metadata() else { continue };
+            let obs = obs_entry_of(&meta);
+            let descend = obs.is_dir && recursive;
+            prefix.push(name);
+            out.insert(prefix.clone(), obs);
+            if descend {
+                walk(&entry.path(), prefix, recursive, depth + 1, out);
+            }
+            prefix.pop();
+        }
+    }
+
+    walk(root, &mut Vec::new(), recursive, 0, &mut out);
+    Some(out)
+}
+
+/// One change between two snapshots, in the vocabulary of `FileSystemChangeType`.
+#[cfg(feature = "v8-backend")]
+struct ObsChange {
+    /// `appeared` / `disappeared` / `modified` / `moved`.
+    kind: &'static str,
+    /// Path components of the entry relative to the observation root.
+    path: Vec<String>,
+    /// Whether the entry is a directory — decides which kind of grant the
+    /// change record's `changedHandle` gets.
+    is_dir: bool,
+    /// Where a `moved` entry came from; `None` for every other kind.
+    moved_from: Option<Vec<String>>,
+}
+
+/// Changes between two snapshots of the same observation.
+///
+/// A rename is the one thing two snapshots cannot show directly: it looks
+/// exactly like a disappearance plus an appearance. It is reported as `moved`
+/// only when the poll saw *exactly one* of each and the two carry identical
+/// metadata (kind, length, mtime — all preserved by `rename`, none of them by a
+/// fresh write), so the ambiguous cases stay two honest records rather than one
+/// invented one.
+#[cfg(feature = "v8-backend")]
+fn diff_snapshots(
+    old: &std::collections::BTreeMap<Vec<String>, ObsEntry>,
+    new: &std::collections::BTreeMap<Vec<String>, ObsEntry>,
+) -> Vec<ObsChange> {
+    let mut out = Vec::new();
+    let mut appeared = Vec::new();
+    for (path, entry) in new {
+        match old.get(path) {
+            None => appeared.push((path.clone(), entry.clone())),
+            Some(prev) if prev != entry => out.push(ObsChange {
+                kind: "modified",
+                path: path.clone(),
+                is_dir: entry.is_dir,
+                moved_from: None,
+            }),
+            Some(_) => {}
+        }
+    }
+    let mut disappeared = Vec::new();
+    for (path, entry) in old {
+        if !new.contains_key(path) {
+            disappeared.push((path.clone(), entry.clone()));
+        }
+    }
+
+    if appeared.len() == 1 && disappeared.len() == 1 && appeared[0].1 == disappeared[0].1 {
+        out.push(ObsChange {
+            kind: "moved",
+            path: appeared[0].0.clone(),
+            is_dir: appeared[0].1.is_dir,
+            moved_from: Some(disappeared[0].0.clone()),
+        });
+        return out;
+    }
+    out.extend(appeared.into_iter().map(|(path, entry)| ObsChange {
+        kind: "appeared",
+        path,
+        is_dir: entry.is_dir,
+        moved_from: None,
+    }));
+    out.extend(disappeared.into_iter().map(|(path, entry)| ObsChange {
+        kind: "disappeared",
+        path,
+        is_dir: entry.is_dir,
+        moved_from: None,
+    }));
+    out
 }
 
 // ── Directory-handle registry ──────────────────────────────────────────────────
@@ -503,6 +712,47 @@ fn fs_error_json(name: &str) -> String {
     format!(r#"{{"error":"{}"}}"#, json_escape(name))
 }
 
+/// JSON array of strings — how a change record carries its relative path.
+#[cfg(feature = "v8-backend")]
+fn json_string_array(parts: &[String]) -> String {
+    let quoted: Vec<String> =
+        parts.iter().map(|p| format!("\"{}\"", json_escape(p))).collect();
+    format!("[{}]", quoted.join(","))
+}
+
+/// `changedHandle` of one change record: the same `{kind, …grant}` shape
+/// `_lumen_dir_entries` hands out, so the shim builds it with the same factory.
+///
+/// A grant is minted for a `disappeared` entry too — the record's handle names
+/// the entry that went away, and FS Observer §2 makes `changedHandle`
+/// non-nullable, so answering `null` there would be a shape the page cannot
+/// feature-detect around.
+#[cfg(feature = "v8-backend")]
+fn obs_handle_json(
+    path: &std::path::Path,
+    is_dir: bool,
+    origin: &str,
+    writable: bool,
+) -> Option<String> {
+    if is_dir {
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+        let id = dir_reg()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .allocate(path.to_path_buf(), origin, writable);
+        if id.is_empty() {
+            return None;
+        }
+        return Some(format!(
+            r#"{{"kind":"directory","name":"{}","path_id":"{}"}}"#,
+            json_escape(&name),
+            json_escape(&id)
+        ));
+    }
+    let json = file_entry_json(path, origin, writable)?;
+    Some(format!(r#"{{"kind":"file",{}"#, &json[1..]))
+}
+
 /// Whether `name` may be used as a single entry name inside a directory.
 ///
 /// File System Access §7.2 forbids the empty string, `.`, `..` and any name
@@ -665,8 +915,10 @@ pub(crate) fn install_filesystem_access_v8(
     // stays reachable, including a save-handle it left open.
     dir_reg().lock().unwrap_or_else(|e| e.into_inner()).revoke_origin(origin);
     write_reg().lock().unwrap_or_else(|e| e.into_inner()).revoke_origin(origin);
-    // Including any file the previous document still had open for sync access.
+    // Including any file the previous document still had open for sync access,
+    // and any tree it left an observer polling.
     sync_reg().lock().unwrap_or_else(|e| e.into_inner()).retain(|_, h| h.origin != origin);
+    obs_reg().lock().unwrap_or_else(|e| e.into_inner()).retain(|_, o| o.origin != origin);
 
     let open_origin = origin.to_string();
     let open_picker = into_v8_fn0(move || -> Option<String> {
@@ -1183,6 +1435,108 @@ pub(crate) fn install_filesystem_access_v8(
     });
     rt.register_native("_lumen_sync_close", sync_close)?;
 
+    // ── FileSystemObserver (FS Observer §2-§3) ────────────────────────────────
+    // No OS file-watcher: an observation is a snapshot, and `_lumen_fs_poll_changes`
+    // is the diff against it. The shim ticks that poll from a shared interval —
+    // which is why the *state* lives here and not in JS: a page that drops its
+    // observer must stop costing directory walks, and the origin check has to
+    // happen where the grant registries are.
+
+    let observe_origin = origin.to_string();
+    let fs_observe =
+        into_v8_fn3(move |path_id: String, token: String, recursive: bool| -> Option<String> {
+            let (root, writable, root_is_file) = if !path_id.is_empty() {
+                let (dir, writable) = dir_reg()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get_grant(&path_id, &observe_origin)?;
+                (dir, writable, false)
+            } else if !token.is_empty() {
+                let path = crate::file_input::path_for_token(&token, &observe_origin)?;
+                let writable =
+                    crate::file_input::writable_path_for_token(&token, &observe_origin).is_some();
+                (path, writable, true)
+            } else {
+                return None;
+            };
+            let snapshot = snapshot_tree(&root, root_is_file, recursive)?;
+            let id = crate::file_input::new_grant_id()?;
+            obs_reg().lock().unwrap_or_else(|e| e.into_inner()).insert(
+                id.clone(),
+                Observation {
+                    origin: observe_origin.clone(),
+                    root,
+                    root_is_file,
+                    recursive,
+                    writable,
+                    snapshot,
+                    ended: false,
+                },
+            );
+            Some(id)
+        });
+    rt.register_native("_lumen_fs_observe", fs_observe)?;
+
+    let poll_origin = origin.to_string();
+    let fs_poll = into_v8_fn1(move |id: String| -> String {
+        // The snapshot swap happens under the lock; building the records does
+        // not, because minting a grant takes the directory/token registries and
+        // holding two of them at once is how a deadlock gets written.
+        let taken = {
+            let mut reg = obs_reg().lock().unwrap_or_else(|e| e.into_inner());
+            let Some(obs) = reg.get_mut(&id) else { return "[]".to_string() };
+            if obs.origin != poll_origin || obs.ended {
+                return "[]".to_string();
+            }
+            match snapshot_tree(&obs.root, obs.root_is_file, obs.recursive) {
+                Some(next) => {
+                    let changes = diff_snapshots(&obs.snapshot, &next);
+                    obs.snapshot = next;
+                    Some((obs.root.clone(), obs.writable, changes))
+                }
+                None => {
+                    // The observed root itself is gone: FS Observer §3 ends the
+                    // observation on `errored` rather than reporting every
+                    // descendant as separately disappeared.
+                    obs.ended = true;
+                    None
+                }
+            }
+        };
+        let Some((root, writable, changes)) = taken else {
+            return r#"[{"type":"errored","path":[],"movedFrom":null,"handle":null}]"#.to_string();
+        };
+        let mut records = Vec::with_capacity(changes.len());
+        for change in changes {
+            let path = change.path.iter().fold(root.clone(), |acc, part| acc.join(part));
+            let handle = obs_handle_json(&path, change.is_dir, &poll_origin, writable)
+                .unwrap_or_else(|| "null".to_string());
+            let moved_from = match &change.moved_from {
+                Some(from) => json_string_array(from),
+                None => "null".to_string(),
+            };
+            records.push(format!(
+                r#"{{"type":"{}","path":{},"movedFrom":{},"handle":{}}}"#,
+                change.kind,
+                json_string_array(&change.path),
+                moved_from,
+                handle
+            ));
+        }
+        format!("[{}]", records.join(","))
+    });
+    rt.register_native("_lumen_fs_poll_changes", fs_poll)?;
+
+    let unobserve_origin = origin.to_string();
+    let fs_unobserve = into_v8_fn1(move |id: String| -> bool {
+        let mut reg = obs_reg().lock().unwrap_or_else(|e| e.into_inner());
+        match reg.get(&id) {
+            Some(o) if o.origin == unobserve_origin => reg.remove(&id).is_some(),
+            _ => false,
+        }
+    });
+    rt.register_native("_lumen_fs_unobserve", fs_unobserve)?;
+
     let close_origin = origin.to_string();
     let writable_close = into_v8_fn1(move |handle_id: String| -> bool {
         write_reg()
@@ -1240,6 +1594,9 @@ var NAT_FS_UNIQUE    = nat('_lumen_fs_unique_id');
 var NAT_FS_REMOVE    = nat('_lumen_fs_remove');
 var NAT_FS_MOVE      = nat('_lumen_fs_move');
 var NAT_FS_SIZE      = nat('_lumen_fs_file_size');
+var NAT_FS_OBSERVE   = nat('_lumen_fs_observe');
+var NAT_FS_POLL      = nat('_lumen_fs_poll_changes');
+var NAT_FS_UNOBSERVE = nat('_lumen_fs_unobserve');
 var NAT_SYNC_OPEN    = nat('_lumen_sync_open');
 var NAT_SYNC_SIZE    = nat('_lumen_sync_size');
 var NAT_SYNC_READ    = nat('_lumen_sync_read');
@@ -1950,6 +2307,217 @@ FileSystemSyncAccessHandle.prototype.close = function() {
   if (NAT_SYNC_CLOSE) NAT_SYNC_CLOSE(st.id);
 };
 
+// ── FileSystemObserver (FS Observer §2-§3) ───────────────────────────────────
+
+// There is no OS file-watcher under this: `_lumen_fs_observe` snapshots the
+// observed subtree and `_lumen_fs_poll_changes` diffs the next snapshot against
+// it, so "when does a change surface" is really "how often does someone look".
+// One shared interval drives every live observation — a timer per observation
+// would multiply directory walks by the number of observers watching the same
+// tree.
+var OBS_POLL_MS = 100;
+
+// Captured at eval time like the natives: a bare runtime (the unit-test harness)
+// has no timers, and the classes must still exist and answer there.
+var OBS_SET_INTERVAL =
+  (typeof globalThis.setInterval === 'function') ? globalThis.setInterval : null;
+var OBS_CLEAR_INTERVAL =
+  (typeof globalThis.clearInterval === 'function') ? globalThis.clearInterval : null;
+
+// observer -> {callback, entries: [{id, handle, uniqueId}]}
+var OBS_STATE = new WeakMap();
+
+// Every observer with at least one live observation, held *strongly* on purpose:
+// FS Observer §2 keeps an observer alive while it is observing, so a page that
+// kept no reference to it must still get its records.
+var OBS_LIVE = [];
+var OBS_TIMER = null;
+
+function FileSystemChangeRecord(brand) {
+  if (brand !== BRAND) illegalConstructor();
+}
+defineToStringTag(FileSystemChangeRecord, 'FileSystemChangeRecord');
+
+// record -> {root, changedHandle, relativePathComponents, type, relativePathMovedFrom}
+var RECORD_STATE = new WeakMap();
+
+function recordStateOf(obj) {
+  var st = (obj !== null && typeof obj === 'object') ? RECORD_STATE.get(obj) : undefined;
+  if (st === undefined) throw new TypeError('Illegal invocation');
+  return st;
+}
+
+defineAttribute(FileSystemChangeRecord.prototype, 'root',
+  function() { return recordStateOf(this).root; });
+defineAttribute(FileSystemChangeRecord.prototype, 'changedHandle',
+  function() { return recordStateOf(this).changedHandle; });
+defineAttribute(FileSystemChangeRecord.prototype, 'relativePathComponents',
+  function() { return recordStateOf(this).relativePathComponents; });
+defineAttribute(FileSystemChangeRecord.prototype, 'type',
+  function() { return recordStateOf(this).type; });
+defineAttribute(FileSystemChangeRecord.prototype, 'relativePathMovedFrom',
+  function() { return recordStateOf(this).relativePathMovedFrom; });
+
+function frozenPath(parts) {
+  var out = [];
+  for (var i = 0; i < (parts || []).length; i++) out.push(String(parts[i]));
+  // `FrozenArray<USVString>`: a page must not be able to edit the path inside a
+  // record it was handed and have the next reader of that record see the edit.
+  return Object.freeze(out);
+}
+
+function makeChangeRecord(root, raw) {
+  var record = new FileSystemChangeRecord(BRAND);
+  RECORD_STATE.set(record, {
+    root: root,
+    // An `errored` record names no entry of its own, and `changedHandle` is not
+    // nullable — §3 makes the observation root what such a record is about.
+    changedHandle: raw.handle ? handleFromEntry(raw.handle) : root,
+    relativePathComponents: frozenPath(raw.path),
+    type: String(raw.type),
+    relativePathMovedFrom: raw.movedFrom ? frozenPath(raw.movedFrom) : null,
+  });
+  return record;
+}
+
+function FileSystemObserver(callback) {
+  if (!(this instanceof FileSystemObserver)) {
+    throw new TypeError(
+      "Failed to construct 'FileSystemObserver': please use the 'new' operator");
+  }
+  if (typeof callback !== 'function') {
+    throw new TypeError(
+      "Failed to construct 'FileSystemObserver': parameter 1 is not of type 'Function'");
+  }
+  OBS_STATE.set(this, { callback: callback, entries: [] });
+}
+defineToStringTag(FileSystemObserver, 'FileSystemObserver');
+
+function observerStateOf(obj) {
+  var st = (obj !== null && typeof obj === 'object') ? OBS_STATE.get(obj) : undefined;
+  if (st === undefined) throw new TypeError('Illegal invocation');
+  return st;
+}
+
+// Drop every observation the predicate selects, release it on the native side,
+// and stop the shared timer once nothing is left to poll.
+function dropEntries(st, observer, pred) {
+  var kept = [];
+  for (var i = 0; i < st.entries.length; i++) {
+    if (pred(st.entries[i])) {
+      if (NAT_FS_UNOBSERVE) NAT_FS_UNOBSERVE(st.entries[i].id);
+    } else {
+      kept.push(st.entries[i]);
+    }
+  }
+  st.entries = kept;
+  if (kept.length) return;
+  var at = OBS_LIVE.indexOf(observer);
+  if (at >= 0) OBS_LIVE.splice(at, 1);
+  if (!OBS_LIVE.length && OBS_TIMER !== null) {
+    if (OBS_CLEAR_INTERVAL) OBS_CLEAR_INTERVAL(OBS_TIMER);
+    OBS_TIMER = null;
+  }
+}
+
+// Two handles on the same entry are different objects with different grant
+// tokens (see `uniqueIdOf`), so `unobserve(h)` has to match on the entry, not on
+// the object — a page that re-derived its handle would otherwise be unable to
+// stop the observation it started. Identity is the fallback for an entry that no
+// longer resolves, which is exactly when the unique id is gone.
+function sameEntryAs(handle, target) {
+  var wanted = uniqueIdOf(target);
+  return function(entry) {
+    if (entry.handle === handle) return true;
+    return wanted != null && entry.uniqueId != null && entry.uniqueId === wanted;
+  };
+}
+
+function deliver(observer, st, entry) {
+  var raw = [];
+  if (NAT_FS_POLL) {
+    try { raw = JSON.parse(NAT_FS_POLL(entry.id)) || []; } catch (e) { raw = []; }
+  }
+  if (!raw.length) return;
+  var records = [];
+  var ended = false;
+  for (var i = 0; i < raw.length; i++) {
+    records.push(makeChangeRecord(entry.handle, raw[i]));
+    if (raw[i].type === 'errored') ended = true;
+  }
+  // §3: `errored` is the last thing an observation ever reports. The native side
+  // has already stopped tracking it, so forget it here too rather than polling a
+  // dead id on every tick for the life of the document.
+  if (ended) {
+    dropEntries(st, observer, function(candidate) { return candidate === entry; });
+  }
+  try {
+    st.callback.call(undefined, records, observer);
+  } catch (err) {
+    // One page's throwing callback must not take down the tick that every other
+    // observer's delivery rides on — but it must not vanish either.
+    if (typeof globalThis.reportError === 'function') {
+      globalThis.reportError(err);
+    } else {
+      Promise.reject(err);
+    }
+  }
+}
+
+function pollAllObservations() {
+  // A callback is free to call `observe()` / `unobserve()` / `disconnect()`
+  // while it runs, so both levels iterate a copy rather than the live array.
+  var observers = OBS_LIVE.slice();
+  for (var i = 0; i < observers.length; i++) {
+    var st = OBS_STATE.get(observers[i]);
+    if (st === undefined) continue;
+    var entries = st.entries.slice();
+    for (var j = 0; j < entries.length; j++) {
+      deliver(observers[i], st, entries[j]);
+    }
+  }
+}
+
+FileSystemObserver.prototype.observe = function(handle, options) {
+  var self = this;
+  return promiseTry(function() {
+    var st = observerStateOf(self);
+    var target = (handle !== null && typeof handle === 'object') ? STATE.get(handle) : undefined;
+    if (target === undefined) {
+      throw new TypeError(
+        "Failed to execute 'observe' on 'FileSystemObserver': parameter 1 is not of type 'FileSystemHandle'");
+    }
+    var recursive = !!(options && options.recursive);
+    if (!NAT_FS_OBSERVE) fsThrow('NotSupportedError', 'observe() is unavailable');
+    var id = NAT_FS_OBSERVE(target.pathId, target.token, recursive);
+    if (!id) fsThrow('NotFoundError', 'Cannot observe ' + target.name);
+    // §2: observing an entry this observer already observes replaces the earlier
+    // observation. Dropped after the new one exists, so a failure above leaves
+    // the old observation running instead of silently ending it.
+    dropEntries(st, self, sameEntryAs(handle, target));
+    st.entries.push({ id: String(id), handle: handle, uniqueId: uniqueIdOf(target) });
+    if (OBS_LIVE.indexOf(self) < 0) OBS_LIVE.push(self);
+    if (OBS_TIMER === null && OBS_SET_INTERVAL) {
+      OBS_TIMER = OBS_SET_INTERVAL(pollAllObservations, OBS_POLL_MS);
+    }
+  });
+};
+
+FileSystemObserver.prototype.unobserve = function(handle) {
+  var st = observerStateOf(this);
+  var target = (handle !== null && typeof handle === 'object') ? STATE.get(handle) : undefined;
+  if (target === undefined) {
+    throw new TypeError(
+      "Failed to execute 'unobserve' on 'FileSystemObserver': parameter 1 is not of type 'FileSystemHandle'");
+  }
+  dropEntries(st, this, sameEntryAs(handle, target));
+};
+
+FileSystemObserver.prototype.disconnect = function() {
+  var st = observerStateOf(this);
+  dropEntries(st, this, function() { return true; });
+};
+
 // ── Picker option validation (FS §8.1) ───────────────────────────────────────
 
 var WELL_KNOWN_DIRS = ['desktop', 'documents', 'downloads', 'music', 'pictures', 'videos'];
@@ -2117,6 +2685,8 @@ if (typeof window !== 'undefined') {
   window.FileSystemDirectoryHandle     = FileSystemDirectoryHandle;
   window.FileSystemWritableFileStream  = FileSystemWritableFileStream;
   window.FileSystemSyncAccessHandle    = FileSystemSyncAccessHandle;
+  window.FileSystemObserver            = FileSystemObserver;
+  window.FileSystemChangeRecord        = FileSystemChangeRecord;
   window.showOpenFilePicker            = showOpenFilePicker;
   window.showSaveFilePicker            = showSaveFilePicker;
   window.showDirectoryPicker           = showDirectoryPicker;
@@ -2263,6 +2833,12 @@ mod tests_v8 {
     // Minimal DOM stubs `install_file_input_bindings_v8`'s shim needs — mirrors
     // `file_input::tests::STUBS` (private to that module, so duplicated here).
     //
+    // `setInterval`/`clearInterval` are here because `FileSystemObserver` drives
+    // its polling off them and this runtime has no event loop at all. Collecting
+    // the callbacks instead of scheduling them also makes the tick *drivable*:
+    // `__tick()` is the test's way to say "a poll interval elapsed" without the
+    // test depending on wall-clock time.
+    //
     // `TextEncoder` is here for the same reason: on a page it arrives with
     // `dom.rs`'s shim, which this harness does not evaluate, and the writable
     // stream encodes every string chunk through it.
@@ -2274,6 +2850,14 @@ mod tests_v8 {
         function _lumen_dispatch_bubble(nid, type) {}
         function _lumen_make_element(nid) { return {__nid__: nid}; }
         window._lumen_make_element = _lumen_make_element;
+        var __intervals = [];
+        function setInterval(fn, ms) { __intervals.push(fn); return __intervals.length; }
+        function clearInterval(id) { if (id) __intervals[id - 1] = null; }
+        function __tick() {
+            for (var i = 0; i < __intervals.length; i++) {
+                if (__intervals[i]) __intervals[i]();
+            }
+        }
         function TextEncoder() {}
         TextEncoder.prototype.encode = function(str) {
             var out = [];
@@ -3425,4 +4009,397 @@ mod tests_v8 {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // ── BUG-389: FileSystemObserver (FS Observer §2-§3) ──────────────────────
+
+    /// A runtime already observing a fresh empty directory, with every delivered
+    /// record appended to `__records` and every callback invocation counted.
+    ///
+    /// The observation snapshot is taken inside `observe()`, so anything the
+    /// test creates afterwards is a change against an empty tree. `__tick()`
+    /// (see `STUBS`) is what stands in for a poll interval elapsing.
+    fn observer_case(tag: &str, recursive: bool) -> (V8JsRuntime, std::path::PathBuf) {
+        let (rt, dir, id) = opfs_case(tag, true);
+        rt.eval(&format!(
+            r#"
+            var __records = [];
+            var __calls = 0;
+            var __failed = null;
+            var __root = {ROOT}('root', '{id}');
+            var __obs = new FileSystemObserver(function(records, observer) {{
+              __calls++;
+              for (var i = 0; i < records.length; i++) __records.push(records[i]);
+            }});
+            __obs.observe(__root, {{ recursive: {recursive} }})
+              .catch(function(e) {{ __failed = String(e); }});
+            "#
+        ))
+        .unwrap();
+        assert_eq!(string_eval(&rt, "String(__failed)"), "null", "observe() rejected");
+        (rt, dir)
+    }
+
+    /// `record.type` of every record delivered so far, joined — the shape every
+    /// test below asserts on.
+    fn types_of(rt: &V8JsRuntime) -> String {
+        string_eval(rt, "__records.map(function(r) { return r.type; }).join(',')")
+    }
+
+    #[test]
+    fn observer_interfaces_exist() {
+        let rt = with_fsa();
+        assert!(bool_eval(&rt, "typeof window.FileSystemObserver === 'function'"));
+        assert!(bool_eval(&rt, "typeof window.FileSystemChangeRecord === 'function'"));
+    }
+
+    /// The five `typeof … === 'undefined'` lines BUG-389 was filed on, asserted
+    /// together: the report is about one API surface, so the thing that says it
+    /// is closed is the whole list answering at once, not five scattered tests.
+    #[test]
+    fn bug_389_symptom_list_is_gone() {
+        let rt = with_fsa();
+        for expr in [
+            "window.FileSystemSyncAccessHandle",
+            "window.FileSystemObserver",
+            "window.FileSystemHandle",
+            "window.FileSystemFileHandle.prototype.createSyncAccessHandle",
+            "window.FileSystemFileHandle.prototype.move",
+        ] {
+            assert!(
+                bool_eval(&rt, &format!("typeof {expr} === 'function'")),
+                "{expr} is still not a function"
+            );
+        }
+        // The base class is a real ancestor, which is what `instanceof
+        // FileSystemHandle` rides on — not just a same-named global.
+        assert!(bool_eval(
+            &rt,
+            "Object.getPrototypeOf(window.FileSystemFileHandle) === window.FileSystemHandle"
+        ));
+        assert!(bool_eval(
+            &rt,
+            "Object.getPrototypeOf(window.FileSystemDirectoryHandle) === window.FileSystemHandle"
+        ));
+    }
+
+    /// The callback is not optional, and neither interface may be built from a
+    /// page: `FileSystemChangeRecord` has no constructor at all in FS Observer §2.
+    #[test]
+    fn observer_construction_is_guarded() {
+        let rt = with_fsa();
+        assert!(bool_eval(
+            &rt,
+            "(function() { try { new FileSystemObserver(); return false; }
+                           catch (e) { return e instanceof TypeError; } })()"
+        ));
+        assert!(bool_eval(
+            &rt,
+            "(function() { try { new FileSystemObserver(42); return false; }
+                           catch (e) { return e instanceof TypeError; } })()"
+        ));
+        assert!(bool_eval(
+            &rt,
+            "(function() { try { new FileSystemChangeRecord(); return false; }
+                           catch (e) { return e instanceof TypeError; } })()"
+        ));
+    }
+
+    /// `observe()` rejects on anything that is not a handle rather than throwing
+    /// synchronously — it returns a promise, so a bad argument must reject.
+    #[test]
+    fn observe_rejects_a_non_handle() {
+        let rt = with_fsa_for("https://reject.observer.test");
+        rt.eval(
+            r#"
+            var __err = null;
+            new FileSystemObserver(function() {}).observe({})
+              .then(function() { __err = 'resolved'; },
+                    function(e) { __err = e.constructor.name; });
+            "#,
+        )
+        .unwrap();
+        assert_eq!(string_eval(&rt, "String(__err)"), "TypeError");
+    }
+
+    /// A new file is one `appeared` record, and the record carries the entry it
+    /// is about: the relative path, a usable handle, and the observation root.
+    #[test]
+    fn appeared_record_describes_the_new_entry() {
+        let (rt, dir) = observer_case("appeared", false);
+        std::fs::write(dir.join("fresh.txt"), b"hi").unwrap();
+        rt.eval("__tick();").unwrap();
+
+        assert_eq!(types_of(&rt), "appeared");
+        assert_eq!(string_eval(&rt, "__records[0].relativePathComponents.join('/')"), "fresh.txt");
+        assert_eq!(string_eval(&rt, "__records[0].changedHandle.kind"), "file");
+        assert_eq!(string_eval(&rt, "__records[0].changedHandle.name"), "fresh.txt");
+        assert!(bool_eval(&rt, "__records[0].root === __root"));
+        assert!(bool_eval(&rt, "__records[0].relativePathMovedFrom === null"));
+        // FrozenArray<USVString>: editing a handed-out path must not stick.
+        assert!(bool_eval(&rt, "Object.isFrozen(__records[0].relativePathComponents)"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Nothing changed between two polls is *no* callback, not an empty one —
+    /// a page that counted calls would otherwise see a change on every tick.
+    #[test]
+    fn a_quiet_tick_does_not_call_back() {
+        let (rt, dir) = observer_case("quiet", false);
+        rt.eval("__tick(); __tick();").unwrap();
+        assert_eq!(string_eval(&rt, "String(__calls)"), "0");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Rewriting a file is `modified`, deleting it is `disappeared` — and the
+    /// snapshot advances each poll, so one change is reported exactly once.
+    #[test]
+    fn modified_then_disappeared() {
+        let (rt, dir) = observer_case("modified", false);
+        let file = dir.join("edit.txt");
+        std::fs::write(&file, b"a").unwrap();
+        rt.eval("__tick();").unwrap();
+        std::fs::write(&file, b"much longer body").unwrap();
+        rt.eval("__tick();").unwrap();
+        std::fs::remove_file(&file).unwrap();
+        rt.eval("__tick(); __tick();").unwrap();
+
+        assert_eq!(types_of(&rt), "appeared,modified,disappeared");
+        assert_eq!(string_eval(&rt, "__records[2].relativePathComponents.join('/')"), "edit.txt");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A rename inside the observed tree is one `moved` record naming both ends,
+    /// not the `disappeared` + `appeared` pair two raw snapshots would suggest.
+    #[test]
+    fn rename_is_reported_as_moved() {
+        let (rt, dir) = observer_case("moved", false);
+        std::fs::write(dir.join("before.txt"), b"body").unwrap();
+        rt.eval("__tick();").unwrap();
+        std::fs::rename(dir.join("before.txt"), dir.join("after.txt")).unwrap();
+        rt.eval("__tick();").unwrap();
+
+        assert_eq!(types_of(&rt), "appeared,moved");
+        assert_eq!(string_eval(&rt, "__records[1].relativePathComponents.join('/')"), "after.txt");
+        assert_eq!(string_eval(&rt, "__records[1].relativePathMovedFrom.join('/')"), "before.txt");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `recursive: false` reports the subdirectory itself and stops there;
+    /// `recursive: true` reports what is inside it, with the full relative path.
+    #[test]
+    fn recursion_decides_how_deep_changes_are_seen() {
+        let (flat, flat_dir) = observer_case("flat", false);
+        std::fs::create_dir(flat_dir.join("sub")).unwrap();
+        std::fs::write(flat_dir.join("sub").join("deep.txt"), b"x").unwrap();
+        flat.eval("__tick();").unwrap();
+        assert_eq!(types_of(&flat), "appeared");
+        assert_eq!(string_eval(&flat, "__records[0].relativePathComponents.join('/')"), "sub");
+        assert_eq!(string_eval(&flat, "__records[0].changedHandle.kind"), "directory");
+        let _ = std::fs::remove_dir_all(&flat_dir);
+
+        let (deep, deep_dir) = observer_case("deep", true);
+        std::fs::create_dir(deep_dir.join("sub")).unwrap();
+        std::fs::write(deep_dir.join("sub").join("deep.txt"), b"x").unwrap();
+        deep.eval("__tick();").unwrap();
+        assert_eq!(types_of(&deep), "appeared,appeared");
+        assert_eq!(
+            string_eval(&deep, "__records.map(function(r) { return r.relativePathComponents.join('/'); }).sort().join('|')"),
+            "sub|sub/deep.txt"
+        );
+        let _ = std::fs::remove_dir_all(&deep_dir);
+    }
+
+    /// `disconnect()` ends every observation the observer holds: a change made
+    /// afterwards reaches nobody, however many ticks go by.
+    #[test]
+    fn disconnect_stops_delivery() {
+        let (rt, dir) = observer_case("disconnect", false);
+        rt.eval("__obs.disconnect();").unwrap();
+        std::fs::write(dir.join("ignored.txt"), b"x").unwrap();
+        rt.eval("__tick(); __tick();").unwrap();
+        assert_eq!(string_eval(&rt, "String(__calls)"), "0");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `unobserve()` takes *an entry*, not the object identity of the handle that
+    /// started the observation: a page that re-derived its handle (a fresh grant,
+    /// hence a different object and a different token) must still be able to stop.
+    #[test]
+    fn unobserve_matches_a_re_derived_handle() {
+        let (rt, dir) = observer_case("unobserve", false);
+        let second = super::dir_reg()
+            .lock()
+            .unwrap()
+            .allocate(dir.clone(), "https://unobserve.opfs.test", true);
+        rt.eval(&format!("__obs.unobserve({ROOT}('root', '{second}'));")).unwrap();
+        std::fs::write(dir.join("ignored.txt"), b"x").unwrap();
+        rt.eval("__tick();").unwrap();
+        assert_eq!(string_eval(&rt, "String(__calls)"), "0");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Losing the observed root is one `errored` record and then silence — §3
+    /// ends the observation rather than reporting each descendant as gone, and
+    /// the shim must stop polling a dead observation instead of re-erroring.
+    #[test]
+    fn a_vanished_root_errors_once_and_ends() {
+        let (rt, dir) = observer_case("errored", false);
+        std::fs::write(dir.join("doomed.txt"), b"x").unwrap();
+        rt.eval("__tick();").unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        rt.eval("__tick(); __tick(); __tick();").unwrap();
+
+        assert_eq!(types_of(&rt), "appeared,errored");
+        // `changedHandle` is not nullable: the root is what an `errored` record
+        // is about.
+        assert!(bool_eval(&rt, "__records[1].changedHandle === __root"));
+    }
+
+    /// Re-observing an entry replaces the earlier observation instead of stacking
+    /// a second one on it — otherwise one change would arrive twice.
+    #[test]
+    fn re_observing_replaces_the_observation() {
+        let (rt, dir) = observer_case("reobserve", false);
+        rt.eval("__obs.observe(__root).catch(function(e) { __failed = String(e); });").unwrap();
+        assert_eq!(string_eval(&rt, "String(__failed)"), "null");
+        std::fs::write(dir.join("once.txt"), b"x").unwrap();
+        rt.eval("__tick();").unwrap();
+        assert_eq!(types_of(&rt), "appeared");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A throwing callback is contained: the observation stays live and the next
+    /// change is still delivered, because one page's bug must not take down the
+    /// tick every other observer's delivery rides on.
+    #[test]
+    fn a_throwing_callback_does_not_kill_the_observation() {
+        let (rt, dir, id) = opfs_case("throwing", true);
+        rt.eval(&format!(
+            r#"
+            var __seen = 0;
+            var __root = {ROOT}('root', '{id}');
+            var __obs = new FileSystemObserver(function(records) {{
+              __seen += records.length;
+              throw new Error('from the callback');
+            }});
+            __obs.observe(__root);
+            "#
+        ))
+        .unwrap();
+        std::fs::write(dir.join("one.txt"), b"x").unwrap();
+        rt.eval("__tick();").unwrap();
+        std::fs::write(dir.join("two.txt"), b"x").unwrap();
+        rt.eval("__tick();").unwrap();
+        assert_eq!(string_eval(&rt, "String(__seen)"), "2");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Installing for a new document drops the previous one's observations, the
+    /// same way it drops its grants (BUG-371 point 3) — a page that navigated
+    /// away must not keep costing a directory walk on every tick.
+    #[test]
+    fn install_revokes_the_previous_documents_observations() {
+        let (rt, dir, id) = opfs_case("revoke-obs", true);
+        rt.eval(&format!(
+            r#"
+            var __id = _lumen_fs_observe('{id}', '', false);
+            "#
+        ))
+        .unwrap();
+        let observation = string_eval(&rt, "String(__id)");
+        assert_ne!(observation, "null");
+        assert!(super::obs_reg().lock().unwrap().contains_key(&observation));
+
+        super::install_filesystem_access_v8(&rt, "https://revoke-obs.opfs.test").unwrap();
+        assert!(!super::obs_reg().lock().unwrap().contains_key(&observation));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── Snapshot diffing (the engine under `_lumen_fs_poll_changes`) ─────────
+
+    fn entry(is_dir: bool, len: u64, mtime_ms: u64) -> super::ObsEntry {
+        super::ObsEntry { is_dir, len, mtime_ms }
+    }
+
+    fn snapshot(items: &[(&str, super::ObsEntry)]) -> std::collections::BTreeMap<Vec<String>, super::ObsEntry> {
+        items
+            .iter()
+            .map(|(path, e)| (path.split('/').map(str::to_string).collect(), e.clone()))
+            .collect()
+    }
+
+    /// A rename is only *reported* as a move when the poll saw exactly one
+    /// departure and one arrival carrying identical metadata. Two unrelated
+    /// changes that happen to land in the same tick stay two honest records
+    /// rather than one invented `moved`.
+    #[test]
+    fn move_detection_needs_an_unambiguous_pair() {
+        let file = entry(false, 12, 1_700_000_000_000);
+        let moved = super::diff_snapshots(&snapshot(&[("a.txt", file.clone())]), &snapshot(&[("b.txt", file.clone())]));
+        assert_eq!(moved.len(), 1);
+        assert_eq!(moved[0].kind, "moved");
+        assert_eq!(moved[0].moved_from.as_deref(), Some(["a.txt".to_string()].as_slice()));
+
+        // Same shape, but the arrival is a *different* file: `rename` preserves
+        // length and mtime, a fresh write does not, so this is not a move.
+        let other = entry(false, 34, 1_700_000_000_000);
+        let pair = super::diff_snapshots(&snapshot(&[("a.txt", file.clone())]), &snapshot(&[("b.txt", other)]));
+        let mut kinds: Vec<&str> = pair.iter().map(|c| c.kind).collect();
+        kinds.sort_unstable();
+        assert_eq!(kinds, ["appeared", "disappeared"]);
+
+        // Two departures and two arrivals: ambiguous, so four plain records.
+        let ambiguous = super::diff_snapshots(
+            &snapshot(&[("a.txt", file.clone()), ("b.txt", file.clone())]),
+            &snapshot(&[("c.txt", file.clone()), ("d.txt", file.clone())]),
+        );
+        assert_eq!(ambiguous.len(), 4);
+        assert!(ambiguous.iter().all(|c| c.kind != "moved"));
+    }
+
+    /// An entry present in both snapshots is `modified` only when something a
+    /// *write* changes moved. Re-reading a file touches its access time, which
+    /// the snapshot deliberately does not carry.
+    #[test]
+    fn unchanged_entries_report_nothing() {
+        let same = snapshot(&[("keep.txt", entry(false, 7, 42)), ("sub", entry(true, 0, 9))]);
+        assert!(super::diff_snapshots(&same, &same).is_empty());
+
+        let grown = snapshot(&[("keep.txt", entry(false, 9, 42)), ("sub", entry(true, 0, 9))]);
+        let changes = super::diff_snapshots(&same, &grown);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].kind, "modified");
+        assert_eq!(changes[0].path, vec!["keep.txt".to_string()]);
+    }
+
+    /// A directory walk stops at [`super::OBS_MAX_DEPTH`], so a pathologically
+    /// deep tree cannot cost unbounded stack on a timer tick.
+    #[test]
+    fn recursive_snapshot_is_depth_capped() {
+        let root = std::env::temp_dir().join("lumen_obs_depth");
+        let _ = std::fs::remove_dir_all(&root);
+        let mut deep = root.clone();
+        for _ in 0..(super::OBS_MAX_DEPTH + 5) {
+            deep = deep.join("d");
+        }
+        std::fs::create_dir_all(&deep).unwrap();
+
+        let snap = super::snapshot_tree(&root, false, true).unwrap();
+        let deepest = snap.keys().map(Vec::len).max().unwrap_or(0);
+        assert!(deepest <= super::OBS_MAX_DEPTH + 1, "walked {deepest} levels deep");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A file handle is observed as itself: the snapshot holds exactly the root,
+    /// keyed by the empty relative path.
+    #[test]
+    fn observing_a_file_snapshots_only_that_file() {
+        let file = std::env::temp_dir().join("lumen_obs_single.txt");
+        std::fs::write(&file, b"body").unwrap();
+        let snap = super::snapshot_tree(&file, true, false).unwrap();
+        assert_eq!(snap.len(), 1);
+        assert!(snap.contains_key(&Vec::<String>::new()));
+        // The same path observed as a directory is not observable at all.
+        assert!(super::snapshot_tree(&file, false, false).is_none());
+        let _ = std::fs::remove_file(&file);
+    }
 }
