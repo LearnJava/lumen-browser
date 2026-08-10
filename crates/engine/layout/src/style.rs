@@ -8103,19 +8103,28 @@ pub fn compute_style(
 
     let parent_fs = inherited.font_size;
     let is_quirks = doc.mode() == DocumentMode::Quirks;
-    let mut has_own_font_size = false;
+    // Which basis the winning font-size resolved against decides the zoom factor
+    // below. No declaration applies → the value is the inherited (or UA-hinted
+    // `em`) one, i.e. parent-relative.
+    let mut fs_basis = FontSizeBasis::ParentRelative;
     for (_, _, _, _, _, _, decl) in &matched {
-        if decl.property.eq_ignore_ascii_case("font-size") {
-            has_own_font_size = true;
+        if let Some(basis) =
+            apply_font_size(&mut style, decl, parent_fs, ua_baseline_font_size, viewport, is_quirks)
+        {
+            fs_basis = basis;
         }
-        apply_font_size(&mut style, decl, parent_fs, ua_baseline_font_size, viewport, is_quirks);
     }
 
-    // A font-size specified *here* has not been zoomed by anyone, so it takes
-    // the full compounded factor. One merely inherited already carries every
-    // ancestor's zoom and needs only this element's own contribution — applying
-    // `effective_zoom` to it would re-apply the ancestors'.
-    style.font_size *= if has_own_font_size { style.effective_zoom } else { own_zoom };
+    // A font-size resolved from a zoom-independent basis (`16px`, `rem`, …) has
+    // not been scaled by anyone, so it takes the full compounded factor. One
+    // resolved against the parent's size (`em`, `%`, or plain inheritance)
+    // already carries every ancestor's zoom and needs only this element's own
+    // contribution — applying `effective_zoom` to it would re-apply the
+    // ancestors', once per level of nesting.
+    style.font_size *= match fs_basis {
+        FontSizeBasis::Absolute => style.effective_zoom,
+        FontSizeBasis::ParentRelative => own_zoom,
+    };
 
     // Pre-pass: применяем color-scheme раньше main-pass, чтобы системные
     // цвета (Canvas, ButtonFace, …) резолвились против правильной темы
@@ -9074,7 +9083,9 @@ fn compute_pseudo_element_style_inner(
     let parent_fs = parent.font_size;
     let is_quirks = doc.mode() == DocumentMode::Quirks;
     for (_, _, _, _, decl) in &matched {
-        apply_font_size(&mut style, decl, parent_fs, parent_fs, viewport, is_quirks);
+        // Pseudo-element style: the basis is irrelevant here — `zoom` is folded
+        // into the originating element's style, which this one inherits from.
+        let _ = apply_font_size(&mut style, decl, parent_fs, parent_fs, viewport, is_quirks);
     }
     let em_basis = style.font_size;
     let parent_weight = parent.font_weight;
@@ -21901,9 +21912,9 @@ fn apply_font_size(
     ua_baseline_fs: f32,
     viewport: Size,
     is_quirks: bool,
-) {
+) -> Option<FontSizeBasis> {
     if decl.property != "font" && decl.property != "font-size" {
-        return;
+        return None;
     }
     // CSS Variables L1 §3.3: нераскрываемый `var()` делает декларацию invalid at
     // computed value time — она просто не применяется.
@@ -21914,17 +21925,15 @@ fn apply_font_size(
                 expanded = v;
                 expanded.as_str()
             }
-            None => return,
+            None => return None,
         }
     } else {
         decl.value.as_str()
     };
 
     if decl.property == "font" {
-        if let Some(parts) = parse_font_shorthand(raw) {
-            resolve_font_size(style, &parts.size, parent_fs, viewport, is_quirks);
-        }
-        return;
+        let parts = parse_font_shorthand(raw)?;
+        return resolve_font_size(style, &parts.size, parent_fs, viewport, is_quirks);
     }
     let val = raw;
     // CSS Cascade L4 §7: CSS-wide keywords. font-size — inherited; unset ==
@@ -21932,62 +21941,96 @@ fn apply_font_size(
     // `parent_fs` when the element has no font-size UA hint, since
     // `ua_baseline_fs` then equals `parent_fs` anyway).
     if let Some(kw) = parse_css_wide_keyword(val) {
-        style.font_size = match kw {
-            CssWideKeyword::Inherit | CssWideKeyword::Unset => parent_fs,
-            CssWideKeyword::Revert => ua_baseline_fs,
-            CssWideKeyword::Initial => ROOT_FONT_SIZE,
+        let (px, basis) = match kw {
+            CssWideKeyword::Inherit | CssWideKeyword::Unset => {
+                (parent_fs, FontSizeBasis::ParentRelative)
+            }
+            // The UA baseline is itself usually an `em` factor over the parent
+            // (`h1 { font-size: 2em }`), and where the element has no UA hint it
+            // *is* `parent_fs` — parent-relative either way.
+            CssWideKeyword::Revert => (ua_baseline_fs, FontSizeBasis::ParentRelative),
+            CssWideKeyword::Initial => (ROOT_FONT_SIZE, FontSizeBasis::Absolute),
         };
-        return;
+        style.font_size = px;
+        return Some(basis);
     }
-    resolve_font_size(style, val, parent_fs, viewport, is_quirks);
+    resolve_font_size(style, val, parent_fs, viewport, is_quirks)
+}
+
+/// What the winning `font-size` declaration resolved *against* — the one thing
+/// `zoom` needs to know about it (CSS Viewport L1 §5).
+///
+/// A parent-relative value (`em`, `%`, `ex`/`ch`, `inherit`) is computed from
+/// `parent_fs`, which already carries every ancestor's zoom, so only the
+/// element's *own* factor may be applied on top. An absolute one (`px`, `rem`,
+/// viewport units, `initial`) comes from a zoom-independent basis and therefore
+/// takes the full compounded `effective_zoom`. Multiplying the first kind by
+/// `effective_zoom` would re-apply the ancestors' factor once per level, so a
+/// tree of `em` sizes under a zoomed container would shrink geometrically.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum FontSizeBasis {
+    /// Resolved against the parent's (already zoomed) font-size.
+    ParentRelative,
+    /// Resolved against a basis no ancestor's `zoom` has touched.
+    Absolute,
 }
 
 /// Резолвит `<font-size>`-значение (без CSS-wide keyword-ов) в абсолютный px и
 /// записывает в `style.font_size`. `em`/`%` — от `parent_fs`, `rem` — от
 /// ROOT_FONT_SIZE, viewport-единицы — от `viewport`. Используется и longhand-ом
 /// `font-size`, и `<font-size>`-компонентом `font`-shorthand.
+///
+/// Возвращает [`FontSizeBasis`] применённого значения (`None` — значение не
+/// разобралось и `style.font_size` не тронут): вызывающему это нужно, чтобы
+/// решить, каким множителем `zoom` домножать результат.
 fn resolve_font_size(
     style: &mut ComputedStyle,
     val: &str,
     parent_fs: f32,
     viewport: Size,
     is_quirks: bool,
-) {
-    let Some(len) = parse_length_q(val, is_quirks) else {
-        return;
-    };
+) -> Option<FontSizeBasis> {
+    let len = parse_length_q(val, is_quirks)?;
     // Для font-size: em и % считаются от parent_fs; vh/vw/vmin/vmax — от viewport.
-    style.font_size = match &len {
-        Length::Px(v) => *v,
-        Length::Em(v) => *v * parent_fs,
-        Length::Rem(v) => *v * ROOT_FONT_SIZE,
+    let (px, basis) = match &len {
+        Length::Px(v) => (*v, FontSizeBasis::Absolute),
+        Length::Em(v) => (*v * parent_fs, FontSizeBasis::ParentRelative),
+        Length::Rem(v) => (*v * ROOT_FONT_SIZE, FontSizeBasis::Absolute),
         // CSS Values L4 §5.1.1 — font-relative units on `font-size` itself refer to
         // the *parent* font. Real ch/ex metrics for the parent are not available at
         // computed-value time, so use the spec `0.5em` fallback against `parent_fs`.
-        Length::Ch(v) | Length::Ex(v) => *v * 0.5 * parent_fs,
-        Length::Percent(v) => *v / 100.0 * parent_fs,
-        Length::Vh(v) => *v / 100.0 * viewport.height,
-        Length::Vw(v) => *v / 100.0 * viewport.width,
-        Length::Vmin(v) => *v / 100.0 * viewport.width.min(viewport.height),
-        Length::Vmax(v) => *v / 100.0 * viewport.width.max(viewport.height),
+        Length::Ch(v) | Length::Ex(v) => (*v * 0.5 * parent_fs, FontSizeBasis::ParentRelative),
+        Length::Percent(v) => (*v / 100.0 * parent_fs, FontSizeBasis::ParentRelative),
+        Length::Vh(v) => (*v / 100.0 * viewport.height, FontSizeBasis::Absolute),
+        Length::Vw(v) => (*v / 100.0 * viewport.width, FontSizeBasis::Absolute),
+        Length::Vmin(v) => {
+            (*v / 100.0 * viewport.width.min(viewport.height), FontSizeBasis::Absolute)
+        }
+        Length::Vmax(v) => {
+            (*v / 100.0 * viewport.width.max(viewport.height), FontSizeBasis::Absolute)
+        }
         // cq* units — resolved via CONTAINER_CQ thread-local (set during container re-layout).
         Length::Cqw(_) | Length::Cqh(_) | Length::Cqi(_) | Length::Cqb(_)
         | Length::Cqmin(_) | Length::Cqmax(_) => {
-            match len.resolve(parent_fs, None, viewport) {
-                Some(v) => v,
-                None => return,
-            }
+            (len.resolve(parent_fs, None, viewport)?, FontSizeBasis::Absolute)
         }
         // `calc()` для font-size: резолвим с em_basis = parent_fs и
         // percent_basis = parent_fs (для `%` внутри выражения). vh/vw
         // используют viewport, что уже делает CalcNode::resolve.
-        Length::Calc(node) => match node.resolve(parent_fs, Some(parent_fs), viewport) {
-            Some(v) => v,
-            None => return,
-        },
+        //
+        // Basis: a `calc()` may mix both kinds (`calc(1em + 2px)`); it is counted
+        // as parent-relative because under-applying `zoom` to the absolute term
+        // is a bounded error, while double-applying it to the relative one
+        // compounds once per nesting level.
+        Length::Calc(node) => (
+            node.resolve(parent_fs, Some(parent_fs), viewport)?,
+            FontSizeBasis::ParentRelative,
+        ),
         // Intrinsic keywords not meaningful for font-size — ignore.
-        Length::MinContent | Length::MaxContent | Length::FitContent(_) => return,
+        Length::MinContent | Length::MaxContent | Length::FitContent(_) => return None,
     };
+    style.font_size = px;
+    Some(basis)
 }
 
 /// Применяет `<line-height>`-значение в `style.line_height` (+ флаг
@@ -34091,6 +34134,43 @@ mod tests {
             "font_size = {}",
             inner_style.font_size
         );
+    }
+
+    /// A font-size *specified* on a descendant is not automatically "unzoomed":
+    /// what matters is the basis it resolved against. `em`/`%` resolve against
+    /// the parent's already-zoomed size and must take only the element's own
+    /// factor, while `px` comes from nowhere and takes the compounded one.
+    /// Charging both to `effective_zoom` re-applies the ancestors' factor once
+    /// per level, so a tree of `em` sizes under a zoomed container shrinks
+    /// geometrically (0.8 → 0.64 → 0.512 …).
+    #[test]
+    fn zoom_font_size_takes_the_factor_its_basis_lacks() {
+        let doc = lumen_html_parser::parse(
+            "<div style=\"zoom: 0.5; font-size: 40px\">\
+             <span style=\"font-size: 1.5em\"></span>\
+             <span style=\"font-size: 150%\"></span>\
+             <span style=\"font-size: 20px\"></span>\
+             <span style=\"zoom: 0.5; font-size: 1.5em\"></span></div>",
+        );
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let vp = Size::new(800.0, 600.0);
+        let outer = doc.get(doc.body().unwrap()).children[0];
+        let outer_style = compute_style(&doc, outer, &sheet, &root, vp, false);
+        assert!((outer_style.font_size - 20.0).abs() < 0.01);
+
+        let kids = doc.get(outer).children.clone();
+        let fs = |i: usize| compute_style(&doc, kids[i], &sheet, &outer_style, vp, false).font_size;
+
+        // 1.5 × the parent's zoomed 20px. The parent's 0.5 is already in the
+        // basis; applying it again would give 15.
+        assert!((fs(0) - 30.0).abs() < 0.01, "em font-size = {}", fs(0));
+        // `%` resolves against the same basis as `em`.
+        assert!((fs(1) - 30.0).abs() < 0.01, "% font-size = {}", fs(1));
+        // A `px` size knows nothing of the ancestors' zoom, so it takes all of it.
+        assert!((fs(2) - 10.0).abs() < 0.01, "px font-size = {}", fs(2));
+        // Own zoom still applies on top of a parent-relative basis: 20 × 1.5 × 0.5.
+        assert!((fs(3) - 15.0).abs() < 0.01, "em + own zoom = {}", fs(3));
     }
 
     /// Relative units must not be scaled here: they resolve later against a
