@@ -53,7 +53,7 @@ pub fn request_pointer_lock(element_nid: u32) {
 
 Тот же класс отсутствующей проверки user activation уже задокументирован для
 двух других API того же движка: [BUG-365](BUG-365-FIXED.md) (`EyeDropper.open()`)
-и [BUG-390](BUG-390-OPEN.md) (`requestFullscreen()`) — систематический пробел,
+и [BUG-390](BUG-390-FIXED.md) (`requestFullscreen()`) — систематический пробел,
 не специфичный для pointer lock.
 
 ## Как чинить
