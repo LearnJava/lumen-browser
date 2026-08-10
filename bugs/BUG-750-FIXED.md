@@ -1,6 +1,6 @@
 # BUG-750 — перебор каталога отдаёт handle-ы без гранта: `getFile()` на элементе листинга возвращает пустой `File`, а спуск на подкаталог — `NotAllowedError`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-10
 **Компонент:** js (`crates/js/src/filesystem_access.rs` — `FileSystemDirectoryHandle.prototype.entries`, и производные от неё `values`/`keys`)
 **Найден:** P3, при закрытии [BUG-372](BUG-372-FIXED.md), 2026-08-10
 
@@ -67,5 +67,19 @@ for await (const [name, handle] of root.entries()) { … }
 
 * Async-итерация как таковая (`Symbol.asyncIterator`, наследование от
   `FileSystemHandle`, WebIDL-форма классов) — отдельная заявка
-  [BUG-374](BUG-374-OPEN.md); здесь речь только о содержимом выдаваемых
+  [BUG-374](BUG-374-FIXED.md); здесь речь только о содержимом выдаваемых
   handle-ов.
+
+## Решение (2026-08-10)
+
+Закрыт вместе с [BUG-374](BUG-374-FIXED.md) (пункт 6 той заявки — тот же
+дефект, увиденный с другой стороны). `_lumen_dir_entries` теперь минтит грант
+на каждый элемент листинга, наследуя право записи родительского гранта, и
+отдаёт его в JSON: `{"kind":"file","name":…,"token":…,"size":…}` либо
+`{"name":…,"kind":"directory","path_id":…}`. Шим строит handle из этих полей,
+так что `getFile()` на элементе листинга читает файл, спуск на подкаталог
+работает, а `isSameEntry` сравнивает непустые идентификаторы.
+
+Тест: `filesystem_access::tests_v8::iterated_entries_carry_a_working_grant` —
+обходит настоящий каталог с файлом и подкаталогом, читает содержимое файла
+через `getFile()` и спускается в подкаталог тем же `for await`.

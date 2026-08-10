@@ -28,10 +28,14 @@
 //! object literal with no `getFile()`, and `removeEntry()` resolved successfully
 //! while removing nothing.
 //!
-//! There is now exactly one such class, owned by `filesystem_access.rs`. This
-//! module reads it off `window` **at call time**, so the two shims' install
-//! order does not matter; if the class is missing, `getDirectory()` rejects
-//! rather than substituting something that looks like a handle.
+//! There is now exactly one such class, owned by `filesystem_access.rs`, and
+//! this module never names it: BUG-374 removed its public constructor, so the
+//! root handle is built through the private `__lumen_fsa_internal` factory that
+//! shim publishes and this one captures (and unpublishes) at eval time. That
+//! makes `install_filesystem_access_v8` an ordering requirement of this module —
+//! `install_dom` runs it first — and if it is missing, `getDirectory()` rejects
+//! with `NotSupportedError` rather than substituting something that looks like a
+//! handle.
 
 /// V8 port of the former rquickjs `install_storage_manager_bindings` (Ph3 V8
 /// migration S5-S7, rquickjs side removed in S12b-B3): identical JS shim,
@@ -72,6 +76,16 @@ const STORAGE_MANAGER_SHIM: &str = r#"
     : null;
   try { delete globalThis._lumen_storage_get_directory; } catch (e) {}
 
+  // BUG-374: `FileSystemDirectoryHandle` has no constructor any more (the spec
+  // declares none, and the public one took the internal grant id as an
+  // argument), so the OPFS root is built through the same private factory
+  // `filesystem_access.rs` uses itself. Captured and unpublished here for the
+  // same reason as the native above.
+  var FSA_INTERNAL = (typeof globalThis.__lumen_fsa_internal === 'object')
+    ? globalThis.__lumen_fsa_internal
+    : null;
+  try { delete globalThis.__lumen_fsa_internal; } catch (e) {}
+
   // ── StorageManager ─────────────────────────────────────────────────────────
 
   function StorageManager() {}
@@ -109,11 +123,10 @@ const STORAGE_MANAGER_SHIM: &str = r#"
   // as an instance of the one FileSystemDirectoryHandle the engine has.
   StorageManager.prototype.getDirectory = function() {
     return Promise.resolve().then(function() {
-      // Looked up now, not at install time: this shim must not care whether
-      // filesystem_access.rs installed before or after it (BUG-372).
-      var Handle = (typeof window !== 'undefined')
-        ? window.FileSystemDirectoryHandle : undefined;
-      if (!NAT_GET_DIRECTORY || typeof Handle !== 'function') {
+      // If filesystem_access.rs did not install, there is no handle class to
+      // hand back — reject loudly instead of substituting something that looks
+      // like a handle and answers every call with a plausible lie (BUG-372).
+      if (!NAT_GET_DIRECTORY || !FSA_INTERNAL) {
         throw new DOMException(
           'The origin private file system is not available', 'NotSupportedError');
       }
@@ -123,7 +136,7 @@ const STORAGE_MANAGER_SHIM: &str = r#"
           'Could not open the origin private file system', 'NotAllowedError');
       }
       var root = JSON.parse(info);
-      return new Handle(root.name, root.path_id);
+      return FSA_INTERNAL.makeDirectoryHandle(root.name, root.path_id);
     });
   };
 
@@ -156,24 +169,34 @@ mod tests {
         f(&rt);
     }
 
-    /// Re-run the shim over a mocked native and handle class.
+    /// The real two-shim composition, over a mocked OPFS-root native.
     ///
-    /// The real `_lumen_storage_get_directory` would create the installation's
-    /// OPFS tree on disk, and the shim captures it (then deletes the global) at
-    /// eval time — so, exactly as in `filesystem_access`'s own harness,
-    /// overwriting the global alone no longer reaches the closure and the shim
-    /// has to be evaluated again.
-    fn with_mocked_opfs(rt: &V8JsRuntime, native: &str) {
-        rt.eval(&format!(
-            r#"
-            window.FileSystemDirectoryHandle = function(name, pathId) {{
-              this.name = name; this.kind = 'directory'; this.__pathId = pathId;
-            }};
-            globalThis._lumen_storage_get_directory = {native};
-            "#
-        ))
+    /// `filesystem_access` installs first (as `install_dom` runs them), so this
+    /// module's shim finds the `__lumen_fsa_internal` bridge and the handle it
+    /// hands back is the engine's one real `FileSystemDirectoryHandle` — the
+    /// whole point of BUG-372, and not something a mocked handle class can show.
+    /// Only `_lumen_storage_get_directory` is mocked: the real one would create
+    /// the installation's OPFS tree on disk. It goes in before the shim is
+    /// evaluated because the shim captures (and deletes) it at eval time.
+    fn with_real_fsa(native: &str, f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(
+            "var window = globalThis; var navigator = {}; \
+             function Blob(parts, options) {} \
+             function _lumen_set_attr(nid, name, val) {} \
+             function _lumen_get_attr(nid, name) { return undefined; } \
+             function _lumen_dispatch_bubble(nid, type) {} \
+             function _lumen_make_element(nid) { return {__nid__: nid}; } \
+             window._lumen_make_element = _lumen_make_element;",
+        )
         .unwrap();
+        rt.eval(crate::v8_runtime::DOM_EXCEPTION_POLYFILL).unwrap();
+        crate::file_input::install_file_input_bindings_v8(&rt, TEST_ORIGIN).unwrap();
+        crate::filesystem_access::install_filesystem_access_v8(&rt, TEST_ORIGIN).unwrap();
+        rt.eval(&format!("globalThis._lumen_storage_get_directory = {native};"))
+            .unwrap();
         rt.eval(STORAGE_MANAGER_SHIM).unwrap();
+        f(&rt);
     }
 
     /// Settle `expr` and read the outcome back: V8 drains microtasks at the end
@@ -267,23 +290,40 @@ mod tests {
     }
 
     /// BUG-372: `getDirectory()` resolves an instance of the global class, not
-    /// of a look-alike private to this shim.
+    /// of a look-alike private to this shim. BUG-374: it is built through the
+    /// private factory, since the class no longer has a public constructor.
     #[test]
     fn get_directory_resolves_the_global_handle_class() {
-        with_storage_manager(|rt| {
-            with_mocked_opfs(
-                rt,
-                r#"function() { return '{"name":"","path_id":"root-id"}'; }"#,
-            );
-            settle(rt, "navigator.storage.getDirectory()");
-            let ok = rt
-                .eval(
-                    "__e === null && __v instanceof window.FileSystemDirectoryHandle && \
-                     __v.name === '' && __v.kind === 'directory' && __v.__pathId === 'root-id'",
-                )
-                .unwrap();
-            assert_eq!(ok, JsValue::Bool(true));
-        });
+        with_real_fsa(
+            r#"function() { return '{"name":"","path_id":"root-id"}'; }"#,
+            |rt| {
+                settle(rt, "navigator.storage.getDirectory()");
+                let ok = rt
+                    .eval(
+                        "__e === null && __v instanceof window.FileSystemDirectoryHandle && \
+                         __v instanceof window.FileSystemHandle && \
+                         __v.name === '' && __v.kind === 'directory' && \
+                         Object.getOwnPropertyNames(__v).length === 0",
+                    )
+                    .unwrap();
+                assert_eq!(ok, JsValue::Bool(true));
+            },
+        );
+    }
+
+    /// BUG-374: the handle factory is a private bridge between the two shims —
+    /// page script must not be left holding it any more than the natives.
+    #[test]
+    fn handle_factory_bridge_is_unpublished_after_install() {
+        with_real_fsa(
+            r#"function() { return '{"name":"","path_id":"root-id"}'; }"#,
+            |rt| {
+                let ok = rt
+                    .eval("typeof globalThis.__lumen_fsa_internal === 'undefined'")
+                    .unwrap();
+                assert_eq!(ok, JsValue::Bool(true));
+            },
+        );
     }
 
     /// BUG-372: no handle class installed → reject. The old shim answered with
@@ -304,8 +344,7 @@ mod tests {
     /// resolve a handle to nothing.
     #[test]
     fn get_directory_rejects_when_the_root_is_unavailable() {
-        with_storage_manager(|rt| {
-            with_mocked_opfs(rt, "function() { return null; }");
+        with_real_fsa("function() { return null; }", |rt| {
             settle(rt, "navigator.storage.getDirectory()");
             let ok = rt
                 .eval("__v === null && __e !== null && __e.name === 'NotAllowedError'")
