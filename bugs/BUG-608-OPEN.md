@@ -13,7 +13,7 @@ FAIL fetchPriority of new Image() is 'auto' - assert_equals: expected (string) "
 (`scripting/the-script-element/attr-script-fetchpriority.html`,
 `embedded-content/the-img-element/attr-img-fetchpriority.html` — the
 first subtest in each file is additionally masked by
-[BUG-384](BUG-384-OPEN.md), named access on `window`, since it references
+[BUG-384](BUG-384-FIXED.md), named access on `window`, since it references
 elements by bare `id`-derived identifiers; the second subtest constructs
 the element directly and fails independently of that gap)
 

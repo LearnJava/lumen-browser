@@ -34,7 +34,7 @@ back via `var()`, `@function` nested inside `@layer`/`@container`, and
 `@function` invoked from inside a shadow tree. Every other file in the same
 directory that touches one of these fails *fast* with a normal `FAIL`
 (e.g. `function-container-dynamic.html`, `target is not defined` —
-[BUG-384](BUG-384-OPEN.md)) — only the 9 files below, all combining one of
+[BUG-384](BUG-384-FIXED.md)) — only the 9 files below, all combining one of
 these constructs with the *body* of a `@function` declaration itself (not
 just referencing the result from outside), hang. Root cause not isolated
 further this session (would need a live `--mcp-live-port` step-through or a

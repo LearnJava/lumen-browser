@@ -42,7 +42,7 @@ FAIL/TIMEOUT сабтестов — переподтверждение уже о
 (`document.defaultView` отсутствует → «Browsing context for element was
 detached» на всех тестах с `<iframe>` — 52 сабтеста), [BUG-590](BUG-590-OPEN.md)
 (`document.createEvent` отсутствует целиком — 18 сабтестов) и
-[BUG-384](BUG-384-OPEN.md) (именованный доступ `window.<id>` не реализован,
+[BUG-384](BUG-384-FIXED.md) (именованный доступ `window.<id>` не реализован,
 `ReferenceError: square is not defined` в `order-of-events/mouse-events/
 click-on-div.html` — 2 сабтеста)). Оба новых дефекта того же класса, что
 [BUG-680](BUG-680-OPEN.md)/[BUG-688](BUG-688-OPEN.md)/[BUG-687](BUG-687-OPEN.md):

@@ -46,7 +46,7 @@ back: `revert-rule-basic.html` (4), `revert-rule-custom-property.html` (1),
 `revert-rule-layer.html` (2), `revert-rule-revert-layer.html` (5).
 
 Two more files are **mixed** — `revert-rule` failures alongside unrelated
-[BUG-384](BUG-384-OPEN.md) (named access on Window) failures in the same
+[BUG-384](BUG-384-FIXED.md) (named access on Window) failures in the same
 file:
 - `revert-rule-important.html`: 1 subtest is this bug (`assert_true`), 2 are
   BUG-384 (`test2`/`test3 is not defined`).

@@ -62,7 +62,7 @@ above the container's own size — i.e. `content_width` falls back to its
 `scrollable-overflow-height-with-flex-item-margin-inline-end{,-rtl}.html`,
 `scrollable-overflow-with-{flex,grid}-item-margin-inline-end.html` — all
 report `scrollWidth`/`scrollHeight` (or a derived `container`/`container1`/
-`container2` reading, once [BUG-384](BUG-384-OPEN.md) is separately fixed) as
+`container2` reading, once [BUG-384](BUG-384-FIXED.md) is separately fixed) as
 `0` where a positive value is expected, and every one of these tests exercises
 a `transform` on the overflowing child.
 

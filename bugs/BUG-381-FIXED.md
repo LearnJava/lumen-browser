@@ -215,7 +215,7 @@ BUG-442.
 
 * [BUG-383](BUG-383-OPEN.md) — `tabIndex`/`autofocus` — часть общего провала
   IDL-рефлексии; `click()` отсутствует там же, где `focus()`.
-* [BUG-384](BUG-384-OPEN.md) — named access on Window; мешает измерить этот баг
+* [BUG-384](BUG-384-FIXED.md) — named access on Window; мешает измерить этот баг
   на трёх тестах категории.
 * [BUG-442](BUG-442-FIXED.md) — расхождение `null`/`undefined` в биндингах
   атрибутов, найденное этой пробой.

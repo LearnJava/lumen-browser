@@ -17,7 +17,7 @@ Plus a cluster of TIMEOUT/NOTRUN across `the-hidden-attribute/beforematch-*.html
 `hidden-until-found-002.html`, `hidden-until-found-and-details.html`,
 `hidden-until-found-text-fragment.html` (the `beforematch` event never fires,
 so nothing wakes the test up) -- some of these overlap with the unrelated
-named-access gap [BUG-384](BUG-384-OPEN.md) (`a1 is not defined` etc.), which
+named-access gap [BUG-384](BUG-384-FIXED.md) (`a1 is not defined` etc.), which
 masks part of the signal in this cluster the same way it did in `focus`.
 
 ## Причина

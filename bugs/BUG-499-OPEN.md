@@ -58,7 +58,7 @@ the value never reaches the JS side at all. A parallel effect: any test that
 happens to *expect* `""` for a custom property (e.g. a guaranteed-invalid
 case) passes by coincidence, not because the engine detected invalidity
 (see `variables-substitute-guaranteed-invalid.html`'s note in
-[BUG-384](BUG-384-OPEN.md)'s extension below — masked by a different bug in
+[BUG-384](BUG-384-FIXED.md)'s extension below — masked by a different bug in
 this slice, but would pass-by-luck once unmasked).
 
 ## Масштаб находки
@@ -72,7 +72,7 @@ block), `variable-definition-cascading.html`, `variable-definition-keywords.html
 subtests), `variable-animation-from-to.html`/`-over-transition.html`/
 `-to-only.html` (the `--value` "before" checks), plus masked-but-would-apply
 in `variable-cycles.html` and `variables-substitute-guaranteed-invalid.html`
-(both blocked earlier by [BUG-384](BUG-384-OPEN.md)). Not surveyed beyond
+(both blocked earlier by [BUG-384](BUG-384-FIXED.md)). Not surveyed beyond
 `css/css-variables` this slice, but the mechanism (a hand-written, fixed
 property list with no custom-property loop) has zero dependency on the
 category — any WPT test anywhere that reads a `--name` custom property back

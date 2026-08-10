@@ -27,7 +27,7 @@ The one WPT file exercising this (`var-ident-function.html`) never reaches
 this code path in the current run — its `#target` element is referenced by
 the bare identifier `target` in the test script, which throws
 `ReferenceError: target is not defined` before any assertion runs (a
-different, unrelated bug — see [BUG-384](BUG-384-OPEN.md), which masks this
+different, unrelated bug — see [BUG-384](BUG-384-FIXED.md), which masks this
 file's actual signal). This bug is filed from the source-grep evidence
 alone, in the same spirit as [BUG-491](BUG-491-OPEN.md)'s `hairline`
 keyword: a real, confirmable gap, but its practical blast radius through
@@ -42,6 +42,6 @@ L5) with no other WPT coverage found in this slice.
 
 ## .ini
 
-`var-ident-function.html`'s `.ini` cites [BUG-384](BUG-384-OPEN.md) as the
+`var-ident-function.html`'s `.ini` cites [BUG-384](BUG-384-FIXED.md) as the
 directly-observed cause (that's what the actual FAIL messages show) and
 notes BUG-500 as the deeper, currently-invisible gap underneath it.

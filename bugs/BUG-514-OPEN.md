@@ -59,7 +59,7 @@ rejection gap ([BUG-484](BUG-484-OPEN.md) — malformed `env(...)` accepted by
 one), `env-revert-rule.html` (1) fails on the unrelated missing
 `revert-rule` keyword ([BUG-487](BUG-487-OPEN.md)), and
 `env-in-custom-properties.tentative.html` (2) dies earlier on bare
-identifier access ([BUG-384](BUG-384-OPEN.md)).
+identifier access ([BUG-384](BUG-384-FIXED.md)).
 
 ## .ini
 

@@ -90,7 +90,7 @@ different, non-draft property (`border-image-width`, CSS Backgrounds and
 Borders **Level 3**, not this Level 4 draft — filed separately as
 [BUG-492](../bugs/BUG-492-OPEN.md), not to conflate a mature spec gap with a
 speculative-draft one); `border-width-hairline.html`'s one real failure is
-[BUG-384](../bugs/BUG-384-OPEN.md) (named window access on a bare
+[BUG-384](../bugs/BUG-384-FIXED.md) (named window access on a bare
 identifier), not this bug.
 
 ## Не в скоупе этого бага

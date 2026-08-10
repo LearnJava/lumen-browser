@@ -40,7 +40,7 @@ This single defect drives the bulk of this category's failures:
 - `inert-with-modal-dialog-00{1,3}.html`'s four `checkSelection(...)`
   based subtests would hit the identical failure, but never get there —
   they error out first on the unrelated
-  [BUG-384](BUG-384-OPEN.md) (named access on `window` for `dialog`/
+  [BUG-384](BUG-384-FIXED.md) (named access on `window` for `dialog`/
   `wrapper`/`child`).
 
 ## Root cause (found, not yet fixed)
