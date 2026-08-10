@@ -17,6 +17,7 @@
 pub mod parser;
 
 pub use parser::{
+    is_valid_selector_list,
     parse, parse_inline_style, parse_selector_list, parse_media_query, parse_supports_condition, AttrOp, AttrSelector, ColorScheme,
     ColorProfileRule, Combinator, CompoundSelector, ComplexSelector, ContainerRule, CounterStyleRule, Declaration,
     DirArg, FontFaceRule, FontFaceSource, FontFaceSourceKind, FontPaletteValuesRule, FunctionParameter, FunctionRule, ImportRule, Keyframe, KeyframesRule,

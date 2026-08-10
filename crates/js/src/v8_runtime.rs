@@ -1680,6 +1680,15 @@ impl V8JsRuntime {
             })
             .map(|n| n.index() as u32)
         });
+        // BUG-391: DOM LS требует `SyntaxError` DOMException на невалидный или
+        // неподдерживаемый селектор в `querySelector(All)`/`matches`/`closest`.
+        // Селекторные нативы ниже намеренно остаются «прощающими» (их же
+        // использует каскад и внутренние помощники шима вроде
+        // `getElementsByTagName`, которым бросать нельзя), поэтому проверка
+        // вынесена отдельным предикатом — шим зовёт его на публичных входах.
+        reg!("_lumen_selector_is_valid", move |sel: String| -> bool {
+            lumen_css_parser::is_valid_selector_list(&sel)
+        });
         let d = Arc::clone(&doc);
         reg!("_lumen_query_selector", move |sel: String| -> Option<u32> {
             let doc = d.lock().unwrap();

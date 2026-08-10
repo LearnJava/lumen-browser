@@ -100,5 +100,5 @@ fullscreen: те же гейты в File System Access и Local Font Access чи
 
 * Тот же прогон отдельно подтвердил, что happy path (`body.requestFullscreen()`
   → `document.fullscreenElement !== null` → `exitFullscreen()`) работает.
-* [BUG-391](BUG-391-OPEN.md) — вторая находка того же прогона (селекторы не
+* [BUG-391](BUG-391-FIXED.md) — вторая находка того же прогона (селекторы не
   бросают `SyntaxError`), не тронута.

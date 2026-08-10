@@ -1,6 +1,6 @@
 # BUG-391 — `matches()`/`querySelector(All)`/`closest()` никогда не бросают `SyntaxError` на невалидный или неподдерживаемый селектор
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-10 (P3)
 **Компонент:** layout (`crates/engine/layout/src/selector_query.rs:335-422` —
 `query_all`, `query_all_within`, `query_all_scoped`, `matches_selector`), js
 (`crates/js/src/dom.rs:5924` — `matches`, `5934` — `closest`, аналогичные
@@ -162,3 +162,87 @@ selectors — 66 subtests combined) covering invalid nesting/argument shapes
 for each. `.ini` under `tests/wpt/metadata/css/css-pseudo/`,
 `tests/wpt/metadata/css/css-view-transitions/`,
 `tests/wpt/metadata/css/selectors/`.
+
+---
+
+## Исправлено (P3, 2026-08-10)
+
+### Что сделано
+
+Лояльный путь парсера **не тронут**: `parse_selector_list` по-прежнему
+проглатывает всё, потому что его же зовут каскад (невалидное правило обязано
+молча выпасть из stylesheet-а) и внутренние помощники шима —
+`getElementsByTagName`/`getElementsByClassName`, обход `<slot>`,
+`document.images`, — которым спека бросать запрещает. Бросать внутри натива
+было нельзя по той же причине: натив один на публичные и внутренние вызовы.
+
+Вместо этого добавлен отдельный предикат
+`lumen_css_parser::is_valid_selector_list` (`parser.rs`), который зовётся
+из шима на публичных входах:
+
+* `Parser::parse_selector_list_strict` — строгий разбор списка. Лояльный
+  вариант на `"div,"` отдаёт `[div]` и оставляет позицию после запятой, по
+  нему невозможно отличить «список кончился» от «следующий элемент
+  невалиден»; строгий возвращает `None`, а вызывающий дополнительно требует,
+  чтобы вход был съеден целиком (ловит `"div!"`, `"div ("`, `""`).
+* рекурсивная проверка разобранного дерева: неизвестный псевдокласс
+  (`PseudoClass::Unsupported`) или pseudo-element (`PseudoElementKind::
+  Unknown`); аргумент вне допустимого множества (`::picker(foo)` —
+  спека определяет только `select`); pseudo-element не в последнем compound-е
+  (`::before *`); запрещённое продолжение после pseudo-element-а
+  (`::before.cls`, `::marker::marker`, `::highlight(foo):hover`) с двумя
+  спековыми исключениями — `::before::marker`/`::after::marker` и
+  user-action-псевдоклассы после tree-abiding pseudo-element-а.
+* аргументы `:is()`/`:where()` **не** проверяются: по CSS Selectors L4 §3.2
+  это forgiving-selector-list (`:is(::before)` валиден), в отличие от
+  non-forgiving `:not()`/`:has()`, которые проверяются рекурсивно.
+
+На JS-границе — `_lumen_selector_is_valid` (`v8_runtime.rs`) и помощник
+`_lumen_sel()` в `WEB_API_SHIM`, стоящий на шести публичных входах:
+`querySelector`/`querySelectorAll` у `document`, `Element`, `ShadowRoot`,
+`DocumentFragment`, плюс `Element.matches` и `Element.closest`.
+
+### Проверено
+
+Базис снят вторым прогоном того же скрипта на бинарнике `main`, не из старых
+заметок вендоринга.
+
+| Прогон | До | После |
+|---|---|---|
+| `fullscreen/rendering/fullscreen-pseudo-class-support.html` (драйвер бага) | 0/1, Unexpected 1 | **1/1, Unexpected 0** |
+| `fullscreen` (83 файла, `--recursive --all`) | 60/83 harness OK, 89/181 сабтестов | 60/83, **90/181** |
+| curated `dom/nodes` (регрессионный гейт) | 20/20 harness OK, 37/41, 0 unexpected | 20/20, 37/41, **0 unexpected** |
+
+Curated-прогон — главный признак отсутствия регрессии: `testharness.js`
+активно ходит через `querySelector`, и ни один его вызов не начал бросать.
+Юнит-тесты: 6 в `lumen-css-parser` (`valid_selector_list_*`), 7 в `lumen-js`
+(`v8_selector_syntax_error`, включая парные негативные — валидный селектор
+без совпадений по-прежнему отдаёт `null`, а `getElementsByTagName`/
+`getElementsByClassName` по-прежнему не бросают).
+
+### Что осталось за границей этой правки
+
+**Срезы 16/26/29/30 (`css/*`) этой правкой не закрываются** — они упираются
+во второй, независимый барьер. `css/support/parsing-testcommon.js`'s
+`test_invalid_selector` — это один `test()` с **двумя** assert-ами: сначала
+`document.querySelector(selector)` (эта половина теперь проходит), затем
+`sheet.insertRule(selector + '{}')`. CSSOM таблиц стилей отсутствует
+целиком, поэтому второй assert падает не «не бросил», а
+`TypeError: Cannot read properties of undefined (reading 'insertRule')` —
+`<style>.sheet` = `undefined`. Проверено прогоном
+`css/css-highlight-api` уже с исправленным бинарником:
+`highlight-pseudo-parsing.html` как было 0/13, так и осталось, и в отчёте у
+всех шести «should be an invalid selector» сабтестов теперь именно
+insertRule-сообщение, а не «did not throw in querySelector». Барьер уже
+заведён — [BUG-471](BUG-471-OPEN.md) и [BUG-746](BUG-746-OPEN.md); отдельной
+заявки не создавалось.
+
+**Строгость валидатора ограничена охватом самого парсера**: селектор,
+который парсер не умеет представить, считается невалидным. На том же
+прогоне это видно на трёх спекой-валидных случаях, которые теперь бросают:
+`::part(my-part)::highlight(foo)` (`::part()` в движке не реализован) и
+`::highlight(multi\ word)` / `::highlight(\31\32\33)` (escape-
+последовательности в ident-е, CSS Syntax §4.3.11). Все три сабтеста были
+красными и до правки (упирались в тот же insertRule), так что счёт не
+ухудшился, но при реализации `::part()` или escape-ов проверять их надо
+именно здесь.
