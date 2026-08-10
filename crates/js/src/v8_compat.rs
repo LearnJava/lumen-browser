@@ -704,8 +704,34 @@ pub(crate) fn register_v8_native_scoped(
 
     let key = v8::String::new(scope, name)
         .ok_or_else(|| JsError::Runtime(format!("V8: OOM creating key '{name}'")))?;
-    ctx.global(scope).set(scope, key.into(), func.into());
+    define_hidden_global(scope, ctx, key, func.into());
     Ok(())
+}
+
+/// Put a native on the global object as a **non-enumerable** own property
+/// (BUG-378).
+///
+/// The engine's natives are not part of the web-platform surface, so
+/// `for (k in window)` / `Object.keys(window)` must not report them — a plain
+/// `[[Set]]` created them with the default attributes instead, which is how 592
+/// internal names ended up enumerable on every page.
+///
+/// Deliberately still writable and configurable: `install_dom` re-registers
+/// some names on purpose (`_lumen_query_selector_scoped` is registered twice,
+/// the second registration being BUG-291's fix) and the shim wraps others
+/// (`_lumen_set_attr` → the MutationObserver hook), both of which a read-only
+/// slot would break — silently, in the shim's sloppy-mode code. Freezing is a
+/// separate, later step:
+/// [`crate::internal_globals::seal_internal_globals_v8`] at the end of
+/// `install_dom`, once every registration and every shim has run.
+fn define_hidden_global(
+    scope: &mut v8::PinScope<'_, '_>,
+    ctx: v8::Local<'_, v8::Context>,
+    key: v8::Local<'_, v8::String>,
+    value: v8::Local<'_, v8::Value>,
+) {
+    ctx.global(scope)
+        .define_own_property(scope, key.into(), value, v8::PropertyAttribute::DONT_ENUM);
 }
 
 // ── V8 value conversion helpers ─────────────────────────────────────────────
@@ -943,7 +969,7 @@ pub(crate) fn register_v8_native(
 
     let key = v8::String::new(scope, name)
         .ok_or_else(|| JsError::Runtime(format!("V8: OOM creating key '{name}'")))?;
-    ctx.global(scope).set(scope, key.into(), func.into());
+    define_hidden_global(scope, ctx, key, func.into());
     Ok(())
 }
 

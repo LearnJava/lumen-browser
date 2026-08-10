@@ -4501,18 +4501,52 @@ impl V8JsRuntime {
             // thread is already busy running this job (dispatched via `self.run`), and
             // `run` cannot be re-entered from inside its own job closure (it would
             // deadlock waiting on a channel the thread isn't servicing).
+            //
+            // BUG-378: run it through *indirect* eval rather than as a Script.
+            // Both forms create the shim's top-level `var`/`function` bindings as
+            // properties of the global object, but with different attributes: a
+            // Script's GlobalDeclarationInstantiation passes `D = false`
+            // (ECMA-262 §16.1.7), so `_lumen_u2n`, `_lumen_timers`, … come out
+            // **non-configurable** — and `enumerable: true → false` is exactly
+            // the transition `Object.defineProperty` forbids on a
+            // non-configurable property, which left 247 internal names
+            // permanently visible to `for (k in window)` no matter what the
+            // sealing pass did. Indirect eval's EvalDeclarationInstantiation
+            // passes `D = true` (§19.2.1.3), so the same bindings become
+            // configurable and `internal_globals::seal_internal_globals_v8` can
+            // hide and freeze them at the end of this function.
+            //
+            // Safe only because the shim has no top-level `let`/`const`/`class`:
+            // those are lexical, and eval puts them in a declarative environment
+            // that dies with the eval call instead of on the global object — a
+            // future top-level `const` would silently vanish. Guarded by
+            // `internal_globals`'s `shim_has_no_top_level_lexical_declarations`.
             {
                 v8::tc_scope!(tc, scope);
                 let src = v8::String::new(tc, crate::dom::WEB_API_SHIM)
                     .ok_or_else(|| JsError::Runtime("OOM: WEB_API_SHIM source".into()))?;
-                let compiled = v8::Script::compile(tc, src, None);
+                let wrapper_src = v8::String::new(tc, "(function(s) { (0, eval)(s); })")
+                    .ok_or_else(|| JsError::Runtime("OOM: WEB_API_SHIM eval wrapper".into()))?;
+                let compiled = v8::Script::compile(tc, wrapper_src, None);
                 if tc.has_caught() {
                     let exc = tc.exception().unwrap();
                     return Err(v8_err(tc, exc));
                 }
                 let compiled = compiled
                     .ok_or_else(|| JsError::Runtime("WEB_API_SHIM compile returned None".into()))?;
-                let result = compiled.run(tc);
+                let wrapper = compiled.run(tc);
+                if tc.has_caught() {
+                    let exc = tc.exception().unwrap();
+                    return Err(v8_err(tc, exc));
+                }
+                let wrapper: v8::Local<v8::Function> = wrapper
+                    .ok_or_else(|| JsError::Runtime("WEB_API_SHIM eval wrapper is None".into()))?
+                    .try_into()
+                    .map_err(|_| {
+                        JsError::Runtime("WEB_API_SHIM eval wrapper is not a function".into())
+                    })?;
+                let recv = v8::undefined(tc).into();
+                let result = wrapper.call(tc, recv, &[src.into()]);
                 if tc.has_caught() {
                     let exc = tc.exception().unwrap();
                     return Err(v8_err(tc, exc));
@@ -4842,6 +4876,14 @@ impl V8JsRuntime {
             fp_shared_worker,
         ) {
             eprintln!("v8: shared_worker::install_shared_worker_bindings_v8 failed: {e}");
+        }
+        // BUG-378: must be the LAST install step — it hides every internal
+        // `_lumen_*` global from enumeration and freezes the function-valued
+        // ones, so anything registering a native or patching one afterwards
+        // would either stay visible (register) or fail silently (patch). See
+        // `internal_globals`'s module docs.
+        if let Err(e) = crate::internal_globals::seal_internal_globals_v8(self) {
+            eprintln!("v8: internal_globals::seal_internal_globals_v8 failed: {e}");
         }
         Ok(())
     }

@@ -1,6 +1,6 @@
 # BUG-378 — 604 внутренних имени движка (`_lumen_*`/`__lumen_*`/`_LUMEN_*`) лежат own-свойствами `window`, 592 из них перечисляемы; все записываемы и удаляемы, а шим резолвит нативы через глобал в момент вызова — перезапись `window._lumen_get_attr` подменяет `Element.getAttribute` для всей страницы
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-10
 **Компонент:** js (два механизма: регистрация нативов из Rust — `ctx.globals().set(...)` / `rt.register_native(...)` / макросы `reg!` в ~25 модулях `crates/js/src/*.rs`, 468 различных строковых имён `_lumen*`; и объявления верхнего уровня `var`/`function _lumen_…` внутри `WEB_API_SHIM` (`crates/js/src/dom.rs`), которые по семантике скрипта тоже становятся перечисляемыми свойствами глобала)
 **Найден:** P2, WPT-VENDOR-fledge (2026-07-28), проба `--dump-layout` вне WPT (`.tmp/fledge-probe.html`, `.tmp/fledge-probe2.html`)
 
@@ -95,6 +95,74 @@ NAT.hijack getAttribute via native =
    неперечисляемыми (`enumerable:false`) и незаписываемыми
    (`writable:false, configurable:false`). Это убирает пункты 1-3 частично, но
    не убирает возможность прочитать натив по известному имени.
+
+## Что сделано (P3, 2026-08-10)
+
+Пункты 2-3 «Как чинить» — целиком; пункт 1 (перенос шима в IIFE) вынесен в
+[BUG-753](BUG-753-OPEN.md), см. «Остаток» ниже.
+
+1. **Точка регистрации нативов** (`crates/js/src/v8_compat.rs` —
+   `register_v8_native` и `register_v8_native_scoped`, через которые проходят все
+   468 имён) кладёт функцию `define_own_property(..., DONT_ENUM)` вместо
+   `[[Set]]`. Записываемость **сохранена намеренно**: `install_dom` часть имён
+   регистрирует дважды (`_lumen_query_selector_scoped` — второй раз это фикс
+   BUG-291), а шим оборачивает другие (`_lumen_set_attr` → хук
+   MutationObserver, `_lumen_append_child` → хук вставки ресурсов); read-only
+   слот сломал бы и то и другое, причём молча — код шима sloppy-mode.
+
+2. **Единый seal-пасс** — новый `crates/js/src/internal_globals.rs`,
+   `seal_internal_globals_v8`, вызывается последним шагом `install_dom`, когда
+   все нативы зарегистрированы и все ~120 модульных шимов исполнены. Каждое
+   внутреннее имя (`/^__|^_+lumen/i`) становится неперечисляемым, а
+   функции — нативы и уже установленные обёртки шима над ними — ещё и
+   незаписываемыми и неудаляемыми. **Состояние** движка (`_lumen_timers`,
+   `_lumen_loc_parts`, `_lumen_timer_nesting`, `_lumen_last_focused_nid`,
+   `_lumen_document_implementation`, …) остаётся записываемым сознательно: шим
+   пишет в него уже после пасса (пример: `_lumen_tick_timers` переписывает
+   `_lumen_timers` на каждом такте), и заморозка теряла бы эти записи без
+   всякого признака.
+
+3. **`WEB_API_SHIM` вычисляется через indirect eval, а не как Script**
+   (`v8_runtime.rs`, место вычисления шима). Без этого пункт 2 упирался в спеку:
+   `GlobalDeclarationInstantiation` скрипта передаёт `D = false` (ECMA-262
+   §16.1.7), поэтому 246 top-level `var`/`function _lumen_…` шима — свойства
+   **non-configurable**, а `enumerable: true → false` — ровно тот переход,
+   который `Object.defineProperty` на non-configurable запрещает. В прогоне это
+   выглядело так: пункты 1-2 убрали 489 имён из 736, а 247 оставались видимы
+   и никакими атрибутами не убирались. `EvalDeclarationInstantiation` у indirect
+   eval передаёт `D = true` (§19.2.1.3), и те же привязки становятся
+   configurable. Приём корректен только потому, что в шиме **нет** top-level
+   `let`/`const`/`class`: они лексические и при eval попали бы в декларативное
+   окружение, умирающее вместе с вызовом eval, а не на глобал. На это заведён
+   тест-страж `shim_has_no_top_level_lexical_declarations` — иначе будущий
+   top-level `const` в шиме исчез бы молча.
+
+Замер на реальном движке (`--dump-layout` пробой из заявки), было → стало:
+
+| | до | после |
+|---|---|---|
+| перечисляемых внутренних имён (`for (k in window)`) | 592 | **0** |
+| дескриптор `_lumen_get_attr` | `writable/enumerable/configurable` = все `true` | все `false` |
+| hijack `getAttribute` через `window._lumen_get_attr = …` | `HIJACKED` | `orig` |
+| `delete window._lumen_get_attr` | `true` | `false` |
+
+Тесты — 9 в `internal_globals::tests`: перепись перечислимости (с выводом самих
+имён при регрессе), hijack присваиванием + `TypeError` в strict mode, `delete`,
+заморозка обёртки шима с проверкой, что `setAttribute` через неё работает,
+записываемость состояния с прогоном `_lumen_tick_timers`, неперечислимость на
+самой точке регистрации (рантайм без `install_dom`, т.е. без пасса),
+неприкосновенность web-видимых глобалов, страж лексических объявлений.
+`cargo test -p lumen-js --features v8-backend` — 2719 + 68 зелёных.
+
+## Остаток
+
+Имя, **известное заранее**, по-прежнему читается: `typeof
+window._lumen_get_attr === 'function'`, `Object.getOwnPropertyNames(window)`
+выдаёт 725 внутренних имён. Это неустранимо, пока шим резолвит нативы поздно,
+через глобал, и требует пункта 1 — перенос `WEB_API_SHIM` в IIFE с передачей
+нативов аргументами и перестройкой границы «шим ↔ ~120 модульных шимов»,
+которые обращаются к внутренним именам напрямую. Заведено как
+[BUG-753](BUG-753-OPEN.md).
 
 ## Заметки
 
