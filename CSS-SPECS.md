@@ -178,6 +178,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `box-sizing` | ✅ | content-box, border-box |
 | `overflow` / `overflow-x` / `overflow-y` | ✅ | visible/hidden/clip; scroll ⬜ rendering |
 | `visibility` | ✅ | visible/hidden (space reserved) |
+| `zoom` | 🟡 | P3 2026-08-10: `<number>` / `<percentage>` / `normal` / `reset`, compounds down the tree (`ComputedStyle::effective_zoom`); scales `font-size` and the absolute (`px`) lengths of the non-inherited box-model properties — width/height/min/max, margin, padding, inset, border-width, row/column-gap. Relative units need no handling (they resolve against already-zoomed bases); `font-size` takes the compounded factor only when it resolved from a zoom-independent basis (`px`/`rem`/viewport units, `FontSizeBasis`) — an `em`/`%`/inherited one takes just the element's own, since the ancestors' is already in the basis. Not scaled: `line-height` and inherited length properties (`text-indent`, `letter-spacing`, `word-spacing`) when specified on the zoomed element itself, `rem` (resolves against the unzoomed root font-size), a `calc()` font-size's absolute terms, and a `border-width` given in `em` (the cascade resolves it to px against the already-zoomed font-size, so the multiply here double-applies). `reset` is treated as `1.0` rather than as "ignore ancestors" |
 | `opacity` | ✅ | composited layer |
 | `aspect-ratio` | ✅ | auto, W/H ratio |
 | `text-overflow` | ✅ | clip, ellipsis |
