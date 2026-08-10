@@ -238,7 +238,7 @@ Guard не выводится в публичный API, поэтому `Respons
   мутацию, а не чтение) — вне движка, у которого нет CORS-слоя.
 - `Response.redirect()` по-прежнему пишет `r.url` вместо заголовка `Location` и не
   бросает `RangeError` на не-редиректном статусе; `Response.error()` не выставляет
-  `type = 'error'` — это [BUG-370](BUG-370-OPEN.md), который прямо владеет
+  `type = 'error'` — это [BUG-370](BUG-370-FIXED.md), который прямо владеет
   «корректным `Response.error()`/`redirect()`».
 - Мини-шим `Headers`/`Response` в скоупе service worker
   (`crates/js/src/sw_worker.rs`) — отдельный объект того же класса дефекта,
@@ -246,7 +246,7 @@ Guard не выводится в публичный API, поэтому `Respons
 
 ## Связанные
 
-- [BUG-370](BUG-370-OPEN.md) — та же проба, `Request`/`Response`: нет Body-mixin
+- [BUG-370](BUG-370-FIXED.md) — та же проба, `Request`/`Response`: нет Body-mixin
   на `Request`, `Response.json()`, корректного `Response.error()`/`redirect()`.
 - [BUG-694](BUG-694-OPEN.md) — ровно тот же класс на `URLSearchParams`: нет
   `Symbol.iterator`, `entries()` отдаёт массив, копирующий конструктор кладёт

@@ -58,11 +58,11 @@
  "generated": "2026-08-10",
  "counts": {
   "open": 326,
-  "fixed": 387,
+  "fixed": 388,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 713,
+ "total_bugs": 714,
  "phases": [
   {
    "id": "P0",
@@ -7168,10 +7168,10 @@
    "debtor": false
   },
   "BUG-370": {
-   "status": "open",
+   "status": "fixed",
    "title": "`Request`/`Response` — Phase-0-приближения (признано в комментарии `dom.rs:9025`). `Request` **не имеет Body-mixin вовсе**: `text`/`json`/`blob`/`arrayBuffer`/`…",
-   "component": "js (`crates/js/src/dom.rs:8908-8925` — конструктор `Response`; `8967-9007` — Body-mixin; `9008-9024` — `clone`/`error`/`redirect`; `9026-9046` — `Request`)",
-   "date": null,
+   "component": "js (`crates/js/src/dom.rs` — блок `Body`/`Response`/`Request` в `WEB_API_SHIM`)",
+   "date": "2026-08-10",
    "debtor": false
   },
   "BUG-371": {
@@ -9777,6 +9777,13 @@
    "component": "js (`crates/js/src/sw_worker.rs` — шим глобального скоупа service worker)",
    "date": null,
    "debtor": false
+  },
+  "BUG-749": {
+   "status": "open",
+   "title": "`fetch()` не отправляет заголовки запроса вообще: ни `init.headers`, ни `Request.headers` не доезжают до сети. Не потеря в шиме и не guard — `q.headers.get(...)…",
+   "component": "js (`crates/js/src/dom.rs` — `_lumen_fetch`), core (`crates/core/src/ext.rs::JsFetchProvider`), network (`crates/network/src/lib.rs`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -10151,6 +10158,9 @@
   ],
   "js (`crates/js/src/dom.rs` — `Window`-шим)": [
    "BUG-529"
+  ],
+  "js (`crates/js/src/dom.rs` — `_lumen_fetch`), core (`crates/core/src/ext.rs::JsFetchProvider`), network (`crates/network/src/lib.rs`)": [
+   "BUG-749"
   ],
   "js (`crates/js/src/dom.rs` — `_lumen_make_style`/`_lumen_serialize_style`)": [
    "BUG-473"

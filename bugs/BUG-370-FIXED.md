@@ -1,8 +1,9 @@
 # BUG-370 — `Request` не имеет Body-mixin вовсе (`text`/`json`/`blob`/`arrayBuffer`/`formData`/`bytes` = `undefined`) и не абсолютизирует `url`; `Response.json()` отсутствует, `Response.error()` отдаёт обычный ответ вместо network error, `Response.redirect()` не ставит `Location`; ни один конструктор не валидирует аргументы
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/dom.rs:8908-8925` — конструктор `Response`; `dom.rs:8967-9007` — `_consumeBody` и Body-mixin `Response`; `dom.rs:9008-9024` — `clone`/`error`/`redirect`; `dom.rs:9026-9046` — конструктор `Request` и его единственный метод `clone`)
+**Статус:** FIXED 2026-08-10 (все пункты A/B/C)
+**Компонент:** js (`crates/js/src/dom.rs` — блок `Body`/`Response`/`Request` в `WEB_API_SHIM`)
 **Найден:** P2, WPT-VENDOR-fetch (2026-07-28), проба `--dump-layout` вне WPT
+**Исправлен:** P3 2026-08-10, ветка `p3-bug-370`
 
 ## Симптом
 
@@ -234,9 +235,63 @@ target/dev-release/lumen.exe --dump-layout .tmp/probe-fetch2.html
 `response-static-json.any.js`, `response-static-error.any.js`,
 `response-consume.any.js` и т.д.).
 
+## Фикс (P3, 2026-08-10)
+
+Оба класса переписаны одним замыканием в `WEB_API_SHIM` — у них общий Body-mixin
+и общая форма приватного состояния (две `WeakMap`, по одной на интерфейс). Точечно
+чинить было нечего: пункты C1/C2/C3 — не три дефекта, а один, «объект собран
+присваиваниями в `this` вместо интерфейса», и он же порождает половину A и B.
+
+| Пункт | Что сделано |
+|---|---|
+| A1 | `Request` получил Body-mixin (`body`/`bodyUsed`/`arrayBuffer`/`blob`/`bytes`/`formData`/`json`/`text`) и атрибуты `keepalive`/`destination`. Mixin ставится общей функцией `installBody(proto, stateOf)` на оба прототипа — расхождение между ними теперь структурно невозможно |
+| A2 | Уже был закрыт вместе с [BUG-347](BUG-347-FIXED.md) |
+| A3 | `new` обязателен, `Request.length === 1`, тело у `GET`/`HEAD` → `TypeError`, метод-не-токен → `TypeError`. Нормализация метода приведена к спеке: апперкейсятся только шесть известных имён, `patch` остаётся строчным (раньше апперкейсилось всё) |
+| B1 | Добавлен статический `Response.json(data, init)`; тело передаётся байтами, поэтому `application/json` ставится только когда `init.headers` не задал свой `Content-Type` |
+| B2 | `Response.error()` строится напрямую из слотов, минуя конструктор (тот безусловно ставит `type = 'default'`) → `type === 'error'`, `body === null`, заголовки `immutable` |
+| B3 | `Response.redirect()` кладёт сериализованный URL в `Location` и бросает `RangeError` вне {301,302,303,307,308}. Список заполняется **до** установки `immutable`-guard-а — иначе собственная запись была бы отвергнута |
+| B4 | `RangeError` на статусе вне 200-599, `TypeError` на теле при null-body-статусе (101/103/204/205/304) |
+| B5 | `Content-Type` выводится из типа тела (строка, `URLSearchParams`, `Blob`, `FormData`) и только заполняет пробел, не перебивая `init.headers` |
+| B6 | `formData()` (разбирает urlencoded и multipart) и `bytes()` дополнили mixin |
+| C1 | Все атрибуты — read-only геттеры на прототипе; `Object.getOwnPropertyNames(new Request(...))` теперь пуст, `req.method = 'DELETE'` ничего не меняет |
+| C2 | Слоты уехали в `WeakMap`; `JSON.stringify` на обоих даёт `{}` (раньше `Request` вываливал `signal._listeners`, а `Response` **бросал** из-за цикла в незапрятанном `ReadableStream`) |
+| C3 | `Symbol.toStringTag` на обоих прототипах |
+| C4 | `fetch` на глобале стал `configurable`. Объявление `function fetch()` на верхнем уровне скрипта даёт `configurable: false`, и переопределить такое свойство через `defineProperty` нельзя в принципе — функция объявлена как `_lumen_fetch` и публикуется `defineProperty`-ем; `name`/`length` выставлены вручную, чтобы `fetch.name === 'fetch'` и `fetch.length === 1` остались спековыми |
+
+Побочные изменения, которых потребовала приватность состояния (тот же класс, что в
+[BUG-369](BUG-369-FIXED.md) — «спрятал состояние в замыкание, отрезал от него и
+легитимных внутренних потребителей»): замыкание выдаёт наружу два внутренних
+глобала — `_lumen_response_from_fetch_cache(status, statusText, headers, url)`
+(сетевой путь; заменил `Response._fromFetchCache` + внешнее присваивание
+`resp.url`, которое теперь молча ничего бы не делало) и `_lumen_body_source(obj)`
+(`fetch()` читал `input.body`, а он теперь `ReadableStream`, а не исходная
+строка/`FormData`).
+
+Регрессионный тест BUG-703 пришлось переписать: он строил объект через
+`Object.create(Response.prototype)` и присваивание приватных полей. Новый вариант
+гоняет два `fetch()` с разными телами через мок-провайдер — это сильнее прежнего,
+потому что ловит именно перекрёстное чтение общего слота `FetchCache`, а не только
+факт чтения очереди.
+
+Изменения формы, не входившие в заявку, но следующие из спеки и потому сделанные
+заодно: `new Response()` без тела теперь даёт `body === null` (раньше всегда был
+поток над пустым буфером); `Response.redirect(url).url` — `''`, а не переданный URL
+(URL уезжает в `Location`); `clone()` на использованном теле бросает `TypeError`.
+
+Тесты: 20 новых в `crates/js/src/dom.rs`, `mod dom::tests::v8_ws_sse` (и один
+переписанный в `v8_whatwg_streams`). Прогон — `cargo test -p lumen-js --lib
+--features v8-backend`, 2638 зелёных.
+
+**Остаток, найденный по ходу и вынесенный отдельно:** `fetch()` не отправляет
+заголовки запроса вообще — ни `init.headers`, ни `Request.headers` никуда не
+доезжают, потому что у `JsFetchProvider::fetch_sync(url, method)` попросту нет
+параметра заголовков → [BUG-749](BUG-749-OPEN.md).
+
 ## Связанные
 
 - [BUG-369](BUG-369-FIXED.md) — та же проба, `Headers`: не итерируем, не копируется.
+- [BUG-749](BUG-749-OPEN.md) — найден при этом фиксе: `fetch()` молча теряет
+  заголовки запроса (в мосту к Rust нет канала для них).
 - [BUG-347](BUG-347-FIXED.md) — `fetch()` не резолвит относительные URL; A2 —
   соседняя строка того же шима, исправлена вместе с ним 2026-08-06.
 - [BUG-346](BUG-346-FIXED.md), [BUG-359](BUG-359-FIXED.md), [BUG-362](BUG-362-FIXED.md) —
