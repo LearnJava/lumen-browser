@@ -238,8 +238,13 @@ fn base64_encode(data: &[u8]) -> String {
     out
 }
 
+/// Decode standard base64, ignoring padding and ASCII whitespace.
+///
+/// `None` on any character outside the alphabet. Also used by
+/// [`crate::filesystem_access`], which moves file bytes across the JS boundary
+/// as base64 — a JS string cannot carry arbitrary bytes intact.
 #[cfg(feature = "v8-backend")]
-fn base64_decode(encoded: &str) -> Option<Vec<u8>> {
+pub(crate) fn base64_decode(encoded: &str) -> Option<Vec<u8>> {
     const INVALID: u8 = 0xFF;
     let mut table = [INVALID; 256];
     for (i, &c) in b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"

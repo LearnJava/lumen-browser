@@ -1,0 +1,11 @@
+    Checking lumen-js v0.5.0 (D:\RustProjects\lumen-browser\.claude\worktrees\p3-work\crates\js)
+warning: function `await_bool` is never used
+    --> crates\js\src\filesystem_access.rs:2090:8
+     |
+2090 |     fn await_bool(rt: &V8JsRuntime, expr: &str) -> bool {
+     |        ^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `lumen-js` (lib test) generated 1 warning
+    Finished `dev` profile [optimized + debuginfo] target(s) in 6.63s

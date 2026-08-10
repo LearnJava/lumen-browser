@@ -41,12 +41,17 @@
 //! | `_lumen_show_open_file_picker` | `() → Option<String>` | Open file dialog → JSON `{name,token,size}` or null |
 //! | `_lumen_show_save_file_picker` | `(name: String) → Option<String>` | Save dialog → write-handle id or null |
 //! | `_lumen_show_directory_picker` | `() → Option<String>` | Directory dialog → JSON `{name,path_id}` or null |
-//! | `_lumen_dir_entries` | `(path_id: String) → String` | List directory → JSON `[{name,kind}]` |
+//! | `_lumen_dir_entries` | `(path_id: String) → String` | List directory → JSON `[{name,kind,token\|path_id,size}]`, one grant per entry |
 //! | `_lumen_dir_get_file` | `(path_id, name, create: bool) → String` | Get/create file → JSON `{name,token,size}` or `{error}` |
 //! | `_lumen_dir_get_subdir` | `(path_id, name, create: bool) → String` | Get/create subdir → JSON `{name,path_id}` or `{error}` |
 //! | `_lumen_dir_remove_entry` | `(path_id, name, recursive: bool) → String` | Remove entry → `""` or a DOMException name |
 //! | `_lumen_fs_resolve` | `(parent_id, child_dir_id, child_token) → Option<String>` | Relative path → JSON `[segment, …]` or null |
-//! | `_lumen_writable_write_text` | `(handle_id: String, data: String) → bool` | Append UTF-8 text to writable stream |
+//! | `_lumen_fs_permission` | `(path_id, token, mode) → String` | `granted` / `prompt` / `denied` for `query`/`requestPermission` |
+//! | `_lumen_fs_unique_id` | `(path_id, token) → Option<String>` | Stable opaque per-entry label (`getUniqueId`, `isSameEntry`) |
+//! | `_lumen_fs_remove` | `(path_id, token, recursive: bool) → String` | Remove the handle's own entry → `""` or a DOMException name |
+//! | `_lumen_fs_move` | `(token, dest_dir_id, new_name) → String` | Rename/move a file → JSON `{name,token,size}` or `{error}` |
+//! | `_lumen_writable_write_bytes` | `(handle_id, position: f64, data_b64) → bool` | Write base64 bytes at a file position |
+//! | `_lumen_writable_truncate` | `(handle_id: String, size: f64) → bool` | Resize the pending buffer |
 //! | `_lumen_writable_close` | `(handle_id: String) → bool` | Flush and close writable stream |
 //! | `_lumen_writable_from_token` | `(token: String) → Option<String>` | Write-handle id for an OPFS file token |
 //!
@@ -110,10 +115,33 @@ impl WriteRegistry {
         id
     }
 
-    fn append_text(&mut self, id: &str, origin: &str, text: &str) -> bool {
+    /// Splice `bytes` into the pending buffer at `position`, zero-filling the gap
+    /// if the write starts past the current end.
+    ///
+    /// FS §6.2 defines every write in terms of a file position, not of appending:
+    /// `seek()` moves it, `write({type:'write', position})` writes at an explicit
+    /// one. The buffer used to be append-only, which is why `seek()`/`truncate()`
+    /// could only be no-ops (BUG-374 point 7).
+    fn write_bytes(&mut self, id: &str, origin: &str, position: u64, bytes: &[u8]) -> bool {
         match self.handles.get_mut(id) {
             Some(h) if h.origin == origin => {
-                h.data.extend_from_slice(text.as_bytes());
+                let pos = position as usize;
+                let end = pos.saturating_add(bytes.len());
+                if h.data.len() < end {
+                    h.data.resize(end, 0);
+                }
+                h.data[pos..end].copy_from_slice(bytes);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Resize the pending buffer to `size`, zero-filling if it grows (FS §6.2).
+    fn truncate(&mut self, id: &str, origin: &str, size: u64) -> bool {
+        match self.handles.get_mut(id) {
+            Some(h) if h.origin == origin => {
+                h.data.resize(size as usize, 0);
                 true
             }
             _ => false,
@@ -443,6 +471,54 @@ fn valid_entry_name(name: &str) -> bool {
         && !name.contains('\0')
 }
 
+/// Path behind a handle, whichever of the two grant kinds it carries.
+///
+/// A directory handle presents `path_id`, a file handle `token`; the base
+/// interface's members (`remove`, `getUniqueId`, `isSameEntry`) are defined on
+/// `FileSystemHandle` and therefore have to accept either.
+#[cfg(feature = "v8-backend")]
+fn resolve_handle_path(path_id: &str, token: &str, origin: &str) -> Option<PathBuf> {
+    if !path_id.is_empty() {
+        return dir_reg().lock().unwrap_or_else(|e| e.into_inner()).get(path_id, origin).cloned();
+    }
+    if !token.is_empty() {
+        return crate::file_input::path_for_token(token, origin);
+    }
+    None
+}
+
+/// `origin`-scoped random label per file-system path, stable for the lifetime of
+/// the process.
+#[cfg(feature = "v8-backend")]
+static UNIQUE_IDS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+
+/// Opaque, stable identifier of the entry at `path` as seen by `origin`.
+///
+/// Backs `FileSystemHandle.getUniqueId()` and, through it, `isSameEntry()`: two
+/// handles on the same file get *different* grant tokens (every
+/// `getFileHandle()` mints a fresh one), so comparing tokens answered "not the
+/// same entry" for two handles that are, in fact, the same entry.
+///
+/// The label is drawn from the same CSPRNG as a grant id rather than hashed from
+/// the path: a hash would let a page confirm a guessed absolute path by
+/// comparing digests, which is exactly the information the token model exists to
+/// withhold.
+#[cfg(feature = "v8-backend")]
+fn unique_id_for_path(path: &std::path::Path, origin: &str) -> String {
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let key = format!("{origin}\u{0}{}", canonical.to_string_lossy());
+    let mut map = UNIQUE_IDS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(existing) = map.get(&key) {
+        return existing.clone();
+    }
+    let id = crate::file_input::new_grant_id().unwrap_or_default();
+    map.insert(key, id.clone());
+    id
+}
+
 // ── Origin private file system (OPFS) ──────────────────────────────────────────
 
 /// Root of the OPFS tree for the whole installation: `<exe_dir>/data/opfs/`.
@@ -586,18 +662,40 @@ pub(crate) fn install_filesystem_access_v8(
 
     let entries_origin = origin.to_string();
     let dir_entries = into_v8_fn1(move |path_id: String| -> String {
-        let path_opt = dir_reg()
+        let grant = dir_reg()
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .get(&path_id, &entries_origin)
-            .cloned();
-        let Some(dir) = path_opt else { return "[]".to_string() };
+            .get_grant(&path_id, &entries_origin);
+        let Some((dir, writable)) = grant else { return "[]".to_string() };
         let Ok(rd) = std::fs::read_dir(&dir) else { return "[]".to_string() };
         let mut items = Vec::new();
         for entry in rd.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            let kind = if entry.path().is_dir() { "directory" } else { "file" };
-            items.push(format!(r#"{{"name":"{}","kind":"{}"}}"#, json_escape(&name), kind));
+            // Each listed entry carries a grant of its own, inheriting the
+            // parent's write permission. Listing used to hand back handles built
+            // on an empty id, so iterating a directory produced handles with the
+            // right `name`/`kind` and no contents at all — `getFile()` read
+            // nothing and `entries()` on a listed subdirectory returned `[]`
+            // (BUG-374 point 6, a silent wrong answer rather than an error).
+            let item = if entry.path().is_dir() {
+                let sub_id = dir_reg()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .allocate(entry.path(), &entries_origin, writable);
+                format!(
+                    r#"{{"name":"{}","kind":"directory","path_id":"{}"}}"#,
+                    json_escape(&name),
+                    json_escape(&sub_id)
+                )
+            } else {
+                match file_entry_json(&entry.path(), &entries_origin, writable) {
+                    // `{"name":…,"token":…,"size":…}` plus the discriminator the
+                    // shim switches on.
+                    Some(json) => format!(r#"{{"kind":"file",{}"#, &json[1..]),
+                    None => continue,
+                }
+            };
+            items.push(item);
         }
         format!("[{}]", items.join(","))
     });
@@ -765,14 +863,166 @@ pub(crate) fn install_filesystem_access_v8(
     });
     rt.register_native("_lumen_writable_from_token", writable_from_token)?;
 
+    // Data crosses as base64 rather than as a JS string: `write()` accepts
+    // `ArrayBuffer`/typed arrays/`Blob`, whose bytes are not text and do not
+    // survive a UTF-8 round trip (BUG-374 point 7 — a `Blob` used to land in the
+    // file as the literal `[object Blob]`).
     let write_origin = origin.to_string();
-    let writable_write_text = into_v8_fn2(move |handle_id: String, data: String| -> bool {
-        write_reg()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .append_text(&handle_id, &write_origin, &data)
+    let writable_write_bytes =
+        into_v8_fn3(move |handle_id: String, position: f64, data_b64: String| -> bool {
+            let Some(bytes) = crate::sw_worker::base64_decode(&data_b64) else {
+                return false;
+            };
+            if !(0.0..=(u64::MAX as f64)).contains(&position) {
+                return false;
+            }
+            write_reg().lock().unwrap_or_else(|e| e.into_inner()).write_bytes(
+                &handle_id,
+                &write_origin,
+                position as u64,
+                &bytes,
+            )
+        });
+    rt.register_native("_lumen_writable_write_bytes", writable_write_bytes)?;
+
+    let truncate_origin = origin.to_string();
+    let writable_truncate = into_v8_fn2(move |handle_id: String, size: f64| -> bool {
+        if !(0.0..=(u64::MAX as f64)).contains(&size) {
+            return false;
+        }
+        write_reg().lock().unwrap_or_else(|e| e.into_inner()).truncate(
+            &handle_id,
+            &truncate_origin,
+            size as u64,
+        )
     });
-    rt.register_native("_lumen_writable_write_text", writable_write_text)?;
+    rt.register_native("_lumen_writable_truncate", writable_truncate)?;
+
+    // ── FileSystemHandle members (FS §4) ──────────────────────────────────────
+    // All four take `(path_id, token)` — a directory handle presents the first,
+    // a file handle the second — so one native shape serves both subclasses and
+    // the base interface's methods stay on the base prototype (BUG-374 point 5).
+
+    let perm_origin = origin.to_string();
+    let fs_permission =
+        into_v8_fn3(move |path_id: String, token: String, mode: String| -> String {
+            let readwrite = mode == "readwrite";
+            if !path_id.is_empty() {
+                return match dir_reg()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get_grant(&path_id, &perm_origin)
+                {
+                    // A picked directory is a read grant and there is no dialog
+                    // that would upgrade it, so `readwrite` stays 'prompt'
+                    // rather than claiming a permission the engine cannot give.
+                    Some((_, writable)) if readwrite && !writable => "prompt",
+                    Some(_) => "granted",
+                    None => "denied",
+                }
+                .to_string();
+            }
+            if !token.is_empty() {
+                if crate::file_input::writable_path_for_token(&token, &perm_origin).is_some() {
+                    return "granted".to_string();
+                }
+                if crate::file_input::path_for_token(&token, &perm_origin).is_some() {
+                    return if readwrite { "prompt" } else { "granted" }.to_string();
+                }
+            }
+            "denied".to_string()
+        });
+    rt.register_native("_lumen_fs_permission", fs_permission)?;
+
+    let unique_origin = origin.to_string();
+    let fs_unique_id = into_v8_fn2(move |path_id: String, token: String| -> Option<String> {
+        let path = resolve_handle_path(&path_id, &token, &unique_origin)?;
+        Some(unique_id_for_path(&path, &unique_origin))
+    });
+    rt.register_native("_lumen_fs_unique_id", fs_unique_id)?;
+
+    let remove_origin = origin.to_string();
+    let fs_remove =
+        into_v8_fn3(move |path_id: String, token: String, recursive: bool| -> String {
+            if !path_id.is_empty() {
+                let Some((dir, writable)) = dir_reg()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get_grant(&path_id, &remove_origin)
+                else {
+                    return "NotAllowedError".to_string();
+                };
+                if !writable {
+                    return "NotAllowedError".to_string();
+                }
+                let res = if recursive {
+                    std::fs::remove_dir_all(&dir)
+                } else {
+                    std::fs::remove_dir(&dir)
+                };
+                return match res {
+                    Ok(()) => String::new(),
+                    // FS §7.5: a non-empty directory without `recursive` is the
+                    // one failure the caller is expected to recover from.
+                    Err(_) if !recursive => "InvalidModificationError".to_string(),
+                    Err(_) => "NoModificationAllowedError".to_string(),
+                };
+            }
+            let Some(path) = crate::file_input::writable_path_for_token(&token, &remove_origin)
+            else {
+                return "NotAllowedError".to_string();
+            };
+            match std::fs::remove_file(&path) {
+                Ok(()) => String::new(),
+                Err(_) => "NoModificationAllowedError".to_string(),
+            }
+        });
+    rt.register_native("_lumen_fs_remove", fs_remove)?;
+
+    let move_origin = origin.to_string();
+    let fs_move =
+        into_v8_fn3(move |token: String, dest_dir_id: String, new_name: String| -> String {
+            let Some(src) = crate::file_input::writable_path_for_token(&token, &move_origin)
+            else {
+                return fs_error_json("NotAllowedError");
+            };
+            let dest_dir = if dest_dir_id.is_empty() {
+                match src.parent() {
+                    Some(p) => p.to_path_buf(),
+                    None => return fs_error_json("NotAllowedError"),
+                }
+            } else {
+                match dir_reg()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get_grant(&dest_dir_id, &move_origin)
+                {
+                    Some((dir, true)) => dir,
+                    _ => return fs_error_json("NotAllowedError"),
+                }
+            };
+            let name = if new_name.is_empty() {
+                match src.file_name().and_then(|n| n.to_str()) {
+                    Some(n) => n.to_string(),
+                    None => return fs_error_json("TypeError"),
+                }
+            } else {
+                new_name
+            };
+            if !valid_entry_name(&name) {
+                return fs_error_json("TypeError");
+            }
+            let target = dest_dir.join(&name);
+            if std::fs::rename(&src, &target).is_err() {
+                return fs_error_json("NoModificationAllowedError");
+            }
+            // The handle now represents the entry at its new location (FS §4),
+            // so it needs a grant for the new path — the old token still points
+            // at a name that no longer exists.
+            file_entry_json(&target, &move_origin, true)
+                .unwrap_or_else(|| fs_error_json("NoModificationAllowedError"))
+        });
+    rt.register_native("_lumen_fs_move", fs_move)?;
 
     let close_origin = origin.to_string();
     let writable_close = into_v8_fn1(move |handle_id: String| -> bool {
@@ -789,18 +1039,30 @@ pub(crate) fn install_filesystem_access_v8(
 
 // ── JS shim ────────────────────────────────────────────────────────────────────
 
-/// Defines `FileSystemFileHandle`, `FileSystemDirectoryHandle`,
-/// `FileSystemWritableFileStream`, and wraps the picker globals as Promise-returning APIs.
+/// Defines the File System Access interface hierarchy — `FileSystemHandle` and
+/// its two subclasses, plus `FileSystemWritableFileStream` — and wraps the picker
+/// globals as Promise-returning APIs.
 ///
 /// BUG-371 moved the whole shim inside an IIFE. It used to run at top level so
-/// its classes were global bindings *and* `window.X`; but the eight natives it
-/// calls are deleted from the global object right after install
+/// its classes were global bindings *and* `window.X`; but the natives it calls
+/// are deleted from the global object right after install
 /// ([`crate::file_input::seal_file_natives_v8`]), so they have to be captured in
 /// closure scope first. The classes are still reachable exactly as before —
 /// `window.X = X` on a real page makes them globals anyway.
+///
+/// BUG-374 gave the three classes their WebIDL shape. They used to be three
+/// unrelated ES5 constructor functions: no common `FileSystemHandle` ancestor
+/// (so `if (window.FileSystemHandle)` feature-detects answered "unsupported"),
+/// publicly constructible (spec: `TypeError: Illegal constructor`), `kind`/`name`
+/// held as enumerable *writable own data properties* — `fileHandle.kind =
+/// 'directory'` was accepted and the object then lied about its own type — no
+/// `Symbol.toStringTag`, no `queryPermission`/`requestPermission`/`remove`/
+/// `getUniqueId`, no async iteration of a directory, and a writable stream that
+/// was not a `WritableStream` and whose `seek`/`truncate` did nothing at all.
 #[cfg(feature = "v8-backend")]
 const FSAL_SHIM: &str = r#"
 (function() {
+'use strict';
 
 // BUG-371 point 1: the natives live here from now on, not on `window`.
 function nat(name) {
@@ -814,7 +1076,12 @@ var NAT_DIR_GET_FILE = nat('_lumen_dir_get_file');
 var NAT_DIR_GET_SUB  = nat('_lumen_dir_get_subdir');
 var NAT_DIR_REMOVE   = nat('_lumen_dir_remove_entry');
 var NAT_FS_RESOLVE   = nat('_lumen_fs_resolve');
-var NAT_WRITE_TEXT   = nat('_lumen_writable_write_text');
+var NAT_FS_PERM      = nat('_lumen_fs_permission');
+var NAT_FS_UNIQUE    = nat('_lumen_fs_unique_id');
+var NAT_FS_REMOVE    = nat('_lumen_fs_remove');
+var NAT_FS_MOVE      = nat('_lumen_fs_move');
+var NAT_WRITE_BYTES  = nat('_lumen_writable_write_bytes');
+var NAT_WRITE_TRUNC  = nat('_lumen_writable_truncate');
 var NAT_WRITE_CLOSE  = nat('_lumen_writable_close');
 var NAT_WRITE_TOKEN  = nat('_lumen_writable_from_token');
 
@@ -838,263 +1105,699 @@ function fsUnwrap(raw, message) {
 var FS_INTERNAL = (typeof globalThis.__lumen_fs_internal === 'object')
   ? globalThis.__lumen_fs_internal : null;
 
+// ── WebIDL plumbing ──────────────────────────────────────────────────────────
+
+// None of these interfaces declares a constructor, so page script must not be
+// able to build one: `new FileSystemFileHandle(name, token, size)` used to work
+// and took the internal grant id straight back as an argument. Internal
+// construction goes through the factories below, which hand this token in.
+var BRAND = {};
+
 // BUG-371 point 4 (same reasoning as `File._token`): a handle's grant id is a
 // private slot, not an own property. Left web-visible, `handle._token` /
-// `_pathId` / `_id` were the values an attacker needed, and the public
-// constructors accepted them straight back.
-var FILE_STATE = new WeakMap();   // FileSystemFileHandle       -> {token, size}
-var DIR_STATE  = new WeakMap();   // FileSystemDirectoryHandle  -> {pathId}
-var WRITE_STATE = new WeakMap();  // FileSystemWritableFileStream -> {id, closed}
+// `_pathId` / `_id` were the values an attacker needed. BUG-374 point 3 moved
+// `kind`/`name` in here too — as own data properties they were writable, so a
+// handle could be made to misreport its own kind.
+//
+//   handle -> {kind, name, token, size, pathId}
+var STATE = new WeakMap();
+// stream -> {id, position, closed}
+var WRITE_STATE = new WeakMap();
 
-// ── FileSystemWritableFileStream ─────────────────────────────────────────────
-
-function FileSystemWritableFileStream(handleId) {
-  WRITE_STATE.set(this, { id: String(handleId == null ? '' : handleId), closed: false });
+function illegalConstructor() {
+  throw new TypeError('Illegal constructor');
 }
 
-FileSystemWritableFileStream.prototype.write = function(data) {
-  var st = WRITE_STATE.get(this);
-  return Promise.resolve().then(function() {
-    if (!st || st.closed) throw new TypeError('FileSystemWritableFileStream is closed');
-    var text = (data instanceof ArrayBuffer || ArrayBuffer.isView(data))
-      ? new TextDecoder().decode(data)
-      : String(data);
-    if (NAT_WRITE_TEXT) NAT_WRITE_TEXT(st.id, text);
+function stateOf(obj) {
+  var st = (obj !== null && typeof obj === 'object') ? STATE.get(obj) : undefined;
+  if (st === undefined) throw new TypeError('Illegal invocation');
+  return st;
+}
+
+// WebIDL: a `readonly attribute` is an accessor on the interface prototype
+// (enumerable, configurable, getter only), never an own property of the
+// instance — which is why `Object.keys(handle)` must come back empty.
+function defineAttribute(proto, name, getter) {
+  Object.defineProperty(proto, name, { get: getter, enumerable: true, configurable: true });
+}
+
+function defineToStringTag(ctor, name) {
+  Object.defineProperty(ctor.prototype, Symbol.toStringTag,
+    { value: name, writable: false, enumerable: false, configurable: true });
+}
+
+// WebIDL inheritance: the prototype chain *and* the interface objects
+// themselves (`Object.getPrototypeOf(FileSystemFileHandle) === FileSystemHandle`).
+function inherit(sub, base, name) {
+  sub.prototype = Object.create(base.prototype);
+  Object.defineProperty(sub.prototype, 'constructor',
+    { value: sub, writable: true, enumerable: false, configurable: true });
+  Object.setPrototypeOf(sub, base);
+  defineToStringTag(sub, name);
+}
+
+// Every operation here returns a promise, so an argument that fails validation
+// must *reject* rather than throw synchronously.
+function promiseTry(fn) {
+  return Promise.resolve().then(fn);
+}
+
+// ── FileSystemHandle (FS §4) ─────────────────────────────────────────────────
+
+function FileSystemHandle() {
+  illegalConstructor();
+}
+defineToStringTag(FileSystemHandle, 'FileSystemHandle');
+
+defineAttribute(FileSystemHandle.prototype, 'kind', function() { return stateOf(this).kind; });
+defineAttribute(FileSystemHandle.prototype, 'name', function() { return stateOf(this).name; });
+
+// Opaque per-entry label from Rust. Two handles on the same file carry
+// *different* grant tokens — every `getFileHandle()` mints a fresh one — so
+// comparing tokens used to report "not the same entry" for two handles that
+// are.
+function uniqueIdOf(st) {
+  return NAT_FS_UNIQUE ? NAT_FS_UNIQUE(st.pathId, st.token) : null;
+}
+
+FileSystemHandle.prototype.isSameEntry = function(other) {
+  var self = this;
+  return promiseTry(function() {
+    var mine = stateOf(self);
+    var theirs = (other !== null && typeof other === 'object') ? STATE.get(other) : undefined;
+    if (theirs === undefined || theirs.kind !== mine.kind) return false;
+    var a = uniqueIdOf(mine);
+    var b = uniqueIdOf(theirs);
+    return a != null && a === b;
   });
 };
 
-FileSystemWritableFileStream.prototype.seek = function(_pos) {
-  return Promise.resolve();
-};
-
-FileSystemWritableFileStream.prototype.truncate = function(_size) {
-  return Promise.resolve();
-};
-
-FileSystemWritableFileStream.prototype.close = function() {
-  var st = WRITE_STATE.get(this);
-  return Promise.resolve().then(function() {
-    if (!st || st.closed) return;
-    st.closed = true;
-    if (NAT_WRITE_CLOSE) NAT_WRITE_CLOSE(st.id);
+FileSystemHandle.prototype.getUniqueId = function() {
+  var self = this;
+  return promiseTry(function() {
+    var id = uniqueIdOf(stateOf(self));
+    if (id == null) fsThrow('NotFoundError', 'The entry is no longer reachable');
+    return id;
   });
 };
 
-// ── FileSystemFileHandle ──────────────────────────────────────────────────────
+function permissionMode(descriptor) {
+  var mode = (descriptor && descriptor.mode !== undefined) ? String(descriptor.mode) : 'read';
+  if (mode !== 'read' && mode !== 'readwrite') {
+    throw new TypeError(
+      "Failed to read the 'mode' property: '" + mode + "' is not a valid FileSystemPermissionMode");
+  }
+  return mode;
+}
 
-function FileSystemFileHandle(name, token, size) {
-  this.name = name;
-  this.kind = 'file';
-  FILE_STATE.set(this, { token: String(token == null ? '' : token), size: size || 0 });
+FileSystemHandle.prototype.queryPermission = function(descriptor) {
+  var self = this;
+  return promiseTry(function() {
+    var st = stateOf(self);
+    var mode = permissionMode(descriptor);
+    return NAT_FS_PERM ? NAT_FS_PERM(st.pathId, st.token, mode) : 'denied';
+  });
+};
+
+// There is no permission prompt to raise: a grant is minted by the picker (read
+// only) or by the origin's own sandbox (read-write), and nothing in between can
+// upgrade one. So a request answers exactly what a query answers rather than
+// pretending to ask — an honest 'prompt' beats a 'granted' that the next write
+// would contradict.
+FileSystemHandle.prototype.requestPermission = function(descriptor) {
+  return FileSystemHandle.prototype.queryPermission.call(this, descriptor);
+};
+
+FileSystemHandle.prototype.remove = function(options) {
+  var self = this;
+  return promiseTry(function() {
+    var st = stateOf(self);
+    var recursive = !!(options && options.recursive);
+    if (!NAT_FS_REMOVE) fsThrow('NotSupportedError', 'remove() is unavailable');
+    var err = NAT_FS_REMOVE(st.pathId, st.token, recursive);
+    if (err) fsThrow(err, 'Cannot remove ' + st.name);
+  });
+};
+
+// ── FileSystemFileHandle (FS §5) ─────────────────────────────────────────────
+
+function FileSystemFileHandle(brand) {
+  if (brand !== BRAND) illegalConstructor();
+}
+inherit(FileSystemFileHandle, FileSystemHandle, 'FileSystemFileHandle');
+
+function makeFileHandle(name, token, size) {
+  var handle = new FileSystemFileHandle(BRAND);
+  STATE.set(handle, {
+    kind: 'file',
+    name: String(name == null ? '' : name),
+    token: String(token == null ? '' : token),
+    size: Number(size) || 0,
+    pathId: '',
+  });
+  return handle;
 }
 
 FileSystemFileHandle.prototype.getFile = function() {
-  var st = FILE_STATE.get(this) || { token: '', size: 0 };
-  var name = this.name;
-  return Promise.resolve().then(function() {
-    if (FS_INTERNAL) return FS_INTERNAL.makeTokenFile(name, st.token, st.size, '', 0);
+  var self = this;
+  return promiseTry(function() {
+    var st = stateOf(self);
+    if (FS_INTERNAL) return FS_INTERNAL.makeTokenFile(st.name, st.token, st.size, '', 0);
     // No bridge (the file-input shim failed to install): hand back a plain,
     // grant-less File rather than inventing a second token path.
-    var f = new File([], name, { type: '' });
-    f.size = st.size;
-    return f;
+    return new File([], st.name, { type: '' });
   });
 };
 
-FileSystemFileHandle.prototype.createWritable = function() {
-  var suggested = this.name;
-  var st = FILE_STATE.get(this) || { token: '', size: 0 };
-  return Promise.resolve().then(function() {
+FileSystemFileHandle.prototype.createWritable = function(_options) {
+  var self = this;
+  return promiseTry(function() {
+    var st = stateOf(self);
     // BUG-372: a handle from the origin's own sandbox writes straight to the
     // file it names. Sending it through the save picker would ask the user to
     // choose a destination for a file they never see, and then write the bytes
     // somewhere other than where the page's own `getFile()` reads them from.
     var sandboxed = (NAT_WRITE_TOKEN && st.token) ? NAT_WRITE_TOKEN(st.token) : null;
-    if (sandboxed != null) {
-      return new FileSystemWritableFileStream(sandboxed);
-    }
-    var handleId = NAT_SAVE_PICKER ? NAT_SAVE_PICKER(suggested) : null;
+    if (sandboxed != null) return makeWritable(sandboxed);
+    var handleId = NAT_SAVE_PICKER ? NAT_SAVE_PICKER(st.name) : null;
     if (handleId == null) {
-      throw new DOMException('Write permission denied or user cancelled', 'NotAllowedError');
+      fsThrow('NotAllowedError', 'Write permission denied or user cancelled');
     }
-    return new FileSystemWritableFileStream(handleId);
+    return makeWritable(handleId);
   });
 };
 
-FileSystemFileHandle.prototype.isSameEntry = function(other) {
-  var mine = FILE_STATE.get(this);
-  var theirs = (other && typeof other === 'object') ? FILE_STATE.get(other) : undefined;
-  return Promise.resolve(
-    !!mine && !!theirs && mine.token !== '' && mine.token === theirs.token);
+// FS §5.1 `move()`: `move(newName)`, `move(destination)` or
+// `move(destination, newName)`. The handle keeps representing the entry, so its
+// state is repointed at the new location — the old grant names a path that no
+// longer exists.
+FileSystemFileHandle.prototype.move = function(destination, newName) {
+  var self = this;
+  return promiseTry(function() {
+    var st = stateOf(self);
+    if (!NAT_FS_MOVE) fsThrow('NotSupportedError', 'move() is unavailable');
+    var destId = '';
+    var name = '';
+    if (typeof destination === 'string') {
+      name = destination;
+    } else if (destination !== null && typeof destination === 'object') {
+      var dst = STATE.get(destination);
+      if (dst === undefined || dst.kind !== 'directory') {
+        throw new TypeError('move(): the destination is not a FileSystemDirectoryHandle');
+      }
+      destId = dst.pathId;
+      if (newName !== undefined && newName !== null) name = String(newName);
+    } else if (destination !== undefined) {
+      throw new TypeError('move(): invalid destination');
+    }
+    var moved = fsUnwrap(NAT_FS_MOVE(st.token, destId, name), 'Cannot move ' + st.name);
+    st.name = String(moved.name);
+    st.token = String(moved.token);
+    st.size = Number(moved.size) || 0;
+  });
 };
 
-// ── FileSystemDirectoryHandle ─────────────────────────────────────────────────
+// ── FileSystemDirectoryHandle (FS §6) ────────────────────────────────────────
 
-function FileSystemDirectoryHandle(name, pathId) {
-  this.name = name;
-  this.kind = 'directory';
-  DIR_STATE.set(this, { pathId: String(pathId == null ? '' : pathId) });
+function FileSystemDirectoryHandle(brand) {
+  if (brand !== BRAND) illegalConstructor();
+}
+inherit(FileSystemDirectoryHandle, FileSystemHandle, 'FileSystemDirectoryHandle');
+
+function makeDirHandle(name, pathId) {
+  var handle = new FileSystemDirectoryHandle(BRAND);
+  STATE.set(handle, {
+    kind: 'directory',
+    name: String(name == null ? '' : name),
+    token: '',
+    size: 0,
+    pathId: String(pathId == null ? '' : pathId),
+  });
+  return handle;
+}
+
+function handleFromEntry(entry) {
+  return entry.kind === 'directory'
+    ? makeDirHandle(entry.name, entry.path_id)
+    : makeFileHandle(entry.name, entry.token, entry.size);
+}
+
+function asyncIterator(next) {
+  var iter = { next: next };
+  iter[Symbol.asyncIterator] = function() { return this; };
+  return iter;
 }
 
 FileSystemDirectoryHandle.prototype.entries = function() {
-  var st = DIR_STATE.get(this) || { pathId: '' };
+  var st = stateOf(this);
   var raw = [];
   if (NAT_DIR_ENTRIES) {
     try { raw = JSON.parse(NAT_DIR_ENTRIES(st.pathId)) || []; } catch (e) { raw = []; }
   }
   var idx = 0;
-  return {
-    next: function() {
-      if (idx >= raw.length) return Promise.resolve({ done: true, value: undefined });
-      var e = raw[idx++];
-      // Phase 1: listed entries carry no grant of their own — the caller has to
-      // re-request them by name through getFileHandle/getDirectoryHandle.
-      var handle = e.kind === 'directory'
-        ? new FileSystemDirectoryHandle(e.name, '')
-        : new FileSystemFileHandle(e.name, '', 0);
-      return Promise.resolve({ done: false, value: [e.name, handle] });
-    },
-    [Symbol.asyncIterator || '_asyncIter']: function() { return this; },
-  };
+  return asyncIterator(function() {
+    if (idx >= raw.length) return Promise.resolve({ done: true, value: undefined });
+    var entry = raw[idx++];
+    return Promise.resolve({ done: false, value: [entry.name, handleFromEntry(entry)] });
+  });
 };
 
 FileSystemDirectoryHandle.prototype.values = function() {
   var it = this.entries();
-  return {
-    next: function() {
-      return it.next().then(function(r) {
-        if (r.done) return r;
-        return { done: false, value: r.value[1] };
-      });
-    },
-    [Symbol.asyncIterator || '_asyncIter']: function() { return this; },
-  };
+  return asyncIterator(function() {
+    return it.next().then(function(r) {
+      return r.done ? r : { done: false, value: r.value[1] };
+    });
+  });
 };
 
 FileSystemDirectoryHandle.prototype.keys = function() {
   var it = this.entries();
-  return {
-    next: function() {
-      return it.next().then(function(r) {
-        if (r.done) return r;
-        return { done: false, value: r.value[0] };
-      });
-    },
-    [Symbol.asyncIterator || '_asyncIter']: function() { return this; },
-  };
+  return asyncIterator(function() {
+    return it.next().then(function(r) {
+      return r.done ? r : { done: false, value: r.value[0] };
+    });
+  });
 };
 
+// `async iterable<USVString, FileSystemHandle>` — `for await (const [name, h] of
+// dir)` iterates the directory itself, not only `dir.entries()`.
+FileSystemDirectoryHandle.prototype[Symbol.asyncIterator] =
+  FileSystemDirectoryHandle.prototype.entries;
+
 FileSystemDirectoryHandle.prototype.getFileHandle = function(name, opts) {
-  var st = DIR_STATE.get(this) || { pathId: '' };
-  var create = !!(opts && opts.create);
-  var entryName = String(name);
-  return Promise.resolve().then(function() {
+  var self = this;
+  return promiseTry(function() {
+    var st = stateOf(self);
+    var create = !!(opts && opts.create);
+    var entryName = String(name);
     var raw = NAT_DIR_GET_FILE ? NAT_DIR_GET_FILE(st.pathId, entryName, create) : null;
     var p = fsUnwrap(raw, 'Cannot open file: ' + entryName);
-    return new FileSystemFileHandle(p.name, p.token, p.size);
+    return makeFileHandle(p.name, p.token, p.size);
   });
 };
 
 FileSystemDirectoryHandle.prototype.getDirectoryHandle = function(name, opts) {
-  var st = DIR_STATE.get(this) || { pathId: '' };
-  var create = !!(opts && opts.create);
-  var entryName = String(name);
-  return Promise.resolve().then(function() {
+  var self = this;
+  return promiseTry(function() {
+    var st = stateOf(self);
+    var create = !!(opts && opts.create);
+    var entryName = String(name);
     var raw = NAT_DIR_GET_SUB ? NAT_DIR_GET_SUB(st.pathId, entryName, create) : null;
     var p = fsUnwrap(raw, 'Cannot open directory: ' + entryName);
-    return new FileSystemDirectoryHandle(p.name, p.path_id);
+    return makeDirHandle(p.name, p.path_id);
   });
 };
 
 FileSystemDirectoryHandle.prototype.removeEntry = function(name, opts) {
-  var st = DIR_STATE.get(this) || { pathId: '' };
-  var recursive = !!(opts && opts.recursive);
-  var entryName = String(name);
-  return Promise.resolve().then(function() {
+  var self = this;
+  return promiseTry(function() {
+    var st = stateOf(self);
+    var recursive = !!(opts && opts.recursive);
+    var entryName = String(name);
     // BUG-372: this used to resolve without removing anything, so a caller
     // could not tell a deletion from a no-op. It now either removes the entry
     // or says which rule stopped it.
     if (!NAT_DIR_REMOVE) {
-      throw new DOMException('removeEntry is unavailable', 'NotSupportedError');
+      fsThrow('NotSupportedError', 'removeEntry is unavailable');
     }
     var err = NAT_DIR_REMOVE(st.pathId, entryName, recursive);
     if (err) fsThrow(err, 'Cannot remove entry: ' + entryName);
   });
 };
 
-// FS §5.2: `[]` for the handle itself, the path segments for a descendant,
+// FS §6.2: `[]` for the handle itself, the path segments for a descendant,
 // `null` for anything else.
 FileSystemDirectoryHandle.prototype.resolve = function(possibleDescendant) {
-  var st = DIR_STATE.get(this) || { pathId: '' };
-  var child = (possibleDescendant && typeof possibleDescendant === 'object')
-    ? possibleDescendant : null;
-  var childDir  = child ? DIR_STATE.get(child) : undefined;
-  var childFile = child ? FILE_STATE.get(child) : undefined;
-  return Promise.resolve().then(function() {
-    if (!NAT_FS_RESOLVE) return null;
-    var raw = NAT_FS_RESOLVE(
-      st.pathId,
-      childDir ? childDir.pathId : '',
-      childFile ? childFile.token : '');
+  var self = this;
+  return promiseTry(function() {
+    var st = stateOf(self);
+    var child = (possibleDescendant !== null && typeof possibleDescendant === 'object')
+      ? STATE.get(possibleDescendant) : undefined;
+    if (child === undefined || !NAT_FS_RESOLVE) return null;
+    var raw = NAT_FS_RESOLVE(st.pathId, child.pathId, child.token);
     return raw == null ? null : JSON.parse(raw);
   });
 };
 
-FileSystemDirectoryHandle.prototype.isSameEntry = function(other) {
-  var mine = DIR_STATE.get(this);
-  var theirs = (other && typeof other === 'object') ? DIR_STATE.get(other) : undefined;
-  return Promise.resolve(
-    !!mine && !!theirs && mine.pathId !== '' && mine.pathId === theirs.pathId);
+// ── FileSystemWritableFileStream (FS §7) ─────────────────────────────────────
+
+var WritableStreamBase = (typeof globalThis.WritableStream === 'function')
+  ? globalThis.WritableStream : null;
+
+function FileSystemWritableFileStream(brand) {
+  if (brand !== BRAND) illegalConstructor();
+}
+if (WritableStreamBase) {
+  inherit(FileSystemWritableFileStream, WritableStreamBase, 'FileSystemWritableFileStream');
+} else {
+  // No streams in this runtime (bare unit-test harness): the class still works,
+  // it just has no `getWriter`/`locked`/`abort` to inherit.
+  defineToStringTag(FileSystemWritableFileStream, 'FileSystemWritableFileStream');
+}
+
+var B64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+// File bytes cross into Rust as base64: a JS string is UTF-16 and cannot carry
+// arbitrary bytes through the string boundary intact. Written out by hand rather
+// than through `btoa` so the shim keeps working in a runtime that has no
+// `btoa` (the unit-test harness).
+function toBase64(bytes) {
+  var out = '';
+  for (var i = 0; i < bytes.length; i += 3) {
+    var b0 = bytes[i];
+    var has1 = (i + 1) < bytes.length;
+    var has2 = (i + 2) < bytes.length;
+    var b1 = has1 ? bytes[i + 1] : 0;
+    var b2 = has2 ? bytes[i + 2] : 0;
+    var n = (b0 << 16) | (b1 << 8) | b2;
+    out += B64_CHARS[(n >> 18) & 63];
+    out += B64_CHARS[(n >> 12) & 63];
+    out += has1 ? B64_CHARS[(n >> 6) & 63] : '=';
+    out += has2 ? B64_CHARS[n & 63] : '=';
+  }
+  return out;
+}
+
+// FS §7.1 accepts `BufferSource`, `Blob` or `USVString`. Everything but a string
+// is raw bytes, and a `Blob` only yields them asynchronously — which is why the
+// old `String(data)` wrote a `Blob` out as the literal `[object Blob]`.
+function bytesOf(data) {
+  if (data === null || data === undefined) return Promise.resolve(new Uint8Array(0));
+  if (typeof Blob === 'function' && data instanceof Blob) {
+    return data.arrayBuffer().then(function(buf) { return new Uint8Array(buf); });
+  }
+  if (data instanceof ArrayBuffer) return Promise.resolve(new Uint8Array(data.slice(0)));
+  if (ArrayBuffer.isView(data)) {
+    return Promise.resolve(new Uint8Array(
+      data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)));
+  }
+  return Promise.resolve(new TextEncoder().encode(String(data)));
+}
+
+function toOffset(value, what) {
+  var n = Number(value);
+  if (!isFinite(n) || n < 0) {
+    throw new TypeError('write(): ' + what + ' must be a non-negative number');
+  }
+  return Math.floor(n);
+}
+
+function writeStateOf(stream) {
+  var st = (stream !== null && typeof stream === 'object') ? WRITE_STATE.get(stream) : undefined;
+  if (st === undefined) throw new TypeError('Illegal invocation');
+  return st;
+}
+
+// True for a `WriteParams` dictionary rather than for the data itself.
+function isWriteParams(data) {
+  return data !== null && typeof data === 'object'
+    && !(data instanceof ArrayBuffer)
+    && !ArrayBuffer.isView(data)
+    && !(typeof Blob === 'function' && data instanceof Blob)
+    && data.type !== undefined;
+}
+
+// The one place implementing FS §7.1's write algorithm — `write()`, `seek()`,
+// `truncate()` and the underlying sink's `write()` all route through it, so a
+// `{type:'seek'}` command and a `seek()` call cannot drift apart.
+function writeCommand(st, data) {
+  return promiseTry(function() {
+    if (st.closed) throw new TypeError('FileSystemWritableFileStream is closed');
+    var type = 'write';
+    var payload = data;
+    var position;
+    var size;
+    if (isWriteParams(data)) {
+      type = String(data.type);
+      payload = data.data;
+      position = data.position;
+      size = data.size;
+    }
+    if (type === 'seek') {
+      if (position === undefined || position === null) {
+        fsThrow('SyntaxError', "write(): a 'seek' command requires a position");
+      }
+      st.position = toOffset(position, 'position');
+      return undefined;
+    }
+    if (type === 'truncate') {
+      if (size === undefined || size === null) {
+        fsThrow('SyntaxError', "write(): a 'truncate' command requires a size");
+      }
+      var end = toOffset(size, 'size');
+      if (!NAT_WRITE_TRUNC || !NAT_WRITE_TRUNC(st.id, end)) {
+        fsThrow('NotAllowedError', 'The write grant is no longer valid');
+      }
+      if (st.position > end) st.position = end;
+      return undefined;
+    }
+    if (type !== 'write') {
+      throw new TypeError("write(): '" + type + "' is not a valid write command type");
+    }
+    if (position !== undefined && position !== null) {
+      st.position = toOffset(position, 'position');
+    }
+    return bytesOf(payload).then(function(bytes) {
+      if (!NAT_WRITE_BYTES || !NAT_WRITE_BYTES(st.id, st.position, toBase64(bytes))) {
+        fsThrow('NotAllowedError', 'The write grant is no longer valid');
+      }
+      st.position += bytes.length;
+    });
+  });
+}
+
+function commitWrite(st) {
+  if (st.closed) return undefined;
+  st.closed = true;
+  if (!NAT_WRITE_CLOSE || !NAT_WRITE_CLOSE(st.id)) {
+    fsThrow('NotAllowedError', 'The write grant is no longer valid');
+  }
+  return undefined;
+}
+
+function makeWritable(handleId) {
+  var stream = new FileSystemWritableFileStream(BRAND);
+  var st = { id: String(handleId == null ? '' : handleId), position: 0, closed: false };
+  WRITE_STATE.set(stream, st);
+  if (WritableStreamBase) {
+    // The stream really is a `WritableStream`: its sink is the FS write
+    // algorithm, so `getWriter().write(chunk)` and `stream.write(chunk)` commit
+    // the same bytes through the same path.
+    WritableStreamBase.call(stream, {
+      write: function(chunk) { return writeCommand(st, chunk); },
+      close: function() { return commitWrite(st); },
+      abort: function() { st.closed = true; },
+    });
+  }
+  return stream;
+}
+
+FileSystemWritableFileStream.prototype.write = function(data) {
+  var self = this;
+  return promiseTry(function() {
+    var st = writeStateOf(self);
+    if (self.locked) throw new TypeError('FileSystemWritableFileStream is locked');
+    return writeCommand(st, data);
+  });
 };
 
-// ── Picker globals (Promise-returning per spec §5.1) ─────────────────────────
+FileSystemWritableFileStream.prototype.seek = function(position) {
+  var self = this;
+  return promiseTry(function() {
+    return writeCommand(writeStateOf(self), { type: 'seek', position: position });
+  });
+};
 
-function showOpenFilePicker(_options) {
-  return Promise.resolve().then(function() {
+FileSystemWritableFileStream.prototype.truncate = function(size) {
+  var self = this;
+  return promiseTry(function() {
+    return writeCommand(writeStateOf(self), { type: 'truncate', size: size });
+  });
+};
+
+FileSystemWritableFileStream.prototype.close = function() {
+  var self = this;
+  return promiseTry(function() {
+    var st = writeStateOf(self);
+    // Go through the base class where there is one, so the stream ends up in
+    // the 'closed' state its own `locked`/`getWriter` contract talks about.
+    if (WritableStreamBase && typeof self._ws_state === 'string') {
+      return WritableStreamBase.prototype.close.call(self);
+    }
+    return commitWrite(st);
+  });
+};
+
+// ── Picker option validation (FS §8.1) ───────────────────────────────────────
+
+var WELL_KNOWN_DIRS = ['desktop', 'documents', 'downloads', 'music', 'pictures', 'videos'];
+var MIME_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+var PICKER_ID = /^[A-Za-z0-9_-]*$/;
+var EXTENSION = /^\.[a-z0-9+\-.]+$/;
+
+// A MIME type with no parameters: exactly one '/', both halves non-empty HTTP
+// tokens. `text/plain;charset=utf-8` and `image` are both rejected.
+function validMimeType(mime) {
+  var parts = String(mime).split('/');
+  return parts.length === 2 && MIME_TOKEN.test(parts[0]) && MIME_TOKEN.test(parts[1]);
+}
+
+function validExtension(ext) {
+  if (typeof ext !== 'string') return false;
+  if (ext.length > 16) return false;
+  if (ext.charAt(ext.length - 1) === '.') return false;
+  return EXTENSION.test(ext);
+}
+
+// The pickers used to take an options dictionary and ignore it whole — the
+// parameter was even named `_options`. Every rule below is one the spec states
+// as a `TypeError`, so accepting the call silently was the difference between
+// "this build cannot filter by type" and "this build says it filtered".
+function validatePickerOptions(options) {
+  if (options === undefined || options === null) return;
+  if (typeof options !== 'object') {
+    throw new TypeError('The provided value is not of type FilePickerOptions');
+  }
+  if (options.id !== undefined && options.id !== null) {
+    var id = String(options.id);
+    if (id.length > 32 || !PICKER_ID.test(id)) {
+      throw new TypeError("Invalid 'id': at most 32 characters of [A-Za-z0-9_-]");
+    }
+  }
+  if (options.startIn !== undefined && options.startIn !== null) {
+    var startIn = options.startIn;
+    var isHandle = (typeof startIn === 'object') && STATE.has(startIn);
+    if (!isHandle && WELL_KNOWN_DIRS.indexOf(String(startIn)) < 0) {
+      throw new TypeError("Invalid 'startIn': not a well-known directory or a FileSystemHandle");
+    }
+  }
+  var types = options.types;
+  if (types !== undefined && types !== null) {
+    if (typeof types.length !== 'number') {
+      throw new TypeError("Invalid 'types': not a sequence");
+    }
+    for (var i = 0; i < types.length; i++) {
+      var accept = types[i] ? types[i].accept : undefined;
+      if (accept === null || typeof accept !== 'object') {
+        throw new TypeError("Invalid 'types': each entry needs an 'accept' dictionary");
+      }
+      var mimes = Object.keys(accept);
+      for (var m = 0; m < mimes.length; m++) {
+        if (!validMimeType(mimes[m])) {
+          throw new TypeError("Invalid 'types': '" + mimes[m] + "' is not a valid MIME type");
+        }
+        var exts = accept[mimes[m]];
+        if (typeof exts === 'string') exts = [exts];
+        if (exts === null || typeof exts !== 'object' || typeof exts.length !== 'number') {
+          throw new TypeError("Invalid 'types': the extension list is not a sequence");
+        }
+        for (var e = 0; e < exts.length; e++) {
+          if (!validExtension(exts[e])) {
+            throw new TypeError("Invalid 'types': '" + exts[e] + "' is not a valid extension");
+          }
+        }
+      }
+    }
+  }
+  if (options.excludeAcceptAllOption && (types === undefined || types === null || types.length === 0)) {
+    throw new TypeError("Invalid 'types': no accepted file types");
+  }
+}
+
+// FS §8.1 requires transient activation, so a script cannot pop a file dialog
+// on its own. `navigator.userActivation` is the engine's own answer to that
+// question — the pickers used not to consult it at all.
+function requireUserActivation(what) {
+  var activation = (typeof navigator !== 'undefined') ? navigator.userActivation : undefined;
+  if (activation && activation.isActive === false) {
+    fsThrow('SecurityError', 'Must be handling a user gesture to show ' + what);
+  }
+}
+
+// ── Picker globals (Promise-returning per FS §8.1) ───────────────────────────
+
+function showOpenFilePicker(options) {
+  return promiseTry(function() {
+    validatePickerOptions(options);
+    requireUserActivation('a file picker');
     var info = NAT_OPEN_PICKER ? NAT_OPEN_PICKER() : null;
     if (info == null) {
-      throw new DOMException('The user aborted a request.', 'AbortError');
+      fsThrow('AbortError', 'The user aborted a request.');
     }
     var p = JSON.parse(info);
-    return [new FileSystemFileHandle(p.name, p.token, p.size)];
+    return [makeFileHandle(p.name, p.token, p.size)];
   });
 }
 
 function showSaveFilePicker(options) {
-  return Promise.resolve().then(function() {
-    var suggested = (options && options.suggestedName) ? options.suggestedName : 'file.txt';
+  return promiseTry(function() {
+    validatePickerOptions(options);
+    requireUserActivation('a file picker');
+    var suggested = (options && options.suggestedName) ? String(options.suggestedName) : 'file.txt';
     var handleId = NAT_SAVE_PICKER ? NAT_SAVE_PICKER(suggested) : null;
     if (handleId == null) {
-      throw new DOMException('The user aborted a request.', 'AbortError');
+      fsThrow('AbortError', 'The user aborted a request.');
     }
-    var handle = new FileSystemFileHandle(suggested, '', 0);
-    handle.createWritable = function() {
-      return Promise.resolve(new FileSystemWritableFileStream(handleId));
-    };
+    // The save dialog hands back a write grant, not a read token, so the handle
+    // it produces writes to the confirmed destination and reads nothing.
+    var handle = makeFileHandle(suggested, '', 0);
+    Object.defineProperty(handle, 'createWritable', {
+      value: function() { return Promise.resolve(makeWritable(handleId)); },
+      writable: true, enumerable: false, configurable: true,
+    });
     return handle;
   });
 }
 
-function showDirectoryPicker(_options) {
-  return Promise.resolve().then(function() {
+function showDirectoryPicker(options) {
+  return promiseTry(function() {
+    validatePickerOptions(options);
+    requireUserActivation('a directory picker');
     var info = NAT_DIR_PICKER ? NAT_DIR_PICKER() : null;
     if (info == null) {
-      throw new DOMException('The user aborted a request.', 'AbortError');
+      fsThrow('AbortError', 'The user aborted a request.');
     }
     var p = JSON.parse(info);
-    return new FileSystemDirectoryHandle(p.name, p.path_id);
+    return makeDirHandle(p.name, p.path_id);
   });
 }
+
+// ── [Serializable] (FS §4: all three handles survive structuredClone) ────────
+
+if (globalThis.__lumen_platform_cloners) {
+  globalThis.__lumen_platform_cloners.register(
+    function(value) { return STATE.has(value); },
+    function(value) {
+      var st = STATE.get(value);
+      return st.kind === 'directory'
+        ? makeDirHandle(st.name, st.pathId)
+        : makeFileHandle(st.name, st.token, st.size);
+    });
+}
+
+// ── Internal bridge for navigator.storage.getDirectory() ─────────────────────
+
+// `storage_manager.rs` used to build the OPFS root by calling
+// `new window.FileSystemDirectoryHandle(name, pathId)`, which is exactly the
+// public constructor BUG-374 removes. It captures this bridge at its own eval
+// time and deletes the global immediately, the same way it already treats
+// `_lumen_storage_get_directory`.
+Object.defineProperty(globalThis, '__lumen_fsa_internal', {
+  value: Object.freeze({ makeDirectoryHandle: makeDirHandle }),
+  enumerable: false, writable: false, configurable: true,
+});
 
 // ── Expose on window if available ────────────────────────────────────────────
 
 if (typeof window !== 'undefined') {
-  window.FileSystemFileHandle         = FileSystemFileHandle;
-  window.FileSystemDirectoryHandle    = FileSystemDirectoryHandle;
-  window.FileSystemWritableFileStream = FileSystemWritableFileStream;
-  window.showOpenFilePicker           = showOpenFilePicker;
-  window.showSaveFilePicker           = showSaveFilePicker;
-  window.showDirectoryPicker          = showDirectoryPicker;
+  window.FileSystemHandle              = FileSystemHandle;
+  window.FileSystemFileHandle          = FileSystemFileHandle;
+  window.FileSystemDirectoryHandle     = FileSystemDirectoryHandle;
+  window.FileSystemWritableFileStream  = FileSystemWritableFileStream;
+  window.showOpenFilePicker            = showOpenFilePicker;
+  window.showSaveFilePicker            = showSaveFilePicker;
+  window.showDirectoryPicker           = showDirectoryPicker;
 }
 
 })();
@@ -1120,8 +1823,8 @@ mod tests_v8 {
     fn writable_write_accumulates() {
         let tmp = std::env::temp_dir().join("lumen_fsal_write_test.txt");
         let handle_id = super::write_reg().lock().unwrap().allocate(tmp.clone(), TEST_ORIGIN);
-        super::write_reg().lock().unwrap().append_text(&handle_id, TEST_ORIGIN, "hello");
-        super::write_reg().lock().unwrap().append_text(&handle_id, TEST_ORIGIN, " world");
+        super::write_reg().lock().unwrap().write_bytes(&handle_id, TEST_ORIGIN, 0, b"hello");
+        super::write_reg().lock().unwrap().write_bytes(&handle_id, TEST_ORIGIN, 5, b" world");
         super::write_reg().lock().unwrap().close(&handle_id, TEST_ORIGIN);
         let content = std::fs::read_to_string(&tmp).unwrap_or_default();
         assert_eq!(content, "hello world");
@@ -1132,7 +1835,7 @@ mod tests_v8 {
     fn writable_close_writes_file() {
         let tmp = std::env::temp_dir().join("lumen_fsal_close_test.txt");
         let handle_id = super::write_reg().lock().unwrap().allocate(tmp.clone(), TEST_ORIGIN);
-        super::write_reg().lock().unwrap().append_text(&handle_id, TEST_ORIGIN, "lumen test content");
+        super::write_reg().lock().unwrap().write_bytes(&handle_id, TEST_ORIGIN, 0, b"lumen test content");
         let ok = super::write_reg().lock().unwrap().close(&handle_id, TEST_ORIGIN);
         assert!(ok);
         let content = std::fs::read_to_string(&tmp).unwrap_or_default();
@@ -1152,7 +1855,7 @@ mod tests_v8 {
             .unwrap()
             .allocate(tmp.clone(), "https://honest.example");
         assert!(
-            !super::write_reg().lock().unwrap().append_text(&handle_id, "https://evil.example", "pwn"),
+            !super::write_reg().lock().unwrap().write_bytes(&handle_id, "https://evil.example", 0, b"pwn"),
             "append from a foreign origin must be refused"
         );
         assert!(
@@ -1237,6 +1940,10 @@ mod tests_v8 {
 
     // Minimal DOM stubs `install_file_input_bindings_v8`'s shim needs — mirrors
     // `file_input::tests::STUBS` (private to that module, so duplicated here).
+    //
+    // `TextEncoder` is here for the same reason: on a page it arrives with
+    // `dom.rs`'s shim, which this harness does not evaluate, and the writable
+    // stream encodes every string chunk through it.
     const STUBS: &str = r#"
         var window = globalThis;
         function Blob(blobParts, options) {}
@@ -1245,7 +1952,48 @@ mod tests_v8 {
         function _lumen_dispatch_bubble(nid, type) {}
         function _lumen_make_element(nid) { return {__nid__: nid}; }
         window._lumen_make_element = _lumen_make_element;
+        function TextEncoder() {}
+        TextEncoder.prototype.encode = function(str) {
+            var out = [];
+            for (var i = 0; i < str.length; i++) {
+                var c = str.charCodeAt(i);
+                if (c >= 0xD800 && c <= 0xDBFF && (i + 1) < str.length) {
+                    var lo = str.charCodeAt(i + 1);
+                    if (lo >= 0xDC00 && lo <= 0xDFFF) {
+                        c = 0x10000 + ((c - 0xD800) << 10) + (lo - 0xDC00);
+                        i++;
+                    }
+                }
+                if (c < 0x80) { out.push(c); }
+                else if (c < 0x800) { out.push(0xC0 | (c >> 6), 0x80 | (c & 63)); }
+                else if (c < 0x10000) {
+                    out.push(0xE0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+                } else {
+                    out.push(0xF0 | (c >> 18), 0x80 | ((c >> 12) & 63),
+                             0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+                }
+            }
+            return new Uint8Array(out);
+        };
     "#;
+
+    /// Two handles every shape test needs, resolved from the mocked pickers.
+    ///
+    /// BUG-374 removed the public constructors, so a test cannot say
+    /// `new FileSystemFileHandle('a.txt', '', 0)` any more — which is the point:
+    /// the only way to a handle is the way a page has, through an API that
+    /// hands one out.
+    const RESOLVE_HANDLES: &str = r#"
+        var __fh = null, __dh = null;
+        showOpenFilePicker().then(function(list) { __fh = list[0]; });
+        showDirectoryPicker().then(function(dir) { __dh = dir; });
+    "#;
+
+    /// Private factory the OPFS root is built through (`__lumen_fsa_internal`,
+    /// BUG-374) — the only way for a test to turn a directory grant it allocated
+    /// itself into a handle, now that the constructor is gone. `storage_manager`
+    /// deletes this global on a real page; nothing installs that shim here.
+    const ROOT: &str = "__lumen_fsa_internal.makeDirectoryHandle";
 
     fn with_fsa() -> V8JsRuntime {
         with_fsa_for(TEST_ORIGIN)
@@ -1289,6 +2037,7 @@ mod tests_v8 {
         )
         .unwrap();
         rt.eval(super::FSAL_SHIM).unwrap();
+        rt.eval(RESOLVE_HANDLES).unwrap();
         rt
     }
 
@@ -1350,129 +2099,132 @@ mod tests_v8 {
         matches!(rt.eval("__r").unwrap(), JsValue::Bool(true))
     }
 
+    // ── BUG-374: the WebIDL shape of the interface hierarchy ─────────────────
+
+    /// Point 1: `FileSystemHandle` is the base interface, exposed on the global,
+    /// and both handle classes inherit from it — instance *and* interface object.
+    /// Without it `if (window.FileSystemHandle)` feature-detects concluded the
+    /// API was missing and the prototype chain ended at `Object`.
     #[test]
-    fn fsfh_kind_is_file() {
+    fn handle_hierarchy_is_webidl() {
         let rt = with_fsa();
         assert!(bool_eval(
             &rt,
-            "new FileSystemFileHandle('a.txt', '', 0).kind === 'file'"
+            "typeof window.FileSystemHandle === 'function' && \
+             __fh instanceof FileSystemHandle && __fh instanceof FileSystemFileHandle && \
+             __dh instanceof FileSystemHandle && __dh instanceof FileSystemDirectoryHandle && \
+             !(__fh instanceof FileSystemDirectoryHandle) && \
+             Object.getPrototypeOf(FileSystemFileHandle.prototype) === FileSystemHandle.prototype && \
+             Object.getPrototypeOf(FileSystemDirectoryHandle.prototype) === FileSystemHandle.prototype && \
+             Object.getPrototypeOf(FileSystemFileHandle) === FileSystemHandle && \
+             __fh.constructor === FileSystemFileHandle"
         ));
     }
 
+    /// Point 2: none of the four interfaces declares a constructor. They used to
+    /// be publicly constructible *and* took the internal grant id as an
+    /// argument, so forging a handle was one line.
     #[test]
-    fn fsfh_exposes_name() {
-        let rt = with_fsa();
-        let r = rt
-            .eval("new FileSystemFileHandle('hello.txt', '', 0).name")
-            .unwrap();
-        assert_eq!(r, JsValue::String("hello.txt".into()));
-    }
-
-    #[test]
-    fn fsdh_kind_is_directory() {
+    fn constructors_are_illegal() {
         let rt = with_fsa();
         assert!(bool_eval(
             &rt,
-            "new FileSystemDirectoryHandle('docs', 'x').kind === 'directory'"
+            "function threw(f) { try { f(); return false; } catch (e) { return e instanceof TypeError; } } \
+             threw(function() { new FileSystemHandle(); }) && \
+             threw(function() { new FileSystemFileHandle('a.txt', 'tok', 0); }) && \
+             threw(function() { new FileSystemDirectoryHandle('d', 'pid'); }) && \
+             threw(function() { new FileSystemWritableFileStream('wid'); })"
         ));
     }
 
+    /// Point 3: `kind`/`name` are `readonly attribute`s — accessors on the
+    /// prototype, not own data properties. `fileHandle.kind = 'directory'` used
+    /// to be accepted, after which the handle misreported its own type.
     #[test]
-    fn fsdh_exposes_name() {
-        let rt = with_fsa();
-        let r = rt
-            .eval("new FileSystemDirectoryHandle('docs', 'x').name")
-            .unwrap();
-        assert_eq!(r, JsValue::String("docs".into()));
-    }
-
-    #[test]
-    fn fsws_write_returns_promise() {
+    fn kind_and_name_are_readonly_prototype_accessors() {
         let rt = with_fsa();
         assert!(bool_eval(
             &rt,
-            "typeof new FileSystemWritableFileStream('x').write('x').then === 'function'"
+            "var d = Object.getOwnPropertyDescriptor(FileSystemHandle.prototype, 'kind'); \
+             __fh.kind = 'directory'; __fh.name = 'other.txt'; \
+             typeof d.get === 'function' && d.set === undefined && \
+             Object.getOwnPropertyNames(__fh).length === 0 && \
+             Object.getOwnPropertyNames(__dh).length === 0 && \
+             __fh.kind === 'file' && __fh.name === 'mock.txt' && __dh.kind === 'directory'"
         ));
     }
 
+    /// Point 3, second half: the grant ids stay in private slots (BUG-371).
     #[test]
-    fn fsws_seek_returns_promise() {
+    fn handle_internals_are_not_web_visible() {
         let rt = with_fsa();
         assert!(bool_eval(
             &rt,
-            "typeof new FileSystemWritableFileStream('x').seek(0).then === 'function'"
+            "__fh._token === undefined && __dh._pathId === undefined && \
+             JSON.stringify(__fh) === '{}' && JSON.stringify(__dh) === '{}'"
         ));
     }
 
+    /// Point 4.
     #[test]
-    fn fsws_truncate_returns_promise() {
+    fn handles_have_a_to_string_tag() {
         let rt = with_fsa();
         assert!(bool_eval(
             &rt,
-            "typeof new FileSystemWritableFileStream('x').truncate(0).then === 'function'"
+            "Object.prototype.toString.call(__fh) === '[object FileSystemFileHandle]' && \
+             Object.prototype.toString.call(__dh) === '[object FileSystemDirectoryHandle]'"
         ));
     }
 
+    /// Point 5: the base interface's members live on the base prototype, and
+    /// `queryPermission`/`requestPermission`/`remove`/`getUniqueId` exist at all.
     #[test]
-    fn fsws_close_returns_promise() {
+    fn base_members_are_on_the_base_prototype() {
         let rt = with_fsa();
         assert!(bool_eval(
             &rt,
-            "typeof new FileSystemWritableFileStream('x').close().then === 'function'"
+            "var p = FileSystemHandle.prototype; \
+             ['isSameEntry','queryPermission','requestPermission','remove','getUniqueId'] \
+               .every(function(m) { return typeof p[m] === 'function' && \
+                                          !Object.prototype.hasOwnProperty.call( \
+                                             FileSystemFileHandle.prototype, m); }) && \
+             typeof FileSystemFileHandle.prototype.getFile === 'function' && \
+             typeof FileSystemFileHandle.prototype.createWritable === 'function' && \
+             typeof FileSystemFileHandle.prototype.move === 'function' && \
+             ['entries','values','keys','getFileHandle','getDirectoryHandle','removeEntry','resolve'] \
+               .every(function(m) { \
+                 return typeof FileSystemDirectoryHandle.prototype[m] === 'function'; })"
         ));
     }
 
+    /// Point 6: `async iterable<USVString, FileSystemHandle>` — the handle
+    /// itself is iterable, not only the object `entries()` returns.
     #[test]
-    fn fsfh_get_file_returns_promise() {
+    fn directory_handle_is_async_iterable() {
         let rt = with_fsa();
         assert!(bool_eval(
             &rt,
-            "typeof new FileSystemFileHandle('a.txt', '', 0).getFile().then === 'function'"
+            "typeof __dh[Symbol.asyncIterator] === 'function' && \
+             typeof __dh.entries()[Symbol.asyncIterator] === 'function' && \
+             typeof __dh.values()[Symbol.asyncIterator] === 'function' && \
+             typeof __dh.keys()[Symbol.asyncIterator] === 'function'"
         ));
     }
 
+    /// A method called on a foreign object must not read someone else's state —
+    /// the brand check is what a private-slot design buys.
     #[test]
-    fn fsdh_get_file_handle_returns_promise() {
+    fn base_members_reject_a_foreign_this() {
         let rt = with_fsa();
         assert!(bool_eval(
             &rt,
-            "typeof new FileSystemDirectoryHandle('d', 'x').getFileHandle('x.txt').then === 'function'"
-        ));
-    }
-
-    #[test]
-    fn fsdh_get_dir_handle_returns_promise() {
-        let rt = with_fsa();
-        assert!(bool_eval(
-            &rt,
-            "typeof new FileSystemDirectoryHandle('d', 'x').getDirectoryHandle('sub').then === 'function'"
-        ));
-    }
-
-    #[test]
-    fn fsdh_entries_has_next() {
-        let rt = with_fsa();
-        assert!(bool_eval(
-            &rt,
-            "typeof new FileSystemDirectoryHandle('d', 'x').entries().next === 'function'"
-        ));
-    }
-
-    #[test]
-    fn fsdh_values_has_next() {
-        let rt = with_fsa();
-        assert!(bool_eval(
-            &rt,
-            "typeof new FileSystemDirectoryHandle('d', 'x').values().next === 'function'"
-        ));
-    }
-
-    #[test]
-    fn fsdh_keys_has_next() {
-        let rt = with_fsa();
-        assert!(bool_eval(
-            &rt,
-            "typeof new FileSystemDirectoryHandle('d', 'x').keys().next === 'function'"
+            "var thrown = false; \
+             try { Object.getOwnPropertyDescriptor(FileSystemHandle.prototype, 'kind') \
+                     .get.call({}); } catch (e) { thrown = e instanceof TypeError; } \
+             var rejected = false; \
+             FileSystemHandle.prototype.getUniqueId.call({}) \
+               .catch(function(e) { rejected = e instanceof TypeError; }); \
+             thrown"
         ));
     }
 
@@ -1495,53 +2247,6 @@ mod tests_v8 {
             }
             other => panic!("expected string JSON, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn fsfh_is_same_entry_same_token() {
-        let rt = with_fsa();
-        assert!(await_bool(
-            &rt,
-            "new FileSystemFileHandle('a.txt', 'tok', 0)\
-             .isSameEntry(new FileSystemFileHandle('b.txt', 'tok', 0))"
-        ));
-    }
-
-    #[test]
-    fn fsfh_is_same_entry_diff_token() {
-        let rt = with_fsa();
-        assert!(!await_bool(
-            &rt,
-            "new FileSystemFileHandle('a.txt', 'one', 0)\
-             .isSameEntry(new FileSystemFileHandle('b.txt', 'two', 0))"
-        ));
-    }
-
-    #[test]
-    fn fsdh_is_same_entry_same_path_id() {
-        let rt = with_fsa();
-        assert!(await_bool(
-            &rt,
-            "new FileSystemDirectoryHandle('x', 'pid')\
-             .isSameEntry(new FileSystemDirectoryHandle('y', 'pid'))"
-        ));
-    }
-
-    /// BUG-371 point 4: handle internals are private slots — the page can read
-    /// neither the read token nor the directory/write ids off a handle.
-    #[test]
-    fn handle_internals_are_not_web_visible() {
-        let rt = with_fsa();
-        assert!(bool_eval(
-            &rt,
-            "var f = new FileSystemFileHandle('a.txt', 'tok', 1); \
-             var d = new FileSystemDirectoryHandle('d', 'pid'); \
-             var w = new FileSystemWritableFileStream('wid'); \
-             f._token === undefined && d._pathId === undefined && w._id === undefined && \
-             Object.getOwnPropertyNames(f).join(',') === 'name,kind' && \
-             Object.getOwnPropertyNames(d).join(',') === 'name,kind' && \
-             Object.getOwnPropertyNames(w).length === 0"
-        ));
     }
 
     #[test]
@@ -1730,10 +2435,11 @@ mod tests_v8 {
         let (rt, dir, pid) = opfs_case("writable_handle", true);
         rt.eval(&format!(
             r#"
-            var __i = JSON.parse(_lumen_dir_get_file('{pid}', 'out.txt', true));
             var __w = null;
-            new FileSystemFileHandle(__i.name, __i.token, __i.size)
-              .createWritable().then(function(s) {{ __w = s; }});
+            {ROOT}('root', '{pid}')
+              .getFileHandle('out.txt', {{ create: true }})
+              .then(function(fh) {{ return fh.createWritable(); }})
+              .then(function(s) {{ __w = s; }});
             "#
         ))
         .unwrap();
@@ -1858,11 +2564,18 @@ mod tests_v8 {
 
     /// The one non-picker site: a handle with no sandbox grant falls through to
     /// the save dialog, and a refused dialog must say `NotAllowedError`.
+    ///
+    /// Only the *save* picker is cancelled here: the open picker still has to
+    /// hand out the grant-less handle the test then tries to write through.
     #[test]
     fn refused_write_permission_rejects_with_not_allowed_error() {
-        let rt = with_cancelling_pickers("https://abort-write.fsal.test");
+        let rt = with_fsa_for("https://abort-write.fsal.test");
+        rt.eval("globalThis._lumen_show_save_file_picker = function() { return null; };")
+            .unwrap();
+        rt.eval(super::FSAL_SHIM).unwrap();
+        rt.eval(RESOLVE_HANDLES).unwrap();
         assert_eq!(
-            await_rejection(&rt, "new FileSystemFileHandle('x.txt', '', 0).createWritable()"),
+            await_rejection(&rt, "__fh.createWritable()"),
             "true|NotAllowedError|Write permission denied or user cancelled"
         );
     }
@@ -1877,7 +2590,7 @@ mod tests_v8 {
         assert_eq!(
             await_rejection(
                 &rt,
-                &format!("new FileSystemDirectoryHandle('root', '{pid}').getFileHandle('nope.txt')")
+                &format!("{ROOT}('root', '{pid}').getFileHandle('nope.txt')")
             ),
             "true|NotFoundError|Cannot open file: nope.txt"
         );

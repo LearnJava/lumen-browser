@@ -12017,6 +12017,29 @@ if (typeof _lumen_idb_load === 'function') {
 // DataCloneError DOMException for non-serializable values (functions, symbols).
 // Not handled: the `transfer` option (transferables are copied, not detached),
 // Blob/File/ImageData/Error and other platform objects.
+// Extension point for `[Serializable]` platform interfaces (HTML LS §2.7.2).
+// A platform object is not a plain object: cloned as one it loses its class and
+// its internal slots, which for a File System Access handle means the clone is
+// an inert `{}` instead of a handle (BUG-374 point 9). Interfaces that declare
+// `[Serializable]` register a (test, clone) pair from their own shim; the list
+// itself stays closed over, so a page can add a cloner for its own objects but
+// cannot read or drop anyone else's.
+(function() {
+    var CLONERS = [];
+    Object.defineProperty(window, '__lumen_platform_cloners', {
+        value: Object.freeze({
+            register: function(test, clone) { CLONERS.push([test, clone]); },
+            find: function(v) {
+                for (var i = 0; i < CLONERS.length; i++) {
+                    try { if (CLONERS[i][0](v)) return CLONERS[i][1]; } catch (e) {}
+                }
+                return null;
+            }
+        }),
+        enumerable: false, writable: false, configurable: false
+    });
+})();
+
 function structuredClone(val) {
     // memory: original object → its clone, so shared refs and cycles round-trip.
     var memory = new Map();
@@ -12082,6 +12105,13 @@ function structuredClone(val) {
             memory.set(v, arr);
             for (var i = 0; i < v.length; i++) arr[i] = clone(v[i]);
             return arr;
+        }
+        // A `[Serializable]` platform object serializes through its own shim.
+        var platformClone = window.__lumen_platform_cloners.find(v);
+        if (platformClone) {
+            var pc = platformClone(v);
+            memory.set(v, pc);
+            return pc;
         }
         // Plain object: own enumerable string-keyed properties only (symbol keys
         // are dropped, matching the spec's serialization of ordinary objects).

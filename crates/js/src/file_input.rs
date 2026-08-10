@@ -331,7 +331,9 @@ pub(crate) fn install_file_input_bindings_v8(
 ///
 /// `_lumen_storage_get_directory` is *not* in the list: `navigator.storage`
 /// installs later than this pass runs, so [`crate::storage_manager`]'s shim
-/// deletes that one itself (BUG-372).
+/// deletes that one itself (BUG-372). Same for `__lumen_fsa_internal`, the
+/// handle factory that same shim needs (BUG-374) — deleting it here would take
+/// it away before its one consumer had captured it.
 ///
 /// Called by `install_dom` **after** both `install_file_input_bindings_v8` and
 /// `install_filesystem_access_v8`, rather than from the tail of either shim: if
@@ -356,9 +358,10 @@ const SEAL_FILE_NATIVES: &str = r#"
     '_lumen_show_open_file_picker', '_lumen_show_save_file_picker',
     '_lumen_show_directory_picker', '_lumen_dir_entries',
     '_lumen_dir_get_file', '_lumen_dir_get_subdir', '_lumen_dir_remove_entry',
-    '_lumen_fs_resolve',
-    '_lumen_writable_write_text', '_lumen_writable_close',
-    '_lumen_writable_from_token'
+    '_lumen_fs_resolve', '_lumen_fs_permission', '_lumen_fs_unique_id',
+    '_lumen_fs_remove', '_lumen_fs_move',
+    '_lumen_writable_write_bytes', '_lumen_writable_truncate',
+    '_lumen_writable_close', '_lumen_writable_from_token'
   ];
   for (var i = 0; i < names.length; i++) {
     try { delete globalThis[names[i]]; } catch (e) {}
