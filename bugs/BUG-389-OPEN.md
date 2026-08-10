@@ -77,5 +77,5 @@ OPFS-based БД) и `FileSystemObserver` (Storage §9) в кодовой баз�
 * [BUG-372](BUG-372-OPEN.md) — та же пара модулей, `getDirectory()` отдаёт
   несовместимый теневой класс (найден раньше, на категории `file-system-access`;
   здесь тот же дефект подтверждён повторно, независимой пробой, на категории `fs`).
-* [BUG-371](BUG-371-OPEN.md)…[BUG-374](BUG-374-OPEN.md) — соседняя категория
+* [BUG-371](BUG-371-FIXED.md)…[BUG-374](BUG-374-OPEN.md) — соседняя категория
   `file-system-access` (picker-based API), тот же модуль `filesystem_access.rs`.

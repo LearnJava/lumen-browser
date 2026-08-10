@@ -73,7 +73,7 @@ after: enumerable?             = {"e":true,"w":true,"c":true}
 Нативных биндингов, о которых говорит doc-комментарий («Phase 1:
 `_lumen_local_fonts_query()`»), в рантайме нет:
 `_lumen_local_fonts_query=undefined _lumen_local_font_blob=undefined` — то есть
-класс [BUG-371](BUG-371-OPEN.md) (перечислимая capability на `window`) здесь
+класс [BUG-371](BUG-371-FIXED.md) (перечислимая capability на `window`) здесь
 не воспроизводится, обе ветки `if (typeof … === 'function')` мертвы.
 
 ## Влияние
