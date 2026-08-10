@@ -10367,8 +10367,6 @@ fn lay_out_multicol_children(
     cur_y - content_y
 }
 
-/// Positions absolutely/fixed-positioned deferred children of `parent`.
-/// Called after parent's height is finalized so `my_pcb` is complete.
 /// CSS 2.1 §10.3.7 — does an absolutely positioned box resolve its `auto`
 /// width by shrink-to-fit (BUG-745), or does it keep the legacy
 /// "stretch to the containing block" behaviour?
@@ -10403,6 +10401,8 @@ fn abs_box_shrinks_to_fit(b: &LayoutBox) -> bool {
     ) && !matches!(b.style.display, Display::Grid | Display::InlineGrid)
 }
 
+/// Positions absolutely/fixed-positioned deferred children of `parent`.
+/// Called after parent's height is finalized so `my_pcb` is complete.
 fn lay_out_abs_children(
     parent: &mut LayoutBox,
     deferred: &[(usize, f32, f32)],
