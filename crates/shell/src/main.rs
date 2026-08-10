@@ -3562,7 +3562,8 @@ impl PageSource {
                 // PERF-1: HTTP request for the main document (nested inside the
                 // `fetch-document` span); its `size` arg is the response body.
                 let mut fetch_span = lumen_core::trace::span(format!("GET {url}"), "net");
-                let (bytes, resp_headers) = client.fetch_page(&lumen_url)?;
+                let lumen_network::PageResponse { body: bytes, headers: resp_headers, final_url } =
+                    client.fetch_page(&lumen_url)?;
                 fetch_span.set_bytes(bytes.len());
                 eprintln!("Получено {} байт", bytes.len());
                 let coop = resp_headers.iter()
@@ -3574,7 +3575,12 @@ impl PageSource {
                 let cross_origin_isolated = lumen_network::CrossOriginIsolationState::from_headers(coop, coep).is_cross_origin_isolated();
                 Ok(RawPage {
                     bytes,
-                    base: ResourceBase::Url(url.clone()),
+                    // BUG-757: база документа — адрес, с которого пришёл
+                    // финальный ответ, а не аргумент навигации. После
+                    // серверного редиректа они разные, и от базы зависят
+                    // `location.*`/`document.baseURI`, разрешение
+                    // относительных подресурсов и origin хранилищ.
+                    base: ResourceBase::Url(final_url.to_string()),
                     content_type: Some("text/html"),
                     cross_origin_isolated,
                     cache_control_no_store: cache_control_no_store(&resp_headers),
@@ -3636,7 +3642,8 @@ impl PageSource {
             );
         }
         let client = crate::config::global().apply_http(builder);
-        let (bytes, resp_headers) = client.fetch_page_streaming(&lumen_url, on_chunk)?;
+        let lumen_network::PageResponse { body: bytes, headers: resp_headers, final_url } =
+            client.fetch_page_streaming(&lumen_url, on_chunk)?;
         eprintln!("Получено {} байт (streaming)", bytes.len());
         let coop = resp_headers.iter()
             .find(|(k, _)| k.eq_ignore_ascii_case("cross-origin-opener-policy"))
@@ -3647,8 +3654,11 @@ impl PageSource {
         let cross_origin_isolated = lumen_network::CrossOriginIsolationState::from_headers(coop, coep)
             .is_cross_origin_isolated();
         Ok(RawPage {
+            // BUG-757: см. `load_bytes` — база из финального URL ответа.
+            // Preload-хинты, отданные из `on_chunk` выше, ещё резолвятся от
+            // запрошенного URL: их база захвачена в замыкание до запроса.
+            base: ResourceBase::Url(final_url.to_string()),
             bytes,
-            base: ResourceBase::Url(url.clone()),
             content_type: Some("text/html"),
             cross_origin_isolated,
             cache_control_no_store: cache_control_no_store(&resp_headers),
