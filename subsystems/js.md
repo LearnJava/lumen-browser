@@ -373,7 +373,8 @@ the time — read dates.
   `document.body instanceof Element`/`Node`/`HTMLElement`, `document.createElement('div') instanceof
   HTMLDivElement`, etc. were always `false` — the gap BUG-314/BUG-321 explicitly deferred. Fix: a
   `_lumen_html_tag_prototypes` table (`TAGNAME → HTML*Element` constructor, ~40 common tags; tags
-  without an entry fall back to plain `HTMLElement` per HTML §3.1.3, not `HTMLUnknownElement`) plus
+  without an entry fell back to plain `HTMLElement`, later split into `HTMLElement` vs
+  `HTMLUnknownElement` by BUG-367 below) plus
   `_lumen_element_prototype_for(nid)` (non-HTML-namespace nodes — SVG/MathML — get the generic
   `Element.prototype`; the SVG shim's `createElementNS` decorator, which re-points results at typed
   `SVG*Element.prototype` afterward, chains through `Element.prototype` too via `class SVGElement
@@ -818,6 +819,29 @@ the time — read dates.
   on `!evt.defaultPrevented && evt.isTrusted === false && evt.type === 'click'` — covers submit/reset
   buttons, `<a href>`/`<area>`, checkbox/radio, `<summary>`, `<label>` in one place since they all share
   that same function.
+- **Live node wrapper matches WebIDL on `localName`/`prefix`, namespace-aware `tagName`, a hidden
+  `__nid__` handle and `HTMLUnknownElement` ([BUG-367](../bugs/BUG-367-FIXED.md) points 1/2/3/5,
+  [P3] 2026-08-10).** Four independent WebIDL gaps in `_lumen_build_element`, the one factory behind
+  every live wrapper. Points 1-2 shared a root in the **native** layer: `_lumen_get_tag_name` returned
+  `name.local.to_ascii_uppercase()` and was the only route from the arena to JS, so the un-folded local
+  name simply never crossed the boundary — `localName` could not be derived in the shim
+  (`tagName.toLowerCase()` would mangle `<linearGradient>`) and `tagName` had nothing to un-upper-case.
+  The upper-cased form is still needed *inside* the shim (it keys `_lumen_html_tag_prototypes` and ~50
+  `=== 'IMG'`-style tag comparisons), so the two roles were split rather than swapped: a new
+  `_lumen_get_local_name(nid) -> Option<String>` native returns `name.local` verbatim (`None` for
+  non-elements), `_lumen_get_tag_name` is untouched, and a shim helper `_lumen_qualified_tag_name`
+  upper-cases only when `namespaceURI === 'http://www.w3.org/1999/xhtml'` and now feeds both `tagName`
+  and `nodeName`. `localName`/`prefix` are getters on the wrapper (`prefix` always `null` — present and
+  null, which is what `'prefix' in el` detects — Lumen parses no prefixes). `__nid__` is re-declared
+  after the literal as non-enumerable/non-writable/non-configurable, which both un-fingerprints every
+  node (`Object.keys(el)[0]` used to be `__nid__`) and closes a real mutation-redirect: the shim
+  resolves tree mutations through `child.__nid__`, so `a.__nid__ = b.__nid__` from page script made
+  `dest.appendChild(a)` move `b`. `_LUMEN_KNOWN_HTML_TAGS` splits known tags (→ `HTMLElement`) from
+  unrecognized ones (→ `HTMLUnknownElement`, HTML LS §3.1.3), with hyphenated names (valid custom
+  element names) staying `HTMLElement` per spec. Point 4 of the report — moving the wrapper's ~220 own
+  members onto the prototypes — is a rewrite of the factory and is tracked separately as
+  [BUG-747](../bugs/BUG-747-OPEN.md). 4 unit tests; `create_document_builds_xml_document` was corrected
+  on the merits (it asserted `documentElement.tagName === 'SVG'`, encoding the very defect removed).
 
 ## Deferred
 
@@ -990,6 +1014,20 @@ the time — read dates.
   content attribute (HTML LS §4.10.5.5 dirty-value flag), and an own property shadows the prototype —
   so adding a `value`/`checked` row to the reflection table would be dead code. Everything else belongs
   in the table (`_LUMEN_*` entries near `_lumen_install_reflection`), never as a new own property.
+- **DOM shim: `Object.defineProperty` that *redefines* an existing property inherits every attribute
+  the new descriptor omits — the `false` defaults only apply to brand-new properties (BUG-367).** The
+  shim's usual lock-down idiom, copied from `_lumen_make_doctype` (`{ value: nid, enumerable: false }`),
+  is written against a freshly `Object.create`d object where the omitted `writable`/`configurable`
+  really do default to `false`. Applied to a property that already exists — e.g. `__nid__`, seeded by
+  `_lumen_build_element`'s object literal as writable+configurable — the same call flips only
+  `enumerable` and silently leaves the property writable. Spell out all four attributes whenever the
+  target property may already exist.
+- **DOM shim: `_lumen_get_tag_name` is the *internal* upper-cased tag key, `_lumen_get_local_name` is
+  the web-visible name (BUG-367).** The former keys `_lumen_html_tag_prototypes` and every
+  `=== 'IMG'`-style comparison in the shim, so it must stay unconditionally upper-cased; anything
+  surfacing a name to page script goes through `_lumen_qualified_tag_name` (`tagName`/`nodeName`) or
+  the `localName` getter, which upper-case only inside the HTML namespace. Never expose
+  `_lumen_get_tag_name`'s result to the page directly.
 - **DOM shim: `_lumen_dispatch_rich` runs the document-level listeners even for a non-bubbling event.** It stops the ancestor walk on `!event.bubbles` but not the document hop afterwards, so a non-bubbling event dispatched through it still reaches `document.addEventListener(type, …)`. The focus family (BUG-381) needed its own dispatcher for exactly this reason; anything else adding a non-bubbling shell-driven event must not reuse `_lumen_dispatch_rich` as-is.
 - **DOM shim: the shell tracks focus by layout box, whose node may be a text node.** Anything exposing `focused_node` to the page must normalise through `_lumen_nearest_element_nid` first — the spec-level focus surface only ever names elements.
 - `install_dom` must be called before `eval`. Drop the runtime before `Arc::try_unwrap(doc_arc)` — closures hold Arc clones until the runtime is dropped.

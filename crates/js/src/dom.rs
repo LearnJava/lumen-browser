@@ -1946,6 +1946,33 @@ var _lumen_html_tag_prototypes = {
     'TEMPLATE': HTMLTemplateElement, 'PRE': HTMLPreElement, 'BR': HTMLBRElement,
     'HR': HTMLHRElement, 'DIALOG': HTMLDialogElement, 'IMG': HTMLImageElement,
 };
+// BUG-367: HTML LS §3.1.3 — a tag name the HTML specification does not define
+// gets `HTMLUnknownElement`, not `HTMLElement`. Membership of this set is what
+// separates the two: everything listed here is a real HTML element (either with
+// a dedicated interface in `_lumen_html_tag_prototypes` above or, for the rest,
+// plain `HTMLElement`), everything else is unknown. Obsolete-but-parsed names
+// that the spec still gives an interface to (`center`, `font`, `marquee`, …)
+// belong here as well; the eight names the spec explicitly maps to
+// `HTMLUnknownElement` (`applet`, `bgsound`, `blink`, `isindex`, `keygen`,
+// `multicol`, `nextid`, `spacer`) are deliberately absent. Keys are upper-cased
+// to match `_lumen_get_tag_name`. Valid custom element names (anything with a
+// hyphen) are handled separately below — the spec gives those `HTMLElement`
+// whether or not `customElements.define` has run.
+var _LUMEN_KNOWN_HTML_TAGS = {};
+('A ABBR ADDRESS AREA ARTICLE ASIDE AUDIO B BASE BDI BDO BLOCKQUOTE BODY BR ' +
+ 'BUTTON CANVAS CAPTION CITE CODE COL COLGROUP DATA DATALIST DD DEL DETAILS ' +
+ 'DFN DIALOG DIV DL DT EM EMBED FIELDSET FIGCAPTION FIGURE FOOTER FORM H1 H2 ' +
+ 'H3 H4 H5 H6 HEAD HEADER HGROUP HR HTML I IFRAME IMG INPUT INS KBD LABEL ' +
+ 'LEGEND LI LINK MAIN MAP MARK MENU META METER NAV NOSCRIPT OBJECT OL OPTGROUP ' +
+ 'OPTION OUTPUT P PICTURE PRE PROGRESS Q RP RT RUBY S SAMP SCRIPT SEARCH ' +
+ 'SECTION SELECT SLOT SMALL SOURCE SPAN STRONG STYLE SUB SUMMARY SUP TABLE ' +
+ 'TBODY TD TEMPLATE TEXTAREA TFOOT TH THEAD TIME TITLE TR TRACK U UL VAR VIDEO ' +
+ 'WBR ' +
+ // Obsolete, still parsed, still interface-bearing (HTML LS §16).
+ 'ACRONYM BASEFONT BIG CENTER DIR FONT FRAME FRAMESET LISTING MARQUEE NOBR ' +
+ 'NOEMBED NOFRAMES PARAM PLAINTEXT RB RTC STRIKE TT XMP'
+).split(' ').forEach(function(_t) { _LUMEN_KNOWN_HTML_TAGS[_t] = true; });
+
 // BUG-322: resolves the [[Prototype]] a native element wrapper (`_lumen_build_element`)
 // should get. Non-HTML-namespace elements (SVG/MathML/unknown) get the generic
 // `Element.prototype` here — the SVG shim (`svg.rs`) re-points `createElementNS`
@@ -1956,8 +1983,27 @@ var _lumen_html_tag_prototypes = {
 function _lumen_element_prototype_for(nid) {
     var ns = _lumen_u2n(_lumen_get_namespace_uri(nid));
     if (ns !== 'http://www.w3.org/1999/xhtml') return Element.prototype;
-    var ctor = _lumen_html_tag_prototypes[_lumen_get_tag_name(nid)];
-    return ctor ? ctor.prototype : HTMLElement.prototype;
+    var tag  = _lumen_get_tag_name(nid);
+    var ctor = _lumen_html_tag_prototypes[tag];
+    if (ctor) return ctor.prototype;
+    // BUG-367: unknown tag → HTMLUnknownElement (whose chain still runs through
+    // HTMLElement.prototype, so `instanceof HTMLElement` keeps holding).
+    return (_LUMEN_KNOWN_HTML_TAGS[tag] || tag.indexOf('-') >= 0)
+        ? HTMLElement.prototype : HTMLUnknownElement.prototype;
+}
+
+// BUG-367: DOM LS §4.9 — an element's web-visible `tagName`/`nodeName` is its
+// qualified name, ASCII-upper-cased ONLY when the element is in the HTML
+// namespace. The native `_lumen_get_tag_name` upper-cases unconditionally
+// because its result keys the interface table above, so reading it directly
+// reported `RECT` for an SVG `<rect>`; this helper re-derives the name from the
+// untouched local name instead and only falls back to the native string for
+// non-elements (`#text`/`#comment`/…), which have no local name at all.
+function _lumen_qualified_tag_name(nid) {
+    var local = _lumen_u2n(_lumen_get_local_name(nid));
+    if (local === null) return _lumen_get_tag_name(nid);
+    return _lumen_u2n(_lumen_get_namespace_uri(nid)) === 'http://www.w3.org/1999/xhtml'
+        ? local.toUpperCase() : local;
 }
 
 // Builds a detached CharacterData node (Comment/Text) with `proto` as its
@@ -3138,9 +3184,20 @@ function _lumen_build_element(nid) {
     var _attributes = null;
     var _returnValue = '';
     var _obj = {
+        // BUG-367: `__nid__` is re-declared as a non-enumerable, non-writable
+        // own property right below the literal — see the `Object.defineProperty`
+        // call at the end of this function for why. It has to be seeded here so
+        // that the accessors defined in this literal (which capture `nid`) and
+        // the shim's own `child.__nid__` readers agree from the first moment.
         __nid__: nid,
-        get tagName()        { return _lumen_get_tag_name(nid); },
-        get nodeName()       { return _lumen_get_tag_name(nid); },
+        get tagName()        { return _lumen_qualified_tag_name(nid); },
+        get nodeName()       { return _lumen_qualified_tag_name(nid); },
+        // DOM LS §4.9: `localName` is the qualified name with no case folding at
+        // all (`rect`, `linearGradient`), and Lumen never parses a prefix out of
+        // a tag name, so `prefix` is always `null` — present-and-null, which is
+        // what `'prefix' in el` feature checks look for, not absent (BUG-367).
+        get localName()      { return _lumen_u2n(_lumen_get_local_name(nid)); },
+        get prefix()         { return null; },
         get nodeType()       { return _lumen_is_text_node(nid) ? 3 : (_lumen_is_comment_node(nid) ? 8 : 1); },
         // DOM LS §4.9.1: XHTML namespace for HTML elements, `null` for non-element nodes
         // (text/comment). react-dom's root-listening bootstrap (BUG-281) reads this.
@@ -4405,6 +4462,18 @@ function _lumen_build_element(nid) {
     // on the inherited chain.
     Object.setPrototypeOf(_obj, _lumen_is_text_node(nid) ? Text.prototype :
         (_lumen_is_comment_node(nid) ? Comment.prototype : _lumen_element_prototype_for(nid)));
+    // BUG-367: `__nid__` is the wrapper's internal arena handle, not a DOM
+    // member. As a plain literal property it was enumerable (first key of
+    // `Object.keys`/`for…in`/spread/`JSON.stringify` on every node — a Lumen
+    // fingerprint) and writable, and the whole shim resolves tree mutations
+    // through `child.__nid__`, so one assignment from page script
+    // (`a.__nid__ = b.__nid__`) re-pointed `appendChild(a)` at node `b`. Lock it
+    // down the way `_lumen_make_doctype` already does. Every attribute is spelled
+    // out on purpose: this call REDEFINES the literal property above, and
+    // redefinition keeps whatever the existing descriptor says for any attribute
+    // the new one omits — the `false` defaults only apply to brand-new properties.
+    Object.defineProperty(_obj, '__nid__',
+        { value: nid, enumerable: false, writable: false, configurable: false });
     return _obj;
 }
 
@@ -17005,6 +17074,109 @@ mod tests {
             assert_eq!(r, lumen_core::JsValue::Bool(true));
         }
 
+        // BUG-367 (1): DOM LS §4.9 `localName`/`prefix` exist on every element
+        // wrapper — `localName` is the lower-case tag name for HTML elements and
+        // `prefix` is present-and-null (Lumen parses no prefixes), rather than
+        // both being absent as they were before.
+        #[test]
+        fn element_local_name_and_prefix() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var div = document.createElement('DIV'); \
+                     var main = document.getElementById('main'); \
+                     [div, main, document.body, document.documentElement].every(function(el) { \
+                         return typeof el.localName === 'string' \
+                             && el.localName === el.tagName.toLowerCase() \
+                             && 'prefix' in el && el.prefix === null; \
+                     }) && main.localName === 'div' && document.body.localName === 'body'",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        // BUG-367 (2): DOM LS §4.9 upper-cases `tagName` only for elements in the
+        // HTML namespace. Foreign content keeps the author's case verbatim, which
+        // matters for the case-sensitive SVG tag names (`linearGradient`), while
+        // HTML elements are unaffected.
+        #[test]
+        fn tag_name_upper_cased_only_in_html_namespace() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var SVG = 'http://www.w3.org/2000/svg'; \
+                     var rect = document.createElementNS(SVG, 'rect'); \
+                     var grad = document.createElementNS(SVG, 'linearGradient'); \
+                     var div  = document.createElement('div'); \
+                     rect.tagName === 'rect' && rect.nodeName === 'rect' && \
+                     rect.localName === 'rect' && rect.namespaceURI === SVG && \
+                     grad.tagName === 'linearGradient' && grad.localName === 'linearGradient' && \
+                     div.tagName === 'DIV' && div.nodeName === 'DIV' && div.localName === 'div' && \
+                     document.createTextNode('x').nodeName === '#text'",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        // BUG-367 (3): `__nid__` is the wrapper's internal arena handle. It must
+        // not show up in `Object.keys`/`for…in`/spread (a Lumen fingerprint on
+        // every node), and it must not be writable — the shim resolves tree
+        // mutations through it, so a page-script assignment used to re-point
+        // `appendChild(a)` at whatever node `a.__nid__` was overwritten with.
+        #[test]
+        fn nid_handle_is_hidden_and_immutable() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var host = document.createElement('div'); \
+                     document.body.appendChild(host); \
+                     host.innerHTML = '<span id=\"a\">A</span><span id=\"b\">B</span>'; \
+                     var a = document.getElementById('a'), b = document.getElementById('b'); \
+                     var dest = document.createElement('div'); \
+                     document.body.appendChild(dest); \
+                     var d = Object.getOwnPropertyDescriptor(a, '__nid__'); \
+                     var keysClean = Object.keys(a).indexOf('__nid__') < 0 \
+                         && Object.keys(document.body).indexOf('__nid__') < 0; \
+                     var forInClean = true; \
+                     for (var k in a) { if (k === '__nid__') forInClean = false; } \
+                     try { a.__nid__ = b.__nid__; } catch (e) {} \
+                     dest.appendChild(a); \
+                     d.enumerable === false && d.writable === false && \
+                     keysClean && forInClean && a.__nid__ !== b.__nid__ && \
+                     dest.children.length === 1 && dest.children[0].id === 'a' && \
+                     host.children.length === 1 && host.children[0].id === 'b'",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        // BUG-367 (5): HTML LS §3.1.3 — a tag name the specification does not
+        // define gets `HTMLUnknownElement`; defined ones (including those without
+        // a dedicated interface) and valid custom element names get `HTMLElement`.
+        #[test]
+        fn unrecognized_tag_gets_html_unknown_element() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "function ctorOf(t) { return document.createElement(t); } \
+                     var unknown = ['fencedframe', 'foo', 'abcd'].every(function(t) { \
+                         var el = ctorOf(t); \
+                         return el instanceof HTMLUnknownElement && el instanceof HTMLElement \
+                             && el instanceof Element; \
+                     }); \
+                     var known = ['section', 'article', 'figure', 'center'].every(function(t) { \
+                         var el = ctorOf(t); \
+                         return el instanceof HTMLElement && !(el instanceof HTMLUnknownElement); \
+                     }); \
+                     var custom = ctorOf('my-widget'); \
+                     unknown && known && \
+                     custom instanceof HTMLElement && !(custom instanceof HTMLUnknownElement) && \
+                     !(ctorOf('div') instanceof HTMLUnknownElement)",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
         // BUG-325: `Node.appendChild()` on any CharacterData receiver (Text/
         // Comment/ProcessingInstruction) throws HierarchyRequestError — DOM
         // §4.2.3 pre-insert validity forbids CharacterData from having children.
@@ -17249,6 +17421,9 @@ mod tests {
         // XMLDocument with the given doctype and a namespaced document element
         // (or no document element when qualifiedName is empty) — WPT
         // `DOMImplementation-createDocument.html`.
+        // BUG-367: the document element is in the SVG namespace, so its `tagName`
+        // is the un-folded qualified name `svg` — the previous `SVG` expectation
+        // encoded the unconditional upper-casing this bug removed.
         #[test]
         fn create_document_builds_xml_document() {
             let rt = v8_runtime_with_dom(make_doc());
@@ -17259,7 +17434,8 @@ mod tests {
                      var empty = document.implementation.createDocument(null, '', null); \
                      (Object.getPrototypeOf(doc) === XMLDocument.prototype) && \
                      doc.nodeType === 9 && doc.contentType === 'image/svg+xml' && \
-                     doc.doctype === dt && doc.documentElement.tagName === 'SVG' && \
+                     doc.doctype === dt && doc.documentElement.tagName === 'svg' && \
+                     doc.documentElement.localName === 'svg' && \
                      doc.childNodes.length === 2 && \
                      empty.documentElement === null && empty.contentType === 'application/xml'",
                 )

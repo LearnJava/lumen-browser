@@ -38,7 +38,7 @@ Path2D:function                     OffscreenCanvas:function      HTMLCanvasElem
 буквально `Object.prototype`. Замер 2026-07-29:
 `Object.getOwnPropertyNames(ctx).length === 59`, у прототипа ровно 12 имён — столько
 их у `Object.prototype`, то есть своего прототипа у контекста нет вовсе. Тот же
-класс дефекта, что [BUG-367](BUG-367-OPEN.md) описывает для `Element`.
+класс дефекта, что [BUG-367](BUG-367-FIXED.md) описывает для `Element`.
 
 Данные при этом настоящие: `fillRect` + `getImageData` дают корректные пиксели
 (`18,52,86,255` для `#123456`), `createImageData(2,2).data.length === 16`,

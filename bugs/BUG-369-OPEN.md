@@ -111,7 +111,7 @@ JSON.stringify(new Headers({a:"1"})) = {"_map":[["a","1"]]}
 `{}`, а `for..in` — ничего. Сейчас наружу торчит и хранилище, и служебный
 нормализатор `_key`, причём записываемые: страница может подменить
 `Headers.prototype._key` и изменить регистронезависимость всех заголовков
-процесса. Тот же класс дефекта, что `__nid__` в [BUG-367](BUG-367-OPEN.md) и
+процесса. Тот же класс дефекта, что `__nid__` в [BUG-367](BUG-367-FIXED.md) и
 `navigator.credentials._get_original` в [BUG-366](BUG-366-FIXED.md), — уже третий
 объект подряд, где приватное состояние не спрятано.
 
@@ -176,5 +176,5 @@ target/dev-release/lumen.exe --dump-layout .tmp/probe-fetch.html
 
 - [BUG-370](BUG-370-OPEN.md) — та же проба, `Request`/`Response`: нет Body-mixin
   на `Request`, `Response.json()`, корректного `Response.error()`/`redirect()`.
-- [BUG-367](BUG-367-OPEN.md), [BUG-366](BUG-366-FIXED.md) — тот же класс «внутренний
+- [BUG-367](BUG-367-FIXED.md), [BUG-366](BUG-366-FIXED.md) — тот же класс «внутренний
   слот торчит наружу перечислимым и записываемым», на `Element` и `navigator.credentials`.

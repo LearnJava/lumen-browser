@@ -47,7 +47,7 @@ comma-joined array contents percent-encoded.
    `Array.from()` all fail or (worse) silently return `[]` depending on the
    call site, per the same defect class already on record for `Headers`
    ([BUG-369](BUG-369-OPEN.md)) and other collection-like objects
-   ([BUG-367](BUG-367-OPEN.md)).
+   ([BUG-367](BUG-367-FIXED.md)).
 2. **`entries()`/`keys()`/`values()` return plain arrays**, not
    `%ArrayIteratorPrototype%`-shaped iterator objects (no `.next()`), so
    `sp.entries().next` is `undefined` — code written per spec that manually

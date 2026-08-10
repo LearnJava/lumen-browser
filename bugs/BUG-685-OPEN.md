@@ -101,7 +101,7 @@ case-sensitive local names — `feGaussianBlur`, `textPath`, etc. — which
 also breaks the `SVG_TAG_MAP` lookup in `svg.rs:910` for any *scripted*
 `createElementNS` call spelled with the correct SVG casing if a caller
 ever cross-checks `tagName`, and is a smaller aspect of the already-open
-[BUG-367](BUG-367-OPEN.md), filed against the `createElementNS` path
+[BUG-367](BUG-367-FIXED.md), filed against the `createElementNS` path
 specifically — this bug's parser-side namespace gap is the larger,
 independent defect: BUG-367's element *does* get the right prototype,
 just the wrong tag-name case; this bug's element gets neither).
@@ -153,7 +153,7 @@ to SVG on entering an `<svg>` start tag (and back to HTML on the
 appropriate close/integration-point boundary per §13.2.6.5), and use it
 both for `QualName` construction and to preserve SVG's case-sensitive
 tag names via the spec's `adjustSVGTagNames` table (also fixes the
-`tagName` half of [BUG-367](BUG-367-OPEN.md) for parser-created
+`tagName` half of [BUG-367](BUG-367-FIXED.md) for parser-created
 elements, though not its `createElementNS` half). Once `namespaceURI`
 is correct, `_lumen_element_prototype_for` (`dom.rs:1673`) already knows
 to consult the SVG shim — no changes needed there — as long as `svg.rs`

@@ -76,11 +76,11 @@
  "generated": "2026-08-10",
  "counts": {
   "open": 326,
-  "fixed": 385,
+  "fixed": 386,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 711,
+ "total_bugs": 712,
  "phases": [
   {
    "id": "P0",
@@ -2491,7 +2491,8 @@
        "note": "DONE 2026-07-28: вендорена (`tests/wpt/fenced-frame/`, 400 файлов: `META.yml`/`WEB_FEATURES.yml`/`README.md`, 198 корневых `.html`-тестов (197 из них `.https.`, единственный не-https — `insecure-context.html`), 8 файлов `.headers` (COOP/COEP, client-hints, default-enabled-features), `resources/` — 190 хелперов, wptserve-эндпоинтов и вложенных страниц, `LICENSE-WPT.md`), скоуп 🚫 (Fenced Frames, ad-tech / Privacy Sandbox), включена по постоянному решению пользователя. `run_report.py --all --root fenced-frame --recursive` — **51 мин 48 с**, 198 файлов дали 199 id (единственное variant-раскрытие — `allow-attribute-src.https.html` с `?type=fencedframe`/`?type=iframe`), **1/199 harness OK, 1/2 сабтеста**. Категория — сумма двух уже известных гэпов исполнителя без единого нового: 54 SKIP (`Executor does not support testdriver.js`; ровно те 54 корневых теста, что тянут `testdriver.js`) + 143 TIMEOUT HTTPS-порт-гэпа (`invalid url: invalid port: \"None\"`) + 1 ERROR (session-reuse артефакт: результат пришёл с URL предыдущего теста) — то есть тот же однородный SKIP-вал, что на `fedcm`, но здесь testdriver покрывает лишь 27% файлов, поэтому оставшиеся 73% успели упереться в HTTPS-порт и растянули прогон с 44 с до 52 мин. Выполнился ровно один тест — `insecure-context.html`: 1/2, причём прошедший сабтест ложноположителен по своей природе (`assert_throws_js(TypeError, () => navigator.canLoadAdAuctionFencedFrame())` зелен просто потому, что метода нет), а упавший — `ReferenceError: token is not defined`, 404 на невендоренный `/common/utils.js` (тот же survey-gap, что `beacon`). Внекатегорийные зависимости обширны и не вендорены: `/common/utils.js` (201 файл), `/common/dispatcher/dispatcher.js` (129), `/common/get-host-info.sub.js` (86), `/resources/testdriver*.js` (59/44), `/fetch/local-network-access/resources/support.sub.js` (5), `/webauthn/helpers.js` (2). Сам Fenced Frames в Lumen не реализован (`HTMLFencedFrameElement`/`FencedFrameConfig`/`Fence`/`window.fence`/`navigator.deprecatedReplaceInEmbedderURL` — все `undefined`), багом это не заведено — честный feature detection на 🚫-скоупе. Две находки дала проба `--dump-layout` уровнем выше, в общем для всего DOM объекте-обёртке узла: BUG-367 (живой `Element` расходится с WebIDL по 4 пунктам — нет `localName`/`prefix`, `tagName` апперкейсится и в SVG-namespace, внутренний `__nid__` перечислим и записываем (перезапись перенаправляет `appendChild` на другой узел), все ~120 членов на инстансе вместо прототипа) и BUG-368 (`innerHTML` — текстовая заглушка «Phase 0» на обоих движках: геттер = `textContent`, сеттер кладёт разметку одним текстовым узлом; при этом `CAPABILITIES.md` числит его в «DOM — ✅ full read/write»)",
        "bugs": [
         "BUG-367",
-        "BUG-368"
+        "BUG-368",
+        "BUG-747"
        ]
       },
       {
@@ -2797,7 +2798,7 @@
        "title": "WPT: прогнать срез `html/rendering`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). Срез категории `html`, вынесен из `WPT-VENDOR-html` 2026-07-28. Дерево уже вендорено. DONE 2026-08-04: прогнан целиком (`--processes=4`, ~2 мин) — **115/149 harness OK, 187/1053 сабтестов** (296 `reftest` вне охвата минимального исполнителя, как и предсказывала строка). Основная масса из 900+ unexpected — не новые находки, а концентрированный ценник уже известных сквозных дефектов: [BUG-367](bugs/BUG-367-OPEN.md) (`localName`/`prefix` отсутствуют — `<undefined type=submit>` во всех тест-именах и телах ассертов button-layout/computed-style.html, 167/167 сабтестов одного файла), [BUG-488](bugs/BUG-488-OPEN.md) (`getComputedStyle` пуст для ЛЮБОГО inline-элемента — `<span>`/`<a>`), [BUG-351](bugs/BUG-351-OPEN.md) (`outerHTML` отсутствует на живом DOM), [BUG-478](bugs/BUG-478-OPEN.md)/[522](bugs/BUG-522-OPEN.md)/[551](bugs/BUG-551-OPEN.md)/[580](bugs/BUG-580-OPEN.md) (`Element.getClientRects` отсутствует), [BUG-414](bugs/BUG-414-FIXED.md) (`dataset` отсутствует — 12 хитов в iframe-frameborder.html), [BUG-368](bugs/BUG-368-OPEN.md) (`innerHTML` текстовая заглушка — `table_tr`-инъекция в table-attribute.html даёт `getElementById`=null, каскадный ERROR/NOTRUN на 8 сабтестов той же категории). Три новых бага, все подтверждены живой пробой `--mcp-live-port` поверх сигнала прогона: [BUG-602](bugs/BUG-602-OPEN.md) (легаси `align` — вообще нет IDL-рефлексии ни на одном элементе, отдельно от table `align`→`text-align` presentational hint, который работает), [BUG-603](bugs/BUG-603-OPEN.md) (`bgcolor` presentational hint применяется только из начального парсинга и никогда не переприменяется на рантайменый `setAttribute`, плюс `background`/`bordercolor`/`cellspacing` не реализованы вовсе), [BUG-604](bugs/BUG-604-OPEN.md) (нет UA shadow tree у `<video>`/`<audio>`/`<select>`/`<details>` — дочерний контент рендерится напрямую вместо ожидаемого no-slot/slot-контракта). Отдельно расширен [BUG-537](bugs/BUG-537-OPEN.md) новым шестым свойством: `aspect-ratio` пропущен в whitelist `computed_style_to_map`, изолировано на блочном элементе, чтобы исключить BUG-488/443/555",
+       "note": "Скоуп: ⬜ (кандидат). Срез категории `html`, вынесен из `WPT-VENDOR-html` 2026-07-28. Дерево уже вендорено. DONE 2026-08-04: прогнан целиком (`--processes=4`, ~2 мин) — **115/149 harness OK, 187/1053 сабтестов** (296 `reftest` вне охвата минимального исполнителя, как и предсказывала строка). Основная масса из 900+ unexpected — не новые находки, а концентрированный ценник уже известных сквозных дефектов: [BUG-367](bugs/BUG-367-FIXED.md) (`localName`/`prefix` отсутствуют — `<undefined type=submit>` во всех тест-именах и телах ассертов button-layout/computed-style.html, 167/167 сабтестов одного файла), [BUG-488](bugs/BUG-488-OPEN.md) (`getComputedStyle` пуст для ЛЮБОГО inline-элемента — `<span>`/`<a>`), [BUG-351](bugs/BUG-351-OPEN.md) (`outerHTML` отсутствует на живом DOM), [BUG-478](bugs/BUG-478-OPEN.md)/[522](bugs/BUG-522-OPEN.md)/[551](bugs/BUG-551-OPEN.md)/[580](bugs/BUG-580-OPEN.md) (`Element.getClientRects` отсутствует), [BUG-414](bugs/BUG-414-FIXED.md) (`dataset` отсутствует — 12 хитов в iframe-frameborder.html), [BUG-368](bugs/BUG-368-OPEN.md) (`innerHTML` текстовая заглушка — `table_tr`-инъекция в table-attribute.html даёт `getElementById`=null, каскадный ERROR/NOTRUN на 8 сабтестов той же категории). Три новых бага, все подтверждены живой пробой `--mcp-live-port` поверх сигнала прогона: [BUG-602](bugs/BUG-602-OPEN.md) (легаси `align` — вообще нет IDL-рефлексии ни на одном элементе, отдельно от table `align`→`text-align` presentational hint, который работает), [BUG-603](bugs/BUG-603-OPEN.md) (`bgcolor` presentational hint применяется только из начального парсинга и никогда не переприменяется на рантайменый `setAttribute`, плюс `background`/`bordercolor`/`cellspacing` не реализованы вовсе), [BUG-604](bugs/BUG-604-OPEN.md) (нет UA shadow tree у `<video>`/`<audio>`/`<select>`/`<details>` — дочерний контент рендерится напрямую вместо ожидаемого no-slot/slot-контракта). Отдельно расширен [BUG-537](bugs/BUG-537-OPEN.md) новым шестым свойством: `aspect-ratio` пропущен в whitelist `computed_style_to_map`, изолировано на блочном элементе, чтобы исключить BUG-488/443/555",
        "bugs": [
         "BUG-602",
         "BUG-603",
@@ -7164,10 +7165,10 @@
    "debtor": false
   },
   "BUG-367": {
-   "status": "open",
+   "status": "fixed",
    "title": "Живая обёртка `Element` (то, что отдают `getElementById`/`querySelector`/`createElement`/`firstChild` для **любого** узла документа) расходится с WebIDL по четы…",
-   "component": "js (`crates/js/src/dom.rs:5516-5880` — литерал `_lumen_build_element`, общая фабрика живых обёрток узлов; `dom.rs:5521` `__nid__`; `dom.rs:5522-5523` `tagName`/`nodeName`; `dom.rs:4599-4612` `_lumen_element_prototype_for`)",
-   "date": null,
+   "component": "js (`crates/js/src/dom.rs` — литерал `_lumen_build_element`, общая фабрика живых обёрток узлов; `__nid__`; `tagName`/`nodeName`; `_lumen_element_prototype_for`; натив `_lumen_get_local_name` в `crates/js/src/v8_runtime.rs`)",
+   "date": "2026-08-10",
    "debtor": false
   },
   "BUG-368": {
@@ -9778,6 +9779,13 @@
    "status": "open",
    "title": "`document.styleSheets` отсутствует целиком (`typeof === \"undefined\"`), а вместе с ним и весь CSSOM таблиц стилей: нет ни `StyleSheetList`, ни `CSSStyleSheet`/`C…",
    "component": "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`) + shell/layout (публикация разобранных таблиц в JS-рантайм)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-747": {
+   "status": "open",
+   "title": "Все ~220 членов живой обёртки узла — собственные свойства инстанса, а не операции прототипа: `Object.getOwnPropertyNames(host).length` = 217 против 3 у `Element…",
+   "component": "js (`crates/js/src/dom.rs` — объектный литерал в `_lumen_build_element`; почти пустые `Element.prototype`/`Node.prototype`)",
    "date": null,
    "debtor": false
   }

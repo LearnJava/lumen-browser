@@ -1593,6 +1593,25 @@ impl V8JsRuntime {
             }
         });
         let d = Arc::clone(&doc);
+        // BUG-367: DOM LS §4.9 `localName` — the name exactly as stored, i.e.
+        // lower-case for HTML (both the parser and `createElement` normalize) and
+        // original case for foreign content (`createElementNS('…/svg',
+        // 'linearGradient')`). Only `_lumen_get_tag_name` above upper-cases, and
+        // only because the shim's tag→interface table is keyed on that form; the
+        // shim derives the web-visible `tagName` from this local name plus the
+        // namespace. `None` for non-elements, which have no local name at all.
+        reg!(
+            "_lumen_get_local_name",
+            move |node_id: u32| -> Option<String> {
+                let doc = d.lock().unwrap();
+                let nid = NodeId::from_index(node_id as usize);
+                match &doc.get(nid).data {
+                    NodeData::Element { name, .. } => Some(name.local.clone()),
+                    _ => None,
+                }
+            }
+        );
+        let d = Arc::clone(&doc);
         reg!(
             "_lumen_is_text_node",
             move |node_id: u32| -> bool {
