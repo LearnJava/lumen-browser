@@ -6,16 +6,16 @@
 //! (ChromeDriver), `__selenium_unwrapped` / `__webdriver_evaluate` etc.
 //!
 //! Since Lumen builds the JS environment from scratch it never injects
-//! these markers. This module adds an additional hardening layer:
+//! these markers, so the module defines **none** of them: an absent property
+//! and a property that reads as `undefined` are different observable states,
+//! and detectors query the difference via `getOwnPropertyNames` / `in` /
+//! `hasOwnProperty` (BUG-379). What this module does add:
 //!
-//! 1. Seals `navigator.webdriver` as `undefined` via `Object.defineProperty`
-//!    with `configurable: false` — even if a script tries to assign `true`
-//!    the property cannot be overridden at runtime.
-//! 2. Adds standard browser compatibility properties that fingerprinting
+//! 1. Standard browser compatibility properties that fingerprinting
 //!    scripts expect on any real browser (`navigator.plugins`,
 //!    `navigator.mimeTypes`, `navigator.appName`, `navigator.vendor`,
 //!    `navigator.product`, `navigator.productSub`).
-//! 3. Freezes `navigator.cookieEnabled = true` and
+//! 2. Freezes `navigator.cookieEnabled = true` and
 //!    `navigator.doNotTrack = null` (Chrome-matching).
 //!
 //! Must be called **after** `v8_runtime.rs::install_dom` and `install_navigator_bindings`.
@@ -24,8 +24,9 @@
 /// S5-S7, rquickjs side removed in S12b-B6): identical JS shim, evaluated via
 /// [`lumen_core::ext::JsRuntime::eval`] instead of `rquickjs::Ctx::eval`.
 ///
-/// Seals automation-detection properties and adds standard browser
-/// compatibility shims. Must be called after `v8_runtime.rs::install_dom`.
+/// Adds standard browser compatibility shims to `navigator` and defines no
+/// automation-detection property at all (BUG-379). Must be called after
+/// `v8_runtime.rs::install_dom`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_surface_api_protection_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -149,30 +150,26 @@ const SURFACE_API_SHIM: &str = r#"(function() {
     } catch(_) {}
   }
 
-  // ── Ensure no automation globals leak through ─────────────────────────────
-  // These are read-only shims that return `undefined` even if something tries
-  // to set them.  We only define them if they do not already exist (they
-  // should not — Lumen never defines them — but this is a belt-and-braces
-  // guard for external scripts that inject via `eval`).
-  var _automationGlobals = [
-    '__playwright', '__pwInitScripts', '__pwExecPath',
-    '__selenium_unwrapped', '__selenium_evaluate', '__webdriver_evaluate',
-    '__webdriver_script_fn', '__webdriver_script_func',
-    '__lastWatirAlert', '__lastWatirConfirm', '__lastWatirPrompt',
-    '_phantom', 'callPhantom', 'domAutomation', 'domAutomationController'
-  ];
-  for (var _i = 0; _i < _automationGlobals.length; _i++) {
-    var _g = _automationGlobals[_i];
-    if (typeof globalThis[_g] === 'undefined') {
-      try {
-        Object.defineProperty(globalThis, _g, {
-          get: function() { return undefined; },
-          set: function() {},
-          configurable: false, enumerable: false
-        });
-      } catch(_) {}
-    }
-  }
+  // ── Automation globals: deliberately NOT defined ──────────────────────────
+  // `__playwright`, `__pwInitScripts`, `__pwExecPath`, `__selenium_unwrapped`,
+  // `__selenium_evaluate`, `__webdriver_evaluate`, `__webdriver_script_fn`,
+  // `__webdriver_script_func`, `__lastWatirAlert`, `__lastWatirConfirm`,
+  // `__lastWatirPrompt`, `_phantom`, `callPhantom`, `domAutomation`,
+  // `domAutomationController` — Lumen never injects any of them, so there is
+  // nothing to seal here and no code runs for them (BUG-379).
+  //
+  // This block used to define all fifteen as non-configurable `undefined`
+  // getters "belt-and-braces, in case an external script injects one via
+  // eval". That inverted its own purpose: `undefined` on read is not the same
+  // state as absent, and detectors query the difference —
+  // `Object.getOwnPropertyNames(window)`, `'__webdriver_evaluate' in window`
+  // and `hasOwnProperty` all answered *true* on Lumen and *false* on
+  // Chrome/Firefox, so the anti-fingerprint layer was itself a 15-marker
+  // fingerprint (and `configurable: false` made it unremovable afterwards).
+  // The guard could not work in the first place: a marker injected by a
+  // foreign script shows up in `getOwnPropertyNames` whether we reserved the
+  // name or not. Intercepting *writes* would need a `globalThis` proxy, which
+  // is a different mechanism — see the BUG-379 report before adding one.
 })();
 "#;
 
@@ -182,10 +179,33 @@ mod tests {
     use lumen_core::ext::JsRuntime as _;
     use lumen_core::JsValue;
 
+    /// The fifteen names the shim used to reserve (BUG-379) — none of them may
+    /// exist as a property of the global object after installation.
+    const AUTOMATION_MARKERS: &[&str] = &[
+        "__playwright",
+        "__pwInitScripts",
+        "__pwExecPath",
+        "__selenium_unwrapped",
+        "__selenium_evaluate",
+        "__webdriver_evaluate",
+        "__webdriver_script_fn",
+        "__webdriver_script_func",
+        "__lastWatirAlert",
+        "__lastWatirConfirm",
+        "__lastWatirPrompt",
+        "_phantom",
+        "callPhantom",
+        "domAutomation",
+        "domAutomationController",
+    ];
+
     fn with_surface_api(f: impl FnOnce(&V8JsRuntime)) {
         let rt = V8JsRuntime::new().unwrap();
-        rt.eval("var navigator = { language: 'en-US' }; var globalThis = {};")
-            .unwrap();
+        // Only `navigator` is faked here. `globalThis` must stay the engine's
+        // real global object: the earlier harness shadowed it with a plain
+        // `{}`, so every marker assertion below was measuring a throwaway
+        // object instead of the surface a page actually sees (BUG-379).
+        rt.eval("var navigator = { language: 'en-US' };").unwrap();
         super::install_surface_api_protection_v8(&rt).unwrap();
         f(&rt);
     }
@@ -253,33 +273,75 @@ mod tests {
         });
     }
 
+    /// BUG-379: `typeof x === 'undefined'` cannot tell "absent" from "defined
+    /// as an `undefined`-returning getter", which is exactly the distinction
+    /// automation detectors query — so assert the observable state instead:
+    /// no own property, no `in`, no `hasOwnProperty`, nothing in
+    /// `getOwnPropertyNames`.
     #[test]
-    fn playwright_global_is_undefined() {
+    fn automation_markers_are_not_properties_of_the_global() {
         with_surface_api(|rt| {
-            let v = rt
-                .eval("typeof globalThis.__playwright === 'undefined'")
-                .unwrap();
-            assert_eq!(v, JsValue::Bool(true), "__playwright must be undefined");
+            for name in AUTOMATION_MARKERS {
+                let v = rt
+                    .eval(&format!(
+                        "!('{name}' in globalThis) \
+                         && !Object.prototype.hasOwnProperty.call(globalThis, '{name}') \
+                         && Object.getOwnPropertyNames(globalThis).indexOf('{name}') === -1"
+                    ))
+                    .unwrap();
+                assert_eq!(
+                    v,
+                    JsValue::Bool(true),
+                    "`{name}` must be absent from the global object, not defined as undefined"
+                );
+            }
         });
     }
 
+    /// Guards the assertion form above from decaying back into the check that
+    /// hid BUG-379: define one marker exactly the way the removed loop did and
+    /// confirm `typeof === 'undefined'` still answers "absent" while
+    /// `in` / `getOwnPropertyNames` correctly report it as present.
     #[test]
-    fn phantom_global_is_undefined() {
+    fn undefined_returning_getter_is_not_the_same_as_absent() {
         with_surface_api(|rt| {
-            let v = rt
-                .eval("typeof globalThis.callPhantom === 'undefined'")
-                .unwrap();
-            assert_eq!(v, JsValue::Bool(true), "callPhantom must be undefined");
+            rt.eval(
+                "Object.defineProperty(globalThis, '__playwright', { \
+                   get: function() { return undefined; }, set: function() {}, \
+                   configurable: false, enumerable: false });",
+            )
+            .unwrap();
+            assert_eq!(
+                rt.eval("typeof globalThis.__playwright === 'undefined'").unwrap(),
+                JsValue::Bool(true),
+                "the weak check cannot see the marker — that is the point"
+            );
+            assert_eq!(
+                rt.eval(
+                    "'__playwright' in globalThis \
+                     && Object.prototype.hasOwnProperty.call(globalThis, '__playwright') \
+                     && Object.getOwnPropertyNames(globalThis).indexOf('__playwright') !== -1"
+                )
+                .unwrap(),
+                JsValue::Bool(true),
+                "the observable-state check must see a marker defined this way"
+            );
         });
     }
 
+    /// The one-line detector from the BUG-379 report: `false` in Chrome and
+    /// Firefox, and it must be `false` here too.
     #[test]
-    fn selenium_global_is_undefined() {
+    fn one_line_detector_finds_no_marker() {
         with_surface_api(|rt| {
             let v = rt
-                .eval("typeof globalThis.__selenium_unwrapped === 'undefined'")
+                .eval(
+                    "Object.getOwnPropertyNames(globalThis).some(function(n) { \
+                       return /^(__webdriver|__selenium|__playwright|__pw|__lastWatir|_phantom|callPhantom|domAutomation)/.test(n); \
+                     })",
+                )
                 .unwrap();
-            assert_eq!(v, JsValue::Bool(true), "__selenium_unwrapped must be undefined");
+            assert_eq!(v, JsValue::Bool(false), "no automation-marker name may be an own property of the global");
         });
     }
 
