@@ -2537,7 +2537,7 @@ fn fetch_with_redirect(
             }
         };
         let hop_sink: Option<ChunkSink<'_>> =
-            streams_body.then(|| &mut hop_adapter as ChunkSink<'_>);
+            streams_body.then_some(&mut hop_adapter as ChunkSink<'_>);
 
         let mut resp = match fetch_single(
             pool,
