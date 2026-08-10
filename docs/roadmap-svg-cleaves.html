@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-10",
  "counts": {
-  "open": 326,
-  "fixed": 381,
+  "open": 328,
+  "fixed": 382,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 707,
+ "total_bugs": 710,
  "phases": [
   {
    "id": "P0",
@@ -9734,6 +9734,27 @@
    "component": "layout (`crates/engine/layout/src/box_tree.rs` — `preferred_inline_block_width`, `max_content_outer_width`, `min_content_outer_width`)",
    "date": "2026-08-10",
    "debtor": false
+  },
+  "BUG-743": {
+   "status": "fixed",
+   "title": "`<style>`, вставленный после загрузки документа, не попадал в каскад **никогда**: таблица стилей собиралась ровно один раз за навигацию (`extract_style_blocks`…",
+   "component": "shell (`crates/shell/src/main.rs` — `parse_and_layout`, `LayoutSource`, `Lumen::refresh_dynamic_css`)",
+   "date": "2026-08-10",
+   "debtor": false
+  },
+  "BUG-744": {
+   "status": "open",
+   "title": "`<style>`, созданный разбором `innerHTML` (`div.innerHTML = '<style>…'`, затем узел переносится в `<head>`), не работает как таблица стилей и не виден `document…",
+   "component": "js (`crates/js/src/dom.rs` — фрагментный парсер `innerHTML`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-745": {
+   "status": "open",
+   "title": "Абсолютно позиционированный не-replaced бокс с `width: auto` и `auto`-инсетой растягивается на всю ширину содержащего блока вместо shrink-to-fit (CSS 2.1 §10.3.…",
+   "component": "layout (`crates/engine/layout/src/box_tree.rs` — размещение `position: absolute`/`fixed`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -10136,6 +10157,9 @@
   "js (`crates/js/src/dom.rs` — ни одного `DOMMatrix`/`DOMPoint`/`DOMRect`/`DOMQuad`-конструктора нигде)": [
    "BUG-522"
   ],
+  "js (`crates/js/src/dom.rs` — фрагментный парсер `innerHTML`)": [
+   "BUG-744"
+  ],
   "js (`crates/js/src/dom.rs` — шим), shell (исполнение скриптов), layout (`style.rs`)": [
    "BUG-703"
   ],
@@ -10380,6 +10404,9 @@
   ],
   "layout (`crates/engine/layout/src/box_tree.rs` — ветка `is_image_element`, auto-ширина замещаемого элемента)": [
    "BUG-734"
+  ],
+  "layout (`crates/engine/layout/src/box_tree.rs` — размещение `position: absolute`/`fixed`)": [
+   "BUG-745"
   ],
   "layout (`crates/engine/layout/src/box_tree.rs` — те же три функции intrinsic-ширины)": [
    "BUG-738",
@@ -10693,6 +10720,9 @@
   ],
   "shell (`crates/shell/src/main.rs::render_current_page_to_png`), image (`decode_cache.rs`)": [
    "BUG-729"
+  ],
+  "shell (`crates/shell/src/main.rs` — `parse_and_layout`, `LayoutSource`, `Lumen::refresh_dynamic_css`)": [
+   "BUG-743"
   ],
   "shell (`crates/shell/src/main.rs` — `spawn_image_requests` / арм `LoadEvent::ImageDecoded`)": [
    "BUG-735"

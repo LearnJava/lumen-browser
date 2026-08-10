@@ -5032,6 +5032,9 @@ struct ParsedPage {
     js_ctx: Option<Arc<dyn PersistentJs>>,
     /// P3-webvtt срез 3: WebVTT-cues, загруженные из `<track>` каждого `<video>`.
     page_tracks: tracks::PageTracks,
+    /// BUG-743: неизменяемая часть CSS + отпечаток инлайновых `<style>`,
+    /// чтобы поздняя вставка листа пересобрала каскад без сети.
+    dynamic_css: DynamicCssBase,
 }
 
 /// Источник для повторного layout без повторной загрузки/парсинга.
@@ -5055,6 +5058,12 @@ struct LayoutSource {
     /// freeze. `false` for non-network sources (file/thaw/sidebar/hibernate
     /// restore) — no header to check, so the page is treated as cacheable.
     cache_control_no_store: bool,
+    /// BUG-743: часть CSS, не зависящая от инлайновых `<style>`, плюс отпечаток
+    /// тех блоков, из которых собран текущий [`Self::stylesheet`]. `Some` на
+    /// обычном пути загрузки; `None` на путях восстановления (bfcache-thaw,
+    /// разморозка вкладки, sidebar), где исходные части CSS не сохранены — там
+    /// каскад ведёт себя как до BUG-743 и поздний `<style>` не подхватывается.
+    dynamic_css: Option<DynamicCssBase>,
 }
 
 /// Frozen state of a background tab — moved in/out of `Lumen` on tab switch.
@@ -5357,7 +5366,7 @@ fn parse_and_layout(
     }
 
     // Встроенные <style> + внешние <link rel=stylesheet>.
-    let css = {
+    let (css, dynamic_css) = {
         let _s = lumen_core::trace::span("fetch-css", "net");
         let d = doc_arc.lock().unwrap();
         let link_media_ctx = if media_print {
@@ -5378,14 +5387,25 @@ fn parse_and_layout(
             &mut std::collections::HashSet::new(),
             0,
         );
-        css.push_str(&load_linked_stylesheets(
+        // BUG-743: всё, что не пришло из инлайновых <style>, откладывается
+        // отдельно — так поздний динамический <style> пересобирает каскад без
+        // единого сетевого запроса. `inline_css_imports` возвращает
+        // `<импорты> + <исходный текст>`, поэтому префикс = всё до хвоста.
+        let imports_prefix = css[..css.len() - inline.len()].to_owned();
+        let linked = load_linked_stylesheets(
             &d,
             base,
             sink,
             cookie_jar.clone(),
             &link_media_ctx,
-        ));
-        css
+        );
+        css.push_str(&linked);
+        let dyn_css = DynamicCssBase {
+            imports_prefix,
+            linked,
+            inline_fp: inline_style_fingerprint(&d),
+        };
+        (css, dyn_css)
     };
 
     let sheet = {
@@ -5478,6 +5498,7 @@ fn parse_and_layout(
         js_navigate: js_nav,
         js_ctx,
         page_tracks,
+        dynamic_css,
     })
 }
 
@@ -6513,6 +6534,7 @@ fn render_bytes(
         stylesheet: Arc::new(parsed.stylesheet),
         html_source: Some(parsed.html_source),
         cache_control_no_store,
+        dynamic_css: Some(parsed.dynamic_css),
     };
     Ok((
         LoadedPage {
@@ -6638,6 +6660,59 @@ fn extract_style_blocks(doc: &Document) -> String {
     let mut out = String::new();
     walk_style_blocks(doc, doc.root(), &mut out);
     out
+}
+
+/// Хэш текста всех инлайновых `<style>` в порядке документа (BUG-743).
+///
+/// Считается на каждом релейауте, поэтому не собирает строку: обходит те же
+/// узлы, что и [`walk_style_blocks`], и хэширует их текст по кускам. Меняется
+/// при вставке, удалении и правке любого блока — этого достаточно, чтобы
+/// понять, что каскад пора пересобрать.
+fn inline_style_fingerprint(doc: &Document) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    hash_style_blocks(doc, doc.root(), &mut h);
+    // Пустой документ и документ без единого `<style>` должны давать один хэш —
+    // отдельная соль не нужна, но длина цепочки в него уже вошла.
+    0_u8.hash(&mut h);
+    h.finish()
+}
+
+/// Рекурсивная половина [`inline_style_fingerprint`].
+fn hash_style_blocks(doc: &Document, id: NodeId, h: &mut impl std::hash::Hasher) {
+    let node = doc.get(id);
+    if let NodeData::Element { name, .. } = &node.data
+        && name.local == "style"
+    {
+        for &child in &node.children {
+            if let NodeData::Text(s) = &doc.get(child).data {
+                h.write(s.as_bytes());
+            }
+        }
+        h.write_u8(0xff);
+        return;
+    }
+    for &child in &node.children {
+        hash_style_blocks(doc, child, h);
+    }
+}
+
+/// CSS страницы, который динамический `<style>` изменить не может (BUG-743).
+///
+/// Позволяет пересобрать каскад после поздней вставки `<style>` целиком из
+/// памяти: текст, притянутый `@import`-ами инлайновых листов (префикс — по CSS
+/// Cascade L4 §6.5 правила импортированного листа идут раньше), и тела внешних
+/// `<link rel=stylesheet>` (суффикс — как при первой сборке). Сетевых запросов
+/// пересборка не делает, поэтому `@import` внутри *нового* `<style>` останется
+/// неразрешённым; это осознанный размен — релейаут не место для сети.
+#[derive(Clone)]
+struct DynamicCssBase {
+    /// Содержимое `@import`-ов инлайновых `<style>`, разрешённое при загрузке.
+    imports_prefix: String,
+    /// Склеенные тела внешних `<link rel=stylesheet>`.
+    linked: String,
+    /// Хэш инлайновых `<style>`, из которых собран текущий лист.
+    inline_fp: u64,
 }
 
 /// A `<script>` to execute: either an inline body or an external `src`.
@@ -8624,9 +8699,61 @@ impl Lumen {
         self.request_redraw();
     }
 
+    /// BUG-743: пересобрать каскад, если набор инлайновых `<style>` изменился
+    /// с последней сборки. Возвращает `true`, если лист заменён.
+    ///
+    /// Таблица стилей страницы собирается один раз за навигацию — на этапе
+    /// разбора, сразу после выполнения синхронных скриптов. Всё, что вставляет
+    /// `<style>` позже (обработчик `load`, `setTimeout`, rAF, промис — то есть
+    /// любой CSS-in-JS), до этого оставалось вне каскада навсегда. Здесь
+    /// дешёвый отпечаток ([`inline_style_fingerprint`]) сверяется на каждом
+    /// релейауте, а полная пересборка (склейка из [`DynamicCssBase`] + парс)
+    /// происходит только когда блоки действительно изменились.
+    ///
+    /// Сеть не трогается: `@import` внутри *нового* листа останется
+    /// неразрешённым, `@font-face` из него не подгрузится — релейаут не место
+    /// для загрузок. Обычный CSS-in-JS ни того, ни другого не использует.
+    fn refresh_dynamic_css(&mut self) -> bool {
+        let Some(src) = self.layout_source.as_mut() else {
+            return false;
+        };
+        // Раздельные заимствования полей: `document` читается, пока `stylesheet`
+        // и `dynamic_css` держатся на запись.
+        let LayoutSource { document, stylesheet, dynamic_css, .. } = src;
+        let Some(base) = dynamic_css.as_mut() else {
+            return false;
+        };
+        let Ok(doc) = document.lock() else {
+            return false;
+        };
+        let fp = inline_style_fingerprint(&doc);
+        if fp == base.inline_fp {
+            return false;
+        }
+        let inline = extract_style_blocks(&doc);
+        drop(doc);
+        let mut css =
+            String::with_capacity(base.imports_prefix.len() + inline.len() + base.linked.len());
+        css.push_str(&base.imports_prefix);
+        css.push_str(&inline);
+        css.push_str(&base.linked);
+        let sheet = lumen_css_parser::parse(&css);
+        eprintln!(
+            "CSS пересобран после правки <style>: {} правил",
+            sheet.rules.len()
+        );
+        *stylesheet = Arc::new(sheet);
+        base.inline_fp = fp;
+        // Инкрементальный рестайл (BUG-341 S7) переиспользует стили прошлого
+        // прохода — против нового листа они недействительны.
+        self.page_prev_cascade_styles = None;
+        true
+    }
+
     /// Повторный layout+paint при изменении размера viewport.
     /// Использует сохранённый `LayoutSource`; парсинг не повторяется.
     fn relayout(&mut self) {
+        self.refresh_dynamic_css();
         let Some(viewport) = self.relayout_viewport() else { return };
         // ADR-016 M2.2: a synchronous relayout is authoritative — advance the
         // applied generation to `job_generation` so any off-thread commit still
@@ -9922,6 +10049,12 @@ impl Lumen {
         let Some(viewport) = self.relayout_viewport() else {
             return false;
         };
+        // BUG-743: смена таблицы стилей может задеть любой узел дерева —
+        // геометрию прошлого прохода переиспользовать нельзя, пусть вызывающий
+        // сделает полный [`Self::relayout`].
+        if self.refresh_dynamic_css() {
+            return false;
+        }
         let Some(prev_lb) = self.layout_box.take() else {
             return false;
         };
@@ -10409,6 +10542,9 @@ impl Lumen {
         &mut self,
     ) -> Option<(u64, impl FnOnce() -> EngineCommit + Send + 'static)> {
         let viewport = self.relayout_viewport()?;
+        // BUG-743: снимок листа для движкового потока берётся здесь, поэтому
+        // поздний динамический `<style>` должен попасть в каскад до клонирования.
+        self.refresh_dynamic_css();
         let src = self.layout_source.as_ref()?;
         self.engine_job_generation = self.engine_job_generation.wrapping_add(1);
         let generation = self.engine_job_generation;
@@ -19159,6 +19295,9 @@ impl Lumen {
             // The page was eligible for a full freeze (bfcache_eligible() was
             // true when it was stored), so it was not no-store at that point.
             cache_control_no_store: false,
+            // BUG-743: the frozen entry keeps the parsed sheet, not the CSS
+            // parts it was built from — nothing to rebuild a cascade out of.
+            dynamic_css: None,
         });
         // Ph3 V8 migration S4.
         #[cfg(feature = "v8")]
@@ -21265,6 +21404,9 @@ impl Lumen {
             html_source: None,
             // Sidebar panel, not the main navigable page — not bfcache-tracked.
             cache_control_no_store: false,
+            // BUG-743: the sidebar page runs no scripts, so no `<style>` can
+            // appear in it after this build.
+            dynamic_css: None,
         };
 
         let sidebar_vp = Size::new(
@@ -22939,6 +23081,10 @@ impl Lumen {
             // preserved across the hibernate/restore round-trip; treat as
             // cacheable (matches the rest of this struct's restore paths).
             cache_control_no_store: false,
+            // BUG-743: only the inline `<style>` text survives hibernation
+            // (`extract_style_blocks`), the external-sheet bodies do not — a
+            // rebuild would silently drop them, so the cascade stays frozen.
+            dynamic_css: None,
         };
 
         // Re-run layout+paint with the current viewport (including zoom).
@@ -28845,6 +28991,66 @@ mod tests {
         let b_pos = out.find("color: blue").expect("imported content present");
         let a_pos = out.find("color: red").expect("own content present");
         assert!(b_pos < a_pos, "imported rules must precede importing sheet's own rules");
+    }
+
+    /// BUG-743: результат всегда **оканчивается** исходным текстом листа —
+    /// на этом инварианте держится вырезание `imports_prefix` в
+    /// `parse_and_layout` (префикс = всё, что длиннее исходного текста).
+    #[test]
+    fn inline_css_imports_result_ends_with_source_text() {
+        let dir = import_fixture_dir("suffix");
+        std::fs::write(dir.join("b.css"), "b { color: blue; }").unwrap();
+        let base = ResourceBase::File(dir.join("a.css"));
+        let ctx = screen_media_context(Size::new(1024.0, 720.0), false);
+        for text in ["@import url(\"b.css\");\na { color: red; }", "a { color: red; }", ""] {
+            let out = inline_css_imports(
+                text, &base, &null_sink(), None, &ctx,
+                &mut std::collections::HashSet::new(), 0,
+            );
+            assert!(out.ends_with(text), "результат не оканчивается исходником: {out:?}");
+        }
+    }
+
+    // ──────────────── BUG-743: отпечаток инлайновых <style> ──────────────────
+
+    /// Вставка нового `<style>` меняет отпечаток — иначе поздний динамический
+    /// лист не пересоберёт каскад.
+    #[test]
+    fn inline_style_fingerprint_detects_added_block() {
+        let a = lumen_html_parser::parse("<html><head><style>.a{color:red}</style></head><body></body></html>");
+        let b = lumen_html_parser::parse(
+            "<html><head><style>.a{color:red}</style><style>.b{color:blue}</style></head><body></body></html>",
+        );
+        assert_ne!(inline_style_fingerprint(&a), inline_style_fingerprint(&b));
+    }
+
+    /// Правка текста блока без изменения длины тоже меняет отпечаток —
+    /// счётчика блоков или суммарной длины было бы недостаточно.
+    #[test]
+    fn inline_style_fingerprint_detects_same_length_edit() {
+        let a = lumen_html_parser::parse("<html><head><style>.a{color:red}</style></head></html>");
+        let b = lumen_html_parser::parse("<html><head><style>.a{color:RED}</style></head></html>");
+        assert_ne!(inline_style_fingerprint(&a), inline_style_fingerprint(&b));
+    }
+
+    /// Один и тот же документ даёт один и тот же отпечаток, а перестановка
+    /// текста между двумя блоками — разный (границы блоков учитываются).
+    #[test]
+    fn inline_style_fingerprint_is_stable_and_block_aware() {
+        let src = "<html><head><style>.a{}</style><style>.b{}</style></head></html>";
+        let a = lumen_html_parser::parse(src);
+        let b = lumen_html_parser::parse(src);
+        assert_eq!(inline_style_fingerprint(&a), inline_style_fingerprint(&b));
+        let merged = lumen_html_parser::parse("<html><head><style>.a{}.b{}</style></head></html>");
+        assert_ne!(inline_style_fingerprint(&a), inline_style_fingerprint(&merged));
+    }
+
+    /// Документ без единого `<style>` — отпечаток считается и не паникует.
+    #[test]
+    fn inline_style_fingerprint_handles_document_without_styles() {
+        let a = lumen_html_parser::parse("<html><body><p>текст</p></body></html>");
+        let b = lumen_html_parser::parse("<html><body><p>другой</p></body></html>");
+        assert_eq!(inline_style_fingerprint(&a), inline_style_fingerprint(&b));
     }
 
     /// Вложенные `@import` (a → b → c) разворачиваются в порядке c, b, a.
