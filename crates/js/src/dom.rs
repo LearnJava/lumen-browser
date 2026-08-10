@@ -1677,6 +1677,135 @@ function Node() { throw new TypeError('Illegal constructor'); }
 // element/text/comment wrapper — see the `childNodes` getter added to `_obj` in
 // `_lumen_build_element` below.
 Node.prototype.hasChildNodes = function() { return this.childNodes.length > 0; };
+
+// ── DOM §4.4 Node.contains() / compareDocumentPosition() (BUG-732) ───────────
+// Both were missing outright, so a call landed as `TypeError: ... is not a
+// function` in the middle of third-party code (confirmed on a live site) and
+// took the rest of that script down with it — the ordinary shape
+// `if (container.contains(target))` has no fallback path to take.
+//
+// Both work on arena node ids rather than on JS wrapper identity: the live
+// `document` singleton is an object literal, not an `__nid__` carrier, and
+// `documentElement.parentNode` answers a *wrapper for the document root node*,
+// not that literal — so an identity-based parent walk would report
+// `document.contains(el) === false` for every element on the page.
+
+// Arena id of `n` for tree-order work: the node id for native-backed
+// wrappers, the document root's id for the `document` singleton,
+// `null` for detached JS-only nodes (`new Comment()` and friends, which have no
+// arena backing at all).
+function _lumen_tree_nid(n) {
+    if (n === null || n === undefined || (typeof n !== 'object' && typeof n !== 'function')) return null;
+    if (n === document) return _lumen_root_nid;
+    var v = n.__nid__;
+    return typeof v === 'number' ? v : null;
+}
+
+// [node, parent, ..., root] in arena ids.
+function _lumen_ancestor_nids(nid) {
+    var chain = [];
+    var cur = nid;
+    while (cur !== null && cur !== undefined) {
+        chain.push(cur);
+        cur = _lumen_u2n(_lumen_get_parent(cur));
+    }
+    return chain;
+}
+
+// Total order used only for the DISCONNECTED case, where the spec asks for a
+// consistent result (`a.compareDocumentPosition(b)` must be the mirror of
+// `b.compareDocumentPosition(a)`) but not for any particular one. Arena nodes
+// order by node id; a JS-only node gets a lazily assigned ordinal and sorts
+// after every arena node.
+var _LUMEN_DP_JS_BASE = 4294967296;
+var _lumen_dp_next_ordinal = 1;
+function _lumen_dp_rank(n) {
+    var nid = _lumen_tree_nid(n);
+    if (nid !== null) return nid;
+    if (!Object.prototype.hasOwnProperty.call(n, '__lumen_dp_ord__')) {
+        try {
+            Object.defineProperty(n, '__lumen_dp_ord__', {
+                value: _lumen_dp_next_ordinal++, enumerable: false, configurable: false, writable: false,
+            });
+        } catch (e) {
+            return _LUMEN_DP_JS_BASE;
+        }
+    }
+    return _LUMEN_DP_JS_BASE + n.__lumen_dp_ord__;
+}
+
+function _lumen_node_contains(self, other) {
+    if (other === null || other === undefined) return false;
+    if (self === other) return true;
+    var a = _lumen_tree_nid(self);
+    var b = _lumen_tree_nid(other);
+    if (a !== null && b !== null) {
+        var cur = b;
+        while (cur !== null) {
+            if (cur === a) return true;
+            cur = _lumen_u2n(_lumen_get_parent(cur));
+        }
+        return false;
+    }
+    // At least one side is a detached JS-only node: no arena chain to walk, so
+    // fall back to wrapper identity up the `parentNode` links those nodes do keep.
+    var n = other;
+    while (n) {
+        if (n === self) return true;
+        n = n.parentNode;
+    }
+    return false;
+}
+
+function _lumen_node_compare_position(self, other) {
+    if (other === null || other === undefined || typeof other !== 'object') {
+        throw new TypeError('compareDocumentPosition: argument is not a Node');
+    }
+    if (self === other) return 0;
+    var a = _lumen_tree_nid(self);
+    var b = _lumen_tree_nid(other);
+    if (a !== null && b !== null) {
+        if (a === b) return 0;
+        var ca = _lumen_ancestor_nids(a);
+        var cb = _lumen_ancestor_nids(b);
+        if (ca[ca.length - 1] === cb[cb.length - 1]) {
+            // DOM §4.4: an ancestor precedes and contains; a descendant follows
+            // and is contained by.
+            if (cb.indexOf(a) >= 0) return 20;  // CONTAINED_BY | FOLLOWING
+            if (ca.indexOf(b) >= 0) return 10;  // CONTAINS | PRECEDING
+            // Same tree, neither contains the other: compare the two distinct
+            // children of their nearest common ancestor in child order.
+            var i = ca.length - 1;
+            var j = cb.length - 1;
+            while (i >= 0 && j >= 0 && ca[i] === cb[j]) { i--; j--; }
+            var kids = _lumen_get_children(ca[i + 1]);
+            return kids.indexOf(cb[j]) > kids.indexOf(ca[i]) ? 4 : 2;  // FOLLOWING : PRECEDING
+        }
+    }
+    // Different trees, or a node with no arena backing: DISCONNECTED |
+    // IMPLEMENTATION_SPECIFIC plus a stable direction.
+    return 33 | (_lumen_dp_rank(other) > _lumen_dp_rank(self) ? 4 : 2);
+}
+
+Node.prototype.contains = function(other) { return _lumen_node_contains(this, other); };
+Node.prototype.compareDocumentPosition = function(other) {
+    return _lumen_node_compare_position(this, other);
+};
+// The DOCUMENT_POSITION_* bit names (DOM §4.4) — a caller writes
+// `pos & Node.DOCUMENT_POSITION_CONTAINED_BY`, and an undefined constant there
+// turns every answer into a silent `0`, so the method is only usable together
+// with them. Exposed on the interface object and on the prototype (WebIDL
+// constants live on both).
+[['DOCUMENT_POSITION_DISCONNECTED', 1],
+ ['DOCUMENT_POSITION_PRECEDING', 2],
+ ['DOCUMENT_POSITION_FOLLOWING', 4],
+ ['DOCUMENT_POSITION_CONTAINS', 8],
+ ['DOCUMENT_POSITION_CONTAINED_BY', 16],
+ ['DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC', 32]].forEach(function(_c) {
+    Object.defineProperty(Node, _c[0], { value: _c[1], writable: false, enumerable: true, configurable: false });
+    Object.defineProperty(Node.prototype, _c[0], { value: _c[1], writable: false, enumerable: true, configurable: false });
+});
+
 function Element() { throw new TypeError('Illegal constructor'); }
 Element.prototype = Object.create(Node.prototype);
 Element.prototype.constructor = Element;
@@ -2870,10 +2999,143 @@ function _lumen_make_dataset(nid) {
     });
 }
 
+// ── DOM §4.9.1 NamedNodeMap / §4.9.2 Attr — `element.attributes` (BUG-732) ───
+// `element.attributes` was `undefined` even though every piece of data behind
+// it (`_lumen_get_attr_names` + `_lumen_get_attr`) was already there: code that
+// walks an element's attributes generically — serializers, sanitizers,
+// framework hydration diffing — got a `TypeError` on the first access.
+// Not constructible from script, per WebIDL.
+function NamedNodeMap() { throw new TypeError('Illegal constructor'); }
+globalThis.NamedNodeMap = NamedNodeMap;
+
+// A live `Attr` node over `nid`'s `name` attribute: reads and writes go
+// straight through to the element, so the object never holds a stale value.
+// Lumen's attribute model is name-only (see `getAttributeNS` on the element
+// wrapper), hence `namespaceURI === null` and a prefix split done on the
+// qualified name alone.
+function _lumen_make_attr(nid, name) {
+    var colon = name.indexOf(':');
+    var attr = Object.create(Attr.prototype);
+    function value() {
+        var v = _lumen_u2n(_lumen_get_attr(nid, name));
+        return v !== null ? v : '';
+    }
+    function setValue(v) { _lumen_set_attr(nid, name, String(v)); }
+    Object.defineProperties(attr, {
+        name:         { get: function() { return name; }, enumerable: true, configurable: true },
+        nodeName:     { get: function() { return name; }, enumerable: true, configurable: true },
+        localName:    { get: function() { return colon >= 0 ? name.slice(colon + 1) : name; }, enumerable: true, configurable: true },
+        prefix:       { get: function() { return colon >= 0 ? name.slice(0, colon) : null; }, enumerable: true, configurable: true },
+        namespaceURI: { get: function() { return null; }, enumerable: true, configurable: true },
+        nodeType:     { get: function() { return 2; }, enumerable: true, configurable: true },
+        // DOM §4.9.2: `specified` is a legacy getter that is always true.
+        specified:    { get: function() { return true; }, enumerable: true, configurable: true },
+        value:        { get: value, set: setValue, enumerable: true, configurable: true },
+        nodeValue:    { get: value, set: setValue, enumerable: true, configurable: true },
+        textContent:  { get: value, set: setValue, enumerable: true, configurable: true },
+        ownerElement: { get: function() { return _lumen_make_element(nid); }, enumerable: true, configurable: true },
+        ownerDocument: { get: function() { return document; }, enumerable: true, configurable: true },
+    });
+    return attr;
+}
+
+// Live `NamedNodeMap` over `nid`'s attributes: indices, `length`, `item()`,
+// `getNamedItem()`/`setNamedItem()`/`removeNamedItem()` and named access all
+// re-read `_lumen_get_attr_names` on every access, so the map tracks
+// `setAttribute`/`removeAttribute` without being rebuilt — the same Proxy
+// design `_lumen_make_nid_collection` uses for HTMLCollection.
+function _lumen_make_named_node_map(nid) {
+    var proto = Object.create(NamedNodeMap.prototype);
+    function names() { return _lumen_get_attr_names(nid); }
+    function at(list, i) { return i < list.length ? _lumen_make_attr(nid, list[i]) : null; }
+    var methods = {
+        item: function(i) { return at(names(), i >>> 0); },
+        getNamedItem: function(n) {
+            var name = String(n);
+            return _lumen_get_attr(nid, name) !== undefined ? _lumen_make_attr(nid, name) : null;
+        },
+        // Namespaces are not modelled (see `_lumen_make_attr`), so the NS forms
+        // ignore the namespace and look the qualified name up.
+        getNamedItemNS: function(ns, n) { return methods.getNamedItem(n); },
+        setNamedItem: function(attr) {
+            if (!attr || typeof attr.name !== 'string') {
+                throw new TypeError('setNamedItem: argument is not an Attr');
+            }
+            var prev = methods.getNamedItem(attr.name);
+            _lumen_set_attr(nid, attr.name, String(attr.value));
+            return prev;
+        },
+        setNamedItemNS: function(attr) { return methods.setNamedItem(attr); },
+        removeNamedItem: function(n) {
+            var name = String(n);
+            if (_lumen_get_attr(nid, name) === undefined) {
+                throw new DOMException('No attribute named ' + name, 'NotFoundError');
+            }
+            var prev = _lumen_make_attr(nid, name);
+            _lumen_remove_attr(nid, name);
+            return prev;
+        },
+        removeNamedItemNS: function(ns, n) { return methods.removeNamedItem(n); },
+    };
+    return new Proxy(proto, {
+        get: function(target, prop) {
+            if (prop === 'length') return names().length;
+            if (typeof prop === 'string' && Object.prototype.hasOwnProperty.call(methods, prop)) {
+                return methods[prop];
+            }
+            if (typeof prop === 'string' && /^[0-9]+$/.test(prop)) {
+                var byIndex = at(names(), parseInt(prop, 10));
+                return byIndex !== null ? byIndex : undefined;
+            }
+            if (typeof prop === 'string' && prop !== 'constructor'
+                && _lumen_get_attr(nid, prop) !== undefined) {
+                return _lumen_make_attr(nid, prop);
+            }
+            return target[prop];
+        },
+        has: function(target, prop) {
+            if (prop === 'length') return true;
+            if (typeof prop === 'string' && Object.prototype.hasOwnProperty.call(methods, prop)) return true;
+            if (typeof prop === 'string' && /^[0-9]+$/.test(prop)) {
+                return parseInt(prop, 10) < names().length;
+            }
+            if (typeof prop === 'string' && _lumen_get_attr(nid, prop) !== undefined) return true;
+            return prop in target;
+        },
+        // Indexed keys enumerable, named keys own-but-not-enumerable — the same
+        // split `_lumen_make_nid_collection` applies (BUG-323), so `for-in`
+        // yields indices while `Object.getOwnPropertyNames` also sees names.
+        ownKeys: function() {
+            var list = names();
+            var keys = [];
+            for (var i = 0; i < list.length; i++) keys.push(String(i));
+            for (var k = 0; k < list.length; k++) {
+                if (!/^[0-9]+$/.test(list[k])) keys.push(list[k]);
+            }
+            return keys;
+        },
+        getOwnPropertyDescriptor: function(target, prop) {
+            if (typeof prop !== 'string') return undefined;
+            var list = names();
+            if (/^[0-9]+$/.test(prop)) {
+                var byIndex = at(list, parseInt(prop, 10));
+                return byIndex !== null
+                    ? { value: byIndex, writable: false, enumerable: true, configurable: true }
+                    : undefined;
+            }
+            if (_lumen_get_attr(nid, prop) !== undefined) {
+                return { value: _lumen_make_attr(nid, prop), writable: false, enumerable: false, configurable: true };
+            }
+            return undefined;
+        },
+    });
+}
+
 function _lumen_build_element(nid) {
     var _classList = _lumen_make_class_list(nid);
     var _style     = _lumen_make_style(nid);
     var _dataset   = null;
+    var _attributes = null;
     var _returnValue = '';
     var _obj = {
         __nid__: nid,
@@ -2894,6 +3156,24 @@ function _lumen_build_element(nid) {
         get dataset()        {
             if (_dataset === null) { _dataset = _lumen_make_dataset(nid); }
             return _dataset;
+        },
+        // DOM §4.9 Element.attributes (BUG-732) — the map itself is live, and
+        // cached for the wrapper's lifetime so `el.attributes === el.attributes`
+        // holds as it does in a browser (same treatment as `dataset` above).
+        get attributes()     {
+            if (_attributes === null) { _attributes = _lumen_make_named_node_map(nid); }
+            return _attributes;
+        },
+        // DOM §4.9: the Attr-node accessors that pair with `attributes`.
+        getAttributeNode:   function(n)      { return this.attributes.getNamedItem(n); },
+        getAttributeNodeNS: function(ns, n)  { return this.attributes.getNamedItem(n); },
+        setAttributeNode:   function(attr)   { return this.attributes.setNamedItem(attr); },
+        setAttributeNodeNS: function(attr)   { return this.attributes.setNamedItem(attr); },
+        removeAttributeNode: function(attr)  {
+            if (!attr || typeof attr.name !== 'string') {
+                throw new TypeError('removeAttributeNode: argument is not an Attr');
+            }
+            return this.attributes.removeNamedItem(attr.name);
         },
         get attributeStyleMap() {
             // CSS Typed OM L1 — StylePropertyMap for element.style (mutable)
@@ -4522,6 +4802,11 @@ var document = {
     // wired to `Document.prototype` (so it doesn't inherit the one just added
     // there), hence an own copy here.
     hasChildNodes: function() { return this.childNodes.length > 0; },
+    // Same reason as `hasChildNodes` above: `Node.prototype.contains` /
+    // `.compareDocumentPosition` (BUG-732) don't reach this literal, and
+    // `document.contains(node)` is the single most common form of the call.
+    contains: function(other) { return _lumen_node_contains(this, other); },
+    compareDocumentPosition: function(other) { return _lumen_node_compare_position(this, other); },
     // DOM §4.5: the document's DocumentType child (`<!doctype …>`), or null.
     get doctype() {
         var dnid = _lumen_u2n(_lumen_get_document_doctype());
@@ -4636,6 +4921,17 @@ var document = {
         var sel = _lumen_class_selector(names);
         if (sel === null) return [];
         return _lumen_query_selector_all(sel).map(_lumen_make_element);
+    },
+    // HTML LS §3.1.5 — `document.images`: a live HTMLCollection of the `img`
+    // elements in the document, in tree order (BUG-732: was `undefined`, so
+    // `document.images.length` threw). A real live collection rather than the
+    // static array `getElementsByTagName` above settles for: unlike a one-off
+    // query, this one is read repeatedly by long-lived code (image
+    // preloaders/lazy-loaders) that expects later-inserted images to show up.
+    get images() {
+        return _lumen_make_nid_collection(
+            function() { return _lumen_query_selector_all('img'); },
+            HTMLCollection.prototype);
     },
     createElement:     function(tag) {
         var nid = _lumen_create_element(String(tag).toLowerCase());
@@ -10707,6 +11003,15 @@ window.Range            = Range;
 // ── window.getComputedStyle(element[, pseudoElt]) ────────────────────────────
 // Returns a CSSStyleDeclaration-like object with resolved property values.
 // Pseudo-elements are not yet supported (ignored).
+// CSS Variables L1 §3 (BUG-732): a `--`-prefixed name is a custom property and
+// is answered from its own snapshot — the standard-property map never carried
+// them, so `getPropertyValue('--x')` used to return `''` on a page whose
+// cascade had resolved `--x` perfectly well.
+function _lumen_computed_property(nid, name) {
+    if (nid == null) return '';
+    if (name.slice(0, 2) === '--') return _lumen_get_custom_property(nid, name) || '';
+    return _lumen_get_computed_style(nid, name) || '';
+}
 window.getComputedStyle = function(element, pseudoElt) {
     var nid = element && element.__nid__ != null ? element.__nid__ : null;
     // Cache: keyed by nid, invalidated on next call (live object semantics).
@@ -10714,17 +11019,18 @@ window.getComputedStyle = function(element, pseudoElt) {
         get: function(target, prop) {
             if (prop === 'getPropertyValue') {
                 return function(name) {
-                    if (nid == null) return '';
-                    return _lumen_get_computed_style(nid, name) || '';
+                    return _lumen_computed_property(nid, String(name));
                 };
             }
             if (prop === 'length') return 0;
             if (prop === 'item') return function() { return ''; };
             if (prop === 'cssText') return '';
             if (typeof prop === 'string' && !/^\\d+$/.test(prop)) {
-                // camelCase → kebab-case conversion for convenience
+                // camelCase → kebab-case conversion for convenience. A custom
+                // property is spelled `--x` on the object too, and survives the
+                // conversion unchanged, so it routes through the same helper.
                 var kebab = prop.replace(/([A-Z])/g, function(m) { return '-' + m.toLowerCase(); });
-                if (nid != null) return _lumen_get_computed_style(nid, kebab) || '';
+                if (nid != null) return _lumen_computed_property(nid, kebab);
             }
             return undefined;
         }
@@ -10736,8 +11042,7 @@ window.getComputedStyle = function(element, pseudoElt) {
     // Fallback for environments without Proxy.
     return {
         getPropertyValue: function(name) {
-            if (nid == null) return '';
-            return _lumen_get_computed_style(nid, name) || '';
+            return _lumen_computed_property(nid, String(name));
         }
     };
 };
@@ -12135,7 +12440,10 @@ window.HTMLOptionsCollection = HTMLOptionsCollection;
 // `Array` masquerade so hard to spot.
 [['HTMLCollection', HTMLCollection.prototype],
  ['HTMLFormControlsCollection', HTMLFormControlsCollection.prototype],
- ['HTMLOptionsCollection', HTMLOptionsCollection.prototype]].forEach(function(_e) {
+ ['HTMLOptionsCollection', HTMLOptionsCollection.prototype],
+ // NamedNodeMap (BUG-732) is indexed the same way, so `[...el.attributes]`
+ // and `for (var a of el.attributes)` come from the same iterator.
+ ['NamedNodeMap', NamedNodeMap.prototype]].forEach(function(_e) {
     if (typeof Symbol === 'undefined' || !Symbol.iterator) return;
     var _p = _e[1];
     if (!_p[Symbol.iterator]) {
@@ -27344,6 +27652,180 @@ mod tests {
                 .unwrap();
             assert_eq!(pos, lumen_core::JsValue::String("absolute".to_string()));
             assert_eq!(top, lumen_core::JsValue::String("10px".to_string()));
+        }
+
+        /// BUG-732: `getPropertyValue('--x')` reads the custom-property snapshot
+        /// (`update_custom_properties`), not the standard-property one — the two
+        /// are published side by side because custom properties inherit and are
+        /// shared, see `lumen_layout::collect_custom_properties`.
+        #[test]
+        fn get_computed_style_custom_property() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let nid = get_main_nid(&rt);
+            let mut inner = std::collections::HashMap::new();
+            inner.insert("--gap".to_string(), "8px".to_string());
+            let mut outer = std::collections::HashMap::new();
+            outer.insert(nid, Arc::new(inner));
+            rt.update_custom_properties(outer);
+            let via_get = rt
+                .eval("window.getComputedStyle(document.getElementById('main')).getPropertyValue('--gap')")
+                .unwrap();
+            assert_eq!(via_get, lumen_core::JsValue::String("8px".to_string()));
+            // Bracket access spells the property the same way and must agree.
+            let via_index = rt
+                .eval("window.getComputedStyle(document.getElementById('main'))['--gap']")
+                .unwrap();
+            assert_eq!(via_index, lumen_core::JsValue::String("8px".to_string()));
+        }
+
+        /// A variable the element neither declares nor inherits is the empty
+        /// string, never `undefined` — callers branch on `=== ''`.
+        #[test]
+        fn get_computed_style_unknown_custom_property_is_empty() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval("window.getComputedStyle(document.getElementById('main')).getPropertyValue('--nope')")
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::String(String::new()));
+        }
+    }
+
+    /// BUG-732 — the DOM half of the same report: `Node.contains()`,
+    /// `Node.compareDocumentPosition()`, `Element.attributes` and
+    /// `document.images` were all absent from the shim although every native
+    /// they need (`_lumen_get_parent`, `_lumen_get_children`,
+    /// `_lumen_get_attr_names`, `_lumen_query_selector_all`) already existed.
+    /// Each one used to surface as a `TypeError` thrown from the middle of
+    /// third-party code, taking the rest of that script down with it.
+    #[cfg(feature = "v8-backend")]
+    mod v8_bug732_node_and_collections {
+        use super::*;
+        use crate::v8_runtime::V8JsRuntime;
+
+        /// V8 twin of [`super::runtime_with_dom`].
+        fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
+            let rt = V8JsRuntime::new().unwrap();
+            rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+            rt.install_dom(doc, "", None, None, None, None, None, None, None, None, false)
+                .unwrap();
+            rt
+        }
+
+        fn num(rt: &V8JsRuntime, code: &str) -> f64 {
+            match rt.eval(code).unwrap() {
+                lumen_core::JsValue::Number(n) => n,
+                other => panic!("{code}: expected a number, got {other:?}"),
+            }
+        }
+
+        fn is_true(rt: &V8JsRuntime, code: &str) -> bool {
+            rt.eval(code).unwrap() == lumen_core::JsValue::Bool(true)
+        }
+
+        #[test]
+        fn contains_self_descendant_and_foreign_node() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(is_true(&rt, "document.getElementById('main').contains(document.getElementById('main'))"));
+            assert!(is_true(&rt, "document.getElementById('main').contains(document.querySelector('.highlight'))"));
+            assert!(is_true(&rt, "!document.querySelector('.highlight').contains(document.getElementById('main'))"));
+            assert!(is_true(&rt, "!document.getElementById('main').contains(null)"));
+            // A freshly created, still-detached element is inside nothing.
+            assert!(is_true(&rt, "!document.getElementById('main').contains(document.createElement('div'))"));
+        }
+
+        /// `document` is an object literal, not a `Node.prototype` instance and
+        /// not the parent its own `documentElement` reports — the case an
+        /// identity-based parent walk would get wrong.
+        #[test]
+        fn document_contains_element() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(is_true(&rt, "document.contains(document.getElementById('main'))"));
+            assert!(is_true(&rt, "!document.contains(document.createElement('div'))"));
+        }
+
+        #[test]
+        fn compare_document_position_bits() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let setup = "var _main = document.getElementById('main'); \
+                         var _span = document.querySelector('.highlight');";
+            rt.eval(setup).unwrap();
+            assert_eq!(num(&rt, "_main.compareDocumentPosition(_main)"), 0.0);
+            // CONTAINED_BY | FOLLOWING, and its mirror CONTAINS | PRECEDING.
+            assert_eq!(num(&rt, "_main.compareDocumentPosition(_span)"), 20.0);
+            assert_eq!(num(&rt, "_span.compareDocumentPosition(_main)"), 10.0);
+            // A detached node is DISCONNECTED | IMPLEMENTATION_SPECIFIC plus a
+            // direction bit, and the two directions must be mirrors.
+            rt.eval("var _loose = document.createElement('div');").unwrap();
+            let there = num(&rt, "_main.compareDocumentPosition(_loose)");
+            let back = num(&rt, "_loose.compareDocumentPosition(_main)");
+            assert_eq!(there as u32 & 33, 33, "expected DISCONNECTED|IMPLEMENTATION_SPECIFIC");
+            assert_eq!((there as u32 & 6) ^ (back as u32 & 6), 6, "direction bits must mirror");
+        }
+
+        #[test]
+        fn document_position_constants_are_exposed() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert_eq!(num(&rt, "Node.DOCUMENT_POSITION_DISCONNECTED"), 1.0);
+            assert_eq!(num(&rt, "Node.DOCUMENT_POSITION_PRECEDING"), 2.0);
+            assert_eq!(num(&rt, "Node.DOCUMENT_POSITION_FOLLOWING"), 4.0);
+            assert_eq!(num(&rt, "Node.DOCUMENT_POSITION_CONTAINS"), 8.0);
+            assert_eq!(num(&rt, "Node.DOCUMENT_POSITION_CONTAINED_BY"), 16.0);
+            assert_eq!(num(&rt, "Node.DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC"), 32.0);
+            // The bitmask is only usable together with the names.
+            assert!(is_true(
+                &rt,
+                "!!(document.getElementById('main').compareDocumentPosition(document.querySelector('.highlight')) \
+                    & Node.DOCUMENT_POSITION_CONTAINED_BY)"
+            ));
+        }
+
+        #[test]
+        fn attributes_expose_name_value_and_stay_live() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("var _main = document.getElementById('main');").unwrap();
+            assert!(is_true(&rt, "_main.attributes instanceof NamedNodeMap"));
+            assert!(is_true(&rt, "_main.attributes[0] instanceof Attr"));
+            assert_eq!(num(&rt, "_main.attributes.length"), 1.0);
+            assert!(is_true(&rt, "_main.attributes[0].name === 'id' && _main.attributes[0].value === 'main'"));
+            assert!(is_true(&rt, "_main.attributes.item(0).nodeType === 2"));
+            assert!(is_true(&rt, "_main.attributes.getNamedItem('id').ownerElement === _main"));
+            assert!(is_true(&rt, "_main.attributes.getNamedItem('missing') === null"));
+            // The map itself is one object per element and tracks later writes.
+            assert!(is_true(&rt, "_main.attributes === _main.attributes"));
+            rt.eval("_main.setAttribute('data-x', '1');").unwrap();
+            assert_eq!(num(&rt, "_main.attributes.length"), 2.0);
+            assert!(is_true(&rt, "_main.attributes['data-x'].value === '1'"));
+            rt.eval("_main.attributes.removeNamedItem('data-x');").unwrap();
+            assert!(is_true(&rt, "_main.getAttribute('data-x') === null"));
+            // Writing through an Attr writes through to the element.
+            rt.eval("_main.attributes.getNamedItem('id').value = 'renamed';").unwrap();
+            assert!(is_true(&rt, "_main.getAttribute('id') === 'renamed'"));
+        }
+
+        #[test]
+        fn attributes_are_iterable_and_enumerable() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("var _main = document.getElementById('main'); _main.setAttribute('data-x', '1');")
+                .unwrap();
+            let names = rt
+                .eval("Array.from(_main.attributes).map(function(a) { return a.name; }).join(',')")
+                .unwrap();
+            assert_eq!(names, lumen_core::JsValue::String("id,data-x".to_string()));
+        }
+
+        #[test]
+        fn document_images_is_a_live_collection() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert_eq!(num(&rt, "document.images.length"), 0.0);
+            rt.eval(
+                "var _img = document.createElement('img'); _img.setAttribute('id', 'hero'); \
+                 document.getElementById('main').appendChild(_img);",
+            )
+            .unwrap();
+            assert_eq!(num(&rt, "document.images.length"), 1.0);
+            assert!(is_true(&rt, "document.images[0] === _img"));
+            assert!(is_true(&rt, "document.images.namedItem('hero') === _img"));
+            assert!(is_true(&rt, "document.images instanceof HTMLCollection"));
         }
     }
 

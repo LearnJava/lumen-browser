@@ -3172,6 +3172,21 @@ impl CustomProps {
     pub fn ptr_eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
+
+    /// Address of the shared map, for callers that memoise per unique
+    /// allocation rather than per node — see `collect_custom_properties`,
+    /// which resolves each distinct map's `var()` chains exactly once and
+    /// hands every node inheriting it the same `Arc`. Never dereferenced:
+    /// the pointer is a map-identity key, nothing more.
+    pub fn as_ptr(&self) -> *const HashMap<String, String> {
+        Arc::as_ptr(&self.0)
+    }
+
+    /// The shared map itself, cloned as an `Arc` (a refcount bump, not a copy).
+    /// Lets an embedder publish one allocation for every node that inherits it.
+    pub fn shared(&self) -> Arc<HashMap<String, String>> {
+        Arc::clone(&self.0)
+    }
 }
 
 impl Default for CustomProps {
@@ -13990,7 +14005,10 @@ const VAR_EXPAND_MAX_DEPTH: u32 = 32;
 /// Вынесено в отдельную функцию ради pre-pass-а `font-size`/`font`
 /// ([`apply_font_size`], BUG-731) — единственного места, где значение
 /// парсится вне main-pass-а, и где раньше `var()` терялся.
-fn expand_vars_and_env(value: &str, custom: &HashMap<String, String>) -> Option<String> {
+pub(crate) fn expand_vars_and_env(
+    value: &str,
+    custom: &HashMap<String, String>,
+) -> Option<String> {
     let after_var = if value.contains("var(") {
         expand_vars(value, custom, 0)?
     } else {
