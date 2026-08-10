@@ -1772,6 +1772,186 @@ pub fn parse_selector_list(input: &str) -> Vec<ComplexSelector> {
     Parser::new(input).parse_selector_list()
 }
 
+/// Проверяет, валиден ли `input` как selector-list по правилам DOM LS для
+/// `querySelector`/`querySelectorAll`/`matches`/`closest` (BUG-391).
+///
+/// [`parse_selector_list`] намеренно прощает всё: неизвестный псевдокласс
+/// становится [`PseudoClass::Unsupported`], мусор в хвосте просто
+/// отбрасывается. Для каскада это правильно (невалидное правило молча
+/// выпадает из stylesheet-а), но DOM-методы обязаны бросать `SyntaxError`
+/// DOMException, а не возвращать «ничего не нашлось» — иначе стандартный
+/// feature-detection (`assert_throws_dom('SyntaxError', () =>
+/// el.matches(':unknown-pseudo'))`) не отличает «не поддерживается» от
+/// «не совпало».
+///
+/// Селектор считается невалидным, если:
+/// * он не разбирается целиком (пустая строка, мусор в хвосте, висящая
+///   запятая, незакрытая скобка);
+/// * где-либо встречается неизвестный псевдокласс или pseudo-element;
+/// * pseudo-element стоит не в последнем compound-е (`::before *`);
+/// * после pseudo-element-а идёт что-то, кроме разрешённых спекой
+///   user-action-псевдоклассов (`::before.cls`, `::marker::marker`);
+/// * аргумент функционального pseudo-element-а вне допустимого множества
+///   (`::picker(foo)`).
+///
+/// Аргументы `:is()`/`:where()` — forgiving-selector-list по CSS Selectors
+/// L4 §3.2, поэтому их содержимое не валидируется; `:not()`/`:has()`
+/// non-forgiving и проверяются рекурсивно.
+pub fn is_valid_selector_list(input: &str) -> bool {
+    let mut parser = Parser::new(input);
+    let Some(list) = parser.parse_selector_list_strict() else {
+        return false;
+    };
+    parser.skip_ws_and_comments();
+    if parser.peek().is_some() {
+        return false;
+    }
+    list.iter().all(|c| complex_selector_is_valid(c, true))
+}
+
+/// Проверяет один complex-селектор. `allow_pseudo_element` = false для
+/// вложенных списков (`:not()`, `:has()`, `::slotted()`), где спека
+/// pseudo-element-ы запрещает.
+fn complex_selector_is_valid(sel: &ComplexSelector, allow_pseudo_element: bool) -> bool {
+    let last_idx = sel.tail.len();
+    for (idx, compound) in std::iter::once(&sel.head)
+        .chain(sel.tail.iter().map(|(_, c)| c))
+        .enumerate()
+    {
+        let has_pe = compound
+            .parts
+            .iter()
+            .any(|p| matches!(p, SimpleSelector::PseudoElement(_)));
+        if has_pe && (!allow_pseudo_element || idx != last_idx) {
+            // Pseudo-element допустим только в самом правом compound-е:
+            // комбинатор после него запрещён (CSS Pseudo-Elements L4 §2.1).
+            return false;
+        }
+        if !compound_selector_is_valid(compound) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Проверяет один compound: порядок частей относительно pseudo-element-а и
+/// валидность каждой простой части.
+fn compound_selector_is_valid(compound: &CompoundSelector) -> bool {
+    let mut seen_pe: Option<&PseudoElementKind> = None;
+    for part in &compound.parts {
+        match part {
+            SimpleSelector::PseudoElement(pe) => {
+                if let Some(prev) = seen_pe
+                    && !pseudo_element_pair_allowed(prev, pe)
+                {
+                    return false;
+                }
+                if !pseudo_element_is_valid(pe) {
+                    return false;
+                }
+                seen_pe = Some(pe);
+            }
+            SimpleSelector::PseudoClass(pc) => {
+                if let Some(prev) = seen_pe
+                    && !(pseudo_element_allows_user_action(prev) && is_user_action_pseudo_class(pc))
+                {
+                    return false;
+                }
+                if !pseudo_class_is_valid(pc) {
+                    return false;
+                }
+            }
+            // Тип/класс/id/атрибут/`*` после pseudo-element-а запрещены.
+            _ => {
+                if seen_pe.is_some() {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+/// Разрешена ли пара «pseudo-element сразу за pseudo-element-ом».
+/// Спека допускает только маркер сгенерированного контента
+/// (`::before::marker`, `::after::marker`, CSS Pseudo-Elements L4 §2.4).
+fn pseudo_element_pair_allowed(first: &PseudoElementKind, second: &PseudoElementKind) -> bool {
+    matches!(
+        (first, second),
+        (
+            PseudoElementKind::Before | PseudoElementKind::After,
+            PseudoElementKind::Marker
+        )
+    )
+}
+
+/// Может ли за pseudo-element-ом стоять user-action-псевдокласс.
+/// Highlight-псевдоэлементы (`::selection`, `::highlight()`) не допускают
+/// после себя ничего (CSS Highlight API L1 §2.2).
+fn pseudo_element_allows_user_action(pe: &PseudoElementKind) -> bool {
+    !matches!(
+        pe,
+        PseudoElementKind::Selection | PseudoElementKind::Highlight(_)
+    )
+}
+
+/// User-action-псевдоклассы (CSS Selectors L4 §4) — единственное, что спека
+/// разрешает после tree-abiding pseudo-element-а. `:is()`/`:where()`
+/// прозрачны, если целиком состоят из таких же псевдоклассов.
+fn is_user_action_pseudo_class(pc: &PseudoClass) -> bool {
+    match pc {
+        PseudoClass::Hover
+        | PseudoClass::Active
+        | PseudoClass::Focus
+        | PseudoClass::FocusWithin
+        | PseudoClass::FocusVisible => true,
+        PseudoClass::Is(list) | PseudoClass::Where(list) => list.iter().all(|c| {
+            c.tail.is_empty()
+                && c.head.parts.iter().all(|p| {
+                    matches!(p, SimpleSelector::PseudoClass(inner) if is_user_action_pseudo_class(inner))
+                })
+        }),
+        _ => false,
+    }
+}
+
+/// Валиден ли pseudo-element: известен движку и с допустимым аргументом.
+fn pseudo_element_is_valid(pe: &PseudoElementKind) -> bool {
+    match pe {
+        PseudoElementKind::Unknown(_) => false,
+        // `::picker()` определён спекой только для аргумента `select`.
+        PseudoElementKind::Picker(arg) => arg == "select",
+        // `::slotted` без аргумента — синтаксически невозможен по грамматике.
+        PseudoElementKind::Slotted(None) => false,
+        PseudoElementKind::Slotted(Some(list)) => {
+            list.iter().all(|c| complex_selector_is_valid(c, false))
+        }
+        _ => true,
+    }
+}
+
+/// Валиден ли псевдокласс: известен движку, а его аргумент-список (для
+/// non-forgiving функциональных форм) сам валиден.
+fn pseudo_class_is_valid(pc: &PseudoClass) -> bool {
+    match pc {
+        PseudoClass::Unsupported(_) => false,
+        // `:is()`/`:where()` — forgiving-selector-list (CSS Selectors L4
+        // §3.2): невалидные элементы списка отбрасываются, а не делают
+        // невалидным весь селектор, поэтому содержимое не проверяем.
+        PseudoClass::Is(_) | PseudoClass::Where(_) => true,
+        PseudoClass::Not(list) | PseudoClass::Host(Some(list)) => {
+            list.iter().all(|c| complex_selector_is_valid(c, false))
+        }
+        PseudoClass::NthChild(_, Some(list)) | PseudoClass::NthLastChild(_, Some(list)) => {
+            list.iter().all(|c| complex_selector_is_valid(c, false))
+        }
+        PseudoClass::Has(list) => list
+            .iter()
+            .all(|r| complex_selector_is_valid(&r.selector, false)),
+        _ => true,
+    }
+}
+
 enum AtRuleOutcome {
     Property(PropertyRule),
     Media(MediaRule),
@@ -4028,6 +4208,31 @@ impl<'a> Parser<'a> {
         sels
     }
 
+    /// Строгий вариант [`Parser::parse_selector_list`] для DOM-границы
+    /// (`querySelector`/`matches`, BUG-391): возвращает `None`, если хоть один
+    /// элемент списка не разобрался целиком, вместо того чтобы молча вернуть
+    /// уже накопленный префикс. Лояльный вариант на `"div,"` отдаёт `[div]`
+    /// и оставляет позицию после запятой — по нему невозможно отличить
+    /// «список кончился» от «следующий элемент невалиден».
+    ///
+    /// Хвост входа не проверяется — это делает вызывающий
+    /// [`is_valid_selector_list`], потому что тот же метод используется для
+    /// вложенных списков, где ожидается `)`.
+    fn parse_selector_list_strict(&mut self) -> Option<Vec<ComplexSelector>> {
+        let mut sels = Vec::new();
+        loop {
+            self.skip_ws_and_comments();
+            sels.push(self.parse_complex_selector()?);
+            self.skip_ws_and_comments();
+            if self.peek() == Some(',') {
+                self.consume();
+                continue;
+            }
+            break;
+        }
+        Some(sels)
+    }
+
     fn parse_complex_selector(&mut self) -> Option<ComplexSelector> {
         let head = self.parse_compound_selector()?;
         let mut tail = Vec::new();
@@ -5038,6 +5243,133 @@ mod revision_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── is_valid_selector_list (BUG-391) ──────────────────────────────────────
+
+    #[test]
+    fn valid_selector_list_accepts_ordinary_selectors() {
+        for sel in [
+            "div",
+            ".foo",
+            "#bar",
+            "*",
+            "a[href]",
+            "a[href^='http' i]",
+            "div > p + span ~ em",
+            "div, p, span",
+            "  div  ,  p  ",
+            "li:nth-child(2n+1)",
+            "li:nth-child(2n+1 of .x)",
+            ":not(.a, .b)",
+            ":is(.a, .b):hover",
+            ":where(div .foo)",
+            ":has(> .child)",
+            ":lang(en-GB)",
+            ":dir(rtl)",
+            "input:read-only:required",
+            "::before",
+            "*::before",
+            "foo.bar[baz]::before",
+            "::after::marker",
+            "::before::marker",
+            "::placeholder",
+            "::picker(select)",
+            "::highlight(name)",
+            "::slotted(.a)",
+            "div::first-line",
+            "p::before:hover",
+            "p::before:is(:hover, :focus)",
+        ] {
+            assert!(is_valid_selector_list(sel), "expected valid: {sel:?}");
+        }
+    }
+
+    #[test]
+    fn valid_selector_list_rejects_syntax_errors() {
+        for sel in [
+            "",
+            "   ",
+            "(",
+            "div (",
+            "div!",
+            "div,",
+            ",div",
+            "div,,p",
+            "div{}",
+            ">",
+            ".",
+            "#",
+        ] {
+            assert!(!is_valid_selector_list(sel), "expected invalid: {sel:?}");
+        }
+    }
+
+    #[test]
+    fn valid_selector_list_rejects_unknown_pseudo() {
+        // Драйвер бага: WPT-паттерн feature-detection
+        // `assert_throws_dom('SyntaxError', () => el.matches(':halfscreen'))`.
+        for sel in [
+            ":halfscreen",
+            "div:halfscreen",
+            "::bogus-pseudo",
+            "::highlight",
+            "::picker",
+            "::picker()",
+            "::picker(foo)",
+            ":not(:halfscreen)",
+            ":has(:halfscreen)",
+            ":host-context(.a)",
+        ] {
+            assert!(!is_valid_selector_list(sel), "expected invalid: {sel:?}");
+        }
+    }
+
+    #[test]
+    fn valid_selector_list_rejects_bad_pseudo_element_structure() {
+        for sel in [
+            "::before *",
+            "::after *",
+            "::marker *",
+            "::placeholder *",
+            "::before > div",
+            "::before::before",
+            "::after::before",
+            "::marker::marker",
+            "::placeholder::marker",
+            "::before::placeholder",
+            "::before.cls",
+            "::before#id",
+            "::before[attr]",
+            "::highlight(foo).a",
+            "::highlight(foo) div",
+            "::highlight(foo)::after",
+            "::highlight(foo):hover",
+            "::before:host",
+            ":not(::before)",
+            "::slotted(::before)",
+        ] {
+            assert!(!is_valid_selector_list(sel), "expected invalid: {sel:?}");
+        }
+    }
+
+    #[test]
+    fn valid_selector_list_keeps_is_where_forgiving() {
+        // CSS Selectors L4 §3.2: `:is()`/`:where()` — forgiving-selector-list,
+        // невалидный элемент внутри отбрасывается, а не делает невалидным
+        // весь селектор (в отличие от `:not()`).
+        assert!(is_valid_selector_list(":is(::before)"));
+        assert!(is_valid_selector_list(":where(:halfscreen)"));
+        assert!(!is_valid_selector_list(":not(:halfscreen)"));
+    }
+
+    #[test]
+    fn valid_selector_list_is_independent_of_matching() {
+        // Валидный селектор, которому ничего не соответствует, остаётся
+        // валидным — иначе `querySelector('.no-match')` бросал бы вместо
+        // возврата null.
+        assert!(is_valid_selector_list(".no-such-class-anywhere"));
+        assert!(is_valid_selector_list("nonexistent-tag"));
+    }
 
     // ── to_css_str tests ──────────────────────────────────────────────────────
 

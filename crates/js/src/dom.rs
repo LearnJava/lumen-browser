@@ -332,6 +332,22 @@ fn set_attribute(doc: &mut Document, id: NodeId, name: &str, value: &str) {
 pub(crate) const WEB_API_SHIM: &str = "
 function _lumen_u2n(v) { return v !== undefined ? v : null; }
 
+// BUG-391: DOM LS §4.2.6 / §4.9 — querySelector(All)/matches/closest must throw
+// a SyntaxError DOMException for a selector that is invalid or that the engine
+// does not recognise, instead of silently reporting «nothing matched». The
+// distinction is invisible to the natives (they return an empty result either
+// way), so every public entry point stringifies its argument through this
+// helper first and gets the validated string back. Internal callers that must
+// never throw (getElementsByTagName/ClassName, the slot walker) keep calling
+// the natives directly.
+function _lumen_sel(sel) {
+    var s = String(sel);
+    if (!_lumen_selector_is_valid(s)) {
+        throw new DOMException(s + ' is not a valid selector', 'SyntaxError');
+    }
+    return s;
+}
+
 // Engine-agnostic «is this content attribute present?». A missing attribute
 // comes back as `undefined` from the QuickJS bindings but as `null` from the V8
 // ones (BUG-442), so the bare `_lumen_get_attr(...) !== undefined` test used
@@ -1492,11 +1508,11 @@ function _lumen_make_shadow_root(nid, mode, host_nid) {
         get style()       { return _style; },
         // Scoped to this shadow tree's descendants — see BUG-291.
         querySelector:    function(sel) {
-            var n = _lumen_u2n(_lumen_query_selector_scoped(nid, String(sel)));
+            var n = _lumen_u2n(_lumen_query_selector_scoped(nid, _lumen_sel(sel)));
             return n !== null ? _lumen_make_element(n) : null;
         },
         querySelectorAll: function(sel) {
-            return _lumen_query_selector_all_scoped(nid, String(sel)).map(_lumen_make_element);
+            return _lumen_query_selector_all_scoped(nid, _lumen_sel(sel)).map(_lumen_make_element);
         },
         getElementById:   function(id) {
             var n = _lumen_u2n(_lumen_get_element_by_id(String(id)));
@@ -1560,11 +1576,11 @@ function _lumen_make_document_fragment(nid) {
         set innerHTML(v)      { _lumen_set_inner_html(nid, String(v)); },
         // Scoped to this fragment's descendants — see BUG-291.
         querySelector:        function(sel) {
-            var n = _lumen_u2n(_lumen_query_selector_scoped(nid, String(sel)));
+            var n = _lumen_u2n(_lumen_query_selector_scoped(nid, _lumen_sel(sel)));
             return n !== null ? _lumen_make_element(n) : null;
         },
         querySelectorAll:     function(sel) {
-            return _lumen_query_selector_all_scoped(nid, String(sel)).map(_lumen_make_element);
+            return _lumen_query_selector_all_scoped(nid, _lumen_sel(sel)).map(_lumen_make_element);
         },
         appendChild:          function(c) {
             if (c && c.__nid__ !== undefined) {
@@ -3729,11 +3745,11 @@ function _lumen_build_element(nid) {
         // Scoped to this element's descendants (DOM Parentnode §4.2.5) — works on
         // detached subtrees too, unlike the document-global `_lumen_query_selector`.
         querySelector:    function(sel) {
-            var n = _lumen_u2n(_lumen_query_selector_scoped(nid, String(sel)));
+            var n = _lumen_u2n(_lumen_query_selector_scoped(nid, _lumen_sel(sel)));
             return n !== null ? _lumen_make_element(n) : null;
         },
         querySelectorAll: function(sel) {
-            return _lumen_query_selector_all_scoped(nid, String(sel)).map(_lumen_make_element);
+            return _lumen_query_selector_all_scoped(nid, _lumen_sel(sel)).map(_lumen_make_element);
         },
         // DOM LS §4.9: getElementsByClassName(names), scoped to this element's
         // descendants (BUG-302). Static array, not a live HTMLCollection.
@@ -3743,7 +3759,7 @@ function _lumen_build_element(nid) {
             return _lumen_query_selector_all_scoped(nid, sel).map(_lumen_make_element);
         },
         matches: function(sel) {
-            return _lumen_node_matches_selector(nid, String(sel));
+            return _lumen_node_matches_selector(nid, _lumen_sel(sel));
         },
         addEventListener:    function(type, fn) { _lumen_add_listener(nid, type, fn); },
         removeEventListener: function(type, fn) { _lumen_rm_listener(nid, type, fn); },
@@ -3763,9 +3779,10 @@ function _lumen_build_element(nid) {
             return notCancelled;
         },
         closest: function(sel) {
+            var s = _lumen_sel(sel);
             var cur = nid;
             while (cur !== undefined && cur !== null) {
-                if (_lumen_node_matches_selector(cur, String(sel))) return _lumen_make_element(cur);
+                if (_lumen_node_matches_selector(cur, s)) return _lumen_make_element(cur);
                 var pid = _lumen_u2n(_lumen_get_parent(cur));
                 cur = pid !== null ? pid : null;
             }
@@ -5034,11 +5051,11 @@ var document = {
         return n !== null ? _lumen_make_element(n) : null;
     },
     querySelector:     function(sel) {
-        var n = _lumen_u2n(_lumen_query_selector(String(sel)));
+        var n = _lumen_u2n(_lumen_query_selector(_lumen_sel(sel)));
         return n !== null ? _lumen_make_element(n) : null;
     },
     querySelectorAll:  function(sel) {
-        return _lumen_query_selector_all(String(sel)).map(_lumen_make_element);
+        return _lumen_query_selector_all(_lumen_sel(sel)).map(_lumen_make_element);
     },
     // DOM LS §4.2.6: getElementsByTagName(tag) — a bare tag name is already a
     // valid CSS type selector (and '*' a valid universal selector), so this
@@ -16153,6 +16170,128 @@ mod tests {
         fn report_error_is_on_window() {
             let rt = v8_runtime_with_dom(make_doc());
             assert!(bool_eval(&rt, "typeof window.reportError === 'function'"));
+        }
+    }
+
+    /// BUG-391 — `querySelector(All)`/`matches()`/`closest()` must throw a
+    /// `SyntaxError` DOMException for an invalid or engine-unknown selector.
+    ///
+    /// The regression these guard against is the *silent* one: before the fix
+    /// every entry point funnelled an unparsable selector into the same empty
+    /// result an ordinary no-match produces, so the standard WPT
+    /// feature-detection idiom (`assert_throws_dom('SyntaxError', () =>
+    /// el.matches(':unknown-pseudo'))`) could not tell "not supported" from
+    /// "did not match". Hence the paired negative assertions below: a valid
+    /// selector that matches nothing must still *not* throw, and
+    /// `getElementsByTagName`/`getElementsByClassName` — which share the same
+    /// natives but are specified never to throw — must stay quiet.
+    #[cfg(feature = "v8-backend")]
+    mod v8_selector_syntax_error {
+        use super::*;
+        use crate::v8_runtime::V8JsRuntime;
+
+        fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
+            let rt = V8JsRuntime::new().unwrap();
+            rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
+            rt.install_dom(doc, "", None, None, None, None, None, None, None, None, false)
+                .unwrap();
+            rt
+        }
+
+        fn bool_eval(rt: &V8JsRuntime, script: &str) -> bool {
+            rt.eval(script).unwrap() == lumen_core::JsValue::Bool(true)
+        }
+
+        /// Evaluates `expr` and reports the `name` of whatever it threw, or
+        /// `'no-throw'` when it completed normally.
+        fn throw_name(rt: &V8JsRuntime, expr: &str) -> String {
+            let script = format!(
+                "(function() {{ try {{ {expr}; return 'no-throw'; }} \
+                 catch (e) {{ return String(e && e.name); }} }})()"
+            );
+            match rt.eval(&script).unwrap() {
+                lumen_core::JsValue::String(s) => s,
+                other => panic!("expected string, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn matches_throws_syntax_error_on_unknown_pseudo_class() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert_eq!(
+                throw_name(&rt, "document.body.matches(':halfscreen')"),
+                "SyntaxError"
+            );
+        }
+
+        #[test]
+        fn matches_throws_dom_exception_not_plain_error() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(
+                &rt,
+                "(function() { try { document.body.matches(':halfscreen'); return false; } \
+                 catch (e) { return e instanceof DOMException && e.code === DOMException.SYNTAX_ERR; } })()"
+            ));
+        }
+
+        #[test]
+        fn query_selector_throws_syntax_error_on_malformed_selector() {
+            let rt = v8_runtime_with_dom(make_doc());
+            for expr in [
+                "document.querySelector('(')",
+                "document.querySelector('')",
+                "document.querySelector(':bogus-pseudo')",
+                "document.querySelectorAll('div,')",
+            ] {
+                assert_eq!(throw_name(&rt, expr), "SyntaxError", "for {expr}");
+            }
+        }
+
+        #[test]
+        fn scoped_query_selector_and_closest_throw_too() {
+            let rt = v8_runtime_with_dom(make_doc());
+            for expr in [
+                "document.body.querySelector(':bogus-pseudo')",
+                "document.body.querySelectorAll(':bogus-pseudo')",
+                "document.body.closest(':bogus-pseudo')",
+            ] {
+                assert_eq!(throw_name(&rt, expr), "SyntaxError", "for {expr}");
+            }
+        }
+
+        #[test]
+        fn valid_selector_with_no_match_still_returns_null() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert_eq!(throw_name(&rt, "document.querySelector('.no-match')"), "no-throw");
+            assert!(bool_eval(&rt, "document.querySelector('.no-match') === null"));
+            assert!(bool_eval(&rt, "document.querySelectorAll('.no-match').length === 0"));
+            assert!(bool_eval(&rt, "document.body.matches('.no-match') === false"));
+            assert!(bool_eval(&rt, "document.body.closest('.no-match') === null"));
+        }
+
+        #[test]
+        fn ordinary_selectors_keep_working() {
+            let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(&rt, "document.querySelector('#main') !== null"));
+            assert!(bool_eval(&rt, "document.querySelectorAll('.highlight').length === 1"));
+            assert!(bool_eval(&rt, "document.querySelector('#main').matches('div#main')"));
+            assert!(bool_eval(&rt, "document.querySelector('.highlight').closest('div') !== null"));
+        }
+
+        #[test]
+        fn get_elements_by_tag_and_class_never_throw() {
+            // DOM LS specifies neither as throwing on a weird argument — they
+            // reuse the same lenient natives on purpose (BUG-391 guards only the
+            // selector-taking entry points).
+            let rt = v8_runtime_with_dom(make_doc());
+            assert_eq!(
+                throw_name(&rt, "document.getElementsByTagName(':bogus')"),
+                "no-throw"
+            );
+            assert_eq!(
+                throw_name(&rt, "document.getElementsByClassName(':bogus')"),
+                "no-throw"
+            );
         }
     }
 
