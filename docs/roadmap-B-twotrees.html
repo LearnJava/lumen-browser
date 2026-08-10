@@ -75,8 +75,8 @@
 {
  "generated": "2026-08-10",
  "counts": {
-  "open": 317,
-  "fixed": 402,
+  "open": 316,
+  "fixed": 403,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -7309,10 +7309,10 @@
    "debtor": false
   },
   "BUG-387": {
-   "status": "open",
+   "status": "fixed",
    "title": "`element.computedStyleMap()` (CSS Typed OM) — тот же класс и та же нативная привязка, что мутируемый `attributeStyleMap`, и обе читают только инлайн-атрибут `st…",
-   "component": "js (`crates/js/src/typed_om_api.rs:76-89` — `StylePropertyMap.prototype.get`; нативная привязка `_lumen_get_style_property` в `crates/js/src/v8_runtime.rs:3658`/`crates/js/src/dom.rs:3105`)",
-   "date": null,
+   "component": "js (`crates/js/src/typed_om_api.rs` — `TYPED_OM_SHIM` целиком; привязки Typed OM в `crates/js/src/v8_runtime.rs`; `computedStyleMap()` в обёртке элемента, `crates/js/src/dom.rs`)",
+   "date": "2026-08-10",
    "debtor": false
   },
   "BUG-388": {
