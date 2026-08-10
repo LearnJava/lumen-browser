@@ -46,7 +46,7 @@ comma-joined array contents percent-encoded.
    object itself is not iterable at all — `for...of`, spread, and
    `Array.from()` all fail or (worse) silently return `[]` depending on the
    call site, per the same defect class already on record for `Headers`
-   ([BUG-369](BUG-369-OPEN.md)) and other collection-like objects
+   ([BUG-369](BUG-369-FIXED.md)) and other collection-like objects
    ([BUG-367](BUG-367-FIXED.md)).
 2. **`entries()`/`keys()`/`values()` return plain arrays**, not
    `%ArrayIteratorPrototype%`-shaped iterator objects (no `.next()`), so
@@ -64,7 +64,7 @@ comma-joined array contents percent-encoded.
    dutifully copies `{_p: init._p}` as if it were a single query parameter
    named `_p` whose value is the raw backing array — exactly the
    `_p=a%2Cb` result observed. Same internal-field-leak pattern as
-   `Headers._map` in [BUG-369](BUG-369-OPEN.md).
+   `Headers._map` in [BUG-369](BUG-369-FIXED.md).
 4. **`delete(name, value)` and `has(name, value)`'s two-argument overload
    (added to the URL Standard alongside the rest of the setlike-adjacent
    API) is not implemented** — both prototype methods take only `name` —
