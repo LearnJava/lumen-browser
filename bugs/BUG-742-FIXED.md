@@ -4,7 +4,7 @@
 **Компонент:** layout (`crates/engine/layout/src/box_tree.rs` —
 `preferred_inline_block_width`, `max_content_outer_width`,
 `min_content_outer_width`)
-**Найден:** P3, при разборе пункта 2 [BUG-733](BUG-733-OPEN.md), 2026-08-10
+**Найден:** P3, при разборе пункта 2 [BUG-733](BUG-733-FIXED.md), 2026-08-10
 
 ## Симптом
 

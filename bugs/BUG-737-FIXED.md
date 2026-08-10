@@ -4,7 +4,7 @@
 **Компонент:** layout (`crates/engine/layout/src/box_tree.rs` —
 `max_content_outer_width`, `min_content_outer_width_of_contents`,
 `preferred_inline_block_width`)
-**Найден и исправлен:** P3 при разборе [BUG-733](BUG-733-OPEN.md), 2026-08-10
+**Найден и исправлен:** P3 при разборе [BUG-733](BUG-733-FIXED.md), 2026-08-10
 
 ## Симптом
 
@@ -72,7 +72,7 @@
 
 ## Влияние на `tbank.ru`
 
-Прямая причина пункта 1 [BUG-733](BUG-733-OPEN.md) (верхняя навигация —
+Прямая причина пункта 1 [BUG-733](BUG-733-FIXED.md) (верхняя навигация —
 вертикальный список с маркером вместо четырёх пунктов в строку). Вместе с
 [BUG-738](BUG-738-FIXED.md) пункт закрыт: `<ul class="bbP0sIwLi">` = 1042 px,
 четыре `<li>` в строку по 140.3 / 83.9 / 93.3 / 54.6 px на одном `y`.
