@@ -62,7 +62,7 @@ OPFS-based БД) и `FileSystemObserver` (Storage §9) в кодовой баз�
 только вендорит и документирует, не реализует API). При реализации:
 
 1. Ввести общий `FileSystemHandle` как базовый прототип для `FileSystemFileHandle`/
-   `FileSystemDirectoryHandle` (см. также [BUG-372](BUG-372-OPEN.md) — сначала
+   `FileSystemDirectoryHandle` (см. также [BUG-372](BUG-372-FIXED.md) — сначала
    унифицировать существующий дубль классов, потом наращивать иерархию).
 2. `createSyncAccessHandle()` — синхронная операция, доступна только в
    `DedicatedWorkerGlobalScope`/`SharedWorkerGlobalScope` по спеке; в
@@ -74,7 +74,7 @@ OPFS-based БД) и `FileSystemObserver` (Storage §9) в кодовой баз�
 
 ## Связанные
 
-* [BUG-372](BUG-372-OPEN.md) — та же пара модулей, `getDirectory()` отдаёт
+* [BUG-372](BUG-372-FIXED.md) — та же пара модулей, `getDirectory()` отдаёт
   несовместимый теневой класс (найден раньше, на категории `file-system-access`;
   здесь тот же дефект подтверждён повторно, независимой пробой, на категории `fs`).
 * [BUG-371](BUG-371-FIXED.md)…[BUG-374](BUG-374-OPEN.md) — соседняя категория

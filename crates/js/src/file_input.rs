@@ -141,6 +141,15 @@ struct FileGrant {
     // written on a backend-less build, so the field is dead there, not unused.
     #[cfg_attr(not(feature = "v8-backend"), allow(dead_code))]
     path: PathBuf,
+    /// Whether the grant also allows writing back to `path`.
+    ///
+    /// False for everything the user picked through a file dialog: those are
+    /// read grants, and a save always goes through its own picker so the user
+    /// confirms the destination. True only for files inside the origin's own
+    /// sandbox (OPFS, [BUG-372]), where no confirmation exists to ask for
+    /// because the origin already owns every byte in the tree.
+    #[cfg_attr(not(feature = "v8-backend"), allow(dead_code))]
+    writable: bool,
 }
 
 // The token registry is written by the shell (UI thread, `register_file_token`)
@@ -164,14 +173,53 @@ fn registry() -> std::sync::MutexGuard<'static, HashMap<String, FileGrant>> {
 /// installed with. Returns an empty string if no unguessable token could be
 /// generated; that token registers nothing and reads nothing.
 pub fn register_file_token(path: &str, origin: &str) -> String {
+    register_file_grant(path, origin, false)
+}
+
+/// Register a file path for `origin` and return a token that grants **read and
+/// write** access to it.
+///
+/// Only [`crate::filesystem_access`] issues these, and only for paths inside the
+/// origin's own OPFS sandbox — see [`FileGrant::writable`] for why a picked file
+/// never gets one ([BUG-372]).
+#[cfg(feature = "v8-backend")]
+pub(crate) fn register_writable_file_token(path: &str, origin: &str) -> String {
+    register_file_grant(path, origin, true)
+}
+
+/// Shared body of [`register_file_token`] and [`register_writable_file_token`].
+fn register_file_grant(path: &str, origin: &str, writable: bool) -> String {
     let Some(token) = new_grant_id() else {
         return String::new();
     };
     registry().insert(
         token.clone(),
-        FileGrant { origin: origin.to_string(), path: PathBuf::from(path) },
+        FileGrant { origin: origin.to_string(), path: PathBuf::from(path), writable },
     );
     token
+}
+
+/// Path a read grant unlocks, or `None` if `token` was never issued to `origin`.
+///
+/// Used by `FileSystemDirectoryHandle.resolve()` to compare a child handle
+/// against a directory without ever handing either path to JS (BUG-372).
+#[cfg(feature = "v8-backend")]
+pub(crate) fn path_for_token(token: &str, origin: &str) -> Option<PathBuf> {
+    let reg = registry();
+    let grant = reg.get(token)?;
+    (grant.origin == origin).then(|| grant.path.clone())
+}
+
+/// Same as [`path_for_token`], but only for grants that also allow writing.
+///
+/// Backs `FileSystemFileHandle.createWritable()` on an OPFS handle: inside the
+/// origin's own sandbox the write goes straight to the file the handle names,
+/// with no save dialog to confirm a destination the user never chose (BUG-372).
+#[cfg(feature = "v8-backend")]
+pub(crate) fn writable_path_for_token(token: &str, origin: &str) -> Option<PathBuf> {
+    let reg = registry();
+    let grant = reg.get(token)?;
+    (grant.origin == origin && grant.writable).then(|| grant.path.clone())
 }
 
 /// Revoke all tokens — should be called when a browsing context is torn down.
@@ -278,8 +326,12 @@ pub(crate) fn install_file_input_bindings_v8(
 ///
 /// Both shims copy the bindings they need into closure variables at install
 /// time, so deleting the globals afterwards costs them nothing while taking the
-/// whole surface — `__lumen_file_read_*`, the six File System Access natives and
+/// whole surface — `__lumen_file_read_*`, every File System Access native and
 /// the `__lumen_fs_internal` bridge — out of reach of page script.
+///
+/// `_lumen_storage_get_directory` is *not* in the list: `navigator.storage`
+/// installs later than this pass runs, so [`crate::storage_manager`]'s shim
+/// deletes that one itself (BUG-372).
 ///
 /// Called by `install_dom` **after** both `install_file_input_bindings_v8` and
 /// `install_filesystem_access_v8`, rather than from the tail of either shim: if
@@ -303,8 +355,10 @@ const SEAL_FILE_NATIVES: &str = r#"
     '__lumen_file_read_text', '__lumen_file_read_base64', '__lumen_fs_internal',
     '_lumen_show_open_file_picker', '_lumen_show_save_file_picker',
     '_lumen_show_directory_picker', '_lumen_dir_entries',
-    '_lumen_dir_get_file', '_lumen_dir_get_subdir',
-    '_lumen_writable_write_text', '_lumen_writable_close'
+    '_lumen_dir_get_file', '_lumen_dir_get_subdir', '_lumen_dir_remove_entry',
+    '_lumen_fs_resolve',
+    '_lumen_writable_write_text', '_lumen_writable_close',
+    '_lumen_writable_from_token'
   ];
   for (var i = 0; i < names.length; i++) {
     try { delete globalThis[names[i]]; } catch (e) {}
