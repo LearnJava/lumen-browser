@@ -1,17 +1,16 @@
 //! Glyph rasterizer: outline → grayscale bitmap.
 //!
-//! Phase 0 — простой, медленный, корректный путь:
+//! Путь:
 //! 1. Контур обходится с учётом on-curve / off-curve флагов; квадратичные
 //!    Безье разворачиваются в 8 коротких отрезков.
 //! 2. Bitmap размером bbox + 1px padding на сторону.
-//! 3. Каждый пиксель сэмплируется 4×4 раза, для каждого сэмпла —
-//!    ray-casting point-in-polygon с even-odd правилом (как в SVG/PDF
-//!    при отсутствии fill-rule). Покрытие → 8-битный grayscale.
+//! 3. Покрытие считается по сетке 4×4 сэмпла на пиксель с even-odd правилом
+//!    (как в SVG/PDF при отсутствии fill-rule) — сканлайнами с активным
+//!    списком рёбер: O(height · 4 · (active · log active + width · 4)).
+//!    Покрытие → 8-битный grayscale.
 //!
 //! Замены / оптимизации в дальнейшем:
 //! - адаптивная subdivision Безье (сейчас фиксированные 8 шагов);
-//! - scanline-based active-edge-table (O(edges · log edges · height)
-//!   вместо O(width · height · 16 · edges));
 //! - SDF-подход для масштабируемого рендера.
 
 use crate::glyf::{Contour, Glyph, Outline};
@@ -197,51 +196,91 @@ fn flatten_quad(p0: Point, c: Point, p2: Point, out: &mut Vec<Edge>) {
     }
 }
 
+/// Число сэмплов на сторону пикселя (сетка N×N). Значение — часть контракта
+/// покрытия: изменение сдвинуло бы все эталоны текста.
+const N: u32 = 4;
+
+/// Заполняет покрытие сканлайнами: на каждую сэмпл-строку считается список
+/// x-пересечений активных рёбер, а не ray-cast из каждого сэмпла по всем
+/// рёбрам (BUG-405 срез 3).
+///
+/// Результат **побитово** тот же, что у прежнего перебора
+/// (`fill_pixels_reference` в тестах): те же выражения пересечения, то же
+/// half-open правило `[min_y, max_y)` и тот же критерий «пересечение справа»
+/// (`xint > x`) — сэмпл внутри, когда число пересечений строго правее нечётно,
+/// а это чётность `len - k`, где `k` — сколько пересечений ≤ x. Сортировка не
+/// меняет сами значения, поэтому чётность сохраняется.
 fn fill_pixels(edges: &[Edge], width: u32, height: u32, pixels: &mut [u8]) {
-    const N: u32 = 4;
     let total = N * N;
+    // Рёбра в нормальном виде (ay < by) — прежний код выполнял этот разворот
+    // и отсев горизонтальных внутри самого внутреннего цикла, то есть
+    // width·height·16 раз на ребро.
+    let mut norm: Vec<Edge> = Vec::with_capacity(edges.len());
+    for &(x1, y1, x2, y2) in edges {
+        let e = if y1 <= y2 { (x1, y1, x2, y2) } else { (x2, y2, x1, y1) };
+        // dy == 0 (в т.ч. NaN-координата) не даёт пересечений ни на одной
+        // строке: прежний код отбрасывал такое ребро проверкой `dy == 0.0`
+        // либо получал NaN-`xint`, который не проходил `xint > px`.
+        if e.3 - e.1 > 0.0 {
+            norm.push(e);
+        }
+    }
+    // Порядок ввода рёбер в активный список: по верхней координате.
+    let mut order: Vec<u32> = (0..norm.len() as u32).collect();
+    order.sort_unstable_by(|&a, &b| norm[a as usize].1.total_cmp(&norm[b as usize].1));
+
+    let mut active: Vec<u32> = Vec::new();
+    let mut next = 0_usize;
+    let mut xs: Vec<f32> = Vec::new();
+    let mut cov: Vec<u32> = vec![0; width as usize];
+
+    // Сэмпл-строки идут строго по возрастанию y — это и позволяет вести
+    // активный список одним проходом.
     for py in 0..height {
-        for px in 0..width {
-            let mut inside = 0u32;
-            for sy in 0..N {
-                let y = py as f32 + (sy as f32 + 0.5) / N as f32;
+        cov.fill(0);
+        for sy in 0..N {
+            let y = py as f32 + (sy as f32 + 0.5) / N as f32;
+            while next < order.len() && norm[order[next] as usize].1 <= y {
+                active.push(order[next]);
+                next += 1;
+            }
+            active.retain(|&i| norm[i as usize].3 > y);
+            if active.is_empty() {
+                continue;
+            }
+            xs.clear();
+            for &i in &active {
+                let (ax, ay, bx, by) = norm[i as usize];
+                let t = (y - ay) / (by - ay);
+                let xint = ax + t * (bx - ax);
+                if !xint.is_nan() {
+                    xs.push(xint);
+                }
+            }
+            if xs.is_empty() {
+                continue;
+            }
+            xs.sort_unstable_by(f32::total_cmp);
+            // Сэмплы строки идут по возрастанию x, поэтому курсор `k`
+            // («сколько пересечений ≤ x») только растёт.
+            let mut k = 0_usize;
+            for (px, c) in cov.iter_mut().enumerate() {
                 for sx in 0..N {
                     let x = px as f32 + (sx as f32 + 0.5) / N as f32;
-                    if point_inside(edges, x, y) {
-                        inside += 1;
+                    while k < xs.len() && xs[k] <= x {
+                        k += 1;
+                    }
+                    if (xs.len() - k) & 1 == 1 {
+                        *c += 1;
                     }
                 }
             }
-            pixels[(py * width + px) as usize] = (inside * 255 / total) as u8;
+        }
+        let row = py as usize * width as usize;
+        for (px, &c) in cov.iter().enumerate() {
+            pixels[row + px] = (c * 255 / total) as u8;
         }
     }
-}
-
-/// Ray-casting от точки (px, py) вправо. Считаем пересечения с рёбрами
-/// по правилу half-open Y: [min_y, max_y). Чётное число пересечений —
-/// снаружи, нечётное — внутри.
-fn point_inside(edges: &[Edge], px: f32, py: f32) -> bool {
-    let mut crossings = 0u32;
-    for &(x1, y1, x2, y2) in edges {
-        let (ax, ay, bx, by) = if y1 <= y2 {
-            (x1, y1, x2, y2)
-        } else {
-            (x2, y2, x1, y1)
-        };
-        if py < ay || py >= by {
-            continue;
-        }
-        let dy = by - ay;
-        if dy == 0.0 {
-            continue;
-        }
-        let t = (py - ay) / dy;
-        let xint = ax + t * (bx - ax);
-        if xint > px {
-            crossings += 1;
-        }
-    }
-    crossings & 1 == 1
 }
 
 #[cfg(test)]
@@ -259,6 +298,121 @@ mod tests {
 
     fn coverage_at(bm: &Bitmap, x: u32, y: u32) -> u8 {
         bm.pixels[(y * bm.width + x) as usize]
+    }
+
+    /// Прежний (до BUG-405 срез 3) перебор: ray-cast из каждого сэмпла по
+    /// ВСЕМ рёбрам. Оставлен эталоном идентичности — сканлайн обязан давать
+    /// побитово тот же bitmap, иначе поедут все эталоны текста.
+    fn fill_pixels_reference(edges: &[Edge], width: u32, height: u32, pixels: &mut [u8]) {
+        const N: u32 = 4;
+        let total = N * N;
+        for py in 0..height {
+            for px in 0..width {
+                let mut inside = 0u32;
+                for sy in 0..N {
+                    let y = py as f32 + (sy as f32 + 0.5) / N as f32;
+                    for sx in 0..N {
+                        let x = px as f32 + (sx as f32 + 0.5) / N as f32;
+                        if point_inside_reference(edges, x, y) {
+                            inside += 1;
+                        }
+                    }
+                }
+                pixels[(py * width + px) as usize] = (inside * 255 / total) as u8;
+            }
+        }
+    }
+
+    /// Ray-casting от точки (px, py) вправо, half-open правило `[min_y, max_y)`.
+    /// Чётное число пересечений — снаружи, нечётное — внутри.
+    fn point_inside_reference(edges: &[Edge], px: f32, py: f32) -> bool {
+        let mut crossings = 0u32;
+        for &(x1, y1, x2, y2) in edges {
+            let (ax, ay, bx, by) = if y1 <= y2 {
+                (x1, y1, x2, y2)
+            } else {
+                (x2, y2, x1, y1)
+            };
+            if py < ay || py >= by {
+                continue;
+            }
+            let dy = by - ay;
+            if dy == 0.0 {
+                continue;
+            }
+            let t = (py - ay) / dy;
+            let xint = ax + t * (bx - ax);
+            if xint > px {
+                crossings += 1;
+            }
+        }
+        crossings & 1 == 1
+    }
+
+    /// Растеризует глиф прежним перебором — по тем же рёбрам и той же
+    /// геометрии bitmap-а, что и `Rasterizer::rasterize`.
+    fn rasterize_reference(r: &Rasterizer, glyph: &Glyph) -> Option<Bitmap> {
+        let mut bm = r.rasterize(glyph)?;
+        let scale = r.scale();
+        let Outline::Simple(contours) = &glyph.outline else {
+            return None;
+        };
+        let mut edges: Vec<Edge> = Vec::new();
+        for contour in contours {
+            walk_contour(contour, scale, bm.left, bm.top, &mut edges);
+        }
+        let mut pixels = vec![0u8; (bm.width as usize) * (bm.height as usize)];
+        fill_pixels_reference(&edges, bm.width, bm.height, &mut pixels);
+        bm.pixels = pixels;
+        Some(bm)
+    }
+
+    fn assets_dir() -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("..")
+            .join("assets")
+            .join("fonts")
+    }
+
+    /// Гейт среза 3 BUG-405: сканлайн-заполнение обязано быть побитово
+    /// равно прежнему перебору. Проверяется на реальном шрифте (Inter) —
+    /// синтетические треугольники не содержат ни кривых, ни дыр, ни
+    /// почти-горизонтальных рёбер, где расходится обработка краёв.
+    #[test]
+    fn scanline_fill_matches_bruteforce_on_real_font() {
+        let bytes = std::fs::read(assets_dir().join("Inter-Regular.ttf"))
+            .expect("assets/fonts/Inter-Regular.ttf");
+        let font = crate::Font::parse(&bytes).expect("Inter parses");
+        let upem = font.head().expect("head").units_per_em;
+        let mut compared = 0;
+        for size in [11.0_f32, 13.0, 16.0, 24.0, 48.0] {
+            let r = Rasterizer::new(size, upem);
+            for gid in 1_u16..200 {
+                let Ok(Some(glyph)) = font.glyph_resolved(gid) else {
+                    continue;
+                };
+                if !matches!(glyph.outline, Outline::Simple(_)) {
+                    continue;
+                }
+                let (Some(got), Some(want)) = (r.rasterize(&glyph), rasterize_reference(&r, &glyph))
+                else {
+                    continue;
+                };
+                assert_eq!(
+                    (got.width, got.height),
+                    (want.width, want.height),
+                    "glyph {gid} @ {size}px: размер bitmap-а"
+                );
+                assert_eq!(
+                    got.pixels, want.pixels,
+                    "glyph {gid} @ {size}px: покрытие разошлось со старым перебором"
+                );
+                compared += 1;
+            }
+        }
+        assert!(compared > 400, "сравнено слишком мало глифов: {compared}");
     }
 
     #[test]
