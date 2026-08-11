@@ -1,6 +1,6 @@
 # BUG-398 — Graphics ARIA roles (`graphics-document`/`graphics-object`/`graphics-symbol`) не распознаются, откатываются к Generic
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-11 (P3)
 **Компонент:** a11y (`crates/engine/a11y/src/roles.rs::AXRole::parse`, `AXRole` enum;
 потребитель — `crates/engine/a11y/src/lib.rs::resolve_role`)
 **Найден:** P2, WPT-VENDOR-graphics-aam (2026-07-28), прогон не дал сигнала —
@@ -69,6 +69,51 @@ implicit role» реализован правильно (тот же путь, �
    (аналогично `role="group"`); `graphics-symbol` → `ROLE_SYSTEM_GRAPHIC`.
    Точные значения — см. `graphics-*-manual.html` в `tests/wpt/graphics-aam/`
    (каждый файл несёт ожидания под `ATK`/`AXAPI`/`IAccessible2`/`UIA` явно).
+
+## Как исправлено (P3, 2026-08-11)
+
+Ветка `p3-bug-398`, один коммит в `crates/engine/a11y`.
+
+1. **`roles.rs`** — три варианта `AXRole::GraphicsDocument`/`GraphicsObject`/
+   `GraphicsSymbol`, ветки `as_str()` (`"graphics-document"`/`"graphics-object"`/
+   `"graphics-symbol"`) и case-insensitive ветки `parse()`. Строка роли из
+   `as_str()` — то же значение, которое драйвер/MCP отдаёт наружу
+   (`session.rs::ax_node_to_a11y`, `winit_session.rs`), так что поверхность
+   автоматизации получила роли тем же движением, без отдельной правки.
+2. **`platform/windows.rs::ax_role_to_msaa`** — `GraphicsDocument` →
+   `ROLE_SYSTEM_DOCUMENT` (0x000F), `GraphicsObject` → `ROLE_SYSTEM_GROUPING`
+   (0x001C), `GraphicsSymbol` → `ROLE_SYSTEM_GRAPHIC` (0x0028). Значения взяты не
+   «по смыслу», а из ожиданий вендоренных фикстур `tests/wpt/graphics-aam/*.html`
+   (секции `IAccessible2`/`UIA` каждого файла). `match` там исчерпывающий, так что
+   пропустить платформенный маппинг при добавлении варианта компилятор не даёт.
+   `platform/macos.rs`/`linux.rs` — маппинга ролей не содержат вовсе (Phase 0
+   заглушки), править нечего.
+3. **`lib.rs::build_node`** — `GraphicsObject` добавлен в список ролей, прозрачных
+   для валидации контекста (рядом с `Group`, чьим подклассом graphics-object и
+   является по спеке). Это не косметика: **сам факт распознавания роли завёл бы
+   регрессию** — узел, который раньше падал в прозрачный `Generic`, стал бы
+   непрозрачным родителем, и вложенная роль с обязательным родителем
+   (`listitem`/`row`/`option`/…) перестала бы проходить
+   `is_role_valid_in_context` и откатывалась бы к implicit-роли. Контекстных
+   ограничений сами три роли не требуют (п. 2 заявки) — ветка `_ => true`.
+
+**Тесты** (`cargo test -p lumen-a11y` — 139 интеграционных + 26 юнит, зелёные):
+5 интеграционных в `tests/cases/ax_tree.rs`, повторяющих разметку фикстур
+graphics-aam (HTML- и SVG-вариант `graphics-document` с вложенным
+`graphics-object`, `graphics-symbol` на `<g>`, регистронезависимость токена,
+прозрачность `graphics-object` для контекста ребёнка) + 3 юнита на MSAA-маппинг.
+Тест на прозрачность проверен дифференциально: со снятым `AXRole::GraphicsObject`
+из списка прозрачных ролей он краснеет (первая его редакция — `<tr>` внутри
+`<tbody role="graphics-object">` — была ложно-зелёной: implicit-роли вообще не
+проходят валидацию контекста, поэтому различал бы её только explicit `role=`).
+
+**Не входит:** implicit-роли SVG-элементов ([BUG-686](BUG-686-OPEN.md), открыт) —
+это другая функция (`implicit_role`) и другой путь; данный фикс даёт ему
+недостающие варианты enum, но сам маппинг тегов не трогает. Автоматический тест
+категории `graphics-aria` (`graphics-roles.html`) по-прежнему SKIP — ему нужны
+невендоренные `/wai-aria/scripts/aria-utils.js` и `test_driver.get_computed_role`
+(`WPT-VENDOR-wai-aria`, ROADMAP.md:560), это инфраструктурный разрыв, не дефект
+движка.
 
 ## Связанные
 

@@ -191,7 +191,9 @@ fn build_node(doc: &Document, node_id: NodeId, parent_role: Option<AXRole>, flat
         .map(|&child_id| {
             // Transparent roles (Presentation, None, Generic, Group) don't participate in child role validation.
             // Children should skip these and see the actual semantic parent for context validation.
-            let effective_parent_role = if matches!(role, AXRole::Presentation | AXRole::None | AXRole::Generic | AXRole::Group) {
+            // GraphicsObject is a subclass of `group` (Graphics ARIA Module) and is transparent
+            // for the same reason: it imposes no required-child semantics of its own.
+            let effective_parent_role = if matches!(role, AXRole::Presentation | AXRole::None | AXRole::Generic | AXRole::Group | AXRole::GraphicsObject) {
                 parent_role
             } else {
                 Some(role)

@@ -1297,3 +1297,69 @@ fn state_required_and_invalid() {
     assert!(tb.state.required, "required attribute should set required state");
     assert!(tb.state.invalid, "required empty input should be invalid");
 }
+
+// ── Graphics ARIA roles (BUG-398) ────────────────────────────────────────────
+
+#[test]
+fn role_graphics_document_on_html_element() {
+    // WPT graphics-aam/graphics-document_on_html_element-manual.html
+    let tree = build_tree(
+        r#"<div role="graphics-document" aria-label="house">
+             <div role="graphics-object" aria-label="door"></div>
+           </div>"#,
+    );
+    let doc = find_role_dfs(&tree.root, AXRole::GraphicsDocument).expect("graphics-document");
+    assert_eq!(doc.name, "house");
+    let obj = find_role_dfs(&tree.root, AXRole::GraphicsObject).expect("graphics-object");
+    assert_eq!(obj.name, "door");
+}
+
+#[test]
+fn role_graphics_document_on_svg_element() {
+    // WPT graphics-aam/graphics-document_on_svg_element-manual.html
+    let tree = build_tree(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" role="graphics-document">
+             <g role="graphics-object" aria-label="door"><rect /></g>
+           </svg>"#,
+    );
+    assert!(
+        find_role_dfs(&tree.root, AXRole::GraphicsDocument).is_some(),
+        "expected GraphicsDocument for <svg role=graphics-document>"
+    );
+    let obj = find_role_dfs(&tree.root, AXRole::GraphicsObject).expect("graphics-object");
+    assert_eq!(obj.name, "door");
+}
+
+#[test]
+fn role_graphics_symbol() {
+    // WPT graphics-aam/graphics-symbol_on_svg_element-manual.html
+    let tree = build_tree(
+        r#"<svg xmlns="http://www.w3.org/2000/svg">
+             <g role="graphics-symbol" aria-label="lightbulb"><circle r="10" /></g>
+           </svg>"#,
+    );
+    let sym = find_role_dfs(&tree.root, AXRole::GraphicsSymbol).expect("graphics-symbol");
+    assert_eq!(sym.name, "lightbulb");
+}
+
+#[test]
+fn role_graphics_parse_is_case_insensitive() {
+    let tree = build_tree(r#"<div role="Graphics-Symbol" aria-label="icon"></div>"#);
+    assert!(
+        find_role_dfs(&tree.root, AXRole::GraphicsSymbol).is_some(),
+        "role token matching must stay case-insensitive"
+    );
+}
+
+#[test]
+fn role_graphics_object_is_transparent_for_child_context() {
+    // graphics-object is a subclass of `group`, which build_node treats as
+    // transparent for parent-context validation: a required-parent role nested
+    // inside one must still see the real semantic ancestor.
+    let tree = build_tree(
+        r#"<ul><div role="graphics-object"><div role="listitem" aria-label="item"></div></div></ul>"#,
+    );
+    let item = find_role_dfs(&tree.root, AXRole::ListItem)
+        .expect("listitem nested in a graphics-object must still resolve against the list");
+    assert_eq!(item.name, "item");
+}

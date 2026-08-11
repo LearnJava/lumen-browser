@@ -1,13 +1,15 @@
 //! ARIA role enum and HTML → implicit-role mapping.
 //!
 //! Covers all roles from WAI-ARIA 1.2 §5 (landmark, widget, document structure,
-//! and window roles). The `implicit_role` function implements the
-//! "Implicit WAI-ARIA Semantics" table from the HTML-AAM specification.
+//! and window roles) plus the three roles of the W3C Graphics ARIA Module
+//! (`graphics-document` / `graphics-object` / `graphics-symbol`). The
+//! `implicit_role` function implements the "Implicit WAI-ARIA Semantics" table
+//! from the HTML-AAM specification.
 
 use serde::{Deserialize, Serialize};
 use lumen_dom::{InputType, Node};
 
-/// All WAI-ARIA 1.2 roles.
+/// All WAI-ARIA 1.2 roles plus the Graphics ARIA Module extension roles.
 ///
 /// Roles not listed in this enum fall back to `AXRole::Generic`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -171,6 +173,14 @@ pub enum AXRole {
     /// `role="treeitem"` — item in a tree widget.
     TreeItem,
 
+    // ── Graphics ARIA roles (W3C Graphics ARIA Module) ────────────────────────
+    /// `role="graphics-document"` — self-contained graphic (superclass `document`).
+    GraphicsDocument,
+    /// `role="graphics-object"` — meaningful part of a graphic (superclass `group`).
+    GraphicsObject,
+    /// `role="graphics-symbol"` — graphic standing for a concept (superclass `img`).
+    GraphicsSymbol,
+
     // ── Generic / fallback ────────────────────────────────────────────────────
     /// Any element with no meaningful ARIA role (div, span, p, etc.).
     Generic,
@@ -254,6 +264,9 @@ impl AXRole {
             Self::Tooltip => "tooltip",
             Self::Tree => "tree",
             Self::TreeItem => "treeitem",
+            Self::GraphicsDocument => "graphics-document",
+            Self::GraphicsObject => "graphics-object",
+            Self::GraphicsSymbol => "graphics-symbol",
             Self::Generic => "generic",
             Self::Document => "document",
             Self::None => "none",
@@ -335,6 +348,9 @@ impl AXRole {
             s if s.eq_ignore_ascii_case("tooltip") => Self::Tooltip,
             s if s.eq_ignore_ascii_case("tree") => Self::Tree,
             s if s.eq_ignore_ascii_case("treeitem") => Self::TreeItem,
+            s if s.eq_ignore_ascii_case("graphics-document") => Self::GraphicsDocument,
+            s if s.eq_ignore_ascii_case("graphics-object") => Self::GraphicsObject,
+            s if s.eq_ignore_ascii_case("graphics-symbol") => Self::GraphicsSymbol,
             s if s.eq_ignore_ascii_case("generic") => Self::Generic,
             s if s.eq_ignore_ascii_case("document") => Self::Document,
             _ => return None,

@@ -41,7 +41,7 @@ SVG namespace) и т.д. просто не совпадают ни с одной
 роли (например `<div>`, `<span>`)» — SVG-элементы попадают в эту корзину по
 умолчанию, не по замыслу.
 
-Это отдельный от [BUG-398](BUG-398-OPEN.md) пробел: BUG-398 — про explicit
+Это отдельный от [BUG-398](BUG-398-FIXED.md) пробел: BUG-398 — про explicit
 `role="graphics-document"`-атрибут, не распознаваемый `AXRole::parse`; здесь —
 про implicit-роль **без всякого `role=`-атрибута**, определяемую спекой
 SVG-AAM по одному только тегу (`<svg>` → `graphics-document`/`img`/`group` в
@@ -73,7 +73,7 @@ SVG-AAM по одному только тегу (`<svg>` → `graphics-document`
 ## Связанные
 
 * `implicit_role` — `crates/engine/a11y/src/roles.rs:349`.
-* [BUG-398](BUG-398-OPEN.md) — тот же класс пробела (роль теряется → `Generic`),
+* [BUG-398](BUG-398-FIXED.md) — тот же класс пробела (роль теряется → `Generic`),
   но по explicit `role="..."`-атрибуту, другая функция (`AXRole::parse`).
 * [BUG-685](BUG-685-OPEN.md) — соседний, но независимый SVG-гэп: HTML-парсер не
   реализует foreign content, поэтому `<svg>` внутри HTML-документа не получает

@@ -314,6 +314,13 @@ pub fn ax_role_to_msaa(role: AXRole) -> u32 {
         AXRole::Tree        => 0x0023, // ROLE_SYSTEM_OUTLINE
         AXRole::TreeItem    => 0x0024, // ROLE_SYSTEM_OUTLINEITEM
 
+        // ── Graphics ARIA ────────────────────────────────────────────────────
+        // Values per the graphics-aam fixtures (`tests/wpt/graphics-aam/`):
+        // IAccessible2 role ROLE_SYSTEM_DOCUMENT / GROUPING / GRAPHIC.
+        AXRole::GraphicsDocument => 0x000F, // ROLE_SYSTEM_DOCUMENT
+        AXRole::GraphicsObject   => 0x001C, // ROLE_SYSTEM_GROUPING
+        AXRole::GraphicsSymbol   => 0x0028, // ROLE_SYSTEM_GRAPHIC
+
         // ── Fallback ─────────────────────────────────────────────────────────
         AXRole::Generic     => 0x001C,
         AXRole::None        => 0x001C,
@@ -419,6 +426,21 @@ mod tests {
     #[test]
     fn ax_role_textbox_maps_to_text() {
         assert_eq!(ax_role_to_msaa(AXRole::TextBox), 0x002A);
+    }
+
+    #[test]
+    fn ax_role_graphics_document_maps_to_document() {
+        assert_eq!(ax_role_to_msaa(AXRole::GraphicsDocument), 0x000F);
+    }
+
+    #[test]
+    fn ax_role_graphics_object_maps_to_grouping() {
+        assert_eq!(ax_role_to_msaa(AXRole::GraphicsObject), 0x001C);
+    }
+
+    #[test]
+    fn ax_role_graphics_symbol_maps_to_graphic() {
+        assert_eq!(ax_role_to_msaa(AXRole::GraphicsSymbol), 0x0028);
     }
 
     #[test]
