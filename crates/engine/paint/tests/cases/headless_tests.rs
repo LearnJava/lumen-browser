@@ -7,7 +7,7 @@
 ///   cargo test -p lumen-paint --test headless_tests -- --include-ignored
 use lumen_core::geom::Rect;
 use lumen_core::ColorSpace;
-use lumen_layout::Color;
+use lumen_layout::{Color, FilterFn};
 use lumen_paint::{DisplayCommand, Renderer};
 
 const INTER: &[u8] = include_bytes!("../../../../../assets/fonts/Inter-Regular.ttf");
@@ -623,4 +623,128 @@ fn cull_merge_is_pixel_identical() {
         before.data, after.data,
         "склейка изменила пиксели: пассов {passes_off} → {passes_on}",
     );
+}
+
+/// Список из `n` filter-групп: у каждой один залитый прямоугольник, фильтры —
+/// `filters`. Единицы — CSS px поверхности 64×64.
+fn filter_groups_dl(n: usize, filters: Vec<FilterFn>) -> Vec<DisplayCommand> {
+    let mut dl = Vec::new();
+    for i in 0..n {
+        let y = 2.0 + i as f32 * 8.0;
+        let rect = Rect { x: 8.0, y, width: 40.0, height: 5.0 };
+        dl.push(DisplayCommand::PushFilter { filters: filters.clone(), bounds: Some(rect) });
+        dl.push(DisplayCommand::FillRect { rect, color: Color { r: 0, g: 0, b: 255, a: 255 } });
+        dl.push(DisplayCommand::PopFilter);
+    }
+    dl
+}
+
+/// BUG-405 срез 6: filter-группа с блюром стоит двух пассов, а не трёх.
+///
+/// Гейт стоит на счётчике механизма, а не на времени кадра: вертикальный
+/// проход блюра идёт сразу в родителя вместе с цветовыми фильтрами.
+///
+/// Три контроля на ложно-зелёный:
+/// * плечо `set_blur_merge_enabled(false)` обязано дать прежние три пасса —
+///   иначе тест зелен и на рендере, который блюр вовсе не считает;
+/// * фильтр БЕЗ блюра как стоил одного пасса, так и стоит;
+/// * блюр вместе с цветовым фильтром — те же два пасса (склейка не должна
+///   отключаться, когда в списке есть и то и другое).
+#[test]
+#[ignore = "requires GPU adapter"]
+fn blur_filter_costs_two_passes() {
+    let mut r = Renderer::new_headless(INTER.to_vec(), 64, 64, ColorSpace::Srgb)
+        .expect("headless renderer");
+    r.set_font_provider(None);
+
+    let blur = filter_groups_dl(4, vec![FilterFn::Blur(3.0)]);
+
+    let p0 = r.filter_passes();
+    r.render_to_image(&blur, 0.0, 0.0).expect("кадр с блюром");
+    assert_eq!(r.filter_passes() - p0, 4 * 2, "блюр обязан стоить двух пассов");
+
+    r.set_blur_merge_enabled(false);
+    let p0 = r.filter_passes();
+    r.render_to_image(&blur, 0.0, 0.0).expect("кадр с блюром без склейки");
+    assert_eq!(
+        r.filter_passes() - p0,
+        4 * 3,
+        "плечо без склейки обязано остаться трёхпассовым (контроль негоден)",
+    );
+    r.set_blur_merge_enabled(true);
+
+    let p0 = r.filter_passes();
+    r.render_to_image(&filter_groups_dl(4, vec![FilterFn::Grayscale(1.0)]), 0.0, 0.0)
+        .expect("кадр с цветовым фильтром");
+    assert_eq!(r.filter_passes() - p0, 4, "фильтр без блюра стоит одного пасса");
+
+    let p0 = r.filter_passes();
+    r.render_to_image(
+        &filter_groups_dl(4, vec![FilterFn::Blur(3.0), FilterFn::Grayscale(1.0)]),
+        0.0,
+        0.0,
+    )
+    .expect("кадр с блюром и цветовым фильтром");
+    assert_eq!(
+        r.filter_passes() - p0,
+        4 * 2,
+        "блюр вместе с цветовым фильтром обязан остаться двухпассовым",
+    );
+}
+
+/// BUG-405 срез 6: склейка даёт ту же картинку, что и трёхпассовый путь.
+///
+/// Оба плеча снимаются в одном процессе (`set_blur_merge_enabled`) на одном
+/// списке. Побайтового равенства тут быть не может и не должно: прежний путь
+/// клал результат вертикального прохода в 8-битный слой и только потом
+/// композитил, слитый — блендит его в родителя без этой промежуточной
+/// квантовки. Поэтому гейт — расхождение не больше одного младшего бита.
+///
+/// Проверка «картинка вообще не пустая» обязательна: сравнение двух
+/// одинаково пустых кадров зелено и у правки, которая потеряла блюр целиком.
+#[test]
+#[ignore = "requires GPU adapter"]
+fn blur_merge_matches_two_pass() {
+    let mut r = Renderer::new_headless(INTER.to_vec(), 64, 64, ColorSpace::Srgb)
+        .expect("headless renderer");
+    r.set_font_provider(None);
+    // Блюр сам по себе, блюр с цветовыми фильтрами и вложенный в opacity —
+    // все три формы, в которых filter-группа доезжает до кадра.
+    let mut dl = filter_groups_dl(3, vec![FilterFn::Blur(3.0)]);
+    dl.extend(filter_groups_dl(2, vec![FilterFn::Blur(2.0), FilterFn::Sepia(1.0)]));
+    dl.push(DisplayCommand::PushOpacity { alpha: 0.5, bounds: None });
+    dl.extend(filter_groups_dl(2, vec![FilterFn::Blur(4.0)]));
+    dl.push(DisplayCommand::PopOpacity);
+
+    r.set_blur_merge_enabled(false);
+    let p0 = r.filter_passes();
+    let before = r.render_to_image(&dl, 0.0, 0.0).expect("плечо трёх пассов");
+    let passes_off = r.filter_passes() - p0;
+
+    r.set_blur_merge_enabled(true);
+    let p0 = r.filter_passes();
+    let after = r.render_to_image(&dl, 0.0, 0.0).expect("плечо склейки");
+    let passes_on = r.filter_passes() - p0;
+
+    assert!(passes_on < passes_off, "пассов не стало меньше: {passes_off} -> {passes_on}");
+
+    let max_diff = before
+        .data
+        .iter()
+        .zip(after.data.iter())
+        .map(|(a, b)| a.abs_diff(*b))
+        .max()
+        .unwrap_or(0);
+    assert!(
+        max_diff <= 1,
+        "склейка изменила картинку: расхождение {max_diff}/255 (пассов {passes_off} -> {passes_on})",
+    );
+
+    // Полутон блюра обязан быть в кадре: без него сравнивались бы два пустых
+    // кадра. Ищем пиксель, который не белый фон и не чистая заливка.
+    let blurred = after
+        .data
+        .chunks_exact(4)
+        .any(|px| px[2] > 32 && px[2] < 223 && px[0] < 223);
+    assert!(blurred, "в кадре нет размытых пикселей — гейт пикселей негоден");
 }

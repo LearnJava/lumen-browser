@@ -1056,7 +1056,10 @@ struct VOut { @builtin(position) clip: vec4<f32>, @location(0) uv: vec2<f32> };
 /// an offscreen layer, whose content is premultiplied; `fs_main` returns premultiplied).
 /// Kind values: 1=Brightness, 2=Contrast, 3=Grayscale, 4=HueRotate(rad), 5=Invert,
 /// 6=Opacity, 7=Saturate, 8=Sepia. Kind=0 (Blur) is handled by the blur shader, not here.
-const FILTER_SHADER_SRC: &str = r#"
+/// Типы CSS-фильтров и общая вершинная часть — одинаковы у `filter`-шейдера и
+/// у `blur-composite` (BUG-405 срез 6), поэтому вынесены в отдельный кусок:
+/// две копии `apply_filter_fn` разъезжаются при первой же правке спеки.
+const FILTER_TYPES_WGSL: &str = r#"
 struct FilterEntry {
     kind: u32,
     amount: f32,
@@ -1071,10 +1074,6 @@ struct FilterParams {
     entries: array<FilterEntry, 8>,
 }
 
-@group(0) @binding(0) var t_src: texture_2d<f32>;
-@group(0) @binding(1) var s_src: sampler;
-@group(0) @binding(2) var<uniform> u: FilterParams;
-
 struct VIn { @location(0) pos: vec2<f32>, @location(1) uv: vec2<f32>, @location(2) alpha: f32 }
 struct VOut { @builtin(position) clip: vec4<f32>, @location(0) uv: vec2<f32> }
 
@@ -1084,7 +1083,17 @@ struct VOut { @builtin(position) clip: vec4<f32>, @location(0) uv: vec2<f32> }
     o.uv = in.uv;
     return o;
 }
+"#;
 
+/// Биндинги `filter`-шейдера: слой-источник, сэмплер, список фильтров.
+const FILTER_BINDINGS_WGSL: &str = r#"
+@group(0) @binding(0) var t_src: texture_2d<f32>;
+@group(0) @binding(1) var s_src: sampler;
+@group(0) @binding(2) var<uniform> u: FilterParams;
+"#;
+
+/// Реализация функций CSS Filter Effects L1 §7 — общая для обоих шейдеров.
+const FILTER_FN_WGSL: &str = r#"
 fn apply_filter_fn(c: vec4<f32>, kind: u32, amount: f32) -> vec4<f32> {
     if kind == 1u { // Brightness
         return vec4<f32>(clamp(c.rgb * amount, vec3<f32>(0.0), vec3<f32>(1.0)), c.a);
@@ -1124,7 +1133,10 @@ fn apply_filter_fn(c: vec4<f32>, kind: u32, amount: f32) -> vec4<f32> {
     }
     return c;
 }
+"#;
 
+/// Фрагментная часть `filter`-шейдера: цветовые фильтры над готовым слоем.
+const FILTER_FS_WGSL: &str = r#"
 @fragment fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     let src = textureSample(t_src, s_src, in.uv);
     // Offscreen-слои копят ПРЕМУЛЬТИПЛИРОВАННЫЙ цвет, а CSS Filter Effects L1
@@ -1142,6 +1154,69 @@ fn apply_filter_fn(c: vec4<f32>, kind: u32, amount: f32) -> vec4<f32> {
     return vec4<f32>(c.rgb * c.a, c.a);
 }
 "#;
+
+/// Биндинги `blur-composite` (BUG-405 срез 6): к тем же слою/сэмплеру
+/// добавлен uniform блюра — вертикальный проход и цветовые фильтры считаются
+/// одним пассом прямо в родителя.
+const BLUR_COMPOSITE_BINDINGS_WGSL: &str = r#"
+struct BlurParams {
+    sigma: f32,
+    direction: u32,   // всегда 1 (вертикальный проход)
+    _p0: u32,
+    _p1: u32,
+}
+
+@group(0) @binding(0) var t_src: texture_2d<f32>;
+@group(0) @binding(1) var s_src: sampler;
+@group(0) @binding(2) var<uniform> b: BlurParams;
+@group(0) @binding(3) var<uniform> u: FilterParams;
+"#;
+
+/// Фрагментная часть `blur-composite`: вертикальный проход сепарабельного
+/// гаусса по горизонтально размытому источнику + цветовые фильтры.
+/// Ядро повторяет [`BLUR_SHADER_SRC`] буква в букву — иначе два прохода
+/// одного и того же блюра давали бы разный результат.
+const BLUR_COMPOSITE_FS_WGSL: &str = r#"
+@fragment fn fs_main(in: VOut) -> @location(0) vec4<f32> {
+    let sigma = max(b.sigma, 0.001);
+    let radius = min(i32(ceil(3.0 * sigma)), 32);
+    let dim = vec2<f32>(textureDimensions(t_src));
+    let step = select(vec2<f32>(1.0 / dim.x, 0.0), vec2<f32>(0.0, 1.0 / dim.y), b.direction == 1u);
+    var sum = vec4<f32>(0.0);
+    var weight_total = 0.0;
+    for (var i = -radius; i <= radius; i = i + 1) {
+        let fi = f32(i);
+        let w = exp(-fi * fi / (2.0 * sigma * sigma));
+        sum = sum + textureSample(t_src, s_src, in.uv + fi * step) * w;
+        weight_total = weight_total + w;
+    }
+    let src = sum / weight_total;
+    // Дальше — тот же путь, что в `FILTER_FS_WGSL`: слой премультиплирован,
+    // фильтры CSS Filter Effects L1 §7 определены над непремультиплированным.
+    let straight = select(src.rgb / max(src.a, 1e-6), vec3<f32>(0.0), src.a <= 0.0);
+    var c = vec4<f32>(straight, src.a);
+    for (var i = 0u; i < u.count; i = i + 1u) {
+        c = apply_filter_fn(c, u.entries[i].kind, u.entries[i].amount);
+    }
+    return vec4<f32>(c.rgb * c.a, c.a);
+}
+"#;
+
+/// Исходник шейдера цветовых CSS-фильтров (склейка общих кусков).
+fn filter_shader_src() -> String {
+    [FILTER_TYPES_WGSL, FILTER_BINDINGS_WGSL, FILTER_FN_WGSL, FILTER_FS_WGSL].concat()
+}
+
+/// Исходник шейдера «вертикальный блюр + фильтры + композит» (BUG-405 срез 6).
+fn blur_composite_shader_src() -> String {
+    [
+        FILTER_TYPES_WGSL,
+        BLUR_COMPOSITE_BINDINGS_WGSL,
+        FILTER_FN_WGSL,
+        BLUR_COMPOSITE_FS_WGSL,
+    ]
+    .concat()
+}
 
 /// CSS Filter Effects — separable Gaussian blur shader (one pass: H or V).
 /// Bindings: 0=t_src, 1=s_src (linear sampler), 2=BlurParams uniform.
@@ -2091,6 +2166,8 @@ struct PipelineDeps {
     filter_bgl: wgpu::BindGroupLayout,
     /// Layout пасса блюра (H/V разделяемое ядро).
     blur_bgl: wgpu::BindGroupLayout,
+    /// Layout пасса «вертикальный блюр + фильтры + композит» (BUG-405 срез 6).
+    blur_composite_bgl: wgpu::BindGroupLayout,
     /// Layout пасса blend-режимов (`mix-blend-mode`).
     blend_bgl: wgpu::BindGroupLayout,
     /// Layout пасса cross-fade (`image-set`/переходы картинок).
@@ -2129,6 +2206,8 @@ enum WarmedPipeline {
     MaskLayer(Box<(wgpu::RenderPipeline, wgpu::RenderPipeline)>),
     /// → [`Renderer::filter_pipeline`].
     Filter(wgpu::RenderPipeline),
+    /// → [`Renderer::blur_composite_pipeline`].
+    BlurComposite(wgpu::RenderPipeline),
     /// → [`Renderer::blur_pipeline`].
     Blur(wgpu::RenderPipeline),
     /// → [`Renderer::backdrop_blit_pipeline`].
@@ -2197,6 +2276,14 @@ pub struct Renderer {
     /// — BUG-405 срез 5. Эффект склейки виден именно здесь: механизм считает
     /// `cull_merges`, а «пассов стало меньше» — этот счётчик.
     plan_passes: u64,
+    /// Сколько render-пассов закодировали filter-элементы плана (BUG-405
+    /// срез 6): blur даёт два (H + слитый V-композит) вместо трёх, фильтр
+    /// без blur - один. Гейт правки стоит на нём, а не на времени кадра.
+    filter_passes: u64,
+    /// Склейка вертикального прохода блюра с композитом включена (срез 6).
+    /// Инстансный выключатель нужен гейту пикселей: оба плеча снимаются в
+    /// одном процессе. Поверх него - рычаг процесса `LUMEN_NO_BLUR_MERGE=1`.
+    blur_merge_enabled: bool,
     /// Склейка пасса родителя вокруг выброшенного уровня включена
     /// (BUG-405 срез 5). Инстансное плечо A/B: тест рисует один и тот же
     /// список обоими путями в одном процессе и сверяет пиксели побайтово, не
@@ -2278,6 +2365,13 @@ pub struct Renderer {
     /// BUG-406: ленивая компиляция — `OnceCell` заполняется при первом
     /// использовании (`blur_pipeline()`), не при старте окна.
     blur_pipeline: OnceCell<wgpu::RenderPipeline>,
+    /// BUG-405 срез 6 — вертикальный проход блюра вместе с цветовыми фильтрами
+    /// и композитом в родителя: один пасс вместо двух. Layout = `blur_bgl`
+    /// плюс четвёртый слот с `FilterParams`.
+    blur_composite_bgl: wgpu::BindGroupLayout,
+    /// BUG-406: ленивая компиляция — `OnceCell` заполняется при первом
+    /// использовании (`blur_composite_pipeline()`), не при старте окна.
+    blur_composite_pipeline: OnceCell<wgpu::RenderPipeline>,
     /// CSS Filter Effects L1 §2 — backdrop-filter blit pipeline.
     /// Same shader as `filter_pipeline` but uses REPLACE blend so the filtered
     /// backdrop snapshot overwrites (not composites over) the parent layer at
@@ -2619,6 +2713,12 @@ fn shader_rrect_clip_disabled() -> bool {
 /// offscreen-уровня отключена (`LUMEN_NO_CULL_MERGE=1`) — рычаг отката
 /// BUG-405 срез 5 к прежнему поведению «уровень выброшен из плана, но разрез
 /// пасса родителя остался» и A/B-плечо для проверки пикселей.
+fn blur_merge_disabled() -> bool {
+    use std::sync::OnceLock;
+    static OFF: OnceLock<bool> = OnceLock::new();
+    *OFF.get_or_init(|| std::env::var("LUMEN_NO_BLUR_MERGE").is_ok_and(|v| v == "1"))
+}
+
 fn cull_merge_disabled() -> bool {
     use std::sync::OnceLock;
     static OFF: OnceLock<bool> = OnceLock::new();
@@ -3714,6 +3814,50 @@ impl Renderer {
             ],
         });
 
+        // ── Blur-composite BGL (BUG-405 срез 6, пайплайн ленив) ──────────────
+        // Group 0: { t_src, s_src, BlurParams uniform, FilterParams uniform }
+        let blur_composite_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("blur-composite-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
         // ── CSS Blur BGL + uniform (пайплайн ленив, BUG-406) ─────────────────
         // Group 0: { t_src, s_src, BlurParams uniform }
         let blur_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -3870,6 +4014,7 @@ impl Renderer {
             mask_composite_bgl: mask_composite_bgl.clone(),
             filter_bgl: filter_bgl.clone(),
             blur_bgl: blur_bgl.clone(),
+            blur_composite_bgl: blur_composite_bgl.clone(),
             blend_bgl: blend_bgl.clone(),
             cross_fade_bgl: cross_fade_bgl.clone(),
             path_clip_bgl: path_clip_bgl.clone(),
@@ -3881,6 +4026,8 @@ impl Renderer {
             rrect_clip_levels: 0,
             cull_merges: 0,
             plan_passes: 0,
+            filter_passes: 0,
+            blur_merge_enabled: true,
             cull_merge_enabled: true,
             warm_rx: None,
             warm_started: false,
@@ -3932,6 +4079,8 @@ impl Renderer {
             filter_pipeline: OnceCell::new(),
             blur_bgl,
             blur_pipeline: OnceCell::new(),
+            blur_composite_bgl,
+            blur_composite_pipeline: OnceCell::new(),
             backdrop_blit_pipeline: OnceCell::new(),
             backdrop_layer: None,
             small_depth_cache: HashMap::new(),
@@ -4039,6 +4188,7 @@ impl Renderer {
             WarmedPipeline::MaskLayer(x) => drop(self.mask_layer_pipelines.set(*x)),
             WarmedPipeline::Filter(x) => drop(self.filter_pipeline.set(x)),
             WarmedPipeline::Blur(x) => drop(self.blur_pipeline.set(x)),
+            WarmedPipeline::BlurComposite(x) => drop(self.blur_composite_pipeline.set(x)),
             WarmedPipeline::BackdropBlit(x) => drop(self.backdrop_blit_pipeline.set(x)),
         }
     }
@@ -4112,6 +4262,26 @@ impl Renderer {
         self.plan_passes
     }
 
+    /// Сколько render-пассов закодировали filter-элементы планов этого
+    /// рендера (BUG-405 срез 6).
+    ///
+    /// Гейт правки стоит на нём: «блюр стоит двух пассов вместо трёх» -
+    /// утверждение о механизме, а не о времени кадра.
+    #[must_use]
+    pub fn filter_passes(&self) -> u64 {
+        self.filter_passes
+    }
+
+    /// Включает/выключает склейку вертикального прохода блюра с композитом
+    /// (BUG-405 срез 6).
+    ///
+    /// Нужен гейту пикселей: правка обязана давать ту же картинку, а сравнить
+    /// это можно только двумя плечами в одном процессе. Рычаг процесса
+    /// `LUMEN_NO_BLUR_MERGE=1` выключает склейку поверх этого переключателя.
+    pub fn set_blur_merge_enabled(&mut self, enabled: bool) {
+        self.blur_merge_enabled = enabled;
+    }
+
     /// Включает/выключает склейку пасса родителя вокруг выброшенного
     /// невидимого уровня (BUG-405 срез 5).
     ///
@@ -4177,6 +4347,7 @@ impl PipelineDeps {
         }
         emit!(WarmedPipeline::Filter(self.build_filter_pipeline()));
         emit!(WarmedPipeline::Blur(self.build_blur_pipeline()));
+        emit!(WarmedPipeline::BlurComposite(self.build_blur_composite_pipeline()));
         emit!(WarmedPipeline::RRectClip(self.build_rrect_clip_pipeline()));
         emit!(WarmedPipeline::Composite(self.build_composite_pipeline()));
         emit!(WarmedPipeline::PathClip(self.build_path_clip_pipeline()));
@@ -4821,7 +4992,7 @@ impl PipelineDeps {
     fn build_filter_pipeline(&self) -> wgpu::RenderPipeline {
         let filter_shader = timed_shader(&self.device, wgpu::ShaderModuleDescriptor {
             label: Some("filter-shader"),
-            source: wgpu::ShaderSource::Wgsl(FILTER_SHADER_SRC.into()),
+            source: wgpu::ShaderSource::Wgsl(filter_shader_src().into()),
         });
         let filter_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("filter-layout"),
@@ -4854,6 +5025,61 @@ impl PipelineDeps {
                     // (та же конвенция, что у `composite_pipeline`), и `fs_main`
                     // возвращает премультиплированный результат. Straight-alpha
                     // `ALPHA_BLENDING` домножал бы rgb на alpha второй раз.
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        })
+    }
+
+    /// Пайплайн «вертикальный проход блюра + цветовые фильтры + композит»
+    /// (BUG-405 срез 6). Отличия от [`Self::build_filter_pipeline`] — свой
+    /// BGL (четвёртый слот под `BlurParams`) и своя фрагментная часть;
+    /// blend тот же премультиплированный, цель — родительский уровень.
+    fn build_blur_composite_pipeline(&self) -> wgpu::RenderPipeline {
+        let shader = timed_shader(&self.device, wgpu::ShaderModuleDescriptor {
+            label: Some("blur-composite-shader"),
+            source: wgpu::ShaderSource::Wgsl(blur_composite_shader_src().into()),
+        });
+        let layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("blur-composite-layout"),
+            bind_group_layouts: &[&self.blur_composite_bgl],
+            push_constant_ranges: &[],
+        });
+        self.timed(&wgpu::RenderPipelineDescriptor {
+            label: Some("blur-composite-pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<CompositeVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 8, shader_location: 1 },
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32, offset: 16, shader_location: 2 },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: self.surface_format,
                     blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -4943,7 +5169,7 @@ impl PipelineDeps {
         // локальные shader/layout не переживают своего билдера.
         let filter_shader = timed_shader(&self.device, wgpu::ShaderModuleDescriptor {
             label: Some("filter-shader"),
-            source: wgpu::ShaderSource::Wgsl(FILTER_SHADER_SRC.into()),
+            source: wgpu::ShaderSource::Wgsl(filter_shader_src().into()),
         });
         let filter_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("filter-layout"),
@@ -5044,6 +5270,11 @@ impl Renderer {
     /// первом обращении и кэширует на весь срок жизни рендера.
     fn blur_pipeline(&self) -> &wgpu::RenderPipeline {
         self.blur_pipeline.get_or_init(|| self.pdeps.build_blur_pipeline())
+    }
+    /// Ленивый доступ к `blur-composite`-пайплайну (BUG-405 срез 6): вертикальный
+    /// проход блюра вместе с цветовыми фильтрами и композитом в родителя.
+    fn blur_composite_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.blur_composite_pipeline.get_or_init(|| self.pdeps.build_blur_composite_pipeline())
     }
     /// Ленивый доступ к `backdrop_blit`-пайплайну (BUG-406): компилирует его при
     /// первом обращении и кэширует на весь срок жизни рендера.
@@ -9898,6 +10129,9 @@ impl Renderer {
         // видит его как и раньше — меняется только момент отправки.
         let split_submit = !split_submit_disabled();
         let mut since_submit = 0usize;
+        // BUG-405 срез 6: склейка V-прохода блюра с композитом.
+        let blur_merge_on = self.blur_merge_enabled && !blur_merge_disabled();
+        let mut filter_passes = 0u64;
 
         for item in &render_plan {
             if split_submit && since_submit >= SUBMIT_CHUNK_ITEMS {
@@ -10441,9 +10675,11 @@ impl Renderer {
                         pass.draw(0..6, 0..1);
                     }
                 }
-                // CSS Filter Effects L1 — filter composite.
-                // If blur in filter list: two-pass separable Gaussian (H: src→scratch, V: scratch→src).
-                // Then color filter pass composites src_level onto parent with ALPHA_BLENDING.
+                // CSS Filter Effects L1 — композит filter-группы.
+                // Есть блюр: сепарабельный гаусс, H-проход пишет в scratch, а
+                // вертикальный идёт вместе с цветовыми фильтрами сразу в
+                // родителя (BUG-405 срез 6: один пасс вместо двух). Нет блюра —
+                // один пасс цветовых фильтров, как и раньше.
                 RenderPlanItem::FilterComposite(plan) => {
                     if plan.from_level == 0 { continue; }
                     let src_layer_idx = plan.from_level - 1;
@@ -10453,6 +10689,10 @@ impl Renderer {
                         FilterFn::Blur(s) if *s > 0.0 => Some(*s),
                         _ => None,
                     });
+                    // BUG-405 срез 6: склейка вертикального прохода с композитом.
+                    // Выключено — прежний трёхпассовый путь (рычаг отката и
+                    // плечо A/B).
+                    let merge = blur_sigma.is_some() && blur_merge_on;
 
                     if let Some(sigma) = blur_sigma {
                         // Ensure scratch before any immutable borrows of self.
@@ -10460,7 +10700,7 @@ impl Renderer {
                         let src_h = self.layer_textures[src_layer_idx].height;
                         self.ensure_scratch_layer(src_w, src_h);
 
-                        // H pass: src_level → scratch
+                        // H-проход: src_level → scratch.
                         let blur_h = BlurParamsCpu { sigma, direction: 0, _p0: 0, _p1: 0 };
                         let blur_h_buf = make_blur_param_buf(&self.device, &blur_h);
                         let src_view_h = &self.layer_textures[src_layer_idx].view;
@@ -10499,54 +10739,57 @@ impl Renderer {
                             pass.set_vertex_buffer(0, cvb.slice(..));
                             pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
                         }
+                        filter_passes += 1;
 
-                        // V pass: scratch → src_level (overwrite with fully blurred result)
-                        let blur_v = BlurParamsCpu { sigma, direction: 1, _p0: 0, _p1: 0 };
-                        let blur_v_buf = make_blur_param_buf(&self.device, &blur_v);
-                        let scratch_view_v = &self.scratch_layer.as_ref().unwrap().view;
-                        let src_level_view_v = &self.layer_textures[src_layer_idx].view;
-                        let blur_bg_v = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                            label: Some("blur-v-bg"),
-                            layout: &self.blur_bgl,
-                            entries: &[
-                                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(scratch_view_v) },
-                                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.layer_sampler) },
-                                wgpu::BindGroupEntry { binding: 2, resource: blur_v_buf.as_entire_binding() },
-                            ],
-                        });
-                        {
-                            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                label: Some("blur-v-pass"),
-                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                    view: src_level_view_v,
-                                    resolve_target: None,
-                                    depth_slice: None,
-                                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
-                                })],
-                                depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
-                            view: dv,
-                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
-                            stencil_ops: None,
-                        }),
-                                timestamp_writes: None,
-                                occlusion_query_set: None,
+                        if !merge {
+                            // V-проход: scratch → src_level (полностью размытый результат).
+                            let blur_v = BlurParamsCpu { sigma, direction: 1, _p0: 0, _p1: 0 };
+                            let blur_v_buf = make_blur_param_buf(&self.device, &blur_v);
+                            let scratch_view_v = &self.scratch_layer.as_ref().unwrap().view;
+                            let src_level_view_v = &self.layer_textures[src_layer_idx].view;
+                            let blur_bg_v = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                                label: Some("blur-v-bg"),
+                                layout: &self.blur_bgl,
+                                entries: &[
+                                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(scratch_view_v) },
+                                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.layer_sampler) },
+                                    wgpu::BindGroupEntry { binding: 2, resource: blur_v_buf.as_entire_binding() },
+                                ],
                             });
-                            pass.set_pipeline(self.blur_pipeline());
-                            if let Some(s) = plan.scissor {
-                                pass.set_scissor_rect(s.x, s.y, s.width, s.height);
+                            {
+                                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                    label: Some("blur-v-pass"),
+                                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                        view: src_level_view_v,
+                                        resolve_target: None,
+                                        depth_slice: None,
+                                        ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                                    })],
+                                    depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                                view: dv,
+                                depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                                stencil_ops: None,
+                            }),
+                                    timestamp_writes: None,
+                                    occlusion_query_set: None,
+                                });
+                                pass.set_pipeline(self.blur_pipeline());
+                                if let Some(s) = plan.scissor {
+                                    pass.set_scissor_rect(s.x, s.y, s.width, s.height);
+                                }
+                                pass.set_bind_group(0, &blur_bg_v, &[]);
+                                pass.set_vertex_buffer(0, cvb.slice(..));
+                                pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
                             }
-                            pass.set_bind_group(0, &blur_bg_v, &[]);
-                            pass.set_vertex_buffer(0, cvb.slice(..));
-                            pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
+                            filter_passes += 1;
+                            blur_param_bufs.push(blur_v_buf);
                         }
                         // Буферы должны пережить `encoder` — проходы читают их
                         // на `submit`, а не в момент кодирования.
                         blur_param_bufs.push(blur_h_buf);
-                        blur_param_bufs.push(blur_v_buf);
                     }
 
-                    // Color filter pass: src_level → parent (PREMULTIPLIED_ALPHA_BLENDING).
-                    // src_level now has blurred content if blur was applied.
+                    // Цветовые фильтры списка (блюр обработан выше).
                     let mut entries = [FilterEntryCpu { kind: 0, amount: 0.0, _p0: 0, _p1: 0 }; 8];
                     let mut color_count = 0u32;
                     for f in &plan.filters {
@@ -10566,41 +10809,104 @@ impl Renderer {
                     } else {
                         &self.layer_textures[plan.from_level - 2].view
                     };
-                    let src_view_f = &self.layer_textures[src_layer_idx].view;
-                    let filter_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("filter-bg"),
-                        layout: &self.filter_bgl,
-                        entries: &[
-                            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(src_view_f) },
-                            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.layer_sampler) },
-                            wgpu::BindGroupEntry { binding: 2, resource: fp_buf.as_entire_binding() },
-                        ],
-                    });
-                    filter_param_bufs.push(fp_buf);
-                    {
-                        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                            label: Some("filter-pass"),
-                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: dst_view,
-                                resolve_target: None,
-                                depth_slice: None,
-                                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
-                            })],
-                            depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                    if merge {
+                        // Слитый пасс: вертикальный блюр scratch-а + цветовые
+                        // фильтры + композит в родителя.
+                        let sigma = blur_sigma.unwrap_or(0.0);
+                        let blur_v = BlurParamsCpu { sigma, direction: 1, _p0: 0, _p1: 0 };
+                        let blur_v_buf = make_blur_param_buf(&self.device, &blur_v);
+                        let scratch_view_v = &self.scratch_layer.as_ref().unwrap().view;
+                        let bc_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("blur-composite-bg"),
+                            layout: &self.blur_composite_bgl,
+                            entries: &[
+                                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(scratch_view_v) },
+                                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.layer_sampler) },
+                                wgpu::BindGroupEntry { binding: 2, resource: blur_v_buf.as_entire_binding() },
+                                wgpu::BindGroupEntry { binding: 3, resource: fp_buf.as_entire_binding() },
+                            ],
+                        });
+                        {
+                            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("blur-composite-pass"),
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view: dst_view,
+                                    resolve_target: None,
+                                    depth_slice: None,
+                                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                                })],
+                                depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
                             view: dv,
                             depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
                             stencil_ops: None,
                         }),
-                            timestamp_writes: None,
-                            occlusion_query_set: None,
-                        });
-                        pass.set_pipeline(self.filter_pipeline());
-                        if let Some(s) = plan.scissor {
-                            pass.set_scissor_rect(s.x, s.y, s.width, s.height);
+                                timestamp_writes: None,
+                                occlusion_query_set: None,
+                            });
+                            pass.set_pipeline(self.blur_composite_pipeline());
+                            if let Some(s) = plan.scissor {
+                                pass.set_scissor_rect(s.x, s.y, s.width, s.height);
+                            }
+                            pass.set_bind_group(0, &bc_bg, &[]);
+                            pass.set_vertex_buffer(0, cvb.slice(..));
+                            pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
                         }
-                        pass.set_bind_group(0, &filter_bg, &[]);
-                        pass.set_vertex_buffer(0, cvb.slice(..));
-                        pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
+                        filter_passes += 1;
+                        blur_param_bufs.push(blur_v_buf);
+                    } else {
+                        // Пасс цветовых фильтров: src_level → родитель
+                        // (PREMULTIPLIED_ALPHA_BLENDING). Если блюр был, в
+                        // src_level уже лежит размытое содержимое.
+                        let src_view_f = &self.layer_textures[src_layer_idx].view;
+                        let filter_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("filter-bg"),
+                            layout: &self.filter_bgl,
+                            entries: &[
+                                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(src_view_f) },
+                                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.layer_sampler) },
+                                wgpu::BindGroupEntry { binding: 2, resource: fp_buf.as_entire_binding() },
+                            ],
+                        });
+                        {
+                            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("filter-pass"),
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view: dst_view,
+                                    resolve_target: None,
+                                    depth_slice: None,
+                                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                                })],
+                                depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                            view: dv,
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                            stencil_ops: None,
+                        }),
+                                timestamp_writes: None,
+                                occlusion_query_set: None,
+                            });
+                            pass.set_pipeline(self.filter_pipeline());
+                            if let Some(s) = plan.scissor {
+                                pass.set_scissor_rect(s.x, s.y, s.width, s.height);
+                            }
+                            pass.set_bind_group(0, &filter_bg, &[]);
+                            pass.set_vertex_buffer(0, cvb.slice(..));
+                            pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
+                        }
+                        filter_passes += 1;
+                    }
+                    filter_param_bufs.push(fp_buf);
+                    if item_log {
+                        let sc = plan
+                            .scissor
+                            .as_ref()
+                            .map(|s| format!("{}x{}", s.width, s.height))
+                            .unwrap_or_else(|| "full".into());
+                        desc = format!(
+                            "L{}b{:.1}c{color_count} sc{sc}{}",
+                            plan.from_level,
+                            blur_sigma.unwrap_or(0.0),
+                            if merge { " merged" } else { "" },
+                        );
                     }
                 }
                 // CSS Filter Effects L1 §2 / Compositing §13 — backdrop-filter composite.
@@ -11022,6 +11328,8 @@ impl Renderer {
                 items_prof.push((plan_kind, item_level, t_item, item_pass_end, item_ops, item_kinds, desc));
             }
         }
+
+        self.filter_passes += filter_passes;
 
         let t_after_encode = t_frame0.elapsed();
         self.queue.submit([encoder.finish()]);
