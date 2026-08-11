@@ -22,28 +22,25 @@ pub(crate) fn install_generic_sensor_bindings_v8(rt: &crate::v8_runtime::V8JsRun
 #[cfg(feature = "v8-backend")]
 const GENERIC_SENSOR_SHIM: &str = r#"
 (function() {
-  // ── Minimal EventTarget mixin ──────────────────────────────────────────────
+  // ── Base classes: the engine's own EventTarget/Event ──────────────────────
   //
-  // Used as base for Sensor classes. Avoids depending on a global EventTarget
-  // constructor (QuickJS doesn't expose one in all environments).
-  function _SensorEventTarget() {
-    this._listeners = {};
-  }
-  _SensorEventTarget.prototype.addEventListener = function(type, listener) {
-    if (!this._listeners[type]) this._listeners[type] = [];
-    if (!this._listeners[type].includes(listener)) {
-      this._listeners[type].push(listener);
-    }
-  };
-  _SensorEventTarget.prototype.removeEventListener = function(type, listener) {
-    if (!this._listeners[type]) return;
-    this._listeners[type] = this._listeners[type].filter(function(l) { return l !== listener; });
-  };
-  _SensorEventTarget.prototype.dispatchEvent = function(evt) {
-    const listeners = this._listeners[evt.type] || [];
-    listeners.forEach(function(l) { l(evt); });
-    return true;
-  };
+  // W3C Generic Sensor §8 is `interface Sensor : EventTarget`, so the base has
+  // to be the engine's real `EventTarget` — the one `WEB_API_SHIM` installs
+  // before this module (plain V8 has none) — and not a private look-alike, as
+  // this shim used to define: `sensor instanceof EventTarget` has to hold, and
+  // listeners have to live in the same registry that gives every other event
+  // source `capture`/`once` and the `on<type>` handler call (BUG-394).
+  //
+  // Without those globals there is no `Sensor` interface to install, so bail
+  // rather than export a twin whose `addEventListener` silently differs: a
+  // missing `Accelerometer` fails feature detection closed, a divergent one
+  // does not (the `navigator.permissions` precedent, `permissions.rs`). On a
+  // real page the branch is unreachable — `install_dom` evaluates
+  // `WEB_API_SHIM` before every `install_v8!` module — it only bites a
+  // standalone install such as a bare-V8 unit test.
+  var EventTargetBase = globalThis.EventTarget;
+  var EventBase = globalThis.Event;
+  if (typeof EventTargetBase !== 'function' || typeof EventBase !== 'function') return;
 
   // ── SensorErrorEvent (W3C Generic Sensor §11) ────────────────────────────
   //
@@ -87,7 +84,14 @@ const GENERIC_SENSOR_SHIM: &str = r#"
   // Phase 0: start() activates sensor; readings are null (no hardware).
   // Native binding _lumen_sensor_deliver_reading(type, payload) reserved for Phase 1.
   function Sensor(options) {
-    _SensorEventTarget.call(this);
+    // WebIDL: the `Sensor` interface declares no constructor operation, so it
+    // is reachable only through a concrete subclass — a direct `new Sensor()`
+    // is an illegal constructor. Subclasses enter this body through
+    // `Sensor.call(this, options)`, where `new.target` is undefined (BUG-394).
+    if (new.target === Sensor) {
+      throw new TypeError('Illegal constructor');
+    }
+    EventTargetBase.call(this);
     this._frequency = (options && options.frequency) ? options.frequency : null;
     this._referenceFrame = (options && options.referenceFrame) ? options.referenceFrame : 'device';
     this._activated = false;
@@ -98,7 +102,7 @@ const GENERIC_SENSOR_SHIM: &str = r#"
     this.onerror = null;
     this.onactivate = null;
   }
-  Sensor.prototype = Object.create(_SensorEventTarget.prototype);
+  Sensor.prototype = Object.create(EventTargetBase.prototype);
   Sensor.prototype.constructor = Sensor;
 
   Object.defineProperty(Sensor.prototype, 'activated', {
@@ -116,11 +120,12 @@ const GENERIC_SENSOR_SHIM: &str = r#"
     if (this._activated) return;
     this._activated = true;
     var self = this;
-    // Fire 'activate' event asynchronously per spec §8.10.
+    // Fire 'activate' event asynchronously per spec §8.10. `dispatchEvent`
+    // invokes `onactivate` itself (the `on<type>` step every EventTarget
+    // performs), so the explicit call this line used to carry would now
+    // deliver the event twice.
     Promise.resolve().then(function() {
-      var evt = { type: 'activate' };
-      if (typeof self.onactivate === 'function') self.onactivate(evt);
-      self.dispatchEvent(evt);
+      self.dispatchEvent(new EventBase('activate'));
     });
   };
 
@@ -180,7 +185,15 @@ const GENERIC_SENSOR_SHIM: &str = r#"
   });
 
   // ── OrientationSensor base (W3C Orientation Sensor §6) ────────────────────
-  function OrientationSensor(options) { Sensor.call(this, options); }
+  // Abstract like `Sensor`: the IDL gives a constructor only to the two
+  // concrete subclasses below, so `new OrientationSensor()` is illegal too
+  // (same WebIDL rule as BUG-394's `new Sensor()`, not named in that report).
+  function OrientationSensor(options) {
+    if (new.target === OrientationSensor) {
+      throw new TypeError('Illegal constructor');
+    }
+    Sensor.call(this, options);
+  }
   OrientationSensor.prototype = Object.create(Sensor.prototype);
   OrientationSensor.prototype.constructor = OrientationSensor;
   OrientationSensor.prototype._quaternion = null;
@@ -267,8 +280,48 @@ mod tests {
     use lumen_core::ext::JsRuntime as _;
     use lumen_core::JsValue;
 
+    /// `Event`/`EventTarget` stubs, copied from `permissions.rs`'s `STUBS`.
+    ///
+    /// The shim now refuses to install without both globals (`Sensor` is an
+    /// `EventTarget` subclass), and plain V8 has neither — on a page they come
+    /// from `WEB_API_SHIM`, which these tests cannot evaluate (it needs the
+    /// native registrations of a full `install_dom`). The copies match the
+    /// contract this module depends on: a per-type listener map plus the
+    /// `on<type>` handler call inside `dispatchEvent`. What a stub cannot
+    /// prove — that the base really is the engine's own `EventTarget` — is
+    /// covered by the `generic_sensor_*` tests in `dom.rs`, which run against
+    /// the real install.
+    const STUBS: &str = r#"
+        function Event(type) { this.type = String(type); this.target = null; }
+        globalThis.Event = Event;
+        function EventTarget() {
+            Object.defineProperty(this, '_listeners', { value: Object.create(null), writable: true });
+        }
+        EventTarget.prototype.addEventListener = function(type, cb) {
+            if (!cb) return;
+            type = String(type);
+            (this._listeners[type] || (this._listeners[type] = [])).push(cb);
+        };
+        EventTarget.prototype.removeEventListener = function(type, cb) {
+            var list = this._listeners[String(type)];
+            if (!list) return;
+            var i = list.indexOf(cb);
+            if (i >= 0) list.splice(i, 1);
+        };
+        EventTarget.prototype.dispatchEvent = function(event) {
+            var list = (this._listeners[String(event.type)] || []).slice();
+            event.target = this;
+            for (var i = 0; i < list.length; i++) { list[i].call(this, event); }
+            var on = this['on' + event.type];
+            if (typeof on === 'function') on.call(this, event);
+            return true;
+        };
+        globalThis.EventTarget = EventTarget;
+    "#;
+
     fn with_generic_sensor(f: impl FnOnce(&V8JsRuntime)) {
         let rt = V8JsRuntime::new().unwrap();
+        rt.eval(STUBS).unwrap();
         super::install_generic_sensor_bindings_v8(&rt).unwrap();
         f(&rt);
     }
@@ -278,6 +331,7 @@ mod tests {
     /// prove nothing about the real one (see `DOM_EXCEPTION_POLYFILL` docs).
     fn with_generic_sensor_and_dom_exception(f: impl FnOnce(&V8JsRuntime)) {
         let rt = V8JsRuntime::new().unwrap();
+        rt.eval(STUBS).unwrap();
         rt.eval(crate::v8_runtime::DOM_EXCEPTION_POLYFILL).unwrap();
         super::install_generic_sensor_bindings_v8(&rt).unwrap();
         f(&rt);
@@ -455,6 +509,78 @@ mod tests {
                 s.populateMatrix(m);
                 m[0] === 1 && m[5] === 1 && m[10] === 1 && m[15] === 1
                 "#,
+            );
+        });
+    }
+
+    /// BUG-394: `interface Sensor : EventTarget` — the base has to be the
+    /// global `EventTarget`, not a private mixin, so both the prototype chain
+    /// and the listener implementation are the platform's own.
+    #[test]
+    fn sensor_subclasses_inherit_global_event_target() {
+        with_generic_sensor(|rt| {
+            check(rt, "Sensor.prototype instanceof EventTarget");
+            check(rt, "(new Accelerometer()) instanceof EventTarget");
+            check(rt, "(new AbsoluteOrientationSensor()) instanceof EventTarget");
+            check(
+                rt,
+                "(new Gyroscope()).addEventListener === EventTarget.prototype.addEventListener",
+            );
+            check(
+                rt,
+                "(new Gyroscope()).dispatchEvent === EventTarget.prototype.dispatchEvent",
+            );
+        });
+    }
+
+    /// BUG-394: `Sensor` has no constructor operation in the IDL, so only its
+    /// concrete subclasses are constructible.
+    #[test]
+    fn direct_sensor_construction_throws() {
+        with_generic_sensor(|rt| {
+            check_throws_type_error(rt, "new Sensor()");
+            check_throws_type_error(rt, "new Sensor({frequency: 60})");
+            // The abstract orientation base is the same case (W3C Orientation
+            // Sensor §6 declares no constructor either).
+            check_throws_type_error(rt, "new OrientationSensor()");
+        });
+    }
+
+    /// The guard keys on `new.target`, so it must not fire for the subclasses
+    /// that reach the same body through `Sensor.call(this, options)`.
+    #[test]
+    fn subclass_construction_still_works() {
+        with_generic_sensor(|rt| {
+            check(rt, "(new Accelerometer()) instanceof Sensor");
+            check(rt, "(new AmbientLightSensor()) instanceof Sensor");
+            check(
+                rt,
+                "var s = new RelativeOrientationSensor({frequency: 30}); \
+                 (s instanceof OrientationSensor) && (s instanceof Sensor)",
+            );
+        });
+    }
+
+    /// `start()` must deliver `activate` exactly once to each of the two
+    /// subscription channels: `dispatchEvent` already calls the `on<type>`
+    /// handler, so the shim must not call `onactivate` a second time itself.
+    #[test]
+    fn activate_event_fires_once_per_channel() {
+        with_generic_sensor(|rt| {
+            // The event is queued on a microtask (spec §8.10), which runs when
+            // this `eval` returns — hence the separate assertion call.
+            rt.eval(
+                "var s = new Accelerometer(); \
+                 var viaHandler = 0, viaListener = 0, evt = null; \
+                 s.onactivate = function(e) { viaHandler++; evt = e; }; \
+                 s.addEventListener('activate', function() { viaListener++; }); \
+                 s.start();",
+            )
+            .unwrap();
+            check(
+                rt,
+                "viaHandler === 1 && viaListener === 1 && evt instanceof Event \
+                 && evt.type === 'activate' && evt.target === s",
             );
         });
     }

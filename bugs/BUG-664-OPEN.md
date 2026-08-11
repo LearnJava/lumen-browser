@@ -62,7 +62,7 @@ NetworkInformation.prototype.removeEventListener = function() {};
 уведомление.
 
 Тот же класс дефекта, что [BUG-386](BUG-386-FIXED.md) (`PermissionStatus`),
-[BUG-394](BUG-394-OPEN.md) (`Sensor`) и [BUG-400](BUG-400-OPEN.md)
+[BUG-394](BUG-394-FIXED.md) (`Sensor`) и [BUG-400](BUG-400-OPEN.md)
 (`performance`) — самодельные объектные литералы/мини-классы вместо
 наследования от уже существующего глобального `EventTarget`.
 
@@ -87,6 +87,6 @@ NetworkInformation.prototype.removeEventListener = function() {};
 
 * [BUG-641](BUG-641-OPEN.md) — тот же шим (`dom.rs:12855-12874`), другая
   находка: `downlinkMax` отсутствует целиком.
-* [BUG-386](BUG-386-FIXED.md) / [BUG-394](BUG-394-OPEN.md) /
+* [BUG-386](BUG-386-FIXED.md) / [BUG-394](BUG-394-FIXED.md) /
   [BUG-400](BUG-400-OPEN.md) — тот же класс дефекта (не-`EventTarget`
   самодельные шимы) на других объектах.

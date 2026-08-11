@@ -58,11 +58,11 @@
  "generated": "2026-08-11",
  "counts": {
   "open": 314,
-  "fixed": 411,
+  "fixed": 412,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 725,
+ "total_bugs": 726,
  "phases": [
   {
    "id": "P0",
@@ -3055,7 +3055,7 @@
        "title": "WPT: вендорить + прогнать категорию `magnetometer`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа, датчик устройства). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root magnetometer --recursive`, ~1:56), включена по тому же постоянному решению пользователя, что `accelerometer`/`ambient-light`/`compute-pressure` — **2/10 harness OK, 1/3 сабтестов**. 6 `.https.` TIMEOUT на стандартном TLS-гэпе тестового сертификата (тот же класс, что `keyboard-lock`/`loading`); 2 ERROR — session-reuse артефакт класса [BUG-380](bugs/BUG-380-FIXED.md). Реально исполнились 2 не-https теста: 1 FAIL на Permissions-Policy интроспекции (тот же паттерн, что `ambient-light`), 1 FAIL переподтверждает уже открытые [BUG-399](bugs/BUG-399-OPEN.md)/[BUG-394](bugs/BUG-394-OPEN.md) (`Magnetometer` доступен в небезопасном контексте — общий `_makeXyzSensor`-стаб, найдено ранее на `Gyroscope_insecure_context.html`). Новых багов не заведено"
+       "note": "Скоуп: 🚫 (вне скоупа, датчик устройства). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root magnetometer --recursive`, ~1:56), включена по тому же постоянному решению пользователя, что `accelerometer`/`ambient-light`/`compute-pressure` — **2/10 harness OK, 1/3 сабтестов**. 6 `.https.` TIMEOUT на стандартном TLS-гэпе тестового сертификата (тот же класс, что `keyboard-lock`/`loading`); 2 ERROR — session-reuse артефакт класса [BUG-380](bugs/BUG-380-FIXED.md). Реально исполнились 2 не-https теста: 1 FAIL на Permissions-Policy интроспекции (тот же паттерн, что `ambient-light`), 1 FAIL переподтверждает уже открытые [BUG-399](bugs/BUG-399-OPEN.md)/[BUG-394](bugs/BUG-394-FIXED.md) (`Magnetometer` доступен в небезопасном контексте — общий `_makeXyzSensor`-стаб, найдено ранее на `Gyroscope_insecure_context.html`). Новых багов не заведено"
       },
       {
        "id": "WPT-VENDOR-managed",
@@ -3552,7 +3552,7 @@
        "title": "WPT: вендорить + прогнать категорию `savedata`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root savedata --recursive`, ~30 с, единственный тест — `idlharness.any.js`) — **0/1 harness OK** (TIMEOUT, `/resources/WebIDLParser.js`+`idlharness.js` 404, невендоренный общий idlharness-инфра-гэп, реконфирмация уже задокументированного класса). Заведён [BUG-664](bugs/BUG-664-OPEN.md) прямой пробой `--mcp-live-port`/`eval` (та же техника, что у `generic-sensor`/BUG-394): `navigator.connection` (`NetworkInformation`) не наследуется от `EventTarget` (`instanceof` → false, нет `dispatchEvent`, свои no-op заглушки `addEventListener`/`removeEventListener`) — `change`-событие в принципе не может быть доставлено ни одним из двух способов подписки; тот же класс дефекта, что [BUG-386](bugs/BUG-386-FIXED.md)/[BUG-394](bugs/BUG-394-OPEN.md)/[BUG-400](bugs/BUG-400-OPEN.md). Соседняя находка того же шима — [BUG-641](bugs/BUG-641-OPEN.md) (`downlinkMax` отсутствует) — уже заведена категорией `netinfo`",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root savedata --recursive`, ~30 с, единственный тест — `idlharness.any.js`) — **0/1 harness OK** (TIMEOUT, `/resources/WebIDLParser.js`+`idlharness.js` 404, невендоренный общий idlharness-инфра-гэп, реконфирмация уже задокументированного класса). Заведён [BUG-664](bugs/BUG-664-OPEN.md) прямой пробой `--mcp-live-port`/`eval` (та же техника, что у `generic-sensor`/BUG-394): `navigator.connection` (`NetworkInformation`) не наследуется от `EventTarget` (`instanceof` → false, нет `dispatchEvent`, свои no-op заглушки `addEventListener`/`removeEventListener`) — `change`-событие в принципе не может быть доставлено ни одним из двух способов подписки; тот же класс дефекта, что [BUG-386](bugs/BUG-386-FIXED.md)/[BUG-394](bugs/BUG-394-FIXED.md)/[BUG-400](bugs/BUG-400-OPEN.md). Соседняя находка того же шима — [BUG-641](bugs/BUG-641-OPEN.md) (`downlinkMax` отсутствует) — уже заведена категорией `netinfo`",
        "bugs": [
         "BUG-664"
        ]
@@ -7340,10 +7340,10 @@
    "debtor": false
   },
   "BUG-394": {
-   "status": "open",
+   "status": "fixed",
    "title": "`Sensor`/подклассы (`Accelerometer` и др.) не наследуются от глобального `EventTarget` (`instanceof EventTarget` → `false`, своя реализация `addEventListener`)…",
    "component": "js (`crates/js/src/generic_sensor.rs:32-78` — приватный `_SensorEventTarget`, `Sensor` без guard на прямой вызов)",
-   "date": null,
+   "date": "2026-08-11",
    "debtor": false
   },
   "BUG-395": {
@@ -9865,6 +9865,13 @@
    "component": "driver (`crates/driver/src/session.rs:790` — `InProcessSession::navigate`, ветка `url.strip_prefix(\"file://\")`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-761": {
+   "status": "open",
+   "title": "`SensorErrorEvent` не наследуется от `Event` вопреки `interface SensorErrorEvent : Event` (W3C Generic Sensor §11): `SensorErrorEvent.prototype instanceof Event…",
+   "component": "js (`crates/js/src/generic_sensor.rs` — `GENERIC_SENSOR_SHIM`, конструктор `SensorErrorEvent`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -10317,6 +10324,9 @@
   ],
   "js (`crates/js/src/eye_dropper.rs` — тело шима `open()`)": [
    "BUG-698"
+  ],
+  "js (`crates/js/src/generic_sensor.rs` — `GENERIC_SENSOR_SHIM`, конструктор `SensorErrorEvent`)": [
+   "BUG-761"
   ],
   "js (`crates/js/src/highlight_api.rs` — `HIGHLIGHT_API_SHIM`)": [
    "BUG-534"
