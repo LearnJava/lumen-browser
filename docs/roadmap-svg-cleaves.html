@@ -58,11 +58,11 @@
  "generated": "2026-08-11",
  "counts": {
   "open": 314,
-  "fixed": 413,
+  "fixed": 414,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 727,
+ "total_bugs": 728,
  "phases": [
   {
    "id": "P0",
@@ -7354,10 +7354,10 @@
    "debtor": false
   },
   "BUG-396": {
-   "status": "open",
-   "title": "GIF-декодер отклоняет спек-валидный кадр без предшествующего Graphic Control Extension: `tests/wpt/gif/reset-no-gce.gif` (2×2, 3 кадра) падает `DecodeError(\"inv…",
-   "component": "image (`crates/engine/image/src/gif.rs:339-393` — `decode_gif_animated`, зависимость `gif` крейт v0.14.2)",
-   "date": null,
+   "status": "fixed",
+   "title": "GIF-декодер отклонял спек-валидный кадр без предшествующего Graphic Control Extension: `tests/wpt/gif/reset-no-gce.gif` (2×2, 3 кадра) падал `DecodeError(\"inval…",
+   "component": "image (`crates/engine/image/src/gif.rs` — `decode_gif_animated`, `GifCursor`/`AnimatedGif::frame_image`)",
+   "date": "2026-08-11",
    "debtor": false
   },
   "BUG-397": {
@@ -9879,6 +9879,13 @@
    "component": "js (`crates/js/src/geolocation.rs` — `GEO_SHIM`, `getCurrentPosition`/`watchPosition`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-763": {
+   "status": "open",
+   "title": "Кадр GIF меньше логического экрана рисуется из левого верхнего угла и не компонуется с предыдущим: `frame_image` объявляет результат размером экрана, но пишет т…",
+   "component": "image (`crates/engine/image/src/gif.rs` — `AnimatedGif::frame_image`; `frame.left`/`frame.top`/`frame.dispose` не читаются нигде в файле)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -10043,6 +10050,9 @@
    "BUG-014",
    "BUG-069",
    "BUG-229"
+  ],
+  "image (`crates/engine/image/src/gif.rs` — `AnimatedGif::frame_image`; `frame.left`/`frame.top`/`frame.dispose` не читаются нигде в файле)": [
+   "BUG-763"
   ],
   "image/paint": [
    "BUG-077",
