@@ -46,9 +46,40 @@ const GENERIC_SENSOR_SHIM: &str = r#"
   };
 
   // ── SensorErrorEvent (W3C Generic Sensor §11) ────────────────────────────
+  //
+  // `SensorErrorEventInit` declares `error` as a *required* dictionary member,
+  // which under WebIDL makes the init argument itself mandatory too: a missing
+  // second argument, a non-object one, or an absent/`undefined` `error` must
+  // each throw `TypeError` instead of silently defaulting to `null` (BUG-393).
   function SensorErrorEvent(type, init) {
-    this.type = type;
-    this.error = (init && init.error) ? init.error : null;
+    if (arguments.length < 2) {
+      throw new TypeError(
+        'Failed to construct SensorErrorEvent: 2 arguments required, but only ' +
+        arguments.length + ' present.'
+      );
+    }
+    if (init === null || init === undefined || (typeof init !== 'object' && typeof init !== 'function')) {
+      throw new TypeError(
+        'Failed to construct SensorErrorEvent: argument 2 is not of type SensorErrorEventInit.'
+      );
+    }
+    var error = init.error;
+    if (error === undefined) {
+      throw new TypeError(
+        'Failed to construct SensorErrorEvent: required member error is undefined.'
+      );
+    }
+    // WebIDL interface-type conversion: anything that is not a DOMException is
+    // a TypeError. Guarded on the global existing, since the shim is also
+    // installed standalone (unit tests) where the DOMException polyfill may not
+    // have run.
+    if (typeof globalThis.DOMException === 'function' && !(error instanceof globalThis.DOMException)) {
+      throw new TypeError(
+        'Failed to construct SensorErrorEvent: member error is not of type DOMException.'
+      );
+    }
+    this.type = String(type);
+    this.error = error;
   }
 
   // ── Sensor base class (W3C Generic Sensor §8) ─────────────────────────────
@@ -242,6 +273,29 @@ mod tests {
         f(&rt);
     }
 
+    /// Same, plus the engine's own `DOMException` constructor — the WebIDL
+    /// `error` member is typed `DOMException`, and a hand-written twin would
+    /// prove nothing about the real one (see `DOM_EXCEPTION_POLYFILL` docs).
+    fn with_generic_sensor_and_dom_exception(f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval(crate::v8_runtime::DOM_EXCEPTION_POLYFILL).unwrap();
+        super::install_generic_sensor_bindings_v8(&rt).unwrap();
+        f(&rt);
+    }
+
+    /// Evaluate `expr` and assert it threw a `TypeError`.
+    fn check_throws_type_error(rt: &V8JsRuntime, expr: &str) {
+        let probe = format!(
+            "(function() {{ try {{ {expr}; return 'no throw'; }} \
+             catch (e) {{ return (e instanceof TypeError) ? 'TypeError' : ('other: ' + e); }} }})()"
+        );
+        assert_eq!(
+            rt.eval(&probe).unwrap(),
+            JsValue::String("TypeError".to_string()),
+            "expected TypeError from `{expr}`"
+        );
+    }
+
     fn check(rt: &V8JsRuntime, expr: &str) {
         assert_eq!(rt.eval(expr).unwrap(), JsValue::Bool(true), "assertion failed for `{expr}`");
     }
@@ -329,6 +383,53 @@ mod tests {
     #[test]
     fn sensor_error_event_class_exists() {
         with_generic_sensor(|rt| check(rt, "typeof SensorErrorEvent === 'function'"));
+    }
+
+    #[test]
+    fn sensor_error_event_arity_is_two() {
+        with_generic_sensor(|rt| check(rt, "SensorErrorEvent.length === 2"));
+    }
+
+    #[test]
+    fn sensor_error_event_without_init_dict_throws() {
+        with_generic_sensor(|rt| check_throws_type_error(rt, "new SensorErrorEvent('error')"));
+    }
+
+    #[test]
+    fn sensor_error_event_with_non_object_init_throws() {
+        with_generic_sensor(|rt| {
+            check_throws_type_error(rt, "new SensorErrorEvent('error', 42)");
+            check_throws_type_error(rt, "new SensorErrorEvent('error', null)");
+            check_throws_type_error(rt, "new SensorErrorEvent('error', undefined)");
+        });
+    }
+
+    #[test]
+    fn sensor_error_event_without_required_error_member_throws() {
+        with_generic_sensor(|rt| {
+            check_throws_type_error(rt, "new SensorErrorEvent('error', {})");
+            check_throws_type_error(rt, "new SensorErrorEvent('error', {error: undefined})");
+        });
+    }
+
+    #[test]
+    fn sensor_error_event_with_non_dom_exception_error_throws() {
+        with_generic_sensor_and_dom_exception(|rt| {
+            check_throws_type_error(rt, "new SensorErrorEvent('error', {error: {}})");
+            check_throws_type_error(rt, "new SensorErrorEvent('error', {error: 'boom'})");
+        });
+    }
+
+    #[test]
+    fn sensor_error_event_with_init_dict_keeps_error() {
+        with_generic_sensor_and_dom_exception(|rt| {
+            check(
+                rt,
+                "var err = new DOMException(); \
+                 var evt = new SensorErrorEvent('type', {error: err}); \
+                 evt.type === 'type' && evt.error === err",
+            );
+        });
     }
 
     #[test]
