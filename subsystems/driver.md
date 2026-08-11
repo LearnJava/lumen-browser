@@ -224,6 +224,12 @@ headless pipeline without winit/wgpu/ffmpeg.
   `lay_out_flex`'s row branch) — the fixture uses `gap` instead of per-item `margin` to avoid
   baking that bug into the golden baseline.
 
+- **Done (HSTS in driver-built clients — BUG-402, 2026-08-11):** `session::build_http_client` and the http(s) branch of `winit_session::navigate` build
+  their own `HttpClient` (the shell sits above this crate, so `shell::config::apply_http` is out of reach) and therefore carried no HSTS at all.
+  Both now call `types::with_shared_hsts(client, profile)`, which attaches the **same** process-global `lumen_storage::shared_hsts_store` the shell
+  uses — automation and navigation must not disagree about a host's policy — with `FingerprintProfile::Tor` selecting the in-memory variant.
+  Gate: `session::tests::build_http_client_wires_hsts` asserts `HttpClient::has_hsts()` on the real factory output.
+
 ## Deferred
 
 - `WinitSession::eval` built with `--no-default-features` (feature `v8` off) still errors —

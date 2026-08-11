@@ -451,6 +451,31 @@ impl FingerprintProfile {
     }
 }
 
+/// Подключить общий на процесс HSTS-store (RFC 6797) к клиенту драйвера.
+///
+/// Драйверные сессии строят `HttpClient` сами, мимо шелловского
+/// `config::apply_http` (шелл лежит выше в графе зависимостей), поэтому точка
+/// подключения нужна отдельная — но store тот же самый процесс-глобальный
+/// объект, что и у шелла: обе половины браузера должны видеть одну
+/// HSTS-политику, иначе один и тот же хост апгрейдится в навигации и не
+/// апгрейдится в автоматизации ([BUG-402]).
+///
+/// `Tor`-профиль получает in-memory store — сессия не оставляет на диске
+/// следов посещённых хостов; preload-лист работает в обоих режимах.
+///
+/// [BUG-402]: https://github.com/LearnJava/lumen-browser/blob/main/bugs/BUG-402-FIXED.md
+#[must_use]
+pub(crate) fn with_shared_hsts(
+    client: lumen_network::HttpClient,
+    profile: FingerprintProfile,
+) -> lumen_network::HttpClient {
+    let private = profile == FingerprintProfile::Tor;
+    match lumen_storage::shared_hsts_store(private) {
+        Some(hsts) => client.with_hsts(hsts),
+        None => client,
+    }
+}
+
 /// Command for automation API — sent to shell via IPC channel (SDC-1a).
 ///
 /// This enum defines the contract between `lumen-driver` and `lumen-shell`.

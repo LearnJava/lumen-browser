@@ -20332,7 +20332,11 @@ impl Lumen {
                         use lumen_core::url::Url;
                         use lumen_network::HttpClient;
                         let Ok(parsed) = Url::parse(&url_clone) else { return };
-                        let Ok(html) = HttpClient::new().fetch(&parsed) else { return };
+                        // Через apply_http, а не голым HttpClient::new(): иначе
+                        // «сохранить на потом» ходит мимо HSTS, прокси, DoH и
+                        // кэша — своим, ничем не настроенным клиентом (BUG-402).
+                        let client = crate::config::global().apply_http(HttpClient::new());
+                        let Ok(html) = client.fetch(&parsed) else { return };
                         let title = panels::read_later_panel::extract_title_from_html(&html);
                         let title = if title.is_empty() { url_clone.clone() } else { title };
                         let _ = tx.send((url_clone, title, html));

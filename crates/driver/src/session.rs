@@ -232,12 +232,15 @@ impl InProcessSession {
     ///
     /// [`HttpClient`]: lumen_network::HttpClient
     fn build_http_client(&self) -> lumen_network::HttpClient {
-        lumen_network::HttpClient::new()
+        let profile = self.context.fingerprint_profile();
+        let mut client = lumen_network::HttpClient::new()
             .with_sink(Arc::new(NoopEventSink))
             .with_content_decoder(Arc::new(lumen_network::BrotliContentDecoder::new()))
             .with_content_decoder(Arc::new(lumen_network::GzipContentDecoder::new()))
             .with_content_decoder(Arc::new(lumen_network::DeflateContentDecoder::new()))
-            .with_fingerprint_profile(self.context.fingerprint_profile().to_http_profile())
+            .with_fingerprint_profile(profile.to_http_profile());
+        client = crate::types::with_shared_hsts(client, profile);
+        client
     }
 
     /// Active property trees snapshot from the compositor (PH1-7).
@@ -2130,6 +2133,21 @@ mod tests {
         s.run_pipeline(&bytes, Some("text/html"), "file://test".into())
             .expect("pipeline не запустился");
         s
+    }
+
+    #[test]
+    fn build_http_client_wires_hsts() {
+        // BUG-402: драйвер собирал HttpClient мимо HSTS — автоматизация и
+        // headless-навигация ходили по http без апгрейда даже на preload-хосты.
+        // Профиль Tor выбран, чтобы общий store процесса был in-memory и тест
+        // не создавал файл БД рядом с тестовым бинарником.
+        let mut s = InProcessSession::new();
+        s.set_fingerprint_profile(FingerprintProfile::Tor)
+            .expect("профиль ставится");
+        assert!(
+            s.build_http_client().has_hsts(),
+            "клиент драйвера обязан нести общий HSTS-store"
+        );
     }
 
     #[test]

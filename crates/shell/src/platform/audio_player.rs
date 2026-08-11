@@ -409,7 +409,11 @@ fn fetch_audio_bytes(url: &str) -> Result<Vec<u8>, String> {
 
     // HTTP(S): parse URL then use lumen-network HttpClient.
     let parsed = lumen_core::url::Url::parse(url).map_err(|e| e.to_string())?;
-    let client = lumen_network::HttpClient::new();
+    // Через apply_http: медиа-запрос должен подчиняться тем же HSTS / прокси /
+    // DoH / кэшу, что и остальная страница. Голый HttpClient::new() делал
+    // `<audio src="http://...">` единственным запросом навигации, который не
+    // апгрейдится до https по выученной или preload-политике (BUG-402).
+    let client = crate::config::global().apply_http(lumen_network::HttpClient::new());
     client
         .fetch_subresource(&parsed, lumen_network::RequestDestination::Media)
         .map_err(|e| e.to_string())
