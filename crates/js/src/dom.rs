@@ -5761,6 +5761,95 @@ function _lumen_parse_url(url) {
 var _lumen_loc_parts = _lumen_parse_url(typeof _LUMEN_PAGE_URL !== 'undefined' ? _LUMEN_PAGE_URL : '');
 var _lumen_loc_href  = _lumen_loc_parts.href;
 var _lumen_loc_hash  = _lumen_loc_parts.hash;
+
+// ── Secure context (W3C Secure Contexts §3.1/§3.2) ──────────────────────────
+// BUG-399: `window.isSecureContext` used to be the literal `true`, so every
+// `[SecureContext]`-gated API would answer «safe» even on a plain http:// page.
+// It is computed here instead, from the very URL the document was installed
+// with.
+// A host is loopback when it is `localhost` (or a subdomain / trailing-dot form
+// of it), a 127.0.0.0/8 address, or the IPv6 loopback — Secure Contexts §3.1.
+// The host is matched as written: `_lumen_parse_url` is not a full URL parser
+// and does not normalise a shorthand IPv4 literal (`127.1`), so such a form is
+// answered «not trustworthy». That is the safe direction to be wrong in — a
+// false negative denies a gated API, a false positive would hand it out on an
+// insecure origin.
+function _lumen_ipv6_is_loopback(addr) {
+    var groups, i;
+    var dbl = addr.indexOf('::');
+    if (dbl >= 0) {
+        if (addr.indexOf('::', dbl + 2) >= 0) return false;
+        var head = addr.slice(0, dbl);
+        var tail = addr.slice(dbl + 2);
+        var h = head === '' ? [] : head.split(':');
+        var t = tail === '' ? [] : tail.split(':');
+        if (h.length + t.length > 7) return false;
+        groups = [];
+        for (i = 0; i < h.length; i++) groups.push(h[i]);
+        for (i = h.length + t.length; i < 8; i++) groups.push('0');
+        for (i = 0; i < t.length; i++) groups.push(t[i]);
+    } else {
+        groups = addr.split(':');
+    }
+    if (groups.length !== 8) return false;
+    for (i = 0; i < 8; i++) {
+        var g = groups[i];
+        if (g.length === 0 || g.length > 4) return false;
+        for (var j = 0; j < g.length; j++) {
+            var c = g.charCodeAt(j) | 0x20;
+            var isDigit = c >= 0x30 && c <= 0x39;
+            var isHex   = c >= 0x61 && c <= 0x66;
+            if (!isDigit && !isHex) return false;
+        }
+        // Only ::1 itself is loopback; ::ffff:127.0.0.1 is not (per spec).
+        if (parseInt(g, 16) !== (i === 7 ? 1 : 0)) return false;
+    }
+    return true;
+}
+function _lumen_host_is_loopback(host) {
+    var h = String(host || '').toLowerCase();
+    if (h === 'localhost' || h === 'localhost.') return true;
+    if (h.slice(-10) === '.localhost' || h.slice(-11) === '.localhost.') return true;
+    if (h.length > 2 && h.charAt(0) === '[' && h.charAt(h.length - 1) === ']') {
+        return _lumen_ipv6_is_loopback(h.slice(1, -1));
+    }
+    var octets = h.split('.');
+    if (octets.length !== 4) return false;
+    for (var i = 0; i < 4; i++) {
+        var o = octets[i];
+        if (o.length === 0 || o.length > 3) return false;
+        for (var j = 0; j < o.length; j++) {
+            var c = o.charCodeAt(j);
+            if (c < 0x30 || c > 0x39) return false;
+        }
+        if (parseInt(o, 10) > 255) return false;
+    }
+    return parseInt(octets[0], 10) === 127;
+}
+function _lumen_url_is_potentially_trustworthy(parts) {
+    // The scheme is taken from the href rather than from `parts.protocol`:
+    // `_lumen_parse_url` splits on the first `://`, so it reads
+    // `blob:https://h/id` as protocol `blob:https:` and a `data:` URL whose
+    // payload happens to contain `://` as protocol `data:text/html,…:`.
+    // The URL Standard's scheme is simply everything before the first colon.
+    var href   = String(parts.href || '');
+    var colon  = href.indexOf(':');
+    var scheme = colon >= 0 ? href.slice(0, colon).toLowerCase() : '';
+    // §3.2 short-circuits these before the origin check: `about:blank` and
+    // `about:srcdoc` inherit their creator's context, and a `data:` URL is
+    // called potentially trustworthy despite its opaque origin.
+    if (scheme === 'about') {
+        var rest = href.slice(colon + 1);
+        return rest === 'blank' || rest === 'srcdoc';
+    }
+    if (scheme === 'data') return true;
+    // A blob: URL carries its origin as the URL that follows the scheme.
+    if (scheme === 'blob') {
+        return _lumen_url_is_potentially_trustworthy(_lumen_parse_url(href.slice(colon + 1)));
+    }
+    if (scheme === 'https' || scheme === 'wss' || scheme === 'file') return true;
+    return _lumen_host_is_loopback(parts.hostname);
+}
 // Engine-side URL commit. Writes the backing state ONLY — never through the
 // Location accessors, whose setters navigate (HTML LS §7.10.5). Routing an
 // internal update through them would turn every committed navigation into a
@@ -10866,8 +10955,26 @@ window.btoa                  = btoa;
 window.atob                  = atob;
 window.MessageChannel        = MessageChannel;
 window.MessagePort           = MessagePort;
-// W3C Secure Contexts §3.1: local-file and localhost are considered secure.
-window.isSecureContext       = true;
+// W3C Secure Contexts: computed from the document URL by
+// `_lumen_url_is_potentially_trustworthy` (BUG-399) — see there for the rules.
+// Snapshotted here, not re-read from `_lumen_loc_parts` on every access: the
+// flag belongs to the environment settings object and is fixed when the
+// document is created (HTML LS §8.1.5.1), and a document is exactly what a
+// fresh runtime is installed for (`install_dom` runs per navigation). A live
+// read would also be actively wrong — a same-document
+// `history.pushState(s, '', '/x')` stores that raw relative string in
+// `_lumen_loc_parts` (see `_lumen_location_update`), which would flip the flag
+// to false on an https page. The value is held in a closure, not in a
+// `_lumen_…` global, so it survives `seal_internal_globals_v8` leaving engine
+// *state* writable; the property itself is the readonly accessor WebIDL
+// declares, so page script cannot answer for the engine by plain assignment.
+(function() {
+    var secure = _lumen_url_is_potentially_trustworthy(_lumen_loc_parts);
+    Object.defineProperty(window, 'isSecureContext', {
+        get: function() { return secure; },
+        enumerable: true, configurable: true,
+    });
+})();
 // Set by Rust via _LUMEN_CROSS_ORIGIN_ISOLATED global (COOP=same-origin + COEP=require-corp).
 window.crossOriginIsolated   = !!_LUMEN_CROSS_ORIGIN_ISOLATED;
 
@@ -34385,6 +34492,15 @@ mod tests {
         use super::*;
         use crate::v8_runtime::V8JsRuntime;
 
+        /// Runtime installed against a concrete page URL — the input
+        /// `window.isSecureContext` is computed from (BUG-399).
+        fn v8_runtime_with_url(url: &str) -> V8JsRuntime {
+            let rt = V8JsRuntime::new().unwrap();
+            rt.install_dom(make_doc(), url, None, None, None, None, None, None, None, None, false)
+                .unwrap();
+            rt
+        }
+
         /// V8 twin of [`super::runtime_with_dom`].
         fn v8_runtime_with_dom(doc: Arc<Mutex<Document>>) -> V8JsRuntime {
             let rt = V8JsRuntime::new().unwrap();
@@ -34701,9 +34817,87 @@ mod tests {
 
         // ── isSecureContext / crossOriginIsolated tests ────────────────────────────
 
+        /// BUG-399: the flag used to be the literal `true` for every page. Each
+        /// URL below is a distinct clause of Secure Contexts §3.1/§3.2.
         #[test]
-        fn is_secure_context_is_true() {
+        fn is_secure_context_is_true_on_trustworthy_url() {
+            for url in [
+                "https://example.com/page",
+                "wss://example.com/socket",
+                "file:///tmp/page.html",
+                "about:blank",
+                "about:srcdoc",
+                "data:text/html,<p>hi</p>",
+                "blob:https://example.com/2a1f-0b",
+                "http://localhost:8000/t",
+                "http://localhost./t",
+                "http://app.localhost/t",
+                "http://127.0.0.1:18300/t",
+                "http://127.1.2.3/t",
+                "http://[::1]:8000/t",
+                "http://[0:0:0:0:0:0:0:1]/t",
+            ] {
+                let rt = v8_runtime_with_url(url);
+                assert!(
+                    bool_eval(&rt, "window.isSecureContext === true"),
+                    "expected secure context for {url}"
+                );
+            }
+        }
+
+        #[test]
+        fn is_secure_context_is_false_on_insecure_origin() {
+            for url in [
+                "http://example.com/page",
+                "http://127notanip.example/t",
+                // Not the loopback prefix, and not a loopback IPv6 address.
+                "http://128.0.0.1/t",
+                "http://[::2]/t",
+                "http://[::ffff:127.0.0.1]/t",
+                // `localhost` only as a whole label, not as a substring.
+                "http://notlocalhost/t",
+                "http://localhost.example.com/t",
+                "ws://example.com/socket",
+                // A blob: URL is only as trustworthy as the origin it carries.
+                "blob:http://example.com/2a1f-0b",
+                // An `about:` URL other than blank/srcdoc has no creator to
+                // inherit from.
+                "about:settings",
+            ] {
+                let rt = v8_runtime_with_url(url);
+                assert!(
+                    bool_eval(&rt, "window.isSecureContext === false"),
+                    "expected insecure context for {url}"
+                );
+            }
+        }
+
+        /// No page URL at all (the shape most unit-test runtimes install with)
+        /// is not a trustworthy origin — the safe direction to be wrong in.
+        #[test]
+        fn is_secure_context_is_false_without_page_url() {
             let rt = v8_runtime_with_dom(make_doc());
+            assert!(bool_eval(&rt, "window.isSecureContext === false"));
+        }
+
+        /// WebIDL declares a readonly attribute: page script must not be able
+        /// to answer for the engine by assigning to it (the BUG-366 class).
+        #[test]
+        fn is_secure_context_is_not_writable() {
+            let rt = v8_runtime_with_url("http://example.com/page");
+            rt.eval("window.isSecureContext = true;").unwrap();
+            assert!(bool_eval(&rt, "window.isSecureContext === false"));
+            assert!(bool_eval(&rt, "isSecureContext === false"));
+        }
+
+        /// A same-document URL change does not re-create the environment, so
+        /// it must not move the flag — least of all through the raw relative
+        /// string `pushState` leaves in the parsed location parts.
+        #[test]
+        fn is_secure_context_survives_same_document_navigation() {
+            let rt = v8_runtime_with_url("https://example.com/page");
+            rt.eval("history.pushState({}, '', '/other')").unwrap();
+            assert!(bool_eval(&rt, "location.href === '/other'"));
             assert!(bool_eval(&rt, "window.isSecureContext === true"));
         }
 
