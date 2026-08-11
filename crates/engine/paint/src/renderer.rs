@@ -94,12 +94,6 @@ fn atlas_key(
 }
 
 const FILL_SHADER_SRC: &str = r#"
-struct Uniforms {
-    viewport: vec2<f32>,
-};
-
-@group(0) @binding(0) var<uniform> u: Uniforms;
-
 struct VIn {
     @location(0) pos: vec2<f32>,
     // CSS depth in pixels: positive = closer to viewer.
@@ -131,7 +125,7 @@ fn vs_main(in: VIn) -> VOut {
 
 @fragment
 fn fs_main(in: VOut) -> @location(0) vec4<f32> {
-    return in.color;
+    return vec4<f32>(in.color.rgb, in.color.a * rrect_clip_coverage(in.clip.xy));
 }
 "#;
 
@@ -142,12 +136,6 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
 /// `radius_px` (loc 3) — CSS-радиус точки. Формула совпадает с Skia, что минимизирует
 /// разницу с Chrome/Edge (пиксельный pixel-diff для dotted border ≈ sub-pixel noise).
 const CIRCLE_SHADER_SRC: &str = r#"
-struct Uniforms {
-    viewport: vec2<f32>,
-};
-
-@group(0) @binding(0) var<uniform> u: Uniforms;
-
 struct VIn {
     @location(0) pos:       vec2<f32>,
     @location(1) uv:        vec2<f32>,
@@ -180,7 +168,7 @@ fn vs_main(in: VIn) -> VOut {
 fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     // Quad spans (r+0.5) px in each direction from center, so dist_px = |uv| * (r+0.5).
     let dist_px = length(in.uv) * (in.radius_px + 0.5);
-    let alpha = clamp(0.5 + in.radius_px - dist_px, 0.0, 1.0);
+    let alpha = clamp(0.5 + in.radius_px - dist_px, 0.0, 1.0) * rrect_clip_coverage(in.clip.xy);
     if alpha <= 0.0 { discard; }
     return vec4<f32>(in.color.rgb, in.color.a * alpha);
 }
@@ -233,6 +221,45 @@ fn sdf_rrect(p: vec2<f32>, half_size: vec2<f32>, radii_x: vec4<f32>, radii_y: ve
 }
 "#;
 
+/// BUG-405 срез 4 — общий пролог всех рисующих шейдеров: viewport-uniform
+/// группы 0 и покрытие активного скруглённого клипа.
+///
+/// Раньше `overflow: hidden` со скруглением всегда открывал offscreen-уровень,
+/// а `PopClip` композитил его через контур: три пасса на клип (сброс батча
+/// родителя + пасс уровня + композит). На `lenta.ru` это 751 пасс из 915 за
+/// прокрутку — при том, что 235 из 251 таких уровней содержат РОВНО ОДНУ
+/// операцию рисования. Теперь контур приезжает uniform-ом (динамический офсет
+/// на слот в общем буфере) и каждый шейдер сам домножает альфу на покрытие —
+/// клип не стоит ни одного пасса. Уровень остаётся запасным путём (вложенный
+/// клип, фильтр/маска внутри поддерева — см. `shader_rrect_clip_allowed`).
+///
+/// Слот 0 — «клипа нет»: полуразмер 1e7 даёт покрытие 1 во всей поверхности.
+/// Позиция берётся из `@builtin(position)` — это device px, поэтому шейдер
+/// делит её на `dpr` и считает контур в CSS px: ровно в тех же единицах, в
+/// каких контур считает композит-пасс `RRECT_CLIP_SHADER_SRC` и сам
+/// скруглённый бокс (`RRECT_SHADER_SRC`). Иначе на HiDPI полоса сглаживания
+/// клипа была бы вдвое уже полосы собственного края бокса. Новых varying'ов
+/// ни одному шейдеру при этом не нужно.
+const CLIP_UNIFORM_WGSL: &str = r#"
+struct Uniforms {
+    viewport: vec2<f32>,
+    dpr: f32,
+    _pad0: f32,
+    clip_center: vec2<f32>,
+    clip_half: vec2<f32>,
+    clip_radii_x: vec4<f32>,
+    clip_radii_y: vec4<f32>,
+};
+
+@group(0) @binding(0) var<uniform> u: Uniforms;
+
+fn rrect_clip_coverage(p_device: vec2<f32>) -> f32 {
+    let p = p_device / u.dpr;
+    let d = sdf_rrect(p - u.clip_center, u.clip_half, u.clip_radii_x, u.clip_radii_y);
+    return 1.0 - smoothstep(-0.5, 0.5, d);
+}
+"#;
+
 /// SDF rounded-rect shader with elliptical per-corner radii.
 /// Per-vertex data carries the rect's center, half-size, and two vec4s for
 /// horizontal (x) and vertical (y) corner radii, enabling `border-radius: H/V`.
@@ -246,12 +273,6 @@ fn sdf_rrect(p: vec2<f32>, half_size: vec2<f32>, radii_x: vec4<f32>, radii_y: ve
 ///   loc 5  radii_x   vec4  – horizontal corner radii px: tl, tr, br, bl
 ///   loc 6  radii_y   vec4  – vertical corner radii px:   tl, tr, br, bl
 const RRECT_SHADER_SRC: &str = r#"
-struct Uniforms {
-    viewport: vec2<f32>,
-};
-
-@group(0) @binding(0) var<uniform> u: Uniforms;
-
 struct VIn {
     @location(0) pos:       vec2<f32>,
     // CSS depth in pixels: positive = closer to viewer.
@@ -298,18 +319,13 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     let p = in.world_pos - in.center;
     let d = sdf_rrect(p, in.half_size, in.radii_x, in.radii_y);
     // Sub-pixel anti-aliasing: smoothstep over [-0.5, 0.5] px.
-    let alpha = 1.0 - smoothstep(-0.5, 0.5, d);
+    let alpha = (1.0 - smoothstep(-0.5, 0.5, d)) * rrect_clip_coverage(in.clip.xy);
     if alpha <= 0.0 { discard; }
     return vec4<f32>(in.color.rgb, in.color.a * alpha);
 }
 "#;
 
 const TEXT_SHADER_SRC: &str = r#"
-struct Uniforms {
-    viewport: vec2<f32>,
-};
-
-@group(0) @binding(0) var<uniform> u: Uniforms;
 @group(1) @binding(0) var atlas_tex: texture_2d<f32>;
 @group(1) @binding(1) var atlas_smp: sampler;
 
@@ -345,17 +361,12 @@ fn vs_main(in: VIn) -> VOut {
 
 @fragment
 fn fs_main(in: VOut) -> @location(0) vec4<f32> {
-    let alpha = textureSample(atlas_tex, atlas_smp, in.uv).r;
+    let alpha = textureSample(atlas_tex, atlas_smp, in.uv).r * rrect_clip_coverage(in.clip.xy);
     return vec4<f32>(in.color.rgb, in.color.a * alpha);
 }
 "#;
 
 const IMAGE_SHADER_SRC: &str = r#"
-struct Uniforms {
-    viewport: vec2<f32>,
-};
-
-@group(0) @binding(0) var<uniform> u: Uniforms;
 @group(1) @binding(0) var image_tex: texture_2d<f32>;
 @group(1) @binding(1) var image_smp: sampler;
 
@@ -392,7 +403,7 @@ fn vs_main(in: VIn) -> VOut {
 @fragment
 fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     let sample = textureSample(image_tex, image_smp, in.uv);
-    return vec4<f32>(sample.rgb, sample.a * in.alpha);
+    return vec4<f32>(sample.rgb, sample.a * in.alpha * rrect_clip_coverage(in.clip.xy));
 }
 "#;
 
@@ -441,10 +452,6 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
 /// uses `ALPHA_BLENDING` so the GPU performs `SrcAlpha · src + (1-SrcAlpha) · dst`
 /// — same convention as `image_pipeline`.
 const CROSS_FADE_SHADER_SRC: &str = r#"
-struct Uniforms {
-    viewport: vec2<f32>,
-};
-
 struct CrossFadeParams {
     // x = progress, yzw = padding (uniform buffer requires 16-byte alignment).
     progress: f32,
@@ -453,7 +460,6 @@ struct CrossFadeParams {
     _pad2: f32,
 };
 
-@group(0) @binding(0) var<uniform> u: Uniforms;
 @group(1) @binding(0) var tex_a: texture_2d<f32>;
 @group(1) @binding(1) var tex_b: texture_2d<f32>;
 @group(1) @binding(2) var smp: sampler;
@@ -502,7 +508,7 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     if (out_a <= 0.0) {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
-    return vec4<f32>(premul / out_a, out_a);
+    return vec4<f32>(premul / out_a, out_a * rrect_clip_coverage(in.clip.xy));
 }
 "#;
 
@@ -1208,9 +1214,6 @@ struct VOut { @builtin(position) clip: vec4<f32>, @location(0) uv: vec2<f32> }
 /// `[0,1]` (see `wrap_repeat` below), and stop-to-stop interpolation runs in
 /// premultiplied sRGBA (`mix_premul`, CSS Images L4 §3.1).
 const GRADIENT_SHADER_SRC: &str = r#"
-struct ViewUniforms { viewport: vec2<f32> }
-@group(0) @binding(0) var<uniform> vu: ViewUniforms;
-
 struct GradStop {
     color: vec4<f32>,
     pos:   f32,
@@ -1239,8 +1242,8 @@ struct VOut { @builtin(position) clip: vec4<f32>, @location(0) uv: vec2<f32> }
 
 @vertex fn vs_main(in: VIn) -> VOut {
     let ndc = vec2<f32>(
-        in.pos.x / vu.viewport.x * 2.0 - 1.0,
-        1.0 - in.pos.y / vu.viewport.y * 2.0,
+        in.pos.x / u.viewport.x * 2.0 - 1.0,
+        1.0 - in.pos.y / u.viewport.y * 2.0,
     );
     return VOut(vec4<f32>(ndc, 0.0, 1.0), in.uv);
 }
@@ -1329,7 +1332,8 @@ fn sample_grad(t_in: f32) -> vec4<f32> {
     }
     // Repeating conic (CSS Images L4 §3.7) tiles the stop span within one
     // revolution — the same fold linear/radial need, so it lives in one place.
-    return sample_grad(wrap_repeat(t));
+    let c = sample_grad(wrap_repeat(t));
+    return vec4<f32>(c.rgb, c.a * rrect_clip_coverage(in.clip.xy));
 }
 "#;
 
@@ -1613,6 +1617,11 @@ fn filter_fn_to_entry(f: &FilterFn) -> FilterEntryCpu {
 /// уровне render(), не клонируется в DrawOp).
 enum DrawOp {
     SetScissor(DeviceScissor),
+    /// BUG-405 срез 4: сменить активный скруглённый клип — номер слота в
+    /// uniform-буфере группы 0 (0 = клипа нет). Пассов не добавляет: смена
+    /// bind group живёт внутри уже открытого пасса, в отличие от
+    /// offscreen-уровня, который требовал своего.
+    SetClip(u32),
     Fill { v_start: u32, v_count: u32 },
     Circle { v_start: u32, v_count: u32 },
     /// SDF rounded-rect draw — uses `rrect_pipeline` + `rrect_vbuf`.
@@ -2175,6 +2184,10 @@ pub struct Renderer {
     /// загрузке картинки, обратное чтение в headless) не считаются: гейт
     /// подачи порциями — про кадр.
     submissions: u64,
+    /// Сколько скруглённых клипов этот рендер обслужил offscreen-уровнем
+    /// (три пасса на клип) за свою жизнь — BUG-405 срез 4. Шейдерный контур
+    /// счётчик не двигает, поэтому «правка работает» = «счётчик не растёт».
+    rrect_clip_levels: u64,
     /// Приёмник готовых пайплайнов с потока прогрева (BUG-405). `None` —
     /// прогрев ещё не запущен, уже завершён, или отключён
     /// `LUMEN_NO_PIPELINE_WARMUP=1`. Сбрасывается в `None`, когда поток
@@ -2289,6 +2302,9 @@ pub struct Renderer {
 
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
+    /// Сколько слотов [`ClipUniformSlot`] помещается в `uniform_buffer`
+    /// (BUG-405 срез 4). Слот 0 — «скруглённого клипа нет».
+    uniform_slots: usize,
 
     atlas_texture: wgpu::Texture,
     atlas_bind_group: wgpu::BindGroup,
@@ -2532,6 +2548,57 @@ fn split_submit_disabled() -> bool {
     use std::sync::OnceLock;
     static OFF: OnceLock<bool> = OnceLock::new();
     *OFF.get_or_init(|| std::env::var("LUMEN_NO_SPLIT_SUBMIT").is_ok_and(|v| v == "1"))
+}
+
+/// Слот uniform-буфера группы 0 — CPU-зеркало WGSL-структуры `Uniforms`
+/// из [`CLIP_UNIFORM_WGSL`] (BUG-405 срез 4). Все поля в DEVICE px:
+/// фрагментный этап берёт позицию из `@builtin(position)`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct ClipUniformSlot {
+    /// Размер вьюпорта в CSS px — им вершинный этап переводит позицию в NDC.
+    viewport: [f32; 2],
+    /// `scale_factor` кадра: фрагментный этап делит на него
+    /// `@builtin(position)`, чтобы получить CSS px.
+    dpr: f32,
+    _pad0: f32,
+    /// Центр прямоугольника клипа (CSS px, экранные координаты).
+    clip_center: [f32; 2],
+    /// Полуразмер прямоугольника клипа (CSS px).
+    clip_half: [f32; 2],
+    /// Горизонтальные радиусы углов (tl, tr, br, bl), CSS px.
+    clip_radii_x: [f32; 4],
+    /// Вертикальные радиусы углов (tl, tr, br, bl), CSS px.
+    clip_radii_y: [f32; 4],
+}
+
+/// Шаг слота в uniform-буфере. Динамический офсет обязан быть кратен
+/// `min_uniform_buffer_offset_alignment` (256 у D3D12/Vulkan/Metal), поэтому
+/// 64-байтовый слот кладётся с запасом.
+const UNIFORM_SLOT_STRIDE: u64 = 256;
+
+/// «Клипа нет»: полуразмер 1e7 CSS px делает SDF отрицательным во всей
+/// поверхности, покрытие — ровно 1.0.
+fn no_clip_slot(viewport: [f32; 2], dpr: f32) -> ClipUniformSlot {
+    ClipUniformSlot {
+        viewport,
+        dpr,
+        _pad0: 0.0,
+        clip_center: [0.0, 0.0],
+        clip_half: [1.0e7, 1.0e7],
+        clip_radii_x: [0.0; 4],
+        clip_radii_y: [0.0; 4],
+    }
+}
+
+/// `true`, если шейдерный скруглённый клип отключён
+/// (`LUMEN_NO_SHADER_RRECT_CLIP=1`) — рычаг отката BUG-405 срез 4 к
+/// offscreen-уровню на каждый `PushClipRoundedRect` и A/B-плечо для проверки
+/// пикселей.
+fn shader_rrect_clip_disabled() -> bool {
+    use std::sync::OnceLock;
+    static OFF: OnceLock<bool> = OnceLock::new();
+    *OFF.get_or_init(|| std::env::var("LUMEN_NO_SHADER_RRECT_CLIP").is_ok_and(|v| v == "1"))
 }
 
 fn scroll_compositor_disabled() -> bool {
@@ -2963,34 +3030,29 @@ impl Renderer {
             }
         }
 
-        // ── Uniform bind group (viewport) — общий для fill и text ──────────
+        // ── Uniform bind group (viewport + скруглённый клип) ───────────────
+        // BUG-405 срез 4: буфер стал МАССИВОМ слотов с динамическим офсетом —
+        // слот 0 хранит «клипа нет», остальные заводит кадр под каждый
+        // активный `PushClipRoundedRect`. Видимость расширена до фрагментного
+        // этапа: покрытие контура считает именно он.
         let uniform_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("uniform-bgl"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+                    has_dynamic_offset: true,
+                    min_binding_size: wgpu::BufferSize::new(
+                        std::mem::size_of::<ClipUniformSlot>() as u64,
+                    ),
                 },
                 count: None,
             }],
         });
-        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("uniform-buf"),
-            size: 16,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("uniform-bg"),
-            layout: &uniform_bgl,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
-            }],
-        });
+        let uniform_slots = 64usize;
+        let (uniform_buffer, uniform_bind_group) =
+            Self::create_uniform_buffer(&device, &uniform_bgl, uniform_slots);
 
         // ── Atlas texture + sampler + bind group ───────────────────────────
         count_texture_created_labeled("glyph-atlas", ATLAS_DIM, ATLAS_DIM);
@@ -3059,7 +3121,7 @@ impl Renderer {
         // ── Fill pipeline ─────────────────────────────────────────────────
         let fill_shader = timed_shader(&device, wgpu::ShaderModuleDescriptor {
             label: Some("fill-shader"),
-            source: wgpu::ShaderSource::Wgsl(FILL_SHADER_SRC.into()),
+            source: wgpu::ShaderSource::Wgsl(format!("{SDF_RRECT_WGSL}{CLIP_UNIFORM_WGSL}{FILL_SHADER_SRC}").into()),
         });
         let fill_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("fill-layout"),
@@ -3125,7 +3187,7 @@ impl Renderer {
         // ── RRect (SDF rounded-rect) pipeline ─────────────────────────────
         let rrect_shader = timed_shader(&device, wgpu::ShaderModuleDescriptor {
             label: Some("rrect-shader"),
-            source: wgpu::ShaderSource::Wgsl(format!("{SDF_RRECT_WGSL}{RRECT_SHADER_SRC}").into()),
+            source: wgpu::ShaderSource::Wgsl(format!("{SDF_RRECT_WGSL}{CLIP_UNIFORM_WGSL}{RRECT_SHADER_SRC}").into()),
         });
         let rrect_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("rrect-layout"),
@@ -3217,7 +3279,7 @@ impl Renderer {
         // ── Text pipeline ─────────────────────────────────────────────────
         let text_shader = timed_shader(&device, wgpu::ShaderModuleDescriptor {
             label: Some("text-shader"),
-            source: wgpu::ShaderSource::Wgsl(TEXT_SHADER_SRC.into()),
+            source: wgpu::ShaderSource::Wgsl(format!("{SDF_RRECT_WGSL}{CLIP_UNIFORM_WGSL}{TEXT_SHADER_SRC}").into()),
         });
         let text_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("text-layout"),
@@ -3336,7 +3398,7 @@ impl Renderer {
         });
         let image_shader = timed_shader(&device, wgpu::ShaderModuleDescriptor {
             label: Some("image-shader"),
-            source: wgpu::ShaderSource::Wgsl(IMAGE_SHADER_SRC.into()),
+            source: wgpu::ShaderSource::Wgsl(format!("{SDF_RRECT_WGSL}{CLIP_UNIFORM_WGSL}{IMAGE_SHADER_SRC}").into()),
         });
         let image_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("image-layout"),
@@ -3683,7 +3745,7 @@ impl Renderer {
         });
         let gradient_shader = timed_shader(&device, wgpu::ShaderModuleDescriptor {
             label: Some("gradient-shader"),
-            source: wgpu::ShaderSource::Wgsl(GRADIENT_SHADER_SRC.into()),
+            source: wgpu::ShaderSource::Wgsl(format!("{SDF_RRECT_WGSL}{CLIP_UNIFORM_WGSL}{GRADIENT_SHADER_SRC}").into()),
         });
         let gradient_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("gradient-layout"),
@@ -3792,6 +3854,7 @@ impl Renderer {
         let renderer = Self {
             pdeps,
             submissions: 0,
+            rrect_clip_levels: 0,
             warm_rx: None,
             warm_started: false,
             surface,
@@ -3813,6 +3876,7 @@ impl Renderer {
             cross_fade_bgl,
             uniform_buffer,
             uniform_bind_group,
+            uniform_slots,
             atlas_texture,
             atlas_bind_group,
             image_bgl,
@@ -3991,6 +4055,17 @@ impl Renderer {
         self.submissions
     }
 
+    /// Сколько скруглённых клипов этот рендер обслужил offscreen-уровнем
+    /// (BUG-405 срез 4). Клип, обслуженный шейдерным контуром, счётчик не
+    /// двигает — уровня, а значит и трёх его пассов, у него нет.
+    ///
+    /// Гейт правки стоит на нём, а не на времени кадра: «клип больше не стоит
+    /// пассов» — утверждение о механизме.
+    #[must_use]
+    pub fn rrect_clip_levels(&self) -> u64 {
+        self.rrect_clip_levels
+    }
+
     /// Сколько ленивых ячеек пайплайнов уже заполнено (BUG-405/406).
     /// Счётчик-интроспектор для тестов: гейт стоит на «прогрев довёл ячейки до
     /// заполненного состояния», а не на времени кадра.
@@ -4066,7 +4141,7 @@ impl PipelineDeps {
         // ── Circle pipeline ───────────────────────────────────────────────
         let circle_shader = timed_shader(&self.device, wgpu::ShaderModuleDescriptor {
             label: Some("circle-shader"),
-            source: wgpu::ShaderSource::Wgsl(CIRCLE_SHADER_SRC.into()),
+            source: wgpu::ShaderSource::Wgsl(format!("{SDF_RRECT_WGSL}{CLIP_UNIFORM_WGSL}{CIRCLE_SHADER_SRC}").into()),
         });
         let circle_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("circle-layout"),
@@ -4186,7 +4261,7 @@ impl PipelineDeps {
     fn build_cross_fade_pipeline(&self) -> wgpu::RenderPipeline {
         let cross_fade_shader = timed_shader(&self.device, wgpu::ShaderModuleDescriptor {
             label: Some("cross-fade-shader"),
-            source: wgpu::ShaderSource::Wgsl(CROSS_FADE_SHADER_SRC.into()),
+            source: wgpu::ShaderSource::Wgsl(format!("{SDF_RRECT_WGSL}{CLIP_UNIFORM_WGSL}{CROSS_FADE_SHADER_SRC}").into()),
         });
         let cross_fade_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("cross-fade-layout"),
@@ -6099,6 +6174,55 @@ impl Renderer {
         }
     }
 
+    /// Создать uniform-буфер группы 0 на `slots` слотов и bind group к нему.
+    /// Привязывается ОДИН слот (`size` = размер структуры), выбираемый
+    /// динамическим офсетом на `set_bind_group` (BUG-405 срез 4).
+    fn create_uniform_buffer(
+        device: &wgpu::Device,
+        bgl: &wgpu::BindGroupLayout,
+        slots: usize,
+    ) -> (wgpu::Buffer, wgpu::BindGroup) {
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("uniform-buf"),
+            size: UNIFORM_SLOT_STRIDE * slots.max(1) as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("uniform-bg"),
+            layout: bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &buffer,
+                    offset: 0,
+                    size: wgpu::BufferSize::new(std::mem::size_of::<ClipUniformSlot>() as u64),
+                }),
+            }],
+        });
+        (buffer, bind_group)
+    }
+
+    /// Записать слоты кадра в uniform-буфер, вырастив его при нехватке места.
+    fn write_uniform_slots(&mut self, slots: &[ClipUniformSlot]) {
+        if slots.len() > self.uniform_slots {
+            let want = slots.len().next_power_of_two();
+            let (buf, bg) = Self::create_uniform_buffer(&self.device, &self.pdeps.uniform_bgl, want);
+            self.uniform_buffer = buf;
+            self.uniform_bind_group = bg;
+            self.uniform_slots = want;
+        }
+        // Один write_buffer вместо N: слоты раскладываются по шагу 256 в
+        // промежуточный буфер (у кадра прокрутки их до трёх сотен).
+        let stride = UNIFORM_SLOT_STRIDE as usize;
+        let mut bytes = vec![0u8; stride * slots.len()];
+        for (i, slot) in slots.iter().enumerate() {
+            let src = as_bytes(std::slice::from_ref(slot));
+            bytes[i * stride..i * stride + src.len()].copy_from_slice(src);
+        }
+        self.queue.write_buffer(&self.uniform_buffer, 0, &bytes);
+    }
+
     fn create_layer_texture(&mut self, width: u32, height: u32) -> OffscreenLayer {
         use std::sync::atomic::Ordering::Relaxed;
 
@@ -6938,6 +7062,10 @@ impl Renderer {
         }
 
         let mut render_plan: Vec<RenderPlanItem> = Vec::new();
+        // BUG-405 срез 4: сколько скруглённых клипов кадра всё же открыли
+        // offscreen-уровень (по три пасса на клип) вместо шейдерного контура.
+        // Это и есть гейт правки — см. `rrect_clip_levels()`.
+        let mut level_rrect_clips: u64 = 0;
         let mut composite_vertices: Vec<CompositeVertex> = Vec::new();
         // Accumulated vertex data for mask composite passes.
         let mut mask_vertices: Vec<MaskVertex> = Vec::new();
@@ -6982,6 +7110,9 @@ impl Renderer {
         enum ClipLevel {
             RRect(RRectClipLevel),
             Path(PathClipLevel),
+            /// BUG-405 срез 4: скруглённый клип без уровня — контур уехал в
+            /// uniform, парный `PopClip` только возвращает слот 0.
+            Shader,
         }
         // По записи на КАЖДЫЙ push клипа (`PushClipRect`/`PushClipRoundedRect`/
         // `PushClipPath`), чтобы `PopClip` знал, открывал ли его парный push
@@ -7086,7 +7217,7 @@ impl Renderer {
                     if let Some(lb) = level_bounds.get_mut(current_level) {
                         for op in &draw_ops[batch_start..] {
                             match op {
-                                DrawOp::SetScissor(_) => {}
+                                DrawOp::SetScissor(_) | DrawOp::SetClip(_) => {}
                                 DrawOp::Fill { v_start, v_count } => union_op_verts!(lb, fill_vertices, v_start, v_count),
                                 DrawOp::Circle { v_start, v_count } => union_op_verts!(lb, circle_vertices, v_start, v_count),
                                 DrawOp::RRect { v_start, v_count } => union_op_verts!(lb, rrect_vertices, v_start, v_count),
@@ -7179,9 +7310,18 @@ impl Renderer {
             draw_ops.push(DrawOp::Image { v_start, v_count: 6, image_batch_idx });
         }
 
-        let iter_content = content.iter().map(|c| (c, false));
-        let iter_overlay = overlay.iter().map(|c| (c, true));
-        for (cmd, is_overlay) in iter_content.chain(iter_overlay) {
+        // BUG-405 срез 4: пред-проход по спискам — какие скруглённые клипы
+        // обойдутся шейдерным контуром вместо своего offscreen-уровня.
+        let shader_clip_ok_content = shader_rrect_clip_allowed(content);
+        let shader_clip_ok_overlay = shader_rrect_clip_allowed(overlay);
+        // Слоты uniform-буфера группы 0: 0 — «клипа нет», дальше по слоту на
+        // каждый шейдерный клип кадра.
+        let mut clip_slots: Vec<ClipUniformSlot> =
+            vec![no_clip_slot([viewport_css_w, viewport_css_h], dpr_f32)];
+        let mut active_clip_slot: u32 = 0;
+        let iter_content = content.iter().enumerate().map(|(i, c)| (c, false, i));
+        let iter_overlay = overlay.iter().enumerate().map(|(i, c)| (c, true, i));
+        for (cmd, is_overlay, cmd_idx) in iter_content.chain(iter_overlay) {
             let (dy, dx) = if is_overlay {
                 (0.0_f32, 0.0_f32)
             } else {
@@ -7782,6 +7922,52 @@ impl Renderer {
                                 br: r(2) * sx, br_y: r(2) * sy,
                                 bl: r(3) * sx, bl_y: r(3) * sy,
                             };
+                            // BUG-405 срез 4: контур помещается в uniform —
+                            // ни уровня, ни композита, ни разрыва батча. Уровень
+                            // остаётся, если контур уже занят внешним клипом
+                            // (в шейдере он один) или поддерево содержит
+                            // фильтр/маску/blend (`shader_rrect_clip_allowed`).
+                            let ok = if is_overlay {
+                                shader_clip_ok_overlay.get(cmd_idx)
+                            } else {
+                                shader_clip_ok_content.get(cmd_idx)
+                            };
+                            if active_clip_slot == 0
+                                && *ok.unwrap_or(&false)
+                                && !shader_rrect_clip_disabled()
+                            {
+                                let slot = clip_slots.len() as u32;
+                                // Радиусы обязаны быть ужаты в бокс тем же
+                                // правилом, что и на путь уровня
+                                // (`push_rrect_clip_quad`): CSS Backgrounds L3
+                                // §5.5 масштабирует пересекающиеся кривые, а
+                                // без этого `border-radius: 50%` (pill, круг)
+                                // даёт контур с радиусами больше половины
+                                // стороны — TEST-101 5.39% против 0.25%.
+                                let radii = radii
+                                    .clamped_to_box(in_screen.width, in_screen.height);
+                                clip_slots.push(ClipUniformSlot {
+                                    viewport: [viewport_css_w, viewport_css_h],
+                                    dpr: dpr_f32,
+                                    _pad0: 0.0,
+                                    clip_center: [
+                                        in_screen.x + in_screen.width * 0.5,
+                                        in_screen.y + in_screen.height * 0.5,
+                                    ],
+                                    clip_half: [
+                                        in_screen.width * 0.5,
+                                        in_screen.height * 0.5,
+                                    ],
+                                    clip_radii_x: [radii.tl, radii.tr, radii.br, radii.bl],
+                                    clip_radii_y: [
+                                        radii.tl_y, radii.tr_y, radii.br_y, radii.bl_y,
+                                    ],
+                                });
+                                draw_ops.push(DrawOp::SetClip(slot));
+                                active_clip_slot = slot;
+                                clip_level_stack.push(Some(ClipLevel::Shader));
+                                continue;
+                            }
                             flush_batch!();
                             let plan_mark = render_plan.len();
                             current_level += 1;
@@ -7850,9 +8036,19 @@ impl Renderer {
                     // форму `clip-path` — закрыть его composite-пассом через
                     // покрытие контура.
                     if let Some(Some(clip)) = clip_level_stack.pop() {
+                        // BUG-405 срез 4: у шейдерного клипа уровня нет —
+                        // закрыть его значит вернуть слот 0 прямо в потоке
+                        // операций, без flush_batch и без композит-пасса.
+                        if matches!(clip, ClipLevel::Shader) {
+                            draw_ops.push(DrawOp::SetClip(0));
+                            active_clip_slot = 0;
+                            continue;
+                        }
                         let (clip_rect, plan_mark) = match &clip {
                             ClipLevel::RRect(c) => (c.rect, c.plan_mark),
                             ClipLevel::Path(c) => (c.rect, c.plan_mark),
+                            // Снято выше отдельной веткой: уровня нет.
+                            ClipLevel::Shader => continue,
                         };
                         flush_batch!();
                         // viewport-cull: пустой/за-экранный уровень невидим —
@@ -7882,7 +8078,13 @@ impl Renderer {
                             continue;
                         }
                         match clip {
+                            // Шейдерный клип снят веткой выше (уровня нет).
+                            ClipLevel::Shader => {}
                             ClipLevel::RRect(c) => {
+                                // BUG-405 срез 4: клип, которому шейдерный путь
+                                // не подошёл (вложенный или с фильтром/маской
+                                // внутри) — считаем, это гейт правки.
+                                level_rrect_clips += 1;
                                 let v_start = rrect_clip_vertices.len() as u32;
                                 push_rrect_clip_quad(
                                     &mut rrect_clip_vertices,
@@ -9160,16 +9362,12 @@ impl Renderer {
         // scale_factor=1 — поведение pre-DPR (1:1, обычный 1080p); =2 — 4K с
         // 200% scaling, 16-px CSS текст рендерится на 32 device px.
         // f32 cast терпит небольшую потерю точности — DPR редко > 4.0.
-        let dpr = self.scale_factor.max(1e-6) as f32;
-        let (dims_w, dims_h) = (surface_w, surface_h);
-        let viewport = [
-            dims_w as f32 / dpr,
-            dims_h as f32 / dpr,
-            0.0,
-            0.0,
-        ];
-        self.queue
-            .write_buffer(&self.uniform_buffer, 0, as_bytes(&viewport));
+        //
+        // BUG-405 срез 4: в слоте 0 лежит тот же viewport и «клипа нет»;
+        // слоты 1.. заполнены шейдерными скруглёнными клипами этого кадра
+        // (`viewport` у всех одинаков — меняется только контур).
+        self.write_uniform_slots(&clip_slots);
+        self.rrect_clip_levels += level_rrect_clips;
 
         // ── Vertex buffers ────────────────────────────────────────────────
         let fill_vbuf = if fill_vertices.is_empty() {
@@ -9432,10 +9630,19 @@ impl Renderer {
                 label: Some("encoder"),
             });
 
+        // BUG-405 срез 4: активный слот скруглённого клипа. Состояние
+        // энкодера, а не пасса: `DrawOp::SetClip` переставляет его в потоке
+        // операций, и каждый следующий пасс продолжает с тем же значением.
+        let mut clip_slot: u32 = 0;
         macro_rules! run_draw_ops {
             ($pass:ident, $start:expr, $end:expr) => {
                 for op in &draw_ops[$start..$end] {
                     match op {
+                        // BUG-405 срез 4: слот клипа — состояние пасса, как и
+                        // scissor; сама операция ничего не рисует.
+                        DrawOp::SetClip(slot) => {
+                            clip_slot = *slot;
+                        }
                         DrawOp::SetScissor(s) => {
                             if s.is_empty() {
                                 $pass.set_scissor_rect(0, 0, 1.min(surface_w), 1.min(surface_h));
@@ -9446,7 +9653,7 @@ impl Renderer {
                         DrawOp::Fill { v_start, v_count } => {
                             if let Some(vb) = &fill_vbuf {
                                 $pass.set_pipeline(&self.fill_pipeline);
-                                $pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                                $pass.set_bind_group(0, &self.uniform_bind_group, &[clip_slot * UNIFORM_SLOT_STRIDE as u32]);
                                 $pass.set_vertex_buffer(0, vb.slice(..));
                                 $pass.draw(*v_start..*v_start + *v_count, 0..1);
                             }
@@ -9454,7 +9661,7 @@ impl Renderer {
                         DrawOp::Circle { v_start, v_count } => {
                             if let Some(vb) = &circle_vbuf {
                                 $pass.set_pipeline(self.circle_pipeline());
-                                $pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                                $pass.set_bind_group(0, &self.uniform_bind_group, &[clip_slot * UNIFORM_SLOT_STRIDE as u32]);
                                 $pass.set_vertex_buffer(0, vb.slice(..));
                                 $pass.draw(*v_start..*v_start + *v_count, 0..1);
                             }
@@ -9462,7 +9669,7 @@ impl Renderer {
                         DrawOp::RRect { v_start, v_count } => {
                             if let Some(vb) = &rrect_vbuf {
                                 $pass.set_pipeline(&self.rrect_pipeline);
-                                $pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                                $pass.set_bind_group(0, &self.uniform_bind_group, &[clip_slot * UNIFORM_SLOT_STRIDE as u32]);
                                 $pass.set_vertex_buffer(0, vb.slice(..));
                                 $pass.draw(*v_start..*v_start + *v_count, 0..1);
                             }
@@ -9470,7 +9677,7 @@ impl Renderer {
                         DrawOp::Text { v_start, v_count } => {
                             if let Some(vb) = &text_vbuf {
                                 $pass.set_pipeline(&self.text_pipeline);
-                                $pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                                $pass.set_bind_group(0, &self.uniform_bind_group, &[clip_slot * UNIFORM_SLOT_STRIDE as u32]);
                                 $pass.set_bind_group(1, &self.atlas_bind_group, &[]);
                                 $pass.set_vertex_buffer(0, vb.slice(..));
                                 $pass.draw(*v_start..*v_start + *v_count, 0..1);
@@ -9482,7 +9689,7 @@ impl Renderer {
                                 image_bind_groups.get(*image_batch_idx as usize),
                             ) {
                                 $pass.set_pipeline(&self.image_pipeline);
-                                $pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                                $pass.set_bind_group(0, &self.uniform_bind_group, &[clip_slot * UNIFORM_SLOT_STRIDE as u32]);
                                 $pass.set_bind_group(1, bind_group, &[]);
                                 $pass.set_vertex_buffer(0, vb.slice(..));
                                 $pass.draw(*v_start..*v_start + *v_count, 0..1);
@@ -9494,7 +9701,7 @@ impl Renderer {
                                 grad_bind_groups.get(*grad_batch_idx as usize),
                             ) {
                                 $pass.set_pipeline(&self.gradient_pipeline);
-                                $pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                                $pass.set_bind_group(0, &self.uniform_bind_group, &[clip_slot * UNIFORM_SLOT_STRIDE as u32]);
                                 $pass.set_bind_group(1, bind_group, &[]);
                                 $pass.set_vertex_buffer(0, vb.slice(..));
                                 $pass.draw(*v_start..*v_start + *v_count, 0..1);
@@ -9506,7 +9713,7 @@ impl Renderer {
                                 cross_fade_bind_groups.get(*cf_batch_idx as usize),
                             ) {
                                 $pass.set_pipeline(self.cross_fade_pipeline());
-                                $pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                                $pass.set_bind_group(0, &self.uniform_bind_group, &[clip_slot * UNIFORM_SLOT_STRIDE as u32]);
                                 $pass.set_bind_group(1, bind_group, &[]);
                                 $pass.set_vertex_buffer(0, vb.slice(..));
                                 $pass.draw(*v_start..*v_start + *v_count, 0..1);
@@ -9613,7 +9820,7 @@ impl Renderer {
                     );
                     for op in &draw_ops[batch.ops_start..batch.ops_end] {
                         m[match op {
-                            DrawOp::SetScissor(_) => 0,
+                            DrawOp::SetScissor(_) | DrawOp::SetClip(_) => 0,
                             DrawOp::Fill { .. } => 1,
                             DrawOp::Circle { .. } => 2,
                             DrawOp::RRect { .. } => 3,
@@ -10012,7 +10219,7 @@ impl Renderer {
                                 occlusion_query_set: None,
                             });
                             pass.set_pipeline(&self.gradient_pipeline);
-                            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                            pass.set_bind_group(0, &self.uniform_bind_group, &[0]);
                             pass.set_bind_group(1, &grad_bg, &[]);
                             pass.set_vertex_buffer(0, grad_vbuf_m.slice(..));
                             pass.draw(0..6, 0..1);
@@ -10064,7 +10271,7 @@ impl Renderer {
                                 occlusion_query_set: None,
                             });
                             pass.set_pipeline(self.mask_composite_pipeline());
-                            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                            pass.set_bind_group(0, &self.uniform_bind_group, &[0]);
                             pass.set_bind_group(1, &mask_bg, &[]);
                             pass.set_vertex_buffer(0, mvb.slice(..));
                             pass.draw(comp.mask_v_start..comp.mask_v_end, 0..1);
@@ -10679,7 +10886,7 @@ impl Renderer {
                             occlusion_query_set: None,
                         });
                         pass.set_pipeline(pipeline);
-                        pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                        pass.set_bind_group(0, &self.uniform_bind_group, &[0]);
                         pass.set_bind_group(1, &ml_bg, &[]);
                         pass.set_vertex_buffer(0, mlvb.slice(..));
                         pass.draw(plan.ml_v_start..plan.ml_v_end, 0..1);
@@ -10753,6 +10960,14 @@ impl Renderer {
                 (load_counter(&GLYPH_RASTER_NANOS) - glyph_nanos_at_entry) as f64 / 1e6,
                 load_counter(&GLYPHS_RASTERIZED),
                 load_counter(&GLYPH_RASTER_NANOS) as f64 / 1e6,
+            );
+
+            // BUG-405 срез 4: чем обслужены скруглённые клипы кадра —
+            // шейдерным контуром (0 пассов) или offscreen-уровнем (3 пасса).
+            eprintln!(
+                "[frame:wgpu]   rclip: шейдером {} | уровнем {}",
+                clip_slots.len() - 1,
+                level_rrect_clips,
             );
 
             // LUMEN_FRAME_LOG=3 — распределение, а не среднее.
@@ -12788,6 +13003,54 @@ fn make_blur_param_buf(device: &wgpu::Device, params: &BlurParamsCpu) -> wgpu::B
 
 // SAFETY: T: Copy + #[repr(C)] плюс отсутствие padding-байт делают этот
 // каст безопасным. Используется только для POD-типов из этого файла.
+/// BUG-405 срез 4: для каждой команды списка — можно ли обслужить её
+/// скруглённый клип шейдером (без offscreen-уровня). `true` стоит ровно на
+/// индексах `PushClipRoundedRect`, чьё поддерево не содержит команды, чей
+/// композит читает УЖЕ СОБРАННЫЙ слой и потому клипу не подчиняется:
+/// фильтр (размывает за контур), backdrop-фильтр (берёт фон родителя),
+/// маска и `mix-blend-mode` (читают цель пасса).
+///
+/// Остальное безопасно: содержимое вложенного уровня (opacity, вложенный
+/// клип) рисуется теми же шейдерами и получает клип пофрагментно, а его
+/// композит переносит уже обрезанный слой 1:1.
+fn shader_rrect_clip_allowed(cmds: &[DisplayCommand]) -> Vec<bool> {
+    let mut ok = vec![false; cmds.len()];
+    // Индексы открытых `PushClip*`: `Some(i)` — скруглённый (кандидат),
+    // `None` — прямоугольный/по форме (парный `PopClip` тот же).
+    let mut open: Vec<Option<usize>> = Vec::new();
+    for (i, cmd) in cmds.iter().enumerate() {
+        match cmd {
+            DisplayCommand::PushClipRoundedRect { radii, .. } => {
+                let candidate = radii.iter().any(|r| *r > 0.0);
+                if candidate {
+                    ok[i] = true;
+                }
+                open.push(candidate.then_some(i));
+            }
+            DisplayCommand::PushClipRect { .. } | DisplayCommand::PushClipPath { .. } => {
+                open.push(None);
+            }
+            DisplayCommand::PopClip => {
+                open.pop();
+            }
+            DisplayCommand::PushFilter { .. }
+            | DisplayCommand::PushBackdropFilter { .. }
+            | DisplayCommand::PushBlendMode { .. }
+            | DisplayCommand::PushMaskImage { .. }
+            | DisplayCommand::PushMaskLinearGradient { .. }
+            | DisplayCommand::PushMaskRadialGradient { .. }
+            | DisplayCommand::PushMaskConicGradient { .. }
+            | DisplayCommand::PushMaskLayer { .. } => {
+                for slot in open.iter().flatten() {
+                    ok[*slot] = false;
+                }
+            }
+            _ => {}
+        }
+    }
+    ok
+}
+
 fn as_bytes<T: Copy>(slice: &[T]) -> &[u8] {
     unsafe {
         std::slice::from_raw_parts(slice.as_ptr() as *const u8, std::mem::size_of_val(slice))
