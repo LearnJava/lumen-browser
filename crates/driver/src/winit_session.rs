@@ -1254,7 +1254,9 @@ impl BrowserSession for WinitSession {
     }
 
     fn set_fingerprint_profile(&mut self, profile: FingerprintProfile) -> Result<()> {
-        self.context.set_fingerprint_profile(profile)
+        self.context.set_fingerprint_profile(profile)?;
+        crate::session::sync_global_privacy_control(profile);
+        Ok(())
     }
 
     fn user_agent(&self) -> String {

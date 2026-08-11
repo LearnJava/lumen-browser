@@ -1214,7 +1214,9 @@ impl BrowserSession for InProcessSession {
     }
 
     fn set_fingerprint_profile(&mut self, profile: FingerprintProfile) -> Result<()> {
-        self.context.set_fingerprint_profile(profile)
+        self.context.set_fingerprint_profile(profile)?;
+        sync_global_privacy_control(profile);
+        Ok(())
     }
 
     fn user_agent(&self) -> String {
@@ -1376,6 +1378,27 @@ impl lumen_core::ext::BrowserSession for InProcessSession {
 }
 
 // ── Вспомогательные функции ─────────────────────────────────────────────────
+
+/// Mirror a runtime fingerprint-profile switch onto the JS-side Global Privacy
+/// Control state (BUG-397).
+///
+/// The HTTP client is rebuilt from `context.fingerprint_profile()` on every
+/// request, so `set_fingerprint_profile(Strict)` starts sending `Sec-GPC: 1`
+/// immediately; without this the JS property would keep reporting the profile
+/// the process started with and a page could observe the header and
+/// `navigator.globalPrivacyControl` disagreeing. The new value reaches a page
+/// on the next JS context (i.e. the next navigation) — the shim is installed
+/// once per context, exactly like the navigator/screen profile.
+#[cfg(feature = "v8")]
+pub(crate) fn sync_global_privacy_control(profile: FingerprintProfile) {
+    lumen_js::set_global_privacy_control(lumen_network::sends_global_privacy_control(
+        profile.to_http_profile(),
+    ));
+}
+
+/// No-op without the `v8` feature: there is no JS side to keep in sync.
+#[cfg(not(feature = "v8"))]
+pub(crate) fn sync_global_privacy_control(_profile: FingerprintProfile) {}
 
 /// Construct and install a fresh V8 runtime against `doc` for `page_url`
 /// (DEVX-5 slice 2). Mirrors `crates/shell/src/main.rs`'s per-navigate

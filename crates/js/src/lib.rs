@@ -160,6 +160,7 @@ pub use dom::{FullscreenRequest, HistoryUrlUpdate, NavigateRequest, PrintRequest
 pub use v8_runtime::DomTouched;
 pub use view_transitions::ViewTransitionEvent;
 pub use navigator_bindings::{NavigatorProfile, set_navigator_profile};
+pub use surface_api::{global_privacy_control_enabled, set_global_privacy_control};
 pub use lumen_core::WebStorage;
 
 /// Compute a deterministic u64 seed from a URL for deterministic render mode (8F).

@@ -17,6 +17,9 @@
 //!    `navigator.product`, `navigator.productSub`).
 //! 2. Freezes `navigator.cookieEnabled = true` and
 //!    `navigator.doNotTrack = null` (Chrome-matching).
+//! 3. Defines `navigator.globalPrivacyControl = true` when — and only when —
+//!    the network layer sends `Sec-GPC: 1` (BUG-397, see
+//!    [`set_global_privacy_control`]).
 //!
 //! Must be called **after** `v8_runtime.rs::install_dom` and `install_navigator_bindings`.
 
@@ -29,10 +32,78 @@
 /// `v8_runtime.rs::install_dom`.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_surface_api_protection_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
+    install_surface_api_protection_v8_with(rt, global_privacy_control_enabled())
+}
+
+/// Install the surface-API shim with an explicit Global Privacy Control state,
+/// ignoring the process-global flag. Used by tests that want full control
+/// without racing other tests over the global slot (same split as
+/// `navigator_bindings::install_navigator_bindings_v8_with`).
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_surface_api_protection_v8_with(
+    rt: &crate::v8_runtime::V8JsRuntime,
+    global_privacy_control: bool,
+) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
     rt.eval(SURFACE_API_SHIM)?;
+    if global_privacy_control {
+        rt.eval(GPC_SHIM)?;
+    }
     Ok(())
 }
+
+/// Process-global Global Privacy Control state (BUG-397).
+///
+/// `false` (the default) means the page must not see the property at all —
+/// see [`set_global_privacy_control`] for why absence, not `false`.
+static GPC_ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Enable or disable the Global Privacy Control signal on the JS side
+/// (`navigator.globalPrivacyControl`, <https://www.w3.org/TR/gpc/>).
+///
+/// The shell calls this once at startup with
+/// `lumen_network::sends_global_privacy_control(http_profile)` — the network
+/// predicate is the single source of truth, so the JS property and the
+/// `Sec-GPC: 1` header can never disagree (a page seeing one without the other
+/// would have a fingerprinting signal, BUG-397).
+///
+/// When disabled the property is **absent**, not `false`: the profiles that do
+/// not send the header impersonate Chrome/Edge/Safari, which have no native GPC
+/// at all, and `'globalPrivacyControl' in navigator` is exactly the check a
+/// fingerprinting script runs (the same absent-vs-`undefined` distinction as
+/// BUG-379). A supporting-but-off state has no user today: the signal is
+/// chosen by picking the `strict` / `lumen` HTTP profile, not by a per-site
+/// toggle.
+///
+/// Must be called before any page loads; later calls affect only JS contexts
+/// created afterwards.
+pub fn set_global_privacy_control(enabled: bool) {
+    GPC_ENABLED.store(enabled, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The currently configured Global Privacy Control state (default `false`).
+#[must_use]
+pub fn global_privacy_control_enabled() -> bool {
+    GPC_ENABLED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// `navigator.globalPrivacyControl` — installed only when the signal is on.
+///
+/// W3C GPC defines a read-only boolean on `Navigator`; Lumen has no separate
+/// `WorkerNavigator` interface, so the same `navigator` object serves both.
+#[cfg(feature = "v8-backend")]
+const GPC_SHIM: &str = r#"(function() {
+  if (typeof navigator === 'undefined') { return; }
+  // Global Privacy Control (https://www.w3.org/TR/gpc/): `true` means the
+  // browser is sending `Sec-GPC: 1` on every request.  Read-only per spec —
+  // a page must not be able to flip the user's opt-out.
+  try {
+    Object.defineProperty(navigator, 'globalPrivacyControl', {
+      value: true, writable: false, configurable: true, enumerable: true
+    });
+  } catch(_) {}
+})();
+"#;
 
 #[cfg(feature = "v8-backend")]
 const SURFACE_API_SHIM: &str = r#"(function() {
@@ -345,10 +416,54 @@ mod tests {
         });
     }
 
+    /// Install with an explicit GPC state, bypassing the process-global flag so
+    /// the two tests below cannot race each other.
+    fn with_gpc(enabled: bool, f: impl FnOnce(&V8JsRuntime)) {
+        let rt = V8JsRuntime::new().unwrap();
+        rt.eval("var navigator = { language: 'en-US' };").unwrap();
+        super::install_surface_api_protection_v8_with(&rt, enabled).unwrap();
+        f(&rt);
+    }
+
+    /// BUG-397: with the signal on the page sees a read-only `true`.
+    #[test]
+    fn global_privacy_control_is_true_when_enabled() {
+        with_gpc(true, |rt| {
+            assert_eq!(rt.eval("navigator.globalPrivacyControl").unwrap(), JsValue::Bool(true));
+            // Read-only per spec — a page must not be able to clear the opt-out.
+            rt.eval("try { navigator.globalPrivacyControl = false; } catch(_) {}").unwrap();
+            assert_eq!(
+                rt.eval("navigator.globalPrivacyControl").unwrap(),
+                JsValue::Bool(true),
+                "globalPrivacyControl must not be writable"
+            );
+        });
+    }
+
+    /// With the signal off the property must be *absent*, not `false`: the
+    /// profiles that do not send `Sec-GPC` impersonate browsers without native
+    /// GPC, and `in` / `getOwnPropertyNames` see the difference (BUG-379 class).
+    #[test]
+    fn global_privacy_control_is_absent_when_disabled() {
+        with_gpc(false, |rt| {
+            let v = rt
+                .eval(
+                    "!('globalPrivacyControl' in navigator) \
+                     && Object.getOwnPropertyNames(navigator).indexOf('globalPrivacyControl') === -1",
+                )
+                .unwrap();
+            assert_eq!(v, JsValue::Bool(true), "globalPrivacyControl must be absent when GPC is off");
+        });
+    }
+
     #[test]
     fn install_succeeds_without_navigator() {
         let rt = V8JsRuntime::new().unwrap();
         super::install_surface_api_protection_v8(&rt)
             .expect("must not crash when navigator is absent");
+        // The GPC shim runs in the same navigator-less context (worker-style
+        // globals) and must be just as tolerant.
+        super::install_surface_api_protection_v8_with(&rt, true)
+            .expect("GPC shim must not crash when navigator is absent");
     }
 }

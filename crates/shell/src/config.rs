@@ -262,9 +262,18 @@ impl FingerprintProfile {
 
     /// Install the navigator/screen/timezone values into the process-global JS
     /// profile. Must be called once at startup, before any page loads.
+    ///
+    /// Also mirrors the network layer's Global Privacy Control decision onto the
+    /// JS side (BUG-397): `navigator.globalPrivacyControl` is derived from the
+    /// same `http_profile` predicate that decides whether `Sec-GPC: 1` goes out,
+    /// so the two can never contradict each other. There is no separate toggle —
+    /// GPC is on exactly for `http_profile = "strict" | "lumen"`.
     #[cfg(feature = "v8")]
     pub fn install_navigator(&self) {
         lumen_js::set_navigator_profile(self.navigator_profile());
+        lumen_js::set_global_privacy_control(lumen_network::sends_global_privacy_control(
+            self.http_profile,
+        ));
     }
 
     /// Stamp the HTTP and TLS fingerprint onto an [`HttpClient`] builder.
