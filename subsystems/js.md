@@ -52,6 +52,23 @@ the time — read dates.
   a non-writable own property (the BUG-366 precedent); the spec's
   `Navigator.prototype` accessor is impossible while there is no `Navigator`
   interface at all ([BUG-624](../bugs/BUG-624-OPEN.md)).
+- **Sensors are real `EventTarget`s, and the two abstract bases are not
+  constructible (BUG-394, P3, 2026-08-11).** `generic_sensor.rs` used to define
+  a private `_SensorEventTarget` mixin "to avoid depending on a global
+  `EventTarget`" — a QuickJS-era motivation that outlived the engine it was
+  written for. `Sensor.prototype` now descends from the shim's own
+  `EventTarget`, so `once`/`capture` and the `on<type>` step come from the same
+  implementation as every other event source; the module refuses to install at
+  all without global `Event`/`EventTarget` (the `permissions.rs` precedent —
+  install order guarantees them on a page, since `install_dom` evaluates
+  `WEB_API_SHIM` before every `install_v8!` module). `new Sensor()` and
+  `new OrientationSensor()` throw `TypeError: Illegal constructor` on a
+  `new.target` check; subclasses enter the same body through
+  `Sensor.call(this, options)`, where `new.target` is undefined. Inheriting the
+  real base also meant deleting `start()`'s hand-written `onactivate` call —
+  `dispatchEvent` performs that step itself, so keeping both would have
+  delivered `activate` twice. `SensorErrorEvent` is still not an `Event`
+  ([BUG-761](../bugs/BUG-761-OPEN.md)).
 - **`queryLocalFonts()` exists, and the 2020-draft `navigator.fonts` is gone
   (BUG-385, P3, 2026-08-10).** `local_font_access.rs` implemented a WICG draft that
   was dropped before the API shipped: `navigator.fonts.query()` — a surface no
