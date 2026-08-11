@@ -5,11 +5,22 @@
 //! и клиент в течение `max-age` секунд обязан обращаться к этому хосту
 //! только по HTTPS (HTTP-запросы переадресуются на HTTPS).
 //!
-//! Phase 0: storage layer + парсер. Реальный upgrade-to-HTTPS в network —
-//! отдельная задача (hook в `HttpClient::parse_url` для `Url::scheme`).
+//! Слои: этот модуль — persistence (`HstsStore`, SQLite) + парсер заголовка;
+//! `lumen-network::hsts` — клиентская логика (pre-request upgrade http→https,
+//! разбор `Strict-Transport-Security` из ответа). Связывает их trait
+//! [`HstsEnforcement`] (`lumen-core::ext`), который `HstsStore` реализует, а
+//! `HttpClient::with_hsts` принимает.
+//!
+//! Точка подключения к реальному браузеру — [`shared_store`]: один store на
+//! процесс, который шелл (`config::apply_http`) и драйвер (`build_http_client`)
+//! ставят в каждый продакшн-`HttpClient`. До [BUG-402] такой точки не было и
+//! весь модуль исполнялся только в тестах.
+//!
+//! [BUG-402]: https://github.com/LearnJava/lumen-browser/blob/main/bugs/BUG-402-FIXED.md
 
-use std::path::Path;
-use std::sync::Mutex;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use lumen_core::ext::HstsEnforcement;
 use lumen_core::{Error, Result};
@@ -280,6 +291,103 @@ impl HstsEnforcement for HstsStore {
     }
 }
 
+// ── Общий store процесса (точка подключения к браузеру, BUG-402) ─────────────
+
+/// Портативный корень пользовательских данных браузера — `<exe_dir>/data`.
+///
+/// Дублирует правило `shell::adblock::browser_data_dir` (решение пользователя
+/// 2026-06-16: все данные лежат в папке браузера, не в `%APPDATA%`/XDG), потому
+/// что `lumen-storage` лежит ниже шелла в графе зависимостей и позвать его
+/// хелпер не может. Тот же приём уже применён в
+/// `lumen-paint::backend_probe` и `lumen-js::filesystem_access`.
+fn browser_data_dir() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|p| p.join("data")))
+        .unwrap_or_else(|| PathBuf::from("data"))
+}
+
+/// Путь к persistent-базе HSTS: `<exe_dir>/data/hsts/hsts.db`.
+#[must_use]
+pub fn default_db_path() -> PathBuf {
+    browser_data_dir().join("hsts").join("hsts.db")
+}
+
+/// Текущее время в Unix-секундах (0, если системные часы до эпохи).
+fn now_unix() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Процесс-глобальный HSTS-store, общий для всех `HttpClient` процесса.
+///
+/// Инициализируется лениво при первом обращении; режим (`private`) фиксируется
+/// первым вызовом на всё время жизни процесса — приватность выбирается на
+/// старте и не меняется.
+static SHARED: OnceLock<Option<Arc<HstsStore>>> = OnceLock::new();
+
+/// Общий на процесс HSTS-store для подключения в `HttpClient::with_hsts`.
+///
+/// `private = true` (Tor / `no_persistent_state`) даёт in-memory store: HSTS,
+/// выученный за сессию, действует до выхода и не пишется на диск. Preload-лист
+/// (`lumen_network::get_preload_list`) работает в обоих режимах — он
+/// консультируется внутри `maybe_upgrade_url_to_https`, а та вызывается только
+/// когда store подключён, поэтому «нет store» = «нет и preload-защиты».
+///
+/// `None` означает, что HSTS отключён (не удалось открыть даже in-memory базу);
+/// запросы тогда ведут себя как до [BUG-402] — без апгрейда http→https.
+///
+/// [BUG-402]: https://github.com/LearnJava/lumen-browser/blob/main/bugs/BUG-402-FIXED.md
+#[must_use]
+pub fn shared_store(private: bool) -> Option<Arc<dyn HstsEnforcement>> {
+    SHARED
+        .get_or_init(|| open_shared_store(private, &default_db_path()))
+        .clone()
+        .map(|s| s as Arc<dyn HstsEnforcement>)
+}
+
+/// Открыть store для запрошенного режима приватности (без глобального
+/// состояния). Отделено от [`shared_store`], чтобы поведение можно было
+/// проверить юнит-тестом, не замораживая процесс-глобальный `OnceLock`.
+///
+/// Деградация при ошибке диска — in-memory, а не «выключить»: preload-лист и
+/// внутрисессионный HSTS ценнее, чем persistence, а тихо остаться без защиты
+/// от downgrade-атаки — ровно тот дефект, который закрывает BUG-402.
+/// Просроченные записи вычищаются здесь же (`purge_expired`) — единственная
+/// точка, где store открывается, значит и естественная точка GC.
+fn open_shared_store(private: bool, path: &Path) -> Option<Arc<HstsStore>> {
+    let store = if private {
+        HstsStore::open_in_memory().ok()
+    } else {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match HstsStore::open(path) {
+            Ok(s) => Some(s),
+            Err(e) => {
+                eprintln!(
+                    "hsts: cannot open {} ({e}); falling back to in-memory HSTS state",
+                    path.display()
+                );
+                HstsStore::open_in_memory().ok()
+            }
+        }
+    };
+    let store = match store {
+        Some(s) => s,
+        None => {
+            eprintln!("hsts: no store available; HTTPS upgrade enforcement disabled");
+            return None;
+        }
+    };
+    if let Err(e) = store.purge_expired(now_unix()) {
+        eprintln!("hsts: purge_expired failed: {e}; continuing");
+    }
+    Some(Arc::new(store))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -386,5 +494,75 @@ mod tests {
         s.upsert("a.com", 3600, false, false, 100).unwrap();
         s.upsert("b.com", 3600, false, false, 100).unwrap();
         assert_eq!(s.count().unwrap(), 2);
+    }
+
+    // ── shared_store / open_shared_store (BUG-402) ───────────────────────────
+
+    #[test]
+    fn open_shared_store_private_is_in_memory() {
+        // Приватный режим не должен трогать диск: путь заведомо несуществующий,
+        // а store всё равно открывается.
+        let path = PathBuf::from("/definitely/not/a/real/dir/hsts.db");
+        let s = open_shared_store(true, &path).expect("in-memory store opens");
+        assert!(!path.exists(), "private mode must not create the DB file");
+        s.upsert("example.com", 3600, false, false, 100).unwrap();
+        assert!(s.is_https_only("example.com", 200).unwrap());
+    }
+
+    #[test]
+    fn open_shared_store_persists_and_purges() {
+        let dir = std::env::temp_dir().join(format!(
+            "lumen_test_hsts_{}_{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let path = dir.join("hsts.db");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // Первое открытие создаёт директорию + файл и пишет две записи:
+        // просроченную к «сейчас» и живую до 2100 года.
+        {
+            let s = open_shared_store(false, &path).expect("disk store opens");
+            assert!(path.exists(), "disk mode must create the DB file");
+            s.upsert("stale.example", 1, false, false, 100).unwrap();
+            s.upsert("live.example", 4_000_000_000, false, false, 100)
+                .unwrap();
+            assert_eq!(s.count().unwrap(), 2);
+        }
+
+        // Второе открытие видит записи (persistence) и вычищает просроченную
+        // (purge_expired на старте — BUG-402 п.3: у метода не было вызывающей
+        // стороны вовсе).
+        let s = open_shared_store(false, &path).expect("disk store reopens");
+        assert!(s.get("stale.example").unwrap().is_none(), "expired entry purged on open");
+        assert!(s.get("live.example").unwrap().is_some(), "live entry survives");
+
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn open_shared_store_falls_back_to_memory_on_disk_error() {
+        // Путь, который заведомо нельзя открыть как файл БД (родитель — файл,
+        // а не директория). Store всё равно должен получиться: preload-лист и
+        // внутрисессионный HSTS важнее persistence.
+        let blocker = std::env::temp_dir().join(format!(
+            "lumen_test_hsts_blocker_{}_{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::write(&blocker, b"not a directory").unwrap();
+        let path = blocker.join("hsts.db");
+        let s = open_shared_store(false, &path);
+        let _ = std::fs::remove_file(&blocker);
+        let s = s.expect("falls back to in-memory instead of disabling HSTS");
+        s.upsert("example.com", 3600, false, false, 100).unwrap();
+        assert!(s.is_https_only("example.com", 200).unwrap());
+    }
+
+    #[test]
+    fn default_db_path_lives_in_browser_data_dir() {
+        let p = default_db_path();
+        assert!(p.ends_with(PathBuf::from("data").join("hsts").join("hsts.db")), "{p:?}");
     }
 }

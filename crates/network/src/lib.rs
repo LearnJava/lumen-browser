@@ -2965,6 +2965,20 @@ impl HttpClient {
         self
     }
 
+    /// Подключён ли HSTS-store к этому клиенту.
+    ///
+    /// Интроспекция для фабрик клиентов в shell/driver: она позволяет тесту
+    /// утверждать «эта фабрика зовёт [`with_hsts`](Self::with_hsts)», а не
+    /// только «HSTS работает, если его подключить». До [BUG-402] вся
+    /// HSTS-реализация была протестирована, но не вызывалась ни из одного
+    /// продакшн-пути — наблюдать этот разрыв было нечем.
+    ///
+    /// [BUG-402]: https://github.com/LearnJava/lumen-browser/blob/main/bugs/BUG-402-FIXED.md
+    #[must_use]
+    pub fn has_hsts(&self) -> bool {
+        self.hsts.is_some()
+    }
+
     /// Подключить credential-провайдер для HTTP authentication (RFC 7235 /
     /// 7616 / 7617). По умолчанию — нет: запросы уходят без `Authorization`
     /// header, и 401 пробрасывается как `Err`. С подключённым провайдером:

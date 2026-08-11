@@ -944,6 +944,7 @@ impl BrowserSession for WinitSession {
                 .map_err(|e| Error::InvalidUrl(format!("{url}: {e}")))?;
             let sink = std::sync::Arc::new(lumen_core::ext::NoopEventSink);
             // 9F.2: apply the per-context fingerprint profile to outgoing requests.
+            let profile = self.context.fingerprint_profile();
             let client = lumen_network::HttpClient::new()
                 .with_sink(sink)
                 .with_content_decoder(std::sync::Arc::new(
@@ -955,7 +956,9 @@ impl BrowserSession for WinitSession {
                 .with_content_decoder(std::sync::Arc::new(
                     lumen_network::DeflateContentDecoder::new(),
                 ))
-                .with_fingerprint_profile(self.context.fingerprint_profile().to_http_profile());
+                .with_fingerprint_profile(profile.to_http_profile());
+            // BUG-402: HSTS-store — общий на процесс, как и в шелле.
+            let client = crate::types::with_shared_hsts(client, profile);
             let bytes = client.fetch(&lumen_url)?;
             return self.run_pipeline(&bytes, Some("text/html"), url.to_owned());
         }

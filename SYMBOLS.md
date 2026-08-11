@@ -36,10 +36,10 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/a11y/src/platform/windows.rs:75` **fn** `last_tree` — Return the last-received accessibility tree, if any
 `crates/engine/a11y/src/platform/windows.rs:80` **fn** `focused_node` — Return the currently focused node, if any
 `crates/engine/a11y/src/platform/windows.rs:238` **fn** `ax_role_to_msaa` — Map a Lumen `AXRole` to a Windows MSAA `ROLE_SYSTEM_*` constant
-`crates/engine/a11y/src/roles.rs:14` **enum** `AXRole` — All WAI-ARIA 1.2 roles
-`crates/engine/a11y/src/roles.rs:185` **fn** `as_str` — Canonical lowercase WAI-ARIA role string
-`crates/engine/a11y/src/roles.rs:266` **fn** `parse` — Parse a WAI-ARIA role string (case-insensitive)
-`crates/engine/a11y/src/roles.rs:349` **fn** `implicit_role` — Compute the implicit WAI-ARIA role for a DOM node per HTML-AAM §5
+`crates/engine/a11y/src/roles.rs:16` **enum** `AXRole` — All WAI-ARIA 1.2 roles plus the Graphics ARIA Module extension roles
+`crates/engine/a11y/src/roles.rs:195` **fn** `as_str` — Canonical lowercase WAI-ARIA role string
+`crates/engine/a11y/src/roles.rs:279` **fn** `parse` — Parse a WAI-ARIA role string (case-insensitive)
+`crates/engine/a11y/src/roles.rs:365` **fn** `implicit_role` — Compute the implicit WAI-ARIA role for a DOM node per HTML-AAM §5
 
 ## lumen-ai  (11 symbols)
 
@@ -924,13 +924,13 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/driver/src/session.rs:205` **fn** `isolation_context` — Access the per-origin-group isolation context, if this session was
 `crates/driver/src/session.rs:210` **fn** `isolation_context_mut` — Mutable access to the per-origin-group isolation context
 `crates/driver/src/session.rs:220` **fn** `set_pending_js_tasks` — Установить количество pending JS microtask/callback для условия `JsIdle`
-`crates/driver/src/session.rs:251` **fn** `active_property_trees` — Active property trees snapshot from the compositor (PH1-7)
-`crates/driver/src/session.rs:263` **fn** `scroll_page_by` — Off-main-thread page scroll (PH1-7)
-`crates/driver/src/session.rs:283` **fn** `navigate_html` — Загрузить HTML-строку без навигации по URL. Используется для тестов
-`crates/driver/src/session.rs:596` **fn** `screenshot_cpu_rgba` — Детерминированный CPU-рендер текущей страницы в RGBA8 (tiny-skia)
-`crates/driver/src/session.rs:626` **fn** `screenshot_cpu_png` — Детерминированный CPU-рендер текущей страницы в PNG (tiny-skia)
-`crates/driver/src/session.rs:640` **fn** `display_list_for_compare` — Строит [`lumen_paint::DisplayList`] из текущего состояния страницы
-`crates/driver/src/session.rs:2022` **fn** `computed_style_json` — Возвращает полный набор computed-style свойств первого элемента,
+`crates/driver/src/session.rs:254` **fn** `active_property_trees` — Active property trees snapshot from the compositor (PH1-7)
+`crates/driver/src/session.rs:266` **fn** `scroll_page_by` — Off-main-thread page scroll (PH1-7)
+`crates/driver/src/session.rs:286` **fn** `navigate_html` — Загрузить HTML-строку без навигации по URL. Используется для тестов
+`crates/driver/src/session.rs:599` **fn** `screenshot_cpu_rgba` — Детерминированный CPU-рендер текущей страницы в RGBA8 (tiny-skia)
+`crates/driver/src/session.rs:629` **fn** `screenshot_cpu_png` — Детерминированный CPU-рендер текущей страницы в PNG (tiny-skia)
+`crates/driver/src/session.rs:643` **fn** `display_list_for_compare` — Строит [`lumen_paint::DisplayList`] из текущего состояния страницы
+`crates/driver/src/session.rs:2025` **fn** `computed_style_json` — Возвращает полный набор computed-style свойств первого элемента,
 `crates/driver/src/types.rs:15` **struct** `NodeRef` — Ссылка на DOM-узел, возвращаемая [`BrowserSession::query`]
 `crates/driver/src/types.rs:30` **enum** `Target` — Цель для команд [`BrowserSession::click`], [`type_text`](BrowserSession::type_text),
 `crates/driver/src/types.rs:41` **struct** `ScrollDelta` — Дельта скролла для [`BrowserSession::scroll`]
@@ -951,8 +951,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/driver/src/types.rs:387` **enum** `AxQuery` — Запрос к accessibility-дереву для [`BrowserSession::query_a11y`] и [`query_a11y_all`](BrowserSession::query_a11y_all)
 `crates/driver/src/types.rs:423` **enum** `FingerprintProfile` — Профиль отпечатка браузера (fingerprint profile) для BrowserSession
 `crates/driver/src/types.rs:445` **fn** `to_http_profile` — Map this session-level profile to the network [`HttpProfile`] that drives
-`crates/driver/src/types.rs:460` **enum** `AutomationCommand` — Command for automation API — sent to shell via IPC channel (SDC-1a)
-`crates/driver/src/types.rs:530` **enum** `AutomationReply` — Reply from automation API — returned from shell after command execution
+`crates/driver/src/types.rs:485` **enum** `AutomationCommand` — Command for automation API — sent to shell via IPC channel (SDC-1a)
+`crates/driver/src/types.rs:555` **enum** `AutomationReply` — Reply from automation API — returned from shell after command execution
 `crates/driver/src/winit_session.rs:66` **struct** `WinitSession` — Оконная сессия браузера
 `crates/driver/src/winit_session.rs:93` **fn** `new` — Создать сессию с viewport 1024×720
 `crates/driver/src/winit_session.rs:108` **fn** `with_viewport` — Создать сессию с заданным размером viewport (логические пиксели)
@@ -2462,7 +2462,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/mcp/src/transport.rs:127` **fn** `push_incoming` — Поставить в очередь входящее JSON сообщение
 `crates/mcp/src/transport.rs:132` **fn** `take_outgoing` — Забрать все исходящие сообщения (очищает буфер)
 
-## lumen-network  (1209 symbols)
+## lumen-network  (1210 symbols)
 
 `crates/network/src/auth.rs:52` **fn** `get`
 `crates/network/src/auth.rs:619` **struct** `StaticCredentialProvider` — Простой credential-провайдер с фиксированной табличкой `(origin, realm) →
@@ -3574,31 +3574,32 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/lib.rs:2937` **fn** `with_h2_pool` — Подключить shared `H2Pool` (RFC 9113 §9.1.1). По умолчанию HTTP/2
 `crates/network/src/lib.rs:2946` **fn** `with_dns_resolver` — Подключить DNS-резолвер. По умолчанию — `SystemDnsResolver` (через
 `crates/network/src/lib.rs:2963` **fn** `with_hsts` — Подключить HSTS-store (RFC 6797). По умолчанию — нет:
-`crates/network/src/lib.rs:2979` **fn** `with_credentials` — Подключить credential-провайдер для HTTP authentication (RFC 7235 /
-`crates/network/src/lib.rs:2990` **fn** `with_tab` — Указать `TabId`, который попадёт в каждое emit-ое событие. В Phase 0
-`crates/network/src/lib.rs:3010` **fn** `with_mixed_content_policy` — Подключить mixed-content policy (W3C Mixed Content §5). По умолчанию
-`crates/network/src/lib.rs:3034` **fn** `with_content_decoder` — Зарегистрировать `ContentDecoder` для одного encoding. Декодер попадает
-`crates/network/src/lib.rs:3048` **fn** `with_http3` — Включить путь диспетчеризации HTTP/3 (QUIC) — RFC 9114 / RFC 7838
-`crates/network/src/lib.rs:3111` **fn** `with_cors_cache` — Запросить только диапазон байт ресурса (RFC 7233). Если сервер
-`crates/network/src/lib.rs:3123` **fn** `with_cookie_jar` — Attach a cookie store. The provider receives `Cookie:` injection
-`crates/network/src/lib.rs:3147` **fn** `with_http_cache` — Подключить HTTP response cache (RFC 7234)
-`crates/network/src/lib.rs:3158` **fn** `with_proxy` — Подключить HTTP прокси (RFC 7230). По умолчанию прокси не подключён — запросы
-`crates/network/src/lib.rs:3171` **fn** `with_socks5_proxy` — Подключить SOCKS5 прокси (RFC 1928) для туннелирования всех TCP-соединений
-`crates/network/src/lib.rs:3182` **fn** `with_fingerprint_profile` — Установить HTTP fingerprinting profile (Standard/Strict/Tor) для Chrome-matching
-`crates/network/src/lib.rs:3190` **fn** `fingerprint_profile` — Получить текущий HTTP fingerprinting profile
-`crates/network/src/lib.rs:3201` **fn** `with_tls_profile` — Override the TLS fingerprint profile independently of the HTTP profile
-`crates/network/src/lib.rs:3207` **fn** `tls_profile` — Получить текущий TLS fingerprinting profile
-`crates/network/src/lib.rs:3241` **fn** `fetch_cors` — CORS-enabled fetch для cross-origin subresource (Fetch §3-§4)
-`crates/network/src/lib.rs:3293` **fn** `fetch_range`
-`crates/network/src/lib.rs:3364` **fn** `fetch_multi_range` — Multi-range запрос (RFC 7233 §4.1). Один request на несколько
-`crates/network/src/lib.rs:3454` **fn** `fetch_subresource` — Загрузить подресурс с проверкой mixed-content по подключённой
-`crates/network/src/lib.rs:3560` **fn** `fetch_conditional` — Perform a **conditional GET** (RFC 7232) and report whether the resource
-`crates/network/src/lib.rs:3619` **enum** `ConditionalFetch` — Outcome of [`HttpClient::fetch_conditional`]
-`crates/network/src/lib.rs:3647` **fn** `fetch_page` — Fetch a top-level page and return the response body together with all
-`crates/network/src/lib.rs:3726` **fn** `fetch_page_streaming` — Как [`HttpClient::fetch_page`], но тело финального 2xx-ответа стримится
-`crates/network/src/lib.rs:4386` **struct** `InMemoryFetchInterceptor` — In-memory реализация `FetchInterceptor` для тестов без SQLite
-`crates/network/src/lib.rs:4392` **fn** `new`
-`crates/network/src/lib.rs:4399` **fn** `insert` — Добавить запись: ответ для (origin, url) берётся из кэша без сети
+`crates/network/src/lib.rs:2978` **fn** `has_hsts` — Подключён ли HSTS-store к этому клиенту
+`crates/network/src/lib.rs:2993` **fn** `with_credentials` — Подключить credential-провайдер для HTTP authentication (RFC 7235 /
+`crates/network/src/lib.rs:3004` **fn** `with_tab` — Указать `TabId`, который попадёт в каждое emit-ое событие. В Phase 0
+`crates/network/src/lib.rs:3024` **fn** `with_mixed_content_policy` — Подключить mixed-content policy (W3C Mixed Content §5). По умолчанию
+`crates/network/src/lib.rs:3048` **fn** `with_content_decoder` — Зарегистрировать `ContentDecoder` для одного encoding. Декодер попадает
+`crates/network/src/lib.rs:3062` **fn** `with_http3` — Включить путь диспетчеризации HTTP/3 (QUIC) — RFC 9114 / RFC 7838
+`crates/network/src/lib.rs:3125` **fn** `with_cors_cache` — Запросить только диапазон байт ресурса (RFC 7233). Если сервер
+`crates/network/src/lib.rs:3137` **fn** `with_cookie_jar` — Attach a cookie store. The provider receives `Cookie:` injection
+`crates/network/src/lib.rs:3161` **fn** `with_http_cache` — Подключить HTTP response cache (RFC 7234)
+`crates/network/src/lib.rs:3172` **fn** `with_proxy` — Подключить HTTP прокси (RFC 7230). По умолчанию прокси не подключён — запросы
+`crates/network/src/lib.rs:3185` **fn** `with_socks5_proxy` — Подключить SOCKS5 прокси (RFC 1928) для туннелирования всех TCP-соединений
+`crates/network/src/lib.rs:3196` **fn** `with_fingerprint_profile` — Установить HTTP fingerprinting profile (Standard/Strict/Tor) для Chrome-matching
+`crates/network/src/lib.rs:3204` **fn** `fingerprint_profile` — Получить текущий HTTP fingerprinting profile
+`crates/network/src/lib.rs:3215` **fn** `with_tls_profile` — Override the TLS fingerprint profile independently of the HTTP profile
+`crates/network/src/lib.rs:3221` **fn** `tls_profile` — Получить текущий TLS fingerprinting profile
+`crates/network/src/lib.rs:3255` **fn** `fetch_cors` — CORS-enabled fetch для cross-origin subresource (Fetch §3-§4)
+`crates/network/src/lib.rs:3307` **fn** `fetch_range`
+`crates/network/src/lib.rs:3378` **fn** `fetch_multi_range` — Multi-range запрос (RFC 7233 §4.1). Один request на несколько
+`crates/network/src/lib.rs:3468` **fn** `fetch_subresource` — Загрузить подресурс с проверкой mixed-content по подключённой
+`crates/network/src/lib.rs:3574` **fn** `fetch_conditional` — Perform a **conditional GET** (RFC 7232) and report whether the resource
+`crates/network/src/lib.rs:3633` **enum** `ConditionalFetch` — Outcome of [`HttpClient::fetch_conditional`]
+`crates/network/src/lib.rs:3661` **fn** `fetch_page` — Fetch a top-level page and return the response body together with all
+`crates/network/src/lib.rs:3740` **fn** `fetch_page_streaming` — Как [`HttpClient::fetch_page`], но тело финального 2xx-ответа стримится
+`crates/network/src/lib.rs:4400` **struct** `InMemoryFetchInterceptor` — In-memory реализация `FetchInterceptor` для тестов без SQLite
+`crates/network/src/lib.rs:4406` **fn** `new`
+`crates/network/src/lib.rs:4413` **fn** `insert` — Добавить запись: ответ для (origin, url) берётся из кэша без сети
 `crates/network/src/mixed_content.rs:33` **enum** `RequestDestination` — Назначение подресурса по Fetch spec §3.2.7 «request destination» —
 `crates/network/src/mixed_content.rs:59` **enum** `MixedContentLevel` — Mixed-content уровень для запроса в secure-контексте
 `crates/network/src/mixed_content.rs:75` **fn** `is_strict_blocked` — Должны ли мы блокировать запрос по строгому режиму. По умолчанию
@@ -4169,12 +4170,12 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/config.rs:230` **fn** `effective_tls_profile` — Resolve the effective TLS profile: explicit override, else derived from
 `crates/shell/src/config.rs:242` **fn** `navigator_profile` — Build the JS-side [`lumen_js::NavigatorProfile`] from this config
 `crates/shell/src/config.rs:272` **fn** `install_navigator` — Install the navigator/screen/timezone values into the process-global JS
-`crates/shell/src/config.rs:281` **fn** `apply_http` — Stamp the HTTP and TLS fingerprint onto an [`HttpClient`] builder
-`crates/shell/src/config.rs:344` **fn** `effective_socks5_proxy` — Resolve the effective SOCKS5 proxy: explicit override first, then
-`crates/shell/src/config.rs:367` **fn** `config_path` — Resolve the path to the portable `fingerprint.toml`
-`crates/shell/src/config.rs:376` **fn** `load` — Load and parse the fingerprint profile from the default config path
-`crates/shell/src/config.rs:389` **fn** `set_http3` — Rewrite the `http3` key in the portable `fingerprint.toml`, preserving every
-`crates/shell/src/config.rs:422` **fn** `parse` — Parse a flat `key = value` TOML subset into a [`FingerprintProfile`]
+`crates/shell/src/config.rs:286` **fn** `apply_http` — Stamp the HTTP and TLS fingerprint onto an [`HttpClient`] builder, and
+`crates/shell/src/config.rs:362` **fn** `effective_socks5_proxy` — Resolve the effective SOCKS5 proxy: explicit override first, then
+`crates/shell/src/config.rs:385` **fn** `config_path` — Resolve the path to the portable `fingerprint.toml`
+`crates/shell/src/config.rs:394` **fn** `load` — Load and parse the fingerprint profile from the default config path
+`crates/shell/src/config.rs:407` **fn** `set_http3` — Rewrite the `http3` key in the portable `fingerprint.toml`, preserving every
+`crates/shell/src/config.rs:440` **fn** `parse` — Parse a flat `key = value` TOML subset into a [`FingerprintProfile`]
 `crates/shell/src/deterministic.rs:15` **struct** `DetConfig` — Parsed deterministic-mode configuration from CLI args
 `crates/shell/src/deterministic.rs:27` **fn** `extract_deterministic` — Extract all deterministic-mode flags from CLI args
 `crates/shell/src/devtools/console_panel.rs:49` **enum** `ConsoleLevel` — Severity level of a console message
@@ -5037,7 +5038,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/zoom.rs:48` **fn** `preview_scale` — Preview scale for transform-first zoom (ADR-016 M0.3)
 `crates/shell/src/zoom.rs:64` **fn** `effective_viewport` — Compute the CSS layout viewport size from the physical window size
 
-## lumen-storage  (524 symbols)
+## lumen-storage  (526 symbols)
 
 `crates/storage/src/a11y_prefs.rs:38` **enum** `CursorSize` — Accessibility cursor magnification level
 `crates/storage/src/a11y_prefs.rs:50` **fn** `as_str` — Serialize to the storage string representation
@@ -5229,17 +5230,19 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/history.rs:257` **fn** `delete` — Удалить запись по url. Никаких ошибок, если url не существует
 `crates/storage/src/history.rs:269` **fn** `delete_older_than` — Удалить все записи с `visit_date < before`. Возвращает число
 `crates/storage/src/history.rs:284` **fn** `clear` — Полная очистка истории
-`crates/storage/src/hsts.rs:19` **struct** `HstsEntry`
-`crates/storage/src/hsts.rs:31` **fn** `parse_sts_header` — Парсит Strict-Transport-Security header
-`crates/storage/src/hsts.rs:59` **struct** `HstsStore`
-`crates/storage/src/hsts.rs:70` **fn** `open`
-`crates/storage/src/hsts.rs:76` **fn** `open_in_memory`
-`crates/storage/src/hsts.rs:106` **fn** `upsert` — Записать HSTS entry. `host` — lowercase ASCII hostname (без порта)
-`crates/storage/src/hsts.rs:146` **fn** `is_https_only` — Проверить, должен ли host обрабатываться как HTTPS-only
-`crates/storage/src/hsts.rs:189` **fn** `get`
-`crates/storage/src/hsts.rs:212` **fn** `delete`
-`crates/storage/src/hsts.rs:223` **fn** `purge_expired` — Удалить все просроченные entries (для GC)
-`crates/storage/src/hsts.rs:237` **fn** `count`
+`crates/storage/src/hsts.rs:30` **struct** `HstsEntry`
+`crates/storage/src/hsts.rs:42` **fn** `parse_sts_header` — Парсит Strict-Transport-Security header
+`crates/storage/src/hsts.rs:70` **struct** `HstsStore`
+`crates/storage/src/hsts.rs:81` **fn** `open`
+`crates/storage/src/hsts.rs:87` **fn** `open_in_memory`
+`crates/storage/src/hsts.rs:117` **fn** `upsert` — Записать HSTS entry. `host` — lowercase ASCII hostname (без порта)
+`crates/storage/src/hsts.rs:157` **fn** `is_https_only` — Проверить, должен ли host обрабатываться как HTTPS-only
+`crates/storage/src/hsts.rs:200` **fn** `get`
+`crates/storage/src/hsts.rs:223` **fn** `delete`
+`crates/storage/src/hsts.rs:234` **fn** `purge_expired` — Удалить все просроченные entries (для GC)
+`crates/storage/src/hsts.rs:248` **fn** `count`
+`crates/storage/src/hsts.rs:312` **fn** `default_db_path` — Путь к persistent-базе HSTS: `<exe_dir>/data/hsts/hsts.db`
+`crates/storage/src/hsts.rs:344` **fn** `shared_store` — Общий на процесс HSTS-store для подключения в `HttpClient::with_hsts`
 `crates/storage/src/http_cache.rs:28` **struct** `CacheControl` — Распарсенные директивы Cache-Control. Из RFC 9111 §5.2 берём только
 `crates/storage/src/http_cache.rs:43` **fn** `parse` — Распарсить значение Cache-Control HTTP-заголовка
 `crates/storage/src/http_cache.rs:75` **fn** `is_cacheable` — Можно ли вообще хранить ответ в кеше?
@@ -5565,4 +5568,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 5488 symbols in 24 crates*
+*Total: 5491 symbols in 24 crates*

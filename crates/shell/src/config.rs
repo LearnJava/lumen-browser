@@ -276,12 +276,31 @@ impl FingerprintProfile {
         ));
     }
 
-    /// Stamp the HTTP and TLS fingerprint onto an [`HttpClient`] builder.
+    /// Stamp the HTTP and TLS fingerprint onto an [`HttpClient`] builder, and
+    /// wire the process-wide providers every production client must share:
+    /// HSTS enforcement, DoH resolver, proxies and the HTTP cache.
+    ///
+    /// Every `HttpClient` the shell builds must go through here — a client that
+    /// skips it silently opts out of all of the above (BUG-402).
     #[must_use]
     pub fn apply_http(&self, mut client: HttpClient) -> HttpClient {
         client = client
             .with_fingerprint_profile(self.http_profile)
             .with_tls_profile(self.effective_tls_profile());
+
+        // Приватный режим (Tor / no_persistent_state) для всего, что иначе
+        // легло бы на диск: HSTS-store ниже и HTTP-кэш в конце.
+        let private = self.no_persistent_state || self.http_profile == HttpProfile::TorBrowser;
+
+        // Wire HSTS enforcement (RFC 6797). Без этого http→https upgrade не
+        // выполняется вообще — ни по выученной policy, ни по встроенному
+        // preload-листу, — и downgrade-атака (MITM понижает https до http)
+        // работает против браузера в полный рост (BUG-402). Store общий на
+        // процесс: одна политика для навигации, subresource-fetch, загрузок и
+        // медиа, иначе один и тот же хост апгрейдился бы через раз.
+        if let Some(hsts) = lumen_storage::shared_hsts_store(private) {
+            client = client.with_hsts(hsts);
+        }
 
         // Opt into the HTTP/3 (QUIC) dispatch path. Off by default — the
         // absent handle keeps the fetch path from touching the Alt-Svc cache
@@ -328,7 +347,6 @@ impl FingerprintProfile {
         // navigation are served from cache (or revalidated with 304) on the next
         // — including repeat visits to the same site. Tor / private sessions get
         // an in-memory cache that never persists to disk.
-        let private = self.no_persistent_state || self.http_profile == HttpProfile::TorBrowser;
         if let Some(cache) = shared_http_cache(private) {
             client = client.with_http_cache(cache);
         }
@@ -655,6 +673,26 @@ mod tests {
         // but it is the in-memory variant — nothing reaches disk.
         let cache = build_http_cache(true);
         assert!(cache.is_some(), "private session should still cache in RAM");
+    }
+
+    #[test]
+    fn apply_http_wires_hsts() {
+        // BUG-402: HSTS был полностью реализован и протестирован, но
+        // `with_hsts` не звался ни из одной продакшн-фабрики — тест на сам
+        // механизм этого не ловил в принципе. Здесь проверяется именно
+        // проводка: клиент, собранный шелловской фабрикой, несёт store.
+        //
+        // Профиль — TorBrowser: он даёт `private = true`, поэтому и HSTS, и
+        // HTTP-кэш процесса замораживаются в in-memory варианте и тест ничего
+        // не пишет на диск. Единственный тест крейта, зовущий `apply_http`.
+        let p = FingerprintProfile {
+            http_profile: HttpProfile::TorBrowser,
+            ..FingerprintProfile::default()
+        };
+        assert!(
+            p.apply_http(HttpClient::new()).has_hsts(),
+            "каждый продакшн-HttpClient шелла обязан нести HSTS-store"
+        );
     }
 
     #[test]
