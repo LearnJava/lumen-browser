@@ -9682,6 +9682,17 @@ var window = {
                 arr = arr.slice();
                 for (var i = 0; i < arr.length; i++) { try { arr[i].call(window, evt); } catch(e) {} }
             }
+            // BUG-392: the `on<type>` IDL attribute fires after the explicit
+            // listeners, same ordering as the 'load'/'error' branches above and
+            // as `_lumen_dispatch` does for elements. Generic by design: every
+            // Window event handler attribute declared as a plain nullable
+            // property (`onpopstate`, `ongamepadconnected`, …) is reached this
+            // way, so a new one needs no dispatch-side change. No double-fire:
+            // `load`/`error` are handled by the branches above, and the engine's
+            // own delivery of `hashchange`/`popstate`/`message` calls the
+            // handler directly instead of going through `dispatchEvent`.
+            var onFn = window['on' + evt.type];
+            if (typeof onFn === 'function') { try { onFn.call(window, evt); } catch(e) {} }
         }
         return !evt.defaultPrevented;
     },
@@ -32493,6 +32504,41 @@ mod tests {
                        && typeof window.PromiseRejectionEvent === 'function' \
                        && ('onunhandledrejection' in window) && ('onrejectionhandled' in window) \
                        && window.onunhandledrejection === null",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// BUG-392: on a page where nothing is connected, `getGamepads()` must
+        /// report an empty list and the two Window event handler IDL attributes
+        /// must already exist (`'onX' in window`).
+        #[test]
+        fn gamepad_surface_clean_without_device() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "navigator.getGamepads().length === 0 \
+                     && ('ongamepadconnected' in window) && ('ongamepaddisconnected' in window) \
+                     && window.ongamepadconnected === null",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// BUG-392: `window.dispatchEvent` must invoke the `on<type>` IDL
+        /// attribute for a generic event type, not only for `load`/`error` —
+        /// otherwise `window.ongamepadconnected = fn` is stored where no
+        /// dispatch path ever looks (same class of defect as BUG-390).
+        #[test]
+        fn window_on_handler_fires_for_generic_event_type() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var seen = []; \
+                     window.addEventListener('gamepadconnected', function(e) { seen.push('listener:' + e.gamepad.index); }); \
+                     window.ongamepadconnected = function(e) { seen.push('onhandler:' + e.gamepad.index); }; \
+                     _lumen_gamepad_connect(3, 'Pad', 'standard'); \
+                     seen.join(',') === 'listener:3,onhandler:3' && navigator.getGamepads().length === 4",
                 )
                 .unwrap();
             assert_eq!(r, lumen_core::JsValue::Bool(true));

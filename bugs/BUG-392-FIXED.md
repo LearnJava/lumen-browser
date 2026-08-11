@@ -1,6 +1,6 @@
 # BUG-392 — Gamepad API нарушает спеку: `getGamepads()` всегда 4 слота вместо 0, `onX`-обработчики на `Window` отсутствуют
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-11 (P3, ветка `p3-bug-392`)
 **Компонент:** js (`crates/js/src/gamepad.rs:112` — `_gamepads` инициализация,
 `:118-124` — `navigator.getGamepads`, `:147-151` — экспорт глобалов,
 отсутствующие `ongamepadconnected`/`ongamepaddisconnected`)
@@ -71,6 +71,41 @@ event-handler-IDL-атрибутов (не проверялось в рамка�
 
 Регрессия без WPT: на пустой странице `navigator.getGamepads().length === 0`
 и `'ongamepadconnected' in window === true` без подключения устройства.
+
+## Что сделано (2026-08-11)
+
+1. `gamepad.rs`: `_gamepads` теперь `[]`; `_lumen_gamepad_connect` доращивает
+   список до `index + 1` (`while (_gamepads.length <= i) _gamepads.push(null)`),
+   `_lumen_gamepad_disconnect` гасит слот и снимает `connected`, но список НЕ
+   укорачивает (спека §5.1: длина растёт до наивысшего использованного индекса
+   и не сжимается). Без железа список остаётся пустым — `getGamepads()` → `[]`.
+2. `gamepad.rs`: добавлены `window.ongamepadconnected`/`ongamepaddisconnected`
+   как обычные nullable-свойства — та же форма, в которой основной шим объявляет
+   `window.onpopstate`/`onhashchange`.
+3. **Второй, не названный в заявке дефект — иначе п.2 был бы мёртвым кодом:**
+   `window.dispatchEvent` (`dom.rs`, ветка `else`) вызывал только слушателей из
+   `_other_win_listeners[type]` и НЕ смотрел на `window['on' + type]` —
+   выделенные вызовы `on`-обработчика были только в ветках `load` и `error`.
+   То есть присвоение `window.ongamepadconnected = fn` легло бы туда, куда
+   диспатч не смотрит (класс BUG-390). Ветка `else` теперь общая: обработчик
+   вызывается после явных слушателей, как в ветках `load`/`error` и в
+   `_lumen_dispatch` для элементов. Двойного срабатывания нет — `load`/`error`
+   обслужены ветками выше, а собственная доставка `hashchange`/`popstate`/
+   `message` вызывает обработчик напрямую, минуя `dispatchEvent`. Побочно это
+   чинит и `window.onscroll` (`_lumen_fire_window_scroll_event` шёл ровно в эту
+   же ветку).
+
+Тесты: `gamepad::tests::get_gamepads_empty_until_connect`,
+`get_gamepads_grows_to_connected_index`,
+`window_gamepad_event_handler_attributes_exist`, плюс два теста на полном
+рантайме (`v8_runtime_with_dom`) —
+`dom::tests::v8_event_classes::gamepad_surface_clean_without_device` (критерий
+регрессии из этой заявки один-в-один) и
+`window_on_handler_fires_for_generic_event_type` (порядок «слушатель →
+`on`-обработчик» + рост списка до `index + 1`).
+
+Заявка называла причиной только п.1 и п.2; п.3 — то, из-за чего п.2 сам по себе
+ничего бы не дал.
 
 ## Связанные
 
