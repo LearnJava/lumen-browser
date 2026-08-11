@@ -1,6 +1,6 @@
 # BUG-395 — `getCurrentPosition`/`watchPosition` никогда не бросают `TypeError` на отсутствующий/невалидный success-колбэк
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-11
 **Компонент:** js (`crates/js/src/geolocation.rs:128-155` — `GEO_SHIM`,
 функции `getCurrentPosition`/`watchPosition`)
 **Найден:** P2, WPT-VENDOR-geolocation (2026-07-28), статический разбор
@@ -83,8 +83,50 @@ stub") реализовал только happy-path callback-инвокацию 
 `TypeError`, `navigator.geolocation.clearWatch(NaN)` по-прежнему не
 бросает.
 
+## Исправление (P3, 2026-08-11)
+
+В `GEO_SHIM` добавлена функция `_checkArgs(name, arguments)`, вызываемая
+первой строкой `getCurrentPosition`/`watchPosition` — то есть до любого
+наблюдаемого эффекта (в `watchPosition` — до `_nextId++`, так что
+отклонённый вызов не съедает id watch'а). Проверяются все три аргумента
+в порядке WebIDL-конверсии:
+
+1. `arguments.length < 1` → `TypeError` (обязательный аргумент);
+2. `typeof args[0] !== 'function'` → `TypeError`. Тип callback function
+   принимает только вызываемое, поэтому legacy event-handler объект
+   `{handleEvent}` отсекается тем же условием — отдельной ветки не надо;
+3. `errorCallback` (`PositionErrorCallback?` со значением по умолчанию
+   `null`): `undefined`/`null`/функция — ок, всё остальное `TypeError`;
+4. `options` (словарь `PositionOptions`): `undefined`/`null`/Object —
+   ок (функция тоже Object), примитив → `TypeError`. Члены словаря
+   намеренно не типизируются — вендоренный `PositionOptions.https.html`
+   явно требует «No exception expected» на `enableHighAccuracy: 'boom'`.
+
+Третий аргумент в заявке не назван, но `assert_throws_js` на него есть в
+обоих названных тестах (`(()=>{}, ()=>{}, 4)`), поэтому без него они всё
+равно остались бы красными.
+
+Побочный эффект правки: после валидации `success` гарантированно
+функция, так что защита `if (typeof success === 'function')` в отложенных
+колбэках обоих методов снята как мёртвая (у `error` она осталась —
+`null`/`undefined` там законны).
+
+Регрессия закрыта 4 юнит-тестами (`cargo test -p lumen-js --features
+v8-backend geolocation`, 21/21): `callback_webidl_type_errors` (все 8
+форм × 2 метода × оба режима `FakeCoords`),
+`valid_callback_forms_do_not_throw`, `clear_watch_never_throws_on_invalid_id`
+(все id из `clearWatch_TypeError.https.html`),
+`rejected_watch_does_not_consume_id`. Собственные тесты модуля заглушают
+`navigator`, поэтому дополнительно прогнана живая проба
+`--mcp-live-port`+`eval` против реального `install_dom` (страница со
+`<script>`: на `about:blank` JS-контекста нет) — 25/25 утверждений верны.
+
 ## Связанные
 
+* [BUG-762](BUG-762-OPEN.md) — `PositionOptions` (`timeout`/`maximumAge`/
+  `enableHighAccuracy`) шимом не читается вовсе, ветки `TIMEOUT` нет;
+  найдено при этом фиксе, тип третьего аргумента теперь проверяется, но
+  его содержимое по-прежнему игнорируется.
 * Категория `geolocation` — скоуп ⬜ (кандидат, не аппаратный 🚫-класс),
   первая находка не от пробы "вне-скоуп API", а от чтения кода
   in-scope стаба.
