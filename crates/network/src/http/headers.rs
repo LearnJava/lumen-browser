@@ -103,6 +103,35 @@ impl HeaderOrder {
     }
 }
 
+/// Whether the profile emits the Global Privacy Control signal
+/// (`Sec-GPC: 1`, [W3C GPC](https://www.w3.org/TR/gpc/)) on every request.
+///
+/// GPC is a legally binding universal opt-out request (CCPA/CPRA, Colorado and
+/// Connecticut privacy acts recognise `Sec-GPC: 1` as a valid opt-out), so it
+/// is on for the two profiles that state Lumen's own privacy position rather
+/// than impersonate another browser:
+/// - [`HttpProfile::Lumen`] — Lumen's own, unmasked fingerprint,
+/// - [`HttpProfile::Strict`] — the hardened privacy profile.
+///
+/// It is off for the impersonation profiles: real Chrome/Edge/Safari have no
+/// native GPC support, and Firefox ships it off in normal browsing — sending
+/// the header there would be a fingerprint tell, not privacy. `TorBrowser` is
+/// deliberately left off as well: Tor Browser inherits Firefox's
+/// "on in private browsing" default in principle, but that could not be
+/// verified against a real Tor Browser build (BUG-397), and a wrong guess
+/// breaks the byte-exact header match that profile exists for. Verify against
+/// a real build before flipping it.
+///
+/// This predicate is the single source of truth for the signal: the JS side
+/// (`lumen_js::set_global_privacy_control` → `navigator.globalPrivacyControl`)
+/// is wired from the same value by the shell, so a page can never observe the
+/// header and the JS property disagreeing (a contradiction is itself a
+/// fingerprinting vector).
+#[must_use]
+pub fn sends_global_privacy_control(profile: HttpProfile) -> bool {
+    matches!(profile, HttpProfile::Lumen | HttpProfile::Strict)
+}
+
 /// Build HTTP/1.1 request headers for the given profile.
 ///
 /// Each profile constructs headers in a specific order and set matching a real browser.
@@ -141,6 +170,13 @@ pub fn build_request_headers(
 
             // DNT (Do Not Track) — Chrome sends by default
             headers.add("DNT", "1");
+
+            // Sec-GPC (Global Privacy Control) — Strict only; plain Chrome has
+            // no native GPC, so it stays in the privacy-signal group next to
+            // DNT and never appears on the Chrome fingerprint.
+            if sends_global_privacy_control(profile) {
+                headers.add("Sec-GPC", "1");
+            }
 
             // Sec-Fetch-* headers (Chromium 76+) — sent by default in Chrome
             headers.add("Sec-Fetch-Site", "none");
@@ -243,6 +279,12 @@ pub fn build_request_headers(
             }
 
             headers.add("Accept-Language", super::DEFAULT_ACCEPT_LANGUAGE);
+
+            // Sec-GPC (Global Privacy Control) — Lumen's own profile states the
+            // opt-out by default; there is no other browser to stay identical to.
+            if sends_global_privacy_control(profile) {
+                headers.add("Sec-GPC", "1");
+            }
         }
     }
 
@@ -458,6 +500,67 @@ mod tests {
             assert!(pos >= last, "header {name} is out of Firefox order");
             last = pos;
         }
+    }
+
+    /// Every profile: the emitted header must agree with the predicate the JS
+    /// side is wired from — otherwise `navigator.globalPrivacyControl` and
+    /// `Sec-GPC` can drift apart and a page sees a contradictory signal.
+    #[test]
+    fn test_sec_gpc_matches_the_predicate_on_every_profile() {
+        for profile in [
+            HttpProfile::Chrome,
+            HttpProfile::Firefox,
+            HttpProfile::Safari,
+            HttpProfile::Edge,
+            HttpProfile::TorBrowser,
+            HttpProfile::Lumen,
+            HttpProfile::Strict,
+        ] {
+            let headers = build_request_headers("example.com", "gzip", "", profile);
+            assert_eq!(
+                headers.contains("Sec-GPC: 1"),
+                sends_global_privacy_control(profile),
+                "Sec-GPC presence disagrees with sends_global_privacy_control for {profile:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_sec_gpc_sent_only_by_the_privacy_profiles() {
+        // Lumen's own and the hardened profile state the opt-out (BUG-397)...
+        assert!(build_request_headers("example.com", "", "", HttpProfile::Lumen).contains("Sec-GPC: 1"));
+        assert!(build_request_headers("example.com", "", "", HttpProfile::Strict).contains("Sec-GPC: 1"));
+        // ...while every impersonation profile must stay byte-identical to the
+        // browser it imitates, none of which sends GPC natively.
+        for profile in [
+            HttpProfile::Chrome,
+            HttpProfile::Firefox,
+            HttpProfile::Safari,
+            HttpProfile::Edge,
+            HttpProfile::TorBrowser,
+        ] {
+            let headers = build_request_headers("example.com", "", "", profile);
+            assert!(!headers.contains("Sec-GPC"), "{profile:?} must not send Sec-GPC");
+        }
+    }
+
+    #[test]
+    fn test_strict_profile_keeps_chrome_privacy_header_order() {
+        // Sec-GPC joins the privacy-signal group: after DNT, before Sec-Fetch-*.
+        let headers = build_request_headers("example.com", "", "", HttpProfile::Strict);
+        let dnt = headers.find("DNT: 1").expect("Strict keeps Chrome's DNT");
+        let gpc = headers.find("Sec-GPC: 1").expect("Strict sends GPC");
+        let fetch = headers.find("Sec-Fetch-Site").expect("Strict keeps Sec-Fetch-*");
+        assert!(dnt < gpc && gpc < fetch, "Sec-GPC must sit between DNT and Sec-Fetch-*");
+    }
+
+    #[test]
+    fn test_h2_carries_sec_gpc_lowercased() {
+        // H1 and H2 must never diverge on the fingerprint (see the H2 doc comment).
+        let hdrs = h2_fingerprint_headers(HttpProfile::Strict, "gzip");
+        assert!(hdrs.iter().any(|(k, v)| k == "sec-gpc" && v == "1"));
+        let chrome = h2_fingerprint_headers(HttpProfile::Chrome, "gzip");
+        assert!(chrome.iter().all(|(k, _)| k != "sec-gpc"));
     }
 
     #[test]

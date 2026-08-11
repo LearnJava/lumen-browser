@@ -19,7 +19,10 @@ pub mod headers;
 pub mod h2_settings;
 pub mod client_hints;
 
-pub use headers::{HttpProfile, HeaderOrder, build_request_headers, h2_fingerprint_headers};
+pub use headers::{
+    HttpProfile, HeaderOrder, build_request_headers, h2_fingerprint_headers,
+    sends_global_privacy_control,
+};
 pub use h2_settings::{H2Settings, H2StreamPriority};
 pub use client_hints::{ClientHintsProfile, should_send_client_hints, client_hints_headers};
 

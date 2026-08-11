@@ -212,7 +212,10 @@ pub use intercept::{
     pause_for_intercept, remove_global_intercept, resolve_intercept,
 };
 pub use http_cache::{HttpCache, HttpCacheBackend, DiskHttpCache, lumen_cache_dir};
-pub use http::{HttpProfile, H2Settings, H2StreamPriority, ClientHintsProfile, HeaderOrder};
+pub use http::{
+    HttpProfile, H2Settings, H2StreamPriority, ClientHintsProfile, HeaderOrder,
+    sends_global_privacy_control,
+};
 pub use mock::MockTransport;
 pub use tls::{
     CertInfo, TlsProfile, TlsHandshakeInfo, CHROME_130_JA3_SNAPSHOT, CHROME_130_JA4_SNAPSHOT,
