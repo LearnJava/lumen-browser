@@ -307,8 +307,11 @@ fn set_attribute(doc: &mut Document, id: NodeId, name: &str, value: &str) {
 
 // ─── JavaScript Web API shim ──────────────────────────────────────────────────
 
-/// Evaluated once after the `_lumen_*` natives are registered (V8 install
-/// path, `v8_runtime.rs::install_dom`); builds standard Web API globals.
+/// First of the five parts of the page shim — see [`web_api_shim`], which
+/// concatenates them back into the single program that is evaluated once after
+/// the `_lumen_*` natives are registered (V8 install path,
+/// `v8_runtime.rs::install_dom`) and builds the standard Web API globals.
+/// Everything below in this doc comment applies to all five parts.
 ///
 /// Uses top-level `var` so declarations land on the global object under plain
 /// script eval. No IIFE — avoids strict-mode `this`-is-undefined edge cases.
@@ -329,7 +332,7 @@ fn set_attribute(doc: &mut Document, id: NodeId, name: &str, value: &str) {
 /// "character literal"/"unknown prefix" errors anchored deep inside the JS,
 /// not at the actual offending quote (BUG-360 postmortem, 2026-08-09).
 #[cfg(feature = "v8-backend")]
-pub(crate) const WEB_API_SHIM: &str = "
+const WEB_API_SHIM_HEAD: &str = "
 function _lumen_u2n(v) { return v !== undefined ? v : null; }
 
 // BUG-391: DOM LS §4.2.6 / §4.9 — querySelector(All)/matches/closest must throw
@@ -400,7 +403,19 @@ function CustomEvent(type, init) {
 }
 CustomEvent.prototype = Object.create(Event.prototype);
 CustomEvent.prototype.constructor = CustomEvent;
+";
 
+/// `EventTarget` — the first of the two shim blocks shared verbatim between the
+/// page global scope and every `WorkerGlobalScope` (BUG-401).
+///
+/// WHATWG DOM declares `EventTarget` `[Exposed=*]`, so a worker needs the very
+/// same class the page has — and [`PERFORMANCE_SHIM`] below cannot build a real
+/// `Performance : EventTarget` prototype chain without it. Kept as its own
+/// const purely so `worker.rs` can evaluate it; [`web_api_shim`] splices it back
+/// into the page shim at its original position, so nothing about the page
+/// program changes.
+#[cfg(feature = "v8-backend")]
+pub(crate) const EVENT_TARGET_SHIM: &str = "
 // ── EventTarget base class ────────────────────────────────────────────────────
 // WHATWG DOM §2.7 — minimal EventTarget so the many Web API shims that do
 // `class X extends EventTarget` (Document PiP, WebHID, WebUSB, Bluetooth,
@@ -457,7 +472,12 @@ EventTarget.prototype.dispatchEvent = function(event) {
     event.currentTarget = null;
     return !event.defaultPrevented;
 };
+";
 
+/// Page shim source between [`EVENT_TARGET_SHIM`] and [`PERFORMANCE_SHIM`].
+/// Not shared with workers — see [`web_api_shim`].
+#[cfg(feature = "v8-backend")]
+const WEB_API_SHIM_MID: &str = "
 // ── UIEvent / MouseEvent / KeyboardEvent / InputEvent / FocusEvent ────────────
 // ── WheelEvent / PointerEvent / AnimationEvent / TransitionEvent / … ─────────
 // WHATWG UI Events spec — provides typed event classes for instanceof checks
@@ -10365,9 +10385,26 @@ URL.createObjectURL = function(blob) {
     return key;
 };
 URL.revokeObjectURL = function(url) { delete _object_url_store[String(url)]; };
+";
 
+/// `Performance` — the second shim block shared between the page global scope
+/// and every `WorkerGlobalScope` (BUG-401).
+///
+/// HR Time L3 marks the interface `[Exposed=(Window,Worker)]`, so a worker must
+/// get the identical object, not a second hand-written one that drifts from
+/// this one the next time the page copy is fixed (BUG-400 had just rebuilt it
+/// as a real `EventTarget` subclass). Depends on [`EVENT_TARGET_SHIM`] and on
+/// the `_lumen_now_ms` native; `_perf_observer_notify` lives further down the
+/// page shim and is therefore called through a `typeof` guard, which is a
+/// no-op for the page (same script, hoisted) and the reason a worker without
+/// `PerformanceObserver` can still call `mark()`/`measure()`.
+#[cfg(feature = "v8-backend")]
+pub(crate) const PERFORMANCE_SHIM: &str = "
 // ── performance (HR Timer — W3C HR Time L2 + User Timing L3) ─────────────────
-// Time origin is the instant the native DOM install ran (injected by Rust).
+// Time origin is the instant this block ran: the native DOM install for the
+// page, the worker global-scope install for a worker. HR Time L3 §4.2 makes it
+// a property of the global scope, so a worker started later legitimately gets
+// a later origin than the page that spawned it.
 var _perf_origin_ms = typeof _lumen_now_ms === 'function' ? _lumen_now_ms() : 0;
 // Internal entry store: array of {entryType, name, startTime, duration}.
 var _perf_entries = [];
@@ -10404,7 +10441,9 @@ Performance.prototype.mark = function(name, opts) {
     var start = (opts && typeof opts.startTime === 'number') ? opts.startTime : this.now();
     var entry = { entryType: 'mark', name: String(name), startTime: start, duration: 0 };
     _perf_entries.push(entry);
-    _perf_observer_notify([entry]);
+    // Guarded: PerformanceObserver is part of the page shim only, so in a
+    // worker scope this function does not exist (see PERFORMANCE_SHIM docs).
+    if (typeof _perf_observer_notify === 'function') _perf_observer_notify([entry]);
     return entry;
 };
 // User Timing L3 §4.3 — performance.measure(name, start?, end?)
@@ -10424,7 +10463,7 @@ Performance.prototype.measure = function(name, startMark, endMark) {
     }
     var entry = { entryType: 'measure', name: String(name), startTime: start, duration: end - start };
     _perf_entries.push(entry);
-    _perf_observer_notify([entry]);
+    if (typeof _perf_observer_notify === 'function') _perf_observer_notify([entry]);
     return entry;
 };
 Performance.prototype.getEntriesByName = function(name, type) {
@@ -10476,7 +10515,12 @@ function _perf_entries_by_name(name, type) {
         return e.name === name && (type === undefined || e.entryType === type);
     });
 }
+";
 
+/// Page shim source after [`PERFORMANCE_SHIM`]. Not shared with workers — see
+/// [`web_api_shim`].
+#[cfg(feature = "v8-backend")]
+const WEB_API_SHIM_TAIL: &str = "
 // ── PerformanceObserver (Performance Timeline L2 §5–6) ───────────────────────
 // observe({entryTypes}) or observe({type, buffered}) per §6.2.2.
 // disconnect() → stops observing. Callback: fn(list, observer).
@@ -15497,6 +15541,32 @@ var removeEventListener = window.removeEventListener.bind(window);
 var dispatchEvent       = window.dispatchEvent.bind(window);
 ";
 
+/// The page-scope Web API shim, re-assembled from its five parts in source
+/// order: head, [`EVENT_TARGET_SHIM`], mid, [`PERFORMANCE_SHIM`], tail.
+///
+/// The split exists only so `worker.rs` can evaluate the two `[Exposed=*]` /
+/// `[Exposed=(Window,Worker)]` blocks in a `WorkerGlobalScope` without a second
+/// copy of them (BUG-401). Because the pieces are concatenated in their
+/// original order, V8 still compiles one program with one hoisting scope — the
+/// split is invisible to the shim's own code.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn web_api_shim() -> String {
+    format!("{WEB_API_SHIM_HEAD}{EVENT_TARGET_SHIM}{WEB_API_SHIM_MID}{PERFORMANCE_SHIM}{WEB_API_SHIM_TAIL}")
+}
+
+/// The subset of the page shim that WHATWG also exposes in a
+/// `WorkerGlobalScope`: [`EVENT_TARGET_SHIM`] followed by [`PERFORMANCE_SHIM`].
+///
+/// Evaluated as one script (like in the page) so `Performance`'s prototype
+/// chain finds `EventTarget`. The trailing `undefined` keeps the completion
+/// value convertible for [`crate::v8_runtime::V8JsRuntime::eval`], whose return
+/// path has no representation for the function object the last statement of
+/// [`EVENT_TARGET_SHIM`] would otherwise yield.
+#[cfg(feature = "v8-backend")]
+pub(crate) fn worker_exposed_shim() -> String {
+    format!("{EVENT_TARGET_SHIM}{PERFORMANCE_SHIM}\nundefined;\n")
+}
+
 // ─── tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -15507,6 +15577,51 @@ mod tests {
     use lumen_core::JsRuntime;
     #[cfg(feature = "v8-backend")]
     use lumen_dom::{Document, NodeData, QualName};
+
+    /// BUG-401 split the page shim into five consts so `worker.rs` can evaluate
+    /// the two `[Exposed=(Window,Worker)]` blocks in a worker scope without a
+    /// second copy of them. The page program must come out unchanged: the parts
+    /// have to be spliced back in source order, each exactly once — a wrong
+    /// order would put `Object.create(EventTarget.prototype)` before
+    /// `EventTarget` exists, and a duplicate would reset `_perf_entries`
+    /// halfway through the shim.
+    #[cfg(feature = "v8-backend")]
+    #[test]
+    fn web_api_shim_splices_its_parts_in_source_order() {
+        let shim = web_api_shim();
+        let mut prev = 0usize;
+        for marker in [
+            "function _lumen_u2n",
+            "function EventTarget()",
+            "function UIEvent(",
+            "function Performance()",
+            "function PerformanceObserver(",
+        ] {
+            assert_eq!(
+                shim.matches(marker).count(),
+                1,
+                "{marker} must appear exactly once in the assembled shim"
+            );
+            let at = shim.find(marker).expect(marker);
+            assert!(at > prev, "{marker} is out of source order");
+            prev = at;
+        }
+    }
+
+    /// The worker-facing subset is literally the same source the page gets —
+    /// not a paraphrase of it. Comparing the strings (rather than probing the
+    /// resulting objects) is what actually rules out the drift BUG-401 was
+    /// filed about.
+    #[cfg(feature = "v8-backend")]
+    #[test]
+    fn worker_exposed_shim_is_a_verbatim_slice_of_the_page_shim() {
+        let page = web_api_shim();
+        assert!(page.contains(EVENT_TARGET_SHIM));
+        assert!(page.contains(PERFORMANCE_SHIM));
+        let worker = worker_exposed_shim();
+        assert!(worker.starts_with(EVENT_TARGET_SHIM));
+        assert!(worker.contains(PERFORMANCE_SHIM));
+    }
 
     #[cfg(feature = "v8-backend")]
     fn make_doc() -> Arc<Mutex<Document>> {

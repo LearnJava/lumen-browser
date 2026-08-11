@@ -76,11 +76,11 @@
  "generated": "2026-08-11",
  "counts": {
   "open": 314,
-  "fixed": 418,
+  "fixed": 419,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 732,
+ "total_bugs": 733,
  "phases": [
   {
    "id": "P0",
@@ -7407,10 +7407,10 @@
    "debtor": false
   },
   "BUG-401": {
-   "status": "open",
+   "status": "fixed",
    "title": "`performance` полностью отсутствует в Worker global scope — `worker_global_shim` не заводит ни `performance.now()`, ни `timeOrigin`; любой воркер-скрипт, читающ…",
    "component": "js (`crates/js/src/worker.rs:439-566` — `worker_global_shim`)",
-   "date": null,
+   "date": "2026-08-11",
    "debtor": false
   },
   "BUG-402": {
@@ -9932,6 +9932,13 @@
    "component": "js (`crates/js/src/dom.rs` — секция `// ── performance (HR Timer …`, `Performance.prototype`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-768": {
+   "status": "open",
+   "title": "`--deterministic` не действует ни в одной worker-области: патч (сид-PRNG для `Math.random`, замороженный `Date.now`) — обычный `v8::Script`, выполняемый в конте…",
+   "component": "js (`crates/js/src/v8_runtime.rs:4809-4843` — блок `if let Some(seed) = deterministic_seed`; области `crates/js/src/worker.rs::run_worker_thread_v8`, `shared_worker.rs`, `sw_worker.rs`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -10423,6 +10430,9 @@
   ],
   "js (`crates/js/src/typed_om_api.rs`)": [
    "BUG-554"
+  ],
+  "js (`crates/js/src/v8_runtime.rs:4809-4843` — блок `if let Some(seed) = deterministic_seed`; области `crates/js/src/worker.rs::run_worker_thread_v8`, `shared_worker.rs`, `sw_worker.rs`)": [
+   "BUG-768"
   ],
   "js (`crates/js/src/v8_runtime.rs::_lumen_create_element`/`_lumen_create_element_ns`, `v8_compat.rs::IntoJsReturn for u32`)": [
    "BUG-457"

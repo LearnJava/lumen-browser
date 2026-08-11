@@ -431,6 +431,10 @@ fn install_sw_globals_v8(
         into_v8_fn1(move |s: String| -> String { base64_encode(s.as_bytes()) }),
     )?;
 
+    // `ServiceWorkerGlobalScope` is a `WorkerGlobalScope` too, so it gets the
+    // same `EventTarget`/`performance` surface as the dedicated worker (BUG-401).
+    crate::worker::install_worker_scope_globals_v8(rt)?;
+
     let scope_js = scope.replace('\'', "\\'");
     let scope_str = format!("'{scope_js}'");
     rt.eval(&sw_globals_shim(&scope_str))?;
@@ -449,6 +453,26 @@ mod tests_v8 {
     use super::*;
     use lumen_core::ext::CacheBackend;
     use std::sync::Mutex;
+
+    /// BUG-401: `ServiceWorkerGlobalScope` is a `WorkerGlobalScope` too, so it
+    /// gets the same `performance` as the page and the other worker flavours —
+    /// same shim source, hence the same prototype chain.
+    #[test]
+    fn sw_global_scope_has_performance() {
+        let rt = V8JsRuntime::new().unwrap();
+        install_sw_globals_v8(&rt, "https://example.com", "/", MockCache::new()).unwrap();
+        for expr in [
+            "typeof performance.now === 'function'",
+            "performance instanceof Performance",
+            "Object.getPrototypeOf(Performance.prototype) === EventTarget.prototype",
+        ] {
+            assert_eq!(
+                rt.eval(expr).unwrap(),
+                lumen_core::JsValue::Bool(true),
+                "{expr}"
+            );
+        }
+    }
 
     struct MockCache {
         entries: Mutex<std::collections::HashMap<String, Vec<u8>>>,

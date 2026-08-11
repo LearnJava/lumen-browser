@@ -4746,7 +4746,8 @@ impl V8JsRuntime {
             // `internal_globals`'s `shim_has_no_top_level_lexical_declarations`.
             {
                 v8::tc_scope!(tc, scope);
-                let src = v8::String::new(tc, crate::dom::WEB_API_SHIM)
+                let shim = crate::dom::web_api_shim();
+                let src = v8::String::new(tc, &shim)
                     .ok_or_else(|| JsError::Runtime("OOM: WEB_API_SHIM source".into()))?;
                 let wrapper_src = v8::String::new(tc, "(function(s) { (0, eval)(s); })")
                     .ok_or_else(|| JsError::Runtime("OOM: WEB_API_SHIM eval wrapper".into()))?;
