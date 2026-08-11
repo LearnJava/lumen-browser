@@ -3,27 +3,31 @@
 //! Installs `navigator.getGamepads()` and associated interfaces so that
 //! game-oriented pages can probe for connected controllers without JS errors.
 //!
-//! Phase 0: no hardware polling — all four gamepad slots return `null`
-//! (no gamepad connected). The API surface is complete so that feature-detection
-//! code (`navigator.getGamepads` existence checks, `GamepadButton` interface,
+//! Phase 0: no hardware polling — the gamepad list stays empty, so
+//! `getGamepads()` returns `[]` until something connects a device (BUG-392;
+//! W3C Gamepad Level 2 §5.1 forbids a pre-declared non-zero length). The API
+//! surface is complete so that feature-detection code
+//! (`navigator.getGamepads` existence checks, `GamepadButton` interface,
 //! `gamepadconnected` event listener) works without errors.
 //!
 //! Installed interfaces:
-//! - `navigator.getGamepads()` → sparse array of null (4 slots)
+//! - `navigator.getGamepads()` → snapshot array, empty until a device connects
 //! - `Gamepad` class — id/index/connected/timestamp/mapping/axes/buttons/vibrationActuator
 //! - `GamepadButton` class — pressed/touched/value
 //! - `GamepadHapticActuator` stub — type/playEffect/reset
 //! - `GamepadEvent` class — gamepad property
 //! - `window.Gamepad`, `window.GamepadButton`, `window.GamepadHapticActuator`,
 //!   `window.GamepadEvent` exported as globals
+//! - `window.ongamepadconnected` / `window.ongamepaddisconnected` event handler
+//!   IDL attributes (BUG-392)
 
 /// V8 port of the former rquickjs `install_gamepad_bindings` (Ph3 V8 migration S5-S7):
 /// identical JS shim, evaluated via [`lumen_core::ext::JsRuntime::eval`].
 ///
 /// Adds `navigator.getGamepads()` and all W3C Gamepad §4 interfaces.
-/// Phase 0: returns 4 null slots (no hardware polling). The event infrastructure
-/// (`gamepadconnected`/`gamepaddisconnected`) is present but never fires
-/// until a future shell integration polls actual hardware.
+/// Phase 0: returns an empty list (no hardware polling). The event
+/// infrastructure (`gamepadconnected`/`gamepaddisconnected`) is present but
+/// never fires until a future shell integration polls actual hardware.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn install_gamepad_bindings_v8(rt: &crate::v8_runtime::V8JsRuntime) -> lumen_core::JsResult<()> {
     use lumen_core::ext::JsRuntime as _;
@@ -98,13 +102,17 @@ const GAMEPAD_SHIM: &str = r#"(function() {
   GamepadEvent.prototype.constructor = GamepadEvent;
 
   // ── Internal gamepad list ─────────────────────────────────────────────────
-  // Phase 0: all 4 slots are null (no device connected).
-  var _gamepads = [null, null, null, null];
+  // BUG-392: the list starts EMPTY and only grows (to `index + 1`) when a
+  // device actually connects — W3C Gamepad Level 2 §5.1 does not allow a
+  // pre-declared non-zero length, and `getGamepads().length > 0` is the common
+  // real-world "any controller?" test. Phase 0 has no hardware polling, so in
+  // practice it stays empty for the whole navigation.
+  var _gamepads = [];
 
   // ── navigator.getGamepads ─────────────────────────────────────────────────
   // W3C Gamepad §5.1: returns a snapshot of the current gamepad state.
   // Returns a sparse array (Array-like object with numeric indices + length).
-  // Phase 0: all entries null.
+  // Phase 0: empty until `_lumen_gamepad_connect` runs.
   navigator.getGamepads = function() {
     var out = [];
     for (var i = 0; i < _gamepads.length; i++) {
@@ -118,21 +126,40 @@ const GAMEPAD_SHIM: &str = r#"(function() {
   // _lumen_gamepad_connect(index, id, mapping) → fires 'gamepadconnected'.
   // _lumen_gamepad_disconnect(index)           → fires 'gamepaddisconnected'.
   globalThis._lumen_gamepad_connect = function(index, id, mapping) {
-    var gp = new Gamepad(id || '', index, true, mapping || 'standard');
+    var i = (typeof index === 'number' && index >= 0) ? (index | 0) : 0;
+    var gp = new Gamepad(id || '', i, true, mapping || 'standard');
     gp.timestamp = typeof performance !== 'undefined' ? performance.now() : 0;
-    _gamepads[index] = gp;
+    // Grow the list to cover the new slot; intermediate slots stay null, which
+    // is what the spec's "list grows to the highest used index" means.
+    while (_gamepads.length <= i) _gamepads.push(null);
+    _gamepads[i] = gp;
     var evt = new GamepadEvent('gamepadconnected', { gamepad: gp, bubbles: false, cancelable: false });
     window.dispatchEvent(evt);
   };
 
+  // Disconnecting clears the slot but does NOT shrink the list: once a gamepad
+  // has been seen in this navigation, its index stays observable (spec §5.1).
   globalThis._lumen_gamepad_disconnect = function(index) {
-    var gp = _gamepads[index];
-    _gamepads[index] = null;
+    var i = (typeof index === 'number' && index >= 0) ? (index | 0) : 0;
+    var gp = _gamepads[i];
+    if (i < _gamepads.length) _gamepads[i] = null;
     if (gp) {
+      gp.connected = false;
       var evt = new GamepadEvent('gamepaddisconnected', { gamepad: gp, bubbles: false, cancelable: false });
       window.dispatchEvent(evt);
     }
   };
+
+  // ── Event handler IDL attributes (W3C Gamepad §5.2) ───────────────────────
+  // BUG-392: `ongamepadconnected`/`ongamepaddisconnected` are Window event
+  // handler IDL attributes — the spec requires them to exist (value `null`)
+  // before anything ever assigns one, which is exactly what the standard
+  // feature test `'ongamepadconnected' in window` looks at. Declared as plain
+  // nullable properties, the same shape the main shim uses for
+  // `window.onpopstate`/`onhashchange`; `window.dispatchEvent` invokes them
+  // generically as `window['on' + type]`.
+  try { window.ongamepadconnected    = null; } catch(_) {}
+  try { window.ongamepaddisconnected = null; } catch(_) {}
 
   // ── Global exports ────────────────────────────────────────────────────────
   try { window.Gamepad              = Gamepad;              } catch(_) {}
@@ -176,21 +203,47 @@ mod tests {
         });
     }
 
+    /// BUG-392: W3C Gamepad Level 2 §5.1 — the list is empty until a device
+    /// connects; a pre-declared non-zero length is observable through
+    /// `.length` and breaks the common `getGamepads().length > 0` probe.
     #[test]
-    fn get_gamepads_returns_four_slots() {
+    fn get_gamepads_empty_until_connect() {
         with_gamepad_api(|rt| {
             let len = rt.eval("navigator.getGamepads().length").unwrap();
-            assert_eq!(len, JsValue::Number(4.0));
+            assert_eq!(len, JsValue::Number(0.0));
         });
     }
 
+    /// BUG-392: the list grows only up to the highest connected index.
     #[test]
-    fn get_gamepads_all_null_initially() {
+    fn get_gamepads_grows_to_connected_index() {
         with_gamepad_api(|rt| {
-            let all_null = rt
-                .eval("navigator.getGamepads().every(function(g){ return g === null; })")
+            rt.eval("globalThis._lumen_gamepad_connect(2, 'TestPad', 'standard');")
                 .unwrap();
-            assert_eq!(all_null, JsValue::Bool(true));
+            let shape = rt
+                .eval(
+                    "var g = navigator.getGamepads(); \
+                     g.length === 3 && g[0] === null && g[1] === null && g[2] !== null",
+                )
+                .unwrap();
+            assert_eq!(shape, JsValue::Bool(true));
+        });
+    }
+
+    /// BUG-392: `ongamepadconnected`/`ongamepaddisconnected` are event handler
+    /// IDL attributes on `Window` — present as `null` before any assignment,
+    /// which is what `'onX' in window` feature detection reads.
+    #[test]
+    fn window_gamepad_event_handler_attributes_exist() {
+        with_gamepad_api(|rt| {
+            let ok = rt
+                .eval(
+                    "('ongamepadconnected' in window) && ('ongamepaddisconnected' in window) \
+                     && window.ongamepadconnected === null \
+                     && window.ongamepaddisconnected === null",
+                )
+                .unwrap();
+            assert_eq!(ok, JsValue::Bool(true));
         });
     }
 

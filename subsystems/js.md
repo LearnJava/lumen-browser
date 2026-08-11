@@ -579,6 +579,18 @@ the time — read dates.
   live_text_and_comment_data_mutates_in_place, character_data_methods_spec_examples}`); closes most
   of WPT `dom/nodes/CharacterData-{data,appendData,insertData,deleteData,replaceData,
   substringData,surrogates}.html`.
+- **Window event handler IDL attributes and how they are dispatched (BUG-392, 2026-08-11).**
+  `window.on<type>` attributes are plain nullable properties on the `window` object literal
+  in `dom.rs` (`onpopstate`, `onhashchange`, `onunhandledrejection`, `ongamepadconnected`, …)
+  — Window has no accessor machinery like the element-side `_lumen_on_handlers`, which is
+  keyed by node id and therefore not usable here. Delivery: `window.dispatchEvent`'s generic
+  branch calls `window['on' + evt.type]` *after* the explicit
+  `_other_win_listeners[type]` listeners, so declaring a new handler attribute needs no
+  dispatch-side change. `load`/`error` keep their own earlier branches; the engine's own
+  delivery of `hashchange`/`popstate`/`message` calls the handler directly instead of going
+  through `dispatchEvent` — hence no double-fire. Before BUG-392 the generic branch skipped
+  the attribute entirely, so any `window.onX = fn` outside `load`/`error` (`onscroll`,
+  `ongamepadconnected`) was stored where no dispatch path looked.
 - **`_lumen_bfcache_blocked()` — bfcache eligibility check (Ph3 `P3-bfcache` level 1, 2026-07-13).**
   Global JS function in `dom.rs` next to `_lumen_fire_page_lifecycle`. Returns
   `true` when any `_ws_instances`/`_sse_instances` entry has
@@ -796,14 +808,15 @@ the time — read dates.
   - 10 unit tests: install_succeeds, src getter/setter, contentDocument null, contentWindow null, name getter/setter, width/height attrs, sandbox reflects, getSVGDocument null, src default empty string. **922 lumen-js lib tests total.**
 
 - **Gamepad API** (`crates/js/src/gamepad.rs`, W3C Gamepad Level 2 §4, P1 2026-06-03).
-  - `navigator.getGamepads()` → sparse array of 4 null slots (Phase 0, no hardware polling).
+  - `navigator.getGamepads()` → snapshot array, **empty until a device connects** (BUG-392; W3C Gamepad L2 §5.1 forbids a pre-declared non-zero length). The internal list grows to `index + 1` in `_lumen_gamepad_connect` and never shrinks on disconnect. Phase 0 has no hardware polling, so in practice it stays `[]`.
   - `Gamepad` class: id/index/connected/timestamp/mapping/axes(4)/buttons(17)/vibrationActuator/hapticActuators.
   - `GamepadButton` class: pressed/touched/value.
   - `GamepadHapticActuator` stub: type, `playEffect(type, params) → Promise<'complete'>`, `reset() → Promise<'complete'>`.
   - `GamepadEvent` class: gamepad property.
   - Shell integration helpers: `_lumen_gamepad_connect(index, id, mapping)` fires `gamepadconnected`; `_lumen_gamepad_disconnect(index)` fires `gamepaddisconnected`. P3 shell calls these when polling OS gamepad APIs.
   - `window.Gamepad`, `window.GamepadButton`, `window.GamepadHapticActuator`, `window.GamepadEvent` exported as globals.
-  - 15 unit tests. **1086 lumen-js lib tests total** (after combining with speech task's 1071 base).
+  - `window.ongamepadconnected` / `window.ongamepaddisconnected` event handler IDL attributes (BUG-392) — plain nullable properties, the same shape the main shim uses for `window.onpopstate`/`onhashchange`.
+  - 17 unit tests. **1086 lumen-js lib tests total** (after combining with speech task's 1071 base).
 
 - **MediaSession API** (`crates/js/src/media_session.rs`, W3C Media Session API L1/L2 §5, P1 2026-06-03).
   - `navigator.mediaSession` singleton.
