@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-11",
  "counts": {
-  "open": 313,
+  "open": 314,
   "fixed": 411,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 724,
+ "total_bugs": 725,
  "phases": [
   {
    "id": "P0",
@@ -9876,6 +9876,13 @@
    "component": "js (`crates/js/src/credentials.rs:516-540` — `create_without_provider_rejects_not_allowed` / `create_and_get_through_installed_provider`, процесс-глобальный слот провайдера)",
    "date": null,
    "debtor": false
+  },
+  "BUG-760": {
+   "status": "open",
+   "title": "Headless-MCP (`--mcp-port N`) инструмент `navigate` не грузит `file://`-URL: наивный `strip_prefix(\"file://\")` от `file:///D:/…` оставляет `/D:/…`, Windows отве…",
+   "component": "driver (`crates/driver/src/session.rs:790` — `InProcessSession::navigate`, ветка `url.strip_prefix(\"file://\")`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -9992,6 +9999,9 @@
    "BUG-061",
    "BUG-064",
    "BUG-112"
+  ],
+  "driver (`crates/driver/src/session.rs:790` — `InProcessSession::navigate`, ветка `url.strip_prefix(\"file://\")`)": [
+   "BUG-760"
   ],
   "driver (`crates/driver/tests/cases/snapshot_cpu.rs`, feature `cpu-render`)": [
    "BUG-316"
