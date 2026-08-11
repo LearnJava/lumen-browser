@@ -63,6 +63,103 @@ fn headless_resize_updates_dimensions() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// BUG-405 — прогрев ленивых пайплайнов
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Display list со скруглённым клипом: заставляет кадр взять ленивые
+/// `rrect-clip`/`composite`-пайплайны (BUG-406 вынес их из старта окна).
+fn rounded_clip_dl(w: f32, h: f32) -> Vec<DisplayCommand> {
+    let rect = Rect { x: 4.0, y: 4.0, width: w - 8.0, height: h - 8.0 };
+    vec![
+        DisplayCommand::PushClipRoundedRect { rect, radii: [8.0, 8.0, 8.0, 8.0] },
+        DisplayCommand::FillRect { rect, color: Color { r: 255, g: 0, b: 0, a: 255 } },
+        DisplayCommand::PopClip,
+    ]
+}
+
+/// BUG-406: ленивые пайплайны не компилируются при создании рендера.
+///
+/// Проверяется счётчиком компиляций, а не временем старта: время зависит от
+/// драйвера и загрузки машины, а «ни одна ячейка не заполнена» — нет.
+#[test]
+#[ignore = "requires GPU adapter"]
+fn lazy_pipelines_are_absent_right_after_construction() {
+    let r = Renderer::new_headless(INTER.to_vec(), 64, 64, ColorSpace::Srgb)
+        .expect("headless renderer");
+    assert_eq!(
+        r.warmed_pipeline_count(),
+        0,
+        "ленивые пайплайны не должны компилироваться в конструкторе (BUG-406)",
+    );
+}
+
+/// BUG-405: после прогрева кадр, которому нужны ленивые пайплайны, **ничего**
+/// не компилирует.
+///
+/// Это и есть гейт правки: «компиляция ушла с кадра» = «за время кадра
+/// `pipelines_compiled()` не вырос». Первая половина теста — контроль на
+/// ложно-зелёный: без прогрева тот же самый кадр счётчик поднимает, иначе
+/// проверка проходила бы и на рендере, который эти пайплайны вообще не трогает.
+///
+/// Счётчик инстансный, а не процессный: тесты одного бинарника идут
+/// параллельно, и на общем счётчике эти два рендера считали бы компиляции
+/// друг друга.
+#[test]
+#[ignore = "requires GPU adapter"]
+fn warmup_takes_pipeline_compilation_off_the_frame() {
+    // Контроль: холодный рендер тот же кадр компилирует.
+    let mut cold = Renderer::new_headless(INTER.to_vec(), 64, 64, ColorSpace::Srgb)
+        .expect("headless renderer");
+    cold.set_font_provider(None);
+    cold.render_to_image(&rounded_clip_dl(64.0, 64.0), 0.0, 0.0)
+        .expect("render_to_image (cold)");
+    assert!(
+        cold.pipelines_compiled() > 0,
+        "контроль негоден: кадр не потребовал ни одного ленивого пайплайна",
+    );
+
+    // Прогретый рендер: тот же кадр — ноль компиляций.
+    let mut warm = Renderer::new_headless(INTER.to_vec(), 64, 64, ColorSpace::Srgb)
+        .expect("headless renderer");
+    warm.set_font_provider(None);
+    warm.warm_lazy_pipelines_blocking();
+    assert_eq!(
+        warm.warmed_pipeline_count(),
+        12,
+        "прогрев обязан заполнить все ленивые ячейки",
+    );
+    let before_warm = warm.pipelines_compiled();
+    warm.render_to_image(&rounded_clip_dl(64.0, 64.0), 0.0, 0.0)
+        .expect("render_to_image (warm)");
+    assert_eq!(
+        warm.pipelines_compiled(),
+        before_warm,
+        "после прогрева кадр не должен компилировать пайплайны (BUG-405)",
+    );
+}
+
+/// BUG-405: прогрев компилирует каждый ленивый пайплайн ровно один раз.
+///
+/// Сторожит от «прогрели и тут же перекомпилировали»: если бы результат не
+/// попадал в `OnceCell` (например, `set` молча проглотили), счётчик ячеек
+/// остался бы нулём при выросшем счётчике компиляций.
+#[test]
+#[ignore = "requires GPU adapter"]
+fn warmup_compiles_each_lazy_pipeline_exactly_once() {
+    let r = Renderer::new_headless(INTER.to_vec(), 32, 32, ColorSpace::Srgb)
+        .expect("headless renderer");
+    assert_eq!(
+        r.pipelines_compiled(),
+        0,
+        "до прогрева ленивые пайплайны не компилируются (BUG-406)",
+    );
+    r.warm_lazy_pipelines_blocking();
+    // `mask-layer` — одна ячейка на два пайплайна (luminance/alpha).
+    assert_eq!(r.pipelines_compiled(), 13, "прогрев собрал не тот набор пайплайнов");
+    assert_eq!(r.warmed_pipeline_count(), 12);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // CPU render tests (tiny-skia, no GPU required, feature="cpu-render")
 // ─────────────────────────────────────────────────────────────────────────────
 
