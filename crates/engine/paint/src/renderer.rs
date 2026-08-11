@@ -2484,6 +2484,18 @@ pub static TEXTURE_POOL_HITS: std::sync::atomic::AtomicU64 =
 pub static TEXTURE_POOL_MISSES: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
+/// BUG-405 срез 3: число промахов глиф-атласа (растеризованных глифов) за
+/// процесс. Фаза `collect` держит 40–90 мс на кадре перерисовки полосы, и
+/// «растеризация впервые показанного текста» была лишь гипотезой — счётчик
+/// отделяет её от остального обхода display list.
+pub static GLYPHS_RASTERIZED: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// BUG-405 срез 3: наносекунды внутри растеризации глифа при промахе атласа
+/// (парс outline + `Rasterizer` + вставка в атлас).
+pub static GLYPH_RASTER_NANOS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
 /// Frames that reached the GPU (`render` ran to completion and presented).
 pub static FRAMES_RENDERED: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
@@ -6681,6 +6693,9 @@ impl Renderer {
         let tex_nanos_at_entry = load_counter(&TEXTURE_CREATE_NANOS);
         let pool_hits_at_entry = load_counter(&TEXTURE_POOL_HITS);
         let pool_misses_at_entry = load_counter(&TEXTURE_POOL_MISSES);
+        // BUG-405 срез 3: та же дельта-схема для промахов глиф-атласа.
+        let glyphs_at_entry = load_counter(&GLYPHS_RASTERIZED);
+        let glyph_nanos_at_entry = load_counter(&GLYPH_RASTER_NANOS);
 
         // Размеры цели: для Band — полоса, иначе — поверхность окна/headless.
         let (sw0, sh0) = match &mode {
@@ -10729,6 +10744,16 @@ impl Renderer {
                 TEXTURES_CREATED.load(std::sync::atomic::Ordering::Relaxed),
                 self.texture_pool.len(),
             );
+            // BUG-405 срез 3: чем занята фаза `collect` — растеризацией
+            // впервые показанных глифов или самим обходом display list.
+            eprintln!(
+                "[frame:wgpu]   glyphs: rasterized {} in {:.2}ms | \
+                 за процесс {} в {:.1}ms",
+                load_counter(&GLYPHS_RASTERIZED) - glyphs_at_entry,
+                (load_counter(&GLYPH_RASTER_NANOS) - glyph_nanos_at_entry) as f64 / 1e6,
+                load_counter(&GLYPHS_RASTERIZED),
+                load_counter(&GLYPH_RASTER_NANOS) as f64 / 1e6,
+            );
 
             // LUMEN_FRAME_LOG=3 — распределение, а не среднее.
             if item_log {
@@ -12385,6 +12410,7 @@ fn ensure_glyph(
 
     // Промах atlas-кэша — единственный путь, где нужен распарсенный шрифт
     // (outline + HVAR). Ленивый парс: на тёплом кадре сюда не заходим.
+    let t0 = std::time::Instant::now();
     let face = lazy.get(face_id)?;
     let result = rasterize_and_insert(
         atlas,
@@ -12393,6 +12419,13 @@ fn ensure_glyph(
         face.head.units_per_em,
         key,
         coords,
+    );
+    // BUG-405 срез 3: цена промаха атласа — отдельной статьёй от обхода
+    // display list (обе живут в фазе `collect`).
+    GLYPHS_RASTERIZED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    GLYPH_RASTER_NANOS.fetch_add(
+        t0.elapsed().as_nanos() as u64,
+        std::sync::atomic::Ordering::Relaxed,
     );
     cached.insert(key, result);
     result
