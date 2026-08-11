@@ -142,6 +142,9 @@ pub fn cfg() -> Option<BenchCfg> {
             Some("scroll") => BenchMode::Scroll,
             other => {
                 eprintln!("LUMEN_BENCH: неизвестный режим {other:?}, ожидается hover|scroll");
+                // BUG-770: the stderr sink's writer thread is detached, so the
+                // line above has to be flushed before the process disappears.
+                crate::diag_stderr::flush(std::time::Duration::from_secs(2));
                 std::process::exit(2);
             }
         };
@@ -150,11 +153,13 @@ pub fn cfg() -> Option<BenchCfg> {
         let step = parts.next().and_then(|s| s.parse::<f32>().ok()).unwrap_or(1.0);
         if frames == 0 {
             eprintln!("LUMEN_BENCH: frames must be > 0");
+            crate::diag_stderr::flush(std::time::Duration::from_secs(2));
             std::process::exit(2);
         }
         // NaN проваливается сюда же — бенч с мусорным шагом не имеет смысла.
         if step <= 0.0 || step.is_nan() {
             eprintln!("LUMEN_BENCH: step must be > 0");
+            crate::diag_stderr::flush(std::time::Duration::from_secs(2));
             std::process::exit(2);
         }
         Some(BenchCfg { mode, frames, warmup, step })

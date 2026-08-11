@@ -33,6 +33,7 @@ mod health_log;
 mod backend_factory;
 mod bench_frames;
 mod chrome_preview;
+mod diag_stderr;
 use lumen_bidi_server::spawn as bidi_spawn;
 mod config;
 mod deterministic;
@@ -329,6 +330,24 @@ fn fast_scroll_degrade_disabled() -> bool {
 }
 
 fn main() -> ExitCode {
+    // BUG-770: install the non-blocking stderr sink before anything can print.
+    // A parent that captures stderr as a pipe and stops reading it used to
+    // block whichever thread called `eprintln!` next — with the UI thread that
+    // froze the whole window mid-run. No-op unless stderr really is a pipe.
+    diag_stderr::install();
+    let code = run_cli();
+    // The writer thread is detached, so the tail of the log would be lost when
+    // `main` returns. Bounded wait: a parent that never reads must not turn
+    // process exit into a second hang.
+    diag_stderr::flush(std::time::Duration::from_secs(2));
+    code
+}
+
+/// Parses the command line and dispatches to the chosen `CliMode`.
+///
+/// Split out of `main` so that every `return` inside it — including the early
+/// argument-error paths — is followed by `diag_stderr::flush`.
+fn run_cli() -> ExitCode {
     // Opt-in visual profiler (§14.3, BUG-284): `Client::start()` spawns the
     // background thread that connects to (or is discovered by) a running
     // Tracy GUI app — https://github.com/wolfpld/tracy. Must be started

@@ -861,9 +861,13 @@ class LumenIpcClient:
     """
 
     def __init__(self, lumen_path: str, cwd: str) -> None:
+        # encoding/errors: same BUG-770 trap as in `LiveWindowClient` — the
+        # shell prints Russian lines to stdout too, and a drain thread killed
+        # by UnicodeDecodeError would block the server on a full pipe.
         self.proc = subprocess.Popen(
             [lumen_path, '--ipc-server'], cwd=cwd,
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+            encoding='utf-8', errors='replace',
         )
         port: int | None = None
         token: str | None = None
@@ -903,8 +907,9 @@ class LumenIpcClient:
         try:
             for _ in out:
                 pass
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001 — BUG-770, молчаливая смерть = блок сервера
+            print(f'ВНИМАНИЕ: дренаж stdout --ipc-server упал ({e!r}); '
+                  f'труба больше не читается, см. BUG-770', flush=True)
 
     def _send(self, payload: bytes) -> None:
         self.sock.sendall(_u32(len(payload)) + payload)
@@ -1025,11 +1030,19 @@ class LiveWindowClient:
         # model (DEVX-15) token the process prints there — mandatory, no
         # escape hatch. `_read_token` drains the rest in a background thread
         # afterward so unrelated stderr output cannot block the child.
+        #
+        # BUG-770: `text=True` alone decodes with the console codepage (cp1251
+        # here) while Lumen prints Russian diagnostics in UTF-8, so the drain
+        # thread died with UnicodeDecodeError on the first such line, the pipe
+        # filled and the browser's UI thread blocked in `eprintln!` — the run
+        # froze at page 24 with `automation command timed out`. Decode as UTF-8
+        # and never let a stray byte kill the reader.
         self.proc = subprocess.Popen(
             [lumen_path, '--mcp-live-port', str(port), '--no-scrollbar',
              '--deterministic', '--viewport', f'{VIEWPORT_W}x{VIEWPORT_H}',
              'about:blank'],
             cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+            encoding='utf-8', errors='replace',
         )
         token = self._read_token()
         self.sock = self._connect_with_retry(port)
@@ -1055,14 +1068,24 @@ class LiveWindowClient:
         return token
 
     def _drain_stderr(self) -> None:
+        """Вычитывает stderr окна до конца процесса.
+
+        BUG-770: молчать здесь нельзя. Пока `except` глотал исключение, смерть
+        дренажа выглядела как зависание движка на конкретной странице — окно
+        блокировалось в `eprintln!` на переполненной трубе, а харнесс печатал
+        `automation command timed out` через 20 страниц после настоящей
+        причины. Если дренаж всё-таки упал, об этом должно быть видно в логе
+        прогона.
+        """
         err = self.proc.stderr
         if err is None:
             return
         try:
             for _ in err:
                 pass
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001 — сообщаем и выходим, см. docstring
+            print(f'ВНИМАНИЕ: дренаж stderr окна упал ({e!r}); '
+                  f'труба больше не читается, см. BUG-770', flush=True)
 
     def _connect_with_retry(self, port: int, attempts: int = 200, delay: float = 0.1) -> socket.socket:
         """Poll for the MCP TCP listener — window/GPU startup takes longer than
