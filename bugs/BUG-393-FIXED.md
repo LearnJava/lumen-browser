@@ -1,6 +1,6 @@
 # BUG-393 — `SensorErrorEvent` конструктор не проверяет обязательный `error` в init dict, не бросает `TypeError`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-11 (P3)
 **Компонент:** js (`crates/js/src/generic_sensor.rs:56-59` — конструктор `SensorErrorEvent`)
 **Найден:** P2, WPT-VENDOR-generic-sensor (2026-07-28), тест
 `SensorErrorEvent-constructor.https.html` (недостижим прогоном из-за
@@ -59,6 +59,48 @@ function SensorErrorEvent(type, init) {
 Регрессия без WPT: `new SensorErrorEvent('error')` должен бросать
 `TypeError`; `new SensorErrorEvent('error', {error: new DOMException()})`
 должен успешно создавать событие с этим `error`.
+
+## Исправление (P3, 2026-08-11)
+
+`crates/js/src/generic_sensor.rs`, конструктор `SensorErrorEvent` в
+`GENERIC_SENSOR_SHIM` — четыре WebIDL-проверки вместо молчаливого `null`:
+
+1. `arguments.length < 2` → `TypeError` (у словаря есть обязательный член,
+   значит и сам аргумент обязателен);
+2. `init` — `null`/`undefined`/не объект → `TypeError`;
+3. `init.error === undefined` (в т.ч. ключа нет вовсе) → `TypeError`
+   (обязательный член словаря);
+4. `error` не `instanceof DOMException` → `TypeError` (конверсия
+   interface-типа).
+
+Проверка (4) обёрнута в `typeof globalThis.DOMException === 'function'`:
+шим ставится и standalone — в юнит-тестах без `DOM_EXCEPTION_POLYFILL`
+глобального `DOMException` нет, и безусловная проверка отвергала бы вообще
+любой `error`. `this.type` теперь приводится к строке (WebIDL `DOMString`),
+`this.error` хранит переданный объект как есть (`[SameObject]`).
+
+Никакой другой код `SensorErrorEvent` не конструирует (grep по `crates/`,
+`shell/`) — событие только экспортируется в глобал, движок его не
+диспатчит, так что ужесточение конструктора ничего внутри не ломает.
+
+### Проверка
+
+* 7 новых юнит-тестов в `generic_sensor.rs` (арность `2`; бросок на
+  отсутствующем init, на `42`/`null`/`undefined`, на `{}`/`{error: undefined}`,
+  на `{error: {}}`/`{error: 'boom'}`; успешная конструкция с настоящим
+  `DOMException` — через crate-visible `DOM_EXCEPTION_POLYFILL`, а не
+  самописный двойник). `cargo test -p lumen-js --features v8-backend
+  generic_sensor` — 22/22.
+* Живая проба `--mcp-port`/`eval` (`.tmp/probe393.py`) на реальной странице:
+  `SensorErrorEvent.length === 2`; `new SensorErrorEvent('error')`,
+  `…('error', {})`, `…('error', {error: {}})` — все три бросают `TypeError`;
+  `new SensorErrorEvent('error', {error: new DOMException('boom',
+  'NotReadableError')})` даёт `type === 'error'`, `evt.error === err`,
+  `evt.error.name === 'NotReadableError'`.
+
+Сам WPT-тест `SensorErrorEvent-constructor.https.html` по-прежнему
+недостижим прогоном (HTTPS-порт-гэп) — обе его проверки воспроизведены
+пробой и юнит-тестами вручную.
 
 ## Связанные
 
