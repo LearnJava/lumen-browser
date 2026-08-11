@@ -2170,6 +2170,11 @@ pub struct Renderer {
     /// Снимок хэндлов, из которых собирается любой ленивый пайплайн.
     /// Отдаётся клоном фоновому потоку прогрева (BUG-405).
     pdeps: PipelineDeps,
+    /// Сколько командных списков **кадра** этот рендер отправил в очередь за
+    /// свою жизнь (BUG-405 срез 2). Служебные подачи (mip-генерация при
+    /// загрузке картинки, обратное чтение в headless) не считаются: гейт
+    /// подачи порциями — про кадр.
+    submissions: u64,
     /// Приёмник готовых пайплайнов с потока прогрева (BUG-405). `None` —
     /// прогрев ещё не запущен, уже завершён, или отключён
     /// `LUMEN_NO_PIPELINE_WARMUP=1`. Сбрасывается в `None`, когда поток
@@ -2499,6 +2504,24 @@ pub fn load_counter(c: &std::sync::atomic::AtomicU64) -> u64 {
 /// `true`, если скролл-композитор страницы отключён
 /// (`LUMEN_NO_SCROLL_COMPOSITOR=1`). Диагностика: A/B картинки и скорости
 /// на одном бинарнике (как `LUMEN_NO_BBOX_SCISSOR`).
+/// Сколько элементов плана кадра кодируется в один командный список
+/// (BUG-405 срез 2). Кадр перерисовки полосы состоит из десятков пассов, и
+/// цена `drop(pass)` растёт по мере накопления списка: одинаковые по
+/// дескриптору пассы стоят 0.05 мс в начале кадра и 1.2–2 мс дальше, даже
+/// если в них не записано ни одной операции. Подача списка порциями
+/// возвращает цену пасса к начальной. Размер подобран замером на живой
+/// прокрутке `lenta.ru`: 8 — минимум суммы кадров (4 хуже на 8%, 16 и 32 не
+/// отличаются от «без порций» вовсе).
+const SUBMIT_CHUNK_ITEMS: usize = 8;
+
+/// `true`, если подача кадра порциями отключена (`LUMEN_NO_SPLIT_SUBMIT=1`) —
+/// рычаг отката BUG-405 срез 2 к одному командному списку на кадр.
+fn split_submit_disabled() -> bool {
+    use std::sync::OnceLock;
+    static OFF: OnceLock<bool> = OnceLock::new();
+    *OFF.get_or_init(|| std::env::var("LUMEN_NO_SPLIT_SUBMIT").is_ok_and(|v| v == "1"))
+}
+
 fn scroll_compositor_disabled() -> bool {
     use std::sync::OnceLock;
     static DISABLED: OnceLock<bool> = OnceLock::new();
@@ -3756,6 +3779,7 @@ impl Renderer {
         };
         let renderer = Self {
             pdeps,
+            submissions: 0,
             warm_rx: None,
             warm_started: false,
             surface,
@@ -3942,6 +3966,17 @@ impl Renderer {
     #[must_use]
     pub fn pipelines_compiled(&self) -> u64 {
         self.pdeps.built.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Сколько командных списков **кадра** отправил в очередь этот рендер
+    /// (BUG-405 срез 2, подача кадра порциями).
+    ///
+    /// Гейт правки стоит на нём: «кадр из многих пассов подан не одним
+    /// списком» — утверждение о механизме, оно не зависит от железа и
+    /// загрузки машины, в отличие от времени кадра.
+    #[must_use]
+    pub fn submissions(&self) -> u64 {
+        self.submissions
     }
 
     /// Сколько ленивых ячеек пайплайнов уже заполнено (BUG-405/406).
@@ -9499,11 +9534,37 @@ impl Renderer {
         // сумму, но требуют противоположных решений (схлопывать пассы против
         // переиспользовать текстуры). Пишем каждый элемент, печатаем топ.
         let item_log = crate::frame_log_level() >= 3;
-        // (plan_kind, target_level, длительность, drop(pass) для Draw)
-        let mut items_prof: Vec<(usize, usize, std::time::Duration, std::time::Duration)> =
+        // (plan_kind, target_level, длительность, drop(pass) для Draw, ops в пассе).
+        // BUG-405 срез 2: без числа ops «дорог каждый пасс» неотличимо от
+        // «дорога каждая draw-операция» — а лечится это противоположно.
+        let mut items_prof: Vec<(
+            usize,
+            usize,
+            std::time::Duration,
+            std::time::Duration,
+            usize,
+            String,
+            String,
+        )> =
             if item_log { Vec::with_capacity(render_plan.len()) } else { Vec::new() };
 
+        // BUG-405 срез 2: кадр подаётся порциями по `SUBMIT_CHUNK_ITEMS`
+        // элементов плана, а не одним командным списком. Подачи исполняются
+        // в порядке отправки, поэтому пасс, читающий результат предыдущего,
+        // видит его как и раньше — меняется только момент отправки.
+        let split_submit = !split_submit_disabled();
+        let mut since_submit = 0usize;
+
         for item in &render_plan {
+            if split_submit && since_submit >= SUBMIT_CHUNK_ITEMS {
+                let next = self.device.create_command_encoder(
+                    &wgpu::CommandEncoderDescriptor { label: Some("encoder-chunk") },
+                );
+                self.queue.submit([std::mem::replace(&mut encoder, next).finish()]);
+                self.submissions += 1;
+                since_submit = 0;
+            }
+            since_submit += 1;
             let t_item0 = std::time::Instant::now();
             // usize::MAX = «уровень неприменим к этому типу элемента».
             let item_level = match item {
@@ -9511,6 +9572,52 @@ impl Renderer {
                 _ => usize::MAX,
             };
             let mut item_pass_end = std::time::Duration::ZERO;
+            let item_ops = match item {
+                RenderPlanItem::Draw(batch) => batch.ops_end - batch.ops_start,
+                _ => 0,
+            };
+            // BUG-405 срез 2: маска типов операций пасса (s/f/c/r/t/i/g/x).
+            // Цена пасса от их ЧИСЛА не зависит — значит вопрос в том, какой
+            // именно тип впервые появляется там, где кадр «переключается» с
+            // дешёвых пассов на дорогие.
+            let mut desc = String::new();
+            let item_kinds: String = if item_log {
+                let mut m = [false; 8];
+                if let RenderPlanItem::Draw(batch) = item {
+                    // Дескриптор пасса: цель и load-op цвета. Пустые пассы
+                    // (проба) стоят столько же, сколько полные, — значит
+                    // различать их можно только этим.
+                    desc = format!(
+                        "L{}{}",
+                        batch.target_level,
+                        match batch.load_op {
+                            LoadOpChoice::Clear(_) => "c",
+                            LoadOpChoice::ClearTransparent => "t",
+                            LoadOpChoice::Load => "l",
+                        }
+                    );
+                    for op in &draw_ops[batch.ops_start..batch.ops_end] {
+                        m[match op {
+                            DrawOp::SetScissor(_) => 0,
+                            DrawOp::Fill { .. } => 1,
+                            DrawOp::Circle { .. } => 2,
+                            DrawOp::RRect { .. } => 3,
+                            DrawOp::Text { .. } => 4,
+                            DrawOp::Image { .. } => 5,
+                            DrawOp::Gradient { .. } => 6,
+                            DrawOp::CrossFade { .. } => 7,
+                        }] = true;
+                    }
+                }
+                "sfcrtigx"
+                    .chars()
+                    .zip(m)
+                    .filter(|(_, on)| *on)
+                    .map(|(ch, _)| ch)
+                    .collect()
+            } else {
+                String::new()
+            };
             let plan_kind = match item {
                 RenderPlanItem::Draw(_) => 0,
                 RenderPlanItem::Composite(_) => 1,
@@ -10568,12 +10675,13 @@ impl Renderer {
             t_plan[plan_kind] += t_item;
             n_plan[plan_kind] += 1;
             if item_log {
-                items_prof.push((plan_kind, item_level, t_item, item_pass_end));
+                items_prof.push((plan_kind, item_level, t_item, item_pass_end, item_ops, item_kinds, desc));
             }
         }
 
         let t_after_encode = t_frame0.elapsed();
         self.queue.submit([encoder.finish()]);
+        self.submissions += 1;
         // Градиент-маски: временные текстуры обратно в пул (команды уже
         // сабмичены; wgpu удерживает ресурсы до исполнения сам).
         for layer in temp_grad_layers.drain(..) {
@@ -10616,7 +10724,7 @@ impl Renderer {
                 n_plan[6], ms(t_plan[6]),
             );
             eprintln!(
-                "[frame:wgpu]   draw-sub: begin {:.1}ms ops {:.1}ms end {:.1}ms |                  textures_created {} pool {}",
+                "[frame:wgpu]   draw-sub: begin {:.1}ms ops {:.1}ms end {:.1}ms | textures_created {} pool {}",
                 ms(t_draw_sub[0]), ms(t_draw_sub[1]), ms(t_draw_sub[2]),
                 TEXTURES_CREATED.load(std::sync::atomic::Ordering::Relaxed),
                 self.texture_pool.len(),
@@ -10649,13 +10757,16 @@ impl Renderer {
                     eprintln!("[frame:wgpu]   alloc-census (total): {s}");
                 }
 
-                const KIND: [&str; 6] =
-                    ["draw", "comp", "mask", "filt", "bdrop", "mlayer"];
+                // Порядок повторяет `plan_kind` выше; `rclip` — общий слот 6
+                // обоих клип-композитов (RRect/Path). Раньше его в таблице не
+                // было, и `LUMEN_FRAME_LOG=3` ронял окно на первом же клипе.
+                const KIND: [&str; 7] =
+                    ["draw", "comp", "mask", "filt", "bdrop", "mlayer", "rclip"];
 
                 // Гистограмма по длительности: «дорог каждый пасс» против
                 // «дороги единицы пассов» различаются здесь и только здесь.
                 let mut buckets = [0u32; 5]; // <0.05, <0.2, <1, <5, >=5 ms
-                for (_, _, dur, _) in &items_prof {
+                for (_, _, dur, _, _, _, _) in &items_prof {
                     let m = ms(*dur);
                     let b = if m < 0.05 {
                         0
@@ -10676,6 +10787,26 @@ impl Renderer {
                     buckets[0], buckets[1], buckets[2], buckets[3], buckets[4],
                 );
 
+                // BUG-405 срез 2: последовательность пассов В ПОРЯДКЕ ПЛАНА.
+                // Топ-12 отсортирован по времени и потому не отвечает на
+                // вопрос «дорогие пассы стоят подряд или размазаны» — а
+                // «стоят подряд в начале» означает ожидание, а не работу.
+                eprintln!(
+                    "[frame:wgpu]   seq: {}",
+                    items_prof
+                        .iter()
+                        .map(|(k, _, d, _, o, kinds, desc)| format!(
+                            "{}{}{}[{}]:{:.2}",
+                            KIND.get(*k).unwrap_or(&"?"),
+                            o,
+                            kinds,
+                            desc,
+                            ms(*d)
+                        ))
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                );
+
                 let mut top = items_prof.clone();
                 top.sort_unstable_by_key(|i| std::cmp::Reverse(i.2));
                 let shown = top.len().min(12);
@@ -10684,15 +10815,15 @@ impl Renderer {
                 eprintln!(
                     "[frame:wgpu]   top {shown} items = {top_sum:.1}ms of {all_sum:.1}ms encode"
                 );
-                for (kind, level, dur, pass_end) in &top[..shown] {
+                for (kind, level, dur, pass_end, ops, kinds, _) in &top[..shown] {
                     let lvl = if *level == usize::MAX {
                         "-".to_string()
                     } else {
                         level.to_string()
                     };
                     eprintln!(
-                        "[frame:wgpu]     {:<6} lvl {:<3} {:7.2}ms  (drop(pass) {:6.2}ms)",
-                        KIND[*kind], lvl, ms(*dur), ms(*pass_end),
+                        "[frame:wgpu]     {:<6} lvl {:<3} {:7.2}ms  (drop(pass) {:6.2}ms, ops {} [{}])",
+                        KIND.get(*kind).unwrap_or(&"?"), lvl, ms(*dur), ms(*pass_end), ops, kinds,
                     );
                 }
             }

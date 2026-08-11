@@ -215,3 +215,55 @@ fn cpu_render_red_rect_partial() {
     assert_eq!(pix[1], 255, "G в (50,50) должен быть 255 (белый фон)");
     assert_eq!(pix[2], 255, "B в (50,50) должен быть 255 (белый фон)");
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BUG-405 срез 2 — подача кадра порциями
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Display list из `n` скруглённых клипов подряд: каждый добавляет в план
+/// кадра свой draw + композит клипа, то есть план заведомо длиннее одной
+/// порции подачи.
+fn many_clips_dl(w: f32, h: f32, n: usize) -> Vec<DisplayCommand> {
+    let mut dl = Vec::with_capacity(n * 3);
+    for i in 0..n {
+        let y = 4.0 + i as f32 * 6.0;
+        let rect = Rect { x: 4.0, y, width: w - 8.0, height: 4.0 };
+        dl.push(DisplayCommand::PushClipRoundedRect { rect, radii: [2.0; 4] });
+        dl.push(DisplayCommand::FillRect { rect, color: Color { r: 255, g: 0, b: 0, a: 255 } });
+        dl.push(DisplayCommand::PopClip);
+    }
+    let _ = h;
+    dl
+}
+
+/// BUG-405 срез 2: кадр из многих пассов подаётся несколькими командными
+/// списками, а короткий кадр — по-прежнему одним.
+///
+/// Гейт стоит на счётчике подач, а не на времени кадра: «список не копится»
+/// — утверждение о механизме, оно не зависит ни от железа, ни от загрузки
+/// машины (время кадра зависит от обоих).
+#[test]
+#[ignore = "requires GPU adapter"]
+fn long_frame_is_submitted_in_chunks() {
+    let mut r = Renderer::new_headless(INTER.to_vec(), 64, 128, ColorSpace::Srgb)
+        .expect("headless renderer");
+    r.set_font_provider(None);
+
+    // Контроль: короткий кадр (один прямоугольник) — одна подача.
+    let before = r.submissions();
+    r.render_to_image(&red_rect_dl(64.0, 128.0), 0.0, 0.0).expect("короткий кадр");
+    assert_eq!(
+        r.submissions() - before,
+        1,
+        "короткий кадр не должен резаться на подачи",
+    );
+
+    // Целевой случай: длинный план — больше одной подачи.
+    let before = r.submissions();
+    r.render_to_image(&many_clips_dl(64.0, 128.0, 12), 0.0, 0.0).expect("длинный кадр");
+    assert!(
+        r.submissions() - before > 1,
+        "кадр из многих пассов подан одним списком: подач {}",
+        r.submissions() - before,
+    );
+}
