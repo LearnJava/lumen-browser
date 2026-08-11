@@ -1,5 +1,6 @@
 use std::io::Cursor;
 use std::sync::{Arc, Mutex};
+use gif::streaming_decoder::FrameDecoder;
 use gif::{DecodeOptions, Decoder};
 use crate::{Image, PixelFormat};
 
@@ -99,6 +100,33 @@ fn frame_index_for(delays_cs: &[u16], loop_count: GifLoopCount, elapsed_ms: u64)
     delays_cs.len() - 1
 }
 
+/// Опции контейнерного прохода: LZW-данные кадров **не** разжимаются на месте, а выдаются
+/// как есть (`skip_frame_decoding`), чтобы пиксели каждого кадра распаковывались отдельным
+/// [`FrameDecoder`] строго до заполнения кадрового буфера.
+///
+/// BUG-396: у `gif::Decoder` со встроенным LZW нет способа «дочитать кадр и перейти к
+/// следующему» — `next_frame_info` докручивает LZW-поток текущего кадра до конца, даже если
+/// все пиксели уже выданы. Файлы, чей энкодер наращивает ширину кода по early-change-правилу
+/// (giflib и производные: ширина растёт на один код раньше, чем ждёт `weezl`), несут после
+/// последнего пикселя биты, которые декодер прочитывает как несуществующий код — вся анимация
+/// падала `invalid code in LZW stream`, хотя пиксели всех кадров декодируются верно. Контейнерный
+/// проход без LZW этих битов не касается, а `FrameDecoder` останавливается на `width × height`
+/// пикселях и до хвоста не доходит — ровно так же ведут себя Chromium и Pillow.
+fn container_options() -> DecodeOptions {
+    let mut options = DecodeOptions::new();
+    options.set_color_output(gif::ColorOutput::RGBA);
+    options.skip_frame_decoding(true);
+    options
+}
+
+/// Опции пиксельного прохода [`FrameDecoder`]: RGBA-выход, палитра и transparent-index
+/// применяются самим конвертером.
+fn pixel_options() -> DecodeOptions {
+    let mut options = DecodeOptions::new();
+    options.set_color_output(gif::ColorOutput::RGBA);
+    options
+}
+
 /// Ленивое состояние декодера: живой forward-only `gif::Decoder` над `Arc<[u8]>`-байтами,
 /// его позиция и кэш последнего выданного кадра.
 ///
@@ -108,10 +136,13 @@ fn frame_index_for(delays_cs: &[u16], loop_count: GifLoopCount, elapsed_ms: u64)
 /// При запросе кадра «позади» курсора (wrap на 0 в цикле или обратный seek) декодер
 /// пересоздаётся с начала.
 struct GifCursor {
-    /// Живой декодер, спозиционированный так, что следующий читаемый кадр имеет индекс `next_idx`.
+    /// Живой контейнерный декодер, спозиционированный так, что следующий читаемый кадр имеет
+    /// индекс `next_idx`. Выдаёт кадры с несжатыми LZW-данными (см. [`container_options`]).
     /// В `Box`, чтобы объёмный `gif::Decoder` не раздувал `AnimatedGif` при простое (курсор `None`
     /// всё равно резервирует место под самый большой вариант `Option`).
     reader: Box<Decoder<Cursor<Arc<[u8]>>>>,
+    /// Распаковщик LZW-данных одного кадра в RGBA-пиксели. Держит глобальную палитру файла.
+    frames: Box<FrameDecoder>,
     /// Индекс следующего кадра, который выдаст `reader` (число уже прочитанных кадров).
     next_idx: usize,
     /// Кэш последнего выданного кадра `(индекс, пиксели)` — обслуживает повторный запрос
@@ -122,12 +153,19 @@ struct GifCursor {
 impl GifCursor {
     /// Создаёт новый forward-декодер с позиции нулевого кадра.
     fn new(encoded: &Arc<[u8]>) -> Result<Self, GifError> {
-        let mut options = DecodeOptions::new();
-        options.set_color_output(gif::ColorOutput::RGBA);
-        let reader = options
+        let reader = container_options()
             .read_info(Cursor::new(Arc::clone(encoded)))
             .map_err(|e| GifError::DecodeError(e.to_string()))?;
-        Ok(Self { reader: Box::new(reader), next_idx: 0, last: None })
+        let mut frames = FrameDecoder::new(pixel_options());
+        if let Some(palette) = reader.global_palette() {
+            frames.set_global_palette(palette.to_vec());
+        }
+        Ok(Self {
+            reader: Box::new(reader),
+            frames: Box::new(frames),
+            next_idx: 0,
+            last: None,
+        })
     }
 }
 
@@ -265,18 +303,19 @@ impl AnimatedGif {
         // decoded too (disposal makes each frame depend on its predecessors).
         let mut buffer = Vec::new();
         while cursor.next_idx <= idx {
-            let has_frame = cursor
+            // Disjoint field borrows: `frame` borrows `cursor.reader`, the unpacker is
+            // `cursor.frames`.
+            let Some(frame) = cursor
                 .reader
-                .next_frame_info()
+                .read_next_frame()
                 .map_err(|e| GifError::DecodeError(e.to_string()))?
-                .is_some();
-            if !has_frame {
+            else {
                 break;
-            }
+            };
             buffer = vec![0u8; frame_bytes];
             cursor
-                .reader
-                .read_into_buffer(&mut buffer)
+                .frames
+                .decode_lzw_encoded_frame_into_buffer(frame, &mut buffer)
                 .map_err(|e| GifError::DecodeError(e.to_string()))?;
             cursor.next_idx += 1;
         }
@@ -321,11 +360,11 @@ pub fn decode_gif(bytes: &[u8]) -> Result<Image, GifError> {
 /// Декодирует метаданные GIF (размер, цикличность, per-frame задержки) и возвращает
 /// [`AnimatedGif`] с **ленивым** декодированием пиксельных кадров.
 ///
-/// Кадры не материализуются в память при загрузке: за один проход собираются лишь задержки
-/// (пиксели проходного декода сразу отбрасываются, пиковая память здесь — один кадр, а не вся
-/// анимация), а сами кадры декодируются по запросу через [`AnimatedGif::frame_image`].
-/// Использует `gif` крейт с `ColorOutput::RGBA` — палитра и disposal обрабатываются
-/// автоматически; каждый кадр разворачивается в полный экранный прямоугольник `width × height`.
+/// Кадры не материализуются в память при загрузке: проход идёт по контейнеру и собирает лишь
+/// задержки, LZW-данные при этом не распаковываются вовсе (см. [`container_options`]), а сами
+/// кадры декодируются по запросу через [`AnimatedGif::frame_image`]. Пиксели выдаёт
+/// `gif::FrameDecoder` с `ColorOutput::RGBA` — палитра и transparent-index применяются
+/// автоматически.
 ///
 /// # Shell integration handoff
 /// Шелл вызывает `gif.frame_index_at(elapsed_ms)` на каждом render-тике, и при смене индекса —
@@ -343,10 +382,7 @@ pub fn decode_gif_animated(bytes: &[u8]) -> Result<AnimatedGif, GifError> {
 
     let encoded: Arc<[u8]> = Arc::from(bytes);
 
-    let mut options = DecodeOptions::new();
-    options.set_color_output(gif::ColorOutput::RGBA);
-
-    let mut reader = options
+    let mut reader = container_options()
         .read_info(Cursor::new(Arc::clone(&encoded)))
         .map_err(|e| GifError::DecodeError(e.to_string()))?;
 
@@ -362,10 +398,10 @@ pub fn decode_gif_animated(bytes: &[u8]) -> Result<AnimatedGif, GifError> {
         gif::Repeat::Infinite => GifLoopCount::Infinite,
     };
 
-    // Metadata pass: iterate every frame to record its delay. Pixels are decoded into a single
-    // reused buffer and discarded, so peak memory here is one frame, not the whole animation.
-    let frame_bytes = (width * height * 4) as usize;
-    let mut discard = vec![0u8; frame_bytes];
+    // Metadata pass: walk the container to record every frame's delay. `skip_frame_decoding`
+    // means the LZW payload is stepped over, not unpacked — no pixel buffer is allocated here
+    // at all, and a frame whose trailing LZW bits the decoder cannot parse (BUG-396) does not
+    // sink the whole animation.
     let mut delays_cs = Vec::new();
 
     while let Some(frame) = reader
@@ -373,9 +409,6 @@ pub fn decode_gif_animated(bytes: &[u8]) -> Result<AnimatedGif, GifError> {
         .map_err(|e| GifError::DecodeError(e.to_string()))?
     {
         delays_cs.push(frame.delay);
-        reader
-            .read_into_buffer(&mut discard)
-            .map_err(|e| GifError::DecodeError(e.to_string()))?;
     }
 
     if delays_cs.is_empty() {
@@ -632,6 +665,67 @@ mod tests {
         let img = decode_gif(&bytes).expect("first frame");
         assert_eq!(img.data, vec![255, 0, 0, 255, 0, 255, 0, 255]);
     }
+
+    // ── BUG-396: early-change LZW tail / frame without a preceding GCE ───────
+
+    /// Байт-в-байт `tests/wpt/gif/reset-no-gce.gif` (upstream WPT, 90 байт): 2×2, три кадра,
+    /// глобальная палитра `[чёрный, красный, зелёный, синий]`.
+    ///
+    /// * кадр 0 — GCE `disposal=2`, `transparent_index=0` → сплошной красный, непрозрачный;
+    /// * кадр 1 — GCE `disposal=2`, `transparent_index=2` → залит зелёным = прозрачный целиком;
+    /// * кадр 2 — **GCE отсутствует** (это и проверяет upstream) → прозрачного индекса нет,
+    ///   сплошной зелёный, непрозрачный.
+    ///
+    /// LZW-данные всех трёх кадров (`8c a3 00` / `94 a5 00`) энкодер записал по early-change-
+    /// правилу: ширина кода растёт на один код раньше, чем её наращивает `weezl`, поэтому
+    /// хвостовые биты за последним пикселем читаются как несуществующий код.
+    const RESET_NO_GCE_GIF: &[u8] = &[
+        0x47, 0x49, 0x46, 0x38, 0x39, 0x61, // "GIF89a"
+        0x02, 0x00, 0x02, 0x00, 0xf1, 0x00, 0x00, // 2×2, GCT из 4 цветов
+        0x00, 0x00, 0x00, 0xff, 0x00, 0x00, 0x00, 0xff, 0x00, 0x00, 0x00, 0xff, // палитра
+        0x21, 0xf9, 0x04, 0x09, 0x14, 0x00, 0x00, 0x00, // GCE кадра 0
+        0x2c, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x02, 0x00, 0x00, // дескриптор кадра 0
+        0x02, 0x03, 0x8c, 0xa3, 0x00, 0x00, // LZW кадра 0
+        0x21, 0xf9, 0x04, 0x09, 0x14, 0x00, 0x02, 0x00, // GCE кадра 1
+        0x2c, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x02, 0x00, 0x00, // дескриптор кадра 1
+        0x02, 0x03, 0x94, 0xa5, 0x00, 0x00, // LZW кадра 1
+        0x2c, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x02, 0x00, 0x00, // дескриптор кадра 2, без GCE
+        0x02, 0x03, 0x94, 0xa5, 0x00, 0x00, // LZW кадра 2
+        0x3b, // trailer
+    ];
+
+    #[test]
+    fn bug396_early_change_lzw_tail_does_not_kill_animation() {
+        let gif = decode_gif_animated(RESET_NO_GCE_GIF).expect("три кадра должны декодироваться");
+        assert_eq!(gif.frame_count(), 3, "кадр без GCE тоже считается");
+        assert_eq!((gif.width, gif.height), (2, 2));
+        // Кадры 0 и 1 несут delay=20 cs, у кадра 2 GCE нет → delay=0 → браузерные 100 мс.
+        assert_eq!(gif.frame_delay_ms(0), 200);
+        assert_eq!(gif.frame_delay_ms(1), 200);
+        assert_eq!(gif.frame_delay_ms(2), 100);
+    }
+
+    #[test]
+    fn bug396_frame_without_gce_has_no_transparent_index() {
+        let gif = decode_gif_animated(RESET_NO_GCE_GIF).expect("decode");
+
+        let f0 = gif.frame_image(0).expect("кадр 0");
+        assert_eq!(f0.data, [255, 0, 0, 255].repeat(4), "кадр 0 — красный непрозрачный");
+
+        // transparent_index=2 совпал с заливкой → все четыре пикселя прозрачны.
+        let f1 = gif.frame_image(1).expect("кадр 1");
+        assert!(
+            f1.data.chunks_exact(4).all(|px| px[3] == 0),
+            "кадр 1 должен быть полностью прозрачным, получено {:?}",
+            f1.data
+        );
+
+        // Ключ теста: у кадра 2 нет предшествующего GCE, значит прозрачного индекса нет —
+        // тот же зелёный пиксель обязан остаться непрозрачным.
+        let f2 = gif.frame_image(2).expect("кадр 2");
+        assert_eq!(f2.data, [0, 255, 0, 255].repeat(4), "кадр 2 — зелёный непрозрачный");
+    }
+
 
     #[test]
     fn animated_gif_is_send_sync() {
