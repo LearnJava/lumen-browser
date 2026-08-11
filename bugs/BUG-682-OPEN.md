@@ -59,7 +59,7 @@ TestDriver-тест) — реконфирмация уже открытых де
 - `document.hasStorageAccess()`/`requestStorageAccess()` не проверяют
   небезопасный контекст (`assert_false: ... expected false got true`,
   `assert_unreached: ... call without user gesture`) — тот же корень, что
-  [BUG-399](BUG-399-OPEN.md): `window.isSecureContext` захардкожен `true`
+  [BUG-399](BUG-399-FIXED.md): `window.isSecureContext` захардкожен `true`
   безусловно (`dom.rs:8755`), поэтому Phase 0 шим «always granted»
   (`dom.rs:4423-4433`) не может отличить secure/insecure origin.
 - `CreateDetachedFrame().requestStorageAccess()` падает на `null` —

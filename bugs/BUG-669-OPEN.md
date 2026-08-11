@@ -35,7 +35,7 @@ test(() => {
 ```
 
 (`isSecureContext` здесь `true` — реконфирмация отдельного, уже открытого
-[BUG-399](BUG-399-OPEN.md), «`window.isSecureContext` захардкожен `true`»; то
+[BUG-399](BUG-399-FIXED.md), «`window.isSecureContext` захардкожен `true`»; то
 есть эта страница по мнению движка — secure context, а `WakeLock` там всё равно
 отсутствует.) `navigator.wakeLock.request('screen')` при этом реально
 работает и резолвится (`{"ok":true,"type":"screen","released":false}`) — сам
