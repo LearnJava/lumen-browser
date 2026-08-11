@@ -10371,68 +10371,105 @@ URL.revokeObjectURL = function(url) { delete _object_url_store[String(url)]; };
 var _perf_origin_ms = typeof _lumen_now_ms === 'function' ? _lumen_now_ms() : 0;
 // Internal entry store: array of {entryType, name, startTime, duration}.
 var _perf_entries = [];
-var performance = {
-    timeOrigin: _perf_origin_ms,
-    now: function() {
-        return (typeof _lumen_now_ms === 'function' ? _lumen_now_ms() : 0) - _perf_origin_ms;
-    },
-    // User Timing L3 §4.2 — performance.mark(name, options?)
-    mark: function(name, opts) {
-        var start = (opts && typeof opts.startTime === 'number') ? opts.startTime : performance.now();
-        var entry = { entryType: 'mark', name: String(name), startTime: start, duration: 0 };
-        _perf_entries.push(entry);
-        _perf_observer_notify([entry]);
-        return entry;
-    },
-    // User Timing L3 §4.3 — performance.measure(name, start?, end?)
-    measure: function(name, startMark, endMark) {
-        var start = 0, end = performance.now();
-        if (typeof startMark === 'string') {
-            var sm = _perf_entries_by_name(startMark, 'mark');
-            if (sm.length > 0) start = sm[sm.length - 1].startTime;
-        } else if (typeof startMark === 'number') {
-            start = startMark;
-        }
-        if (typeof endMark === 'string') {
-            var em = _perf_entries_by_name(endMark, 'mark');
-            if (em.length > 0) end = em[em.length - 1].startTime;
-        } else if (typeof endMark === 'number') {
-            end = endMark;
-        }
-        var entry = { entryType: 'measure', name: String(name), startTime: start, duration: end - start };
-        _perf_entries.push(entry);
-        _perf_observer_notify([entry]);
-        return entry;
-    },
-    getEntriesByName: function(name, type) {
-        return _perf_entries_by_name(String(name), type);
-    },
-    getEntriesByType: function(type) {
-        var t = String(type);
-        return _perf_entries.filter(function(e) { return e.entryType === t; });
-    },
-    getEntries: function() { return _perf_entries.slice(); },
-    clearMarks: function(name) {
-        if (typeof name === 'string') {
-            _perf_entries = _perf_entries.filter(function(e) { return !(e.entryType === 'mark' && e.name === name); });
-        } else {
-            _perf_entries = _perf_entries.filter(function(e) { return e.entryType !== 'mark'; });
-        }
-    },
-    clearMeasures: function(name) {
-        if (typeof name === 'string') {
-            _perf_entries = _perf_entries.filter(function(e) { return !(e.entryType === 'measure' && e.name === name); });
-        } else {
-            _perf_entries = _perf_entries.filter(function(e) { return e.entryType !== 'measure'; });
-        }
-    },
-    // W3C Resource Timing L2 §4.4 — clears all 'resource' entries from the buffer.
-    clearResourceTimings: function() {
-        _perf_entries = _perf_entries.filter(function(e) { return e.entryType !== 'resource'; });
-    },
-    // W3C Resource Timing L2 §4.4 — sets max buffer size; Phase 0: no-op (unbounded).
-    setResourceTimingBufferSize: function(_maxSize) {},
+
+// HR Time L3 §4 declares `interface Performance : EventTarget`, so this is a
+// real interface — constructor plus a prototype chained to EventTarget —
+// rather than the flat object literal it used to be (BUG-400). A singleton is
+// still an *instance*: page code legitimately calls
+// `performance.addEventListener('resourcetimingbufferfull', ...)` (Resource
+// Timing L2 §4.4) and checks `performance instanceof Performance`, and neither
+// works when the methods are own properties of a literal. Putting the
+// operations on the prototype also leaves the instance with no own enumerable
+// properties, which is what makes the WebIDL default `toJSON()` below the only
+// thing `JSON.stringify(performance)` can report — same as in browsers.
+// Not constructible from script: the IDL declares no constructor.
+function Performance() { throw new TypeError('Illegal constructor'); }
+Performance.prototype = Object.create(EventTarget.prototype);
+Performance.prototype.constructor = Performance;
+
+// `readonly attribute DOMHighResTimeStamp timeOrigin` — a readonly WebIDL
+// attribute is a getter-only accessor on the prototype, not a writable data
+// property (class of BUG-366): page script must not be able to answer for the
+// engine by plain assignment.
+Object.defineProperty(Performance.prototype, 'timeOrigin', {
+    get: function() { return _perf_origin_ms; },
+    enumerable: true, configurable: true,
+});
+
+Performance.prototype.now = function() {
+    return (typeof _lumen_now_ms === 'function' ? _lumen_now_ms() : 0) - _perf_origin_ms;
 };
+// User Timing L3 §4.2 — performance.mark(name, options?)
+Performance.prototype.mark = function(name, opts) {
+    var start = (opts && typeof opts.startTime === 'number') ? opts.startTime : this.now();
+    var entry = { entryType: 'mark', name: String(name), startTime: start, duration: 0 };
+    _perf_entries.push(entry);
+    _perf_observer_notify([entry]);
+    return entry;
+};
+// User Timing L3 §4.3 — performance.measure(name, start?, end?)
+Performance.prototype.measure = function(name, startMark, endMark) {
+    var start = 0, end = this.now();
+    if (typeof startMark === 'string') {
+        var sm = _perf_entries_by_name(startMark, 'mark');
+        if (sm.length > 0) start = sm[sm.length - 1].startTime;
+    } else if (typeof startMark === 'number') {
+        start = startMark;
+    }
+    if (typeof endMark === 'string') {
+        var em = _perf_entries_by_name(endMark, 'mark');
+        if (em.length > 0) end = em[em.length - 1].startTime;
+    } else if (typeof endMark === 'number') {
+        end = endMark;
+    }
+    var entry = { entryType: 'measure', name: String(name), startTime: start, duration: end - start };
+    _perf_entries.push(entry);
+    _perf_observer_notify([entry]);
+    return entry;
+};
+Performance.prototype.getEntriesByName = function(name, type) {
+    return _perf_entries_by_name(String(name), type);
+};
+Performance.prototype.getEntriesByType = function(type) {
+    var t = String(type);
+    return _perf_entries.filter(function(e) { return e.entryType === t; });
+};
+Performance.prototype.getEntries = function() { return _perf_entries.slice(); };
+Performance.prototype.clearMarks = function(name) {
+    if (typeof name === 'string') {
+        _perf_entries = _perf_entries.filter(function(e) { return !(e.entryType === 'mark' && e.name === name); });
+    } else {
+        _perf_entries = _perf_entries.filter(function(e) { return e.entryType !== 'mark'; });
+    }
+};
+Performance.prototype.clearMeasures = function(name) {
+    if (typeof name === 'string') {
+        _perf_entries = _perf_entries.filter(function(e) { return !(e.entryType === 'measure' && e.name === name); });
+    } else {
+        _perf_entries = _perf_entries.filter(function(e) { return e.entryType !== 'measure'; });
+    }
+};
+// W3C Resource Timing L2 §4.4 — clears all 'resource' entries from the buffer.
+Performance.prototype.clearResourceTimings = function() {
+    _perf_entries = _perf_entries.filter(function(e) { return e.entryType !== 'resource'; });
+};
+// W3C Resource Timing L2 §4.4 — sets max buffer size; Phase 0: no-op (unbounded).
+Performance.prototype.setResourceTimingBufferSize = function(_maxSize) {};
+// HR Time L3 §4 `[Default] object toJSON()`. The default toJSON operation
+// serialises the interface's *attributes*, not its operations, and Performance
+// declares exactly one attribute Lumen implements — timeOrigin. The legacy
+// Navigation Timing L2 partial adds `timing`/`navigation`, which browsers also
+// emit here; Lumen has neither interface (no per-milestone timing data exists
+// in the engine at all — the shell delivers a navigation entry as url +
+// total duration only), so they are absent rather than faked — BUG-767.
+Performance.prototype.toJSON = function() {
+    return { timeOrigin: this.timeOrigin };
+};
+
+// The one instance. Built with Object.create + an explicit EventTarget
+// initialiser because the constructor above deliberately throws for script.
+var performance = Object.create(Performance.prototype);
+EventTarget.call(performance);
 
 function _perf_entries_by_name(name, type) {
     return _perf_entries.filter(function(e) {
@@ -10865,6 +10902,7 @@ window.HTMLCollection        = HTMLCollection;
 window.NodeFilter            = NodeFilter;
 window.TreeWalker            = _TreeWalker;
 window.NodeIterator          = _NodeIterator;
+window.Performance           = Performance;
 window.PerformanceObserver   = PerformanceObserver;
 window.MediaQueryList        = MediaQueryList;
 window.MediaQueryListEvent   = MediaQueryListEvent;
@@ -24815,6 +24853,93 @@ mod tests {
         fn performance_on_window() {
             let rt = v8_runtime_with_dom(make_doc());
             let r = rt.eval("typeof window.performance.now === 'function'").unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        // ── BUG-400: Performance is a real interface, not an object literal ──────
+
+        /// WPT `hr-time/basic.any.js`, subtest «Performance interface extends
+        /// EventTarget»: listener registration + dispatch must actually work.
+        #[test]
+        fn performance_extends_event_target() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var didHandle = false;\
+                     performance.addEventListener('testEvent', function() { didHandle = true; }, { once: true });\
+                     performance.dispatchEvent(new Event('testEvent'));\
+                     didHandle",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// The prototype chain, not just the presence of the three methods:
+        /// a literal carrying copies of `addEventListener` would pass the WPT
+        /// subtest above while still failing every `instanceof` check.
+        #[test]
+        fn performance_prototype_chain_reaches_event_target() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "performance instanceof Performance\
+                     && performance instanceof EventTarget\
+                     && window.Performance === Performance\
+                     && Object.getPrototypeOf(Performance.prototype) === EventTarget.prototype\
+                     && performance.addEventListener === EventTarget.prototype.addEventListener",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// HR Time L3 §4 declares no constructor, so the exposed interface
+        /// object must not be callable as one.
+        #[test]
+        fn performance_constructor_is_illegal() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval("try { new Performance(); false } catch (e) { e instanceof TypeError }")
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// WPT `hr-time/performance-tojson.html`, the part Lumen can satisfy:
+        /// `toJSON()` exists, returns an object and reports `timeOrigin`.
+        #[test]
+        fn performance_to_json_reports_time_origin() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var json = performance.toJSON();\
+                     typeof performance.toJSON === 'function'\
+                     && typeof json === 'object'\
+                     && json.timeOrigin === performance.timeOrigin\
+                     && JSON.parse(JSON.stringify(performance)).timeOrigin === performance.timeOrigin",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        /// The WebIDL default `toJSON()` serialises attributes only — the
+        /// operations must not leak into it, which is exactly what moving them
+        /// off the instance and onto the prototype buys.
+        #[test]
+        fn performance_to_json_carries_attributes_only() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval("Object.keys(performance.toJSON()).join(',')")
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::String("timeOrigin".to_string()));
+        }
+
+        /// `readonly attribute DOMHighResTimeStamp timeOrigin` — plain
+        /// assignment from page script must not move the engine's value.
+        #[test]
+        fn performance_time_origin_is_readonly() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval("var before = performance.timeOrigin; performance.timeOrigin = 0; performance.timeOrigin === before")
+                .unwrap();
             assert_eq!(r, lumen_core::JsValue::Bool(true));
         }
 

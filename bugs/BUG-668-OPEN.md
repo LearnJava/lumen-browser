@@ -51,7 +51,7 @@ Two independent defects in `SCREEN_ORIENTATION_SHIM` (`screen_orientation.rs:20`
    `dispatchEvent(new Event('change'))` path (rather than calling the internal
    `_fireChangeEvent` the shim itself defines) cannot work at all. Same class of defect as
    [BUG-664](bugs/BUG-664-OPEN.md) (`navigator.connection` not an `EventTarget`) and
-   [BUG-400](bugs/BUG-400-OPEN.md) (`performance` a plain object literal) — a recurring pattern
+   [BUG-400](bugs/BUG-400-FIXED.md) (`performance` a plain object literal) — a recurring pattern
    of hand-rolled pub/sub standing in for real `EventTarget` inheritance across Phase 0 shims.
 
 2. **`.lock()` resolves successfully but never updates `type`/`angle`.** `lock()`

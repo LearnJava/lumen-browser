@@ -58,11 +58,11 @@
  "generated": "2026-08-11",
  "counts": {
   "open": 314,
-  "fixed": 417,
+  "fixed": 418,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 731,
+ "total_bugs": 732,
  "phases": [
   {
    "id": "P0",
@@ -3535,7 +3535,7 @@
        "title": "WPT: вендорить + прогнать категорию `resource-timing`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root resource-timing --recursive --processes=4`, ~7 мин, 271 файл, 132 исполнившихся id) — **30/132 harness OK, 11/147 сабтестов**. Весь сигнал воспроизводит уже задокументированные гэпы, три класса: (1) `TypeError: performance.addEventListener is not a function` (14 хитов, `buffer-full-*.html`) — реконфирмация [BUG-400](bugs/BUG-400-OPEN.md) (`performance` — плоский объектный литерал без `EventTarget`); отдельно подтверждено (живой grep `dom.rs`), что `resourcetimingbufferfull`-событие не существует в шиме вовсе (нулевых упоминаний) — BUG-400 явно выносит его диспатч за скобки своего фикса, так что `buffer-full-*.html` не позеленеют даже после него, остаточный гэп уже предвиден в тексте бага; (2) `Error: observe_entry: timeout` — почти все `initiator-type/*.html` (img/script/css/svg/video/embed/input/frameset/body background/sendBeacon) вместе с `clear-resource-timings.html` (`expected 2 but got 0`) и весь NOTRUN/TIMEOUT-хвост `test_resource_timing.html` — реконфирмация [BUG-520](bugs/BUG-520-OPEN.md) (`_lumen_record_resource_timing` не вызывается ни из одного реального пути загрузки ресурса — JS-сторона и `PerformanceObserver`-доставка рабочие, буфер просто никогда не наполняется); (3) единичные реконфирмации на периферии — [BUG-572](bugs/BUG-572-OPEN.md) (`HTMLScriptElement.supports` отсутствует, `resource-timing-failed-fetch-web-bundle.tentative.html`), [BUG-568](bugs/BUG-568-OPEN.md) (`document.write` отсутствует целиком, `link-sequence-of-events.html`/`input-sequence-of-events.html`), [BUG-347](bugs/BUG-347-OPEN.md) (`missing scheme` на относительных URL, `no-entries-for-cross-origin-css-fetched.sub.html`), TLS-гэп `UnknownIssuer` (`.https.`/`.h2.` файлы, [BUG-380](bugs/BUG-380-FIXED.md)) и `AssertionError: Got results from X, expected Y` (27 хитов, тот же реюз browsing context, BUG-380). Невендоренные общие хелперы (`/common/*.js`, `../../resources/*.js` на уровень выше категории) — по устоявшейся конвенции, не баг. Новых багов не заведено — весь сигнал уже покрыт открытыми тикетами"
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root resource-timing --recursive --processes=4`, ~7 мин, 271 файл, 132 исполнившихся id) — **30/132 harness OK, 11/147 сабтестов**. Весь сигнал воспроизводит уже задокументированные гэпы, три класса: (1) `TypeError: performance.addEventListener is not a function` (14 хитов, `buffer-full-*.html`) — реконфирмация [BUG-400](bugs/BUG-400-FIXED.md) (`performance` — плоский объектный литерал без `EventTarget`); отдельно подтверждено (живой grep `dom.rs`), что `resourcetimingbufferfull`-событие не существует в шиме вовсе (нулевых упоминаний) — BUG-400 явно выносит его диспатч за скобки своего фикса, так что `buffer-full-*.html` не позеленеют даже после него, остаточный гэп уже предвиден в тексте бага; (2) `Error: observe_entry: timeout` — почти все `initiator-type/*.html` (img/script/css/svg/video/embed/input/frameset/body background/sendBeacon) вместе с `clear-resource-timings.html` (`expected 2 but got 0`) и весь NOTRUN/TIMEOUT-хвост `test_resource_timing.html` — реконфирмация [BUG-520](bugs/BUG-520-OPEN.md) (`_lumen_record_resource_timing` не вызывается ни из одного реального пути загрузки ресурса — JS-сторона и `PerformanceObserver`-доставка рабочие, буфер просто никогда не наполняется); (3) единичные реконфирмации на периферии — [BUG-572](bugs/BUG-572-OPEN.md) (`HTMLScriptElement.supports` отсутствует, `resource-timing-failed-fetch-web-bundle.tentative.html`), [BUG-568](bugs/BUG-568-OPEN.md) (`document.write` отсутствует целиком, `link-sequence-of-events.html`/`input-sequence-of-events.html`), [BUG-347](bugs/BUG-347-OPEN.md) (`missing scheme` на относительных URL, `no-entries-for-cross-origin-css-fetched.sub.html`), TLS-гэп `UnknownIssuer` (`.https.`/`.h2.` файлы, [BUG-380](bugs/BUG-380-FIXED.md)) и `AssertionError: Got results from X, expected Y` (27 хитов, тот же реюз browsing context, BUG-380). Невендоренные общие хелперы (`/common/*.js`, `../../resources/*.js` на уровень выше категории) — по устоявшейся конвенции, не баг. Новых багов не заведено — весь сигнал уже покрыт открытыми тикетами"
       },
       {
        "id": "WPT-VENDOR-sanitizer-api",
@@ -3552,7 +3552,7 @@
        "title": "WPT: вендорить + прогнать категорию `savedata`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root savedata --recursive`, ~30 с, единственный тест — `idlharness.any.js`) — **0/1 harness OK** (TIMEOUT, `/resources/WebIDLParser.js`+`idlharness.js` 404, невендоренный общий idlharness-инфра-гэп, реконфирмация уже задокументированного класса). Заведён [BUG-664](bugs/BUG-664-OPEN.md) прямой пробой `--mcp-live-port`/`eval` (та же техника, что у `generic-sensor`/BUG-394): `navigator.connection` (`NetworkInformation`) не наследуется от `EventTarget` (`instanceof` → false, нет `dispatchEvent`, свои no-op заглушки `addEventListener`/`removeEventListener`) — `change`-событие в принципе не может быть доставлено ни одним из двух способов подписки; тот же класс дефекта, что [BUG-386](bugs/BUG-386-FIXED.md)/[BUG-394](bugs/BUG-394-FIXED.md)/[BUG-400](bugs/BUG-400-OPEN.md). Соседняя находка того же шима — [BUG-641](bugs/BUG-641-OPEN.md) (`downlinkMax` отсутствует) — уже заведена категорией `netinfo`",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root savedata --recursive`, ~30 с, единственный тест — `idlharness.any.js`) — **0/1 harness OK** (TIMEOUT, `/resources/WebIDLParser.js`+`idlharness.js` 404, невендоренный общий idlharness-инфра-гэп, реконфирмация уже задокументированного класса). Заведён [BUG-664](bugs/BUG-664-OPEN.md) прямой пробой `--mcp-live-port`/`eval` (та же техника, что у `generic-sensor`/BUG-394): `navigator.connection` (`NetworkInformation`) не наследуется от `EventTarget` (`instanceof` → false, нет `dispatchEvent`, свои no-op заглушки `addEventListener`/`removeEventListener`) — `change`-событие в принципе не может быть доставлено ни одним из двух способов подписки; тот же класс дефекта, что [BUG-386](bugs/BUG-386-FIXED.md)/[BUG-394](bugs/BUG-394-FIXED.md)/[BUG-400](bugs/BUG-400-FIXED.md). Соседняя находка того же шима — [BUG-641](bugs/BUG-641-OPEN.md) (`downlinkMax` отсутствует) — уже заведена категорией `netinfo`",
        "bugs": [
         "BUG-664"
        ]
@@ -7382,10 +7382,10 @@
    "debtor": false
   },
   "BUG-400": {
-   "status": "open",
+   "status": "fixed",
    "title": "`performance` не реализует интерфейс `Performance` целиком: не наследует `EventTarget` (`performance.addEventListener is not a function`) и не имеет `toJSON()`…",
-   "component": "js (`crates/js/src/dom.rs:10987-11048` — `var performance = {...}`, объектный литерал)",
-   "date": null,
+   "component": "js (`crates/js/src/dom.rs` — секция `// ── performance (HR Timer …`, бывший `var performance = {...}`, объектный литерал)",
+   "date": "2026-08-11",
    "debtor": false
   },
   "BUG-401": {
@@ -9907,6 +9907,13 @@
    "component": "js (`crates/js/src/worker.rs:227` — `worker_global_shim`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-767": {
+   "status": "open",
+   "title": "`performance.timing` / `performance.navigation` (legacy Navigation Timing L2 §5–6: `PerformanceTiming`/`PerformanceNavigation`) отсутствуют — `undefined`, имена…",
+   "component": "js (`crates/js/src/dom.rs` — секция `// ── performance (HR Timer …`, `Performance.prototype`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -10335,6 +10342,9 @@
   ],
   "js (`crates/js/src/dom.rs` — ни одного `DOMMatrix`/`DOMPoint`/`DOMRect`/`DOMQuad`-конструктора нигде)": [
    "BUG-522"
+  ],
+  "js (`crates/js/src/dom.rs` — секция `// ── performance (HR Timer …`, `Performance.prototype`)": [
+   "BUG-767"
   ],
   "js (`crates/js/src/dom.rs` — фрагментный парсер `innerHTML`)": [
    "BUG-744"

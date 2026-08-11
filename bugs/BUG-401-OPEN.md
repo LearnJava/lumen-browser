@@ -46,12 +46,12 @@ timeOrigins differ when worker is created after a delay»). Минимальны
 хочется дублировать логику — оценить, стоит ли выносить общий
 JS-фрагмент `performance`-конструктора в шаред-строку, используемую и
 `WEB_API_SHIM`, и `WORKER_SHIM`, чтобы не разъезжались (после фикса
-[BUG-400](bugs/BUG-400-OPEN.md) это станет актуальнее — EventTarget-
+[BUG-400](bugs/BUG-400-FIXED.md) это станет актуальнее — EventTarget-
 наследование и `toJSON()` тоже придётся продублировать или вынести).
 
 ## Связанные
 
-* [BUG-400](bugs/BUG-400-OPEN.md) — тот же API (`Performance`), другой
+* [BUG-400](bugs/BUG-400-FIXED.md) — тот же API (`Performance`), другой
   root cause: там метод/наследование неполны на `window.performance`,
   здесь объект отсутствует на `self`/`globalThis` воркера целиком.
 * `worker_global_shim` уже содержит несколько намеренно урезанных
