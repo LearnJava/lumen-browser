@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-11",
  "counts": {
-  "open": 313,
-  "fixed": 416,
+  "open": 314,
+  "fixed": 417,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 729,
+ "total_bugs": 731,
  "phases": [
   {
    "id": "P0",
@@ -3055,7 +3055,7 @@
        "title": "WPT: вендорить + прогнать категорию `magnetometer`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа, датчик устройства). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root magnetometer --recursive`, ~1:56), включена по тому же постоянному решению пользователя, что `accelerometer`/`ambient-light`/`compute-pressure` — **2/10 harness OK, 1/3 сабтестов**. 6 `.https.` TIMEOUT на стандартном TLS-гэпе тестового сертификата (тот же класс, что `keyboard-lock`/`loading`); 2 ERROR — session-reuse артефакт класса [BUG-380](bugs/BUG-380-FIXED.md). Реально исполнились 2 не-https теста: 1 FAIL на Permissions-Policy интроспекции (тот же паттерн, что `ambient-light`), 1 FAIL переподтверждает уже открытые [BUG-399](bugs/BUG-399-OPEN.md)/[BUG-394](bugs/BUG-394-FIXED.md) (`Magnetometer` доступен в небезопасном контексте — общий `_makeXyzSensor`-стаб, найдено ранее на `Gyroscope_insecure_context.html`). Новых багов не заведено"
+       "note": "Скоуп: 🚫 (вне скоупа, датчик устройства). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root magnetometer --recursive`, ~1:56), включена по тому же постоянному решению пользователя, что `accelerometer`/`ambient-light`/`compute-pressure` — **2/10 harness OK, 1/3 сабтестов**. 6 `.https.` TIMEOUT на стандартном TLS-гэпе тестового сертификата (тот же класс, что `keyboard-lock`/`loading`); 2 ERROR — session-reuse артефакт класса [BUG-380](bugs/BUG-380-FIXED.md). Реально исполнились 2 не-https теста: 1 FAIL на Permissions-Policy интроспекции (тот же паттерн, что `ambient-light`), 1 FAIL переподтверждает уже открытые [BUG-399](bugs/BUG-399-FIXED.md)/[BUG-394](bugs/BUG-394-FIXED.md) (`Magnetometer` доступен в небезопасном контексте — общий `_makeXyzSensor`-стаб, найдено ранее на `Gyroscope_insecure_context.html`). Новых багов не заведено"
       },
       {
        "id": "WPT-VENDOR-managed",
@@ -3281,7 +3281,7 @@
        "title": "WPT: вендорить + прогнать категорию `orientation-sensor`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). датчик устройства (Generic Sensor API). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root orientation-sensor --recursive`, ~7 мин 20 с, 16 id) — **1/16 harness OK, 0/2 сабтестов**. 15/16 TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer` (все `.https.`). Единственный не-`.https.` тест (`OrientationSensor_insecure_context.html`) реально исполнился и провалил оба сабтеста: `AbsoluteOrientationSensor`/`RelativeOrientationSensor` не должны быть видны в небезопасном контексте, но видны — прямая переподтверждение уже заведённого [BUG-399](bugs/BUG-399-OPEN.md) (`window.isSecureContext` захардкожен `true`, вся Generic Sensor family не гейтится). API реализован как Phase 0 заглушка (`crates/js/src/generic_sensor.rs`, нет реального железа). Новый баг не заведён — совпадает с уже описанным дефектом"
+       "note": "Скоуп: 🚫 (вне скоупа). датчик устройства (Generic Sensor API). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root orientation-sensor --recursive`, ~7 мин 20 с, 16 id) — **1/16 harness OK, 0/2 сабтестов**. 15/16 TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer` (все `.https.`). Единственный не-`.https.` тест (`OrientationSensor_insecure_context.html`) реально исполнился и провалил оба сабтеста: `AbsoluteOrientationSensor`/`RelativeOrientationSensor` не должны быть видны в небезопасном контексте, но видны — прямая переподтверждение уже заведённого [BUG-399](bugs/BUG-399-FIXED.md) (`window.isSecureContext` захардкожен `true`, вся Generic Sensor family не гейтится). API реализован как Phase 0 заглушка (`crates/js/src/generic_sensor.rs`, нет реального железа). Новый баг не заведён — совпадает с уже описанным дефектом"
       },
       {
        "id": "WPT-VENDOR-page-lifecycle",
@@ -3336,7 +3336,7 @@
        "title": "WPT: вендорить + прогнать категорию `payment-request`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). Payment Request API. DONE 2026-08-05: вендорена + прогнана целиком (`--all --root payment-request --recursive --processes=4`, ~3 мин 25 с, 32 id) — **2/32 harness OK, 0/2 сабтестов**. 30/32 TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`. Два исполнившихся не-`.https.` теста реконфирмируют уже заведённые баги: `payment-request-insecure.http.html` — [BUG-399](bugs/BUG-399-OPEN.md) (`window.isSecureContext` захардкожен `true`); `PaymentRequestUpdateEvent/constructor.http.html` — [BUG-637](bugs/BUG-637-OPEN.md) (глобальный `Window` не определён). Новых багов не заведено"
+       "note": "Скоуп: 🚫 (вне скоупа). Payment Request API. DONE 2026-08-05: вендорена + прогнана целиком (`--all --root payment-request --recursive --processes=4`, ~3 мин 25 с, 32 id) — **2/32 harness OK, 0/2 сабтестов**. 30/32 TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`. Два исполнившихся не-`.https.` теста реконфирмируют уже заведённые баги: `payment-request-insecure.http.html` — [BUG-399](bugs/BUG-399-FIXED.md) (`window.isSecureContext` захардкожен `true`); `PaymentRequestUpdateEvent/constructor.http.html` — [BUG-637](bugs/BUG-637-OPEN.md) (глобальный `Window` не определён). Новых багов не заведено"
       },
       {
        "id": "WPT-VENDOR-performance-timeline",
@@ -3602,7 +3602,7 @@
        "title": "WPT: вендорить + прогнать категорию `screen-wake-lock`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root screen-wake-lock --recursive`, ~4 мин 39 с, 21 файл, 16 исполнившихся id) — **2/16 harness OK, 1/2 сабтестов**. 13/16 id — `.https.`, TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`; 2 ERROR — session/URL-reuse артефакт (BUG-380). Оба реально исполнившихся не-`.https.` теста — реконфирмации: `wakelock-supported-by-permissions-policy.html` → [BUG-361](bugs/BUG-361-FIXED.md) (`document.permissionsPolicy.features()` всегда `[]`); `wakelock-insecure-context.any.html` формально PASS, но по неверной причине — живая проба (`--mcp-live-port`) нашла [BUG-669](bugs/BUG-669-OPEN.md): `WakeLock`-интерфейс никогда не выставляется на `globalThis` (только `WakeLockSentinel` и `navigator.wakeLock`), поэтому `'WakeLock' in self` всегда `false`, даже в контексте, который сам движок считает secure (реконфирмация [BUG-399](bugs/BUG-399-OPEN.md), `isSecureContext` захардкожен `true`) — `navigator.wakeLock.request('screen')` при этом реально работает и резолвится",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root screen-wake-lock --recursive`, ~4 мин 39 с, 21 файл, 16 исполнившихся id) — **2/16 harness OK, 1/2 сабтестов**. 13/16 id — `.https.`, TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`; 2 ERROR — session/URL-reuse артефакт (BUG-380). Оба реально исполнившихся не-`.https.` теста — реконфирмации: `wakelock-supported-by-permissions-policy.html` → [BUG-361](bugs/BUG-361-FIXED.md) (`document.permissionsPolicy.features()` всегда `[]`); `wakelock-insecure-context.any.html` формально PASS, но по неверной причине — живая проба (`--mcp-live-port`) нашла [BUG-669](bugs/BUG-669-OPEN.md): `WakeLock`-интерфейс никогда не выставляется на `globalThis` (только `WakeLockSentinel` и `navigator.wakeLock`), поэтому `'WakeLock' in self` всегда `false`, даже в контексте, который сам движок считает secure (реконфирмация [BUG-399](bugs/BUG-399-FIXED.md), `isSecureContext` захардкожен `true`) — `navigator.wakeLock.request('screen')` при этом реально работает и резолвится",
        "bugs": [
         "BUG-669"
        ]
@@ -3700,7 +3700,7 @@
        "title": "WPT: вендорить + прогнать категорию `shared-storage`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). ad-tech (Privacy Sandbox). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root shared-storage --recursive --processes=4`, ~9 мин 41 с, 100 файлов, 90 отобранных id) — **2/90 harness OK, 0/2 сабтестов**. 88 id — `.https.`, TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`. Два исполнившихся non-`.https.` теста оба FAIL по одной причине — реконфирмация уже открытого [BUG-399](bugs/BUG-399-OPEN.md): `window.isSecureContext` захардкожен `true` безусловно, поэтому ни один `[SecureContext]`-гейт в движке не работает — `sharedStorage` (`crates/js/src/shared_storage.rs`) устанавливается на `window` без всякой проверки контекста, так что `insecure-context.tentative.http.html` (`window.sharedStorage` должен быть `undefined` на небезопасном origin, на деле — объект) и `shared-storage-writable-insecure-context.tentative.http.sub.html` (`sharedStorageWritable` должен отклоняться, на деле проходит) оба падают по одному и тому же корню. Два `ERROR`-id (`interest-groups`/`shared-storage-writable-multi-redirect`, оба `.https.`) — не новая находка, тот же класс, что уже задокументирован для BUG-380 (переиспользуемый browsing context отдаёт результаты предыдущего теста после проваленной навигации). Новых номеров багов не заведено",
+       "note": "Скоуп: 🚫 (вне скоупа). ad-tech (Privacy Sandbox). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root shared-storage --recursive --processes=4`, ~9 мин 41 с, 100 файлов, 90 отобранных id) — **2/90 harness OK, 0/2 сабтестов**. 88 id — `.https.`, TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`. Два исполнившихся non-`.https.` теста оба FAIL по одной причине — реконфирмация уже открытого [BUG-399](bugs/BUG-399-FIXED.md): `window.isSecureContext` захардкожен `true` безусловно, поэтому ни один `[SecureContext]`-гейт в движке не работает — `sharedStorage` (`crates/js/src/shared_storage.rs`) устанавливается на `window` без всякой проверки контекста, так что `insecure-context.tentative.http.html` (`window.sharedStorage` должен быть `undefined` на небезопасном origin, на деле — объект) и `shared-storage-writable-insecure-context.tentative.http.sub.html` (`sharedStorageWritable` должен отклоняться, на деле проходит) оба падают по одному и тому же корню. Два `ERROR`-id (`interest-groups`/`shared-storage-writable-multi-redirect`, оба `.https.`) — не новая находка, тот же класс, что уже задокументирован для BUG-380 (переиспользуемый browsing context отдаёт результаты предыдущего теста после проваленной навигации). Новых номеров багов не заведено",
        "bugs": [
         "BUG-399"
        ]
@@ -3761,7 +3761,7 @@
        "title": "WPT: вендорить + прогнать категорию `storage-access-api`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root storage-access-api --recursive`, 11:39, 40 файлов, 40 отобранных id) — **3/40 harness OK, 2/9 сабтестов**. Новая находка — [BUG-682](bugs/BUG-682-OPEN.md): `requestStorageAccess`/`hasStorageAccess`/`requestStorageAccessFor`/`hasUnpartitionedCookieAccess` определены только в литерале живого `document` (`dom.rs:4423-4433`), но не в `_lumen_build_detached_document` (`DOMParser.parseFromString` и т.п.) — второй независимый экземпляр класса [BUG-358](bugs/BUG-358-OPEN.md)/[BUG-359](bugs/BUG-359-FIXED.md) (два несинхронизированных Document-литерала), на этот раз в обратную сторону. Остальной сигнал двух исполнившихся не-`.https.` тестов — реконфирмация: [BUG-399](bugs/BUG-399-OPEN.md) (`window.isSecureContext` захардкожен `true`), [BUG-480](bugs/BUG-480-OPEN.md) (`<iframe>` без browsing context), [BUG-574](bugs/BUG-574-OPEN.md) (`Node.contains` отсутствует). Остальные 37 `.https.` id — TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`. Один новый номер бага",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root storage-access-api --recursive`, 11:39, 40 файлов, 40 отобранных id) — **3/40 harness OK, 2/9 сабтестов**. Новая находка — [BUG-682](bugs/BUG-682-OPEN.md): `requestStorageAccess`/`hasStorageAccess`/`requestStorageAccessFor`/`hasUnpartitionedCookieAccess` определены только в литерале живого `document` (`dom.rs:4423-4433`), но не в `_lumen_build_detached_document` (`DOMParser.parseFromString` и т.п.) — второй независимый экземпляр класса [BUG-358](bugs/BUG-358-OPEN.md)/[BUG-359](bugs/BUG-359-FIXED.md) (два несинхронизированных Document-литерала), на этот раз в обратную сторону. Остальной сигнал двух исполнившихся не-`.https.` тестов — реконфирмация: [BUG-399](bugs/BUG-399-FIXED.md) (`window.isSecureContext` захардкожен `true`), [BUG-480](bugs/BUG-480-OPEN.md) (`<iframe>` без browsing context), [BUG-574](bugs/BUG-574-OPEN.md) (`Node.contains` отсутствует). Остальные 37 `.https.` id — TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer`. Один новый номер бага",
        "bugs": [
         "BUG-682"
        ]
@@ -3825,7 +3825,7 @@
        "title": "WPT: вендорить + прогнать категорию `top-level-storage-access-api`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root top-level-storage-access-api --recursive`, ~35 с, 3 файла/3 id) — **0/3 harness OK, 1/7 сабтестов**. Весь сигнал — реконфирмация уже открытых багов, новых номеров не заведено: `requestStorageAccessFor()` на документе из `DOMParser.parseFromString` — реконфирмация [BUG-682](bugs/BUG-682-OPEN.md) (Storage Access API методы есть только у живого `document`, не у `_lumen_build_detached_document`); отсутствие проверки user gesture/контекста в Phase 0 шиме («always granted») — тот же корень, что [BUG-399](bugs/BUG-399-OPEN.md); `CreateDetachedFrame().requestStorageAccessFor` падает на `null` — реконфирмация [BUG-480](bugs/BUG-480-OPEN.md) (`<iframe>` без browsing context); `AssertionError: Got results from <previous test>` на обоих `.https.` id — реконфирмация [BUG-380](bugs/BUG-380-FIXED.md); третий `.https.` id TIMEOUT на документированном TLS-гэпе `UnknownIssuer`"
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root top-level-storage-access-api --recursive`, ~35 с, 3 файла/3 id) — **0/3 harness OK, 1/7 сабтестов**. Весь сигнал — реконфирмация уже открытых багов, новых номеров не заведено: `requestStorageAccessFor()` на документе из `DOMParser.parseFromString` — реконфирмация [BUG-682](bugs/BUG-682-OPEN.md) (Storage Access API методы есть только у живого `document`, не у `_lumen_build_detached_document`); отсутствие проверки user gesture/контекста в Phase 0 шиме («always granted») — тот же корень, что [BUG-399](bugs/BUG-399-FIXED.md); `CreateDetachedFrame().requestStorageAccessFor` падает на `null` — реконфирмация [BUG-480](bugs/BUG-480-OPEN.md) (`<iframe>` без browsing context); `AssertionError: Got results from <previous test>` на обоих `.https.` id — реконфирмация [BUG-380](bugs/BUG-380-FIXED.md); третий `.https.` id TIMEOUT на документированном TLS-гэпе `UnknownIssuer`"
       },
       {
        "id": "WPT-VENDOR-touch-events",
@@ -3997,14 +3997,14 @@
        "title": "WPT: вендорить + прогнать категорию `web-locks`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root web-locks --recursive`, 47 файлов, 40 отобранных id) — **1/40 harness OK, 0/1 сабтестов**. 34 TIMEOUT + 5 ERROR — стандартный TLS-гэп `UnknownIssuer` ([BUG-657](bugs/BUG-657-OPEN.md)) на `.https.`-файлах. Единственный исполнившийся не-`.https.` тест (`non-secure-context.any.html`) формально OK, но его единственный сабтест FAIL: `navigator.locks` доступен в небезопасном контексте. Живая проба подтвердила API работает функционально, но `window.isSecureContext` захардкожен `true` — переподтверждение уже открытого [BUG-399](bugs/BUG-399-OPEN.md). Новый номер бага не заводился"
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root web-locks --recursive`, 47 файлов, 40 отобранных id) — **1/40 harness OK, 0/1 сабтестов**. 34 TIMEOUT + 5 ERROR — стандартный TLS-гэп `UnknownIssuer` ([BUG-657](bugs/BUG-657-OPEN.md)) на `.https.`-файлах. Единственный исполнившийся не-`.https.` тест (`non-secure-context.any.html`) формально OK, но его единственный сабтест FAIL: `navigator.locks` доступен в небезопасном контексте. Живая проба подтвердила API работает функционально, но `window.isSecureContext` захардкожен `true` — переподтверждение уже открытого [BUG-399](bugs/BUG-399-FIXED.md). Новый номер бага не заводился"
       },
       {
        "id": "WPT-VENDOR-web-nfc",
        "title": "WPT: вендорить + прогнать категорию `web-nfc`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). аппаратный API (NFC). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root web-nfc --recursive`, 20 файлов, 11 отобранных id) — **1/11 harness OK, 0/1 сабтестов**. 9 TIMEOUT — стандартный TLS-гэп `UnknownIssuer` ([BUG-657](bugs/BUG-657-OPEN.md)) на `.https.`-файлах. Единственный исполнившийся не-`.https.` тест (`nfc_insecure_context.html`) формально OK, но его единственный сабтест FAIL: `assert_false(isSecureContext)` got true — та же причина, что в `web-locks`, переподтверждение [BUG-399](bugs/BUG-399-OPEN.md). Соседний `.https.`-тест ERROR вместо TIMEOUT — переподтверждение [BUG-380](bugs/BUG-380-FIXED.md) (утечка результатов предыдущего теста). Живая проба подтвердила: `navigator.nfc`/`NDEFReader`/`NDEFMessage`/`NDEFRecord`/`NDEFReadingEvent` отсутствуют целиком — ожидаемо для 🚫-скоупа, не баг. Новый номер бага не заводился"
+       "note": "Скоуп: 🚫 (вне скоупа). аппаратный API (NFC). DONE 2026-08-09: вендорена + прогнана целиком (`--all --root web-nfc --recursive`, 20 файлов, 11 отобранных id) — **1/11 harness OK, 0/1 сабтестов**. 9 TIMEOUT — стандартный TLS-гэп `UnknownIssuer` ([BUG-657](bugs/BUG-657-OPEN.md)) на `.https.`-файлах. Единственный исполнившийся не-`.https.` тест (`nfc_insecure_context.html`) формально OK, но его единственный сабтест FAIL: `assert_false(isSecureContext)` got true — та же причина, что в `web-locks`, переподтверждение [BUG-399](bugs/BUG-399-FIXED.md). Соседний `.https.`-тест ERROR вместо TIMEOUT — переподтверждение [BUG-380](bugs/BUG-380-FIXED.md) (утечка результатов предыдущего теста). Живая проба подтвердила: `navigator.nfc`/`NDEFReader`/`NDEFMessage`/`NDEFRecord`/`NDEFReadingEvent` отсутствуют целиком — ожидаемо для 🚫-скоупа, не баг. Новый номер бага не заводился"
       },
       {
        "id": "WPT-VENDOR-web-otp",
@@ -4018,7 +4018,7 @@
        "title": "WPT: вендорить + прогнать категорию `web-share`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). Web Share API — Phase 1 заглушка. DONE 2026-08-09: вендорена + прогнана целиком (`--all --root web-share --recursive`, 27 файлов, 15 отобранных id) — **3/15 harness OK, 2/6 сабтестов**. 12 TIMEOUT на TLS-гэпе `UnknownIssuer` ([BUG-657](bugs/BUG-657-OPEN.md)), исполнившиеся тесты друг друга «отравляли» — переподтверждение [BUG-380](bugs/BUG-380-FIXED.md). `navigator.share`/`.canShare` доступны без гейта по секьюрность-контексту — переподтверждение [BUG-399](bugs/BUG-399-OPEN.md) (живая проба: `typeof navigator.share === 'function'` даже на `file:`). `features()` корректно не включает `'web-share'` (Phase 1 заглушка, не баг — тот же паттерн, что `encrypted-media` в [BUG-361](bugs/BUG-361-FIXED.md)). Новый номер бага не заводился"
+       "note": "Скоуп: ⬜ (кандидат). Web Share API — Phase 1 заглушка. DONE 2026-08-09: вендорена + прогнана целиком (`--all --root web-share --recursive`, 27 файлов, 15 отобранных id) — **3/15 harness OK, 2/6 сабтестов**. 12 TIMEOUT на TLS-гэпе `UnknownIssuer` ([BUG-657](bugs/BUG-657-OPEN.md)), исполнившиеся тесты друг друга «отравляли» — переподтверждение [BUG-380](bugs/BUG-380-FIXED.md). `navigator.share`/`.canShare` доступны без гейта по секьюрность-контексту — переподтверждение [BUG-399](bugs/BUG-399-FIXED.md) (живая проба: `typeof navigator.share === 'function'` даже на `file:`). `features()` корректно не включает `'web-share'` (Phase 1 заглушка, не баг — тот же паттерн, что `encrypted-media` в [BUG-361](bugs/BUG-361-FIXED.md)). Новый номер бага не заводился"
       },
       {
        "id": "WPT-VENDOR-webaudio",
@@ -4032,7 +4032,7 @@
        "title": "WPT: вендорить + прогнать категорию `webauthn`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). WebAuthn — отдельная крипто/платформенная интеграция. DONE 2026-08-09: вендорена + прогнана целиком (`--all --root webauthn --recursive --processes=4`, ~14 мин, 60 файлов, 54 отобранных id) — **1/54 harness OK, 0/1 сабтестов**. 53 TIMEOUT на TLS-гэпе `UnknownIssuer` ([BUG-657](bugs/BUG-657-OPEN.md)). Единственный исполнившийся не-`.https.` тест (`securecontext.http.html`) формально OK, но его сабтест FAIL — переподтверждение [BUG-399](bugs/BUG-399-OPEN.md). Код-ревью + временный локальный тест (удалён до коммита) нашли [BUG-709](bugs/BUG-709-OPEN.md): ни JS-шим, ни нативные биндинги, ни `VirtualAuthenticator` не проверяют `rp.id`/`rpId` против фактического origin страницы (WebAuthn L2 §5.1.3) — страница `https://example.com/login` успешно создаёт credential с чужим `rp.id`. Сейчас недостижимо в браузере (провайдер нигде не устанавливается под `crates/shell/`), но реальный дефект в полностью реализованном крипто-коде. Новый номер: BUG-709"
+       "note": "Скоуп: 🚫 (вне скоупа). WebAuthn — отдельная крипто/платформенная интеграция. DONE 2026-08-09: вендорена + прогнана целиком (`--all --root webauthn --recursive --processes=4`, ~14 мин, 60 файлов, 54 отобранных id) — **1/54 harness OK, 0/1 сабтестов**. 53 TIMEOUT на TLS-гэпе `UnknownIssuer` ([BUG-657](bugs/BUG-657-OPEN.md)). Единственный исполнившийся не-`.https.` тест (`securecontext.http.html`) формально OK, но его сабтест FAIL — переподтверждение [BUG-399](bugs/BUG-399-FIXED.md). Код-ревью + временный локальный тест (удалён до коммита) нашли [BUG-709](bugs/BUG-709-OPEN.md): ни JS-шим, ни нативные биндинги, ни `VirtualAuthenticator` не проверяют `rp.id`/`rpId` против фактического origin страницы (WebAuthn L2 §5.1.3) — страница `https://example.com/login` успешно создаёт credential с чужим `rp.id`. Сейчас недостижимо в браузере (провайдер нигде не устанавливается под `crates/shell/`), но реальный дефект в полностью реализованном крипто-коде. Новый номер: BUG-709"
       },
       {
        "id": "WPT-VENDOR-webcodecs",
@@ -7375,10 +7375,10 @@
    "debtor": false
   },
   "BUG-399": {
-   "status": "open",
+   "status": "fixed",
    "title": "`window.isSecureContext` захардкожен `true` безусловно для любой страницы вместо вычисления по W3C Secure Contexts §3.1 из уже распарсенного протокола/хоста — л…",
    "component": "js (`crates/js/src/dom.rs:11531` — `window.isSecureContext = true;` литерал; неиспользованный источник данных — `dom.rs:7397` `_lumen_loc_parts`)",
-   "date": null,
+   "date": "2026-08-11",
    "debtor": false
   },
   "BUG-400": {
@@ -9893,6 +9893,20 @@
    "component": "a11y (`crates/engine/a11y/src/roles.rs::AXRole::parse`/`AXRole`; потребитель `crates/engine/a11y/src/lib.rs::resolve_role`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-765": {
+   "status": "open",
+   "title": "Ни один `[SecureContext]`-API не гейтится по `window.isSecureContext`: после [BUG-399](bugs/BUG-399-FIXED.md) флаг вычисляется верно, но `grep -rn isSecureConte…",
+   "component": "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`: `crypto.subtle` (`dom.rs:12176`), `navigator.clipboard`/`serviceWorker`/`geolocation`/`wakeLock`; шимы сенсоров)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-766": {
+   "status": "open",
+   "title": "`isSecureContext` отсутствует в `WorkerGlobalScope` вовсе (`'isSecureContext' in self === false`), хотя HTML LS объявляет его в миксине `WindowOrWorkerGlobalSco…",
+   "component": "js (`crates/js/src/worker.rs:227` — `worker_global_shim`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -10277,6 +10291,9 @@
   "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`, машинерия `_lumen_resource_*`)": [
    "BUG-722"
   ],
+  "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`: `crypto.subtle` (`dom.rs:12176`), `navigator.clipboard`/`serviceWorker`/`geolocation`/`wakeLock`; шимы сенсоров)": [
+   "BUG-765"
+  ],
   "js (`crates/js/src/dom.rs` — `WEB_API_SHIM`: `queueMicrotask`, конструктор `PromiseRejectionEvent`)": [
    "BUG-702"
   ],
@@ -10402,6 +10419,9 @@
   ],
   "js (`crates/js/src/webgpu.rs` — `WEBGPU_SHIM`)": [
    "BUG-712"
+  ],
+  "js (`crates/js/src/worker.rs:227` — `worker_global_shim`)": [
+   "BUG-766"
   ],
   "js (`dom.rs` `WEB_API_SHIM`)": [
    "BUG-309"

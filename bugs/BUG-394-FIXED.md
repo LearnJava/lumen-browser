@@ -112,7 +112,7 @@ all 8 sensors still constructible             -> all ok
 ### Чего фикс НЕ закрывает
 
 * `Magnetometer_insecure_context.html` (и родня): сенсоры по-прежнему
-  доступны в небезопасном контексте — это [BUG-399](BUG-399-OPEN.md)
+  доступны в небезопасном контексте — это [BUG-399](BUG-399-FIXED.md)
   (`window.isSecureContext` захардкожен `true`), а не эта заявка;
   фраза в `docs/wpt-vendor-notes/magnetometer.md` («BUG-394 —
   конструкторы не гейтятся по контексту») к предмету BUG-394 отношения

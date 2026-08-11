@@ -75,7 +75,7 @@ other origin's `rp.id` with zero client-side gate.
 
 `securecontext.http.html` (the one non-`.https.` WPT test in the category
 that actually executed) independently reconfirmed the already-open
-[BUG-399](BUG-399-OPEN.md) (`window.isSecureContext` hardcoded `true`):
+[BUG-399](BUG-399-FIXED.md) (`window.isSecureContext` hardcoded `true`):
 `FAIL no navigator.credentials.create in non-secure context - assert_false:
 expected false got true`. Not a new bug — folded into the existing BUG-399
 reconfirmation list, not counted separately here.

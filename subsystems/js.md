@@ -1070,6 +1070,22 @@ the time — read dates.
   variable access — while an unresolved name costs ~0.75 µs vs ~0.02 µs on an 8-node document, an
   O(n) tree walk per miss. Spec simplifications: several matches yield the first in tree order rather
   than an `HTMLCollection`, a matching `iframe` yields the element rather than its `contentWindow`.
+- **`window.isSecureContext` is computed once, from the URL the runtime was installed with
+  (BUG-399, 2026-08-11).** `_lumen_url_is_potentially_trustworthy` implements Secure Contexts
+  §3.1/§3.2 next to `_lumen_loc_parts`. Two non-obvious constraints shape it. **(1) Read the scheme
+  off `href`, never off `parts.protocol`.** `_lumen_parse_url` splits on the first `://`, so it
+  reports `blob:https://h/id` as protocol `blob:https:` and a `data:` URL whose payload contains
+  `://` as something arbitrary — any scheme test written against `protocol` is wrong for exactly
+  the two schemes (`blob:`, `data:`) the spec singles out. The URL Standard's scheme is everything
+  before the first colon, and that is what the predicate uses. **(2) Snapshot the value, don't
+  re-read it per access.** The flag belongs to the environment settings object and is fixed when
+  the document is created (HTML LS §8.1.5.1) — which is exactly the granularity of `install_dom`.
+  A live read is also actively wrong: same-document `history.pushState(s, '', '/x')` stores that
+  raw *relative* string in `_lumen_loc_parts` (see `_lumen_location_update`), which would flip an
+  https page to insecure. The snapshot lives in a closure rather than a `_lumen_…` global, since
+  `seal_internal_globals_v8` leaves engine state writable. Nothing in the engine reads the flag yet
+  — `[SecureContext]` gating is [BUG-765](../bugs/BUG-765-OPEN.md), and `WorkerGlobalScope` has no
+  such property at all ([BUG-766](../bugs/BUG-766-OPEN.md)).
 
 ## Deferred
 
