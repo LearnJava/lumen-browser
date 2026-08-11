@@ -66,13 +66,21 @@ fn headless_resize_updates_dimensions() {
 // BUG-405 — прогрев ленивых пайплайнов
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Display list со скруглённым клипом: заставляет кадр взять ленивые
-/// `rrect-clip`/`composite`-пайплайны (BUG-406 вынес их из старта окна).
+/// Display list со скруглённым клипом, которому нужен offscreen-уровень:
+/// заставляет кадр взять ленивые `rrect-clip`/`composite`-пайплайны (BUG-406
+/// вынес их из старта окна).
+///
+/// Клип **вложенный** намеренно: с BUG-405 срез 4 одиночный скруглённый клип
+/// обслуживается контуром в шейдере и уровня не открывает, а внешний контур в
+/// шейдере ровно один — поэтому уровень берёт внутренний клип.
 fn rounded_clip_dl(w: f32, h: f32) -> Vec<DisplayCommand> {
+    let outer = Rect { x: 2.0, y: 2.0, width: w - 4.0, height: h - 4.0 };
     let rect = Rect { x: 4.0, y: 4.0, width: w - 8.0, height: h - 8.0 };
     vec![
+        DisplayCommand::PushClipRoundedRect { rect: outer, radii: [8.0, 8.0, 8.0, 8.0] },
         DisplayCommand::PushClipRoundedRect { rect, radii: [8.0, 8.0, 8.0, 8.0] },
         DisplayCommand::FillRect { rect, color: Color { r: 255, g: 0, b: 0, a: 255 } },
+        DisplayCommand::PopClip,
         DisplayCommand::PopClip,
     ]
 }
@@ -223,8 +231,16 @@ fn cpu_render_red_rect_partial() {
 /// Display list из `n` скруглённых клипов подряд: каждый добавляет в план
 /// кадра свой draw + композит клипа, то есть план заведомо длиннее одной
 /// порции подачи.
+///
+/// Все `n` завёрнуты в общий скруглённый клип: с BUG-405 срез 4 контур в
+/// шейдере занимает внешний клип, и внутренние — те, чьи пассы считает этот
+/// тест, — идут прежним путём уровня.
 fn many_clips_dl(w: f32, h: f32, n: usize) -> Vec<DisplayCommand> {
-    let mut dl = Vec::with_capacity(n * 3);
+    let mut dl = Vec::with_capacity(n * 3 + 2);
+    dl.push(DisplayCommand::PushClipRoundedRect {
+        rect: Rect { x: 2.0, y: 2.0, width: w - 4.0, height: h - 4.0 },
+        radii: [2.0; 4],
+    });
     for i in 0..n {
         let y = 4.0 + i as f32 * 6.0;
         let rect = Rect { x: 4.0, y, width: w - 8.0, height: 4.0 };
@@ -232,7 +248,7 @@ fn many_clips_dl(w: f32, h: f32, n: usize) -> Vec<DisplayCommand> {
         dl.push(DisplayCommand::FillRect { rect, color: Color { r: 255, g: 0, b: 0, a: 255 } });
         dl.push(DisplayCommand::PopClip);
     }
-    let _ = h;
+    dl.push(DisplayCommand::PopClip);
     dl
 }
 
@@ -266,4 +282,86 @@ fn long_frame_is_submitted_in_chunks() {
         "кадр из многих пассов подан одним списком: подач {}",
         r.submissions() - before,
     );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BUG-405 срез 4 — скруглённый клип контуром в шейдере, без offscreen-уровня
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `n` скруглённых клипов подряд на верхнем уровне (без объемлющего клипа) —
+/// ровно тот случай, который срез 4 уводит с уровней в шейдер.
+fn flat_clips_dl(w: f32, h: f32, n: usize) -> Vec<DisplayCommand> {
+    let mut dl = Vec::with_capacity(n * 3);
+    for i in 0..n {
+        let y = 4.0 + i as f32 * 6.0;
+        let rect = Rect { x: 4.0, y, width: w - 8.0, height: 4.0 };
+        dl.push(DisplayCommand::PushClipRoundedRect { rect, radii: [2.0; 4] });
+        dl.push(DisplayCommand::FillRect { rect, color: Color { r: 255, g: 0, b: 0, a: 255 } });
+        dl.push(DisplayCommand::PopClip);
+    }
+    let _ = h;
+    dl
+}
+
+/// BUG-405 срез 4: скруглённый клип не открывает offscreen-уровень.
+///
+/// Гейт стоит на счётчике уровней, а не на времени кадра: «клип перестал
+/// стоить своих трёх пассов» — утверждение о механизме, оно не зависит ни от
+/// железа, ни от загрузки машины.
+///
+/// Вторая половина — контроль на ложно-зелёный: вложенный клип (в шейдере
+/// контур один) обязан уровень открыть, иначе тест проходил бы и на рендере,
+/// который скруглённые клипы вообще не обрабатывает.
+#[test]
+#[ignore = "requires GPU adapter"]
+fn rounded_clip_costs_no_offscreen_level() {
+    let mut r = Renderer::new_headless(INTER.to_vec(), 64, 128, ColorSpace::Srgb)
+        .expect("headless renderer");
+    r.set_font_provider(None);
+
+    let before = r.rrect_clip_levels();
+    r.render_to_image(&flat_clips_dl(64.0, 128.0, 12), 0.0, 0.0).expect("кадр с клипами");
+    assert_eq!(
+        r.rrect_clip_levels() - before,
+        0,
+        "скруглённый клип верхнего уровня всё ещё открывает offscreen-уровень",
+    );
+
+    let before = r.rrect_clip_levels();
+    r.render_to_image(&many_clips_dl(64.0, 128.0, 12), 0.0, 0.0).expect("кадр с вложенными");
+    assert_eq!(
+        r.rrect_clip_levels() - before,
+        12,
+        "вложенный клип обязан остаться на пути уровня (контроль негоден)",
+    );
+}
+
+/// BUG-405 срез 4: углы шейдерного клипа действительно вырезаны.
+///
+/// Счётчик уровней говорит только «пассов нет»; без этой проверки правка,
+/// которая просто перестала клипать, тоже была бы зелёной.
+#[test]
+#[ignore = "requires GPU adapter"]
+fn shader_rounded_clip_carves_corners() {
+    let mut r = Renderer::new_headless(INTER.to_vec(), 64, 64, ColorSpace::Srgb)
+        .expect("headless renderer");
+    r.set_font_provider(None);
+
+    let rect = Rect { x: 4.0, y: 4.0, width: 56.0, height: 56.0 };
+    let dl = vec![
+        DisplayCommand::PushClipRoundedRect { rect, radii: [16.0; 4] },
+        DisplayCommand::FillRect { rect, color: Color { r: 255, g: 0, b: 0, a: 255 } },
+        DisplayCommand::PopClip,
+    ];
+    let img = r.render_to_image(&dl, 0.0, 0.0).expect("render_to_image");
+    let px = |x: usize, y: usize| {
+        let o = (y * 64 + x) * 4;
+        [img.data[o], img.data[o + 1], img.data[o + 2]]
+    };
+
+    // Центр — внутри контура: заливка видна.
+    assert_eq!(px(32, 32), [255, 0, 0], "центр клипа обязан быть залит");
+    // (5,5) лежит вне скругления радиуса 16 у угла (4,4): расстояние до центра
+    // скругления (20,20) — 21.2 px.
+    assert_ne!(px(5, 5), [255, 0, 0], "угол клипа не вырезан");
 }
