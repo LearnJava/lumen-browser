@@ -325,6 +325,157 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
 }
 "#;
 
+/// BUG-405 срез 7 — аналитическая размытая скруглённая rrect (`box-shadow`).
+///
+/// Раньше тень = `PushFilter [blur(σ)]` + одна заливка + `PopFilter`, то есть
+/// offscreen-уровень и три пасса на тень: контент уровня, горизонтальный
+/// проход блюра и слитый вертикальный+композит (срез 6). Здесь тень — обычная
+/// операция внутри уже открытого батча родителя: пассов не добавляет вовсе.
+///
+/// Вместо свёртки растра фрагмент считает размытие фигуры **точно**, пользуясь
+/// тем, что каждая строка скруглённого прямоугольника — один отрезок
+/// `[left(y), right(y)]`:
+///
+/// ```text
+/// blur(shape)(x,y) = Σ_j w_j · ∫ g_σ(x−t) dt   по t ∈ [left(y+j), right(y+j)]
+/// ```
+///
+/// Внутренний интеграл гауссианы по отрезку — разность двух `erf`, внешняя
+/// сумма по строкам берёт **те же** веса и тот же обрез ядра `min(ceil(3σ),32)`,
+/// что и [`BLUR_SHADER_SRC`]: не «похожий блюр», а тот же самый по вертикали.
+///
+/// Единицы — device px, как у пассов блюра: там шаг ядра равен одному текселю
+/// surface-текстуры, а σ приезжает из CSS без домножения на dpr. Поэтому
+/// геометрия домножается на `u.dpr`, а σ — нет: на HiDPI аналитическая тень
+/// повторяет прежнюю картинку, а не «чинит» её (это отдельный вопрос).
+///
+/// Вершинный формат (`ShadowVertex`) — `RRectVertex` плюс `sigma` в loc 7.
+const SHADOW_SHADER_SRC: &str = r#"
+struct VIn {
+    @location(0) pos:       vec2<f32>,
+    @location(1) z:         f32,
+    @location(2) color:     vec4<f32>,
+    @location(3) center:    vec2<f32>,
+    @location(4) half_size: vec2<f32>,
+    @location(5) radii_x:   vec4<f32>,
+    @location(6) radii_y:   vec4<f32>,
+    @location(7) sigma:     f32,
+};
+
+struct VOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) color:     vec4<f32>,
+    @location(1) center:    vec2<f32>,
+    @location(2) half_size: vec2<f32>,
+    @location(3) radii_x:   vec4<f32>,
+    @location(4) radii_y:   vec4<f32>,
+    @location(5) @interpolate(flat) sigma: f32,
+};
+
+@vertex
+fn vs_main(in: VIn) -> VOut {
+    let ndc = vec2<f32>(
+        in.pos.x / u.viewport.x * 2.0 - 1.0,
+        1.0 - in.pos.y / u.viewport.y * 2.0,
+    );
+    let depth = clamp(0.5 - in.z / 20000.0, 0.0, 1.0);
+    var out: VOut;
+    out.clip      = vec4<f32>(ndc, depth, 1.0);
+    out.color     = in.color;
+    out.center    = in.center;
+    out.half_size = in.half_size;
+    out.radii_x   = in.radii_x;
+    out.radii_y   = in.radii_y;
+    out.sigma     = in.sigma;
+    return out;
+}
+
+// Abramowitz–Stegun 7.1.26: |ошибка| ≤ 1.5e-7 — на три порядка тоньше
+// восьмибитного кванта цели, то есть на пиксель не влияет.
+fn erf_approx(x: f32) -> f32 {
+    let s = sign(x);
+    let a = abs(x);
+    let t = 1.0 / (1.0 + 0.3275911 * a);
+    let poly = ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t
+        - 0.284496736) * t + 0.254829592) * t;
+    return s * (1.0 - poly * exp(-a * a));
+}
+
+// Доля гауссианы с центром в `x`, попавшая в отрезок [a, b].
+//
+// Ядро обрезано на ±`radius` и перенормировано на собственную массу — ровно
+// как дискретное ядро в [`BLUR_SHADER_SRC`], которое суммирует
+// `min(ceil(3σ),32)` отсчётов и делит на их сумму. Без обреза у аналитики
+// оставались бы хвосты за 3σ, которых у образца нет, и тень выходила бы
+// систематически темнее (замер: +2/255 по всей полутени `1000000-final`).
+fn gauss_span(a: f32, b: f32, x: f32, inv_sigma_sqrt2: f32, radius: f32) -> f32 {
+    let lo = max(a, x - radius);
+    let hi = min(b, x + radius);
+    if hi <= lo {
+        return 0.0;
+    }
+    let mass = erf_approx(radius * inv_sigma_sqrt2);
+    return 0.5 * (erf_approx((hi - x) * inv_sigma_sqrt2) - erf_approx((lo - x) * inv_sigma_sqrt2))
+        / mass;
+}
+
+// Полуширина строки `dy` (от центра) со стороны угла с радиусами (crx, cry).
+// Вне углового пояса — прямой край, внутри — эллипс: x = crx·(1 − √(1 − t²)).
+fn shadow_row_half(dy: f32, half: vec2<f32>, crx: f32, cry: f32) -> f32 {
+    if crx < 0.001 || cry < 0.001 {
+        return half.x;
+    }
+    let flat = half.y - cry;
+    let ay = abs(dy);
+    if ay <= flat {
+        return half.x;
+    }
+    let t = clamp((ay - flat) / cry, 0.0, 1.0);
+    return half.x - crx * (1.0 - sqrt(max(0.0, 1.0 - t * t)));
+}
+
+@fragment
+fn fs_main(in: VOut) -> @location(0) vec4<f32> {
+    // Всё в device px: p — от центра фигуры, ядро шагает по одному device px.
+    let p = in.clip.xy - in.center * u.dpr;
+    let half = in.half_size * u.dpr;
+    let rx = in.radii_x * u.dpr;
+    let ry = in.radii_y * u.dpr;
+    let sigma = max(in.sigma, 0.001);
+    let radius = min(i32(ceil(3.0 * sigma)), 32);
+    let inv_sigma_sqrt2 = 1.0 / (sigma * 1.4142135623730951);
+    var sum = 0.0;
+    var weight_total = 0.0;
+    for (var j = -radius; j <= radius; j = j + 1) {
+        let fj = f32(j);
+        let w = exp(-fj * fj / (2.0 * sigma * sigma));
+        weight_total = weight_total + w;
+        let dy = p.y + fj;
+        // Доля строки, накрытая фигурой по вертикали. Прежний путь растеризовал
+        // фигуру со сглаживанием (`1 − smoothstep(−0.5, 0.5, sdf)`) и лишь затем
+        // размывал; без этого множителя верхний и нижний края тени
+        // округлялись бы до целой строки — сдвиг края на полпикселя.
+        let cover_y = clamp(half.y - abs(dy) + 0.5, 0.0, 1.0);
+        if cover_y <= 0.0 {
+            continue;
+        }
+        // y вниз: строка выше центра режется верхними углами (tl, tr),
+        // ниже — нижними (bl, br).
+        let top = dy < 0.0;
+        let left_rx  = select(rx.w, rx.x, top);
+        let left_ry  = select(ry.w, ry.x, top);
+        let right_rx = select(rx.z, rx.y, top);
+        let right_ry = select(ry.z, ry.y, top);
+        let hl = shadow_row_half(dy, half, left_rx, left_ry);
+        let hr = shadow_row_half(dy, half, right_rx, right_ry);
+        sum = sum + w * cover_y * gauss_span(-hl, hr, p.x, inv_sigma_sqrt2, f32(radius));
+    }
+    let alpha = sum / weight_total * rrect_clip_coverage(in.clip.xy);
+    if alpha <= 0.0 { discard; }
+    return vec4<f32>(in.color.rgb, in.color.a * alpha);
+}
+"#;
+
 const TEXT_SHADER_SRC: &str = r#"
 @group(1) @binding(0) var atlas_tex: texture_2d<f32>;
 @group(1) @binding(1) var atlas_smp: sampler;
@@ -1513,6 +1664,32 @@ struct RRectVertex {
     radii_y: [f32; 4],
 }
 
+/// Вершина аналитической размытой тени (`SHADOW_SHADER_SRC`, BUG-405 срез 7).
+/// Поля `RRectVertex` один в один плюс `sigma` — квад тени шире самой фигуры на
+/// радиус ядра, поэтому `pos` и `center`/`half_size` здесь расходятся.
+/// Layout: pos(8) + z(4) + color(16) + center(8) + half_size(8) + radii_x(16)
+/// + radii_y(16) + sigma(4) = 80 bytes.
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct ShadowVertex {
+    /// Позиция вершины квада в CSS px (фигура + запас на ядро блюра).
+    pos: [f32; 2],
+    /// CSS-глубина, как у [`RRectVertex::z`].
+    z: f32,
+    /// Цвет тени RGBA (прямая альфа; премультиплицирование — дело blend-state).
+    color: [f32; 4],
+    /// Центр размываемой фигуры в CSS px.
+    center: [f32; 2],
+    /// Полуразмеры фигуры (w/2, h/2) в CSS px.
+    half_size: [f32; 2],
+    /// Горизонтальные радиусы углов в CSS px: [tl, tr, br, bl].
+    radii_x: [f32; 4],
+    /// Вертикальные радиусы углов в CSS px: [tl, tr, br, bl].
+    radii_y: [f32; 4],
+    /// σ гауссианы — в тех же единицах, что у пассов блюра (device px).
+    sigma: f32,
+}
+
 #[repr(C)]
 #[derive(Copy, Clone)]
 struct CompositeVertex {
@@ -1701,6 +1878,10 @@ enum DrawOp {
     Circle { v_start: u32, v_count: u32 },
     /// SDF rounded-rect draw — uses `rrect_pipeline` + `rrect_vbuf`.
     RRect { v_start: u32, v_count: u32 },
+    /// BUG-405 срез 7: аналитическая размытая rrect (`box-shadow`) —
+    /// `shadow_pipeline` + `shadow_vbuf`. Пассов не добавляет: рисуется внутри
+    /// батча родителя, в отличие от прежнего offscreen-уровня с блюром.
+    Shadow { v_start: u32, v_count: u32 },
     Text { v_start: u32, v_count: u32 },
     Image { v_start: u32, v_count: u32, image_batch_idx: u32 },
     /// CSS Images L3 §3.3 — linear or radial gradient quad. `grad_batch_idx`
@@ -2210,6 +2391,8 @@ enum WarmedPipeline {
     BlurComposite(wgpu::RenderPipeline),
     /// → [`Renderer::blur_pipeline`].
     Blur(wgpu::RenderPipeline),
+    /// → [`Renderer::shadow_pipeline`].
+    Shadow(wgpu::RenderPipeline),
     /// → [`Renderer::backdrop_blit_pipeline`].
     BackdropBlit(wgpu::RenderPipeline),
 }
@@ -2289,6 +2472,13 @@ pub struct Renderer {
     /// список обоими путями в одном процессе и сверяет пиксели побайтово, не
     /// требуя второго прогона с `LUMEN_NO_CULL_MERGE=1`.
     cull_merge_enabled: bool,
+    /// Сколько внешних теней нарисовано аналитически, без offscreen-уровня
+    /// (BUG-405 срез 7). Гейт правки — этот счётчик рядом с `filter_passes`.
+    shadow_draws: u64,
+    /// Аналитическая размытая тень включена (BUG-405 срез 7). Инстансное
+    /// плечо A/B: тест рисует один и тот же список обоими путями в одном
+    /// процессе и сверяет пиксели.
+    shadow_analytic_enabled: bool,
     /// Приёмник готовых пайплайнов с потока прогрева (BUG-405). `None` —
     /// прогрев ещё не запущен, уже завершён, или отключён
     /// `LUMEN_NO_PIPELINE_WARMUP=1`. Сбрасывается в `None`, когда поток
@@ -2305,6 +2495,10 @@ pub struct Renderer {
     circle_pipeline: OnceCell<wgpu::RenderPipeline>,
     /// CSS border-radius SDF pipeline. Uses `RRectVertex` layout.
     rrect_pipeline: wgpu::RenderPipeline,
+    /// BUG-405 срез 7 — аналитическая размытая rrect (`box-shadow`), формат
+    /// `ShadowVertex`. Ленивая компиляция: страница без теней за неё не платит,
+    /// прогрев подхватывает её в общем списке (`build_all_lazy`).
+    shadow_pipeline: OnceCell<wgpu::RenderPipeline>,
     text_pipeline: wgpu::RenderPipeline,
     image_pipeline: wgpu::RenderPipeline,
     /// Blit-каскад mip-цепочки картинок: пасс «mip N−1 → mip N» при
@@ -2717,6 +2911,51 @@ fn blur_merge_disabled() -> bool {
     use std::sync::OnceLock;
     static OFF: OnceLock<bool> = OnceLock::new();
     *OFF.get_or_init(|| std::env::var("LUMEN_NO_BLUR_MERGE").is_ok_and(|v| v == "1"))
+}
+
+/// `true`, если аналитическая размытая тень отключена
+/// (`LUMEN_NO_SHADOW_ANALYTIC=1`) — рычаг отката BUG-405 срез 7 к
+/// offscreen-уровню с блюром на каждую внешнюю тень и A/B-плечо для сверки
+/// пикселей.
+fn shadow_analytic_disabled() -> bool {
+    use std::sync::OnceLock;
+    static OFF: OnceLock<bool> = OnceLock::new();
+    *OFF.get_or_init(|| std::env::var("LUMEN_NO_SHADOW_ANALYTIC").is_ok_and(|v| v == "1"))
+}
+
+/// Разбирает сигнатуру внешней тени, какой её кладёт `emit_box_shadows`
+/// (`display_list.rs`): `PushFilter [Blur(σ)]` → **одна** заливка
+/// (`FillRect`/`FillRoundedRect`) → `PopFilter`, между ними ничего.
+///
+/// Возвращает `(σ, rect, color, radii)`. Всё, что в сигнатуру не укладывается
+/// (несколько фильтров, цветовой фильтр рядом с блюром, содержимое из
+/// нескольких операций, вложенный уровень), — не тень: такой `PushFilter`
+/// уходит прежним путём.
+fn box_shadow_body(
+    list: &[DisplayCommand],
+    push_idx: usize,
+    filters: &[FilterFn],
+) -> Option<(f32, Rect, Color, CornerRadii)> {
+    let [FilterFn::Blur(sigma)] = filters else {
+        return None;
+    };
+    // NaN сюда доезжать не должен, но если доедет — тень уходит прежним путём,
+    // а не рисуется квадом с невычислимым радиусом.
+    if !sigma.is_finite() || *sigma <= 0.0 {
+        return None;
+    }
+    if !matches!(list.get(push_idx + 2), Some(DisplayCommand::PopFilter)) {
+        return None;
+    }
+    match list.get(push_idx + 1)? {
+        DisplayCommand::FillRect { rect, color } => {
+            Some((*sigma, *rect, *color, CornerRadii::default()))
+        }
+        DisplayCommand::FillRoundedRect { rect, color, radii } => {
+            Some((*sigma, *rect, *color, *radii))
+        }
+        _ => None,
+    }
 }
 
 fn cull_merge_disabled() -> bool {
@@ -4029,6 +4268,8 @@ impl Renderer {
             filter_passes: 0,
             blur_merge_enabled: true,
             cull_merge_enabled: true,
+            shadow_draws: 0,
+            shadow_analytic_enabled: true,
             warm_rx: None,
             warm_started: false,
             surface,
@@ -4081,6 +4322,7 @@ impl Renderer {
             blur_pipeline: OnceCell::new(),
             blur_composite_bgl,
             blur_composite_pipeline: OnceCell::new(),
+            shadow_pipeline: OnceCell::new(),
             backdrop_blit_pipeline: OnceCell::new(),
             backdrop_layer: None,
             small_depth_cache: HashMap::new(),
@@ -4188,6 +4430,7 @@ impl Renderer {
             WarmedPipeline::MaskLayer(x) => drop(self.mask_layer_pipelines.set(*x)),
             WarmedPipeline::Filter(x) => drop(self.filter_pipeline.set(x)),
             WarmedPipeline::Blur(x) => drop(self.blur_pipeline.set(x)),
+            WarmedPipeline::Shadow(x) => drop(self.shadow_pipeline.set(x)),
             WarmedPipeline::BlurComposite(x) => drop(self.blur_composite_pipeline.set(x)),
             WarmedPipeline::BackdropBlit(x) => drop(self.backdrop_blit_pipeline.set(x)),
         }
@@ -4272,6 +4515,27 @@ impl Renderer {
         self.filter_passes
     }
 
+    /// Сколько внешних теней (`box-shadow`) этот рендер нарисовал
+    /// аналитически — то есть без offscreen-уровня и его пассов
+    /// (BUG-405 срез 7).
+    ///
+    /// Гейт правки стоит на нём вместе с [`Renderer::filter_passes`]: счётчик
+    /// называет механизм («тень рисуется в батче родителя»), а число
+    /// filter-пассов — его следствие.
+    #[must_use]
+    pub fn shadow_draws(&self) -> u64 {
+        self.shadow_draws
+    }
+
+    /// Включает/выключает аналитическую размытую тень (BUG-405 срез 7).
+    ///
+    /// Нужен гейту пикселей: сравнить прежний трёхпассовый путь с новым можно
+    /// только двумя плечами в одном процессе. Рычаг процесса
+    /// `LUMEN_NO_SHADOW_ANALYTIC=1` выключает аналитику поверх переключателя.
+    pub fn set_shadow_analytic_enabled(&mut self, enabled: bool) {
+        self.shadow_analytic_enabled = enabled;
+    }
+
     /// Включает/выключает склейку вертикального прохода блюра с композитом
     /// (BUG-405 срез 6).
     ///
@@ -4347,6 +4611,7 @@ impl PipelineDeps {
         }
         emit!(WarmedPipeline::Filter(self.build_filter_pipeline()));
         emit!(WarmedPipeline::Blur(self.build_blur_pipeline()));
+        emit!(WarmedPipeline::Shadow(self.build_shadow_pipeline()));
         emit!(WarmedPipeline::BlurComposite(self.build_blur_composite_pipeline()));
         emit!(WarmedPipeline::RRectClip(self.build_rrect_clip_pipeline()));
         emit!(WarmedPipeline::Composite(self.build_composite_pipeline()));
@@ -5099,6 +5364,83 @@ impl PipelineDeps {
         })
     }
 
+    /// Пайплайн аналитической размытой тени (BUG-405 срез 7).
+    ///
+    /// Отличия от `rrect_pipeline`, с которого он списан: своя фрагментная
+    /// часть ([`SHADOW_SHADER_SRC`]) и лишний вершинный атрибут `sigma`.
+    /// Группа 0 та же — viewport + слот скруглённого клипа, поэтому тень
+    /// рисуется прямо в батче родителя и своего пасса не открывает.
+    ///
+    /// BUG-406: компилируется лениво, при первом использовании.
+    fn build_shadow_pipeline(&self) -> wgpu::RenderPipeline {
+        let shader = timed_shader(&self.device, wgpu::ShaderModuleDescriptor {
+            label: Some("shadow-shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                format!("{SDF_RRECT_WGSL}{CLIP_UNIFORM_WGSL}{SHADOW_SHADER_SRC}").into(),
+            ),
+        });
+        let layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("shadow-layout"),
+            bind_group_layouts: &[&self.uniform_bgl],
+            push_constant_ranges: &[],
+        });
+        self.timed(&wgpu::RenderPipelineDescriptor {
+            label: Some("shadow-pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<ShadowVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        // loc 0: pos (vec2)
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
+                        // loc 1: z (f32)
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32, offset: 8, shader_location: 1 },
+                        // loc 2: color (vec4)
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 12, shader_location: 2 },
+                        // loc 3: center (vec2)
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 28, shader_location: 3 },
+                        // loc 4: half_size (vec2)
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 36, shader_location: 4 },
+                        // loc 5: radii_x (vec4)
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 44, shader_location: 5 },
+                        // loc 6: radii_y (vec4)
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 60, shader_location: 6 },
+                        // loc 7: sigma (f32)
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32, offset: 76, shader_location: 7 },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: self.surface_format,
+                    // Тот же blend, что у `rrect_pipeline`: прямая альфа —
+                    // прежний путь композитил уровень премультиплицированно,
+                    // но там альфа уже была вмножена в цвет самой заливкой.
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        })
+    }
+
     /// Пайплайн сепарабельного гауссова блюра (один проход, H или V).
     ///
     /// BUG-406: компилируется лениво, при первом реальном использовании —
@@ -5275,6 +5617,10 @@ impl Renderer {
     /// проход блюра вместе с цветовыми фильтрами и композитом в родителя.
     fn blur_composite_pipeline(&self) -> &wgpu::RenderPipeline {
         self.blur_composite_pipeline.get_or_init(|| self.pdeps.build_blur_composite_pipeline())
+    }
+    /// Ленивый доступ к пайплайну аналитической тени (BUG-405 срез 7).
+    fn shadow_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.shadow_pipeline.get_or_init(|| self.pdeps.build_shadow_pipeline())
     }
     /// Ленивый доступ к `backdrop_blit`-пайплайну (BUG-406): компилирует его при
     /// первом обращении и кэширует на весь срок жизни рендера.
@@ -7190,6 +7536,7 @@ impl Renderer {
         let mut fill_vertices: Vec<FillVertex> = Vec::new();
         let mut circle_vertices: Vec<CircleVertex> = Vec::new();
         let mut rrect_vertices: Vec<RRectVertex> = Vec::new();
+        let mut shadow_vertices: Vec<ShadowVertex> = Vec::new();
         let mut text_vertices: Vec<TextVertex> = Vec::new();
         let mut image_vertices: Vec<ImageVertex> = Vec::new();
         // Bind groups для image draw-ов в порядке появления. DrawOp::Image
@@ -7481,6 +7828,16 @@ impl Renderer {
         // (`LUMEN_NO_CULL_MERGE=1`) ИЛИ инстансный переключатель, которым тест
         // рисует один и тот же список обоими путями в одном процессе.
         let cull_merge_off = cull_merge_disabled() || !self.cull_merge_enabled;
+        // BUG-405 срез 7: то же двойное плечо для аналитической тени.
+        let shadow_analytic_off = shadow_analytic_disabled() || !self.shadow_analytic_enabled;
+        // Сколько внешних теней кадра нарисованы аналитически, то есть без
+        // своего offscreen-уровня. Гейт правки — этот счётчик вместе с
+        // `filter_passes`, а не время кадра.
+        let mut shadow_draws: u32 = 0;
+        // Хвост тени, который уже учтён её квадом: заливка и парный
+        // `PopFilter` пропускаются как команды. Пара «список (content/overlay),
+        // индекс последней пропускаемой команды».
+        let mut shadow_skip_until: Option<(bool, usize)> = None;
 
         // Текущий выставленный scissor (для дедупликации SetScисsor-команд).
         // None = не выставлен (первый SetScissor нужен в любом случае).
@@ -7518,6 +7875,7 @@ impl Renderer {
                                 DrawOp::Fill { v_start, v_count } => union_op_verts!(lb, fill_vertices, v_start, v_count),
                                 DrawOp::Circle { v_start, v_count } => union_op_verts!(lb, circle_vertices, v_start, v_count),
                                 DrawOp::RRect { v_start, v_count } => union_op_verts!(lb, rrect_vertices, v_start, v_count),
+                                DrawOp::Shadow { v_start, v_count } => union_op_verts!(lb, shadow_vertices, v_start, v_count),
                                 DrawOp::Text { v_start, v_count } => union_op_verts!(lb, text_vertices, v_start, v_count),
                                 DrawOp::Image { v_start, v_count, .. } => union_op_verts!(lb, image_vertices, v_start, v_count),
                                 DrawOp::Gradient { v_start, v_count, .. } => union_op_verts!(lb, grad_vertices, v_start, v_count),
@@ -7671,6 +8029,15 @@ impl Renderer {
         let iter_content = content.iter().enumerate().map(|(i, c)| (c, false, i));
         let iter_overlay = overlay.iter().enumerate().map(|(i, c)| (c, true, i));
         for (cmd, is_overlay, cmd_idx) in iter_content.chain(iter_overlay) {
+            // BUG-405 срез 7: заливка и `PopFilter` тени, нарисованной
+            // аналитически, уже учтены её квадом — пропускаем их как команды.
+            match shadow_skip_until {
+                Some((list_overlay, until)) if list_overlay == is_overlay && cmd_idx <= until => {
+                    continue;
+                }
+                Some(_) => shadow_skip_until = None,
+                None => {}
+            }
             let (dy, dx) = if is_overlay {
                 (0.0_f32, 0.0_f32)
             } else {
@@ -9173,6 +9540,83 @@ impl Renderer {
                 // CSS Filter Effects L1 — PushFilter opens an offscreen level;
                 // PopFilter composites it onto the parent with filter applied.
                 DisplayCommand::PushFilter { filters, bounds: _ } => {
+                    // BUG-405 срез 7 — внешняя тень рисуется аналитически, без
+                    // своего offscreen-уровня и его трёх пассов.
+                    //
+                    // Условия — не косметика, каждое держит равенство картинки:
+                    // * `clip=0` — шейдерный скруглённый клип умножает покрытие
+                    //   ПОСЛЕ размытия, а прежний путь клипал саму фигуру и
+                    //   размывал уже обрезанную;
+                    // * только перенос — SDF строки выведен по экранным осям;
+                    // * scissor не режет тень внутри поверхности — прежний путь
+                    //   размывал обрезанную фигуру, здесь обрезается результат.
+                    //   Совпадение среза с краем поверхности срезом не считается:
+                    //   за краем нет ни пикселей, ни текстуры уровня.
+                    if !shadow_analytic_off
+                        && active_clip_slot == 0
+                        && let Some((sigma, rect, color, radii)) =
+                            box_shadow_body(if is_overlay { overlay } else { content }, cmd_idx, filters)
+                        && let Some((tx, ty)) = match transform_stack.last() {
+                            None => Some((0.0, 0.0)),
+                            Some(m) => transform_is_translation(m),
+                        }
+                    {
+                        let r = translate_rect(rect, dx + tx, dy + ty);
+                        // Запас квада — обрез ядра блюра, тот же
+                        // `min(ceil(3σ),32)` в device px, что в BLUR_SHADER_SRC,
+                        // плюс пиксель на сглаживание края.
+                        let pad_css = (3.0 * sigma).ceil().min(32.0) / dpr_f32 + 1.0;
+                        let padded = Rect::new(
+                            r.x - pad_css,
+                            r.y - pad_css,
+                            r.width + 2.0 * pad_css,
+                            r.height + 2.0 * pad_css,
+                        );
+                        let want =
+                            css_rect_to_device_scissor(padded, dpr_f32, surface_w, surface_h);
+                        let desired = match clip_stack.last() {
+                            Some(c) => {
+                                css_rect_to_device_scissor(*c, dpr_f32, surface_w, surface_h)
+                            }
+                            None => DeviceScissor::full(surface_w, surface_h),
+                        };
+                        let uncut = want.x >= desired.x
+                            && want.y >= desired.y
+                            && want.x + want.width <= desired.x + desired.width
+                            && want.y + want.height <= desired.y + desired.height;
+                        if want.is_empty() {
+                            // Тень целиком за поверхностью: прежний путь
+                            // выбрасывал такой уровень (viewport-cull) — здесь
+                            // просто ничего не рисуем.
+                            shadow_skip_until = Some((is_overlay, cmd_idx + 2));
+                            continue;
+                        }
+                        if uncut {
+                            if sync_scissor_to_stack(
+                                &clip_stack,
+                                &mut current_scissor,
+                                &mut draw_ops,
+                                dpr_f32,
+                                surface_w,
+                                surface_h,
+                            ) {
+                                let v_start = shadow_vertices.len() as u32;
+                                push_shadow_quad(
+                                    &mut shadow_vertices,
+                                    r,
+                                    color_to_array(&color),
+                                    radii,
+                                    sigma,
+                                    pad_css,
+                                );
+                                let v_count = shadow_vertices.len() as u32 - v_start;
+                                draw_ops.push(DrawOp::Shadow { v_start, v_count });
+                                shadow_draws += 1;
+                            }
+                            shadow_skip_until = Some((is_overlay, cmd_idx + 2));
+                            continue;
+                        }
+                    }
                     flush_batch!();
                     filter_stack.push((filters.clone(), render_plan.len()));
                     current_level += 1;
@@ -9720,6 +10164,7 @@ impl Renderer {
         // BUG-405 срез 5: гейт склейки — число склеенных разрезов и итоговое
         // число пассов кадра (элемент плана = пасс).
         self.cull_merges += merged_cull_splits as u64;
+        self.shadow_draws += shadow_draws as u64;
         self.plan_passes += render_plan.len() as u64;
 
         // ── Vertex buffers ────────────────────────────────────────────────
@@ -9757,6 +10202,18 @@ impl Renderer {
                 mapped_at_creation: false,
             });
             self.queue.write_buffer(&buf, 0, as_bytes(&rrect_vertices));
+            Some(buf)
+        };
+        let shadow_vbuf = if shadow_vertices.is_empty() {
+            None
+        } else {
+            let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("shadow-vbuf"),
+                size: std::mem::size_of_val(shadow_vertices.as_slice()) as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.queue.write_buffer(&buf, 0, as_bytes(&shadow_vertices));
             Some(buf)
         };
         let text_vbuf = if text_vertices.is_empty() {
@@ -10027,6 +10484,14 @@ impl Renderer {
                                 $pass.draw(*v_start..*v_start + *v_count, 0..1);
                             }
                         }
+                        DrawOp::Shadow { v_start, v_count } => {
+                            if let Some(vb) = &shadow_vbuf {
+                                $pass.set_pipeline(self.shadow_pipeline());
+                                $pass.set_bind_group(0, &self.uniform_bind_group, &[clip_slot * UNIFORM_SLOT_STRIDE as u32]);
+                                $pass.set_vertex_buffer(0, vb.slice(..));
+                                $pass.draw(*v_start..*v_start + *v_count, 0..1);
+                            }
+                        }
                         DrawOp::Text { v_start, v_count } => {
                             if let Some(vb) = &text_vbuf {
                                 $pass.set_pipeline(&self.text_pipeline);
@@ -10180,6 +10645,7 @@ impl Renderer {
                             DrawOp::Fill { .. } => 1,
                             DrawOp::Circle { .. } => 2,
                             DrawOp::RRect { .. } => 3,
+                            DrawOp::Shadow { .. } => 9,
                             DrawOp::Text { .. } => 4,
                             DrawOp::Image { .. } => 5,
                             DrawOp::Gradient { .. } => 6,
@@ -12313,6 +12779,67 @@ fn push_rrect_quad(out: &mut Vec<RRectVertex>, rect: Rect, color: [f32; 4], radi
         v(x0, y0), v(x1, y0), v(x1, y1),
         v(x0, y0), v(x1, y1), v(x0, y1),
     ]);
+}
+
+/// Кладёт квад аналитической размытой тени (BUG-405 срез 7).
+///
+/// `rect`/`radii` — сама фигура (уже в экранных CSS px), `pad` — запас на
+/// радиус ядра блюра: за его пределами вклад гауссианы ровно ноль, потому что
+/// ядро в шейдере обрезано так же, как в [`BLUR_SHADER_SRC`]. Квад строится по
+/// раздутому прямоугольнику, а `center`/`half_size`/радиусы остаются от
+/// исходной фигуры — фрагмент считает размытие именно её.
+fn push_shadow_quad(
+    out: &mut Vec<ShadowVertex>,
+    rect: Rect,
+    color: [f32; 4],
+    radii: CornerRadii,
+    sigma: f32,
+    pad: f32,
+) {
+    let center = [rect.x + rect.width * 0.5, rect.y + rect.height * 0.5];
+    let half_size = [rect.width * 0.5, rect.height * 0.5];
+    let radii = radii.clamped_to_box(rect.width, rect.height);
+    let radii_x = [radii.tl, radii.tr, radii.br, radii.bl];
+    let radii_y = [radii.tl_y, radii.tr_y, radii.br_y, radii.bl_y];
+    let (x0, y0) = (rect.x - pad, rect.y - pad);
+    let (x1, y1) = (rect.x + rect.width + pad, rect.y + rect.height + pad);
+    let v = |px: f32, py: f32| ShadowVertex {
+        pos: [px, py],
+        z: 0.0,
+        color,
+        center,
+        half_size,
+        radii_x,
+        radii_y,
+        sigma,
+    };
+    out.extend_from_slice(&[
+        v(x0, y0), v(x1, y0), v(x1, y1),
+        v(x0, y0), v(x1, y1), v(x0, y1),
+    ]);
+}
+
+/// `Some((tx, ty))`, если матрица — чистый перенос в плоскости экрана.
+/// Поворот/масштаб/перспектива уводят фигуру с осей, под которыми аналитическая
+/// тень выведена, — такие остаются на прежнем пути с offscreen-уровнем.
+fn transform_is_translation(m: &Mat4) -> Option<(f32, f32)> {
+    let e = &m.0;
+    let unit = |a: f32, b: f32| (a - b).abs() < 1e-6;
+    let ok = unit(e[0], 1.0)
+        && unit(e[5], 1.0)
+        && unit(e[10], 1.0)
+        && unit(e[15], 1.0)
+        && unit(e[1], 0.0)
+        && unit(e[2], 0.0)
+        && unit(e[3], 0.0)
+        && unit(e[4], 0.0)
+        && unit(e[6], 0.0)
+        && unit(e[7], 0.0)
+        && unit(e[8], 0.0)
+        && unit(e[9], 0.0)
+        && unit(e[11], 0.0)
+        && unit(e[14], 0.0);
+    ok.then(|| (e[12], e[13]))
 }
 
 /// Applies a `PushTransform` matrix to `RRectVertex::pos` AND `center` fields.

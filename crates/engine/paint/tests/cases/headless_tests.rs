@@ -133,7 +133,7 @@ fn warmup_takes_pipeline_compilation_off_the_frame() {
     warm.warm_lazy_pipelines_blocking();
     assert_eq!(
         warm.warmed_pipeline_count(),
-        12,
+        13,
         "прогрев обязан заполнить все ленивые ячейки",
     );
     let before_warm = warm.pipelines_compiled();
@@ -163,8 +163,8 @@ fn warmup_compiles_each_lazy_pipeline_exactly_once() {
     );
     r.warm_lazy_pipelines_blocking();
     // `mask-layer` — одна ячейка на два пайплайна (luminance/alpha).
-    assert_eq!(r.pipelines_compiled(), 13, "прогрев собрал не тот набор пайплайнов");
-    assert_eq!(r.warmed_pipeline_count(), 12);
+    assert_eq!(r.pipelines_compiled(), 14, "прогрев собрал не тот набор пайплайнов");
+    assert_eq!(r.warmed_pipeline_count(), 13);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -656,6 +656,10 @@ fn blur_filter_costs_two_passes() {
     let mut r = Renderer::new_headless(INTER.to_vec(), 64, 64, ColorSpace::Srgb)
         .expect("headless renderer");
     r.set_font_provider(None);
+    // `filter_groups_dl` кладёт РОВНО одну заливку внутрь блюра — то есть
+    // сигнатуру внешней тени, которую срез 7 уводит с уровня в батч родителя.
+    // Здесь предмет проверки — сам filter-путь, поэтому аналитика выключена.
+    r.set_shadow_analytic_enabled(false);
 
     let blur = filter_groups_dl(4, vec![FilterFn::Blur(3.0)]);
 
@@ -708,6 +712,9 @@ fn blur_merge_matches_two_pass() {
     let mut r = Renderer::new_headless(INTER.to_vec(), 64, 64, ColorSpace::Srgb)
         .expect("headless renderer");
     r.set_font_provider(None);
+    // См. `blur_filter_costs_two_passes`: списки из одной заливки под блюром —
+    // сигнатура тени, а предмет этого гейта — склейка среза 6.
+    r.set_shadow_analytic_enabled(false);
     // Блюр сам по себе, блюр с цветовыми фильтрами и вложенный в opacity —
     // все три формы, в которых filter-группа доезжает до кадра.
     let mut dl = filter_groups_dl(3, vec![FilterFn::Blur(3.0)]);
@@ -747,4 +754,194 @@ fn blur_merge_matches_two_pass() {
         .chunks_exact(4)
         .any(|px| px[2] > 32 && px[2] < 223 && px[0] < 223);
     assert!(blurred, "в кадре нет размытых пикселей — гейт пикселей негоден");
+}
+
+/// Внешняя тень так, как её кладёт `emit_box_shadows`: `PushFilter [Blur(σ)]`,
+/// одна заливка, `PopFilter`. `radii = None` — прямые углы (`FillRect`).
+fn box_shadow_dl(rect: Rect, sigma: f32, radii: Option<[f32; 4]>) -> Vec<DisplayCommand> {
+    let color = Color { r: 0, g: 0, b: 0, a: 80 };
+    let fill = match radii {
+        None => DisplayCommand::FillRect { rect, color },
+        Some(r) => DisplayCommand::FillRoundedRect {
+            rect,
+            color,
+            radii: lumen_paint::CornerRadii {
+                tl: r[0], tr: r[1], br: r[2], bl: r[3],
+                tl_y: r[0], tr_y: r[1], br_y: r[2], bl_y: r[3],
+            },
+        },
+    };
+    vec![
+        DisplayCommand::PushFilter { filters: vec![FilterFn::Blur(sigma)], bounds: Some(rect) },
+        fill,
+        DisplayCommand::PopFilter,
+    ]
+}
+
+/// BUG-405 срез 7: внешняя тень не стоит ни одного пасса.
+///
+/// Гейт стоит на механизме (`shadow_draws` + `filter_passes`), а не на времени
+/// кадра: тень рисуется операцией внутри уже открытого батча родителя, поэтому
+/// её прежние три пасса (контент уровня, блюр H, слитый блюр V + композит)
+/// исчезают целиком.
+///
+/// Три контроля на ложно-зелёный:
+/// * плечо `set_shadow_analytic_enabled(false)` обязано дать прежние два пасса
+///   на тень (срез 6) — иначе тест зелен и на рендере, который тени не рисует;
+/// * блюр над ДВУМЯ заливками — не тень: уровень обязан остаться, иначе
+///   сигнатура проглатывает произвольные filter-группы и меняет им картинку;
+/// * блюр рядом с цветовым фильтром — тоже не тень (по той же причине).
+#[test]
+#[ignore = "requires GPU adapter"]
+fn box_shadow_costs_no_pass() {
+    let mut r = Renderer::new_headless(INTER.to_vec(), 128, 128, ColorSpace::Srgb)
+        .expect("headless renderer");
+    r.set_font_provider(None);
+
+    let mut shadows = Vec::new();
+    for i in 0..4 {
+        let rect = Rect { x: 20.0, y: 16.0 + i as f32 * 24.0, width: 60.0, height: 12.0 };
+        shadows.extend(box_shadow_dl(rect, 3.0, Some([4.0; 4])));
+    }
+
+    let (p0, s0) = (r.filter_passes(), r.shadow_draws());
+    r.render_to_image(&shadows, 0.0, 0.0).expect("кадр с тенями");
+    assert_eq!(r.shadow_draws() - s0, 4, "тени не ушли на аналитический путь");
+    assert_eq!(r.filter_passes() - p0, 0, "тень всё ещё открывает уровень");
+
+    r.set_shadow_analytic_enabled(false);
+    let (p0, s0) = (r.filter_passes(), r.shadow_draws());
+    r.render_to_image(&shadows, 0.0, 0.0).expect("кадр с тенями без аналитики");
+    assert_eq!(r.shadow_draws() - s0, 0, "плечо A/B рисует тени аналитически");
+    assert_eq!(
+        r.filter_passes() - p0,
+        4 * 2,
+        "плечо без аналитики обязано остаться двухпассовым (контроль негоден)",
+    );
+    r.set_shadow_analytic_enabled(true);
+
+    // Блюр над двумя заливками — не тень.
+    let rect = Rect { x: 20.0, y: 20.0, width: 60.0, height: 12.0 };
+    let color = Color { r: 0, g: 0, b: 0, a: 80 };
+    let two_fills = vec![
+        DisplayCommand::PushFilter { filters: vec![FilterFn::Blur(3.0)], bounds: Some(rect) },
+        DisplayCommand::FillRect { rect, color },
+        DisplayCommand::FillRect {
+            rect: Rect { x: 20.0, y: 40.0, width: 60.0, height: 12.0 },
+            color,
+        },
+        DisplayCommand::PopFilter,
+    ];
+    let (p0, s0) = (r.filter_passes(), r.shadow_draws());
+    r.render_to_image(&two_fills, 0.0, 0.0).expect("кадр с блюром над двумя заливками");
+    assert_eq!(r.shadow_draws() - s0, 0, "две заливки под блюром приняты за тень");
+    assert_eq!(r.filter_passes() - p0, 2, "filter-группа обязана остаться на уровне");
+
+    // Блюр вместе с цветовым фильтром — не тень.
+    let blur_and_color = vec![
+        DisplayCommand::PushFilter {
+            filters: vec![FilterFn::Blur(3.0), FilterFn::Sepia(1.0)],
+            bounds: Some(rect),
+        },
+        DisplayCommand::FillRect { rect, color },
+        DisplayCommand::PopFilter,
+    ];
+    let (p0, s0) = (r.filter_passes(), r.shadow_draws());
+    r.render_to_image(&blur_and_color, 0.0, 0.0).expect("кадр с блюром и цветовым фильтром");
+    assert_eq!(r.shadow_draws() - s0, 0, "блюр с цветовым фильтром принят за тень");
+    assert_eq!(r.filter_passes() - p0, 2, "filter-группа обязана остаться на уровне");
+}
+
+/// BUG-405 срез 7: аналитическая тень даёт ту же картинку, что и размытый
+/// offscreen-уровень.
+///
+/// Оба плеча снимаются в одном процессе (`set_shadow_analytic_enabled`) на
+/// одном списке: прямоугольная тень, скруглённая, с разными σ, под переносом и
+/// внутри opacity-уровня. Побайтового равенства тут быть не может — прежний
+/// путь берёт свёртку восьмибитного растра фигуры, новый считает тот же
+/// интеграл аналитически, — поэтому гейт числовой, а порог назван измерением
+/// (см. bugs/BUG-405-OPEN.md, срез 7).
+///
+/// Проверка «в кадре есть полутон тени» обязательна: сравнение двух пустых
+/// кадров зелено и у правки, потерявшей тень целиком.
+#[test]
+#[ignore = "requires GPU adapter"]
+fn analytic_shadow_matches_blurred_level() {
+    let mut r = Renderer::new_headless(INTER.to_vec(), 128, 128, ColorSpace::Srgb)
+        .expect("headless renderer");
+    r.set_font_provider(None);
+
+    let mut dl = box_shadow_dl(Rect { x: 20.0, y: 14.0, width: 50.0, height: 10.0 }, 3.0, None);
+    dl.extend(box_shadow_dl(
+        Rect { x: 20.0, y: 40.0, width: 50.0, height: 10.0 },
+        3.0,
+        Some([5.0; 4]),
+    ));
+    dl.extend(box_shadow_dl(
+        Rect { x: 20.0, y: 66.0, width: 50.0, height: 12.0 },
+        1.5,
+        Some([6.0, 0.0, 6.0, 0.0]),
+    ));
+    // Под переносом и внутри видимого уровня — обе формы, в которых тень
+    // доезжает до кадра на реальной странице.
+    dl.push(DisplayCommand::PushTransform {
+        matrix: lumen_layout::Mat4::translation_2d(4.0, 92.0),
+    });
+    dl.extend(box_shadow_dl(Rect { x: 16.0, y: 0.0, width: 50.0, height: 10.0 }, 4.0, Some([3.0; 4])));
+    dl.push(DisplayCommand::PopTransform);
+    dl.push(DisplayCommand::PushOpacity { alpha: 0.6, bounds: None });
+    dl.extend(box_shadow_dl(
+        Rect { x: 20.0, y: 110.0, width: 50.0, height: 8.0 },
+        2.0,
+        Some([4.0; 4]),
+    ));
+    dl.push(DisplayCommand::PopOpacity);
+    // Тень, выезжающая за край поверхности, — то, что происходит на прокрутке.
+    // Прежний путь размывает содержимое текстуры уровня и на краю повторяет
+    // краевой тексель (clamp), аналитический считает фигуру целиком: случай
+    // обязан быть в гейте, а не остаться необмеренным.
+    dl.extend(box_shadow_dl(
+        Rect { x: -20.0, y: 88.0, width: 50.0, height: 10.0 },
+        4.0,
+        Some([4.0; 4]),
+    ));
+
+    r.set_shadow_analytic_enabled(false);
+    let p0 = r.filter_passes();
+    let level = r.render_to_image(&dl, 0.0, 0.0).expect("плечо уровня");
+    let passes_level = r.filter_passes() - p0;
+
+    r.set_shadow_analytic_enabled(true);
+    let (p0, s0) = (r.filter_passes(), r.shadow_draws());
+    let analytic = r.render_to_image(&dl, 0.0, 0.0).expect("плечо аналитики");
+    let (passes_analytic, draws) = (r.filter_passes() - p0, r.shadow_draws() - s0);
+
+    assert_eq!(draws, 6, "не все тени списка ушли на аналитический путь");
+    assert_eq!(passes_analytic, 0, "аналитическая тень всё ещё стоит пассов");
+    assert!(passes_level > 0, "плечо уровня не рисует тень пассами (контроль негоден)");
+
+    let max_diff = level
+        .data
+        .iter()
+        .zip(analytic.data.iter())
+        .map(|(a, b)| a.abs_diff(*b))
+        .max()
+        .unwrap_or(0);
+    // Порог назван измерением: на этом списке расхождение ровно 1/255 —
+    // младший бит там, где прежний путь квантует размытый слой в восемь бит,
+    // а аналитика блендит результат в родителя без промежуточного слоя.
+    assert!(
+        max_diff <= 1,
+        "аналитическая тень разошлась с размытым уровнем: {max_diff}/255 \
+         (пассов {passes_level} -> {passes_analytic})",
+    );
+
+    // Полутон тени обязан быть в кадре у ОБОИХ плеч.
+    for (name, img) in [("уровень", &level), ("аналитика", &analytic)] {
+        let has_penumbra = img
+            .data
+            .chunks_exact(4)
+            .any(|px| px[0] > 32 && px[0] < 223);
+        assert!(has_penumbra, "в кадре плеча «{name}» нет полутона тени — гейт негоден");
+    }
 }
