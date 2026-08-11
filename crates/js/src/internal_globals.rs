@@ -317,7 +317,10 @@ mod tests {
     /// would silently disappear. There are none today; this guards that.
     #[test]
     fn shim_has_no_top_level_lexical_declarations() {
-        let offenders: Vec<&str> = crate::dom::WEB_API_SHIM
+        // Assembled from its five parts (BUG-401) — a lexical declaration in
+        // any of them, shared blocks included, is equally fatal here.
+        let shim = crate::dom::web_api_shim();
+        let offenders: Vec<&str> = shim
             .lines()
             .filter(|l| {
                 l.starts_with("let ") || l.starts_with("const ") || l.starts_with("class ")

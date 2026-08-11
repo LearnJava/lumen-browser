@@ -23,7 +23,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
 #[cfg(feature = "v8-backend")]
-use crate::v8_compat::{into_v8_fn1, into_v8_fn2};
+use crate::v8_compat::{into_v8_fn0, into_v8_fn1, into_v8_fn2};
 #[cfg(feature = "v8-backend")]
 use crate::v8_runtime::V8JsRuntime;
 #[cfg(feature = "v8-backend")]
@@ -212,6 +212,42 @@ fn resolve_import_url(url: &str, blob_store: &WorkerBlobStore) -> Option<String>
     }
 }
 
+// ─── shared WorkerGlobalScope surface ─────────────────────────────────────────
+
+/// Install the parts of the global scope that WHATWG exposes in **every**
+/// `WorkerGlobalScope`, not just the dedicated-worker one: the `_lumen_now_ms`
+/// clock native plus [`crate::dom::worker_exposed_shim`] (`EventTarget` and the
+/// `Performance` interface with its `performance` singleton).
+///
+/// Called by all three worker flavours — dedicated ([`install_worker_globals_v8`]),
+/// shared (`shared_worker.rs`) and service (`sw_worker.rs`) — before each
+/// evaluates its own flavour-specific scope shim. Sharing the page's shim source
+/// rather than re-writing it here is the point: a second copy of `Performance`
+/// would silently drift from the page one (BUG-401 was filed right after BUG-400
+/// had rebuilt the page copy as a real `EventTarget` subclass).
+///
+/// `_lumen_now_ms` is registered per worker runtime and reports wall-clock
+/// milliseconds since the Unix epoch, the same contract as the main-context
+/// native of that name. It deliberately does **not** honour `--deterministic`:
+/// the deterministic clock/RNG patch is evaluated in the page context only, so
+/// `Date.now()` and `Math.random()` are already live inside every worker —
+/// freezing `performance.now()` alone would fake a determinism the scope does
+/// not have ([BUG-768](bugs/BUG-768-OPEN.md)).
+#[cfg(feature = "v8-backend")]
+pub(crate) fn install_worker_scope_globals_v8(rt: &V8JsRuntime) -> JsResult<()> {
+    rt.register_native(
+        "_lumen_now_ms",
+        into_v8_fn0(move || -> f64 {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs_f64() * 1000.0)
+                .unwrap_or(0.0)
+        }),
+    )?;
+    rt.eval(&crate::dom::worker_exposed_shim())?;
+    Ok(())
+}
+
 // ─── worker thread ────────────────────────────────────────────────────────────
 
 /// Build the worker-thread global-scope shim source for a given worker id.
@@ -222,7 +258,8 @@ fn resolve_import_url(url: &str, blob_store: &WorkerBlobStore) -> Option<String>
 /// `importScripts` (data: + blob: URLs), `setTimeout`/`clearTimeout`/
 /// `setInterval`/`clearInterval` (minimal stubs), `queueMicrotask`.
 /// `atob`/`btoa` are installed separately as natives since they need
-/// Rust-side base64 codecs.
+/// Rust-side base64 codecs; `EventTarget` and `performance` come from the
+/// shim shared with the page scope ([`install_worker_scope_globals_v8`]).
 #[cfg(feature = "v8-backend")]
 fn worker_global_shim(worker_id: u32) -> String {
     format!(
@@ -834,6 +871,11 @@ fn install_worker_globals_v8(
     rt.register_native_scoped("atob", Box::new(atob_native_v8))?;
     rt.register_native_scoped("btoa", Box::new(btoa_native_v8))?;
 
+    // Before the dedicated-worker shim: it is what gives the scope `performance`
+    // (BUG-401) and `EventTarget`, and the `performance` time origin is taken at
+    // this point — the creation of this global scope, per HR Time L3 §4.2.
+    install_worker_scope_globals_v8(rt)?;
+
     rt.eval(&worker_global_shim(worker_id))?;
     Ok(())
 }
@@ -1028,6 +1070,132 @@ mod tests_v8 {
             .eval("(function(){try{atob('!!!');return false;}catch(e){return e instanceof TypeError;}})()")
             .unwrap();
         assert_eq!(ok, lumen_core::JsValue::Bool(true));
+    }
+
+    /// BUG-401: `performance` was absent from the worker global scope entirely,
+    /// so a worker script reading `performance.now()` aborted with a
+    /// `ReferenceError` on its first line. What is asserted here is the
+    /// prototype chain, not the presence of three method names: a hand-written
+    /// literal with `now`/`timeOrigin` on it would satisfy the names and still
+    /// be a different object from the page's `Performance` — exactly the shape
+    /// defect BUG-400 had just removed from the page copy.
+    #[test]
+    fn v8_worker_globals_have_performance() {
+        let rt = V8JsRuntime::new().unwrap();
+        let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), make_store()).unwrap();
+
+        for expr in [
+            "typeof performance === 'object'",
+            "self.performance === performance",
+            "typeof performance.now === 'function'",
+            "typeof performance.timeOrigin === 'number'",
+            "performance instanceof Performance",
+            "Object.getPrototypeOf(Performance.prototype) === EventTarget.prototype",
+            "typeof performance.addEventListener === 'function'",
+            // The operations live on the prototype, so the singleton has no own
+            // enumerable properties and the WebIDL default toJSON stays honest.
+            "Object.keys(performance).length === 0",
+            "JSON.stringify(performance) === JSON.stringify({timeOrigin: performance.timeOrigin})",
+        ] {
+            assert_eq!(
+                rt.eval(expr).unwrap(),
+                lumen_core::JsValue::Bool(true),
+                "{expr}"
+            );
+        }
+    }
+
+    /// The worker's time origin is its own scope-creation instant (HR Time L3
+    /// §4.2), not zero and not the page's. Bracketing it with two wall-clock
+    /// reads taken around the install is the only way to tell those apart from
+    /// inside a single runtime.
+    #[test]
+    fn v8_worker_performance_time_origin_is_scope_creation() {
+        let epoch_ms = || {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs_f64() * 1000.0)
+                .unwrap_or(0.0)
+        };
+        let before = epoch_ms();
+        let rt = V8JsRuntime::new().unwrap();
+        let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), make_store()).unwrap();
+        let after = epoch_ms();
+
+        let origin = match rt.eval("performance.timeOrigin").unwrap() {
+            lumen_core::JsValue::Number(n) => n,
+            other => panic!("timeOrigin is not a number: {other:?}"),
+        };
+        assert!(
+            origin >= before && origin <= after,
+            "timeOrigin {origin} is outside the install window [{before}, {after}]"
+        );
+
+        // now() is measured from that origin, so it is a small offset, not an
+        // epoch timestamp.
+        let now = match rt.eval("performance.now()").unwrap() {
+            lumen_core::JsValue::Number(n) => n,
+            other => panic!("now() is not a number: {other:?}"),
+        };
+        assert!((0.0..60_000.0).contains(&now), "now() = {now}");
+    }
+
+    /// `PerformanceObserver` is part of the page shim only, so in a worker
+    /// `_perf_observer_notify` does not exist. User Timing must still work —
+    /// this is the test for the `typeof` guard the shared shim calls it
+    /// through; without it `mark()` throws `ReferenceError` in a worker.
+    #[test]
+    fn v8_worker_user_timing_works_without_performance_observer() {
+        let rt = V8JsRuntime::new().unwrap();
+        let queue: Arc<Mutex<Vec<(u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
+        install_worker_globals_v8(&rt, 0, Arc::clone(&queue), make_store()).unwrap();
+
+        assert_eq!(
+            rt.eval("typeof _perf_observer_notify").unwrap(),
+            lumen_core::JsValue::String("undefined".into()),
+        );
+        let ok = rt
+            .eval(
+                "(function(){\
+                   performance.mark('a'); performance.mark('b');\
+                   var m = performance.measure('m', 'a', 'b');\
+                   return m.entryType === 'measure' &&\
+                          performance.getEntriesByType('mark').length === 2;\
+                 })()",
+            )
+            .unwrap();
+        assert_eq!(ok, lumen_core::JsValue::Bool(true));
+    }
+
+    /// The reported failure end-to-end: a real spawned worker whose very first
+    /// statement reads `performance.now()`. Before the fix the script died
+    /// before `onmessage` was installed, so no reply ever came back — the
+    /// TIMEOUT the three `hr-time` WPT files hit.
+    #[test]
+    fn v8_worker_end_to_end_performance_now() {
+        use std::time::Duration;
+        let queue: WorkerMessageQueue = Arc::new(Mutex::new(Vec::new()));
+        let store = make_store();
+        let reg: WorkerRegistry = Arc::new(Mutex::new(HashMap::new()));
+        let nid = Arc::new(Mutex::new(0u32));
+
+        let script = "var t0 = performance.now();\
+                      onmessage = function(e) {\
+                        postMessage(performance.now() >= t0 && performance.timeOrigin > 0);\
+                      };"
+            .to_string();
+        let worker_id = spawn_worker_v8(&reg, &queue, &nid, &store, script);
+
+        post_to_worker(&reg, worker_id, "0".to_string());
+        std::thread::sleep(Duration::from_millis(300));
+
+        let msgs = drain_messages(&queue);
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].1, "true");
+
+        terminate_worker(&reg, worker_id);
     }
 
     #[test]

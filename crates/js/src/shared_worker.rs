@@ -559,6 +559,10 @@ fn install_shared_worker_globals_v8(
         }),
     )?;
 
+    // `SharedWorkerGlobalScope` is a `WorkerGlobalScope` too, so it gets the
+    // same `EventTarget`/`performance` surface as the dedicated worker (BUG-401).
+    crate::worker::install_worker_scope_globals_v8(rt)?;
+
     rt.eval(SHARED_WORKER_GLOBAL_SHIM)?;
     Ok(())
 }
@@ -598,6 +602,23 @@ mod tests_v8 {
             JsValue::Number(n) => *n,
             JsValue::Bool(b) => i32::from(*b) as f64,
             _ => f64::NAN,
+        }
+    }
+
+    /// BUG-401: `SharedWorkerGlobalScope` is a `WorkerGlobalScope`, so it gets
+    /// the same `performance` the dedicated worker and the page do — the same
+    /// shim source, hence the same prototype chain, not a look-alike.
+    #[test]
+    fn shared_worker_global_scope_has_performance() {
+        let rt = V8JsRuntime::new().unwrap();
+        let ports = Arc::new(Mutex::new(HashMap::new()));
+        install_shared_worker_globals_v8(&rt, ports).unwrap();
+        for expr in [
+            "typeof performance.now === 'function'",
+            "performance instanceof Performance",
+            "Object.getPrototypeOf(Performance.prototype) === EventTarget.prototype",
+        ] {
+            assert_eq!(rt.eval(expr).unwrap(), JsValue::Bool(true), "{expr}");
         }
     }
 

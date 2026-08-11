@@ -139,7 +139,7 @@ WebIDL, класс [BUG-366](BUG-366-FIXED.md): страница не должн
 
 * [BUG-767](BUG-767-OPEN.md) — `performance.timing`/`performance.navigation`
   (Navigation Timing L1/L2 legacy) отсутствуют; заведён этим фиксом.
-* [BUG-401](BUG-401-OPEN.md) — `performance` отсутствует в Worker global
+* [BUG-401](BUG-401-FIXED.md) — `performance` отсутствует в Worker global
   scope целиком: тот же API, другой файл (`worker.rs`). Теперь у него
   появился готовый образец — прототип `Performance` можно поднять в
   воркер-глобал целиком, а не переписывать литерал второй раз.
