@@ -2054,6 +2054,78 @@ fn timed_pipeline(
     pipeline
 }
 
+/// Неизменяемые wgpu-хэндлы, которых достаточно для сборки любого ленивого
+/// пайплайна (BUG-406). Выделены из [`Renderer`] отдельной структурой ради
+/// BUG-405: все поля здесь — `Clone + Send + Sync` (в wgpu 26 хэндлы внутри
+/// `Arc`), поэтому снимок можно отдать фоновому потоку прогрева, а сам
+/// `Renderer` (с `OnceCell`, `HashMap`-кэшами и `Surface`) остаётся
+/// не-`Send`-овым и живёт только на UI-потоке.
+///
+/// Все поля выставляются один раз в конструкторе и больше не переприсваиваются
+/// — снимок не может устареть. `surface_format` в том числе: пересоздание
+/// swapchain'а в `resize`/`set_scale_factor` формат не меняет.
+#[derive(Clone)]
+struct PipelineDeps {
+    /// Устройство, на котором компилируются пайплайны.
+    device: wgpu::Device,
+    /// Формат цветового attachment'а всех пайплайнов кадра.
+    surface_format: wgpu::TextureFormat,
+    /// Layout viewport-униформы (bind group 0).
+    uniform_bgl: wgpu::BindGroupLayout,
+    /// Layout сэмплируемой картинки (текстура + сэмплер).
+    image_bgl: wgpu::BindGroupLayout,
+    /// Layout composite-пасса (склейка offscreen-уровня с родителем).
+    composite_bgl: wgpu::BindGroupLayout,
+    /// Layout composite-пасса маски (`mask-image`).
+    mask_composite_bgl: wgpu::BindGroupLayout,
+    /// Layout пасса CSS-фильтров.
+    filter_bgl: wgpu::BindGroupLayout,
+    /// Layout пасса блюра (H/V разделяемое ядро).
+    blur_bgl: wgpu::BindGroupLayout,
+    /// Layout пасса blend-режимов (`mix-blend-mode`).
+    blend_bgl: wgpu::BindGroupLayout,
+    /// Layout пасса cross-fade (`image-set`/переходы картинок).
+    cross_fade_bgl: wgpu::BindGroupLayout,
+    /// Layout composite-пасса клипа произвольной формы (`clip-path`).
+    path_clip_bgl: wgpu::BindGroupLayout,
+    /// Сколько ленивых пайплайнов этого рендера уже скомпилировано (BUG-405).
+    /// Считается **на рендер**, а не на процесс: гейт правки — тест, а тесты
+    /// одного бинарника идут параллельно и на общем счётчике мешали бы друг
+    /// другу. `Arc` разделяется с клоном снимка, уехавшим на поток прогрева,
+    /// поэтому фоновые компиляции тоже видны владельцу.
+    built: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
+
+/// Готовый пайплайн, приехавший с потока прогрева (BUG-405). Вариант несёт
+/// ровно ту `OnceCell`, в которую его нужно положить, — иначе принимающая
+/// сторона не отличила бы один `RenderPipeline` от другого.
+enum WarmedPipeline {
+    /// → [`Renderer::circle_pipeline`].
+    Circle(wgpu::RenderPipeline),
+    /// → [`Renderer::mipgen_pipeline`].
+    Mipgen(wgpu::RenderPipeline),
+    /// → [`Renderer::cross_fade_pipeline`].
+    CrossFade(wgpu::RenderPipeline),
+    /// → [`Renderer::composite_pipeline`].
+    Composite(wgpu::RenderPipeline),
+    /// → [`Renderer::rrect_clip_pipeline`].
+    RRectClip(wgpu::RenderPipeline),
+    /// → [`Renderer::path_clip_pipeline`].
+    PathClip(wgpu::RenderPipeline),
+    /// → [`Renderer::blend_pipeline`].
+    Blend(wgpu::RenderPipeline),
+    /// → [`Renderer::mask_composite_pipeline`].
+    MaskComposite(wgpu::RenderPipeline),
+    /// → [`Renderer::mask_layer_pipelines`] (пара luminance/alpha).
+    MaskLayer(Box<(wgpu::RenderPipeline, wgpu::RenderPipeline)>),
+    /// → [`Renderer::filter_pipeline`].
+    Filter(wgpu::RenderPipeline),
+    /// → [`Renderer::blur_pipeline`].
+    Blur(wgpu::RenderPipeline),
+    /// → [`Renderer::backdrop_blit_pipeline`].
+    BackdropBlit(wgpu::RenderPipeline),
+}
+
 pub struct Renderer {
     /// Windowed surface; `None` in headless mode (created with `new_headless()`).
     surface: Option<wgpu::Surface<'static>>,
@@ -2094,6 +2166,19 @@ pub struct Renderer {
     // provides correct occlusion for the rare case of intersecting 3D planes.
     depth_texture: Option<wgpu::Texture>,
     depth_view: Option<wgpu::TextureView>,
+
+    /// Снимок хэндлов, из которых собирается любой ленивый пайплайн.
+    /// Отдаётся клоном фоновому потоку прогрева (BUG-405).
+    pdeps: PipelineDeps,
+    /// Приёмник готовых пайплайнов с потока прогрева (BUG-405). `None` —
+    /// прогрев ещё не запущен, уже завершён, или отключён
+    /// `LUMEN_NO_PIPELINE_WARMUP=1`. Сбрасывается в `None`, когда поток
+    /// закрыл отправитель, — дальше `try_recv` был бы холостым.
+    warm_rx: Option<std::sync::mpsc::Receiver<WarmedPipeline>>,
+    /// Прогрев уже запускался (BUG-405). Отдельно от `warm_rx`, который
+    /// обнуляется по завершении потока: без флага прогрев перезапускался бы
+    /// каждый кадр после его окончания.
+    warm_started: bool,
 
     fill_pipeline: wgpu::RenderPipeline,
     /// BUG-406: ленивая компиляция — `OnceCell` заполняется при первом
@@ -2197,9 +2282,6 @@ pub struct Renderer {
     layer_textures: Vec<OffscreenLayer>,
     surface_format: wgpu::TextureFormat,
 
-    /// Layout viewport-униформы (bind group 0). Хранится, потому что ленивые
-    /// пайплайны (BUG-406) строят свой `PipelineLayout` уже после `init_pipelines`.
-    uniform_bgl: wgpu::BindGroupLayout,
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
 
@@ -2509,6 +2591,17 @@ fn image_mips_disabled() -> bool {
     static DISABLED: OnceLock<bool> = OnceLock::new();
     *DISABLED.get_or_init(|| {
         std::env::var("LUMEN_NO_IMAGE_MIPS").is_ok_and(|v| v == "1")
+    })
+}
+
+/// `true`, если фоновый прогрев ленивых пайплайнов отключён
+/// (`LUMEN_NO_PIPELINE_WARMUP=1`): каждый пайплайн снова компилируется на том
+/// кадре, где впервые понадобился (поведение до BUG-405). A/B-рычаг и откат.
+fn pipeline_warmup_disabled() -> bool {
+    use std::sync::OnceLock;
+    static DISABLED: OnceLock<bool> = OnceLock::new();
+    *DISABLED.get_or_init(|| {
+        std::env::var("LUMEN_NO_PIPELINE_WARMUP").is_ok_and(|v| v == "1")
     })
 }
 
@@ -3644,7 +3737,27 @@ impl Renderer {
         };
 
         mark(&t_init, "depth-texture");
+        // BUG-405: снимок хэндлов для сборки ленивых пайплайнов. Клонируется
+        // ДО переезда полей в структуру — wgpu-хэндлы клонируются по `Arc`,
+        // так что это не копия ресурсов, а вторая ссылка на те же объекты.
+        let pdeps = PipelineDeps {
+            device: device.clone(),
+            surface_format: format,
+            uniform_bgl,
+            image_bgl: image_bgl.clone(),
+            composite_bgl: composite_bgl.clone(),
+            mask_composite_bgl: mask_composite_bgl.clone(),
+            filter_bgl: filter_bgl.clone(),
+            blur_bgl: blur_bgl.clone(),
+            blend_bgl: blend_bgl.clone(),
+            cross_fade_bgl: cross_fade_bgl.clone(),
+            path_clip_bgl: path_clip_bgl.clone(),
+            built: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        };
         let renderer = Self {
+            pdeps,
+            warm_rx: None,
+            warm_started: false,
             surface,
             device,
             queue,
@@ -3662,7 +3775,6 @@ impl Renderer {
             mipgen_pipeline: OnceCell::new(),
             cross_fade_pipeline: OnceCell::new(),
             cross_fade_bgl,
-            uniform_bgl,
             uniform_buffer,
             uniform_bind_group,
             atlas_texture,
@@ -3723,25 +3835,179 @@ impl Renderer {
         // все 16 пайплайнов компилируются в `init_pipelines`. Нужен для A/B в
         // одном бинарнике и как откат, если ленивая компиляция где-то мешает.
         if std::env::var("LUMEN_EAGER_PIPELINES").is_ok_and(|v| v == "1" || v == "true") {
-            renderer.warm_all_pipelines();
+            renderer.warm_lazy_pipelines_blocking();
             mark(&t_init, "eager-warm");
         }
         Ok(renderer)
     }
 
-    /// Компилирует все ленивые пайплайны (BUG-406) немедленно.
-    /// Используется только форс-режимом `LUMEN_EAGER_PIPELINES=1`.
-    fn warm_all_pipelines(&self) {
-        self.circle_pipeline();
-        self.mipgen_pipeline();
-        self.cross_fade_pipeline();
-        self.composite_pipeline();
-        self.blend_pipeline();
-        self.mask_composite_pipeline();
-        self.mask_layer_pipelines();
-        self.filter_pipeline();
-        self.blur_pipeline();
-        self.backdrop_blit_pipeline();
+    /// BUG-405: запустить фоновую компиляцию ленивых пайплайнов (BUG-406).
+    ///
+    /// Вызывается один раз, **после** показа первого кадра окна: сдвигать
+    /// компиляцию в старт нельзя (ровно это BUG-406 и убрал — `first non-empty
+    /// frame` 6357 → 2980 мс на DX12), а оставлять её на первом использовании
+    /// значит платить ~0.8 с посреди прокрутки, когда в кадр въезжает первый
+    /// элемент с фильтром.
+    ///
+    /// Стоимость уходит с UI-потока целиком, а не сдвигается по времени:
+    /// замеренный на DX12/Intel штраф привязан к **вызывающему** потоку
+    /// (`create_render_pipeline` возвращается рано, драйвер доедает компиляцию
+    /// после возврата — BUG-406), поэтому вызов из отдельного потока и есть
+    /// правка. Headless-путь (без `surface`) прогрев не запускает: там нет
+    /// интерактивности, ради которой стоило бы жечь второе ядро.
+    fn spawn_pipeline_warmup(&mut self) {
+        if self.warm_started || self.surface.is_none() || pipeline_warmup_disabled() {
+            return;
+        }
+        self.warm_started = true;
+        let d = self.pdeps.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let spawned = std::thread::Builder::new()
+            .name("lumen-pipeline-warm".to_string())
+            .spawn(move || d.build_all_lazy(|p| tx.send(p).is_ok()))
+            .is_ok();
+        if spawned {
+            self.warm_rx = Some(rx);
+        }
+    }
+
+    /// BUG-405: разложить приехавшие с потока прогрева пайплайны по их
+    /// `OnceCell`-ам. `try_recv` не блокирует — кадр никогда не ждёт
+    /// компиляции, он лишь перестаёт платить за неё, когда та готова.
+    ///
+    /// `set` может вернуть `Err`: кадр успел скомпилировать пайплайн сам, пока
+    /// поток его строил. Дубликат тогда просто выбрасывается — оба объекта
+    /// валидны, а занят уже один.
+    fn drain_warmed_pipelines(&mut self) {
+        use std::sync::mpsc::TryRecvError;
+        let Some(rx) = self.warm_rx.take() else { return };
+        let mut alive = true;
+        loop {
+            match rx.try_recv() {
+                Ok(p) => self.install_warmed_pipeline(p),
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    alive = false;
+                    break;
+                }
+            }
+        }
+        if alive {
+            self.warm_rx = Some(rx);
+        }
+    }
+
+    /// Кладёт один прогретый пайплайн в его ячейку (см.
+    /// [`Self::drain_warmed_pipelines`]).
+    fn install_warmed_pipeline(&self, p: WarmedPipeline) {
+        match p {
+            WarmedPipeline::Circle(x) => drop(self.circle_pipeline.set(x)),
+            WarmedPipeline::Mipgen(x) => drop(self.mipgen_pipeline.set(x)),
+            WarmedPipeline::CrossFade(x) => drop(self.cross_fade_pipeline.set(x)),
+            WarmedPipeline::Composite(x) => drop(self.composite_pipeline.set(x)),
+            WarmedPipeline::RRectClip(x) => drop(self.rrect_clip_pipeline.set(x)),
+            WarmedPipeline::PathClip(x) => drop(self.path_clip_pipeline.set(x)),
+            WarmedPipeline::Blend(x) => drop(self.blend_pipeline.set(x)),
+            WarmedPipeline::MaskComposite(x) => drop(self.mask_composite_pipeline.set(x)),
+            WarmedPipeline::MaskLayer(x) => drop(self.mask_layer_pipelines.set(*x)),
+            WarmedPipeline::Filter(x) => drop(self.filter_pipeline.set(x)),
+            WarmedPipeline::Blur(x) => drop(self.blur_pipeline.set(x)),
+            WarmedPipeline::BackdropBlit(x) => drop(self.backdrop_blit_pipeline.set(x)),
+        }
+    }
+
+    /// Прогревает ленивые пайплайны синхронно, на вызывающем потоке
+    /// (BUG-405) — тем же списком, что и фоновый прогрев.
+    ///
+    /// Нужен там, где фонового потока нет по построению: форс-режим
+    /// `LUMEN_EAGER_PIPELINES=1` (откат к доленивому поведению BUG-406) и
+    /// тесты, которым нужен детерминированный момент готовности. Прежний
+    /// список форс-режима был отдельным и успел разойтись с настоящим —
+    /// не хватало `rrect_clip`/`path_clip`, поэтому «доленивое поведение»
+    /// уже не было доленивым; здесь список ровно один.
+    pub fn warm_lazy_pipelines_blocking(&self) {
+        let deps = self.pdeps.clone();
+        deps.build_all_lazy(|p| {
+            self.install_warmed_pipeline(p);
+            true
+        });
+    }
+
+    /// Сколько ленивых пайплайнов **этот** рендер скомпилировал за свою жизнь
+    /// (BUG-405), считая прогретые фоновым потоком.
+    ///
+    /// Гейт перф-правки стоит на нём, а не на времени кадра: «компиляция ушла
+    /// с кадра» — это «за время кадра счётчик не вырос», и такое утверждение
+    /// не зависит ни от железа, ни от нагрузки машины.
+    #[must_use]
+    pub fn pipelines_compiled(&self) -> u64 {
+        self.pdeps.built.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Сколько ленивых ячеек пайплайнов уже заполнено (BUG-405/406).
+    /// Счётчик-интроспектор для тестов: гейт стоит на «прогрев довёл ячейки до
+    /// заполненного состояния», а не на времени кадра.
+    #[must_use]
+    pub fn warmed_pipeline_count(&self) -> usize {
+        usize::from(self.circle_pipeline.get().is_some())
+            + usize::from(self.mipgen_pipeline.get().is_some())
+            + usize::from(self.cross_fade_pipeline.get().is_some())
+            + usize::from(self.composite_pipeline.get().is_some())
+            + usize::from(self.rrect_clip_pipeline.get().is_some())
+            + usize::from(self.path_clip_pipeline.get().is_some())
+            + usize::from(self.blend_pipeline.get().is_some())
+            + usize::from(self.mask_composite_pipeline.get().is_some())
+            + usize::from(self.mask_layer_pipelines.get().is_some())
+            + usize::from(self.filter_pipeline.get().is_some())
+            + usize::from(self.blur_pipeline.get().is_some())
+            + usize::from(self.backdrop_blit_pipeline.get().is_some())
+    }
+
+}
+
+impl PipelineDeps {
+    /// Компилирует один ленивый пайплайн и учитывает его в счётчике рендера
+    /// (BUG-405). Все `build_*_pipeline` ниже ходят только сюда, поэтому
+    /// счётчик не может разойтись с реальным числом компиляций.
+    fn timed(&self, desc: &wgpu::RenderPipelineDescriptor<'_>) -> wgpu::RenderPipeline {
+        self.built.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        timed_pipeline(&self.device, desc)
+    }
+
+    /// Собирает **все** ленивые пайплайны (BUG-406) и отдаёт каждый в `emit`
+    /// сразу по готовности; `emit` вернул `false` — приёмника больше нет, и
+    /// дальше строить нечего.
+    ///
+    /// Единственное место, где перечислен набор прогрева: и фоновый поток
+    /// ([`Renderer::spawn_pipeline_warmup`]), и синхронный вход для тестов
+    /// ([`Renderer::warm_lazy_pipelines_blocking`]) ходят сюда, поэтому тест
+    /// не может проверять список, отличный от продакшн-набора.
+    ///
+    /// Порядок — по измеренной цене: на прокрутке `lenta.ru` единственный
+    /// кадр, компилировавший ленивые пайплайны, брал ровно `filter`+`blur` и
+    /// стоил 823/1048 мс против 320/268 мс с прогревом (тот же кадр #8, два
+    /// раунда A/B). Поэтому они первыми — прогрев обязан успеть закрыть именно
+    /// их до первой прокрутки.
+    fn build_all_lazy(&self, mut emit: impl FnMut(WarmedPipeline) -> bool) {
+        macro_rules! emit {
+            ($v:expr) => {
+                if !emit($v) {
+                    return;
+                }
+            };
+        }
+        emit!(WarmedPipeline::Filter(self.build_filter_pipeline()));
+        emit!(WarmedPipeline::Blur(self.build_blur_pipeline()));
+        emit!(WarmedPipeline::RRectClip(self.build_rrect_clip_pipeline()));
+        emit!(WarmedPipeline::Composite(self.build_composite_pipeline()));
+        emit!(WarmedPipeline::PathClip(self.build_path_clip_pipeline()));
+        emit!(WarmedPipeline::Blend(self.build_blend_pipeline()));
+        emit!(WarmedPipeline::MaskComposite(self.build_mask_composite_pipeline()));
+        emit!(WarmedPipeline::MaskLayer(Box::new(self.build_mask_layer_pipeline())));
+        emit!(WarmedPipeline::BackdropBlit(self.build_backdrop_blit_pipeline()));
+        emit!(WarmedPipeline::Circle(self.build_circle_pipeline()));
+        emit!(WarmedPipeline::Mipgen(self.build_mipgen_pipeline()));
+        emit!(WarmedPipeline::CrossFade(self.build_cross_fade_pipeline()));
     }
 
     /// Пайплайн кружков (SDF): маркеры списков, radio-кнопки.
@@ -3760,7 +4026,7 @@ impl Renderer {
             bind_group_layouts: &[&self.uniform_bgl],
             push_constant_ranges: &[],
         });
-        timed_pipeline(&self.device, &wgpu::RenderPipelineDescriptor {
+        self.timed(&wgpu::RenderPipelineDescriptor {
             label: Some("circle-pipeline"),
             layout: Some(&circle_layout),
             vertex: wgpu::VertexState {
@@ -3836,7 +4102,7 @@ impl Renderer {
             bind_group_layouts: &[&self.image_bgl],
             push_constant_ranges: &[],
         });
-        timed_pipeline(&self.device, &wgpu::RenderPipelineDescriptor {
+        self.timed(&wgpu::RenderPipelineDescriptor {
             label: Some("mipgen-pipeline"),
             layout: Some(&mipgen_layout),
             vertex: wgpu::VertexState {
@@ -3880,7 +4146,7 @@ impl Renderer {
             bind_group_layouts: &[&self.uniform_bgl, &self.cross_fade_bgl],
             push_constant_ranges: &[],
         });
-        timed_pipeline(&self.device, &wgpu::RenderPipelineDescriptor {
+        self.timed(&wgpu::RenderPipelineDescriptor {
             label: Some("cross-fade-pipeline"),
             layout: Some(&cross_fade_layout),
             vertex: wgpu::VertexState {
@@ -3948,7 +4214,7 @@ impl Renderer {
             bind_group_layouts: &[&self.composite_bgl],
             push_constant_ranges: &[],
         });
-        timed_pipeline(&self.device, &wgpu::RenderPipelineDescriptor {
+        self.timed(&wgpu::RenderPipelineDescriptor {
             label: Some("composite-pipeline"),
             layout: Some(&composite_layout),
             vertex: wgpu::VertexState {
@@ -4025,7 +4291,7 @@ impl Renderer {
             bind_group_layouts: &[&self.composite_bgl],
             push_constant_ranges: &[],
         });
-        timed_pipeline(&self.device, &wgpu::RenderPipelineDescriptor {
+        self.timed(&wgpu::RenderPipelineDescriptor {
             label: Some("rrect-clip-pipeline"),
             layout: Some(&layout),
             vertex: wgpu::VertexState {
@@ -4085,7 +4351,7 @@ impl Renderer {
             bind_group_layouts: &[&self.path_clip_bgl],
             push_constant_ranges: &[],
         });
-        timed_pipeline(&self.device, &wgpu::RenderPipelineDescriptor {
+        self.timed(&wgpu::RenderPipelineDescriptor {
             label: Some("path-clip-pipeline"),
             layout: Some(&layout),
             vertex: wgpu::VertexState {
@@ -4144,7 +4410,7 @@ impl Renderer {
             push_constant_ranges: &[],
         });
         // REPLACE blend state: shader implements full CSS compositing formula.
-        timed_pipeline(&self.device, &wgpu::RenderPipelineDescriptor {
+        self.timed(&wgpu::RenderPipelineDescriptor {
             label: Some("blend-pipeline"),
             layout: Some(&blend_layout),
             vertex: wgpu::VertexState {
@@ -4212,7 +4478,7 @@ impl Renderer {
             label: Some("mask-composite-shader"),
             source: wgpu::ShaderSource::Wgsl(MASK_COMPOSITE_SHADER_SRC.into()),
         });
-        timed_pipeline(&self.device, &wgpu::RenderPipelineDescriptor {
+        self.timed(&wgpu::RenderPipelineDescriptor {
             label: Some("mask-composite-pipeline"),
             layout: Some(&mask_composite_layout),
             vertex: wgpu::VertexState {
@@ -4303,7 +4569,7 @@ impl Renderer {
                 operation: wgpu::BlendOperation::Add,
             },
         };
-        let mask_layer_alpha_pipeline = timed_pipeline(&self.device, &wgpu::RenderPipelineDescriptor {
+        let mask_layer_alpha_pipeline = self.timed(&wgpu::RenderPipelineDescriptor {
             label: Some("mask-layer-alpha-pipeline"),
             layout: Some(&mask_composite_layout),
             vertex: wgpu::VertexState {
@@ -4334,7 +4600,7 @@ impl Renderer {
             multiview: None,
             cache: None,
         });
-        let mask_layer_luma_pipeline = timed_pipeline(&self.device, &wgpu::RenderPipelineDescriptor {
+        let mask_layer_luma_pipeline = self.timed(&wgpu::RenderPipelineDescriptor {
             label: Some("mask-layer-luma-pipeline"),
             layout: Some(&mask_composite_layout),
             vertex: wgpu::VertexState {
@@ -4383,7 +4649,7 @@ impl Renderer {
             bind_group_layouts: &[&self.filter_bgl],
             push_constant_ranges: &[],
         });
-        timed_pipeline(&self.device, &wgpu::RenderPipelineDescriptor {
+        self.timed(&wgpu::RenderPipelineDescriptor {
             label: Some("filter-pipeline"),
             layout: Some(&filter_layout),
             vertex: wgpu::VertexState {
@@ -4443,7 +4709,7 @@ impl Renderer {
             bind_group_layouts: &[&self.blur_bgl],
             push_constant_ranges: &[],
         });
-        timed_pipeline(&self.device, &wgpu::RenderPipelineDescriptor {
+        self.timed(&wgpu::RenderPipelineDescriptor {
             label: Some("blur-pipeline"),
             layout: Some(&blur_layout),
             vertex: wgpu::VertexState {
@@ -4505,7 +4771,7 @@ impl Renderer {
             bind_group_layouts: &[&self.filter_bgl],
             push_constant_ranges: &[],
         });
-        timed_pipeline(&self.device, &wgpu::RenderPipelineDescriptor {
+        self.timed(&wgpu::RenderPipelineDescriptor {
             label: Some("backdrop-blit-pipeline"),
             layout: Some(&filter_layout),
             vertex: wgpu::VertexState {
@@ -4548,63 +4814,66 @@ impl Renderer {
         })
     }
 
+}
+
+impl Renderer {
     /// Ленивый доступ к `circle`-пайплайну (BUG-406): компилирует его при
     /// первом обращении и кэширует на весь срок жизни рендера.
     fn circle_pipeline(&self) -> &wgpu::RenderPipeline {
-        self.circle_pipeline.get_or_init(|| self.build_circle_pipeline())
+        self.circle_pipeline.get_or_init(|| self.pdeps.build_circle_pipeline())
     }
     /// Ленивый доступ к `mipgen`-пайплайну (BUG-406): компилирует его при
     /// первом обращении и кэширует на весь срок жизни рендера.
     fn mipgen_pipeline(&self) -> &wgpu::RenderPipeline {
-        self.mipgen_pipeline.get_or_init(|| self.build_mipgen_pipeline())
+        self.mipgen_pipeline.get_or_init(|| self.pdeps.build_mipgen_pipeline())
     }
     /// Ленивый доступ к `cross_fade`-пайплайну (BUG-406): компилирует его при
     /// первом обращении и кэширует на весь срок жизни рендера.
     fn cross_fade_pipeline(&self) -> &wgpu::RenderPipeline {
-        self.cross_fade_pipeline.get_or_init(|| self.build_cross_fade_pipeline())
+        self.cross_fade_pipeline.get_or_init(|| self.pdeps.build_cross_fade_pipeline())
     }
     /// Ленивый доступ к `composite`-пайплайну (BUG-406): компилирует его при
     /// первом обращении и кэширует на весь срок жизни рендера.
     fn composite_pipeline(&self) -> &wgpu::RenderPipeline {
-        self.composite_pipeline.get_or_init(|| self.build_composite_pipeline())
+        self.composite_pipeline.get_or_init(|| self.pdeps.build_composite_pipeline())
     }
     /// Ленивый доступ к пайплайну скруглённого клипа (BUG-406, BUG-277 срез 5).
     fn rrect_clip_pipeline(&self) -> &wgpu::RenderPipeline {
-        self.rrect_clip_pipeline.get_or_init(|| self.build_rrect_clip_pipeline())
+        self.rrect_clip_pipeline.get_or_init(|| self.pdeps.build_rrect_clip_pipeline())
     }
 
     /// Ленивый доступ к пайплайну композита формы `clip-path` (BUG-406).
     fn path_clip_pipeline(&self) -> &wgpu::RenderPipeline {
-        self.path_clip_pipeline.get_or_init(|| self.build_path_clip_pipeline())
+        self.path_clip_pipeline.get_or_init(|| self.pdeps.build_path_clip_pipeline())
     }
     /// Ленивый доступ к `blend`-пайплайну (BUG-406): компилирует его при
     /// первом обращении и кэширует на весь срок жизни рендера.
     fn blend_pipeline(&self) -> &wgpu::RenderPipeline {
-        self.blend_pipeline.get_or_init(|| self.build_blend_pipeline())
+        self.blend_pipeline.get_or_init(|| self.pdeps.build_blend_pipeline())
     }
     /// Ленивый доступ к `mask_composite`-пайплайну (BUG-406): компилирует его при
     /// первом обращении и кэширует на весь срок жизни рендера.
     fn mask_composite_pipeline(&self) -> &wgpu::RenderPipeline {
-        self.mask_composite_pipeline.get_or_init(|| self.build_mask_composite_pipeline())
+        self.mask_composite_pipeline.get_or_init(|| self.pdeps.build_mask_composite_pipeline())
     }
     /// Ленивый доступ к `filter`-пайплайну (BUG-406): компилирует его при
     /// первом обращении и кэширует на весь срок жизни рендера.
     fn filter_pipeline(&self) -> &wgpu::RenderPipeline {
-        self.filter_pipeline.get_or_init(|| self.build_filter_pipeline())
+        self.filter_pipeline.get_or_init(|| self.pdeps.build_filter_pipeline())
     }
     /// Ленивый доступ к `blur`-пайплайну (BUG-406): компилирует его при
     /// первом обращении и кэширует на весь срок жизни рендера.
     fn blur_pipeline(&self) -> &wgpu::RenderPipeline {
-        self.blur_pipeline.get_or_init(|| self.build_blur_pipeline())
+        self.blur_pipeline.get_or_init(|| self.pdeps.build_blur_pipeline())
     }
     /// Ленивый доступ к `backdrop_blit`-пайплайну (BUG-406): компилирует его при
     /// первом обращении и кэширует на весь срок жизни рендера.
     fn backdrop_blit_pipeline(&self) -> &wgpu::RenderPipeline {
-        self.backdrop_blit_pipeline.get_or_init(|| self.build_backdrop_blit_pipeline())
+        self.backdrop_blit_pipeline.get_or_init(|| self.pdeps.build_backdrop_blit_pipeline())
     }
     /// Ленивый доступ к паре mask-layer-пайплайнов (alpha, luminance) — BUG-406.
     fn mask_layer_pipelines(&self) -> &(wgpu::RenderPipeline, wgpu::RenderPipeline) {
-        self.mask_layer_pipelines.get_or_init(|| self.build_mask_layer_pipeline())
+        self.mask_layer_pipelines.get_or_init(|| self.pdeps.build_mask_layer_pipeline())
     }
 
     /// Заменяет источник лукапа face-ов. Полезно для тестов (mock-provider) и
@@ -6364,6 +6633,11 @@ impl Renderer {
         // диагностировать, какая фаза жжёт CPU в простое.
         let phase_log = crate::frame_log_level() >= 2;
         let t_frame0 = std::time::Instant::now();
+
+        // BUG-405: забрать всё, что успел скомпилировать поток прогрева, до
+        // того как кадр полезет за пайплайнами. Не блокирует: не приехало —
+        // ячейка останется пустой и кадр скомпилирует пайплайн сам, как раньше.
+        self.drain_warmed_pipelines();
 
         // BUG-274: снимки диагностических счётчиков на входе в кадр — печатаем
         // дельту за кадр, а не процессный итог (кумулятивные числа не отвечают
@@ -10312,6 +10586,11 @@ impl Renderer {
         self.texture_pool.trim();
         if let Some(frame) = windowed_frame {
             frame.present();
+            // BUG-405: первый показанный кадр — момент запуска фонового
+            // прогрева ленивых пайплайнов. Раньше нельзя (вернули бы медленный
+            // старт BUG-406), позже незачем: до первой прокрутки надо успеть
+            // скомпилировать хотя бы filter/blur.
+            self.spawn_pipeline_warmup();
         }
         if phase_log {
             let t_total = t_frame0.elapsed();
