@@ -365,3 +365,262 @@ fn shader_rounded_clip_carves_corners() {
     // скругления (20,20) — 21.2 px.
     assert_ne!(px(5, 5), [255, 0, 0], "угол клипа не вырезан");
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BUG-405 срез 5 — невидимый offscreen-уровень не разрезает пасс родителя
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Красная полоса, `n` opacity-групп с заданным содержимым между полосами.
+///
+/// `content` строит содержимое группы по её номеру: пустой вектор — уровень с
+/// пустым bbox (то, что даёт прокрутка реального сайта: элемент с `opacity`,
+/// поддерево которого в этом кадре ничего не рисует), непустой — обычный
+/// видимый уровень (контроль).
+fn opacity_groups_dl(
+    n: usize,
+    content: impl Fn(usize) -> Vec<DisplayCommand>,
+) -> Vec<DisplayCommand> {
+    let mut dl = Vec::new();
+    for i in 0..n {
+        let y = 2.0 + i as f32 * 6.0;
+        dl.push(DisplayCommand::FillRect {
+            rect: Rect { x: 2.0, y, width: 60.0, height: 4.0 },
+            color: Color { r: 255, g: 0, b: 0, a: 255 },
+        });
+        dl.push(DisplayCommand::PushOpacity { alpha: 0.5, bounds: None });
+        dl.extend(content(i));
+        dl.push(DisplayCommand::PopOpacity);
+    }
+    dl
+}
+
+/// BUG-405 срез 5: уровень, выброшенный viewport-cull-ом, не оставляет за собой
+/// лишнего пасса родителя.
+///
+/// Гейт стоит на счётчиках механизма, а не на времени кадра: «разрез отменён»
+/// (`cull_merges`) и «пассов у кадра столько, сколько целей» (`plan_passes`).
+///
+/// Вторая половина — контроль на ложно-зелёный: те же группы с непустым
+/// содержимым обязаны остаться тремя пассами каждая (батч родителя, контент
+/// уровня, композит). Без контроля тест прошёл бы и на правке, которая склеила
+/// бы вообще всё, потеряв offscreen-уровни как таковые.
+#[test]
+#[ignore = "requires GPU adapter"]
+fn culled_level_costs_no_pass_split() {
+    let mut r = Renderer::new_headless(INTER.to_vec(), 64, 64, ColorSpace::Srgb)
+        .expect("headless renderer");
+    r.set_font_provider(None);
+
+    // 8 пустых opacity-групп вперемешку с полосами: цель кадра одна, значит и
+    // пасс обязан быть один.
+    let (p0, m0) = (r.plan_passes(), r.cull_merges());
+    r.render_to_image(&opacity_groups_dl(8, |_| Vec::new()), 0.0, 0.0)
+        .expect("кадр с выброшенными уровнями");
+    assert_eq!(
+        r.cull_merges() - m0,
+        8,
+        "разрезы пасса родителя вокруг выброшенных уровней не склеены",
+    );
+    assert_eq!(
+        r.plan_passes() - p0,
+        1,
+        "кадр с одной целью обязан кодироваться одним пассом",
+    );
+
+    // Контроль: те же группы, но каждая рисует — уровни настоящие, пассы нужны.
+    let (p0, m0) = (r.plan_passes(), r.cull_merges());
+    r.render_to_image(
+        &opacity_groups_dl(8, |i| {
+            let y = 4.0 + i as f32 * 6.0;
+            vec![DisplayCommand::FillRect {
+                rect: Rect { x: 20.0, y, width: 20.0, height: 2.0 },
+                color: Color { r: 0, g: 0, b: 255, a: 255 },
+            }]
+        }),
+        0.0,
+        0.0,
+    )
+    .expect("кадр с видимыми уровнями");
+    assert_eq!(r.cull_merges() - m0, 0, "видимый уровень склеивать нельзя");
+    assert_eq!(
+        r.plan_passes() - p0,
+        8 * 3,
+        "видимый opacity-уровень обязан остаться тремя пассами (контроль негоден)",
+    );
+}
+
+/// BUG-405 срез 5: склейка не теряет содержимое родителя.
+///
+/// Счётчик пассов сам по себе зелен и у правки, которая склеила батчи, потеряв
+/// часть операций или `Clear` цели: проверяем пиксели по обе стороны от
+/// выброшенного уровня и фон между ними.
+#[test]
+#[ignore = "requires GPU adapter"]
+fn cull_merge_keeps_parent_content() {
+    let mut r = Renderer::new_headless(INTER.to_vec(), 64, 64, ColorSpace::Srgb)
+        .expect("headless renderer");
+    r.set_font_provider(None);
+
+    let dl = vec![
+        DisplayCommand::FillRect {
+            rect: Rect { x: 0.0, y: 0.0, width: 64.0, height: 8.0 },
+            color: Color { r: 255, g: 0, b: 0, a: 255 },
+        },
+        // Выброшенный уровень: содержимое целиком за поверхностью — его
+        // операции обязаны уйти вместе с ним, а не попасть в пасс родителя.
+        DisplayCommand::PushOpacity { alpha: 1.0, bounds: None },
+        DisplayCommand::FillRect {
+            rect: Rect { x: 0.0, y: 400.0, width: 64.0, height: 8.0 },
+            color: Color { r: 0, g: 255, b: 0, a: 255 },
+        },
+        DisplayCommand::PopOpacity,
+        // Пустой выброшенный уровень между двумя операциями родителя.
+        DisplayCommand::PushOpacity { alpha: 0.5, bounds: None },
+        DisplayCommand::PopOpacity,
+        DisplayCommand::FillRect {
+            rect: Rect { x: 0.0, y: 56.0, width: 64.0, height: 8.0 },
+            color: Color { r: 0, g: 0, b: 255, a: 255 },
+        },
+    ];
+    let m0 = r.cull_merges();
+    let img = r.render_to_image(&dl, 0.0, 0.0).expect("render_to_image");
+    assert_eq!(r.cull_merges() - m0, 2, "оба выброшенных уровня обязаны склеиться");
+
+    let px = |x: usize, y: usize| {
+        let o = (y * 64 + x) * 4;
+        [img.data[o], img.data[o + 1], img.data[o + 2]]
+    };
+    assert_eq!(px(32, 4), [255, 0, 0], "полоса ДО выброшенного уровня потеряна");
+    assert_eq!(px(32, 60), [0, 0, 255], "полоса ПОСЛЕ выброшенного уровня потеряна");
+    // Между полосами — фон кадра (Clear цели выполнен ровно один раз).
+    assert_eq!(px(32, 32), [255, 255, 255], "фон кадра не очищен");
+}
+
+/// Список с разнообразными выброшенными уровнями: пустые, с содержимым за
+/// поверхностью, вложенные в видимый уровень, со скруглённым клипом и
+/// blend-режимом внутри — плюс обычное содержимое родителя между ними.
+///
+/// Единицы — CSS px поверхности 64×64; всё, что с `y >= 300`, за поверхностью,
+/// то есть его уровень будет выброшен viewport-cull-ом.
+fn mixed_culled_levels_dl() -> Vec<DisplayCommand> {
+    let red = Color { r: 255, g: 0, b: 0, a: 255 };
+    let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+    let green = Color { r: 0, g: 160, b: 0, a: 255 };
+    let off = Rect { x: 0.0, y: 400.0, width: 64.0, height: 20.0 };
+    let mut dl = vec![
+        DisplayCommand::FillRect {
+            rect: Rect { x: 0.0, y: 0.0, width: 64.0, height: 6.0 },
+            color: red,
+        },
+        // Пустой уровень.
+        DisplayCommand::PushOpacity { alpha: 0.4, bounds: None },
+        DisplayCommand::PopOpacity,
+        // Уровень с содержимым за поверхностью — его операции обязаны уйти
+        // вместе с ним, а не попасть в пасс родителя.
+        DisplayCommand::PushOpacity { alpha: 0.9, bounds: None },
+        DisplayCommand::FillRect { rect: off, color: green },
+        DisplayCommand::PopOpacity,
+        // Скруглённый клип (шейдерный слот) внутри выброшенного уровня:
+        // его `SetClip` тоже обязан уйти.
+        DisplayCommand::PushOpacity { alpha: 0.7, bounds: None },
+        DisplayCommand::PushClipRoundedRect { rect: off, radii: [4.0; 4] },
+        DisplayCommand::FillRect { rect: off, color: green },
+        DisplayCommand::PopClip,
+        DisplayCommand::PopOpacity,
+        DisplayCommand::DrawText {
+            rect: Rect { x: 2.0, y: 8.0, width: 60.0, height: 12.0 },
+            text: "Ag".to_string(),
+            font_size: 11.0,
+            color: blue,
+            font_family: Vec::new(),
+            font_weight: Default::default(),
+            font_style: Default::default(),
+            font_stretch: Default::default(),
+            font_variation_axes: Vec::new(),
+            font_features: Vec::new(),
+            font_palette: None,
+            tab_size: 8.0,
+            highlight_name: None,
+            text_orientation: None,
+        },
+        // Видимый уровень с выброшенным уровнем ВНУТРИ.
+        DisplayCommand::PushOpacity { alpha: 0.5, bounds: None },
+        DisplayCommand::FillRect {
+            rect: Rect { x: 4.0, y: 24.0, width: 40.0, height: 8.0 },
+            color: green,
+        },
+        DisplayCommand::PushBlendMode {
+            mode: lumen_paint::BlendMode::Multiply,
+            bounds: off,
+        },
+        DisplayCommand::FillRect { rect: off, color: red },
+        DisplayCommand::PopBlendMode,
+        DisplayCommand::FillRect {
+            rect: Rect { x: 4.0, y: 34.0, width: 40.0, height: 8.0 },
+            color: blue,
+        },
+        DisplayCommand::PopOpacity,
+        // Видимый скруглённый клип после всех склеек — контур не должен
+        // «поехать» из-за того, что батч родителя стал длиннее.
+        DisplayCommand::PushClipRoundedRect {
+            rect: Rect { x: 4.0, y: 44.0, width: 56.0, height: 16.0 },
+            radii: [6.0; 4],
+        },
+        DisplayCommand::FillRect {
+            rect: Rect { x: 4.0, y: 44.0, width: 56.0, height: 16.0 },
+            color: red,
+        },
+        DisplayCommand::PopClip,
+    ];
+    // Хвост из пустых уровней вперемешку с полосами — основная масса на
+    // прокрутке реального сайта.
+    for i in 0..6 {
+        dl.push(DisplayCommand::PushOpacity { alpha: 0.6, bounds: None });
+        dl.push(DisplayCommand::FillRect { rect: off, color: green });
+        dl.push(DisplayCommand::PopOpacity);
+        dl.push(DisplayCommand::FillRect {
+            rect: Rect { x: 2.0 + i as f32 * 10.0, y: 62.0, width: 8.0, height: 2.0 },
+            color: blue,
+        });
+    }
+    dl
+}
+
+/// BUG-405 срез 5: склейка не меняет ни одного пикселя.
+///
+/// Оба плеча снимаются в одном процессе (`set_cull_merge_enabled`) на одном и
+/// том же списке, и картинки сверяются побайтово. Гейт «headless-скриншот» для
+/// wgpu-правки был бы ложно-зелёным (`lumen --screenshot` ведёт в
+/// tiny-skia-растеризатор, срез 4), а `render_to_image` — тот самый wgpu-путь.
+///
+/// Счётчики в тесте обязательны: без них тест зелен и на списке, в котором
+/// склейке нечего склеивать.
+#[test]
+#[ignore = "requires GPU adapter"]
+fn cull_merge_is_pixel_identical() {
+    let mut r = Renderer::new_headless(INTER.to_vec(), 64, 64, ColorSpace::Srgb)
+        .expect("headless renderer");
+    r.set_font_provider(None);
+    let dl = mixed_culled_levels_dl();
+
+    r.set_cull_merge_enabled(false);
+    let (p0, m0) = (r.plan_passes(), r.cull_merges());
+    let before = r.render_to_image(&dl, 0.0, 0.0).expect("плечо без склейки");
+    let (passes_off, merges_off) = (r.plan_passes() - p0, r.cull_merges() - m0);
+
+    r.set_cull_merge_enabled(true);
+    let (p0, m0) = (r.plan_passes(), r.cull_merges());
+    let after = r.render_to_image(&dl, 0.0, 0.0).expect("плечо со склейкой");
+    let (passes_on, merges_on) = (r.plan_passes() - p0, r.cull_merges() - m0);
+
+    assert_eq!(merges_off, 0, "плечо A/B без склейки склеивает");
+    assert!(merges_on >= 8, "список не задействовал склейку: {merges_on} склеек");
+    assert!(
+        passes_on < passes_off,
+        "пассов не стало меньше: {passes_off} → {passes_on}",
+    );
+    assert_eq!(
+        before.data, after.data,
+        "склейка изменила пиксели: пассов {passes_off} → {passes_on}",
+    );
+}
