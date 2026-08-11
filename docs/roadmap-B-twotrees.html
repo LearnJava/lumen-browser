@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-11",
  "counts": {
-  "open": 312,
+  "open": 313,
   "fixed": 416,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 728,
+ "total_bugs": 729,
  "phases": [
   {
    "id": "P0",
@@ -9904,11 +9904,21 @@
    "component": "image (`crates/engine/image/src/gif.rs` — `AnimatedGif::frame_image`; `frame.left`/`frame.top`/`frame.dispose` не читаются нигде в файле)",
    "date": null,
    "debtor": false
+  },
+  "BUG-764": {
+   "status": "open",
+   "title": "Ни одна из 41 роли словаря DPUB-ARIA (`doc-abstract`/`doc-chapter`/`doc-footnote`/`doc-pagebreak`/…, полный список — вендоренный `tests/wpt/dpub-aam/role/roles.…",
+   "component": "a11y (`crates/engine/a11y/src/roles.rs::AXRole::parse`/`AXRole`; потребитель `crates/engine/a11y/src/lib.rs::resolve_role`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
   "`tools/wptrunner/wptrunner/browsers/lumen.py` + `crates/shell/src/main.rs`": [
    "BUG-315"
+  ],
+  "a11y (`crates/engine/a11y/src/roles.rs::AXRole::parse`/`AXRole`; потребитель `crates/engine/a11y/src/lib.rs::resolve_role`)": [
+   "BUG-764"
   ],
   "bidi-server (protocol.rs)": [
    "BUG-319"
