@@ -55,14 +55,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-08-11",
+ "generated": "2026-08-12",
  "counts": {
-  "open": 314,
+  "open": 315,
   "fixed": 420,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 734,
+ "total_bugs": 735,
  "phases": [
   {
    "id": "P0",
@@ -9928,6 +9928,13 @@
    "component": "shell (`crates/shell/src/main.rs:525` — `let (_network_svc, _transport) = …`) / network (`crates/network/src/bin/network_service.rs`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-770": {
+   "status": "open",
+   "title": "Полный прогон графтестов встаёт намертво на 24-й странице: TEST-22 PASS, дальше `Wait error: automation command timed out`, затем `[WinError 10054]` — **130 из…",
+   "component": "test-harness (`graphic_tests/run.py` — `LiveWindowClient.__init__`/`_drain_stderr`); вторично shell/paint (диагностическая печать с UI-потока)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -11017,6 +11024,9 @@
   ],
   "test": [
    "BUG-153"
+  ],
+  "test-harness (`graphic_tests/run.py` — `LiveWindowClient.__init__`/`_drain_stderr`); вторично shell/paint (диагностическая печать с UI-потока)": [
+   "BUG-770"
   ],
   "test/driver": [
    "BUG-121"
