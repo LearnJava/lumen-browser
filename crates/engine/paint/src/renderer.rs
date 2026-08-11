@@ -2188,6 +2188,20 @@ pub struct Renderer {
     /// (три пасса на клип) за свою жизнь — BUG-405 срез 4. Шейдерный контур
     /// счётчик не двигает, поэтому «правка работает» = «счётчик не растёт».
     rrect_clip_levels: u64,
+    /// Сколько разрезов пасса родителя этот рендер склеил обратно после
+    /// выброса невидимого offscreen-уровня (BUG-405 срез 5). Растёт ровно на
+    /// те уровни, которые `viewport-cull` убрал из плана, а прежний код
+    /// оставлял за собой лишний пасс родителя.
+    cull_merges: u64,
+    /// Сколько пассов (элементов плана) этот рендер закодировал за свою жизнь
+    /// — BUG-405 срез 5. Эффект склейки виден именно здесь: механизм считает
+    /// `cull_merges`, а «пассов стало меньше» — этот счётчик.
+    plan_passes: u64,
+    /// Склейка пасса родителя вокруг выброшенного уровня включена
+    /// (BUG-405 срез 5). Инстансное плечо A/B: тест рисует один и тот же
+    /// список обоими путями в одном процессе и сверяет пиксели побайтово, не
+    /// требуя второго прогона с `LUMEN_NO_CULL_MERGE=1`.
+    cull_merge_enabled: bool,
     /// Приёмник готовых пайплайнов с потока прогрева (BUG-405). `None` —
     /// прогрев ещё не запущен, уже завершён, или отключён
     /// `LUMEN_NO_PIPELINE_WARMUP=1`. Сбрасывается в `None`, когда поток
@@ -2599,6 +2613,16 @@ fn shader_rrect_clip_disabled() -> bool {
     use std::sync::OnceLock;
     static OFF: OnceLock<bool> = OnceLock::new();
     *OFF.get_or_init(|| std::env::var("LUMEN_NO_SHADER_RRECT_CLIP").is_ok_and(|v| v == "1"))
+}
+
+/// `true`, если склейка пасса родителя вокруг выброшенного (невидимого)
+/// offscreen-уровня отключена (`LUMEN_NO_CULL_MERGE=1`) — рычаг отката
+/// BUG-405 срез 5 к прежнему поведению «уровень выброшен из плана, но разрез
+/// пасса родителя остался» и A/B-плечо для проверки пикселей.
+fn cull_merge_disabled() -> bool {
+    use std::sync::OnceLock;
+    static OFF: OnceLock<bool> = OnceLock::new();
+    *OFF.get_or_init(|| std::env::var("LUMEN_NO_CULL_MERGE").is_ok_and(|v| v == "1"))
 }
 
 fn scroll_compositor_disabled() -> bool {
@@ -3855,6 +3879,9 @@ impl Renderer {
             pdeps,
             submissions: 0,
             rrect_clip_levels: 0,
+            cull_merges: 0,
+            plan_passes: 0,
+            cull_merge_enabled: true,
             warm_rx: None,
             warm_started: false,
             surface,
@@ -4064,6 +4091,36 @@ impl Renderer {
     #[must_use]
     pub fn rrect_clip_levels(&self) -> u64 {
         self.rrect_clip_levels
+    }
+
+    /// Сколько разрезов пасса родителя склеено обратно после выброса
+    /// невидимого offscreen-уровня (BUG-405 срез 5).
+    ///
+    /// Гейт правки стоит на нём вместе с [`Renderer::plan_passes`]: счётчик
+    /// называет механизм («разрез отменён»), число пассов — его следствие.
+    #[must_use]
+    pub fn cull_merges(&self) -> u64 {
+        self.cull_merges
+    }
+
+    /// Сколько пассов (элементов плана кадра) закодировал этот рендер
+    /// (BUG-405 срез 5). Цена одного пасса на глубоком командном списке —
+    /// около миллисекунды (срез 2), поэтому «пассов меньше» и есть предмет
+    /// правки.
+    #[must_use]
+    pub fn plan_passes(&self) -> u64 {
+        self.plan_passes
+    }
+
+    /// Включает/выключает склейку пасса родителя вокруг выброшенного
+    /// невидимого уровня (BUG-405 срез 5).
+    ///
+    /// Нужен гейту идентичности: правка обязана не менять ни одного пикселя,
+    /// а проверить это можно только сравнив два плеча. Инстансный
+    /// переключатель позволяет снять оба плеча в одном процессе — рычаг
+    /// процесса `LUMEN_NO_CULL_MERGE=1` выключает склейку поверх него.
+    pub fn set_cull_merge_enabled(&mut self, enabled: bool) {
+        self.cull_merge_enabled = enabled;
     }
 
     /// Сколько ленивых ячеек пайплайнов уже заполнено (BUG-405/406).
@@ -7184,6 +7241,15 @@ impl Renderer {
         let mut backdrop_ordinal: u32 = 0;
         let mut level_first: Vec<bool> = vec![true];
         let mut batch_start: usize = 0;
+        // BUG-405 срез 5: сколько offscreen-уровней кадра оказались невидимы
+        // (viewport-cull) и сколько разрезов пасса родителя от них удалось
+        // склеить обратно. Гейт правки — второй счётчик, а не время кадра.
+        let mut culled_levels: u32 = 0;
+        let mut merged_cull_splits: u32 = 0;
+        // Плечо A/B снимается один раз на кадр: рычаг процесса
+        // (`LUMEN_NO_CULL_MERGE=1`) ИЛИ инстансный переключатель, которым тест
+        // рисует один и тот же список обоими путями в одном процессе.
+        let cull_merge_off = cull_merge_disabled() || !self.cull_merge_enabled;
 
         // Текущий выставленный scissor (для дедупликации SetScисsor-команд).
         // None = не выставлен (первый SetScissor нужен в любом случае).
@@ -7259,6 +7325,58 @@ impl Renderer {
                 batch_start = draw_ops.len();
                 current_scissor = None;
             }}
+        }
+
+        // BUG-405 срез 5 — выбросить невидимый уровень из плана И склеить пасс
+        // родителя, который разрезал парный `push`.
+        //
+        // Любой `push*`, открывающий уровень, начинает со `flush_batch!()`:
+        // накопленный батч родителя обязан уехать в свой пасс, потому что
+        // дальше меняется цель. Когда на `pop` уровень оказывается невидимым
+        // (пустой bbox или целиком за поверхностью), `render_plan.truncate`
+        // убирает его контент и композит — но пасс родителя уже разрезан, и
+        // ровно этот разрез стоит ~1 мс на пасс на глубоком командном списке
+        // (срез 2). Здесь разрез отменяется: `Draw`-элемент, положенный тем
+        // флешем, снимается, а его операции возвращаются в открытый батч —
+        // следующий флеш выпустит их одним пассом вместе с продолжением.
+        //
+        // Операции самого выброшенного поддерева (хвост `draw_ops` за
+        // `ops_end`) удаляются: на них больше не ссылается ни один элемент
+        // плана, а внутри склеенного батча они рисовались бы прямо в родителя.
+        //
+        // Условие применимости — последний оставшийся элемент плана есть
+        // `Draw` в уровень родителя. Ничего не добавляется в `draw_ops` между
+        // тем флешем и первой операцией поддерева, поэтому его `ops_end` и есть
+        // длина `draw_ops` на момент `push`.
+        macro_rules! cull_invisible_level {
+            ($plan_mark:expr) => {{
+                render_plan.truncate($plan_mark);
+                culled_levels += 1;
+                let parent = current_level.wrapping_sub(1);
+                let reopen = match render_plan.last() {
+                    Some(RenderPlanItem::Draw(b)) if b.target_level == parent => {
+                        Some((b.ops_start, b.ops_end, !matches!(b.load_op, LoadOpChoice::Load)))
+                    }
+                    _ => None,
+                };
+                if let Some((ops_start, ops_end, was_first)) = reopen
+                    && !cull_merge_off
+                {
+                    render_plan.pop();
+                    draw_ops.truncate(ops_end);
+                    batch_start = ops_start;
+                    // Батч снова открыт: если он был первым для уровня, его
+                    // `Clear` ещё не выполнен — вернуть флаг, иначе цель
+                    // останется с прошлого кадра.
+                    if was_first
+                        && let Some(f) = level_first.get_mut(parent)
+                    {
+                        *f = true;
+                    }
+                    current_scissor = None;
+                    merged_cull_splits += 1;
+                }
+            }};
         }
 
         // BUG-277 срезы 8/14 — открыть offscreen-уровень под клип точной формы:
@@ -8073,7 +8191,7 @@ impl Renderer {
                             LevelBounds::Unbounded => false,
                         };
                         if invisible {
-                            render_plan.truncate(plan_mark);
+                            cull_invisible_level!(plan_mark);
                             current_level -= 1;
                             continue;
                         }
@@ -8177,7 +8295,7 @@ impl Renderer {
                                 LevelBounds::Unbounded => false,
                             };
                         if invisible {
-                            render_plan.truncate(plan_mark);
+                            cull_invisible_level!(plan_mark);
                             current_level -= 1;
                             continue;
                         }
@@ -8251,7 +8369,7 @@ impl Renderer {
                             LevelBounds::Unbounded => false,
                         };
                         if invisible {
-                            render_plan.truncate(plan_mark);
+                            cull_invisible_level!(plan_mark);
                             current_level -= 1;
                             continue;
                         }
@@ -8867,7 +8985,7 @@ impl Renderer {
                                 // Слой пуст: composite прозрачной текстуры —
                                 // визуальный no-op; выбросить из плана и
                                 // отрисовку контента слоя (viewport-cull).
-                                render_plan.truncate(plan_mark);
+                                cull_invisible_level!(plan_mark);
                                 current_level -= 1;
                                 continue;
                             }
@@ -8883,7 +9001,7 @@ impl Renderer {
                                     // Контент целиком за пределами surface —
                                     // фильтр не виден, его контент-пассы тоже
                                     // выбрасываются (viewport-cull).
-                                    render_plan.truncate(plan_mark);
+                                    cull_invisible_level!(plan_mark);
                                     current_level -= 1;
                                     continue;
                                 }
@@ -9368,6 +9486,10 @@ impl Renderer {
         // (`viewport` у всех одинаков — меняется только контур).
         self.write_uniform_slots(&clip_slots);
         self.rrect_clip_levels += level_rrect_clips;
+        // BUG-405 срез 5: гейт склейки — число склеенных разрезов и итоговое
+        // число пассов кадра (элемент плана = пасс).
+        self.cull_merges += merged_cull_splits as u64;
+        self.plan_passes += render_plan.len() as u64;
 
         // ── Vertex buffers ────────────────────────────────────────────────
         let fill_vbuf = if fill_vertices.is_empty() {
@@ -10968,6 +11090,12 @@ impl Renderer {
                 "[frame:wgpu]   rclip: шейдером {} | уровнем {}",
                 clip_slots.len() - 1,
                 level_rrect_clips,
+            );
+
+            // BUG-405 срез 5: сколько уровней кадра выброшено как невидимые и
+            // сколько разрезов пасса родителя от них склеено обратно.
+            eprintln!(
+                "[frame:wgpu]   culled: уровней {culled_levels} | склеено разрезов {merged_cull_splits}",
             );
 
             // LUMEN_FRAME_LOG=3 — распределение, а не среднее.
