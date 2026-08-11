@@ -13,6 +13,12 @@
 //! Opt-in fake coordinates: pass `Some(FakeCoords { latitude, longitude,
 //! accuracy })` to `install_geolocation_bindings_v8`.  Shell code can obtain these
 //! from a `FingerprintProfile` configuration field.
+//!
+//! Arguments of `getCurrentPosition`/`watchPosition` go through WebIDL
+//! conversion first (`_checkArgs` in the shim): a missing or non-callable
+//! success callback, a non-callable non-null error callback, or a
+//! non-object `options` all throw `TypeError` synchronously.  `clearWatch`
+//! takes no callbacks and, per spec, never throws.
 
 /// Fake geographic coordinates injected into the Geolocation API.
 ///
@@ -99,11 +105,42 @@ const GEO_SHIM: &str = r#"(function() {
     return new GeolocationPositionError(1, 'User denied Geolocation');
   }
 
+  // WebIDL argument conversion for
+  //   undefined getCurrentPosition(PositionCallback successCallback,
+  //                                optional PositionErrorCallback? errorCallback = null,
+  //                                optional PositionOptions options = {});
+  // and the identically-typed watchPosition.  Runs synchronously, before any
+  // observable side effect (no watch id is consumed on a rejected call).
+  function _checkArgs(name, args) {
+    var where = "Failed to execute '" + name + "' on 'Geolocation': ";
+    if (args.length < 1) {
+      throw new TypeError(where + '1 argument required, but only 0 present.');
+    }
+    // A callback function type accepts only callables: a legacy event handler
+    // object ({handleEvent}) is not one.
+    if (typeof args[0] !== 'function') {
+      throw new TypeError(where + "parameter 1 is not of type 'Function'.");
+    }
+    // Nullable callback, defaulting to null: null/undefined mean "not given".
+    var error = args.length > 1 ? args[1] : undefined;
+    if (error !== undefined && error !== null && typeof error !== 'function') {
+      throw new TypeError(where + "parameter 2 is not of type 'Function'.");
+    }
+    // Dictionary type: only undefined/null/Object convert (a function is an
+    // Object too); members themselves are never type-checked.
+    var options = args.length > 2 ? args[2] : undefined;
+    if (options !== undefined && options !== null
+        && typeof options !== 'object' && typeof options !== 'function') {
+      throw new TypeError(where + "parameter 3 is not of type 'PositionOptions'.");
+    }
+  }
+
   var _geo = {
     getCurrentPosition: function(success, error) {
+      _checkArgs('getCurrentPosition', arguments);
       if (_coords) {
         var pos = makePosition(_coords);
-        _defer(function() { if (typeof success === 'function') success(pos); });
+        _defer(function() { success(pos); });
       } else {
         var err = permDenied();
         _defer(function() { if (typeof error === 'function') error(err); });
@@ -111,11 +148,12 @@ const GEO_SHIM: &str = r#"(function() {
     },
 
     watchPosition: function(success, error) {
+      _checkArgs('watchPosition', arguments);
       var id = _nextId++;
       if (_coords) {
         var fire = function() {
           if (!_watches.hasOwnProperty(id)) return;
-          if (typeof success === 'function') success(makePosition(_coords));
+          success(makePosition(_coords));
           _watches[id] = _defer(fire);
         };
         _watches[id] = true;
@@ -417,6 +455,109 @@ mod tests {
             // _LUMEN_GEO_COORDS must be deleted after install.
             let ty = rt.eval("typeof _LUMEN_GEO_COORDS").unwrap();
             assert_eq!(ty, JsValue::String("undefined".to_string()), "_LUMEN_GEO_COORDS must be cleaned up");
+        });
+    }
+
+    /// Evaluate `expr` and report whether it threw a `TypeError`.
+    ///
+    /// Returns `"TypeError"`, `"no-throw"`, or the constructor name of whatever
+    /// else was thrown, so a wrong exception type is distinguishable from none.
+    fn throw_kind(rt: &V8JsRuntime, expr: &str) -> String {
+        let js = format!(
+            "(function() {{ try {{ {expr}; return 'no-throw'; }} \
+             catch (e) {{ return e instanceof TypeError ? 'TypeError' : String(e && e.constructor && e.constructor.name); }} }})()"
+        );
+        match rt.eval(&js).unwrap() {
+            JsValue::String(s) => s,
+            other => panic!("expected string, got {other:?}"),
+        }
+    }
+
+    /// Every `assert_throws_js(TypeError, …)` case of the vendored
+    /// `getCurrentPosition_TypeError.https.html` / `watchPosition_TypeError.https.html`.
+    #[test]
+    fn callback_webidl_type_errors() {
+        // Both fake-coords modes: validation must precede the coords branch.
+        for coords in [None, Some(FakeCoords { latitude: 1.0, longitude: 2.0, accuracy: 3.0 })] {
+            with_geo(coords, |rt| {
+                for method in ["getCurrentPosition", "watchPosition"] {
+                    for args in [
+                        "",                        // no arguments
+                        "null",                    // null success callback
+                        "null, null",              // null success and error callbacks
+                        "3",                       // non-callable success callback
+                        "()=>{}, 4",               // non-callable error callback
+                        "()=>{}, ()=>{}, 4",       // non-object options
+                        "{ handleEvent: ()=>{} }", // legacy event handler object as success
+                        "()=>{}, { handleEvent: ()=>{} }", // ditto as error callback
+                    ] {
+                        let expr = format!("navigator.geolocation.{method}({args})");
+                        assert_eq!(
+                            throw_kind(rt, &expr),
+                            "TypeError",
+                            "{expr} must throw TypeError (coords: {coords:?})"
+                        );
+                    }
+                }
+            });
+        }
+    }
+
+    /// Forms the spec accepts must keep working — in particular an omitted or
+    /// explicitly null/undefined error callback and an omitted/null/object
+    /// `options`, none of which may be turned into a `TypeError` by the check.
+    #[test]
+    fn valid_callback_forms_do_not_throw() {
+        with_geo(None, |rt| {
+            for method in ["getCurrentPosition", "watchPosition"] {
+                for args in [
+                    "()=>{}",
+                    "()=>{}, null",
+                    "()=>{}, undefined",
+                    "()=>{}, ()=>{}",
+                    "()=>{}, null, {}",
+                    "()=>{}, null, null",
+                    "()=>{}, null, undefined",
+                    // Dictionary members are never type-checked (WPT
+                    // `PositionOptions.https.html`: "No exception expected").
+                    "()=>{}, null, { enableHighAccuracy: 'boom' }",
+                ] {
+                    let expr = format!("navigator.geolocation.{method}({args})");
+                    assert_eq!(throw_kind(rt, &expr), "no-throw", "{expr} must not throw");
+                }
+            }
+        });
+    }
+
+    /// `clearWatch` has no callback arguments: per spec (and the vendored
+    /// `clearWatch_TypeError.https.html`) every invalid id is silently ignored.
+    #[test]
+    fn clear_watch_never_throws_on_invalid_id() {
+        with_geo(None, |rt| {
+            for id in ["", "NaN", "-1", "0", "1", "2147483648", "Infinity", "-Infinity", "null", "'x'"] {
+                let expr = format!("navigator.geolocation.clearWatch({id})");
+                assert_eq!(throw_kind(rt, &expr), "no-throw", "{expr} must not throw");
+            }
+        });
+    }
+
+    /// Validation happens before any side effect: a rejected `watchPosition`
+    /// call must not consume a watch id.
+    #[test]
+    fn rejected_watch_does_not_consume_id() {
+        with_geo(None, |rt| {
+            let consecutive = rt
+                .eval(
+                    "(function() { \
+                       var g = navigator.geolocation; \
+                       var id1 = g.watchPosition(function(){}); \
+                       try { g.watchPosition(3); } catch(_) {} \
+                       var id2 = g.watchPosition(function(){}); \
+                       return id2 - id1; \
+                     })()",
+                )
+                .unwrap();
+            assert_eq!(consecutive, JsValue::Number(1.0), "throwing call must not burn a watch id");
         });
     }
 

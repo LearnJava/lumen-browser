@@ -76,11 +76,11 @@
  "generated": "2026-08-11",
  "counts": {
   "open": 314,
-  "fixed": 412,
+  "fixed": 413,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 726,
+ "total_bugs": 727,
  "phases": [
   {
    "id": "P0",
@@ -7365,10 +7365,10 @@
    "debtor": false
   },
   "BUG-395": {
-   "status": "open",
+   "status": "fixed",
    "title": "`getCurrentPosition()`/`watchPosition()` никогда не бросают `TypeError` на отсутствующий/`null`/невалидный success-колбэк (WebIDL: обязательный аргумент) — `typ…",
    "component": "js (`crates/js/src/geolocation.rs:129-155` — `GEO_SHIM`, `getCurrentPosition`/`watchPosition`)",
-   "date": null,
+   "date": "2026-08-11",
    "debtor": false
   },
   "BUG-396": {
@@ -9890,6 +9890,13 @@
    "component": "js (`crates/js/src/generic_sensor.rs` — `GENERIC_SENSOR_SHIM`, конструктор `SensorErrorEvent`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-762": {
+   "status": "open",
+   "title": "Словарь `PositionOptions` не читается шимом вовсе: строк `timeout`/`maximumAge`/`enableHighAccuracy` в модуле нет, поэтому `{timeout: 0}` даёт `PERMISSION_DENIE…",
+   "component": "js (`crates/js/src/geolocation.rs` — `GEO_SHIM`, `getCurrentPosition`/`watchPosition`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -10345,6 +10352,9 @@
   ],
   "js (`crates/js/src/generic_sensor.rs` — `GENERIC_SENSOR_SHIM`, конструктор `SensorErrorEvent`)": [
    "BUG-761"
+  ],
+  "js (`crates/js/src/geolocation.rs` — `GEO_SHIM`, `getCurrentPosition`/`watchPosition`)": [
+   "BUG-762"
   ],
   "js (`crates/js/src/highlight_api.rs` — `HIGHLIGHT_API_SHIM`)": [
    "BUG-534"
