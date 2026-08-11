@@ -73,10 +73,10 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-08-10",
+ "generated": "2026-08-11",
  "counts": {
-  "open": 315,
-  "fixed": 409,
+  "open": 314,
+  "fixed": 410,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -7344,10 +7344,10 @@
    "debtor": false
   },
   "BUG-392": {
-   "status": "open",
-   "title": "`navigator.getGamepads()` всегда возвращает 4 слота (все `null`) вместо требуемых спекой 0 до первого подключения устройства; `ongamepadconnected`/`ongamepaddis…",
-   "component": "js (`crates/js/src/gamepad.rs:112` — `_gamepads` init, `:118-124` — `getGamepads`, `:147-151` — экспорт глобалов)",
-   "date": null,
+   "status": "fixed",
+   "title": "`navigator.getGamepads()` всегда возвращал 4 слота (все `null`) вместо требуемых спекой 0 до первого подключения устройства; `ongamepadconnected`/`ongamepaddisc…",
+   "component": "js (`crates/js/src/gamepad.rs` — `_gamepads`/`getGamepads`/`on`-атрибуты, `crates/js/src/dom.rs` — `window.dispatchEvent`)",
+   "date": "2026-08-11",
    "debtor": false
   },
   "BUG-393": {
