@@ -7504,6 +7504,7 @@ impl Renderer {
     fn warm_page_band(&mut self, sw: u32, band_h_px: u32) {
         let t0 = std::time::Instant::now();
         self.create_page_band(sw, band_h_px, 0.0);
+        let t_create = t0.elapsed();
         let Some((view, depth_v)) = self
             .page_band
             .as_ref()
@@ -7539,14 +7540,22 @@ impl Renderer {
             timestamp_writes: None,
             occlusion_query_set: None,
         });
+        let t_pass0 = std::time::Instant::now();
         drop(pass);
+        let t_pass = t_pass0.elapsed();
         self.queue.submit(Some(encoder.finish()));
         if crate::frame_log_level() >= 2 {
             // Цена, перенесённая с первого кадра прокрутки на кадр загрузки:
-            // печатается, чтобы перенос был виден, а не только его результат.
+            // печатается вместе с разбивкой, чтобы перенос был виден целиком,
+            // а не только его результат.
+            let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
             eprintln!(
-                "[frame:wgpu] page-band warm: {sw}x{band_h_px} px за {:.2}мс",
-                t0.elapsed().as_secs_f64() * 1000.0,
+                "[frame:wgpu] page-band warm: {sw}x{band_h_px} px за {:.2}мс \
+                 (текстуры {:.2} / пасс {:.2} / submit {:.2})",
+                ms(t0.elapsed()),
+                ms(t_create),
+                ms(t_pass),
+                ms(t_pass0.elapsed()) - ms(t_pass),
             );
         }
     }
