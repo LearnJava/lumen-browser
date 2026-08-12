@@ -1188,6 +1188,10 @@ fn coverage_cache_serves_repeated_soups() {
     let mut r = Renderer::new_headless(INTER.to_vec(), 64, 128, ColorSpace::Srgb)
         .expect("headless renderer");
     r.set_font_provider(None);
+    // Срез 12 поставил перед кэшем покрытия кэш целых фигур, который на
+    // повторном кадре до растеризации не доходит вовсе. Гейт среза 9 обязан
+    // проверять СВОЙ путь, поэтому верхний кэш здесь выключен.
+    r.set_svg_shape_cache_enabled(false);
 
     let dl = svg_strokes_dl(12, 0.0);
     let (h0, m0) = r.coverage_cache_stats();
@@ -1236,6 +1240,9 @@ fn coverage_cache_matches_recompute() {
     let mut r = Renderer::new_headless(INTER.to_vec(), 64, 128, ColorSpace::Srgb)
         .expect("headless renderer");
     r.set_font_provider(None);
+    // Как и в соседнем тесте: кэш фигур среза 12 не дал бы кадру попаданий
+    // дойти до кэша покрытия, и гейт среза 9 остался бы без предмета.
+    r.set_svg_shape_cache_enabled(false);
     let dl = svg_strokes_dl(12, 0.0);
 
     r.set_coverage_cache_enabled(false);
@@ -1262,6 +1269,111 @@ fn coverage_cache_matches_recompute() {
             .data
             .chunks_exact(4)
             .any(|px| px[0] > 32 && px[0] < 223);
+        assert!(has_edge, "в кадре плеча «{name}» нет полутона кромки — покрытие не считалось");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BUG-405 срез 12 — вся фигура SVG считается один раз
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// BUG-405 срез 12: повторно встреченная фигура не тесселируется второй раз.
+///
+/// Гейт стоит на счётчике попаданий, а не на времени фазы `collect`: «одна и
+/// та же фигура считается один раз» — утверждение о механизме.
+///
+/// Три контроля на ложно-зелёный. Первый: СДВИНУТАЯ фигура обязана дать
+/// промахи — иначе кэш отвечал бы готовым на любой запрос. Второй: плечо
+/// отката обязано перестать попадать, иначе счётчик не различает два пути.
+/// Третий: тот же список, но заливками, обязан дать свои промахи — ключ,
+/// не различающий вид команды, вернул бы обводку вместо заливки.
+#[test]
+#[ignore = "requires GPU adapter"]
+fn svg_shape_cache_serves_repeated_shapes() {
+    let mut r = Renderer::new_headless(INTER.to_vec(), 64, 128, ColorSpace::Srgb)
+        .expect("headless renderer");
+    r.set_font_provider(None);
+
+    let dl = svg_strokes_dl(12, 0.0);
+    let (h0, m0) = r.svg_shape_cache_stats();
+    r.render_to_image(&dl, 0.0, 0.0).expect("первый кадр");
+    let (h1, m1) = r.svg_shape_cache_stats();
+    assert_eq!(h1 - h0, 0, "первый кадр не мог попасть в пустой кэш");
+    assert_eq!(m1 - m0, 12, "не все обводки дошли до тесселяции");
+
+    r.render_to_image(&dl, 0.0, 0.0).expect("второй кадр");
+    let (h2, m2) = r.svg_shape_cache_stats();
+    assert_eq!(h2 - h1, 12, "повторный кадр всё ещё считает фигуры заново");
+    assert_eq!(m2 - m1, 0, "повторный кадр тесселировал фигуры заново");
+
+    // Контроль №1: другая геометрия — другая фигура.
+    r.render_to_image(&svg_strokes_dl(12, 3.5), 0.0, 0.0).expect("кадр со сдвигом");
+    let (h3, m3) = r.svg_shape_cache_stats();
+    assert_eq!(m3 - m2, 12, "сдвинутая фигура взята из кэша — ключ не различает формы");
+    assert_eq!(h3 - h2, 0, "сдвинутая фигура засчитана попаданием");
+
+    // Контроль №2: те же контуры под заливкой — другой вид команды.
+    let fills: Vec<DisplayCommand> = svg_strokes_dl(12, 0.0)
+        .into_iter()
+        .map(|cmd| match cmd {
+            DisplayCommand::DrawSvgStroke { contours, color, .. } => {
+                DisplayCommand::DrawSvgFill { contours, color }
+            }
+            other => other,
+        })
+        .collect();
+    r.render_to_image(&fills, 0.0, 0.0).expect("кадр заливок");
+    let (h4, m4) = r.svg_shape_cache_stats();
+    assert_eq!(m4 - m3, 12, "заливка взята из кэша обводки — ключ не различает вид команды");
+    assert_eq!(h4 - h3, 0, "заливка засчитана попаданием");
+
+    // Контроль №3: плечо отката обязано обходить кэш целиком.
+    r.set_svg_shape_cache_enabled(false);
+    r.render_to_image(&dl, 0.0, 0.0).expect("кадр без кэша");
+    let (h5, m5) = r.svg_shape_cache_stats();
+    assert_eq!(h5 - h4, 0, "плечо без кэша всё ещё попадает (контроль негоден)");
+    assert_eq!(m5 - m4, 0, "плечо без кэша обязано обходить кэш целиком");
+    r.set_svg_shape_cache_enabled(true);
+}
+
+/// BUG-405 срез 12: кадр с попаданиями побитово равен кадру без кэша.
+///
+/// Мемоизация чистой цепочки обязана давать РОВНО те же вершины, что пересчёт:
+/// ключ хранится в абсолютных координатах и сравнивается побитово, поэтому
+/// гейт побайтовый, а не численный.
+///
+/// Сравниваются три кадра: плечо отката, кадр промахов и кадр попаданий.
+/// Последний и есть предмет проверки — первые два вместе показывают, что
+/// расхождение искали там, где оно возможно. Проверка «обводка нарисована и
+/// её кромка сглажена» обязательна: три пустых кадра сравнивались бы зелено.
+#[test]
+#[ignore = "requires GPU adapter"]
+fn svg_shape_cache_matches_recompute() {
+    let mut r = Renderer::new_headless(INTER.to_vec(), 64, 128, ColorSpace::Srgb)
+        .expect("headless renderer");
+    r.set_font_provider(None);
+    let dl = svg_strokes_dl(12, 0.0);
+
+    r.set_svg_shape_cache_enabled(false);
+    let plain = r.render_to_image(&dl, 0.0, 0.0).expect("плечо без кэша");
+
+    r.set_svg_shape_cache_enabled(true);
+    let (h0, m0) = r.svg_shape_cache_stats();
+    let miss = r.render_to_image(&dl, 0.0, 0.0).expect("кадр промахов");
+    let (h1, m1) = r.svg_shape_cache_stats();
+    let hit = r.render_to_image(&dl, 0.0, 0.0).expect("кадр попаданий");
+    let (h2, _) = r.svg_shape_cache_stats();
+
+    assert_eq!((h1 - h0, m1 - m0), (0, 12), "кадр промахов оказался не тем, чем назван");
+    assert_eq!(h2 - h1, 12, "кадр попаданий не попал в кэш — сравнивать нечего");
+
+    assert_eq!(plain.data, miss.data, "кадр промахов разошёлся с плечом без кэша");
+    assert_eq!(plain.data, hit.data, "кадр попаданий разошёлся с плечом без кэша");
+
+    for (name, img) in [("без кэша", &plain), ("промахи", &miss), ("попадания", &hit)] {
+        let opaque = img.data.chunks_exact(4).filter(|px| px[3] == 255 && px[0] < 32).count();
+        assert!(opaque > 0, "в кадре плеча «{name}» нет обводки — гейт негоден");
+        let has_edge = img.data.chunks_exact(4).any(|px| px[0] > 32 && px[0] < 223);
         assert!(has_edge, "в кадре плеча «{name}» нет полутона кромки — покрытие не считалось");
     }
 }
