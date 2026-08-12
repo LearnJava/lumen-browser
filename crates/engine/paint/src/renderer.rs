@@ -1966,6 +1966,11 @@ struct PageBandCache {
     w_px: u32,
     /// Высота текстуры полосы в device px (surface + 2×запас).
     h_px: u32,
+    /// Bind group блита полосы (`image_bgl`: view полосы + linear sampler).
+    /// Оба входа живут ровно столько же, сколько сама полоса, поэтому
+    /// группа создаётся вместе с ней, а не на каждый Compose-кадр
+    /// (BUG-405 срез 21: 40 дескрипторных наборов за прогон прокрутки).
+    blit_bg: wgpu::BindGroup,
     /// Depth-текстура Band-рендера (обязана совпадать размером с полосой).
     /// Кэшируется вместе с полосой: раньше создавалась заново на каждый
     /// miss (7+ МБ Depth32 на band-размере — чистый churn VRAM).
@@ -2843,6 +2848,13 @@ fn frame_skip_disabled() -> bool {
 /// process (all `Renderer`s). Printed by the `LUMEN_FRAME_LOG=2` phase log
 /// to correlate pass-end cost with live-resource growth.
 pub static TEXTURES_CREATED: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// BUG-405 срез 21: сколько раз собрана bind group блита полосы
+/// скролл-композитора. Гейт правки: группа обязана жить вместе с полосой, а
+/// не пересобираться каждый Compose-кадр (прогон прокрутки `lenta.ru`:
+/// 40 → 1). Счётчик процессный, как [`TEXTURES_CREATED`].
+pub static BAND_BLIT_BGS_CREATED: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
 /// BUG-274 diagnostics: bump [`TEXTURES_CREATED`].
@@ -7479,10 +7491,14 @@ impl Renderer {
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        // Bind group блита — вход у неё только этот view и постоянный sampler,
+        // поэтому она создаётся здесь и живёт до пересоздания полосы.
+        let blit_bg = self.create_band_blit_bind_group(&view);
         let (depth_t, depth_v) = create_depth_texture(&self.device, sw, band_h_px);
         self.page_band = Some(PageBandCache {
             _texture: texture,
             view,
+            blit_bg,
             key: 0, // невалиден, пока Band-рендер не пройдёт
             band_top_css,
             w_px: sw,
@@ -7490,6 +7506,31 @@ impl Renderer {
             depth_t,
             depth_v,
         });
+    }
+
+    /// Собирает bind group блита полосы: view полосы + постоянный linear
+    /// sampler по layout-у `image_bgl`.
+    ///
+    /// BUG-405 срез 21: раньше эта группа собиралась на каждом Compose-кадре,
+    /// хотя оба её входа меняются только вместе с самой полосой. Счётчик
+    /// [`BAND_BLIT_BGS_CREATED`] гейтит именно это — прогон прокрутки
+    /// `lenta.ru` давал 40 наборов дескрипторов вместо 1.
+    fn create_band_blit_bind_group(&self, view: &wgpu::TextureView) -> wgpu::BindGroup {
+        BAND_BLIT_BGS_CREATED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("page-band-bg"),
+            layout: &self.image_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.image_sampler),
+                },
+            ],
+        })
     }
 
     /// Прогрев полосы скролл-композитора (BUG-405 срез 20): создаёт её текстуры
@@ -7795,26 +7836,14 @@ impl Renderer {
             eprintln!("[frame:wgpu] page-compose HIT ({} anim segs)", ranges.len());
         }
 
-        // Композиция: blit полосы со сдвигом + overlay поверх.
-        let Some((band_top_css, band_view)) =
-            self.page_band.as_ref().map(|b| (b.band_top_css, b.view.clone()))
+        // Композиция: blit полосы со сдвигом + overlay поверх. Bind group
+        // блита взята готовой из кэша полосы (срез 21) — её входы не зависят
+        // ни от скролла, ни от содержимого кадра.
+        let Some((band_top_css, bind_group)) =
+            self.page_band.as_ref().map(|b| (b.band_top_css, b.blit_bg.clone()))
         else {
             return Ok(false);
         };
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("page-band-bg"),
-            layout: &self.image_bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&band_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.image_sampler),
-                },
-            ],
-        });
         self.pending_base_blit = Some(PendingBaseBlit {
             bind_group,
             dy_css: band_top_css - scroll_y,
@@ -12579,10 +12608,11 @@ impl Renderer {
             // BUG-405 срез 10: сколько команд состояния пасса не отправлено.
             eprintln!("[frame:wgpu]   state: отсеяно команд {st_elided}, склеено draw {st_merged}");
             eprintln!(
-                "[frame:wgpu]   draw-sub: begin {:.1}ms ops {:.1}ms end {:.1}ms | textures_created {} pool {}",
+                "[frame:wgpu]   draw-sub: begin {:.1}ms ops {:.1}ms end {:.1}ms | textures_created {} pool {} band-bg {}",
                 ms(t_draw_sub[0]), ms(t_draw_sub[1]), ms(t_draw_sub[2]),
                 TEXTURES_CREATED.load(std::sync::atomic::Ordering::Relaxed),
                 self.texture_pool.len(),
+                BAND_BLIT_BGS_CREATED.load(std::sync::atomic::Ordering::Relaxed),
             );
             // BUG-405 срез 14: фактически отправленные команды пасса по видам.
             // Счётчик отсева говорит, сколько команд сэкономлено, а этот —
@@ -17615,6 +17645,45 @@ mod tests {
         let band = r.page_band.as_ref().expect("полоса обязана пересоздаться");
         assert_eq!((band.w_px, band.h_px), (80, 240), "размер не обновился");
         assert_eq!(band.key, 0, "пересозданная полоса выдала себя за валидную");
+    }
+
+    /// BUG-405 срез 21: bind group блита обязана создаваться ровно один раз
+    /// на полосу.
+    ///
+    /// Её входы — view полосы и постоянный sampler — меняются только вместе с
+    /// самой полосой, поэтому каждый Compose-кадр брал готовую группу, а не
+    /// собирал новую (прогон прокрутки `lenta.ru`: 40 наборов дескрипторов за
+    /// прогон против 1). Тест пиннит связку «создание полосы = создание
+    /// группы»: возврат пересборки на кадр поднимет счётчик выше числа
+    /// созданных полос.
+    ///
+    /// Требует GPU-адаптер, поэтому `#[ignore]`; запуск:
+    /// `cargo test -p lumen-paint --features backend-wgpu
+    ///  band_blit_bind_group_lives_with_band -- --include-ignored`.
+    #[test]
+    #[ignore = "requires GPU adapter"]
+    fn band_blit_bind_group_lives_with_band() {
+        let bytes = std::fs::read("../../../assets/fonts/Inter-Regular.ttf")
+            .expect("bundled font");
+        let mut r = Renderer::new_headless(bytes, 64, 48, ColorSpace::Srgb)
+            .expect("headless renderer");
+        let before = BAND_BLIT_BGS_CREATED.load(std::sync::atomic::Ordering::Relaxed);
+
+        r.create_page_band(64, 200, 0.0);
+        assert_eq!(
+            BAND_BLIT_BGS_CREATED.load(std::sync::atomic::Ordering::Relaxed) - before,
+            1,
+            "полоса создана, а группа блита — нет (или собрана дважды)",
+        );
+
+        // Пересоздание полосы (смена размера окна) обязано дать новую группу:
+        // старая ссылается на исчезнувший view.
+        r.create_page_band(80, 240, 17.0);
+        assert_eq!(
+            BAND_BLIT_BGS_CREATED.load(std::sync::atomic::Ordering::Relaxed) - before,
+            2,
+            "пересозданная полоса осталась со старой группой блита",
+        );
     }
 
     /// Побитовое равенство двух наборов вершин текста.
