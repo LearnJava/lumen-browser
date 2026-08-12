@@ -2525,6 +2525,18 @@ pub struct Renderer {
     /// плечо A/B: тест рисует один и тот же список обоими путями в одном
     /// процессе и сверяет пиксели.
     shadow_analytic_enabled: bool,
+    /// Сколько байт пикселей атласа отправлено в GPU за жизнь рендерера
+    /// (BUG-405 срез 11). Гейт правки — этот счётчик: заливка целой текстуры
+    /// (1 МиБ) против заливки только изменившихся строк.
+    atlas_bytes_uploaded: u64,
+    /// Сколько раз атлас заливался в GPU (BUG-405 срез 11). Байты без числа
+    /// заливок не отличают «стало реже» от «стало меньше за раз».
+    atlas_uploads: u64,
+    /// Заливка только изменившихся строк атласа включена (BUG-405 срез 11).
+    /// Инстансное плечо A/B: тест гоняет один и тот же список обоими путями в
+    /// одном процессе и сверяет пиксели. Поверх — рычаг
+    /// `LUMEN_NO_ATLAS_PARTIAL=1`.
+    atlas_partial_upload_enabled: bool,
     /// Сколько ВЛОЖЕННЫХ скруглённых клипов обслужено вторым шейдерным
     /// контуром, то есть без offscreen-уровня (BUG-405 срез 8). Гейт правки —
     /// этот счётчик рядом с `rrect_clip_levels`.
@@ -3094,6 +3106,13 @@ fn cull_merge_disabled() -> bool {
     use std::sync::OnceLock;
     static OFF: OnceLock<bool> = OnceLock::new();
     *OFF.get_or_init(|| std::env::var("LUMEN_NO_CULL_MERGE").is_ok_and(|v| v == "1"))
+}
+
+/// Рычаг отката построчной заливки атласа (BUG-405 срез 11).
+fn atlas_partial_upload_disabled() -> bool {
+    use std::sync::OnceLock;
+    static OFF: OnceLock<bool> = OnceLock::new();
+    *OFF.get_or_init(|| std::env::var("LUMEN_NO_ATLAS_PARTIAL").is_ok_and(|v| v == "1"))
 }
 
 /// Рычаг отката отсева повторных команд состояния пасса (BUG-405 срез 10).
@@ -4412,6 +4431,9 @@ impl Renderer {
             draw_merges: 0,
             state_elision_enabled: true,
             shadow_analytic_enabled: true,
+            atlas_bytes_uploaded: 0,
+            atlas_uploads: 0,
+            atlas_partial_upload_enabled: true,
             nested_shader_clips: 0,
             nested_shader_clip_enabled: true,
             coverage_cache: CoverageCache::default(),
@@ -4679,6 +4701,37 @@ impl Renderer {
     /// пиксели, вместо второго прогона с `LUMEN_NO_STATE_ELISION=1`.
     pub fn set_state_elision_enabled(&mut self, enabled: bool) {
         self.state_elision_enabled = enabled;
+    }
+
+    /// Сколько байт пикселей атласа глифов отправлено в GPU этим рендером
+    /// (BUG-405 срез 11).
+    ///
+    /// Гейт правки стоит на нём: заливка атласа — это `queue.write_texture`,
+    /// чья цена пропорциональна объёму, поэтому «байт меньше» и есть предмет
+    /// правки, а не время кадра.
+    #[must_use]
+    pub fn atlas_bytes_uploaded(&self) -> u64 {
+        self.atlas_bytes_uploaded
+    }
+
+    /// Сколько раз атлас глифов заливался в GPU этим рендером
+    /// (BUG-405 срез 11).
+    ///
+    /// Второй счётчик того же среза: байты без числа заливок не отличают
+    /// «заливок стало меньше» от «одна заливка стала меньше», а правка среза —
+    /// про второе.
+    #[must_use]
+    pub fn atlas_uploads(&self) -> u64 {
+        self.atlas_uploads
+    }
+
+    /// Включает/выключает построчную заливку атласа (BUG-405 срез 11) на этом
+    /// рендере.
+    ///
+    /// Инстансное плечо A/B: тест снимает оба пути в одном процессе и сверяет
+    /// пиксели, вместо второго прогона с `LUMEN_NO_ATLAS_PARTIAL=1`.
+    pub fn set_atlas_partial_upload_enabled(&mut self, enabled: bool) {
+        self.atlas_partial_upload_enabled = enabled;
     }
 
     /// Сколько render-пассов закодировали filter-элементы планов этого
@@ -7088,7 +7141,19 @@ impl Renderer {
         Some(buf)
     }
 
-    fn write_uniform_slots(&mut self, slots: &[ClipUniformSlot]) {
+    /// BUG-405 срез 11: подстатьи `uniforms` (выращивание буфера / раскладка
+    /// слотов по шагу / `write_buffer`) считаются порознь — «дорого просить
+    /// новый буфер», «дорого раскладывать» и «дорого отправлять» лечатся
+    /// по-разному, а фаза до среза была одним числом.
+    fn write_uniform_slots(
+        &mut self,
+        slots: &[ClipUniformSlot],
+        t_grow: &mut std::time::Duration,
+        t_build: &mut std::time::Duration,
+        t_write: &mut std::time::Duration,
+    ) {
+        let stride = UNIFORM_SLOT_STRIDE as usize;
+        let t0 = std::time::Instant::now();
         if slots.len() > self.uniform_slots {
             let want = slots.len().next_power_of_two();
             let (buf, bg) = Self::create_uniform_buffer(&self.device, &self.pdeps.uniform_bgl, want);
@@ -7096,15 +7161,19 @@ impl Renderer {
             self.uniform_bind_group = bg;
             self.uniform_slots = want;
         }
+        let t1 = std::time::Instant::now();
         // Один write_buffer вместо N: слоты раскладываются по шагу 256 в
         // промежуточный буфер (у кадра прокрутки их до трёх сотен).
-        let stride = UNIFORM_SLOT_STRIDE as usize;
         let mut bytes = vec![0u8; stride * slots.len()];
         for (i, slot) in slots.iter().enumerate() {
             let src = as_bytes(std::slice::from_ref(slot));
             bytes[i * stride..i * stride + src.len()].copy_from_slice(src);
         }
+        let t2 = std::time::Instant::now();
         self.queue.write_buffer(&self.uniform_buffer, 0, &bytes);
+        *t_grow += t1 - t0;
+        *t_build += t2 - t1;
+        *t_write += t2.elapsed();
     }
 
     fn create_layer_texture(&mut self, width: u32, height: u32) -> OffscreenLayer {
@@ -10467,26 +10536,44 @@ impl Renderer {
         let t_after_collect = t_frame0.elapsed();
 
         // ── Atlas upload (если изменился) ─────────────────────────────────
+        // BUG-405 срез 11: заливаются только строки, изменившиеся с прошлой
+        // заливки. Новый глиф трогает десятки строк из 1024, а отправлялась
+        // вся текстура целиком (1 МиБ на каждом кадре с новым глифом).
+        let mut atlas_frame_bytes = 0usize;
+        let mut atlas_frame_rows = 0u32;
         if self.atlas.dirty() {
+            let partial = self.atlas_partial_upload_enabled && !atlas_partial_upload_disabled();
+            let (y0, y1) = match self.atlas.dirty_rows() {
+                Some(rows) if partial => rows,
+                // `dirty()` без диапазона строк невозможен, но полагаться на
+                // это нельзя: без диапазона заливаем всё, как до среза.
+                _ => (0, self.atlas.height()),
+            };
+            let row = self.atlas.width() as usize;
+            let bytes = &self.atlas.pixels()[y0 as usize * row..y1 as usize * row];
             self.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &self.atlas_texture,
                     mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
+                    origin: wgpu::Origin3d { x: 0, y: y0, z: 0 },
                     aspect: wgpu::TextureAspect::All,
                 },
-                self.atlas.pixels(),
+                bytes,
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(self.atlas.width()),
-                    rows_per_image: Some(self.atlas.height()),
+                    rows_per_image: Some(y1 - y0),
                 },
                 wgpu::Extent3d {
                     width: self.atlas.width(),
-                    height: self.atlas.height(),
+                    height: y1 - y0,
                     depth_or_array_layers: 1,
                 },
             );
+            self.atlas_bytes_uploaded += bytes.len() as u64;
+            self.atlas_uploads += 1;
+            atlas_frame_bytes = bytes.len();
+            atlas_frame_rows = y1 - y0;
             self.atlas.mark_clean();
         }
         // BUG-405 срез 10: разбивка фазы `prep` (атлас / uniform-слоты /
@@ -10506,7 +10593,15 @@ impl Renderer {
         // BUG-405 срез 4: в слоте 0 лежит тот же viewport и «клипа нет»;
         // слоты 1.. заполнены шейдерными скруглёнными клипами этого кадра
         // (`viewport` у всех одинаков — меняется только контур).
-        self.write_uniform_slots(&clip_slots);
+        let mut t_uni_grow = std::time::Duration::ZERO;
+        let mut t_uni_build = std::time::Duration::ZERO;
+        let mut t_uni_write = std::time::Duration::ZERO;
+        self.write_uniform_slots(
+            &clip_slots,
+            &mut t_uni_grow,
+            &mut t_uni_build,
+            &mut t_uni_write,
+        );
         self.rrect_clip_levels += level_rrect_clips;
         // BUG-405 срез 5: гейт склейки — число склеенных разрезов и итоговое
         // число пассов кадра (элемент плана = пасс).
@@ -12307,6 +12402,21 @@ impl Renderer {
                 vbuf_count,
                 vbuf_bytes / 1024,
                 grad_bind_groups.len(),
+            );
+
+            // BUG-405 срез 11: подстатьи `atlas` и `uniforms`. У атласа
+            // предмет правки — объём (заливка целой текстуры против строк),
+            // у uniform-слотов сначала надо понять, чем занята фаза: ростом
+            // буфера, раскладкой по шагу 256 или самой отправкой.
+            eprintln!(
+                "[frame:wgpu]   prep-sub: atlas {} строк / {} KiB | \
+                 uni grow {:.2} build {:.2} write {:.2} | слотов {}",
+                atlas_frame_rows,
+                atlas_frame_bytes / 1024,
+                ms(t_uni_grow),
+                ms(t_uni_build),
+                ms(t_uni_write),
+                clip_slots.len(),
             );
 
             // LUMEN_FRAME_LOG=3 — распределение, а не среднее.
