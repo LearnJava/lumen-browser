@@ -2557,6 +2557,12 @@ pub struct Renderer {
     /// рисует один и тот же список обоими путями в одном процессе и сверяет
     /// пиксели. Поверх — рычаг `LUMEN_NO_SVG_SHAPE_CACHE=1`.
     svg_shape_cache_enabled: bool,
+    /// Мемоизация укладки целого текстового run-а (BUG-405 срез 13).
+    text_run_cache: TextRunCache,
+    /// Кэш укладки текста включён (BUG-405 срез 13). Инстансное плечо A/B:
+    /// тест рисует один и тот же список обоими путями в одном процессе и
+    /// сверяет вершины. Поверх — рычаг `LUMEN_NO_TEXT_RUN_CACHE=1`.
+    text_run_cache_enabled: bool,
     /// Приёмник готовых пайплайнов с потока прогрева (BUG-405). `None` —
     /// прогрев ещё не запущен, уже завершён, или отключён
     /// `LUMEN_NO_PIPELINE_WARMUP=1`. Сбрасывается в `None`, когда поток
@@ -4446,6 +4452,8 @@ impl Renderer {
             coverage_cache_enabled: true,
             svg_shape_cache: SvgShapeCache::default(),
             svg_shape_cache_enabled: true,
+            text_run_cache: TextRunCache::default(),
+            text_run_cache_enabled: true,
             warm_rx: None,
             warm_started: false,
             surface,
@@ -4804,6 +4812,21 @@ impl Renderer {
     /// выключает кэш поверх него.
     pub fn set_svg_shape_cache_enabled(&mut self, enabled: bool) {
         self.svg_shape_cache_enabled = enabled;
+    }
+
+    /// Попаданий и промахов кэша укладки текста (BUG-405 срез 13) за жизнь
+    /// рендерера.
+    pub fn text_run_cache_stats(&self) -> (u64, u64) {
+        (self.text_run_cache.hits, self.text_run_cache.misses)
+    }
+
+    /// Включает/выключает мемоизацию укладки текстового run-а (BUG-405 срез 13).
+    ///
+    /// Нужен гейту вершин: сравнить укладку с попаданием можно только двумя
+    /// плечами в одном процессе. Рычаг процесса `LUMEN_NO_TEXT_RUN_CACHE=1`
+    /// выключает кэш поверх него.
+    pub fn set_text_run_cache_enabled(&mut self, enabled: bool) {
+        self.text_run_cache_enabled = enabled;
     }
 
     /// Включает/выключает кэш покрытия SVG-супов (BUG-405 срез 9).
@@ -8403,6 +8426,7 @@ impl Renderer {
         let cmd_log = crate::frame_log_level() >= 3;
         if cmd_log {
             SVG_SUB.reset();
+            TEXT_SUB.reset();
         }
         let mut probe: std::collections::HashMap<&'static str, (std::time::Duration, u32, u32)> =
             std::collections::HashMap::new();
@@ -8670,6 +8694,9 @@ impl Renderer {
                     highlight_name: _,
                     text_orientation,
                 } => {
+                    // BUG-405 срез 13: охватывающая статья arm-а — снимается и
+                    // на `continue` (нет метрик / отказ scissor'а).
+                    let _t_arm = sub_timer(cmd_log, &TEXT_SUB.arm);
                     let primary_face_id = text_face_iter.next().unwrap_or(0);
                     if lazy_faces
                         .faces
@@ -8679,7 +8706,12 @@ impl Renderer {
                     {
                         continue;
                     }
-                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
+                    let t_sciss = cmd_log.then(std::time::Instant::now);
+                    let scissor_ok = sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h);
+                    if let Some(t0) = t_sciss {
+                        sub_add(&TEXT_SUB.sciss, t0);
+                    }
+                    if !scissor_ok {
                         continue;
                     }
                     let alpha = 1.0_f32;
@@ -8708,6 +8740,8 @@ impl Renderer {
                                 &mut lazy_faces,
                                 &mut self.atlas,
                                 &mut self.cached_glyphs,
+                                &mut self.text_run_cache,
+                                self.text_run_cache_enabled,
                                 font_variation_axes,
                                 *tab_size,
                                 font_palette.as_ref(),
@@ -8725,6 +8759,8 @@ impl Renderer {
                                 &mut lazy_faces,
                                 &mut self.atlas,
                                 &mut self.cached_glyphs,
+                                &mut self.text_run_cache,
+                                self.text_run_cache_enabled,
                                 font_variation_axes,
                                 *tab_size,
                                 font_palette.as_ref(),
@@ -8741,6 +8777,8 @@ impl Renderer {
                                 &mut lazy_faces,
                                 &mut self.atlas,
                                 &mut self.cached_glyphs,
+                                &mut self.text_run_cache,
+                                self.text_run_cache_enabled,
                                 font_variation_axes,
                                 *tab_size,
                                 font_palette.as_ref(),
@@ -8748,7 +8786,11 @@ impl Renderer {
                         }
                     }
                     if let Some(m) = transform_stack.last() {
+                        let t_xform = cmd_log.then(std::time::Instant::now);
                         apply_affine_to_verts(&mut text_vertices[v_start as usize..], m);
+                        if let Some(t0) = t_xform {
+                            sub_add(&TEXT_SUB.xform, t0);
+                        }
                     }
                     let v_count = text_vertices.len() as u32 - v_start;
                     if v_count > 0 {
@@ -8923,6 +8965,8 @@ impl Renderer {
                                 &mut lazy_faces,
                                 &mut self.atlas,
                                 &mut self.cached_glyphs,
+                                &mut self.text_run_cache,
+                                self.text_run_cache_enabled,
                                 &[],
                                 0.0,
                                 None,
@@ -10547,6 +10591,9 @@ impl Renderer {
             eprintln!("[frame:wgpu]   collect-top: {}", top.join(", "));
             if SVG_SUB.calls.load(std::sync::atomic::Ordering::Relaxed) > 0 {
                 eprintln!("[frame:wgpu]   {}", SVG_SUB.line());
+            }
+            if TEXT_SUB.cmds.load(std::sync::atomic::Ordering::Relaxed) > 0 {
+                eprintln!("[frame:wgpu]   {}", TEXT_SUB.line());
             }
         }
         let t_after_collect = t_frame0.elapsed();
@@ -12435,6 +12482,17 @@ impl Renderer {
                 clip_slots.len(),
             );
 
+            // BUG-405 срез 13: попадания кэша укладки текста нарастающим
+            // итогом. На уровне 2, без таймеров: разбивка `text-sub` стоит
+            // около трети измеряемой ею статьи, а решение «кэш работает или
+            // нет» принимается по счётчику, а не по секундомеру.
+            eprintln!(
+                "[frame:wgpu]   text-runs: попаданий {} промахов {} | планов {} слов",
+                self.text_run_cache.hits,
+                self.text_run_cache.misses,
+                self.text_run_cache.stored,
+            );
+
             // LUMEN_FRAME_LOG=3 — распределение, а не среднее.
             if item_log {
                 let d_created = load_counter(&TEXTURES_CREATED) - tex_created_at_entry;
@@ -13107,8 +13165,30 @@ impl SvgSubStats {
     }
 }
 
-/// Прибавить к подстатье [`SVG_SUB`] время, прошедшее с `t0`.
-fn svg_sub_add(slot: &std::sync::atomic::AtomicU64, t0: std::time::Instant) {
+/// Таймер подстатьи, снимающий себя на выходе из области видимости — нужен там,
+/// где путь может выйти через `continue` (arm команды в фазе `collect`): иначе
+/// именно интересные ветки (отказ scissor'а, нет метрик) теряли бы свой вклад.
+struct SubTimer<'a> {
+    /// Куда прибавить время.
+    slot: &'a std::sync::atomic::AtomicU64,
+    /// Момент входа.
+    t0: std::time::Instant,
+}
+
+impl Drop for SubTimer<'_> {
+    fn drop(&mut self) {
+        sub_add(self.slot, self.t0);
+    }
+}
+
+/// [`SubTimer`] на подстатью, если покадровый лог просит разбивку.
+fn sub_timer(on: bool, slot: &std::sync::atomic::AtomicU64) -> Option<SubTimer<'_>> {
+    on.then(|| SubTimer { slot, t0: std::time::Instant::now() })
+}
+
+/// Прибавить к подстатье покадрового лога ([`SVG_SUB`], [`TEXT_SUB`]) время,
+/// прошедшее с `t0`.
+fn sub_add(slot: &std::sync::atomic::AtomicU64, t0: std::time::Instant) {
     slot.fetch_add(t0.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
 }
 
@@ -13120,6 +13200,122 @@ fn count_svg_soup(verts: usize, contours: &[Vec<[f32; 2]>]) {
     use std::sync::atomic::Ordering::Relaxed;
     SVG_SUB.verts.fetch_add(verts as u64, Relaxed);
     SVG_SUB.pts.fetch_add(contours.iter().map(Vec::len).sum::<usize>() as u64, Relaxed);
+}
+
+/// BUG-405 срез 13: подстатьи одной команды `DrawText` под `LUMEN_FRAME_LOG=3`.
+///
+/// Срез 12 оставил `DrawText` крупнейшей статьёй фазы `collect` (16.8 мс на
+/// 9977 команд прокрутки `lenta.ru`), но разбивки ВНУТРИ команды не было —
+/// и без неё правка была бы угадыванием (пункт 16 остатка бага). Разбивка
+/// отделяет работу над командой (scissor, аффинная матрица) от работы над
+/// каждым символом: выбор face-а под кодпойнт, нормализация осей вариаций,
+/// поиск глифа в атласе и укладка квада.
+///
+/// Все счётчики — наносекунды ЗА КАДР (сбрасываются в начале фазы `collect`),
+/// заполняются только на уровне 3: `Instant::now()` на символ сравним с самой
+/// работой, поэтому замеры уровня 2 обязаны остаться чистыми.
+struct TextSubStats {
+    /// Весь arm команды `DrawText` целиком — охватывающая статья, разность с
+    /// суммой остальных называет остаток (то, что не попало ни в одну).
+    arm: std::sync::atomic::AtomicU64,
+    /// Вся укладка глифов ([`push_text_glyphs`]) целиком.
+    run: std::sync::atomic::AtomicU64,
+    /// Цикл по символам целиком (внутри [`TextSubStats::run`]).
+    lp: std::sync::atomic::AtomicU64,
+    /// Пролог команды: bin размера, метрики primary face-а, базовая линия и
+    /// три per-run кэша.
+    pre: std::sync::atomic::AtomicU64,
+    /// Выбор face-а под кодпойнт (per-run кэш + [`pick_face_for_codepoint`]).
+    pick: std::sync::atomic::AtomicU64,
+    /// Нормализация осей вариаций под face (per-run кэш).
+    coord: std::sync::atomic::AtomicU64,
+    /// Всё, что делается с символом после выбора face-а: проверка COLR, поиск
+    /// глифа и укладка квада. Охватывает [`TextSubStats::look`] и
+    /// [`TextSubStats::quad`] — разность называет проверку COLR и вызовы.
+    glyf: std::sync::atomic::AtomicU64,
+    /// Поиск глифа в кэше атласа — без цены промаха (она отдельной статьёй,
+    /// [`GLYPH_RASTER_NANOS`], срез 3).
+    look: std::sync::atomic::AtomicU64,
+    /// Укладка квада глифа в вершины и сдвиг пера.
+    quad: std::sync::atomic::AtomicU64,
+    /// `sync_scissor_to_stack` на команду.
+    sciss: std::sync::atomic::AtomicU64,
+    /// Наложение накопленной матрицы на вершины команды.
+    xform: std::sync::atomic::AtomicU64,
+    /// Команд `DrawText`, дошедших до укладки глифов.
+    cmds: std::sync::atomic::AtomicU64,
+    /// Символов, пройденных циклом (включая `\t` и невидимые).
+    chars: std::sync::atomic::AtomicU64,
+    /// Квадов глифов, уложенных в вершины (цветной глиф даёт квад на слой).
+    glyphs: std::sync::atomic::AtomicU64,
+}
+
+/// Подстатьи команд `DrawText` текущего кадра ([`TextSubStats`]).
+static TEXT_SUB: TextSubStats = TextSubStats {
+    arm: std::sync::atomic::AtomicU64::new(0),
+    run: std::sync::atomic::AtomicU64::new(0),
+    lp: std::sync::atomic::AtomicU64::new(0),
+    pre: std::sync::atomic::AtomicU64::new(0),
+    pick: std::sync::atomic::AtomicU64::new(0),
+    coord: std::sync::atomic::AtomicU64::new(0),
+    glyf: std::sync::atomic::AtomicU64::new(0),
+    look: std::sync::atomic::AtomicU64::new(0),
+    quad: std::sync::atomic::AtomicU64::new(0),
+    sciss: std::sync::atomic::AtomicU64::new(0),
+    xform: std::sync::atomic::AtomicU64::new(0),
+    cmds: std::sync::atomic::AtomicU64::new(0),
+    chars: std::sync::atomic::AtomicU64::new(0),
+    glyphs: std::sync::atomic::AtomicU64::new(0),
+};
+
+impl TextSubStats {
+    /// Обнулить подстатьи перед кадром.
+    fn reset(&self) {
+        use std::sync::atomic::Ordering::Relaxed;
+        for slot in [
+            &self.arm,
+            &self.run,
+            &self.lp,
+            &self.pre,
+            &self.pick,
+            &self.coord,
+            &self.glyf,
+            &self.look,
+            &self.quad,
+            &self.sciss,
+            &self.xform,
+            &self.cmds,
+            &self.chars,
+            &self.glyphs,
+        ] {
+            slot.store(0, Relaxed);
+        }
+    }
+
+    /// Строка `text-sub` для покадрового лога уровня 3.
+    fn line(&self) -> String {
+        use std::sync::atomic::Ordering::Relaxed;
+        let ms = |slot: &std::sync::atomic::AtomicU64| slot.load(Relaxed) as f64 / 1e6;
+        format!(
+            "text-sub: arm {:.2}ms run {:.2} loop {:.2} pre {:.2} pick {:.2} coord {:.2} \
+             glyf {:.2} look {:.2} quad {:.2} sciss {:.2} xform {:.2} | \
+             команд {} / символов {} / квадов {}",
+            ms(&self.arm),
+            ms(&self.run),
+            ms(&self.lp),
+            ms(&self.pre),
+            ms(&self.pick),
+            ms(&self.coord),
+            ms(&self.glyf),
+            ms(&self.look),
+            ms(&self.quad),
+            ms(&self.sciss),
+            ms(&self.xform),
+            self.cmds.load(Relaxed),
+            self.chars.load(Relaxed),
+            self.glyphs.load(Relaxed),
+        )
+    }
 }
 
 /// Сколько вершин держит [`SvgShapeCache`], прежде чем сбросить себя целиком.
@@ -13263,7 +13459,7 @@ fn compute_svg_shape(
         apply_affine_to_verts(&mut verts, m);
     }
     if let Some(t0) = t_push {
-        svg_sub_add(&SVG_SUB.push, t0);
+        sub_add(&SVG_SUB.push, t0);
     }
     if aa {
         antialias_fill_soup(&mut verts, 0, WHITE, dpr, coverage);
@@ -13303,7 +13499,7 @@ fn svg_shape_verts(
             None => crate::svg_path::tessellate_fill(contours),
         };
         if let Some(t0) = t_tess {
-            svg_sub_add(&SVG_SUB.tess, t0);
+            sub_add(&SVG_SUB.tess, t0);
             count_svg_soup(tris.len(), contours);
         }
         tris
@@ -13320,7 +13516,7 @@ fn svg_shape_verts(
     let t_key = cmd_log.then(std::time::Instant::now);
     build_svg_shape_key(&mut key, params.is_some(), contours, params, dx, dy, m, dpr, aa);
     if let Some(t0) = t_key {
-        svg_sub_add(&SVG_SUB.key, t0);
+        sub_add(&SVG_SUB.key, t0);
     }
     let before = shapes.hits;
     let verts = shapes.shape(&key, || {
@@ -13354,7 +13550,7 @@ fn emit_svg_shape(
         });
     }
     if let Some(t0) = t_emit {
-        svg_sub_add(&SVG_SUB.emit, t0);
+        sub_add(&SVG_SUB.emit, t0);
     }
 }
 
@@ -13423,7 +13619,7 @@ impl CoverageCache {
             .and_then(|bucket| bucket.iter().find(|(key, _)| soup_bits_eq(key, soup)))
             .map(|(_, quads)| std::sync::Arc::clone(quads));
         if let Some(t0) = t_key {
-            svg_sub_add(&SVG_SUB.key, t0);
+            sub_add(&SVG_SUB.key, t0);
         }
         if let Some(quads) = found {
             self.hits += 1;
@@ -13433,7 +13629,7 @@ impl CoverageCache {
         let t_calc = log.then(std::time::Instant::now);
         let quads = std::sync::Arc::new(crate::svg_path::coverage_quads(soup));
         if let Some(t0) = t_calc {
-            svg_sub_add(&SVG_SUB.calc, t0);
+            sub_add(&SVG_SUB.calc, t0);
         }
         let cost = soup.len() + quads.len();
         if self.stored_verts + cost > COVERAGE_CACHE_MAX_VERTS {
@@ -13504,7 +13700,7 @@ fn antialias_fill_soup(
         .map(|v| [v.pos[0] * dpr, v.pos[1] * dpr])
         .collect();
     if let Some(t0) = t_soup {
-        svg_sub_add(&SVG_SUB.soup, t0);
+        sub_add(&SVG_SUB.soup, t0);
     }
     let fresh;
     let quads: &[crate::svg_path::CoverageVertex] = match cache {
@@ -14400,6 +14596,158 @@ fn push_glyph_quad(
     ]);
 }
 
+/// Шаг укладки текстового run-а — то, что цикл по символам делает с пером.
+///
+/// Разбивка `text-sub` (срез 13) показала, что из 16.8 мс команд `DrawText` на
+/// прокрутке `lenta.ru` собственно укладка квадов — 2.9 мс, а остальное уходит
+/// на то, ЧТО класть: выбор face-а под кодпойнт, нормализацию осей вариаций и
+/// поиск глифа в атласе — три хэш-таблицы на каждый символ. Ответ на все три
+/// вопроса зависит только от входа команды, а он на прокрутке повторяется:
+/// один и тот же заголовок перекладывается каждый кадр заново.
+#[derive(Clone, Copy)]
+enum TextRunStep {
+    /// Положить квад глифа и сдвинуть перо на `advance`.
+    Glyph {
+        /// Готовая запись атласа с метриками.
+        g: CachedGlyph,
+        /// Сдвиг пера, уже домноженный на `font_size / units_per_em` face-а,
+        /// с которого взят глиф.
+        advance: f32,
+    },
+    /// Сдвинуть перо, ничего не кладя (табуляция или неотрисовавшийся глиф).
+    Advance(f32),
+}
+
+/// План укладки run-а: последовательность [`TextRunStep`] от пера в `rect.x`.
+type TextRunPlan = std::sync::Arc<Vec<TextRunStep>>;
+
+/// Запись [`TextRunCache`]: численная часть ключа, строка и её план.
+type TextRunEntry = (Vec<u32>, Box<str>, TextRunPlan);
+
+/// Сколько шагов планов держит [`TextRunCache`], прежде чем сбросить себя
+/// целиком. Та же политика и тот же порядок, что у
+/// [`SVG_SHAPE_CACHE_MAX_VERTS`]: страница живёт на единицах тысяч, сброс нужен
+/// патологии — потоку НОВЫХ строк каждый кадр (счётчик, тикающий посимвольно).
+const TEXT_RUN_CACHE_MAX_STEPS: usize = 1 << 18;
+
+/// Мемоизация укладки целого текстового run-а (BUG-405 срез 13).
+///
+/// Ключ — ВХОД команды: сама строка, кегль, ширина табуляции, primary face и
+/// оси вариаций. Всё, от чего зависит план, в ключе есть, поэтому попадание
+/// возвращает ровно те шаги, которые вернул бы пересчёт; сравнение ключей
+/// побитовое, коллизия хэша даёт промах, а не чужие глифы.
+///
+/// План хранит шаги, а не готовые вершины, именно чтобы попадание повторило
+/// ТЕ ЖЕ операции над `f32` в ТОМ ЖЕ порядке, что и пересчёт: перо стартует с
+/// `rect.x` и накапливает те же слагаемые, `push_glyph_quad` получает те же
+/// аргументы. Сложение `f32` не ассоциативно — вынеси мы позицию из плана
+/// (уложив run в начале координат и сдвинув потом), вершины разошлись бы на
+/// ULP, и гейт перестал бы быть побайтовым.
+///
+/// **Цветной глиф (COLR) не кэшируется**: его квады зависят ещё и от палитры и
+/// от цвета текста, а сам он редок (эмодзи). Такой run кладётся мимо кэша.
+///
+/// **Попадание не трогает атлас**, поэтому не обновляет `last_accessed` его
+/// записей: под эвикцией по памяти (`atlas_on_memory_pressure`) давно
+/// повторяющийся run может потерять свои глифы. Та же экспозиция, что у
+/// `Renderer::cached_glyphs`, который тоже переживает эвикцию.
+#[derive(Default)]
+struct TextRunCache {
+    /// Хэш ключа → ключи с таким хэшом и посчитанные по ним планы.
+    buckets: std::collections::HashMap<u64, Vec<TextRunEntry>>,
+    /// Переиспользуемый буфер под численную часть ключа — иначе каждая
+    /// команда аллоцировала бы.
+    scratch: Vec<u32>,
+    /// Сколько слов ключей и шагов планов суммарно хранится.
+    stored: usize,
+    /// Сколько команд вернули готовый план.
+    hits: u64,
+    /// Сколько команд уложили run заново.
+    misses: u64,
+}
+
+impl TextRunCache {
+    /// Готовый план по ключу, если он есть, и хэш ключа для последующего
+    /// [`TextRunCache::put`] — считать его второй раз незачем.
+    fn get(&mut self, params: &[u32], text: &str) -> (Option<TextRunPlan>, u64) {
+        let h = text_run_hash(params, text);
+        let found = self
+            .buckets
+            .get(&h)
+            .and_then(|bucket| {
+                bucket
+                    .iter()
+                    .find(|(p, t, _)| p.as_slice() == params && &**t == text)
+            })
+            .map(|(_, _, plan)| std::sync::Arc::clone(plan));
+        if found.is_some() {
+            self.hits += 1;
+        } else {
+            self.misses += 1;
+        }
+        (found, h)
+    }
+
+    /// Запомнить план, уложенный по этому ключу (`h` — хэш, отданный `get`).
+    fn put(&mut self, h: u64, params: &[u32], text: &str, plan: Vec<TextRunStep>) {
+        let cost = params.len() + text.len() + plan.len();
+        if self.stored + cost > TEXT_RUN_CACHE_MAX_STEPS {
+            self.buckets.clear();
+            self.stored = 0;
+        }
+        self.stored += cost;
+        self.buckets.entry(h).or_default().push((
+            params.to_vec(),
+            Box::from(text),
+            std::sync::Arc::new(plan),
+        ));
+    }
+}
+
+/// Численная часть ключа run-а для [`TextRunCache`] — всё, от чего зависит
+/// план укладки, кроме самой строки. Пишется в переиспользуемый буфер `out`.
+///
+/// Строка в буфер НЕ упаковывается. Первая редакция паковала её байты в слова
+/// `u32`, и упаковка съедала заметную долю выигрыша от кэша — тот же класс,
+/// что и ключ среза 12: строка хранится и сравнивается как есть, а в хэш идёт
+/// побайтово.
+fn build_text_run_key(
+    out: &mut Vec<u32>,
+    font_size: f32,
+    tab_size: f32,
+    primary_face_id: usize,
+    axes: &[([u8; 4], f32)],
+) {
+    out.clear();
+    out.push(font_size.to_bits());
+    out.push(tab_size.to_bits());
+    out.push(primary_face_id as u32);
+    out.push(axes.len() as u32);
+    for (tag, value) in axes {
+        out.push(u32::from_be_bytes(*tag));
+        out.push(value.to_bits());
+    }
+}
+
+/// FNV-1a по численной части ключа и байтам строки — та же дешёвая свёртка,
+/// что у [`bits_hash`]; коллизия отсеивается сравнением самого ключа.
+fn text_run_hash(params: &[u32], text: &str) -> u64 {
+    let mut h = bits_hash(params);
+    for b in text.as_bytes() {
+        h = (h ^ u64::from(*b)).wrapping_mul(0x100_0000_01b3);
+    }
+    h
+}
+
+/// `true`, если мемоизация укладки текста отключена
+/// (`LUMEN_NO_TEXT_RUN_CACHE=1`) — рычаг отката BUG-405 срез 13 к укладке
+/// run-а на каждую команду.
+fn text_run_cache_disabled() -> bool {
+    use std::sync::OnceLock;
+    static OFF: OnceLock<bool> = OnceLock::new();
+    *OFF.get_or_init(|| std::env::var("LUMEN_NO_TEXT_RUN_CACHE").is_ok_and(|v| v == "1"))
+}
+
 /// Returns the final pen `x` (== `rect.x` + shaped advance) — used by
 /// [`push_text_glyphs_mixed`] to measure a segment's real width without a
 /// separate shaping pass.
@@ -14414,10 +14762,16 @@ fn push_text_glyphs(
     lazy: &mut LazyParsedFaces<'_>,
     atlas: &mut GlyphAtlas,
     cached: &mut HashMap<AtlasKey, Option<CachedGlyph>>,
+    runs: &mut TextRunCache,
+    runs_enabled: bool,
     font_variation_axes: &[([u8; 4], f32)],
     tab_size: f32,
     font_palette: Option<&FontPaletteSelection>,
 ) -> f32 {
+    // BUG-405 срез 13: разбивка команды текста (`text-sub`, уровень 3).
+    let log = crate::frame_log_level() >= 3;
+    let _t_run = sub_timer(log, &TEXT_SUB.run);
+    let t_pre = log.then(std::time::Instant::now);
     // Multi-size atlas: подбираем bin под font_size, растеризируем глифы
     // на этом bin. Display масштаб = font_size / size_bin — если font_size
     // совпал с bin-ом (12/16/24/32/...) — масштаба нет, текст резкий.
@@ -14447,14 +14801,69 @@ fn push_text_glyphs(
     // у монохромного face-а (подавляющее большинство) `FaceMetrics.color` =
     // None и сюда не заходим ни разу.
     let mut palette_cache: HashMap<usize, Option<Vec<[f32; 4]>>> = HashMap::new();
+    // BUG-405 срез 13: готовый план укладки этого run-а. Ключ строится по
+    // входу команды — он на порядок меньше плана (18 байт строки против 18
+    // шагов с записями атласа), поэтому спросить кэш дёшево.
+    let cache_on = runs_enabled && !text_run_cache_disabled();
+    let mut key = std::mem::take(&mut runs.scratch);
+    let mut key_hash = 0_u64;
+    let plan = if cache_on {
+        build_text_run_key(
+            &mut key,
+            font_size,
+            tab_size,
+            primary_face_id,
+            font_variation_axes,
+        );
+        let (found, h) = runs.get(&key, text);
+        key_hash = h;
+        found
+    } else {
+        None
+    };
+    if let Some(t0) = t_pre {
+        sub_add(&TEXT_SUB.pre, t0);
+        use std::sync::atomic::Ordering::Relaxed;
+        TEXT_SUB.cmds.fetch_add(1, Relaxed);
+        TEXT_SUB.chars.fetch_add(text.chars().count() as u64, Relaxed);
+    }
 
+    if let Some(plan) = plan {
+        let _t_loop = sub_timer(log, &TEXT_SUB.lp);
+        let mut cursor_x = rect.x;
+        for step in plan.iter() {
+            match step {
+                TextRunStep::Glyph { g, advance } => {
+                    let t_quad = log.then(std::time::Instant::now);
+                    push_glyph_quad(out, g, cursor_x, baseline_y, display_scale, color);
+                    cursor_x += advance;
+                    if let Some(t0) = t_quad {
+                        sub_add(&TEXT_SUB.quad, t0);
+                        TEXT_SUB.glyphs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+                TextRunStep::Advance(advance) => cursor_x += advance,
+            }
+        }
+        runs.scratch = key;
+        return cursor_x;
+    }
+
+    // Промах: укладываем run и попутно записываем план. `None` означает, что
+    // запоминать нечего — кэш выключен или в run-е попался цветной глиф.
+    let mut plan: Option<Vec<TextRunStep>> = cache_on.then(Vec::new);
+    let _t_loop = sub_timer(log, &TEXT_SUB.lp);
     let mut cursor_x = rect.x;
     for ch in text.chars() {
         // CSS Text L3 §10.1 — tab character advances by tab_size pixels.
         if ch == '\t' && tab_size > 0.0 {
             cursor_x += tab_size;
+            if let Some(plan) = plan.as_mut() {
+                plan.push(TextRunStep::Advance(tab_size));
+            }
             continue;
         }
+        let t_pick = log.then(std::time::Instant::now);
         let (face_id, glyph_id) = *char_face_cache
             .entry(ch)
             .or_insert_with(|| pick_face_for_codepoint(ch as u32, primary_face_id, lazy.faces));
@@ -14463,6 +14872,10 @@ fn push_text_glyphs(
             .as_ref()
             .expect("pick_face_for_codepoint вернул face_id с валидными metrics");
         let advance_scale = font_size / metrics.units_per_em as f32;
+        if let Some(t0) = t_pick {
+            sub_add(&TEXT_SUB.pick, t0);
+        }
+        let t_coord = log.then(std::time::Instant::now);
         let coords: &[f32] = match norm_coords_cache.entry(face_id) {
             std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
             std::collections::hash_map::Entry::Vacant(v) => {
@@ -14476,6 +14889,10 @@ fn push_text_glyphs(
                 v.insert(computed)
             }
         };
+        if let Some(t0) = t_coord {
+            sub_add(&TEXT_SUB.coord, t0);
+        }
+        let _t_glyf = sub_timer(log, &TEXT_SUB.glyf);
         // CSS Fonts L4 §11.3 — COLR v0 цветной глиф: вместо одного quad-а
         // текстовым цветом кладём по quad-у на каждый слой, снизу вверх, со
         // своим цветом из выбранной палитры. Слой — обычный монохромный
@@ -14498,6 +14915,7 @@ fn push_text_glyphs(
                 else {
                     continue;
                 };
+                let t_quad = log.then(std::time::Instant::now);
                 push_glyph_quad(
                     out,
                     &g,
@@ -14506,10 +14924,17 @@ fn push_text_glyphs(
                     display_scale,
                     layer_color(palette, layer.palette_index, color),
                 );
+                if let Some(t0) = t_quad {
+                    sub_add(&TEXT_SUB.quad, t0);
+                    TEXT_SUB.glyphs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
             }
             if let Some(&adv) = metrics.advances.get(glyph_id as usize) {
                 cursor_x += adv as f32 * advance_scale;
             }
+            // Цветной глиф зависит от палитры и цвета текста — run с ним
+            // мимо кэша целиком (см. [`TextRunCache`]).
+            plan = None;
             continue;
         }
 
@@ -14524,16 +14949,33 @@ fn push_text_glyphs(
         );
 
         if let Some(g) = cached_glyph {
+            let t_quad = log.then(std::time::Instant::now);
+            let advance = g.advance_native as f32 * advance_scale;
             push_glyph_quad(out, &g, cursor_x, baseline_y, display_scale, color);
-            cursor_x += g.advance_native as f32 * advance_scale;
+            cursor_x += advance;
+            if let Some(plan) = plan.as_mut() {
+                plan.push(TextRunStep::Glyph { g, advance });
+            }
+            if let Some(t0) = t_quad {
+                sub_add(&TEXT_SUB.quad, t0);
+                TEXT_SUB.glyphs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
         } else {
             // Глиф не отрисовался (composite-fallback, empty или нет места
             // в атласе). Двигаем cursor на advance из выбранного face-а.
             if let Some(&adv) = metrics.advances.get(glyph_id as usize) {
-                cursor_x += adv as f32 * advance_scale;
+                let advance = adv as f32 * advance_scale;
+                cursor_x += advance;
+                if let Some(plan) = plan.as_mut() {
+                    plan.push(TextRunStep::Advance(advance));
+                }
             }
         }
     }
+    if let Some(plan) = plan {
+        runs.put(key_hash, &key, text, plan);
+    }
+    runs.scratch = key;
     cursor_x
 }
 
@@ -14571,6 +15013,8 @@ fn push_text_glyphs_mixed(
     lazy: &mut LazyParsedFaces<'_>,
     atlas: &mut GlyphAtlas,
     cached: &mut HashMap<AtlasKey, Option<CachedGlyph>>,
+    runs: &mut TextRunCache,
+    runs_enabled: bool,
     font_variation_axes: &[([u8; 4], f32)],
     tab_size: f32,
     font_palette: Option<&FontPaletteSelection>,
@@ -14589,7 +15033,7 @@ fn push_text_glyphs_mixed(
             let seg_rect = Rect::new(dest.x, dest.y + y_cursor, dest.width, dest.height);
             let end_x = push_text_glyphs(
                 out, seg_rect, &seg_text, font_size, color, primary_face_id, lazy, atlas,
-                cached, font_variation_axes, tab_size, font_palette,
+                cached, runs, runs_enabled, font_variation_axes, tab_size, font_palette,
             );
             y_cursor += end_x - dest.x;
         } else {
@@ -14597,7 +15041,7 @@ fn push_text_glyphs_mixed(
             let local_rect = Rect::new(y_cursor, 0.0, dest.width, dest.height);
             let end_x = push_text_glyphs(
                 out, local_rect, &seg_text, font_size, color, primary_face_id, lazy, atlas,
-                cached, font_variation_axes, tab_size, font_palette,
+                cached, runs, runs_enabled, font_variation_axes, tab_size, font_palette,
             );
             rotate_text_vertices_cw(&mut out[v_start..], dest);
             y_cursor = end_x;
@@ -14644,8 +15088,16 @@ fn ensure_glyph(
     size_bin: u16,
     coords: &[f32],
 ) -> Option<CachedGlyph> {
+    // BUG-405 срез 13: поиск в кэше атласа — отдельной подстатьёй `text-sub`.
+    // Цена промаха (растеризация) считается ниже своим счётчиком (срез 3),
+    // поэтому таймер снимается ровно на границе попадания/промаха.
+    let t_look = (crate::frame_log_level() >= 3).then(std::time::Instant::now);
     let key = atlas_key(face_id, glyph_id, size_bin, AtlasKey::hash_coords(coords));
-    if let Some(&entry) = cached.get(&key) {
+    let hit = cached.get(&key).copied();
+    if let Some(t0) = t_look {
+        sub_add(&TEXT_SUB.look, t0);
+    }
+    if let Some(entry) = hit {
         return entry;
     }
 
@@ -16743,6 +17195,7 @@ mod tests {
         let mut atlas = GlyphAtlas::new(ATLAS_DIM);
         let mut cached: HashMap<AtlasKey, Option<CachedGlyph>> = HashMap::new();
         let mut out: Vec<TextVertex> = Vec::new();
+        let mut runs = TextRunCache::default();
         let text_color = [0.0, 0.0, 1.0, 1.0];
 
         let end_x = push_text_glyphs(
@@ -16755,6 +17208,8 @@ mod tests {
             &mut lazy,
             &mut atlas,
             &mut cached,
+            &mut runs,
+            true,
             &[],
             0.0,
             None,
@@ -16783,6 +17238,7 @@ mod tests {
         let mut atlas = GlyphAtlas::new(ATLAS_DIM);
         let mut cached: HashMap<AtlasKey, Option<CachedGlyph>> = HashMap::new();
         let mut out: Vec<TextVertex> = Vec::new();
+        let mut runs = TextRunCache::default();
         let selection = FontPaletteSelection::Custom {
             base_palette: 0,
             overrides: vec![PaletteColorOverride {
@@ -16801,6 +17257,8 @@ mod tests {
             &mut lazy,
             &mut atlas,
             &mut cached,
+            &mut runs,
+            true,
             &[],
             0.0,
             Some(&selection),
@@ -16813,5 +17271,121 @@ mod tests {
         assert!(close(out[0].color, [0.0, 1.0, 0.0, 1.0]), "layer 0 color {:?}", out[0].color);
         // Слой `0xFFFF` остаётся текстового цвета независимо от override-ов.
         assert!(close(out[6].color, [0.0, 0.0, 1.0, 1.0]));
+    }
+
+    /// BUG-405 срез 13: run с цветным глифом мимо кэша.
+    ///
+    /// Его квады зависят от палитры и от цвета текста, которых в ключе нет, —
+    /// попади он в кэш, второй вызов с другим цветом вернул бы чужие вершины.
+    /// Гейт — счётчик: попаданий обязано остаться ноль на любом числе вызовов.
+    #[test]
+    fn text_run_cache_skips_color_glyph_runs() {
+        let bytes = build_color_font();
+        let metrics = build_face_metrics(&bytes);
+        let faces = vec![LoadedFace { bytes: Arc::from(bytes.as_slice()), metrics }];
+        let mut lazy = LazyParsedFaces::new(&faces);
+        let mut atlas = GlyphAtlas::new(ATLAS_DIM);
+        let mut cached: HashMap<AtlasKey, Option<CachedGlyph>> = HashMap::new();
+        let mut runs = TextRunCache::default();
+        let mut out: Vec<TextVertex> = Vec::new();
+
+        for _ in 0..3 {
+            out.clear();
+            push_text_glyphs(
+                &mut out,
+                Rect::new(0.0, 0.0, 100.0, 40.0),
+                "A",
+                32.0,
+                [0.0, 0.0, 1.0, 1.0],
+                0,
+                &mut lazy,
+                &mut atlas,
+                &mut cached,
+                &mut runs,
+                true,
+                &[],
+                0.0,
+                None,
+            );
+        }
+        assert_eq!(out.len(), 12, "цветной глиф всё ещё даёт quad на слой");
+        assert_eq!(runs.hits, 0, "run с цветным глифом попал в кэш");
+        assert_eq!(runs.misses, 3, "каждый вызов обязан уложить run заново");
+    }
+
+    /// BUG-405 срез 13: попадание кэша укладки даёт ПОБИТОВО те же вершины.
+    ///
+    /// План хранит шаги, а не готовые вершины, ровно ради этого: перо
+    /// стартует с `rect.x` и накапливает те же слагаемые в том же порядке.
+    /// Сравнение по битам, а не с допуском: сложение `f32` не ассоциативно, и
+    /// расхождение в ULP означало бы, что позиция вынесена из плана неверно.
+    #[test]
+    fn text_run_cache_replays_identical_vertices() {
+        let bytes = std::fs::read("../../../assets/fonts/Inter-Regular.ttf")
+            .expect("bundled font");
+        let metrics = build_face_metrics(&bytes);
+        let faces = vec![LoadedFace { bytes: Arc::from(bytes.as_slice()), metrics }];
+        let mut lazy = LazyParsedFaces::new(&faces);
+        let mut atlas = GlyphAtlas::new(ATLAS_DIM);
+        let mut cached: HashMap<AtlasKey, Option<CachedGlyph>> = HashMap::new();
+        let mut runs = TextRunCache::default();
+
+        let mut lay = |runs: &mut TextRunCache, enabled: bool, y: f32| {
+            let mut out: Vec<TextVertex> = Vec::new();
+            push_text_glyphs(
+                &mut out,
+                Rect::new(13.5, y, 400.0, 30.0),
+                "Привет, world!",
+                17.0,
+                [0.1, 0.2, 0.3, 1.0],
+                0,
+                &mut lazy,
+                &mut atlas,
+                &mut cached,
+                runs,
+                enabled,
+                &[],
+                0.0,
+                None,
+            );
+            out
+        };
+
+        // Плечо отката: кэш не трогается ни разу.
+        let mut off = TextRunCache::default();
+        let base = lay(&mut off, false, 40.0);
+        assert!(!base.is_empty(), "run обязан дать вершины");
+        assert_eq!((off.hits, off.misses), (0, 0), "плечо отката трогало кэш");
+
+        let first = lay(&mut runs, true, 40.0);
+        assert_eq!((runs.hits, runs.misses), (0, 1), "первый вызов не мог попасть");
+        let second = lay(&mut runs, true, 40.0);
+        assert_eq!((runs.hits, runs.misses), (1, 1), "повторный вызов не попал в кэш");
+
+        assert!(bits_eq(&first, &base), "укладка с кэшом разошлась с откатом");
+        assert!(bits_eq(&second, &first), "попадание разошлось с укладкой");
+
+        // Другая позиция — тот же ключ (позиция не в ключе), но вершины
+        // обязаны сдвинуться: план воспроизводит перо от нового `rect`.
+        let moved = lay(&mut runs, true, 90.0);
+        assert_eq!(runs.hits, 2, "сдвиг по вертикали обязан быть попаданием");
+        assert_eq!(moved.len(), first.len());
+        assert!(
+            moved.iter().zip(&first).all(|(a, b)| a.pos[0] == b.pos[0] && a.pos[1] > b.pos[1]),
+            "попадание проигнорировало новую позицию run-а",
+        );
+    }
+
+    /// Побитовое равенство двух наборов вершин текста.
+    fn bits_eq(a: &[TextVertex], b: &[TextVertex]) -> bool {
+        a.len() == b.len()
+            && a.iter().zip(b).all(|(x, y)| {
+                x.pos[0].to_bits() == y.pos[0].to_bits()
+                    && x.pos[1].to_bits() == y.pos[1].to_bits()
+                    && x.z.to_bits() == y.z.to_bits()
+                    && x.uv[0].to_bits() == y.uv[0].to_bits()
+                    && x.uv[1].to_bits() == y.uv[1].to_bits()
+                    && x.color.iter().zip(&y.color).all(|(p, q)| p.to_bits() == q.to_bits())
+            })
     }
 }
