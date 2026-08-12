@@ -1026,6 +1026,14 @@ impl DisplayCommand {
         }
         /// AABB of a flat `[x, y]` vertex list, or `None` if empty.
         fn verts_bounds(pts: &[[f32; 2]]) -> Option<Rect> {
+            points_bounds(pts.iter().copied())
+        }
+        /// AABB of any sequence of points — the contour variants stream their
+        /// points through here instead of flattening into a temporary `Vec`
+        /// (BUG-405 срез 16: `cull_rect` runs on every command of every frame,
+        /// and that allocation was 0.4 ms per scroll run of `lenta.ru`, ~10 %
+        /// of what a `DrawSvgStroke` command costs).
+        fn points_bounds(pts: impl Iterator<Item = [f32; 2]>) -> Option<Rect> {
             let (mut mn_x, mut mn_y) = (f32::MAX, f32::MAX);
             let (mut mx_x, mut mx_y) = (f32::MIN, f32::MIN);
             for p in pts {
@@ -1076,13 +1084,11 @@ impl DisplayCommand {
             // times the miter limit (a conservative bound on miter spikes).
             Self::DrawSvgPath { vertices, .. } => verts_bounds(vertices),
             Self::DrawSvgFill { contours, .. } => {
-                let all: Vec<[f32; 2]> = contours.iter().flatten().copied().collect();
-                verts_bounds(&all)
+                points_bounds(contours.iter().flatten().copied())
             }
             Self::DrawSvgStroke { contours, params, .. } => {
-                let all: Vec<[f32; 2]> = contours.iter().flatten().copied().collect();
                 let out = params.half_width.max(0.0) * params.miterlimit.max(1.0);
-                verts_bounds(&all).map(|r| grow(r, out))
+                points_bounds(contours.iter().flatten().copied()).map(|r| grow(r, out))
             }
 
             // Structural / stack-affecting / no-op commands — never cull.

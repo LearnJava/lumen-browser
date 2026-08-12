@@ -8428,8 +8428,15 @@ impl Renderer {
             SVG_SUB.reset();
             TEXT_SUB.reset();
         }
-        let mut probe: std::collections::HashMap<&'static str, (std::time::Duration, u32, u32)> =
-            std::collections::HashMap::new();
+        // Слоты записи: время команды, сколько их было, сколько отсеял кулинг и
+        // (срез 16) сколько времени ушло на САМ кулинг — `cull_rect` считает
+        // bbox по геометрии команды, и у SVG это не константа, а проход по
+        // контурам. Без отдельного слота эта работа сидит в разности между
+        // `collect-top` и arm'ом команды и выглядит «остатком».
+        let mut probe: std::collections::HashMap<
+            &'static str,
+            (std::time::Duration, u32, u32, std::time::Duration),
+        > = std::collections::HashMap::new();
         let mut probe_prev: Option<(&'static str, std::time::Instant)> = None;
         let iter_content = content.iter().enumerate().map(|(i, c)| (c, false, i));
         let iter_overlay = overlay.iter().enumerate().map(|(i, c)| (c, true, i));
@@ -8443,6 +8450,18 @@ impl Renderer {
                 }
                 probe_prev = Some((cmd.variant_name(), now));
             }
+            // Срез 16: вся итерация SVG-команды целиком. Снимается на выходе из
+            // тела цикла (в том числе через `continue`), поэтому разность
+            // `iter − arm − кулинг` называет работу над командой, которую не
+            // видит ни одна подстатья arm'а.
+            let _t_iter = sub_timer(
+                cmd_log
+                    && matches!(
+                        cmd,
+                        DisplayCommand::DrawSvgStroke { .. } | DisplayCommand::DrawSvgFill { .. }
+                    ),
+                &SVG_SUB.iter,
+            );
             // BUG-405 срез 7: заливка и `PopFilter` тени, нарисованной
             // аналитически, уже учтены её квадом — пропускаем их как команды.
             match shadow_skip_until {
@@ -8463,14 +8482,19 @@ impl Renderer {
             // the viewport (+ slop). `cull_rect` returns `None` for every
             // structural `Push*`/`Pop*`, which must always run to keep the
             // level/clip/transform stacks balanced.
-            if let Some(local) = cmd.cull_rect()
-                && leaf_is_offscreen(
+            let t_cull = cmd_log.then(std::time::Instant::now);
+            let culled = cmd.cull_rect().is_some_and(|local| {
+                leaf_is_offscreen(
                     translate_rect(local, dx, dy),
                     transform_stack.last(),
                     viewport_css_w,
                     viewport_css_h,
                 )
-            {
+            });
+            if let Some(t0) = t_cull {
+                probe.entry(cmd.variant_name()).or_default().3 += t0.elapsed();
+            }
+            if culled {
                 if cmd_log {
                     probe.entry(cmd.variant_name()).or_default().2 += 1;
                 }
@@ -10307,7 +10331,13 @@ impl Renderer {
                 // tessellate the nonzero outline contours into a triangle soup —
                 // identical to the old `DrawSvgPath` fill the emitter produced.
                 DisplayCommand::DrawSvgFill { contours, color } => {
-                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
+                    let _t_arm = sub_timer(cmd_log, &SVG_SUB.arm);
+                    let t_sciss = cmd_log.then(std::time::Instant::now);
+                    let scissor_ok = sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h);
+                    if let Some(t0) = t_sciss {
+                        sub_add(&SVG_SUB.sciss, t0);
+                    }
+                    if !scissor_ok {
                         continue;
                     }
                     let v_start = fill_vertices.len() as u32;
@@ -10335,7 +10365,13 @@ impl Renderer {
                 // the stroke contours into a triangle soup — identical to the old
                 // `DrawSvgPath` stroke the emitter produced.
                 DisplayCommand::DrawSvgStroke { contours, color, params } => {
-                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
+                    let _t_arm = sub_timer(cmd_log, &SVG_SUB.arm);
+                    let t_sciss = cmd_log.then(std::time::Instant::now);
+                    let scissor_ok = sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h);
+                    if let Some(t0) = t_sciss {
+                        sub_add(&SVG_SUB.sciss, t0);
+                    }
+                    if !scissor_ok {
                         continue;
                     }
                     let v_start = fill_vertices.len() as u32;
@@ -10580,12 +10616,16 @@ impl Renderer {
         }
         if cmd_log {
             let mut rows: Vec<_> = probe.iter().collect();
-            rows.sort_by_key(|(_, (d, _, _))| std::cmp::Reverse(*d));
+            rows.sort_by_key(|(_, (d, _, _, _))| std::cmp::Reverse(*d));
             let top: Vec<String> = rows
                 .iter()
                 .take(8)
-                .map(|(name, (d, n, c))| {
-                    format!("{name} {:.2}ms/{n}(cull {c})", d.as_secs_f64() * 1e3)
+                .map(|(name, (d, n, c, cd))| {
+                    format!(
+                        "{name} {:.2}ms/{n}(cull {c}, bbox {:.2}ms)",
+                        d.as_secs_f64() * 1e3,
+                        cd.as_secs_f64() * 1e3
+                    )
                 })
                 .collect();
             eprintln!("[frame:wgpu]   collect-top: {}", top.join(", "));
@@ -13102,6 +13142,19 @@ const COVERAGE_CACHE_MAX_VERTS: usize = 1 << 20;
 /// `collect`); заполняются только на уровне 3, иначе не берётся даже
 /// `Instant::now()` — по той же причине, что у `collect-top`.
 struct SvgSubStats {
+    /// Вся ИТЕРАЦИЯ цикла `collect` для SVG-команды — от метки счётчика до
+    /// конца тела цикла. Охватывает [`SvgSubStats::arm`] и кулинг; разность с
+    /// ними называет работу, которая делается над командой вне её arm'а
+    /// (срез 16).
+    iter: std::sync::atomic::AtomicU64,
+    /// Весь arm команды `DrawSvgFill`/`DrawSvgStroke` целиком — охватывающая
+    /// статья, разность с суммой остальных называет остаток (срез 16).
+    arm: std::sync::atomic::AtomicU64,
+    /// `sync_scissor_to_stack` на команду.
+    sciss: std::sync::atomic::AtomicU64,
+    /// Поиск готовой фигуры в [`SvgShapeCache`]: хэш ключа, побитовое сравнение
+    /// и клон `Arc` — цена попадания ПОВЕРХ сборки ключа ([`SvgSubStats::key`]).
+    look: std::sync::atomic::AtomicU64,
     /// Тесселяция контуров в треугольный суп.
     tess: std::sync::atomic::AtomicU64,
     /// Укладка супа в `fill_vertices` со сдвигом и накопленной матрицей.
@@ -13118,6 +13171,9 @@ struct SvgSubStats {
     calls: std::sync::atomic::AtomicU64,
     /// Сколько вершин супа они дали суммарно.
     verts: std::sync::atomic::AtomicU64,
+    /// Сколько вершин уложено в `fill_vertices` ([`emit_svg_shape`]) — размер
+    /// готовой фигуры, единственное, на что нормируется укладка (срез 16).
+    emitv: std::sync::atomic::AtomicU64,
     /// Сколько точек контуров пришло на вход — размер ключа мемоизации фигур
     /// против размера супа (`verts`), который ключом служил в срезе 9.
     pts: std::sync::atomic::AtomicU64,
@@ -13129,6 +13185,10 @@ struct SvgSubStats {
 
 /// Подстатьи SVG-команд текущего кадра ([`SvgSubStats`]).
 static SVG_SUB: SvgSubStats = SvgSubStats {
+    iter: std::sync::atomic::AtomicU64::new(0),
+    arm: std::sync::atomic::AtomicU64::new(0),
+    sciss: std::sync::atomic::AtomicU64::new(0),
+    look: std::sync::atomic::AtomicU64::new(0),
     tess: std::sync::atomic::AtomicU64::new(0),
     push: std::sync::atomic::AtomicU64::new(0),
     soup: std::sync::atomic::AtomicU64::new(0),
@@ -13137,6 +13197,7 @@ static SVG_SUB: SvgSubStats = SvgSubStats {
     emit: std::sync::atomic::AtomicU64::new(0),
     calls: std::sync::atomic::AtomicU64::new(0),
     verts: std::sync::atomic::AtomicU64::new(0),
+    emitv: std::sync::atomic::AtomicU64::new(0),
     pts: std::sync::atomic::AtomicU64::new(0),
     hit: std::sync::atomic::AtomicU64::new(0),
     miss: std::sync::atomic::AtomicU64::new(0),
@@ -13147,6 +13208,10 @@ impl SvgSubStats {
     fn reset(&self) {
         use std::sync::atomic::Ordering::Relaxed;
         for slot in [
+            &self.iter,
+            &self.arm,
+            &self.sciss,
+            &self.look,
             &self.tess,
             &self.push,
             &self.soup,
@@ -13155,6 +13220,7 @@ impl SvgSubStats {
             &self.emit,
             &self.calls,
             &self.verts,
+            &self.emitv,
             &self.pts,
             &self.hit,
             &self.miss,
@@ -13168,16 +13234,22 @@ impl SvgSubStats {
         use std::sync::atomic::Ordering::Relaxed;
         let ms = |slot: &std::sync::atomic::AtomicU64| slot.load(Relaxed) as f64 / 1e6;
         format!(
-            "svg-sub: tess {:.2}ms push {:.2} soup {:.2} key {:.2} calc {:.2} emit {:.2} | \
-             команд {} / вершин {} / точек {} | фигуры {}/{}",
+            "svg-sub: iter {:.2}ms arm {:.2} sciss {:.2} tess {:.2} push {:.2} soup {:.2} key {:.2} \
+             look {:.2} calc {:.2} emit {:.2} | \
+             команд {} / вершин {} / уложено {} / точек {} | фигуры {}/{}",
+            ms(&self.iter),
+            ms(&self.arm),
+            ms(&self.sciss),
             ms(&self.tess),
             ms(&self.push),
             ms(&self.soup),
             ms(&self.key),
+            ms(&self.look),
             ms(&self.calc),
             ms(&self.emit),
             self.calls.load(Relaxed),
             self.verts.load(Relaxed),
+            self.emitv.load(Relaxed),
             self.pts.load(Relaxed),
             self.hit.load(Relaxed),
             self.miss.load(Relaxed),
@@ -13539,11 +13611,15 @@ fn svg_shape_verts(
         sub_add(&SVG_SUB.key, t0);
     }
     let before = shapes.hits;
+    let t_look = cmd_log.then(std::time::Instant::now);
     let verts = shapes.shape(&key, || {
         let tris = tessellate();
         let arm = coverage_cache_arm(coverage, coverage_enabled);
         compute_svg_shape(&tris, dx, dy, m, dpr, aa, arm)
     });
+    if let Some(t0) = t_look {
+        sub_add(&SVG_SUB.look, t0);
+    }
     if cmd_log {
         let slot = if shapes.hits > before { &SVG_SUB.hit } else { &SVG_SUB.miss };
         slot.fetch_add(1, Relaxed);
@@ -13571,6 +13647,7 @@ fn emit_svg_shape(
     }
     if let Some(t0) = t_emit {
         sub_add(&SVG_SUB.emit, t0);
+        SVG_SUB.emitv.fetch_add(shape.len() as u64, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
