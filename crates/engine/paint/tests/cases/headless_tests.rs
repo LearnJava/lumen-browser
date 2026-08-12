@@ -75,11 +75,17 @@ fn headless_resize_updates_dimensions() {
 /// шейдере ровно один — поэтому уровень берёт внутренний клип.
 fn rounded_clip_dl(w: f32, h: f32) -> Vec<DisplayCommand> {
     let outer = Rect { x: 2.0, y: 2.0, width: w - 4.0, height: h - 4.0 };
-    let rect = Rect { x: 4.0, y: 4.0, width: w - 8.0, height: h - 8.0 };
+    let mid = Rect { x: 4.0, y: 4.0, width: w - 8.0, height: h - 8.0 };
+    let rect = Rect { x: 6.0, y: 6.0, width: w - 12.0, height: h - 12.0 };
+    // Вложенность ТРИ, а не два: два контура шейдер держит сам (BUG-405
+    // срез 8), и от двойного клипа ленивый `rrect_clip`-пайплайн больше не
+    // нужен — контроль «кадру нужен ленивый пайплайн» стал бы негодным.
     vec![
         DisplayCommand::PushClipRoundedRect { rect: outer, radii: [8.0, 8.0, 8.0, 8.0] },
+        DisplayCommand::PushClipRoundedRect { rect: mid, radii: [8.0, 8.0, 8.0, 8.0] },
         DisplayCommand::PushClipRoundedRect { rect, radii: [8.0, 8.0, 8.0, 8.0] },
         DisplayCommand::FillRect { rect, color: Color { r: 255, g: 0, b: 0, a: 255 } },
+        DisplayCommand::PopClip,
         DisplayCommand::PopClip,
         DisplayCommand::PopClip,
     ]
@@ -133,7 +139,7 @@ fn warmup_takes_pipeline_compilation_off_the_frame() {
     warm.warm_lazy_pipelines_blocking();
     assert_eq!(
         warm.warmed_pipeline_count(),
-        13,
+        14,
         "прогрев обязан заполнить все ленивые ячейки",
     );
     let before_warm = warm.pipelines_compiled();
@@ -162,9 +168,10 @@ fn warmup_compiles_each_lazy_pipeline_exactly_once() {
         "до прогрева ленивые пайплайны не компилируются (BUG-406)",
     );
     r.warm_lazy_pipelines_blocking();
-    // `mask-layer` — одна ячейка на два пайплайна (luminance/alpha).
-    assert_eq!(r.pipelines_compiled(), 14, "прогрев собрал не тот набор пайплайнов");
-    assert_eq!(r.warmed_pipeline_count(), 13);
+    // `mask-layer` — одна ячейка на два пайплайна (luminance/alpha), поэтому
+    // компиляций на одну больше, чем ячеек.
+    assert_eq!(r.pipelines_compiled(), 15, "прогрев собрал не тот набор пайплайнов");
+    assert_eq!(r.warmed_pipeline_count(), 14);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -252,6 +259,39 @@ fn many_clips_dl(w: f32, h: f32, n: usize) -> Vec<DisplayCommand> {
     dl
 }
 
+/// `n` заливок, каждая под цепочкой из `depth` вложенных скруглённых клипов.
+///
+/// Шейдер держит [`SHADER_CLIP_MAX_CONTOURS`] = 2 контура (BUG-405 срез 8),
+/// поэтому `depth` = 2 — целевой случай среза (уровней нет вовсе), а `depth`
+/// = 3 — тот, что на уровне остаётся: он и служит контролем на ложно-зелёный.
+fn nested_clips_dl(w: f32, h: f32, n: usize, depth: usize) -> Vec<DisplayCommand> {
+    let mut dl = Vec::with_capacity(n * (2 * depth + 1));
+    for i in 0..n {
+        let y = 4.0 + i as f32 * 6.0;
+        for d in 0..depth {
+            let inset = d as f32 * 0.5;
+            dl.push(DisplayCommand::PushClipRoundedRect {
+                rect: Rect {
+                    x: 4.0 + inset,
+                    y: y + inset,
+                    width: w - 8.0 - 2.0 * inset,
+                    height: 4.0,
+                },
+                radii: [2.0; 4],
+            });
+        }
+        dl.push(DisplayCommand::FillRect {
+            rect: Rect { x: 4.0, y, width: w - 8.0, height: 4.0 },
+            color: Color { r: 255, g: 0, b: 0, a: 255 },
+        });
+        for _ in 0..depth {
+            dl.push(DisplayCommand::PopClip);
+        }
+    }
+    let _ = h;
+    dl
+}
+
 /// BUG-405 срез 2: кадр из многих пассов подаётся несколькими командными
 /// списками, а короткий кадр — по-прежнему одним.
 ///
@@ -274,9 +314,11 @@ fn long_frame_is_submitted_in_chunks() {
         "короткий кадр не должен резаться на подачи",
     );
 
-    // Целевой случай: длинный план — больше одной подачи.
+    // Целевой случай: длинный план — больше одной подачи. Список берётся с
+    // вложенностью 3: два контура шейдер держит сам (срез 8), уровень —
+    // и, значит, пассы — открывает только третий.
     let before = r.submissions();
-    r.render_to_image(&many_clips_dl(64.0, 128.0, 12), 0.0, 0.0).expect("длинный кадр");
+    r.render_to_image(&nested_clips_dl(64.0, 128.0, 12, 3), 0.0, 0.0).expect("длинный кадр");
     assert!(
         r.submissions() - before > 1,
         "кадр из многих пассов подан одним списком: подач {}",
@@ -309,9 +351,9 @@ fn flat_clips_dl(w: f32, h: f32, n: usize) -> Vec<DisplayCommand> {
 /// стоить своих трёх пассов» — утверждение о механизме, оно не зависит ни от
 /// железа, ни от загрузки машины.
 ///
-/// Вторая половина — контроль на ложно-зелёный: вложенный клип (в шейдере
-/// контур один) обязан уровень открыть, иначе тест проходил бы и на рендере,
-/// который скруглённые клипы вообще не обрабатывает.
+/// Вторая половина — контроль на ложно-зелёный: клип глубже двух контуров
+/// обязан уровень открыть, иначе тест проходил бы и на рендере, который
+/// скруглённые клипы вообще не обрабатывает.
 #[test]
 #[ignore = "requires GPU adapter"]
 fn rounded_clip_costs_no_offscreen_level() {
@@ -327,13 +369,168 @@ fn rounded_clip_costs_no_offscreen_level() {
         "скруглённый клип верхнего уровня всё ещё открывает offscreen-уровень",
     );
 
-    let before = r.rrect_clip_levels();
-    r.render_to_image(&many_clips_dl(64.0, 128.0, 12), 0.0, 0.0).expect("кадр с вложенными");
+    // BUG-405 срез 8: вложенный клип обслуживает ВТОРОЙ контур того же слота.
+    let (before, nested_before) = (r.rrect_clip_levels(), r.nested_shader_clips());
+    r.render_to_image(&nested_clips_dl(64.0, 128.0, 12, 2), 0.0, 0.0)
+        .expect("кадр с вложенными");
+    assert_eq!(
+        r.rrect_clip_levels() - before,
+        0,
+        "вложенный скруглённый клип всё ещё открывает offscreen-уровень",
+    );
+    assert_eq!(
+        r.nested_shader_clips() - nested_before,
+        12,
+        "вложенные клипы не доехали до второго контура",
+    );
+
+    // Контроль на ложно-зелёный №1: третий контур в слот не помещается,
+    // и такой клип обязан остаться на пути уровня.
+    let (before, nested_before) = (r.rrect_clip_levels(), r.nested_shader_clips());
+    r.render_to_image(&nested_clips_dl(64.0, 128.0, 12, 3), 0.0, 0.0)
+        .expect("кадр с тройной вложенностью");
     assert_eq!(
         r.rrect_clip_levels() - before,
         12,
-        "вложенный клип обязан остаться на пути уровня (контроль негоден)",
+        "клип глубже двух контуров обязан открыть уровень (контроль негоден)",
     );
+    assert_eq!(
+        r.nested_shader_clips() - nested_before,
+        12,
+        "второй контур обязан достаться среднему клипу тройной цепочки",
+    );
+
+    // Контроль на ложно-зелёный №2: плечо A/B обязано вернуть прежнее
+    // поведение — иначе счётчик уровней не различает два пути и гейт пуст.
+    r.set_nested_shader_clip_enabled(false);
+    let (before, nested_before) = (r.rrect_clip_levels(), r.nested_shader_clips());
+    r.render_to_image(&nested_clips_dl(64.0, 128.0, 12, 2), 0.0, 0.0)
+        .expect("кадр с вложенными без второго контура");
+    assert_eq!(
+        r.rrect_clip_levels() - before,
+        12,
+        "плечо без второго контура обязано открывать уровень (контроль негоден)",
+    );
+    assert_eq!(
+        r.nested_shader_clips() - nested_before,
+        0,
+        "плечо без второго контура всё ещё считает вложенные клипы шейдерными",
+    );
+    r.set_nested_shader_clip_enabled(true);
+}
+
+/// BUG-405 срез 8: вложенный клип двумя контурами даёт ту же картинку, что и
+/// прежний offscreen-уровень.
+///
+/// Оба плеча снимаются в одном процессе (`set_nested_shader_clip_enabled`) на
+/// одном списке. Побайтового равенства тут быть не может: прежний путь
+/// умножал покрытие ВНЕШНЕГО контура в восьмибитную текстуру уровня, а
+/// композит домножал её на покрытие ВНУТРЕННЕГО — то есть округлял дважды;
+/// новый берёт то же произведение во фрагменте и округляет один раз. Порог
+/// назван измерением (см. bugs/BUG-405-OPEN.md, срез 8).
+///
+/// Проверки «центр залит» и «угол вырезан» обязательны у ОБОИХ плеч: два
+/// пустых кадра (или два неклипнутых) сравнивались бы зелено.
+#[test]
+#[ignore = "requires GPU adapter"]
+fn nested_shader_clip_matches_level() {
+    let mut r = Renderer::new_headless(INTER.to_vec(), 128, 128, ColorSpace::Srgb)
+        .expect("headless renderer");
+    r.set_font_provider(None);
+
+    let red = Color { r: 255, g: 0, b: 0, a: 255 };
+    let outer = Rect { x: 8.0, y: 8.0, width: 96.0, height: 48.0 };
+    let inner = Rect { x: 16.0, y: 16.0, width: 80.0, height: 32.0 };
+    let mut dl = vec![
+        // Пара «внешний со скруглением + внутренний со скруглением»: углы
+        // режут оба контура, и в углах живёт вся разница путей.
+        DisplayCommand::PushClipRoundedRect { rect: outer, radii: [20.0; 4] },
+        DisplayCommand::PushClipRoundedRect { rect: inner, radii: [12.0; 4] },
+        DisplayCommand::FillRect { rect: outer, color: red },
+        DisplayCommand::PopClip,
+        DisplayCommand::PopClip,
+    ];
+    // Внутренний клип, ВЫЕЗЖАЮЩИЙ за внешний, — то, что происходит на
+    // прокрутке: пересечение контуров обязано резать по обоим.
+    dl.extend([
+        DisplayCommand::PushClipRoundedRect {
+            rect: Rect { x: 8.0, y: 64.0, width: 60.0, height: 28.0 },
+            radii: [10.0; 4],
+        },
+        DisplayCommand::PushClipRoundedRect {
+            rect: Rect { x: 40.0, y: 70.0, width: 60.0, height: 28.0 },
+            radii: [8.0, 0.0, 8.0, 0.0],
+        },
+        DisplayCommand::FillRect {
+            rect: Rect { x: 0.0, y: 60.0, width: 128.0, height: 40.0 },
+            color: Color { r: 0, g: 160, b: 0, a: 255 },
+        },
+        DisplayCommand::PopClip,
+        DisplayCommand::PopClip,
+    ]);
+    // Под переносом и внутри видимого уровня — обе формы, в которых
+    // вложенный клип доезжает до кадра на реальной странице.
+    dl.push(DisplayCommand::PushTransform {
+        matrix: lumen_layout::Mat4::translation_2d(0.0, 40.0),
+    });
+    dl.push(DisplayCommand::PushOpacity { alpha: 0.6, bounds: None });
+    dl.extend([
+        DisplayCommand::PushClipRoundedRect {
+            rect: Rect { x: 12.0, y: 64.0, width: 100.0, height: 20.0 },
+            radii: [9.0; 4],
+        },
+        DisplayCommand::PushClipRoundedRect {
+            rect: Rect { x: 20.0, y: 66.0, width: 60.0, height: 16.0 },
+            radii: [7.0; 4],
+        },
+        DisplayCommand::FillRect {
+            rect: Rect { x: 0.0, y: 60.0, width: 128.0, height: 30.0 },
+            color: Color { r: 0, g: 0, b: 255, a: 255 },
+        },
+        DisplayCommand::PopClip,
+        DisplayCommand::PopClip,
+    ]);
+    dl.push(DisplayCommand::PopOpacity);
+    dl.push(DisplayCommand::PopTransform);
+
+    r.set_nested_shader_clip_enabled(false);
+    let before = r.rrect_clip_levels();
+    let level = r.render_to_image(&dl, 0.0, 0.0).expect("плечо уровня");
+    let levels_off = r.rrect_clip_levels() - before;
+
+    r.set_nested_shader_clip_enabled(true);
+    let (before, nested_before) = (r.rrect_clip_levels(), r.nested_shader_clips());
+    let shader = r.render_to_image(&dl, 0.0, 0.0).expect("плечо второго контура");
+    let (levels_on, nested) = (r.rrect_clip_levels() - before, r.nested_shader_clips() - nested_before);
+
+    assert_eq!(levels_on, 0, "вложенный клип всё ещё открывает уровень");
+    assert_eq!(nested, 3, "не все вложенные клипы списка ушли на второй контур");
+    assert!(levels_off > 0, "плечо уровня не открывает уровней (контроль негоден)");
+
+    let max_diff = level
+        .data
+        .iter()
+        .zip(shader.data.iter())
+        .map(|(a, b)| a.abs_diff(*b))
+        .max()
+        .unwrap_or(0);
+    assert!(
+        max_diff <= 1,
+        "второй контур разошёлся с уровнем: {max_diff}/255 \
+         (уровней {levels_off} -> {levels_on})",
+    );
+
+    // Клип обязан быть виден у ОБОИХ плеч: и центр залит, и угол вырезан.
+    for (name, img) in [("уровень", &level), ("контур", &shader)] {
+        let px = |x: usize, y: usize| {
+            let o = (y * 128 + x) * 4;
+            [img.data[o], img.data[o + 1], img.data[o + 2]]
+        };
+        assert_eq!(px(56, 32), [255, 0, 0], "центр вложенного клипа плеча «{name}» не залит");
+        // (17,17) лежит вне скругления радиуса 12 у угла (16,16) внутреннего
+        // контура: до центра скругления (28,28) — 15.6 px.
+        assert_ne!(px(17, 17), [255, 0, 0], "угол вложенного клипа плеча «{name}» не вырезан");
+    }
 }
 
 /// BUG-405 срез 4: углы шейдерного клипа действительно вырезаны.
