@@ -2551,6 +2551,12 @@ pub struct Renderer {
     /// рисует один и тот же список обоими путями в одном процессе и сверяет
     /// пиксели. Поверх — рычаг `LUMEN_NO_COVERAGE_CACHE=1`.
     coverage_cache_enabled: bool,
+    /// Мемоизация целых фигур SVG (BUG-405 срез 12).
+    svg_shape_cache: SvgShapeCache,
+    /// Кэш фигур SVG включён (BUG-405 срез 12). Инстансное плечо A/B: тест
+    /// рисует один и тот же список обоими путями в одном процессе и сверяет
+    /// пиксели. Поверх — рычаг `LUMEN_NO_SVG_SHAPE_CACHE=1`.
+    svg_shape_cache_enabled: bool,
     /// Приёмник готовых пайплайнов с потока прогрева (BUG-405). `None` —
     /// прогрев ещё не запущен, уже завершён, или отключён
     /// `LUMEN_NO_PIPELINE_WARMUP=1`. Сбрасывается в `None`, когда поток
@@ -4438,6 +4444,8 @@ impl Renderer {
             nested_shader_clip_enabled: true,
             coverage_cache: CoverageCache::default(),
             coverage_cache_enabled: true,
+            svg_shape_cache: SvgShapeCache::default(),
+            svg_shape_cache_enabled: true,
             warm_rx: None,
             warm_started: false,
             surface,
@@ -4776,6 +4784,26 @@ impl Renderer {
     #[must_use]
     pub fn coverage_cache_stats(&self) -> (u64, u64) {
         (self.coverage_cache.hits, self.coverage_cache.misses)
+    }
+
+    /// Сколько команд SVG получили готовую фигуру из кэша (BUG-405 срез 12),
+    /// и сколько её пересчитали.
+    ///
+    /// Гейт правки стоит на нём: счётчик называет механизм («одна и та же
+    /// фигура тесселируется один раз»), а не следствие — время фазы `collect`
+    /// зависит ещё и от содержимого страницы.
+    #[must_use]
+    pub fn svg_shape_cache_stats(&self) -> (u64, u64) {
+        (self.svg_shape_cache.hits, self.svg_shape_cache.misses)
+    }
+
+    /// Включает/выключает мемоизацию фигур SVG (BUG-405 срез 12).
+    ///
+    /// Нужен гейту пикселей: сравнить пересчёт с попаданием можно только двумя
+    /// плечами в одном процессе. Рычаг процесса `LUMEN_NO_SVG_SHAPE_CACHE=1`
+    /// выключает кэш поверх него.
+    pub fn set_svg_shape_cache_enabled(&mut self, enabled: bool) {
+        self.svg_shape_cache_enabled = enabled;
     }
 
     /// Включает/выключает кэш покрытия SVG-супов (BUG-405 срез 9).
@@ -8373,6 +8401,9 @@ impl Renderer {
         // отдельно от 2 затем, что `Instant::now()` на команду — заметная доля
         // самой фазы, и замеры уровня 2 обязаны остаться чистыми.
         let cmd_log = crate::frame_log_level() >= 3;
+        if cmd_log {
+            SVG_SUB.reset();
+        }
         let mut probe: std::collections::HashMap<&'static str, (std::time::Duration, u32, u32)> =
             std::collections::HashMap::new();
         let mut probe_prev: Option<(&'static str, std::time::Instant)> = None;
@@ -10237,29 +10268,20 @@ impl Renderer {
                     }
                     let v_start = fill_vertices.len() as u32;
                     let c = apply_alpha_to_color(color_to_array(color), 1.0_f32);
-                    let tris = crate::svg_path::tessellate_fill(contours);
-                    for [x, y] in &tris {
-                        fill_vertices.push(FillVertex {
-                            pos: [x + dx, y + dy],
-                            z: 0.0,
-                            color: c,
-                        });
-                    }
-                    if let Some(m) = transform_stack.last() {
-                        apply_affine_to_verts(&mut fill_vertices[v_start as usize..], m);
-                    }
-                    if !svg_aa_disabled() {
-                        antialias_fill_soup(
-                            &mut fill_vertices,
-                            v_start as usize,
-                            c,
-                            dpr_f32,
-                            coverage_cache_arm(
-                                &mut self.coverage_cache,
-                                self.coverage_cache_enabled,
-                            ),
-                        );
-                    }
+                    let shape = svg_shape_verts(
+                        &mut self.svg_shape_cache,
+                        &mut self.coverage_cache,
+                        self.svg_shape_cache_enabled,
+                        self.coverage_cache_enabled,
+                        contours,
+                        None,
+                        dx,
+                        dy,
+                        transform_stack.last(),
+                        dpr_f32,
+                        cmd_log,
+                    );
+                    emit_svg_shape(&mut fill_vertices, &shape, c, cmd_log);
                     let v_count = fill_vertices.len() as u32 - v_start;
                     if v_count > 0 {
                         draw_ops.push(DrawOp::Fill { v_start, v_count });
@@ -10274,29 +10296,20 @@ impl Renderer {
                     }
                     let v_start = fill_vertices.len() as u32;
                     let c = apply_alpha_to_color(color_to_array(color), 1.0_f32);
-                    let tris = crate::svg_path::tessellate_stroke_ex(contours, params);
-                    for [x, y] in &tris {
-                        fill_vertices.push(FillVertex {
-                            pos: [x + dx, y + dy],
-                            z: 0.0,
-                            color: c,
-                        });
-                    }
-                    if let Some(m) = transform_stack.last() {
-                        apply_affine_to_verts(&mut fill_vertices[v_start as usize..], m);
-                    }
-                    if !svg_aa_disabled() {
-                        antialias_fill_soup(
-                            &mut fill_vertices,
-                            v_start as usize,
-                            c,
-                            dpr_f32,
-                            coverage_cache_arm(
-                                &mut self.coverage_cache,
-                                self.coverage_cache_enabled,
-                            ),
-                        );
-                    }
+                    let shape = svg_shape_verts(
+                        &mut self.svg_shape_cache,
+                        &mut self.coverage_cache,
+                        self.svg_shape_cache_enabled,
+                        self.coverage_cache_enabled,
+                        contours,
+                        Some(params),
+                        dx,
+                        dy,
+                        transform_stack.last(),
+                        dpr_f32,
+                        cmd_log,
+                    );
+                    emit_svg_shape(&mut fill_vertices, &shape, c, cmd_log);
                     let v_count = fill_vertices.len() as u32 - v_start;
                     if v_count > 0 {
                         draw_ops.push(DrawOp::Fill { v_start, v_count });
@@ -10532,6 +10545,9 @@ impl Renderer {
                 })
                 .collect();
             eprintln!("[frame:wgpu]   collect-top: {}", top.join(", "));
+            if SVG_SUB.calls.load(std::sync::atomic::Ordering::Relaxed) > 0 {
+                eprintln!("[frame:wgpu]   {}", SVG_SUB.line());
+            }
         }
         let t_after_collect = t_frame0.elapsed();
 
@@ -12994,6 +13010,372 @@ fn apply_affine_to_grad_verts(verts: &mut [GradVertex], m: &Mat4) {
 /// равно не попадает и держать его нечем.
 const COVERAGE_CACHE_MAX_VERTS: usize = 1 << 20;
 
+/// BUG-405 срез 12: подстатьи одной команды SVG-супа (`DrawSvgFill`/
+/// `DrawSvgStroke`) под `LUMEN_FRAME_LOG=3`.
+///
+/// Срез 9 назвал статью целиком («`DrawSvgStroke` — 16.9 мкс на команду против
+/// 1.9 у `DrawText`»), но не сказал, ЧТО внутри команды столько стоит после
+/// мемоизации покрытия. Разбивка отделяет тесселяцию (пересчёт одной и той же
+/// геометрии каждый кадр) от работы вокруг кэша: сборка супа в device px,
+/// хэш+побитовое сравнение ключа, сам пересчёт покрытия на промахе, укладка
+/// готовых квадов обратно в вершины.
+///
+/// Все счётчики — наносекунды, накопленные ЗА КАДР (сбрасываются в начале фазы
+/// `collect`); заполняются только на уровне 3, иначе не берётся даже
+/// `Instant::now()` — по той же причине, что у `collect-top`.
+struct SvgSubStats {
+    /// Тесселяция контуров в треугольный суп.
+    tess: std::sync::atomic::AtomicU64,
+    /// Укладка супа в `fill_vertices` со сдвигом и накопленной матрицей.
+    push: std::sync::atomic::AtomicU64,
+    /// Сборка супа в device px перед обращением к кэшу покрытия.
+    soup: std::sync::atomic::AtomicU64,
+    /// Хэш супа и побитовое сравнение с ключом (цена попадания).
+    key: std::sync::atomic::AtomicU64,
+    /// `coverage_quads` — CPU-растеризация покрытия (цена промаха).
+    calc: std::sync::atomic::AtomicU64,
+    /// Укладка готовых квадов обратно в `fill_vertices`.
+    emit: std::sync::atomic::AtomicU64,
+    /// Сколько команд SVG-супа прошло через тесселяцию за кадр.
+    calls: std::sync::atomic::AtomicU64,
+    /// Сколько вершин супа они дали суммарно.
+    verts: std::sync::atomic::AtomicU64,
+    /// Сколько точек контуров пришло на вход — размер ключа мемоизации фигур
+    /// против размера супа (`verts`), который ключом служил в срезе 9.
+    pts: std::sync::atomic::AtomicU64,
+    /// Команд, обслуженных готовой фигурой из [`SvgShapeCache`].
+    hit: std::sync::atomic::AtomicU64,
+    /// Команд, пересчитавших фигуру.
+    miss: std::sync::atomic::AtomicU64,
+}
+
+/// Подстатьи SVG-команд текущего кадра ([`SvgSubStats`]).
+static SVG_SUB: SvgSubStats = SvgSubStats {
+    tess: std::sync::atomic::AtomicU64::new(0),
+    push: std::sync::atomic::AtomicU64::new(0),
+    soup: std::sync::atomic::AtomicU64::new(0),
+    key: std::sync::atomic::AtomicU64::new(0),
+    calc: std::sync::atomic::AtomicU64::new(0),
+    emit: std::sync::atomic::AtomicU64::new(0),
+    calls: std::sync::atomic::AtomicU64::new(0),
+    verts: std::sync::atomic::AtomicU64::new(0),
+    pts: std::sync::atomic::AtomicU64::new(0),
+    hit: std::sync::atomic::AtomicU64::new(0),
+    miss: std::sync::atomic::AtomicU64::new(0),
+};
+
+impl SvgSubStats {
+    /// Обнулить подстатьи перед кадром.
+    fn reset(&self) {
+        use std::sync::atomic::Ordering::Relaxed;
+        for slot in [
+            &self.tess,
+            &self.push,
+            &self.soup,
+            &self.key,
+            &self.calc,
+            &self.emit,
+            &self.calls,
+            &self.verts,
+            &self.pts,
+            &self.hit,
+            &self.miss,
+        ] {
+            slot.store(0, Relaxed);
+        }
+    }
+
+    /// Строка `svg-sub` для покадрового лога уровня 3.
+    fn line(&self) -> String {
+        use std::sync::atomic::Ordering::Relaxed;
+        let ms = |slot: &std::sync::atomic::AtomicU64| slot.load(Relaxed) as f64 / 1e6;
+        format!(
+            "svg-sub: tess {:.2}ms push {:.2} soup {:.2} key {:.2} calc {:.2} emit {:.2} | \
+             команд {} / вершин {} / точек {} | фигуры {}/{}",
+            ms(&self.tess),
+            ms(&self.push),
+            ms(&self.soup),
+            ms(&self.key),
+            ms(&self.calc),
+            ms(&self.emit),
+            self.calls.load(Relaxed),
+            self.verts.load(Relaxed),
+            self.pts.load(Relaxed),
+            self.hit.load(Relaxed),
+            self.miss.load(Relaxed),
+        )
+    }
+}
+
+/// Прибавить к подстатье [`SVG_SUB`] время, прошедшее с `t0`.
+fn svg_sub_add(slot: &std::sync::atomic::AtomicU64, t0: std::time::Instant) {
+    slot.fetch_add(t0.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Учесть одну оттесселированную фигуру SVG: размер её супа и размер исходных
+/// контуров. Команды считаются отдельно ([`SVG_SUB`]`.calls`): тесселяция —
+/// удел промаха, а нормировать статью надо на ВСЕ команды, иначе плечо с
+/// кэшем поделит своё время на одни промахи и покажет цену вчетверо больше.
+fn count_svg_soup(verts: usize, contours: &[Vec<[f32; 2]>]) {
+    use std::sync::atomic::Ordering::Relaxed;
+    SVG_SUB.verts.fetch_add(verts as u64, Relaxed);
+    SVG_SUB.pts.fetch_add(contours.iter().map(Vec::len).sum::<usize>() as u64, Relaxed);
+}
+
+/// Сколько вершин держит [`SvgShapeCache`], прежде чем сбросить себя целиком.
+/// Та же политика и тот же порядок, что у [`COVERAGE_CACHE_MAX_VERTS`]:
+/// страница со статичными иконками занимает единицы килобайт, а сброс нужен
+/// патологии — потоку НОВЫХ фигур каждый кадр.
+const SVG_SHAPE_CACHE_MAX_VERTS: usize = 1 << 20;
+
+/// Готовая фигура SVG: `[x, y, z, cov]` в CSS px, без цвета. Цвет домножается
+/// на `cov` при укладке в вершины, поэтому одна и та же геометрия обслуживает
+/// иконки любого цвета.
+type SvgShapeVerts = std::sync::Arc<Vec<[f32; 4]>>;
+
+/// Мемоизация ЦЕЛОЙ команды SVG-супа (BUG-405 срез 12) — тесселяции, укладки,
+/// матрицы и сглаживания разом.
+///
+/// Срез 9 закэшировал последний шаг команды (`coverage_quads`), и разбивка
+/// `svg-sub` показала, что осталось: из 17.9 мкс команды `DrawSvgStroke` на
+/// прокрутке `lenta.ru` 8.3 мкс — тесселяция, 6.5 — укладка 340 вершин супа со
+/// сдвигом и матрицей, 1.5 — хэш и побитовое сравнение ключа ИЗ ЭТИХ 340
+/// вершин, 0.0 — сам пересчёт покрытия (кэш попадает). То есть 90% работы
+/// команды существует ради вычисления ключа к уже посчитанному ответу.
+///
+/// Ключ здесь — ВХОД команды (10.9 точки контуров на команду против 340 вершин
+/// супа), а не её промежуточный результат: контуры, параметры обводки, сдвиг,
+/// накопленная матрица, `dpr` и флаг сглаживания. Всё, что влияет на вершины,
+/// в ключе есть, поэтому попадание возвращает ровно те вершины, которые вернул
+/// бы пересчёт, и сравнение — побитовое (`f32::to_bits`), как в срезе 9:
+/// коллизия хэша даёт промах, а не чужие пиксели.
+#[derive(Default)]
+struct SvgShapeCache {
+    /// Хэш ключа → ключи с таким хэшом и посчитанные по ним вершины.
+    buckets: std::collections::HashMap<u64, Vec<(Vec<u32>, SvgShapeVerts)>>,
+    /// Переиспользуемый буфер под ключ — иначе каждая команда аллоцировала бы.
+    scratch: Vec<u32>,
+    /// Сколько слов ключей и вершин суммарно хранится.
+    stored: usize,
+    /// Сколько команд вернули готовую фигуру.
+    hits: u64,
+    /// Сколько команд пересчитали фигуру.
+    misses: u64,
+}
+
+impl SvgShapeCache {
+    /// Вершины фигуры по ключу: готовые из кэша либо посчитанные `compute`.
+    fn shape(&mut self, key: &[u32], compute: impl FnOnce() -> Vec<[f32; 4]>) -> SvgShapeVerts {
+        let h = bits_hash(key);
+        if let Some(bucket) = self.buckets.get(&h)
+            && let Some((_, verts)) = bucket.iter().find(|(k, _)| k.as_slice() == key)
+        {
+            self.hits += 1;
+            return std::sync::Arc::clone(verts);
+        }
+        self.misses += 1;
+        let verts = std::sync::Arc::new(compute());
+        let cost = key.len() + verts.len();
+        if self.stored + cost > SVG_SHAPE_CACHE_MAX_VERTS {
+            self.buckets.clear();
+            self.stored = 0;
+        }
+        self.stored += cost;
+        self.buckets.entry(h).or_default().push((key.to_vec(), std::sync::Arc::clone(&verts)));
+        verts
+    }
+}
+
+/// Ключ фигуры SVG для [`SvgShapeCache`] — всё, от чего зависят её вершины,
+/// в битовом виде. Пишется в переиспользуемый буфер `out`.
+///
+/// `stroke` в ключе обязателен: одни и те же контуры под заливкой и под
+/// обводкой дают разные супы, а всё остальное у них совпадает.
+#[allow(clippy::too_many_arguments)]
+fn build_svg_shape_key(
+    out: &mut Vec<u32>,
+    stroke: bool,
+    contours: &[Vec<[f32; 2]>],
+    params: Option<&crate::svg_path::StrokeParams>,
+    dx: f32,
+    dy: f32,
+    m: Option<&Mat4>,
+    dpr: f32,
+    aa: bool,
+) {
+    out.clear();
+    out.push(u32::from(stroke) | (u32::from(aa) << 1));
+    out.push(dx.to_bits());
+    out.push(dy.to_bits());
+    out.push(dpr.to_bits());
+    match m {
+        Some(m) => {
+            out.push(1);
+            out.extend(m.0.iter().map(|v| v.to_bits()));
+        }
+        None => out.push(0),
+    }
+    match params {
+        Some(p) => {
+            out.push(1);
+            out.push(p.half_width.to_bits());
+            out.push(p.linecap as u32);
+            out.push(p.linejoin as u32);
+            out.push(p.miterlimit.to_bits());
+            out.push(p.dashoffset.to_bits());
+            out.push(p.dasharray.len() as u32);
+            out.extend(p.dasharray.iter().map(|v| v.to_bits()));
+        }
+        None => out.push(0),
+    }
+    out.push(contours.len() as u32);
+    for c in contours {
+        out.push(c.len() as u32);
+        for p in c {
+            out.push(p[0].to_bits());
+            out.push(p[1].to_bits());
+        }
+    }
+}
+
+/// Посчитать вершины фигуры SVG из готового супа — тот же путь, что был до
+/// среза 12, только с белым цветом: покрытие остаётся в альфе, а настоящий
+/// цвет домножается на него при укладке, поэтому результат от цвета не зависит.
+///
+/// `1.0 * cov == cov` и `c.a * 1.0 == c.a` точны в IEEE-754, поэтому вершины
+/// побитово те же, что дал бы прежний путь с настоящим цветом.
+fn compute_svg_shape(
+    tris: &[[f32; 2]],
+    dx: f32,
+    dy: f32,
+    m: Option<&Mat4>,
+    dpr: f32,
+    aa: bool,
+    coverage: Option<&mut CoverageCache>,
+) -> Vec<[f32; 4]> {
+    const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+    let t_push = (crate::frame_log_level() >= 3).then(std::time::Instant::now);
+    let mut verts: Vec<FillVertex> = tris
+        .iter()
+        .map(|[x, y]| FillVertex { pos: [x + dx, y + dy], z: 0.0, color: WHITE })
+        .collect();
+    if let Some(m) = m {
+        apply_affine_to_verts(&mut verts, m);
+    }
+    if let Some(t0) = t_push {
+        svg_sub_add(&SVG_SUB.push, t0);
+    }
+    if aa {
+        antialias_fill_soup(&mut verts, 0, WHITE, dpr, coverage);
+    }
+    verts.iter().map(|v| [v.pos[0], v.pos[1], v.z, v.color[3]]).collect()
+}
+
+/// Вершины фигуры одной команды `DrawSvgFill`/`DrawSvgStroke`: готовые из
+/// [`SvgShapeCache`] либо посчитанные и запомненные (BUG-405 срез 12).
+///
+/// `shapes_enabled == false` (инстансный рычаг или `LUMEN_NO_SVG_SHAPE_CACHE=1`)
+/// — плечо отката: та же самая функция подсчёта, но без обращения к кэшу,
+/// поэтому A/B сравнивает мемоизацию, а не два разных пути укладки.
+#[allow(clippy::too_many_arguments)]
+fn svg_shape_verts(
+    shapes: &mut SvgShapeCache,
+    coverage: &mut CoverageCache,
+    shapes_enabled: bool,
+    coverage_enabled: bool,
+    contours: &[Vec<[f32; 2]>],
+    params: Option<&crate::svg_path::StrokeParams>,
+    dx: f32,
+    dy: f32,
+    m: Option<&Mat4>,
+    dpr: f32,
+    cmd_log: bool,
+) -> SvgShapeVerts {
+    use std::sync::atomic::Ordering::Relaxed;
+    let aa = !svg_aa_disabled();
+    if cmd_log {
+        SVG_SUB.calls.fetch_add(1, Relaxed);
+    }
+    let tessellate = || {
+        let t_tess = cmd_log.then(std::time::Instant::now);
+        let tris = match params {
+            Some(p) => crate::svg_path::tessellate_stroke_ex(contours, p),
+            None => crate::svg_path::tessellate_fill(contours),
+        };
+        if let Some(t0) = t_tess {
+            svg_sub_add(&SVG_SUB.tess, t0);
+            count_svg_soup(tris.len(), contours);
+        }
+        tris
+    };
+    if !shapes_enabled || svg_shape_cache_disabled() {
+        let tris = tessellate();
+        let arm = coverage_cache_arm(coverage, coverage_enabled);
+        return std::sync::Arc::new(compute_svg_shape(&tris, dx, dy, m, dpr, aa, arm));
+    }
+    // Буфер ключа одалживается у кэша и возвращается обратно: ключ строится на
+    // каждую команду, включая попадающую, и аллокация на команду съела бы часть
+    // того, ради чего срез делается.
+    let mut key = std::mem::take(&mut shapes.scratch);
+    let t_key = cmd_log.then(std::time::Instant::now);
+    build_svg_shape_key(&mut key, params.is_some(), contours, params, dx, dy, m, dpr, aa);
+    if let Some(t0) = t_key {
+        svg_sub_add(&SVG_SUB.key, t0);
+    }
+    let before = shapes.hits;
+    let verts = shapes.shape(&key, || {
+        let tris = tessellate();
+        let arm = coverage_cache_arm(coverage, coverage_enabled);
+        compute_svg_shape(&tris, dx, dy, m, dpr, aa, arm)
+    });
+    if cmd_log {
+        let slot = if shapes.hits > before { &SVG_SUB.hit } else { &SVG_SUB.miss };
+        slot.fetch_add(1, Relaxed);
+    }
+    shapes.scratch = key;
+    verts
+}
+
+/// Уложить готовую фигуру в вершины заливки, домножив её покрытие на цвет
+/// команды. Цвет — единственное, что фигура не помнит.
+fn emit_svg_shape(
+    fill_vertices: &mut Vec<FillVertex>,
+    shape: &[[f32; 4]],
+    color: [f32; 4],
+    cmd_log: bool,
+) {
+    let t_emit = cmd_log.then(std::time::Instant::now);
+    fill_vertices.reserve(shape.len());
+    for q in shape {
+        fill_vertices.push(FillVertex {
+            pos: [q[0], q[1]],
+            z: q[2],
+            color: [color[0], color[1], color[2], color[3] * q[3]],
+        });
+    }
+    if let Some(t0) = t_emit {
+        svg_sub_add(&SVG_SUB.emit, t0);
+    }
+}
+
+/// `true`, если мемоизация фигур SVG отключена (`LUMEN_NO_SVG_SHAPE_CACHE=1`) —
+/// рычаг отката BUG-405 срез 12 к пересчёту фигуры на каждую команду.
+fn svg_shape_cache_disabled() -> bool {
+    use std::sync::OnceLock;
+    static OFF: OnceLock<bool> = OnceLock::new();
+    *OFF.get_or_init(|| std::env::var("LUMEN_NO_SVG_SHAPE_CACHE").is_ok_and(|v| v == "1"))
+}
+
+/// FNV-1a по словам ключа — та же дешёвая свёртка, что у [`soup_hash`];
+/// коллизия отсеивается побитовым сравнением самого ключа.
+fn bits_hash(key: &[u32]) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325_u64;
+    for w in key {
+        h = (h ^ u64::from(*w)).wrapping_mul(0x100_0000_01b3);
+    }
+    h
+}
+
 /// Мемоизация [`crate::svg_path::coverage_quads`] по треугольному супу
 /// (BUG-405 срез 9).
 ///
@@ -13030,15 +13412,29 @@ struct CoverageCache {
 impl CoverageCache {
     /// Покрытие для `soup`: готовое из кэша либо посчитанное и запомненное.
     fn coverage(&mut self, soup: &[[f32; 2]]) -> std::sync::Arc<Vec<crate::svg_path::CoverageVertex>> {
+        // Срез 12: цена ключа (хэш + побитовое сравнение) считается отдельно от
+        // цены промаха — попадание платит только её, и лечится она иначе.
+        let log = crate::frame_log_level() >= 3;
+        let t_key = log.then(std::time::Instant::now);
         let h = soup_hash(soup);
-        if let Some(bucket) = self.buckets.get(&h)
-            && let Some((_, quads)) = bucket.iter().find(|(key, _)| soup_bits_eq(key, soup))
-        {
+        let found = self
+            .buckets
+            .get(&h)
+            .and_then(|bucket| bucket.iter().find(|(key, _)| soup_bits_eq(key, soup)))
+            .map(|(_, quads)| std::sync::Arc::clone(quads));
+        if let Some(t0) = t_key {
+            svg_sub_add(&SVG_SUB.key, t0);
+        }
+        if let Some(quads) = found {
             self.hits += 1;
-            return std::sync::Arc::clone(quads);
+            return quads;
         }
         self.misses += 1;
+        let t_calc = log.then(std::time::Instant::now);
         let quads = std::sync::Arc::new(crate::svg_path::coverage_quads(soup));
+        if let Some(t0) = t_calc {
+            svg_sub_add(&SVG_SUB.calc, t0);
+        }
         let cost = soup.len() + quads.len();
         if self.stored_verts + cost > COVERAGE_CACHE_MAX_VERTS {
             self.buckets.clear();
@@ -13101,10 +13497,15 @@ fn antialias_fill_soup(
     if dpr <= 0.0 || !dpr.is_finite() || v_start >= fill_vertices.len() {
         return;
     }
+    let log = crate::frame_log_level() >= 3;
+    let t_soup = log.then(std::time::Instant::now);
     let soup: Vec<[f32; 2]> = fill_vertices[v_start..]
         .iter()
         .map(|v| [v.pos[0] * dpr, v.pos[1] * dpr])
         .collect();
+    if let Some(t0) = t_soup {
+        svg_sub_add(&SVG_SUB.soup, t0);
+    }
     let fresh;
     let quads: &[crate::svg_path::CoverageVertex] = match cache {
         Some(cache) => {
@@ -15685,6 +16086,65 @@ mod tests {
         let shifted = aa(Some(&mut cache), 3.5);
         assert_eq!(cache.misses, 2, "сдвинутая фигура взята из кэша — ключ не различает формы");
         assert_ne!(bits(&plain), bits(&shifted), "сдвиг не изменил покрытие — контроль негоден");
+    }
+
+    /// BUG-405 срез 12: фигура, взятая из кэша, обязана дать те же вершины,
+    /// что пересчёт, и ключ обязан различать всё, от чего вершины зависят.
+    ///
+    /// Утверждение проверяется на уровне самой мемоизируемой цепочки
+    /// (тесселяция → сдвиг → матрица → сглаживание), а не только на пикселях:
+    /// пиксельный тест не увидел бы расхождения в вершинах, накрытых одним и
+    /// тем же пикселем.
+    ///
+    /// Контроли на ложно-зелёный: сдвиг, смена параметров обводки и та же
+    /// геометрия под заливкой вместо обводки обязаны дать промах — кэш,
+    /// отвечающий готовым на любой запрос, был бы тут зелен.
+    #[test]
+    fn svg_shape_cache_returns_identical_vertices() {
+        let contours = vec![vec![[2.0_f32, 3.0], [18.0, 7.0], [10.0, 19.0]]];
+        let params = crate::svg_path::StrokeParams { half_width: 1.5, ..Default::default() };
+        let color = [0.2_f32, 0.4, 0.6, 0.8];
+        let run = |shapes: &mut SvgShapeCache,
+                   on: bool,
+                   dx: f32,
+                   p: Option<&crate::svg_path::StrokeParams>| {
+            let mut cov = CoverageCache::default();
+            let shape =
+                svg_shape_verts(shapes, &mut cov, on, true, &contours, p, dx, 0.0, None, 1.0, false);
+            let mut v = Vec::new();
+            emit_svg_shape(&mut v, &shape, color, false);
+            v
+        };
+        let bits = |v: &[FillVertex]| -> Vec<[u32; 4]> {
+            v.iter()
+                .map(|x| [x.pos[0].to_bits(), x.pos[1].to_bits(), x.z.to_bits(), x.color[3].to_bits()])
+                .collect()
+        };
+
+        let mut shapes = SvgShapeCache::default();
+        let plain = run(&mut shapes, false, 0.0, Some(&params));
+        assert_eq!((shapes.hits, shapes.misses), (0, 0), "плечо отката трогало кэш");
+        assert!(!plain.is_empty(), "обводка не дала вершин — сравнивать нечего");
+
+        let miss = run(&mut shapes, true, 0.0, Some(&params));
+        assert_eq!((shapes.hits, shapes.misses), (0, 1), "первый вызов не мог попасть");
+        let hit = run(&mut shapes, true, 0.0, Some(&params));
+        assert_eq!((shapes.hits, shapes.misses), (1, 1), "повторный вызов не попал в кэш");
+        assert_eq!(bits(&plain), bits(&miss), "промах разошёлся с пересчётом");
+        assert_eq!(bits(&plain), bits(&hit), "попадание разошлось с пересчётом");
+
+        let shifted = run(&mut shapes, true, 3.5, Some(&params));
+        assert_eq!(shapes.misses, 2, "сдвинутая фигура взята из кэша — ключ не видит сдвига");
+        assert_ne!(bits(&plain), bits(&shifted), "сдвиг не изменил вершины — контроль негоден");
+
+        let thick = crate::svg_path::StrokeParams { half_width: 4.0, ..params.clone() };
+        let wide = run(&mut shapes, true, 0.0, Some(&thick));
+        assert_eq!(shapes.misses, 3, "другая толщина взята из кэша — ключ не видит параметров");
+        assert_ne!(bits(&plain), bits(&wide), "толщина не изменила вершины — контроль негоден");
+
+        let filled = run(&mut shapes, true, 0.0, None);
+        assert_eq!(shapes.misses, 4, "заливка взята из кэша обводки — ключ не видит вида команды");
+        assert_ne!(bits(&plain), bits(&filled), "заливка совпала с обводкой — контроль негоден");
     }
 
     /// А кромка, сошедшая с сетки, обязана дать дробное покрытие — ради этого
