@@ -3255,6 +3255,25 @@ fn band_bias_disabled() -> bool {
     })
 }
 
+/// `true`, если прогрев полосы скролл-композитора отключён
+/// (`LUMEN_NO_BAND_WARM=1`): текстуры полосы создаются лениво, на первом же
+/// промахе, как до среза 20 BUG-405. По умолчанию **включён**: первая
+/// отрисовка в свежую цель стоит на порядок дороже последующих (перепись
+/// среза 20 на `lenta.ru`, Vulkan: `drop(pass)` 4.6 мс против 0.15 мс у
+/// следующих промахов с той же полосой), и без прогрева эту цену платит
+/// первый кадр ПРОКРУТКИ. Прогрев переносит её в кадр загрузки, где уже
+/// компилируются пайплайны. Пиксельно нейтрален: прогревающий пасс только
+/// чистит текстуру, а ключ полосы остаётся невалидным, поэтому первое
+/// реальное использование всё равно перерисовывает её содержимое целиком.
+/// Диагностика: A/B на одном бинарнике.
+fn band_warm_disabled() -> bool {
+    use std::sync::OnceLock;
+    static DISABLED: OnceLock<bool> = OnceLock::new();
+    *DISABLED.get_or_init(|| {
+        std::env::var("LUMEN_NO_BAND_WARM").is_ok_and(|v| v == "1")
+    })
+}
+
 impl Renderer {
     pub fn new(window: Arc<Window>, font_bytes: Vec<u8>, target_color_space: ColorSpace) -> Result<Self, Box<dyn Error>> {
         // Валидируем шрифт сразу, чтобы при битом файле не падать в первом кадре.
@@ -7436,6 +7455,111 @@ impl Renderer {
         }
     }
 
+    /// Создаёт кэш полосы скролл-композитора (цветная текстура + depth) под
+    /// размер `sw × band_h_px` в device px, заменяя прежний.
+    ///
+    /// Ключ полосы ставится в 0 — «содержимое невалидно»: заполняет его только
+    /// прошедший Band-рендер. Вынесено из [`Renderer::try_page_compose`]
+    /// (BUG-405 срез 20), потому что ту же полосу создаёт прогрев.
+    fn create_page_band(&mut self, sw: u32, band_h_px: u32, band_top_css: f32) {
+        count_texture_created_labeled("page-band", sw, band_h_px);
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("page-band"),
+            size: wgpu::Extent3d {
+                width: sw,
+                height: band_h_px,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.surface_format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let (depth_t, depth_v) = create_depth_texture(&self.device, sw, band_h_px);
+        self.page_band = Some(PageBandCache {
+            _texture: texture,
+            view,
+            key: 0, // невалиден, пока Band-рендер не пройдёт
+            band_top_css,
+            w_px: sw,
+            h_px: band_h_px,
+            depth_t,
+            depth_v,
+        });
+    }
+
+    /// Прогрев полосы скролл-композитора (BUG-405 срез 20): создаёт её текстуры
+    /// заранее и один раз отрисовывает в них пустой пасс.
+    ///
+    /// Смысл — не в самой очистке, а в том, что цену ПЕРВОЙ отрисовки в свежую
+    /// цель (перепись `lenta.ru`/Vulkan: `drop(pass)` 4.6 мс против 0.15 мс у
+    /// следующих отрисовок в ту же текстуру) платит кадр загрузки, а не первый
+    /// кадр прокрутки. Пиксельно нейтрально: ключ полосы остаётся невалидным,
+    /// поэтому первое реальное обращение перерисовывает её содержимое целиком,
+    /// а до того полоса ни разу не читается.
+    fn warm_page_band(&mut self, sw: u32, band_h_px: u32) {
+        let t0 = std::time::Instant::now();
+        self.create_page_band(sw, band_h_px, 0.0);
+        let t_create = t0.elapsed();
+        let Some((view, depth_v)) = self
+            .page_band
+            .as_ref()
+            .map(|b| (b.view.clone(), b.depth_v.clone()))
+        else {
+            return;
+        };
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("page-band-warm"),
+            });
+        // Пасс без единого draw: прогревает саму цель, а не конвейер.
+        let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("page-band-warm-pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &depth_v,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        let t_pass0 = std::time::Instant::now();
+        drop(pass);
+        let t_pass = t_pass0.elapsed();
+        self.queue.submit(Some(encoder.finish()));
+        if crate::frame_log_level() >= 2 {
+            // Цена, перенесённая с первого кадра прокрутки на кадр загрузки:
+            // печатается вместе с разбивкой, чтобы перенос был виден целиком,
+            // а не только его результат.
+            let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
+            eprintln!(
+                "[frame:wgpu] page-band warm: {sw}x{band_h_px} px за {:.2}мс \
+                 (текстуры {:.2} / пасс {:.2} / submit {:.2})",
+                ms(t0.elapsed()),
+                ms(t_create),
+                ms(t_pass),
+                ms(t_pass0.elapsed()) - ms(t_pass),
+            );
+        }
+    }
+
     /// Рендерит две полосы display list-а одним кадром:
     /// - `content` — основная страница; ко всем `rect`-ам применяется
     ///   смещение `(-scroll_x, -scroll_y)` (CSS px). Так пользователь
@@ -7503,6 +7627,19 @@ impl Renderer {
             return Ok(false);
         }
         let band_h_css = band_h_px as f32 / dpr;
+
+        // BUG-405 срез 20: прогрев полосы. Дальше по функции полоса создаётся
+        // лениво — на первом промахе, то есть на первом кадре ПРОКРУТКИ, — и
+        // первая отрисовка в свежую цель стоит на порядок дороже последующих
+        // (перепись: `drop(pass)` 4.6 мс против 0.15 мс на следующих промахах
+        // с той же текстурой). Создаём и прогреваем её здесь, на кадре
+        // загрузки: сюда доходят только страницы, для которых композитор в
+        // принципе применим (ранние `return` выше уже отсеяли непригодные), а
+        // размер полосы зависит только от поверхности и dpr, которые к этому
+        // моменту известны.
+        if self.page_band.is_none() && !band_warm_disabled() {
+            self.warm_page_band(sw, band_h_px);
+        }
 
         // Static/animated split: план оверлея сегментов. При конфликте
         // painter's order план сам расширяет диапазоны tail-split-ом —
@@ -7604,34 +7741,7 @@ impl Renderer {
                 .as_ref()
                 .is_none_or(|b| b.w_px != sw || b.h_px != band_h_px);
             if recreate {
-                count_texture_created_labeled("page-band", sw, band_h_px);
-                let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some("page-band"),
-                    size: wgpu::Extent3d {
-                        width: sw,
-                        height: band_h_px,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: self.surface_format,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                        | wgpu::TextureUsages::TEXTURE_BINDING,
-                    view_formats: &[],
-                });
-                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-                let (depth_t, depth_v) = create_depth_texture(&self.device, sw, band_h_px);
-                self.page_band = Some(PageBandCache {
-                    _texture: texture,
-                    view,
-                    key: 0, // невалиден, пока рендер полосы ниже не пройдёт
-                    band_top_css,
-                    w_px: sw,
-                    h_px: band_h_px,
-                    depth_t,
-                    depth_v,
-                });
+                self.create_page_band(sw, band_h_px, band_top_css);
             }
             let Some(view) = self.page_band.as_ref().map(|b| b.view.clone()) else {
                 return Ok(false);
@@ -17471,6 +17581,40 @@ mod tests {
             moved.iter().zip(&first).all(|(a, b)| a.pos[0] == b.pos[0] && a.pos[1] > b.pos[1]),
             "попадание проигнорировало новую позицию run-а",
         );
+    }
+
+    /// BUG-405 срез 20: прогретая полоса обязана остаться НЕВАЛИДНОЙ.
+    ///
+    /// Прогрев создаёт текстуры полосы заранее и чистит их пустым пассом —
+    /// содержимого в них нет. Пиксельная нейтральность правки держится ровно
+    /// на нулевом ключе: пока он не выставлен прошедшим Band-рендером,
+    /// `try_page_compose` не может сблитить полосу на экран. Тест гейтит
+    /// именно это, а не скорость: скорость меряет A/B через
+    /// `LUMEN_NO_BAND_WARM`.
+    ///
+    /// Требует GPU-адаптер, поэтому `#[ignore]` — как headless-тесты в
+    /// `tests/cases/headless_tests.rs`; запуск:
+    /// `cargo test -p lumen-paint --features backend-wgpu
+    ///  warm_page_band_leaves_band_invalid -- --include-ignored`.
+    #[test]
+    #[ignore = "requires GPU adapter"]
+    fn warm_page_band_leaves_band_invalid() {
+        let bytes = std::fs::read("../../../assets/fonts/Inter-Regular.ttf")
+            .expect("bundled font");
+        let mut r = Renderer::new_headless(bytes, 64, 48, ColorSpace::Srgb)
+            .expect("headless renderer");
+        assert!(r.page_band.is_none(), "полоса не могла возникнуть до прогрева");
+
+        r.warm_page_band(64, 200);
+        let band = r.page_band.as_ref().expect("прогрев обязан создать полосу");
+        assert_eq!((band.w_px, band.h_px), (64, 200), "прогрет чужой размер");
+        assert_eq!(band.key, 0, "прогретая полоса выдала себя за валидную");
+
+        // Смена размера заменяет полосу целиком и снова оставляет её невалидной.
+        r.create_page_band(80, 240, 17.0);
+        let band = r.page_band.as_ref().expect("полоса обязана пересоздаться");
+        assert_eq!((band.w_px, band.h_px), (80, 240), "размер не обновился");
+        assert_eq!(band.key, 0, "пересозданная полоса выдала себя за валидную");
     }
 
     /// Побитовое равенство двух наборов вершин текста.
