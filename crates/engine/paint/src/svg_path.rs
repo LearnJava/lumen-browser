@@ -1362,8 +1362,10 @@ const COVERAGE_MAX_AREA: u64 = 16 * 1024 * 1024;
 /// contributes one span, accumulated with exact horizontal overlap — fractional
 /// at the two end pixels, a `+w`/`−w` delta pair over the fully covered middle
 /// (prefix-summed once per row, so a long span costs O(1) rather than O(len)).
-/// Runs of equal coverage collapse into one quad, so a solid interior costs one
-/// quad per row and only the boundary pays per pixel.
+/// Runs of equal coverage collapse into one quad **in both axes** (BUG-405
+/// срез 16): a row repeating the previous row's runs extends that block instead
+/// of emitting its own copy, so a solid interior costs one quad in total and a
+/// straight icon bar costs one quad per column-run, not one per row.
 ///
 /// Coverage is summed across triangles and clamped to 1: [`tessellate_fill`]
 /// emits a non-overlapping tiling (sum = exact coverage), while
@@ -1417,31 +1419,50 @@ pub fn coverage_quads(tris: &[[f32; 2]]) -> Vec<CoverageVertex> {
     let mut cov = vec![0.0_f32; w];
     let wgt = 1.0 / COVERAGE_SUBS as f32;
 
+    // Срез 16: блок одинаковых строк копится и выходит одним рядом квадов.
+    // `block` — прогоны верхней строки блока, `block_top`/`block_rows` — его
+    // положение и высота; строка, чьи прогоны совпали, только растит высоту.
+    let mut block: Vec<CoverageRun> = Vec::new();
+    let mut row_runs: Vec<CoverageRun> = Vec::new();
+    let mut block_top = y0f;
+    let mut block_rows = 0.0_f32;
+
     for (r, row_starts) in starts.iter_mut().enumerate() {
         active.append(row_starts);
         let row_top = y0f + r as f32;
         active.retain(|&i| tri_bot[i as usize] > row_top);
-        if active.is_empty() {
-            continue;
-        }
-        part[..].fill(0.0);
-        run[..].fill(0.0);
-        for s in 0..COVERAGE_SUBS {
-            let ys = row_top + (s as f32 + 0.5) * wgt;
-            for &i in &active {
-                let i = i as usize;
-                if let Some((xa, xb)) = triangle_span(&tris[i * 3..i * 3 + 3], ys) {
-                    add_span(&mut part, &mut run, x0f, w, xa, xb, wgt);
+        row_runs.clear();
+        if !active.is_empty() {
+            part[..].fill(0.0);
+            run[..].fill(0.0);
+            for s in 0..COVERAGE_SUBS {
+                let ys = row_top + (s as f32 + 0.5) * wgt;
+                for &i in &active {
+                    let i = i as usize;
+                    if let Some((xa, xb)) = triangle_span(&tris[i * 3..i * 3 + 3], ys) {
+                        add_span(&mut part, &mut run, x0f, w, xa, xb, wgt);
+                    }
                 }
             }
+            let mut running = 0.0_f32;
+            for ((c, p), d) in cov.iter_mut().zip(part.iter()).zip(run.iter()) {
+                running += *d;
+                *c = (*p + running).clamp(0.0, 1.0);
+            }
+            collect_row_runs(&cov, &mut row_runs);
         }
-        let mut running = 0.0_f32;
-        for ((c, p), d) in cov.iter_mut().zip(part.iter()).zip(run.iter()) {
-            running += *d;
-            *c = (*p + running).clamp(0.0, 1.0);
+        // Разрыв закрывается сам собой: пустая строка не равна непустому
+        // блоку, поэтому блок выходит квадами и не накрывает её пиксели.
+        if row_runs == block {
+            block_rows += 1.0;
+            continue;
         }
-        emit_row_quads(&cov, x0f, row_top, &mut out);
+        emit_block_quads(&block, x0f, block_top, block_rows, &mut out);
+        std::mem::swap(&mut block, &mut row_runs);
+        block_top = row_top;
+        block_rows = 1.0;
     }
+    emit_block_quads(&block, x0f, block_top, block_rows, &mut out);
     out
 }
 
@@ -1504,10 +1525,26 @@ fn add_span(part: &mut [f32], run: &mut [f32], x0f: f32, w: usize, xa: f32, xb: 
     }
 }
 
-/// Emits one pixel row of the coverage buffer as quads: consecutive pixels
-/// whose coverage rounds to the same 1/255 step share a single quad (two
-/// triangles), zero-coverage pixels are skipped entirely.
-fn emit_row_quads(cov: &[f32], x0f: f32, row_top: f32, out: &mut Vec<CoverageVertex>) {
+/// Один горизонтальный прогон пикселей одинакового покрытия: пиксели
+/// `[start, end)` строки и квантованное покрытие (1/255 шага).
+///
+/// Сравнение прогонов — то, чем строка узнаётся как копия предыдущей
+/// (BUG-405 срез 16), поэтому квант хранится целым: у `f32` то же значение
+/// сравнивалось бы через `PartialEq`, и `NaN`-покрытие ломало бы склейку.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct CoverageRun {
+    /// Первый пиксель прогона (индекс в буфере покрытия строки).
+    start: u32,
+    /// Первый пиксель ПОСЛЕ прогона.
+    end: u32,
+    /// Покрытие прогона в 1/255 (0 не встречается — такие пиксели пропущены).
+    q: u16,
+}
+
+/// Раскладывает строку буфера покрытия на прогоны: соседние пиксели, чьё
+/// покрытие округляется к одному шагу 1/255, дают один прогон; пиксели с
+/// нулевым покрытием пропускаются.
+fn collect_row_runs(cov: &[f32], out: &mut Vec<CoverageRun>) {
     let mut i = 0usize;
     while i < cov.len() {
         let q = (cov[i] * 255.0).round() as u16;
@@ -1519,9 +1556,33 @@ fn emit_row_quads(cov: &[f32], x0f: f32, row_top: f32, out: &mut Vec<CoverageVer
         while j < cov.len() && (cov[j] * 255.0).round() as u16 == q {
             j += 1;
         }
-        let (xa, xb) = (x0f + i as f32, x0f + j as f32);
-        let (ya, yb) = (row_top, row_top + 1.0);
-        let c = q as f32 / 255.0;
+        out.push(CoverageRun { start: i as u32, end: j as u32, q });
+        i = j;
+    }
+}
+
+/// Выдаёт прогоны блока строк квадами (по два треугольника на прогон): блок
+/// высотой `rows` строк, начинающийся на `top`, даёт по одному квад на прогон
+/// вместо `rows` одинаковых копий.
+///
+/// Пиксели квада — те же, что у `rows` отдельных однострочных квадов: прогоны
+/// внутри строки не пересекаются, блоки не пересекаются по `y`, поэтому и
+/// суммарное покрытие каждого пикселя, и порядок наложения от склейки не
+/// зависят.
+fn emit_block_quads(
+    runs: &[CoverageRun],
+    x0f: f32,
+    top: f32,
+    rows: f32,
+    out: &mut Vec<CoverageVertex>,
+) {
+    if runs.is_empty() || rows <= 0.0 {
+        return;
+    }
+    let (ya, yb) = (top, top + rows);
+    for r in runs {
+        let (xa, xb) = (x0f + r.start as f32, x0f + r.end as f32);
+        let c = f32::from(r.q) / 255.0;
         let v = |x: f32, y: f32| CoverageVertex { pos: [x, y], cov: c };
         out.extend_from_slice(&[
             v(xa, ya),
@@ -1531,7 +1592,6 @@ fn emit_row_quads(cov: &[f32], x0f: f32, row_top: f32, out: &mut Vec<CoverageVer
             v(xb, yb),
             v(xa, yb),
         ]);
-        i = j;
     }
 }
 
@@ -2133,8 +2193,9 @@ mod tests {
             "прямоугольник по границам пикселей не должен давать дробного покрытия"
         );
         assert!((coverage_area(&q) - 12.0).abs() < 1e-3, "площадь 4×3");
-        // Один квад на строку: сплошная внутренность не платит по пикселю.
-        assert_eq!(q.len(), 3 * 6);
+        // Срез 16: сплошная внутренность — ОДИН квад на всю фигуру, а не по
+        // квадy на строку (до среза здесь было `3 * 6`).
+        assert_eq!(q.len(), 6);
     }
 
     #[test]
@@ -2173,5 +2234,173 @@ mod tests {
         let q = coverage_quads(&soup);
         assert!(q.iter().all(|v| v.cov <= 1.0 + 1e-6));
         assert!((coverage_area(&q) - 24.0).abs() < 1e-2, "объединение 6×4");
+    }
+
+    // ── Вертикальная склейка квадов покрытия (BUG-405 срез 16) ──────────────
+
+    /// КОПИЯ [`coverage_quads`] с прежней укладкой — по квадy на пиксельную
+    /// строку. Эталон для склейки: сравнивать склеенный выход не с чем, кроме
+    /// того выхода, который давала прежняя редакция, а вывести её из нынешней
+    /// нельзя — она и есть то, что изменилось.
+    fn coverage_quads_per_row(tris: &[[f32; 2]]) -> Vec<CoverageVertex> {
+        let ntri = tris.len() / 3;
+        if ntri == 0 {
+            return Vec::new();
+        }
+        let (mut minx, mut miny) = (f32::INFINITY, f32::INFINITY);
+        let (mut maxx, mut maxy) = (f32::NEG_INFINITY, f32::NEG_INFINITY);
+        for p in &tris[..ntri * 3] {
+            if !p[0].is_finite() || !p[1].is_finite() {
+                return raw_coverage(tris);
+            }
+            minx = minx.min(p[0]);
+            miny = miny.min(p[1]);
+            maxx = maxx.max(p[0]);
+            maxy = maxy.max(p[1]);
+        }
+        let x0 = minx.floor() as i64;
+        let y0 = miny.floor() as i64;
+        let w = (maxx.ceil() as i64 - x0).max(0) as u64;
+        let h = (maxy.ceil() as i64 - y0).max(0) as u64;
+        if w == 0 || h == 0 || w * h > COVERAGE_MAX_AREA {
+            return raw_coverage(tris);
+        }
+        let (w, h) = (w as usize, h as usize);
+        let (x0f, y0f) = (x0 as f32, y0 as f32);
+        let mut starts: Vec<Vec<u32>> = vec![Vec::new(); h];
+        let mut tri_bot: Vec<f32> = Vec::with_capacity(ntri);
+        for i in 0..ntri {
+            let (a, b, c) = (tris[i * 3], tris[i * 3 + 1], tris[i * 3 + 2]);
+            let top = a[1].min(b[1]).min(c[1]);
+            let bot = a[1].max(b[1]).max(c[1]);
+            tri_bot.push(bot);
+            let r = ((top.floor() - y0f) as i64).clamp(0, h as i64 - 1) as usize;
+            starts[r].push(i as u32);
+        }
+        let mut out: Vec<CoverageVertex> = Vec::new();
+        let mut active: Vec<u32> = Vec::new();
+        let mut part = vec![0.0_f32; w];
+        let mut run = vec![0.0_f32; w + 1];
+        let mut cov = vec![0.0_f32; w];
+        let wgt = 1.0 / COVERAGE_SUBS as f32;
+        let mut runs: Vec<CoverageRun> = Vec::new();
+        for (r, row_starts) in starts.iter_mut().enumerate() {
+            active.append(row_starts);
+            let row_top = y0f + r as f32;
+            active.retain(|&i| tri_bot[i as usize] > row_top);
+            if active.is_empty() {
+                continue;
+            }
+            part[..].fill(0.0);
+            run[..].fill(0.0);
+            for s in 0..COVERAGE_SUBS {
+                let ys = row_top + (s as f32 + 0.5) * wgt;
+                for &i in &active {
+                    let i = i as usize;
+                    if let Some((xa, xb)) = triangle_span(&tris[i * 3..i * 3 + 3], ys) {
+                        add_span(&mut part, &mut run, x0f, w, xa, xb, wgt);
+                    }
+                }
+            }
+            let mut running = 0.0_f32;
+            for ((c, p), d) in cov.iter_mut().zip(part.iter()).zip(run.iter()) {
+                running += *d;
+                *c = (*p + running).clamp(0.0, 1.0);
+            }
+            runs.clear();
+            collect_row_runs(&cov, &mut runs);
+            emit_block_quads(&runs, x0f, row_top, 1.0, &mut out);
+        }
+        out
+    }
+
+    /// Карта «пиксель → покрытие», собранная из квадов. Координаты квадов целые
+    /// (границы пикселей), поэтому карта восстанавливается точно, и сравнение
+    /// двух карт — побитовое.
+    fn coverage_map(q: &[CoverageVertex]) -> std::collections::HashMap<(i32, i32), u32> {
+        let mut map = std::collections::HashMap::new();
+        for t in q.chunks_exact(6) {
+            let (xa, ya) = (t[0].pos[0], t[0].pos[1]);
+            let (xb, yb) = (t[2].pos[0], t[2].pos[1]);
+            assert_eq!(xa.fract(), 0.0, "квад обязан стоять по границе пикселя");
+            assert_eq!(ya.fract(), 0.0, "квад обязан стоять по границе пикселя");
+            for y in (yb as i32 - (yb - ya) as i32)..(yb as i32) {
+                for x in (xb as i32 - (xb - xa) as i32)..(xb as i32) {
+                    let slot = map.entry((x, y)).or_insert(0_u32);
+                    // Суммируем БИТЫ покрытия: пиксель обязан прийти из ровно
+                    // одного квада, поэтому сумма = само значение, а наложение
+                    // (которого быть не должно) даст расхождение.
+                    *slot += t[0].cov.to_bits();
+                }
+            }
+        }
+        map
+    }
+
+    /// Псевдослучайный генератор для наборов треугольников — свой LCG, чтобы
+    /// не тянуть зависимость (та же схема, что у гейтов среза 15).
+    struct Lcg(u64);
+
+    impl Lcg {
+        fn next_f32(&mut self, lo: f32, hi: f32) -> f32 {
+            self.0 = self.0.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+            let u = ((self.0 >> 33) as f32) / ((1_u64 << 31) as f32);
+            lo + u * (hi - lo)
+        }
+    }
+
+    #[test]
+    fn block_merge_matches_per_row_coverage_on_random_soups() {
+        let mut rng = Lcg(0x5eed_1234);
+        let mut merged_total = 0usize;
+        let mut per_row_total = 0usize;
+        for case in 0..200 {
+            let ntri = 1 + (case % 4);
+            let mut soup = Vec::new();
+            for _ in 0..ntri {
+                for _ in 0..3 {
+                    soup.push([rng.next_f32(-2.0, 24.0), rng.next_f32(-2.0, 24.0)]);
+                }
+            }
+            let merged = coverage_quads(&soup);
+            let per_row = coverage_quads_per_row(&soup);
+            assert_eq!(
+                coverage_map(&merged),
+                coverage_map(&per_row),
+                "набор {case}: склейка изменила покрытие пикселей"
+            );
+            merged_total += merged.len();
+            per_row_total += per_row.len();
+        }
+        // Случайные треугольники почти не дают одинаковых строк — выигрыш здесь
+        // не проверяется (его предмет — прямые участки, см.
+        // `block_merge_collapses_straight_bar`), но склейка не имеет права и
+        // ДОБАВИТЬ вершин.
+        assert!(
+            merged_total <= per_row_total,
+            "склейка добавила вершин: {merged_total} против {per_row_total}"
+        );
+    }
+
+    #[test]
+    fn block_merge_keeps_empty_rows_empty() {
+        // Две полосы, разделённые пустой строкой: склейка не имеет права
+        // накрыть разрыв одним квадом — иначе фигура «слипнется» по вертикали.
+        let mut soup = rect_soup(0.0, 0.0, 4.0, 1.0);
+        soup.extend(rect_soup(0.0, 2.0, 4.0, 3.0));
+        let q = coverage_quads(&soup);
+        let map = coverage_map(&q);
+        assert!(map.contains_key(&(0, 0)), "верхняя полоса");
+        assert!(map.contains_key(&(0, 2)), "нижняя полоса");
+        assert!(!map.contains_key(&(0, 1)), "разрыв обязан остаться пустым");
+        assert_eq!(q.len(), 2 * 6, "две полосы — два квада, склейки через разрыв нет");
+    }
+
+    #[test]
+    fn block_merge_collapses_straight_bar() {
+        // Вертикальный штрих иконки: 20 одинаковых строк дают один квад.
+        let q = coverage_quads(&rect_soup(3.0, 0.0, 5.0, 20.0));
+        assert_eq!(q.len(), 6, "20 одинаковых строк — один квад");
+        assert!((coverage_area(&q) - 40.0).abs() < 1e-3, "площадь 2×20");
     }
 }
