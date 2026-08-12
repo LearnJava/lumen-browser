@@ -3711,7 +3711,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/backdrop_cache.rs:196` **fn** `budget_bytes` — Configured eviction budget, in bytes
 `crates/engine/paint/src/backend.rs:39` **enum** `RenderError` — Ошибка рендера — возвращается из [`RenderBackend::render`]
 `crates/engine/paint/src/backend.rs:79` **trait** `RenderBackend` — Стабильный интерфейс GPU-рендера для Lumen
-`crates/engine/paint/src/backend_probe.rs:550` **fn** `client_center_avg` — Средний цвет (RGB) центрального блока 32×32 клиентской области окна,
+`crates/engine/paint/src/backend_probe.rs:698` **fn** `client_center_avg` — Средний цвет (RGB) центрального блока 32×32 клиентской области окна,
 `crates/engine/paint/src/backends/compare_backend.rs:35` **struct** `DiffResult` — Результат pixel-diff сравнения двух бэкендов
 `crates/engine/paint/src/backends/compare_backend.rs:53` **fn** `diff_percent` — Доля отличающихся пикселей в процентах (0.0 – 100.0)
 `crates/engine/paint/src/backends/compare_backend.rs:61` **fn** `is_identical` — `true` если бэкенды дали побитово идентичные результаты
@@ -4004,10 +4004,10 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/renderer.rs:7119` **fn** `viewport_size` — Текущий viewport в **logical** (CSS) пикселях: `physical / scale_factor`
 `crates/engine/paint/src/renderer.rs:7722` **fn** `render` — `scroll_y ≥ 0`, `scroll_x ≥ 0`. Negatives caller обязан клампить до 0
 `crates/engine/paint/src/renderer.rs:7735` **fn** `render_with_anim` — Как [`render`](Self::render), но с диапазонами анимируемых сегментов
-`crates/engine/paint/src/renderer.rs:12621` **fn** `render_to_image_cpu` — CPU-based rasterization using tiny-skia (feature="cpu-render" only)
-`crates/engine/paint/src/renderer.rs:12647` **fn** `render_tile`
-`crates/engine/paint/src/renderer.rs:12686` **fn** `render_to_image` — Renders display commands and returns a CPU `Image` (RGBA8)
-`crates/engine/paint/src/renderer.rs:12789` **fn** `render_print_pages` — Renders a print display list into one `Image` per page
+`crates/engine/paint/src/renderer.rs:12641` **fn** `render_to_image_cpu` — CPU-based rasterization using tiny-skia (feature="cpu-render" only)
+`crates/engine/paint/src/renderer.rs:12667` **fn** `render_tile`
+`crates/engine/paint/src/renderer.rs:12706` **fn** `render_to_image` — Renders display commands and returns a CPU `Image` (RGBA8)
+`crates/engine/paint/src/renderer.rs:12809` **fn** `render_print_pages` — Renders a print display list into one `Image` per page
 `crates/engine/paint/src/scroll_cache.rs:60` **enum** `ScrollFramePlan` — What the render backend should do with the current frame, given the retained
 `crates/engine/paint/src/scroll_cache.rs:116` **fn** `label` — A stable one-word label for the plan variant — `"blit"`,
 `crates/engine/paint/src/scroll_cache.rs:131` **struct** `ScrollCache` — Bookkeeping for the retained scroll-content surface (ADR-016 M3)
