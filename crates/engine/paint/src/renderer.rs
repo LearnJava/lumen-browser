@@ -240,6 +240,27 @@ fn sdf_rrect(p: vec2<f32>, half_size: vec2<f32>, radii_x: vec4<f32>, radii_y: ve
 /// скруглённый бокс (`RRECT_SHADER_SRC`). Иначе на HiDPI полоса сглаживания
 /// клипа была бы вдвое уже полосы собственного края бокса. Новых varying'ов
 /// ни одному шейдеру при этом не нужно.
+/// BUG-405 срез 8 — ВТОРОЙ контур в том же слоте (вложенный клип).
+///
+/// Срез 4 оставил вложенному скруглённому клипу offscreen-уровень: контур в
+/// шейдере был один, и второй `PushClipRoundedRect` внутри первого падал на
+/// прежний путь. Перепись на `lenta.ru` (53 кадра) назвала цену: **все 43**
+/// клипа, ушедших на уровень, ушли туда именно из-за занятого контура (ни
+/// одного — из-за содержимого поддерева), а максимальная вложенность
+/// скруглённых клипов на странице — ровно **2**. Один уровень — это три пасса
+/// (разрез батча родителя, пасс уровня, композит), то есть 126 пассов из 178
+/// за прогон.
+///
+/// Пересечение двух контуров считается произведением покрытий — ровно то, что
+/// делал путь уровня: содержимое уровня рисовалось с активным ВНЕШНИМ контуром
+/// (uniform), а композит `RRECT_CLIP_SHADER_SRC` домножал его на покрытие
+/// ВНУТРЕННЕГО. Разница только в том, что произведение теперь берётся во
+/// фрагменте, а не через восьмибитную текстуру уровня.
+///
+/// Второй контур неактивен → `clip2_half` = `NO_CLIP_HALF`: ветка uniform'а
+/// одинакова для всего варпа, поэтому дивергенции у неё нет, а фрагменты
+/// невложенных клипов (их подавляющее большинство) второй `sdf_rrect` не
+/// считают вовсе.
 const CLIP_UNIFORM_WGSL: &str = r#"
 struct Uniforms {
     viewport: vec2<f32>,
@@ -249,6 +270,10 @@ struct Uniforms {
     clip_half: vec2<f32>,
     clip_radii_x: vec4<f32>,
     clip_radii_y: vec4<f32>,
+    clip2_center: vec2<f32>,
+    clip2_half: vec2<f32>,
+    clip2_radii_x: vec4<f32>,
+    clip2_radii_y: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -256,7 +281,12 @@ struct Uniforms {
 fn rrect_clip_coverage(p_device: vec2<f32>) -> f32 {
     let p = p_device / u.dpr;
     let d = sdf_rrect(p - u.clip_center, u.clip_half, u.clip_radii_x, u.clip_radii_y);
-    return 1.0 - smoothstep(-0.5, 0.5, d);
+    var cov = 1.0 - smoothstep(-0.5, 0.5, d);
+    if u.clip2_half.x < 1.0e6 {
+        let d2 = sdf_rrect(p - u.clip2_center, u.clip2_half, u.clip2_radii_x, u.clip2_radii_y);
+        cov = cov * (1.0 - smoothstep(-0.5, 0.5, d2));
+    }
+    return cov;
 }
 "#;
 
@@ -2479,6 +2509,14 @@ pub struct Renderer {
     /// плечо A/B: тест рисует один и тот же список обоими путями в одном
     /// процессе и сверяет пиксели.
     shadow_analytic_enabled: bool,
+    /// Сколько ВЛОЖЕННЫХ скруглённых клипов обслужено вторым шейдерным
+    /// контуром, то есть без offscreen-уровня (BUG-405 срез 8). Гейт правки —
+    /// этот счётчик рядом с `rrect_clip_levels`.
+    nested_shader_clips: u64,
+    /// Второй шейдерный контур включён (BUG-405 срез 8). Инстансное плечо A/B:
+    /// тест рисует один и тот же список обоими путями в одном процессе и
+    /// сверяет пиксели. Поверх — рычаг `LUMEN_NO_NESTED_SHADER_CLIP=1`.
+    nested_shader_clip_enabled: bool,
     /// Приёмник готовых пайплайнов с потока прогрева (BUG-405). `None` —
     /// прогрев ещё не запущен, уже завершён, или отключён
     /// `LUMEN_NO_PIPELINE_WARMUP=1`. Сбрасывается в `None`, когда поток
@@ -2872,6 +2910,63 @@ struct ClipUniformSlot {
     clip_radii_x: [f32; 4],
     /// Вертикальные радиусы углов (tl, tr, br, bl), CSS px.
     clip_radii_y: [f32; 4],
+    /// Центр ВТОРОГО (вложенного) контура, CSS px (BUG-405 срез 8).
+    clip2_center: [f32; 2],
+    /// Полуразмер второго контура; `NO_CLIP_HALF` — контура нет.
+    clip2_half: [f32; 2],
+    /// Горизонтальные радиусы углов второго контура, CSS px.
+    clip2_radii_x: [f32; 4],
+    /// Вертикальные радиусы углов второго контура, CSS px.
+    clip2_radii_y: [f32; 4],
+}
+
+/// Полуразмер контура, при котором SDF отрицателен во всей поверхности —
+/// «клипа нет». То же число проверяет фрагментный шейдер
+/// ([`CLIP_UNIFORM_WGSL`]), решая, считать ли второй `sdf_rrect`.
+const NO_CLIP_HALF: f32 = 1.0e7;
+
+/// Сколько скруглённых контуров одновременно держит шейдер (BUG-405 срез 8).
+/// Клип глубже этого остаётся на offscreen-уровне: следующий слот стоил бы
+/// ещё одного `sdf_rrect` на фрагмент, а вложенность 3+ на живых страницах не
+/// встретилась (перепись `lenta.ru`: максимум 2).
+const SHADER_CLIP_MAX_CONTOURS: usize = 2;
+
+/// Скруглённый контур активного шейдерного клипа в экранных CSS px
+/// (BUG-405 срез 8). Стек этих записей и есть то, что слот uniform'а
+/// пересекает произведением покрытий.
+#[derive(Clone, Copy)]
+struct ClipContour {
+    /// Центр прямоугольника клипа.
+    center: [f32; 2],
+    /// Полуразмер прямоугольника клипа.
+    half: [f32; 2],
+    /// Горизонтальные радиусы углов (tl, tr, br, bl).
+    radii_x: [f32; 4],
+    /// Вертикальные радиусы углов (tl, tr, br, bl).
+    radii_y: [f32; 4],
+}
+
+/// Собирает слот uniform'а из стека активных контуров (BUG-405 срез 8).
+/// Пустой стек невозможен — слот 0 строит [`no_clip_slot`].
+fn clip_slot_from(
+    contours: &[ClipContour],
+    viewport: [f32; 2],
+    dpr: f32,
+) -> ClipUniformSlot {
+    let mut slot = no_clip_slot(viewport, dpr);
+    if let Some(c) = contours.first() {
+        slot.clip_center = c.center;
+        slot.clip_half = c.half;
+        slot.clip_radii_x = c.radii_x;
+        slot.clip_radii_y = c.radii_y;
+    }
+    if let Some(c) = contours.get(1) {
+        slot.clip2_center = c.center;
+        slot.clip2_half = c.half;
+        slot.clip2_radii_x = c.radii_x;
+        slot.clip2_radii_y = c.radii_y;
+    }
+    slot
 }
 
 /// Шаг слота в uniform-буфере. Динамический офсет обязан быть кратен
@@ -2887,9 +2982,13 @@ fn no_clip_slot(viewport: [f32; 2], dpr: f32) -> ClipUniformSlot {
         dpr,
         _pad0: 0.0,
         clip_center: [0.0, 0.0],
-        clip_half: [1.0e7, 1.0e7],
+        clip_half: [NO_CLIP_HALF, NO_CLIP_HALF],
         clip_radii_x: [0.0; 4],
         clip_radii_y: [0.0; 4],
+        clip2_center: [0.0, 0.0],
+        clip2_half: [NO_CLIP_HALF, NO_CLIP_HALF],
+        clip2_radii_x: [0.0; 4],
+        clip2_radii_y: [0.0; 4],
     }
 }
 
@@ -2901,6 +3000,17 @@ fn shader_rrect_clip_disabled() -> bool {
     use std::sync::OnceLock;
     static OFF: OnceLock<bool> = OnceLock::new();
     *OFF.get_or_init(|| std::env::var("LUMEN_NO_SHADER_RRECT_CLIP").is_ok_and(|v| v == "1"))
+}
+
+/// `true`, если ВТОРОЙ шейдерный контур отключён
+/// (`LUMEN_NO_NESTED_SHADER_CLIP=1`) — рычаг отката BUG-405 срез 8 к
+/// offscreen-уровню на каждый вложенный `PushClipRoundedRect` и A/B-плечо для
+/// проверки пикселей. Отдельный от `LUMEN_NO_SHADER_RRECT_CLIP` затем, что тот
+/// снимает шейдерный клип целиком и потому не отделяет срез 8 от среза 4.
+fn nested_shader_clip_disabled() -> bool {
+    use std::sync::OnceLock;
+    static OFF: OnceLock<bool> = OnceLock::new();
+    *OFF.get_or_init(|| std::env::var("LUMEN_NO_NESTED_SHADER_CLIP").is_ok_and(|v| v == "1"))
 }
 
 /// `true`, если склейка пасса родителя вокруг выброшенного (невидимого)
@@ -4270,6 +4380,8 @@ impl Renderer {
             cull_merge_enabled: true,
             shadow_draws: 0,
             shadow_analytic_enabled: true,
+            nested_shader_clips: 0,
+            nested_shader_clip_enabled: true,
             warm_rx: None,
             warm_started: false,
             surface,
@@ -4527,6 +4639,26 @@ impl Renderer {
         self.shadow_draws
     }
 
+    /// Сколько вложенных скруглённых клипов этот рендер обслужил ВТОРЫМ
+    /// шейдерным контуром, то есть без offscreen-уровня (BUG-405 срез 8).
+    ///
+    /// Гейт правки стоит на нём вместе с [`Renderer::rrect_clip_levels`]:
+    /// счётчик называет механизм («вложенный клип уехал в тот же uniform»), а
+    /// ноль уровней — его следствие.
+    #[must_use]
+    pub fn nested_shader_clips(&self) -> u64 {
+        self.nested_shader_clips
+    }
+
+    /// Включает/выключает второй шейдерный контур (BUG-405 срез 8).
+    ///
+    /// Нужен гейту пикселей: сравнить прежний путь через offscreen-уровень с
+    /// новым можно только двумя плечами в одном процессе. Рычаг процесса
+    /// `LUMEN_NO_NESTED_SHADER_CLIP=1` выключает второй контур поверх него.
+    pub fn set_nested_shader_clip_enabled(&mut self, enabled: bool) {
+        self.nested_shader_clip_enabled = enabled;
+    }
+
     /// Включает/выключает аналитическую размытую тень (BUG-405 срез 7).
     ///
     /// Нужен гейту пикселей: сравнить прежний трёхпассовый путь с новым можно
@@ -4573,6 +4705,10 @@ impl Renderer {
             + usize::from(self.mask_layer_pipelines.get().is_some())
             + usize::from(self.filter_pipeline.get().is_some())
             + usize::from(self.blur_pipeline.get().is_some())
+            // Срезы 6 и 7 добавили ленивые ячейки, но не добавили их сюда —
+            // прогрев заполнял 14 ячеек, а счётчик-интроспектор сообщал 12.
+            + usize::from(self.blur_composite_pipeline.get().is_some())
+            + usize::from(self.shadow_pipeline.get().is_some())
             + usize::from(self.backdrop_blit_pipeline.get().is_some())
     }
 
@@ -7746,8 +7882,13 @@ impl Renderer {
             RRect(RRectClipLevel),
             Path(PathClipLevel),
             /// BUG-405 срез 4: скруглённый клип без уровня — контур уехал в
-            /// uniform, парный `PopClip` только возвращает слот 0.
-            Shader,
+            /// uniform, парный `PopClip` только возвращает прежний слот.
+            ///
+            /// Срез 8 сделал слот вложенным, поэтому «прежний» — это не всегда
+            /// 0: внутренний клип возвращает управление слоту ВНЕШНЕГО, а не
+            /// «клипа нет». Хранить его в самой записи надёжнее пересборки на
+            /// `PopClip`: стек контуров к этому моменту уже укорочен.
+            Shader { prev_slot: u32 },
         }
         // По записи на КАЖДЫЙ push клипа (`PushClipRect`/`PushClipRoundedRect`/
         // `PushClipPath`), чтобы `PopClip` знал, открывал ли его парный push
@@ -8026,6 +8167,18 @@ impl Renderer {
         let mut clip_slots: Vec<ClipUniformSlot> =
             vec![no_clip_slot([viewport_css_w, viewport_css_h], dpr_f32)];
         let mut active_clip_slot: u32 = 0;
+        // BUG-405 срез 8: контуры активных шейдерных клипов. Слот собирается из
+        // всего стека, поэтому вложенный клип пересекается с внешним прямо во
+        // фрагменте.
+        let mut clip_contours: Vec<ClipContour> = Vec::new();
+        // Сколько контуров шейдер держит В ЭТОМ кадре: рычаг отката среза 8
+        // оставляет один, и вложенный клип снова уходит на offscreen-уровень.
+        let max_clip_contours =
+            if nested_shader_clip_disabled() || !self.nested_shader_clip_enabled {
+                1
+            } else {
+                SHADER_CLIP_MAX_CONTOURS
+            };
         let iter_content = content.iter().enumerate().map(|(i, c)| (c, false, i));
         let iter_overlay = overlay.iter().enumerate().map(|(i, c)| (c, true, i));
         for (cmd, is_overlay, cmd_idx) in iter_content.chain(iter_overlay) {
@@ -8640,19 +8793,19 @@ impl Renderer {
                             };
                             // BUG-405 срез 4: контур помещается в uniform —
                             // ни уровня, ни композита, ни разрыва батча. Уровень
-                            // остаётся, если контур уже занят внешним клипом
-                            // (в шейдере он один) или поддерево содержит
-                            // фильтр/маску/blend (`shader_rrect_clip_allowed`).
+                            // остаётся, если контуры уже заняты (срез 8 держит
+                            // два, вложенность 3+ идёт на уровень) или поддерево
+                            // содержит фильтр/маску/blend
+                            // (`shader_rrect_clip_allowed`).
                             let ok = if is_overlay {
                                 shader_clip_ok_overlay.get(cmd_idx)
                             } else {
                                 shader_clip_ok_content.get(cmd_idx)
                             };
-                            if active_clip_slot == 0
+                            if clip_contours.len() < max_clip_contours
                                 && *ok.unwrap_or(&false)
                                 && !shader_rrect_clip_disabled()
                             {
-                                let slot = clip_slots.len() as u32;
                                 // Радиусы обязаны быть ужаты в бокс тем же
                                 // правилом, что и на путь уровня
                                 // (`push_rrect_clip_quad`): CSS Backgrounds L3
@@ -8662,26 +8815,28 @@ impl Renderer {
                                 // стороны — TEST-101 5.39% против 0.25%.
                                 let radii = radii
                                     .clamped_to_box(in_screen.width, in_screen.height);
-                                clip_slots.push(ClipUniformSlot {
-                                    viewport: [viewport_css_w, viewport_css_h],
-                                    dpr: dpr_f32,
-                                    _pad0: 0.0,
-                                    clip_center: [
+                                if !clip_contours.is_empty() {
+                                    self.nested_shader_clips += 1;
+                                }
+                                clip_contours.push(ClipContour {
+                                    center: [
                                         in_screen.x + in_screen.width * 0.5,
                                         in_screen.y + in_screen.height * 0.5,
                                     ],
-                                    clip_half: [
-                                        in_screen.width * 0.5,
-                                        in_screen.height * 0.5,
-                                    ],
-                                    clip_radii_x: [radii.tl, radii.tr, radii.br, radii.bl],
-                                    clip_radii_y: [
-                                        radii.tl_y, radii.tr_y, radii.br_y, radii.bl_y,
-                                    ],
+                                    half: [in_screen.width * 0.5, in_screen.height * 0.5],
+                                    radii_x: [radii.tl, radii.tr, radii.br, radii.bl],
+                                    radii_y: [radii.tl_y, radii.tr_y, radii.br_y, radii.bl_y],
                                 });
+                                let slot = clip_slots.len() as u32;
+                                clip_slots.push(clip_slot_from(
+                                    &clip_contours,
+                                    [viewport_css_w, viewport_css_h],
+                                    dpr_f32,
+                                ));
                                 draw_ops.push(DrawOp::SetClip(slot));
+                                clip_level_stack
+                                    .push(Some(ClipLevel::Shader { prev_slot: active_clip_slot }));
                                 active_clip_slot = slot;
-                                clip_level_stack.push(Some(ClipLevel::Shader));
                                 continue;
                             }
                             flush_batch!();
@@ -8753,18 +8908,21 @@ impl Renderer {
                     // покрытие контура.
                     if let Some(Some(clip)) = clip_level_stack.pop() {
                         // BUG-405 срез 4: у шейдерного клипа уровня нет —
-                        // закрыть его значит вернуть слот 0 прямо в потоке
-                        // операций, без flush_batch и без композит-пасса.
-                        if matches!(clip, ClipLevel::Shader) {
-                            draw_ops.push(DrawOp::SetClip(0));
-                            active_clip_slot = 0;
+                        // закрыть его значит вернуть ПРЕЖНИЙ слот прямо в
+                        // потоке операций, без flush_batch и без композита.
+                        // Срез 8: прежний слот — это слот внешнего клипа, если
+                        // тот был, и 0 иначе.
+                        if let ClipLevel::Shader { prev_slot } = clip {
+                            clip_contours.pop();
+                            draw_ops.push(DrawOp::SetClip(prev_slot));
+                            active_clip_slot = prev_slot;
                             continue;
                         }
                         let (clip_rect, plan_mark) = match &clip {
                             ClipLevel::RRect(c) => (c.rect, c.plan_mark),
                             ClipLevel::Path(c) => (c.rect, c.plan_mark),
                             // Снято выше отдельной веткой: уровня нет.
-                            ClipLevel::Shader => continue,
+                            ClipLevel::Shader { .. } => continue,
                         };
                         flush_batch!();
                         // viewport-cull: пустой/за-экранный уровень невидим —
@@ -8795,7 +8953,7 @@ impl Renderer {
                         }
                         match clip {
                             // Шейдерный клип снят веткой выше (уровня нет).
-                            ClipLevel::Shader => {}
+                            ClipLevel::Shader { .. } => {}
                             ClipLevel::RRect(c) => {
                                 // BUG-405 срез 4: клип, которому шейдерный путь
                                 // не подошёл (вложенный или с фильтром/маской
