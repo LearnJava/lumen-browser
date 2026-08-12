@@ -2557,6 +2557,12 @@ pub struct Renderer {
     /// рисует один и тот же список обоими путями в одном процессе и сверяет
     /// пиксели. Поверх — рычаг `LUMEN_NO_SVG_SHAPE_CACHE=1`.
     svg_shape_cache_enabled: bool,
+    /// Мемоизация укладки целого текстового run-а (BUG-405 срез 13).
+    text_run_cache: TextRunCache,
+    /// Кэш укладки текста включён (BUG-405 срез 13). Инстансное плечо A/B:
+    /// тест рисует один и тот же список обоими путями в одном процессе и
+    /// сверяет вершины. Поверх — рычаг `LUMEN_NO_TEXT_RUN_CACHE=1`.
+    text_run_cache_enabled: bool,
     /// Приёмник готовых пайплайнов с потока прогрева (BUG-405). `None` —
     /// прогрев ещё не запущен, уже завершён, или отключён
     /// `LUMEN_NO_PIPELINE_WARMUP=1`. Сбрасывается в `None`, когда поток
@@ -4446,6 +4452,8 @@ impl Renderer {
             coverage_cache_enabled: true,
             svg_shape_cache: SvgShapeCache::default(),
             svg_shape_cache_enabled: true,
+            text_run_cache: TextRunCache::default(),
+            text_run_cache_enabled: true,
             warm_rx: None,
             warm_started: false,
             surface,
@@ -4804,6 +4812,21 @@ impl Renderer {
     /// выключает кэш поверх него.
     pub fn set_svg_shape_cache_enabled(&mut self, enabled: bool) {
         self.svg_shape_cache_enabled = enabled;
+    }
+
+    /// Попаданий и промахов кэша укладки текста (BUG-405 срез 13) за жизнь
+    /// рендерера.
+    pub fn text_run_cache_stats(&self) -> (u64, u64) {
+        (self.text_run_cache.hits, self.text_run_cache.misses)
+    }
+
+    /// Включает/выключает мемоизацию укладки текстового run-а (BUG-405 срез 13).
+    ///
+    /// Нужен гейту вершин: сравнить укладку с попаданием можно только двумя
+    /// плечами в одном процессе. Рычаг процесса `LUMEN_NO_TEXT_RUN_CACHE=1`
+    /// выключает кэш поверх него.
+    pub fn set_text_run_cache_enabled(&mut self, enabled: bool) {
+        self.text_run_cache_enabled = enabled;
     }
 
     /// Включает/выключает кэш покрытия SVG-супов (BUG-405 срез 9).
@@ -8717,6 +8740,8 @@ impl Renderer {
                                 &mut lazy_faces,
                                 &mut self.atlas,
                                 &mut self.cached_glyphs,
+                                &mut self.text_run_cache,
+                                self.text_run_cache_enabled,
                                 font_variation_axes,
                                 *tab_size,
                                 font_palette.as_ref(),
@@ -8734,6 +8759,8 @@ impl Renderer {
                                 &mut lazy_faces,
                                 &mut self.atlas,
                                 &mut self.cached_glyphs,
+                                &mut self.text_run_cache,
+                                self.text_run_cache_enabled,
                                 font_variation_axes,
                                 *tab_size,
                                 font_palette.as_ref(),
@@ -8750,6 +8777,8 @@ impl Renderer {
                                 &mut lazy_faces,
                                 &mut self.atlas,
                                 &mut self.cached_glyphs,
+                                &mut self.text_run_cache,
+                                self.text_run_cache_enabled,
                                 font_variation_axes,
                                 *tab_size,
                                 font_palette.as_ref(),
@@ -8936,6 +8965,8 @@ impl Renderer {
                                 &mut lazy_faces,
                                 &mut self.atlas,
                                 &mut self.cached_glyphs,
+                                &mut self.text_run_cache,
+                                self.text_run_cache_enabled,
                                 &[],
                                 0.0,
                                 None,
@@ -12451,6 +12482,17 @@ impl Renderer {
                 clip_slots.len(),
             );
 
+            // BUG-405 срез 13: попадания кэша укладки текста нарастающим
+            // итогом. На уровне 2, без таймеров: разбивка `text-sub` стоит
+            // около трети измеряемой ею статьи, а решение «кэш работает или
+            // нет» принимается по счётчику, а не по секундомеру.
+            eprintln!(
+                "[frame:wgpu]   text-runs: попаданий {} промахов {} | планов {} слов",
+                self.text_run_cache.hits,
+                self.text_run_cache.misses,
+                self.text_run_cache.stored,
+            );
+
             // LUMEN_FRAME_LOG=3 — распределение, а не среднее.
             if item_log {
                 let d_created = load_counter(&TEXTURES_CREATED) - tex_created_at_entry;
@@ -14554,6 +14596,158 @@ fn push_glyph_quad(
     ]);
 }
 
+/// Шаг укладки текстового run-а — то, что цикл по символам делает с пером.
+///
+/// Разбивка `text-sub` (срез 13) показала, что из 16.8 мс команд `DrawText` на
+/// прокрутке `lenta.ru` собственно укладка квадов — 2.9 мс, а остальное уходит
+/// на то, ЧТО класть: выбор face-а под кодпойнт, нормализацию осей вариаций и
+/// поиск глифа в атласе — три хэш-таблицы на каждый символ. Ответ на все три
+/// вопроса зависит только от входа команды, а он на прокрутке повторяется:
+/// один и тот же заголовок перекладывается каждый кадр заново.
+#[derive(Clone, Copy)]
+enum TextRunStep {
+    /// Положить квад глифа и сдвинуть перо на `advance`.
+    Glyph {
+        /// Готовая запись атласа с метриками.
+        g: CachedGlyph,
+        /// Сдвиг пера, уже домноженный на `font_size / units_per_em` face-а,
+        /// с которого взят глиф.
+        advance: f32,
+    },
+    /// Сдвинуть перо, ничего не кладя (табуляция или неотрисовавшийся глиф).
+    Advance(f32),
+}
+
+/// План укладки run-а: последовательность [`TextRunStep`] от пера в `rect.x`.
+type TextRunPlan = std::sync::Arc<Vec<TextRunStep>>;
+
+/// Запись [`TextRunCache`]: численная часть ключа, строка и её план.
+type TextRunEntry = (Vec<u32>, Box<str>, TextRunPlan);
+
+/// Сколько шагов планов держит [`TextRunCache`], прежде чем сбросить себя
+/// целиком. Та же политика и тот же порядок, что у
+/// [`SVG_SHAPE_CACHE_MAX_VERTS`]: страница живёт на единицах тысяч, сброс нужен
+/// патологии — потоку НОВЫХ строк каждый кадр (счётчик, тикающий посимвольно).
+const TEXT_RUN_CACHE_MAX_STEPS: usize = 1 << 18;
+
+/// Мемоизация укладки целого текстового run-а (BUG-405 срез 13).
+///
+/// Ключ — ВХОД команды: сама строка, кегль, ширина табуляции, primary face и
+/// оси вариаций. Всё, от чего зависит план, в ключе есть, поэтому попадание
+/// возвращает ровно те шаги, которые вернул бы пересчёт; сравнение ключей
+/// побитовое, коллизия хэша даёт промах, а не чужие глифы.
+///
+/// План хранит шаги, а не готовые вершины, именно чтобы попадание повторило
+/// ТЕ ЖЕ операции над `f32` в ТОМ ЖЕ порядке, что и пересчёт: перо стартует с
+/// `rect.x` и накапливает те же слагаемые, `push_glyph_quad` получает те же
+/// аргументы. Сложение `f32` не ассоциативно — вынеси мы позицию из плана
+/// (уложив run в начале координат и сдвинув потом), вершины разошлись бы на
+/// ULP, и гейт перестал бы быть побайтовым.
+///
+/// **Цветной глиф (COLR) не кэшируется**: его квады зависят ещё и от палитры и
+/// от цвета текста, а сам он редок (эмодзи). Такой run кладётся мимо кэша.
+///
+/// **Попадание не трогает атлас**, поэтому не обновляет `last_accessed` его
+/// записей: под эвикцией по памяти (`atlas_on_memory_pressure`) давно
+/// повторяющийся run может потерять свои глифы. Та же экспозиция, что у
+/// `Renderer::cached_glyphs`, который тоже переживает эвикцию.
+#[derive(Default)]
+struct TextRunCache {
+    /// Хэш ключа → ключи с таким хэшом и посчитанные по ним планы.
+    buckets: std::collections::HashMap<u64, Vec<TextRunEntry>>,
+    /// Переиспользуемый буфер под численную часть ключа — иначе каждая
+    /// команда аллоцировала бы.
+    scratch: Vec<u32>,
+    /// Сколько слов ключей и шагов планов суммарно хранится.
+    stored: usize,
+    /// Сколько команд вернули готовый план.
+    hits: u64,
+    /// Сколько команд уложили run заново.
+    misses: u64,
+}
+
+impl TextRunCache {
+    /// Готовый план по ключу, если он есть, и хэш ключа для последующего
+    /// [`TextRunCache::put`] — считать его второй раз незачем.
+    fn get(&mut self, params: &[u32], text: &str) -> (Option<TextRunPlan>, u64) {
+        let h = text_run_hash(params, text);
+        let found = self
+            .buckets
+            .get(&h)
+            .and_then(|bucket| {
+                bucket
+                    .iter()
+                    .find(|(p, t, _)| p.as_slice() == params && &**t == text)
+            })
+            .map(|(_, _, plan)| std::sync::Arc::clone(plan));
+        if found.is_some() {
+            self.hits += 1;
+        } else {
+            self.misses += 1;
+        }
+        (found, h)
+    }
+
+    /// Запомнить план, уложенный по этому ключу (`h` — хэш, отданный `get`).
+    fn put(&mut self, h: u64, params: &[u32], text: &str, plan: Vec<TextRunStep>) {
+        let cost = params.len() + text.len() + plan.len();
+        if self.stored + cost > TEXT_RUN_CACHE_MAX_STEPS {
+            self.buckets.clear();
+            self.stored = 0;
+        }
+        self.stored += cost;
+        self.buckets.entry(h).or_default().push((
+            params.to_vec(),
+            Box::from(text),
+            std::sync::Arc::new(plan),
+        ));
+    }
+}
+
+/// Численная часть ключа run-а для [`TextRunCache`] — всё, от чего зависит
+/// план укладки, кроме самой строки. Пишется в переиспользуемый буфер `out`.
+///
+/// Строка в буфер НЕ упаковывается. Первая редакция паковала её байты в слова
+/// `u32`, и упаковка съедала заметную долю выигрыша от кэша — тот же класс,
+/// что и ключ среза 12: строка хранится и сравнивается как есть, а в хэш идёт
+/// побайтово.
+fn build_text_run_key(
+    out: &mut Vec<u32>,
+    font_size: f32,
+    tab_size: f32,
+    primary_face_id: usize,
+    axes: &[([u8; 4], f32)],
+) {
+    out.clear();
+    out.push(font_size.to_bits());
+    out.push(tab_size.to_bits());
+    out.push(primary_face_id as u32);
+    out.push(axes.len() as u32);
+    for (tag, value) in axes {
+        out.push(u32::from_be_bytes(*tag));
+        out.push(value.to_bits());
+    }
+}
+
+/// FNV-1a по численной части ключа и байтам строки — та же дешёвая свёртка,
+/// что у [`bits_hash`]; коллизия отсеивается сравнением самого ключа.
+fn text_run_hash(params: &[u32], text: &str) -> u64 {
+    let mut h = bits_hash(params);
+    for b in text.as_bytes() {
+        h = (h ^ u64::from(*b)).wrapping_mul(0x100_0000_01b3);
+    }
+    h
+}
+
+/// `true`, если мемоизация укладки текста отключена
+/// (`LUMEN_NO_TEXT_RUN_CACHE=1`) — рычаг отката BUG-405 срез 13 к укладке
+/// run-а на каждую команду.
+fn text_run_cache_disabled() -> bool {
+    use std::sync::OnceLock;
+    static OFF: OnceLock<bool> = OnceLock::new();
+    *OFF.get_or_init(|| std::env::var("LUMEN_NO_TEXT_RUN_CACHE").is_ok_and(|v| v == "1"))
+}
+
 /// Returns the final pen `x` (== `rect.x` + shaped advance) — used by
 /// [`push_text_glyphs_mixed`] to measure a segment's real width without a
 /// separate shaping pass.
@@ -14568,6 +14762,8 @@ fn push_text_glyphs(
     lazy: &mut LazyParsedFaces<'_>,
     atlas: &mut GlyphAtlas,
     cached: &mut HashMap<AtlasKey, Option<CachedGlyph>>,
+    runs: &mut TextRunCache,
+    runs_enabled: bool,
     font_variation_axes: &[([u8; 4], f32)],
     tab_size: f32,
     font_palette: Option<&FontPaletteSelection>,
@@ -14605,6 +14801,26 @@ fn push_text_glyphs(
     // у монохромного face-а (подавляющее большинство) `FaceMetrics.color` =
     // None и сюда не заходим ни разу.
     let mut palette_cache: HashMap<usize, Option<Vec<[f32; 4]>>> = HashMap::new();
+    // BUG-405 срез 13: готовый план укладки этого run-а. Ключ строится по
+    // входу команды — он на порядок меньше плана (18 байт строки против 18
+    // шагов с записями атласа), поэтому спросить кэш дёшево.
+    let cache_on = runs_enabled && !text_run_cache_disabled();
+    let mut key = std::mem::take(&mut runs.scratch);
+    let mut key_hash = 0_u64;
+    let plan = if cache_on {
+        build_text_run_key(
+            &mut key,
+            font_size,
+            tab_size,
+            primary_face_id,
+            font_variation_axes,
+        );
+        let (found, h) = runs.get(&key, text);
+        key_hash = h;
+        found
+    } else {
+        None
+    };
     if let Some(t0) = t_pre {
         sub_add(&TEXT_SUB.pre, t0);
         use std::sync::atomic::Ordering::Relaxed;
@@ -14612,12 +14828,39 @@ fn push_text_glyphs(
         TEXT_SUB.chars.fetch_add(text.chars().count() as u64, Relaxed);
     }
 
+    if let Some(plan) = plan {
+        let _t_loop = sub_timer(log, &TEXT_SUB.lp);
+        let mut cursor_x = rect.x;
+        for step in plan.iter() {
+            match step {
+                TextRunStep::Glyph { g, advance } => {
+                    let t_quad = log.then(std::time::Instant::now);
+                    push_glyph_quad(out, g, cursor_x, baseline_y, display_scale, color);
+                    cursor_x += advance;
+                    if let Some(t0) = t_quad {
+                        sub_add(&TEXT_SUB.quad, t0);
+                        TEXT_SUB.glyphs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+                TextRunStep::Advance(advance) => cursor_x += advance,
+            }
+        }
+        runs.scratch = key;
+        return cursor_x;
+    }
+
+    // Промах: укладываем run и попутно записываем план. `None` означает, что
+    // запоминать нечего — кэш выключен или в run-е попался цветной глиф.
+    let mut plan: Option<Vec<TextRunStep>> = cache_on.then(Vec::new);
     let _t_loop = sub_timer(log, &TEXT_SUB.lp);
     let mut cursor_x = rect.x;
     for ch in text.chars() {
         // CSS Text L3 §10.1 — tab character advances by tab_size pixels.
         if ch == '\t' && tab_size > 0.0 {
             cursor_x += tab_size;
+            if let Some(plan) = plan.as_mut() {
+                plan.push(TextRunStep::Advance(tab_size));
+            }
             continue;
         }
         let t_pick = log.then(std::time::Instant::now);
@@ -14689,6 +14932,9 @@ fn push_text_glyphs(
             if let Some(&adv) = metrics.advances.get(glyph_id as usize) {
                 cursor_x += adv as f32 * advance_scale;
             }
+            // Цветной глиф зависит от палитры и цвета текста — run с ним
+            // мимо кэша целиком (см. [`TextRunCache`]).
+            plan = None;
             continue;
         }
 
@@ -14704,8 +14950,12 @@ fn push_text_glyphs(
 
         if let Some(g) = cached_glyph {
             let t_quad = log.then(std::time::Instant::now);
+            let advance = g.advance_native as f32 * advance_scale;
             push_glyph_quad(out, &g, cursor_x, baseline_y, display_scale, color);
-            cursor_x += g.advance_native as f32 * advance_scale;
+            cursor_x += advance;
+            if let Some(plan) = plan.as_mut() {
+                plan.push(TextRunStep::Glyph { g, advance });
+            }
             if let Some(t0) = t_quad {
                 sub_add(&TEXT_SUB.quad, t0);
                 TEXT_SUB.glyphs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -14714,10 +14964,18 @@ fn push_text_glyphs(
             // Глиф не отрисовался (composite-fallback, empty или нет места
             // в атласе). Двигаем cursor на advance из выбранного face-а.
             if let Some(&adv) = metrics.advances.get(glyph_id as usize) {
-                cursor_x += adv as f32 * advance_scale;
+                let advance = adv as f32 * advance_scale;
+                cursor_x += advance;
+                if let Some(plan) = plan.as_mut() {
+                    plan.push(TextRunStep::Advance(advance));
+                }
             }
         }
     }
+    if let Some(plan) = plan {
+        runs.put(key_hash, &key, text, plan);
+    }
+    runs.scratch = key;
     cursor_x
 }
 
@@ -14755,6 +15013,8 @@ fn push_text_glyphs_mixed(
     lazy: &mut LazyParsedFaces<'_>,
     atlas: &mut GlyphAtlas,
     cached: &mut HashMap<AtlasKey, Option<CachedGlyph>>,
+    runs: &mut TextRunCache,
+    runs_enabled: bool,
     font_variation_axes: &[([u8; 4], f32)],
     tab_size: f32,
     font_palette: Option<&FontPaletteSelection>,
@@ -14773,7 +15033,7 @@ fn push_text_glyphs_mixed(
             let seg_rect = Rect::new(dest.x, dest.y + y_cursor, dest.width, dest.height);
             let end_x = push_text_glyphs(
                 out, seg_rect, &seg_text, font_size, color, primary_face_id, lazy, atlas,
-                cached, font_variation_axes, tab_size, font_palette,
+                cached, runs, runs_enabled, font_variation_axes, tab_size, font_palette,
             );
             y_cursor += end_x - dest.x;
         } else {
@@ -14781,7 +15041,7 @@ fn push_text_glyphs_mixed(
             let local_rect = Rect::new(y_cursor, 0.0, dest.width, dest.height);
             let end_x = push_text_glyphs(
                 out, local_rect, &seg_text, font_size, color, primary_face_id, lazy, atlas,
-                cached, font_variation_axes, tab_size, font_palette,
+                cached, runs, runs_enabled, font_variation_axes, tab_size, font_palette,
             );
             rotate_text_vertices_cw(&mut out[v_start..], dest);
             y_cursor = end_x;
@@ -16935,6 +17195,7 @@ mod tests {
         let mut atlas = GlyphAtlas::new(ATLAS_DIM);
         let mut cached: HashMap<AtlasKey, Option<CachedGlyph>> = HashMap::new();
         let mut out: Vec<TextVertex> = Vec::new();
+        let mut runs = TextRunCache::default();
         let text_color = [0.0, 0.0, 1.0, 1.0];
 
         let end_x = push_text_glyphs(
@@ -16947,6 +17208,8 @@ mod tests {
             &mut lazy,
             &mut atlas,
             &mut cached,
+            &mut runs,
+            true,
             &[],
             0.0,
             None,
@@ -16975,6 +17238,7 @@ mod tests {
         let mut atlas = GlyphAtlas::new(ATLAS_DIM);
         let mut cached: HashMap<AtlasKey, Option<CachedGlyph>> = HashMap::new();
         let mut out: Vec<TextVertex> = Vec::new();
+        let mut runs = TextRunCache::default();
         let selection = FontPaletteSelection::Custom {
             base_palette: 0,
             overrides: vec![PaletteColorOverride {
@@ -16993,6 +17257,8 @@ mod tests {
             &mut lazy,
             &mut atlas,
             &mut cached,
+            &mut runs,
+            true,
             &[],
             0.0,
             Some(&selection),
@@ -17005,5 +17271,121 @@ mod tests {
         assert!(close(out[0].color, [0.0, 1.0, 0.0, 1.0]), "layer 0 color {:?}", out[0].color);
         // Слой `0xFFFF` остаётся текстового цвета независимо от override-ов.
         assert!(close(out[6].color, [0.0, 0.0, 1.0, 1.0]));
+    }
+
+    /// BUG-405 срез 13: run с цветным глифом мимо кэша.
+    ///
+    /// Его квады зависят от палитры и от цвета текста, которых в ключе нет, —
+    /// попади он в кэш, второй вызов с другим цветом вернул бы чужие вершины.
+    /// Гейт — счётчик: попаданий обязано остаться ноль на любом числе вызовов.
+    #[test]
+    fn text_run_cache_skips_color_glyph_runs() {
+        let bytes = build_color_font();
+        let metrics = build_face_metrics(&bytes);
+        let faces = vec![LoadedFace { bytes: Arc::from(bytes.as_slice()), metrics }];
+        let mut lazy = LazyParsedFaces::new(&faces);
+        let mut atlas = GlyphAtlas::new(ATLAS_DIM);
+        let mut cached: HashMap<AtlasKey, Option<CachedGlyph>> = HashMap::new();
+        let mut runs = TextRunCache::default();
+        let mut out: Vec<TextVertex> = Vec::new();
+
+        for _ in 0..3 {
+            out.clear();
+            push_text_glyphs(
+                &mut out,
+                Rect::new(0.0, 0.0, 100.0, 40.0),
+                "A",
+                32.0,
+                [0.0, 0.0, 1.0, 1.0],
+                0,
+                &mut lazy,
+                &mut atlas,
+                &mut cached,
+                &mut runs,
+                true,
+                &[],
+                0.0,
+                None,
+            );
+        }
+        assert_eq!(out.len(), 12, "цветной глиф всё ещё даёт quad на слой");
+        assert_eq!(runs.hits, 0, "run с цветным глифом попал в кэш");
+        assert_eq!(runs.misses, 3, "каждый вызов обязан уложить run заново");
+    }
+
+    /// BUG-405 срез 13: попадание кэша укладки даёт ПОБИТОВО те же вершины.
+    ///
+    /// План хранит шаги, а не готовые вершины, ровно ради этого: перо
+    /// стартует с `rect.x` и накапливает те же слагаемые в том же порядке.
+    /// Сравнение по битам, а не с допуском: сложение `f32` не ассоциативно, и
+    /// расхождение в ULP означало бы, что позиция вынесена из плана неверно.
+    #[test]
+    fn text_run_cache_replays_identical_vertices() {
+        let bytes = std::fs::read("../../../assets/fonts/Inter-Regular.ttf")
+            .expect("bundled font");
+        let metrics = build_face_metrics(&bytes);
+        let faces = vec![LoadedFace { bytes: Arc::from(bytes.as_slice()), metrics }];
+        let mut lazy = LazyParsedFaces::new(&faces);
+        let mut atlas = GlyphAtlas::new(ATLAS_DIM);
+        let mut cached: HashMap<AtlasKey, Option<CachedGlyph>> = HashMap::new();
+        let mut runs = TextRunCache::default();
+
+        let mut lay = |runs: &mut TextRunCache, enabled: bool, y: f32| {
+            let mut out: Vec<TextVertex> = Vec::new();
+            push_text_glyphs(
+                &mut out,
+                Rect::new(13.5, y, 400.0, 30.0),
+                "Привет, world!",
+                17.0,
+                [0.1, 0.2, 0.3, 1.0],
+                0,
+                &mut lazy,
+                &mut atlas,
+                &mut cached,
+                runs,
+                enabled,
+                &[],
+                0.0,
+                None,
+            );
+            out
+        };
+
+        // Плечо отката: кэш не трогается ни разу.
+        let mut off = TextRunCache::default();
+        let base = lay(&mut off, false, 40.0);
+        assert!(!base.is_empty(), "run обязан дать вершины");
+        assert_eq!((off.hits, off.misses), (0, 0), "плечо отката трогало кэш");
+
+        let first = lay(&mut runs, true, 40.0);
+        assert_eq!((runs.hits, runs.misses), (0, 1), "первый вызов не мог попасть");
+        let second = lay(&mut runs, true, 40.0);
+        assert_eq!((runs.hits, runs.misses), (1, 1), "повторный вызов не попал в кэш");
+
+        assert!(bits_eq(&first, &base), "укладка с кэшом разошлась с откатом");
+        assert!(bits_eq(&second, &first), "попадание разошлось с укладкой");
+
+        // Другая позиция — тот же ключ (позиция не в ключе), но вершины
+        // обязаны сдвинуться: план воспроизводит перо от нового `rect`.
+        let moved = lay(&mut runs, true, 90.0);
+        assert_eq!(runs.hits, 2, "сдвиг по вертикали обязан быть попаданием");
+        assert_eq!(moved.len(), first.len());
+        assert!(
+            moved.iter().zip(&first).all(|(a, b)| a.pos[0] == b.pos[0] && a.pos[1] > b.pos[1]),
+            "попадание проигнорировало новую позицию run-а",
+        );
+    }
+
+    /// Побитовое равенство двух наборов вершин текста.
+    fn bits_eq(a: &[TextVertex], b: &[TextVertex]) -> bool {
+        a.len() == b.len()
+            && a.iter().zip(b).all(|(x, y)| {
+                x.pos[0].to_bits() == y.pos[0].to_bits()
+                    && x.pos[1].to_bits() == y.pos[1].to_bits()
+                    && x.z.to_bits() == y.z.to_bits()
+                    && x.uv[0].to_bits() == y.uv[0].to_bits()
+                    && x.uv[1].to_bits() == y.uv[1].to_bits()
+                    && x.color.iter().zip(&y.color).all(|(p, q)| p.to_bits() == q.to_bits())
+            })
     }
 }
