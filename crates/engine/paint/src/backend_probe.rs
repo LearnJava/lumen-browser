@@ -37,8 +37,20 @@
 //! валидацию (readback + захват презентации через DWM) — устаревший или
 //! неверный кэш просто отклоняется пробой и проба сама скатывается на
 //! оставшихся двух кандидатов в обычном порядке (self-healing, не риск).
-//! Файл — `<exe_dir>/data/paint/backend_probe.txt`, единственная строка —
-//! короткое имя кандидата ("Vulkan"/"GL"/"DX12"). Тот же портативный
+//!
+//! **Самолечение работает только вниз по порядку — и это чинилось в BUG-405
+//! срезе 14.** Кандидат, принятый прошлый раз, пробуется первым и проходит,
+//! поэтому стоящие ВПЕРЕДИ него кандидаты не пробуются больше никогда: одно
+//! отклонение Vulkan'а (глюк DWM, старый драйвер) навсегда сажало машину на
+//! DX12, который на той же Intel Iris Plus стоит вдвое дороже по кадру
+//! прокрутки (`encode` 33 против 11.8 мс за прогон, сумма кадров 116 против
+//! 53). Поэтому кэш хранит не только победителя, но и ключ окружения, в
+//! котором он победил (адаптер, драйвер, версия Lumen): при расхождении
+//! ключа проба перепроверяет кандидатов впереди победителя, а запись старого
+//! формата (одно слово) права пропускать кандидатов не даёт вовсе.
+//!
+//! Файл — `<exe_dir>/data/paint/backend_probe.txt`, формат v2 — строки
+//! `winner=`/`adapter=`/`driver=`/`app=`. Тот же портативный
 //! конвенция, что `shell::adblock::browser_data_dir` (только папка браузера,
 //! никогда OS-каталоги) — paint не может зависеть от shell (архитектурное
 //! направление `lumen-core → … → paint → shell`), поэтому здесь свой
@@ -125,6 +137,10 @@ fn classify(avg: [u8; 3], srgb: bool) -> Signal {
 struct CandidateReport {
     /// Имя адаптера, каким его сообщил wgpu.
     adapter: String,
+    /// Драйвер адаптера (`driver` + `driver_info`) — ключ инвалидации кэша
+    /// (BUG-405 срез 14): обновление драйвера меняет исход пробы, а имя
+    /// адаптера при этом не меняется.
+    driver: String,
     /// Сигнал texture readback.
     texture: Signal,
     /// Сигнал захвата презентации.
@@ -149,11 +165,66 @@ fn cache_path() -> std::path::PathBuf {
         .join("backend_probe.txt")
 }
 
-/// Читает закэшированного победителя прошлой пробы. `None` — файла нет,
-/// нечитаем или содержит не одно из трёх известных имён (проба тогда идёт
-/// в исходном порядке Vulkan → GL → DX12, как без кэша).
-fn read_cached_backend() -> Option<wgpu::Backends> {
-    match std::fs::read_to_string(cache_path()).ok()?.trim() {
+/// Запись кэша пробы (формат v2, BUG-405 срез 14).
+///
+/// Кроме победителя хранит ключ окружения, в котором он победил: имя
+/// адаптера, строку драйвера и версию приложения. Победитель без ключа
+/// (формат v1 — одно слово в файле) не даёт права пропускать кандидатов:
+/// именно так «кандидат отклонён один раз» превращалось в «кандидат не
+/// пробуется никогда».
+#[derive(Clone, PartialEq, Eq, Debug)]
+struct ProbeCache {
+    /// Короткое имя принятого кандидата: `Vulkan` / `GL` / `DX12`.
+    winner: String,
+    /// Имя адаптера, на котором победитель прошёл пробу.
+    adapter: String,
+    /// Драйвер этого адаптера (`driver` + `driver_info`).
+    driver: String,
+    /// Версия Lumen, в которой снят результат.
+    app: String,
+}
+
+/// Разбирает содержимое файла кэша. `None` — пусто, мусор или формат v1
+/// (одно слово): и то, и другое означает «улик нет, проба идёт полностью».
+fn parse_cache(text: &str) -> Option<ProbeCache> {
+    let mut winner = None;
+    let mut adapter = None;
+    let mut driver = None;
+    let mut app = None;
+    for line in text.lines() {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let value = value.trim().to_string();
+        match key.trim() {
+            "winner" => winner = Some(value),
+            "adapter" => adapter = Some(value),
+            "driver" => driver = Some(value),
+            "app" => app = Some(value),
+            _ => {}
+        }
+    }
+    let cache = ProbeCache {
+        winner: winner?,
+        adapter: adapter?,
+        driver: driver?,
+        app: app?,
+    };
+    backend_by_name(&cache.winner)?;
+    Some(cache)
+}
+
+/// Собирает содержимое файла кэша.
+fn serialize_cache(cache: &ProbeCache) -> String {
+    format!(
+        "winner={}\nadapter={}\ndriver={}\napp={}\n",
+        cache.winner, cache.adapter, cache.driver, cache.app
+    )
+}
+
+/// Короткое имя кандидата → набор бэкендов wgpu.
+fn backend_by_name(name: &str) -> Option<wgpu::Backends> {
+    match name {
         "Vulkan" => Some(wgpu::Backends::VULKAN),
         "GL" => Some(wgpu::Backends::GL),
         "DX12" => Some(wgpu::Backends::DX12),
@@ -161,18 +232,23 @@ fn read_cached_backend() -> Option<wgpu::Backends> {
     }
 }
 
-/// Сохраняет принятого пробой кандидата для следующего запуска.
+/// Читает кэш прошлой пробы.
+fn read_cache() -> Option<ProbeCache> {
+    parse_cache(&std::fs::read_to_string(cache_path()).ok()?)
+}
+
+/// Сохраняет результат пробы для следующего запуска.
 /// Best-effort: любая ошибка ФС (нет прав на запись в `data/`, диск только
 /// для чтения) молча игнорируется — следующий запуск просто снова пройдёт
 /// полную пробу без кэша, поведение не хуже, чем до этого среза.
-fn write_cached_backend(name: &str) {
+fn write_cache(cache: &ProbeCache) {
     let path = cache_path();
     if let Some(dir) = path.parent()
         && std::fs::create_dir_all(dir).is_err()
     {
         return;
     }
-    let _ = std::fs::write(path, name);
+    let _ = std::fs::write(path, serialize_cache(cache));
 }
 
 /// Переставляет `cached` (если он есть среди `candidates`) на первое место,
@@ -190,6 +266,20 @@ fn reorder_by_cache<T: Copy>(
         order.insert(0, hit);
     }
     order
+}
+
+/// Кандидаты, которые стоят в статическом порядке ВПЕРЕДИ победителя кэша:
+/// их надо перепробовать, если окружение (адаптер / драйвер / версия
+/// приложения) изменилось с прошлого запуска — BUG-405 срез 14.
+fn candidates_before<T: Copy>(
+    candidates: [(wgpu::Backends, T); 3],
+    winner: wgpu::Backends,
+) -> Vec<(wgpu::Backends, T)> {
+    candidates
+        .iter()
+        .take_while(|(b, _)| *b != winner)
+        .copied()
+        .collect()
 }
 
 /// Авто-проба бэкендов: возвращает первый кандидат из цепочки
@@ -210,42 +300,94 @@ pub async fn pick_backend(window: &Arc<Window>) -> Option<wgpu::Backends> {
         (wgpu::Backends::GL, "GL"),
         (wgpu::Backends::DX12, "DX12"),
     ];
-    let candidates = reorder_by_cache(candidates, read_cached_backend());
-    for (backends, name) in candidates {
-        let t0 = Instant::now();
-        match probe_candidate(window, backends).await {
-            Ok(rep) => {
-                let accepted = matches!(
-                    (rep.present, rep.texture),
-                    (Signal::Match, _) | (Signal::Unavailable, Signal::Match)
-                );
-                eprintln!(
-                    "[probe] {name}: present={} texture={} adapter=\"{}\" ({} мс) — {}",
-                    rep.present.label(),
-                    rep.texture.label(),
-                    rep.adapter,
-                    t0.elapsed().as_millis(),
-                    if accepted { "ПРИНЯТ" } else { "отклонён" },
-                );
-                if accepted {
-                    eprintln!(
-                        "[probe] бэкенд выбран за {} мс: {name}",
-                        started.elapsed().as_millis()
-                    );
-                    write_cached_backend(name);
-                    return Some(backends);
-                }
+    let cache = read_cache();
+    let cached_backend = cache
+        .as_ref()
+        .filter(|c| c.app == env!("CARGO_PKG_VERSION"))
+        .and_then(|c| backend_by_name(&c.winner));
+    let order = reorder_by_cache(candidates, cached_backend);
+
+    let mut winner: Option<(wgpu::Backends, &str, CandidateReport)> = None;
+    for (backends, name) in order {
+        match probe_one(window, backends, name).await {
+            Some(rep) => {
+                winner = Some((backends, name, rep));
+                break;
             }
-            Err(e) => {
-                eprintln!("[probe] {name}: недоступен ({e})");
+            None => continue,
+        }
+    }
+    let Some((backends, name, rep)) = winner else {
+        eprintln!(
+            "[probe] все кандидаты отклонены за {} мс — статическая цепочка",
+            started.elapsed().as_millis()
+        );
+        return None;
+    };
+
+    // BUG-405 срез 14: кэш пропускает кандидатов, стоящих в статическом
+    // порядке впереди победителя, — но только пока окружение то же. Иначе
+    // однажды отклонённый кандидат не пробуется больше НИКОГДА: на этой
+    // машине так и вышло — закэшированный DX12 принимался первым, Vulkan
+    // (первый по порядку, вдвое дешевле по кадру прокрутки) не пробовался
+    // ни разу, хотя давно проходит пробу.
+    let (mut backends, mut name, mut rep) = (backends, name, rep);
+    let stale = cache.as_ref().is_none_or(|c| {
+        c.adapter != rep.adapter || c.driver != rep.driver || c.app != env!("CARGO_PKG_VERSION")
+    });
+    if stale && cached_backend == Some(backends) {
+        eprintln!(
+            "[probe] окружение изменилось (адаптер/драйвер/версия) — \
+             перепроверяю кандидатов впереди {name}"
+        );
+        for (b, n) in candidates_before(candidates, backends) {
+            if let Some(better) = probe_one(window, b, n).await {
+                backends = b;
+                name = n;
+                rep = better;
+                break;
             }
         }
     }
-    eprintln!(
-        "[probe] все кандидаты отклонены за {} мс — статическая цепочка",
-        started.elapsed().as_millis()
-    );
-    None
+
+    eprintln!("[probe] бэкенд выбран за {} мс: {name}", started.elapsed().as_millis());
+    write_cache(&ProbeCache {
+        winner: name.to_string(),
+        adapter: rep.adapter.clone(),
+        driver: rep.driver.clone(),
+        app: env!("CARGO_PKG_VERSION").to_string(),
+    });
+    Some(backends)
+}
+
+/// Пробует одного кандидата и печатает его отчёт. `Some` — принят.
+async fn probe_one(
+    window: &Arc<Window>,
+    backends: wgpu::Backends,
+    name: &str,
+) -> Option<CandidateReport> {
+    let t0 = Instant::now();
+    match probe_candidate(window, backends).await {
+        Ok(rep) => {
+            let accepted = matches!(
+                (rep.present, rep.texture),
+                (Signal::Match, _) | (Signal::Unavailable, Signal::Match)
+            );
+            eprintln!(
+                "[probe] {name}: present={} texture={} adapter=\"{}\" ({} мс) — {}",
+                rep.present.label(),
+                rep.texture.label(),
+                rep.adapter,
+                t0.elapsed().as_millis(),
+                if accepted { "ПРИНЯТ" } else { "отклонён" },
+            );
+            accepted.then_some(rep)
+        }
+        Err(e) => {
+            eprintln!("[probe] {name}: недоступен ({e})");
+            None
+        }
+    }
 }
 
 /// Пробует один бэкенд: instance → surface → adapter → device → 2 кадра
@@ -407,7 +549,13 @@ async fn probe_candidate(
         }
     }
 
-    Ok(CandidateReport { adapter: adapter.get_info().name, texture, present })
+    let info = adapter.get_info();
+    Ok(CandidateReport {
+        adapter: info.name,
+        driver: format!("{} {}", info.driver, info.driver_info),
+        texture,
+        present,
+    })
 }
 
 /// Читает staging-буфер readback-а и классифицирует средний цвет региона.
@@ -749,9 +897,64 @@ mod tests {
         // (не пересекается с production `lumen.exe`).
         let path = cache_path();
         let _ = std::fs::remove_file(&path);
-        assert_eq!(read_cached_backend(), None);
-        write_cached_backend("DX12");
-        assert_eq!(read_cached_backend(), Some(wgpu::Backends::DX12));
+        assert_eq!(read_cache(), None);
+        let entry = ProbeCache {
+            winner: "DX12".to_string(),
+            adapter: "Intel(R) Iris(R) Plus Graphics".to_string(),
+            driver: "Intel Corporation 31.0.101.2114".to_string(),
+            app: env!("CARGO_PKG_VERSION").to_string(),
+        };
+        write_cache(&entry);
+        assert_eq!(read_cache(), Some(entry));
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// BUG-405 срез 14: кэш формата v1 (одно слово) больше не даёт права
+    /// пропускать кандидатов — иначе однажды принятый DX12 навсегда закрывает
+    /// дорогу Vulkan'у, который вдвое дешевле по кадру прокрутки.
+    #[test]
+    fn legacy_one_word_cache_is_ignored() {
+        assert_eq!(parse_cache("DX12"), None);
+        assert_eq!(parse_cache("DX12\n"), None);
+        assert_eq!(parse_cache(""), None);
+    }
+
+    #[test]
+    fn cache_without_environment_key_is_ignored() {
+        // Победитель без ключа окружения — те же «улики без основания».
+        assert_eq!(parse_cache("winner=DX12\n"), None);
+        assert_eq!(parse_cache("winner=DX12\nadapter=Intel\ndriver=x\n"), None);
+    }
+
+    #[test]
+    fn cache_with_unknown_winner_is_ignored() {
+        assert_eq!(
+            parse_cache("winner=Metal\nadapter=Intel\ndriver=x\napp=0.5.0\n"),
+            None
+        );
+    }
+
+    #[test]
+    fn cache_parses_full_v2_entry() {
+        let text = "winner=Vulkan\nadapter=Intel(R) Iris(R) Plus Graphics\n\
+                    driver=Intel Corporation 31.0.101.2114\napp=0.5.0\n";
+        let cache = parse_cache(text).expect("v2-запись разбирается");
+        assert_eq!(cache.winner, "Vulkan");
+        assert_eq!(cache.adapter, "Intel(R) Iris(R) Plus Graphics");
+        assert_eq!(cache.driver, "Intel Corporation 31.0.101.2114");
+        assert_eq!(cache.app, "0.5.0");
+        assert_eq!(parse_cache(&serialize_cache(&cache)), Some(cache));
+    }
+
+    #[test]
+    fn candidates_before_lists_higher_priority_only() {
+        assert_eq!(
+            candidates_before(CANDIDATES, wgpu::Backends::DX12),
+            vec![(wgpu::Backends::VULKAN, "Vulkan"), (wgpu::Backends::GL, "GL")]
+        );
+        assert_eq!(
+            candidates_before(CANDIDATES, wgpu::Backends::VULKAN),
+            Vec::new()
+        );
     }
 }

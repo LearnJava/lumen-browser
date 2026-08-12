@@ -10931,6 +10931,11 @@ impl Renderer {
         let mut st_pending: Option<(u32, u32)>;
         let mut st_elided: u64 = 0;
         let mut st_merged: u64 = 0;
+        // BUG-405 срез 14: сколько команд пасса РЕАЛЬНО отправлено, по видам
+        // (пайплайн / bg0 / bg1 / вершинный буфер / scissor / draw). Счётчик
+        // отсева отвечает на «сколько сэкономлено», а цену `drop(pass)` можно
+        // разложить только по фактически отправленным командам.
+        let mut n_cmd: [u64; 6] = [0; 6];
 
         /// Отдаёт отложенный draw, если он есть (BUG-405 срез 10).
         ///
@@ -10939,6 +10944,7 @@ impl Renderer {
         macro_rules! flush_pending_draw {
             ($pass:ident) => {{
                 if let Some((s, e)) = st_pending.take() {
+                    n_cmd[5] += 1;
                     $pass.draw(s..e, 0..1);
                 }
             }};
@@ -10980,12 +10986,14 @@ impl Renderer {
                     flush_pending_draw!($pass);
                     if need_pipeline {
                         st_pipeline = pid;
+                        n_cmd[0] += 1;
                         $pass.set_pipeline(pipeline);
                     } else {
                         st_elided += 1;
                     }
                     if need_bg0 {
                         st_bg0_off = off;
+                        n_cmd[1] += 1;
                         $pass.set_bind_group(0, &self.uniform_bind_group, &[off]);
                     } else {
                         st_elided += 1;
@@ -10993,6 +11001,7 @@ impl Renderer {
                     if let Some(bg) = bg1 {
                         if need_bg1 {
                             st_bg1 = bid;
+                            n_cmd[2] += 1;
                             $pass.set_bind_group(1, bg, &[]);
                         } else {
                             st_elided += 1;
@@ -11000,6 +11009,7 @@ impl Renderer {
                     }
                     if need_vbuf {
                         st_vbuf = vid;
+                        n_cmd[3] += 1;
                         $pass.set_vertex_buffer(0, vb.slice(..));
                     } else {
                         st_elided += 1;
@@ -11047,6 +11057,7 @@ impl Renderer {
                                 // scissor — отдать их до смены.
                                 flush_pending_draw!($pass);
                                 st_scissor = Some(*s);
+                                n_cmd[4] += 1;
                                 if s.is_empty() {
                                     $pass.set_scissor_rect(0, 0, 1.min(surface_w), 1.min(surface_h));
                                 } else {
@@ -12422,6 +12433,15 @@ impl Renderer {
                 ms(t_draw_sub[0]), ms(t_draw_sub[1]), ms(t_draw_sub[2]),
                 TEXTURES_CREATED.load(std::sync::atomic::Ordering::Relaxed),
                 self.texture_pool.len(),
+            );
+            // BUG-405 срез 14: фактически отправленные команды пасса по видам.
+            // Счётчик отсева говорит, сколько команд сэкономлено, а этот —
+            // сколько их осталось: без него цену `drop(pass)` не на что делить
+            // (в срезе 14 это дало 0.15 мкс на команду против 540 мкс на пасс,
+            // то есть команды к цене пасса отношения не имеют).
+            eprintln!(
+                "[frame:wgpu]   cmd-mix: pipeline {} bg0 {} bg1 {} vbuf {} scissor {} draw {}",
+                n_cmd[0], n_cmd[1], n_cmd[2], n_cmd[3], n_cmd[4], n_cmd[5],
             );
             // BUG-405 срез 3: чем занята фаза `collect` — растеризацией
             // впервые показанных глифов или самим обходом display list.
