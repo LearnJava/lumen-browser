@@ -475,24 +475,19 @@ impl<'a> Font<'a> {
                 }
             };
 
+            // Подавляющее большинство компонентов реальных шрифтов ставит
+            // базовый глиф на место без поворота и масштаба: у корпуса Inter
+            // (382 gid, достижимых через cmap) таких 450 компонентов из 450.
+            // Для них общая формула вырождается в целое сложение — см.
+            // `shift_points` (BUG-405 срез 19).
+            let shift = integer_shift(&comp.transform, dx, dy);
+
             for contour in sub_contours {
-                let transformed = contour
-                    .points
-                    .into_iter()
-                    .map(|p| {
-                        let x = p.x as f32;
-                        let y = p.y as f32;
-                        // (x', y') = (a·x + c·y + dx, b·x + d·y + dy)
-                        let nx = comp.transform[0] * x + comp.transform[2] * y + dx;
-                        let ny = comp.transform[1] * x + comp.transform[3] * y + dy;
-                        crate::glyf::OutlinePoint {
-                            x: nx.round() as i16,
-                            y: ny.round() as i16,
-                            on_curve: p.on_curve,
-                        }
-                    })
-                    .collect();
-                merged.push(crate::glyf::Contour { points: transformed });
+                let points = match shift {
+                    Some((dxi, dyi)) => shift_points(contour.points, dxi, dyi),
+                    None => transform_points(contour.points, &comp.transform, dx, dy),
+                };
+                merged.push(crate::glyf::Contour { points });
             }
         }
 
@@ -510,6 +505,79 @@ impl<'a> Font<'a> {
             outline: crate::glyf::Outline::Simple(merged),
         }))
     }
+}
+
+/// 2×2 матрица компонента, не меняющая форму: `[a, b, c, d] = [1, 0, 0, 1]`.
+/// Ровно это значение кладёт разбор composite-глифа (`glyf::parse_composite`),
+/// когда у компонента нет ни одного из флагов масштаба (`WE_HAVE_A_SCALE` и
+/// соседей), поэтому сравнение точное, а не с допуском.
+const IDENTITY_TRANSFORM: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
+
+/// Условие, при котором сборка компонента сводится к целому сложению:
+/// матрица тождественна и сдвиг целый. Возвращает сам сдвиг, чтобы вызывающий
+/// не считал его повторно.
+///
+/// Предикат намеренно узкий: любой масштаб, поворот или дробный сдвиг уводит
+/// компонент на общую формулу [`transform_points`], где f32-арифметика
+/// обязательна. Расширять его «почти-тождественными» матрицами нельзя —
+/// эквивалентность в [`shift_points`] доказывается точностью f32 на целых, а
+/// не близостью значений.
+fn integer_shift(transform: &[f32; 4], dx: f32, dy: f32) -> Option<(i32, i32)> {
+    if *transform == IDENTITY_TRANSFORM && dx.fract() == 0.0 && dy.fract() == 0.0 {
+        Some((dx as i32, dy as i32))
+    } else {
+        None
+    }
+}
+
+/// Общий случай: `(x', y') = (a·x + c·y + dx, b·x + d·y + dy)` в f32.
+fn transform_points(
+    points: Vec<crate::glyf::OutlinePoint>,
+    transform: &[f32; 4],
+    dx: f32,
+    dy: f32,
+) -> Vec<crate::glyf::OutlinePoint> {
+    points
+        .into_iter()
+        .map(|p| {
+            let x = p.x as f32;
+            let y = p.y as f32;
+            let nx = transform[0] * x + transform[2] * y + dx;
+            let ny = transform[1] * x + transform[3] * y + dy;
+            crate::glyf::OutlinePoint {
+                x: nx.round() as i16,
+                y: ny.round() as i16,
+                on_curve: p.on_curve,
+            }
+        })
+        .collect()
+}
+
+/// Частный случай [`transform_points`] при тождественной матрице и целых
+/// `dx`/`dy` — целое сложение вместо четырёх умножений, двух сложений и двух
+/// `round()` на точку (BUG-405 срез 19: 0.94 мс из 1.08 мс статьи сборки).
+///
+/// Результат совпадает с общей формулой **побитово**, а не приближённо:
+/// - при `a = d = 1, b = c = 0` формула вырождается в `x + dx`;
+/// - `x` — это `i16`, `dx` — целое из `i16`/`i8` (`Anchor::Offset`) либо
+///   разность двух таких же целых (`Anchor::Points` при тождественной
+///   матрице), поэтому `|x| + |dx| < 2^17` и сложение в f32 точно (мантисса
+///   24 бита);
+/// - `round()` над целым значением — тождество;
+/// - каст `f32 as i16` в Rust насыщающий, что здесь повторяет `clamp`.
+fn shift_points(
+    points: Vec<crate::glyf::OutlinePoint>,
+    dx: i32,
+    dy: i32,
+) -> Vec<crate::glyf::OutlinePoint> {
+    points
+        .into_iter()
+        .map(|p| crate::glyf::OutlinePoint {
+            x: (p.x as i32 + dx).clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+            y: (p.y as i32 + dy).clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+            on_curve: p.on_curve,
+        })
+        .collect()
 }
 
 /// Возвращает XY n-ой точки в линейном обходе всех контуров. Per
@@ -743,5 +811,72 @@ mod tests {
         let hmtx = crate::hmtx::Hmtx::parse(&hmtx_data, 1, 1).unwrap();
         // coords non-empty, HVAR present but empty store → delta=0 → base=1000.
         assert_eq!(font.advance_width_varied(0, &hmtx, &[0.7]), 1000);
+    }
+
+    /// Гейт среза 19 BUG-405, первое плечо: целочисленный сдвиг компонента
+    /// обязан совпадать с общей f32-формулой **побитово**, а не приближённо.
+    ///
+    /// Проверяются те входы, где «очевидная» реализация расходится с общей
+    /// формулой: переполнение i16 (каст `f32 as i16` в Rust насыщающий, а
+    /// `i16::wrapping_add` — нет), отрицательные сдвиги и сами границы
+    /// диапазона. Гейт живёт на уровне функций, потому что после правки
+    /// одинаковый вход через оба тела шрифтом не пропустишь: тождественный
+    /// компонент всегда уходит в быстрый путь.
+    #[test]
+    fn shift_points_matches_general_formula_bit_for_bit() {
+        let pts: Vec<crate::glyf::OutlinePoint> = [
+            (0i16, 0i16),
+            (17, -42),
+            (i16::MAX, i16::MIN),
+            (i16::MIN, i16::MAX),
+            (30000, -30000),
+            (-1, 1),
+        ]
+        .iter()
+        .enumerate()
+        .map(|(i, &(x, y))| crate::glyf::OutlinePoint {
+            x,
+            y,
+            on_curve: i % 2 == 0,
+        })
+        .collect();
+
+        for (dx, dy) in [
+            (0i32, 0i32),
+            (10, -20),
+            (-500, 500),
+            (i16::MAX as i32, i16::MIN as i32),
+            (i16::MIN as i32, i16::MAX as i32),
+        ] {
+            let fast = shift_points(pts.clone(), dx, dy);
+            let general =
+                transform_points(pts.clone(), &IDENTITY_TRANSFORM, dx as f32, dy as f32);
+            assert_eq!(fast, general, "сдвиг ({dx}, {dy}) разошёлся с общей формулой");
+        }
+    }
+
+    /// Гейт среза 19 BUG-405, второе плечо: предикат быстрого пути.
+    ///
+    /// Реальный шрифт это плечо не гейтит — у Inter все 450 компонентов
+    /// корпуса тождественные, поэтому расширение предиката (например, «считать
+    /// тождественной любую матрицу без поворота») не уронило бы ни сквозной
+    /// гейт, ни побитовые тесты растеризатора: масштабированного компонента им
+    /// просто неоткуда взять.
+    #[test]
+    fn integer_shift_accepts_only_identity_with_whole_offset() {
+        assert_eq!(integer_shift(&IDENTITY_TRANSFORM, 12.0, -30.0), Some((12, -30)));
+        assert_eq!(integer_shift(&IDENTITY_TRANSFORM, 0.0, 0.0), Some((0, 0)));
+        // Дробный сдвиг: `round()` общей формулы — не усечение, повторить его
+        // целым сложением нельзя.
+        assert_eq!(integer_shift(&IDENTITY_TRANSFORM, 0.5, 0.0), None);
+        assert_eq!(integer_shift(&IDENTITY_TRANSFORM, 1.0, -0.25), None);
+        // Масштаб, зеркало, сдвиговая и поворотная матрицы.
+        assert_eq!(integer_shift(&[0.5, 0.0, 0.0, 0.5], 0.0, 0.0), None);
+        assert_eq!(integer_shift(&[1.0, 0.0, 0.0, -1.0], 0.0, 0.0), None);
+        assert_eq!(integer_shift(&[1.0, 0.0, 0.25, 1.0], 0.0, 0.0), None);
+        assert_eq!(integer_shift(&[0.707, 0.707, -0.707, 0.707], 0.0, 0.0), None);
+        // Почти-тождественная матрица — тоже общий путь: доказательство
+        // побитовости опирается на точное равенство, а не на близость.
+        assert_eq!(integer_shift(&[0.999_99, 0.0, 0.0, 1.0], 3.0, 4.0), None);
     }
 }
