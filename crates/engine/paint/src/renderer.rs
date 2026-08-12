@@ -62,6 +62,19 @@ const ATLAS_DIM: u32 = 1024;
 /// остальные обслуживает дешёвая композиция.
 const BAND_MIN_MARGIN_RATIO: f32 = 0.25;
 
+/// Сторона текстуры, которую движок запрашивает у устройства, когда адаптер
+/// её отдаёт (BUG-405 срез 23).
+///
+/// Совпадает с `max_texture_dimension_2d` дефолтного тира WebGPU
+/// (`wgpu::Limits::default()`); всё остальное остаётся на
+/// `downlevel_defaults()`, где эта сторона — 2048. Полоса скролл-композитора
+/// (2.5 вьюпорта) в 2048 не влезала уже на окне клиентской высотой ~819 device
+/// px, поэтому на развёрнутом окне композитор либо ужимался до почти нулевого
+/// запаса, либо (выше ~1365 px) отключался целиком. 8192 покрывает 4K-вьюпорт
+/// с полным запасом и не даёт запросить у драйвера тир, которого он не
+/// обещает: значение всегда режется по [`wgpu::Adapter::limits`].
+const MAX_TEXTURE_DIM_TARGET: u32 = 8192;
+
 /// Bin размеров растеризации (CSS px). `font_size` округляется до
 /// ближайшего bin вверх через `size_bin_for`. Если ≤ 8 — используется
 /// bin 8 (нечитаемо иначе всё равно); если > 64 — bin 64 с up-scaling-ом
@@ -2096,7 +2109,8 @@ pub enum ImageRegisterError {
     /// (PNG/JPEG запрещают нулевые размеры), но на всякий случай ловим.
     EmptyImage,
     /// Размер изображения превышает `device.limits().max_texture_dimension_2d`
-    /// (на downlevel_defaults — 2048).
+    /// (живое окно — [`MAX_TEXTURE_DIM_TARGET`] или потолок адаптера, что
+    /// меньше; headless-устройство — 2048 из `downlevel_defaults`).
     TooLarge {
         width: u32,
         height: u32,
@@ -3312,12 +3326,18 @@ fn band_warm_disabled() -> bool {
 ///
 /// Полный запас — по 3/4 вьюпорта сверху и снизу, но не больше 768 CSS px.
 /// Если такая полоса не влезает в `max_dim`, при `clamp` она **ужимается** до
-/// лимита вместо отказа: устройство запрашивается с
-/// `wgpu::Limits::downlevel_defaults()` (`max_texture_dimension_2d` = 2048), а
-/// полная полоса — 2.5 вьюпорта, поэтому прежний безусловный отказ выключал
+/// лимита вместо отказа (срез 22): до среза 23 живое устройство запрашивалось
+/// с `wgpu::Limits::downlevel_defaults()` (`max_texture_dimension_2d` = 2048)
+/// при полосе в 2.5 вьюпорта, поэтому прежний безусловный отказ выключал
 /// скролл-композитор на ЛЮБОМ окне выше ~819 device px, то есть почти на любом
-/// развёрнутом (перепись среза: `lenta.ru`, окно 1200×991 — ни одного
+/// развёрнутом (перепись среза 22: `lenta.ru`, окно 1200×991 — ни одного
 /// Compose-кадра, `p50` кадра 0.90–1.06 мс против 0.49–0.56 с ужатием).
+///
+/// С поднятым лимитом (срез 23, [`requested_max_texture_dim`]) ужатие на
+/// живом устройстве не срабатывает ни на одном реальном окне: запас упирается
+/// в потолок 768 CSS px раньше, чем в лимит, то есть полоса — это вьюпорт плюс
+/// 1536 CSS px. Путь ужатия остаётся рабочим для headless-устройства (там
+/// по-прежнему `downlevel_defaults`) и для адаптеров беднее цели.
 fn band_geometry(
     sw: u32,
     sh: u32,
@@ -3365,6 +3385,36 @@ fn band_clamp_disabled() -> bool {
     *DISABLED.get_or_init(|| {
         std::env::var("LUMEN_NO_BAND_CLAMP").is_ok_and(|v| v == "1")
     })
+}
+
+/// `true`, если подъём `max_texture_dimension_2d` до тира адаптера отключён
+/// (`LUMEN_NO_TEXTURE_LIMIT_RAISE=1`): устройство снова запрашивается ровно с
+/// `downlevel_defaults()`, как до среза 23 BUG-405. Нужен для интерливед-A/B
+/// на одном бинарнике (`docs/perf-method.md`).
+fn texture_limit_raise_disabled() -> bool {
+    use std::sync::OnceLock;
+    static DISABLED: OnceLock<bool> = OnceLock::new();
+    *DISABLED.get_or_init(|| {
+        std::env::var("LUMEN_NO_TEXTURE_LIMIT_RAISE").is_ok_and(|v| v == "1")
+    })
+}
+
+/// Какую сторону текстуры просить у устройства при `adapter_max` от адаптера.
+///
+/// Отдельной функцией (как [`band_geometry`] в срезе 22), потому что решение
+/// целиком арифметическое и его гейтит юнит-тест без GPU. Запрос никогда не
+/// превышает того, что обещал адаптер: `request_device` на превышении
+/// возвращает ошибку, то есть окно вообще не открылось бы.
+///
+/// Нижняя граница — `downlevel_defaults()`: адаптер, отдающий меньше, не
+/// потянул бы и прежний запрос, поэтому поведение в этом углу не меняется
+/// (та же ошибка `request_device`, что и до среза).
+fn requested_max_texture_dim(adapter_max: u32, raise: bool) -> u32 {
+    let base = wgpu::Limits::downlevel_defaults().max_texture_dimension_2d;
+    if !raise {
+        return base;
+    }
+    adapter_max.min(MAX_TEXTURE_DIM_TARGET).max(base)
 }
 
 impl Renderer {
@@ -3457,11 +3507,20 @@ impl Renderer {
         }
         let (surface, adapter) =
             picked.ok_or("no GPU adapter under any candidate backend (DX12/Vulkan/GL)")?;
+        // BUG-405 срез 23: всё, кроме стороны текстуры, остаётся на
+        // `downlevel_defaults()` (переносимость), а сторона поднимается до
+        // тира адаптера — от неё зависит, работает ли скролл-композитор:
+        // полоса высотой 2.5 вьюпорта не влезала в 2048 уже на окне
+        // клиентской высотой ~819 device px.
+        let mut limits = wgpu::Limits::downlevel_defaults();
+        let adapter_max_dim = adapter.limits().max_texture_dimension_2d;
+        limits.max_texture_dimension_2d =
+            requested_max_texture_dim(adapter_max_dim, !texture_limit_raise_disabled());
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("lumen-device"),
                 required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_defaults(),
+                required_limits: limits,
                 memory_hints: wgpu::MemoryHints::default(),
                 trace: wgpu::Trace::Off,
             })
@@ -3511,6 +3570,15 @@ impl Renderer {
             eprintln!(
                 "[wgpu] adapter: {} ({:?}, {:?})",
                 adapter_info.name, adapter_info.device_type, adapter_info.backend
+            );
+            // BUG-405 срез 23: от стороны текстуры зависит, работает ли
+            // скролл-композитор на этом окне, поэтому запрошенное значение
+            // и потолок адаптера видны в том же логе, что и сам адаптер.
+            eprintln!(
+                "[wgpu] max_texture_dimension_2d: {} (адаптер {}, downlevel {})",
+                device.limits().max_texture_dimension_2d,
+                adapter_max_dim,
+                wgpu::Limits::downlevel_defaults().max_texture_dimension_2d,
             );
             eprintln!(
                 "[wgpu] surface: format {:?} (of {:?}) alpha {:?} (of {:?}) present {:?}",
@@ -3608,6 +3676,11 @@ impl Renderer {
         }
         let adapter =
             picked.ok_or("no GPU adapter under any candidate backend (DX12/Vulkan/GL)")?;
+        // Лимит стороны здесь НЕ поднимается (в отличие от живого устройства,
+        // BUG-405 срез 23): скролл-композитора в headless нет вовсе
+        // (`try_page_compose` выходит по «нет surface»), а эталонные снимки
+        // тем самым не начинают зависеть от тира адаптера машины — какие
+        // картинки примет `register_image`, остаётся одинаковым везде.
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("lumen-headless-device"),
@@ -17862,6 +17935,43 @@ mod tests {
         // dpr ≠ 1: запас считается в device px, потолок 768 — в CSS px.
         let (m, h) = band_geometry(2048, 1200, 2.0, 4096, true).expect("полоса при dpr 2");
         assert_eq!((m, h), (900, 3000), "потолок 768 CSS px применён не в тех единицах");
+    }
+
+    /// BUG-405 срез 23: сторона текстуры запрашивается по тиру адаптера, и
+    /// именно она решает, работает ли композитор на высоком окне.
+    ///
+    /// Гейт на арифметику [`requested_max_texture_dim`] плюс её связка с
+    /// [`band_geometry`]: с прежними 2048 окно клиентской высотой 1401 px
+    /// (развёрнутое 1080p с dpr 1) композитора не получало вовсе — перепись
+    /// среза даёт на нём 0 Compose-кадров и `page-compose skip: вьюпорт не
+    /// оставляет запаса в лимите текстуры`.
+    #[test]
+    fn requested_texture_dim_follows_adapter() {
+        let downlevel = wgpu::Limits::downlevel_defaults().max_texture_dimension_2d;
+
+        // Обычный дискретный/интегрированный адаптер: берём цель, не больше.
+        assert_eq!(requested_max_texture_dim(16384, true), MAX_TEXTURE_DIM_TARGET);
+        assert_eq!(requested_max_texture_dim(8192, true), 8192);
+        // Адаптер беднее цели — просим ровно его потолок, иначе
+        // `request_device` вернул бы ошибку и окно не открылось.
+        assert_eq!(requested_max_texture_dim(4096, true), 4096);
+        // Ниже downlevel не опускаемся: такой адаптер не потянул бы и запрос
+        // до среза, поведение в этом углу не меняется.
+        assert_eq!(requested_max_texture_dim(1024, true), downlevel);
+        // Плечо отката обязано повторять поведение до среза при любом адаптере.
+        assert_eq!(requested_max_texture_dim(16384, false), downlevel);
+
+        // Связка с полосой: 1024×1401 (развёрнутое 1080p) — отказ на 2048 и
+        // полный запас на поднятом лимите.
+        assert_eq!(
+            band_geometry(1024, 1401, 1.0, requested_max_texture_dim(16384, false), true),
+            Err("вьюпорт не оставляет запаса в лимите текстуры"),
+            "плечо отката перестало воспроизводить потерю композитора",
+        );
+        let (m, h) = band_geometry(1024, 1401, 1.0, requested_max_texture_dim(16384, true), true)
+            .expect("на поднятом лимите полоса обязана быть");
+        // Запас упирается в потолок 768 CSS px, а не в лимит текстуры.
+        assert_eq!((m, h), (768, 2937), "полоса ужата там, где лимит уже не жмёт");
     }
 
     /// Побитовое равенство двух наборов вершин текста.
