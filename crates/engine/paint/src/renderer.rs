@@ -8403,6 +8403,7 @@ impl Renderer {
         let cmd_log = crate::frame_log_level() >= 3;
         if cmd_log {
             SVG_SUB.reset();
+            TEXT_SUB.reset();
         }
         let mut probe: std::collections::HashMap<&'static str, (std::time::Duration, u32, u32)> =
             std::collections::HashMap::new();
@@ -8670,6 +8671,9 @@ impl Renderer {
                     highlight_name: _,
                     text_orientation,
                 } => {
+                    // BUG-405 срез 13: охватывающая статья arm-а — снимается и
+                    // на `continue` (нет метрик / отказ scissor'а).
+                    let _t_arm = sub_timer(cmd_log, &TEXT_SUB.arm);
                     let primary_face_id = text_face_iter.next().unwrap_or(0);
                     if lazy_faces
                         .faces
@@ -8679,7 +8683,12 @@ impl Renderer {
                     {
                         continue;
                     }
-                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
+                    let t_sciss = cmd_log.then(std::time::Instant::now);
+                    let scissor_ok = sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h);
+                    if let Some(t0) = t_sciss {
+                        sub_add(&TEXT_SUB.sciss, t0);
+                    }
+                    if !scissor_ok {
                         continue;
                     }
                     let alpha = 1.0_f32;
@@ -8748,7 +8757,11 @@ impl Renderer {
                         }
                     }
                     if let Some(m) = transform_stack.last() {
+                        let t_xform = cmd_log.then(std::time::Instant::now);
                         apply_affine_to_verts(&mut text_vertices[v_start as usize..], m);
+                        if let Some(t0) = t_xform {
+                            sub_add(&TEXT_SUB.xform, t0);
+                        }
                     }
                     let v_count = text_vertices.len() as u32 - v_start;
                     if v_count > 0 {
@@ -10547,6 +10560,9 @@ impl Renderer {
             eprintln!("[frame:wgpu]   collect-top: {}", top.join(", "));
             if SVG_SUB.calls.load(std::sync::atomic::Ordering::Relaxed) > 0 {
                 eprintln!("[frame:wgpu]   {}", SVG_SUB.line());
+            }
+            if TEXT_SUB.cmds.load(std::sync::atomic::Ordering::Relaxed) > 0 {
+                eprintln!("[frame:wgpu]   {}", TEXT_SUB.line());
             }
         }
         let t_after_collect = t_frame0.elapsed();
@@ -13107,8 +13123,30 @@ impl SvgSubStats {
     }
 }
 
-/// Прибавить к подстатье [`SVG_SUB`] время, прошедшее с `t0`.
-fn svg_sub_add(slot: &std::sync::atomic::AtomicU64, t0: std::time::Instant) {
+/// Таймер подстатьи, снимающий себя на выходе из области видимости — нужен там,
+/// где путь может выйти через `continue` (arm команды в фазе `collect`): иначе
+/// именно интересные ветки (отказ scissor'а, нет метрик) теряли бы свой вклад.
+struct SubTimer<'a> {
+    /// Куда прибавить время.
+    slot: &'a std::sync::atomic::AtomicU64,
+    /// Момент входа.
+    t0: std::time::Instant,
+}
+
+impl Drop for SubTimer<'_> {
+    fn drop(&mut self) {
+        sub_add(self.slot, self.t0);
+    }
+}
+
+/// [`SubTimer`] на подстатью, если покадровый лог просит разбивку.
+fn sub_timer(on: bool, slot: &std::sync::atomic::AtomicU64) -> Option<SubTimer<'_>> {
+    on.then(|| SubTimer { slot, t0: std::time::Instant::now() })
+}
+
+/// Прибавить к подстатье покадрового лога ([`SVG_SUB`], [`TEXT_SUB`]) время,
+/// прошедшее с `t0`.
+fn sub_add(slot: &std::sync::atomic::AtomicU64, t0: std::time::Instant) {
     slot.fetch_add(t0.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
 }
 
@@ -13120,6 +13158,122 @@ fn count_svg_soup(verts: usize, contours: &[Vec<[f32; 2]>]) {
     use std::sync::atomic::Ordering::Relaxed;
     SVG_SUB.verts.fetch_add(verts as u64, Relaxed);
     SVG_SUB.pts.fetch_add(contours.iter().map(Vec::len).sum::<usize>() as u64, Relaxed);
+}
+
+/// BUG-405 срез 13: подстатьи одной команды `DrawText` под `LUMEN_FRAME_LOG=3`.
+///
+/// Срез 12 оставил `DrawText` крупнейшей статьёй фазы `collect` (16.8 мс на
+/// 9977 команд прокрутки `lenta.ru`), но разбивки ВНУТРИ команды не было —
+/// и без неё правка была бы угадыванием (пункт 16 остатка бага). Разбивка
+/// отделяет работу над командой (scissor, аффинная матрица) от работы над
+/// каждым символом: выбор face-а под кодпойнт, нормализация осей вариаций,
+/// поиск глифа в атласе и укладка квада.
+///
+/// Все счётчики — наносекунды ЗА КАДР (сбрасываются в начале фазы `collect`),
+/// заполняются только на уровне 3: `Instant::now()` на символ сравним с самой
+/// работой, поэтому замеры уровня 2 обязаны остаться чистыми.
+struct TextSubStats {
+    /// Весь arm команды `DrawText` целиком — охватывающая статья, разность с
+    /// суммой остальных называет остаток (то, что не попало ни в одну).
+    arm: std::sync::atomic::AtomicU64,
+    /// Вся укладка глифов ([`push_text_glyphs`]) целиком.
+    run: std::sync::atomic::AtomicU64,
+    /// Цикл по символам целиком (внутри [`TextSubStats::run`]).
+    lp: std::sync::atomic::AtomicU64,
+    /// Пролог команды: bin размера, метрики primary face-а, базовая линия и
+    /// три per-run кэша.
+    pre: std::sync::atomic::AtomicU64,
+    /// Выбор face-а под кодпойнт (per-run кэш + [`pick_face_for_codepoint`]).
+    pick: std::sync::atomic::AtomicU64,
+    /// Нормализация осей вариаций под face (per-run кэш).
+    coord: std::sync::atomic::AtomicU64,
+    /// Всё, что делается с символом после выбора face-а: проверка COLR, поиск
+    /// глифа и укладка квада. Охватывает [`TextSubStats::look`] и
+    /// [`TextSubStats::quad`] — разность называет проверку COLR и вызовы.
+    glyf: std::sync::atomic::AtomicU64,
+    /// Поиск глифа в кэше атласа — без цены промаха (она отдельной статьёй,
+    /// [`GLYPH_RASTER_NANOS`], срез 3).
+    look: std::sync::atomic::AtomicU64,
+    /// Укладка квада глифа в вершины и сдвиг пера.
+    quad: std::sync::atomic::AtomicU64,
+    /// `sync_scissor_to_stack` на команду.
+    sciss: std::sync::atomic::AtomicU64,
+    /// Наложение накопленной матрицы на вершины команды.
+    xform: std::sync::atomic::AtomicU64,
+    /// Команд `DrawText`, дошедших до укладки глифов.
+    cmds: std::sync::atomic::AtomicU64,
+    /// Символов, пройденных циклом (включая `\t` и невидимые).
+    chars: std::sync::atomic::AtomicU64,
+    /// Квадов глифов, уложенных в вершины (цветной глиф даёт квад на слой).
+    glyphs: std::sync::atomic::AtomicU64,
+}
+
+/// Подстатьи команд `DrawText` текущего кадра ([`TextSubStats`]).
+static TEXT_SUB: TextSubStats = TextSubStats {
+    arm: std::sync::atomic::AtomicU64::new(0),
+    run: std::sync::atomic::AtomicU64::new(0),
+    lp: std::sync::atomic::AtomicU64::new(0),
+    pre: std::sync::atomic::AtomicU64::new(0),
+    pick: std::sync::atomic::AtomicU64::new(0),
+    coord: std::sync::atomic::AtomicU64::new(0),
+    glyf: std::sync::atomic::AtomicU64::new(0),
+    look: std::sync::atomic::AtomicU64::new(0),
+    quad: std::sync::atomic::AtomicU64::new(0),
+    sciss: std::sync::atomic::AtomicU64::new(0),
+    xform: std::sync::atomic::AtomicU64::new(0),
+    cmds: std::sync::atomic::AtomicU64::new(0),
+    chars: std::sync::atomic::AtomicU64::new(0),
+    glyphs: std::sync::atomic::AtomicU64::new(0),
+};
+
+impl TextSubStats {
+    /// Обнулить подстатьи перед кадром.
+    fn reset(&self) {
+        use std::sync::atomic::Ordering::Relaxed;
+        for slot in [
+            &self.arm,
+            &self.run,
+            &self.lp,
+            &self.pre,
+            &self.pick,
+            &self.coord,
+            &self.glyf,
+            &self.look,
+            &self.quad,
+            &self.sciss,
+            &self.xform,
+            &self.cmds,
+            &self.chars,
+            &self.glyphs,
+        ] {
+            slot.store(0, Relaxed);
+        }
+    }
+
+    /// Строка `text-sub` для покадрового лога уровня 3.
+    fn line(&self) -> String {
+        use std::sync::atomic::Ordering::Relaxed;
+        let ms = |slot: &std::sync::atomic::AtomicU64| slot.load(Relaxed) as f64 / 1e6;
+        format!(
+            "text-sub: arm {:.2}ms run {:.2} loop {:.2} pre {:.2} pick {:.2} coord {:.2} \
+             glyf {:.2} look {:.2} quad {:.2} sciss {:.2} xform {:.2} | \
+             команд {} / символов {} / квадов {}",
+            ms(&self.arm),
+            ms(&self.run),
+            ms(&self.lp),
+            ms(&self.pre),
+            ms(&self.pick),
+            ms(&self.coord),
+            ms(&self.glyf),
+            ms(&self.look),
+            ms(&self.quad),
+            ms(&self.sciss),
+            ms(&self.xform),
+            self.cmds.load(Relaxed),
+            self.chars.load(Relaxed),
+            self.glyphs.load(Relaxed),
+        )
+    }
 }
 
 /// Сколько вершин держит [`SvgShapeCache`], прежде чем сбросить себя целиком.
@@ -13263,7 +13417,7 @@ fn compute_svg_shape(
         apply_affine_to_verts(&mut verts, m);
     }
     if let Some(t0) = t_push {
-        svg_sub_add(&SVG_SUB.push, t0);
+        sub_add(&SVG_SUB.push, t0);
     }
     if aa {
         antialias_fill_soup(&mut verts, 0, WHITE, dpr, coverage);
@@ -13303,7 +13457,7 @@ fn svg_shape_verts(
             None => crate::svg_path::tessellate_fill(contours),
         };
         if let Some(t0) = t_tess {
-            svg_sub_add(&SVG_SUB.tess, t0);
+            sub_add(&SVG_SUB.tess, t0);
             count_svg_soup(tris.len(), contours);
         }
         tris
@@ -13320,7 +13474,7 @@ fn svg_shape_verts(
     let t_key = cmd_log.then(std::time::Instant::now);
     build_svg_shape_key(&mut key, params.is_some(), contours, params, dx, dy, m, dpr, aa);
     if let Some(t0) = t_key {
-        svg_sub_add(&SVG_SUB.key, t0);
+        sub_add(&SVG_SUB.key, t0);
     }
     let before = shapes.hits;
     let verts = shapes.shape(&key, || {
@@ -13354,7 +13508,7 @@ fn emit_svg_shape(
         });
     }
     if let Some(t0) = t_emit {
-        svg_sub_add(&SVG_SUB.emit, t0);
+        sub_add(&SVG_SUB.emit, t0);
     }
 }
 
@@ -13423,7 +13577,7 @@ impl CoverageCache {
             .and_then(|bucket| bucket.iter().find(|(key, _)| soup_bits_eq(key, soup)))
             .map(|(_, quads)| std::sync::Arc::clone(quads));
         if let Some(t0) = t_key {
-            svg_sub_add(&SVG_SUB.key, t0);
+            sub_add(&SVG_SUB.key, t0);
         }
         if let Some(quads) = found {
             self.hits += 1;
@@ -13433,7 +13587,7 @@ impl CoverageCache {
         let t_calc = log.then(std::time::Instant::now);
         let quads = std::sync::Arc::new(crate::svg_path::coverage_quads(soup));
         if let Some(t0) = t_calc {
-            svg_sub_add(&SVG_SUB.calc, t0);
+            sub_add(&SVG_SUB.calc, t0);
         }
         let cost = soup.len() + quads.len();
         if self.stored_verts + cost > COVERAGE_CACHE_MAX_VERTS {
@@ -13504,7 +13658,7 @@ fn antialias_fill_soup(
         .map(|v| [v.pos[0] * dpr, v.pos[1] * dpr])
         .collect();
     if let Some(t0) = t_soup {
-        svg_sub_add(&SVG_SUB.soup, t0);
+        sub_add(&SVG_SUB.soup, t0);
     }
     let fresh;
     let quads: &[crate::svg_path::CoverageVertex] = match cache {
@@ -14418,6 +14572,10 @@ fn push_text_glyphs(
     tab_size: f32,
     font_palette: Option<&FontPaletteSelection>,
 ) -> f32 {
+    // BUG-405 срез 13: разбивка команды текста (`text-sub`, уровень 3).
+    let log = crate::frame_log_level() >= 3;
+    let _t_run = sub_timer(log, &TEXT_SUB.run);
+    let t_pre = log.then(std::time::Instant::now);
     // Multi-size atlas: подбираем bin под font_size, растеризируем глифы
     // на этом bin. Display масштаб = font_size / size_bin — если font_size
     // совпал с bin-ом (12/16/24/32/...) — масштаба нет, текст резкий.
@@ -14447,7 +14605,14 @@ fn push_text_glyphs(
     // у монохромного face-а (подавляющее большинство) `FaceMetrics.color` =
     // None и сюда не заходим ни разу.
     let mut palette_cache: HashMap<usize, Option<Vec<[f32; 4]>>> = HashMap::new();
+    if let Some(t0) = t_pre {
+        sub_add(&TEXT_SUB.pre, t0);
+        use std::sync::atomic::Ordering::Relaxed;
+        TEXT_SUB.cmds.fetch_add(1, Relaxed);
+        TEXT_SUB.chars.fetch_add(text.chars().count() as u64, Relaxed);
+    }
 
+    let _t_loop = sub_timer(log, &TEXT_SUB.lp);
     let mut cursor_x = rect.x;
     for ch in text.chars() {
         // CSS Text L3 §10.1 — tab character advances by tab_size pixels.
@@ -14455,6 +14620,7 @@ fn push_text_glyphs(
             cursor_x += tab_size;
             continue;
         }
+        let t_pick = log.then(std::time::Instant::now);
         let (face_id, glyph_id) = *char_face_cache
             .entry(ch)
             .or_insert_with(|| pick_face_for_codepoint(ch as u32, primary_face_id, lazy.faces));
@@ -14463,6 +14629,10 @@ fn push_text_glyphs(
             .as_ref()
             .expect("pick_face_for_codepoint вернул face_id с валидными metrics");
         let advance_scale = font_size / metrics.units_per_em as f32;
+        if let Some(t0) = t_pick {
+            sub_add(&TEXT_SUB.pick, t0);
+        }
+        let t_coord = log.then(std::time::Instant::now);
         let coords: &[f32] = match norm_coords_cache.entry(face_id) {
             std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
             std::collections::hash_map::Entry::Vacant(v) => {
@@ -14476,6 +14646,10 @@ fn push_text_glyphs(
                 v.insert(computed)
             }
         };
+        if let Some(t0) = t_coord {
+            sub_add(&TEXT_SUB.coord, t0);
+        }
+        let _t_glyf = sub_timer(log, &TEXT_SUB.glyf);
         // CSS Fonts L4 §11.3 — COLR v0 цветной глиф: вместо одного quad-а
         // текстовым цветом кладём по quad-у на каждый слой, снизу вверх, со
         // своим цветом из выбранной палитры. Слой — обычный монохромный
@@ -14498,6 +14672,7 @@ fn push_text_glyphs(
                 else {
                     continue;
                 };
+                let t_quad = log.then(std::time::Instant::now);
                 push_glyph_quad(
                     out,
                     &g,
@@ -14506,6 +14681,10 @@ fn push_text_glyphs(
                     display_scale,
                     layer_color(palette, layer.palette_index, color),
                 );
+                if let Some(t0) = t_quad {
+                    sub_add(&TEXT_SUB.quad, t0);
+                    TEXT_SUB.glyphs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
             }
             if let Some(&adv) = metrics.advances.get(glyph_id as usize) {
                 cursor_x += adv as f32 * advance_scale;
@@ -14524,8 +14703,13 @@ fn push_text_glyphs(
         );
 
         if let Some(g) = cached_glyph {
+            let t_quad = log.then(std::time::Instant::now);
             push_glyph_quad(out, &g, cursor_x, baseline_y, display_scale, color);
             cursor_x += g.advance_native as f32 * advance_scale;
+            if let Some(t0) = t_quad {
+                sub_add(&TEXT_SUB.quad, t0);
+                TEXT_SUB.glyphs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
         } else {
             // Глиф не отрисовался (composite-fallback, empty или нет места
             // в атласе). Двигаем cursor на advance из выбранного face-а.
@@ -14644,8 +14828,16 @@ fn ensure_glyph(
     size_bin: u16,
     coords: &[f32],
 ) -> Option<CachedGlyph> {
+    // BUG-405 срез 13: поиск в кэше атласа — отдельной подстатьёй `text-sub`.
+    // Цена промаха (растеризация) считается ниже своим счётчиком (срез 3),
+    // поэтому таймер снимается ровно на границе попадания/промаха.
+    let t_look = (crate::frame_log_level() >= 3).then(std::time::Instant::now);
     let key = atlas_key(face_id, glyph_id, size_bin, AtlasKey::hash_coords(coords));
-    if let Some(&entry) = cached.get(&key) {
+    let hit = cached.get(&key).copied();
+    if let Some(t0) = t_look {
+        sub_add(&TEXT_SUB.look, t0);
+    }
+    if let Some(entry) = hit {
         return entry;
     }
 
