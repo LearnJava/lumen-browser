@@ -2505,6 +2505,22 @@ pub struct Renderer {
     /// Сколько внешних теней нарисовано аналитически, без offscreen-уровня
     /// (BUG-405 срез 7). Гейт правки — этот счётчик рядом с `filter_passes`.
     shadow_draws: u64,
+    /// Сколько команд состояния пасса (пайплайн / bind-группа / вершинный
+    /// буфер / scissor) не отправлено, потому что там уже стояло ровно это
+    /// значение — BUG-405 срез 10. Команды пасса стоят в `drop(pass)`, где
+    /// `wgpu-core` проигрывает их в командный список, поэтому «правка
+    /// работает» = «счётчик растёт», а не «кадр стал быстрее».
+    state_elisions: u64,
+    /// Сколько вызовов `draw` слито с предыдущим, потому что состояние пасса
+    /// между ними не менялось, а диапазоны вершин оказались соседними
+    /// (BUG-405 срез 10). Второй счётчик того же среза: команд состояния
+    /// стало меньше — этот, самих draw'ов меньше — тот.
+    draw_merges: u64,
+    /// Отсев повторных команд состояния включён (BUG-405 срез 10). Инстансное
+    /// плечо A/B: тест рисует один и тот же список обоими путями в одном
+    /// процессе и сверяет пиксели, не требуя второго прогона с
+    /// `LUMEN_NO_STATE_ELISION=1`.
+    state_elision_enabled: bool,
     /// Аналитическая размытая тень включена (BUG-405 срез 7). Инстансное
     /// плечо A/B: тест рисует один и тот же список обоими путями в одном
     /// процессе и сверяет пиксели.
@@ -3078,6 +3094,13 @@ fn cull_merge_disabled() -> bool {
     use std::sync::OnceLock;
     static OFF: OnceLock<bool> = OnceLock::new();
     *OFF.get_or_init(|| std::env::var("LUMEN_NO_CULL_MERGE").is_ok_and(|v| v == "1"))
+}
+
+/// Рычаг отката отсева повторных команд состояния пасса (BUG-405 срез 10).
+fn state_elision_disabled() -> bool {
+    use std::sync::OnceLock;
+    static OFF: OnceLock<bool> = OnceLock::new();
+    *OFF.get_or_init(|| std::env::var("LUMEN_NO_STATE_ELISION").is_ok_and(|v| v == "1"))
 }
 
 fn scroll_compositor_disabled() -> bool {
@@ -4385,6 +4408,9 @@ impl Renderer {
             blur_merge_enabled: true,
             cull_merge_enabled: true,
             shadow_draws: 0,
+            state_elisions: 0,
+            draw_merges: 0,
+            state_elision_enabled: true,
             shadow_analytic_enabled: true,
             nested_shader_clips: 0,
             nested_shader_clip_enabled: true,
@@ -4623,6 +4649,36 @@ impl Renderer {
     #[must_use]
     pub fn plan_passes(&self) -> u64 {
         self.plan_passes
+    }
+
+    /// Сколько команд состояния пасса не отправлено, потому что нужное
+    /// значение там уже стояло (BUG-405 срез 10).
+    ///
+    /// Гейт правки стоит на нём: команды пасса стоят в `drop(pass)`, где
+    /// `wgpu-core` проигрывает их в командный список, — «команд меньше» и есть
+    /// предмет правки, а не время кадра.
+    #[must_use]
+    pub fn state_elisions(&self) -> u64 {
+        self.state_elisions
+    }
+
+    /// Сколько вызовов `draw` слито с предыдущим (BUG-405 срез 10).
+    ///
+    /// Второй гейт того же среза: цена `drop(pass)` растёт вместе с числом
+    /// операций пасса (перепись: 85 операций — 0.14 мс, 310 — 2.14 мс),
+    /// поэтому «draw'ов меньше» — предмет правки наравне с «команд меньше».
+    #[must_use]
+    pub fn draw_merges(&self) -> u64 {
+        self.draw_merges
+    }
+
+    /// Включает/выключает отсев повторных команд состояния пасса
+    /// (BUG-405 срез 10) на этом рендере.
+    ///
+    /// Инстансное плечо A/B: тест снимает оба пути в одном процессе и сверяет
+    /// пиксели, вместо второго прогона с `LUMEN_NO_STATE_ELISION=1`.
+    pub fn set_state_elision_enabled(&mut self, enabled: bool) {
+        self.state_elision_enabled = enabled;
     }
 
     /// Сколько render-пассов закодировали filter-элементы планов этого
@@ -7002,6 +7058,36 @@ impl Renderer {
     }
 
     /// Записать слоты кадра в uniform-буфер, вырастив его при нехватке места.
+    /// Создаёт и заливает вершинный буфер одной категории кадра.
+    ///
+    /// Тринадцать одинаковых блоков фазы `prep` собраны сюда (BUG-405 срез 10),
+    /// чтобы подстатьи «создание ресурса» и «запись вершин» измерялись по
+    /// отдельности: `t_create`/`t_write` накапливают их за кадр.
+    /// Пустая категория буфера не создаёт — `None`.
+    fn upload_vertex_buffer<T: Copy>(
+        &self,
+        label: &str,
+        verts: &[T],
+        t_create: &mut std::time::Duration,
+        t_write: &mut std::time::Duration,
+    ) -> Option<wgpu::Buffer> {
+        if verts.is_empty() {
+            return None;
+        }
+        let t0 = std::time::Instant::now();
+        let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: std::mem::size_of_val(verts) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let t1 = std::time::Instant::now();
+        self.queue.write_buffer(&buf, 0, as_bytes(verts));
+        *t_create += t1 - t0;
+        *t_write += t1.elapsed();
+        Some(buf)
+    }
+
     fn write_uniform_slots(&mut self, slots: &[ClipUniformSlot]) {
         if slots.len() > self.uniform_slots {
             let want = slots.len().next_power_of_two();
@@ -10403,6 +10489,11 @@ impl Renderer {
             );
             self.atlas.mark_clean();
         }
+        // BUG-405 срез 10: разбивка фазы `prep` (атлас / uniform-слоты /
+        // вершинные буферы / bind-группы градиентов / offscreen-текстуры).
+        // До неё `prep` была одним числом — вторая по величине статья прогона
+        // без единой подстатьи, ровно как `collect` до среза 9.
+        let t_after_atlas = t_frame0.elapsed();
 
         // ── Uniforms ──────────────────────────────────────────────────────
         // Shader делит pos на viewport, чтобы получить clip-space. Surface
@@ -10422,164 +10513,114 @@ impl Renderer {
         self.cull_merges += merged_cull_splits as u64;
         self.shadow_draws += shadow_draws as u64;
         self.plan_passes += render_plan.len() as u64;
+        let t_after_uniforms = t_frame0.elapsed();
 
         // ── Vertex buffers ────────────────────────────────────────────────
-        let fill_vbuf = if fill_vertices.is_empty() {
-            None
-        } else {
-            let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("fill-vbuf"),
-                size: std::mem::size_of_val(fill_vertices.as_slice()) as u64,
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            self.queue.write_buffer(&buf, 0, as_bytes(&fill_vertices));
-            Some(buf)
-        };
-        let circle_vbuf = if circle_vertices.is_empty() {
-            None
-        } else {
-            let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("circle-vbuf"),
-                size: std::mem::size_of_val(circle_vertices.as_slice()) as u64,
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            self.queue.write_buffer(&buf, 0, as_bytes(&circle_vertices));
-            Some(buf)
-        };
-        let rrect_vbuf = if rrect_vertices.is_empty() {
-            None
-        } else {
-            let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("rrect-vbuf"),
-                size: std::mem::size_of_val(rrect_vertices.as_slice()) as u64,
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            self.queue.write_buffer(&buf, 0, as_bytes(&rrect_vertices));
-            Some(buf)
-        };
-        let shadow_vbuf = if shadow_vertices.is_empty() {
-            None
-        } else {
-            let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("shadow-vbuf"),
-                size: std::mem::size_of_val(shadow_vertices.as_slice()) as u64,
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            self.queue.write_buffer(&buf, 0, as_bytes(&shadow_vertices));
-            Some(buf)
-        };
-        let text_vbuf = if text_vertices.is_empty() {
-            None
-        } else {
-            let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("text-vbuf"),
-                size: std::mem::size_of_val(text_vertices.as_slice()) as u64,
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            self.queue.write_buffer(&buf, 0, as_bytes(&text_vertices));
-            Some(buf)
-        };
-        let image_vbuf = if image_vertices.is_empty() {
-            None
-        } else {
-            let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("image-vbuf"),
-                size: std::mem::size_of_val(image_vertices.as_slice()) as u64,
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            self.queue.write_buffer(&buf, 0, as_bytes(&image_vertices));
-            Some(buf)
-        };
-        let comp_vbuf = if composite_vertices.is_empty() {
-            None
-        } else {
-            let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("comp-vbuf"),
-                size: std::mem::size_of_val(composite_vertices.as_slice()) as u64,
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            self.queue.write_buffer(&buf, 0, as_bytes(&composite_vertices));
-            Some(buf)
-        };
-        let mask_vbuf = if mask_vertices.is_empty() {
-            None
-        } else {
-            let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("mask-vbuf"),
-                size: std::mem::size_of_val(mask_vertices.as_slice()) as u64,
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            self.queue.write_buffer(&buf, 0, as_bytes(&mask_vertices));
-            Some(buf)
-        };
-        let mask_layer_vbuf = if mask_layer_vertices.is_empty() {
-            None
-        } else {
-            let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("mask-layer-vbuf"),
-                size: std::mem::size_of_val(mask_layer_vertices.as_slice()) as u64,
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            self.queue.write_buffer(&buf, 0, as_bytes(&mask_layer_vertices));
-            Some(buf)
-        };
-        let rrect_clip_vbuf = if rrect_clip_vertices.is_empty() {
-            None
-        } else {
-            let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("rrect-clip-vbuf"),
-                size: std::mem::size_of_val(rrect_clip_vertices.as_slice()) as u64,
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            self.queue.write_buffer(&buf, 0, as_bytes(&rrect_clip_vertices));
-            Some(buf)
-        };
-        let path_clip_vbuf = if path_clip_vertices.is_empty() {
-            None
-        } else {
-            let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("path-clip-vbuf"),
-                size: std::mem::size_of_val(path_clip_vertices.as_slice()) as u64,
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            self.queue.write_buffer(&buf, 0, as_bytes(&path_clip_vertices));
-            Some(buf)
-        };
-        let grad_vbuf = if grad_vertices.is_empty() {
-            None
-        } else {
-            let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("grad-vbuf"),
-                size: std::mem::size_of_val(grad_vertices.as_slice()) as u64,
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            self.queue.write_buffer(&buf, 0, as_bytes(&grad_vertices));
-            Some(buf)
-        };
-        let cross_fade_vbuf = if cross_fade_vertices.is_empty() {
-            None
-        } else {
-            let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("cross-fade-vbuf"),
-                size: std::mem::size_of_val(cross_fade_vertices.as_slice()) as u64,
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            self.queue.write_buffer(&buf, 0, as_bytes(&cross_fade_vertices));
-            Some(buf)
-        };
+        // BUG-405 срез 10: цена создания буфера и цена записи вершин считаются
+        // порознь — «дорого писать 250 KiB» и «дорого просить у драйвера новый
+        // ресурс» лечатся противоположно (первое ничем, второе — переиспользо-
+        // ванием буфера между кадрами).
+        let mut t_vbuf_create = std::time::Duration::ZERO;
+        let mut t_vbuf_write = std::time::Duration::ZERO;
+        let fill_vbuf = self.upload_vertex_buffer(
+            "fill-vbuf",
+            &fill_vertices,
+            &mut t_vbuf_create,
+            &mut t_vbuf_write,
+        );
+        let circle_vbuf = self.upload_vertex_buffer(
+            "circle-vbuf",
+            &circle_vertices,
+            &mut t_vbuf_create,
+            &mut t_vbuf_write,
+        );
+        let rrect_vbuf = self.upload_vertex_buffer(
+            "rrect-vbuf",
+            &rrect_vertices,
+            &mut t_vbuf_create,
+            &mut t_vbuf_write,
+        );
+        let shadow_vbuf = self.upload_vertex_buffer(
+            "shadow-vbuf",
+            &shadow_vertices,
+            &mut t_vbuf_create,
+            &mut t_vbuf_write,
+        );
+        let text_vbuf = self.upload_vertex_buffer(
+            "text-vbuf",
+            &text_vertices,
+            &mut t_vbuf_create,
+            &mut t_vbuf_write,
+        );
+        let image_vbuf = self.upload_vertex_buffer(
+            "image-vbuf",
+            &image_vertices,
+            &mut t_vbuf_create,
+            &mut t_vbuf_write,
+        );
+        let comp_vbuf = self.upload_vertex_buffer(
+            "comp-vbuf",
+            &composite_vertices,
+            &mut t_vbuf_create,
+            &mut t_vbuf_write,
+        );
+        let mask_vbuf = self.upload_vertex_buffer(
+            "mask-vbuf",
+            &mask_vertices,
+            &mut t_vbuf_create,
+            &mut t_vbuf_write,
+        );
+        let mask_layer_vbuf = self.upload_vertex_buffer(
+            "mask-layer-vbuf",
+            &mask_layer_vertices,
+            &mut t_vbuf_create,
+            &mut t_vbuf_write,
+        );
+        let rrect_clip_vbuf = self.upload_vertex_buffer(
+            "rrect-clip-vbuf",
+            &rrect_clip_vertices,
+            &mut t_vbuf_create,
+            &mut t_vbuf_write,
+        );
+        let path_clip_vbuf = self.upload_vertex_buffer(
+            "path-clip-vbuf",
+            &path_clip_vertices,
+            &mut t_vbuf_create,
+            &mut t_vbuf_write,
+        );
+        let grad_vbuf = self.upload_vertex_buffer(
+            "grad-vbuf",
+            &grad_vertices,
+            &mut t_vbuf_create,
+            &mut t_vbuf_write,
+        );
+        let cross_fade_vbuf = self.upload_vertex_buffer(
+            "cross-fade-vbuf",
+            &cross_fade_vertices,
+            &mut t_vbuf_create,
+            &mut t_vbuf_write,
+        );
+        let t_after_vbufs = t_frame0.elapsed();
+        // BUG-405 срез 10: сколько буферов родилось за кадр и сколько в них
+        // байт. Пустые категории буфера не создают, поэтому считаем ровно те,
+        // что выше ушли в `Some`.
+        let vbuf_sizes: [usize; 13] = [
+            std::mem::size_of_val(fill_vertices.as_slice()),
+            std::mem::size_of_val(circle_vertices.as_slice()),
+            std::mem::size_of_val(rrect_vertices.as_slice()),
+            std::mem::size_of_val(shadow_vertices.as_slice()),
+            std::mem::size_of_val(text_vertices.as_slice()),
+            std::mem::size_of_val(image_vertices.as_slice()),
+            std::mem::size_of_val(composite_vertices.as_slice()),
+            std::mem::size_of_val(mask_vertices.as_slice()),
+            std::mem::size_of_val(mask_layer_vertices.as_slice()),
+            std::mem::size_of_val(rrect_clip_vertices.as_slice()),
+            std::mem::size_of_val(path_clip_vertices.as_slice()),
+            std::mem::size_of_val(grad_vertices.as_slice()),
+            std::mem::size_of_val(cross_fade_vertices.as_slice()),
+        ];
+        let vbuf_count = vbuf_sizes.iter().filter(|s| **s > 0).count();
+        let vbuf_bytes: usize = vbuf_sizes.iter().sum();
         // One storage buffer + bind group per gradient draw call (same pattern as image batches).
         let grad_bind_groups: Vec<wgpu::BindGroup> = grad_params
             .iter()
@@ -10596,6 +10637,7 @@ impl Renderer {
                 })
             })
             .collect();
+        let t_after_grad_bg = t_frame0.elapsed();
 
         // ── Off-screen textures ───────────────────────────────────────────
         // Blend composites (mode != Normal) also need from_level offscreen layers.
@@ -10700,8 +10742,138 @@ impl Renderer {
         // энкодера, а не пасса: `DrawOp::SetClip` переставляет его в потоке
         // операций, и каждый следующий пасс продолжает с тем же значением.
         let mut clip_slot: u32 = 0;
+
+        // BUG-405 срез 10: последнее выставленное состояние ТЕКУЩЕГО пасса.
+        // Каждая операция рисования безусловно ставила пайплайн, обе
+        // bind-группы и вершинный буфер — пять команд на операцию при ~83
+        // операциях в пассе. Команды пасса стоят не там, где записаны, а в
+        // `drop(pass)` (перепись среза 10: `end` — 33.4 мс из 35.7 мс фазы
+        // `encode`, и цена растёт вместе с числом операций), поэтому повтор
+        // уже выставленного значения — чистая цена.
+        //
+        // Сравнение по адресу: пайплайны лежат в полях `self`, bind-группы —
+        // в векторах кадра, вершинные буферы — в локальных `Option`; ни один
+        // из них внутри пасса не пересоздаётся, поэтому «тот же адрес» = «тот
+        // же объект» (ABA внутри пасса невозможен).
+        //
+        // 0 / `u32::MAX` / `None` — «состояние неизвестно»; с них начинается
+        // КАЖДЫЙ пасс: у свежего `RenderPass` ничего не выставлено, а scissor
+        // равен всей цели.
+        // Начальные значения не пишутся здесь намеренно: их выставляет
+        // `run_draw_ops!` в начале КАЖДОГО пасса — начальное значение отсюда
+        // всё равно не дожило бы до первого чтения.
+        let elide_state = self.state_elision_enabled && !state_elision_disabled();
+        let mut st_pipeline: usize;
+        let mut st_bg0_off: u32;
+        let mut st_bg1: usize;
+        let mut st_vbuf: usize;
+        let mut st_scissor: Option<DeviceScissor>;
+        // Отложенный (ещё не отданный) диапазон вершин текущего состояния —
+        // см. `bind_and_draw!`.
+        let mut st_pending: Option<(u32, u32)>;
+        let mut st_elided: u64 = 0;
+        let mut st_merged: u64 = 0;
+
+        /// Отдаёт отложенный draw, если он есть (BUG-405 срез 10).
+        ///
+        /// Обязателен перед ЛЮБОЙ командой, меняющей состояние пасса, и в
+        /// конце пасса: отложенные примитивы записаны под прежним состоянием.
+        macro_rules! flush_pending_draw {
+            ($pass:ident) => {{
+                if let Some((s, e)) = st_pending.take() {
+                    $pass.draw(s..e, 0..1);
+                }
+            }};
+        }
+
+        /// Выставляет состояние операции рисования и рисует, пропуская те
+        /// команды, где уже стоит нужное значение, и склеивая соседние
+        /// диапазоны одного состояния в один `draw` (BUG-405 срез 10).
+        ///
+        /// Склейка точна, а не приблизительна: `draw(a..c)` подаёт те же
+        /// примитивы в том же порядке, что `draw(a..b)` + `draw(b..c)`, если
+        /// между ними не менялось состояние, — значит и пиксели те же.
+        macro_rules! bind_and_draw {
+            ($pass:ident, $pipeline:expr, $bg1:expr, $vb:expr, $v_start:expr, $v_count:expr) => {{
+                let pipeline: &wgpu::RenderPipeline = $pipeline;
+                let pid = std::ptr::from_ref(pipeline) as usize;
+                let bg1: Option<&wgpu::BindGroup> = $bg1;
+                let bid = bg1.map_or(0, |b| std::ptr::from_ref(b) as usize);
+                let vb: &wgpu::Buffer = $vb;
+                let vid = std::ptr::from_ref(vb) as usize;
+                let off = clip_slot * UNIFORM_SLOT_STRIDE as u32;
+
+                let need_pipeline = !elide_state || st_pipeline != pid;
+                if need_pipeline {
+                    // Смена пайплайна обесценивает bind-группы, чей layout у
+                    // нового пайплайна другой (правило совместимости WebGPU).
+                    // Группа 0 у всех пайплайнов одна и та же (`uniform_bgl`)
+                    // и смену переживает, а группа 1 у text/image/gradient
+                    // разная — её знание сбрасывается.
+                    st_bg1 = 0;
+                }
+                let need_bg0 = !elide_state || st_bg0_off != off;
+                let need_bg1 = bg1.is_some() && (!elide_state || st_bg1 != bid);
+                let need_vbuf = !elide_state || st_vbuf != vid;
+
+                let v_start: u32 = $v_start;
+                let v_end: u32 = v_start + $v_count;
+                if need_pipeline || need_bg0 || need_bg1 || need_vbuf {
+                    flush_pending_draw!($pass);
+                    if need_pipeline {
+                        st_pipeline = pid;
+                        $pass.set_pipeline(pipeline);
+                    } else {
+                        st_elided += 1;
+                    }
+                    if need_bg0 {
+                        st_bg0_off = off;
+                        $pass.set_bind_group(0, &self.uniform_bind_group, &[off]);
+                    } else {
+                        st_elided += 1;
+                    }
+                    if let Some(bg) = bg1 {
+                        if need_bg1 {
+                            st_bg1 = bid;
+                            $pass.set_bind_group(1, bg, &[]);
+                        } else {
+                            st_elided += 1;
+                        }
+                    }
+                    if need_vbuf {
+                        st_vbuf = vid;
+                        $pass.set_vertex_buffer(0, vb.slice(..));
+                    } else {
+                        st_elided += 1;
+                    }
+                    st_pending = Some((v_start, v_end));
+                } else {
+                    st_elided += 3 + u64::from(bg1.is_some());
+                    match st_pending {
+                        Some((s, e)) if e == v_start => {
+                            st_pending = Some((s, v_end));
+                            st_merged += 1;
+                        }
+                        _ => {
+                            flush_pending_draw!($pass);
+                            st_pending = Some((v_start, v_end));
+                        }
+                    }
+                }
+            }};
+        }
+
         macro_rules! run_draw_ops {
             ($pass:ident, $start:expr, $end:expr) => {
+                // BUG-405 срез 10: у свежего пасса ничего не выставлено, а
+                // scissor равен всей цели — знание предыдущего пасса здесь
+                // недействительно.
+                st_pipeline = 0;
+                st_bg0_off = u32::MAX;
+                st_bg1 = 0;
+                st_vbuf = 0;
+                st_scissor = None;
+                st_pending = None;
                 for op in &draw_ops[$start..$end] {
                     match op {
                         // BUG-405 срез 4: слот клипа — состояние пасса, как и
@@ -10710,51 +10882,43 @@ impl Renderer {
                             clip_slot = *slot;
                         }
                         DrawOp::SetScissor(s) => {
-                            if s.is_empty() {
-                                $pass.set_scissor_rect(0, 0, 1.min(surface_w), 1.min(surface_h));
+                            if elide_state && st_scissor == Some(*s) {
+                                st_elided += 1;
                             } else {
-                                $pass.set_scissor_rect(s.x, s.y, s.width, s.height);
+                                // Отложенные примитивы записаны под прежним
+                                // scissor — отдать их до смены.
+                                flush_pending_draw!($pass);
+                                st_scissor = Some(*s);
+                                if s.is_empty() {
+                                    $pass.set_scissor_rect(0, 0, 1.min(surface_w), 1.min(surface_h));
+                                } else {
+                                    $pass.set_scissor_rect(s.x, s.y, s.width, s.height);
+                                }
                             }
                         }
                         DrawOp::Fill { v_start, v_count } => {
                             if let Some(vb) = &fill_vbuf {
-                                $pass.set_pipeline(&self.fill_pipeline);
-                                $pass.set_bind_group(0, &self.uniform_bind_group, &[clip_slot * UNIFORM_SLOT_STRIDE as u32]);
-                                $pass.set_vertex_buffer(0, vb.slice(..));
-                                $pass.draw(*v_start..*v_start + *v_count, 0..1);
+                                bind_and_draw!($pass, &self.fill_pipeline, None, vb, *v_start, *v_count);
                             }
                         }
                         DrawOp::Circle { v_start, v_count } => {
                             if let Some(vb) = &circle_vbuf {
-                                $pass.set_pipeline(self.circle_pipeline());
-                                $pass.set_bind_group(0, &self.uniform_bind_group, &[clip_slot * UNIFORM_SLOT_STRIDE as u32]);
-                                $pass.set_vertex_buffer(0, vb.slice(..));
-                                $pass.draw(*v_start..*v_start + *v_count, 0..1);
+                                bind_and_draw!($pass, self.circle_pipeline(), None, vb, *v_start, *v_count);
                             }
                         }
                         DrawOp::RRect { v_start, v_count } => {
                             if let Some(vb) = &rrect_vbuf {
-                                $pass.set_pipeline(&self.rrect_pipeline);
-                                $pass.set_bind_group(0, &self.uniform_bind_group, &[clip_slot * UNIFORM_SLOT_STRIDE as u32]);
-                                $pass.set_vertex_buffer(0, vb.slice(..));
-                                $pass.draw(*v_start..*v_start + *v_count, 0..1);
+                                bind_and_draw!($pass, &self.rrect_pipeline, None, vb, *v_start, *v_count);
                             }
                         }
                         DrawOp::Shadow { v_start, v_count } => {
                             if let Some(vb) = &shadow_vbuf {
-                                $pass.set_pipeline(self.shadow_pipeline());
-                                $pass.set_bind_group(0, &self.uniform_bind_group, &[clip_slot * UNIFORM_SLOT_STRIDE as u32]);
-                                $pass.set_vertex_buffer(0, vb.slice(..));
-                                $pass.draw(*v_start..*v_start + *v_count, 0..1);
+                                bind_and_draw!($pass, self.shadow_pipeline(), None, vb, *v_start, *v_count);
                             }
                         }
                         DrawOp::Text { v_start, v_count } => {
                             if let Some(vb) = &text_vbuf {
-                                $pass.set_pipeline(&self.text_pipeline);
-                                $pass.set_bind_group(0, &self.uniform_bind_group, &[clip_slot * UNIFORM_SLOT_STRIDE as u32]);
-                                $pass.set_bind_group(1, &self.atlas_bind_group, &[]);
-                                $pass.set_vertex_buffer(0, vb.slice(..));
-                                $pass.draw(*v_start..*v_start + *v_count, 0..1);
+                                bind_and_draw!($pass, &self.text_pipeline, Some(&self.atlas_bind_group), vb, *v_start, *v_count);
                             }
                         }
                         DrawOp::Image { v_start, v_count, image_batch_idx } => {
@@ -10762,11 +10926,7 @@ impl Renderer {
                                 &image_vbuf,
                                 image_bind_groups.get(*image_batch_idx as usize),
                             ) {
-                                $pass.set_pipeline(&self.image_pipeline);
-                                $pass.set_bind_group(0, &self.uniform_bind_group, &[clip_slot * UNIFORM_SLOT_STRIDE as u32]);
-                                $pass.set_bind_group(1, bind_group, &[]);
-                                $pass.set_vertex_buffer(0, vb.slice(..));
-                                $pass.draw(*v_start..*v_start + *v_count, 0..1);
+                                bind_and_draw!($pass, &self.image_pipeline, Some(bind_group), vb, *v_start, *v_count);
                             }
                         }
                         DrawOp::Gradient { v_start, v_count, grad_batch_idx } => {
@@ -10774,11 +10934,7 @@ impl Renderer {
                                 &grad_vbuf,
                                 grad_bind_groups.get(*grad_batch_idx as usize),
                             ) {
-                                $pass.set_pipeline(&self.gradient_pipeline);
-                                $pass.set_bind_group(0, &self.uniform_bind_group, &[clip_slot * UNIFORM_SLOT_STRIDE as u32]);
-                                $pass.set_bind_group(1, bind_group, &[]);
-                                $pass.set_vertex_buffer(0, vb.slice(..));
-                                $pass.draw(*v_start..*v_start + *v_count, 0..1);
+                                bind_and_draw!($pass, &self.gradient_pipeline, Some(bind_group), vb, *v_start, *v_count);
                             }
                         }
                         DrawOp::CrossFade { v_start, v_count, cf_batch_idx } => {
@@ -10786,15 +10942,13 @@ impl Renderer {
                                 &cross_fade_vbuf,
                                 cross_fade_bind_groups.get(*cf_batch_idx as usize),
                             ) {
-                                $pass.set_pipeline(self.cross_fade_pipeline());
-                                $pass.set_bind_group(0, &self.uniform_bind_group, &[clip_slot * UNIFORM_SLOT_STRIDE as u32]);
-                                $pass.set_bind_group(1, bind_group, &[]);
-                                $pass.set_vertex_buffer(0, vb.slice(..));
-                                $pass.draw(*v_start..*v_start + *v_count, 0..1);
+                                bind_and_draw!($pass, self.cross_fade_pipeline(), Some(bind_group), vb, *v_start, *v_count);
                             }
                         }
                     }
                 }
+                // Хвост пасса: последний отложенный диапазон.
+                flush_pending_draw!($pass);
             };
         }
 
@@ -10881,7 +11035,11 @@ impl Renderer {
             // дешёвых пассов на дорогие.
             let mut desc = String::new();
             let item_kinds: String = if item_log {
-                let mut m = [false; 8];
+                // BUG-405 срез 10: слотов девять, а не восемь — `Shadow`
+                // (аналитическая тень среза 7) писалась в индекс 9 при длине
+                // 8 и роняла окно на первом же кадре с тенью под
+                // `LUMEN_FRAME_LOG=3`.
+                let mut m = [false; 9];
                 if let RenderPlanItem::Draw(batch) = item {
                     // Дескриптор пасса: цель и load-op цвета. Пустые пассы
                     // (проба) стоят столько же, сколько полные, — значит
@@ -10901,7 +11059,7 @@ impl Renderer {
                             DrawOp::Fill { .. } => 1,
                             DrawOp::Circle { .. } => 2,
                             DrawOp::RRect { .. } => 3,
-                            DrawOp::Shadow { .. } => 9,
+                            DrawOp::Shadow { .. } => 8,
                             DrawOp::Text { .. } => 4,
                             DrawOp::Image { .. } => 5,
                             DrawOp::Gradient { .. } => 6,
@@ -10909,7 +11067,7 @@ impl Renderer {
                         }] = true;
                     }
                 }
-                "sfcrtigx"
+                "sfcrtigxh"
                     .chars()
                     .zip(m)
                     .filter(|(_, on)| *on)
@@ -12052,6 +12210,8 @@ impl Renderer {
         }
 
         self.filter_passes += filter_passes;
+        self.state_elisions += st_elided;
+        self.draw_merges += st_merged;
 
         let t_after_encode = t_frame0.elapsed();
         self.queue.submit([encoder.finish()]);
@@ -12097,6 +12257,8 @@ impl Renderer {
                 n_plan[3], ms(t_plan[3]), n_plan[4], ms(t_plan[4]), n_plan[5], ms(t_plan[5]),
                 n_plan[6], ms(t_plan[6]),
             );
+            // BUG-405 срез 10: сколько команд состояния пасса не отправлено.
+            eprintln!("[frame:wgpu]   state: отсеяно команд {st_elided}, склеено draw {st_merged}");
             eprintln!(
                 "[frame:wgpu]   draw-sub: begin {:.1}ms ops {:.1}ms end {:.1}ms | textures_created {} pool {}",
                 ms(t_draw_sub[0]), ms(t_draw_sub[1]), ms(t_draw_sub[2]),
@@ -12126,6 +12288,25 @@ impl Renderer {
             // сколько разрезов пасса родителя от них склеено обратно.
             eprintln!(
                 "[frame:wgpu]   culled: уровней {culled_levels} | склеено разрезов {merged_cull_splits}",
+            );
+
+            // BUG-405 срез 10: подстатьи фазы `prep`. Число созданных за кадр
+            // вершинных буферов и их суммарный объём отделяют «дорого писать
+            // вершины» от «дорого СОЗДАВАТЬ буфер» — лечится это по-разному.
+            eprintln!(
+                "[frame:wgpu]   prep-top: atlas {:.2} uniforms {:.2} vbuf {:.2} \
+                 (create {:.2} write {:.2}) grad-bg {:.2} offscreen {:.2} | \
+                 vbufs {} / {} KiB, grad-bg {}",
+                ms(t_after_atlas - t_after_collect),
+                ms(t_after_uniforms - t_after_atlas),
+                ms(t_after_vbufs - t_after_uniforms),
+                ms(t_vbuf_create),
+                ms(t_vbuf_write),
+                ms(t_after_grad_bg - t_after_vbufs),
+                ms(t_after_prep - t_after_grad_bg),
+                vbuf_count,
+                vbuf_bytes / 1024,
+                grad_bind_groups.len(),
             );
 
             // LUMEN_FRAME_LOG=3 — распределение, а не среднее.

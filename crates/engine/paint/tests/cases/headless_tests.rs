@@ -1265,3 +1265,145 @@ fn coverage_cache_matches_recompute() {
         assert!(has_edge, "в кадре плеча «{name}» нет полутона кромки — покрытие не считалось");
     }
 }
+
+/// Список из `n` непересекающихся заливок одного цвета — то есть `n` подряд
+/// идущих операций рисования с ОДНИМ состоянием пасса. Единицы — CSS px
+/// поверхности 64×128.
+fn same_state_fills_dl(n: usize) -> Vec<DisplayCommand> {
+    (0..n)
+        .map(|i| DisplayCommand::FillRect {
+            rect: Rect { x: 4.0, y: 2.0 + i as f32 * 9.0, width: 40.0, height: 5.0 },
+            color: Color { r: 0, g: 0, b: 255, a: 255 },
+        })
+        .collect()
+}
+
+/// Тот же список, но каждая вторая заливка — скруглённая: пайплайн меняется
+/// на каждой операции, склеивать нечего.
+fn alternating_kind_fills_dl(n: usize) -> Vec<DisplayCommand> {
+    (0..n)
+        .map(|i| {
+            let rect = Rect { x: 4.0, y: 2.0 + i as f32 * 9.0, width: 40.0, height: 5.0 };
+            let color = Color { r: 0, g: 0, b: 255, a: 255 };
+            if i % 2 == 0 {
+                DisplayCommand::FillRect { rect, color }
+            } else {
+                DisplayCommand::FillRoundedRect {
+                    rect,
+                    color,
+                    radii: lumen_paint::CornerRadii {
+                        tl: 2.0, tr: 2.0, br: 2.0, bl: 2.0,
+                        tl_y: 2.0, tr_y: 2.0, br_y: 2.0, bl_y: 2.0,
+                    },
+                }
+            }
+        })
+        .collect()
+}
+
+/// BUG-405 срез 10: повторная команда состояния не отправляется, а соседние
+/// диапазоны одного состояния сливаются в один `draw`.
+///
+/// Гейт стоит на счётчиках, а не на времени кадра: цена пасса платится в
+/// `drop(pass)`, где `wgpu-core` проигрывает его команды в командный список,
+/// поэтому «команд меньше» — утверждение о механизме, не зависящее от железа.
+///
+/// Два контроля на ложно-зелёный. Первый: плечо `set_state_elision_enabled`
+/// обязано не отсеять и не склеить НИЧЕГО — иначе счётчики не различают два
+/// пути и гейт пуст. Второй: на списке, где вид заливки чередуется, склеек
+/// обязано быть ноль — счётчик, растущий всегда, был бы тут зелен.
+#[test]
+#[ignore = "requires GPU adapter"]
+fn state_elision_skips_repeated_commands() {
+    let mut r = Renderer::new_headless(INTER.to_vec(), 64, 128, ColorSpace::Srgb)
+        .expect("headless renderer");
+    r.set_font_provider(None);
+    let dl = same_state_fills_dl(12);
+
+    r.set_state_elision_enabled(false);
+    let (e0, m0) = (r.state_elisions(), r.draw_merges());
+    r.render_to_image(&dl, 0.0, 0.0).expect("плечо без отсева");
+    let (e_off, m_off) = (r.state_elisions() - e0, r.draw_merges() - m0);
+    assert_eq!(
+        (e_off, m_off),
+        (0, 0),
+        "плечо A/B без отсева всё равно отсеивает (контроль негоден)",
+    );
+
+    r.set_state_elision_enabled(true);
+    let (e0, m0) = (r.state_elisions(), r.draw_merges());
+    r.render_to_image(&dl, 0.0, 0.0).expect("плечо с отсевом");
+    let (e_on, m_on) = (r.state_elisions() - e0, r.draw_merges() - m0);
+    assert_eq!(m_on, 11, "12 заливок одного состояния обязаны стать одним draw");
+    assert!(e_on >= 33, "команды состояния не отсеяны: {e_on}");
+
+    // Контроль на ложно-зелёный №2: вид заливки чередуется — склеивать нечего.
+    let (e0, m0) = (r.state_elisions(), r.draw_merges());
+    r.render_to_image(&alternating_kind_fills_dl(12), 0.0, 0.0)
+        .expect("кадр с чередованием");
+    let (e_alt, m_alt) = (r.state_elisions() - e0, r.draw_merges() - m0);
+    assert_eq!(m_alt, 0, "склеены операции с разным пайплайном");
+    assert!(e_alt > 0, "у чередования не отсеялась ни одна bind-группа: {e_alt}");
+}
+
+/// BUG-405 срез 10: отсев и склейка не меняют ни одного пикселя.
+///
+/// Оба плеча снимаются в одном процессе (`set_state_elision_enabled`) на одном
+/// и том же списке и сверяются ПОБАЙТОВО: `draw(a..c)` подаёт те же примитивы
+/// в том же порядке, что `draw(a..b)` + `draw(b..c)`, — численный порог здесь
+/// скрывал бы дефект, а не допускал округление.
+///
+/// Список намеренно смешанный: заливки (склеиваются), скруглённые заливки и
+/// текст (меняют пайплайн и bind-группу 1 — то место, где отсев может
+/// оставить в пассе чужую группу).
+#[test]
+#[ignore = "requires GPU adapter"]
+fn state_elision_is_pixel_identical() {
+    let mut r = Renderer::new_headless(INTER.to_vec(), 64, 128, ColorSpace::Srgb)
+        .expect("headless renderer");
+    let mut dl = same_state_fills_dl(6);
+    dl.extend(alternating_kind_fills_dl(6));
+    dl.push(DisplayCommand::DrawText {
+        rect: Rect { x: 4.0, y: 112.0, width: 56.0, height: 14.0 },
+        text: "Lumen".to_string(),
+        font_size: 12.0,
+        color: Color { r: 0, g: 0, b: 0, a: 255 },
+        font_family: Vec::new(),
+        font_weight: Default::default(),
+        font_style: Default::default(),
+        font_stretch: Default::default(),
+        font_variation_axes: Vec::new(),
+        font_features: Vec::new(),
+        font_palette: None,
+        tab_size: 8.0,
+        highlight_name: None,
+        text_orientation: None,
+    });
+
+    r.set_state_elision_enabled(false);
+    let (e0, m0) = (r.state_elisions(), r.draw_merges());
+    let plain = r.render_to_image(&dl, 0.0, 0.0).expect("плечо без отсева");
+    assert_eq!(
+        (r.state_elisions() - e0, r.draw_merges() - m0),
+        (0, 0),
+        "плечо A/B без отсева всё равно отсеивает (контроль негоден)",
+    );
+
+    r.set_state_elision_enabled(true);
+    let (e0, m0) = (r.state_elisions(), r.draw_merges());
+    let elided = r.render_to_image(&dl, 0.0, 0.0).expect("плечо с отсевом");
+    let (e_on, m_on) = (r.state_elisions() - e0, r.draw_merges() - m0);
+    assert!(m_on > 0, "список не задействовал склейку — сравнивать нечего");
+    assert!(e_on > 0, "список не задействовал отсев — сравнивать нечего");
+
+    assert_eq!(
+        plain.data, elided.data,
+        "отсев изменил пиксели: отсеяно {e_on} команд, склеено {m_on} draw",
+    );
+
+    // В кадре есть и заливка, и текст — иначе побайтовое равенство пусто.
+    let blue = plain.data.chunks_exact(4).filter(|px| px[2] > 200 && px[0] < 64).count();
+    assert!(blue > 0, "в кадре нет заливок — гейт негоден");
+    let dark = plain.data.chunks_exact(4).filter(|px| px[0] < 64 && px[2] < 64).count();
+    assert!(dark > 0, "в кадре нет текста — гейт негоден");
+}
