@@ -2517,6 +2517,12 @@ pub struct Renderer {
     /// тест рисует один и тот же список обоими путями в одном процессе и
     /// сверяет пиксели. Поверх — рычаг `LUMEN_NO_NESTED_SHADER_CLIP=1`.
     nested_shader_clip_enabled: bool,
+    /// Мемоизация покрытия SVG-супов (BUG-405 срез 9).
+    coverage_cache: CoverageCache,
+    /// Кэш покрытия включён (BUG-405 срез 9). Инстансное плечо A/B: тест
+    /// рисует один и тот же список обоими путями в одном процессе и сверяет
+    /// пиксели. Поверх — рычаг `LUMEN_NO_COVERAGE_CACHE=1`.
+    coverage_cache_enabled: bool,
     /// Приёмник готовых пайплайнов с потока прогрева (BUG-405). `None` —
     /// прогрев ещё не запущен, уже завершён, или отключён
     /// `LUMEN_NO_PIPELINE_WARMUP=1`. Сбрасывается в `None`, когда поток
@@ -4382,6 +4388,8 @@ impl Renderer {
             shadow_analytic_enabled: true,
             nested_shader_clips: 0,
             nested_shader_clip_enabled: true,
+            coverage_cache: CoverageCache::default(),
+            coverage_cache_enabled: true,
             warm_rx: None,
             warm_started: false,
             surface,
@@ -4648,6 +4656,26 @@ impl Renderer {
     #[must_use]
     pub fn nested_shader_clips(&self) -> u64 {
         self.nested_shader_clips
+    }
+
+    /// Сколько раз покрытие SVG-супа взято готовым из кэша, а не пересчитано
+    /// (BUG-405 срез 9), и сколько раз пересчитано.
+    ///
+    /// Гейт правки стоит на нём: счётчик называет механизм («тот же суп
+    /// растеризуется один раз»), а не следствие — время фазы `collect`
+    /// зависит ещё и от содержимого страницы.
+    #[must_use]
+    pub fn coverage_cache_stats(&self) -> (u64, u64) {
+        (self.coverage_cache.hits, self.coverage_cache.misses)
+    }
+
+    /// Включает/выключает кэш покрытия SVG-супов (BUG-405 срез 9).
+    ///
+    /// Нужен гейту пикселей: сравнить пересчёт с попаданием в кэш можно только
+    /// двумя плечами в одном процессе. Рычаг процесса
+    /// `LUMEN_NO_COVERAGE_CACHE=1` выключает кэш поверх него.
+    pub fn set_coverage_cache_enabled(&mut self, enabled: bool) {
+        self.coverage_cache_enabled = enabled;
     }
 
     /// Включает/выключает второй шейдерный контур (BUG-405 срез 8).
@@ -8179,9 +8207,32 @@ impl Renderer {
             } else {
                 SHADER_CLIP_MAX_CONTOURS
             };
+        // `LUMEN_FRAME_LOG=3`: разбивка фазы `collect` по вариантам команд —
+        // сколько времени, сколько команд, сколько из них отсёк кулинг. Сестра
+        // femtovg-строки `[frame] top:`; на wgpu-пути её не было, и статья
+        // «SVG-обводка» (BUG-405 срез 9) поэтому два среза не была видна.
+        //
+        // Время команды считается меткой в начале СЛЕДУЮЩЕЙ итерации: любой
+        // `continue` внутри arm'а иначе терял бы свой вклад, а именно такие
+        // ветки (кулинг, отказ scissor'а) в этой фазе и интересны. Уровень 3
+        // отдельно от 2 затем, что `Instant::now()` на команду — заметная доля
+        // самой фазы, и замеры уровня 2 обязаны остаться чистыми.
+        let cmd_log = crate::frame_log_level() >= 3;
+        let mut probe: std::collections::HashMap<&'static str, (std::time::Duration, u32, u32)> =
+            std::collections::HashMap::new();
+        let mut probe_prev: Option<(&'static str, std::time::Instant)> = None;
         let iter_content = content.iter().enumerate().map(|(i, c)| (c, false, i));
         let iter_overlay = overlay.iter().enumerate().map(|(i, c)| (c, true, i));
         for (cmd, is_overlay, cmd_idx) in iter_content.chain(iter_overlay) {
+            if cmd_log {
+                let now = std::time::Instant::now();
+                if let Some((name, t0)) = probe_prev.take() {
+                    let e = probe.entry(name).or_default();
+                    e.0 += now - t0;
+                    e.1 += 1;
+                }
+                probe_prev = Some((cmd.variant_name(), now));
+            }
             // BUG-405 срез 7: заливка и `PopFilter` тени, нарисованной
             // аналитически, уже учтены её квадом — пропускаем их как команды.
             match shadow_skip_until {
@@ -8210,6 +8261,9 @@ impl Renderer {
                     viewport_css_h,
                 )
             {
+                if cmd_log {
+                    probe.entry(cmd.variant_name()).or_default().2 += 1;
+                }
                 continue;
             }
             match cmd {
@@ -8227,7 +8281,16 @@ impl Renderer {
                         // кромкой с растровой сетки — осевой остаётся на прежнем
                         // (побитово идентичном) пути.
                         if rotates_axes_2d(m) && !rot_aa_disabled() {
-                            antialias_fill_soup(&mut fill_vertices, v_start as usize, c, dpr_f32);
+                            antialias_fill_soup(
+                            &mut fill_vertices,
+                            v_start as usize,
+                            c,
+                            dpr_f32,
+                            coverage_cache_arm(
+                                &mut self.coverage_cache,
+                                self.coverage_cache_enabled,
+                            ),
+                        );
                         }
                     }
                     let v_count = fill_vertices.len() as u32 - v_start;
@@ -10031,7 +10094,16 @@ impl Renderer {
                         apply_affine_to_verts(&mut fill_vertices[v_start as usize..], m);
                     }
                     if !svg_aa_disabled() {
-                        antialias_fill_soup(&mut fill_vertices, v_start as usize, c, dpr_f32);
+                        antialias_fill_soup(
+                            &mut fill_vertices,
+                            v_start as usize,
+                            c,
+                            dpr_f32,
+                            coverage_cache_arm(
+                                &mut self.coverage_cache,
+                                self.coverage_cache_enabled,
+                            ),
+                        );
                     }
                     let v_count = fill_vertices.len() as u32 - v_start;
                     if v_count > 0 {
@@ -10059,7 +10131,16 @@ impl Renderer {
                         apply_affine_to_verts(&mut fill_vertices[v_start as usize..], m);
                     }
                     if !svg_aa_disabled() {
-                        antialias_fill_soup(&mut fill_vertices, v_start as usize, c, dpr_f32);
+                        antialias_fill_soup(
+                            &mut fill_vertices,
+                            v_start as usize,
+                            c,
+                            dpr_f32,
+                            coverage_cache_arm(
+                                &mut self.coverage_cache,
+                                self.coverage_cache_enabled,
+                            ),
+                        );
                     }
                     let v_count = fill_vertices.len() as u32 - v_start;
                     if v_count > 0 {
@@ -10280,6 +10361,23 @@ impl Renderer {
         }
         flush_batch!();
         let _ = (batch_start, current_scissor); // terminal flush — values not needed after
+        if let Some((name, t0)) = probe_prev.take() {
+            let e = probe.entry(name).or_default();
+            e.0 += t0.elapsed();
+            e.1 += 1;
+        }
+        if cmd_log {
+            let mut rows: Vec<_> = probe.iter().collect();
+            rows.sort_by_key(|(_, (d, _, _))| std::cmp::Reverse(*d));
+            let top: Vec<String> = rows
+                .iter()
+                .take(8)
+                .map(|(name, (d, n, c))| {
+                    format!("{name} {:.2}ms/{n}(cull {c})", d.as_secs_f64() * 1e3)
+                })
+                .collect();
+            eprintln!("[frame:wgpu]   collect-top: {}", top.join(", "));
+        }
         let t_after_collect = t_frame0.elapsed();
 
         // ── Atlas upload (если изменился) ─────────────────────────────────
@@ -12598,11 +12696,116 @@ fn apply_affine_to_grad_verts(verts: &mut [GradVertex], m: &Mat4) {
 ///
 /// Ничего не делает при вырожденном `dpr`; выключается флагами вызывающей
 /// стороны (`LUMEN_NO_SVG_AA` / `LUMEN_NO_ROT_AA`).
+/// Сколько вершин (суп + покрытие) [`CoverageCache`] держит, прежде чем
+/// сбросить себя целиком. ≈16 МБ при полном заполнении; страница со статичными
+/// иконками занимает единицы килобайт, а сброс нужен только патологии — потоку
+/// НОВЫХ супов каждый кадр (анимированный SVG под трансформом), где кэш всё
+/// равно не попадает и держать его нечем.
+const COVERAGE_CACHE_MAX_VERTS: usize = 1 << 20;
+
+/// Мемоизация [`crate::svg_path::coverage_quads`] по треугольному супу
+/// (BUG-405 срез 9).
+///
+/// `coverage_quads` — CPU-растеризация покрытия, 58 мкс на команду
+/// `DrawSvgStroke` при 16 РАЗНЫХ супах на 704 вызова за прогон прокрутки
+/// `lenta.ru`: иконки шапки не двигаются, и 98% вызовов пересчитывают уже
+/// посчитанное. Функция чистая, поэтому кэш — точная мемоизация, а не
+/// приближение: ключ сравнивается побитово (`f32::to_bits`), так что коллизия
+/// хэша даёт промах, а не чужие пиксели, и попадание возвращает те самые
+/// вершины, которые вернул бы пересчёт.
+///
+/// Ключ — суп В АБСОЛЮТНЫХ device-координатах, без нормализации сдвигом. Она
+/// дала бы попадания ещё и у движущихся фигур, но растеризация не
+/// инвариантна к сдвигу побитово (интерполяция кромки округляется иначе на
+/// больших координатах), а на замеренной странице нормализация не даёт ни
+/// одного лишнего попадания — те же 16 супов.
+/// Запись [`CoverageCache`]: суп-ключ в битовом виде и посчитанное по нему
+/// покрытие. Ключ хранится целиком, чтобы совпадение хэша проверялось
+/// побитовым сравнением, а не принималось на веру.
+type CoverageEntry = (Vec<[u32; 2]>, std::sync::Arc<Vec<crate::svg_path::CoverageVertex>>);
+
+#[derive(Default)]
+struct CoverageCache {
+    /// Хэш супа → супы с таким хэшом (в битовом виде) и их покрытие.
+    buckets: std::collections::HashMap<u64, Vec<CoverageEntry>>,
+    /// Сколько вершин суммарно хранится — счётчик для [`COVERAGE_CACHE_MAX_VERTS`].
+    stored_verts: usize,
+    /// Сколько вызовов вернули готовое покрытие.
+    hits: u64,
+    /// Сколько вызовов пересчитали покрытие.
+    misses: u64,
+}
+
+impl CoverageCache {
+    /// Покрытие для `soup`: готовое из кэша либо посчитанное и запомненное.
+    fn coverage(&mut self, soup: &[[f32; 2]]) -> std::sync::Arc<Vec<crate::svg_path::CoverageVertex>> {
+        let h = soup_hash(soup);
+        if let Some(bucket) = self.buckets.get(&h)
+            && let Some((_, quads)) = bucket.iter().find(|(key, _)| soup_bits_eq(key, soup))
+        {
+            self.hits += 1;
+            return std::sync::Arc::clone(quads);
+        }
+        self.misses += 1;
+        let quads = std::sync::Arc::new(crate::svg_path::coverage_quads(soup));
+        let cost = soup.len() + quads.len();
+        if self.stored_verts + cost > COVERAGE_CACHE_MAX_VERTS {
+            self.buckets.clear();
+            self.stored_verts = 0;
+        }
+        self.stored_verts += cost;
+        let key: Vec<[u32; 2]> = soup.iter().map(|p| [p[0].to_bits(), p[1].to_bits()]).collect();
+        self.buckets.entry(h).or_default().push((key, std::sync::Arc::clone(&quads)));
+        quads
+    }
+}
+
+/// FNV-1a по битам вершин супа. Криптостойкость не нужна — коллизия отсеивается
+/// побитовым сравнением в [`soup_bits_eq`]; нужна дешевизна, потому что хэш
+/// считается на КАЖДЫЙ вызов, в том числе попадающий.
+fn soup_hash(soup: &[[f32; 2]]) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325_u64;
+    for p in soup {
+        h = (h ^ u64::from(p[0].to_bits())).wrapping_mul(0x100_0000_01b3);
+        h = (h ^ u64::from(p[1].to_bits())).wrapping_mul(0x100_0000_01b3);
+    }
+    h
+}
+
+/// Побитовое равенство запомненного ключа и входного супа. Именно побитовое:
+/// одинаковые биты — одинаковый результат чистой функции, включая `NaN` и
+/// `-0.0`, которые обычное `==` рассудило бы неверно в обе стороны.
+fn soup_bits_eq(key: &[[u32; 2]], soup: &[[f32; 2]]) -> bool {
+    key.len() == soup.len()
+        && key
+            .iter()
+            .zip(soup)
+            .all(|(k, p)| k[0] == p[0].to_bits() && k[1] == p[1].to_bits())
+}
+
+/// Плечо кэша покрытия для вызова [`antialias_fill_soup`]: `None` — считать
+/// заново, как до среза 9. `enabled` — инстансный рычаг
+/// ([`Renderer::set_coverage_cache_enabled`]), поверх него рычаг процесса
+/// `LUMEN_NO_COVERAGE_CACHE=1`.
+fn coverage_cache_arm(cache: &mut CoverageCache, enabled: bool) -> Option<&mut CoverageCache> {
+    (enabled && !coverage_cache_disabled()).then_some(cache)
+}
+
+/// `true`, если кэш покрытия отключён (`LUMEN_NO_COVERAGE_CACHE=1`) — рычаг
+/// отката BUG-405 срез 9 к пересчёту на каждую фигуру и A/B-плечо для проверки
+/// пикселей.
+fn coverage_cache_disabled() -> bool {
+    use std::sync::OnceLock;
+    static OFF: OnceLock<bool> = OnceLock::new();
+    *OFF.get_or_init(|| std::env::var("LUMEN_NO_COVERAGE_CACHE").is_ok_and(|v| v == "1"))
+}
+
 fn antialias_fill_soup(
     fill_vertices: &mut Vec<FillVertex>,
     v_start: usize,
     color: [f32; 4],
     dpr: f32,
+    cache: Option<&mut CoverageCache>,
 ) {
     if dpr <= 0.0 || !dpr.is_finite() || v_start >= fill_vertices.len() {
         return;
@@ -12611,7 +12814,17 @@ fn antialias_fill_soup(
         .iter()
         .map(|v| [v.pos[0] * dpr, v.pos[1] * dpr])
         .collect();
-    let quads = crate::svg_path::coverage_quads(&soup);
+    let fresh;
+    let quads: &[crate::svg_path::CoverageVertex] = match cache {
+        Some(cache) => {
+            fresh = cache.coverage(&soup);
+            fresh.as_slice()
+        }
+        None => {
+            fresh = std::sync::Arc::new(crate::svg_path::coverage_quads(&soup));
+            fresh.as_slice()
+        }
+    };
     if quads.is_empty() {
         return;
     }
@@ -15127,7 +15340,7 @@ mod tests {
         let color = [0.2, 0.4, 0.6, 1.0];
         let mut verts = Vec::new();
         push_fill_quad(&mut verts, Rect::new(4.0, 6.0, 10.0, 8.0), color);
-        antialias_fill_soup(&mut verts, 0, color, 2.0);
+        antialias_fill_soup(&mut verts, 0, color, 2.0, None);
         assert!(!verts.is_empty(), "квад не должен исчезнуть");
         for v in &verts {
             assert!((v.color[3] - 1.0).abs() < 1e-3, "alpha = {}", v.color[3]);
@@ -15140,6 +15353,49 @@ mod tests {
         }
     }
 
+    /// BUG-405 срез 9: кэш покрытия обязан возвращать РОВНО те же вершины, что
+    /// и пересчёт, — и на промахе, и на попадании.
+    ///
+    /// Гейты плечами живут в `headless_tests` и требуют GPU, поэтому помечены
+    /// `#[ignore]`; этот тест идёт в обычном прогоне и держит то же
+    /// утверждение на уровне самой мемоизируемой функции.
+    ///
+    /// Контроль на ложно-зелёный: СДВИНУТАЯ фигура обязана дать промах, иначе
+    /// кэш, отвечающий готовым на любой запрос, был бы тут зелен.
+    #[test]
+    fn coverage_cache_returns_identical_vertices() {
+        let color = [1.0, 0.0, 0.0, 1.0];
+        let soup = |dx: f32| {
+            let mut v = Vec::new();
+            push_fill_quad(&mut v, Rect::new(dx, 0.0, 20.0, 20.0), color);
+            apply_affine_to_verts(&mut v, &Mat4::rotate_2d(std::f32::consts::FRAC_PI_4));
+            v
+        };
+        let aa = |cache: Option<&mut CoverageCache>, dx: f32| {
+            let mut v = soup(dx);
+            antialias_fill_soup(&mut v, 0, color, 1.0, cache);
+            v
+        };
+
+        let plain = aa(None, 0.0);
+        let mut cache = CoverageCache::default();
+        let miss = aa(Some(&mut cache), 0.0);
+        assert_eq!((cache.hits, cache.misses), (0, 1), "первый вызов не мог попасть");
+        let hit = aa(Some(&mut cache), 0.0);
+        assert_eq!((cache.hits, cache.misses), (1, 1), "повторный вызов не попал в кэш");
+
+        assert!(!plain.is_empty(), "покрытие пусто — сравнивать нечего");
+        let bits = |v: &[FillVertex]| -> Vec<[u32; 3]> {
+            v.iter().map(|x| [x.pos[0].to_bits(), x.pos[1].to_bits(), x.color[3].to_bits()]).collect()
+        };
+        assert_eq!(bits(&plain), bits(&miss), "промах разошёлся с пересчётом");
+        assert_eq!(bits(&plain), bits(&hit), "попадание разошлось с пересчётом");
+
+        let shifted = aa(Some(&mut cache), 3.5);
+        assert_eq!(cache.misses, 2, "сдвинутая фигура взята из кэша — ключ не различает формы");
+        assert_ne!(bits(&plain), bits(&shifted), "сдвиг не изменил покрытие — контроль негоден");
+    }
+
     /// А кромка, сошедшая с сетки, обязана дать дробное покрытие — ради этого
     /// срез и делается. Ромб (квад под 45°) не может состоять из одних
     /// полностью залитых пикселей.
@@ -15149,7 +15405,7 @@ mod tests {
         let mut verts = Vec::new();
         push_fill_quad(&mut verts, Rect::new(0.0, 0.0, 20.0, 20.0), color);
         apply_affine_to_verts(&mut verts, &Mat4::rotate_2d(std::f32::consts::FRAC_PI_4));
-        antialias_fill_soup(&mut verts, 0, color, 1.0);
+        antialias_fill_soup(&mut verts, 0, color, 1.0, None);
         assert!(
             verts.iter().any(|v| v.color[3] > 0.01 && v.color[3] < 0.99),
             "ни одного частично покрытого пикселя на кромке ромба"

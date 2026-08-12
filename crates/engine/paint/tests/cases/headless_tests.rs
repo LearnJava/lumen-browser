@@ -1142,3 +1142,126 @@ fn analytic_shadow_matches_blurred_level() {
         assert!(has_penumbra, "в кадре плеча «{name}» нет полутона тени — гейт негоден");
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BUG-405 срез 9 — покрытие SVG-супа считается один раз на форму
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Список из `n` обводок-«галок» со сдвигом `shift` по обеим осям.
+///
+/// Обводка (`DrawSvgStroke`) — команда, у которой покрытие кромки считает
+/// CPU-растеризатор `coverage_quads`; `shift` нужен контролю на промах:
+/// сдвинутая фигура — ДРУГОЙ суп, и кэш обязан её пересчитать.
+fn svg_strokes_dl(n: usize, shift: f32) -> Vec<DisplayCommand> {
+    (0..n)
+        .map(|i| {
+            let y = 6.0 + i as f32 * 9.0 + shift;
+            DisplayCommand::DrawSvgStroke {
+                contours: vec![vec![
+                    [6.0 + shift, y],
+                    [14.0 + shift, y + 6.0],
+                    [30.0 + shift, y - 4.0],
+                ]],
+                color: Color { r: 0, g: 0, b: 0, a: 255 },
+                params: lumen_paint::svg_path::StrokeParams {
+                    half_width: 1.5,
+                    ..Default::default()
+                },
+            }
+        })
+        .collect()
+}
+
+/// BUG-405 срез 9: повторно встреченный суп не растеризуется второй раз.
+///
+/// Гейт стоит на счётчике попаданий, а не на времени фазы `collect`:
+/// «одна и та же форма считается один раз» — утверждение о механизме, оно не
+/// зависит ни от железа, ни от содержимого страницы.
+///
+/// Два контроля на ложно-зелёный. Первый: СДВИНУТАЯ фигура обязана дать
+/// промахи — кэш, отвечающий готовым на любой запрос, рисовал бы чужие
+/// пиксели и был бы тут зелен. Второй: плечо A/B обязано перестать попадать —
+/// иначе счётчик не различает два пути и гейт пуст.
+#[test]
+#[ignore = "requires GPU adapter"]
+fn coverage_cache_serves_repeated_soups() {
+    let mut r = Renderer::new_headless(INTER.to_vec(), 64, 128, ColorSpace::Srgb)
+        .expect("headless renderer");
+    r.set_font_provider(None);
+
+    let dl = svg_strokes_dl(12, 0.0);
+    let (h0, m0) = r.coverage_cache_stats();
+    r.render_to_image(&dl, 0.0, 0.0).expect("первый кадр");
+    let (h1, m1) = r.coverage_cache_stats();
+    assert_eq!(h1 - h0, 0, "первый кадр не мог попасть в пустой кэш");
+    assert_eq!(m1 - m0, 12, "не все обводки дошли до растеризации покрытия");
+
+    r.render_to_image(&dl, 0.0, 0.0).expect("второй кадр");
+    let (h2, m2) = r.coverage_cache_stats();
+    assert_eq!(h2 - h1, 12, "повторный кадр всё ещё пересчитывает покрытие");
+    assert_eq!(m2 - m1, 0, "повторный кадр растеризовал покрытие заново");
+
+    // Контроль на ложно-зелёный №1: другая геометрия — другой суп.
+    r.render_to_image(&svg_strokes_dl(12, 3.5), 0.0, 0.0).expect("кадр со сдвигом");
+    let (h3, m3) = r.coverage_cache_stats();
+    assert_eq!(m3 - m2, 12, "сдвинутая фигура взята из кэша — ключ не различает формы");
+    assert_eq!(h3 - h2, 0, "сдвинутая фигура засчитана попаданием");
+
+    // Контроль на ложно-зелёный №2: плечо A/B обязано вернуть прежний путь.
+    r.set_coverage_cache_enabled(false);
+    r.render_to_image(&dl, 0.0, 0.0).expect("кадр без кэша");
+    let (h4, m4) = r.coverage_cache_stats();
+    assert_eq!(h4 - h3, 0, "плечо без кэша всё ещё попадает (контроль негоден)");
+    assert_eq!(m4 - m3, 0, "плечо без кэша обязано обходить кэш целиком");
+    r.set_coverage_cache_enabled(true);
+}
+
+/// BUG-405 срез 9: кадр с попаданиями в кэш побитово равен кадру без кэша.
+///
+/// Мемоизация чистой функции обязана давать РОВНО те же вершины, что и
+/// пересчёт, — здесь, в отличие от срезов 7 и 8, гейт не численный, а
+/// побайтовый: ключ сравнивается побитово и хранится в абсолютных координатах,
+/// поэтому округление кромки не может разойтись.
+///
+/// Сравниваются три кадра: плечо без кэша, кадр промахов и кадр попаданий.
+/// Последний и есть предмет проверки — первые два вместе доказывают, что
+/// расхождение искали бы там, где оно возможно.
+///
+/// Проверка «обводка вообще нарисована, и у неё есть полутон» обязательна:
+/// три пустых кадра сравнивались бы зелено, а кадр с бинарной кромкой
+/// означал бы, что покрытие не считалось вовсе.
+#[test]
+#[ignore = "requires GPU adapter"]
+fn coverage_cache_matches_recompute() {
+    let mut r = Renderer::new_headless(INTER.to_vec(), 64, 128, ColorSpace::Srgb)
+        .expect("headless renderer");
+    r.set_font_provider(None);
+    let dl = svg_strokes_dl(12, 0.0);
+
+    r.set_coverage_cache_enabled(false);
+    let plain = r.render_to_image(&dl, 0.0, 0.0).expect("плечо без кэша");
+
+    r.set_coverage_cache_enabled(true);
+    let (h0, m0) = r.coverage_cache_stats();
+    let miss = r.render_to_image(&dl, 0.0, 0.0).expect("кадр промахов");
+    let (h1, m1) = r.coverage_cache_stats();
+    let hit = r.render_to_image(&dl, 0.0, 0.0).expect("кадр попаданий");
+    let (h2, _) = r.coverage_cache_stats();
+
+    assert_eq!((h1 - h0, m1 - m0), (0, 12), "кадр промахов оказался не тем, чем назван");
+    assert_eq!(h2 - h1, 12, "кадр попаданий не попал в кэш — сравнивать нечего");
+
+    assert_eq!(plain.data, miss.data, "кадр промахов разошёлся с плечом без кэша");
+    assert_eq!(plain.data, hit.data, "кадр попаданий разошёлся с плечом без кэша");
+
+    // Обводка нарисована, и её кромка сглажена — иначе сравнение пусто.
+    for (name, img) in [("без кэша", &plain), ("промахи", &miss), ("попадания", &hit)] {
+        let opaque = img.data.chunks_exact(4).filter(|px| px[3] == 255 && px[0] < 32).count();
+        assert!(opaque > 0, "в кадре плеча «{name}» нет обводки — гейт негоден");
+        let has_edge = img
+            .data
+            .chunks_exact(4)
+            .any(|px| px[0] > 32 && px[0] < 223);
+        assert!(has_edge, "в кадре плеча «{name}» нет полутона кромки — покрытие не считалось");
+    }
+}
