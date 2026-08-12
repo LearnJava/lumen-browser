@@ -86,6 +86,11 @@ pub struct GlyphAtlas {
     /// Помечается при каждом `insert`. Renderer следит и заливает текстуру
     /// в GPU только когда `true`, потом вызывает `mark_clean()`.
     dirty: bool,
+    /// Полуинтервал строк `[y0, y1)`, изменившихся с последнего `mark_clean()`
+    /// (BUG-405 срез 11). `None` — изменений нет. Renderer заливает в GPU
+    /// только эти строки: новый глиф трогает десятки строк из тысячи, а
+    /// заливалась вся текстура целиком.
+    dirty_rows: Option<(u32, u32)>,
     /// Логический timestamp (инкрементируется при каждом доступе).
     /// Используется для LRU эвикции.
     current_tick: u64,
@@ -105,8 +110,22 @@ impl GlyphAtlas {
             shelf_y: 0,
             shelf_height: 0,
             dirty: true,
+            dirty_rows: Some((0, size)),
             current_tick: 0,
         }
+    }
+
+    /// Расширяет диапазон изменившихся строк на `[y0, y1)`.
+    fn mark_dirty_rows(&mut self, y0: u32, y1: u32) {
+        let (y0, y1) = (y0.min(self.height), y1.min(self.height));
+        if y0 >= y1 {
+            return;
+        }
+        self.dirty = true;
+        self.dirty_rows = Some(match self.dirty_rows {
+            Some((a, b)) => (a.min(y0), b.max(y1)),
+            None => (y0, y1),
+        });
     }
 
     pub fn width(&self) -> u32 {
@@ -122,8 +141,14 @@ impl GlyphAtlas {
     pub fn dirty(&self) -> bool {
         self.dirty
     }
+    /// Строки `[y0, y1)`, изменившиеся с последнего [`mark_clean`](Self::mark_clean).
+    /// `None` при `dirty() == false`; при `true` — всегда `Some`.
+    pub fn dirty_rows(&self) -> Option<(u32, u32)> {
+        self.dirty_rows
+    }
     pub fn mark_clean(&mut self) {
         self.dirty = false;
+        self.dirty_rows = None;
     }
 
     pub fn get(&self, key: AtlasKey) -> Option<&GlyphEntry> {
@@ -156,7 +181,9 @@ impl GlyphAtlas {
         for key in keys {
             if self.cache.remove(key).is_some() {
                 removed += 1;
-                self.dirty = true;
+                // Пиксели удалённой записи не трогаются, но флаг оставлен как
+                // был (консервативно): диапазон — вся текстура.
+                self.mark_dirty_rows(0, self.height);
             }
         }
         removed
@@ -206,7 +233,7 @@ impl GlyphAtlas {
 
         self.cursor_x += bitmap.width + PADDING;
         self.shelf_height = self.shelf_height.max(bitmap.height);
-        self.dirty = true;
+        self.mark_dirty_rows(y, y + bitmap.height);
 
         self.current_tick = self.current_tick.saturating_add(1);
         let entry = GlyphEntry {
@@ -242,7 +269,7 @@ impl GlyphAtlas {
             }
             MemoryPressureLevel::High => {
                 self.cache.clear();
-                self.dirty = true;
+                self.mark_dirty_rows(0, self.height);
                 // Reset packing cursors so new glyphs fill from the top.
                 self.cursor_x = 0;
                 self.shelf_y = 0;
@@ -273,7 +300,7 @@ impl lumen_core::EvictableCache for GlyphAtlas {
 
     fn clear(&mut self) {
         self.cache.clear();
-        self.dirty = true;
+        self.mark_dirty_rows(0, self.height);
         self.cursor_x = 0;
         self.shelf_y = 0;
         self.shelf_height = 0;
@@ -445,6 +472,38 @@ mod tests {
         // Повторный insert уже существующего ключа — НЕ пометит dirty (ничего не записано).
         atlas.insert(k(1), &bitmap(8, 8, 50)).unwrap();
         assert!(!atlas.dirty());
+    }
+
+    /// BUG-405 срез 11: диапазон изменившихся строк накрывает ровно вставленные
+    /// глифы, а свежий атлас — всю текстуру.
+    ///
+    /// Гейт правки стоит здесь: заливается только `[y0, y1)`, поэтому строка
+    /// глифа, оставшаяся ВНЕ диапазона, до GPU не доедет.
+    #[test]
+    fn dirty_rows_cover_inserted_glyphs() {
+        let mut atlas = GlyphAtlas::new(32);
+        assert_eq!(atlas.dirty_rows(), Some((0, 32)), "свежий атлас — вся текстура");
+        atlas.mark_clean();
+        assert_eq!(atlas.dirty_rows(), None, "после заливки диапазона нет");
+
+        // Первая полка: глиф 8×6 в строках 0..6.
+        atlas.insert(k(1), &bitmap(8, 6, 50)).unwrap();
+        assert_eq!(atlas.dirty_rows(), Some((0, 6)));
+        // Сосед по полке выше — диапазон растёт вверх по высоте, не по числу.
+        atlas.insert(k(2), &bitmap(8, 9, 50)).unwrap();
+        assert_eq!(atlas.dirty_rows(), Some((0, 9)));
+        atlas.mark_clean();
+
+        // Новая полка (глиф шире остатка первой): диапазон начинается с неё,
+        // а не с нуля — иначе заливалась бы вся текстура и мерить было бы
+        // нечего.
+        atlas.insert(k(3), &bitmap(20, 9, 50)).unwrap();
+        assert_eq!(atlas.dirty_rows(), Some((10, 19)));
+
+        // Очистка кэша трогает пиксели всей текстуры — диапазон полный.
+        atlas.mark_clean();
+        atlas.on_memory_pressure(lumen_core::MemoryPressureLevel::High);
+        assert_eq!(atlas.dirty_rows(), Some((0, 32)));
     }
 
     #[test]

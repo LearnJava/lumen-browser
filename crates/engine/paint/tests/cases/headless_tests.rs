@@ -1407,3 +1407,74 @@ fn state_elision_is_pixel_identical() {
     let dark = plain.data.chunks_exact(4).filter(|px| px[0] < 64 && px[2] < 64).count();
     assert!(dark > 0, "в кадре нет текста — гейт негоден");
 }
+
+/// Список из одной строки текста — глифы попадают в атлас, поэтому первый
+/// кадр с новой строкой делает заливку атласа, а повторный — нет.
+fn text_dl(text: &str, y: f32) -> Vec<DisplayCommand> {
+    vec![DisplayCommand::DrawText {
+        rect: Rect { x: 2.0, y, width: 60.0, height: 14.0 },
+        text: text.to_string(),
+        font_size: 12.0,
+        color: Color { r: 0, g: 0, b: 0, a: 255 },
+        font_family: Vec::new(),
+        font_weight: Default::default(),
+        font_style: Default::default(),
+        font_stretch: Default::default(),
+        font_variation_axes: Vec::new(),
+        font_features: Vec::new(),
+        font_palette: None,
+        tab_size: 8.0,
+        highlight_name: None,
+        text_orientation: None,
+    }]
+}
+
+/// BUG-405 срез 11: в GPU уходят только изменившиеся строки атласа.
+///
+/// Плечи — два рендера в одном процессе: у каждого свой атлас, и оба видят
+/// одну и ту же последовательность кадров, поэтому их атласы наполняются
+/// одинаково. Одним рендером этот путь не снять: после первого кадра атлас
+/// чист, и второе плечо не заливало бы ничего — гейт был бы пуст.
+///
+/// Проверяются и байты (предмет правки), и пиксели ВТОРОГО кадра: первый у
+/// обоих плеч заливает свежий атлас целиком.
+#[test]
+#[ignore = "requires GPU adapter"]
+fn atlas_partial_upload_sends_only_changed_rows() {
+    const FULL: u64 = 1024 * 1024; // ATLAS_DIM × ATLAS_DIM, R8
+    let mut whole = Renderer::new_headless(INTER.to_vec(), 64, 128, ColorSpace::Srgb)
+        .expect("headless renderer (плечо целой текстуры)");
+    let mut rows = Renderer::new_headless(INTER.to_vec(), 64, 128, ColorSpace::Srgb)
+        .expect("headless renderer (плечо строк)");
+    whole.set_atlas_partial_upload_enabled(false);
+    rows.set_atlas_partial_upload_enabled(true);
+
+    let first = text_dl("Lumen", 20.0);
+    let second = text_dl("Lumen ABCDEFGH", 20.0); // новые глифы → новые строки
+
+    let mut img = [None, None];
+    let mut bytes = [0u64; 2];
+    let mut uploads = [0u64; 2];
+    for (i, r) in [&mut whole, &mut rows].into_iter().enumerate() {
+        r.render_to_image(&first, 0.0, 0.0).expect("первый кадр");
+        let b0 = r.atlas_bytes_uploaded();
+        assert_eq!(b0, FULL, "первый кадр обязан залить свежий атлас целиком: {b0}");
+        let u0 = r.atlas_uploads();
+        img[i] = Some(r.render_to_image(&second, 0.0, 0.0).expect("второй кадр"));
+        bytes[i] = r.atlas_bytes_uploaded() - b0;
+        uploads[i] = r.atlas_uploads() - u0;
+    }
+
+    assert_eq!(uploads, [1, 1], "плечи сделали разное число заливок: {uploads:?}");
+    assert_eq!(bytes[0], FULL, "плечо целой текстуры залило не всю текстуру: {}", bytes[0]);
+    assert!(
+        bytes[1] > 0 && bytes[1] < FULL / 8,
+        "построчная заливка не сузилась: {} байт из {FULL}",
+        bytes[1],
+    );
+
+    let (a, b) = (img[0].take().expect("кадр"), img[1].take().expect("кадр"));
+    assert_eq!(a.data, b.data, "построчная заливка изменила пиксели");
+    let dark = a.data.chunks_exact(4).filter(|px| px[0] < 64 && px[2] < 64).count();
+    assert!(dark > 0, "во втором кадре нет текста — гейт негоден");
+}
