@@ -51,6 +51,17 @@ use crate::DisplayCommand;
 /// что даёт ~3× больше уникальных глифов в кеше.
 const ATLAS_DIM: u32 = 1024;
 
+/// Минимальный запас полосы скролл-композитора с каждой стороны вьюпорта,
+/// в долях его высоты (BUG-405 срез 22).
+///
+/// Полная полоса — 0.75 вьюпорта сверху и снизу; когда столько не влезает в
+/// `max_texture_dimension_2d`, запас режется, но ниже этой доли полоса теряет
+/// смысл: промах случается почти каждым кадром прокрутки, а промах стоит
+/// рендера всей полосы, то есть дороже монолита. При 0.25 и типичном шаге
+/// колеса (~120 CSS px) промах приходится примерно на каждый третий кадр —
+/// остальные обслуживает дешёвая композиция.
+const BAND_MIN_MARGIN_RATIO: f32 = 0.25;
+
 /// Bin размеров растеризации (CSS px). `font_size` округляется до
 /// ближайшего bin вверх через `size_bin_for`. Если ≤ 8 — используется
 /// bin 8 (нечитаемо иначе всё равно); если > 64 — bin 64 с up-scaling-ом
@@ -2726,6 +2737,11 @@ pub struct Renderer {
     /// Blit-квад полосы для следующего Compose-рендера. Ставится только
     /// `try_page_compose`, снимается `take()`-ом в начале сбора вершин.
     pending_base_blit: Option<PendingBaseBlit>,
+    /// Причина последнего отказа скролл-композитора (BUG-405 срез 22) —
+    /// печатается при её СМЕНЕ под `LUMEN_FRAME_LOG>=2`. Без неё отказ виден
+    /// только как отсутствие строк `page-compose`, и перепись не может
+    /// отличить «композитор не применим» от «композитора нет в сборке».
+    last_compose_skip: Option<&'static str>,
     /// Scroll-инвариантный ключ контента ПРОШЛОГО кадра. Полоса рисуется
     /// только по стабильному контенту (ключ совпал два кадра подряд):
     /// анимация/GIF/стриминг парсера меняют ключ каждый кадр, и рендер
@@ -3283,6 +3299,71 @@ fn band_warm_disabled() -> bool {
     static DISABLED: OnceLock<bool> = OnceLock::new();
     *DISABLED.get_or_init(|| {
         std::env::var("LUMEN_NO_BAND_WARM").is_ok_and(|v| v == "1")
+    })
+}
+
+/// Геометрия полосы скролл-композитора под текущую поверхность:
+/// `(запас с каждой стороны, полная высота полосы)` в device px, либо причина
+/// отказа для `page-compose skip`.
+///
+/// Вынесено из [`Renderer::try_page_compose`] отдельной функцией (BUG-405 срез
+/// 22): решение целиком арифметическое — полосе нужен GPU, а выбору её высоты
+/// нет, — поэтому его гейтит юнит-тест без устройства.
+///
+/// Полный запас — по 3/4 вьюпорта сверху и снизу, но не больше 768 CSS px.
+/// Если такая полоса не влезает в `max_dim`, при `clamp` она **ужимается** до
+/// лимита вместо отказа: устройство запрашивается с
+/// `wgpu::Limits::downlevel_defaults()` (`max_texture_dimension_2d` = 2048), а
+/// полная полоса — 2.5 вьюпорта, поэтому прежний безусловный отказ выключал
+/// скролл-композитор на ЛЮБОМ окне выше ~819 device px, то есть почти на любом
+/// развёрнутом (перепись среза: `lenta.ru`, окно 1200×991 — ни одного
+/// Compose-кадра, `p50` кадра 0.90–1.06 мс против 0.49–0.56 с ужатием).
+fn band_geometry(
+    sw: u32,
+    sh: u32,
+    dpr: f32,
+    max_dim: u32,
+    clamp: bool,
+) -> Result<(u32, u32), &'static str> {
+    if sw == 0 || sh == 0 {
+        return Err("нулевой размер поверхности");
+    }
+    // Ниже считается `max_dim - sh`, поэтому вьюпорт крупнее лимита отсеиваем
+    // здесь: в такой поверхности полоса невозможна ни с ужатием, ни без.
+    if sw > max_dim || sh > max_dim {
+        return Err("вьюпорт выше лимита текстуры");
+    }
+    let vp_h_css = sh as f32 / dpr;
+    let margin_want_px = ((vp_h_css * 0.75).min(768.0).floor() * dpr).round() as u32;
+    let margin_px = if clamp {
+        margin_want_px.min((max_dim - sh) / 2)
+    } else {
+        margin_want_px
+    };
+    let band_h_px = sh + 2 * margin_px;
+    if band_h_px > max_dim {
+        return Err("полоса выше лимита текстуры (ужатие отключено)");
+    }
+    // Ужатый запас имеет смысл, только пока промахи редки: при запасе меньше
+    // [`BAND_MIN_MARGIN_RATIO`] вьюпорта промах случается почти каждым кадром
+    // прокрутки, а промах — это рендер всей полосы, то есть дороже монолита во
+    // столько раз, во сколько полоса выше вьюпорта. Тогда честнее отказаться.
+    if (margin_px as f32) < BAND_MIN_MARGIN_RATIO * sh as f32 {
+        return Err("вьюпорт не оставляет запаса в лимите текстуры");
+    }
+    Ok((margin_px, band_h_px))
+}
+
+/// `true`, если ужатие полосы под лимит текстуры отключено
+/// (`LUMEN_NO_BAND_CLAMP=1`): полоса выше `max_texture_dimension_2d` снова
+/// отключает скролл-композитор целиком, как до среза 22 BUG-405. Нужен для
+/// интерливед-A/B на одном бинарнике — плечи различаются только этим
+/// решением (`docs/perf-method.md`).
+fn band_clamp_disabled() -> bool {
+    use std::sync::OnceLock;
+    static DISABLED: OnceLock<bool> = OnceLock::new();
+    *DISABLED.get_or_init(|| {
+        std::env::var("LUMEN_NO_BAND_CLAMP").is_ok_and(|v| v == "1")
     })
 }
 
@@ -4518,6 +4599,7 @@ impl Renderer {
             content_generation: 0,
             last_frame_hash: None,
             page_band: None,
+            last_compose_skip: None,
             pending_base_blit: None,
             last_content_key: None,
             layer_cache: crate::layer_cache::LayerCache::new(),
@@ -7467,6 +7549,23 @@ impl Renderer {
         }
     }
 
+    /// Печатает причину отказа скролл-композитора под `LUMEN_FRAME_LOG>=2` —
+    /// только при её смене (BUG-405 срез 22).
+    ///
+    /// Каждым кадром строка была бы дублем: причина держится десятками кадров
+    /// подряд. Интерес представляет ПЕРЕХОД — кадр, на котором композитор
+    /// перестал применяться (например, рост окна открыл на странице
+    /// sticky-колонку), поэтому повтор той же причины молчит.
+    fn note_compose_skip(&mut self, reason: &'static str) {
+        if self.last_compose_skip == Some(reason) {
+            return;
+        }
+        self.last_compose_skip = Some(reason);
+        if crate::frame_log_level() >= 2 {
+            eprintln!("[frame:wgpu] page-compose skip: {reason}");
+        }
+    }
+
     /// Создаёт кэш полосы скролл-композитора (цветная текстура + depth) под
     /// размер `sw × band_h_px` в device px, заменяя прежний.
     ///
@@ -7648,25 +7747,44 @@ impl Renderer {
         scroll_x: f32,
         anim_ranges: &[std::ops::Range<usize>],
     ) -> Result<bool, wgpu::SurfaceError> {
-        if self.surface.is_none()
-            || scroll_compositor_disabled()
-            || scroll_x != 0.0
-            || content.is_empty()
-            || content
-                .iter()
-                .any(|c| matches!(c, DisplayCommand::BeginStickyLayer { .. }))
+        let skip = if self.surface.is_none() {
+            Some("headless (нет surface)")
+        } else if scroll_compositor_disabled() {
+            Some("выключен LUMEN_NO_SCROLL_COMPOSITOR")
+        } else if scroll_x != 0.0 {
+            Some("горизонтальный скролл")
+        } else if content.is_empty() {
+            Some("пустой display list")
+        } else if content
+            .iter()
+            .any(|c| matches!(c, DisplayCommand::BeginStickyLayer { .. }))
         {
+            Some("sticky-слой в контенте")
+        } else {
+            None
+        };
+        if let Some(reason) = skip {
+            self.note_compose_skip(reason);
             return Ok(false);
         }
         let (sw, sh) = self.surface_dims();
         let dpr = self.scale_factor.max(1e-6) as f32;
         let vp_h_css = sh as f32 / dpr;
-        // Запас полосы: по 3/4 вьюпорта сверху и снизу, но не больше 768 CSS px.
-        let margin_css = (vp_h_css * 0.75).min(768.0).floor();
-        let band_h_px = sh + 2 * (margin_css * dpr).round() as u32;
-        if band_h_px > self.device.limits().max_texture_dimension_2d {
-            return Ok(false);
-        }
+        let max_dim = self.device.limits().max_texture_dimension_2d;
+        let (margin_px, band_h_px) =
+            match band_geometry(sw, sh, dpr, max_dim, !band_clamp_disabled()) {
+                Ok(g) => g,
+                Err(reason) => {
+                    self.note_compose_skip(reason);
+                    return Ok(false);
+                }
+            };
+        self.last_compose_skip = None;
+        // Запас в CSS px берём из ФАКТИЧЕСКОЙ высоты полосы: при ужатии он
+        // меньше желаемого, а при dpr ≠ 1 это заодно снимает расхождение
+        // ≤0.5 px между запасом, по которому полоса построена, и запасом, по
+        // которому ниже считается её верх.
+        let margin_css = margin_px as f32 / dpr;
         let band_h_css = band_h_px as f32 / dpr;
 
         // BUG-405 срез 20: прогрев полосы. Дальше по функции полоса создаётся
@@ -17684,6 +17802,66 @@ mod tests {
             2,
             "пересозданная полоса осталась со старой группой блита",
         );
+    }
+
+    /// BUG-405 срез 22: полоса выше лимита текстуры ужимается, а не отключает
+    /// композитор.
+    ///
+    /// Гейт на арифметику [`band_geometry`], без GPU: до среза окно клиентской
+    /// высотой больше ~819 device px давало отказ (полная полоса — 2.5
+    /// вьюпорта, лимит `downlevel_defaults` — 2048), то есть скролл-композитор
+    /// не работал почти ни на одном развёрнутом окне. Возврат безусловного
+    /// отказа виден здесь как `Err` на строке 952 px.
+    #[test]
+    fn band_geometry_clamps_to_texture_limit() {
+        const MAX: u32 = 2048;
+
+        // Окно, при котором полная полоса влезает: ужатие ничего не меняет,
+        // числа обязаны совпасть с формулой «3/4 вьюпорта с каждой стороны».
+        let (m, h) = band_geometry(1024, 792, 1.0, MAX, true).expect("полоса влезает целиком");
+        assert_eq!((m, h), (594, 1980), "ужатие тронуло полосу, которая влезала");
+        assert_eq!(
+            band_geometry(1024, 792, 1.0, MAX, false),
+            Ok((594, 1980)),
+            "плечи разошлись там, где ужатие не срабатывает",
+        );
+
+        // Окно после роста (перепись среза): полная полоса — 2380 px, лимит
+        // 2048. С ужатием полоса живёт, без него композитор выключается.
+        let (m, h) = band_geometry(1184, 952, 1.0, MAX, true).expect("полоса обязана ужаться");
+        assert_eq!((m, h), (548, 2048), "запас ужат не до лимита");
+        assert!(
+            (m as f32) >= BAND_MIN_MARGIN_RATIO * 952.0,
+            "ужатый запас обязан остаться выше порога полезности",
+        );
+        assert_eq!(
+            band_geometry(1184, 952, 1.0, MAX, false),
+            Err("полоса выше лимита текстуры (ужатие отключено)"),
+            "плечо отката обязано повторять поведение до среза",
+        );
+
+        // Вьюпорт, которому лимит не оставляет полезного запаса: 1700 px дают
+        // 174 px запаса при пороге 425 — честнее монолит.
+        assert_eq!(
+            band_geometry(1024, 1700, 1.0, MAX, true),
+            Err("вьюпорт не оставляет запаса в лимите текстуры"),
+            "полоса с бесполезным запасом обязана отключаться",
+        );
+        // Поверхность крупнее лимита — полоса невозможна в принципе, и
+        // `max_dim - sh` не должен уйти в минус.
+        assert_eq!(
+            band_geometry(1024, 2100, 1.0, MAX, true),
+            Err("вьюпорт выше лимита текстуры"),
+        );
+        assert_eq!(
+            band_geometry(4096, 800, 1.0, MAX, true),
+            Err("вьюпорт выше лимита текстуры"),
+        );
+        assert_eq!(band_geometry(0, 800, 1.0, MAX, true), Err("нулевой размер поверхности"));
+
+        // dpr ≠ 1: запас считается в device px, потолок 768 — в CSS px.
+        let (m, h) = band_geometry(2048, 1200, 2.0, 4096, true).expect("полоса при dpr 2");
+        assert_eq!((m, h), (900, 3000), "потолок 768 CSS px применён не в тех единицах");
     }
 
     /// Побитовое равенство двух наборов вершин текста.
