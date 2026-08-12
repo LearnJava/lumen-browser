@@ -233,7 +233,48 @@ fn read_f2dot14(r: &mut BinaryReader) -> Result<f32, FontError> {
     Ok(raw as f32 / 16384.0)
 }
 
+/// Промежуточные буферы разбора одного простого глифа: концы контуров, флаги
+/// точек и обе координатные полосы. Все они одноразовые по смыслу —
+/// заполняются и выбрасываются, — но глифов на кадре сотни (и у каждого
+/// composite-глифа ещё по компоненту), поэтому живут в [`PARSE_SCRATCH`] и
+/// переиспользуются: четыре аллокации на разбор стоили 0.74 мкс из 1.06 мкс
+/// всего разбора (BUG-405 срез 18).
+#[derive(Default)]
+struct ParseScratch {
+    /// Индекс последней точки каждого контура (`endPtsOfContours`).
+    end_pts: Vec<u16>,
+    /// Флаг каждой точки глифа, с уже развёрнутыми повторами.
+    flags: Vec<u8>,
+    /// X-координаты всех точек глифа в font units.
+    xs: Vec<i16>,
+    /// Y-координаты всех точек глифа в font units.
+    ys: Vec<i16>,
+}
+
+thread_local! {
+    /// Буферы переиспользуются между глифами ОДНОГО потока. Результат от этого
+    /// не зависит ни в чём: каждый вход [`parse_simple_outline_in`] очищает
+    /// всё, что читает, — общий буфер здесь только способ не звать аллокатор
+    /// четыре раза на глиф.
+    static PARSE_SCRATCH: core::cell::RefCell<ParseScratch> =
+        core::cell::RefCell::new(ParseScratch::default());
+}
+
 fn parse_simple_outline(
+    r: &mut BinaryReader,
+    n_contours: usize,
+) -> Result<Vec<Contour>, FontError> {
+    // `Glyph::parse` не рекурсивен (компоненты composite-глифа разбираются
+    // последовательно, а не вложенно), поэтому borrow не должен конфликтовать;
+    // на случай будущего вложенного вызова — свои буферы вместо паники.
+    PARSE_SCRATCH.with(|cell| match cell.try_borrow_mut() {
+        Ok(mut scratch) => parse_simple_outline_in(&mut scratch, r, n_contours),
+        Err(_) => parse_simple_outline_in(&mut ParseScratch::default(), r, n_contours),
+    })
+}
+
+fn parse_simple_outline_in(
+    sc: &mut ParseScratch,
     r: &mut BinaryReader,
     n_contours: usize,
 ) -> Result<Vec<Contour>, FontError> {
@@ -241,24 +282,24 @@ fn parse_simple_outline(
         return Ok(Vec::new());
     }
 
-    let mut end_pts = Vec::with_capacity(n_contours);
+    sc.end_pts.clear();
     for _ in 0..n_contours {
-        end_pts.push(r.read_u16().ok_or(FontError::UnexpectedEof)?);
+        sc.end_pts.push(r.read_u16().ok_or(FontError::UnexpectedEof)?);
     }
-    let total_points = *end_pts.last().unwrap() as usize + 1;
+    let total_points = *sc.end_pts.last().unwrap_or(&0) as usize + 1;
 
     // Пропускаем TrueType-инструкции (hinting) — Phase 0 без grid-fitting.
     let instr_len = r.read_u16().ok_or(FontError::UnexpectedEof)?;
     r.skip(instr_len as usize).ok_or(FontError::UnexpectedEof)?;
 
-    let flags = read_flags(r, total_points)?;
-    let x_coords = read_coords(r, &flags, FLAG_X_SHORT, FLAG_X_SAME_OR_POSITIVE)?;
-    let y_coords = read_coords(r, &flags, FLAG_Y_SHORT, FLAG_Y_SAME_OR_POSITIVE)?;
+    read_flags(r, total_points, &mut sc.flags)?;
+    read_coords(r, &sc.flags, FLAG_X_SHORT, FLAG_X_SAME_OR_POSITIVE, &mut sc.xs)?;
+    read_coords(r, &sc.flags, FLAG_Y_SHORT, FLAG_Y_SAME_OR_POSITIVE, &mut sc.ys)?;
 
     // Собираем контуры по end_pts.
     let mut contours = Vec::with_capacity(n_contours);
     let mut start = 0usize;
-    for &end in &end_pts {
+    for &end in &sc.end_pts {
         let end_idx = end as usize;
         if end_idx >= total_points || end_idx < start {
             return Err(FontError::InvalidTable(*b"glyf"));
@@ -266,9 +307,9 @@ fn parse_simple_outline(
         let mut points = Vec::with_capacity(end_idx - start + 1);
         for i in start..=end_idx {
             points.push(OutlinePoint {
-                x: x_coords[i],
-                y: y_coords[i],
-                on_curve: flags[i] & FLAG_ON_CURVE != 0,
+                x: sc.xs[i],
+                y: sc.ys[i],
+                on_curve: sc.flags[i] & FLAG_ON_CURVE != 0,
             });
         }
         contours.push(Contour { points });
@@ -277,8 +318,13 @@ fn parse_simple_outline(
     Ok(contours)
 }
 
-fn read_flags(r: &mut BinaryReader, total_points: usize) -> Result<Vec<u8>, FontError> {
-    let mut flags = Vec::with_capacity(total_points);
+fn read_flags(
+    r: &mut BinaryReader,
+    total_points: usize,
+    flags: &mut Vec<u8>,
+) -> Result<(), FontError> {
+    flags.clear();
+    flags.reserve(total_points);
     while flags.len() < total_points {
         let f = r.read_u8().ok_or(FontError::UnexpectedEof)?;
         flags.push(f);
@@ -292,7 +338,7 @@ fn read_flags(r: &mut BinaryReader, total_points: usize) -> Result<Vec<u8>, Font
             }
         }
     }
-    Ok(flags)
+    Ok(())
 }
 
 fn read_coords(
@@ -300,8 +346,10 @@ fn read_coords(
     flags: &[u8],
     short_bit: u8,
     same_or_positive_bit: u8,
-) -> Result<Vec<i16>, FontError> {
-    let mut coords = Vec::with_capacity(flags.len());
+    coords: &mut Vec<i16>,
+) -> Result<(), FontError> {
+    coords.clear();
+    coords.reserve(flags.len());
     let mut current = 0i32;
     for &f in flags {
         let delta: i32 = if f & short_bit != 0 {
@@ -323,7 +371,7 @@ fn read_coords(
         // Координата TTF — i16; для штатных шрифтов точно влезает.
         coords.push(current as i16);
     }
-    Ok(coords)
+    Ok(())
 }
 
 /// Удобный view над байтами `glyf` для разбора глифа по offset/length из loca.
@@ -683,6 +731,98 @@ mod tests {
         };
         assert!(contours[0].points[0].on_curve);
         assert!(!contours[0].points[1].on_curve);
+    }
+
+    /// Простой глиф из `n` точек одного контура: все on-curve, 2-байтовые
+    /// дельты `+1` по обеим осям. Нужен гейтам ниже — им важен РАЗМЕР разбора,
+    /// а не форма.
+    fn n_point_glyph_bytes(n: u16) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&1i16.to_be_bytes()); // numberOfContours
+        out.extend_from_slice(&[0u8; 8]); // bbox
+        out.extend_from_slice(&(n - 1).to_be_bytes()); // endPts = [n-1]
+        out.extend_from_slice(&0u16.to_be_bytes()); // instructionLength
+        // on-curve, обе координаты 2-байтовые
+        out.extend(std::iter::repeat_n(0x01u8, n as usize));
+        for _ in 0..(2 * n) {
+            out.extend_from_slice(&1i16.to_be_bytes()); // сначала все x, потом все y
+        }
+        out
+    }
+
+    /// Гейт среза 18 BUG-405, первое плечо: буферы разбора действительно живут
+    /// между глифами.
+    ///
+    /// Вывод от переиспользования не зависит ни в чём, поэтому все побитовые
+    /// сравнения (`scanline_fill_matches_bruteforce_on_real_font` и соседи)
+    /// проходят и с аллокацией на каждый глиф — к этому плечу они слепы.
+    /// Утверждаются оба конца: в холодном потоке буферы не выделены, после
+    /// первого глифа не пусты, второй такой же глиф их не перевыделяет.
+    #[test]
+    fn parse_scratch_survives_between_glyphs() {
+        let bytes = n_point_glyph_bytes(40);
+        std::thread::spawn(move || {
+            let cold = PARSE_SCRATCH.with(|c| {
+                let s = c.borrow();
+                (s.flags.capacity(), s.xs.capacity(), s.ys.capacity(), s.end_pts.capacity())
+            });
+            assert_eq!(cold, (0, 0, 0, 0), "в холодном потоке буферы не выделены");
+
+            Glyph::parse(&bytes).expect("первый разбор");
+            let warm = PARSE_SCRATCH.with(|c| {
+                let s = c.borrow();
+                (s.flags.capacity(), s.xs.capacity(), s.ys.capacity(), s.end_pts.capacity())
+            });
+            assert!(
+                warm.0 >= 40 && warm.1 >= 40 && warm.2 >= 40 && warm.3 >= 1,
+                "после разбора буферы обязаны быть выделены: {warm:?}"
+            );
+
+            Glyph::parse(&bytes).expect("второй разбор");
+            let again = PARSE_SCRATCH.with(|c| {
+                let s = c.borrow();
+                (s.flags.capacity(), s.xs.capacity(), s.ys.capacity(), s.end_pts.capacity())
+            });
+            assert_eq!(warm, again, "второй тот же глиф не должен перевыделять буферы");
+        })
+        .join()
+        .expect("поток гейта");
+    }
+
+    /// Гейт среза 18 BUG-405, второе плечо: общий буфер обязан очищаться на
+    /// входе, иначе хвост предыдущего (большего) глифа доедет до следующего.
+    ///
+    /// Реальный шрифт этот дефект показал бы не всегда: `read_flags` пишет
+    /// ровно `total_points` значений, и разбор маленького глифа читает только
+    /// свой префикс — видно только тем, что `flags`/`xs`/`ys` длиннее нужного,
+    /// а индексы сборки идут по `end_pts`, который тоже надо очистить.
+    #[test]
+    fn parse_scratch_is_cleared_between_glyphs() {
+        let big = n_point_glyph_bytes(60);
+        let small = n_point_glyph_bytes(3);
+
+        // Эталон — тот же маленький глиф в потоке, где буферы холодные.
+        let want = {
+            let small = small.clone();
+            std::thread::spawn(move || Glyph::parse(&small).expect("эталон").outline)
+                .join()
+                .expect("поток эталона")
+        };
+
+        let got = std::thread::spawn(move || {
+            Glyph::parse(&big).expect("большой глиф");
+            Glyph::parse(&small).expect("маленький глиф").outline
+        })
+        .join()
+        .expect("поток гейта");
+
+        let (Outline::Simple(want), Outline::Simple(got)) = (want, got) else {
+            panic!("оба разбора обязаны быть простыми");
+        };
+        let pts = |cs: Vec<Contour>| -> Vec<Vec<OutlinePoint>> {
+            cs.into_iter().map(|c| c.points).collect()
+        };
+        assert_eq!(pts(want), pts(got), "разбор после большего глифа разошёлся с холодным");
     }
 
     #[test]
