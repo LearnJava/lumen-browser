@@ -294,6 +294,170 @@ fn assert_outlines_equal(
     }
 }
 
+/// Эталонная сборка composite-глифа общей f32-формулой — независимая от движка
+/// копия того, что делал `glyph_resolved_inner` до среза 19 BUG-405.
+///
+/// Существует ровно чтобы гейт ниже сравнивал движок не с самим собой: после
+/// правки identity-компонент внутри движка всегда уходит в целочисленный путь,
+/// и «прогнать тот же вход через оба тела» на реальном шрифте больше нельзя.
+fn resolve_reference(
+    font: &Font,
+    gid: u16,
+    depth: u32,
+) -> Option<lumen_font::glyf::Glyph> {
+    use lumen_font::glyf::{Anchor, Contour, Outline, OutlinePoint};
+
+    if depth > 8 {
+        return None;
+    }
+    let glyph = font.glyph(gid).ok()??;
+    let components = match &glyph.outline {
+        Outline::Simple(_) => return Some(glyph),
+        Outline::Composite(c) => c.clone(),
+    };
+
+    let nth = |contours: &[Contour], idx: usize| -> Option<(f32, f32)> {
+        let mut counter = 0usize;
+        for c in contours {
+            if idx < counter + c.points.len() {
+                let p = c.points[idx - counter];
+                return Some((p.x as f32, p.y as f32));
+            }
+            counter += c.points.len();
+        }
+        None
+    };
+
+    let mut merged: Vec<Contour> = Vec::new();
+    for comp in components {
+        let Some(sub) = resolve_reference(font, comp.glyph_id, depth + 1) else {
+            continue;
+        };
+        let Outline::Simple(sub_contours) = sub.outline else {
+            continue;
+        };
+        let (dx, dy) = match comp.anchor {
+            Anchor::Offset(dx, dy) => (dx, dy),
+            Anchor::Points { parent: pi, child: ci } => {
+                let parent_xy = nth(&merged, pi as usize);
+                let child_xy = nth(&sub_contours, ci as usize).map(|(cx, cy)| {
+                    (
+                        comp.transform[0] * cx + comp.transform[2] * cy,
+                        comp.transform[1] * cx + comp.transform[3] * cy,
+                    )
+                });
+                match (parent_xy, child_xy) {
+                    (Some((px, py)), Some((tx, ty))) => (px - tx, py - ty),
+                    _ => (0.0, 0.0),
+                }
+            }
+        };
+        for contour in sub_contours {
+            let points = contour
+                .points
+                .into_iter()
+                .map(|p| {
+                    let nx = comp.transform[0] * p.x as f32
+                        + comp.transform[2] * p.y as f32
+                        + dx;
+                    let ny = comp.transform[1] * p.x as f32
+                        + comp.transform[3] * p.y as f32
+                        + dy;
+                    OutlinePoint {
+                        x: nx.round() as i16,
+                        y: ny.round() as i16,
+                        on_curve: p.on_curve,
+                    }
+                })
+                .collect();
+            merged.push(Contour { points });
+        }
+    }
+
+    let bbox = lumen_font::glyf::bbox_from_contours(&merged).unwrap_or(glyph.bbox);
+    Some(lumen_font::glyf::Glyph {
+        bbox,
+        outline: Outline::Simple(merged),
+    })
+}
+
+/// Гейт среза 19 BUG-405, сквозное плечо: быстрый путь сборки компонента даёт
+/// на реальном шрифте те же точки, что общая формула, для КАЖДОГО глифа,
+/// достижимого через cmap (латиница, Latin-1 с диакритикой, кириллица).
+///
+/// Ловит и обратную ошибку — сужение предиката identity до «никогда»: если
+/// быстрый путь перестанет срабатывать, тест останется зелёным, поэтому здесь
+/// же утверждается, что composite-глифы в корпусе есть и их компоненты
+/// действительно identity+целый offset (иначе правка меряла бы пустоту).
+#[test]
+fn composite_assembly_matches_general_formula_on_inter() {
+    use lumen_font::glyf::{Anchor, Outline};
+
+    let data = font_bytes();
+    let font = Font::parse(&data).expect("parse Inter-Regular");
+    let cmap = font.cmap().expect("cmap");
+
+    let mut checked = 0usize;
+    let mut composites = 0usize;
+    let mut fast_components = 0usize;
+    let mut all_components = 0usize;
+
+    for cp in (0x20u32..0x7F).chain(0xC0..0x180).chain(0x400..0x460) {
+        let Some(gid) = cmap.glyph_index(cp) else {
+            continue;
+        };
+        if gid == 0 {
+            continue;
+        }
+        if let Ok(Some(raw)) = font.glyph(gid)
+            && let Outline::Composite(comps) = &raw.outline
+        {
+            composites += 1;
+            all_components += comps.len();
+            fast_components += comps
+                .iter()
+                .filter(|c| {
+                    c.transform == [1.0, 0.0, 0.0, 1.0]
+                        && matches!(c.anchor, Anchor::Offset(dx, dy)
+                            if dx.fract() == 0.0 && dy.fract() == 0.0)
+                })
+                .count();
+        }
+
+        let engine = font.glyph_resolved(gid).expect("resolve");
+        let reference = resolve_reference(&font, gid, 0);
+        match (engine, reference) {
+            (Some(e), Some(r)) => {
+                assert_eq!(e.bbox, r.bbox, "bbox gid {gid} (U+{cp:04X})");
+                let (Outline::Simple(e), Outline::Simple(r)) = (e.outline, r.outline)
+                else {
+                    panic!("оба разбора обязаны быть простыми, gid {gid}");
+                };
+                assert_outlines_equal(
+                    &e,
+                    &r,
+                    char::from_u32(cp).unwrap_or('?'),
+                );
+                checked += 1;
+            }
+            (None, None) => {}
+            _ => panic!("движок и эталон разошлись по наличию глифа {gid}"),
+        }
+    }
+
+    assert!(checked > 300, "корпус гейта неожиданно мал: {checked} глифов");
+    assert!(
+        composites > 100,
+        "у Inter обязаны быть composite-глифы, найдено {composites}"
+    );
+    assert_eq!(
+        fast_components, all_components,
+        "правка среза 19 обслуживает identity+целый offset; в корпусе таких \
+         {fast_components} из {all_components} — если доля упала, перепись цены \
+         устарела"
+    );
+}
+
 #[test]
 fn reads_family_name_from_inter() {
     let data = font_bytes();
