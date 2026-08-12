@@ -6,8 +6,10 @@
 //! 2. Bitmap размером bbox + 1px padding на сторону.
 //! 3. Покрытие считается по сетке 4×4 сэмпла на пиксель с even-odd правилом
 //!    (как в SVG/PDF при отсутствии fill-rule) — сканлайнами с активным
-//!    списком рёбер: O(height · 4 · (active · log active + width · 4)).
-//!    Покрытие → 8-битный grayscale.
+//!    списком рёбер: рёбра раскладываются по сэмпл-строке входа счётной
+//!    сортировкой (O(рёбра + height · 4)), дальше на каждую сэмпл-строку
+//!    O(active · log active) на её пересечения и по одному спану на интервал
+//!    «внутри». Покрытие → 8-битный grayscale.
 //!
 //! Замены / оптимизации в дальнейшем:
 //! - адаптивная subdivision Безье (сейчас фиксированные 8 шагов);
@@ -96,13 +98,19 @@ impl Rasterizer {
         let width = width_i32 as u32;
         let height = height_i32 as u32;
 
-        let mut edges: Vec<Edge> = Vec::new();
-        for contour in contours {
-            walk_contour(contour, scale, x_min as f32, y_max as f32, &mut edges);
-        }
-
         let mut pixels = vec![0u8; (width as usize) * (height as usize)];
-        fill_pixels(&edges, width, height, &mut pixels);
+        SCRATCH.with_borrow_mut(|sc| {
+            // `edges` живёт в том же scratch, что и остальные буферы, поэтому
+            // на время заполнения вынимается из него (иначе `&sc.edges` и
+            // `&mut sc` пересекаются).
+            let mut edges = std::mem::take(&mut sc.edges);
+            edges.clear();
+            for contour in contours {
+                walk_contour(contour, scale, x_min as f32, y_max as f32, &mut edges);
+            }
+            fill_pixels_in(sc, &edges, width, height, &mut pixels);
+            sc.edges = edges;
+        });
         Some(Bitmap {
             width,
             height,
@@ -241,6 +249,47 @@ fn add_span(s0: i64, s1: i64, sample_max: i64, cov: &mut [u32], runs: &mut [i32]
     }
 }
 
+/// [`fill_pixels_in`] на своих буферах — вход гейтов, которым нужен
+/// произвольный набор рёбер, а не глиф.
+#[cfg(test)]
+fn fill_pixels(edges: &[Edge], width: u32, height: u32, pixels: &mut [u8]) {
+    let mut scratch = Scratch::default();
+    fill_pixels_in(&mut scratch, edges, width, height, pixels);
+}
+
+/// Рабочие буферы растеризации одного глифа. Все они одноразовые по смыслу —
+/// заполняются и выбрасываются, — но глифов на кадре сотни, поэтому живут в
+/// [`SCRATCH`] и переиспользуются: аллокация каждого стоила 88 нс, то есть
+/// 0.27 мс на корпус (BUG-405 срез 17).
+#[derive(Default)]
+struct Scratch {
+    /// Рёбра контуров глифа в pixel space (заполняет `walk_contour`).
+    edges: Vec<Edge>,
+    /// Нормализованные рёбра вместе с индексом их сэмпл-строки входа —
+    /// промежуточный вид перед раскладкой по строкам.
+    keyed: Vec<(u32, Edge)>,
+    /// Те же рёбра, разложенные по сэмпл-строке входа (счётная сортировка).
+    rowed: Vec<Edge>,
+    /// Конец диапазона рёбер каждой сэмпл-строки в `rowed`.
+    row_end: Vec<u32>,
+    /// Рёбра, пересекающие текущую сэмпл-строку.
+    active: Vec<Edge>,
+    /// x-пересечения текущей сэмпл-строки.
+    xs: Vec<f32>,
+    /// Покрытие пикселей текущей строки в сэмплах.
+    cov: Vec<u32>,
+    /// Разностная запись целиком накрытых пикселей (см. `add_span`).
+    runs: Vec<i32>,
+}
+
+thread_local! {
+    /// Буферы переиспользуются между глифами ОДНОГО потока. Результат от
+    /// этого не зависит ни в чём: каждый вход [`fill_pixels_in`] очищает всё,
+    /// что читает, — общий буфер здесь только способ не звать аллокатор
+    /// десять раз на глиф.
+    static SCRATCH: std::cell::RefCell<Scratch> = std::cell::RefCell::new(Scratch::default());
+}
+
 /// Заполняет покрытие сканлайнами: на каждую сэмпл-строку считается список
 /// x-пересечений активных рёбер, а не ray-cast из каждого сэмпла по всем
 /// рёбрам (BUG-405 срез 3). Сами сэмплы строки не обходятся поштучно —
@@ -259,72 +308,107 @@ fn add_span(s0: i64, s1: i64, sample_max: i64, cov: &mut [u32], runs: &mut [i32]
 /// интервалы `[xs[j], xs[j+1])` по таким `j`, плюс начальный `(−∞, xs[0])`
 /// при нечётном `len` (вырожденный контур — прежний код и там считал левые
 /// сэмплы внутренними).
-fn fill_pixels(edges: &[Edge], width: u32, height: u32, pixels: &mut [u8]) {
+fn fill_pixels_in(sc: &mut Scratch, edges: &[Edge], width: u32, height: u32, pixels: &mut [u8]) {
     let total = N * N;
+    let rows = (height as usize) * (N as usize);
+
     // Рёбра в нормальном виде (ay < by) — прежний код выполнял этот разворот
     // и отсев горизонтальных внутри самого внутреннего цикла, то есть
     // width·height·16 раз на ребро.
-    let mut norm: Vec<Edge> = Vec::with_capacity(edges.len());
+    //
+    // Порядок ввода рёбер в активный список — по сэмпл-строке, на которой
+    // ребро впервые становится активным. Прежде его давала сортировка по
+    // верхней координате (1.57 мс из 6.70 мс `fill_pixels` на корпусе,
+    // BUG-405 срез 17), но сама координата дальше не нужна: нужен только
+    // индекс строки входа, а он целый и ограничен высотой bitmap-а, поэтому
+    // рёбра раскладываются счётной сортировкой по нему. От порядка рёбер
+    // внутри строки результат не зависит — набор пересечений строки тот же,
+    // а `xs` всё равно сортируется.
+    sc.keyed.clear();
+    sc.row_end.clear();
+    sc.row_end.resize(rows, 0);
     for &(x1, y1, x2, y2) in edges {
         let e = if y1 <= y2 { (x1, y1, x2, y2) } else { (x2, y2, x1, y1) };
         // dy == 0 (в т.ч. NaN-координата) не даёт пересечений ни на одной
         // строке: прежний код отбрасывал такое ребро проверкой `dy == 0.0`
         // либо получал NaN-`xint`, который не проходил `xint > px`.
         if e.3 - e.1 > 0.0 {
-            norm.push(e);
+            // `first_sample_at_or_after` решает тот же предикат `y(s) >= ay`,
+            // что прежний проход решал сравнением `norm[next].1 <= y` — точно,
+            // см. её док. Ребро с индексом за последней строкой не
+            // активировалось бы никогда: прежний цикл до него не доходил.
+            let row = first_sample_at_or_after(e.1).clamp(0, rows as i64) as usize;
+            if row < rows {
+                sc.row_end[row] += 1;
+                sc.keyed.push((row as u32, e));
+            }
         }
     }
-    // Порядок ввода рёбер в активный список: по верхней координате. Сортируется
-    // сам массив, а не отдельный массив индексов, — от порядка рёбер результат
-    // не зависит (набор пересечений строки тот же, а `xs` всё равно
-    // сортируется), зато оба горячих цикла ниже читают рёбра подряд.
-    norm.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
+    // Префиксная сумма (исключающая): `row_end[r]` временно держит начало
+    // диапазона строки `r`, а раскладка ниже доводит его до конца диапазона.
+    let mut acc = 0_u32;
+    for end in sc.row_end.iter_mut() {
+        let count = *end;
+        *end = acc;
+        acc += count;
+    }
+    sc.rowed.clear();
+    sc.rowed.resize(acc as usize, (0.0, 0.0, 0.0, 0.0));
+    for &(row, e) in &sc.keyed {
+        let slot = &mut sc.row_end[row as usize];
+        sc.rowed[*slot as usize] = e;
+        *slot += 1;
+    }
 
-    let mut active: Vec<Edge> = Vec::new();
-    let mut next = 0_usize;
-    let mut xs: Vec<f32> = Vec::new();
-    let mut cov: Vec<u32> = vec![0; width as usize];
-    // Разностная запись целиком накрытых пикселей (см. `add_span`).
-    let mut runs: Vec<i32> = vec![0; width as usize];
+    sc.active.clear();
+    sc.cov.clear();
+    sc.cov.resize(width as usize, 0);
+    sc.runs.clear();
+    sc.runs.resize(width as usize, 0);
     let sample_max = i64::from(width) * i64::from(N);
 
     // Сэмпл-строки идут строго по возрастанию y — это и позволяет вести
     // активный список одним проходом.
+    let mut row_start = 0_u32;
+    let mut s = 0_usize;
     for py in 0..height {
-        cov.fill(0);
-        runs.fill(0);
+        sc.cov.fill(0);
+        sc.runs.fill(0);
         for sy in 0..N {
             let y = py as f32 + (sy as f32 + 0.5) / N as f32;
-            while next < norm.len() && norm[next].1 <= y {
-                active.push(norm[next]);
-                next += 1;
+            let row_end = sc.row_end[s];
+            if row_start != row_end {
+                sc.active
+                    .extend_from_slice(&sc.rowed[row_start as usize..row_end as usize]);
+                row_start = row_end;
             }
-            active.retain(|e| e.3 > y);
-            if active.is_empty() {
+            s += 1;
+            sc.active.retain(|e| e.3 > y);
+            if sc.active.is_empty() {
                 continue;
             }
-            xs.clear();
-            for &(ax, ay, bx, by) in &active {
+            sc.xs.clear();
+            for &(ax, ay, bx, by) in &sc.active {
                 let t = (y - ay) / (by - ay);
                 let xint = ax + t * (bx - ax);
                 if !xint.is_nan() {
-                    xs.push(xint);
+                    sc.xs.push(xint);
                 }
             }
-            if xs.is_empty() {
+            if sc.xs.is_empty() {
                 continue;
             }
-            xs.sort_unstable_by(f32::total_cmp);
+            sc.xs.sort_unstable_by(f32::total_cmp);
             // Интервалы «внутри» между пересечениями — вывод той же чётности,
             // что вёл посэмпловый курсор (см. док функции).
-            let len = xs.len();
+            let len = sc.xs.len();
             let mut j = if len & 1 == 1 {
                 add_span(
                     i64::MIN,
-                    first_sample_at_or_after(xs[0]),
+                    first_sample_at_or_after(sc.xs[0]),
                     sample_max,
-                    &mut cov,
-                    &mut runs,
+                    &mut sc.cov,
+                    &mut sc.runs,
                 );
                 1
             } else {
@@ -332,19 +416,19 @@ fn fill_pixels(edges: &[Edge], width: u32, height: u32, pixels: &mut [u8]) {
             };
             while j + 1 < len {
                 add_span(
-                    first_sample_at_or_after(xs[j]),
-                    first_sample_at_or_after(xs[j + 1]),
+                    first_sample_at_or_after(sc.xs[j]),
+                    first_sample_at_or_after(sc.xs[j + 1]),
                     sample_max,
-                    &mut cov,
-                    &mut runs,
+                    &mut sc.cov,
+                    &mut sc.runs,
                 );
                 j += 2;
             }
         }
         let row = py as usize * width as usize;
         let mut run = 0_i32;
-        for (px, &c) in cov.iter().enumerate() {
-            run += runs[px];
+        for (px, &c) in sc.cov.iter().enumerate() {
+            run += sc.runs[px];
             debug_assert!(run >= 0, "разностная запись спанов ушла в минус");
             let c = c + run as u32;
             pixels[row + px] = (c * 255 / total) as u8;
@@ -567,6 +651,88 @@ mod tests {
             fill_pixels_reference(&edges, w, h, &mut want);
             assert_eq!(got, want, "случай {case}: {edges:?}");
         }
+    }
+
+    /// Гейт среза 17: рёбра ЗА пределами сетки сэмпл-строк.
+    ///
+    /// Счётная раскладка кладёт ребро в строку его входа; у ребра выше
+    /// bitmap-а индекс отрицателен (прижимается к нулю), у ребра ниже
+    /// последней сэмпл-строки — за концом массива, и такое ребро выбрасывается
+    /// (прежний проход до него просто не доходил). Оба случая реальный шрифт
+    /// не даёт: контур лежит внутри bbox с padding-ом, — поэтому вход
+    /// рукотворный.
+    #[test]
+    fn counting_order_handles_edges_outside_the_sample_grid() {
+        // Пара рёбер поперёк всей высоты (входят выше нулевой сэмпл-строки —
+        // индекс входа отрицателен) даёт чернила в полосе [4, 8). Третье ребро
+        // целиком ниже последней сэмпл-строки (h = 6, последняя строка
+        // y = 5.875): его нельзя ни активировать, ни прижать к последней
+        // строке — прижатое, оно дало бы пересечение x = 6 ВНУТРИ полосы,
+        // то есть лишнюю смену чётности.
+        let edges: Vec<Edge> = vec![
+            (4.0, -3.0, 4.0, 9.0),
+            (8.0, -3.0, 8.0, 9.0),
+            (6.0, 6.5, 6.0, 9.0),
+        ];
+        let (w, h) = (12_u32, 6_u32);
+        let mut got = vec![0u8; (w * h) as usize];
+        let mut want = vec![0u8; (w * h) as usize];
+        fill_pixels(&edges, w, h, &mut got);
+        fill_pixels_reference(&edges, w, h, &mut want);
+        assert_eq!(got, want, "рёбра вне сетки разошлись с перебором");
+        // Утверждение о задействовании: полоса между парой обязана быть
+        // залита, иначе «совпало» означало бы «оба пусты».
+        assert_eq!(coverage_at_slice(&got, w, 5, 3), 255, "полоса обязана быть залита");
+        assert_eq!(coverage_at_slice(&got, w, 0, 3), 0, "вне полосы чернил нет");
+    }
+
+    fn coverage_at_slice(px: &[u8], width: u32, x: u32, y: u32) -> u8 {
+        px[(y * width + x) as usize]
+    }
+
+    /// Гейт среза 17, второе плечо: рабочие буферы обязаны переживать глиф.
+    ///
+    /// Вывод от переиспользования не зависит вовсе, поэтому дифф-тесты выше
+    /// проходят и с аллокацией на каждый глиф — механизм гейтится тем, что
+    /// после первой растеризации буферы не пусты, а вторая их не перевыделяет.
+    #[test]
+    fn raster_scratch_survives_between_glyphs() {
+        fn scratch_capacity() -> usize {
+            SCRATCH.with_borrow(|s| {
+                s.edges.capacity()
+                    + s.keyed.capacity()
+                    + s.rowed.capacity()
+                    + s.row_end.capacity()
+                    + s.active.capacity()
+                    + s.xs.capacity()
+                    + s.cov.capacity()
+                    + s.runs.capacity()
+            })
+        }
+        // Свой поток: `SCRATCH` — thread-local, а тесты крейта идут
+        // параллельно и прогрели бы буферы соседним тестом.
+        std::thread::spawn(|| {
+            let glyph = Glyph {
+                bbox: BoundingBox {
+                    x_min: 0,
+                    y_min: 0,
+                    x_max: 100,
+                    y_max: 100,
+                },
+                outline: Outline::Simple(vec![Contour {
+                    points: vec![pt(0, 0, true), pt(100, 0, true), pt(50, 100, true)],
+                }]),
+            };
+            let r = Rasterizer::new(100.0, 100);
+            assert_eq!(scratch_capacity(), 0, "холодный поток: буферы ещё не выделены");
+            r.rasterize(&glyph).expect("треугольник растеризуется");
+            let warm = scratch_capacity();
+            assert!(warm > 0, "буферы обязаны пережить глиф, иначе аллокация на каждый");
+            r.rasterize(&glyph).expect("треугольник растеризуется");
+            assert_eq!(scratch_capacity(), warm, "тот же глиф не должен перевыделять буферы");
+        })
+        .join()
+        .expect("поток гейта");
     }
 
     #[test]
