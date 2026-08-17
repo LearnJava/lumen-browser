@@ -16325,6 +16325,52 @@ fn block_on<F: std::future::Future>(future: F) -> F::Output {
 mod tests {
     use super::*;
 
+    /// BUG-405 срез 24: квад H-прохода в bbox-офскрин обязан читать источник
+    /// по ТЕМ ЖЕ текселям, что полноразмерный проход, — иначе картинка
+    /// поедет на пиксель. Проверка на центрах фрагментов: интерполяция UV по
+    /// офскрину шириной `rw` в точке `t = (i + 0.5) / rw` должна давать
+    /// `(rx + i + 0.5) / surf`.
+    #[test]
+    fn region_src_quad_uv_matches_full_size_pass() {
+        let (surf_w, surf_h) = (1884.0_f32, 2501.0_f32);
+        let region = [640_u32, 1216, 320, 384];
+        let mut out = Vec::new();
+        push_region_src_quad(&mut out, region, surf_w, surf_h, 1.0);
+        assert_eq!(out.len(), 6);
+        // Позиция — весь офскрин: NDC от −1 до 1 по обеим осям.
+        assert_eq!(out[0].pos, [-1.0, 1.0]);
+        assert_eq!(out[2].pos, [1.0, -1.0]);
+        let (u0, u1) = (out[0].uv[0], out[1].uv[0]);
+        let (v0, v1) = (out[0].uv[1], out[5].uv[1]);
+        let (rx, ry, rw, rh) = (640.0_f32, 1216.0, 320.0, 384.0);
+        for i in [0.0_f32, 1.0, 159.0, 319.0] {
+            let t = (i + 0.5) / rw;
+            let want = (rx + i + 0.5) / surf_w;
+            assert!((u0 + (u1 - u0) * t - want).abs() < 1e-6, "u на фрагменте {i}");
+        }
+        for j in [0.0_f32, 1.0, 383.0] {
+            let t = (j + 0.5) / rh;
+            let want = (ry + j + 0.5) / surf_h;
+            assert!((v0 + (v1 - v0) * t - want).abs() < 1e-6, "v на фрагменте {j}");
+        }
+    }
+
+    /// Слитый пасс кроет в цели ровно прямоугольник региона, а UV пробегает
+    /// офскрин целиком (0..1): смещение сидит в позиции, а не в выборке.
+    #[test]
+    fn region_dst_quad_covers_region_rect() {
+        let (surf_w, surf_h) = (1884.0_f32, 2501.0_f32);
+        let mut out = Vec::new();
+        push_region_dst_quad(&mut out, [640, 1216, 320, 384], surf_w, surf_h, 1.0);
+        assert_eq!(out.len(), 6);
+        let ndc_x = |px: f32| px / surf_w * 2.0 - 1.0;
+        let ndc_y = |px: f32| 1.0 - px / surf_h * 2.0;
+        assert_eq!(out[0].pos, [ndc_x(640.0), ndc_y(1216.0)]);
+        assert_eq!(out[2].pos, [ndc_x(960.0), ndc_y(1600.0)]);
+        assert_eq!(out[0].uv, [0.0, 0.0]);
+        assert_eq!(out[2].uv, [1.0, 1.0]);
+    }
+
     #[test]
     fn size_bin_for_exact_match() {
         // Точное совпадение — bin == входу.
