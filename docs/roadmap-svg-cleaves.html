@@ -4180,9 +4180,9 @@
       {
        "id": "WPT-VENDOR-webrtc-svc",
        "title": "WPT: вендорить + прогнать категорию `webrtc-svc`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). WebRTC — нет конвейера"
+       "note": "Скоуп: 🚫 (вне скоупа, подтверждено точно). DONE 2026-08-17: вендорена + прогнана целиком (`--all --root webrtc-svc --recursive`, ~41с, 6 файлов, 5 id) — **5/5 harness OK, 0/67 сабтестов**. Все падения — уже задокументированные гэпы: Phase 1 нет захвата видео (63 сабтеста), `addTransceiver()` no-op (4 сабтеста, тот же дефект что BUG-721/BUG-726). Новых багов не заведено"
       },
       {
        "id": "WPT-VENDOR-websockets",
