@@ -306,6 +306,26 @@ the time — read dates.
   19 tests in `v8_esm.rs`. **Gap:** the shell never calls `register_module_source`, so a
   page's `import './x.js'` still fails "module not found" —
   [BUG-446](../bugs/BUG-446-FIXED.md), engine-independent (rquickjs had it too).
+- **Module graph fetched level by level, each level in one parallel batch ([P3], 2026-08-17,
+  `v8_esm.rs::prefetch_graph`).** `ResolveModuleCallback` must return a module *synchronously*,
+  so every registry miss inside it is a blocking network round trip on the JS thread; a
+  code-split bundle therefore paid the **sum** of its round trips (`tbank.ru/login/`: 31 chunks
+  × ~63 ms = 1937 ms of frozen JS thread, measured with `LUMEN_ESM_TRACE=1`). Now a freshly
+  compiled module's `Module::get_module_requests()` is read *before* `instantiate_module`, each
+  request resolved through the same `resolve_specifier_with`, and the whole level fetched by 8
+  scoped threads at once — the same shape as HTML LS §8.1.3.2 "fetch the descendants of a
+  module script". Same page: 2 batches, 367 ms. **Three non-obvious points.** (1) *Compiling the
+  level is not the goal, it is the only way to see the next one* — imports are readable only off
+  a parsed module, so each round compiles what it just fetched. A module already in the map is
+  reused, never recompiled: a second `Module` under the same key would run the body twice.
+  (2) *Prefetch errors are swallowed on purpose* (`tc_scope` around the compile, `failed` map for
+  the network): a 404, a parse error or a dead host must reach the page from the resolve callback
+  exactly as without prefetch, one exception per import — the prefetch only warms the registry.
+  (3) *Worker threads must not touch the registry* — `EsmState` is `thread_local!` to the isolate
+  thread, so `fetch_over_network` takes the provider by argument and returns raw text; the JS
+  thread alone writes `sources`/`failed`. Levers: `LUMEN_NO_ESM_PREFETCH=1` (rollback),
+  `LUMEN_ESM_TRACE=1` (census). The A/B gate is the peak count of concurrent module requests
+  (≥2 with prefetch, exactly 1 without), not wall-clock.
 - **Live "prepare the script element" — dynamically inserted `<script>` ([P3],
   2026-08-09, closes [BUG-571](../bugs/BUG-571-FIXED.md)).** Script execution used to be
   the shell's one-shot walk of the parsed tree (`main.rs::collect_scripts_ordered`, once per
