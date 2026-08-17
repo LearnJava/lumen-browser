@@ -4233,9 +4233,9 @@
       {
        "id": "WPT-VENDOR-webusb",
        "title": "WPT: вендорить + прогнать категорию `webusb`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). аппаратный API (USB)"
+       "note": "Скоуп: 🚫 (вне скоупа, подтверждено точно). DONE 2026-08-18: вендорена + прогнана целиком (`--all --root webusb --recursive`, ~2:52, 41 файл, 32 id) — **2/32 harness OK, 0/15 сабтестов**. 30/32 — уже задокументированный TLS-гэп `UnknownIssuer` (BUG-657). Оба исполнившихся не новые: переподтверждает BUG-765 (нет гейта `isSecureContext`) и ожидаемое отсутствие `\"usb\"` в `permissionsPolicy.features()`. Новых багов не заведено"
       },
       {
        "id": "WPT-VENDOR-webvtt",
