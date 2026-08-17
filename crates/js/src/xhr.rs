@@ -262,6 +262,19 @@ XMLHttpRequest.prototype.send = function(body) {
     var hasBody = body !== null && body !== undefined &&
                   self._method !== 'GET' && self._method !== 'HEAD';
 
+    // BUG-749: заголовки, накопленные setRequestHeader-ом, — в плоском виде
+    // [name, value, …] для нативной привязки. Раньше из всего списка на провод
+    // попадал только Content-Type (и то лишь при наличии тела): параметра под
+    // заголовки у привязок не было вовсе. Forbidden-имена (Host/Cookie/Origin)
+    // отсеиваются на Rust-стороне: setRequestHeader пишет в свой объект мимо
+    // guard-а Headers, так что проверить их можно только там.
+    var xhrHeaders = [];
+    for (var hk in self._reqHeaders) {
+        if (Object.prototype.hasOwnProperty.call(self._reqHeaders, hk)) {
+            xhrHeaders.push(hk); xhrHeaders.push(self._reqHeaders[hk]);
+        }
+    }
+
     // Execute synchronously using the same native fetch bindings.
     var ok;
     try {
@@ -296,9 +309,9 @@ XMLHttpRequest.prototype.send = function(body) {
             if (self._reqHeaders['content-type']) {
                 contentType = self._reqHeaders['content-type'];
             }
-            ok = _lumen_fetch_sync_with_body(self._url, self._method, contentType, bodyBytes);
+            ok = _lumen_fetch_sync_with_body(self._url, self._method, contentType, bodyBytes, xhrHeaders);
         } else {
-            ok = _lumen_fetch_sync(self._url, self._method);
+            ok = _lumen_fetch_sync(self._url, self._method, xhrHeaders);
         }
     } catch(e) {
         self._sent = false;
