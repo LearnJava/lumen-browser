@@ -3169,6 +3169,55 @@ fn atlas_partial_upload_disabled() -> bool {
     *OFF.get_or_init(|| std::env::var("LUMEN_NO_ATLAS_PARTIAL").is_ok_and(|v| v == "1"))
 }
 
+/// Слот пре-резолва face-а под команду, которая текстом не является
+/// (BUG-771). Вектор пре-резолва адресуется глобальным индексом команды, а не
+/// порядковым номером `DrawText`, поэтому нетекстовые слоты обязаны быть
+/// заполнены — и заполнены значением, которое нельзя спутать с `face_id`.
+const NO_TEXT_FACE: usize = usize::MAX;
+
+/// Пре-резолв primary face_id под каждую команду кадра (BUG-771).
+///
+/// Длина результата равна `content.len() + overlay.len()`, а слот команды —
+/// её собственный глобальный индекс ([`text_face_slot`]); команда, которая
+/// текстом не является, получает [`NO_TEXT_FACE`]. Раньше сюда клались
+/// только `DrawText`, а читались курсором по мере отрисовки — и первая же
+/// команда текста, не дошедшая до своей ветки (viewport-кулинг), сдвигала
+/// весь остаток кадра на чужие face-ы.
+fn resolve_text_face_ids(
+    content: &[DisplayCommand],
+    overlay: &[DisplayCommand],
+    mut resolve: impl FnMut(&[String], FontWeight, FontStyle, FontStretch) -> usize,
+) -> Vec<usize> {
+    let mut ids = Vec::with_capacity(content.len() + overlay.len());
+    for cmd in content.iter().chain(overlay.iter()) {
+        ids.push(match cmd {
+            DisplayCommand::DrawText {
+                font_family, font_weight, font_style, font_stretch, ..
+            } => resolve(font_family, *font_weight, *font_style, *font_stretch),
+            _ => NO_TEXT_FACE,
+        });
+    }
+    ids
+}
+
+/// Слот команды в векторе [`resolve_text_face_ids`]: полосы склеены в том же
+/// порядке, в котором их обходит render-loop (`content`, затем `overlay`).
+const fn text_face_slot(is_overlay: bool, cmd_idx: usize, content_len: usize) -> usize {
+    if is_overlay { content_len + cmd_idx } else { cmd_idx }
+}
+
+/// Диагностика BUG-771: печатать подпись текста overlay-а и атласа глифов на
+/// каждом кадре (`LUMEN_TEXT_SIG=1`; `=2` — ещё и по вершине на квад).
+/// Отдельно от `LUMEN_FRAME_LOG`, потому что хэш атласа — это проход по
+/// мегабайту на кадр.
+fn text_sig_level() -> u8 {
+    use std::sync::OnceLock;
+    static LEVEL: OnceLock<u8> = OnceLock::new();
+    *LEVEL.get_or_init(|| {
+        std::env::var("LUMEN_TEXT_SIG").ok().and_then(|v| v.parse().ok()).unwrap_or(0)
+    })
+}
+
 /// Рычаг отката отсева повторных команд состояния пасса (BUG-405 срез 10).
 fn state_elision_disabled() -> bool {
     use std::sync::OnceLock;
@@ -8184,29 +8233,20 @@ impl Renderer {
 
         // Pre-resolve primary face_id для каждой DrawText-команды +
         // lazy-загрузка новых face-ов до сбора вершин. Делается до парсинга
-        // (resolve мутирует self.faces). Resolve бежит по обеим полосам
-        // в том же порядке, в котором DrawText встречается в render-loop-е
-        // ниже — иначе iter "поедет" и попадёт чужой face_id.
-        let mut text_face_ids: Vec<usize> =
-            Vec::with_capacity(content.len() + overlay.len());
-        for cmd in content.iter().chain(overlay.iter()) {
-            if let DisplayCommand::DrawText {
-                font_family,
-                font_weight,
-                font_style,
-                font_stretch,
-                ..
-            } = cmd
-            {
-                text_face_ids.push(self.resolve_face_id(
-                    font_family,
-                    *font_weight,
-                    *font_style,
-                    *font_stretch,
-                ));
-            }
-        }
-        let mut text_face_iter = text_face_ids.into_iter();
+        // (resolve мутирует self.faces).
+        //
+        // BUG-771: результат адресуется ГЛОБАЛЬНЫМ индексом команды
+        // (`content`, затем `overlay`), а не курсором по «встреченным
+        // DrawText». Курсор был сдвигаемым: команда текста может не дойти до
+        // своей ветки (viewport-кулинг, пропуск тени) и не забрать свой id —
+        // после первой такой команды весь остаток кадра брал чужой face.
+        // На странице это незаметно (у тела один face), а хром рисуется
+        // последним и другой family-ой — и получал face страницы: те же
+        // строки, другие метрики и другие записи атласа, то есть «тот же
+        // текст, но плотнее». Индекс не сдвигается ни от какого `continue`.
+        let text_face_ids = resolve_text_face_ids(content, overlay, |fam, w, s, st| {
+            self.resolve_face_id(fam, w, s, st)
+        });
 
         // PRE-PASS: создаём CPU-ресайз текстуры для DrawImage до того, как
         // lazy_faces займёт &self.faces. Scroll offset не влияет на SIZE
@@ -8770,7 +8810,14 @@ impl Renderer {
         let mut probe_prev: Option<(&'static str, std::time::Instant)> = None;
         let iter_content = content.iter().enumerate().map(|(i, c)| (c, false, i));
         let iter_overlay = overlay.iter().enumerate().map(|(i, c)| (c, true, i));
+        // BUG-771 (диагностика): граница «контент | overlay» в text_vertices —
+        // чтобы подпись текста overlay-а можно было сравнить между монолитным
+        // кадром и кадром компоновки, у которых контент разный по построению.
+        let mut overlay_text_v0: Option<usize> = None;
         for (cmd, is_overlay, cmd_idx) in iter_content.chain(iter_overlay) {
+            if is_overlay && overlay_text_v0.is_none() {
+                overlay_text_v0 = Some(text_vertices.len());
+            }
             if cmd_log {
                 let now = std::time::Instant::now();
                 if let Some((name, t0)) = probe_prev.take() {
@@ -8806,6 +8853,23 @@ impl Renderer {
             } else {
                 sticky_stack.last().copied().unwrap_or((-scroll_y, -scroll_x))
             };
+            // BUG-771 (диагностика, `LUMEN_TEXT_SIG=2`): сама команда текста
+            // overlay-а — чтобы отличить «шелл прислал другой список» от
+            // «одну и ту же команду два пути нарисовали по-разному».
+            if is_overlay
+                && text_sig_level() >= 2
+                && let DisplayCommand::DrawText {
+                    rect, text, font_size, font_family, font_weight, font_stretch, ..
+                } = cmd
+            {
+                eprintln!(
+                    "[frame:wgpu] text-cmd rect={:.3},{:.3} size={font_size:.4} \
+                     fam={font_family:?} w={font_weight:?} st={font_stretch:?} txt={:?}",
+                    rect.x,
+                    rect.y,
+                    text.chars().take(24).collect::<String>(),
+                );
+            }
             // ADR-016 M0.2 viewport culling: skip self-contained leaf draws
             // whose box — shifted by the scroll/sticky offset and mapped
             // through the current accumulated transform — lands fully outside
@@ -9039,7 +9103,7 @@ impl Renderer {
                     font_weight: _,
                     font_style: _,
                     // Уже учтён при резолве face_id в пре-проходе выше —
-                    // здесь берём готовый id из `text_face_iter`.
+                    // здесь берём готовый id из `text_face_ids`.
                     font_stretch: _,
                     font_variation_axes,
                     font_features: _,
@@ -9051,7 +9115,28 @@ impl Renderer {
                     // BUG-405 срез 13: охватывающая статья arm-а — снимается и
                     // на `continue` (нет метрик / отказ scissor'а).
                     let _t_arm = sub_timer(cmd_log, &TEXT_SUB.arm);
-                    let primary_face_id = text_face_iter.next().unwrap_or(0);
+                    // Слот пре-резолва этой самой команды (BUG-771): своя
+                    // полоса + свой индекс в ней, поэтому пропуск соседа
+                    // ничего не сдвигает.
+                    let primary_face_id = text_face_ids
+                        .get(text_face_slot(is_overlay, cmd_idx, content.len()))
+                        .copied()
+                        .filter(|&id| id != NO_TEXT_FACE)
+                        .unwrap_or(0);
+                    // BUG-771 (диагностика, `LUMEN_TEXT_SIG=2`): какой face
+                    // и какие оси вариаций достались команде overlay-а.
+                    if is_overlay && text_sig_level() >= 2 {
+                        eprintln!(
+                            "[frame:wgpu] text-face id={primary_face_id} nfaces={} upem={:?} bytes={:?} axes={font_variation_axes:?}",
+                            lazy_faces.faces.len(),
+                            lazy_faces
+                                .faces
+                                .get(primary_face_id)
+                                .and_then(|f| f.metrics.as_ref())
+                                .map(|m| m.units_per_em),
+                            lazy_faces.faces.get(primary_face_id).map(|f| f.bytes.len()),
+                        );
+                    }
                     if lazy_faces
                         .faces
                         .get(primary_face_id)
@@ -10939,6 +11024,53 @@ impl Renderer {
         }
         flush_batch!();
         let _ = (batch_start, current_scissor); // terminal flush — values not needed after
+        // BUG-771 (диагностика, `LUMEN_TEXT_SIG=1`): подпись текста overlay-а и
+        // атласа глифов на кадре. Симптом бага — «те же глифы на тех же местах
+        // рисуются плотнее» — распадается ровно на два случая, и эти две
+        // подписи их разделяют: расходится `verts` → дело в квадах (геометрия
+        // или UV), расходится только `atlas` → дело в содержимом атласа.
+        if text_sig_level() > 0 {
+            use std::hash::Hasher;
+            let v0 = overlay_text_v0.unwrap_or(text_vertices.len()).min(text_vertices.len());
+            let mut h_pos = std::collections::hash_map::DefaultHasher::new();
+            let mut h_uv = std::collections::hash_map::DefaultHasher::new();
+            let mut h_col = std::collections::hash_map::DefaultHasher::new();
+            for v in &text_vertices[v0..] {
+                for f in [v.pos[0], v.pos[1], v.z] {
+                    h_pos.write_u32(f.to_bits());
+                }
+                for f in v.uv {
+                    h_uv.write_u32(f.to_bits());
+                }
+                for f in v.color {
+                    h_col.write_u32(f.to_bits());
+                }
+            }
+            let mut ha = std::collections::hash_map::DefaultHasher::new();
+            ha.write(self.atlas.pixels());
+            let mode_name = match mode {
+                RenderPassMode::Band { .. } => "band",
+                RenderPassMode::Compose => "compose",
+                RenderPassMode::Normal { .. } => "normal",
+            };
+            eprintln!(
+                "[frame:wgpu] text-sig {mode_name} n={} pos={:016x} uv={:016x} col={:016x} atlas={:016x}",
+                text_vertices.len() - v0,
+                h_pos.finish(),
+                h_uv.finish(),
+                h_col.finish(),
+                ha.finish(),
+            );
+            if text_sig_level() >= 2 {
+                for (i, v) in text_vertices[v0..].iter().step_by(6).enumerate() {
+                    eprintln!(
+                        "[frame:wgpu] text-vert {mode_name} {i} pos={:.4},{:.4} uv={:.6},{:.6} col={:.3},{:.3},{:.3},{:.3}",
+                        v.pos[0], v.pos[1], v.uv[0], v.uv[1],
+                        v.color[0], v.color[1], v.color[2], v.color[3],
+                    );
+                }
+            }
+        }
         if let Some((name, t0)) = probe_prev.take() {
             let e = probe.entry(name).or_default();
             e.0 += t0.elapsed();
@@ -17836,6 +17968,74 @@ mod tests {
         let band = r.page_band.as_ref().expect("полоса обязана пересоздаться");
         assert_eq!((band.w_px, band.h_px), (80, 240), "размер не обновился");
         assert_eq!(band.key, 0, "пересозданная полоса выдала себя за валидную");
+    }
+
+    /// BUG-771: слот пре-резолва face-а адресуется индексом САМОЙ команды.
+    ///
+    /// Дефект был не в резолве, а в его чтении: id-ы клались подряд только за
+    /// `DrawText`, а забирались курсором по мере отрисовки — и команда текста,
+    /// не дошедшая до своей ветки (viewport-кулинг), курсор не двигала, после
+    /// чего весь остаток кадра рисовался чужими face-ами. Тест пиннит
+    /// инвариант, который это исключает: у каждой команды свой слот, и он не
+    /// зависит ни от того, сколько команд текста было раньше, ни от того,
+    /// нарисовались ли они.
+    #[test]
+    fn text_face_ids_are_addressed_by_command_index() {
+        fn text(family: &str) -> DisplayCommand {
+            DisplayCommand::DrawText {
+                rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+                text: "x".to_string(),
+                font_size: 12.0,
+                color: Color { r: 0, g: 0, b: 0, a: 255 },
+                font_family: vec![family.to_string()],
+                font_weight: FontWeight::NORMAL,
+                font_style: FontStyle::Normal,
+                font_stretch: FontStretch::NORMAL,
+                font_variation_axes: Vec::new(),
+                font_features: Vec::new(),
+                font_palette: None,
+                tab_size: 8.0,
+                highlight_name: None,
+                text_orientation: None,
+            }
+        }
+        let fill = || DisplayCommand::FillRect {
+            rect: Rect::new(0.0, 0.0, 1.0, 1.0),
+            color: Color { r: 0, g: 0, b: 0, a: 255 },
+        };
+        // Страница: текст между нетекстовыми командами; хром: свой текст.
+        let content = vec![fill(), text("page-a"), fill(), text("page-b")];
+        let overlay = vec![fill(), text("chrome")];
+        // Резолвер отвечает по имени family — так видно, какой команде достался
+        // чей ответ.
+        let ids = resolve_text_face_ids(&content, &overlay, |fam, _, _, _| {
+            match fam.first().map(String::as_str) {
+                Some("page-a") => 10,
+                Some("page-b") => 20,
+                Some("chrome") => 30,
+                _ => 0,
+            }
+        });
+
+        assert_eq!(ids.len(), content.len() + overlay.len(), "слот не у каждой команды");
+        assert_eq!(ids[text_face_slot(false, 1, content.len())], 10);
+        assert_eq!(ids[text_face_slot(false, 3, content.len())], 20);
+        assert_eq!(ids[text_face_slot(true, 1, content.len())], 30);
+        for (list, idx) in [(false, 0), (false, 2), (true, 0)] {
+            assert_eq!(
+                ids[text_face_slot(list, idx, content.len())],
+                NO_TEXT_FACE,
+                "нетекстовая команда заняла слот face-а",
+            );
+        }
+
+        // Ядро регрессии: пропуск команды текста (кулинг) не смещает соседей.
+        // Курсорное чтение отдало бы хрому ответ для `page-b`.
+        let drawn: Vec<usize> = [(false, 1), (true, 1)]
+            .into_iter()
+            .map(|(list, idx)| ids[text_face_slot(list, idx, content.len())])
+            .collect();
+        assert_eq!(drawn, vec![10, 30], "пропуск соседней команды сдвинул face-ы");
     }
 
     /// BUG-405 срез 21: bind group блита обязана создаваться ровно один раз
