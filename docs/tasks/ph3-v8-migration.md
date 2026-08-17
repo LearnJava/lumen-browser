@@ -1170,7 +1170,7 @@ Three items block a clean finish and must not be treated as "just another slice"
    parsing and fails on all 80 vendored WPT files using `type="module"`. Porting this closes
    BUG-350 as a side effect, not a separate bug.~~ **Closed by S12b-23** (2026-07-29) — see
    the findings entry below; the WPT files additionally need module-graph *fetching*
-   ([BUG-446](../../bugs/BUG-446-OPEN.md)), which is a separate, engine-independent gap.
+   ([BUG-446](../../bugs/BUG-446-FIXED.md)), which is a separate, engine-independent gap.
 3. **`dom.rs`'s `mod tests` monolith** (~12796-26677, 1047 tests) — the only regression
    coverage for a large swath of DOM behavior (events, forms, storage, IndexedDB, fetch/XHR,
    Cache, WebSockets, history, scroll). No V8-side equivalent exists; it needs a docs/tasks
@@ -1262,7 +1262,7 @@ belong to the `dom.rs`/final-cleanup slices (S12b-24/25).
 ever registered and fails with `module '…' not found`. That is not a regression (the rquickjs
 `LumenLoader` also only read a pre-populated registry, and the shell never populated it) and
 not what BUG-350 described, but it is what the 80 vendored `type="module"` WPT files actually
-need — [BUG-446](../../bugs/BUG-446-OPEN.md), with a concrete fix sketch (scan specifiers with
+need — [BUG-446](../../bugs/BUG-446-FIXED.md), with a concrete fix sketch (scan specifiers with
 the `import_attributes.rs` lexer, BFS-prefetch through the shell's existing synchronous
 subresource path — *not* network I/O inside the synchronous V8 callback).
 

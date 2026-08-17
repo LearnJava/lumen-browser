@@ -108,6 +108,20 @@ pub(crate) fn set_fetch_provider(provider: Option<Arc<dyn JsFetchProvider>>) {
     with_state(|s| s.fetcher = provider);
 }
 
+/// Прочитать модуль с диска по `file://`-спецификатору.
+///
+/// Windows-нюанс тот же, что у остальных путей движка: у `file:///D:/x.js`
+/// после схемы стоит лишний `/` перед буквой диска.
+fn read_file_module(specifier: &str) -> Result<String, String> {
+    let rest = specifier.trim_start_matches("file://");
+    let path = rest.strip_prefix('/').filter(|p| {
+        // `/D:/x` — путь с буквой диска; `/home/x` — обычный абсолютный путь.
+        p.as_bytes().get(1) == Some(&b':')
+    }).unwrap_or(rest);
+    std::fs::read_to_string(path)
+        .map_err(|e| format!("module '{specifier}': {e}"))
+}
+
 /// Забрать исходник модуля из сети синхронно.
 ///
 /// Синхронно — потому что резолв-колбэк V8 обязан вернуть модуль немедленно;
@@ -121,6 +135,11 @@ pub(crate) fn set_fetch_provider(provider: Option<Arc<dyn JsFetchProvider>>) {
 fn fetch_module_source(specifier: &str) -> Result<String, String> {
     let is_http = specifier.starts_with("http://") || specifier.starts_with("https://");
     if !is_http {
+        // `file://` — только со страницы, которая сама открыта по `file://`:
+        // страница из сети не имеет права дотянуться до диска через импорт.
+        if specifier.starts_with("file://") && with_state(|s| s.page_url.starts_with("file://")) {
+            return read_file_module(specifier);
+        }
         return Err(format!("module '{specifier}' not found"));
     }
     if let Some(err) = with_state(|s| s.failed.get(specifier).cloned()) {

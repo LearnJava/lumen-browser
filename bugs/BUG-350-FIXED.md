@@ -135,4 +135,4 @@ QuickJS path) — tracked as part of the broader V8-migration module-support wor
 `import './helper.js'` со страницы падает как `module '…/helper.js' not found`.
 Это не регрессия (на QuickJS было ровно так же) и не то, что описывал этот баг,
 но именно оно нужно 80 вендоренным WPT-файлам — заведено отдельно как
-[BUG-446](BUG-446-OPEN.md).
+[BUG-446](BUG-446-FIXED.md).

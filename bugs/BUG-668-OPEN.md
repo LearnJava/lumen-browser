@@ -2,7 +2,7 @@
 
 **Статус:** OPEN
 **Компонент:** js (`crates/js/src/screen_orientation.rs` — `SCREEN_ORIENTATION_SHIM`, Phase 0 Screen Orientation stub)
-**Найден:** P2, WPT-VENDOR-screen-orientation (2026-08-06), live `--mcp-live-port` probe (the WPT run itself gave zero functional signal — all 13 module-importing test files TIMEOUT on the already-documented [BUG-446](bugs/BUG-446-OPEN.md) module-graph gap, `idlharness.window.html` TIMEOUT on the already-documented recurring idlharness infra gap, `lock-bad-argument.html` — the one file that imports nothing — is the only one that ran, 2/2 subtests OK)
+**Найден:** P2, WPT-VENDOR-screen-orientation (2026-08-06), live `--mcp-live-port` probe (the WPT run itself gave zero functional signal — all 13 module-importing test files TIMEOUT on the already-documented [BUG-446](bugs/BUG-446-FIXED.md) module-graph gap, `idlharness.window.html` TIMEOUT on the already-documented recurring idlharness infra gap, `lock-bad-argument.html` — the one file that imports nothing — is the only one that ran, 2/2 subtests OK)
 
 ## Run signal
 
