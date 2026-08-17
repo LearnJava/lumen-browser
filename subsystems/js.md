@@ -305,7 +305,7 @@ the time — read dates.
   `import_meta.rs` transformer because its `.url`/`.resolve()`/`.env` shape is Lumen policy.
   19 tests in `v8_esm.rs`. **Gap:** the shell never calls `register_module_source`, so a
   page's `import './x.js'` still fails "module not found" —
-  [BUG-446](../bugs/BUG-446-OPEN.md), engine-independent (rquickjs had it too).
+  [BUG-446](../bugs/BUG-446-FIXED.md), engine-independent (rquickjs had it too).
 - **Live "prepare the script element" — dynamically inserted `<script>` ([P3],
   2026-08-09, closes [BUG-571](../bugs/BUG-571-FIXED.md)).** Script execution used to be
   the shell's one-shot walk of the parsed tree (`main.rs::collect_scripts_ordered`, once per

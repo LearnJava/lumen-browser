@@ -70,7 +70,7 @@ the `scheduler:`/async-ordering failure cluster observed across the rest of
 the category (not separately quantified here — those tests mix this defect
 with legitimate ordering-semantics gaps).
 
-Distinguish from [BUG-446](BUG-446-OPEN.md) (network-loaded *module* import
+Distinguish from [BUG-446](BUG-446-FIXED.md) (network-loaded *module* import
 graph) and [BUG-568](BUG-568-OPEN.md) (`document.write()`) — both are about
 different script-loading paths; this one is specifically "script created via
 DOM API, whether classic or module, whether inline or `src`, is never
@@ -150,7 +150,7 @@ ES-модулей через два новых натива (`_lumen_esm_registe
 компилируется одним классическим скриптом, и хост, отказавший в динамическом
 импорте в этой позиции, уронил бы весь шим. Статические импорты **внутри**
 такого модуля по-прежнему резолвятся только из заранее зарегистрированных
-источников — сетевой граф модулей это [BUG-446](BUG-446-OPEN.md), здесь он не
+источников — сетевой граф модулей это [BUG-446](BUG-446-FIXED.md), здесь он не
 менялся.
 
 **Проверка.** 12 юнит-тестов (`cargo test -p lumen-js --features v8-backend`):

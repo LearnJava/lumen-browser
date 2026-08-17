@@ -33,8 +33,12 @@
 //!
 //! ## Out of scope (deferred)
 //!
-//! - Send-side flow control (outbound window tracking) — Phase 0 issues only
-//!   GET requests with no request body, so send-window management is not needed.
+//! - Send-side flow control beyond the initial window: [`H2Conn::fetch_with_body`]
+//!   sends a request body only while it fits the peer's *initial* send window
+//!   (connection- and stream-level), never blocking on WINDOW_UPDATE. A body
+//!   larger than that is refused with [`H2_BODY_EXCEEDS_SEND_WINDOW`] so the
+//!   caller can fall back to HTTP/1.1 instead of us having to interleave
+//!   WINDOW_UPDATE reads with response frames on the same stream.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -105,6 +109,12 @@ const INITIAL_WINDOW: u32 = 65_535;
 /// Read chunk size for `read_frame`.
 const READ_CHUNK: usize = 8192;
 
+/// Error message returned by [`H2Conn::fetch_with_body`] when the request body
+/// does not fit the peer's send window and would require blocking on
+/// WINDOW_UPDATE. Callers match on it to fall back to HTTP/1.1 — it is a
+/// routing signal, not a network failure.
+pub const H2_BODY_EXCEEDS_SEND_WINDOW: &str = "H2 request body exceeds send window";
+
 // ── H2Conn ────────────────────────────────────────────────────────────────
 
 /// Stateful HTTP/2 client connection.
@@ -129,6 +139,12 @@ pub struct H2Conn<S: Read + Write> {
     /// Our connection-level receive window (bytes the server may still send before
     /// we send WINDOW_UPDATE). RFC 9113 §6.9 — starts at INITIAL_WINDOW.
     conn_recv_window: u32,
+    /// Connection-level *send* window (RFC 9113 §6.9.1): bytes of request body we
+    /// may still write across all streams before the peer must grant more with
+    /// WINDOW_UPDATE. Starts at the fixed 65 535 default (the peer's SETTINGS
+    /// `INITIAL_WINDOW_SIZE` governs *streams*, not the connection), grows on every
+    /// stream-0 WINDOW_UPDATE we observe, shrinks by each DATA payload we send.
+    conn_send_window: i64,
     /// Concurrent stream state: maps stream ID → StreamState for in-flight requests.
     /// Empty when using single-stream [`fetch`]; populated when using
     /// [`send_request`]/[`read_response_for_stream`].
@@ -192,6 +208,7 @@ impl<S: Read + Write> H2Conn<S> {
             remote_init_window: INITIAL_WINDOW,
             next_stream_id: 1,
             conn_recv_window: INITIAL_WINDOW,
+            conn_send_window: INITIAL_WINDOW as i64,
             pending_streams: HashMap::new(),
             profile,
         };
@@ -216,11 +233,15 @@ impl<S: Read + Write> H2Conn<S> {
                 }
                 // Server may ACK our initial SETTINGS before sending its own.
                 Frame::Settings { ack: true, .. } => {}
-                // Server often sends an initial WINDOW_UPDATE for stream 0.
+                // Server often sends an initial WINDOW_UPDATE for stream 0 — that
+                // is the peer raising the connection-level send window above the
+                // 65 535 default, so it must be credited, not dropped.
                 Frame::WindowUpdate {
                     stream_id: 0,
-                    increment: _,
-                } => {}
+                    increment,
+                } => {
+                    self.credit_conn_send_window(increment);
+                }
                 // Anything else (PRIORITY etc.) during setup — ignore.
                 _ => {}
             }
@@ -236,6 +257,17 @@ impl<S: Read + Write> H2Conn<S> {
                 _ => {}
             }
         }
+    }
+
+    /// Credit the connection-level send window from a stream-0 WINDOW_UPDATE
+    /// (RFC 9113 §6.9.1). Saturating: a peer that overflows the 2^31-1 cap is a
+    /// protocol error we do not need to police here — clamping keeps our own
+    /// accounting monotonic instead of wrapping into a negative budget.
+    fn credit_conn_send_window(&mut self, increment: u32) {
+        self.conn_send_window = self
+            .conn_send_window
+            .saturating_add(i64::from(increment))
+            .min(i64::from(i32::MAX));
     }
 
     /// Send a single frame; flushes immediately.
@@ -337,6 +369,40 @@ impl<S: Read + Write> H2Conn<S> {
         path: &str,
         extra_headers: &[(&[u8], &[u8])],
     ) -> Result<H2Response, Error> {
+        self.fetch_with_body(method, scheme, authority, path, extra_headers, &[])
+    }
+
+    /// [`fetch`](Self::fetch) with a request body (POST/PUT/PATCH/DELETE).
+    ///
+    /// The body is written as DATA frames after the HEADERS block; the last one
+    /// carries END_STREAM. `extra_headers` must already contain `content-type`
+    /// and `content-length` — this method adds no headers of its own.
+    ///
+    /// Send-side flow control (RFC 9113 §6.9.1) is honoured but not *waited* on:
+    /// a body that exceeds the currently granted connection- or stream-level send
+    /// window is refused up front with [`H2_BODY_EXCEEDS_SEND_WINDOW`] instead of
+    /// blocking for a WINDOW_UPDATE that could only arrive interleaved with
+    /// response frames. In practice the peer's initial windows are ≥ 64 KiB, which
+    /// covers API request bodies; larger uploads fall back to HTTP/1.1 in the
+    /// caller, where the socket blocks on the OS buffer instead.
+    pub fn fetch_with_body(
+        &mut self,
+        method: &str,
+        scheme: &str,
+        authority: &str,
+        path: &str,
+        extra_headers: &[(&[u8], &[u8])],
+        body: &[u8],
+    ) -> Result<H2Response, Error> {
+        // Refuse BEFORE allocating a stream id / sending HEADERS: a half-sent
+        // request would poison the connection for every later request on it.
+        if !body.is_empty() {
+            let budget = self.conn_send_window.min(self.remote_init_window as i64);
+            if body.len() as i64 > budget {
+                return Err(Error::Network(H2_BODY_EXCEEDS_SEND_WINDOW.to_owned()));
+            }
+        }
+
         let sid = self.allocate_stream_id();
 
         // Build HPACK request header block (profile-ordered pseudo-headers).
@@ -344,14 +410,31 @@ impl<S: Read + Write> H2Conn<S> {
         req.extend_from_slice(extra_headers);
         let block = self.encoder.encode(&req);
 
-        // HEADERS with END_STREAM (GET / HEAD have no request body).
+        // END_STREAM on HEADERS only when there is no body to follow.
         self.send_frame(&Frame::Headers {
             stream_id: sid,
-            end_stream: true,
+            end_stream: body.is_empty(),
             end_headers: true,
             priority: None,
             block_fragment: block,
         })?;
+
+        // DATA frames, chunked to the peer's SETTINGS_MAX_FRAME_SIZE.
+        if !body.is_empty() {
+            let max_chunk = (self.remote_max_frame as usize).max(1);
+            let mut offset = 0;
+            while offset < body.len() {
+                let end = (offset + max_chunk).min(body.len());
+                let chunk = &body[offset..end];
+                self.send_frame(&Frame::Data {
+                    stream_id: sid,
+                    end_stream: end == body.len(),
+                    data: chunk.to_vec(),
+                })?;
+                self.conn_send_window -= chunk.len() as i64;
+                offset = end;
+            }
+        }
 
         // ── Receive response ───────────────────────────────────────────────
         let mut hdr_block: Vec<u8> = Vec::new();
@@ -382,6 +465,12 @@ impl<S: Read + Write> H2Conn<S> {
                     })?;
                 }
                 Frame::Settings { ack: true, .. } => {}
+                // Stream-0 updates raise the connection send window (they arrive
+                // even on GET-only connections); per-stream ones concern a stream
+                // whose request body, if any, is already fully written.
+                Frame::WindowUpdate { stream_id: 0, increment } => {
+                    self.credit_conn_send_window(increment);
+                }
                 Frame::WindowUpdate { .. } => {}
                 Frame::Ping {
                     ack: false,
@@ -588,6 +677,12 @@ impl<S: Read + Write> H2Conn<S> {
                     })?;
                 }
                 Frame::Settings { ack: true, .. } => {}
+                // Stream-0 updates raise the connection send window (they arrive
+                // even on GET-only connections); per-stream ones concern a stream
+                // whose request body, if any, is already fully written.
+                Frame::WindowUpdate { stream_id: 0, increment } => {
+                    self.credit_conn_send_window(increment);
+                }
                 Frame::WindowUpdate { .. } => {}
                 Frame::Ping {
                     ack: false,

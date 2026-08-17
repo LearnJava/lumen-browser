@@ -6837,6 +6837,15 @@ fn collect_scripts_ordered(
         if !is_module && !is_classic_script_type(script_type) {
             return;
         }
+        // `nomodule` (HTML LS §4.12.1): классический скрипт с этим атрибутом —
+        // запасная сборка для движка БЕЗ модулей, и движок с модулями обязан её
+        // пропустить. Пока не пропускали, сайт с парой module/nomodule получал
+        // обе сборки разом: legacy-бандл и современный монтировались в один и
+        // тот же корень и гасили друг друга (живой пример — форма входа
+        // id.tbank.ru, 2026-08-17).
+        if !is_module && node.get_attr("nomodule").is_some() {
+            return;
+        }
         let target = if is_module { modules } else { classic };
         // `src` wins over inline body (HTML LS §4.12.1 — inline ignored if set).
         if let Some(src) = node.get_attr("src") {
@@ -6862,6 +6871,20 @@ fn collect_scripts_ordered(
     }
 }
 
+/// Скрипт, готовый к исполнению: тело плюс собственный адрес внешнего файла.
+///
+/// Адрес нужен только модулям — он служит базой их относительных импортов
+/// (`./chunk.js` бандла с CDN обязан резолвиться от CDN, а не от документа).
+/// У inline-скриптов его нет.
+struct ResolvedScript {
+    /// Узел `<script>`, из которого тело взято (для `document.currentScript`).
+    node: NodeId,
+    /// Исходный текст скрипта.
+    source: String,
+    /// Абсолютный URL внешнего `<script src>`; `None` у inline и `file://`.
+    url: Option<String>,
+}
+
 /// Resolve [`ScriptSource`] items to JS source strings in document order,
 /// fetching external `<script src>` bodies via the subresource fetcher
 /// (mirrors [`load_linked_stylesheets`]). Failed fetches are logged and
@@ -6871,18 +6894,26 @@ fn resolve_script_sources(
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
-) -> Vec<(NodeId, String)> {
+) -> Vec<ResolvedScript> {
     // Внешние `<script src>` грузятся параллельно (сеть — главный тормоз), но
     // результат собирается строго в исходном порядке: классические скрипты
     // обязаны выполняться в порядке документа (HTML LS §8.1.3.1). Inline-тела
     // проходят насквозь без сети.
     let fetched = parallel_map(items, |_, item| match item {
-        ScriptSource::Inline(nid, body) => Some((*nid, body.clone())),
+        ScriptSource::Inline(nid, body) => Some(ResolvedScript {
+            node: *nid,
+            source: body.clone(),
+            url: None,
+        }),
         ScriptSource::External(nid, src) => match base.resolve(src) {
             ResolvedResource::File(path) => match std::fs::read_to_string(&path) {
                 Ok(content) => {
                     eprintln!("Загружен скрипт: {}", path.display());
-                    Some((*nid, content))
+                    Some(ResolvedScript {
+                        node: *nid,
+                        source: content,
+                        url: None,
+                    })
                 }
                 Err(e) => {
                     eprintln!("Пропуск скрипта {}: {e}", path.display());
@@ -6915,7 +6946,13 @@ fn resolve_script_sources(
                     Ok(bytes) => {
                         eprintln!("Загружен скрипт: {url}");
                         fetch_span.set_bytes(bytes.len());
-                        Some((*nid, String::from_utf8_lossy(&bytes[..]).into_owned()))
+                        Some(ResolvedScript {
+                            node: *nid,
+                            source: String::from_utf8_lossy(&bytes[..]).into_owned(),
+                            // Абсолютный адрес самого скрипта — база
+                            // относительных импортов внутри модуля.
+                            url: Some(url.clone()),
+                        })
                     }
                     Err(e) => {
                         eprintln!("Пропуск скрипта {url}: {e}");
@@ -6946,6 +6983,10 @@ fn collect_inline_scripts(
         let script_type = node.get_attr("type").map(|t| t.trim());
         let is_module = script_type.is_some_and(|t| t.eq_ignore_ascii_case("module"));
         let is_importmap = script_type.is_some_and(|t| t.eq_ignore_ascii_case("importmap"));
+        // Тот же пропуск `nomodule`, что и в `collect_scripts_ordered`.
+        if !is_module && !is_importmap && node.get_attr("nomodule").is_some() {
+            return;
+        }
 
         let mut text = String::new();
         for &child in &node.children {
@@ -7115,8 +7156,8 @@ fn run_scripts_with_dom(
     deterministic: deterministic::DetConfig,
     cross_origin_isolated: bool,
     extra_scripts: &[String],
-    scripts: Vec<(NodeId, String)>,
-    module_scripts: Vec<(NodeId, String)>,
+    scripts: Vec<ResolvedScript>,
+    module_scripts: Vec<ResolvedScript>,
 ) -> (Arc<Mutex<Document>>, Option<JsNavigateRequest>, Option<Arc<dyn PersistentJs>>) {
     // `scripts` / `module_scripts` are already resolved by the caller in
     // document order, including fetched external `<script src>` bodies (BUG-164).
@@ -7162,7 +7203,7 @@ fn run_scripts_with_dom(
                     rt.set_import_map(map);
                 }
                 // Classic scripts run first (HTML LS §8.1.3 execution order).
-                for (nid, src) in &scripts {
+                for ResolvedScript { node: nid, source: src, .. } in &scripts {
                     // BUG-486: `document.currentScript` must name the element
                     // being executed for the whole body and nothing else, so the
                     // push/pop pair brackets the eval — including the error paths
@@ -7183,8 +7224,16 @@ fn run_scripts_with_dom(
                 }
                 // Module scripts run after classic scripts (HTML LS §8.1.3.1 deferred).
                 // No `currentScript` bracket: it is `null` inside a module by spec.
-                for (_, src) in &module_scripts {
-                    match rt.eval_module(src) {
+                for item in &module_scripts {
+                    let src = &item.source;
+                    // Внешний модуль исполняется под СВОИМ адресом: от него
+                    // считаются его относительные импорты. У inline-модуля
+                    // адреса нет — база остаётся адресом страницы.
+                    let outcome = match &item.url {
+                        Some(url) => rt.eval_module_at(url, src),
+                        None => rt.eval_module(src),
+                    };
+                    match outcome {
                         Ok(()) => {}
                         Err(lumen_core::JsError::NotImplemented) => {
                             eprintln!(
@@ -30143,6 +30192,29 @@ mod tests {
         assert!(matches!(&classic[0], ScriptSource::Inline(_, s) if s.contains("real=1")));
     }
 
+    /// `nomodule` — запасная сборка для движка без ES-модулей. Движок с
+    /// модулями обязан её пропустить, иначе сайт получает обе сборки разом
+    /// (живой пример — форма входа id.tbank.ru: legacy и современный бандл
+    /// монтировались в один корень и гасили друг друга).
+    #[test]
+    fn collect_scripts_ordered_skips_nomodule() {
+        let doc = lumen_html_parser::parse(
+            r#"<html><body>
+              <script type="module" src="/modern.js"></script>
+              <script nomodule src="/legacy.js"></script>
+              <script nomodule>legacyInline=1;</script>
+              <script>plain=1;</script>
+            </body></html>"#,
+        );
+        let mut classic = Vec::new();
+        let mut modules = Vec::new();
+        collect_scripts_ordered(&doc, doc.root(), &mut classic, &mut modules);
+        assert_eq!(modules.len(), 1);
+        assert!(matches!(&modules[0], ScriptSource::External(_, s) if s == "/modern.js"));
+        assert_eq!(classic.len(), 1, "обе nomodule-сборки должны быть пропущены");
+        assert!(matches!(&classic[0], ScriptSource::Inline(_, s) if s.contains("plain=1")));
+    }
+
     /// When both `src` and an inline body are present, `src` wins and the inline
     /// body is ignored (HTML LS §4.12.1).
     #[test]
@@ -30170,11 +30242,13 @@ mod tests {
         let base = ResourceBase::Url("https://example.com/".to_owned());
         let sink: Arc<dyn EventSink> = Arc::new(StdoutEventSink);
         let out = resolve_script_sources(&items, &base, &sink, None);
-        let bodies: Vec<&str> = out.iter().map(|(_, s)| s.as_str()).collect();
+        let bodies: Vec<&str> = out.iter().map(|r| r.source.as_str()).collect();
         assert_eq!(bodies, vec!["var a = 1;", "var b = 2;"]);
         // BUG-486: each body keeps the id of its own `<script>` element, so the
         // executor can point `document.currentScript` at it.
-        assert_ne!(out[0].0, out[1].0);
+        assert_ne!(out[0].node, out[1].node);
+        // Inline-скрипт своего адреса не имеет — база импортов остаётся страницей.
+        assert!(out[0].url.is_none());
     }
 
     #[test]

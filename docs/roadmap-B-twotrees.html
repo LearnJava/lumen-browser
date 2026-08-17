@@ -73,14 +73,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-08-12",
+ "generated": "2026-08-17",
  "counts": {
   "open": 314,
-  "fixed": 421,
+  "fixed": 422,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 735,
+ "total_bugs": 736,
  "phases": [
   {
    "id": "P0",
@@ -862,7 +862,7 @@
          "title": "V8 S12b-23: ESM (`type=\"module\"`) → V8, закрывает BUG-350",
          "status": "done",
          "size": "M",
-         "note": "ЗАКРЫТ 2026-07-29 (ветка p1-v8-s12b-23-esm): ESM портирован на V8, BUG-350 закрыт. Новый `crates/js/src/v8_esm.rs`: `script_compiler::compile_module` → `instantiate_module` → `evaluate` + `perform_microtask_checkpoint`; `impl JsRuntime for V8JsRuntime` переопределяет `eval_module`/`register_module_source`, добавлен `V8JsRuntime::set_import_map` (зовётся шеллом). Плумбинг отличается от rquickjs намеренно: `ResolveModuleCallback` у V8 — `extern \"C\" fn` без захвата, поэтому реестры (исходники, модули, `identity_hash→specifier`, page URL, import map) в `thread_local!` на JS-потоке, а не в `Arc<Mutex<…>>`; разрешение спецификаторов общее для обоих движков — вынесено в `esm::resolve_specifier_with`. Import attributes (`with { type: 'json' }`) и динамический `import()` — нативные V8 (FixedArray в callback / `set_host_import_module_dynamically_callback`), Phase-0 препроцессор `import_attributes.rs` на V8-пути не нужен; `import.meta` остался на общем `import_meta.rs` (форма `.url`/`.resolve()`/`.env` — политика Lumen). Inline-модули включены и в headless-путь драйвера (`session.rs::run_page_scripts`); ни одна страница graphic_tests не использует `type=module` — CPU-снапшоты не затронуты. 19 новых тестов в `v8_esm.rs` + живой прогон `--dump-layout`. rquickjs-путь ESM НЕ удалён (это S12b-24/25). Остаток: сетевая подгрузка импортируемых модулей — [BUG-446](bugs/BUG-446-OPEN.md)",
+         "note": "ЗАКРЫТ 2026-07-29 (ветка p1-v8-s12b-23-esm): ESM портирован на V8, BUG-350 закрыт. Новый `crates/js/src/v8_esm.rs`: `script_compiler::compile_module` → `instantiate_module` → `evaluate` + `perform_microtask_checkpoint`; `impl JsRuntime for V8JsRuntime` переопределяет `eval_module`/`register_module_source`, добавлен `V8JsRuntime::set_import_map` (зовётся шеллом). Плумбинг отличается от rquickjs намеренно: `ResolveModuleCallback` у V8 — `extern \"C\" fn` без захвата, поэтому реестры (исходники, модули, `identity_hash→specifier`, page URL, import map) в `thread_local!` на JS-потоке, а не в `Arc<Mutex<…>>`; разрешение спецификаторов общее для обоих движков — вынесено в `esm::resolve_specifier_with`. Import attributes (`with { type: 'json' }`) и динамический `import()` — нативные V8 (FixedArray в callback / `set_host_import_module_dynamically_callback`), Phase-0 препроцессор `import_attributes.rs` на V8-пути не нужен; `import.meta` остался на общем `import_meta.rs` (форма `.url`/`.resolve()`/`.env` — политика Lumen). Inline-модули включены и в headless-путь драйвера (`session.rs::run_page_scripts`); ни одна страница graphic_tests не использует `type=module` — CPU-снапшоты не затронуты. 19 новых тестов в `v8_esm.rs` + живой прогон `--dump-layout`. rquickjs-путь ESM НЕ удалён (это S12b-24/25). Остаток: сетевая подгрузка импортируемых модулей — [BUG-446](bugs/BUG-446-FIXED.md)",
          "bugs": [
           "BUG-350"
          ]
@@ -2908,7 +2908,7 @@
        "title": "WPT: вендорить + прогнать категорию `import-maps`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-04: вендорена + прогнана целиком (`--all --root import-maps --recursive`, ~5 мин) — **35/57 harness OK, 9/81 сабтестов**. Самодостаточная категория (0 `.https.`, 0 `testdriver.js`), но весь провал объясняется тремя уже открытыми дефектами: доминирующий [BUG-446](bugs/BUG-446-OPEN.md) (граф модулей не подгружается — любой относительный `import`/`import()` внутри уже загруженного модуля падает `module not found`, вне зависимости от import-карты — `set_import_map` переименовывает спецификатор, но загружать переименованный URL по-прежнему некому), часть `not-overridden/*`/`*-integrity.html` — [BUG-485](bugs/BUG-485-FIXED.md)/[BUG-565](bugs/BUG-565-FIXED.md) (`document.head` всегда `undefined`), `script-supports-importmap.html` — [BUG-572](bugs/BUG-572-OPEN.md) (`HTMLScriptElement.supports` отсутствует). Проверено отдельно: 2 «прошедших» сабтеста `static-integrity.html` — ложноположительные (модуль не грузится по BUG-446 независимо от корректности integrity-хэша, импорт-карт-специфичная проверка `integrity` не подтверждена рабочей). Новых багов не заведено — перепрогнать категорию после фикса BUG-446",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-04: вендорена + прогнана целиком (`--all --root import-maps --recursive`, ~5 мин) — **35/57 harness OK, 9/81 сабтестов**. Самодостаточная категория (0 `.https.`, 0 `testdriver.js`), но весь провал объясняется тремя уже открытыми дефектами: доминирующий [BUG-446](bugs/BUG-446-FIXED.md) (граф модулей не подгружается — любой относительный `import`/`import()` внутри уже загруженного модуля падает `module not found`, вне зависимости от import-карты — `set_import_map` переименовывает спецификатор, но загружать переименованный URL по-прежнему некому), часть `not-overridden/*`/`*-integrity.html` — [BUG-485](bugs/BUG-485-FIXED.md)/[BUG-565](bugs/BUG-565-FIXED.md) (`document.head` всегда `undefined`), `script-supports-importmap.html` — [BUG-572](bugs/BUG-572-OPEN.md) (`HTMLScriptElement.supports` отсутствует). Проверено отдельно: 2 «прошедших» сабтеста `static-integrity.html` — ложноположительные (модуль не грузится по BUG-446 независимо от корректности integrity-хэша, импорт-карт-специфичная проверка `integrity` не подтверждена рабочей). Новых багов не заведено — перепрогнать категорию после фикса BUG-446",
        "bugs": [
         "BUG-446",
         "BUG-485/BUG-565",
@@ -3610,7 +3610,7 @@
        "title": "WPT: вендорить + прогнать категорию `screen-orientation`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root screen-orientation --recursive`, ~2 мин 30 с, 16 файлов, 15 исполнившихся id) — **1/15 harness OK, 2/2 сабтестов**. 13 файлов TIMEOUT — реконфирмация [BUG-446](bugs/BUG-446-OPEN.md) (граф ES-модулей: `import ... from \"./resources/orientation-utils.js\"` никогда не подгружается, ноль `test()` регистрируется); `idlharness.window.html` TIMEOUT — реконфирмация рекуррентного невендоренного idlharness-инфра-гэпа; `lock-bad-argument.html` (единственный без модульного импорта) исполнился чисто. Раз функциональный сигнал целиком заблокирован, прямой `--mcp-live-port`-пробой найден [BUG-668](bugs/BUG-668-OPEN.md) — `screen.orientation` (`crates/js/src/screen_orientation.rs`) даёт два независимых дефекта: (1) `ScreenOrientation` не наследует `EventTarget` (`instanceof` → false, `dispatchEvent` отсутствует целиком, свой ручной `_listeners`-массив вместо прототипной цепочки) — тот же класс, что BUG-664/BUG-400; (2) `.lock()` резолвится успешно, но никогда не обновляет `type`/`angle` — успешный лок неотличим от no-op (проверено живьём: после `lock('landscape-primary')` `type` остаётся `'portrait-primary'`), что сломало бы `active-lock.html`/`lock-basic.html`/`lock-unlock-check.html`/`orientation-reading.html` даже после фикса BUG-446",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root screen-orientation --recursive`, ~2 мин 30 с, 16 файлов, 15 исполнившихся id) — **1/15 harness OK, 2/2 сабтестов**. 13 файлов TIMEOUT — реконфирмация [BUG-446](bugs/BUG-446-FIXED.md) (граф ES-модулей: `import ... from \"./resources/orientation-utils.js\"` никогда не подгружается, ноль `test()` регистрируется); `idlharness.window.html` TIMEOUT — реконфирмация рекуррентного невендоренного idlharness-инфра-гэпа; `lock-bad-argument.html` (единственный без модульного импорта) исполнился чисто. Раз функциональный сигнал целиком заблокирован, прямой `--mcp-live-port`-пробой найден [BUG-668](bugs/BUG-668-OPEN.md) — `screen.orientation` (`crates/js/src/screen_orientation.rs`) даёт два независимых дефекта: (1) `ScreenOrientation` не наследует `EventTarget` (`instanceof` → false, `dispatchEvent` отсутствует целиком, свой ручной `_listeners`-массив вместо прототипной цепочки) — тот же класс, что BUG-664/BUG-400; (2) `.lock()` резолвится успешно, но никогда не обновляет `type`/`angle` — успешный лок неотличим от no-op (проверено живьём: после `lock('landscape-primary')` `type` остаётся `'portrait-primary'`), что сломало бы `active-lock.html`/`lock-basic.html`/`lock-unlock-check.html`/`orientation-reading.html` даже после фикса BUG-446",
        "bugs": [
         "BUG-668"
        ]
@@ -7436,8 +7436,8 @@
   },
   "BUG-405": {
    "status": "open",
-   "title": "Прокрутка реальных сайтов рвано залипает: на `https://lenta.ru` (43 кадра/прогон, dev-release, дефолтный wgpu) p50 ≈9 мс, но avg ≈210 мс и max **3.1–3.6 с** — р…",
-   "component": "paint (wgpu — путь отрисовки вновь открывшейся полосы при scroll-blit, `crates/engine/paint/src/renderer.rs`)",
+   "title": "+",
+   "component": "x",
    "date": null,
    "debtor": true
   },
@@ -7722,10 +7722,10 @@
    "debtor": false
   },
   "BUG-446": {
-   "status": "open",
+   "status": "fixed",
    "title": "Граф модулей страницы не подгружается: `import './helper.js'` из `<script type=\"module\">` всегда падает как `module '…' not found`, потому что шелл нигде не зов…",
    "component": "shell (`crates/shell/src/main.rs` — `run_scripts_with_dom`, `resolve_script_sources`), js (`crates/js/src/v8_esm.rs` — реестр исходников)",
-   "date": null,
+   "date": "2026-08-17",
    "debtor": false
   },
   "BUG-447": {
@@ -9953,6 +9953,13 @@
    "component": "test-harness (`graphic_tests/run.py` — `LiveWindowClient.__init__`/`_drain_stderr`); вторично shell/paint (диагностическая печать с UI-потока)",
    "date": "2026-08-12",
    "debtor": false
+  },
+  "BUG-771": {
+   "status": "open",
+   "title": "**Вид окна меняется после прокрутки**: прокрутка вниз и возврат на то же смещение оставляет другую картинку — те же глифы на тех же позициях рисуются плотнее (в…",
+   "component": "paint (`crates/engine/paint/src/renderer.rs` — путь `try_page_compose` → `render_impl(.., RenderPassMode::Compose)`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -10860,6 +10867,9 @@
   "paint (`WgpuBackend`/`renderer.rs`) — wgpu-рендеринг расходится с femtovg": [
    "BUG-277"
   ],
+  "paint (`crates/engine/paint/src/renderer.rs` — путь `try_page_compose` → `render_impl(.., RenderPassMode::Compose)`)": [
+   "BUG-771"
+  ],
   "paint (`display_list.rs::emit_background_image`) — дефект дисплей-листа, не бэкенда": [
    "BUG-631"
   ],
@@ -10907,9 +10917,6 @@
   ],
   "paint (wgpu `renderer.rs`, `BeginStickyLayer`)": [
    "BUG-336"
-  ],
-  "paint (wgpu — путь отрисовки вновь открывшейся полосы при scroll-blit, `crates/engine/paint/src/renderer.rs`)": [
-   "BUG-405"
   ],
   "paint/cpu_raster": [
    "BUG-052"
@@ -11070,6 +11077,9 @@
   ],
   "wptrunner-интеграция (`browsers/lumen.py` `env_options`)": [
    "BUG-301"
+  ],
+  "x": [
+   "BUG-405"
   ],
   "не изолирован (layout / paint / js)": [
    "BUG-733"

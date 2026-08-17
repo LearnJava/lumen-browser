@@ -1369,6 +1369,10 @@ impl V8JsRuntime {
         // installation happens after that closure returns.
         let fp_worker = fetch_provider.clone();
         let fp_shared_worker = fetch_provider.clone();
+        // Тот же провайдер отдаётся загрузчику модулей: `import('./chunk.js')`
+        // обязан сходить в сеть, а не искать чанк в заранее зарегистрированных
+        // исходниках (иначе code-split приложение не собирается вовсе).
+        let fp_esm = fetch_provider.clone();
 
         self.run(move |inner| {
             // ESM (S12b-23): fallback base URL the module resolver uses for
@@ -1376,6 +1380,7 @@ impl V8JsRuntime {
             // which have no URL of their own. Mirrors the `module_page_url`
             // write in `QuickJsRuntime::install_dom`.
             crate::v8_esm::set_page_url(&page_url);
+            crate::v8_esm::set_fetch_provider(fp_esm);
             // BUG-384: point the Window named-properties interceptor (installed
             // on the global object template back at context creation) at this
             // navigation's document. Done here, on the JS thread, because the
@@ -2027,13 +2032,33 @@ impl V8JsRuntime {
                 // as a single text node — no element/comment structure at all).
                 let mut doc = d.lock().unwrap();
                 let nid = NodeId::from_index(node_id as usize);
-                let old_children: Vec<NodeId> = doc.get(nid).children.clone();
+                // HTML LS §4.12.3 / DOM Parsing: у `<template>` разметка уходит
+                // в его content-фрагмент, а не в сам элемент. На этом стоит
+                // весь класс библиотек, собирающих DOM из шаблонов (Solid, lit,
+                // Vue): `t.innerHTML = …; t.content.firstChild.cloneNode(true)`.
+                // Пока разметка ложилась в сам элемент, `content` оставался
+                // пустым и `firstChild` был null — форма входа id.tbank.ru
+                // падала на `Cannot read properties of null (reading
+                // 'cloneNode')` (2026-08-17).
+                let target = if is_template_element(&doc, nid) {
+                    match doc.template_content(nid) {
+                        Some(frag) => frag,
+                        None => {
+                            let frag = doc.create_fragment();
+                            doc.set_template_content(nid, frag);
+                            frag
+                        }
+                    }
+                } else {
+                    nid
+                };
+                let old_children: Vec<NodeId> = doc.get(target).children.clone();
                 for c in old_children {
                     doc.detach(c);
                 }
                 let new_children = parse_html_fragment(&mut doc, &html);
                 for c in new_children {
-                    doc.append_child(nid, c);
+                    doc.append_child(target, c);
                 }
                 record_dom_touch(&touched, nid);
                 dirty.store(true, Ordering::Relaxed);
@@ -3860,9 +3885,22 @@ impl V8JsRuntime {
     {
         let d = Arc::clone(&doc);
         reg!("_lumen_get_template_content", move |nid: u32| -> Option<u32> {
-            let doc = d.lock().unwrap();
+            let mut doc = d.lock().unwrap();
             let id = NodeId::from_index(nid as usize);
-            doc.template_content(id).map(|f| f.index() as u32)
+            if let Some(frag) = doc.template_content(id) {
+                return Some(frag.index() as u32);
+            }
+            // `<template>`, созданный из JS (`document.createElement`), не
+            // проходил через tree-builder и потому не имел content-фрагмента:
+            // фрагмент заводится здесь, при первом обращении, и запоминается.
+            // Иначе каждый доступ к `.content` отдавал бы новый пустой
+            // фрагмент — `t.content !== t.content`, а запись в него терялась.
+            if !is_template_element(&doc, id) {
+                return None;
+            }
+            let frag = doc.create_fragment();
+            doc.set_template_content(id, frag);
+            Some(frag.index() as u32)
         });
     }
     // Deep-clone a subtree rooted at `nid`. Returns the new root NodeId.
@@ -5327,6 +5365,15 @@ fn collect_text_inner(doc: &lumen_dom::Document, id: lumen_dom::NodeId, out: &mu
     }
 }
 
+/// Является ли `nid` элементом `<template>` (HTML LS §4.12.3).
+///
+/// Отдельная проверка, а не наличие content-фрагмента: фрагмент у шаблона,
+/// созданного из JS, появляется лениво, и «нет фрагмента» ещё не значит
+/// «не шаблон».
+fn is_template_element(doc: &lumen_dom::Document, nid: NodeId) -> bool {
+    matches!(&doc.get(nid).data, lumen_dom::NodeData::Element { name, .. } if name.local == "template")
+}
+
 /// BUG-341 S7: record `nid` as touched by a tracked DOM-mutation primitive.
 fn record_dom_touch(tracker: &Mutex<DomTouched>, nid: NodeId) {
     tracker.lock().unwrap_or_else(|e| e.into_inner()).nodes.insert(nid);
@@ -5594,6 +5641,23 @@ impl JsRuntime for V8JsRuntime {
     /// [`crate::QuickJsRuntime::register_module_source`].
     fn register_module_source(&self, specifier: &str, source: &str) {
         self.run(|_inner| crate::v8_esm::register_source(specifier, source));
+    }
+
+    fn eval_module_at(&self, url: &str, source: &str) -> JsResult<()> {
+        let source = crate::decorators::maybe_transform_decorators_v8(self, source)
+            .unwrap_or_else(|| source.to_owned());
+        let url = url.to_owned();
+        self.run(move |inner| {
+            with_tc!(inner, |tc, _ctx| {
+                match crate::v8_esm::evaluate_module_url(tc, &url, &source) {
+                    Ok(()) => Ok(()),
+                    Err(()) => match tc.exception() {
+                        Some(exc) => Err(v8_err(tc, exc)),
+                        None => Err(JsError::Runtime("module eval failed".into())),
+                    },
+                }
+            })
+        })
     }
 
     fn set_global(&self, name: &str, value: JsValue) -> JsResult<()> {

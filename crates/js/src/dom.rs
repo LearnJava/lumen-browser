@@ -1572,6 +1572,15 @@ function _lumen_make_shadow_root(nid, mode, host_nid) {
 // consumed when appended: all children are moved to the target parent (DOM LS
 // §4.2.4). `cloneNode(true)` on a fragment deep-clones without consuming it.
 
+// DOM §4.2.6 «converting nodes into a node»: аргумент ParentNode-методов —
+// либо узел, либо строка, которая становится текстовым узлом. Возвращает nid
+// или `null`, если аргумент не то и не другое.
+function _lumen_node_or_text_nid(arg) {
+    if (typeof arg === 'string') return _lumen_create_text_node(arg);
+    if (arg && arg.__nid__ !== undefined) return arg.__nid__;
+    return _lumen_create_text_node(String(arg));
+}
+
 function _lumen_make_document_fragment(nid) {
     var frag = {
         __nid__:              nid,
@@ -1618,6 +1627,69 @@ function _lumen_make_document_fragment(nid) {
         cloneNode:            function(deep) {
             var clone_nid = _lumen_clone_subtree(nid, deep ? 1 : 0);
             return _lumen_make_document_fragment(clone_nid);
+        },
+        // Ниже — узловые операции, которых у фрагмента не было вовсе, хотя
+        // именно во фрагмент (`template.content`) реактивные библиотеки
+        // собирают разметку перед вставкой в документ.
+        get lastChild()       {
+            var ch = _lumen_get_children(nid);
+            return ch.length ? _lumen_make_element(ch[ch.length - 1]) : null;
+        },
+        // У фрагмента родителя не бывает по определению (DOM §4.7).
+        get parentNode()      { return null; },
+        get parentElement()   { return null; },
+        get nextSibling()     { return null; },
+        get previousSibling() { return null; },
+        insertBefore:         function(newNode, refNode) {
+            if (!newNode || newNode.__nid__ === undefined) {
+                throw new TypeError('insertBefore: newNode must be a node');
+            }
+            if (refNode === null || refNode === undefined) {
+                _lumen_append_child(nid, newNode.__nid__);
+            } else {
+                _lumen_insert_before(nid, newNode.__nid__, refNode.__nid__);
+            }
+            return newNode;
+        },
+        replaceChild:         function(newChild, oldChild) {
+            if (!newChild || !oldChild || newChild.__nid__ === undefined || oldChild.__nid__ === undefined) {
+                throw new TypeError('replaceChild: both arguments must be nodes');
+            }
+            _lumen_insert_before(nid, newChild.__nid__, oldChild.__nid__);
+            _lumen_remove_child(nid, oldChild.__nid__);
+            return oldChild;
+        },
+        hasChildNodes:        function() { return _lumen_get_children(nid).length > 0; },
+        contains:             function(other) { return _lumen_node_contains(this, other); },
+        compareDocumentPosition: function(other) { return _lumen_node_compare_position(this, other); },
+        isSameNode:           function(other) { return !!other && _lumen_tree_nid(other) === nid; },
+        getRootNode:          function() { return this; },
+        // DOM §4.2.6 ParentNode.append/prepend/replaceChildren — принимают узлы
+        // и строки (строка становится текстовым узлом).
+        append:               function() {
+            for (var i = 0; i < arguments.length; i++) {
+                _lumen_append_child(nid, _lumen_node_or_text_nid(arguments[i]));
+            }
+        },
+        prepend:              function() {
+            var first = _lumen_get_children(nid)[0];
+            for (var i = 0; i < arguments.length; i++) {
+                var cnid = _lumen_node_or_text_nid(arguments[i]);
+                if (first === undefined) {
+                    _lumen_append_child(nid, cnid);
+                } else {
+                    _lumen_insert_before(nid, cnid, first);
+                }
+            }
+        },
+        replaceChildren:      function() {
+            var kids = _lumen_get_children(nid);
+            for (var i = 0; i < kids.length; i++) {
+                _lumen_remove_child(nid, kids[i]);
+            }
+            for (var j = 0; j < arguments.length; j++) {
+                _lumen_append_child(nid, _lumen_node_or_text_nid(arguments[j]));
+            }
         },
     };
     // DOM §4.2.6 ParentNode.children — element-only live HTMLCollection (BUG-310).
@@ -3759,8 +3831,12 @@ function _lumen_build_element(nid) {
         // DocumentFragment content container, or null when not a template element.
         get content() {
             if ((_lumen_get_tag_name(nid) || '').toUpperCase() !== 'TEMPLATE') return undefined;
+            // Фрагмент заводит и запоминает нативная сторона (в том числе для
+            // шаблона, созданного через createElement). Раньше на промахе тут
+            // создавался НОВЫЙ фрагмент на каждое обращение: `t.content !==
+            // t.content`, и всё записанное в него терялось.
             var frag_nid = _lumen_u2n(_lumen_get_template_content(nid));
-            return frag_nid !== null ? _lumen_make_document_fragment(frag_nid) : _lumen_make_document_fragment(_lumen_create_fragment());
+            return frag_nid !== null ? _lumen_make_document_fragment(frag_nid) : null;
         },
         // Scoped to this element's descendants (DOM Parentnode §4.2.5) — works on
         // detached subtrees too, unlike the document-global `_lumen_query_selector`.
@@ -4350,6 +4426,97 @@ function _lumen_build_element(nid) {
         get: function() {
             var ch = _lumen_get_children(nid);
             return ch.length > 0 ? _lumen_make_element(ch[ch.length - 1]) : null;
+        },
+        enumerable: false, configurable: true,
+    });
+    // DOM §4.4 Node.replaceChild(new, old) — не было вовсе: реактивные
+    // библиотеки заменяют узел на месте именно им (`e.replaceChild is not a
+    // function` — форма входа id.tbank.ru, 2026-08-17). Возвращает СТАРЫЙ узел,
+    // как требует спека.
+    _obj.replaceChild = function(newChild, oldChild) {
+        if (!newChild || !oldChild || newChild.__nid__ === undefined || oldChild.__nid__ === undefined) {
+            throw new TypeError('replaceChild: both arguments must be nodes');
+        }
+        _lumen_insert_before(nid, newChild.__nid__, oldChild.__nid__);
+        _lumen_remove_child(nid, oldChild.__nid__);
+        return oldChild;
+    };
+    // DOM §4.4 Node.isSameNode / isEqualNode. `isSameNode` нельзя свести к
+    // `===`: обёртка узла создаётся заново на каждое обращение, поэтому
+    // сравниваются идентификаторы узлов дерева.
+    _obj.isSameNode = function(other) {
+        if (!other) return false;
+        return _lumen_tree_nid(other) === nid;
+    };
+    _obj.isEqualNode = function(other) {
+        if (!other) return false;
+        var onid = _lumen_tree_nid(other);
+        if (onid === null) return false;
+        if (onid === nid) return true;
+        // Структурное равенство (DOM §4.4): тип, имя и сериализация поддерева.
+        if (_obj.nodeType !== other.nodeType) return false;
+        if (_obj.nodeName !== other.nodeName) return false;
+        return _lumen_get_outer_html(nid) === _lumen_get_outer_html(onid);
+    };
+    // DOM §4.4 Node.getRootNode() — корень дерева (документ или корень
+    // отсоединённого поддерева).
+    _obj.getRootNode = function() {
+        var cur = nid;
+        while (true) {
+            var pid = _lumen_u2n(_lumen_get_parent(cur));
+            if (pid === null) break;
+            cur = pid;
+        }
+        if (cur === _lumen_root_nid) return document;
+        return _lumen_make_element(cur);
+    };
+    // DOM §4.4 Node.normalize() — склеить соседние текстовые узлы и выбросить
+    // пустые, рекурсивно по поддереву.
+    _obj.normalize = function() {
+        var walk = function(id) {
+            var kids = _lumen_get_children(id);
+            var prevText = null;
+            for (var i = 0; i < kids.length; i++) {
+                var k = kids[i];
+                if (_lumen_is_text_node(k)) {
+                    var data = _lumen_get_text_content(k);
+                    if (data === '') { _lumen_remove_child(id, k); continue; }
+                    if (prevText !== null) {
+                        _lumen_set_text_content(prevText, _lumen_get_text_content(prevText) + data);
+                        _lumen_remove_child(id, k);
+                        continue;
+                    }
+                    prevText = k;
+                } else {
+                    prevText = null;
+                    walk(k);
+                }
+            }
+        };
+        walk(nid);
+    };
+    // DOM §4.4 Node.nextSibling / Node.previousSibling — соседи ЛЮБОГО типа,
+    // включая текстовые узлы и комментарии. Их не было вовсе: обёртка знала
+    // только `nextElementSibling`/`previousElementSibling`, и обход
+    // `firstChild` → `nextSibling` (компилированные шаблоны Solid/lit, обход
+    // смешанного содержимого) упирался в `undefined`.
+    Object.defineProperty(_obj, 'nextSibling', {
+        get: function() {
+            var pid = _lumen_u2n(_lumen_get_parent(nid));
+            if (pid === null) return null;
+            var sibs = _lumen_get_children(pid);
+            var idx = sibs.indexOf(nid);
+            return (idx >= 0 && idx + 1 < sibs.length) ? _lumen_make_element(sibs[idx + 1]) : null;
+        },
+        enumerable: false, configurable: true,
+    });
+    Object.defineProperty(_obj, 'previousSibling', {
+        get: function() {
+            var pid = _lumen_u2n(_lumen_get_parent(nid));
+            if (pid === null) return null;
+            var sibs = _lumen_get_children(pid);
+            var idx = sibs.indexOf(nid);
+            return (idx > 0) ? _lumen_make_element(sibs[idx - 1]) : null;
         },
         enumerable: false, configurable: true,
     });
@@ -27605,6 +27772,113 @@ mod tests {
                 frag !== null && frag.__isDocumentFragment__ === true
             "#).unwrap();
             assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn template_inner_html_fills_content_fragment() {
+            // HTML LS §4.12.3: разметка `<template>` живёт в его content-фрагменте,
+            // а не в самом элементе. На этом стоят Solid/lit/Vue:
+            // `t.innerHTML = …; t.content.firstChild.cloneNode(true)`.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var t = document.createElement('template');
+                t.innerHTML = '<div class="a">x</div>';
+                JSON.stringify({
+                    content_children: t.content.childNodes.length,
+                    own_children: t.childNodes.length,
+                    first: t.content.firstChild ? t.content.firstChild.nodeName : null,
+                    clone: t.content.firstChild.cloneNode(true).nodeName
+                })
+            "#).unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String(
+                    r#"{"content_children":1,"own_children":0,"first":"DIV","clone":"DIV"}"#.into()
+                )
+            );
+        }
+
+        #[test]
+        fn template_content_is_the_same_fragment_every_time() {
+            // Обёртка создаётся заново, но узел фрагмента обязан быть один и тот
+            // же — иначе запись в `t.content` теряется при следующем обращении.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var t = document.createElement('template');
+                t.content.appendChild(document.createElement('span'));
+                t.content.childNodes.length === 1 && t.content.__nid__ === t.content.__nid__
+            "#).unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn node_sibling_traversal_covers_text_nodes() {
+            // DOM §4.4: nextSibling/previousSibling ходят по узлам ЛЮБОГО типа.
+            // Компилированные шаблоны обходят смешанное содержимое именно так.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var el = document.createElement('div');
+                el.innerHTML = 'head<span>mid</span>tail';
+                var c1 = el.firstChild, c2 = c1.nextSibling, c3 = c2.nextSibling;
+                JSON.stringify([c1.nodeType, c2.nodeName, c3.nodeType,
+                                c3.nextSibling, c3.previousSibling.nodeName])
+            "#).unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String(r#"[3,"SPAN",3,null,"SPAN"]"#.into())
+            );
+        }
+
+        #[test]
+        fn node_replace_child_swaps_and_returns_old() {
+            // DOM §4.4 replaceChild: вернуть СТАРЫЙ узел, новый занять его место.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var el = document.createElement('div');
+                var a = document.createElement('a');
+                var b = document.createElement('b');
+                el.appendChild(a);
+                var returned = el.replaceChild(b, a);
+                JSON.stringify({
+                    kids: el.childNodes.length,
+                    first: el.firstChild.nodeName,
+                    returned: returned.nodeName
+                })
+            "#).unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String(r#"{"kids":1,"first":"B","returned":"A"}"#.into())
+            );
+        }
+
+        #[test]
+        fn fragment_gets_node_and_parent_node_operations() {
+            // У DocumentFragment не было insertBefore/replaceChild/append/…,
+            // хотя именно в него библиотеки собирают разметку.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt.eval(r#"
+                var f = document.createDocumentFragment();
+                var a = document.createElement('a');
+                var b = document.createElement('b');
+                f.append(a);
+                f.insertBefore(b, a);
+                var old = f.replaceChild(document.createElement('i'), b);
+                f.append('tail');
+                JSON.stringify({
+                    kids: f.childNodes.length,
+                    first: f.firstChild.nodeName,
+                    last: f.lastChild.nodeType,
+                    old: old.nodeName,
+                    has: f.hasChildNodes(),
+                    parent: f.parentNode
+                })
+            "#).unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String(
+                    r#"{"kids":3,"first":"I","last":3,"old":"B","has":true,"parent":null}"#.into()
+                )
+            );
         }
 
         #[test]

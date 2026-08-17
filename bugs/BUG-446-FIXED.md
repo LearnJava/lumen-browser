@@ -1,6 +1,6 @@
 # BUG-446 — граф модулей страницы не подгружается: `import './helper.js'` со страницы всегда «module not found»
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-17
 **Компонент:** shell (`crates/shell/src/main.rs` — `run_scripts_with_dom`, `collect_scripts_ordered`, `resolve_script_sources`), js (`crates/js/src/v8_esm.rs` — реестр исходников)
 **Найден:** P1, срез P3-v8-s12b-23 (2026-07-29), при сдаче [BUG-350](BUG-350-FIXED.md)
 
@@ -94,3 +94,27 @@ import {...} from "./resources/test-box-properties.js"` (or
 disk) never executes, so zero `test()` calls register and the harness
 times out. Committed `.ini` under `tests/wpt/metadata/css/css-logical/`
 for all 11 files (`expected: TIMEOUT`).
+
+## Исправлено (2026-08-17)
+
+Промах реестра модулей больше не приговор: `v8_esm::module_for` доfetch-ивает
+исходник — по `http(s)` через тот же `JsFetchProvider`, что у `fetch()`/XHR, по
+`file://` с диска и только если сама страница открыта по `file://` (страница из
+сети не имеет права дотянуться до диска импортом). Отказ запоминается, чтобы
+каждый повторный импорт не ходил в сеть заново.
+
+Рядом закрыты два соседних промаха, без которых доfetch ничего бы не дал:
+
+* резолвер не знал root-relative (`/chunk.js`) и protocol-relative
+  (`//cdn/x.js`) спецификаторов — они доезжали до загрузчика строкой;
+* внешний `<script type=module src>` исполнялся как inline, то есть с базой
+  относительных импортов = адрес СТРАНИЦЫ. Бандл с CDN уводил свои чанки на
+  хост документа. Добавлен `JsRuntime::eval_module_at(url, source)`, шелл
+  протягивает адрес скрипта до рантайма.
+
+Проверено репро из этого файла (`--dump-layout`: текст стал `module graph
+works`) и вживую — форма входа `id.tbank.ru` (Solid, ~20 динамических чанков)
+теперь собирается.
+
+Известное ограничение: загрузка синхронная, на JS-потоке (как весь остальной
+мост `JsFetchProvider`), поэтому граф из многих чанков тянется последовательно.

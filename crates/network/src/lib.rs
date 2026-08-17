@@ -372,6 +372,8 @@ impl Connection {
     /// добавляется только вместе с Range. Опциональный `authorization` —
     /// готовая строка для header `Authorization` (Basic / Digest),
     /// формируется на уровень выше после 401-retry.
+    /// Опциональный `body` — тело запроса (POST/PUT/PATCH/DELETE); добавляет
+    /// `Content-Type` и `Content-Length` и дописывает байты после заголовков.
     #[allow(clippy::too_many_arguments)]
     fn write_request(
         &mut self,
@@ -384,6 +386,7 @@ impl Connection {
         accept_encoding: Option<&str>,
         extra_headers: &str,
         http_profile: HttpProfile,
+        body: Option<&RequestBody<'_>>,
     ) -> Result<()> {
         let range_value = range.and_then(|r| r.header_value());
         let range_header = match &range_value {
@@ -406,8 +409,19 @@ impl Connection {
         // и для пользовательских author-headers. Caller гарантирует, что
         // среди них нет дублей `Host`/`Connection`/`Content-Length` и т.п.
         //
+        // Content-Type/Content-Length тела — там же, где остальные не-fingerprint
+        // заголовки (Chrome order): после Range/If-Range/Auth, перед extra.
+        let body_headers = match body {
+            Some(b) => format!(
+                "Content-Type: {}\r\nContent-Length: {}\r\n",
+                b.content_type,
+                b.bytes.len()
+            ),
+            None => String::new(),
+        };
         // Range/If-Range/Auth идут после fingerprint-заголовков (Chrome order).
-        let combined_extra = format!("{range_header}{if_range_header}{auth_header}{extra_headers}");
+        let combined_extra =
+            format!("{range_header}{if_range_header}{auth_header}{body_headers}{extra_headers}");
         let accept_enc = accept_encoding.unwrap_or("");
         let header_block = http::build_request_headers(host, accept_enc, &combined_extra, http_profile);
         let header_block = apply_ua_override(header_block);
@@ -416,47 +430,31 @@ impl Connection {
         stream
             .write_all(req.as_bytes())
             .map_err(|e| Error::Network(format!("write request: {e}")))?;
+        if let Some(b) = body {
+            stream
+                .write_all(b.bytes)
+                .map_err(|e| Error::Network(format!("write body: {e}")))?;
+        }
         stream
             .flush()
             .map_err(|e| Error::Network(format!("flush request: {e}")))?;
         Ok(())
     }
+}
 
-    /// Write an HTTP request with a body (POST/PUT/PATCH/DELETE).
-    ///
-    /// Adds `Content-Type` and `Content-Length` headers automatically.
-    /// `extra_headers` may contain additional pre-formatted `Key: Value\r\n` lines.
-    #[allow(clippy::too_many_arguments)]
-    fn write_request_with_body(
-        &mut self,
-        method: &str,
-        host: &str,
-        path: &str,
-        content_type: &str,
-        body: &[u8],
-        extra_headers: &str,
-        http_profile: HttpProfile,
-    ) -> Result<()> {
-        // Content-Type and Content-Length come after fingerprint headers (Chrome order).
-        let body_headers = format!(
-            "Content-Type: {content_type}\r\nContent-Length: {}\r\n{extra_headers}",
-            body.len()
-        );
-        let header_block = http::build_request_headers(host, "", &body_headers, http_profile);
-        let header_block = apply_ua_override(header_block);
-        let req = format!("{method} {path} HTTP/1.1\r\n{header_block}");
-        let stream = self.reader.get_mut();
-        stream
-            .write_all(req.as_bytes())
-            .map_err(|e| Error::Network(format!("write request: {e}")))?;
-        stream
-            .write_all(body)
-            .map_err(|e| Error::Network(format!("write body: {e}")))?;
-        stream
-            .flush()
-            .map_err(|e| Error::Network(format!("flush request: {e}")))?;
-        Ok(())
-    }
+/// Тело запроса для методов, которые его несут (POST/PUT/PATCH/DELETE).
+///
+/// Держится отдельным типом, а не парой аргументов: тело обязано ехать по
+/// тому же пути, что и GET (куки, редиректы, HSTS, ad-block, HTTP/2), а этот
+/// путь передаётся по цепочке `fetch_with_redirect` → `fetch_single` →
+/// `do_request`, где лишняя пара позиционных аргументов теряется молча.
+pub(crate) struct RequestBody<'a> {
+    /// HTTP-метод запроса (`POST`/`PUT`/`PATCH`/`DELETE`, uppercase).
+    pub method: &'a str,
+    /// Значение заголовка `Content-Type` (например `application/json`).
+    pub content_type: &'a str,
+    /// Сырые байты тела.
+    pub bytes: &'a [u8],
 }
 
 // ── HTTP/1.1 ответ ───────────────────────────────────────────────────────────
@@ -1468,6 +1466,37 @@ fn connect(
     socks5: Option<&socks5::Socks5Proxy>,
     read_timeout: Option<std::time::Duration>,
 ) -> Result<Connection> {
+    connect_inner(host, port, is_tls, resolver, tls_profile, socks5, read_timeout, false)
+}
+
+/// [`connect`], но с ALPN только `http/1.1` — соединение гарантированно не h2.
+///
+/// Нужно там, где запрос нельзя выполнить по HTTP/2 (тело больше окна
+/// отправки): повторный обычный `connect` к тому же серверу согласовал бы h2
+/// снова, и «фолбэк на HTTP/1.1» оказался бы записью H1-байтов в h2-сокет.
+fn connect_h1(
+    host: &str,
+    port: u16,
+    is_tls: bool,
+    resolver: &dyn DnsResolver,
+    tls_profile: tls::TlsProfile,
+    socks5: Option<&socks5::Socks5Proxy>,
+    read_timeout: Option<std::time::Duration>,
+) -> Result<Connection> {
+    connect_inner(host, port, is_tls, resolver, tls_profile, socks5, read_timeout, true)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn connect_inner(
+    host: &str,
+    port: u16,
+    is_tls: bool,
+    resolver: &dyn DnsResolver,
+    tls_profile: tls::TlsProfile,
+    socks5: Option<&socks5::Socks5Proxy>,
+    read_timeout: Option<std::time::Duration>,
+    force_h1: bool,
+) -> Result<Connection> {
     let tcp = if let Some(s5) = socks5 {
         // SOCKS5 path: connect TCP to proxy server, then SOCKS5-tunnel to target.
         // DNS is resolved by the proxy (no local leak) — required for Tor.
@@ -1549,7 +1578,12 @@ fn connect(
     let server_name = ServerName::try_from(host.to_owned())
         .map_err(|e| Error::Network(format!("invalid hostname '{host}': {e}")))?;
 
-    let mut conn = ClientConnection::new(tls_config_for_profile(tls_profile), server_name)
+    let config = if force_h1 {
+        tls_config_h1_for_profile(tls_profile)
+    } else {
+        tls_config_for_profile(tls_profile)
+    };
+    let mut conn = ClientConnection::new(config, server_name)
         .map_err(|e| Error::Network(format!("TLS handshake: {e}")))?;
 
     // Завершаем handshake до отправки данных — иначе ALPN protocol неизвестен,
@@ -1564,6 +1598,39 @@ fn connect(
     Ok(c)
 }
 
+
+/// TLS-конфиг профиля с ALPN, урезанным до `http/1.1`.
+///
+/// Отдельный кэш, а не правка `alpn_protocols` на месте: `ClientConfig` живёт
+/// за `Arc` и разделяется всеми соединениями профиля — мутировать его ради
+/// одного запроса значило бы переключить на H1 весь браузер.
+pub(crate) fn tls_config_h1_for_profile(profile: tls::TlsProfile) -> Arc<rustls::ClientConfig> {
+    use std::collections::HashMap;
+    use std::sync::OnceLock;
+
+    static CONFIGS: OnceLock<HashMap<tls::TlsProfile, Arc<rustls::ClientConfig>>> = OnceLock::new();
+
+    let configs = CONFIGS.get_or_init(|| {
+        let mut root_store = rustls::RootCertStore::empty();
+        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+
+        let mut map = HashMap::new();
+        for prof in &[tls::TlsProfile::Standard, tls::TlsProfile::Strict, tls::TlsProfile::Tor] {
+            let mut cfg = tls::build_client_config(*prof, root_store.clone());
+            cfg.alpn_protocols = vec![b"http/1.1".to_vec()];
+            map.insert(*prof, Arc::new(cfg));
+        }
+        map
+    });
+
+    configs.get(&profile).cloned().unwrap_or_else(|| {
+        let mut root_store = rustls::RootCertStore::empty();
+        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let mut cfg = tls::build_client_config(profile, root_store);
+        cfg.alpn_protocols = vec![b"http/1.1".to_vec()];
+        Arc::new(cfg)
+    })
+}
 
 /// Получить TLS конфиг для указанного профиля. Конфиги кэшируются
 /// отдельно для каждого профиля.
@@ -1665,6 +1732,8 @@ fn fetch_single(
     // PH1-2a: HTTP/1.1 streaming body sink. Only the direct (non-proxy) HTTP/1.1
     // path streams; the H2 and proxy-CONNECT paths buffer (sink unused there).
     mut stream_sink: Option<ChunkSink<'_>>,
+    // Request body for POST/PUT/PATCH/DELETE; `None` for GET/HEAD.
+    body: Option<&RequestBody<'_>>,
 ) -> Result<Response> {
     // SOCKS5 takes precedence over HTTP proxy when both are set.
     // With SOCKS5 the tunnel is established by the proxy itself, so we
@@ -1707,6 +1776,12 @@ fn fetch_single(
         if let Some(auth) = authorization {
             header_refs.push((b"authorization", auth.as_bytes()));
         }
+        // Request body (POST/PUT/…): same two headers the H1/H2 paths add.
+        let body_len_owned: Option<String> = body.map(|b| b.bytes.len().to_string());
+        if let (Some(b), Some(len)) = (body, &body_len_owned) {
+            header_refs.push((b"content-type", b.content_type.as_bytes()));
+            header_refs.push((b"content-length", len.as_bytes()));
+        }
 
         let h3_sink = stream_sink.as_mut().map(|f| &mut **f as ChunkSink<'_>);
         if let Some(resp) = try_h3_dispatch(
@@ -1718,7 +1793,7 @@ fn fetch_single(
             method,
             request_path,
             &header_refs,
-            b"",
+            body.map_or(&[][..], |b| b.bytes),
             H3_CONNECT_TURNS,
             H3_REQUEST_TURNS,
             std::time::Instant::now(),
@@ -1748,10 +1823,21 @@ fn fetch_single(
         let h2_key = pool::PoolKey { host: connect_host.to_owned(), port: connect_port, is_tls: connect_is_tls };
         if let Some(h2_conn) = h2p.acquire(&h2_key) {
             let scheme = if is_tls { "https" } else { "http" };
-            match h2_do_request_conn(h2_conn, scheme, request_host_header, request_path, extra_headers, http_profile, accept_encoding) {
+            match h2_do_request_conn(h2_conn, scheme, request_host_header, request_path, extra_headers, http_profile, accept_encoding, method, body) {
                 Ok((resp, h2_conn)) => {
                     h2p.release(h2_key, h2_conn);
                     return Ok(resp);
+                }
+                // Body larger than the peer's send window: not a failure, a
+                // routing decision — retry the same request over HTTP/1.1
+                // below, where the body streams into the socket buffer.
+                Err(e) if is_h2_body_window_error(&e) => {
+                    h2p.evict(&pool::PoolKey { host: connect_host.to_owned(), port: connect_port, is_tls: connect_is_tls });
+                    return fetch_single_h1_only(
+                        pool, resolver, tls_profile, http_profile, host, port, is_tls, method,
+                        request_host_header, request_path, range, if_range, authorization,
+                        accept_encoding, extra_headers, socks5_proxy, stream_sink, body,
+                    );
                 }
                 Err(e) if is_stale_error(&e) => {
                     // H2 conn went stale (server sent GOAWAY or closed socket).
@@ -1777,6 +1863,7 @@ fn fetch_single(
             extra_headers,
             http_profile,
             stream_sink.as_mut().map(|f| &mut **f as ChunkSink<'_>),
+            body,
         ) {
             Ok((resp, conn)) => {
                 if !conn.closed {
@@ -1871,7 +1958,18 @@ fn fetch_single(
     // HTTP/2: establish fresh H2Conn, use it, then store back in h2_pool.
     if conn.is_h2 {
         let scheme = if is_tls { "https" } else { "http" };
-        return h2_do_request(conn, scheme, request_host_header, request_path, extra_headers, h2_pool, host, port, is_tls, http_profile, accept_encoding);
+        match h2_do_request(conn, scheme, request_host_header, request_path, extra_headers, h2_pool, host, port, is_tls, http_profile, accept_encoding, method, body) {
+            // Same routing fallback as the pooled branch: a body that doesn't fit
+            // the peer's send window goes over HTTP/1.1 instead.
+            Err(e) if is_h2_body_window_error(&e) => {
+                return fetch_single_h1_only(
+                    pool, resolver, tls_profile, http_profile, host, port, is_tls, method,
+                    request_host_header, request_path, range, if_range, authorization,
+                    accept_encoding, extra_headers, socks5_proxy, stream_sink, body,
+                );
+            }
+            other => return other,
+        }
     }
 
     // Для HTTP-прокси: отправляем абсолютный URL вместо относительного пути.
@@ -1894,11 +1992,67 @@ fn fetch_single(
         extra_headers,
         http_profile,
         stream_sink.as_mut().map(|f| &mut **f as ChunkSink<'_>),
+        body,
     )?;
     if !conn.closed {
         pool.release(key, conn);
     }
     Ok(resp)
+}
+
+/// Тот же один запрос, но принудительно по HTTP/1.1: TLS согласуется с ALPN
+/// `http/1.1`, поэтому соединение гарантированно не окажется h2.
+///
+/// Единственный потребитель — фолбэк [`fetch_single`] для тела, которое не
+/// помещается в окно отправки HTTP/2 ([`h2::conn::H2_BODY_EXCEEDS_SEND_WINDOW`]).
+/// Прокси-путь сюда не заводится намеренно: под HTTP-прокси и так живёт
+/// отдельная CONNECT-ветка, а SOCKS5 прозрачен и передаётся как есть.
+#[allow(clippy::too_many_arguments)]
+fn fetch_single_h1_only(
+    pool: &ConnectionPool,
+    resolver: &dyn DnsResolver,
+    tls_profile: tls::TlsProfile,
+    http_profile: HttpProfile,
+    host: &str,
+    port: u16,
+    is_tls: bool,
+    method: &str,
+    request_host_header: &str,
+    request_path: &str,
+    range: Option<&RangeRequest>,
+    if_range: Option<&RangeValidator>,
+    authorization: Option<&str>,
+    accept_encoding: Option<&str>,
+    extra_headers: &str,
+    socks5_proxy: Option<&socks5::Socks5Proxy>,
+    mut stream_sink: Option<ChunkSink<'_>>,
+    body: Option<&RequestBody<'_>>,
+) -> Result<Response> {
+    let conn = connect_h1(host, port, is_tls, resolver, tls_profile, socks5_proxy, Some(FETCH_READ_TIMEOUT))?;
+    let key = PoolKey { host: host.to_owned(), port, is_tls };
+    let (resp, conn) = do_request(
+        conn,
+        method,
+        request_host_header,
+        request_path,
+        range,
+        if_range,
+        authorization,
+        accept_encoding,
+        extra_headers,
+        http_profile,
+        stream_sink.as_mut().map(|f| &mut **f as ChunkSink<'_>),
+        body,
+    )?;
+    if !conn.closed {
+        pool.release(key, conn);
+    }
+    Ok(resp)
+}
+
+/// Отличить «тело не влезло в окно HTTP/2» от настоящей сетевой ошибки.
+fn is_h2_body_window_error(err: &Error) -> bool {
+    format!("{err:?}").contains(h2::conn::H2_BODY_EXCEEDS_SEND_WINDOW)
 }
 
 /// Выполнить один HTTP/2 запрос, открыв свежее соединение. После успешного
@@ -1916,6 +2070,8 @@ fn h2_do_request(
     is_tls: bool,
     http_profile: HttpProfile,
     accept_encoding: Option<&str>,
+    method: &str,
+    body: Option<&RequestBody<'_>>,
 ) -> Result<Response> {
     use h2::conn::H2Conn;
     let stream = conn.into_stream();
@@ -1925,23 +2081,49 @@ fn h2_do_request(
     // (User-Agent/Accept/Sec-Fetch/…) the H1 path builds in `write_request`;
     // without them Cloudflare-class anti-bot layers answer 403.
     let all_headers = build_h2_headers(http_profile, accept_encoding, extra_headers);
-    let extra_refs: Vec<(&[u8], &[u8])> = all_headers
+    let mut extra_refs: Vec<(&[u8], &[u8])> = all_headers
         .iter()
         .map(|(k, v)| (k.as_slice(), v.as_slice()))
         .collect();
+    let body_len_owned = body.map(|b| b.bytes.len().to_string());
+    push_h2_body_headers(&mut extra_refs, body, body_len_owned.as_deref());
 
-    let (status, headers, body) = h2.fetch("GET", scheme, authority, path, &extra_refs)?;
+    let (status, headers, resp_body) = h2.fetch_with_body(
+        method,
+        scheme,
+        authority,
+        path,
+        &extra_refs,
+        body.map_or(&[][..], |b| b.bytes),
+    )?;
 
     if let Some(h2p) = h2_pool {
         let key = pool::PoolKey { host: host.to_owned(), port, is_tls };
         h2p.release(key, h2);
     }
 
-    Ok(Response { status, headers, body })
+    Ok(Response { status, headers, body: resp_body })
+}
+
+/// Дописать `content-type`/`content-length` в набор заголовков HTTP/2-запроса.
+///
+/// Имена строчные (RFC 9113 §8.2). `content-length` берётся длиной байтов —
+/// заголовок, пришедший от вызывающей стороны, тут не участвует, иначе тело и
+/// объявленная длина могли бы разъехаться.
+fn push_h2_body_headers<'a>(
+    headers: &mut Vec<(&'a [u8], &'a [u8])>,
+    body: Option<&'a RequestBody<'a>>,
+    body_len: Option<&'a str>,
+) {
+    if let (Some(b), Some(len)) = (body, body_len) {
+        headers.push((b"content-type", b.content_type.as_bytes()));
+        headers.push((b"content-length", len.as_bytes()));
+    }
 }
 
 /// Выполнить HTTP/2 запрос через уже существующее `H2Conn`. Возвращает
 /// `(Response, H2Conn)` — caller решает, вернуть ли conn в пул.
+#[allow(clippy::too_many_arguments)]
 fn h2_do_request_conn(
     mut h2: h2::conn::H2Conn<RawStream>,
     scheme: &str,
@@ -1950,17 +2132,28 @@ fn h2_do_request_conn(
     extra_headers: &str,
     http_profile: HttpProfile,
     accept_encoding: Option<&str>,
+    method: &str,
+    body: Option<&RequestBody<'_>>,
 ) -> Result<(Response, h2::conn::H2Conn<RawStream>)> {
     // Same fingerprint set as a fresh H2 connection (RP-7) — a pooled
     // connection must not send a weaker header block than a new one.
     let all_headers = build_h2_headers(http_profile, accept_encoding, extra_headers);
-    let extra_refs: Vec<(&[u8], &[u8])> = all_headers
+    let mut extra_refs: Vec<(&[u8], &[u8])> = all_headers
         .iter()
         .map(|(k, v)| (k.as_slice(), v.as_slice()))
         .collect();
+    let body_len_owned = body.map(|b| b.bytes.len().to_string());
+    push_h2_body_headers(&mut extra_refs, body, body_len_owned.as_deref());
 
-    let (status, headers, body) = h2.fetch("GET", scheme, authority, path, &extra_refs)?;
-    Ok((Response { status, headers, body }, h2))
+    let (status, headers, resp_body) = h2.fetch_with_body(
+        method,
+        scheme,
+        authority,
+        path,
+        &extra_refs,
+        body.map_or(&[][..], |b| b.bytes),
+    )?;
+    Ok((Response { status, headers, body: resp_body }, h2))
 }
 
 /// Build the full HTTP/2 request header list — browser-fingerprint headers
@@ -2022,6 +2215,7 @@ fn do_request(
     // PH1-2a: when present, the 2xx response body is streamed off the socket and
     // each decoded chunk is handed to this sink (progressive HTML rendering).
     stream_sink: Option<ChunkSink<'_>>,
+    body: Option<&RequestBody<'_>>,
 ) -> Result<(Response, Connection)> {
     conn.write_request(
         method,
@@ -2033,6 +2227,7 @@ fn do_request(
         accept_encoding,
         extra_headers,
         http_profile,
+        body,
     )?;
     // In-flight abort (Phase A): if a cancellable fetch installed an abort token
     // on this thread, watch it on a side thread and tear the socket down on
@@ -2281,6 +2476,9 @@ fn fetch_with_redirect(
     // navigation is still a navigation) and passed into the EasyList filter
     // context so typed `$`-option rules do not over-block the main document.
     is_top_level: bool,
+    // Request body for POST/PUT/PATCH/DELETE (it also carries the method);
+    // `None` для GET/HEAD. На redirect-hop переносится по правилам Fetch §4.4.
+    body: Option<&RequestBody<'_>>,
 ) -> Result<(Response, Url)> {
     if hops_left == 0 {
         return Err(Error::Network("too many redirects".to_owned()));
@@ -2445,6 +2643,7 @@ fn fetch_with_redirect(
                 h3_alt_svc,
                 h3_pool,
                 None, // preflight OPTIONS body is never streamed
+                None, // preflight OPTIONS carries no request body
             ) {
                 Ok(r) => r,
                 Err(e) => return Err(emit_request_failed(sink, tab_id, url, e)),
@@ -2476,8 +2675,13 @@ fn fetch_with_redirect(
         }
     }
 
-    // Метод и cross-origin extra-headers для actual запроса.
-    let actual_method = cors_ctx.map(|cx| cx.method.as_str()).unwrap_or("GET");
+    // Метод и cross-origin extra-headers для actual запроса. Запрос с телом
+    // несёт свой метод сам: `cors_ctx` заводится не на каждом пути (у JS-fetch
+    // его нет), а без него POST молча уехал бы как GET.
+    let actual_method = body
+        .map(|b| b.method)
+        .or_else(|| cors_ctx.map(|cx| cx.method.as_str()))
+        .unwrap_or("GET");
     let actual_extra_headers = {
         let mut h = match (cors_ctx, &cross_origin_target) {
             (Some(cx), Some(_)) => build_actual_cross_origin_headers(&cx.requestor, &cx.headers),
@@ -2564,6 +2768,7 @@ fn fetch_with_redirect(
             h3_alt_svc,
             h3_pool,
             hop_sink,
+            body,
         ) {
             Ok(r) => r,
             Err(e) => return Err(emit_request_failed(sink, tab_id, url, e)),
@@ -2692,6 +2897,17 @@ fn fetch_with_redirect(
                     stream_sink,
                     // Redirected navigation is still the same navigation.
                     is_top_level,
+                    // Fetch §4.4 «HTTP-redirect fetch», шаг 11: 303 всегда
+                    // превращает запрос в GET без тела; 301/302 делают то же
+                    // только для POST (правило зафиксировано за браузерами
+                    // вопреки RFC), но сохраняют PUT/PATCH/DELETE; 307/308
+                    // сохраняют метод и тело всегда. `None` здесь и означает
+                    // «дальше идёт GET» — метод живёт в самом теле.
+                    match resp.status {
+                        307 | 308 => body,
+                        301 | 302 if !actual_method.eq_ignore_ascii_case("POST") => body,
+                        _ => None,
+                    },
                 );
             }
             401 if authorization.is_none() && credentials.is_some() => {
@@ -3300,6 +3516,7 @@ impl HttpClient {
                     self.h3_pool(),
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
                     false, // BUG-292: subresource, not a document navigation
+                None, // тело запроса: только POST/PUT/… с телом передают Some
         )
         .map(|(resp, _final_url)| resp.body)
     }
@@ -3342,6 +3559,7 @@ impl HttpClient {
                     self.h3_pool(),
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
                     false, // BUG-292: subresource, not a document navigation
+                None, // тело запроса: только POST/PUT/… с телом передают Some
         )?;
         let content_range = if resp.status == 206 {
             header_value(&resp.headers, "content-range").and_then(parse_content_range)
@@ -3418,6 +3636,7 @@ impl HttpClient {
                     self.h3_pool(),
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
                     false, // BUG-292: subresource, not a document navigation
+                None, // тело запроса: только POST/PUT/… с телом передают Some
         )?;
         Ok(parse_multi_range_response(resp))
     }
@@ -3511,6 +3730,7 @@ impl HttpClient {
                     self.h3_pool(),
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
                     false, // BUG-292: subresource, not a document navigation
+                                None, // тело запроса: только POST/PUT/… с телом передают Some
                 )?;
                 if resp.status == 304 {
                     cache.revalidate(&url_str, &resp.headers);
@@ -3550,6 +3770,7 @@ impl HttpClient {
                     self.h3_pool(),
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
                     false, // BUG-292: subresource, not a document navigation
+                None, // тело запроса: только POST/PUT/… с телом передают Some
         )?;
         if let Some(cache) = &self.http_cache {
             cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
@@ -3614,6 +3835,7 @@ impl HttpClient {
             self.h3_pool(),
             None, // PH1-2a: conditional GET is not streamed
             false, // BUG-292: subresource, not a document navigation
+                None, // тело запроса: только POST/PUT/… с телом передают Some
         )?;
         if resp.status == 304 {
             return Ok(ConditionalFetch::NotModified);
@@ -3691,6 +3913,7 @@ impl HttpClient {
                     self.h3_pool(),
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
                     true, // BUG-292: top-level document navigation
+                                None, // тело запроса: только POST/PUT/… с телом передают Some
                 )?;
                 if resp.status == 304 {
                     cache.revalidate(&url_str, &resp.headers);
@@ -3720,6 +3943,7 @@ impl HttpClient {
             self.h3_pool(),
             None, // PH1-2a: streaming sink — only fetch_page_streaming streams
             true, // BUG-292: top-level document navigation
+                None, // тело запроса: только POST/PUT/… с телом передают Some
         )?;
         if let Some(cache) = &self.http_cache {
             cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
@@ -3776,6 +4000,7 @@ impl HttpClient {
                     self.h3_pool(),
                     Some(on_chunk),
                     true, // BUG-292: top-level document navigation
+                                None, // тело запроса: только POST/PUT/… с телом передают Some
                 )?;
                 if resp.status == 304 {
                     cache.revalidate(&url_str, &resp.headers);
@@ -3808,6 +4033,7 @@ impl HttpClient {
             self.h3_pool(),
             Some(on_chunk),
             true, // BUG-292: top-level document navigation
+                None, // тело запроса: только POST/PUT/… с телом передают Some
         )?;
         if let Some(cache) = &self.http_cache {
             cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
@@ -3872,6 +4098,7 @@ impl NetworkTransport for HttpClient {
                     self.h3_pool(),
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
                     true, // BUG-292: top-level document navigation
+                                None, // тело запроса: только POST/PUT/… с телом передают Some
                 )?;
                 if resp.status == 304 {
                     cache.revalidate(&url_str, &resp.headers);
@@ -3911,6 +4138,7 @@ impl NetworkTransport for HttpClient {
                     self.h3_pool(),
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
                     true, // BUG-292: top-level document navigation
+                None, // тело запроса: только POST/PUT/… с телом передают Some
         )?;
         if let Some(cache) = &self.http_cache {
             cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
@@ -3990,6 +4218,7 @@ impl JsFetchProvider for HttpClient {
                     self.h3_pool(),
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
                     false, // BUG-292: subresource, not a document navigation
+                None, // тело запроса: только POST/PUT/… с телом передают Some
         )?;
         Ok(JsFetchResult {
             status_text: http_status_text(resp.status).to_string(),
@@ -4019,52 +4248,50 @@ impl JsFetchProvider for HttpClient {
                 )));
             }
         }
-        let (host_ascii, port, is_tls) = require_http_scheme(&url)?;
-        let path_and_query = url.path_and_query();
-        let key = PoolKey { host: host_ascii.clone(), port, is_tls };
-
-        // Try pooled connection first, fall back to fresh connect.
-        let mut conn = if let Some(pooled) = self.pool.acquire(&key) {
-            pooled
-        } else {
-            connect(&host_ascii, port, is_tls, self.resolver.as_ref(), self.tls_profile, self.socks5_proxy.as_deref(), Some(FETCH_READ_TIMEOUT))?
+        // Тот же путь, что у GET (`fetch_sync`): куки, редиректы, HSTS,
+        // ad-block-фильтр, mixed-content, HTTP/2, retry на протухшем keep-alive.
+        // Своя ветка «сокет + write + read» здесь стояла до 2026-08-17 и не
+        // имела ничего из перечисленного — POST уходил без Cookie, не ходил по
+        // Location и писал HTTP/1.1-байты в согласованное h2-соединение.
+        let method_upper = method.to_ascii_uppercase();
+        let request_body = RequestBody {
+            method: &method_upper,
+            content_type,
+            bytes: body,
         };
-
-        // HTTP/2 connections don't support the body path yet — fall back to H1.
-        if conn.is_h2 {
-            let fresh = connect(&host_ascii, port, is_tls, self.resolver.as_ref(), self.tls_profile, self.socks5_proxy.as_deref(), Some(FETCH_READ_TIMEOUT))?;
-            conn = fresh;
-        }
-
-        conn.write_request_with_body(method, &host_ascii, &path_and_query, content_type, body, "", self.fingerprint_profile)?;
-        // In-flight abort (Phase A): mirror `do_request` so the body-carrying path
-        // honours an installed AbortToken. When no cancellable caller installed a
-        // token, `current_abort_token()` is None and behaviour is unchanged.
-        let token = current_abort_token();
-        if let Some(t) = &token
-            && t.is_aborted()
-        {
-            return Err(Error::Aborted("fetch aborted before response".to_string()));
-        }
-        let mut watchdog: Option<AbortWatchdog> = None;
-        if let Some(t) = &token
-            && let Some(sock) = conn.try_clone_socket()
-        {
-            watchdog = Some(AbortWatchdog::spawn(t.clone(), sock));
-        }
-        let read_result: Result<Response> = read_response(&mut conn);
-        if let Some(wd) = watchdog {
-            wd.stop();
-        }
-        if let Some(t) = &token
-            && t.is_aborted()
-        {
-            return Err(Error::Aborted("fetch aborted in-flight".to_string()));
-        }
-        let resp = read_result?;
-        if !conn.closed {
-            self.pool.release(key, conn);
-        }
+        let accept_encoding = self.accept_encoding_header();
+        let destination = self.mixed_content.as_ref().map(|_| RequestDestination::Other);
+        let (resp, _final_url) = fetch_with_redirect(
+            &url,
+            5,
+            &self.pool,
+            self.h2_pool.as_deref(),
+            self.resolver.as_ref(),
+            self.tls_profile,
+            self.fingerprint_profile,
+            self.sink.as_deref(),
+            self.filter.as_deref(),
+            self.hsts.as_deref(),
+            self.credentials.as_deref(),
+            &self.decoders,
+            accept_encoding.as_deref(),
+            None,
+            None,
+            self.tab_id,
+            self.mixed_content.as_ref(),
+            destination,
+            None,
+            "",
+            self.cookie_jar.as_deref(),
+            self.top_level_site.as_deref(),
+            self.proxy.as_deref(),
+            self.socks5_proxy.as_deref(),
+            self.h3_alt_svc(),
+            self.h3_pool(),
+            None, // streaming sink — только навигация стримит
+            false, // subresource, не навигация документа
+            Some(&request_body),
+        )?;
         Ok(JsFetchResult {
             status_text: http_status_text(resp.status).to_string(),
             status: resp.status,
@@ -7745,6 +7972,182 @@ world\r\n\
             let _ = sock.shutdown(std::net::Shutdown::Both);
         });
         (port, handle)
+    }
+
+    /// Mock-сервер, который пишет в `captured` ПОЛНЫЙ текст каждого запроса
+    /// вместе с телом (Content-Length), по одному запросу на соединение.
+    ///
+    /// `mock_http_server_capturing` читает только заголовки и обслуживает одно
+    /// соединение — для проверок POST этого мало: тело и переход по `Location`
+    /// как раз и есть предмет теста.
+    fn mock_server_capturing_bodies<F>(
+        accept_count: usize,
+        captured: Arc<Mutex<Vec<String>>>,
+        responder: F,
+    ) -> (u16, thread::JoinHandle<()>)
+    where
+        F: Fn(usize) -> Vec<u8> + Send + 'static,
+    {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        let handle = thread::spawn(move || {
+            for i in 1..=accept_count {
+                let (mut sock, _) = listener.accept().expect("accept");
+                let mut reader = BufReader::new(sock.try_clone().unwrap());
+                let mut request = String::new();
+                let mut content_length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                        break;
+                    }
+                    let is_blank = line == "\r\n" || line == "\n";
+                    if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        content_length = v.trim().parse().unwrap_or(0);
+                    }
+                    request.push_str(&line);
+                    if is_blank {
+                        break;
+                    }
+                }
+                if content_length > 0 {
+                    let mut body = vec![0u8; content_length];
+                    if reader.read_exact(&mut body).is_ok() {
+                        request.push_str(&String::from_utf8_lossy(&body));
+                    }
+                }
+                captured.lock().unwrap().push(request);
+                let _ = sock.write_all(&responder(i));
+                let _ = sock.shutdown(std::net::Shutdown::Both);
+            }
+        });
+        (port, handle)
+    }
+
+    /// Ответ `Connection: close`, чтобы каждый следующий запрос теста пришёл
+    /// новым соединением и попал в свой `accept`.
+    fn close_response(status_line: &str, extra: &str, body: &str) -> Vec<u8> {
+        format!(
+            "{status_line}\r\nContent-Length: {}\r\nConnection: close\r\n{extra}\r\n{body}",
+            body.len()
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn js_post_sends_body_with_content_headers() {
+        // Путь JS-fetch с телом обязан дойти до сервера как настоящий POST:
+        // метод, Content-Type, Content-Length и сами байты.
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let (port, server) = mock_server_capturing_bodies(1, captured.clone(), |_| {
+            close_response("HTTP/1.1 200 OK", "", "{}")
+        });
+        let client = HttpClient::new();
+        let res = client
+            .fetch_with_body_sync(
+                &format!("http://127.0.0.1:{port}/api"),
+                "POST",
+                "application/json",
+                br#"{"a":1}"#,
+            )
+            .expect("POST must succeed");
+        assert_eq!(res.status, 200);
+        server.join().unwrap();
+
+        let req = captured.lock().unwrap()[0].clone();
+        assert!(req.starts_with("POST /api HTTP/1.1"), "request line: {req}");
+        assert!(req.contains("Content-Type: application/json"), "{req}");
+        assert!(req.contains("Content-Length: 7"), "{req}");
+        assert!(req.ends_with(r#"{"a":1}"#), "body must be written: {req}");
+    }
+
+    #[test]
+    fn js_post_carries_cookies_like_get() {
+        // Тело не отменяет cookie-jar: до 2026-08-17 ветка с телом ходила мимо
+        // него, и авторизованные POST уходили без сессии.
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let (port, server) = mock_server_capturing_bodies(1, captured.clone(), |_| {
+            close_response("HTTP/1.1 200 OK", "", "{}")
+        });
+        struct FixedJar;
+        impl CookieProvider for FixedJar {
+            fn get_for_request(
+                &self,
+                _host: &str,
+                _path: &str,
+                _is_secure: bool,
+                _top: Option<&str>,
+                _cross: bool,
+            ) -> String {
+                "sid=abc".to_owned()
+            }
+            fn process_set_cookie(
+                &self,
+                _h: &str,
+                _host: &str,
+                _p: &str,
+                _s: bool,
+                _t: Option<&str>,
+            ) {
+            }
+        }
+        let client = HttpClient::new().with_cookie_jar(Arc::new(FixedJar), None);
+        client
+            .fetch_with_body_sync(&format!("http://127.0.0.1:{port}/api"), "POST", "text/plain", b"x")
+            .expect("POST must succeed");
+        server.join().unwrap();
+        assert!(
+            captured.lock().unwrap()[0].contains("Cookie: sid=abc"),
+            "POST must carry the jar's cookies: {}",
+            captured.lock().unwrap()[0]
+        );
+    }
+
+    #[test]
+    fn js_post_303_becomes_get_without_body() {
+        // Fetch §4.4 шаг 11: 303 превращает POST в GET и выбрасывает тело.
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let (port, server) = mock_server_capturing_bodies(2, captured.clone(), |i| {
+            if i == 1 {
+                close_response("HTTP/1.1 303 See Other", "Location: /done\r\n", "")
+            } else {
+                close_response("HTTP/1.1 200 OK", "", "ok")
+            }
+        });
+        let client = HttpClient::new();
+        let res = client
+            .fetch_with_body_sync(&format!("http://127.0.0.1:{port}/start"), "POST", "text/plain", b"payload")
+            .expect("redirect must be followed");
+        assert_eq!(res.status, 200, "caller sees the final response, not the 303");
+        server.join().unwrap();
+
+        let reqs = captured.lock().unwrap().clone();
+        assert!(reqs[0].starts_with("POST /start"), "{}", reqs[0]);
+        assert!(reqs[1].starts_with("GET /done"), "{}", reqs[1]);
+        assert!(!reqs[1].contains("Content-Length"), "тело не переносится: {}", reqs[1]);
+        assert!(!reqs[1].contains("payload"), "тело не переносится: {}", reqs[1]);
+    }
+
+    #[test]
+    fn js_post_307_keeps_method_and_body() {
+        // 307/308 — единственные, что сохраняют и метод, и тело.
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let (port, server) = mock_server_capturing_bodies(2, captured.clone(), |i| {
+            if i == 1 {
+                close_response("HTTP/1.1 307 Temporary Redirect", "Location: /again\r\n", "")
+            } else {
+                close_response("HTTP/1.1 200 OK", "", "ok")
+            }
+        });
+        let client = HttpClient::new();
+        client
+            .fetch_with_body_sync(&format!("http://127.0.0.1:{port}/start"), "POST", "text/plain", b"payload")
+            .expect("redirect must be followed");
+        server.join().unwrap();
+
+        let reqs = captured.lock().unwrap().clone();
+        assert!(reqs[1].starts_with("POST /again"), "{}", reqs[1]);
+        assert!(reqs[1].ends_with("payload"), "тело переносится: {}", reqs[1]);
     }
 
     /// Mock decoder для unit-тестов цепочек encoding-ов. `name` — какое
