@@ -358,6 +358,51 @@ import socket
 s=socket.socket(); s.bind(('127.0.0.1',18301)); s.listen(1); print('OK')"
 ```
 
+## Troubleshooting: `wss` server fails with `module 'ssl' has no attribute 'wrap_socket'`
+
+`tests/wpt/config.json` enables the `ws`/`wss`/`h2` server ports (needed by
+the `websockets` category, `docs/wpt-vendor-notes/websockets.md`) — `ws` and
+`h2` work with a stock `pip install -r requirements.txt`, but `wss`
+(`tools/serve/serve.py::WebSocketDaemon`, backed by `pywebsocket3`) does not:
+`pywebsocket3==4.0.2`'s `websocket_server.py` calls the deprecated
+`ssl.wrap_socket()`, which Python 3.12+ removed outright. Symptom:
+
+```
+wptserve CRITICAL start_wss_server: Caught exception from WebSocketDomain: module 'ssl' has no attribute 'wrap_socket'
+```
+
+— and because `wss`'s port is non-`None` in the committed config,
+`TestEnvironment.ensure_started()` treats this as fatal and aborts the
+**entire** run (`OSError: Servers failed to start: wss:<port>`), not just the
+tests that need `wss`. This isn't fixed in the repo (`tests/wpt/.venv` is
+gitignored — nothing under `site-packages` is vendored/committed), so it
+resurfaces on every fresh `pip install`. One-time local fix, applied to the
+installed package (not `tools/wptserve`/`tools/wptrunner` — this is a pip
+dependency, not vendored WPT tooling, so patching it doesn't violate the
+unmodified-vendor rule): in
+`<venv>/Lib/site-packages/pywebsocket3/websocket_server.py`, replace the
+`ssl.wrap_socket(socket_, keyfile=..., certfile=..., ca_certs=...,
+cert_reqs=...)` call (~line 160) with the modern `SSLContext` equivalent:
+
+```python
+ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+ssl_ctx.load_cert_chain(certfile=server_options.certificate,
+                         keyfile=server_options.private_key)
+if server_options.tls_client_ca:
+    ssl_ctx.load_verify_locations(cafile=server_options.tls_client_ca)
+ssl_ctx.verify_mode = client_cert_
+socket_ = ssl_ctx.wrap_socket(socket_, server_side=True)
+```
+
+Without this patch, revert `tests/wpt/config.json`'s `"wss": [...]` to
+`[null]` to keep other categories runnable — but note `websockets/
+constants.sub.js` (and any future `.sub.js` that unconditionally embeds
+`{{ports[wss][0]}}`/`{{ports[h2][0]}}` regardless of which URL variant is
+requested — the pipe substitution runs over the whole file before any JS
+executes, so an unreachable `if` branch still needs its token to resolve)
+then 500s on **every** variant, not just `?wss`, because the port
+substitution fails file-wide when any referenced scheme has no server.
+
 ## Re-vendoring
 
 See the "Re-vendoring" section of `tests/wpt/VENDOR.md`.

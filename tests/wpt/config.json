@@ -6,10 +6,11 @@
     "https": [18443, 18444],
     "https-local": [null],
     "https-public": [null],
-    "ws": [null],
-    "wss": [null],
-    "h2": [null],
+    "ws": [18888],
+    "wss": [18889],
+    "h2": [19000],
     "webtransport-h3": [null],
     "dns": [null]
-  }
+  },
+  "ws_doc_root": null
 }

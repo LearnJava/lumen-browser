@@ -73,14 +73,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-08-17",
+ "generated": "2026-08-18",
  "counts": {
-  "open": 312,
+  "open": 313,
   "fixed": 424,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 736,
+ "total_bugs": 737,
  "phases": [
   {
    "id": "P0",
@@ -4205,9 +4205,12 @@
       {
        "id": "WPT-VENDOR-websockets",
        "title": "WPT: вендорить + прогнать категорию `websockets`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (подтверждён — реальный `WebSocket`, не заглушка). DONE 2026-08-18: вендорена + прогнана целиком (`--all --root websockets --recursive`, ~22 мин, 266 файлов, 217 id) — **342/515 harness OK, 166/934 сабтестов**. Найден [BUG-772](bugs/BUG-772-OPEN.md) (нет проверки заблокированных портов у `WebSocket`, конструктор реально коннектится вместо синхронного `SecurityError`). `?wss`/`?wpt_flags=h2` — уже задокументированный TLS-гэп. Потребовал харнесс-фиксы в `tests/wpt/config.json` (порты `ws`/`wss`/`h2`, `ws_doc_root`). Новый номер: BUG-772",
+       "bugs": [
+        "BUG-772"
+       ]
       },
       {
        "id": "WPT-VENDOR-webstorage",
@@ -9959,6 +9962,13 @@
    "title": "**Вид окна меняется после прокрутки**: те же глифы на тех же позициях рисовались плотнее. Причина не в композиторе: пре-резолв face-ов складывал id-ы только за…",
    "component": "paint (`crates/engine/paint/src/renderer.rs` — пре-резолв face-ов `DrawText`)",
    "date": "2026-08-17",
+   "debtor": false
+  },
+  "BUG-772": {
+   "status": "open",
+   "title": "`WebSocket` не реализует спековый список «заблокированных портов» (Fetch §3.9, 92 порта — telnet/smtp/pop3/irc и т.п.): конструктор реально пытается TCP-подключ…",
+   "component": "network (`crates/network/src/lib.rs::HttpClient::connect` impl `JsWebSocketProvider`, ~4609; `crates/network/src/websocket/mod.rs::connect`/`connect_deflate`, ~73/127)",
+   "date": null,
    "debtor": false
   }
  },
