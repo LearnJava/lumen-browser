@@ -131,6 +131,20 @@ pub fn resolve_specifier_with(
         };
         return resolve_relative(effective_base, name);
     }
+    // (3b) Root-relative (`/chunk.js`) и protocol-relative (`//cdn/x.js`) —
+    // резолвятся от происхождения базы, а не «как есть». Без этой ветки
+    // `import('/chunk.js')` доходил до загрузчика строкой `/chunk.js`, которая
+    // не URL и не голое имя: модуль «не найден» при живом файле на сервере.
+    if name.starts_with('/') {
+        let effective_base = if base.is_empty() || base.starts_with("lumen://") {
+            page_url
+        } else {
+            base
+        };
+        if let Some(resolved) = resolve_from_origin(effective_base, name) {
+            return resolved;
+        }
+    }
     // (4) Bare specifier — try import map
     if let Some(resolved) = import_map.resolve(name, Some(base)) {
         return resolved;
@@ -140,6 +154,26 @@ pub fn resolve_specifier_with(
 }
 
 // ── URL utilities ─────────────────────────────────────────────────────────────
+
+/// Resolve `/path` (root-relative) or `//host/path` (protocol-relative)
+/// against the scheme+authority of `base`.
+///
+/// `None` — у базы нет схемы с authority (пустая база, `lumen://inline-N`,
+/// голый путь): тогда происхождения, от которого считать, просто нет.
+fn resolve_from_origin(base: &str, name: &str) -> Option<String> {
+    let scheme_end = base.find("://")?;
+    let scheme = &base[..scheme_end];
+    if let Some(rest) = name.strip_prefix("//") {
+        // Protocol-relative: своя authority, схема — от базы.
+        return Some(format!("{scheme}://{rest}"));
+    }
+    let after_scheme = scheme_end + 3;
+    let authority_end = base[after_scheme..]
+        .find('/')
+        .map(|i| after_scheme + i)
+        .unwrap_or(base.len());
+    Some(format!("{}{name}", &base[..authority_end]))
+}
 
 /// Resolve a relative URL `name` against `base`.
 ///
@@ -197,6 +231,51 @@ fn normalize_path(url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn root_relative_specifier_resolves_against_base_origin() {
+        // `/chunk.js` — не голое имя и не относительный путь: без этой ветки он
+        // доезжал до загрузчика как есть и модуль «не находился».
+        let map = ImportMap::default();
+        assert_eq!(
+            resolve_specifier_with("https://page.example/a/b.html", &map, "", "/chunk.js"),
+            "https://page.example/chunk.js"
+        );
+        // База — сам модуль (внешний бандл с CDN), а не страница.
+        assert_eq!(
+            resolve_specifier_with(
+                "https://page.example/a/b.html",
+                &map,
+                "https://cdn.example/app/index.js",
+                "/chunk.js"
+            ),
+            "https://cdn.example/chunk.js"
+        );
+    }
+
+    #[test]
+    fn protocol_relative_specifier_takes_scheme_from_base() {
+        let map = ImportMap::default();
+        assert_eq!(
+            resolve_specifier_with("https://page.example/x.html", &map, "", "//cdn.example/m.js"),
+            "https://cdn.example/m.js"
+        );
+    }
+
+    #[test]
+    fn relative_specifier_from_external_module_uses_module_url() {
+        // Бандл с CDN обязан тянуть свои чанки с CDN, а не с хоста документа.
+        let map = ImportMap::default();
+        assert_eq!(
+            resolve_specifier_with(
+                "https://page.example/login/",
+                &map,
+                "https://cdn.example/app/index.js",
+                "./chunk.js"
+            ),
+            "https://cdn.example/app/chunk.js"
+        );
+    }
 
     #[test]
     fn import_map_parse_basic() {

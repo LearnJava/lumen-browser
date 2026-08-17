@@ -1022,6 +1022,18 @@ pub trait JsRuntime: Send + Sync {
         self.eval(source).map(|_| ())
     }
 
+    /// Evaluate an external `<script type=module src=URL>` under its own `url`.
+    ///
+    /// Отдельный вход от [`Self::eval_module`] нужен из-за базы относительных
+    /// импортов: у внешнего модуля она — его собственный адрес, а не адрес
+    /// страницы, иначе бандл с CDN уводит свои чанки на хост документа.
+    ///
+    /// Default: без поддержки модулей URL ничего не меняет — падаем в `eval_module`.
+    fn eval_module_at(&self, url: &str, source: &str) -> JsResult<()> {
+        let _ = url;
+        self.eval_module(source)
+    }
+
     /// Pre-register an ES module `source` by `specifier` so it can be `import`-ed.
     ///
     /// Default: no-op for runtimes without module support.

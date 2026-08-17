@@ -31,8 +31,10 @@
 
 use crate::esm::{resolve_specifier_with, ImportMap};
 use crate::import_meta::transform_import_meta;
+use lumen_core::ext::JsFetchProvider;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 // ── Thread-local registry ─────────────────────────────────────────────────────
 
@@ -58,6 +60,16 @@ struct EsmState {
     import_map: ImportMap,
     /// Counter behind the virtual `lumen://inline-N` specifiers.
     inline_seq: usize,
+    /// Сетевой мост загрузчика: по нему добирается исходник модуля, которого
+    /// нет в `sources` (HTML LS §8.1.3.1 «fetch a single module script»).
+    /// Без него загрузчик обслуживал только заранее зарегистрированные
+    /// исходники, и `import('./chunk.js')` у любого code-split приложения
+    /// падал «module not found».
+    fetcher: Option<Arc<dyn JsFetchProvider>>,
+    /// Спецификаторы, за которыми уже ходили в сеть и получили отказ.
+    /// Повторная попытка на каждый импорт означала бы новый синхронный
+    /// сетевой поход на том же JS-потоке при каждом обращении.
+    failed: HashMap<String, String>,
 }
 
 thread_local! {
@@ -86,6 +98,55 @@ pub(crate) fn set_page_url(url: &str) {
 /// Install the import map (HTML LS §8.1.6.2) used for bare specifiers.
 pub(crate) fn set_import_map(map: ImportMap) {
     with_state(|s| s.import_map = map);
+}
+
+/// Подключить сетевой мост, которым загрузчик добирает модули по URL.
+///
+/// Ставится там же, где [`set_page_url`] — на JS-потоке при установке DOM,
+/// потому что реестр модулей thread-local (резолв-колбэк V8 бескаптурный).
+pub(crate) fn set_fetch_provider(provider: Option<Arc<dyn JsFetchProvider>>) {
+    with_state(|s| s.fetcher = provider);
+}
+
+/// Забрать исходник модуля из сети синхронно.
+///
+/// Синхронно — потому что резолв-колбэк V8 обязан вернуть модуль немедленно;
+/// это тот же компромисс, что у всего остального моста `JsFetchProvider`
+/// (XHR/`fetch` из шима тоже блокируют JS-поток).
+///
+/// Пускаем только абсолютные `http(s)`-спецификаторы: `lumen://inline-N` и
+/// голые имена, не покрытые import-map, сетью не разрешаются — для них
+/// «не найден» остаётся честным ответом, а не превращается в поход на
+/// несуществующий хост.
+fn fetch_module_source(specifier: &str) -> Result<String, String> {
+    let is_http = specifier.starts_with("http://") || specifier.starts_with("https://");
+    if !is_http {
+        return Err(format!("module '{specifier}' not found"));
+    }
+    if let Some(err) = with_state(|s| s.failed.get(specifier).cloned()) {
+        return Err(err);
+    }
+    let provider = with_state(|s| s.fetcher.clone());
+    let Some(provider) = provider else {
+        return Err(format!("module '{specifier}' not found (no fetch provider)"));
+    };
+    let outcome = match provider.fetch_sync(specifier, "GET") {
+        Ok(res) if (200..300).contains(&res.status) => {
+            Ok(String::from_utf8_lossy(&res.body).into_owned())
+        }
+        Ok(res) => Err(format!(
+            "module '{specifier}': HTTP {} {}",
+            res.status, res.status_text
+        )),
+        Err(e) => Err(format!("module '{specifier}': {e}")),
+    };
+    match outcome {
+        Ok(text) => Ok(text),
+        Err(msg) => {
+            with_state(|s| s.failed.insert(specifier.to_owned(), msg.clone()));
+            Err(msg)
+        }
+    }
 }
 
 /// Pre-register a module `source` under its resolved `specifier`.
@@ -274,9 +335,20 @@ fn module_for<'s>(
     if let Some(existing) = with_state(|s| s.modules.get(&key).cloned()) {
         return Some(v8::Local::new(scope, existing));
     }
-    let Some(source) = with_state(|s| s.sources.get(specifier).cloned()) else {
-        throw(scope, &format!("module '{specifier}' not found"));
-        return None;
+    // Промах реестра — не приговор: модуль по http(s)-URL забирается из сети
+    // и попадает в реестр, как после `register_source`.
+    let source = match with_state(|s| s.sources.get(specifier).cloned()) {
+        Some(text) => text,
+        None => match fetch_module_source(specifier) {
+            Ok(text) => {
+                register_source(specifier, &text);
+                text
+            }
+            Err(msg) => {
+                throw(scope, &msg);
+                return None;
+            }
+        },
     };
     match module_text(specifier, &source, ty) {
         Ok(text) => compile(scope, &key, specifier, &text),
@@ -440,6 +512,26 @@ pub(crate) fn evaluate_entry_module(
     }
     // Drain Promise continuations from dynamic import() / top-level await,
     // mirroring the `execute_pending_job` loop on the QuickJS path.
+    scope.perform_microtask_checkpoint();
+    Ok(())
+}
+
+/// Evaluate an **external** `<script type=module src=URL>` under its own URL.
+///
+/// Отличие от [`evaluate_entry_module`] — база относительных импортов. Внешний
+/// модуль обязан резолвить `./chunk.js` относительно СВОЕГО адреса, а не адреса
+/// страницы: бандл с CDN (`https://cdn.example/app/index.js`) иначе уводит все
+/// свои чанки на хост документа и получает 404 вместо кода.
+///
+/// `Err(())` — исключение висит на `scope`, как и у соседа.
+pub(crate) fn evaluate_module_url(
+    scope: &mut v8::PinScope<'_, '_>,
+    url: &str,
+    source: &str,
+) -> Result<(), ()> {
+    register_source(url, source);
+    load_and_evaluate(scope, url, &DeclaredType::Js)?;
+    // Промисы динамических import() внутри модуля — как в `evaluate_entry_module`.
     scope.perform_microtask_checkpoint();
     Ok(())
 }
