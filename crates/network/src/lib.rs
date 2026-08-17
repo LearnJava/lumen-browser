@@ -30,7 +30,8 @@ use lumen_core::error::{Error, Result};
 use lumen_core::event::{Event, RequestStage, TabId};
 use lumen_core::ext::{
     AbortToken, ContentDecoder, CookieProvider, DnsResolver, EventSink, FetchInterceptor, HstsEnforcement,
-    HttpAuthScheme, HttpCredentialProvider, JsFetchProvider, JsFetchResult, JsSseEvent, JsSseProvider,
+    HttpAuthScheme, HttpCredentialProvider, JsFetchBody, JsFetchProvider, JsFetchRequest,
+    JsFetchResult, JsSseEvent, JsSseProvider,
     JsSseSession, JsWebSocketProvider, JsWebSocketSession, JsWsEvent, NetworkTransport, NoopEventSink,
     RequestFilter, SseProvider, SseSession, WebSocketProvider, WebSocketSession,
 };
@@ -2387,6 +2388,50 @@ fn build_actual_cross_origin_headers(
     out
 }
 
+/// RFC 7230 §3.2.6 token: имя заголовка, которое можно записать в запрос без
+/// риска расщепить его на два.
+fn is_header_token(name: &str) -> bool {
+    !name.is_empty()
+        && name.bytes().all(|c| {
+            c.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&c)
+        })
+}
+
+/// Сериализовать author-заголовки страницы (`fetch(init.headers)`,
+/// `Request.headers`, `XMLHttpRequest.setRequestHeader`) в pre-built блок
+/// `Name: Value\r\n` для слота `extra_request_headers` (BUG-749).
+///
+/// Отбрасываются: forbidden-имена (Fetch §4.4.4, `cors::is_forbidden_request_header`
+/// — UA ставит их сам, и author-значение либо продублировало бы наш заголовок,
+/// либо подделало бы `Origin`/`Referer`/`Cookie`), имена не-token и значения с
+/// CR/LF (иначе author-строка расщепила бы запрос), а при `has_body` — ещё и
+/// `Content-Type`: тело несёт свой MIME само (`RequestBody` → `write_request`),
+/// и второй экземпляр уехал бы дублем.
+///
+/// Проверка стоит именно здесь, а не только в JS-шиме: guard `Headers` покрывает
+/// `fetch()`, но `XMLHttpRequest.setRequestHeader` пишет в свой объект мимо него,
+/// и единственная общая для обоих точка — этот провод.
+fn build_author_headers(headers: &[(String, String)], has_body: bool) -> String {
+    let mut out = String::new();
+    for (name, value) in headers {
+        let lower = name.to_ascii_lowercase();
+        if !is_header_token(&lower) || cors::is_forbidden_request_header(&lower) {
+            continue;
+        }
+        if has_body && lower == "content-type" {
+            continue;
+        }
+        if value.bytes().any(|c| c == b'\r' || c == b'\n' || c == 0) {
+            continue;
+        }
+        out.push_str(&lower);
+        out.push_str(": ");
+        out.push_str(value.trim());
+        out.push_str("\r\n");
+    }
+    out
+}
+
 /// Заголовки для preflight (Fetch §4.8 step 2-7) в виде pre-formatted string.
 fn build_preflight_extra_headers(cors_req: &cors::CorsRequest) -> String {
     let pairs = cors::build_preflight_headers(cors_req);
@@ -2452,8 +2497,11 @@ fn fetch_with_redirect(
     mixed_content: Option<&MixedContentPolicy>,
     destination: Option<RequestDestination>,
     cors_ctx: Option<&CorsContext<'_>>,
-    // Extra headers for HTTP cache conditional GETs (If-None-Match / If-Modified-Since).
-    cache_extra_headers: &str,
+    // Pre-built `Name: Value\r\n` блок заголовков, которые формирует не
+    // `write_request`, а вызывающий: cache-валидаторы conditional GET
+    // (If-None-Match / If-Modified-Since) и author-заголовки страницы
+    // (`fetch(init.headers)` / `setRequestHeader`, BUG-749).
+    extra_request_headers: &str,
     cookie_jar: Option<&dyn CookieProvider>,
     top_level_site: Option<&str>,
     proxy: Option<&HttpProxy>,
@@ -2687,9 +2735,10 @@ fn fetch_with_redirect(
             (Some(cx), Some(_)) => build_actual_cross_origin_headers(&cx.requestor, &cx.headers),
             _ => String::new(),
         };
-        // Append cache conditional headers (If-None-Match / If-Modified-Since).
-        if !cache_extra_headers.is_empty() {
-            h.push_str(cache_extra_headers);
+        // Append caller-built headers: cache conditional validators
+        // (If-None-Match / If-Modified-Since) и author-заголовки страницы.
+        if !extra_request_headers.is_empty() {
+            h.push_str(extra_request_headers);
         }
         // Inject Cookie header (RFC 6265 §5.4). Cross-site is true when
         // top_level_site is set and differs from the request host (covers
@@ -4165,18 +4214,44 @@ fn http_status_text(status: u16) -> &'static str {
 }
 
 impl JsFetchProvider for HttpClient {
-    fn fetch_sync(&self, url: &str, method: &str) -> Result<JsFetchResult> {
-        let url = Url::parse(url).map_err(|e| Error::InvalidUrl(e.to_string()))?;
-        match method.to_ascii_uppercase().as_str() {
-            "GET" | "HEAD" => {}
-            m => {
+    /// Единственный настоящий путь JS-запроса: и GET, и запрос с телом, и
+    /// author-заголовки страницы (BUG-749) — четыре метода ниже сводятся сюда.
+    ///
+    /// Заголовки уезжают через слот `extra_request_headers` рядом с `Cookie`,
+    /// CORS-`Origin` и cache-валидаторами, так что author-значение вытесняет
+    /// одноимённый заголовок нашего fingerprint-набора (`Accept`,
+    /// `Accept-Language`, `Cache-Control`, `User-Agent`), а не дублирует его.
+    fn fetch_request(&self, req: &JsFetchRequest<'_>) -> Result<JsFetchResult> {
+        let url = Url::parse(req.url).map_err(|e| Error::InvalidUrl(e.to_string()))?;
+        let method_upper = req.method.to_ascii_uppercase();
+        match (req.body.is_some(), method_upper.as_str()) {
+            (false, "GET" | "HEAD") | (true, "POST" | "PUT" | "PATCH" | "DELETE") => {}
+            (false, m) => {
                 return Err(Error::Network(format!(
                     "fetch: Phase 0 supports GET/HEAD only, got {m}"
                 )));
             }
+            (true, m) => {
+                return Err(Error::Network(format!(
+                    "fetch_with_body: unsupported method {m}"
+                )));
+            }
         }
-        // SW intercept before network.
-        if let Some(ref interceptor) = self.interceptor {
+        // Предварительная отмена (AbortSignal, уже сработавший до отправки) и
+        // установка токена на поток: `do_request` глубоко в пути чтения поднимет
+        // по нему watchdog и порвёт сокет, если abort() случится в полёте.
+        let _scope = match req.token {
+            Some(t) if t.is_aborted() => {
+                return Err(Error::Aborted("fetch aborted before send".to_string()));
+            }
+            Some(t) => Some(AbortScope::new(t.clone())),
+            None => None,
+        };
+        // SW intercept before network — только для запросов без тела (GET/HEAD):
+        // CacheStorage адресуется URL-ом, тело в ключ не входит.
+        if req.body.is_none()
+            && let Some(ref interceptor) = self.interceptor
+        {
             let origin = build_origin(&url);
             if let Some(body) = interceptor.intercept(&url, &origin) {
                 return Ok(JsFetchResult {
@@ -4187,6 +4262,17 @@ impl JsFetchProvider for HttpClient {
                 });
             }
         }
+        // Тот же путь, что у GET: куки, редиректы, HSTS, ad-block-фильтр,
+        // mixed-content, HTTP/2, retry на протухшем keep-alive. Своя ветка
+        // «сокет + write + read» для тела стояла здесь до 2026-08-17 и не имела
+        // ничего из перечисленного — POST уходил без Cookie, не ходил по
+        // Location и писал HTTP/1.1-байты в согласованное h2-соединение.
+        let request_body = req.body.as_ref().map(|b| RequestBody {
+            method: &method_upper,
+            content_type: b.content_type,
+            bytes: b.bytes,
+        });
+        let author_headers = build_author_headers(req.headers, request_body.is_some());
         let accept_encoding = self.accept_encoding_header();
         let destination = self.mixed_content.as_ref().map(|_| RequestDestination::Other);
         let (resp, _final_url) = fetch_with_redirect(
@@ -4209,16 +4295,16 @@ impl JsFetchProvider for HttpClient {
             self.mixed_content.as_ref(),
             destination,
             None,
-            "",
+            &author_headers,
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
             self.proxy.as_deref(),
-                    self.socks5_proxy.as_deref(),
-                    self.h3_alt_svc(),
-                    self.h3_pool(),
-                    None, // PH1-2a: streaming sink — only fetch_page_streaming streams
-                    false, // BUG-292: subresource, not a document navigation
-                None, // тело запроса: только POST/PUT/… с телом передают Some
+            self.socks5_proxy.as_deref(),
+            self.h3_alt_svc(),
+            self.h3_pool(),
+            None,  // PH1-2a: streaming sink — only fetch_page_streaming streams
+            false, // BUG-292: subresource, not a document navigation
+            request_body.as_ref(),
         )?;
         Ok(JsFetchResult {
             status_text: http_status_text(resp.status).to_string(),
@@ -4232,6 +4318,16 @@ impl JsFetchProvider for HttpClient {
         })
     }
 
+    fn fetch_sync(&self, url: &str, method: &str) -> Result<JsFetchResult> {
+        self.fetch_request(&JsFetchRequest {
+            url,
+            method,
+            headers: &[],
+            body: None,
+            token: None,
+        })
+    }
+
     fn fetch_with_body_sync(
         &self,
         url: &str,
@@ -4239,68 +4335,12 @@ impl JsFetchProvider for HttpClient {
         content_type: &str,
         body: &[u8],
     ) -> Result<JsFetchResult> {
-        let url = Url::parse(url).map_err(|e| Error::InvalidUrl(e.to_string()))?;
-        match method.to_ascii_uppercase().as_str() {
-            "POST" | "PUT" | "PATCH" | "DELETE" => {}
-            m => {
-                return Err(Error::Network(format!(
-                    "fetch_with_body: unsupported method {m}"
-                )));
-            }
-        }
-        // Тот же путь, что у GET (`fetch_sync`): куки, редиректы, HSTS,
-        // ad-block-фильтр, mixed-content, HTTP/2, retry на протухшем keep-alive.
-        // Своя ветка «сокет + write + read» здесь стояла до 2026-08-17 и не
-        // имела ничего из перечисленного — POST уходил без Cookie, не ходил по
-        // Location и писал HTTP/1.1-байты в согласованное h2-соединение.
-        let method_upper = method.to_ascii_uppercase();
-        let request_body = RequestBody {
-            method: &method_upper,
-            content_type,
-            bytes: body,
-        };
-        let accept_encoding = self.accept_encoding_header();
-        let destination = self.mixed_content.as_ref().map(|_| RequestDestination::Other);
-        let (resp, _final_url) = fetch_with_redirect(
-            &url,
-            5,
-            &self.pool,
-            self.h2_pool.as_deref(),
-            self.resolver.as_ref(),
-            self.tls_profile,
-            self.fingerprint_profile,
-            self.sink.as_deref(),
-            self.filter.as_deref(),
-            self.hsts.as_deref(),
-            self.credentials.as_deref(),
-            &self.decoders,
-            accept_encoding.as_deref(),
-            None,
-            None,
-            self.tab_id,
-            self.mixed_content.as_ref(),
-            destination,
-            None,
-            "",
-            self.cookie_jar.as_deref(),
-            self.top_level_site.as_deref(),
-            self.proxy.as_deref(),
-            self.socks5_proxy.as_deref(),
-            self.h3_alt_svc(),
-            self.h3_pool(),
-            None, // streaming sink — только навигация стримит
-            false, // subresource, не навигация документа
-            Some(&request_body),
-        )?;
-        Ok(JsFetchResult {
-            status_text: http_status_text(resp.status).to_string(),
-            status: resp.status,
-            headers: resp
-                .headers
-                .into_iter()
-                .map(|(k, v)| (k.to_ascii_lowercase(), v))
-                .collect(),
-            body: resp.body,
+        self.fetch_request(&JsFetchRequest {
+            url,
+            method,
+            headers: &[],
+            body: Some(JsFetchBody { content_type, bytes: body }),
+            token: None,
         })
     }
 
@@ -4313,11 +4353,13 @@ impl JsFetchProvider for HttpClient {
     /// the socket down if `abort()` fires mid-response, surfacing as
     /// `Error::Aborted`. The JS layer maps that to a DOMException `AbortError`.
     fn fetch_cancellable(&self, url: &str, method: &str, token: &AbortToken) -> Result<JsFetchResult> {
-        if token.is_aborted() {
-            return Err(Error::Aborted("fetch aborted before send".to_string()));
-        }
-        let _scope = AbortScope::new(token.clone());
-        self.fetch_sync(url, method)
+        self.fetch_request(&JsFetchRequest {
+            url,
+            method,
+            headers: &[],
+            body: None,
+            token: Some(token),
+        })
     }
 
     /// In-flight-cancellable variant of `fetch_with_body_sync`.
@@ -4335,11 +4377,13 @@ impl JsFetchProvider for HttpClient {
         body: &[u8],
         token: &AbortToken,
     ) -> Result<JsFetchResult> {
-        if token.is_aborted() {
-            return Err(Error::Aborted("fetch aborted before send".to_string()));
-        }
-        let _scope = AbortScope::new(token.clone());
-        self.fetch_with_body_sync(url, method, content_type, body)
+        self.fetch_request(&JsFetchRequest {
+            url,
+            method,
+            headers: &[],
+            body: Some(JsFetchBody { content_type, bytes: body }),
+            token: Some(token),
+        })
     }
 }
 
@@ -8059,6 +8103,135 @@ world\r\n\
         assert!(req.contains("Content-Type: application/json"), "{req}");
         assert!(req.contains("Content-Length: 7"), "{req}");
         assert!(req.ends_with(r#"{"a":1}"#), "body must be written: {req}");
+    }
+
+    /// BUG-749 (гейт): author-заголовки страницы обязаны быть на проводе.
+    /// До правки канала для них не существовало — `JsFetchProvider` не имел
+    /// параметра под заголовки ни в одном из четырёх методов, так что
+    /// `Authorization`/`X-CSRF` терялись между шимом и сокетом.
+    #[test]
+    fn js_fetch_author_headers_reach_the_wire() {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let (port, server) = mock_server_capturing_bodies(1, captured.clone(), |_| {
+            close_response("HTTP/1.1 200 OK", "", "{}")
+        });
+        let client = HttpClient::new();
+        let headers = vec![
+            ("authorization".to_owned(), "Bearer t".to_owned()),
+            ("x-csrf-token".to_owned(), "v".to_owned()),
+        ];
+        let res = client
+            .fetch_request(&JsFetchRequest {
+                url: &format!("http://127.0.0.1:{port}/api"),
+                method: "GET",
+                headers: &headers,
+                body: None,
+                token: None,
+            })
+            .expect("GET must succeed");
+        assert_eq!(res.status, 200);
+        server.join().unwrap();
+
+        let req = captured.lock().unwrap()[0].clone();
+        assert!(req.contains("authorization: Bearer t\r\n"), "{req}");
+        assert!(req.contains("x-csrf-token: v\r\n"), "{req}");
+    }
+
+    /// Author-заголовок вытесняет одноимённый заголовок нашего
+    /// fingerprint-набора, а не дописывается рядом: `Accept: application/json`
+    /// от страницы должен быть на проводе ровно один раз.
+    #[test]
+    fn js_fetch_author_header_replaces_fingerprint_default() {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let (port, server) = mock_server_capturing_bodies(1, captured.clone(), |_| {
+            close_response("HTTP/1.1 200 OK", "", "{}")
+        });
+        let client = HttpClient::new();
+        let headers = vec![("accept".to_owned(), "application/json".to_owned())];
+        client
+            .fetch_request(&JsFetchRequest {
+                url: &format!("http://127.0.0.1:{port}/api"),
+                method: "GET",
+                headers: &headers,
+                body: None,
+                token: None,
+            })
+            .expect("GET must succeed");
+        server.join().unwrap();
+
+        let req = captured.lock().unwrap()[0].clone();
+        let accepts = req
+            .lines()
+            .filter(|l| l.to_ascii_lowercase().starts_with("accept:"))
+            .count();
+        assert_eq!(accepts, 1, "ровно один Accept на проводе: {req}");
+        assert!(req.contains("accept: application/json\r\n"), "{req}");
+    }
+
+    /// Forbidden request-header names (Fetch §4.4.4) и попытка расщепить запрос
+    /// значением с CRLF не должны доходить до сокета: `Host` формирует движок,
+    /// `Cookie` — jar, а инъекция создала бы второй запрос в том же потоке.
+    #[test]
+    fn js_fetch_forbidden_and_injected_headers_are_dropped() {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let (port, server) = mock_server_capturing_bodies(1, captured.clone(), |_| {
+            close_response("HTTP/1.1 200 OK", "", "{}")
+        });
+        let client = HttpClient::new();
+        let headers = vec![
+            ("host".to_owned(), "evil.example".to_owned()),
+            ("cookie".to_owned(), "sid=stolen".to_owned()),
+            ("origin".to_owned(), "https://evil.example".to_owned()),
+            ("x-inject".to_owned(), "a\r\nX-Smuggled: 1".to_owned()),
+        ];
+        client
+            .fetch_request(&JsFetchRequest {
+                url: &format!("http://127.0.0.1:{port}/api"),
+                method: "GET",
+                headers: &headers,
+                body: None,
+                token: None,
+            })
+            .expect("GET must succeed");
+        server.join().unwrap();
+
+        let req = captured.lock().unwrap()[0].clone();
+        assert!(!req.contains("evil.example"), "{req}");
+        assert!(!req.contains("sid=stolen"), "{req}");
+        assert!(!req.contains("X-Smuggled"), "{req}");
+        assert!(req.contains("Host: 127.0.0.1\r\n"), "движковый Host обязан уцелеть: {req}");
+    }
+
+    /// Тело несёт свой `Content-Type` само (`RequestBody` → `write_request`);
+    /// одноимённый author-заголовок не должен уехать вторым экземпляром.
+    #[test]
+    fn js_fetch_body_content_type_is_not_duplicated() {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let (port, server) = mock_server_capturing_bodies(1, captured.clone(), |_| {
+            close_response("HTTP/1.1 200 OK", "", "{}")
+        });
+        let client = HttpClient::new();
+        let headers = vec![("content-type".to_owned(), "application/json".to_owned())];
+        client
+            .fetch_request(&JsFetchRequest {
+                url: &format!("http://127.0.0.1:{port}/api"),
+                method: "POST",
+                headers: &headers,
+                body: Some(JsFetchBody {
+                    content_type: "application/json",
+                    bytes: br#"{"a":1}"#,
+                }),
+                token: None,
+            })
+            .expect("POST must succeed");
+        server.join().unwrap();
+
+        let req = captured.lock().unwrap()[0].clone();
+        let cts = req
+            .lines()
+            .filter(|l| l.to_ascii_lowercase().starts_with("content-type:"))
+            .count();
+        assert_eq!(cts, 1, "ровно один Content-Type на проводе: {req}");
     }
 
     #[test]

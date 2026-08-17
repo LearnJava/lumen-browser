@@ -8687,6 +8687,26 @@ function _lumen_fetch(input) {
         var reqBody = (init && init.body !== undefined && init.body !== null) ? init.body
                     : _lumen_body_source(input);
 
+        // BUG-749: author-заголовки запроса. До этого места канала для них не
+        // было вовсе — `init.headers` разбирался ровно ради Content-Type, а
+        // нативные привязки параметра под заголовки не имели, так что
+        // Authorization / X-CSRF / Accept страница выставляла в объект Headers,
+        // который никуда не уезжал.
+        //
+        // Fetch §5.5 шаг 32-33: заданный `init.headers` вытесняет список
+        // самого Request-а целиком, иначе берётся список Request-а (он уже
+        // построен под guard-ом 'request'). Готовый Headers всё равно
+        // перезаливаем через guard: страница могла собрать его конструктором,
+        // где guard === 'none' и Host/Cookie/Origin не отсеиваются.
+        var authorHeaders = [];   // плоский [name, value, name, value, …]
+        var hdrSrc = (init && init.headers !== undefined && init.headers !== null) ? init.headers
+                   : ((typeof input === 'object' && input && input.headers) ? input.headers : null);
+        if (hdrSrc) {
+            _lumen_headers_new(hdrSrc, 'request').forEach(function(v, k) {
+                authorHeaders.push(k); authorHeaders.push(v);
+            });
+        }
+
         // AbortSignal.timeout(ms) deadline is enforced natively (the JS thread is
         // parked in the synchronous fetch, so the JS setTimeout can't fire): a
         // positive _timeoutMs routes to the cancellable bridge whose deadline
@@ -8718,26 +8738,15 @@ function _lumen_fetch(input) {
                 bodyBytes = Array.from(new TextEncoder().encode(s));
                 contentType = 'text/plain;charset=UTF-8';
             }
-            // Caller may override Content-Type via headers.
-            var initHeaders = (init && init.headers) ? init.headers : null;
-            if (initHeaders) {
-                var lowerKeys = {};
-                if (initHeaders instanceof Headers) {
-                    // BUG-369: a Headers instance has no enumerable own properties,
-                    // so the `for..in` branch below would silently see nothing.
-                    var ct = initHeaders.get('content-type');
-                    if (ct !== null) { contentType = ct; }
-                } else if (Array.isArray(initHeaders)) {
-                    for (var i = 0; i < initHeaders.length; i++) {
-                        if (initHeaders[i][0].toLowerCase() === 'content-type') {
-                            contentType = initHeaders[i][1];
-                        }
-                    }
-                } else if (typeof initHeaders === 'object') {
-                    for (var k in initHeaders) {
-                        if (k.toLowerCase() === 'content-type') { contentType = initHeaders[k]; }
-                    }
-                }
+            // Caller may override Content-Type via headers. Читаем из уже
+            // собранного author-списка: имена там нормализованы Headers-ом, и
+            // это единственная форма, покрывающая все три способа задать
+            // заголовки (Headers / массив пар / запись) сразу. Сам заголовок
+            // при наличии тела уезжает как Content-Type тела (`RequestBody`),
+            // а из author-списка отбрасывается на Rust-стороне — иначе ушёл бы
+            // дублем.
+            for (var ci = 0; ci + 1 < authorHeaders.length; ci += 2) {
+                if (authorHeaders[ci] === 'content-type') { contentType = authorHeaders[ci + 1]; }
             }
         }
 
@@ -8749,7 +8758,7 @@ function _lumen_fetch(input) {
         var useAsync = fetchSignal && !fetchSignal.aborted && !(_timeoutMs > 0);
         if (useAsync) {
             return new Promise(function(resolve, reject) {
-                var handle = _lumen_fetch_async_start(url, method, contentType || '', bodyBytes || [], !!hasBody);
+                var handle = _lumen_fetch_async_start(url, method, contentType || '', bodyBytes || [], !!hasBody, authorHeaders);
                 if (!handle) {
                     reject(new TypeError('fetch: network error for ' + url));
                     return;
@@ -8807,19 +8816,19 @@ function _lumen_fetch(input) {
         var ok;
         if (hasBody) {
             if (_timeoutMs > 0) {
-                var rc = _lumen_fetch_cancellable_with_body(url, method, contentType, bodyBytes, _timeoutMs);
+                var rc = _lumen_fetch_cancellable_with_body(url, method, contentType, bodyBytes, _timeoutMs, authorHeaders);
                 if (rc === 2) { return Promise.reject(new DOMException('signal timed out', 'TimeoutError')); }
                 ok = (rc === 0);
             } else {
-                ok = _lumen_fetch_sync_with_body(url, method, contentType, bodyBytes);
+                ok = _lumen_fetch_sync_with_body(url, method, contentType, bodyBytes, authorHeaders);
             }
         } else {
             if (_timeoutMs > 0) {
-                var rc2 = _lumen_fetch_cancellable(url, method, _timeoutMs);
+                var rc2 = _lumen_fetch_cancellable(url, method, _timeoutMs, authorHeaders);
                 if (rc2 === 2) { return Promise.reject(new DOMException('signal timed out', 'TimeoutError')); }
                 ok = (rc2 === 0);
             } else {
-                ok = _lumen_fetch_sync(url, method);
+                ok = _lumen_fetch_sync(url, method, authorHeaders);
             }
         }
 
@@ -29698,14 +29707,14 @@ mod tests {
         #[test]
         fn fetch_cancellable_bridge_reports_abort() {
             let rt = v8_runtime_with_abort_fetch();
-            assert_eq!(rt.eval("_lumen_fetch_cancellable('https://example.com/','GET',0) === 2").unwrap(), lumen_core::JsValue::Bool(true));
-            assert_eq!(rt.eval("_lumen_fetch_cancellable_with_body('https://example.com/','POST','text/plain',[104,105],0) === 2").unwrap(), lumen_core::JsValue::Bool(true));
+            assert_eq!(rt.eval("_lumen_fetch_cancellable('https://example.com/','GET',0,[]) === 2").unwrap(), lumen_core::JsValue::Bool(true));
+            assert_eq!(rt.eval("_lumen_fetch_cancellable_with_body('https://example.com/','POST','text/plain',[104,105],0,[]) === 2").unwrap(), lumen_core::JsValue::Bool(true));
         }
 
         #[test]
         fn fetch_cancellable_bridge_reports_ok() {
             let rt = v8_runtime_with_fetch(CaptureFetch::new());
-            assert_eq!(rt.eval("_lumen_fetch_cancellable('https://example.com/','GET',0) === 0").unwrap(), lumen_core::JsValue::Bool(true));
+            assert_eq!(rt.eval("_lumen_fetch_cancellable('https://example.com/','GET',0,[]) === 0").unwrap(), lumen_core::JsValue::Bool(true));
         }
 
         #[test]
@@ -33444,6 +33453,120 @@ mod tests {
             let p: Arc<dyn lumen_core::ext::JsFetchProvider> = provider;
             rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, false).unwrap();
             rt
+        }
+
+        /// BUG-749: провайдер, записывающий author-заголовки запроса в
+        /// `name:value;…`. Читать результат через `r.text()` нельзя — промис
+        /// fetch-а резолвится микротаской, а `eval` её не прокручивает; запись
+        /// в Mutex видна сразу, потому что сам запрос синхронный.
+        struct CaptureHeadersFetch {
+            seen: std::sync::Mutex<String>,
+        }
+        impl lumen_core::ext::JsFetchProvider for CaptureHeadersFetch {
+            fn fetch_sync(&self, _url: &str, _method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+                unreachable!("fetch_request перекрыт — сюда попадать нечему")
+            }
+            fn fetch_request(&self, req: &lumen_core::ext::JsFetchRequest<'_>) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+                let mut out = self.seen.lock().unwrap();
+                for (name, value) in req.headers {
+                    out.push_str(name);
+                    out.push(':');
+                    out.push_str(value);
+                    out.push(';');
+                }
+                Ok(lumen_core::ext::JsFetchResult {
+                    status: 200,
+                    status_text: "OK".into(),
+                    headers: vec![],
+                    body: b"ok".to_vec(),
+                })
+            }
+        }
+
+        /// Прочитать записанные заголовки, дождавшись рабочего потока.
+        ///
+        /// `fetch(new Request(...))` уходит по async-пути: у `Request` всегда
+        /// есть `signal`, а живой сигнал переводит запрос на фоновый поток
+        /// (`_lumen_fetch_async_start`). Синхронные формы записывают заголовки
+        /// ещё внутри `eval`, поэтому первая же итерация их и увидит.
+        fn captured_headers(capture: &CaptureHeadersFetch) -> String {
+            for _ in 0..300 {
+                let seen = capture.seen.lock().unwrap().clone();
+                if !seen.is_empty() {
+                    return seen;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            capture.seen.lock().unwrap().clone()
+        }
+
+        /// Runtime, чей fetch-провайдер записывает author-заголовки запроса.
+        fn v8_runtime_with_header_capture() -> (V8JsRuntime, Arc<CaptureHeadersFetch>) {
+            let capture = Arc::new(CaptureHeadersFetch { seen: std::sync::Mutex::new(String::new()) });
+            let rt = V8JsRuntime::new().unwrap();
+            let p: Arc<dyn lumen_core::ext::JsFetchProvider> = Arc::clone(&capture) as _;
+            rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, false).unwrap();
+            (rt, capture)
+        }
+
+        /// Все три спековых способа задать заголовки (запись, `Headers`,
+        /// `Request`) обязаны доехать до провайдера. До BUG-749 не доезжал ни
+        /// один: у моста не было параметра под заголовки вовсе.
+        #[test]
+        fn fetch_author_headers_reach_the_provider() {
+            for expr in [
+                "fetch('/api', { headers: { 'X-Probe': '1' } })",
+                "fetch('/api', { headers: new Headers([['X-Probe', '1']]) })",
+                "fetch(new Request('/api', { headers: { 'X-Probe': '1' } }))",
+            ] {
+                let (rt, capture) = v8_runtime_with_header_capture();
+                rt.eval(expr).unwrap();
+                assert_eq!(
+                    captured_headers(&capture),
+                    "x-probe:1;",
+                    "форма задания заголовков `{expr}` не доехала до провайдера"
+                );
+            }
+        }
+
+        /// `init.headers` вытесняет список самого `Request`-а целиком
+        /// (Fetch §5.5 шаг 32-33), а не дополняет его.
+        #[test]
+        fn fetch_init_headers_replace_request_headers() {
+            let (rt, capture) = v8_runtime_with_header_capture();
+            rt.eval(
+                "fetch(new Request('/api', { headers: { 'X-Old': 'a' } }), { headers: { 'X-New': 'b' } });",
+            )
+            .unwrap();
+            assert_eq!(captured_headers(&capture), "x-new:b;");
+        }
+
+        /// Guard 'request' применяется даже к готовому `Headers`: страница
+        /// могла собрать его конструктором, где guard === 'none', и тогда
+        /// `Host`/`Cookie` прошли бы в мост.
+        #[test]
+        fn fetch_forbidden_header_never_reaches_the_provider() {
+            let (rt, capture) = v8_runtime_with_header_capture();
+            rt.eval(
+                "var h = new Headers(); h.append('Host', 'evil.example'); h.append('X-Ok', '1'); \
+                 fetch('/api', { headers: h });",
+            )
+            .unwrap();
+            assert_eq!(captured_headers(&capture), "x-ok:1;");
+        }
+
+        /// `XMLHttpRequest.setRequestHeader` пишет в свой объект мимо guard-а
+        /// `Headers` — до BUG-749 из всего списка на провод уходил только
+        /// Content-Type, и то лишь при наличии тела.
+        #[test]
+        fn xhr_set_request_header_reaches_the_provider() {
+            let (rt, capture) = v8_runtime_with_header_capture();
+            rt.eval(
+                "var x = new XMLHttpRequest(); x.open('GET', '/api'); \
+                 x.setRequestHeader('X-Probe', '1'); x.send();",
+            )
+            .unwrap();
+            assert_eq!(captured_headers(&capture), "x-probe:1;");
         }
 
         /// Mock provider whose body is the URL's last path segment, so two

@@ -92,6 +92,12 @@ impl HeaderOrder {
         result
     }
 
+    /// Drop every header whose name `keep` rejects (the name is passed in the
+    /// case it was added with).
+    pub fn retain(&mut self, keep: impl Fn(&str) -> bool) {
+        self.headers.retain(|(name, _)| keep(name));
+    }
+
     /// Return headers as a list of tuples.
     pub fn as_tuples(&self) -> Vec<(String, String)> {
         self.headers.iter().cloned().collect()
@@ -286,6 +292,24 @@ pub fn build_request_headers(
                 headers.add("Sec-GPC", "1");
             }
         }
+    }
+
+    // BUG-749: одноимённый заголовок из `extra_headers` вытесняет
+    // fingerprint-дефолт, а не дописывается рядом с ним — иначе
+    // `fetch(url, {headers: {Accept: 'application/json'}})` уехал бы вторым
+    // `Accept` следом за нашим, и сервер увидел бы оба. HTTP/2-путь
+    // (`build_h2_headers`) это правило соблюдал с самого начала; здесь
+    // восстанавливается симметрия H1↔H2 (расхождение между ними — само по
+    // себе отпечаток). `Host` не вытесняется никогда: он задаёт адресата
+    // запроса, и author-код его ставить не вправе (Fetch §2.2.2).
+    if !extra_headers.is_empty() {
+        let overridden: std::collections::HashSet<String> = extra_headers
+            .split("\r\n")
+            .filter_map(|line| line.split_once(':'))
+            .map(|(name, _)| name.trim().to_ascii_lowercase())
+            .filter(|name| name != "host")
+            .collect();
+        headers.retain(|name| !overridden.contains(&name.to_ascii_lowercase()));
     }
 
     // Append any extra headers from caller (CORS, Authorization, etc.)

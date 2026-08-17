@@ -1787,6 +1787,38 @@ pub struct JsFetchResult {
     pub body: Vec<u8>,
 }
 
+/// Request body of a JS-issued request: MIME type plus raw bytes.
+pub struct JsFetchBody<'a> {
+    /// `Content-Type` header value for the body (e.g. `"application/json"`).
+    pub content_type: &'a str,
+    /// Raw request body bytes.
+    pub bytes: &'a [u8],
+}
+
+/// One request issued by page JS (`fetch()` / `XMLHttpRequest`), with every
+/// input the network layer needs in a single struct.
+///
+/// Exists because the four `fetch_*` methods below multiply out the two
+/// independent axes (body / no body × cancellable / not) and a fifth input —
+/// the author request headers ([BUG-749](../../../bugs/BUG-749-OPEN.md)) —
+/// would have had to be threaded through all four identically, which is
+/// exactly how the headers channel came to be missing in the first place.
+pub struct JsFetchRequest<'a> {
+    /// Absolute request URL (already resolved against the document base).
+    pub url: &'a str,
+    /// HTTP method, as normalised by the Fetch shim (`"GET"`, `"POST"`, …).
+    pub method: &'a str,
+    /// Author request headers (`init.headers` / `Request.headers` /
+    /// `XMLHttpRequest.setRequestHeader`) as `(lowercase-name, value)` pairs,
+    /// in the order the shim serialised them. Empty when the page set none.
+    pub headers: &'a [(String, String)],
+    /// Request body for POST/PUT/PATCH/DELETE; `None` for GET/HEAD.
+    pub body: Option<JsFetchBody<'a>>,
+    /// Cancellation token mirroring `AbortSignal`; `None` when the call site
+    /// has no signal (a plain synchronous fetch).
+    pub token: Option<&'a AbortToken>,
+}
+
 /// Synchronous HTTP fetch bridge for the JS runtime.
 ///
 /// The implementation lives in `lumen-network::HttpClient`, which keeps the
@@ -1796,6 +1828,27 @@ pub struct JsFetchResult {
 /// Phase 0 constraints: GET + HEAD only, no request body, no streaming.
 /// Phase 1 extension: `fetch_with_body_sync` adds POST/PUT/PATCH/DELETE with body.
 pub trait JsFetchProvider: Send + Sync {
+    /// Perform one JS-issued request described in full by `req` — the only
+    /// entry point that carries author request headers.
+    ///
+    /// The default implementation dispatches to the four legacy methods below
+    /// and therefore **drops `req.headers`**: it exists so test doubles that
+    /// implement only `fetch_sync` keep compiling. The real network
+    /// implementation (`lumen-network::HttpClient`) overrides this method and
+    /// puts the headers on the wire; the four methods below delegate to it.
+    fn fetch_request(&self, req: &JsFetchRequest<'_>) -> Result<JsFetchResult> {
+        match (req.body.as_ref(), req.token) {
+            (Some(b), Some(t)) => {
+                self.fetch_with_body_cancellable(req.url, req.method, b.content_type, b.bytes, t)
+            }
+            (Some(b), None) => {
+                self.fetch_with_body_sync(req.url, req.method, b.content_type, b.bytes)
+            }
+            (None, Some(t)) => self.fetch_cancellable(req.url, req.method, t),
+            (None, None) => self.fetch_sync(req.url, req.method),
+        }
+    }
+
     /// Perform a blocking HTTP request and return the full response.
     ///
     /// Returns `Err` for network errors or unsupported methods.

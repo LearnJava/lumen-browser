@@ -22,7 +22,7 @@ use crate::dom::{
 use crate::heap_snapshot;
 use crate::v8_compat::{
     OwnedNativeFn, into_v8_fn0, into_v8_fn1, into_v8_fn2, into_v8_fn3, into_v8_fn4, into_v8_fn5,
-    register_v8_native,
+    into_v8_fn6, register_v8_native,
 };
 use lumen_core::ext::{AbortToken, JsSseEvent, JsWsEvent};
 use lumen_core::url::Url;
@@ -575,6 +575,21 @@ pub struct V8JsRuntime {
 /// runtime at a time per process, so a process-global reads identically to a
 /// "session-level" BiDi override in practice (mirrors `lumen_network`'s
 /// `GLOBAL_UA_OVERRIDE`/`GLOBAL_OFFLINE` statics, same rationale).
+/// Разложить плоский `[name, value, name, value, …]` из JS в пары.
+///
+/// Формат «плоский массив» выбран потому, что мост натива понимает
+/// `Vec<String>`, но не массив массивов; непарный хвост (нечётная длина —
+/// шим такого не строит) отбрасывается, а не превращается в заголовок с
+/// пустым значением.
+fn pairs_from_flat(flat: Vec<String>) -> Vec<(String, String)> {
+    let mut it = flat.into_iter();
+    let mut out = Vec::with_capacity(it.len() / 2);
+    while let (Some(name), Some(value)) = (it.next(), it.next()) {
+        out.push((name, value));
+    }
+    out
+}
+
 static GLOBAL_UA_OVERRIDE: Mutex<Option<String>> = Mutex::new(None);
 
 /// Set (or clear with `None`) the process-global `navigator.userAgent` override.
@@ -2758,9 +2773,16 @@ impl V8JsRuntime {
         let fp_async = fetch_provider.clone();
         let c_async = Arc::clone(&cache);
         let (fp, c) = (fetch_provider, Arc::clone(&cache));
-        reg!("_lumen_fetch_sync", move |url: String, method: String| -> bool {
+        reg!("_lumen_fetch_sync", move |url: String, method: String, headers: Vec<String>| -> bool {
             let Some(ref provider) = fp else { return false };
-            match provider.fetch_sync(&url, &method) {
+            let headers = pairs_from_flat(headers);
+            match provider.fetch_request(&lumen_core::ext::JsFetchRequest {
+                url: &url,
+                method: &method,
+                headers: &headers,
+                body: None,
+                token: None,
+            }) {
                 Ok(resp) => {
                     let mut flat = Vec::with_capacity(resp.headers.len() * 2);
                     for (k, v) in resp.headers {
@@ -2855,7 +2877,7 @@ impl V8JsRuntime {
             });
         }
 
-        // _lumen_fetch_sync_with_body(url, method, content_type, body_bytes) → bool
+        // _lumen_fetch_sync_with_body(url, method, content_type, body_bytes, headers) → bool
         // Used by fetch() when init.body is present (FormData, string, ArrayBuffer).
         // Shares the same FetchCache slot as _lumen_fetch_sync.
         {
@@ -2863,11 +2885,21 @@ impl V8JsRuntime {
             let c2 = Arc::clone(&cache);
             reg!(
                 "_lumen_fetch_sync_with_body",
-                move |url: String, method: String, content_type: String, body: Vec<u8>| -> bool {
+                move |url: String, method: String, content_type: String, body: Vec<u8>, headers: Vec<String>| -> bool {
                     let Some(ref provider) = fetch_provider2 else {
                         return false;
                     };
-                    match provider.fetch_with_body_sync(&url, &method, &content_type, &body) {
+                    let headers = pairs_from_flat(headers);
+                    match provider.fetch_request(&lumen_core::ext::JsFetchRequest {
+                        url: &url,
+                        method: &method,
+                        headers: &headers,
+                        body: Some(lumen_core::ext::JsFetchBody {
+                            content_type: &content_type,
+                            bytes: &body,
+                        }),
+                        token: None,
+                    }) {
                         Ok(resp) => {
                             let mut flat = Vec::with_capacity(resp.headers.len() * 2);
                             for (k, v) in resp.headers {
@@ -2891,13 +2923,13 @@ impl V8JsRuntime {
             );
         }
 
-        // _lumen_fetch_cancellable(url, method, timeout_ms) → u32
+        // _lumen_fetch_cancellable(url, method, timeout_ms, headers) → u32
         // In-flight-cancellable GET/HEAD. Returns 0 = ok (body in FetchCache),
         // 1 = network error, 2 = aborted/timed-out. When timeout_ms > 0 a detached
         // deadline thread flips the AbortToken; the network layer tears the socket
         // down, so a `fetch(url, {signal: AbortSignal.timeout(ms)})` against a slow
         // server actually aborts even though the JS thread is parked in the call.
-        reg!("_lumen_fetch_cancellable", move |url: String, method: String, timeout_ms: u32| -> u32 {
+        reg!("_lumen_fetch_cancellable", move |url: String, method: String, timeout_ms: u32, headers: Vec<String>| -> u32 {
             let Some(ref provider) = fp_cancel else { return 1 };
             let token = AbortToken::new();
             if timeout_ms > 0 {
@@ -2907,7 +2939,14 @@ impl V8JsRuntime {
                     t.abort();
                 });
             }
-            match provider.fetch_cancellable(&url, &method, &token) {
+            let headers = pairs_from_flat(headers);
+            match provider.fetch_request(&lumen_core::ext::JsFetchRequest {
+                url: &url,
+                method: &method,
+                headers: &headers,
+                body: None,
+                token: Some(&token),
+            }) {
                 Ok(resp) => {
                     let mut flat = Vec::with_capacity(resp.headers.len() * 2);
                     for (k, v) in resp.headers { flat.push(k); flat.push(v); }
@@ -2924,11 +2963,11 @@ impl V8JsRuntime {
             }
         });
 
-        // _lumen_fetch_cancellable_with_body(url, method, content_type, body, timeout_ms) → u32
+        // _lumen_fetch_cancellable_with_body(url, method, content_type, body, timeout_ms, headers) → u32
         // Body-carrying (POST/PUT/...) sibling of _lumen_fetch_cancellable.
         reg!(
             "_lumen_fetch_cancellable_with_body",
-            move |url: String, method: String, content_type: String, body: Vec<u8>, timeout_ms: u32| -> u32 {
+            move |url: String, method: String, content_type: String, body: Vec<u8>, timeout_ms: u32, headers: Vec<String>| -> u32 {
                 let Some(ref provider) = fp_cancel_body else { return 1 };
                 let token = AbortToken::new();
                 if timeout_ms > 0 {
@@ -2938,7 +2977,17 @@ impl V8JsRuntime {
                         t.abort();
                     });
                 }
-                match provider.fetch_with_body_cancellable(&url, &method, &content_type, &body, &token) {
+                let headers = pairs_from_flat(headers);
+                match provider.fetch_request(&lumen_core::ext::JsFetchRequest {
+                    url: &url,
+                    method: &method,
+                    headers: &headers,
+                    body: Some(lumen_core::ext::JsFetchBody {
+                        content_type: &content_type,
+                        bytes: &body,
+                    }),
+                    token: Some(&token),
+                }) {
                     Ok(resp) => {
                         let mut flat = Vec::with_capacity(resp.headers.len() * 2);
                         for (k, v) in resp.headers { flat.push(k); flat.push(v); }
@@ -2986,11 +3035,11 @@ impl V8JsRuntime {
                 Arc::new(Mutex::new(HashMap::new()));
             let async_next: Arc<AtomicU32> = Arc::new(AtomicU32::new(1));
 
-            // _lumen_fetch_async_start(url, method, content_type, body, has_body) → handle u32 (0 = no provider)
+            // _lumen_fetch_async_start(url, method, content_type, body, has_body, headers) → handle u32 (0 = no provider)
             let am_start = Arc::clone(&async_map);
             reg!(
                 "_lumen_fetch_async_start",
-                move |url: String, method: String, content_type: String, body: Vec<u8>, has_body: bool| -> u32 {
+                move |url: String, method: String, content_type: String, body: Vec<u8>, has_body: bool, headers: Vec<String>| -> u32 {
                     let provider = match fp_async.as_ref() {
                         Some(p) => Arc::clone(p),
                         None => return 0,
@@ -3002,12 +3051,18 @@ impl V8JsRuntime {
                         .unwrap()
                         .insert(id, AsyncFetchState { token: token.clone(), outcome: None });
                     let map = Arc::clone(&am_start);
+                    let headers = pairs_from_flat(headers);
                     std::thread::spawn(move || {
-                        let res = if has_body {
-                            provider.fetch_with_body_cancellable(&url, &method, &content_type, &body, &token)
-                        } else {
-                            provider.fetch_cancellable(&url, &method, &token)
-                        };
+                        let res = provider.fetch_request(&lumen_core::ext::JsFetchRequest {
+                            url: &url,
+                            method: &method,
+                            headers: &headers,
+                            body: has_body.then(|| lumen_core::ext::JsFetchBody {
+                                content_type: &content_type,
+                                bytes: &body,
+                            }),
+                            token: Some(&token),
+                        });
                         let outcome = match res {
                             Ok(r) => AsyncOutcome::Ok {
                                 status: r.status,
