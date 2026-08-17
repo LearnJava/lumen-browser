@@ -75,8 +75,8 @@
 {
  "generated": "2026-08-17",
  "counts": {
-  "open": 313,
-  "fixed": 423,
+  "open": 312,
+  "fixed": 424,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -9955,10 +9955,10 @@
    "debtor": false
   },
   "BUG-771": {
-   "status": "open",
-   "title": "**Вид окна меняется после прокрутки**: прокрутка вниз и возврат на то же смещение оставляет другую картинку — те же глифы на тех же позициях рисуются плотнее (в…",
-   "component": "paint (`crates/engine/paint/src/renderer.rs` — путь `try_page_compose` → `render_impl(.., RenderPassMode::Compose)`)",
-   "date": null,
+   "status": "fixed",
+   "title": "**Вид окна меняется после прокрутки**: те же глифы на тех же позициях рисовались плотнее. Причина не в композиторе: пре-резолв face-ов складывал id-ы только за…",
+   "component": "paint (`crates/engine/paint/src/renderer.rs` — пре-резолв face-ов `DrawText`)",
+   "date": "2026-08-17",
    "debtor": false
   }
  },
@@ -10867,7 +10867,7 @@
   "paint (`WgpuBackend`/`renderer.rs`) — wgpu-рендеринг расходится с femtovg": [
    "BUG-277"
   ],
-  "paint (`crates/engine/paint/src/renderer.rs` — путь `try_page_compose` → `render_impl(.., RenderPassMode::Compose)`)": [
+  "paint (`crates/engine/paint/src/renderer.rs` — пре-резолв face-ов `DrawText`)": [
    "BUG-771"
   ],
   "paint (`display_list.rs::emit_background_image`) — дефект дисплей-листа, не бэкенда": [
