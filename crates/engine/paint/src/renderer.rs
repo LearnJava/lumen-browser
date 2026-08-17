@@ -3267,6 +3267,16 @@ fn bbox_backdrop_disabled() -> bool {
     })
 }
 
+/// `true`, если bbox-офскрин блюра element-фильтра отключён
+/// (`LUMEN_NO_BBOX_FILTER=1`) — рычаг отката BUG-405 среза 24 к scratch-у
+/// размером во всю цель рендера. Плечо A/B: одно и то же плечо и по пикселям
+/// (сверка картинки), и по счётчику созданных текстур.
+fn bbox_filter_disabled() -> bool {
+    use std::sync::OnceLock;
+    static DISABLED: OnceLock<bool> = OnceLock::new();
+    *DISABLED.get_or_init(|| std::env::var("LUMEN_NO_BBOX_FILTER").is_ok_and(|v| v == "1"))
+}
+
 /// `true`, если сглаживание SVG-супа отключено (`LUMEN_NO_SVG_AA=1`):
 /// `DrawSvgFill`/`DrawSvgStroke` рисуются бинарным треугольным супом, как до
 /// BUG-277 среза 12. Диагностика: A/B-сравнение картинки и скорости на одном
@@ -8361,10 +8371,30 @@ impl Renderer {
         // `from_level` = offscreen layer with element content.
         // `filters` = filter list (may include Blur + color filters).
         // `comp_v_start` = start of 6-vertex fullscreen quad in composite_vertices.
+        /// bbox-офскрин блюра element-фильтра (BUG-405 срез 24): scratch
+        /// H-прохода живёт в размере региона, а не всей цели рендера.
+        ///
+        /// `rect` = `[x, y, w, h]` в device px цели (начало = начало scissor-а,
+        /// ширина/высота выровнены вверх до 64 px ради попаданий
+        /// `texture_pool`). `src_v_start` — квад H-прохода (позиция во весь
+        /// офскрин, UV — область полноразмерного источника), `dst_v_start` —
+        /// квад слитого пасса (позиция — прямоугольник региона в цели, UV —
+        /// весь офскрин).
+        #[derive(Clone, Copy)]
+        struct FilterRegion {
+            rect: [u32; 4],
+            src_v_start: u32,
+            dst_v_start: u32,
+        }
         struct FilterCompositePlan {
             from_level: usize,
             filters: Vec<FilterFn>,
             comp_v_start: u32,
+            /// bbox-офскрин блюра (см. [`FilterRegion`]). `None` — scratch
+            /// размером в цель, путь до среза 24: kill-switch
+            /// `LUMEN_NO_BBOX_FILTER=1`, отсутствие scissor-а (контент слоя
+            /// не ограничен) или регион ≈ вся цель.
+            region: Option<FilterRegion>,
             /// Ограничение закрашиваемой области всех трёх фильтр-пассов
             /// (blur H / blur V / composite): bbox контента уровня, раздутый
             /// на радиус блюра (= min(ceil(3σ),32) текселей — как в шейдере,
@@ -10587,10 +10617,52 @@ impl Renderer {
                         };
                         let comp_v_start = composite_vertices.len() as u32;
                         push_composite_quad(&mut composite_vertices, 1.0);
+                        // bbox-офскрин блюра (BUG-405 срез 24): scratch
+                        // H-прохода — размером со scissor, выровненный вверх
+                        // до 64 px, а не во всю цель рендера. Пиксельная
+                        // эквивалентность: слитый пасс читает офскрин только
+                        // внутри scissor-а, а все его выборки по вертикали для
+                        // этих пикселей лежат внутри региона — scissor уже
+                        // раздут на радиус ядра, а строки выше/ниже bbox-а
+                        // контента прозрачны (горизонтальный проход по
+                        // вертикали не размазывает), то есть край региона
+                        // отдаёт тот же ноль, что прежде давал полный Clear.
+                        let region = match (&scissor, bbox_filter_disabled()) {
+                            (Some(s), false) => {
+                                let rw = s.width.div_ceil(64) * 64;
+                                let rh = s.height.div_ceil(64) * 64;
+                                // Регион ≈ вся цель — выигрыша нет, остаёмся
+                                // на прежнем пути.
+                                if rw >= surface_w && rh >= surface_h {
+                                    None
+                                } else {
+                                    let rect = [s.x, s.y, rw, rh];
+                                    let src_v_start = composite_vertices.len() as u32;
+                                    push_region_src_quad(
+                                        &mut composite_vertices,
+                                        rect,
+                                        surface_w as f32,
+                                        surface_h as f32,
+                                        1.0,
+                                    );
+                                    let dst_v_start = composite_vertices.len() as u32;
+                                    push_region_dst_quad(
+                                        &mut composite_vertices,
+                                        rect,
+                                        surface_w as f32,
+                                        surface_h as f32,
+                                        1.0,
+                                    );
+                                    Some(FilterRegion { rect, src_v_start, dst_v_start })
+                                }
+                            }
+                            _ => None,
+                        };
                         render_plan.push(RenderPlanItem::FilterComposite(FilterCompositePlan {
                             from_level: current_level,
                             filters,
                             comp_v_start,
+                            region,
                             scissor,
                         }));
                         current_level -= 1;
@@ -12244,18 +12316,53 @@ impl Renderer {
                     // Выключено — прежний трёхпассовый путь (рычаг отката и
                     // плечо A/B).
                     let merge = blur_sigma.is_some() && blur_merge_on;
+                    // bbox-офскрин блюра (BUG-405 срез 24) — только на слитом
+                    // пути: несклеенный V-проход пишет обратно в сам слой
+                    // уровня, там регион ничего не экономит.
+                    let region = if merge { plan.region } else { None };
+                    // Офскрин региона держится до конца пасса композита (его
+                    // читает слитый пасс), затем возвращается в пул.
+                    let mut pooled_region: Option<OffscreenLayer> = None;
+                    // Цель H-прохода — она же источник слитого пасса.
+                    let mut blur_out_view: Option<wgpu::TextureView> = None;
+                    // Разбивка цены композита по пассам (только когда план
+                    // кадра печатается, `LUMEN_FRAME_LOG=3`): H-проход читает
+                    // слой уровня, слитый — офскрин. Без неё «дорогой filt0»
+                    // не адресуем. Вне журнала таймеры не берутся вовсе.
+                    let mut t_pass_h = std::time::Duration::ZERO;
+                    let mut t_pass_v = std::time::Duration::ZERO;
 
                     if let Some(sigma) = blur_sigma {
                         // Ensure scratch before any immutable borrows of self.
-                        let src_w = self.layer_textures[src_layer_idx].width;
-                        let src_h = self.layer_textures[src_layer_idx].height;
-                        self.ensure_scratch_layer(src_w, src_h);
+                        let (blur_dst_view, blur_depth_view, h_v_start, h_scissor) = match region {
+                            Some(r) => {
+                                let [_, _, rw, rh] = r.rect;
+                                let layer = self.create_layer_texture(rw, rh);
+                                let view = layer.view.clone();
+                                pooled_region = Some(layer);
+                                // Depth обязан совпадать по размеру с color —
+                                // валидация wgpu (как у bbox-backdrop).
+                                let depth = Some(self.small_depth_view(rw, rh));
+                                // Scissor не нужен: пасс и так кроет только
+                                // регион, а его края обязаны быть заполнены —
+                                // слитый пасс читает офскрин целиком.
+                                (view, depth, r.src_v_start, None)
+                            }
+                            None => {
+                                let src_w = self.layer_textures[src_layer_idx].width;
+                                let src_h = self.layer_textures[src_layer_idx].height;
+                                self.ensure_scratch_layer(src_w, src_h);
+                                let view = self.scratch_layer.as_ref().unwrap().view.clone();
+                                (view, self.depth_view.clone(), plan.comp_v_start, plan.scissor)
+                            }
+                        };
+                        blur_out_view = Some(blur_dst_view.clone());
 
-                        // H-проход: src_level → scratch.
+                        // H-проход: src_level → scratch (или bbox-офскрин).
                         let blur_h = BlurParamsCpu { sigma, direction: 0, _p0: 0, _p1: 0 };
                         let blur_h_buf = make_blur_param_buf(&self.device, &blur_h);
                         let src_view_h = &self.layer_textures[src_layer_idx].view;
-                        let scratch_view_h = &self.scratch_layer.as_ref().unwrap().view;
+                        let scratch_view_h = &blur_dst_view;
                         let blur_bg_h = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                             label: Some("blur-h-bg"),
                             layout: &self.blur_bgl,
@@ -12265,6 +12372,7 @@ impl Renderer {
                                 wgpu::BindGroupEntry { binding: 2, resource: blur_h_buf.as_entire_binding() },
                             ],
                         });
+                        let t_h0 = item_log.then(std::time::Instant::now);
                         {
                             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                                 label: Some("blur-h-pass"),
@@ -12274,7 +12382,7 @@ impl Renderer {
                                     depth_slice: None,
                                     ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
                                 })],
-                                depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                                depth_stencil_attachment: blur_depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
                             view: dv,
                             depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
                             stencil_ops: None,
@@ -12283,13 +12391,14 @@ impl Renderer {
                                 occlusion_query_set: None,
                             });
                             pass.set_pipeline(self.blur_pipeline());
-                            if let Some(s) = plan.scissor {
+                            if let Some(s) = h_scissor {
                                 pass.set_scissor_rect(s.x, s.y, s.width, s.height);
                             }
                             pass.set_bind_group(0, &blur_bg_h, &[]);
                             pass.set_vertex_buffer(0, cvb.slice(..));
-                            pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
+                            pass.draw(h_v_start..h_v_start + 6, 0..1);
                         }
+                        t_pass_h = t_h0.map_or(t_pass_h, |t| t.elapsed());
                         filter_passes += 1;
 
                         if !merge {
@@ -12366,7 +12475,20 @@ impl Renderer {
                         let sigma = blur_sigma.unwrap_or(0.0);
                         let blur_v = BlurParamsCpu { sigma, direction: 1, _p0: 0, _p1: 0 };
                         let blur_v_buf = make_blur_param_buf(&self.device, &blur_v);
-                        let scratch_view_v = &self.scratch_layer.as_ref().unwrap().view;
+                        // Источник — цель H-прохода: bbox-офскрин (срез 24)
+                        // либо прежний полноразмерный scratch.
+                        let fallback_scratch_view;
+                        let scratch_view_v = match blur_out_view.as_ref() {
+                            Some(v) => v,
+                            None => {
+                                fallback_scratch_view =
+                                    self.scratch_layer.as_ref().map(|s| s.view.clone());
+                                match fallback_scratch_view.as_ref() {
+                                    Some(v) => v,
+                                    None => continue,
+                                }
+                            }
+                        };
                         let bc_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                             label: Some("blur-composite-bg"),
                             layout: &self.blur_composite_bgl,
@@ -12377,6 +12499,7 @@ impl Renderer {
                                 wgpu::BindGroupEntry { binding: 3, resource: fp_buf.as_entire_binding() },
                             ],
                         });
+                        let t_v0 = item_log.then(std::time::Instant::now);
                         {
                             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                                 label: Some("blur-composite-pass"),
@@ -12400,8 +12523,12 @@ impl Renderer {
                             }
                             pass.set_bind_group(0, &bc_bg, &[]);
                             pass.set_vertex_buffer(0, cvb.slice(..));
-                            pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
+                            // При bbox-офскрине квад кроет прямоугольник
+                            // региона в цели, а UV пробегает офскрин целиком.
+                            let v_start = region.map_or(plan.comp_v_start, |r| r.dst_v_start);
+                            pass.draw(v_start..v_start + 6, 0..1);
                         }
+                        t_pass_v = t_v0.map_or(t_pass_v, |t| t.elapsed());
                         filter_passes += 1;
                         blur_param_bufs.push(blur_v_buf);
                     } else {
@@ -12446,17 +12573,28 @@ impl Renderer {
                         filter_passes += 1;
                     }
                     filter_param_bufs.push(fp_buf);
+                    // bbox-офскрин отработал — вернуть в пул. Безопасно сразу
+                    // после записи команд: они исполняются в порядке
+                    // encoder-а (та же дисциплина, что у ping-pong backdrop-а).
+                    if let Some(l) = pooled_region.take() {
+                        self.release_layer_to_pool(l);
+                    }
                     if item_log {
                         let sc = plan
                             .scissor
                             .as_ref()
                             .map(|s| format!("{}x{}", s.width, s.height))
                             .unwrap_or_else(|| "full".into());
+                        let rg = region
+                            .map(|r| format!(" r{}x{}", r.rect[2], r.rect[3]))
+                            .unwrap_or_default();
                         desc = format!(
-                            "L{}b{:.1}c{color_count} sc{sc}{}",
+                            "L{}b{:.1}c{color_count} sc{sc}{}{rg} h{:.2} v{:.2}",
                             plan.from_level,
                             blur_sigma.unwrap_or(0.0),
                             if merge { " merged" } else { "" },
+                            t_pass_h.as_secs_f32() * 1000.0,
+                            t_pass_v.as_secs_f32() * 1000.0,
                         );
                     }
                 }
@@ -15053,6 +15191,68 @@ fn push_bounded_quad(
     ]);
 }
 
+/// Квад H-прохода блюра в bbox-офскрин (BUG-405 срез 24): позиция кроет весь
+/// офскрин-таргет (NDC −1..1), UV — соответствующая область ПОЛНОРАЗМЕРНОГО
+/// источника (`region / surface`).
+///
+/// Центр фрагмента `i` офскрина шириной `rw` даёт `uv.x = (rx + i + 0.5)/surf_w`
+/// — ровно то же значение, что было у пикселя `rx + i` при полноразмерном
+/// проходе, поэтому источник читается по тем же текселям.
+fn push_region_src_quad(
+    out: &mut Vec<CompositeVertex>,
+    region: [u32; 4],
+    surf_w: f32,
+    surf_h: f32,
+    alpha: f32,
+) {
+    let (rx, ry, rw, rh) = (
+        region[0] as f32,
+        region[1] as f32,
+        region[2] as f32,
+        region[3] as f32,
+    );
+    let (u0, u1) = (rx / surf_w, (rx + rw) / surf_w);
+    let (v0, v1) = (ry / surf_h, (ry + rh) / surf_h);
+    out.extend_from_slice(&[
+        CompositeVertex { pos: [-1.0, 1.0], uv: [u0, v0], alpha },
+        CompositeVertex { pos: [1.0, 1.0], uv: [u1, v0], alpha },
+        CompositeVertex { pos: [1.0, -1.0], uv: [u1, v1], alpha },
+        CompositeVertex { pos: [-1.0, 1.0], uv: [u0, v0], alpha },
+        CompositeVertex { pos: [1.0, -1.0], uv: [u1, v1], alpha },
+        CompositeVertex { pos: [-1.0, -1.0], uv: [u0, v1], alpha },
+    ]);
+}
+
+/// Квад слитого пасса «вертикальный блюр + фильтры + композит» при
+/// bbox-офскрине (BUG-405 срез 24): позиция — прямоугольник региона в
+/// полноразмерной цели (device px → NDC), UV — весь офскрин (0..1).
+fn push_region_dst_quad(
+    out: &mut Vec<CompositeVertex>,
+    region: [u32; 4],
+    surf_w: f32,
+    surf_h: f32,
+    alpha: f32,
+) {
+    let (rx, ry, rw, rh) = (
+        region[0] as f32,
+        region[1] as f32,
+        region[2] as f32,
+        region[3] as f32,
+    );
+    let x0 = rx / surf_w * 2.0 - 1.0;
+    let x1 = (rx + rw) / surf_w * 2.0 - 1.0;
+    let y0 = 1.0 - ry / surf_h * 2.0;
+    let y1 = 1.0 - (ry + rh) / surf_h * 2.0;
+    out.extend_from_slice(&[
+        CompositeVertex { pos: [x0, y0], uv: [0.0, 0.0], alpha },
+        CompositeVertex { pos: [x1, y0], uv: [1.0, 0.0], alpha },
+        CompositeVertex { pos: [x1, y1], uv: [1.0, 1.0], alpha },
+        CompositeVertex { pos: [x0, y0], uv: [0.0, 0.0], alpha },
+        CompositeVertex { pos: [x1, y1], uv: [1.0, 1.0], alpha },
+        CompositeVertex { pos: [x0, y1], uv: [0.0, 1.0], alpha },
+    ]);
+}
+
 /// Конвертирует декодированное изображение в плотный `Rgba8Unorm`-буфер.
 /// Gray → серый × 3, alpha = 255. GrayA → серый × 3, alpha из канала.
 /// Rgb → opaque (alpha = 255). Rgba — копия.
@@ -16124,6 +16324,52 @@ fn block_on<F: std::future::Future>(future: F) -> F::Output {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// BUG-405 срез 24: квад H-прохода в bbox-офскрин обязан читать источник
+    /// по ТЕМ ЖЕ текселям, что полноразмерный проход, — иначе картинка
+    /// поедет на пиксель. Проверка на центрах фрагментов: интерполяция UV по
+    /// офскрину шириной `rw` в точке `t = (i + 0.5) / rw` должна давать
+    /// `(rx + i + 0.5) / surf`.
+    #[test]
+    fn region_src_quad_uv_matches_full_size_pass() {
+        let (surf_w, surf_h) = (1884.0_f32, 2501.0_f32);
+        let region = [640_u32, 1216, 320, 384];
+        let mut out = Vec::new();
+        push_region_src_quad(&mut out, region, surf_w, surf_h, 1.0);
+        assert_eq!(out.len(), 6);
+        // Позиция — весь офскрин: NDC от −1 до 1 по обеим осям.
+        assert_eq!(out[0].pos, [-1.0, 1.0]);
+        assert_eq!(out[2].pos, [1.0, -1.0]);
+        let (u0, u1) = (out[0].uv[0], out[1].uv[0]);
+        let (v0, v1) = (out[0].uv[1], out[5].uv[1]);
+        let (rx, ry, rw, rh) = (640.0_f32, 1216.0, 320.0, 384.0);
+        for i in [0.0_f32, 1.0, 159.0, 319.0] {
+            let t = (i + 0.5) / rw;
+            let want = (rx + i + 0.5) / surf_w;
+            assert!((u0 + (u1 - u0) * t - want).abs() < 1e-6, "u на фрагменте {i}");
+        }
+        for j in [0.0_f32, 1.0, 383.0] {
+            let t = (j + 0.5) / rh;
+            let want = (ry + j + 0.5) / surf_h;
+            assert!((v0 + (v1 - v0) * t - want).abs() < 1e-6, "v на фрагменте {j}");
+        }
+    }
+
+    /// Слитый пасс кроет в цели ровно прямоугольник региона, а UV пробегает
+    /// офскрин целиком (0..1): смещение сидит в позиции, а не в выборке.
+    #[test]
+    fn region_dst_quad_covers_region_rect() {
+        let (surf_w, surf_h) = (1884.0_f32, 2501.0_f32);
+        let mut out = Vec::new();
+        push_region_dst_quad(&mut out, [640, 1216, 320, 384], surf_w, surf_h, 1.0);
+        assert_eq!(out.len(), 6);
+        let ndc_x = |px: f32| px / surf_w * 2.0 - 1.0;
+        let ndc_y = |px: f32| 1.0 - px / surf_h * 2.0;
+        assert_eq!(out[0].pos, [ndc_x(640.0), ndc_y(1216.0)]);
+        assert_eq!(out[2].pos, [ndc_x(960.0), ndc_y(1600.0)]);
+        assert_eq!(out[0].uv, [0.0, 0.0]);
+        assert_eq!(out[2].uv, [1.0, 1.0]);
+    }
 
     #[test]
     fn size_bin_for_exact_match() {
