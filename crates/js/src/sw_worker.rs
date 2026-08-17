@@ -40,11 +40,27 @@ const FETCH_TIMEOUT: Duration = Duration::from_millis(5_000);
 /// hooks called by the Rust message loop, `console`, and
 /// `setTimeout`/`clearTimeout`/`setInterval`/`clearInterval` stubs.
 #[cfg(feature = "v8-backend")]
-fn sw_globals_shim(scope_str: &str) -> String {
+fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
     format!(r#"
-(function(scope) {{
+(function(scope, origin) {{
   globalThis.self = globalThis;
-  globalThis.location = {{ href: scope, origin: scope.slice(0, scope.lastIndexOf('/')) }};
+  // `WorkerLocation` (HTML LS §8.1.5.4) целиком, а не два поля: сервис-воркеры
+  // ветвятся по `location.host`/`location.search` прямо на верхнем уровне, и
+  // `undefined.includes(...)` роняет установку всего воркера ещё до первого
+  // слушателя (живой пример — `sw.js` t-банка). Разбор берём у той же функции,
+  // что и страница (`_lumen_parse_url` приехал с worker-шимом), поэтому
+  // `origin` — настоящий, а не `scope` без последнего сегмента пути.
+  globalThis.location = (function() {{
+    var abs = (scope.indexOf('://') !== -1) ? scope
+            : (origin + (scope.charAt(0) === '/' ? scope : '/' + scope));
+    var p = _lumen_parse_url(abs);
+    return {{
+      href: p.href, origin: p.origin, protocol: p.protocol,
+      host: p.host, hostname: p.hostname, port: p.port,
+      pathname: p.pathname, search: p.search, hash: p.hash,
+      toString: function() {{ return p.href; }},
+    }};
+  }})();
   globalThis.registration = {{
     scope: scope,
     active: {{ state: 'activated', scriptURL: '' }},
@@ -215,7 +231,7 @@ fn sw_globals_shim(scope_str: &str) -> String {
   globalThis.setInterval = function() {{ return 0; }};
   globalThis.clearInterval = function() {{}};
 
-}})({scope_str});
+}})({scope_str}, {origin_str});
 "#
     )
 }
@@ -437,7 +453,12 @@ fn install_sw_globals_v8(
 
     let scope_js = scope.replace('\'', "\\'");
     let scope_str = format!("'{scope_js}'");
-    rt.eval(&sw_globals_shim(&scope_str))?;
+    // `scope` приходит путём (`/invest/`), а `WorkerLocation` обязан быть
+    // абсолютным адресом — иначе `location.host` пуст, и ветвление воркера по
+    // хосту молча выбирает не ту ветку.
+    let origin_js = origin.trim_end_matches('/').replace('\'', "\\'");
+    let origin_str = format!("'{origin_js}'");
+    rt.eval(&sw_globals_shim(&scope_str, &origin_str))?;
     Ok(())
 }
 
@@ -465,6 +486,34 @@ mod tests_v8 {
             "typeof performance.now === 'function'",
             "performance instanceof Performance",
             "Object.getPrototypeOf(Performance.prototype) === EventTarget.prototype",
+        ] {
+            assert_eq!(
+                rt.eval(expr).unwrap(),
+                lumen_core::JsValue::Bool(true),
+                "{expr}"
+            );
+        }
+    }
+
+    /// `WorkerLocation` целиком + `URL`/`URLSearchParams` в области воркера:
+    /// ровно то, чем сервис-воркеры ветвятся на верхнем уровне. Пока полей не
+    /// было, `self.location.host.includes(...)` роняло установку воркера
+    /// целиком (живой пример — `sw.js` t-банка, 2026-08-17).
+    #[test]
+    fn sw_global_scope_has_full_location_and_url_classes() {
+        let rt = V8JsRuntime::new().unwrap();
+        install_sw_globals_v8(&rt, "https://cdn.example.com:8443", "/invest/", MockCache::new())
+            .unwrap();
+        for expr in [
+            "typeof URLSearchParams === 'function'",
+            "typeof URL === 'function'",
+            "location.host === 'cdn.example.com:8443'",
+            "location.hostname === 'cdn.example.com'",
+            "location.protocol === 'https:'",
+            "location.pathname === '/invest/'",
+            "typeof location.search === 'string'",
+            "new URLSearchParams('a=1&b=2').get('b') === '2'",
+            "new URL('/x?y=1', 'https://h.example/').searchParams.get('y') === '1'",
         ] {
             assert_eq!(
                 rt.eval(expr).unwrap(),
