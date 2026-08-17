@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-18",
  "counts": {
-  "open": 315,
+  "open": 316,
   "fixed": 424,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 739,
+ "total_bugs": 740,
  "phases": [
   {
    "id": "P0",
@@ -4240,9 +4240,12 @@
       {
        "id": "WPT-VENDOR-webvtt",
        "title": "WPT: вендорить + прогнать категорию `webvtt`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат)."
+       "note": "Скоуп: ⬜ (подтверждён — cue-парсер + `<track>`-сбор + оверлей реальны, `lumen_dom::vtt`/`crates/shell/src/tracks.rs`, не заглушка). DONE 2026-08-18: вендорена + прогнана целиком (`--all --root webvtt --recursive`, ~8:17, 821 файл, 72 id; 581/820 файлов — reftest в `rendering/`, не исполняются раннером) — **21/72 harness OK, 1/176 сабтестов**. Найден [BUG-775](bugs/BUG-775-OPEN.md) (`HTMLTrackElement` никогда не диспатчит `load`/`error` — стандартный паттерн `track.onload` виснет до таймаута, роняя все 40 файлов `parsing/file-parsing/` + часть `parsing/cue-text-parsing/`). `api/VTTCue`/`api/VTTRegion` — уже заведённый BUG-570 (конструкторы не установлены как глобалы)",
+       "bugs": [
+        "BUG-775"
+       ]
       },
       {
        "id": "WPT-VENDOR-webxr",
@@ -9986,6 +9989,13 @@
    "status": "open",
    "title": "`initStorageEvent(type, bubbles, cancelable, key, oldValue, newValue, url, storageArea)` присваивает аргументы без WebIDL-коэрсии/default-подстановки: непередан…",
    "component": "js (`crates/js/src/dom.rs::StorageEvent.prototype.initStorageEvent`, ~636)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-775": {
+   "status": "open",
+   "title": "`HTMLTrackElement` никогда не диспатчит `load`/`error` -- любой скрипт стандартного паттерна `track.onload = ...; video.appendChild(track)` (все тесты `webvtt/p…",
+   "component": "js (`crates/js/src/dom.rs:13589` -- `HTMLTrackElement` только атрибут-рефлексия, нет диспатча событий; `crates/js/src/video_bindings.rs` -- `fireEvent()` вызывается для `<video>`/`<audio>`, ни разу для `<track>`; `crates/shell/src/tracks.rs::load_video_tracks` -- чисто внутренний парсер, ничего не диспатчит в DOM)",
    "date": null,
    "debtor": false
   }
