@@ -73,14 +73,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-08-17",
+ "generated": "2026-08-18",
  "counts": {
-  "open": 312,
+  "open": 313,
   "fixed": 424,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 736,
+ "total_bugs": 737,
  "phases": [
   {
    "id": "P0",
@@ -9960,6 +9960,13 @@
    "component": "paint (`crates/engine/paint/src/renderer.rs` — пре-резолв face-ов `DrawText`)",
    "date": "2026-08-17",
    "debtor": false
+  },
+  "BUG-772": {
+   "status": "open",
+   "title": "**TEST-18 (картинки) ушёл с 2.31 % на 6.34 %** — порог теста 0.5 %, запись должника BUG-219 рассчитана на 2.11 %. Эталон `graphic_tests/results/latest.json` сня…",
+   "component": "paint/image (кандидаты — срезы 20–23 [BUG-405](bugs/BUG-405-OPEN.md) и [BUG-771](bugs/BUG-771-FIXED.md); коммит не бисекчен)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -10923,6 +10930,9 @@
   ],
   "paint/image": [
    "BUG-032"
+  ],
+  "paint/image (кандидаты — срезы 20–23 [BUG-405](bugs/BUG-405-OPEN.md) и [BUG-771](bugs/BUG-771-FIXED.md); коммит не бисекчен)": [
+   "BUG-772"
   ],
   "paint/layout": [
    "BUG-096",
