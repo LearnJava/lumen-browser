@@ -4232,9 +4232,9 @@
       {
        "id": "WPT-VENDOR-webxr",
        "title": "WPT: вендорить + прогнать категорию `webxr`",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). XR — нет рантайма"
+       "note": "Скоуп: 🚫 (вне скоупа, подтверждено — `crates/js/src/webxr.rs` целиком Phase-0 заглушка, `isSessionSupported()` всегда `false`, `requestSession()` всегда reject). DONE 2026-08-18: вендорена + прогнана целиком (`--all --root webxr --recursive`, ~17 мин, 178 файлов, 165 id) — **1/165 harness OK, 17/19 сабтестов**. 164/165 — уже задокументированный TLS-гэп `UnknownIssuer` (BUG-657). Оба исполнившихся не-`.https.`: `historical.html` 17/17 OK (тривиально, отсутствие устаревших WebVR-интерфейсов), `webxr_availability.http.sub.html` — harness TIMEOUT, переподтверждает BUG-765 (`navigator.xr` без гейта `isSecureContext`) и BUG-480 (кросс-origin `<iframe>` без browsing context). Новых багов не заведено"
       },
       {
        "id": "WPT-VENDOR-window-management",
