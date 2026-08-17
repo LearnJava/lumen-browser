@@ -5891,6 +5891,15 @@ var customElements = {
 };
 
 // ── location (HTML LS §7.7 + WHATWG URL §8) ──────────────────────────────────
+";
+
+/// `_lumen_parse_url` — разбор URL, общий для страницы и воркера.
+///
+/// Вынесен из [`WEB_API_SHIM_MID`] отдельным куском, потому что `URL`/
+/// `URLSearchParams` (`[Exposed=(Window,Worker)]`) опираются на него, а в
+/// воркере остального шима страницы нет. Кусок — дословный срез, не копия:
+/// склейка в [`web_api_shim`] обязана давать прежний текст.
+pub(crate) const URL_PARSE_SHIM: &str = "
 // _LUMEN_PAGE_URL injected by Rust before this shim runs.
 function _lumen_parse_url(url) {
     var href = String(url || '');
@@ -5945,6 +5954,9 @@ function _lumen_parse_url(url) {
              pathname: pathname, search: search, hash: hash, origin: origin,
              hasAuthority: hasAuthority };
 }
+";
+
+const WEB_API_SHIM_MID_B: &str = "
 var _lumen_loc_parts = _lumen_parse_url(typeof _LUMEN_PAGE_URL !== 'undefined' ? _LUMEN_PAGE_URL : '');
 var _lumen_loc_href  = _lumen_loc_parts.href;
 var _lumen_loc_hash  = _lumen_loc_parts.hash;
@@ -10027,6 +10039,14 @@ var queueMicrotask = (function() {
     };
 })();
 
+";
+
+/// `URLSearchParams` + `URL` (WHATWG URL §5/§6.1) — `[Exposed=(Window,Worker)]`.
+///
+/// Второй кусок, общий с воркером: сервис-воркеры разбирают запросы именно
+/// этими классами (живой пример — `sw.js` t-банка падал на `URLSearchParams
+/// is not defined`, и вместе с ним не вставал весь SW).
+pub(crate) const URL_SHIM: &str = "
 // ── URLSearchParams (WHATWG URL §5) ──────────────────────────────────────────
 function URLSearchParams(init) {
     // `_p` (the pair list) and `_url` (the URL this object is the `searchParams`
@@ -10371,6 +10391,9 @@ function URL(href, base) {
         catch (e) { return null; }
     };
 })();
+";
+
+const WEB_API_SHIM_MID_C: &str = "
 // ── btoa / atob (HTML5 Living Std §2.4.7 + RFC 4648 §4) ─────────────────────
 var _b64c = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 function btoa(str) {
@@ -15727,7 +15750,7 @@ var dispatchEvent       = window.dispatchEvent.bind(window);
 /// split is invisible to the shim's own code.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn web_api_shim() -> String {
-    format!("{WEB_API_SHIM_HEAD}{EVENT_TARGET_SHIM}{WEB_API_SHIM_MID}{PERFORMANCE_SHIM}{WEB_API_SHIM_TAIL}")
+    format!("{WEB_API_SHIM_HEAD}{EVENT_TARGET_SHIM}{WEB_API_SHIM_MID}{URL_PARSE_SHIM}{WEB_API_SHIM_MID_B}{URL_SHIM}{WEB_API_SHIM_MID_C}{PERFORMANCE_SHIM}{WEB_API_SHIM_TAIL}")
 }
 
 /// The subset of the page shim that WHATWG also exposes in a
@@ -15740,7 +15763,7 @@ pub(crate) fn web_api_shim() -> String {
 /// [`EVENT_TARGET_SHIM`] would otherwise yield.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn worker_exposed_shim() -> String {
-    format!("{EVENT_TARGET_SHIM}{PERFORMANCE_SHIM}\nundefined;\n")
+    format!("{EVENT_TARGET_SHIM}{PERFORMANCE_SHIM}{URL_PARSE_SHIM}{URL_SHIM}\nundefined;\n")
 }
 
 // ─── tests ────────────────────────────────────────────────────────────────────

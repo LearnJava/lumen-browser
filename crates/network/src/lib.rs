@@ -1680,6 +1680,28 @@ fn check_negotiated_alpn(alpn: Option<&[u8]>) -> Result<bool> {
 
 // ── Pool integration ─────────────────────────────────────────────────────────
 
+/// Сорвалось ли TLS-рукопожатие по транспортной (не по доверительной) причине.
+///
+/// `cannot decrypt peer's message` / `received corrupt message` — это
+/// повреждённый поток рукопожатия, а не отказ сервера: замерено 2026-08-17 на
+/// живой `www.tbank.ru/invest/portfolio/`, где под нагрузкой (десятки
+/// параллельных подресурсов к одному хосту) примерно каждый четвёртый прогон
+/// терял ОДИН скрипт с такой ошибкой — а вместе с ним и всё приложение, потому
+/// что это оказывался входной чанк. Само повреждение — открытый вопрос
+/// (на чистой странице с 14 параллельными скриптами не воспроизводится).
+///
+/// Отказ доверия (`invalid peer certificate`) сюда НЕ входит: он постоянный, и
+/// повтор только удвоил бы задержку перед тем же ответом.
+///
+/// Рукопожатие происходит ДО отправки запроса, поэтому повтор безопасен и для
+/// запроса с телом: сервер гарантированно ничего не получил.
+fn is_transient_handshake_error(err: &Error) -> bool {
+    let msg = format!("{err:?}");
+    msg.contains("TLS handshake:")
+        && !msg.contains("invalid peer certificate")
+        && !msg.contains("invalid hostname")
+}
+
 /// Решить, выглядит ли ошибка как «stale keep-alive»: сервер закрыл idle
 /// соединение, и наш write / первый read получил EOF или RST. Такие ошибки
 /// заслуживают однократного retry на свежем соединении.
@@ -2820,6 +2842,47 @@ fn fetch_with_redirect(
             body,
         ) {
             Ok(r) => r,
+            // Повреждённое рукопожатие — одна повторная попытка на свежем
+            // соединении. Без неё ОДИН потерянный подресурс убивает страницу
+            // целиком и молча: на `tbank.ru/invest/portfolio/` это оказывался
+            // входной чанк приложения, и примерно каждый четвёртый прогон
+            // заканчивался серверным HTML без единой ошибки в консоли — ровно
+            // тем «мелькнуло и белая страница», с которого начался разбор.
+            // Повтор безопасен на любом методе: рукопожатие рвётся до отправки
+            // запроса, сервер ничего не получил.
+            Err(e) if is_transient_handshake_error(&e) => {
+                eprintln!("повтор после сорванного TLS-рукопожатия: {url} ({e})");
+                match fetch_single(
+                    pool,
+                    h2_pool,
+                    resolver,
+                    tls_profile,
+                    http_profile,
+                    &host_ascii,
+                    port,
+                    is_tls,
+                    actual_method,
+                    &host_ascii,
+                    &url.path_and_query(),
+                    range,
+                    if_range,
+                    authorization.as_deref(),
+                    accept_encoding,
+                    &actual_extra_headers,
+                    proxy,
+                    socks5_proxy,
+                    h3_alt_svc,
+                    h3_pool,
+                    // Sink уже отдан первой попытке (он `&mut`), повтор
+                    // буферизует — стримится только навигация, а её первая
+                    // порция при сорванном рукопожатии не могла уйти.
+                    None,
+                    body,
+                ) {
+                    Ok(r) => r,
+                    Err(e2) => return Err(emit_request_failed(sink, tab_id, url, e2)),
+                }
+            }
             Err(e) => return Err(emit_request_failed(sink, tab_id, url, e)),
         };
 
@@ -5842,6 +5905,29 @@ mod tests {
         assert_eq!(abs.as_str(), "http://localhost:8080/next");
         let rel = base.resolve("sibling.html").unwrap();
         assert_eq!(rel.as_str(), "http://localhost:8080/dir/sibling.html");
+    }
+
+    #[test]
+    fn transient_handshake_error_excludes_trust_failures() {
+        // Повреждённое рукопожатие — повторяем (одна потеря подресурса убивает
+        // страницу целиком); отказ доверия — постоянный, повтор бессмыслен.
+        assert!(is_transient_handshake_error(&Error::Network(
+            "TLS handshake: cannot decrypt peer's message".to_owned()
+        )));
+        assert!(is_transient_handshake_error(&Error::Network(
+            "TLS handshake: received corrupt message of type InvalidContentType".to_owned()
+        )));
+        assert!(!is_transient_handshake_error(&Error::Network(
+            "TLS handshake: invalid peer certificate: UnknownIssuer".to_owned()
+        )));
+        assert!(!is_transient_handshake_error(&Error::Network(
+            "invalid hostname 'x': TLS handshake: ".to_owned()
+        )));
+        // Не-рукопожатные ошибки этой веткой не занимаются.
+        assert!(!is_transient_handshake_error(&Error::Network(
+            "EOF before status line".to_owned()
+        )));
+        assert!(!is_transient_handshake_error(&Error::Network("HTTP 500".to_owned())));
     }
 
     #[test]
