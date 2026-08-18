@@ -271,6 +271,10 @@ fn compose_ruby_text_only(ruby: &RubyBox) -> LayoutBox {
 }
 
 /// Stack boxes horizontally (left-to-right).
+// Тот же случай, что и в `mathml.rs` (docs/lint-policy.md §10): паника на пустом
+// списке в коде, который сегодня не вызывается конвейером («`<ruby>` box-tree
+// integration — deferred»), но экспортируется из крейта.
+#[allow(clippy::panic)]
 fn stack_boxes_horizontal(boxes: &[LayoutBox]) -> LayoutBox {
     if boxes.is_empty() {
         panic!("stack_boxes_horizontal requires at least one box");

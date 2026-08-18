@@ -16,6 +16,12 @@
 //! verbatim below so the same logic is unit-testable from `mod gate;` in
 //! `lib.rs` without duplication.
 
+// Постоянное исключение из `clippy::panic` (docs/lint-policy.md §10): паника —
+// это и есть штатный способ провалить сборку из build-скрипта. Возвращать
+// `Result` некуда, а «мягкий» отказ дал бы собранный бинарь с невалидным
+// ассетом хрома — ровно то, что этот скрипт обязан не допустить.
+#![allow(clippy::panic)]
+
 use std::collections::{BTreeSet, HashSet};
 use std::{env, fs, path::Path, path::PathBuf};
 

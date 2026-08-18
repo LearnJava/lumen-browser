@@ -44,6 +44,10 @@ rust-version = "1.95"
 # «Каждый `unsafe` требует // SAFETY:» (CLAUDE.md §Code conventions). Замер до
 # включения — 17 срабатываний в 7 крейтах, все закрыты тем же коммитом.
 undocumented_unsafe_blocks = "deny"
+# «no panic! в проде» (CLAUDE.md §Code conventions). Замер до включения — 91
+# срабатывание, из них 66 в тестовом коде, куда исключения clippy.toml не
+# достают. Действующие точечные #[allow] перечислены в docs/lint-policy.md §10.
+panic = "deny"
 
 [workspace.dependencies]
 lumen-core = { path = "crates/core" }

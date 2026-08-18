@@ -1186,6 +1186,12 @@ fn rsa_jwk_alg(alg_name: &str, algorithm_json: &str) -> String {
 /// Sign `data` with the key identified by `key_id`.
 /// `alg_json` provides algorithm params (e.g. hash name for ECDSA).
 /// Returns signature bytes, or empty Vec on error.
+// Временное исключение из `clippy::panic` (docs/lint-policy.md §10): три
+// `unwrap_or_else(|_| panic!("hmac key"))` противоречат контракту самой функции
+// («empty Vec on error»). `Hmac::new_from_slice` принимает ключ любой длины,
+// поэтому ветка сегодня недостижима, — но правильная правка (вернуть
+// `Vec::new()`) меняет поведение lumen-js и принадлежит владельцу крейта.
+#[allow(clippy::panic)]
 #[cfg(any(feature = "v8-backend", test))]
 pub(crate) fn sign_data(alg_json: &str, key_id: u32, data: &[u8]) -> Vec<u8> {
     CRYPTO_KEYS.with(|ks| {
@@ -1304,6 +1310,9 @@ fn rsa_sign(
 
 /// Verify a signature produced by `sign_data`.
 /// Returns `true` if the signature is valid, `false` otherwise.
+// То же исключение, что и у `sign_data` (docs/lint-policy.md §10): паника вместо
+// документированного `false`.
+#[allow(clippy::panic)]
 #[cfg(any(feature = "v8-backend", test))]
 pub(crate) fn verify_signature(alg_json: &str, key_id: u32, sig: &[u8], data: &[u8]) -> bool {
     CRYPTO_KEYS.with(|ks| {

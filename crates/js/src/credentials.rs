@@ -590,6 +590,9 @@ mod tests {
 /// rest of `mod tests` which exercises plain Rust functions engine-agnostically.
 #[cfg(all(test, feature = "v8-backend"))]
 mod v8_fedcm {
+    // `panic!` — штатный способ провалить тест; исключение из clippy.toml не
+    // достаёт до хелперов модуля (docs/lint-policy.md §10).
+    #![allow(clippy::panic)]
     use super::*;
     use crate::v8_runtime::V8JsRuntime;
     use lumen_core::ext::JsRuntime as _;
