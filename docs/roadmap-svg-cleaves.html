@@ -55,14 +55,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-08-18",
+ "generated": "2026-08-19",
  "counts": {
-  "open": 323,
+  "open": 324,
   "fixed": 424,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 747,
+ "total_bugs": 748,
  "phases": [
   {
    "id": "P0",
@@ -10077,6 +10077,13 @@
    "component": "network (`crates/network/src/lib.rs:8723-8731`, тест `tests::global_intercept_pauses_real_fetch_until_resolved`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-784": {
+   "status": "open",
+   "title": "**Детерминированный CPU-снапшот на деле недетерминирован:** два прогона `ubuntu-latest` на одном и том же коде (второй коммит ветки правит только `.md`) дали FA…",
+   "component": "paint (`background-blend-mode` в CPU-растре tiny-skia; тест `crates/driver/tests/cases/snapshot_cpu.rs::cpu_snapshots_match_references`, эталон `graphic_tests/snapshots/cpu/49-background-blend-mode.png`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -10985,6 +10992,9 @@
   ],
   "paint (`WgpuBackend`/`renderer.rs`) — wgpu-рендеринг расходится с femtovg": [
    "BUG-277"
+  ],
+  "paint (`background-blend-mode` в CPU-растре tiny-skia; тест `crates/driver/tests/cases/snapshot_cpu.rs::cpu_snapshots_match_references`, эталон `graphic_tests/snapshots/cpu/49-background-blend-mode.png`)": [
+   "BUG-784"
   ],
   "paint (`crates/engine/paint/src/renderer.rs` — пре-резолв face-ов `DrawText`)": [
    "BUG-771"

@@ -218,7 +218,7 @@ The slot (`.claude/worktrees/p1-work` … `p5-work`, plus `perf-base`) is create
 
 **8-step completion checklist** (all mandatory, full details in `docs/git-workflow.md`):
 1. `cargo clippy -p <crate> -- -D warnings` + `cargo test -p <crate>`
-1b. **`git push -u origin p<N>-task-name`, wait for green CI, only then merge** (decided 2026-08-18, `docs/ci-offload.md` §8 variant 1). `ci.yml`/`red-lines.yml` trigger on `p[1-5]-*` pushes — no pull request needed. A red branch is not merged. This is an *addition* to the local gate, not a replacement: CI does not yet run `clippy --workspace` or the snapshot tests, so it is weaker than the local gate and only adds Linux/macOS coverage.
+1b. **`git push -u origin p<N>-task-name`, wait for green CI, only then merge** (decided 2026-08-18, `docs/ci-offload.md` §8 variant 1). `ci.yml`/`red-lines.yml` trigger on `p[1-5]-*` pushes — no pull request needed. A red branch is not merged. This is an *addition* to the local gate, not a replacement: the CI `lint` (`clippy --workspace`) and `snapshot-cpu` jobs are still `continue-on-error` probes (docs/ci-offload.md §11.3, step 1 of 2), so a red one shows as green — read their log text, not their status, and keep running the local gate until step 2 lands.
 2. `git merge --no-ff p<N>-task-name -m "Merge …"`
 3. `bash scripts/worktree-pool.sh release p<N>-work` then `git branch -d p<N>-task-name` (a slot holding the branch makes `branch -d` fail)
 4. Delete pointer line from `STATUS-PN.md`, commit
