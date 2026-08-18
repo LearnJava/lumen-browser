@@ -15,6 +15,16 @@
 //! `math-depth` CSS properties wired — compact fractions scale their children, and
 //! script scale is derived from the cascade's `math-depth` when available.
 
+// Временное исключение из `clippy::panic` (docs/lint-policy.md §10). Десять
+// паник вида «lay_out_mfrac: fraction requires numerator» на пустом списке
+// детей: сегодня недостижимы — `lay_out_mathml` не вызывается из конвейера
+// («`<math>` box-tree integration — deferred», style.rs), — но функция
+// экспортируется из крейта, и первая же страница с `<math></math>` уронит
+// движок, как только интеграцию допишут. Правильная правка — вернуть пустой
+// `LayoutBox` вместо паники — это поведение lumen-layout и работа P1/P4,
+// а не правка под линт.
+#![allow(clippy::panic)]
+
 use crate::box_tree::{LayoutBox, BoxKind, BoxOrigin, BoxRole};
 use crate::style::ComputedStyle;
 use lumen_core::geom::Rect;

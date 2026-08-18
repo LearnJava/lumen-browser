@@ -231,6 +231,9 @@ const LOCAL_FONT_ACCESS_SHIM: &str = r#"(function() {
 
 #[cfg(all(test, feature = "v8-backend"))]
 mod tests {
+    // `panic!` — штатный способ провалить тест; исключение из clippy.toml не
+    // достаёт до хелперов модуля (docs/lint-policy.md §10).
+    #![allow(clippy::panic)]
     use super::*;
     use crate::v8_runtime::V8JsRuntime;
     use lumen_core::ext::JsRuntime as _;

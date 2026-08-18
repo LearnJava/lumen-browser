@@ -1191,6 +1191,12 @@ impl V8JsRuntime {
                 Box<dyn FnOnce(&mut V8Inner) + Send + 'static>,
             >(job)
         };
+        // Исключение из `clippy::panic` (docs/lint-policy.md §10): `run` возвращает
+        // `R`, а не `Result<R>`, и все его вызывающие — тоже. Смерть JS-потока
+        // означает, что ответа не будет никогда; следующая строка всё равно
+        // паникует на `rx.recv()`. Убрать панику можно только сменой сигнатуры
+        // `run` на `Result` — это работа владельца крейта, не правка линта.
+        #[allow(clippy::panic)]
         if self.cmd_tx.send(V8Command::Run(job)).is_err() {
             panic!("lumen-v8 thread terminated unexpectedly");
         }
