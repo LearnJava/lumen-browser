@@ -94,3 +94,16 @@ entirely unimplemented, not just the browsing-context container) once it
 gets far enough to register subtests; folded under this bug's umbrella since
 the whole `responsive-iframe/` feature area is unimplemented, not filed
 separately. `.ini` under `tests/wpt/metadata/css/css-sizing/responsive-iframe/`.
+
+## WPT-VENDOR-x-frame-options (2026-08-18) — whole category is this bug
+
+6 files, 157 subtests, every one of them builds an `<iframe>` and awaits
+either its `message` event (cross-document `postMessage` from the framed
+page back to the parent) or its `load` event (the "blocked" case, checking
+`iframe.contentDocument === null` from the handler). Both paths depend on
+the framed document actually running as a nested browsing context — since
+`<iframe>` has none, neither the message nor the load event ever fires.
+`run_report.py --all --root x-frame-options --recursive` (1 min 21 s):
+**0/6 harness OK, 0/157 subtests** — a uniform TIMEOUT wall, no
+category-specific defect (the `X-Frame-Options`/CSP `frame-ancestors`
+header logic under test is never reached). No new `BUG-NNN` filed.
