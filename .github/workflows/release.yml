@@ -68,7 +68,9 @@ jobs:
           key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-release-
 
-      # glutin (OpenGL context) and winit need X11/Wayland/EGL headers on Linux.
+      # glutin (OpenGL context) and winit need X11/Wayland/EGL headers on Linux;
+      # cpal/rodio (crates/shell audio) map to ALSA there, so alsa-sys needs
+      # libasound2-dev — without it the build script fails, Linux only.
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: |
@@ -77,6 +79,7 @@ jobs:
             libx11-dev libxcursor-dev libxi-dev libxrandr-dev \
             libwayland-dev libxkbcommon-dev \
             libegl-dev libgles2-mesa-dev \
+            libasound2-dev \
             pkg-config
 
       # Build both binaries in one pass to share compilation of common crates.
