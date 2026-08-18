@@ -131,9 +131,15 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", default=default_binary())
     parser.add_argument("test_ids", nargs="*", default=["/dom/nodes/Element-hasAttribute.html"])
-    args = parser.parse_args()
+    # WPT-RUN-4: `run_corpus.py` drives this script as a *subprocess* (so a
+    # category that hangs or crashes the interpreter can be killed and skipped
+    # rather than taking the whole corpus run down with it), and needs to pass
+    # `--log-wptreport`/`--processes` straight through to wptrunner. Unknown
+    # args are forwarded verbatim instead of being enumerated here, so this
+    # stays a passthrough rather than a second copy of wptcommandline.
+    args, extra_args = parser.parse_known_args()
 
-    return run(args.binary, args.test_ids)
+    return run(args.binary, args.test_ids, extra_args)
 
 
 if __name__ == "__main__":
