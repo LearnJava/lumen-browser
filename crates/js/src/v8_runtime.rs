@@ -1388,6 +1388,13 @@ impl V8JsRuntime {
         // обязан сходить в сеть, а не искать чанк в заранее зарегистрированных
         // исходниках (иначе code-split приложение не собирается вовсе).
         let fp_esm = fetch_provider.clone();
+        // Сеть области сервис-воркера (`importScripts`, `fetch`): клонируется
+        // здесь по той же причине, что и предыдущие — ниже провайдер уезжает
+        // в замыкание по значению.
+        let fp_sw_net = fetch_provider.clone();
+        // База IndexedDB воркера — та же, что у страницы: воркер, ведущий свою
+        // очередь в `indexedDB`, обязан видеть те же данные.
+        let idb_sw = idb_backend.clone();
 
         self.run(move |inner| {
             // ESM (S12b-23): fallback base URL the module resolver uses for
@@ -2321,6 +2328,11 @@ impl V8JsRuntime {
         {
             let sws = sw_worker_store.clone();
             let cbe_sw = cache_backend.clone();
+            // Тот же провайдер, что у страницы: без него в области воркера нет
+            // ни `importScripts` по сети, ни настоящего `fetch`, и воркер,
+            // подключающий библиотеку, умирает на первой строке.
+            let fp_sw = fp_sw_net.clone();
+            let idb_sw = idb_sw.clone();
             reg!("_lumen_sw_activate_script", move |origin: String, scope: String, text: String| {
                 if let (Some(store), Some(cache)) = (sws.as_ref(), cbe_sw.as_ref()) {
                     let handle = crate::sw_worker::spawn_sw_worker_v8(
@@ -2328,6 +2340,8 @@ impl V8JsRuntime {
                         scope.clone(),
                         text,
                         Arc::clone(cache),
+                        fp_sw.clone(),
+                        idb_sw.clone(),
                     );
                     store.lock().unwrap().insert((origin, scope), handle);
                 }

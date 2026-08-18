@@ -85,6 +85,39 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
     }}
   }};
 
+  // base64 → «байтовая» строка (по символу на байт) и она же → текст UTF-8.
+  //
+  // Нативный `atob` здесь отдаёт `undefined` на любом теле, которое не
+  // является корректным UTF-8 (он декодирует через `String::from_utf8`), а
+  // сетевой ответ может быть каким угодно. Свой разбор держит байты целыми:
+  // `Response.arrayBuffer` читает их через `charCodeAt`, а `text()` уже
+  // собирает из них UTF-8.
+  var _B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  function _sw_b64_to_bin(s) {{
+    var out = '', buf = 0, bits = 0;
+    for (var i = 0; i < s.length; i++) {{
+      var v = _B64.indexOf(s.charAt(i));
+      if (v < 0) continue;
+      buf = (buf << 6) | v; bits += 6;
+      if (bits >= 8) {{ bits -= 8; out += String.fromCharCode((buf >> bits) & 0xFF); }}
+    }}
+    return out;
+  }}
+  function _sw_bin_to_utf8(b) {{
+    var out = '', i = 0;
+    while (i < b.length) {{
+      var c = b.charCodeAt(i++) & 0xFF, cp;
+      if (c < 0x80) cp = c;
+      else if (c < 0xE0) cp = ((c & 0x1F) << 6) | (b.charCodeAt(i++) & 0x3F);
+      else if (c < 0xF0) cp = ((c & 0x0F) << 12) | ((b.charCodeAt(i++) & 0x3F) << 6)
+                            | (b.charCodeAt(i++) & 0x3F);
+      else cp = ((c & 0x07) << 18) | ((b.charCodeAt(i++) & 0x3F) << 12)
+              | ((b.charCodeAt(i++) & 0x3F) << 6) | (b.charCodeAt(i++) & 0x3F);
+      out += String.fromCodePoint(cp);
+    }}
+    return out;
+  }}
+
   // Minimal Headers class.
   function Headers(init) {{
     this._h = {{}};
@@ -93,7 +126,34 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
   Headers.prototype.get = function(n) {{ return this._h[n.toLowerCase()] || null; }};
   Headers.prototype.set = function(n, v) {{ this._h[n.toLowerCase()] = String(v); }};
   Headers.prototype.has = function(n) {{ return n.toLowerCase() in this._h; }};
+  Headers.prototype.forEach = function(fn, thisArg) {{
+    for (var k in this._h) fn.call(thisArg, this._h[k], k, this);
+  }};
   globalThis.Headers = Headers;
+
+  // Request (Fetch §5.1) — минимально, но с теми полями, по которым воркер
+  // ветвится в обработчике `fetch`: без класса `new Request(url)` в теле
+  // воркера падало на первой же строке, и обработчик не регистрировался.
+  function Request(input, init) {{
+    init = init || {{}};
+    this.url = (typeof input === 'string') ? input : (input && input.url) || '';
+    this.method = (init.method || (input && input.method) || 'GET').toUpperCase();
+    this.headers = (init.headers instanceof Headers) ? init.headers : new Headers(init.headers);
+    this.mode = init.mode || 'cors';
+    this.credentials = init.credentials || 'same-origin';
+    this.destination = (input && input.destination) || '';
+    this.referrer = init.referrer || '';
+    this._body = init.body;
+  }}
+  Request.prototype.clone = function() {{
+    return new Request(this.url, {{
+      method: this.method, headers: this.headers, mode: this.mode,
+      credentials: this.credentials, referrer: this.referrer, body: this._body,
+    }});
+  }};
+  Request.prototype.text = function() {{ return Promise.resolve(String(this._body || '')); }};
+  Request.prototype.json = function() {{ return Promise.resolve(JSON.parse(String(this._body || 'null'))); }};
+  globalThis.Request = Request;
 
   // Minimal Response class.
   function Response(body, init) {{
@@ -103,21 +163,61 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
     this.statusText = init.statusText || 'OK';
     this.ok = (this.status >= 200 && this.status < 300);
     this.headers = new Headers(init.headers);
-    this.url = '';
+    this.url = init.url || '';
+    this.type = init.type || 'basic';
+    this.redirected = false;
+    this.bodyUsed = false;
+    // Тело из сети/кэша приходит «байтовой» строкой (символ = байт), и в
+    // текст его превращает разбор UTF-8. Тело, собранное самим воркером
+    // (`new Response('привет')`), уже текст — второй разбор его бы испортил,
+    // поэтому происхождение помечается, а не угадывается по содержимому.
+    this._binary = !!init._binary;
   }}
+  Response.prototype._text = function() {{
+    var b = String(this._body || '');
+    return this._binary ? _sw_bin_to_utf8(b) : b;
+  }};
   Response.prototype.text = function() {{
-    var b = this._body;
-    return Promise.resolve(typeof b === 'string' ? b : String(b));
+    return Promise.resolve(this._text());
   }};
   Response.prototype.json = function() {{
-    var b = this._body;
-    return Promise.resolve(JSON.parse(typeof b === 'string' ? b : String(b)));
+    return Promise.resolve(JSON.parse(this._text()));
   }};
   Response.prototype.arrayBuffer = function() {{
-    return Promise.resolve(new ArrayBuffer(0));
+    var b = String(this._body || '');
+    var buf = new ArrayBuffer(b.length);
+    var view = new Uint8Array(buf);
+    for (var i = 0; i < b.length; i++) view[i] = b.charCodeAt(i) & 0xFF;
+    return Promise.resolve(buf);
   }};
-  Response.prototype.clone = function() {{ return new Response(this._body, {{ status: this.status, headers: this.headers._h }}); }};
+  Response.prototype.clone = function() {{
+    return new Response(this._body, {{
+      status: this.status, statusText: this.statusText,
+      headers: this.headers._h, url: this.url, _binary: this._binary,
+    }});
+  }};
   globalThis.Response = Response;
+
+  // importScripts(...) (HTML LS §8.1.5.1) — синхронно по сети.
+  //
+  // До этого в области сервис-воркера функции не было вовсе, и воркер,
+  // подключающий библиотеку (push-SDK, workbox), падал на первой строке с
+  // `importScripts is not defined` — то есть не регистрировал НИ ОДНОГО
+  // обработчика. Исполняем непрямым `eval`, чтобы объявления легли в
+  // глобальную область, как требует спецификация.
+  globalThis.importScripts = function() {{
+    for (var i = 0; i < arguments.length; i++) {{
+      var u = String(arguments[i]);
+      var abs = (u.indexOf('://') !== -1) ? u : new URL(u, location.href).href;
+      var raw = _lumen_sw_net_fetch(abs, 'GET');
+      if (!raw) throw new Error('importScripts: cannot load script: ' + abs);
+      var res = JSON.parse(raw);
+      if (res.status < 200 || res.status >= 300) {{
+        throw new Error('importScripts: HTTP ' + res.status + ' for ' + abs);
+      }}
+      (0, eval)(_sw_bin_to_utf8(_sw_b64_to_bin(res.body)));
+    }}
+  }};
 
   // caches API — backed by Rust CacheStorage via _lumen_sw_cache_* bindings.
   var _cache_obj = {{
@@ -125,8 +225,7 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
       var url = (typeof req === 'string') ? req : req.url;
       var b64 = _lumen_sw_cache_match(url);
       if (!b64) return Promise.resolve(undefined);
-      var body = atob(b64);
-      return Promise.resolve(new Response(body, {{ status: 200 }}));
+      return Promise.resolve(new Response(_sw_b64_to_bin(b64), {{ status: 200, _binary: true }}));
     }},
     put: function(req, res) {{
       var url = (typeof req === 'string') ? req : req.url;
@@ -164,14 +263,31 @@ fn sw_globals_shim(scope_str: &str, origin_str: &str) -> String {
     globalThis.btoa = function(s) {{ return s; }};
   }}
 
-  // Minimal fetch stub — cache-first only (Phase 1: no real network access from SW).
-  globalThis.fetch = function(resource) {{
-    var url = (typeof resource === 'string') ? resource : resource.url;
-    var b64 = _lumen_sw_cache_match(url);
-    if (b64) {{
-      return Promise.resolve(new Response(atob(b64), {{ status: 200 }}));
+  // fetch() — настоящая сеть, в обход перехвата этим же воркером.
+  //
+  // Прежняя версия отвечала только из CacheStorage и отклоняла всё остальное,
+  // поэтому воркер, который обновляет кэш («достань из сети — положи в кэш»),
+  // не мог наполнить его ни разу: его первый же `fetch` отклонялся, и цепочка
+  // `install` обрывалась. Сеть идёт мимо `FetchInterceptor` — иначе запрос
+  // вернулся бы в этот же воркер, а он стоит внутри своего же `fetch`.
+  globalThis.fetch = function(resource, init) {{
+    var url = (typeof resource === 'string') ? resource : (resource && resource.url) || '';
+    var method = (init && init.method) || (resource && resource.method) || 'GET';
+    var abs = (url.indexOf('://') !== -1) ? url : new URL(url, location.href).href;
+    var raw = _lumen_sw_net_fetch(abs, String(method).toUpperCase());
+    if (!raw) {{
+      // Сеть не ответила — последний шанс отдать из кэша, как раньше.
+      var b64 = _lumen_sw_cache_match(abs);
+      if (b64) {{
+        return Promise.resolve(new Response(_sw_b64_to_bin(b64), {{ status: 200, url: abs, _binary: true }}));
+      }}
+      return Promise.reject(new TypeError('fetch: network error for ' + abs));
     }}
-    return Promise.reject(new TypeError('fetch not available in SW worker (Phase 1)'));
+    var res = JSON.parse(raw);
+    return Promise.resolve(new Response(_sw_b64_to_bin(res.body), {{
+      status: res.status, statusText: res.statusText,
+      headers: res.headers, url: abs, _binary: true,
+    }}));
   }};
 
   // _sw_fire_event: fire install/activate handlers.
@@ -321,12 +437,16 @@ pub(crate) fn spawn_sw_worker_v8(
     scope: String,
     script: String,
     cache_backend: Arc<dyn CacheBackend>,
+    fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
+    idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
 ) -> SwWorkerHandle {
     let (tx, rx) = std::sync::mpsc::channel::<SwFetchRequest>();
     let thread_name = format!("lumen-sw-v8-{origin}{scope}");
     let handle = std::thread::Builder::new()
         .name(thread_name)
-        .spawn(move || run_sw_thread_v8(origin, scope, script, rx, cache_backend))
+        .spawn(move || {
+            run_sw_thread_v8(origin, scope, script, rx, cache_backend, fetch_provider, idb_backend)
+        })
         .expect("failed to spawn SW thread (v8)");
     SwWorkerHandle { tx, _thread: handle }
 }
@@ -338,6 +458,8 @@ fn run_sw_thread_v8(
     script: String,
     rx: Receiver<SwFetchRequest>,
     cache_backend: Arc<dyn CacheBackend>,
+    fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
+    idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
 ) {
     let rt = match V8JsRuntime::new() {
         Ok(r) => r,
@@ -347,7 +469,16 @@ fn run_sw_thread_v8(
         }
     };
 
-    if let Err(e) = install_sw_globals_v8(&rt, &origin, &scope, Arc::clone(&cache_backend)) {
+    if let Err(e) =
+        install_sw_globals_v8(
+            &rt,
+            &origin,
+            &scope,
+            Arc::clone(&cache_backend),
+            fetch_provider,
+            idb_backend,
+        )
+    {
         eprintln!("[sw {origin}{scope}] v8 globals failed: {e:?}");
         return;
     }
@@ -397,7 +528,46 @@ fn install_sw_globals_v8(
     origin: &str,
     scope: &str,
     cache_backend: Arc<dyn CacheBackend>,
+    fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
+    idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
 ) -> JsResult<()> {
+    // Сеть области воркера: `importScripts` и `fetch` внутри него. Ответ едет
+    // одной JSON-строкой, тело — base64: сетевой ответ не обязан быть текстом,
+    // а строка JS не переносит произвольные байты.
+    //
+    // `fetch_bypassing_sw`, а не `fetch_sync`: обычный путь отдал бы запрос
+    // перехватчику, тот выбрал бы по scope ЭТОТ ЖЕ воркер и послал бы ему
+    // сообщение, которого воркер не разберёт — он стоит внутри своего же
+    // запроса. Поток ждал бы сам себя.
+    {
+        let provider = fetch_provider.clone();
+        rt.register_native(
+            "_lumen_sw_net_fetch",
+            crate::v8_compat::into_v8_fn2(move |url: String, method: String| -> Option<String> {
+                let provider = provider.as_ref()?;
+                let res = match provider.fetch_bypassing_sw(&url, &method) {
+                    Ok(res) => res,
+                    Err(e) => {
+                        eprintln!("[sw] сеть: {url}: {e}");
+                        return None;
+                    }
+                };
+                let headers: serde_json::Map<String, serde_json::Value> = res
+                    .headers
+                    .iter()
+                    .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                    .collect();
+                serde_json::to_string(&serde_json::json!({
+                    "status": res.status,
+                    "statusText": res.status_text,
+                    "headers": headers,
+                    "body": base64_encode(&res.body),
+                }))
+                .ok()
+            }),
+        )?;
+    }
+
     {
         let be = Arc::clone(&cache_backend);
         let orig = origin.to_string();
@@ -451,6 +621,74 @@ fn install_sw_globals_v8(
     // same `EventTarget`/`performance` surface as the dedicated worker (BUG-401).
     crate::worker::install_worker_scope_globals_v8(rt)?;
 
+    // IndexedDB — тот же блок шима, что у страницы (`[Exposed=(Window,Worker)]`),
+    // и та же база: воркер, который пишет свою очередь в `indexedDB`, иначе
+    // умирал на первой строке обращения к ней. Нативы ставятся только при
+    // наличии backend-а — без него шим держит базу в куче (его собственные
+    // охраны `typeof … === 'function'`).
+    if let Some(idb) = idb_backend {
+        let b = Arc::clone(&idb);
+        rt.register_native(
+            "_lumen_idb_load",
+            crate::v8_compat::into_v8_fn0(move || -> Option<String> { b.load() }),
+        )?;
+        let b = Arc::clone(&idb);
+        rt.register_native(
+            "_lumen_idb_persist",
+            into_v8_fn1(move |snapshot: String| {
+                b.save(&snapshot);
+            }),
+        )?;
+        let b = Arc::clone(&idb);
+        rt.register_native(
+            "_lumen_idb_schema_op",
+            into_v8_fn1(move |json: String| -> bool {
+                match serde_json::from_str::<lumen_core::ext::IdbSchemaOp>(&json) {
+                    Ok(op) => b.apply_schema(&op).is_ok(),
+                    Err(_) => false,
+                }
+            }),
+        )?;
+        let b = Arc::clone(&idb);
+        rt.register_native(
+            "_lumen_idb_commit_txn",
+            into_v8_fn1(move |json: String| -> bool {
+                match serde_json::from_str::<Vec<lumen_core::ext::IdbRecordOp>>(&json) {
+                    Ok(ops) => b.commit_txn(&ops).is_ok(),
+                    Err(_) => false,
+                }
+            }),
+        )?;
+        let b = Arc::clone(&idb);
+        rt.register_native(
+            "_lumen_idb_exec_op",
+            into_v8_fn1(move |json: String| -> Option<String> {
+                serde_json::from_str::<lumen_core::ext::IdbRecordOp>(&json)
+                    .ok()
+                    .and_then(|op| b.exec_op(&op).ok())
+                    .and_then(|result| serde_json::to_string(&result).ok())
+            }),
+        )?;
+        let b = Arc::clone(&idb);
+        rt.register_native(
+            "_lumen_idb_db_version",
+            into_v8_fn1(move |db_name: String| -> i32 { b.db_version(&db_name) as i32 }),
+        )?;
+        let b = Arc::clone(&idb);
+        rt.register_native(
+            "_lumen_idb_databases",
+            crate::v8_compat::into_v8_fn0(move || -> String {
+                let dbs = b.list_databases();
+                serde_json::to_string(
+                    &dbs.iter()
+                        .map(|(name, version)| serde_json::json!({ "name": name, "version": version }))
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap_or_else(|_| "[]".to_string())
+            }),
+        )?;
+    }
+
     let scope_js = scope.replace('\'', "\\'");
     let scope_str = format!("'{scope_js}'");
     // `scope` приходит путём (`/invest/`), а `WorkerLocation` обязан быть
@@ -459,6 +697,10 @@ fn install_sw_globals_v8(
     let origin_js = origin.trim_end_matches('/').replace('\'', "\\'");
     let origin_str = format!("'{origin_js}'");
     rt.eval(&sw_globals_shim(&scope_str, &origin_str))?;
+    // После шима области: блоки опираются на `_lumen_console_error`,
+    // `queueMicrotask` и `setTimeout`, которые шим только что определил.
+    rt.eval(crate::dom::MESSAGE_CHANNEL_SHIM)?;
+    rt.eval(crate::dom::IDB_SHIM)?;
     Ok(())
 }
 
@@ -481,7 +723,7 @@ mod tests_v8 {
     #[test]
     fn sw_global_scope_has_performance() {
         let rt = V8JsRuntime::new().unwrap();
-        install_sw_globals_v8(&rt, "https://example.com", "/", MockCache::new()).unwrap();
+        install_sw_globals_v8(&rt, "https://example.com", "/", MockCache::new(), None, None).unwrap();
         for expr in [
             "typeof performance.now === 'function'",
             "performance instanceof Performance",
@@ -502,7 +744,7 @@ mod tests_v8 {
     #[test]
     fn sw_global_scope_has_full_location_and_url_classes() {
         let rt = V8JsRuntime::new().unwrap();
-        install_sw_globals_v8(&rt, "https://cdn.example.com:8443", "/invest/", MockCache::new())
+        install_sw_globals_v8(&rt, "https://cdn.example.com:8443", "/invest/", MockCache::new(), None, None)
             .unwrap();
         for expr in [
             "typeof URLSearchParams === 'function'",
@@ -521,6 +763,227 @@ mod tests_v8 {
                 "{expr}"
             );
         }
+    }
+
+    /// Сетевой двойник области воркера. Различает два входа провайдера:
+    /// обычный `fetch_sync` (через него запрос попал бы в перехватчик, то есть
+    /// обратно в этот же воркер) и `fetch_bypassing_sw`. Тела разные — поэтому
+    /// тест видит, каким путём ушёл запрос, а не только что «что-то вернулось».
+    struct SwNet {
+        /// URL → тело, отдаваемое обходным путём.
+        bodies: std::collections::HashMap<String, String>,
+        /// Сколько раз позвали обычный путь (должен остаться нулём).
+        via_intercepted: Mutex<usize>,
+    }
+
+    impl SwNet {
+        fn new(bodies: &[(&str, &str)]) -> Arc<Self> {
+            Arc::new(Self {
+                bodies: bodies.iter().map(|(u, b)| ((*u).to_owned(), (*b).to_owned())).collect(),
+                via_intercepted: Mutex::new(0),
+            })
+        }
+
+        /// Сколько запросов ушло перехватываемым путём.
+        fn intercepted(&self) -> usize {
+            self.via_intercepted.lock().map(|n| *n).unwrap_or(usize::MAX)
+        }
+    }
+
+    impl lumen_core::ext::JsFetchProvider for SwNet {
+        fn fetch_sync(
+            &self,
+            _url: &str,
+            _method: &str,
+        ) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+            if let Ok(mut n) = self.via_intercepted.lock() {
+                *n += 1;
+            }
+            Ok(lumen_core::ext::JsFetchResult {
+                status: 200,
+                status_text: "OK".into(),
+                headers: vec![],
+                body: "путь через перехватчик".as_bytes().to_vec(),
+            })
+        }
+
+        fn fetch_bypassing_sw(
+            &self,
+            url: &str,
+            _method: &str,
+        ) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+            match self.bodies.get(url) {
+                Some(body) => Ok(lumen_core::ext::JsFetchResult {
+                    status: 200,
+                    status_text: "OK".into(),
+                    headers: vec![("content-type".into(), "text/plain".into())],
+                    body: body.clone().into_bytes(),
+                }),
+                None => Ok(lumen_core::ext::JsFetchResult {
+                    status: 404,
+                    status_text: "Not Found".into(),
+                    headers: vec![],
+                    body: Vec::new(),
+                }),
+            }
+        }
+    }
+
+    /// Рантайм области воркера с сетью.
+    fn sw_rt(origin: &str, scope: &str, net: &Arc<SwNet>) -> V8JsRuntime {
+        let rt = V8JsRuntime::new().unwrap();
+        let provider: Arc<dyn lumen_core::ext::JsFetchProvider> = Arc::clone(net) as _;
+        install_sw_globals_v8(&rt, origin, scope, MockCache::new(), Some(provider), None).unwrap();
+        rt
+    }
+
+    /// `importScripts` по сети. До правки функции в области воркера не было
+    /// вовсе, и воркер, подключающий библиотеку (push-SDK t-банка), умирал на
+    /// первой же строке с `importScripts is not defined` — то есть не
+    /// регистрировал ни одного обработчика.
+    #[test]
+    fn sw_import_scripts_loads_over_network() {
+        let net = SwNet::new(&[(
+            "https://cdn.example.com/lib.js",
+            "globalThis.__lib_loaded = 'да';",
+        )]);
+        let rt = sw_rt("https://example.com", "/", &net);
+        rt.eval("importScripts('https://cdn.example.com/lib.js');").unwrap();
+        assert_eq!(
+            rt.eval("globalThis.__lib_loaded").unwrap(),
+            lumen_core::JsValue::String("да".into())
+        );
+        assert_eq!(net.intercepted(), 0, "запрос воркера ушёл в перехватчик");
+    }
+
+    /// Относительный адрес считается от адреса самого воркера.
+    #[test]
+    fn sw_import_scripts_resolves_relative_to_scope() {
+        let net = SwNet::new(&[(
+            "https://example.com/invest/helper.js",
+            "globalThis.__rel = 1;",
+        )]);
+        let rt = sw_rt("https://example.com", "/invest/", &net);
+        rt.eval("importScripts('./helper.js');").unwrap();
+        assert_eq!(rt.eval("globalThis.__rel").unwrap(), lumen_core::JsValue::Number(1.0));
+    }
+
+    /// Отказ сети обязан быть исключением, а не молчаливым пропуском: воркер с
+    /// недогруженной библиотекой хуже, чем воркер, который честно не встал.
+    #[test]
+    fn sw_import_scripts_throws_on_http_error() {
+        let net = SwNet::new(&[]);
+        let rt = sw_rt("https://example.com", "/", &net);
+        assert!(rt.eval("importScripts('https://example.com/gone.js');").is_err());
+    }
+
+    /// `fetch` в воркере — настоящая сеть и мимо перехватчика. Прежняя версия
+    /// отвечала только из CacheStorage, поэтому воркер не мог НАПОЛНИТЬ кэш:
+    /// его первый же `fetch` отклонялся.
+    #[test]
+    fn sw_fetch_goes_to_network_bypassing_interception() {
+        let net = SwNet::new(&[("https://example.com/api", "тело из сети")]);
+        let rt = sw_rt("https://example.com", "/", &net);
+        rt.eval(
+            "fetch('https://example.com/api').then(function(r) {
+                 globalThis.__st = r.status; return r.text();
+             }).then(function(t) { globalThis.__body = t; });",
+        )
+        .unwrap();
+        assert_eq!(rt.eval("globalThis.__st").unwrap(), lumen_core::JsValue::Number(200.0));
+        assert_eq!(
+            rt.eval("globalThis.__body").unwrap(),
+            lumen_core::JsValue::String("тело из сети".into())
+        );
+        assert_eq!(net.intercepted(), 0, "fetch воркера ушёл в перехватчик");
+    }
+
+    /// Заголовки ответа доезжают до `Response.headers` — по ним воркер решает,
+    /// класть ли ответ в кэш.
+    #[test]
+    fn sw_fetch_exposes_response_headers() {
+        let net = SwNet::new(&[("https://example.com/a.txt", "x")]);
+        let rt = sw_rt("https://example.com", "/", &net);
+        rt.eval(
+            "fetch('https://example.com/a.txt').then(function(r) {
+                 globalThis.__ct = r.headers.get('content-type'); });",
+        )
+        .unwrap();
+        assert_eq!(
+            rt.eval("globalThis.__ct").unwrap(),
+            lumen_core::JsValue::String("text/plain".into())
+        );
+    }
+
+    /// `indexedDB` в области воркера. `sw.js` t-банка обращается к ней на
+    /// верхнем уровне; пока класса не было, воркер умирал там же, где и на
+    /// `importScripts` — до регистрации обработчиков.
+    #[test]
+    fn sw_global_scope_has_indexed_db() {
+        let rt = V8JsRuntime::new().unwrap();
+        install_sw_globals_v8(&rt, "https://example.com", "/", MockCache::new(), None, None)
+            .unwrap();
+        for expr in [
+            "typeof indexedDB === 'object'",
+            "typeof indexedDB.open === 'function'",
+            "typeof IDBKeyRange === 'function'",
+            "typeof IDBDatabase === 'function'",
+        ] {
+            assert_eq!(rt.eval(expr).unwrap(), lumen_core::JsValue::Bool(true), "{expr}");
+        }
+    }
+
+    /// Полный цикл: открыть базу, создать хранилище, записать и прочитать —
+    /// внутри области воркера. Очередь запросов IndexedDB прокачивается
+    /// `queueMicrotask`, который в области воркера свой, поэтому проверяется
+    /// не наличие классов, а доехавшее до `onsuccess` значение.
+    #[test]
+    fn sw_indexed_db_round_trip() {
+        let rt = V8JsRuntime::new().unwrap();
+        install_sw_globals_v8(&rt, "https://example.com", "/", MockCache::new(), None, None)
+            .unwrap();
+        rt.eval(
+            "var req = indexedDB.open('sw-db', 1);
+             req.onupgradeneeded = function(e) {
+                 e.target.result.createObjectStore('items', { keyPath: 'id' });
+             };
+             req.onsuccess = function(e) {
+                 var db = e.target.result;
+                 var tx = db.transaction('items', 'readwrite');
+                 tx.objectStore('items').put({ id: 1, v: 'из воркера' });
+                 var get = db.transaction('items').objectStore('items').get(1);
+                 get.onsuccess = function(ev) { globalThis.__idb = ev.target.result.v; };
+             };",
+        )
+        .unwrap();
+        rt.eval("_lumen_idb_flush();").unwrap();
+        assert_eq!(
+            rt.eval("globalThis.__idb").unwrap(),
+            lumen_core::JsValue::String("из воркера".into())
+        );
+    }
+
+    /// Без провайдера (headless-режимы дампа) сети нет, но область воркера
+    /// обязана остаться живой: `fetch` отклоняется, `importScripts` бросает —
+    /// вместо `_lumen_sw_net_fetch is not defined`.
+    #[test]
+    fn sw_without_provider_rejects_instead_of_crashing() {
+        let rt = V8JsRuntime::new().unwrap();
+        install_sw_globals_v8(&rt, "https://example.com", "/", MockCache::new(), None, None).unwrap();
+        assert_eq!(
+            rt.eval("typeof _lumen_sw_net_fetch").unwrap(),
+            lumen_core::JsValue::String("function".into())
+        );
+        rt.eval(
+            "fetch('https://example.com/x').then(function() { globalThis.__r = 'ok'; },
+                                                function() { globalThis.__r = 'отказ'; });",
+        )
+        .unwrap();
+        assert_eq!(
+            rt.eval("globalThis.__r").unwrap(),
+            lumen_core::JsValue::String("отказ".into())
+        );
+        assert!(rt.eval("importScripts('https://example.com/x.js');").is_err());
     }
 
     struct MockCache {
@@ -576,6 +1039,8 @@ self.addEventListener('fetch', function(event) {
 "#
             .to_string(),
             Arc::clone(&cache) as Arc<dyn CacheBackend>,
+            None,
+            None,
         );
 
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
@@ -606,6 +1071,8 @@ self.addEventListener('fetch', function(event) {
 "#
             .to_string(),
             Arc::clone(&cache) as Arc<dyn CacheBackend>,
+            None,
+            None,
         );
 
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
@@ -631,6 +1098,8 @@ self.addEventListener('fetch', function(event) {
             "/".to_string(),
             "// no fetch handler".to_string(),
             Arc::clone(&cache) as Arc<dyn CacheBackend>,
+            None,
+            None,
         );
 
         let (tx, rx) = std::sync::mpsc::sync_channel(1);

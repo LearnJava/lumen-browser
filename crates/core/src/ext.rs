@@ -1854,6 +1854,23 @@ pub trait JsFetchProvider: Send + Sync {
     /// Returns `Err` for network errors or unsupported methods.
     fn fetch_sync(&self, url: &str, method: &str) -> Result<JsFetchResult>;
 
+    /// Как [`fetch_sync`](Self::fetch_sync), но **в обход перехвата service
+    /// worker-ом**.
+    ///
+    /// Нужен ровно одному вызывающему — сети самого service worker-а
+    /// (`fetch`/`importScripts` внутри его области). Через обычный путь его
+    /// запрос попал бы в `FetchInterceptor`, тот выбрал бы по scope этот же
+    /// воркер и отправил бы ему сообщение — а воркер в этот момент стоит
+    /// внутри своего же `fetch` и разобрать сообщение не может: поток ждёт
+    /// сам себя.
+    ///
+    /// Реализация по умолчанию совпадает с `fetch_sync` — у двойника в тестах
+    /// перехватчика нет; настоящий путь (`lumen-network::HttpClient`)
+    /// перекрывает метод.
+    fn fetch_bypassing_sw(&self, url: &str, method: &str) -> Result<JsFetchResult> {
+        self.fetch_sync(url, method)
+    }
+
     /// Perform a blocking HTTP request with a request body (POST/PUT/PATCH/DELETE).
     ///
     /// `content_type` is the `Content-Type` header value (e.g. `"application/x-www-form-urlencoded"`).

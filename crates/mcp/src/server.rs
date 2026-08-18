@@ -215,8 +215,8 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                     "required": ["target"],
                     "properties": {
                         "target": {
-                            "type": "object",
-                            "description": "Click target (selector, node_id, or point)"
+                            "type": ["string", "object"],
+                            "description": "Click target: a CSS-selector string,                                             {selector}, {node_id} or {point: {x, y}}"
                         }
                     }
                 }),
@@ -230,8 +230,8 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                     "required": ["target", "text"],
                     "properties": {
                         "target": {
-                            "type": "object",
-                            "description": "Target element"
+                            "type": ["string", "object"],
+                            "description": "Target element: a CSS-selector string,                                             {selector}, {node_id} or {point: {x, y}}"
                         },
                         "text": {
                             "type": "string",
@@ -583,7 +583,9 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                     Some(t) => t,
                     None => return McpResponse::err(id.clone(), -32602, "Missing target argument"),
                 };
-                let target = parse_target(target_obj);
+                let Some(target) = parse_target(target_obj) else {
+                    return McpResponse::err(id.clone(), -32602, TARGET_ERROR);
+                };
                 match self.session.click(&target) {
                     Ok(()) => json!({ "success": true }),
                     Err(e) => return McpResponse::err(id.clone(), -32603, format!("Click error: {e}")),
@@ -598,7 +600,9 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                     Some(t) => t,
                     None => return McpResponse::err(id.clone(), -32602, "Missing text argument"),
                 };
-                let target = parse_target(target_obj);
+                let Some(target) = parse_target(target_obj) else {
+                    return McpResponse::err(id.clone(), -32602, TARGET_ERROR);
+                };
                 match self.session.type_text(&target, text) {
                     Ok(()) => json!({ "success": true, "text": text }),
                     Err(e) => return McpResponse::err(id.clone(), -32603, format!("Type error: {e}")),
@@ -609,7 +613,9 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
                     Some(t) => t,
                     None => return McpResponse::err(id.clone(), -32602, "Missing target argument"),
                 };
-                let target = parse_target(target_obj);
+                let Some(target) = parse_target(target_obj) else {
+                    return McpResponse::err(id.clone(), -32602, TARGET_ERROR);
+                };
 
                 let delta_obj = match args.get("delta") {
                     Some(d) => d,
@@ -780,24 +786,39 @@ impl<S: BrowserSession, T: Transport> McpServer<S, T> {
 
 /// Parse Target from JSON object.
 /// Supports { "selector": "..." }, { "node_id": 123 }, or { "point": { "x": ..., "y": ... } }
-fn parse_target(obj: &Value) -> lumen_driver::Target {
+fn parse_target(obj: &Value) -> Option<lumen_driver::Target> {
+    // Голая строка — селектор. Это первая форма, которую пишет любой клиент
+    // (`click {"target": "#b"}`), и до 2026-08-17 она проваливалась во все
+    // ветки и молча превращалась в `body`: инструмент отвечал `success: true`,
+    // клик уходил в центр страницы, а обработчик кнопки не срабатывал —
+    // «клик через MCP ничего не делает» на ровном месте.
+    if let Some(selector) = obj.as_str() {
+        return Some(lumen_driver::Target::Selector(selector.to_string()));
+    }
+
     if let Some(selector) = obj.get("selector").and_then(|v| v.as_str()) {
-        return lumen_driver::Target::Selector(selector.to_string());
+        return Some(lumen_driver::Target::Selector(selector.to_string()));
     }
 
     if let Some(node_id) = obj.get("node_id").and_then(|v| v.as_u64()) {
-        return lumen_driver::Target::NodeId(node_id as u32);
+        return Some(lumen_driver::Target::NodeId(node_id as u32));
     }
 
     if let Some(point_obj) = obj.get("point").and_then(|v| v.as_object()) {
         let x = point_obj.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
         let y = point_obj.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-        return lumen_driver::Target::Point { x, y };
+        return Some(lumen_driver::Target::Point { x, y });
     }
 
-    // Default: treat as selector
-    lumen_driver::Target::Selector("body".to_string())
+    // Ни одна форма не подошла — это ошибка вызова, а не повод куда-нибудь
+    // ткнуть. Прежний запасной `body` делал промах неотличимым от попадания.
+    None
 }
+
+/// Сообщение об ошибке разбора цели — одно на все инструменты, принимающие
+/// `target`, чтобы клиент видел полный список допустимых форм.
+const TARGET_ERROR: &str =
+    "Invalid target: expected a CSS-selector string, {\"selector\": \"…\"},      {\"node_id\": N} or {\"point\": {\"x\": …, \"y\": …}}";
 
 // Helper function: base64 encode
 fn base64_encode(data: &[u8]) -> String {
@@ -1292,6 +1313,64 @@ mod tests {
         let resp = run_one(&mut server, &req);
         assert!(resp.error.is_some());
         assert_eq!(resp.error.unwrap().code, -32602);
+    }
+
+    /// Разбор цели инструментов `click`/`type`/`scroll`.
+    ///
+    /// Главная строка здесь — предпоследняя: форма, которую разобрать нельзя,
+    /// обязана давать `None`. До 2026-08-17 на её месте стоял запасной
+    /// `Selector("body")`, и промах по цели выглядел как успешный клик в центр
+    /// страницы: инструмент отвечал `success: true`, обработчик кнопки не
+    /// срабатывал, и дефект уезжал в движок, которого там не было.
+    #[test]
+    fn parse_target_forms() {
+        use lumen_driver::Target;
+        assert!(
+            matches!(parse_target(&serde_json::json!("#b")), Some(Target::Selector(s)) if s == "#b"),
+            "голая строка — самая частая форма вызова"
+        );
+        assert!(matches!(
+            parse_target(&serde_json::json!({ "selector": "#b" })),
+            Some(Target::Selector(s)) if s == "#b"
+        ));
+        assert!(matches!(
+            parse_target(&serde_json::json!({ "node_id": 7 })),
+            Some(Target::NodeId(7))
+        ));
+        assert!(matches!(
+            parse_target(&serde_json::json!({ "point": { "x": 3.0, "y": 4.0 } })),
+            Some(Target::Point { x, y }) if x == 3.0 && y == 4.0
+        ));
+        assert!(parse_target(&serde_json::json!({ "selektor": "#b" })).is_none());
+        assert!(parse_target(&serde_json::json!({})).is_none());
+        assert!(parse_target(&serde_json::json!(42)).is_none());
+    }
+
+    /// Тот же гейт на уровне протокола: нераспознанная цель — ошибка вызова,
+    /// а не «успешный» клик неизвестно куда.
+    #[test]
+    fn tool_click_unrecognized_target_errors() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request(
+            "tools/call",
+            serde_json::json!({ "name": "click", "arguments": { "target": { "sel": "#b" } } }),
+        );
+        let resp = run_one(&mut server, &req);
+        assert_eq!(resp.error.expect("нераспознанная цель — ошибка").code, -32602);
+    }
+
+    /// Строковая цель доезжает до сессии (у `MockSession` клик всегда успешен —
+    /// проверяется именно то, что вызов не отбит разбором).
+    #[test]
+    fn tool_click_accepts_bare_selector_string() {
+        let mut server = McpServer::new(MockSession, VecTransport::new());
+        let req = make_request(
+            "tools/call",
+            serde_json::json!({ "name": "click", "arguments": { "target": "#b" } }),
+        );
+        let resp = run_one(&mut server, &req);
+        assert!(resp.error.is_none());
+        assert_eq!(resp.result.unwrap()["success"], true);
     }
 
     #[test]

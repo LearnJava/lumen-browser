@@ -10978,7 +10978,18 @@ function requestIdleCallback(cb, opts) {
 function cancelIdleCallback(id) {
     delete _idle_cbs[id | 0];
 }
+";
 
+/// `MessageChannel`/`MessagePort` — ещё одна часть шима с
+/// `[Exposed=(Window,Worker)]`, вырезанная 2026-08-17 ради области
+/// сервис-воркера: `sw.js` t-банка строит канал на верхнем уровне, и без
+/// класса воркер не доживал до регистрации обработчиков.
+///
+/// Блок ни на что страничное не опирается — только на `setTimeout`, который
+/// есть в обеих областях (см. его собственный комментарий про BUG-702: доставка
+/// обязана быть задачей, а не микрозадачей).
+#[cfg(feature = "v8-backend")]
+pub(crate) const MESSAGE_CHANNEL_SHIM: &str = "
 // ── MessageChannel / MessagePort (WHATWG HTML §8.3.4-§8.3.5) ─────────────────
 // MessageChannel() creates two entangled MessagePort objects (port1 / port2).
 // Messages posted on one port are delivered asynchronously to the other.
@@ -11094,6 +11105,14 @@ function MessageChannel() {
     this.port2 = p2;
 }
 
+globalThis.MessageChannel = MessageChannel;
+globalThis.MessagePort    = MessagePort;
+";
+
+/// Продолжение хвоста шима после [`MESSAGE_CHANNEL_SHIM`]. Существует только
+/// ради этого разреза; порядок склейки закреплён тестом
+/// `web_api_shim_splices_its_parts_in_source_order`.
+const WEB_API_SHIM_TAIL_MC: &str = "
 // Expose new globals on window object (defined after window literal because
 // `var performance` is not hoisted with its value, only its name).
 window.URL                   = URL;
@@ -11337,7 +11356,20 @@ function _lumen_init_lazy_images(pairs) {
 // _lumen_deliver_intersection_observers() called earlier by deliver_layout_observers().
 // This function is kept for shell API compatibility.
 function _lumen_deliver_lazy_images() {}
+";
 
+/// IndexedDB (W3C Indexed Database API 3.0) — вырезан из хвоста страничного
+/// шима отдельной частью по той же причине, что `EVENT_TARGET_SHIM` и
+/// `URL_SHIM`: интерфейс `[Exposed=(Window,Worker)]`, и области сервис-воркера
+/// он нужен ровно тот же, а не второй копией.
+///
+/// Внутри блок опирается только на `_lumen_console_error` и на нативы
+/// `_lumen_idb_*` (каждый под охраной `typeof … === 'function'`, поэтому без
+/// них база живёт в куче и просто не переживает перезагрузку). Публикация
+/// классов идёт через `globalThis`, а не `window`: в области воркера окна нет,
+/// а на странице это тот же объект (`window` — настоящий глобал с BUG-280).
+#[cfg(feature = "v8-backend")]
+pub(crate) const IDB_SHIM: &str = "
 // ── IndexedDB (W3C Indexed Database API 3.0) ─────────────────────────────────
 // In-memory implementation: databases live in this runtime's JS heap and do not
 // persist across reloads (Rust-backed persistence is a separate follow-up task).
@@ -12317,17 +12349,23 @@ var indexedDB = {
     }
 };
 
-window.indexedDB        = indexedDB;
-window.IDBKeyRange      = IDBKeyRange;
-window.IDBRequest       = IDBRequest;
-window.IDBOpenDBRequest = IDBOpenDBRequest;
-window.IDBDatabase      = IDBDatabase;
-window.IDBTransaction   = IDBTransaction;
-window.IDBObjectStore   = IDBObjectStore;
-window.IDBIndex         = IDBIndex;
-window.IDBCursor        = IDBCursor;
-window.IDBCursorWithValue = IDBCursor;
-window._lumen_idb_flush = _lumen_idb_flush;
+globalThis.indexedDB        = indexedDB;
+globalThis.IDBKeyRange      = IDBKeyRange;
+globalThis.IDBRequest       = IDBRequest;
+globalThis.IDBOpenDBRequest = IDBOpenDBRequest;
+globalThis.IDBDatabase      = IDBDatabase;
+globalThis.IDBTransaction   = IDBTransaction;
+globalThis.IDBObjectStore   = IDBObjectStore;
+globalThis.IDBIndex         = IDBIndex;
+globalThis.IDBCursor        = IDBCursor;
+globalThis.IDBCursorWithValue = IDBCursor;
+globalThis._lumen_idb_flush = _lumen_idb_flush;
+";
+
+/// Хвост страничного шима после [`IDB_SHIM`] — от `window.getSelection` до
+/// конца. Отдельная часть существует только ради разреза IndexedDB; порядок
+/// склейки закреплён тестом `web_api_shim_splices_its_parts_in_source_order`.
+const WEB_API_SHIM_TAIL_B: &str = "
 window.getSelection     = function() { return _lumen_selection; };
 window.Range            = Range;
 
@@ -15750,7 +15788,7 @@ var dispatchEvent       = window.dispatchEvent.bind(window);
 /// split is invisible to the shim's own code.
 #[cfg(feature = "v8-backend")]
 pub(crate) fn web_api_shim() -> String {
-    format!("{WEB_API_SHIM_HEAD}{EVENT_TARGET_SHIM}{WEB_API_SHIM_MID}{URL_PARSE_SHIM}{WEB_API_SHIM_MID_B}{URL_SHIM}{WEB_API_SHIM_MID_C}{PERFORMANCE_SHIM}{WEB_API_SHIM_TAIL}")
+    format!("{WEB_API_SHIM_HEAD}{EVENT_TARGET_SHIM}{WEB_API_SHIM_MID}{URL_PARSE_SHIM}{WEB_API_SHIM_MID_B}{URL_SHIM}{WEB_API_SHIM_MID_C}{PERFORMANCE_SHIM}{WEB_API_SHIM_TAIL}{MESSAGE_CHANNEL_SHIM}{WEB_API_SHIM_TAIL_MC}{IDB_SHIM}{WEB_API_SHIM_TAIL_B}")
 }
 
 /// The subset of the page shim that WHATWG also exposes in a
@@ -15795,6 +15833,11 @@ mod tests {
             "function UIEvent(",
             "function Performance()",
             "function PerformanceObserver(",
+            // IndexedDB — своя часть с 2026-08-17 (её же исполняет область
+            // сервис-воркера): в собранном шиме она обязана стоять между
+            // хвостом и его продолжением, ровно один раз.
+            "function _idb_schedule_flush()",
+            "globalThis.indexedDB",
         ] {
             assert_eq!(
                 shim.matches(marker).count(),
