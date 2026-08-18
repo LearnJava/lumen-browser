@@ -4717,7 +4717,7 @@
     {
      "id": "TEST",
      "title": "TEST: полнота тестирования движка (fuzzing / expectations / reftests / conformance)",
-     "status": "planned",
+     "status": "active",
      "note": "Дорожка полноты тестирования движка (владелец тулинга — P2; движковые фиксы по находкам — P3/P1). Индустриальные практики движков-с-нуля (Servo, Ladybird, WPT/Firefox) поверх уже существующего тулинга Lumen (graphic_tests, DEVX-2/3, P2-wpt, health-журнал PERF-6, KNOWN_DEBTORS-храповик): фаззинг парсеров и целых страниц, expectations-система для WPT, reftest-executor, Ahem, спец-конформанс (test262/Wasm/WebGL). Бриф с DoD по срезам — docs/tasks/p2-test-track.md. Рекомендуемый порядок: TEST-1 → TEST-2 → TEST-3 → TEST-4/TEST-5 → опц. TEST-6..8",
      "tasks": [
       {
@@ -4730,9 +4730,9 @@
       {
        "id": "TEST-2",
        "title": "TEST-2: DOM/layout-фаззер страниц (Domato-стиль)",
-       "status": "planned",
+       "status": "done",
        "size": "L",
-       "note": "Генеративный фаззер целых страниц в стиле Domato (Google Project Zero; у Ladybird стабильно находит краши в DOM/layout/декодерах/CSS-математике): scripts/page_fuzz.py генерирует случайные почти-валидные HTML/CSS/JS-страницы с фиксируемым seed, прогон пачками через headless --screenshot/--dump-layout --deterministic; сигналы — паника (panic-hook health.log из PERF-6), hang/таймаут, белый экран (rendered_units==0 при dom>=20); минимизатор-бисекция до репро; --selftest; находки в BUG-NNN, seed-регрессии — smoke-список. После TEST-1. Бриф docs/tasks/p2-test-track.md"
+       "note": "Генеративный фаззер целых страниц в стиле Domato: scripts/page_fuzz.py (грамматика тегов/CSS-SPECS.md ✅-свойств/JS-DOM-мутаций, headless --dump-layout runner с таймаутом, ddmin-минимизатор субдеревьев+splice+CSS-правил, --selftest зелёный). Прогон HEAD 1430 страниц (seed 1/100/5000, dev-release) — 0 паник/crash/hang, 0 реальных white-screen (2 ложных white_empty отфильтрованы гейтом expected_content_units — движок корректно не рисует страницы без контента). Харнесс валиден, находок для BUG-NNN на первом прогоне нет — расширять грамматику/увеличивать N в следующей сессии. Состояние — docs/tasks/p2-test-track.md#test-2-состояние"
       },
       {
        "id": "TEST-3",
