@@ -47,6 +47,7 @@ fn queue() -> &'static Mutex<Vec<NetworkLogRecord>> {
 
 /// Enqueue a network-log record. Public so non-JS engine paths can reuse the
 /// same channel if needed.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn enqueue(method: String, url: String, status: Option<u16>, duration_ms: Option<u64>) {
     queue().lock().unwrap().push(NetworkLogRecord {
         method,
@@ -59,6 +60,7 @@ pub fn enqueue(method: String, url: String, status: Option<u16>, duration_ms: Op
 /// Drain and return all pending network-log records.
 ///
 /// Called by the shell each event-loop tick; the queue is left empty.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn take_network_log_records() -> Vec<NetworkLogRecord> {
     std::mem::take(&mut *queue().lock().unwrap())
 }
@@ -114,6 +116,9 @@ pub(crate) fn install_network_log_bindings_v8(
 
 #[cfg(all(test, feature = "v8-backend"))]
 mod tests {
+    // Хелперы тестового модуля: исключение из clippy.toml покрывает
+    // только тело `#[test]` (docs/lint-policy.md §10).
+    #![allow(clippy::unwrap_used)]
     use super::*;
     use crate::v8_runtime::V8JsRuntime;
     use lumen_core::ext::JsRuntime as _;

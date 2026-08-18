@@ -117,6 +117,7 @@ impl PrintPrefs {
     }
 
     /// Load the current snapshot of all print preferences.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn load_snapshot(&self) -> Result<PrintPrefsSnapshot> {
         let conn = self.conn.lock().unwrap();
 
@@ -143,6 +144,7 @@ impl PrintPrefs {
     }
 
     /// Persist a snapshot of print preferences to the database.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn save_snapshot(&self, snap: &PrintPrefsSnapshot) -> Result<()> {
         let conn = self.conn.lock().unwrap();
 

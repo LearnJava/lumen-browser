@@ -181,6 +181,7 @@ impl CpuLayer {
 }
 
 /// Rasterize display commands to an image using tiny-skia (CPU only, deterministic).
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn rasterize_cpu(
     width: u32,
     height: u32,
@@ -1223,6 +1224,7 @@ fn apply_backdrop_filter(
 /// snapshot gate (same constraint the conic-gradient `atan2` approximation
 /// solved). Edges replicate the border sample (clamp index), mirroring the GPU
 /// blur shader's clamp-to-edge sampler.
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 fn gaussian_blur(src: &tiny_skia::Pixmap, sigma: f32) -> tiny_skia::Pixmap {
     let w = src.width() as usize;
     let h = src.height() as usize;
@@ -1299,6 +1301,7 @@ fn box_blur_v(src: &[f32], dst: &mut [f32], w: usize, h: usize, r: i32) {
 /// exactly: each formula operates on **straight** (un-premultiplied) sRGB
 /// components in `[0,1]`, so pixels are un-premultiplied first and
 /// re-premultiplied after. `Blur` is handled separately and is a no-op here.
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 fn apply_color_filter(pixmap: &mut tiny_skia::Pixmap, f: &FilterFn) {
     for px in pixmap.pixels_mut() {
         let a = f32::from(px.alpha());

@@ -245,6 +245,7 @@ fn has_scheme(s: &str) -> bool {
     false
 }
 
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 fn split_scheme(s: &str) -> Result<(String, &str)> {
     if !has_scheme(s) {
         return Err(Error::InvalidUrl(format!("missing scheme: {s:?}")));

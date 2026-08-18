@@ -8184,6 +8184,7 @@ impl Renderer {
     /// обычного кадра, оффскрин-рендера полосы скролл-композитора и
     /// композиции полоса+overlay; отличия сведены к выбору целевого view,
     /// размеров «поверхности» и финализации (present / счётчики / хэш).
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn render_impl(
         &mut self,
         content: &[DisplayCommand],
@@ -15512,6 +15513,7 @@ fn text_run_cache_disabled() -> bool {
 /// [`push_text_glyphs_mixed`] to measure a segment's real width without a
 /// separate shaping pass.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 fn push_text_glyphs(
     out: &mut Vec<TextVertex>,
     rect: Rect,

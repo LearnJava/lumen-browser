@@ -41,6 +41,7 @@ fn queue() -> &'static Mutex<Vec<DownloadRequest>> {
 
 /// Enqueue a download request. Public so non-JS engine paths (e.g. a future
 /// native `<a download>` click handler) can reuse the same channel.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn enqueue(url: String, filename: Option<String>) {
     queue().lock().unwrap().push(DownloadRequest { url, filename });
 }
@@ -48,6 +49,7 @@ pub fn enqueue(url: String, filename: Option<String>) {
 /// Drain and return all pending download requests.
 ///
 /// Called by the shell each event-loop tick; the queue is left empty.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn take_download_requests() -> Vec<DownloadRequest> {
     std::mem::take(&mut *queue().lock().unwrap())
 }
@@ -90,6 +92,9 @@ pub(crate) fn install_download_bindings_v8(
 
 #[cfg(all(test, feature = "v8-backend"))]
 mod tests {
+    // Хелперы тестового модуля: исключение из clippy.toml покрывает
+    // только тело `#[test]` (docs/lint-policy.md §10).
+    #![allow(clippy::unwrap_used)]
     use super::*;
     use crate::v8_runtime::V8JsRuntime;
     use lumen_core::ext::JsRuntime as _;

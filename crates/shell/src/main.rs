@@ -766,6 +766,7 @@ fn should_restore_session(source: &PageSource, automation_mode: bool) -> bool {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 fn run_window_mode(
     source: PageSource,
     event_sink: Arc<dyn EventSink>,
@@ -2603,6 +2604,7 @@ impl NavEntry {
     ///
     /// The caller MUST have range-checked that the source stack is non-empty;
     /// `pop` is therefore expected to succeed.
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     fn shift_history_entry(
         nav_back: &mut Vec<NavEntry>,
         nav_fwd: &mut Vec<NavEntry>,
@@ -4402,6 +4404,8 @@ const MAX_PARALLEL_FETCHES: usize = 8;
 ///
 /// `f` получает `(индекс, &элемент)` и должна быть `Sync` (вызывается из всех
 /// потоков). Паники внутри `f` не глотаются — пробрасываются при join.
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn parallel_map<T, R, F>(items: &[T], f: F) -> Vec<R>
 where
     T: Sync,
@@ -5229,6 +5233,7 @@ struct PageSnapshot {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn parse_and_layout(
     bytes: &[u8],
     content_type: Option<&str>,
@@ -6243,6 +6248,7 @@ fn system_font_faces() -> Arc<lumen_paint::SystemFaceSet> {
 /// Единая точка сборки для всех layout-путей (полный / инкрементальный /
 /// restyle) — иначе системные семейства меряются по-разному в зависимости от
 /// того, есть ли на странице web-шрифты.
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 fn page_measurer(
     font: &lumen_font::Font<'static>,
     web_fonts: &[LoadedWebFont],
@@ -6269,6 +6275,8 @@ fn page_measurer(
 /// (`:hover`/`:focus`/`forced-colors`/`content-visibility` scroll) — thread-local
 /// (`lumen_layout::set_*`), поэтому вызывающая сторона обязана выставить его на
 /// **том же** потоке до вызова и сбросить после.
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn compute_layout(
     document: &Mutex<Document>,
     stylesheet: &lumen_css_parser::Stylesheet,
@@ -6309,6 +6317,8 @@ fn relayout_page_incremental(
 ///
 /// Same caller contract as [`compute_layout`]: thread-local interactive state
 /// must be set before the call and cleared afterwards.
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn compute_layout_incremental(
     document: &Mutex<Document>,
     stylesheet: &lumen_css_parser::Stylesheet,
@@ -6359,6 +6369,8 @@ fn relayout_page_incremental_restyle(
 /// BUG-341 S7: restyle-aware variant of [`compute_layout_incremental`] — see
 /// [`relayout_page_incremental_restyle`].
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn compute_layout_incremental_restyle(
     document: &Mutex<Document>,
     stylesheet: &lumen_css_parser::Stylesheet,
@@ -6549,6 +6561,7 @@ fn sw_store_for_base(
 }
 
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn render_bytes(
     bytes: &[u8],
     content_type: Option<&str>,
@@ -8701,6 +8714,7 @@ impl Lumen {
     /// Reads the `accept` and `multiple` attributes from the DOM, invokes the
     /// platform file dialog (blocking), then delivers the result to JS via
     /// `_lumen_deliver_file_list(nid, json)`.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn open_file_picker(&mut self, id: NodeId) {
         let (accept, multiple) = if let Some(src) = self.layout_source.as_ref() {
             let doc = src.document.lock().unwrap();
@@ -8949,6 +8963,7 @@ impl Lumen {
     /// `#findBar`/`#downloadsPanel` (CC-9), salvaged back into the tree at
     /// `#contentArea`'s former slot since they're real popovers, not preview
     /// placeholder content.
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     fn relayout_chrome_host(&mut self) {
         if self.chrome_doc.is_none() {
             return;
@@ -10159,6 +10174,7 @@ impl Lumen {
     /// `self.layout_box` is **moved out** (not cloned) to avoid copying the
     /// potentially large tree; `apply_relayout_result` moves the fresh tree
     /// back in, so field is always `Some` after a successful call.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn try_relayout_raf_incremental(&mut self) -> bool {
         let Some(viewport) = self.relayout_viewport() else {
             return false;
@@ -10873,6 +10889,7 @@ impl Lumen {
     /// Fetched images are registered in the renderer immediately so the next
     /// repaint (already requested by `relayout`) shows them.
     #[cfg(feature = "v8")]
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn fetch_and_register_lazy_images(&mut self, requests: Vec<(u32, String)>) {
         let base = match &self.source {
             PageSource::File(p) => ResourceBase::File(p.clone()),
@@ -10980,6 +10997,7 @@ impl Lumen {
     /// [`lumen_js::TextTrackStore`] so `video.textTracks` reflects the parsed
     /// `<track>` cues. Fully replaces the store's contents (clear + repopulate),
     /// so navigating to a track-less page empties it.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn sync_text_track_store(&self) {
         let mut guard = self.text_track_store.tracks.lock().unwrap();
         guard.clear();
@@ -11013,6 +11031,7 @@ impl Lumen {
     ///
     /// Called once per render tick (Step 2.6) so video frames stay in sync with
     /// the render rate.  `elapsed_ms` is milliseconds since `self.epoch`.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn tick_video_gifs(&mut self, elapsed_ms: u64) {
         // Drain pending load requests queued by JS `__lumen_video_load`.
         let loads: Vec<(u32, String)> = self
@@ -11150,6 +11169,7 @@ impl Lumen {
     ///
     /// Triggers a full re-layout so that `:target`-based CSS rules take effect
     /// before the scroll position is calculated.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn navigate_fragment(&mut self, fragment: String) {
         // Same-document fragment navigation must keep the JS side in sync: update
         // `location`, push a same-document history entry, and fire `hashchange`
@@ -11889,6 +11909,7 @@ impl Lumen {
     /// Применить результат полного pipeline (fetch + parse + CSS + images).
     /// Используется и при streaming `LoadDone`, и может быть переиспользован
     /// в будущем для других путей загрузки.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn apply_loaded_page(&mut self, page: LoadedPage, new_layout_source: Option<LayoutSource>, new_js_ctx: Option<Arc<dyn PersistentJs>>) {
         // Drop JS closures before layout_source to release Arc clones in QuickJS.
         self.set_js_ctx(None);
@@ -12749,6 +12770,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         }
     }
 
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         // Warm-frame bench (LUMEN_BENCH=hover:N | scroll:N). Drives redraws
         // itself instead of waiting for a human, then exits. Placed first so a
@@ -14048,6 +14070,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         }
     }
 
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn window_event(
         &mut self,
         event_loop: &ActiveEventLoop,
@@ -17502,6 +17526,7 @@ impl Lumen {
         proceed
     }
 
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn handle_click_at(&mut self, x_css: f32, y_css: f32) {
         // Dismiss validation tooltip on any non-scrollbar click.
         self.validation_tooltip = None;
@@ -18257,6 +18282,7 @@ impl Lumen {
         route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
     }
 
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn handle_key(&mut self, event_loop: &ActiveEventLoop, key_event: &KeyEvent) {
         if key_event.state != ElementState::Pressed {
             return;
@@ -21146,6 +21172,7 @@ impl Lumen {
     /// Диспатчит JS click-событие, обрабатывает form-действие (checkbox/radio),
     /// и навигирует по ссылке если узел внутри `<a href>`. Используется
     /// hint-режимом для активации элемента без участия мыши.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn activate_node(&mut self, node_id: NodeId) {
         // JS click dispatch (bubbling от узла до document).
         // Hint-mode activations have no real mouse coordinates, so x/y are 0.
@@ -22106,6 +22133,7 @@ impl Lumen {
     ///
     /// The cursor position is converted from physical pixels to document-space
     /// CSS px (adds page scroll offsets so hit-testing works on scrolled pages).
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn try_scroll_overflow_container(&mut self, dx: f32, dy: f32) -> bool {
         let Some(cursor) = self.cursor_position else { return false };
         if self.layout_box.is_none() { return false; }
@@ -22205,6 +22233,7 @@ impl Lumen {
     /// boxes carry absolute (unscrolled) coordinates — see `PushScrollLayer`'s
     /// paint-time `translate(-scroll_x, -scroll_y)` — so each container's
     /// adjustment is independent of its ancestors' own scroll offset.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn scroll_nested_ancestors_into_view(&mut self, node: NodeId, target_rect: lumen_core::geom::Rect) {
         let Some(src) = self.layout_source.as_ref() else { return };
         let mut ancestor = src.document.lock().unwrap().get(node).parent;
@@ -23519,6 +23548,7 @@ impl Lumen {
     /// Restore per-page fields from a `PageSnapshot` into `self`.
     ///
     /// Called after a tab switch to make a previously-frozen tab active again.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn restore_page_snapshot(&mut self, snap: PageSnapshot) {
         self.display_list = snap.display_list;
         self.title = snap.title;
@@ -23615,6 +23645,7 @@ impl Lumen {
     ///
     /// Called after `save_page_snapshot()` to prepare `self` for a fresh tab
     /// before loading a URL or showing an empty page.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn reset_to_blank_tab(&mut self) {
         self.display_list = Vec::new();
         self.title = None;

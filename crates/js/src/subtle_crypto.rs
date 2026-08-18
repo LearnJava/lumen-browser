@@ -1370,6 +1370,7 @@ pub(crate) fn verify_signature(alg_json: &str, key_id: u32, sig: &[u8], data: &[
 
 /// Dispatch RSA signature verification to the appropriate scheme.
 #[cfg(any(feature = "v8-backend", test))]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn rsa_verify(
     alg_name: &str,
     hash: &str,
@@ -1788,6 +1789,7 @@ pub(crate) fn ecdh_derive_bits(private_key_id: u32, peer_public_key_id: u32, len
 /// uppercase, as stored in the algorithm JSON).  Falls back to SHA-256 for any
 /// other value.
 #[cfg(any(feature = "v8-backend", test))]
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 fn hmac_hash(key: &[u8], data: &[u8], hash: &str) -> Vec<u8> {
     use hmac::Mac;
     match hash {

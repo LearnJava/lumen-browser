@@ -93,6 +93,7 @@ impl DecodedImageCache {
     }
 
     /// TEMP BUG-272 diagnostics: (entries, decoded pixel bytes) currently held.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn debug_stats(&self) -> (usize, usize) {
         let inner = self.inner.lock().unwrap();
         let mut bytes = 0usize;
@@ -115,6 +116,7 @@ impl DecodedImageCache {
     /// Called on the UI thread at navigation start (alongside
     /// [`crate::prefetch::PrefetchCache::reset`]) so the streaming producers and the
     /// final consumer all observe the same generation for one navigation.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn reset(&self, generation: u64) {
         let mut inner = self.inner.lock().unwrap();
         inner.generation = generation;
@@ -127,6 +129,7 @@ impl DecodedImageCache {
     /// `Screenshot` command) that have no `load_generation`: each render is its own
     /// "navigation", so this clears the previous render's images (bounding memory in
     /// the long-lived IPC server) and guarantees no stale cross-page reuse.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn reset_new(&self) {
         let mut inner = self.inner.lock().unwrap();
         inner.generation = inner.generation.wrapping_add(1);
@@ -134,6 +137,7 @@ impl DecodedImageCache {
     }
 
     /// The navigation generation the cache is currently scoped to.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn current_generation(&self) -> u64 {
         self.inner.lock().unwrap().generation
     }
@@ -145,6 +149,7 @@ impl DecodedImageCache {
     /// `generation` no longer matches the cache's current generation (a newer
     /// navigation already reset it), the call bypasses the cache entirely and runs
     /// `decode` directly — a stale producer never pollutes the current page.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn get_or_decode(
         &self,
         generation: u64,

@@ -46,6 +46,7 @@ fn digit_to_char(d: u32) -> char {
 /// нет — extended часть идёт сразу без `-`.
 ///
 /// Пустой вход возвращает пустую строку.
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn encode(input: &str) -> Result<String> {
     let codepoints: Vec<u32> = input.chars().map(|c| c as u32).collect();
     let input_len = codepoints.len() as u32;

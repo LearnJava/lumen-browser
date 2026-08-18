@@ -264,6 +264,7 @@ fn apply_single_variation(
 /// Если touched-точка единственная в контуре (или все touched —
 /// `prev_touched == next_touched`): все untouched сдвигаются на ту же
 /// дельту. Если в контуре 0 touched — variation просто не вкладывает.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn iup_contour(touched: &[bool], delta: &mut [f32], orig: &[i16]) {
     let n = touched.len();
     debug_assert_eq!(delta.len(), n);

@@ -28,6 +28,7 @@ pub const SESSION_DB_PATH: &str = "last_session.db";
 /// rather than aborting startup — losing the saved session is preferable to
 /// failing to launch.
 #[must_use]
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn open_store() -> SessionStore {
     SessionStore::open(SESSION_DB_PATH).unwrap_or_else(|e| {
         eprintln!("session: не удалось открыть {SESSION_DB_PATH}: {e}; сессия не сохранится");

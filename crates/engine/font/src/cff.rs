@@ -70,6 +70,7 @@ impl<'a> Index<'a> {
 
     /// Parse an INDEX starting at `pos` in `data`. Returns the parsed INDEX and
     /// the position immediately after it (start of the next structure).
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn parse(data: &'a [u8], pos: usize) -> Result<(Self, usize), FontError> {
         let mut r = BinaryReader::new(data);
         r.seek(pos);
@@ -368,6 +369,7 @@ impl<'a> Cff<'a> {
     }
 
     /// Local subrs INDEX for `glyph_id` (FD-dependent for CID fonts).
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn local_subrs_for(&self, glyph_id: u16) -> &Index<'a> {
         match &self.charset {
             Charset::Simple { local_subrs } => local_subrs,
@@ -623,6 +625,7 @@ impl<'a, 'b> Type2Interp<'a, 'b> {
 
     /// Run a charstring (recursively for subrs). `cff` is only used for `seac`
     /// resolution at `endchar`.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn run(&mut self, cs: &[u8], cff: &Cff<'a>) -> Result<(), FontError> {
         if self.depth > MAX_SUBR_DEPTH {
             return Ok(());

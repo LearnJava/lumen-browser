@@ -219,6 +219,7 @@ impl Compositor for InProcessCompositor {
         self.pending_layer_tree = Some(layer_tree);
     }
 
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     fn flush_pending(&mut self) -> bool {
         let Some(trees) = self.pending_trees.take() else {
             return false;
@@ -269,6 +270,7 @@ impl VsyncNotifier {
     }
 
     /// Вызывается из `commit()` — будит compositor thread немедленно.
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn notify(&self) {
         *self.dirty.lock().expect("VsyncNotifier dirty mutex poisoned") = true;
         self.cond.notify_one();
@@ -277,6 +279,7 @@ impl VsyncNotifier {
     /// Блокируется до нотификации или timeout-а; сбрасывает dirty-флаг.
     /// Если `notify()` был вызван до входа в метод (dirty=true) — возвращает
     /// немедленно без ожидания.
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn wait_for_next_tick(&self, timeout: Duration) {
         let mut dirty = self
             .dirty
@@ -361,6 +364,7 @@ impl Default for ThreadedCompositor {
 }
 
 impl Compositor for ThreadedCompositor {
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     fn commit(
         &mut self,
         trees: Arc<PropertyTrees>,
@@ -377,6 +381,7 @@ impl Compositor for ThreadedCompositor {
         self.notifier.notify();
     }
 
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     fn flush_pending(&mut self) -> bool {
         let mut guard = self
             .state
@@ -394,6 +399,7 @@ impl Compositor for ThreadedCompositor {
         true
     }
 
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     fn has_pending(&self) -> bool {
         self.state
             .lock()
@@ -402,6 +408,7 @@ impl Compositor for ThreadedCompositor {
             .is_some()
     }
 
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     fn active_tree(&self) -> Option<Arc<dyn LayerTree + Send + Sync>> {
         self.state
             .lock()
@@ -410,6 +417,7 @@ impl Compositor for ThreadedCompositor {
             .clone()
     }
 
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     fn active_trees(&self) -> Option<Arc<PropertyTrees>> {
         self.state
             .lock()
@@ -437,6 +445,7 @@ pub struct ThreadedCompositorHandle {
 }
 
 impl ThreadedCompositorHandle {
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn commit(
         &self,
         trees: Arc<PropertyTrees>,
@@ -453,6 +462,7 @@ impl ThreadedCompositorHandle {
         self.notifier.notify();
     }
 
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn flush_pending(&self) -> bool {
         let mut guard = self
             .state
@@ -471,6 +481,7 @@ impl ThreadedCompositorHandle {
     }
 
     #[must_use]
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn has_pending(&self) -> bool {
         self.state
             .lock()
@@ -480,6 +491,7 @@ impl ThreadedCompositorHandle {
     }
 
     #[must_use]
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn active_tree(&self) -> Option<Arc<dyn LayerTree + Send + Sync>> {
         self.state
             .lock()
@@ -489,6 +501,7 @@ impl ThreadedCompositorHandle {
     }
 
     #[must_use]
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn active_trees(&self) -> Option<Arc<PropertyTrees>> {
         self.state
             .lock()

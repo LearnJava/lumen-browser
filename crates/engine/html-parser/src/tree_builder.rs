@@ -2187,6 +2187,7 @@ impl IncrementalTreeBuilder {
 
     /// Push с применением Noah's Ark clause (§13.2.4.3): если последние
     /// 3 entries с тем же tag+attrs существуют, удалить самую раннюю.
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     fn push_active_formatting(&mut self, node: NodeId, tag: &str, attrs: &[(String, String)]) {
         // Noah's Ark: считаем сколько после ближайшего marker-а имеют
         // тот же тег+атрибуты.
@@ -2292,6 +2293,7 @@ impl IncrementalTreeBuilder {
     /// Phase 0 выполняет один проход AAA вместо полных 8 итераций
     /// outer loop из спецификации — этого достаточно для большинства
     /// реальных страниц.
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     fn adoption_agency(&mut self, subject: &str) {
         // Step 4: find formatting element from active formatting
         // list (after marker).

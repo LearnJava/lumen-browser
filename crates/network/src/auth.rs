@@ -637,6 +637,7 @@ impl StaticCredentialProvider {
     /// Зарегистрировать creds после конструирования. `&self` (не `&mut`) —
     /// у нас Mutex; провайдер можно делить через Arc и доливать creds в
     /// процессе работы (например, после UI-popup).
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn add(&self, origin: &str, realm: &str, user: &str, pass: &str) {
         self.entries.lock().unwrap().insert(
             (origin.to_string(), realm.to_string()),
@@ -655,6 +656,7 @@ impl Default for StaticCredentialProvider {
 }
 
 impl HttpCredentialProvider for StaticCredentialProvider {
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn credentials(&self, challenge: &HttpAuthChallenge) -> Option<HttpCredentials> {
         let entries = self.entries.lock().unwrap();
         // 1. (origin, realm) exact

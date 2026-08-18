@@ -1067,6 +1067,7 @@ impl BrowserSession for WinitSession {
         Ok(())
     }
 
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     fn scroll(&mut self, target: &Target, delta: ScrollDelta) -> Result<()> {
         // BUG-338: when `target` resolves to a DOM node with a scrolling
         // overflow ancestor (inclusive of the node itself), scroll THAT

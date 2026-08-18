@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-18",
  "counts": {
-  "open": 322,
+  "open": 323,
   "fixed": 424,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 746,
+ "total_bugs": 747,
  "phases": [
   {
    "id": "P0",
@@ -10088,6 +10088,13 @@
    "component": "paint/image (кандидаты — срезы 20–23 [BUG-405](bugs/BUG-405-OPEN.md) и [BUG-771](bugs/BUG-771-FIXED.md); коммит не бисекчен)",
    "date": null,
    "debtor": false
+  },
+  "BUG-783": {
+   "status": "open",
+   "title": "Тест ждёт регистрации перехвата опросом с потолком по настенным часам (400 × 5 мс = 2 с) — под параллельной нагрузкой `scoped-test.sh` поток с реальным `fetch`…",
+   "component": "network (`crates/network/src/lib.rs:8723-8731`, тест `tests::global_intercept_pauses_real_fetch_until_resolved`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -10906,6 +10913,9 @@
   ],
   "network (`crates/network/src/lib.rs:2566-2567` — вычисление `default_path` перед `jar.process_set_cookie`); потребители — `crates/storage/src/cookies.rs::parse_set_cookie_with_psl` и `path_matches`": [
    "BUG-756"
+  ],
+  "network (`crates/network/src/lib.rs:8723-8731`, тест `tests::global_intercept_pauses_real_fetch_until_resolved`)": [
+   "BUG-783"
   ],
   "network (`crates/network/src/lib.rs::read_head`, `crates/network/src/h2/conn.rs`)": [
    "BUG-679"

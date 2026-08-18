@@ -326,6 +326,7 @@ impl SafeBrowsingList {
     /// Добавить запись по уже-хэшированному значению. `full_hash` обязан
     /// быть 32 байта (SHA-256). Дубликат `(list_name, full_hash)` обновляет
     /// `threat_type` и `added_at` (`INSERT OR REPLACE`).
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn add_hash(
         &self,
         list_name: &str,
@@ -386,6 +387,7 @@ impl SafeBrowsingList {
     /// Прямой lookup по полному хэшу (32 байта). Возвращает первое
     /// найденное `(list_name, threat_type)` среди всех списков. `None`
     /// если ни в одном списке нет.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn lookup_hash(&self, full_hash: &[u8]) -> Result<Option<(String, ThreatType)>> {
         if full_hash.len() != 32 {
             return Ok(None);
@@ -440,6 +442,7 @@ impl SafeBrowsingList {
 
     /// Удалить все записи указанного списка. `clear_list("google-v4")` —
     /// типичная операция перед re-import свежей dump-копии.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn clear_list(&self, list_name: &str) -> Result<usize> {
         let conn = self.conn.lock().unwrap();
         let n = conn
@@ -453,6 +456,7 @@ impl SafeBrowsingList {
 
     /// Удалить все записи во всех списках. Используется при logout/profile
     /// reset.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn clear_all(&self) -> Result<usize> {
         let conn = self.conn.lock().unwrap();
         let n = conn
@@ -462,6 +466,7 @@ impl SafeBrowsingList {
     }
 
     /// Сколько записей в конкретном списке.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn count_in(&self, list_name: &str) -> Result<usize> {
         let conn = self.conn.lock().unwrap();
         let n: i64 = conn
@@ -475,6 +480,7 @@ impl SafeBrowsingList {
     }
 
     /// Сколько всего записей во всех списках.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn count_total(&self) -> Result<usize> {
         let conn = self.conn.lock().unwrap();
         let n: i64 = conn

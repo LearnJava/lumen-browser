@@ -2611,6 +2611,7 @@ impl FlatTree {
 ///
 /// Fast path: if the document has no shadow hosts, returns an empty `FlatTree`
 /// (every `children_of` call falls through to DOM children).
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn build_flat_tree(doc: &Document) -> FlatTree {
     if doc.shadow_roots.is_empty() {
         return FlatTree::default();
@@ -2644,6 +2645,7 @@ type SlotAssignments = HashMap<NodeId, Vec<NodeId>>;
 /// Each light-tree child of `host` whose `slot=""` attribute matches a
 /// `<slot name="">` in the shadow tree is assigned to that slot. Unmatched
 /// children are dropped (they don't appear in the flat tree).
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 fn compute_slot_assignments(doc: &Document, host: NodeId, sr: NodeId) -> SlotAssignments {
     let mut slots: Vec<(NodeId, String)> = Vec::new();
     collect_slots(doc, sr, &mut slots);

@@ -790,6 +790,7 @@ impl Instance {
     /// Execute a SIMD load (`0xFD` sub-opcodes 0..=10, 92, 93), returning the
     /// resulting `v128`. Covers plain load, the widening `loadNxM_s/u` ops, the
     /// `loadN_splat` broadcasts, and the `loadN_zero` zero-extend loads.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn simd_load(&self, sub: u32, addr: usize) -> Result<Value, Trap> {
         let mut r = [0u8; 16];
         match sub {

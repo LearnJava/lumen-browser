@@ -23,6 +23,7 @@ use std::sync::{Arc, Mutex};
 /// `pointer_capture_nid()`/`take_pointer_capture()` observe the same state
 /// the natives mutate.
 #[cfg(feature = "v8-backend")]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn install_pointer_capture_bindings_v8(
     rt: &crate::v8_runtime::V8JsRuntime,
     capture_nid: Arc<Mutex<Option<u32>>>,
@@ -59,6 +60,9 @@ pub(crate) fn install_pointer_capture_bindings_v8(
 
 #[cfg(all(test, feature = "v8-backend"))]
 mod tests {
+    // Хелперы тестового модуля: исключение из clippy.toml покрывает
+    // только тело `#[test]` (docs/lint-policy.md §10).
+    #![allow(clippy::unwrap_used)]
     use super::*;
     use crate::v8_runtime::V8JsRuntime;
     use lumen_core::ext::JsRuntime as _;

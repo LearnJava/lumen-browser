@@ -355,6 +355,7 @@ fn lay_out_msqrt(mathml: &MathmlBox) -> LayoutBox {
 }
 
 /// Lay out a superscript: base with exponent positioned at top-right, scaled by annotation_scale.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn lay_out_msup(mathml: &MathmlBox) -> LayoutBox {
     if mathml.main_boxes.is_empty() {
         panic!("lay_out_msup: superscript requires base");
@@ -387,6 +388,7 @@ fn lay_out_msup(mathml: &MathmlBox) -> LayoutBox {
 }
 
 /// Lay out a subscript: base with subscript positioned at bottom-right, scaled by annotation_scale.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn lay_out_msub(mathml: &MathmlBox) -> LayoutBox {
     if mathml.main_boxes.is_empty() {
         panic!("lay_out_msub: subscript requires base");

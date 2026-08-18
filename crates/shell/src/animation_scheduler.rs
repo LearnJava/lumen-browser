@@ -172,6 +172,7 @@ impl AnimationScheduler {
         }
     }
 
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn process_node(
         &mut self,
         ts: f64,

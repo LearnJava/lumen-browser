@@ -265,6 +265,7 @@ impl StreamManager {
     /// per-stream flow-control or final-size violation;
     /// [`StreamManagerError::Conn`] on a connection receive flow-control or
     /// stream-count violation.
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn recv_stream(
         &mut self,
         stream_id: u64,
@@ -298,6 +299,7 @@ impl StreamManager {
     /// As [`StreamManager::recv_stream`], plus [`StreamManagerError::Stream`] with
     /// [`StreamError::FinalSize`] if the reset's final size contradicts data
     /// already received.
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn recv_reset(
         &mut self,
         stream_id: u64,

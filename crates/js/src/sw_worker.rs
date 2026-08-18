@@ -432,6 +432,7 @@ const _: Duration = FETCH_TIMEOUT;
 
 /// V8 port of [`spawn_sw_worker`].
 #[cfg(feature = "v8-backend")]
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn spawn_sw_worker_v8(
     origin: String,
     scope: String,
@@ -713,6 +714,9 @@ fn install_sw_globals_v8(
 /// pump (see the V8-port module doc comment above `spawn_sw_worker_v8`).
 #[cfg(all(test, feature = "v8-backend"))]
 mod tests_v8 {
+    // Хелперы тестового модуля: исключение из clippy.toml покрывает
+    // только тело `#[test]` (docs/lint-policy.md §10).
+    #![allow(clippy::unwrap_used)]
     use super::*;
     use lumen_core::ext::CacheBackend;
     use std::sync::Mutex;
