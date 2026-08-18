@@ -11,6 +11,11 @@
 //! поэтому длина глифа N = loca[N+1] − loca[N]. Если loca[N] == loca[N+1],
 //! у глифа нет outline (например, space).
 
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
 use crate::face::FontError;
 use crate::head::IndexToLocFormat;
 

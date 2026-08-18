@@ -1,3 +1,8 @@
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
 /// SRI (Subresource Integrity) implementation per W3C SRI Level 1.
 ///
 /// Parses `integrity` attribute tokens like `sha256-BASE64 sha512-BASE64`

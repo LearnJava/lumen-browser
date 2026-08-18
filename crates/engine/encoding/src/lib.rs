@@ -39,8 +39,11 @@ pub use unicode_provider::Icu4xUnicodeProvider;
 /// совпадает с WHATWG Encoding Standard label-ами.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Encoding {
+    /// UTF-8 — кодировка по умолчанию и единственная, в которую мы кодируем.
     Utf8,
+    /// UTF-16 little-endian; определяется по BOM `FF FE`.
     Utf16Le,
+    /// UTF-16 big-endian; определяется по BOM `FE FF`.
     Utf16Be,
     /// UTF-32 LE — четырёхбайтная кодировка, помеченная WHATWG как
     /// obsolete. Декодируем для backward compat (никогда не encode-им).
@@ -48,8 +51,11 @@ pub enum Encoding {
     /// UTF-32 BE — то же что Utf32Le, но big-endian. Detect по BOM
     /// `00 00 FE FF`.
     Utf32Be,
+    /// windows-1251 — однобайтная кириллица, дефолт русскоязычного веба до UTF-8.
     Windows1251,
+    /// KOI8-R — однобайтная кириллица (RFC 1489), встречается в старых архивах.
     Koi8R,
+    /// CP866 — однобайтная кириллица DOS; встречается в текстовых вложениях.
     Cp866,
 }
 

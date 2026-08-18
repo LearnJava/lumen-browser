@@ -9,6 +9,11 @@
 //! in [`docs/shell-ui-architecture.md`].  Variants are added as panels are
 //! migrated onto the system; the existing ad-hoc panels remain untouched.
 
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
 use lumen_core::geom::{Point, Rect};
 use lumen_layout::Color;
 

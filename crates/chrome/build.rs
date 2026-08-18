@@ -229,7 +229,9 @@ fn write_codegen(collected: &Collected) {
          /// Empty for now: the current asset renders its example lists as static markup;\n\
          /// CC-6 introduces `<template>` wrapping once the ChromeModel→DOM diff needs\n\
          /// real cloning (docs/tasks/p1-css-chrome.md CC-3 step 3 / CC-6).\n\
-         pub mod templates {\n    pub const IDS: &[&str] = &[\n",
+         pub mod templates {\n    \
+         /// Строковые id всех `<template>` в `assets/chrome/chrome.html`.\n    \
+         pub const IDS: &[&str] = &[\n",
     );
     for t in &collected.templates {
         out.push_str(&format!("        {t:?},\n"));

@@ -21,6 +21,11 @@
 //! получает их через `lumen_core::url::Url::host_ascii()`. Передача
 //! Unicode-host-а напрямую даст `None` — `psl` работает по байтам.
 
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
 use lumen_core::ext::PublicSuffixList;
 
 /// Реализация `PublicSuffixList` поверх crate-а `psl` (compiled-in таблица).

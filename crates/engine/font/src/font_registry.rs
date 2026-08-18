@@ -8,6 +8,11 @@
 //! `@font-face:<family_lower>/<weight>/<style>/<unicode-range-key>`;
 //! диска по ним нет — это только ключи для `bytes_store`.
 
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};

@@ -4,6 +4,11 @@
 //! install path (`v8_runtime.rs::install_dom`), and the engine-agnostic
 //! `WEB_API_SHIM` JavaScript that builds standard `document`, `window`,
 //! `console` globals on top of the `_lumen_*` natives that path registers.
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
 // Only exercised by the test suite below (`mod tests`), which itself only
 // glob-imports this module's scope under `v8-backend` — the production
 // `_lumen_*` natives live in the V8 install path (`v8_runtime.rs`), which

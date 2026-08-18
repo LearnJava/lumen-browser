@@ -8,6 +8,11 @@
 //!
 //! Whitespace-only текст и комментарии пропускаются.
 
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
 use lumen_core::geom::{Rect, Size};
 use lumen_core::ext::{HyphenationProvider, NullHyphenationProvider};
 use lumen_css_parser::Stylesheet;

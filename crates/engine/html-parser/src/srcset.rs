@@ -10,6 +10,11 @@
 //!   * `sizes`-атрибут — упрощённый media-condition list + length, и
 //!     viewport-based picker для w-descriptor-кандидатов.
 
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
 /// Один кандидат из `srcset`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SrcsetCandidate {

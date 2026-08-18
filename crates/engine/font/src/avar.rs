@@ -20,6 +20,11 @@
 //! - Парсер хранит маппинги per-axis; реальное consumer-применение
 //!   через `Avar::normalize` использует piecewise-linear interp.
 
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
 use crate::binary::BinaryReader;
 use crate::face::FontError;
 

@@ -6,6 +6,11 @@
 //! Architecture: SessionContext is held as a private field in InProcessSession
 //! and similar implementations. This separates DOM/layout state from resource isolation.
 
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
 use std::collections::HashMap;
 use lumen_core::error::Result;
 use lumen_core::ext::ClockMode;
