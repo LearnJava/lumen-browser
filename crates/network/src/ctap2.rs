@@ -1411,6 +1411,7 @@ impl MockHidDevice {
     }
 
     /// Push a raw 65-byte HID report to the response queue.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn push_response(&self, report: [u8; 65]) {
         self.responses.lock().unwrap().push(report);
     }
@@ -1463,17 +1464,20 @@ impl MockHidDevice {
     }
 
     /// Return all written reports (as slices) for inspection.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn written_reports(&self) -> Vec<[u8; 65]> {
         self.writes.lock().unwrap().clone()
     }
 }
 
 impl HidDevice for MockHidDevice {
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn write(&self, report: &[u8; 65]) -> Result<(), Ctap2Error> {
         self.writes.lock().unwrap().push(*report);
         Ok(())
     }
 
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn read_timeout(&self, _timeout_ms: i32) -> Result<[u8; 65], Ctap2Error> {
         self.responses
             .lock()
@@ -1494,6 +1498,7 @@ impl HidDevice for MockHidDevice {
 // MockHidDevice pops from the back; reverse the queue so first-pushed = first-served.
 impl MockHidDevice {
     /// Reverse the internal response queue so items are served FIFO.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn seal(&self) {
         self.responses.lock().unwrap().reverse();
     }

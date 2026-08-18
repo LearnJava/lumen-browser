@@ -53,6 +53,7 @@ pub fn parse_integrity_metadata(integrity: &str) -> Vec<SriToken> {
 /// - All tokens use unknown algorithms → pass (forward-compatibility).
 /// - Otherwise pick the strongest algorithm present; body must match at
 ///   least one token with that algorithm.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn check_sri(body: &[u8], integrity: &str) -> bool {
     if integrity.is_empty() {
         return true;

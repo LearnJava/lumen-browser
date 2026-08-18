@@ -2499,6 +2499,7 @@ fn destination_to_resource_type(dest: RequestDestination) -> lumen_core::ext::Re
 ///
 /// [BUG-757]: https://github.com/LearnJava/lumen-browser/blob/main/bugs/BUG-757-FIXED.md
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn fetch_with_redirect(
     url: &Url,
     hops_left: u8,
@@ -4540,6 +4541,7 @@ struct JsWebSocketSessionImpl {
 
 impl JsWebSocketSessionImpl {
     /// Create a new session, spawning a background thread to receive frames.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn new(ws: websocket::WebSocket) -> Self {
         let protocol = ws.protocol().to_string();
         let queue: Arc<std::sync::Mutex<std::collections::VecDeque<JsWsEvent>>> =
@@ -4614,18 +4616,22 @@ impl JsWebSocketSessionImpl {
 }
 
 impl JsWebSocketSession for JsWebSocketSessionImpl {
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn send_text(&self, text: &str) -> Result<()> {
         self.session.lock().unwrap().send_text(text)
     }
 
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn send_binary(&self, data: &[u8]) -> Result<()> {
         self.session.lock().unwrap().send_binary(data)
     }
 
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn poll(&self) -> Option<JsWsEvent> {
         self.queue.lock().unwrap().pop_front()
     }
 
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn close(&self, code: u16, reason: &str) -> Result<()> {
         self.session.lock().unwrap().close(code, reason)
     }
@@ -4636,6 +4642,7 @@ impl JsWebSocketSession for JsWebSocketSessionImpl {
 }
 
 impl JsWebSocketProvider for HttpClient {
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn connect(&self, url: &str, protocols: &[String]) -> Result<Box<dyn JsWebSocketSession>> {
         let parsed = Url::parse(url)
             .map_err(|e| Error::Network(format!("ws: invalid URL: {e}")))?;
@@ -4684,6 +4691,7 @@ impl JsSseSessionImpl {
     /// wakes a pending reconnect delay immediately, and the loop also checks it
     /// before each read so an idle session exits promptly. A read already
     /// blocked in the socket finishes naturally when the server closes.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn new(mut session: Box<dyn SseSession>) -> Self {
         let queue: Arc<std::sync::Mutex<std::collections::VecDeque<JsSseEvent>>> =
             Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
@@ -4729,6 +4737,7 @@ impl JsSseSessionImpl {
 }
 
 impl JsSseSession for JsSseSessionImpl {
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn poll(&self) -> Option<JsSseEvent> {
         self.queue.lock().unwrap().pop_front()
     }
@@ -4774,6 +4783,7 @@ impl InMemoryFetchInterceptor {
     }
 
     /// Добавить запись: ответ для (origin, url) берётся из кэша без сети.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn insert(&self, origin: impl Into<String>, url: impl Into<String>, body: Vec<u8>) {
         self.cache
             .lock()
@@ -4789,6 +4799,7 @@ impl Default for InMemoryFetchInterceptor {
 }
 
 impl FetchInterceptor for InMemoryFetchInterceptor {
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn intercept(&self, url: &Url, origin: &str) -> Option<Vec<u8>> {
         self.cache
             .lock()

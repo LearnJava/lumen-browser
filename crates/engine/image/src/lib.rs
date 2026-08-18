@@ -111,6 +111,7 @@ pub fn decode(bytes: &[u8]) -> Result<Image, ImageError> {
 /// profile attached and unapplied. [`decode`] wraps this and runs decode-time
 /// colour management; callers wanting the colour-managed result should use
 /// [`decode`].
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn decode_raw(bytes: &[u8]) -> Result<Image, ImageError> {
     if bytes.len() >= PNG_SIGNATURE.len() && bytes[..PNG_SIGNATURE.len()] == PNG_SIGNATURE {
         return decode_png(bytes).map_err(ImageError::Png);

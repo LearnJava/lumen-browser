@@ -8184,6 +8184,7 @@ impl Renderer {
     /// обычного кадра, оффскрин-рендера полосы скролл-композитора и
     /// композиции полоса+overlay; отличия сведены к выбору целевого view,
     /// размеров «поверхности» и финализации (present / счётчики / хэш).
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn render_impl(
         &mut self,
         content: &[DisplayCommand],

@@ -109,6 +109,7 @@ impl AdblockStore {
     // ── subscriptions ──────────────────────────────────────────────────────
 
     /// All subscriptions, ordered by title for stable display.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn list_subscriptions(&self) -> Result<Vec<Subscription>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
@@ -131,6 +132,7 @@ impl AdblockStore {
     }
 
     /// Insert or update a subscription (keyed by URL).
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn set_subscription(&self, url: &str, title: &str, enabled: bool) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
@@ -147,6 +149,7 @@ impl AdblockStore {
     /// Idempotent across restarts: once the user has any subscription (even a
     /// disabled one), defaults are never re-inserted. Returns `true` if seeding
     /// happened.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn seed_defaults_if_empty(&self, defaults: &[Subscription]) -> Result<bool> {
         {
             let conn = self.conn.lock().unwrap();
@@ -166,6 +169,7 @@ impl AdblockStore {
     // ── list_meta ──────────────────────────────────────────────────────────
 
     /// Fetch cache metadata for a list slug, if present.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn get_meta(&self, slug: &str) -> Result<Option<ListMeta>> {
         let conn = self.conn.lock().unwrap();
         let row = conn
@@ -190,6 +194,7 @@ impl AdblockStore {
     }
 
     /// Insert or replace cache metadata for a list (keyed by slug).
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn upsert_meta(&self, meta: &ListMeta) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(

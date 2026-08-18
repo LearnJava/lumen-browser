@@ -696,7 +696,7 @@ const TC39_PROPOSALS_SHIM: &str = r#"(function(global) {
 mod tests_v8 {
     // `panic!` — штатный способ провалить тест; исключение из clippy.toml не
     // достаёт до хелперов модуля (docs/lint-policy.md §10).
-    #![allow(clippy::panic)]
+    #![allow(clippy::panic, clippy::unwrap_used)]
     use lumen_core::ext::JsRuntime as _;
     use lumen_core::JsValue;
 

@@ -647,6 +647,9 @@ fn throw_type_error(scope: &mut v8::PinScope, msg: &str) {
 /// extended to full parity in S12b-B17 when the rquickjs twin was removed).
 #[cfg(all(test, feature = "v8-backend"))]
 mod tests_v8 {
+    // Хелперы тестового модуля: исключение из clippy.toml покрывает
+    // только тело `#[test]` (docs/lint-policy.md §10).
+    #![allow(clippy::unwrap_used)]
     use crate::v8_runtime::V8JsRuntime;
     use lumen_core::{JsRuntime, JsValue};
 

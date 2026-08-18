@@ -63,6 +63,7 @@ impl TextTrackStore {
     ///
     /// Shape: `[{kind,label,language,mode,cues:[{id,start,end,text}]}]`.
     /// Returns `"[]"` when the video has no tracks.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn tracks_json(&self, nid: u32) -> String {
         let guard = self.tracks.lock().unwrap();
         let Some(tracks) = guard.get(&nid) else {
@@ -107,11 +108,13 @@ fn store_lock() -> &'static RwLock<Option<Arc<TextTrackStore>>> {
 /// Install the text-track store from the shell.
 ///
 /// Should be called once before any JS context is created.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn set_text_track_store(s: Arc<TextTrackStore>) {
     *store_lock().write().unwrap() = Some(s);
 }
 
 /// Return a clone of the installed store, or `None` in headless/CI mode.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn get_text_track_store() -> Option<Arc<TextTrackStore>> {
     store_lock().read().unwrap().clone()
 }

@@ -42,17 +42,20 @@ impl H2Pool {
     }
 
     /// Remove and return the pooled connection for `key`, if any.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn acquire(&self, key: &PoolKey) -> Option<H2Conn<RawStream>> {
         self.entries.lock().unwrap().remove(key)
     }
 
     /// Return a connection to the pool. If an entry already exists (e.g. the
     /// caller created a new conn after failing to acquire), the new one wins.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn release(&self, key: PoolKey, conn: H2Conn<RawStream>) {
         self.entries.lock().unwrap().insert(key, conn);
     }
 
     /// Discard the entry for `key` (called after an unrecoverable error).
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn evict(&self, key: &PoolKey) {
         self.entries.lock().unwrap().remove(key);
     }

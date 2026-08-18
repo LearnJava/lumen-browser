@@ -349,6 +349,7 @@ pub(crate) fn lay_out_vertical_inline_run(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn wrap_inline_run_vertical(
     segments: &[InlineSegment],
     max_height: f32,

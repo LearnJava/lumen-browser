@@ -588,6 +588,7 @@ fn relaxed_dot_i16x8(stack: &mut Vec<Value>) -> Result<(), Trap> {
 
 /// `i32x4.relaxed_dot_i8x16_i7x16_add_s`: the i16x8 dot above, then widen and
 /// pairwise-accumulate into the i32x4 operand `c`. Operands: `a`, `b`, `c`.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn relaxed_dot_i32x4_add(stack: &mut Vec<Value>) -> Result<(), Trap> {
     let c = pop_v(stack)?;
     let b = pop_v(stack)?;
@@ -612,6 +613,7 @@ fn relaxed_dot_i32x4_add(stack: &mut Vec<Value>) -> Result<(), Trap> {
 }
 
 /// Width-changing conversion ops, split out to keep [`exec_simd`] readable.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn exec_simd_convert(sub: u32, stack: &mut Vec<Value>) -> Result<(), Trap> {
     match sub {
         // i32x4.trunc_sat_f32x4_s / _u
@@ -734,6 +736,7 @@ fn round_ties_even_f64(x: f64) -> f64 {
 /// `narrow`: pack two source vectors (`a` then `b`) of `src_sz`-byte signed
 /// lanes into a single vector of half-width lanes, saturating. `signed` selects
 /// signed (→ i8/i16) vs unsigned (→ u8/u16) saturation.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn narrow(stack: &mut Vec<Value>, src_sz: usize, signed: bool) -> Result<(), Trap> {
     let b = pop_v(stack)?;
     let a = pop_v(stack)?;
@@ -846,6 +849,7 @@ fn extadd_pairwise(stack: &mut Vec<Value>, src_sz: usize, signed: bool) -> Resul
 }
 
 /// `i32x4.dot_i16x8_s`: signed multiply of i16 lanes, summed in pairs to i32.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn dot_i16x8_s(stack: &mut Vec<Value>) -> Result<(), Trap> {
     let b = pop_v(stack)?;
     let a = pop_v(stack)?;
@@ -864,6 +868,7 @@ fn dot_i16x8_s(stack: &mut Vec<Value>) -> Result<(), Trap> {
 
 /// Read an integer lane of `sz` bytes at byte offset `off`, sign- or
 /// zero-extended to `i64`.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn read_int(v: &[u8; 16], off: usize, sz: usize, signed: bool) -> i64 {
     match (sz, signed) {
         (1, true) => v[off] as i8 as i64,

@@ -333,7 +333,7 @@ const PERMISSIONS_SHIM: &str = r#"(function() {
 mod tests {
     // `panic!` — штатный способ провалить тест; исключение из clippy.toml не
     // достаёт до хелперов модуля (docs/lint-policy.md §10).
-    #![allow(clippy::panic)]
+    #![allow(clippy::panic, clippy::unwrap_used)]
     use super::*;
     use crate::v8_runtime::V8JsRuntime;
     use lumen_core::JsValue;

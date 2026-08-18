@@ -90,6 +90,7 @@ const VIEW_TRANSITION_SHIM: &str = r#"
 /// call), drained by the shell in `about_to_wait` via
 /// `take_view_transition_events()` to drive the cross-fade.
 #[cfg(feature = "v8-backend")]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn install_view_transition_bindings_v8(
     rt: &crate::v8_runtime::V8JsRuntime,
     events: Arc<Mutex<Vec<ViewTransitionEvent>>>,
@@ -131,6 +132,9 @@ pub(crate) fn install_view_transition_bindings_v8(
 
 #[cfg(all(test, feature = "v8-backend"))]
 mod tests {
+    // Хелперы тестового модуля: исключение из clippy.toml покрывает
+    // только тело `#[test]` (docs/lint-policy.md §10).
+    #![allow(clippy::unwrap_used)]
     use super::*;
     use crate::v8_runtime::V8JsRuntime;
     use lumen_core::ext::JsRuntime as _;

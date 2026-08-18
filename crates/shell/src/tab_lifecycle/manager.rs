@@ -224,6 +224,7 @@ impl TabLifecycleManager {
     ///
     /// Only T1/T2 (BackgroundRecent/BackgroundOld) tabs count toward the budget.
     /// Pinned tabs are skipped.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn lru_evict(&mut self) -> Vec<TierTransition> {
         let mut transitions = Vec::new();
 

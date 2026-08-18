@@ -1993,6 +1993,7 @@ fn lay_out_svg_children_positions(children: &mut [LayoutBox], ox: f32, oy: f32, 
     }
 }
 
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn lay_out_svg_element_position(b: &mut LayoutBox, ox: f32, oy: f32, sx: f32, sy: f32, parent_transform: &SvgTransform) {
     // Phase 2: full nested transform composition.
     // Get element's own transform (stored during box creation).
@@ -12827,6 +12828,7 @@ fn balance_wrap(
 /// line onto the last line, so the last line has ≥ 2 fragments.
 /// The total line count may increase by at most 1.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn pretty_wrap(
     segments: &[InlineSegment],
     container_width: f32,
@@ -13685,6 +13687,7 @@ fn truncate_frag_with_ellipsis(
 /// or replaces overflowing text if the line is already too wide.
 ///
 /// Called only when a text measurer is available (same guard as `text-overflow: ellipsis`).
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn apply_line_clamp(
     lines: &mut Vec<Vec<InlineFrag>>,
     max_lines: u32,
