@@ -84,3 +84,8 @@ cpu-render = ["tiny-skia"]
 
 # Составная фича для lumen-driver: compare (backend-cpu) + backend-cpu
 compare-cpu = ["compare"]
+
+# Политики проекта как машинные проверки — [workspace.lints] в корневом
+# Cargo.toml, протокол docs/lint-policy.md.
+[lints]
+workspace = true

@@ -28985,6 +28985,11 @@ mod tests {
         dispatch_preload_hints(&hints, &base, &sink, &mut std::collections::HashSet::new());
 
         let sink_any = sink.as_ref() as *const dyn EventSink as *const CollectingSink;
+        // SAFETY: `sink` was created two statements above as
+        // `Arc::new(CollectingSink(..))` and never reassigned, so the erased
+        // `dyn EventSink` really points at a `CollectingSink`; the pointer is
+        // derived from a live `Arc` that outlives the borrow. A test-only
+        // downcast — `EventSink` has no `Any` supertrait to do it safely.
         let events = unsafe { (*sink_any).0.lock().unwrap() };
         assert_eq!(events.len(), 2);
 
@@ -29025,6 +29030,11 @@ mod tests {
         dispatch_preload_hints(&hints, &base, &sink, &mut std::collections::HashSet::new());
 
         let sink_any = sink.as_ref() as *const dyn EventSink as *const CollectingSink;
+        // SAFETY: `sink` was created two statements above as
+        // `Arc::new(CollectingSink(..))` and never reassigned, so the erased
+        // `dyn EventSink` really points at a `CollectingSink`; the pointer is
+        // derived from a live `Arc` that outlives the borrow. A test-only
+        // downcast — `EventSink` has no `Any` supertrait to do it safely.
         let events = unsafe { (*sink_any).0.lock().unwrap() };
         // style.css появляется дважды — должен emit-иться один раз
         assert_eq!(events.len(), 2, "expected 2 unique urls, got {}", events.len());
@@ -29063,6 +29073,11 @@ mod tests {
         dispatch_preload_hints(&full, &base, &sink, &mut seen);
 
         let sink_any = sink.as_ref() as *const dyn EventSink as *const CollectingSink;
+        // SAFETY: `sink` was created two statements above as
+        // `Arc::new(CollectingSink(..))` and never reassigned, so the erased
+        // `dyn EventSink` really points at a `CollectingSink`; the pointer is
+        // derived from a live `Arc` that outlives the borrow. A test-only
+        // downcast — `EventSink` has no `Any` supertrait to do it safely.
         let events = unsafe { (*sink_any).0.lock().unwrap() };
         // reset.css — один раз (из первого вызова), hero.png — один раз (из второго)
         assert_eq!(events.len(), 2);
@@ -29096,6 +29111,11 @@ mod tests {
         dispatch_preload_hints(&hints, &base, &sink, &mut std::collections::HashSet::new());
 
         let sink_any = sink.as_ref() as *const dyn EventSink as *const CollectingSink;
+        // SAFETY: `sink` was created two statements above as
+        // `Arc::new(CollectingSink(..))` and never reassigned, so the erased
+        // `dyn EventSink` really points at a `CollectingSink`; the pointer is
+        // derived from a live `Arc` that outlives the borrow. A test-only
+        // downcast — `EventSink` has no `Any` supertrait to do it safely.
         let events = unsafe { (*sink_any).0.lock().unwrap() };
         assert_eq!(events.len(), 3);
 

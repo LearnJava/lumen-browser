@@ -3503,6 +3503,10 @@ mod tests {
         }
     }
 
+    // SAFETY: test double whose fields are `&'static str`, `usize`, `bool` and an
+    // `Option<MemoryPressureLevel>` — all plain data with no thread affinity. The
+    // impl exists only because `EvictableCache` implementors are stored behind a
+    // `Send` bound in the registry under test.
     unsafe impl Send for MockCache {}
 
     impl EvictableCache for MockCache {

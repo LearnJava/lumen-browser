@@ -186,9 +186,11 @@ Full details (style, tests, error handling, unsafe) — [`docs/conventions.md`](
 
 - **Rust 1.95+ stable**, Edition 2024, resolver "3", MSVC on Windows.
 - `cargo clippy -p <crate> --all-targets -- -D warnings` must pass before every commit.
-- **`///` doc comments on all public structs, fields, and functions** — mandatory.
-- No `panic!` / `unwrap()` in production code; allowed in tests.
-- `unsafe` forbidden outside FFI boundaries; every block requires `// SAFETY:` comment.
+- **`///` doc comments on all public structs, fields, and functions** — mandatory. *(prose only — `missing_docs` not yet enabled)*
+- No `panic!` / `unwrap()` in production code; allowed in tests. *(prose only — `clippy::panic`/`unwrap_used`/`expect_used` not yet enabled)*
+- `unsafe` forbidden outside FFI boundaries; every block requires `// SAFETY:` comment. **Machine-checked** since 2026-08-18: `clippy::undocumented_unsafe_blocks = "deny"` in `[workspace.lints]`, so a missing comment is a build error, not a review finding. One comment above two adjacent `unsafe impl`s does not count as documenting the second.
+
+Which of these are enforced and which are still prose is tracked in [`docs/lint-policy.md`](docs/lint-policy.md) — the plan there turns them into lints one rule per commit. Rules are enabled in `[workspace.lints]` (root `Cargo.toml`), configured in `clippy.toml`; every member crate opts in with `[lints] workspace = true`. **A new crate must carry that stanza** or it silently escapes every project lint — `/lumen-new-crate` adds it.
 - Names: `snake_case` functions/fields, `PascalCase` types, `SCREAMING_SNAKE` constants.
 
 ---

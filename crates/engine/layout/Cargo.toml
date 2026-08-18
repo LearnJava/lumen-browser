@@ -30,3 +30,8 @@ workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
 # `lumen_core::tracy_zone!`'s internal `#[cfg(feature = "tracy")]` to
 # evaluate against *this* crate (Cargo feature unification, not inheritance).
 tracy = ["lumen-core/tracy"]
+
+# Политики проекта как машинные проверки — [workspace.lints] в корневом
+# Cargo.toml, протокол docs/lint-policy.md.
+[lints]
+workspace = true

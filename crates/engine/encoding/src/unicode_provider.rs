@@ -56,6 +56,9 @@ impl Default for Icu4xUnicodeProvider {
 // WordSegmenterBorrowed<'static> contain only &'static references to compile-time data,
 // which makes them Send + Sync. ICU4x marks these Copy/Clone for exactly this reason.
 unsafe impl Send for Icu4xUnicodeProvider {}
+// SAFETY: same reasoning as the `Send` impl directly above — the borrowed ICU4x
+// segmenters hold only `&'static` references to compile-time data, so sharing
+// `&Icu4xUnicodeProvider` across threads exposes nothing thread-affine.
 unsafe impl Sync for Icu4xUnicodeProvider {}
 
 impl UnicodeProvider for Icu4xUnicodeProvider {

@@ -25,3 +25,8 @@ workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["psapi", "processthreadsapi", "winnt"] }
+
+# Политики проекта как машинные проверки — [workspace.lints] в корневом
+# Cargo.toml, протокол docs/lint-policy.md.
+[lints]
+workspace = true

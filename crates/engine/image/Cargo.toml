@@ -27,3 +27,8 @@ flate2.workspace = true
 # Требует cmake + nasm — подключается через feature "avif".
 image = { version = "0.25", default-features = false, features = ["avif"], optional = true }
 workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
+
+# Политики проекта как машинные проверки — [workspace.lints] в корневом
+# Cargo.toml, протокол docs/lint-policy.md.
+[lints]
+workspace = true
