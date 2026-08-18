@@ -16290,6 +16290,12 @@ fn shader_rrect_clip_allowed(cmds: &[DisplayCommand]) -> Vec<bool> {
 }
 
 fn as_bytes<T: Copy>(slice: &[T]) -> &[u8] {
+    // SAFETY: the produced slice has exactly `size_of_val(slice)` bytes and borrows
+    // `slice`, so it cannot outlive it or alias mutably. Reading `T` as bytes is
+    // sound only for a type without padding or uninitialised bytes — the `Copy`
+    // bound cannot express that, so it is a precondition on the caller. Every call
+    // site here passes a `#[repr(C)]` POD vertex/uniform struct on its way into a
+    // wgpu buffer, which is what the requirement amounts to.
     unsafe {
         std::slice::from_raw_parts(slice.as_ptr() as *const u8, std::mem::size_of_val(slice))
     }

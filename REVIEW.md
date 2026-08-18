@@ -10,7 +10,12 @@ rule through a different mechanism.
 - `cargo clippy -p <crate> --all-targets -- -D warnings` must be clean for every touched crate.
 - No `panic!` / `.unwrap()` in production code paths. Tests are exempt.
 - Every `unsafe` block must carry a `// SAFETY:` comment explaining the invariant that makes it sound.
-  `unsafe` is only acceptable at FFI boundaries — flag any other use.
+  `unsafe` is only acceptable at FFI boundaries — flag any other use. *Presence* of the comment is now
+  machine-checked (`clippy::undocumented_unsafe_blocks = "deny"`, `[workspace.lints]`), so the gate above
+  already covers it — review the **content** instead: a comment restating the signature, or claiming an
+  invariant the surrounding code does not actually establish, is worse than none.
+- A new crate's `Cargo.toml` must contain `[lints] workspace = true`. Without it the crate opts out of every
+  project lint and the build stays green — flag its absence on any newly added member crate.
 - Every public struct, field, and function needs a `///` doc comment. Flag missing docs on new public API,
   not on unrelated pre-existing code.
 - New `[dependencies]` entries must justify themselves in the commit body (category: permanent/provisional,

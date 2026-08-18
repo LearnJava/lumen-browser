@@ -266,6 +266,10 @@ pub(crate) struct NativeFn1<A, R, F> {
     pub(crate) f: F,
     _ph: PhantomData<fn(A) -> R>,
 }
+// SAFETY: the only non-PhantomData field is `f: F`, and the impl is bounded on
+// `F: Send`; `PhantomData<fn(..) -> R>` is a function-pointer marker, which is
+// `Send + Sync` for any `A`/`R`. Moving the wrapper across threads therefore
+// moves nothing but an already-`Send` closure.
 unsafe impl<A, R, F: Send + 'static> Send for NativeFn1<A, R, F> {}
 
 impl<A: FromJsValue + 'static, R: IntoJsReturn + 'static, F: Fn(A) -> R + Send + 'static> V8NativeFn
@@ -283,6 +287,10 @@ pub(crate) struct NativeFn2<A, B, R, F> {
     pub(crate) f: F,
     _ph: PhantomData<fn(A, B) -> R>,
 }
+// SAFETY: the only non-PhantomData field is `f: F`, and the impl is bounded on
+// `F: Send`; `PhantomData<fn(..) -> R>` is a function-pointer marker, which is
+// `Send + Sync` for any `A`/`R`. Moving the wrapper across threads therefore
+// moves nothing but an already-`Send` closure.
 unsafe impl<A, B, R, F: Send + 'static> Send for NativeFn2<A, B, R, F> {}
 
 impl<
@@ -305,6 +313,10 @@ pub(crate) struct NativeFn3<A, B, C, R, F> {
     pub(crate) f: F,
     _ph: PhantomData<fn(A, B, C) -> R>,
 }
+// SAFETY: the only non-PhantomData field is `f: F`, and the impl is bounded on
+// `F: Send`; `PhantomData<fn(..) -> R>` is a function-pointer marker, which is
+// `Send + Sync` for any `A`/`R`. Moving the wrapper across threads therefore
+// moves nothing but an already-`Send` closure.
 unsafe impl<A, B, C, R, F: Send + 'static> Send for NativeFn3<A, B, C, R, F> {}
 
 impl<
@@ -329,6 +341,10 @@ pub(crate) struct NativeFn4<A, B, C, D, R, F> {
     pub(crate) f: F,
     _ph: PhantomData<fn(A, B, C, D) -> R>,
 }
+// SAFETY: the only non-PhantomData field is `f: F`, and the impl is bounded on
+// `F: Send`; `PhantomData<fn(..) -> R>` is a function-pointer marker, which is
+// `Send + Sync` for any `A`/`R`. Moving the wrapper across threads therefore
+// moves nothing but an already-`Send` closure.
 unsafe impl<A, B, C, D, R, F: Send + 'static> Send for NativeFn4<A, B, C, D, R, F> {}
 
 impl<
@@ -355,6 +371,10 @@ pub(crate) struct NativeFn5<A, B, C, D, E, R, F> {
     pub(crate) f: F,
     _ph: PhantomData<fn(A, B, C, D, E) -> R>,
 }
+// SAFETY: the only non-PhantomData field is `f: F`, and the impl is bounded on
+// `F: Send`; `PhantomData<fn(..) -> R>` is a function-pointer marker, which is
+// `Send + Sync` for any `A`/`R`. Moving the wrapper across threads therefore
+// moves nothing but an already-`Send` closure.
 unsafe impl<A, B, C, D, E, R, F: Send + 'static> Send for NativeFn5<A, B, C, D, E, R, F> {}
 
 impl<
@@ -383,6 +403,10 @@ pub(crate) struct NativeFn6<A, B, C, D, E, G, R, F> {
     pub(crate) f: F,
     _ph: PhantomData<fn(A, B, C, D, E, G) -> R>,
 }
+// SAFETY: the only non-PhantomData field is `f: F`, and the impl is bounded on
+// `F: Send`; `PhantomData<fn(..) -> R>` is a function-pointer marker, which is
+// `Send + Sync` for any `A`/`R`. Moving the wrapper across threads therefore
+// moves nothing but an already-`Send` closure.
 unsafe impl<A, B, C, D, E, G, R, F: Send + 'static> Send for NativeFn6<A, B, C, D, E, G, R, F> {}
 
 impl<
@@ -413,6 +437,10 @@ pub(crate) struct NativeFn7<A, B, C, D, E, G, H, R, F> {
     pub(crate) f: F,
     _ph: PhantomData<fn(A, B, C, D, E, G, H) -> R>,
 }
+// SAFETY: the only non-PhantomData field is `f: F`, and the impl is bounded on
+// `F: Send`; `PhantomData<fn(..) -> R>` is a function-pointer marker, which is
+// `Send + Sync` for any `A`/`R`. Moving the wrapper across threads therefore
+// moves nothing but an already-`Send` closure.
 unsafe impl<A, B, C, D, E, G, H, R, F: Send + 'static> Send
     for NativeFn7<A, B, C, D, E, G, H, R, F>
 {

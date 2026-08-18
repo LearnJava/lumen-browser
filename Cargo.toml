@@ -40,9 +40,10 @@ rust-version = "1.95"
 # замер числа срабатываний → правки до нуля → уровень "deny" тем же коммитом.
 # Каждый крейт-член подключает эту секцию строкой `[lints] workspace = true`
 # в своём Cargo.toml; исключения для тестов живут в корневом clippy.toml.
-# Секция намеренно пуста в коммите-каркасе: первое правило приезжает следующим
-# коммитом вместе с правками, которые оно требует.
 [workspace.lints.clippy]
+# «Каждый `unsafe` требует // SAFETY:» (CLAUDE.md §Code conventions). Замер до
+# включения — 17 срабатываний в 7 крейтах, все закрыты тем же коммитом.
+undocumented_unsafe_blocks = "deny"
 
 [workspace.dependencies]
 lumen-core = { path = "crates/core" }

@@ -878,6 +878,9 @@ mod win_hid {
 
     // SAFETY: HANDLE is safe to move across threads on Windows (MSDN §synchobj).
     unsafe impl Send for WinHidDevice {}
+    // SAFETY: same reasoning as the `Send` impl directly above — a Windows HANDLE
+    // is a kernel-object index, not thread-affine state, so `&WinHidDevice` carries
+    // nothing that would be invalid to observe from another thread.
     unsafe impl Sync for WinHidDevice {}
 
     impl Drop for WinHidDevice {
@@ -1018,6 +1021,14 @@ mod win_hid {
 
             // Extract the null-terminated WCHAR device path (starts at byte offset 4).
             let path_offset = 4usize;
+            // SAFETY: `buf` holds `required` bytes just written by
+            // SetupDiGetDeviceInterfaceDetailW, and `max` is derived from `required`,
+            // so the slice stays inside the allocation and its borrow ends with `buf`.
+            // Caveat, stated rather than hidden: `Vec<u8>` guarantees only 1-byte
+            // alignment, so the `*const u16` cast relies on the system allocator
+            // handing out at least 2-byte-aligned blocks (true for malloc on every
+            // target we build for, but not a language guarantee). Reading the path
+            // through `std::ptr::read_unaligned` would remove the assumption.
             let wchar_slice: &[u16] = unsafe {
                 let ptr = buf.as_ptr().add(path_offset).cast::<u16>();
                 let max = (required as usize - path_offset) / 2;
