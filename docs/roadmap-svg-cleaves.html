@@ -1881,6 +1881,20 @@
        "status": "done",
        "size": "S",
        "note": "DONE 2026-07-17: scripts/perf_audit.py — 3 headless-замера на сайт (--dump-source / --dump-layout+LUMEN_PROFILE_TREE / --screenshot) → фазы сеть+парсинг / стиль+layout / paint, таймауты, error_lines, results.json+summary.md в .tmp/perf-audit/, --compare с дельтами (⚠ >20%); корпус docs/perf/corpus.txt (14 сайтов аудита 2026-07-02, вкл. антибот-403 намеренно); журнал docs/perf/journal.md + коммитируемые сырые прогоны docs/perf/runs/*.json; skill /lumen-perf-audit — полный автономный протокол прогон→анализ→журнал→BUG-NNN. ОБНОВЛЕНО 2026-07-17 (вторая итерация): дефолт — ЖИВОЙ режим (одно GUI-окно, каждый сайт в новой вкладке через новый MCP-инструмент new_tab = AutomationCommand::NewTab + open_new_tab; пользователь видит рендер, dwell+скролл на сайт; кумулятивная RAM тек/пик через WinAPI; per-site stderr-дельта + console-ошибки; TIMEOUT/DEAD с авторестартом окна как находкой); старое пофазное headless-разложение — флаг --phases. Ручной предшественник PERF-2/PERF-7 (тот же корпус и журнал)"
+      },
+      {
+       "id": "PERF-9",
+       "title": "PERF-9: стартовый снапшот V8 вместо разбора шима на каждую навигацию",
+       "status": "active",
+       "size": "M",
+       "note": "Стартовый снапшот V8 для `WEB_API_SHIM`. Сейчас `V8JsRuntime::new()` + `install_dom()` вызываются НА КАЖДУЮ НАВИГАЦИЮ (`crates/shell/src/main.rs:7188`/`19457`, `crates/driver/src/session.rs:1418`, `crates/driver/src/winit_session.rs:1155`) — новый изолят, новый контекст и полный разбор+исполнение шима каждый раз. Шим — сотни КБ JS (`WEB_API_SHIM_HEAD`…`TAIL_B`, `crates/js/src/dom.rs:335`…`12368`), и `web_api_shim()` (`dom.rs:15791`) собирает его ЧИСТОЙ конкатенацией констант, без единого параметра страницы — значит текст побайтово одинаков для любого URL и снапшот строится один раз на сборку. Идея заимствована у lightpanda-io/browser («supports embedding v8 snapshots for improved startup performance»). Цель: заменить eval шима на десериализацию готового изолята (`v8::SnapshotCreator`, rusty_v8 150.1.0). Ключевой риск: нативы `_lumen_*` — замыкания на конкретный Document/провайдеры, в снапшот не попадают и ставятся ПОСЛЕ десериализации; если шим вызывает натив на верхнем уровне и запекает результат, такой вызов переносится в ленивый геттер. Гейт эффекта — готовый бенч PERF-4 (`cargo run -p lumen-bench --release -- --startup`), базлайн `docs/perf/startup-runs/2026-07-18.json` (cold 136.8мс / warm med 125.3мс); метод — `docs/perf-method.md` (сравнение по min на чередующемся A/B, не по wall-clock одного прогона)"
+      },
+      {
+       "id": "PERF-10",
+       "title": "PERF-10: прогон тестов без растеризации и живого окна",
+       "status": "planned",
+       "size": "M",
+       "note": "Режим прогона без растеризации для тестов. Сейчас ВСЕ автоматизационные поверхности гонят полный конвейер: `--screenshot`/`--dump-layout`/`--dump-display-list` считают layout+paint, `--mcp-live-port`/`--bidi-port` вдобавок держат живое окно и wgpu. Для категорий WPT, не проверяющих пиксели (`dom/*`, `html/*`, `fetch`, `xhr`, `webstorage`, `url*`, `websockets` — подавляющее большинство из 289), растеризация — чистые накладные, а живое окно приносит свой класс флейков (увод фокуса у gdigrab, token race, зомби `--ipc-server` — см. CLAUDE.md Known gotchas). Заимствовано у lightpanda-io/browser, но в ослабленном виде: они layout выбросили совсем, мы его сохраняем (нужен для `getBoundingClientRect` и геометрии в тех же тестах) и отключаем только paint/окно. Задача: флаг/режим «DOM+JS+layout, без paint и без окна» на существующих поверхностях + перевод на него тех категорий WPT, которым пиксели не нужны. Владелец тулинга — P2 (дорожка TEST, `docs/tasks/p2-test-track.md`); движковая часть при необходимости — P1. Зависимость: после PERF-9, чтобы не мерить два изменения разом"
       }
      ]
     },
