@@ -112,14 +112,24 @@ A dirty `main` worktree blocks all other sessions — git refuses `checkout main
 
 ---
 
-## Task completion checklist (7 steps, all mandatory)
+## Task completion checklist (8 steps, all mandatory)
 
-**After task is done and ready to merge, execute ALL 7 steps in order. Missing even one step causes accumulated stale branches.**
+**After task is done and ready to merge, execute ALL 8 steps in order. Missing even one step causes accumulated stale branches.**
 
 ```bash
 # 1. Verify code is production-ready
 cargo clippy -p <crate> -- -D warnings
 cargo test -p <crate>
+
+# 1b. Push the task branch and wait for green CI (decided 2026-08-18,
+#     docs/ci-offload.md §8 variant 1). `ci.yml`/`red-lines.yml` trigger on
+#     `p[1-5]-*` pushes, so no pull request is needed.
+git push -u origin p<N>-task-name
+gh run watch --repo LearnJava/lumen-browser \
+  "$(gh run list --repo LearnJava/lumen-browser --branch p<N>-task-name \
+       --workflow CI --limit 1 --json databaseId -q '.[0].databaseId')"
+# Red? Fix on the branch and push again — do NOT merge a red branch.
+# `gh` lives at /c/Program Files/GitHub CLI and is not on the bash PATH by default.
 
 # 2. Merge branch to main with --no-ff
 git checkout main
@@ -142,6 +152,19 @@ git push origin main
 # 6. Pool slot: already freed in step 3 — the slot and its warm target/ stay.
 #    Ad-hoc worktree (not a pool slot): delete it, it blocks other sessions.
 git worktree remove .claude/worktrees/<task-name>
+
+# 7. Delete the remote task branch pushed in step 1b — it has served its purpose.
+git push origin --delete p<N>-task-name
 ```
 
-**Why all 7 are mandatory:** Skipping delete-branch (step 3) or leaving an ad-hoc worktree behind (step 6) leaves stale branches and directories that accumulate. Skipping STATUS update (step 4) loses task history. Both cause confusion in parallel sessions and merge conflicts. As of 2026-05-28, 37 stale branches had accumulated due to incomplete cleanup. Commit to all 7 steps every time.
+**Why all 8 are mandatory:** Skipping delete-branch (step 3) or leaving an ad-hoc worktree behind (step 6) leaves stale branches and directories that accumulate. Skipping STATUS update (step 4) loses task history. Skipping step 7 leaves the remote littered — 29 stale remote branches had piled up by 2026-08-18, the oldest from June. Both cause confusion in parallel sessions and merge conflicts. As of 2026-05-28, 37 stale local branches had accumulated due to incomplete cleanup. Commit to all 8 steps every time.
+
+### The local gate is NOT replaced by CI (yet)
+
+`docs/ci-offload.md` §8 sketches moving the gate to CI. **That has not happened.** Today `ci.yml`
+runs `cargo check -p lumen-shell` plus unit tests of 16 crates — it does **not** run
+`clippy --workspace` and does not run the CPU snapshot tests, so it is strictly *weaker* than the
+local gate. Step 1b is therefore an addition on top of `/lumen-task-finish`, not a replacement:
+CI catches what the local gate cannot (Linux and macOS), the local gate catches what CI does not
+(lints, snapshots, scoped tests). Only once the `lint` and `snapshot-cpu` jobs of
+`docs/ci-offload.md` §4 exist and are green does trimming the local gate become a real question.

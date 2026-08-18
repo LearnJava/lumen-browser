@@ -112,6 +112,35 @@ git commit -m "Обновить статус задачи <имя> в плане
 Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
 ```
 
+## Шаг 5б — Запушить ветку и дождаться зелёного CI
+
+Решение 2026-08-18 ([docs/ci-offload.md](../../../docs/ci-offload.md) §8, вариант 1).
+`ci.yml` и `red-lines.yml` триггерятся на push веток `p[1-5]-*`, поэтому PR открывать
+не нужно. **Красную ветку не мержим.**
+
+`gh` не в PATH у bash — путь задать явно.
+
+```bash
+export PATH="/c/Program Files/GitHub CLI:$PATH"
+git push -u origin $ARGUMENTS
+
+RUN=$(gh run list --repo LearnJava/lumen-browser --branch $ARGUMENTS \
+        --workflow CI --limit 1 --json databaseId -q '.[0].databaseId')
+gh run watch --repo LearnJava/lumen-browser "$RUN"
+```
+
+Если красный — читать причину и чинить **на ветке**, потом push ещё раз
+(`concurrency` отменит предыдущий прогон сам):
+
+```bash
+gh run view "$RUN" --repo LearnJava/lumen-browser --log-failed | head -40
+```
+
+Прогон холодный — 20–25 минут. Это не замена локального гейта (шаги 1–2), а
+дополнение: CI сейчас гоняет `cargo check -p lumen-shell` и юнит-тесты 16 крейтов,
+но **не** `clippy --workspace` и **не** снапшоты — то есть он слабее локального
+гейта и добавляет только Linux и macOS.
+
 ## Шаг 6 — Merge в main
 
 **Важно:** main должен быть свободен (не занят другим worktree с uncommitted changes).
@@ -157,6 +186,14 @@ git branch -d $ARGUMENTS
 
 Если `git branch -d` отказывает (ветка не полностью смержена) —
 убедись что merge прошёл успешно, затем `-D` вместо `-d`.
+
+Удалить и **удалённую** ветку — она нужна была только для прогона CI (шаг 5б):
+
+```bash
+git push origin --delete $ARGUMENTS
+```
+
+Не пропускать: к 2026-08-18 в `origin` накопилось 29 веток, старейшая с июня.
 
 ## Шаг 8 — Проверь результат
 

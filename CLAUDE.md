@@ -216,13 +216,15 @@ bash scripts/worktree-pool.sh release p<N>-work                           # free
 
 The slot (`.claude/worktrees/p1-work` … `p5-work`, plus `perf-base`) is created once and reused — only the branch changes, so `target/` stays warm and rebuilds are incremental. `git worktree remove` after every task deleted that cache and cost 9–15 min of cold build per task, plus 3 min for the `add` itself. Build **only `dev-release`** inside a slot (warm `dev-release` ≈ 4.7 GB; five slots on `debug` would be ~70 GB). The script refuses to switch a slot with uncommitted or unmerged work. Details — [`docs/git-workflow.md`](docs/git-workflow.md).
 
-**7-step completion checklist** (all mandatory, full details in `docs/git-workflow.md`):
+**8-step completion checklist** (all mandatory, full details in `docs/git-workflow.md`):
 1. `cargo clippy -p <crate> -- -D warnings` + `cargo test -p <crate>`
+1b. **`git push -u origin p<N>-task-name`, wait for green CI, only then merge** (decided 2026-08-18, `docs/ci-offload.md` §8 variant 1). `ci.yml`/`red-lines.yml` trigger on `p[1-5]-*` pushes — no pull request needed. A red branch is not merged. This is an *addition* to the local gate, not a replacement: CI does not yet run `clippy --workspace` or the snapshot tests, so it is weaker than the local gate and only adds Linux/macOS coverage.
 2. `git merge --no-ff p<N>-task-name -m "Merge …"`
 3. `bash scripts/worktree-pool.sh release p<N>-work` then `git branch -d p<N>-task-name` (a slot holding the branch makes `branch -d` fail)
 4. Delete pointer line from `STATUS-PN.md`, commit
 5. `git push origin main`
 6. Pool slot — nothing to remove (freed in step 3). Ad-hoc worktree — `git worktree remove .claude/worktrees/<task-name>`
+7. `git push origin --delete p<N>-task-name` — the remote task branch has served its purpose
 
 ---
 
