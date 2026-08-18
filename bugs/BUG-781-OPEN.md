@@ -1,0 +1,108 @@
+# BUG-781: `DOMParser.parseFromString` игнорирует XML MIME-типы — всегда гоняет HTML-токенизатор и заворачивает корень в синтетический `<html>`
+
+**Статус:** OPEN
+
+**Компонент:** js (`crates/js/src/dom_parser.rs:526-567`, `_vBuildDocument`; `DOMParser.prototype.parseFromString`, `dom_parser.rs:850-861`)
+
+**Найден:** P2, WPT-VENDOR-xml 2026-08-18 (`run_report.py --all --root xml --recursive`, 56.79 с, 3/7 harness OK, 4/190 сабтестов)
+
+## Симптом
+
+`new DOMParser().parseFromString(xml, 'text/xml' | 'application/xml' | 'image/svg+xml' | 'application/xhtml+xml')`
+принимает `mimeType`-аргумент (валидирует его против списка из 5 значений,
+`dom_parser.rs:853-859`), но затем безусловно зовёт `_vBuildDocument`, которая
+для любого MIME гоняет один и тот же HTML-токенизатор (`_vParseHTML`). Тот
+ищет литеральный элемент `<html>` на верхнем уровне; если его нет (обычный
+случай для XML — корень называется как угодно, `<a>`/`<b>`/`<rss>`/…), весь
+распарсенный контент заворачивается в синтетические `<html><head></head>
+<body>...</body></html>` (`dom_parser.rs:546-558`, ветка `else`). В результате
+`documentElement.tagName`/`.nodeName` для любого XML-документа — всегда
+`"HTML"`, независимо от реального корневого тега во входной строке; настоящее
+дерево документа проваливается на два уровня внутрь (`html > body > <реальный
+корень>`), `documentElement.firstChild` — это `<head>`, а не первый узел
+реального документа.
+
+Живое воспроизведение (`tests/wpt/xml/xml-prolog-accepted-versions.html`):
+
+```js
+var d = new DOMParser().parseFromString('<?xml version="1.0"?>\n<a></a>', 'text/xml');
+d.documentElement.tagName   // "HTML", ожидание — "a"
+```
+
+и (`tests/wpt/xml/eol-normalization.html`):
+
+```js
+var d = new DOMParser().parseFromString('<a>\r\n\t<b>x</b></a>', 'text/xml');
+d.documentElement.nodeName             // "HTML", ожидание — "a"
+d.documentElement.firstChild.nodeValue // null (это <head>), ожидание — "\n\t"
+```
+
+Побочный эффект — 4 из 10 сабтестов `xml-prolog-accepted-versions.html`
+проходят **случайно**: `assert_not_equals(...tagName, "x")` для отклоняемых
+версий XML (`10.0`/`100`/`2.0`/`17.0`) всегда истинно, раз `tagName` в любом
+случае `"HTML"` — валидации номера версии в прологе нет вообще, тест не
+проверяет то, что называет (см. паттерн
+`feedback_probe_must_not_name_what_it_defines` / зелёный тест маскирует
+дефект).
+
+## Root cause
+
+`_vBuildDocument(html, mimeType)` (`dom_parser.rs:526-567`) записывает
+`doc.contentType = mimeType` (косметика — используется только `.contentType`
+геттером, нигде не влияет на парсинг), но и `root = _vParseHTML(html, doc)`,
+и последующий поиск/синтез `html`/`head`/`body` не зависят от `mimeType`.
+Файл сам документирует это как открытый пробел в шапке
+(`dom_parser.rs:18-25`, «Phase 1: namespace-aware XML output... Not yet
+implemented: ... XML error-document on parse failure for XML MIME types»), но
+не называет главный симптом прямо: не «нет специальной обработки ошибок» —
+XML вообще не парсится как XML, только как HTML-фрагмент с HTML-специфичным
+оборачиванием.
+
+Отдельная, независимая реализация — `document.implementation.createDocument`
+(`dom.rs:2409-2429`, натив `_lumen_create_element_ns`) — строит настоящий
+корневой элемент с произвольным именем через арена-бэкенд и этим дефектом не
+страдает (подтверждено юнит-тестом `create_document_builds_xml_document`,
+исправленным в рамках BUG-367). Значит фикс для `DOMParser` — не открытие
+нового XML-парсера с нуля, а либо (а) минимальный XML-режим в существующем
+токенизаторе `_vParseHTML` (не искать `<html>`, брать первый top-level
+элемент как `documentElement` без HTML-обёртки, регистр тегов не приводить к
+нижнему при XML MIME — XML case-sensitive, `_vParseHTML` сейчас всегда
+`tagN.toLowerCase()`), либо (б) для XML MIME делегировать в
+`_lumen_build_detached_document`/`_lumen_create_element_ns`, как уже делает
+`createDocument`.
+
+## Impact
+
+Оба неманульных не-XSLT теста категории `xml` бьют именно в этот дефект
+(`eol-normalization.html`: 0/3 сабтеста; `xml-prolog-accepted-versions.html`:
+номинально 4/10, но все 4 — ложноположительные). `DOMParser` с
+`'text/xml'`/`'application/xml'` — стандартный способ парсинга XML/RSS/SOAP
+на живых сайтах и в тестах; сейчас он всегда даёт HTML-документ вместо XML.
+
+## Suspected fix direction
+
+В `_vBuildDocument`: при XML-семье MIME (`application/xml`, `text/xml`,
+`application/xhtml+xml`, `image/svg+xml`) не идти в ветку
+«html/head/body-обёртка» — взять единственный top-level элемент, распарсенный
+`_vParseHTML`, как `documentElement` напрямую (без синтетических head/body;
+`doc.head`/`doc.body` остаются `null`, как и должно быть для не-HTML
+документа), сохранить регистр имени тега как есть (не приводить к нижнему —
+`VElement` конструктор сейчас всегда лоуеркейсит `tagName`/`localName`).
+Верификация: `run_report.py --all --root xml --recursive`, ожидание —
+`documentElement.tagName === 'a'`/`'b'`/… вместо `'HTML'` в
+`xml-prolog-accepted-versions.html`, EOL-нормализация в
+`eol-normalization.html` проверяема напрямую на реальном дереве.
+
+## Измеренный вес (WPT-VENDOR-xml, 2026-08-18)
+
+Прогон вендоренной категории `xml` (`run_report.py --all --root xml
+--recursive`, 56.79 с, 20 id по глобу / 7 фактически исполненных
+wptrunner-ом, 3/7 harness OK, 4/190 сабтестов). Остальные 5 исполнившихся id
+(`xslt/*`) падают на полностью отсутствующем `XSLTProcessor` (грепом по
+`crates/` — не встречается вовсе); XSLT нигде не упомянут как запланированный
+скоуп (`CAPABILITIES.md`/`ROADMAP.md`/`CSS-SPECS.md` молчат), это отдельная,
+большая legacy-подсистема — новых багов на это не заведено, аналогично
+`RTCIceTransport` в `WPT-VENDOR-webrtc-ice`. Один `xslt/fetch/xslt.https.sub.html`
+падает `ERROR` на уже задокументированном TLS-гэпе (BUG-438/BUG-657-класс:
+«navigate reported success but the document was never replaced»), тоже не
+новый номер.
