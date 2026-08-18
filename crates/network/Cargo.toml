@@ -92,3 +92,8 @@ workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 # CertificateVerify round-trip tests. Verification is salt-length agnostic, so only
 # the signing side needs entropy; reuses the rand_core 0.6 already in the tree.
 rand_core = { version = "0.6", features = ["getrandom"] }
+
+# Политики проекта как машинные проверки — [workspace.lints] в корневом
+# Cargo.toml, протокол docs/lint-policy.md.
+[lints]
+workspace = true

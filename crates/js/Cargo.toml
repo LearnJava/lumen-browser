@@ -113,3 +113,8 @@ webgpu = ["lumen-paint/backend-wgpu"]
 v8-backend = ["dep:v8"]
 
 [dev-dependencies]
+
+# Политики проекта как машинные проверки — [workspace.lints] в корневом
+# Cargo.toml, протокол docs/lint-policy.md.
+[lints]
+workspace = true

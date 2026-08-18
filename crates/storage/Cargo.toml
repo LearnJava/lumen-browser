@@ -43,3 +43,8 @@ workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 # hibernation blob round-trips and actually shrinks (ADR-008 §10J.1).
 lumen-dom = { workspace = true }
 lumen-html-parser = { workspace = true }
+
+# Политики проекта как машинные проверки — [workspace.lints] в корневом
+# Cargo.toml, протокол docs/lint-policy.md.
+[lints]
+workspace = true

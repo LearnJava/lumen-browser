@@ -22,3 +22,8 @@ tracy-client = { workspace = true, optional = true }
 
 [features]
 tracy = ["dep:tracy-client"]
+
+# Политики проекта как машинные проверки — [workspace.lints] в корневом
+# Cargo.toml, протокол docs/lint-policy.md.
+[lints]
+workspace = true

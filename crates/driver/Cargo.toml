@@ -73,3 +73,8 @@ v8 = ["dep:lumen-js", "lumen-js/v8-backend"]
 # CompareBackend integration tests (ADR-010 RB-8): enables CompareBackend + CpuBackend
 # for pixel-diff comparison between two headless backends.
 compare-backends = ["lumen-paint/compare"]
+
+# Политики проекта как машинные проверки — [workspace.lints] в корневом
+# Cargo.toml, протокол docs/lint-policy.md.
+[lints]
+workspace = true
