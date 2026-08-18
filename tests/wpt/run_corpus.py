@@ -212,7 +212,23 @@ def shard_timeout(shard: dict, base: int, per_id: float) -> int:
     return int(base + shard["ids"] * per_id)
 
 
-def run_shard(shard: dict, binary: str, out_dir: str, processes: int, timeout: int) -> dict:
+def https_ids(manifest: dict, scope: set = None) -> list:
+    """Every `.https.` test id — the ones BUG-785 makes unreachable at the TLS
+    layer, whatever the engine does above it.
+
+    Kept as its own function because these ids stay in the *denominator* while
+    being skippable in the *run*: `--skip-https` trades observation for hours of
+    wall-clock on a result already proven by sampling, and must never quietly
+    shrink what the pass-rate divides by.
+    """
+    return sorted({i for t, c, i in corpus_stats.iter_ids(manifest)
+                   if ".https." in i
+                   and t not in corpus_stats.NON_AUTOMATABLE_TYPES
+                   and (scope is None or c in scope)})
+
+
+def run_shard(shard: dict, binary: str, out_dir: str, processes: int, timeout: int,
+              exclude_file: str = None) -> dict:
     """Run one shard as a subprocess; never raises on a failing shard."""
     report_path = shard_report_path(out_dir, shard)
     log_path = os.path.splitext(report_path)[0] + ".log"
@@ -230,6 +246,8 @@ def run_shard(shard: dict, binary: str, out_dir: str, processes: int, timeout: i
         f"--log-raw={raw_path}",
         "--no-manifest-update",
     ]
+    if exclude_file:
+        argv.append(f"--exclude-file={exclude_file}")
     if processes:
         argv.append(f"--processes={processes}")
     argv.extend(shard["test_ids"] if shard.get("test_ids") else [shard["prefix"]])
@@ -302,12 +320,18 @@ def results_from_raw_log(raw_path: str) -> dict:
 def load_results(out_dir: str) -> tuple:
     """Load every shard's results, falling back to the raw stream per shard.
 
-    Returns `(results, recovered)` where `recovered` names the shards whose
+    Returns `(results, recovered, empty)`. `recovered` names shards whose
     numbers came from the raw stream, so the summary can say so out loud
     instead of quietly reporting a partial shard as if it were complete.
+    `empty` names shards that legitimately ran nothing — with `--skip-https`
+    a category can have every one of its tests excluded, and wptrunner then
+    leaves a zero-byte report. That is not a lost shard, and must not be
+    reported as one: a run where "recovered" fires on healthy shards trains
+    the reader to ignore the line that matters.
     """
     results = {}
     recovered = []
+    empty = []
     for entry in sorted(os.listdir(out_dir)):
         if not entry.endswith(".json") or entry == "state.json":
             continue
@@ -322,13 +346,17 @@ def load_results(out_dir: str) -> tuple:
             pass
 
         raw_path = os.path.splitext(path)[0] + ".raw.jsonl"
-        if os.path.isfile(raw_path):
-            rescued = results_from_raw_log(raw_path)
+        rescued = results_from_raw_log(raw_path) if os.path.isfile(raw_path) else {}
+        if rescued:
             results.update(rescued)
             recovered.append((entry[:-5], len(rescued)))
+        elif os.path.getsize(path) == 0:
+            # Zero-byte report + nothing in the raw stream: wptrunner selected
+            # no tests at all (everything excluded or filtered out).
+            empty.append(entry[:-5])
         else:
             print(f"warning: unreadable report and no raw log, ignored: {entry}", file=sys.stderr)
-    return results, recovered
+    return results, recovered, empty
 
 
 def score_reports(manifest: dict, out_dir: str, scope: set = None) -> dict:
@@ -351,7 +379,7 @@ def score_reports(manifest: dict, out_dir: str, scope: set = None) -> dict:
             continue
         expected[test_id] = {"type": test_type, "category": category}
 
-    results, recovered = load_results(out_dir)
+    results, recovered, empty_shards = load_results(out_dir)
 
     per_category = {}
     totals = {"ids": 0, "score": 0.0, "ran": 0, "not_run": 0, "harness_ok": 0,
@@ -402,7 +430,8 @@ def score_reports(manifest: dict, out_dir: str, scope: set = None) -> dict:
     totals["pass_rate"] = round(totals["score"] / totals["ids"], 4) if totals["ids"] else 0.0
 
     return {"totals": totals, "status_counts": status_counts, "per_category": per_category,
-            "recovered_shards": [{"shard": name, "results": n} for name, n in recovered]}
+            "recovered_shards": [{"shard": name, "results": n} for name, n in recovered],
+            "empty_shards": empty_shards}
 
 
 def print_summary(scored: dict, shard_states: list) -> None:
@@ -416,6 +445,10 @@ def print_summary(scored: dict, shard_states: list) -> None:
     print(f"  harness OK:       {totals['harness_ok']}")
     print(f"  subtests:         {totals['subtests_passed']}/{totals['subtests_total']} passed")
     print("  statuses:         " + ", ".join(f"{k}={v}" for k, v in sorted(scored["status_counts"].items())))
+    empty = scored.get("empty_shards", [])
+    if empty:
+        print(f"  ran nothing:      {len(empty)} shards had every test excluded/filtered "
+              f"(not a loss — e.g. an all-https category under --skip-https)")
     for entry in scored.get("recovered_shards", []):
         print(f"  RECOVERED:        {entry['shard']} — {entry['results']} results salvaged "
               f"from the raw log (shard did not finish)")
@@ -441,6 +474,9 @@ def main() -> int:
     parser.add_argument("--aggregate-only", action="store_true", help="score existing reports in --out-dir, run nothing")
     parser.add_argument("--skip-manifest-update", action="store_true", help="trust MANIFEST.json as-is")
     parser.add_argument("--run-json", default=None, help="write the scored run snapshot here (docs/wpt/runs/<date>.json)")
+    parser.add_argument("--skip-https", action="store_true",
+                        help="do not run .https. tests (BUG-785 makes them fail at TLS regardless); "
+                             "they stay in the denominator and score 0, the summary says how many")
     args = parser.parse_args()
 
     binary = args.binary or os.path.join(REPO_ROOT, "target", os.environ.get("LUMEN_PROFILE", "release"), "lumen.exe")
@@ -473,6 +509,15 @@ def main() -> int:
         print(f"{len(shards)} shards, {sum(s['ids'] for s in shards)} manifest ids, "
               f"--processes={args.processes}", flush=True)
 
+        exclude_file = None
+        if args.skip_https:
+            skipped = https_ids(manifest, set(categories))
+            exclude_file = os.path.join(args.out_dir, "exclude-https.txt")
+            with open(exclude_file, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(skipped) + "\n")
+            print(f"--skip-https: {len(skipped)} ids excluded from the run "
+                  f"(still in the denominator, scored 0 — BUG-785)", flush=True)
+
         shard_states = []
         if args.resume and os.path.isfile(state_path):
             with open(state_path, encoding="utf-8") as fh:
@@ -485,13 +530,14 @@ def main() -> int:
                 continue
             budget = shard_timeout(shard, args.shard_timeout_base, args.shard_timeout_per_id)
             print(f"[{index}/{len(shards)}] {shard['name']}: {shard['ids']} ids (budget {budget}s) ...", end="", flush=True)
-            state = run_shard(shard, binary, args.out_dir, args.processes, budget)
+            state = run_shard(shard, binary, args.out_dir, args.processes, budget, exclude_file)
             shard_states.append(state)
             print(f" {state['outcome']} in {state['seconds']}s", flush=True)
             # Checkpoint after every shard: a corpus run outlives the session
             # that started it, and must be resumable from wherever it stopped.
             with open(state_path, "w", encoding="utf-8") as fh:
-                json.dump({"binary": binary, "shards": shard_states}, fh, indent=2)
+                json.dump({"binary": binary, "shards": shard_states,
+                           "skipped_https": len(skipped) if args.skip_https else 0}, fh, indent=2)
 
     # A run only gets to be scored against what it actually covered. The scope
     # is derived from the shards, not from the CLI selection, so a resumed or
@@ -506,6 +552,16 @@ def main() -> int:
         print(f"\nscope: {len(scope)} of {len(all_categories)} categories "
               f"(partial run — denominator covers only what was selected)")
     print_summary(scored, shard_states)
+
+    # No silent caps: an intentionally unrun slice must be named in the same
+    # breath as the number it depresses, or the reader takes 0 for "measured".
+    skipped_count = 0
+    if os.path.isfile(state_path):
+        with open(state_path, encoding="utf-8") as fh:
+            skipped_count = json.load(fh).get("skipped_https", 0)
+    if skipped_count:
+        print(f"  NOT RUN ON PURPOSE: {skipped_count} .https. ids — unreachable at TLS "
+              f"(BUG-785), scored 0, sampling confirmed the outcome")
 
     if args.run_json:
         os.makedirs(os.path.dirname(os.path.abspath(args.run_json)), exist_ok=True)
