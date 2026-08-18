@@ -99,6 +99,16 @@ def update_manifest() -> None:
     print(f"manifest updated in {time.time() - started:.0f}s", flush=True)
 
 
+def _git_head() -> str:
+    """Short SHA of the checkout the run was made from, or `unknown`."""
+    try:
+        out = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=REPO_ROOT,
+                             capture_output=True, text=True, check=False)
+        return out.stdout.strip() or "unknown"
+    except OSError:
+        return "unknown"
+
+
 def load_manifest() -> dict:
     with open(MANIFEST_PATH, encoding="utf-8") as fh:
         return json.load(fh)
@@ -430,8 +440,20 @@ def main() -> int:
 
     if args.run_json:
         os.makedirs(os.path.dirname(os.path.abspath(args.run_json)), exist_ok=True)
+        snapshot = {
+            "binary": binary,
+            # A pass-rate without the build it came from cannot be compared to
+            # the next one — two snapshots differing by a commit look exactly
+            # like two snapshots differing by an engine change.
+            "commit": _git_head(),
+            "finished": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "processes": args.processes,
+            "scope": sorted(scope) if scope else "full-corpus",
+            "shards": shard_states,
+            "scored": scored,
+        }
         with open(args.run_json, "w", encoding="utf-8") as fh:
-            json.dump({"binary": binary, "shards": shard_states, "scored": scored}, fh, indent=2, sort_keys=True)
+            json.dump(snapshot, fh, indent=2, sort_keys=True)
         print(f"run snapshot: {args.run_json}")
     return 0
 
