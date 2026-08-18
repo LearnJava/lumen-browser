@@ -18,11 +18,22 @@ minimal executor (no `test_driver.*`, no multi-window, no iframes), so expect
 ERROR/TIMEOUT noise, not failures worth filing bugs over; use it to survey,
 not to gate.
 
+TEST-3 (`docs/tasks/p2-test-track.md`, `expectations.py`) adds two more modes
+on top of the same run, for categories outside the hand-curated `dom/nodes`
+gate: `--update-expected` (re)writes the committed `.ini` baseline for every
+selected test to whatever it actually produced this run (a ratchet, like
+`graphic_tests/KNOWN_DEBTORS` — only deviations from wptrunner's own OK/PASS
+defaults get a file); `--check` compares this run against that committed
+baseline and exits non-zero only on a genuine regression (an expected PASS
+that stopped passing, or a new TIMEOUT) — an expected-FAIL category can stay
+red in the HTML report and still gate green.
+
 Usage (from repo root, after `pip install -r tests/wpt/requirements.txt` in a
 venv — see tests/wpt/README.md):
 
     <venv>/python tests/wpt/run_report.py [--binary PATH] [--out PATH] [--all] [--root DIR] [--recursive]
         [--processes N] [--offset N] [--limit N] [--timeout-multiplier F]
+        [--update-expected | --check]
 
 On Windows Git Bash also set `MSYS2_ARG_CONV_EXCL='/dom'` (see README) so the
 leading-slash test ids aren't mangled into Windows paths.
@@ -38,6 +49,7 @@ import tempfile
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import expectations  # noqa: E402
 import run_smoke  # noqa: E402
 import run_suite  # noqa: E402
 
@@ -322,7 +334,34 @@ def main() -> int:
         "result but wptrunner still reports TIMEOUT (result arrived after the "
         "external deadline) — see WPT-RUN-3 slice 40/42 in ROADMAP.md.",
     )
+    parser.add_argument(
+        "--update-expected",
+        action="store_true",
+        help="TEST-3: (re)write the committed .ini expectation baseline under "
+        "tests/wpt/metadata/<root>/ from this run's actual results, instead of "
+        "gating. Refuses --root dom/nodes (that subtree is the hand-curated "
+        "S5/S6 set, see expectations.py). Run this once per category after "
+        "vendoring/triage, commit the .ini files, then use --check on later runs.",
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="TEST-3: gate on the committed .ini baseline instead of just "
+        "reporting — exit 1 iff this run regressed vs it (an expected PASS "
+        "that stopped passing, or a new TIMEOUT); an unexpected PASS or any "
+        "other status swap is printed but does not fail the gate.",
+    )
     args = parser.parse_args()
+    if args.update_expected and args.check:
+        print("--update-expected and --check are mutually exclusive", file=sys.stderr)
+        return 1
+    if args.update_expected and (not args.all or args.root in expectations.GUARDED_ROOTS):
+        print(
+            "--update-expected needs --all --root <category> (not dom/nodes — "
+            "that's the hand-curated S5/S6 gate, see tests/wpt/expectations.py)",
+            file=sys.stderr,
+        )
+        return 1
 
     test_ids = (
         all_vendored_test_ids(args.root, args.recursive) if args.all else run_suite.curated_test_ids()
@@ -391,6 +430,34 @@ def main() -> int:
     sub_pass = sum(1 for st in all_subtests if st.get("status") in SUBTEST_PASS_STATUSES)
     print(f"tests: {ok}/{total} harness OK; subtests: {sub_pass}/{sub_total} passed", file=sys.stderr)
     print(f"report written to {args.out}", file=sys.stderr)
+
+    if args.update_expected:
+        counts = expectations.write_expected(results, args.root)
+        print(
+            f"expectations: {counts['written']} written, {counts['removed']} removed "
+            f"(now clean), {counts['unchanged']} unchanged — under "
+            f"{os.path.join('tests', 'wpt', 'metadata', args.root)}",
+            file=sys.stderr,
+        )
+        return 0
+
+    if args.check:
+        verdict = expectations.classify(results, test_ids)
+        for kind, entries in (("REGRESSION", verdict["regressions"]), ("info", verdict["improvements"])):
+            for e in entries:
+                where = f"{e['test']}" + (f" [{e['subtest']}]" if e["subtest"] else "")
+                print(
+                    f"{kind}: {where}: expected {e['expected']}, got {e['actual']} ({e['reason']})",
+                    file=sys.stderr,
+                )
+        print(
+            f"check: {len(verdict['regressions'])} regression(s), "
+            f"{len(verdict['improvements'])} unexpected pass(es) (narrow expectations), "
+            f"{len(verdict['other'])} other deviation(s)",
+            file=sys.stderr,
+        )
+        return 1 if verdict["regressions"] else 0
+
     return 0
 
 
