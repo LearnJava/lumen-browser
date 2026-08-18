@@ -123,21 +123,51 @@ def plan_shards(manifest: dict, categories: list) -> list:
         if not ids:
             print(f"warning: category not in manifest, skipped: {category}", file=sys.stderr)
             continue
-        if len(ids) <= SHARD_THRESHOLD:
-            shards.append({"name": category, "prefix": f"/{category}/", "ids": len(ids)})
-            continue
-        groups = {}
-        for test_id in ids:
-            parts = test_id.strip("/").split("/")
-            # `/css/foo.html` (a file directly in the category) has no second
-            # component to group on — keep those together under the category.
-            key = parts[1] if len(parts) > 2 else ""
-            groups.setdefault(key, 0)
-            groups[key] += 1
-        for key, count in sorted(groups.items()):
-            prefix = f"/{category}/{key}/" if key else f"/{category}/"
-            shards.append({"name": f"{category}/{key}" if key else category,
-                           "prefix": prefix, "ids": count})
+        shards.extend(_split([category], ids))
+    return shards
+
+
+def _split(prefix_parts: list, ids: list) -> list:
+    """Recursively split a directory's ids until each shard fits the threshold.
+
+    One level of splitting is not enough: `css/CSS2` alone is 9228 ids, which
+    at the measured rate budgets over five hours — and a shard that dies takes
+    its whole budget's worth of work with it. Descends until either the shard
+    fits or the directory has no deeper level left to split on (a flat
+    category like `encoding`, where the only option would be splitting the
+    file list itself — deliberately not done, since a path prefix is what
+    wptrunner filters on).
+    """
+    depth = len(prefix_parts)
+    name = "/".join(prefix_parts)
+    if len(ids) <= SHARD_THRESHOLD:
+        return [{"name": name, "prefix": f"/{name}/", "ids": len(ids)}]
+
+    groups = {}
+    for test_id in ids:
+        parts = test_id.strip("/").split("/")
+        # A test file sitting directly in this directory has no deeper
+        # component to group on; it stays here.
+        key = parts[depth] if len(parts) > depth + 1 else ""
+        groups.setdefault(key, []).append(test_id)
+
+    if len(groups) == 1 and "" in groups:
+        # Flat directory, nothing deeper to split on — accept the oversized
+        # shard rather than inventing a split wptrunner can't express.
+        return [{"name": name, "prefix": f"/{name}/", "ids": len(ids)}]
+
+    shards = []
+    for key, group_ids in sorted(groups.items()):
+        if not key:
+            # Files sitting directly in a directory that also has subdirectories
+            # cannot be addressed by prefix — `/css/CSS2/` would re-select every
+            # subdirectory we just split out, running them twice. Corpus-wide
+            # this is 5 such nodes totalling ~100 ids, so listing them
+            # explicitly is both exact and short enough for a command line.
+            shards.append({"name": f"{name} (bare)", "prefix": None,
+                           "test_ids": sorted(group_ids), "ids": len(group_ids)})
+        else:
+            shards.extend(_split(prefix_parts + [key], group_ids))
     return shards
 
 
@@ -160,6 +190,18 @@ def kill_tree(proc) -> None:
         proc.kill()
 
 
+def shard_timeout(shard: dict, base: int, per_id: float) -> int:
+    """Budget a shard's wall-clock by its size, not by a flat constant.
+
+    WPT-RUN-4 pilot: a flat 1200s killed `encoding` (1343 ids) mid-run while
+    being ten times more than `FileAPI` (125 ids) ever needed. A killed shard
+    loses everything it had done — `wptreport.json` is only written at the end —
+    so the budget has to scale with the shard. Observed rate at
+    `--processes=6` was ~0.8s/id, so the default 2s/id is ~2.5x headroom.
+    """
+    return int(base + shard["ids"] * per_id)
+
+
 def run_shard(shard: dict, binary: str, out_dir: str, processes: int, timeout: int) -> dict:
     """Run one shard as a subprocess; never raises on a failing shard."""
     report_path = shard_report_path(out_dir, shard)
@@ -173,7 +215,7 @@ def run_shard(shard: dict, binary: str, out_dir: str, processes: int, timeout: i
     ]
     if processes:
         argv.append(f"--processes={processes}")
-    argv.append(shard["prefix"])
+    argv.extend(shard["test_ids"] if shard.get("test_ids") else [shard["prefix"]])
 
     started = time.time()
     with open(log_path, "w", encoding="utf-8") as log:
@@ -187,6 +229,11 @@ def run_shard(shard: dict, binary: str, out_dir: str, processes: int, timeout: i
             returncode = None
             outcome = "timeout"
     elapsed = time.time() - started
+
+    # A killed shard leaves the empty file wptrunner opened up front; it would
+    # otherwise show up as an unreadable report at aggregation time.
+    if outcome == "timeout" and os.path.isfile(report_path) and os.path.getsize(report_path) == 0:
+        os.remove(report_path)
 
     if outcome == "ran" and not os.path.isfile(report_path):
         # wptrunner exited without writing a report — a crash during startup
@@ -301,7 +348,8 @@ def main() -> int:
     parser.add_argument("--categories", default=None, help="comma-separated category list")
     parser.add_argument("--processes", type=int, default=6, help="wptrunner --processes per shard (default: 6)")
     parser.add_argument("--out-dir", default=DEFAULT_OUT_DIR)
-    parser.add_argument("--category-timeout", type=int, default=3600, help="seconds before a shard is killed (default: 3600)")
+    parser.add_argument("--shard-timeout-base", type=int, default=600, help="fixed part of a shard's time budget, seconds (default: 600)")
+    parser.add_argument("--shard-timeout-per-id", type=float, default=2.0, help="per-id part of a shard's time budget, seconds (default: 2.0)")
     parser.add_argument("--resume", action="store_true", help="skip shards that already produced a report")
     parser.add_argument("--aggregate-only", action="store_true", help="score existing reports in --out-dir, run nothing")
     parser.add_argument("--skip-manifest-update", action="store_true", help="trust MANIFEST.json as-is")
@@ -348,8 +396,9 @@ def main() -> int:
             if shard["name"] in done:
                 print(f"[{index}/{len(shards)}] {shard['name']}: cached", flush=True)
                 continue
-            print(f"[{index}/{len(shards)}] {shard['name']}: {shard['ids']} ids ...", end="", flush=True)
-            state = run_shard(shard, binary, args.out_dir, args.processes, args.category_timeout)
+            budget = shard_timeout(shard, args.shard_timeout_base, args.shard_timeout_per_id)
+            print(f"[{index}/{len(shards)}] {shard['name']}: {shard['ids']} ids (budget {budget}s) ...", end="", flush=True)
+            state = run_shard(shard, binary, args.out_dir, args.processes, budget)
             shard_states.append(state)
             print(f" {state['outcome']} in {state['seconds']}s", flush=True)
             # Checkpoint after every shard: a corpus run outlives the session
