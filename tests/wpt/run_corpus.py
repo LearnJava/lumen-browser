@@ -216,11 +216,18 @@ def run_shard(shard: dict, binary: str, out_dir: str, processes: int, timeout: i
     """Run one shard as a subprocess; never raises on a failing shard."""
     report_path = shard_report_path(out_dir, shard)
     log_path = os.path.splitext(report_path)[0] + ".log"
+    raw_path = os.path.splitext(report_path)[0] + ".raw.jsonl"
     argv = [
         sys.executable,
         os.path.join(TESTS_ROOT, "run_smoke.py"),
         f"--binary={binary}",
         f"--log-wptreport={report_path}",
+        # `--log-wptreport` is written once, at the end. A shard killed on its
+        # time budget (pilot: `encoding`, `WebCryptoAPI`) therefore lost every
+        # result it had already produced — 1656 ids silently became NOT-RUN.
+        # mozlog's raw stream is written per event, so it survives the kill and
+        # `results_from_raw_log` reconstructs whatever finished.
+        f"--log-raw={raw_path}",
         "--no-manifest-update",
     ]
     if processes:
@@ -255,6 +262,75 @@ def run_shard(shard: dict, binary: str, out_dir: str, processes: int, timeout: i
             "report": os.path.relpath(report_path, REPO_ROOT) if os.path.isfile(report_path) else None}
 
 
+def results_from_raw_log(raw_path: str) -> dict:
+    """Rebuild `{test_id: result}` from a mozlog raw stream.
+
+    Used when a shard produced no `wptreport.json` (killed on its time budget,
+    crashed, or hung): the raw stream is one JSON object per line, flushed as
+    events happen, so everything up to the kill is still there. Emits the same
+    shape `wptreport.json` does, so the scorer cannot tell the two apart.
+
+    A truncated final line is expected — the process was killed mid-write — and
+    is skipped rather than treated as corruption.
+    """
+    results = {}
+    with open(raw_path, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            action = event.get("action")
+            test_id = event.get("test")
+            if not test_id:
+                continue
+            if action == "test_status":
+                entry = results.setdefault(test_id, {"test": test_id, "status": None, "subtests": []})
+                entry["subtests"].append({"name": event.get("subtest", ""),
+                                          "status": event.get("status", "")})
+            elif action == "test_end":
+                entry = results.setdefault(test_id, {"test": test_id, "status": None, "subtests": []})
+                entry["status"] = event.get("status", "")
+    # A test that started but never ended (the one the kill interrupted) has no
+    # status — drop it rather than scoring a half-observed test as anything.
+    return {k: v for k, v in results.items() if v["status"]}
+
+
+def load_results(out_dir: str) -> tuple:
+    """Load every shard's results, falling back to the raw stream per shard.
+
+    Returns `(results, recovered)` where `recovered` names the shards whose
+    numbers came from the raw stream, so the summary can say so out loud
+    instead of quietly reporting a partial shard as if it were complete.
+    """
+    results = {}
+    recovered = []
+    for entry in sorted(os.listdir(out_dir)):
+        if not entry.endswith(".json") or entry == "state.json":
+            continue
+        path = os.path.join(out_dir, entry)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                report = json.load(fh)
+            for result in report.get("results", []):
+                results[result["test"]] = result
+            continue
+        except (json.JSONDecodeError, OSError):
+            pass
+
+        raw_path = os.path.splitext(path)[0] + ".raw.jsonl"
+        if os.path.isfile(raw_path):
+            rescued = results_from_raw_log(raw_path)
+            results.update(rescued)
+            recovered.append((entry[:-5], len(rescued)))
+        else:
+            print(f"warning: unreadable report and no raw log, ignored: {entry}", file=sys.stderr)
+    return results, recovered
+
+
 def score_reports(manifest: dict, out_dir: str, scope: set = None) -> dict:
     """Score every automatable manifest id against whatever the shards produced.
 
@@ -275,18 +351,7 @@ def score_reports(manifest: dict, out_dir: str, scope: set = None) -> dict:
             continue
         expected[test_id] = {"type": test_type, "category": category}
 
-    results = {}
-    for entry in sorted(os.listdir(out_dir)):
-        if not entry.endswith(".json") or entry == "state.json":
-            continue
-        with open(os.path.join(out_dir, entry), encoding="utf-8") as fh:
-            try:
-                report = json.load(fh)
-            except json.JSONDecodeError:
-                print(f"warning: unreadable report, ignored: {entry}", file=sys.stderr)
-                continue
-        for result in report.get("results", []):
-            results[result["test"]] = result
+    results, recovered = load_results(out_dir)
 
     per_category = {}
     totals = {"ids": 0, "score": 0.0, "ran": 0, "not_run": 0, "harness_ok": 0,
@@ -336,7 +401,8 @@ def score_reports(manifest: dict, out_dir: str, scope: set = None) -> dict:
     totals["score"] = round(totals["score"], 2)
     totals["pass_rate"] = round(totals["score"] / totals["ids"], 4) if totals["ids"] else 0.0
 
-    return {"totals": totals, "status_counts": status_counts, "per_category": per_category}
+    return {"totals": totals, "status_counts": status_counts, "per_category": per_category,
+            "recovered_shards": [{"shard": name, "results": n} for name, n in recovered]}
 
 
 def print_summary(scored: dict, shard_states: list) -> None:
@@ -350,6 +416,9 @@ def print_summary(scored: dict, shard_states: list) -> None:
     print(f"  harness OK:       {totals['harness_ok']}")
     print(f"  subtests:         {totals['subtests_passed']}/{totals['subtests_total']} passed")
     print("  statuses:         " + ", ".join(f"{k}={v}" for k, v in sorted(scored["status_counts"].items())))
+    for entry in scored.get("recovered_shards", []):
+        print(f"  RECOVERED:        {entry['shard']} — {entry['results']} results salvaged "
+              f"from the raw log (shard did not finish)")
     bad = [s for s in shard_states if s["outcome"] != "ran"]
     if bad:
         print(f"  PROBLEM SHARDS:   {len(bad)} — " + ", ".join(f"{s['name']}({s['outcome']})" for s in bad[:8]))
