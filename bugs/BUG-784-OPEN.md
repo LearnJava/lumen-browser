@@ -20,9 +20,10 @@ cargo test -p lumen-driver --features cpu-render cpu_snapshots_match_references
 |---|---|
 | [32183754261](https://github.com/LearnJava/lumen-browser/actions/runs/32183754261) | FAILED — `49-background-blend-mode: 108 differing bytes (of 2949120)` |
 | [32185116431](https://github.com/LearnJava/lumen-browser/actions/runs/32185116431) | ok — все 81 эталона совпали побайтно |
+| [32186481322](https://github.com/LearnJava/lumen-browser/actions/runs/32186481322) | FAILED — снова `49-background-blend-mode` |
 
-Остальные 80 страниц совпали побайтно в обоих прогонах. Локально на Windows
-тест зелёный (он входит в `scripts/scoped-test.sh`).
+Итого 2 отказа из 3 прогонов. Остальные 80 страниц совпали побайтно во всех
+трёх. Локально на Windows тест зелёный (он входит в `scripts/scoped-test.sh`).
 
 ## Почему это важнее, чем 0,004 % пикселей
 

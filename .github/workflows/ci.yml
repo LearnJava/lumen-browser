@@ -275,10 +275,18 @@ jobs:
 
       # The roadmap trees are generated from ROADMAP.md + BUGS.md + CSS-SPECS.md,
       # so a bug flipped to FIXED without a regen leaves the trees lying.
+      #
+      # `-I` (ignore lines matching a regex) is load-bearing: gen_roadmap.py
+      # stamps a `"generated": "<today>"` field into the embedded JSON, so a byte
+      # comparison fails on any day later than the commit — and, because the
+      # runner is UTC while the author may not be, sometimes on the same day too.
+      # That is exactly how this job first went red. Do not "simplify" it back to
+      # a plain --exit-code; drop the stamp from the generator instead if this
+      # ever needs to be exact.
       - name: Roadmap trees are current
         run: |
           python scripts/gen_roadmap.py
-          git diff --exit-code -- docs/roadmap-*.html
+          git diff --exit-code -I'"generated":' -- docs/roadmap-*.html
 
   cross:
     # Cold path: push-to-main and nightly only (see the header comment). Keeps the
