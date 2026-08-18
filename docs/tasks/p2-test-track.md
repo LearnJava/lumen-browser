@@ -155,6 +155,53 @@ ROADMAP.md` по `WPT-VENDOR`) — многочасовая работа, для
 `--update-expected` пакетами по категориям (уже отработанный в этой сессии цикл), с таймаутом на
 категорию и пропуском/журналированием зависших вместо блокировки всего пакета.
 
+### TEST-3: расширение охвата (2026-08-18, вторая сессия P2)
+
+Продолжение по плану предыдущей сессии: `--update-expected --all --root <cat> --recursive` пакетами
+по 4–8 категорий за раз (`timeout 65–130` на категорию, дальше — журналирование, а не блокировка).
+Прогнано 43 категории из оставшихся 267 (`css`/`dom` уже покрыты ранее другим путём — WPT-RUN-3
+ручные `.ini` и `dom/nodes` S5/S6-гейт, не пересчитывались): **19 получили полный baseline**
+(`console`, `accessibility`, `acid`, `apng`, `audio-session`, `autoplay-policy-detection`, `avif`,
+`captured-mouse-events`, `close-watcher`, `compat`, `compression`, `contacts`, `container-timing`,
+`content-dpr`, `content-index`, `contenteditable`, `core-aam`, `cors`, `cpu-performance`),
+**11 получили частичный baseline** (процесс убит по таймауту, но `.ini` уже частично записаны —
+см. готчу ниже; `FileAPI`, `IndexedDB`, `WebCryptoAPI`, `accelerometer`, `background-fetch`,
+`battery-status`, `beacon`, `bluetooth`, `connection-allowlist`, `content-security-policy`,
+`custom-elements`), **13 не дали вообще ничего** за отведённый таймаут (`ai`, `ambient-light`,
+`animation-worklet`, `attribution-reporting`, `audio-output`, `background-sync`, `badging`,
+`browsing-topics`, `clear-site-data`, `client-hints`, `clipboard-apis`, `compute-pressure`,
+`cookies`, `credential-management` — крупнее приведённого списка на 1, `cssom` дал `written=0`,
+т.е. пустой файл без отклонений от `OK`/`PASS`), **4 упали сразу** (`annotation-model`,
+`annotation-vocab` — «no tests selected», `annotation-protocol`, `appmanifest` — `CRITICAL Unable
+to find any tests at the path(s)`, см. готчу ниже).
+
+**Готча — «TIMEOUT» в этом журнале не означает пустой результат.** Лог `custom-elements`
+(`.tmp/wpt-expected/custom-elements.log`, не закоммичен) показывает, что `wptrunner` сам штатно
+доходит до `INFO Got 46 unexpected results...` и `report written to ...`, а внешний `timeout 130`
+убивает процесс **после** этого — судя по всему, что-то в самом `run_report.py`/`expectations.py`
+после записи отчёта не даёт интерпретатору штатно завершиться (не продиагностировано, что именно —
+незавершённый поток/дескриптор). `.ini`-файлы `expectations.py` пишет по мере готовности, поэтому
+у категорий с таким исходом уже есть частично годный (хоть и не гарантированно полный) baseline —
+не перезаписывать их вслепую большим таймаутом, не проверив сначала, не полны ли они уже. Для
+следующей сессии стоит поднять `--processes`/увеличить таймаут именно для крупных категорий
+(`FileAPI` 115 файлов, `IndexedDB` 245, `WebCryptoAPI` 185 — см. их отдельные заметки в ROADMAP.md)
+и, возможно, найти и исправить сам хвостовой хэнг, а не просто ждать его таймаутом.
+
+**Готча — 4 категории проваливаются на этапе discovery, не выполнения.** `annotation-model`/
+`annotation-vocab` дают «no tests selected» (0 отобранных id — вероятно, категория состоит только
+из crashtest/manual/`ReadMe`-файлов, как ранее было с `accessibility`), `annotation-protocol`/
+`appmanifest` падают с `CRITICAL Unable to find any tests at the path(s): /<cat>/files/index.html`
+— тестовый id, который `run_report.py`'s дискавери сгенерировал, не резолвится в реальный файл
+через `wptrunner`'s manifest (возможно, `index.html`/`files/` — не тест, а вспомогательная
+страница, попавшая в перечень по ошибке обобщённого globbing). Не чинилось в этой сессии — не
+блокирует остальной пакет, но стоит завести отдельную заметку/баг в тулинге, если таких категорий
+наберётся больше при дальнейшем расширении охвата.
+
+Осталось непокрытых **~247** категорий (267 минус 20 с любым результатом, включая частичные).
+Список кандидатов и статус каждой попытки — `.tmp/wpt-expected/summary.tsv` в рабочем дереве
+(не закоммичен, эфемерный; следующая сессия должна пересчитать remaining-список заново из
+`grep "WPT-VENDOR" ROADMAP.md | grep "| done |"` минус `ls tests/wpt/metadata`).
+
 ## TEST-4: WPT reftest-executor (L)
 
 Сейчас интеграция wptrunner исполняет только testharness-тесты — reftests (основной способ
