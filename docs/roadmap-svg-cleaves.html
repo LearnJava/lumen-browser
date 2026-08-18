@@ -4719,9 +4719,9 @@
       {
        "id": "TEST-3",
        "title": "TEST-3: WPT expectations-система (гейт на регрессии)",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Expectations/metadata-система для WPT по образцу Firefox: per-test ожидаемые результаты, сгенерированные из текущего прогона run_report.py; новый режим run_report.py --check — exit≠0 только на отклонение от ожиданий (регрессия PASS, новый TIMEOUT), неожиданные PASS печатаются как «сузить ожидания» (храповик, аналог KNOWN_DEBTORS). Превращает 277 вендоренных категорий WPT-VENDOR из разового аудита в регрессионный набор. Бриф docs/tasks/p2-test-track.md"
+       "note": "Expectations/metadata-система для WPT по образцу Firefox поверх нативного `wptrunner`-формата (`--metadata`/`.ini`, не отдельный JSON): `tests/wpt/expectations.py` + `run_report.py --update-expected`/`--check` — exit≠0 только на отклонение от ожиданий (регрессия PASS, новый TIMEOUT), неожиданные PASS печатаются как «сузить ожидания» (храповик, аналог KNOWN_DEBTORS); никогда не трогает ручной S5/S6-гейт `dom/nodes`. Проверено сквозным прогоном + отрицательным сценарием. Baseline сгенерирован для 7/289 done-категорий (websockets/xml/x-frame-options/webrtc-svc/url/urlpattern/uievents) — полный охват отложен на следующую сессию (worklets не уложился в таймаут). Состояние — docs/tasks/p2-test-track.md#test-3-состояние"
       },
       {
        "id": "TEST-4",
