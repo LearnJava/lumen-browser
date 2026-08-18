@@ -54,7 +54,9 @@ jobs:
           key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-build-
 
-      # glutin (OpenGL context) and winit need X11/Wayland/EGL headers on Linux.
+      # glutin (OpenGL context) and winit need X11/Wayland/EGL headers on Linux;
+      # cpal/rodio (crates/shell audio) map to ALSA there, so alsa-sys needs
+      # libasound2-dev — without it the build script fails, Linux only.
       # rusqlite uses "bundled" so no libsqlite3 required.
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
@@ -64,6 +66,7 @@ jobs:
             libx11-dev libxcursor-dev libxi-dev libxrandr-dev \
             libwayland-dev libxkbcommon-dev \
             libegl-dev libgles2-mesa-dev \
+            libasound2-dev \
             pkg-config
 
       # Verify the main shell binary compiles on all platforms.
