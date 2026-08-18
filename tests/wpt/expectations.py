@@ -44,10 +44,12 @@ import run_smoke  # noqa: E402
 
 sys.path[:0] = [
     os.path.join(run_smoke.REPO_ROOT, "tools", "wptrunner"),
+    os.path.join(run_smoke.REPO_ROOT, "tools"),
 ]
 from wptrunner.manifestupdate import get_test_name  # noqa: E402
 from wptrunner.wptmanifest.node import DataNode, KeyValueNode, ValueNode  # noqa: E402
 from wptrunner.wptmanifest.serializer import serialize  # noqa: E402
+from manifest import manifest as wpt_manifest  # noqa: E402
 
 # Native wptrunner defaults (wptrunner/wpttest.py): a testharness test with no
 # `.ini` override is expected "OK"; a subtest with no override is expected
@@ -60,19 +62,59 @@ SUBTEST_GOOD_STATUSES = {"PASS"}
 # Hand-curated by S5/S6, gated by run_suite.py — never auto-write here.
 GUARDED_ROOTS = {"dom/nodes"}
 
+_url_to_source_path_cache = None
+
+
+def _url_to_source_path() -> dict:
+    """Map a manifest item's `id` (URL, what `run_report.py`'s results carry
+    as `"test"`) to its `path` (source file, relative to `TESTS_ROOT`).
+
+    For a plain `.html` test the two coincide, but WPT's generated test
+    types don't: a `.any.js` source expands to `.any.html` /
+    `.any.worker.html` / ... (one URL per global), and `.window.js` /
+    `.worker.js` each expand to one differently-named `.html` URL
+    (`tools/manifest/sourcefile.py::global_variant_url`/`replace_end`).
+    `wptrunner`'s own `expected.expected_path` (unmodified vendor code, see
+    `tools/wptrunner/wptrunner/testloader.py::load_metadata`) keys the
+    committed `.ini` off `path` — the *source* file — not the URL, at
+    runtime. Reusing the same vendored manifest reader here (rather than
+    reimplementing the suffix-stripping rules, which have several
+    special-cased variants for shadowrealm/print-reftest) keeps this
+    resolution byte-for-byte identical to what `wptrunner` will actually
+    look up, so a baseline this module writes is guaranteed to be the file
+    `wptrunner` re-reads on the next `--check`.
+    """
+    global _url_to_source_path_cache
+    if _url_to_source_path_cache is None:
+        manifest_path = os.path.join(run_smoke.METADATA_ROOT, "MANIFEST.json")
+        mapping = {}
+        m = wpt_manifest.load(run_smoke.TESTS_ROOT, manifest_path)
+        if m is not None:
+            for _item_type, path, items in m:
+                for item in items:
+                    mapping[item.id] = path.replace(os.sep, "/")
+        _url_to_source_path_cache = mapping
+    return _url_to_source_path_cache
+
 
 def metadata_ini_path(test_id: str) -> str:
-    """`/websockets/foo.html?wss` -> `<METADATA_ROOT>/websockets/foo.html.ini`.
+    """`/websockets/foo.html?wss` -> `<METADATA_ROOT>/websockets/foo.html.ini`;
+    `/console/console-is-a-namespace.any.html` ->
+    `<METADATA_ROOT>/console/console-is-a-namespace.any.js.ini` (source path,
+    see `_url_to_source_path`).
 
     Multiple `test_id`s can share one underlying file (a `?query`/`#fragment`
-    variant selector, e.g. WPT's `.any.js` multi-global expansion or a plain
-    `.html` test navigated with different flags) — wptrunner's own
-    `expected.expected_path` keys the `.ini` off the URL *path* alone, so all
-    variants of one file share one `.ini` with one `[section]` per variant
-    (see `_test_node_for`/`get_test_name`).
+    variant selector, or — for `.any.js`/`.window.js`/`.worker.js` — several
+    per-global URLs generated from one source) — wptrunner's own
+    `expected.expected_path` keys the `.ini` off the source path alone, so
+    all variants of one file share one `.ini` with one `[section]` per
+    variant (see `_test_node_for`/`get_test_name`).
     """
-    file_path = urlsplit(test_id).path
-    rel = file_path.lstrip("/").split("/")
+    source_path = _url_to_source_path().get(test_id)
+    if source_path is not None:
+        rel = source_path.split("/")
+    else:
+        rel = urlsplit(test_id).path.lstrip("/").split("/")
     return os.path.join(run_smoke.METADATA_ROOT, *rel) + ".ini"
 
 
