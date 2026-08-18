@@ -6121,6 +6121,106 @@ mod tests {
         V8JsRuntime::new().unwrap()
     }
 
+    /// PERF-9 census: how much of a navigation's cost is the shim, and does the
+    /// shim survive evaluation with **no** `_lumen_*` natives registered.
+    ///
+    /// Both questions decide whether a V8 startup snapshot is worth building:
+    /// the snapshot can only capture pure-JS state, so a shim that calls a
+    /// native at top level and bakes the result cannot be snapshotted as-is.
+    /// Prints rather than asserts — this is a measurement, not a gate. Run with
+    /// `cargo test -p lumen-js --features v8-backend perf9 -- --nocapture`.
+    #[test]
+    fn perf9_census_shim_eval_without_natives() {
+        let shim = crate::dom::web_api_shim();
+        // A fresh runtime is a fresh isolate + context with the global template,
+        // i.e. exactly the per-navigation starting point — but no natives.
+        let rt = rt();
+        let t0 = std::time::Instant::now();
+        let outcome = rt.eval(&format!("{shim}\nundefined;\n"));
+        let elapsed = t0.elapsed();
+        eprintln!("[PERF-9] shim size: {} bytes", shim.len());
+        eprintln!("[PERF-9] eval (no natives): {:?}", elapsed);
+        match &outcome {
+            Ok(_) => eprintln!("[PERF-9] shim evaluates WITHOUT natives — snapshot is viable as-is"),
+            Err(e) => eprintln!("[PERF-9] shim NEEDS natives at eval time: {e:?}"),
+        }
+    }
+
+    /// PERF-9 census, second half: the real per-navigation JS cost, split into
+    /// isolate+context creation and `install_dom` (native registration + shim
+    /// eval). A snapshot can only ever remove part of the second number, so
+    /// this is the ceiling on what PERF-9 can win. Printed, not asserted.
+    #[test]
+    fn perf9_census_install_dom_cost() {
+        // Three rounds: the first pays one-time V8 platform init, the later two
+        // are the steady state a real navigation sees.
+        for round in 1..=3 {
+            let t0 = std::time::Instant::now();
+            let rt = V8JsRuntime::new().unwrap();
+            let t_new = t0.elapsed();
+            let t1 = std::time::Instant::now();
+            rt.install_dom(make_doc(), "", None, None, None, None, None, None, None, None, false)
+                .unwrap();
+            let t_install = t1.elapsed();
+            eprintln!(
+                "[PERF-9] round {round}: V8JsRuntime::new {t_new:?} + install_dom {t_install:?} = {:?}",
+                t_new + t_install
+            );
+        }
+    }
+
+    /// PERF-9 census, third half: **which** natives the shim needs while it is
+    /// being evaluated. Every one of these is a per-document Rust closure, so
+    /// each is a site that must become lazy before a snapshot can be taken.
+    /// Feeds stub definitions in one at a time, following the interpreter's own
+    /// "X is not defined" errors until the shim either completes or fails for a
+    /// reason other than a missing native. Printed, not asserted.
+    #[test]
+    fn perf9_census_top_level_native_deps() {
+        let shim = crate::dom::web_api_shim();
+        let mut stubs: Vec<String> = Vec::new();
+        for step in 0..60 {
+            let prelude = stubs
+                .iter()
+                .map(|n| format!("globalThis.{n} = function() {{ return undefined; }};\n"))
+                .collect::<String>();
+            // Fresh isolate each round: a failed shim leaves half-built globals.
+            let rt = V8JsRuntime::new().unwrap();
+            match rt.eval(&format!("{prelude}{shim}\nundefined;\n")) {
+                Ok(_) => {
+                    eprintln!("[PERF-9] shim completed after stubbing {} natives", stubs.len());
+                    break;
+                }
+                Err(e) => {
+                    let msg = format!("{e:?}");
+                    // "_lumen_foo is not defined" → stub it and go round again.
+                    // The name is embedded in a Debug-formatted string, so scan
+                    // for the marker rather than splitting on whitespace.
+                    let missing = msg.find("_lumen_").filter(|_| msg.contains("is not defined")).map(|at| {
+                        msg[at..]
+                            .chars()
+                            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                            .collect::<String>()
+                    });
+                    match missing {
+                        Some(name) => {
+                            eprintln!("[PERF-9] step {step}: needs {name}");
+                            stubs.push(name);
+                        }
+                        None => {
+                            eprintln!(
+                                "[PERF-9] stopped after {} stubs, non-missing-native failure: {msg}",
+                                stubs.len()
+                            );
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!("[PERF-9] top-level native deps ({}): {:?}", stubs.len(), stubs);
+    }
+
     #[test]
     fn eval_number() {
         assert_eq!(rt().eval("1 + 2").unwrap(), JsValue::Number(3.0));
