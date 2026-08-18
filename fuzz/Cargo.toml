@@ -1,0 +1,58 @@
+[package]
+name = "lumen-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+lumen-css-parser = { path = "../crates/engine/css-parser" }
+lumen-html-parser = { path = "../crates/engine/html-parser" }
+lumen-core = { path = "../crates/core" }
+lumen-font = { path = "../crates/engine/font" }
+lumen-image = { path = "../crates/engine/image" }
+
+# Not a member of the main workspace (TEST-1 DoD): nightly is required to run
+# the fuzzer, but must not leak into the browser's stable-toolchain build.
+[workspace]
+
+[profile.release]
+debug = true
+
+[[bin]]
+name = "fuzz_css_parser"
+path = "fuzz_targets/fuzz_css_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_html_parser"
+path = "fuzz_targets/fuzz_html_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_url"
+path = "fuzz_targets/fuzz_url.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_font"
+path = "fuzz_targets/fuzz_font.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_image"
+path = "fuzz_targets/fuzz_image.rs"
+test = false
+doc = false
+bench = false
