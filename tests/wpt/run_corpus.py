@@ -245,15 +245,23 @@ def run_shard(shard: dict, binary: str, out_dir: str, processes: int, timeout: i
             "report": os.path.relpath(report_path, REPO_ROOT) if os.path.isfile(report_path) else None}
 
 
-def score_reports(manifest: dict, out_dir: str) -> dict:
+def score_reports(manifest: dict, out_dir: str, scope: set = None) -> dict:
     """Score every automatable manifest id against whatever the shards produced.
 
     Ids with no result score 0 — that is the whole point of scoring against the
     manifest rather than against the reports.
+
+    `scope` limits the denominator to the categories that were actually part of
+    this run. Without it a 10-category pilot scores itself against all 273
+    categories and reports 0.58%, which is arithmetically true and completely
+    misleading: the other 263 categories were never asked to run. A full run
+    passes `scope=None` and gets the whole corpus, which is the real number.
     """
     expected = {}
     for test_type, category, test_id in corpus_stats.iter_ids(manifest):
         if test_type in corpus_stats.NON_AUTOMATABLE_TYPES:
+            continue
+        if scope is not None and category not in scope:
             continue
         expected[test_id] = {"type": test_type, "category": category}
 
@@ -406,7 +414,18 @@ def main() -> int:
             with open(state_path, "w", encoding="utf-8") as fh:
                 json.dump({"binary": binary, "shards": shard_states}, fh, indent=2)
 
-    scored = score_reports(manifest, args.out_dir)
+    # A run only gets to be scored against what it actually covered. The scope
+    # is derived from the shards, not from the CLI selection, so a resumed or
+    # aggregate-only run reports against the same denominator as the run that
+    # produced the shards.
+    scope = {s["name"].split(" ")[0].split("/")[0] for s in shard_states} or None
+    all_categories = {c for _t, c, _i in corpus_stats.iter_ids(manifest)}
+    if scope and scope >= all_categories:
+        scope = None
+    scored = score_reports(manifest, args.out_dir, scope)
+    if scope:
+        print(f"\nscope: {len(scope)} of {len(all_categories)} categories "
+              f"(partial run — denominator covers only what was selected)")
     print_summary(scored, shard_states)
 
     if args.run_json:
