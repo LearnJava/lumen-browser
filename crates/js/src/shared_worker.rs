@@ -369,6 +369,7 @@ fn hub_v8() -> &'static Mutex<HashMap<String, SharedWorkerThread>> {
 ///
 /// Returns the freshly-allocated, process-unique port id.
 #[cfg(feature = "v8-backend")]
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 fn connect_shared_worker_v8(key: String, script: String, outbox: SharedWorkerOutbox) -> u32 {
     let port_id = PORT_COUNTER.fetch_add(1, Ordering::Relaxed);
     let mut map = hub_v8().lock().unwrap();

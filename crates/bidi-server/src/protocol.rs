@@ -853,6 +853,7 @@ fn event_names(params: &JsonValue) -> Vec<String> {
 ///
 /// `params.referenceContext` (опц.) задаёт родителя; если указан, но не найден —
 /// ошибка `no such frame`. Эмитит `browsingContext.created`, если подписан.
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 fn bc_create(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
     if state.session_id.is_none() {
         return DispatchResult::single(make_error(Some(id), "session not created", "no active session"));

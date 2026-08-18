@@ -1172,6 +1172,7 @@ impl V8JsRuntime {
     /// `f` may borrow from the caller's stack; we block on `rx.recv()` until the
     /// JS thread executes the job, so every borrow stays live. Erasing `'_` to
     /// `'static` is sound for the same reason as in `QuickJsRuntime::run`.
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     fn run<R, F>(&self, f: F) -> R
     where
         F: FnOnce(&mut V8Inner) -> R + Send,

@@ -64,6 +64,7 @@ impl SemanticIndex {
     }
 
     /// Insert or replace the embedding for `rowid`.
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn insert(&self, rowid: i64, url: &str, title: &str, vector: Vec<f32>) {
         let mut entries = self.entries.lock().expect("SemanticIndex mutex poisoned");
         entries.retain(|e| e.rowid != rowid);
@@ -71,6 +72,7 @@ impl SemanticIndex {
     }
 
     /// Remove the embedding for `rowid`, if present. No-op if absent.
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn remove(&self, rowid: i64) {
         let mut entries = self.entries.lock().expect("SemanticIndex mutex poisoned");
         entries.retain(|e| e.rowid != rowid);
@@ -82,6 +84,7 @@ impl SemanticIndex {
     /// O(n) linear scan over all stored vectors — fine for the small
     /// in-memory index Step 3 targets; replace [`SemanticIndex`] with a real
     /// ANN index before this needs to scale past a few thousand entries.
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn nearest(&self, query: &[f32], limit: usize) -> Vec<SemanticHit> {
         let entries = self.entries.lock().expect("SemanticIndex mutex poisoned");
         let mut scored: Vec<SemanticHit> = entries

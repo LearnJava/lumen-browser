@@ -11,6 +11,10 @@
 //! Freeze (`Document::to_bytes()`) happens once, outside the measured loop:
 //! it runs at navigate-away time, not on the restore path measured here.
 
+// Файл-инструмент (бенч/пример), а не движок: `expect_used` здесь — то же самое,
+// что в тесте. Реестр исключений — docs/lint-policy.md §10.
+#![allow(clippy::expect_used)]
+
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 

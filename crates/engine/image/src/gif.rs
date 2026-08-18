@@ -272,6 +272,7 @@ impl AnimatedGif {
     ///
     /// # Errors
     /// - [`GifError::DecodeError`] — ошибка декодера или недостижимый кадр.
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn frame_image(&self, idx: usize) -> Result<Image, GifError> {
         let idx = idx.min(self.delays_cs.len().saturating_sub(1));
         let frame_bytes = (self.width as usize) * (self.height as usize) * 4;

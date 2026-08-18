@@ -60,6 +60,7 @@ impl KeyboardShortcuts {
     }
 
     /// Return all stored overrides.
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn all(&self) -> Vec<KeyboardShortcutEntry> {
         let conn = self.conn.lock().expect("shortcuts lock");
         let mut stmt = match conn
@@ -80,6 +81,7 @@ impl KeyboardShortcuts {
     }
 
     /// Return the stored override for `command`, or `None` if using default.
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn get(&self, command: &str) -> Option<KeyboardShortcutEntry> {
         let conn = self.conn.lock().expect("shortcuts lock");
         conn.query_row(
@@ -97,6 +99,7 @@ impl KeyboardShortcuts {
     }
 
     /// Save (or overwrite) a binding override for `command`.
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn set(&self, command: &str, modifier: &str, key: &str) -> Result<()> {
         let conn = self.conn.lock().expect("shortcuts lock");
         conn.execute(
@@ -110,6 +113,7 @@ impl KeyboardShortcuts {
     }
 
     /// Remove the override for `command` (reverts to compile-time default).
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn remove(&self, command: &str) -> Result<()> {
         let conn = self.conn.lock().expect("shortcuts lock");
         conn.execute(

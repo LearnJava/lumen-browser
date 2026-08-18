@@ -749,6 +749,7 @@ pub(crate) fn fetch_worker_script(provider: Option<&dyn lumen_core::ext::JsFetch
 /// Returns the unique worker ID assigned to this instance. The caller stores
 /// the ID in the JS `Worker` object and uses it for `postMessage`/`terminate`.
 #[cfg(feature = "v8-backend")]
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 fn spawn_worker_v8(
     registry: &WorkerRegistry,
     queue: &WorkerMessageQueue,

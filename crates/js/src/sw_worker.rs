@@ -432,6 +432,7 @@ const _: Duration = FETCH_TIMEOUT;
 
 /// V8 port of [`spawn_sw_worker`].
 #[cfg(feature = "v8-backend")]
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn spawn_sw_worker_v8(
     origin: String,
     scope: String,

@@ -48,6 +48,11 @@ undocumented_unsafe_blocks = "deny"
 # срабатывание, из них 66 в тестовом коде, куда исключения clippy.toml не
 # достают. Действующие точечные #[allow] перечислены в docs/lint-policy.md §10.
 panic = "deny"
+# «no expect() в проде» (следует из той же строки CLAUDE.md). Замер — 250
+# срабатываний, из них 122 в тестовом коде. Оставшиеся 128 унаследованы
+# точечными #[allow] на уровне функции, см. docs/lint-policy.md §10:
+# правило живёт для всего нового кода, а не отключено по крейтам.
+expect_used = "deny"
 
 [workspace.dependencies]
 lumen-core = { path = "crates/core" }

@@ -46,6 +46,7 @@ impl SearchProvider for SearchProviderEntry {
         &self.name
     }
 
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     fn query_url(&self, query: &str) -> Url {
         // Trait требует Url по значению — fallback на пустой URL при
         // ошибке парсинга (не должно случаться при валидном template).

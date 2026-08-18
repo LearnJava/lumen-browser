@@ -766,6 +766,7 @@ fn should_restore_session(source: &PageSource, automation_mode: bool) -> bool {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 fn run_window_mode(
     source: PageSource,
     event_sink: Arc<dyn EventSink>,
@@ -2603,6 +2604,7 @@ impl NavEntry {
     ///
     /// The caller MUST have range-checked that the source stack is non-empty;
     /// `pop` is therefore expected to succeed.
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     fn shift_history_entry(
         nav_back: &mut Vec<NavEntry>,
         nav_fwd: &mut Vec<NavEntry>,
@@ -4402,6 +4404,7 @@ const MAX_PARALLEL_FETCHES: usize = 8;
 ///
 /// `f` получает `(индекс, &элемент)` и должна быть `Sync` (вызывается из всех
 /// потоков). Паники внутри `f` не глотаются — пробрасываются при join.
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 fn parallel_map<T, R, F>(items: &[T], f: F) -> Vec<R>
 where
     T: Sync,
@@ -6243,6 +6246,7 @@ fn system_font_faces() -> Arc<lumen_paint::SystemFaceSet> {
 /// Единая точка сборки для всех layout-путей (полный / инкрементальный /
 /// restyle) — иначе системные семейства меряются по-разному в зависимости от
 /// того, есть ли на странице web-шрифты.
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 fn page_measurer(
     font: &lumen_font::Font<'static>,
     web_fonts: &[LoadedWebFont],
@@ -6269,6 +6273,7 @@ fn page_measurer(
 /// (`:hover`/`:focus`/`forced-colors`/`content-visibility` scroll) — thread-local
 /// (`lumen_layout::set_*`), поэтому вызывающая сторона обязана выставить его на
 /// **том же** потоке до вызова и сбросить после.
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 fn compute_layout(
     document: &Mutex<Document>,
     stylesheet: &lumen_css_parser::Stylesheet,
@@ -6309,6 +6314,7 @@ fn relayout_page_incremental(
 ///
 /// Same caller contract as [`compute_layout`]: thread-local interactive state
 /// must be set before the call and cleared afterwards.
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 fn compute_layout_incremental(
     document: &Mutex<Document>,
     stylesheet: &lumen_css_parser::Stylesheet,
@@ -6359,6 +6365,7 @@ fn relayout_page_incremental_restyle(
 /// BUG-341 S7: restyle-aware variant of [`compute_layout_incremental`] — see
 /// [`relayout_page_incremental_restyle`].
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 fn compute_layout_incremental_restyle(
     document: &Mutex<Document>,
     stylesheet: &lumen_css_parser::Stylesheet,
@@ -8949,6 +8956,7 @@ impl Lumen {
     /// `#findBar`/`#downloadsPanel` (CC-9), salvaged back into the tree at
     /// `#contentArea`'s former slot since they're real popovers, not preview
     /// placeholder content.
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     fn relayout_chrome_host(&mut self) {
         if self.chrome_doc.is_none() {
             return;
@@ -14048,6 +14056,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         }
     }
 
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     fn window_event(
         &mut self,
         event_loop: &ActiveEventLoop,

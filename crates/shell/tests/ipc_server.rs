@@ -9,7 +9,7 @@
 // `panic!` — штатный способ провалить тест. Исключение `allow-panic-in-tests`
 // из clippy.toml сюда не достаёт: оно освобождает только тело `#[test]`-функции,
 // а не хелперы тестового крейта. Подробности — docs/lint-policy.md §10.
-#![allow(clippy::panic)]
+#![allow(clippy::panic, clippy::expect_used)]
 
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};

@@ -301,6 +301,7 @@ impl CascadeStyles {
 impl std::ops::Index<&NodeId> for CascadeStyles {
     type Output = Arc<ComputedStyle>;
 
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     fn index(&self, id: &NodeId) -> &Arc<ComputedStyle> {
         self.get(id).expect("no cascade entry for node")
     }

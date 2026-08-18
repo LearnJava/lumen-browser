@@ -12,6 +12,10 @@
 //! Exits 0 on pass, 1 on failure. Prints a brief summary to stdout so CI
 //! logs can show the exact numbers that caused a regression.
 
+// Файл-инструмент (бенч/пример), а не движок: `expect_used` здесь — то же самое,
+// что в тесте. Реестр исключений — docs/lint-policy.md §10.
+#![allow(clippy::expect_used)]
+
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
