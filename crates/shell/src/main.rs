@@ -61,6 +61,7 @@ mod reader_view;
 mod render_thread;
 mod source_view;
 mod spellcheck;
+mod startup_trace;
 mod svg_image;
 pub mod surface;
 mod runtime;
@@ -336,6 +337,9 @@ fn main() -> ExitCode {
     // froze the whole window mid-run. No-op unless stderr really is a pipe.
     diag_stderr::install();
     let code = run_cli();
+    // PERF-12: closes the startup accounting — see `startup_trace::log_exit`.
+    // Before `diag_stderr::flush`, so the line survives the bounded wait below.
+    startup_trace::log_exit();
     // The writer thread is detached, so the tail of the log would be lost when
     // `main` returns. Bounded wait: a parent that never reads must not turn
     // process exit into a second hang.
@@ -360,6 +364,12 @@ fn run_cli() -> ExitCode {
 
     // Anchor for launch->first-frame timing (§4 score table) — before any work.
     bench_frames::mark_process_start();
+    // PERF-12: fixed-startup stopwatch. Must precede the config load and the
+    // argument parse below, which are the phases it measures; it also switches
+    // the tracer on for `--trace-nav`, so that startup lands on the timeline
+    // instead of ahead of its origin.
+    let startup = startup_trace::Startup::begin();
+    let cfg_phase = startup.phase("config-load");
     // Load the fingerprint profile (9F.1) once, before any network or JS setup.
     // Absent config → engine defaults, so behaviour is unchanged out of the box.
     let mut startup_profile = config::load().unwrap_or_default();
@@ -382,7 +392,9 @@ fn run_cli() -> ExitCode {
         startup_profile.no_persistent_state = true;
     }
     config::init_global(startup_profile);
+    drop(cfg_phase);
 
+    let arg_phase = startup.phase("arg-parse");
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (devtools_port, rest_args) = match extract_devtools_port(&args) {
         Ok(r) => r,
@@ -492,6 +504,9 @@ fn run_cli() -> ExitCode {
         }
     };
 
+    drop(arg_phase);
+    let svc_phase = startup.phase("services-init");
+
     if let Some(port) = devtools_port
         && let Err(e) = DevToolsServer::spawn(port)
     {
@@ -562,6 +577,9 @@ fn run_cli() -> ExitCode {
         Some((session_source, scroll)) => (CliMode::OpenWindow(session_source), scroll),
         None => (cli, (0.0_f32, 0.0_f32)),
     };
+
+    drop(svc_phase);
+    startup.dispatch(cli.mode_name());
 
     match cli {
         CliMode::Dump { source, kind } => run_dump_mode(&source, kind, event_sink),
@@ -1359,7 +1377,10 @@ fn run_trace_nav(
     output: &std::path::Path,
     event_sink: Arc<dyn EventSink>,
 ) -> ExitCode {
-    lumen_core::trace::enable();
+    // PERF-12: the tracer is already recording — `startup_trace::Startup::begin`
+    // switched it on at the top of `run_cli`, anchored at process creation, so
+    // that fixed startup lands on the same timeline. Re-enabling here would
+    // reset the origin and drop every span taken before dispatch.
     let render = {
         // Корневой спан всей навигации; закрывается до `finish`, поэтому попадает
         // в таймлайн как охватывающая полоса.
@@ -3767,6 +3788,27 @@ enum CliMode {
     IpcServer { port: Option<u16> },
 }
 
+impl CliMode {
+    /// Short stable label for this mode, used by the PERF-12 startup accounting
+    /// (`startup_trace::Startup::dispatch`) to name the point where fixed
+    /// startup ends and page work begins.
+    fn mode_name(&self) -> &'static str {
+        match self {
+            Self::OpenWindow(_) => "window",
+            Self::Dump { kind, .. } => match kind {
+                DumpKind::Source => "dump-source",
+                DumpKind::Layout => "dump-layout",
+                DumpKind::DisplayList => "dump-display-list",
+            },
+            Self::PrintToPdf { .. } => "print-to-pdf",
+            Self::Screenshot { .. } => "screenshot",
+            Self::TraceNav { .. } => "trace-nav",
+            Self::Mcp(_) => "mcp",
+            Self::IpcServer { .. } => "ipc-server",
+        }
+    }
+}
+
 /// Параметры MCP-режима.
 #[derive(Debug, Clone)]
 struct McpMode {
@@ -5474,7 +5516,15 @@ fn parse_and_layout(
     // local()-источники загружаются синхронно (из системного индекса, быстро).
     // url()-источники — только собираем в pending_web_fonts; фоновый поток
     // fetch+decode спавнится в apply_loaded_page → первый paint не ждёт сети.
-    let (font_registry, pending_web_fonts) = load_font_faces(&sheet.font_faces, base, sink, cookie_jar.clone());
+    let (font_registry, pending_web_fonts) = {
+        // PERF-12: this stretch — @font-face resolution through to the measurer's
+        // system faces below — was the single largest unnamed hole in the
+        // `--trace-nav` waterfall (114 ms of a 128 ms `navigation` on
+        // samples/page.html, against a `layout` span of 0.6 ms). It is dominated
+        // by the lazy system-font index build that PERF-11 caches.
+        let _s = lumen_core::trace::span("font-faces", "font");
+        load_font_faces(&sheet.font_faces, base, sink, cookie_jar.clone())
+    };
 
     // Populate document.fonts with FontFace objects from @font-face rules.
     // local() — immediately Loaded; url() — Loading (будет Loaded по FontLoaded).
@@ -5501,7 +5551,14 @@ fn parse_and_layout(
     let mut measurer = lumen_paint::MultiFontMeasurer::new(&font)
         .map_err(|e| format!("ошибка метрик шрифта: {e}"))?;
     // BUG-128: системные face-ы — те же, что выберет рендер.
-    measurer.set_system_faces(system_font_faces());
+    {
+        // PERF-11/PERF-12: `system_font_faces()` is where the lazy system font
+        // index is built on first use — hundreds of files parsed, once per
+        // process. Named separately from `font-faces` so the trace attributes
+        // the cost to the index rather than to @font-face handling.
+        let _s = lumen_core::trace::span("system-fonts", "font");
+        measurer.set_system_faces(system_font_faces());
+    }
     for rule in &sheet.font_faces {
         if !rule.family.is_empty()
             && let Some(bytes) = font_registry.face_bytes_for_family(&rule.family)

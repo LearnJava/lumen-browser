@@ -57,9 +57,9 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 
 ## lumen-bench  (6 symbols)
 
-`crates/bench/src/bfcache_restore.rs:31` **fn** `run_bfcache_bench` — Runs the bfcache-restore benchmark, prints min/med/mean/p95/max, and
-`crates/bench/src/bfcache_restore.rs:79` **fn** `median_restore_ms` — P50 for the CI gate: fewer iterations than the interactive report (speed)
-`crates/bench/src/ci_gate.rs:39` **fn** `run_ci_gate` — Run the CI performance gate
+`crates/bench/src/bfcache_restore.rs:35` **fn** `run_bfcache_bench` — Runs the bfcache-restore benchmark, prints min/med/mean/p95/max, and
+`crates/bench/src/bfcache_restore.rs:83` **fn** `median_restore_ms` — P50 for the CI gate: fewer iterations than the interactive report (speed)
+`crates/bench/src/ci_gate.rs:43` **fn** `run_ci_gate` — Run the CI performance gate
 `crates/bench/src/startup.rs:54` **fn** `run` — Точка входа: разбирает под-аргументы, гоняет бенч, печатает отчёт
 `crates/bench/src/util.rs:9` **fn** `get_rss_bytes` — Returns the current process RSS (resident set size) in bytes
 `crates/bench/src/util.rs:48` **fn** `extract_style_blocks` — Concatenates all `<style>` text blocks from the document
@@ -121,58 +121,58 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/canvas/src/lib.rs:285` **fn** `conic` — Create a conic gradient starting at `angle` (radians) around `(cx,cy)`
 `crates/engine/canvas/src/lib.rs:290` **fn** `add_color_stop` — Add a colour stop at `offset ∈ [0,1]`
 `crates/engine/canvas/src/lib.rs:296` **fn** `sample` — Sample the gradient colour at device pixel `(x, y)`
-`crates/engine/canvas/src/lib.rs:359` **enum** `RepeatMode` — Pattern repetition mode (`createPattern` second argument)
-`crates/engine/canvas/src/lib.rs:375` **struct** `CanvasPattern` — Canvas pattern object (`createPattern`)
-`crates/engine/canvas/src/lib.rs:388` **fn** `new` — Create a new pattern from RGBA8 pixel data
-`crates/engine/canvas/src/lib.rs:393` **fn** `sample` — Sample the pattern colour at device pixel `(x, y)`
-`crates/engine/canvas/src/lib.rs:425` **enum** `PaintSource` — Paint source: a solid colour, a gradient, or a pattern
-`crates/engine/canvas/src/lib.rs:440` **fn** `sample` — Sample the paint at device pixel centre `(x + 0.5, y + 0.5)`
-`crates/engine/canvas/src/lib.rs:451` **fn** `as_color_or_black` — Return the solid colour, or transparent black if this is a gradient/pattern
-`crates/engine/canvas/src/lib.rs:503` **struct** `Context2D` — HTML Canvas 2D rendering context
-`crates/engine/canvas/src/lib.rs:573` **fn** `new` — Create a new context with a transparent black buffer and identity CTM
-`crates/engine/canvas/src/lib.rs:609` **fn** `set_noise_generator` — Set the optional noise generator for fingerprint randomization
-`crates/engine/canvas/src/lib.rs:616` **fn** `get_image_data` — Get a copy of pixel data with optional noise applied (for `getImageData()`)
-`crates/engine/canvas/src/lib.rs:629` **fn** `from_pixels` — Create a context pre-filled with the given RGBA8 pixel buffer
-`crates/engine/canvas/src/lib.rs:639` **fn** `width` — Canvas width in device pixels
-`crates/engine/canvas/src/lib.rs:641` **fn** `height` — Canvas height in device pixels
-`crates/engine/canvas/src/lib.rs:644` **fn** `color_space` — Canvas color space (sRGB, Display P3, or Rec2020)
-`crates/engine/canvas/src/lib.rs:647` **fn** `set_color_space` — Set the canvas color space for wide-gamut image handling
-`crates/engine/canvas/src/lib.rs:650` **fn** `pixels` — Raw RGBA8 pixel data (no noise applied)
-`crates/engine/canvas/src/lib.rs:653` **fn** `resize` — Resize the canvas (clears the buffer and resets the CTM to identity)
-`crates/engine/canvas/src/lib.rs:664` **fn** `scale_resize` — Resize the canvas by scaling existing pixels to the new dimensions (nearest-neighbour)
-`crates/engine/canvas/src/lib.rs:696` **fn** `save` — `save()` — push the current drawing state onto the stack
-`crates/engine/canvas/src/lib.rs:721` **fn** `restore` — `restore()` — pop and restore the most recently saved drawing state
-`crates/engine/canvas/src/lib.rs:746` **fn** `translate` — `translate(tx, ty)` — apply a translation to the current CTM
-`crates/engine/canvas/src/lib.rs:753` **fn** `rotate` — `rotate(angle)` — rotate by `angle` radians clockwise around the origin
-`crates/engine/canvas/src/lib.rs:760` **fn** `scale` — `scale(sx, sy)` — apply a uniform or non-uniform scale
-`crates/engine/canvas/src/lib.rs:768` **fn** `transform` — `transform(a, b, c, d, e, f)` — post-multiply the CTM by the given matrix
-`crates/engine/canvas/src/lib.rs:781` **fn** `set_transform` — `setTransform(a, b, c, d, e, f)` — replace the CTM with the given matrix
-`crates/engine/canvas/src/lib.rs:786` **fn** `reset_transform` — `resetTransform()` — reset the CTM to the identity matrix
-`crates/engine/canvas/src/lib.rs:804` **fn** `clear_rect` — `clearRect(x, y, w, h)` — erase region to transparent black
-`crates/engine/canvas/src/lib.rs:822` **fn** `fill_rect` — `fillRect(x, y, w, h)` — fill region with current `fillStyle`
-`crates/engine/canvas/src/lib.rs:832` **fn** `stroke_rect` — `strokeRect(x, y, w, h)` — stroke the outline of a rectangle
-`crates/engine/canvas/src/lib.rs:843` **fn** `begin_path` — `beginPath()` — discard current path
-`crates/engine/canvas/src/lib.rs:849` **fn** `move_to` — `moveTo(x, y)` — start a new sub-path at user-space `(x, y)`
-`crates/engine/canvas/src/lib.rs:857` **fn** `line_to` — `lineTo(x, y)` — add a line segment from pen to `(x, y)`
-`crates/engine/canvas/src/lib.rs:869` **fn** `close_path` — `closePath()` — add a line back to the current sub-path start
-`crates/engine/canvas/src/lib.rs:880` **fn** `bezier_curve_to` — `bezierCurveTo(cp1x, cp1y, cp2x, cp2y, x, y)` — cubic Bézier from pen
-`crates/engine/canvas/src/lib.rs:901` **fn** `quadratic_curve_to` — `quadraticCurveTo(cpx, cpy, x, y)` — quadratic Bézier from pen
-`crates/engine/canvas/src/lib.rs:914` **fn** `arc` — `arc(cx, cy, r, startAngle, endAngle[, anticlockwise])` — add circular arc
-`crates/engine/canvas/src/lib.rs:937` **fn** `ellipse` — `ellipse(cx, cy, rx, ry, rotation, startAngle, endAngle[, anticlockwise])`
-`crates/engine/canvas/src/lib.rs:984` **fn** `arc_to` — `arcTo(x1, y1, x2, y2, radius)` — tangent arc between two lines
-`crates/engine/canvas/src/lib.rs:1034` **fn** `rect` — `rect(x, y, w, h)` — add a closed rectangle sub-path
-`crates/engine/canvas/src/lib.rs:1043` **fn** `fill` — `fill()` — fill the current path with `fillStyle`
-`crates/engine/canvas/src/lib.rs:1056` **fn** `stroke` — `stroke()` — stroke the current path with `strokeStyle`
-`crates/engine/canvas/src/lib.rs:1083` **fn** `clip` — `clip()` — intersect the current clipping region with the current path (even-odd rule)
-`crates/engine/canvas/src/lib.rs:1097` **fn** `fill_with_path2d` — `fill(path2d)` — fill a `Path2D` object using the current `fillStyle`
-`crates/engine/canvas/src/lib.rs:1112` **fn** `stroke_with_path2d` — `stroke(path2d)` — stroke a `Path2D` object using the current `strokeStyle`
-`crates/engine/canvas/src/lib.rs:1128` **fn** `clip_with_path2d` — `clip(path2d)` — intersect the clipping region with a `Path2D` object (even-odd rule)
-`crates/engine/canvas/src/lib.rs:1141` **fn** `is_point_in_path2d` — `isPointInPath(path2d, x, y)` — test whether `(x, y)` lies inside a `Path2D`
-`crates/engine/canvas/src/lib.rs:1160` **fn** `draw_image` — `drawImage(src_pixels, src_w, src_h, dx, dy, dw, dh)` — blit source image onto canvas
-`crates/engine/canvas/src/lib.rs:1185` **fn** `draw_image_cropped` — `drawImage(src, sx, sy, sw, sh, dx, dy, dw, dh)` — the 9-argument form with
-`crates/engine/canvas/src/lib.rs:1245` **fn** `put_image_data` — `putImageData(data, sw, sh, dx, dy)` — write RGBA8 pixel data directly to canvas
-`crates/engine/canvas/src/lib.rs:1268` **fn** `create_image_data` — `createImageData(sw, sh)` — return a zero-filled RGBA8 buffer of `sw × sh` pixels
-`crates/engine/canvas/src/lib.rs:1278` **fn** `fill_text_glyphs` — Draw pre-rasterized glyph bitmaps at text position
+`crates/engine/canvas/src/lib.rs:360` **enum** `RepeatMode` — Pattern repetition mode (`createPattern` second argument)
+`crates/engine/canvas/src/lib.rs:376` **struct** `CanvasPattern` — Canvas pattern object (`createPattern`)
+`crates/engine/canvas/src/lib.rs:389` **fn** `new` — Create a new pattern from RGBA8 pixel data
+`crates/engine/canvas/src/lib.rs:394` **fn** `sample` — Sample the pattern colour at device pixel `(x, y)`
+`crates/engine/canvas/src/lib.rs:426` **enum** `PaintSource` — Paint source: a solid colour, a gradient, or a pattern
+`crates/engine/canvas/src/lib.rs:441` **fn** `sample` — Sample the paint at device pixel centre `(x + 0.5, y + 0.5)`
+`crates/engine/canvas/src/lib.rs:452` **fn** `as_color_or_black` — Return the solid colour, or transparent black if this is a gradient/pattern
+`crates/engine/canvas/src/lib.rs:504` **struct** `Context2D` — HTML Canvas 2D rendering context
+`crates/engine/canvas/src/lib.rs:574` **fn** `new` — Create a new context with a transparent black buffer and identity CTM
+`crates/engine/canvas/src/lib.rs:610` **fn** `set_noise_generator` — Set the optional noise generator for fingerprint randomization
+`crates/engine/canvas/src/lib.rs:617` **fn** `get_image_data` — Get a copy of pixel data with optional noise applied (for `getImageData()`)
+`crates/engine/canvas/src/lib.rs:630` **fn** `from_pixels` — Create a context pre-filled with the given RGBA8 pixel buffer
+`crates/engine/canvas/src/lib.rs:640` **fn** `width` — Canvas width in device pixels
+`crates/engine/canvas/src/lib.rs:642` **fn** `height` — Canvas height in device pixels
+`crates/engine/canvas/src/lib.rs:645` **fn** `color_space` — Canvas color space (sRGB, Display P3, or Rec2020)
+`crates/engine/canvas/src/lib.rs:648` **fn** `set_color_space` — Set the canvas color space for wide-gamut image handling
+`crates/engine/canvas/src/lib.rs:651` **fn** `pixels` — Raw RGBA8 pixel data (no noise applied)
+`crates/engine/canvas/src/lib.rs:654` **fn** `resize` — Resize the canvas (clears the buffer and resets the CTM to identity)
+`crates/engine/canvas/src/lib.rs:665` **fn** `scale_resize` — Resize the canvas by scaling existing pixels to the new dimensions (nearest-neighbour)
+`crates/engine/canvas/src/lib.rs:697` **fn** `save` — `save()` — push the current drawing state onto the stack
+`crates/engine/canvas/src/lib.rs:722` **fn** `restore` — `restore()` — pop and restore the most recently saved drawing state
+`crates/engine/canvas/src/lib.rs:747` **fn** `translate` — `translate(tx, ty)` — apply a translation to the current CTM
+`crates/engine/canvas/src/lib.rs:754` **fn** `rotate` — `rotate(angle)` — rotate by `angle` radians clockwise around the origin
+`crates/engine/canvas/src/lib.rs:761` **fn** `scale` — `scale(sx, sy)` — apply a uniform or non-uniform scale
+`crates/engine/canvas/src/lib.rs:769` **fn** `transform` — `transform(a, b, c, d, e, f)` — post-multiply the CTM by the given matrix
+`crates/engine/canvas/src/lib.rs:782` **fn** `set_transform` — `setTransform(a, b, c, d, e, f)` — replace the CTM with the given matrix
+`crates/engine/canvas/src/lib.rs:787` **fn** `reset_transform` — `resetTransform()` — reset the CTM to the identity matrix
+`crates/engine/canvas/src/lib.rs:805` **fn** `clear_rect` — `clearRect(x, y, w, h)` — erase region to transparent black
+`crates/engine/canvas/src/lib.rs:823` **fn** `fill_rect` — `fillRect(x, y, w, h)` — fill region with current `fillStyle`
+`crates/engine/canvas/src/lib.rs:833` **fn** `stroke_rect` — `strokeRect(x, y, w, h)` — stroke the outline of a rectangle
+`crates/engine/canvas/src/lib.rs:844` **fn** `begin_path` — `beginPath()` — discard current path
+`crates/engine/canvas/src/lib.rs:850` **fn** `move_to` — `moveTo(x, y)` — start a new sub-path at user-space `(x, y)`
+`crates/engine/canvas/src/lib.rs:858` **fn** `line_to` — `lineTo(x, y)` — add a line segment from pen to `(x, y)`
+`crates/engine/canvas/src/lib.rs:870` **fn** `close_path` — `closePath()` — add a line back to the current sub-path start
+`crates/engine/canvas/src/lib.rs:881` **fn** `bezier_curve_to` — `bezierCurveTo(cp1x, cp1y, cp2x, cp2y, x, y)` — cubic Bézier from pen
+`crates/engine/canvas/src/lib.rs:902` **fn** `quadratic_curve_to` — `quadraticCurveTo(cpx, cpy, x, y)` — quadratic Bézier from pen
+`crates/engine/canvas/src/lib.rs:915` **fn** `arc` — `arc(cx, cy, r, startAngle, endAngle[, anticlockwise])` — add circular arc
+`crates/engine/canvas/src/lib.rs:938` **fn** `ellipse` — `ellipse(cx, cy, rx, ry, rotation, startAngle, endAngle[, anticlockwise])`
+`crates/engine/canvas/src/lib.rs:985` **fn** `arc_to` — `arcTo(x1, y1, x2, y2, radius)` — tangent arc between two lines
+`crates/engine/canvas/src/lib.rs:1035` **fn** `rect` — `rect(x, y, w, h)` — add a closed rectangle sub-path
+`crates/engine/canvas/src/lib.rs:1044` **fn** `fill` — `fill()` — fill the current path with `fillStyle`
+`crates/engine/canvas/src/lib.rs:1057` **fn** `stroke` — `stroke()` — stroke the current path with `strokeStyle`
+`crates/engine/canvas/src/lib.rs:1084` **fn** `clip` — `clip()` — intersect the current clipping region with the current path (even-odd rule)
+`crates/engine/canvas/src/lib.rs:1098` **fn** `fill_with_path2d` — `fill(path2d)` — fill a `Path2D` object using the current `fillStyle`
+`crates/engine/canvas/src/lib.rs:1113` **fn** `stroke_with_path2d` — `stroke(path2d)` — stroke a `Path2D` object using the current `strokeStyle`
+`crates/engine/canvas/src/lib.rs:1129` **fn** `clip_with_path2d` — `clip(path2d)` — intersect the clipping region with a `Path2D` object (even-odd rule)
+`crates/engine/canvas/src/lib.rs:1142` **fn** `is_point_in_path2d` — `isPointInPath(path2d, x, y)` — test whether `(x, y)` lies inside a `Path2D`
+`crates/engine/canvas/src/lib.rs:1161` **fn** `draw_image` — `drawImage(src_pixels, src_w, src_h, dx, dy, dw, dh)` — blit source image onto canvas
+`crates/engine/canvas/src/lib.rs:1186` **fn** `draw_image_cropped` — `drawImage(src, sx, sy, sw, sh, dx, dy, dw, dh)` — the 9-argument form with
+`crates/engine/canvas/src/lib.rs:1246` **fn** `put_image_data` — `putImageData(data, sw, sh, dx, dy)` — write RGBA8 pixel data directly to canvas
+`crates/engine/canvas/src/lib.rs:1269` **fn** `create_image_data` — `createImageData(sw, sh)` — return a zero-filled RGBA8 buffer of `sw × sh` pixels
+`crates/engine/canvas/src/lib.rs:1279` **fn** `fill_text_glyphs` — Draw pre-rasterized glyph bitmaps at text position
 `crates/engine/canvas/src/path.rs:3` **enum** `PathSegment` — A single segment in a 2D path (HTML Canvas 2D §4.12.4)
 `crates/engine/canvas/src/path.rs:16` **type** `PathCommand` — Alias kept for API symmetry with the HTML spec (`PathCommand` = verb)
 `crates/engine/canvas/src/path2d.rs:14` **struct** `Path2dData` — A reusable 2D path object independent of any rendering context
@@ -228,10 +228,10 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/chrome/src/model.rs:664` **fn** `bind_model` — Binds `model` into `doc`: `data-theme`/`data-layout`/`data-profile` on
 `crates/chrome/src/model.rs:726` **fn** `bind_model_tracked` — Like [`bind_model`], but also reports what the call actually changed, split
 
-## lumen-core  (293 symbols)
+## lumen-core  (295 symbols)
 
-`crates/core/src/auth.rs:20` **fn** `generate_token` — Generate a fresh per-run authentication token
-`crates/core/src/auth.rs:36` **fn** `tokens_match` — Constant-time token comparison
+`crates/core/src/auth.rs:21` **fn** `generate_token` — Generate a fresh per-run authentication token
+`crates/core/src/auth.rs:37` **fn** `tokens_match` — Constant-time token comparison
 `crates/core/src/capability.rs:7` **enum** `Capability`
 `crates/core/src/capability.rs:27` **struct** `CapabilityToken`
 `crates/core/src/color.rs:4` **enum** `ColorSpace` — Цветовое пространство изображения и canvas
@@ -322,77 +322,77 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/core/src/ext.rs:1791` **struct** `JsFetchBody` — Request body of a JS-issued request: MIME type plus raw bytes
 `crates/core/src/ext.rs:1806` **struct** `JsFetchRequest` — One request issued by page JS (`fetch()` / `XMLHttpRequest`), with every
 `crates/core/src/ext.rs:1830` **trait** `JsFetchProvider` — Synchronous HTTP fetch bridge for the JS runtime
-`crates/core/src/ext.rs:1988` **struct** `AbortToken` — A cheaply-clonable cooperative cancellation flag for aborting in-flight fetches
-`crates/core/src/ext.rs:1997` **fn** `new` — Creates a new, non-aborted `AbortToken`
-`crates/core/src/ext.rs:2007` **fn** `abort` — Signals abortion by setting the internal flag to `true`
-`crates/core/src/ext.rs:2015` **fn** `is_aborted` — Returns whether this token has been aborted
-`crates/core/src/ext.rs:2077` **struct** `SseCancel` — An interruptible-delay handle shared across threads
-`crates/core/src/ext.rs:2083` **fn** `new` — Creates a new, not-yet-cancelled handle
-`crates/core/src/ext.rs:2090` **fn** `signal` — Signals cancellation and wakes any thread parked in [`sleep`](Self::sleep)
-`crates/core/src/ext.rs:2098` **fn** `is_cancelled` — Returns whether cancellation has been signalled
-`crates/core/src/ext.rs:2107` **fn** `sleep` — Blocks up to `dur`, returning early if cancellation is signalled
-`crates/core/src/ext.rs:2176` **trait** `ClipboardProvider` — Synchronous access to the host platform clipboard for the JS runtime
-`crates/core/src/ext.rs:2197` **enum** `WebAuthnError` — Failure reason from a [`CredentialProvider`] operation
-`crates/core/src/ext.rs:2215` **fn** `dom_exception_name` — The `DOMException` name `lumen-js` should reject the promise with
-`crates/core/src/ext.rs:2231` **struct** `WebAuthnCreateRequest` — A WebAuthn credential-creation (registration) request
-`crates/core/src/ext.rs:2261` **struct** `WebAuthnCreateResponse` — The result of a successful [`CredentialProvider::create`]
-`crates/core/src/ext.rs:2284` **struct** `WebAuthnGetRequest` — A WebAuthn assertion (authentication) request
-`crates/core/src/ext.rs:2301` **struct** `WebAuthnGetResponse` — The result of a successful [`CredentialProvider::get`]
-`crates/core/src/ext.rs:2331` **trait** `CredentialProvider` — Provider of WebAuthn / passkey credentials, backing `navigator.credentials`
-`crates/core/src/ext.rs:2351` **enum** `JsWsEvent` — A single queued event from a WebSocket connection, ready for delivery to JS
-`crates/core/src/ext.rs:2381` **trait** `JsWebSocketSession` — A live WebSocket connection from the JS runtime's perspective
-`crates/core/src/ext.rs:2400` **trait** `JsWebSocketProvider` — Factory that opens WebSocket connections for the JS runtime
-`crates/core/src/ext.rs:2437` **enum** `IdbSchemaOp` — Persistence boundary for the IndexedDB JS shim
-`crates/core/src/ext.rs:2500` **enum** `IdbRecordOp` — A record-level operation against one object store, executed within a
-`crates/core/src/ext.rs:2577` **enum** `IdbOpResult` — Result of executing a single [`IdbRecordOp`]
-`crates/core/src/ext.rs:2588` **trait** `IdbBackend`
-`crates/core/src/ext.rs:2645` **trait** `SwBackend` — Per-origin Service Worker registration persistence
-`crates/core/src/ext.rs:2667` **trait** `CacheBackend` — Per-origin Cache API persistence (W3C Service Worker spec §cache-objects)
-`crates/core/src/ext.rs:2700` **enum** `ClockMode` — Clock mode for deterministic testing (BrowserSession::set_clock, 8F.1)
-`crates/core/src/ext.rs:2724` **trait** `BrowserSession` — Browser automation session — unified interface for in-process tests, MCP agents,
-`crates/core/src/ext.rs:2859` **struct** `NullBrowserSession` — Null implementation of `BrowserSession` — all methods return `NotImplemented`
-`crates/core/src/ext.rs:2968` **enum** `MemoryPressureLevel` — OS memory pressure level (ADR-008, task 10H)
-`crates/core/src/ext.rs:2988` **trait** `MemoryPressureSource` — Source of OS memory pressure signals (ADR-008, task 10H)
-`crates/core/src/ext.rs:2995` **struct** `NullMemoryPressureSource` — Null implementation — always reports `Low`. For tests and platforms without
-`crates/core/src/ext.rs:3017` **trait** `EvictableCache` — Common interface for all cross-tab shared memory caches (ADR-008, task 10D.3)
-`crates/core/src/ext.rs:3051` **struct** `CacheRegistry` — Registry of all cross-tab shared memory caches (ADR-008, task 10D.3)
-`crates/core/src/ext.rs:3057` **fn** `new` — Create an empty registry
-`crates/core/src/ext.rs:3062` **fn** `register` — Register a cache. Caches are notified in registration order
-`crates/core/src/ext.rs:3067` **fn** `broadcast_pressure` — Broadcast a memory pressure event to all registered caches
-`crates/core/src/ext.rs:3074` **fn** `total_used_bytes` — Total memory currently used across all registered caches, in bytes
-`crates/core/src/ext.rs:3082` **fn** `total_budget_bytes` — Total memory budget across all caches with a finite budget, in bytes
-`crates/core/src/ext.rs:3091` **fn** `clear_all` — Evict all entries in every registered cache
-`crates/core/src/ext.rs:3098` **fn** `len` — Number of registered caches
-`crates/core/src/ext.rs:3103` **fn** `is_empty` — `true` if no caches are registered
-`crates/core/src/ext.rs:3568` **struct** `KnowledgeHistoryHit` — Result of a full-text history search. Mirrors `lumen_knowledge::SearchHit`
-`crates/core/src/ext.rs:3584` **struct** `KnowledgeNoteHit` — Result of a full-text notes search
-`crates/core/src/ext.rs:3601` **struct** `KnowledgeReadLaterHit` — Result of a full-text read-later search
-`crates/core/src/ext.rs:3616` **struct** `KnowledgeTabHit` — Result of a live open-tabs search
-`crates/core/src/ext.rs:3637` **trait** `KnowledgeStore` — Unified knowledge-store interface covering the §12 feature set:
-`crates/core/src/ext.rs:3802` **trait** `AiBackend` — Synchronous AI inference backend for the sidebar AI assistant (§12.8)
-`crates/core/src/ext.rs:3834` **struct** `NullAiBackend` — Null AI backend — always returns an informational stub
-`crates/core/src/ext.rs:3882` **struct** `AudioDeviceDescriptor` — Describes a single audio input or output device available on the host platform
-`crates/core/src/ext.rs:3904` **struct** `AudioCaptureConfig` — Constraints forwarded from JS `getUserMedia({audio: {…}})`
-`crates/core/src/ext.rs:3921` **enum** `AudioCaptureError` — Errors returned by [`AudioCaptureProvider::capture`]
-`crates/core/src/ext.rs:3937` **trait** `AudioCaptureHandle` — Live audio capture stream returned by [`AudioCaptureProvider::capture`]
-`crates/core/src/ext.rs:3965` **trait** `AudioCaptureProvider` — Platform audio capture backend backing `navigator.mediaDevices.getUserMedia({audio})`
-`crates/core/src/ext.rs:3985` **struct** `NullAudioCaptureProvider` — Stub `AudioCaptureProvider` that returns zero devices and always rejects capture
-`crates/core/src/ext.rs:4036` **struct** `ScreenSourceDescriptor` — Describes a capturable screen source (monitor or application window)
-`crates/core/src/ext.rs:4053` **struct** `ScreenCaptureConfig` — Constraints forwarded from JS `getDisplayMedia({video: {…}})`
-`crates/core/src/ext.rs:4066` **enum** `ScreenCaptureError` — Errors returned by [`ScreenCaptureProvider::capture`]
-`crates/core/src/ext.rs:4076` **struct** `VideoFrame` — Single captured video frame (raw RGBA pixels, top-to-bottom row-major)
-`crates/core/src/ext.rs:4089` **trait** `ScreenCaptureHandle` — Live screen capture session returned by [`ScreenCaptureProvider::capture`]
-`crates/core/src/ext.rs:4114` **trait** `ScreenCaptureProvider` — Platform screen capture backend backing `navigator.mediaDevices.getDisplayMedia`
-`crates/core/src/ext.rs:4129` **struct** `NullScreenCaptureProvider` — Stub `ScreenCaptureProvider` that returns zero sources and always rejects capture
-`crates/core/src/ext.rs:4184` **trait** `AudioPlaybackProvider` — Platform audio playback backend backing `HTMLAudioElement` (PH3-11)
-`crates/core/src/ext.rs:4253` **struct** `NullAudioPlaybackProvider` — Stub `AudioPlaybackProvider` installed when no real audio backend is available
-`crates/core/src/ext.rs:4282` **trait** `WakeLockProvider` — Platform provider for Screen Wake Lock API (W3C Screen Wake Lock Level 1)
-`crates/core/src/ext.rs:4298` **struct** `NullWakeLockProvider` — Stub provider used in tests and headless mode
-`crates/core/src/ext.rs:4315` **trait** `DisplayColorProfile` — Цветовой профиль активного дисплея (OS level)
-`crates/core/src/ext.rs:4325` **struct** `NullDisplayColorProfile` — No-op: всегда возвращает `ColorSpace::Srgb`
-`crates/core/src/ext.rs:4438` **struct** `SwFetchRequest` — Message sent from the main thread to a Service Worker execution thread
-`crates/core/src/ext.rs:4453` **struct** `SwWorkerHandle` — Opaque handle to a running Service Worker execution thread
-`crates/core/src/ext.rs:4466` **type** `SwWorkerStore` — Map from `(origin, scope)` to live SW worker handles
+`crates/core/src/ext.rs:2005` **struct** `AbortToken` — A cheaply-clonable cooperative cancellation flag for aborting in-flight fetches
+`crates/core/src/ext.rs:2014` **fn** `new` — Creates a new, non-aborted `AbortToken`
+`crates/core/src/ext.rs:2024` **fn** `abort` — Signals abortion by setting the internal flag to `true`
+`crates/core/src/ext.rs:2032` **fn** `is_aborted` — Returns whether this token has been aborted
+`crates/core/src/ext.rs:2094` **struct** `SseCancel` — An interruptible-delay handle shared across threads
+`crates/core/src/ext.rs:2100` **fn** `new` — Creates a new, not-yet-cancelled handle
+`crates/core/src/ext.rs:2108` **fn** `signal` — Signals cancellation and wakes any thread parked in [`sleep`](Self::sleep)
+`crates/core/src/ext.rs:2117` **fn** `is_cancelled` — Returns whether cancellation has been signalled
+`crates/core/src/ext.rs:2127` **fn** `sleep` — Blocks up to `dur`, returning early if cancellation is signalled
+`crates/core/src/ext.rs:2196` **trait** `ClipboardProvider` — Synchronous access to the host platform clipboard for the JS runtime
+`crates/core/src/ext.rs:2217` **enum** `WebAuthnError` — Failure reason from a [`CredentialProvider`] operation
+`crates/core/src/ext.rs:2235` **fn** `dom_exception_name` — The `DOMException` name `lumen-js` should reject the promise with
+`crates/core/src/ext.rs:2251` **struct** `WebAuthnCreateRequest` — A WebAuthn credential-creation (registration) request
+`crates/core/src/ext.rs:2281` **struct** `WebAuthnCreateResponse` — The result of a successful [`CredentialProvider::create`]
+`crates/core/src/ext.rs:2304` **struct** `WebAuthnGetRequest` — A WebAuthn assertion (authentication) request
+`crates/core/src/ext.rs:2321` **struct** `WebAuthnGetResponse` — The result of a successful [`CredentialProvider::get`]
+`crates/core/src/ext.rs:2351` **trait** `CredentialProvider` — Provider of WebAuthn / passkey credentials, backing `navigator.credentials`
+`crates/core/src/ext.rs:2371` **enum** `JsWsEvent` — A single queued event from a WebSocket connection, ready for delivery to JS
+`crates/core/src/ext.rs:2401` **trait** `JsWebSocketSession` — A live WebSocket connection from the JS runtime's perspective
+`crates/core/src/ext.rs:2420` **trait** `JsWebSocketProvider` — Factory that opens WebSocket connections for the JS runtime
+`crates/core/src/ext.rs:2457` **enum** `IdbSchemaOp` — Persistence boundary for the IndexedDB JS shim
+`crates/core/src/ext.rs:2520` **enum** `IdbRecordOp` — A record-level operation against one object store, executed within a
+`crates/core/src/ext.rs:2597` **enum** `IdbOpResult` — Result of executing a single [`IdbRecordOp`]
+`crates/core/src/ext.rs:2608` **trait** `IdbBackend`
+`crates/core/src/ext.rs:2665` **trait** `SwBackend` — Per-origin Service Worker registration persistence
+`crates/core/src/ext.rs:2687` **trait** `CacheBackend` — Per-origin Cache API persistence (W3C Service Worker spec §cache-objects)
+`crates/core/src/ext.rs:2720` **enum** `ClockMode` — Clock mode for deterministic testing (BrowserSession::set_clock, 8F.1)
+`crates/core/src/ext.rs:2744` **trait** `BrowserSession` — Browser automation session — unified interface for in-process tests, MCP agents,
+`crates/core/src/ext.rs:2879` **struct** `NullBrowserSession` — Null implementation of `BrowserSession` — all methods return `NotImplemented`
+`crates/core/src/ext.rs:2988` **enum** `MemoryPressureLevel` — OS memory pressure level (ADR-008, task 10H)
+`crates/core/src/ext.rs:3008` **trait** `MemoryPressureSource` — Source of OS memory pressure signals (ADR-008, task 10H)
+`crates/core/src/ext.rs:3015` **struct** `NullMemoryPressureSource` — Null implementation — always reports `Low`. For tests and platforms without
+`crates/core/src/ext.rs:3037` **trait** `EvictableCache` — Common interface for all cross-tab shared memory caches (ADR-008, task 10D.3)
+`crates/core/src/ext.rs:3071` **struct** `CacheRegistry` — Registry of all cross-tab shared memory caches (ADR-008, task 10D.3)
+`crates/core/src/ext.rs:3077` **fn** `new` — Create an empty registry
+`crates/core/src/ext.rs:3082` **fn** `register` — Register a cache. Caches are notified in registration order
+`crates/core/src/ext.rs:3087` **fn** `broadcast_pressure` — Broadcast a memory pressure event to all registered caches
+`crates/core/src/ext.rs:3094` **fn** `total_used_bytes` — Total memory currently used across all registered caches, in bytes
+`crates/core/src/ext.rs:3102` **fn** `total_budget_bytes` — Total memory budget across all caches with a finite budget, in bytes
+`crates/core/src/ext.rs:3111` **fn** `clear_all` — Evict all entries in every registered cache
+`crates/core/src/ext.rs:3118` **fn** `len` — Number of registered caches
+`crates/core/src/ext.rs:3123` **fn** `is_empty` — `true` if no caches are registered
+`crates/core/src/ext.rs:3592` **struct** `KnowledgeHistoryHit` — Result of a full-text history search. Mirrors `lumen_knowledge::SearchHit`
+`crates/core/src/ext.rs:3608` **struct** `KnowledgeNoteHit` — Result of a full-text notes search
+`crates/core/src/ext.rs:3625` **struct** `KnowledgeReadLaterHit` — Result of a full-text read-later search
+`crates/core/src/ext.rs:3640` **struct** `KnowledgeTabHit` — Result of a live open-tabs search
+`crates/core/src/ext.rs:3661` **trait** `KnowledgeStore` — Unified knowledge-store interface covering the §12 feature set:
+`crates/core/src/ext.rs:3826` **trait** `AiBackend` — Synchronous AI inference backend for the sidebar AI assistant (§12.8)
+`crates/core/src/ext.rs:3858` **struct** `NullAiBackend` — Null AI backend — always returns an informational stub
+`crates/core/src/ext.rs:3906` **struct** `AudioDeviceDescriptor` — Describes a single audio input or output device available on the host platform
+`crates/core/src/ext.rs:3928` **struct** `AudioCaptureConfig` — Constraints forwarded from JS `getUserMedia({audio: {…}})`
+`crates/core/src/ext.rs:3945` **enum** `AudioCaptureError` — Errors returned by [`AudioCaptureProvider::capture`]
+`crates/core/src/ext.rs:3961` **trait** `AudioCaptureHandle` — Live audio capture stream returned by [`AudioCaptureProvider::capture`]
+`crates/core/src/ext.rs:3989` **trait** `AudioCaptureProvider` — Platform audio capture backend backing `navigator.mediaDevices.getUserMedia({audio})`
+`crates/core/src/ext.rs:4009` **struct** `NullAudioCaptureProvider` — Stub `AudioCaptureProvider` that returns zero devices and always rejects capture
+`crates/core/src/ext.rs:4060` **struct** `ScreenSourceDescriptor` — Describes a capturable screen source (monitor or application window)
+`crates/core/src/ext.rs:4077` **struct** `ScreenCaptureConfig` — Constraints forwarded from JS `getDisplayMedia({video: {…}})`
+`crates/core/src/ext.rs:4090` **enum** `ScreenCaptureError` — Errors returned by [`ScreenCaptureProvider::capture`]
+`crates/core/src/ext.rs:4100` **struct** `VideoFrame` — Single captured video frame (raw RGBA pixels, top-to-bottom row-major)
+`crates/core/src/ext.rs:4113` **trait** `ScreenCaptureHandle` — Live screen capture session returned by [`ScreenCaptureProvider::capture`]
+`crates/core/src/ext.rs:4138` **trait** `ScreenCaptureProvider` — Platform screen capture backend backing `navigator.mediaDevices.getDisplayMedia`
+`crates/core/src/ext.rs:4153` **struct** `NullScreenCaptureProvider` — Stub `ScreenCaptureProvider` that returns zero sources and always rejects capture
+`crates/core/src/ext.rs:4208` **trait** `AudioPlaybackProvider` — Platform audio playback backend backing `HTMLAudioElement` (PH3-11)
+`crates/core/src/ext.rs:4277` **struct** `NullAudioPlaybackProvider` — Stub `AudioPlaybackProvider` installed when no real audio backend is available
+`crates/core/src/ext.rs:4306` **trait** `WakeLockProvider` — Platform provider for Screen Wake Lock API (W3C Screen Wake Lock Level 1)
+`crates/core/src/ext.rs:4322` **struct** `NullWakeLockProvider` — Stub provider used in tests and headless mode
+`crates/core/src/ext.rs:4339` **trait** `DisplayColorProfile` — Цветовой профиль активного дисплея (OS level)
+`crates/core/src/ext.rs:4349` **struct** `NullDisplayColorProfile` — No-op: всегда возвращает `ColorSpace::Srgb`
+`crates/core/src/ext.rs:4462` **struct** `SwFetchRequest` — Message sent from the main thread to a Service Worker execution thread
+`crates/core/src/ext.rs:4477` **struct** `SwWorkerHandle` — Opaque handle to a running Service Worker execution thread
+`crates/core/src/ext.rs:4490` **type** `SwWorkerStore` — Map from `(origin, scope)` to live SW worker handles
 `crates/core/src/form.rs:15` **struct** `FormEntry` — Запись формы — пара (name, value) с опциональным filename (для multipart)
 `crates/core/src/form.rs:21` **enum** `FormValue`
 `crates/core/src/form.rs:33` **fn** `text`
@@ -471,7 +471,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/core/src/profile.rs:137` **struct** `ScopeGuard` — RAII guard returned by [`scope`]. Records elapsed time into the
 `crates/core/src/profile.rs:147` **fn** `scope` — Opens a named profiling scope for the current thread. Returns a guard
 `crates/core/src/profile.rs:164` **fn** `scope_detail` — Like [`scope`], but additionally requires `LUMEN_PROFILE_DETAIL=1`
-`crates/core/src/punycode.rs:49` **fn** `encode` — Кодирует Unicode-строку в Punycode согласно RFC 3492
+`crates/core/src/punycode.rs:50` **fn** `encode` — Кодирует Unicode-строку в Punycode согласно RFC 3492
 `crates/core/src/sandbox.rs:22` **struct** `SandboxFlags` — Битовое поле sandbox-ограничений. Конкретный бит == «**запрет** этой
 `crates/core/src/sandbox.rs:67` **fn** `empty` — Пустой набор — sandbox не активен (без ограничений)
 `crates/core/src/sandbox.rs:73` **fn** `all_restrictions` — Все ограничения активны — стартовое состояние для `<iframe sandbox>`
@@ -494,14 +494,16 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/core/src/sri.rs:193` **trait** `DigestProvider` — Trait для подключения hash-implementaции извне
 `crates/core/src/sri.rs:200` **enum** `SriError`
 `crates/core/src/sri.rs:218` **type** `SriResult`
-`crates/core/src/trace.rs:107` **fn** `enable` — Starts recording. Installs a fresh time origin and clears any previous
-`crates/core/src/trace.rs:117` **fn** `enabled` — Whether the tracer is currently recording. A single relaxed atomic load;
-`crates/core/src/trace.rs:128` **fn** `span` — Opens a complete ("X") span with the given name and category. The span ends
-`crates/core/src/trace.rs:145` **fn** `instant` — Records a zero-duration instant marker ("i" event) at the current time —
-`crates/core/src/trace.rs:168` **fn** `finish` — Stops recording and returns the collected timeline serialised as Chrome
-`crates/core/src/trace.rs:222` **struct** `SpanGuard` — RAII guard returned by [`span`]. Records the completed span into the
-`crates/core/src/trace.rs:230` **fn** `arg` — Attaches a structured arg to this span (shown under the event in the
-`crates/core/src/trace.rs:238` **fn** `set_bytes` — Convenience for resource-fetch spans: records the decoded byte size as
+`crates/core/src/trace.rs:108` **fn** `enable` — Starts recording. Installs a fresh time origin and clears any previous
+`crates/core/src/trace.rs:127` **fn** `enable_at` — Starts recording with an explicit time origin, normally one in the past
+`crates/core/src/trace.rs:145` **fn** `record_span` — Records an already-finished span from start and end instants the caller
+`crates/core/src/trace.rs:173` **fn** `enabled` — Whether the tracer is currently recording. A single relaxed atomic load;
+`crates/core/src/trace.rs:184` **fn** `span` — Opens a complete ("X") span with the given name and category. The span ends
+`crates/core/src/trace.rs:202` **fn** `instant` — Records a zero-duration instant marker ("i" event) at the current time —
+`crates/core/src/trace.rs:226` **fn** `finish` — Stops recording and returns the collected timeline serialised as Chrome
+`crates/core/src/trace.rs:280` **struct** `SpanGuard` — RAII guard returned by [`span`]. Records the completed span into the
+`crates/core/src/trace.rs:288` **fn** `arg` — Attaches a structured arg to this span (shown under the event in the
+`crates/core/src/trace.rs:296` **fn** `set_bytes` — Convenience for resource-fetch spans: records the decoded byte size as
 `crates/core/src/url.rs:27` **struct** `Url`
 `crates/core/src/url.rs:40` **fn** `parse` — Распарсить URL. Минимально требуется непустая `scheme:`
 `crates/core/src/url.rs:101` **fn** `scheme`
@@ -808,34 +810,34 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/dom/src/lib.rs:2567` **struct** `FlatTree` — Pre-computed composed tree (flat tree) for Shadow DOM layout traversal
 `crates/engine/dom/src/lib.rs:2577` **fn** `children_of` — Composed-tree children of `id`
 `crates/engine/dom/src/lib.rs:2602` **fn** `is_plain` — Whether the composed tree *is* the DOM tree — no shadow host or slot
-`crates/engine/dom/src/lib.rs:2614` **fn** `build_flat_tree` — Build the composed (flat) tree for the document
-`crates/engine/dom/src/lib.rs:2709` **fn** `check_navigation_gate` — Гейт навигации по sandbox-флагу HTML §7.6.5
-`crates/engine/dom/src/lib.rs:2733` **struct** `IframeInfo` — Данные `<iframe>` элемента — URL содержимого и sandbox-ограничения
-`crates/engine/dom/src/lib.rs:2789` **fn** `collect_iframes` — Собрать все `<iframe>` элементы документа с их sandbox-ограничениями
-`crates/engine/dom/src/lib.rs:2800` **fn** `check_popup_gate` — Гейт открытия popup-ов (`window.open()`, `target="_blank"`) по sandbox HTML §7.6.5
-`crates/engine/dom/src/lib.rs:2819` **enum** `EditInputType` — Input event type per Input Events Level 2 §4.1.3
-`crates/engine/dom/src/lib.rs:2850` **fn** `as_str` — The canonical `inputType` string for the `InputEvent` interface
-`crates/engine/dom/src/lib.rs:2873` **struct** `InputEvent` — Data for a `beforeinput` or `input` DOM event (Input Events Level 2 §4.1)
-`crates/engine/dom/src/lib.rs:2892` **fn** `trusted` — Construct a trusted input event (native input pipeline or automation
-`crates/engine/dom/src/lib.rs:2903` **fn** `untrusted` — Construct an untrusted input event (synthesized by page script via
-`crates/engine/dom/src/lib.rs:2924` **enum** `CompositionEventType` — Type of IME composition event (UI Events §5.2.5)
-`crates/engine/dom/src/lib.rs:2935` **fn** `as_str` — The canonical DOM event name per UI Events §5.2.5
-`crates/engine/dom/src/lib.rs:2949` **struct** `CompositionData` — Data for a `compositionstart` / `compositionupdate` / `compositionend` event
-`crates/engine/dom/src/lib.rs:2976` **struct** `CompositionEvent` — An IME composition event (compositionstart / update / end)
-`crates/engine/dom/src/lib.rs:2995` **fn** `new` — Create a new trusted composition event (native IME pipeline)
-`crates/engine/dom/src/lib.rs:3007` **fn** `untrusted` — Create an untrusted composition event (synthesized by page script)
-`crates/engine/dom/src/lib.rs:3018` **fn** `start` — Create a `compositionstart` event with initial IME text
-`crates/engine/dom/src/lib.rs:3033` **fn** `update` — Create a `compositionupdate` event for interim preedit text
-`crates/engine/dom/src/lib.rs:3048` **fn** `end` — Create a `compositionend` event for final committed text
-`crates/engine/dom/src/lib.rs:3076` **fn** `split_text_node` — Split a text node at `byte_offset`, creating a second text node with the
-`crates/engine/dom/src/lib.rs:3118` **fn** `insert_text_at` — Insert `text` into the text node at `pos`, returning the caret position
-`crates/engine/dom/src/lib.rs:3176` **fn** `delete_range` — Delete the content of `range` from the document, returning a collapsed
-`crates/engine/dom/src/lib.rs:3230` **fn** `insert_paragraph_break`
-`crates/engine/dom/src/lib.rs:3259` **fn** `node_text_content` — Returns the full text content of `node` — concatenation of all descendant text nodes
-`crates/engine/dom/src/lib.rs:3272` **fn** `locate_text_offset_range` — Locate the text node and local byte range covering `[start, end)` of
-`crates/engine/dom/src/lib.rs:3316` **fn** `node_child_count` — Number of direct DOM children of `node`
-`crates/engine/dom/src/lib.rs:3325` **fn** `node_length` — DOM-spec "length" of `node`: UTF-16 code-unit count for text nodes, child
-`crates/engine/dom/src/lib.rs:3337` **fn** `range_text` — Extracts the text covered by `range` (WHATWG DOM §4.6 `stringification`)
+`crates/engine/dom/src/lib.rs:2615` **fn** `build_flat_tree` — Build the composed (flat) tree for the document
+`crates/engine/dom/src/lib.rs:2711` **fn** `check_navigation_gate` — Гейт навигации по sandbox-флагу HTML §7.6.5
+`crates/engine/dom/src/lib.rs:2735` **struct** `IframeInfo` — Данные `<iframe>` элемента — URL содержимого и sandbox-ограничения
+`crates/engine/dom/src/lib.rs:2791` **fn** `collect_iframes` — Собрать все `<iframe>` элементы документа с их sandbox-ограничениями
+`crates/engine/dom/src/lib.rs:2802` **fn** `check_popup_gate` — Гейт открытия popup-ов (`window.open()`, `target="_blank"`) по sandbox HTML §7.6.5
+`crates/engine/dom/src/lib.rs:2821` **enum** `EditInputType` — Input event type per Input Events Level 2 §4.1.3
+`crates/engine/dom/src/lib.rs:2852` **fn** `as_str` — The canonical `inputType` string for the `InputEvent` interface
+`crates/engine/dom/src/lib.rs:2875` **struct** `InputEvent` — Data for a `beforeinput` or `input` DOM event (Input Events Level 2 §4.1)
+`crates/engine/dom/src/lib.rs:2894` **fn** `trusted` — Construct a trusted input event (native input pipeline or automation
+`crates/engine/dom/src/lib.rs:2905` **fn** `untrusted` — Construct an untrusted input event (synthesized by page script via
+`crates/engine/dom/src/lib.rs:2926` **enum** `CompositionEventType` — Type of IME composition event (UI Events §5.2.5)
+`crates/engine/dom/src/lib.rs:2937` **fn** `as_str` — The canonical DOM event name per UI Events §5.2.5
+`crates/engine/dom/src/lib.rs:2951` **struct** `CompositionData` — Data for a `compositionstart` / `compositionupdate` / `compositionend` event
+`crates/engine/dom/src/lib.rs:2978` **struct** `CompositionEvent` — An IME composition event (compositionstart / update / end)
+`crates/engine/dom/src/lib.rs:2997` **fn** `new` — Create a new trusted composition event (native IME pipeline)
+`crates/engine/dom/src/lib.rs:3009` **fn** `untrusted` — Create an untrusted composition event (synthesized by page script)
+`crates/engine/dom/src/lib.rs:3020` **fn** `start` — Create a `compositionstart` event with initial IME text
+`crates/engine/dom/src/lib.rs:3035` **fn** `update` — Create a `compositionupdate` event for interim preedit text
+`crates/engine/dom/src/lib.rs:3050` **fn** `end` — Create a `compositionend` event for final committed text
+`crates/engine/dom/src/lib.rs:3078` **fn** `split_text_node` — Split a text node at `byte_offset`, creating a second text node with the
+`crates/engine/dom/src/lib.rs:3120` **fn** `insert_text_at` — Insert `text` into the text node at `pos`, returning the caret position
+`crates/engine/dom/src/lib.rs:3178` **fn** `delete_range` — Delete the content of `range` from the document, returning a collapsed
+`crates/engine/dom/src/lib.rs:3232` **fn** `insert_paragraph_break`
+`crates/engine/dom/src/lib.rs:3261` **fn** `node_text_content` — Returns the full text content of `node` — concatenation of all descendant text nodes
+`crates/engine/dom/src/lib.rs:3274` **fn** `locate_text_offset_range` — Locate the text node and local byte range covering `[start, end)` of
+`crates/engine/dom/src/lib.rs:3318` **fn** `node_child_count` — Number of direct DOM children of `node`
+`crates/engine/dom/src/lib.rs:3327` **fn** `node_length` — DOM-spec "length" of `node`: UTF-16 code-unit count for text nodes, child
+`crates/engine/dom/src/lib.rs:3339` **fn** `range_text` — Extracts the text covered by `range` (WHATWG DOM §4.6 `stringification`)
 `crates/engine/dom/src/vtt.rs:7` **struct** `VttCueSettings` — Настройки позиционирования cue (WebVTT §6.3). Phase 0: сырые строки значений
 `crates/engine/dom/src/vtt.rs:16` **struct** `VttCue`
 `crates/engine/dom/src/vtt.rs:28` **enum** `VttError`
@@ -901,17 +903,17 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/driver/src/isolation.rs:40` **struct** `OriginGroup` — eTLD+1 site identifier used to group related origins
 `crates/driver/src/isolation.rs:53` **fn** `for_origin` — Derive the origin group from a full origin URL or host string
 `crates/driver/src/isolation.rs:70` **struct** `OriginIsolationContext` — Per-origin-group isolation container
-`crates/driver/src/isolation.rs:89` **fn** `new` — Create a new isolation context for the given origin (URL or host string)
-`crates/driver/src/isolation.rs:107` **fn** `site` — The site identifier (eTLD+1) of this context's origin group
-`crates/driver/src/isolation.rs:115` **fn** `local_storage_for` — Get (or create) the `localStorage` partition for `origin`
-`crates/driver/src/isolation.rs:126` **fn** `session_storage_for` — Get (or create) the `sessionStorage` partition for `origin`
-`crates/driver/src/isolation.rs:134` **fn** `clear_session_storage_for` — Clear `sessionStorage` for `origin` (spec: cleared on top-level navigation)
-`crates/driver/src/isolation.rs:139` **fn** `clear_all_session_storage` — Clear all `sessionStorage` partitions in this context
-`crates/driver/src/isolation.rs:148` **fn** `idb_store_for` — Create an `IdbStore` scoped to `origin` using this context's backend
-`crates/driver/src/isolation.rs:153` **fn** `idb_save` — Save an IndexedDB JSON snapshot for `origin`
-`crates/driver/src/isolation.rs:158` **fn** `idb_load` — Load the IndexedDB JSON snapshot for `origin`, or `None` if absent
-`crates/driver/src/isolation.rs:166` **fn** `cookie_jar` — Shared `Arc<CookieJar>` for this origin group
-`crates/driver/src/isolation.rs:171` **fn** `same_group` — Check whether two origins belong to the same origin group (same eTLD+1)
+`crates/driver/src/isolation.rs:90` **fn** `new` — Create a new isolation context for the given origin (URL or host string)
+`crates/driver/src/isolation.rs:108` **fn** `site` — The site identifier (eTLD+1) of this context's origin group
+`crates/driver/src/isolation.rs:116` **fn** `local_storage_for` — Get (or create) the `localStorage` partition for `origin`
+`crates/driver/src/isolation.rs:127` **fn** `session_storage_for` — Get (or create) the `sessionStorage` partition for `origin`
+`crates/driver/src/isolation.rs:135` **fn** `clear_session_storage_for` — Clear `sessionStorage` for `origin` (spec: cleared on top-level navigation)
+`crates/driver/src/isolation.rs:140` **fn** `clear_all_session_storage` — Clear all `sessionStorage` partitions in this context
+`crates/driver/src/isolation.rs:149` **fn** `idb_store_for` — Create an `IdbStore` scoped to `origin` using this context's backend
+`crates/driver/src/isolation.rs:154` **fn** `idb_save` — Save an IndexedDB JSON snapshot for `origin`
+`crates/driver/src/isolation.rs:159` **fn** `idb_load` — Load the IndexedDB JSON snapshot for `origin`, or `None` if absent
+`crates/driver/src/isolation.rs:167` **fn** `cookie_jar` — Shared `Arc<CookieJar>` for this origin group
+`crates/driver/src/isolation.rs:172` **fn** `same_group` — Check whether two origins belong to the same origin group (same eTLD+1)
 `crates/driver/src/lib.rs:69` **trait** `BrowserSession` — Программный интерфейс к браузерному сеансу
 `crates/driver/src/live_session.rs:50` **struct** `LiveWindowSession` — [`BrowserSession`] adapter that drives a live `lumen-shell` window through
 `crates/driver/src/live_session.rs:58` **fn** `new` — Bind a new session to `handle`, the sending half of a live window's
@@ -1001,10 +1003,10 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/font/src/binary.rs:62` **fn** `read_i16`
 `crates/engine/font/src/binary.rs:67` **fn** `read_i32`
 `crates/engine/font/src/binary.rs:73` **fn** `read_tag` — 4-байтовый ASCII-тег (например, `b"head"`, `b"glyf"`)
-`crates/engine/font/src/cff.rs:298` **struct** `Cff` — Parsed `CFF ` table ready to produce glyph outlines
-`crates/engine/font/src/cff.rs:306` **fn** `num_glyphs` — Number of glyphs (CharStrings INDEX count)
-`crates/engine/font/src/cff.rs:311` **fn** `parse` — Parse a `CFF ` table from its raw bytes
-`crates/engine/font/src/cff.rs:390` **fn** `glyph` — Glyph outline for `glyph_id`, or `None` if the glyph is empty (e.g
+`crates/engine/font/src/cff.rs:299` **struct** `Cff` — Parsed `CFF ` table ready to produce glyph outlines
+`crates/engine/font/src/cff.rs:307` **fn** `num_glyphs` — Number of glyphs (CharStrings INDEX count)
+`crates/engine/font/src/cff.rs:312` **fn** `parse` — Parse a `CFF ` table from its raw bytes
+`crates/engine/font/src/cff.rs:392` **fn** `glyph` — Glyph outline for `glyph_id`, or `None` if the glyph is empty (e.g
 `crates/engine/font/src/cmap.rs:21` **struct** `Cmap`
 `crates/engine/font/src/cmap.rs:31` **fn** `parse`
 `crates/engine/font/src/cmap.rs:94` **fn** `glyph_index` — Возвращает glyph index для codepoint, либо `None` если не отображён
@@ -1065,10 +1067,10 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/font/src/font_registry.rs:35` **struct** `FontRegistry` — Провайдер шрифтов с поддержкой @font-face: системные шрифты + URL-буферы
 `crates/engine/font/src/font_registry.rs:51` **fn** `new`
 `crates/engine/font/src/font_registry.rs:61` **fn** `with_dirs` — Registry backed by a custom-dir `SystemFontIndex` — for tests and
-`crates/engine/font/src/font_registry.rs:82` **fn** `register_from_bytes` — Регистрирует шрифт из байт-буфера (TrueType / sfnt после декодирования
-`crates/engine/font/src/font_registry.rs:132` **fn** `custom_face_count` — Количество зарегистрированных @font-face face-ов. Для тестов
-`crates/engine/font/src/font_registry.rs:145` **fn** `resolve_local_bytes` — Resolves a `local()` @font-face source by matching the name against the system
-`crates/engine/font/src/font_registry.rs:160` **fn** `face_bytes_for_family` — Возвращает байты первого загруженного face для данной семьи
+`crates/engine/font/src/font_registry.rs:83` **fn** `register_from_bytes` — Регистрирует шрифт из байт-буфера (TrueType / sfnt после декодирования
+`crates/engine/font/src/font_registry.rs:134` **fn** `custom_face_count` — Количество зарегистрированных @font-face face-ов. Для тестов
+`crates/engine/font/src/font_registry.rs:147` **fn** `resolve_local_bytes` — Resolves a `local()` @font-face source by matching the name against the system
+`crates/engine/font/src/font_registry.rs:163` **fn** `face_bytes_for_family` — Возвращает байты первого загруженного face для данной семьи
 `crates/engine/font/src/fvar.rs:25` **struct** `VariationAxis` — Одна variation axis. Все значения в native axis units (не CSS-нормализо-
 `crates/engine/font/src/fvar.rs:53` **fn** `is_hidden`
 `crates/engine/font/src/fvar.rs:60` **fn** `clamp` — Зажать значение в `[min, max]`. Полезно при подаче CSS-уровневого
@@ -1309,10 +1311,10 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/image/src/gif.rs:239` **fn** `total_cycle_ms` — Суммарная длительность одного прохода анимации в миллисекундах
 `crates/engine/image/src/gif.rs:247` **fn** `resident_bytes` — Резидентный объём памяти GIF в байтах: закодированные байты плюс закэшированный
 `crates/engine/image/src/gif.rs:262` **fn** `frame_index_at` — Возвращает индекс кадра для `elapsed_ms` миллисекунд от начала анимации
-`crates/engine/image/src/gif.rs:275` **fn** `frame_image` — Декодирует и возвращает пиксели кадра `idx` (RGBA8, полный экранный буфер
-`crates/engine/image/src/gif.rs:342` **fn** `frame_at` — Возвращает пиксели кадра для `elapsed_ms` миллисекунд от начала анимации
-`crates/engine/image/src/gif.rs:356` **fn** `decode_gif` — Декодирует GIF файл и возвращает первый кадр
-`crates/engine/image/src/gif.rs:378` **fn** `decode_gif_animated` — Декодирует метаданные GIF (размер, цикличность, per-frame задержки) и возвращает
+`crates/engine/image/src/gif.rs:276` **fn** `frame_image` — Декодирует и возвращает пиксели кадра `idx` (RGBA8, полный экранный буфер
+`crates/engine/image/src/gif.rs:343` **fn** `frame_at` — Возвращает пиксели кадра для `elapsed_ms` миллисекунд от начала анимации
+`crates/engine/image/src/gif.rs:357` **fn** `decode_gif` — Декодирует GIF файл и возвращает первый кадр
+`crates/engine/image/src/gif.rs:379` **fn** `decode_gif_animated` — Декодирует метаданные GIF (размер, цикличность, per-frame задержки) и возвращает
 `crates/engine/image/src/heic.rs:18` **struct** `HeicError` — Error decoding a HEIC/HEIF image
 `crates/engine/image/src/heic.rs:33` **fn** `is_heic` — Detects HEIC/HEIF image format
 `crates/engine/image/src/heic.rs:66` **fn** `decode_heic` — Stub HEIC/HEIF decoder (Phase 1)
@@ -1325,22 +1327,22 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/image/src/lib.rs:60` **fn** `is_svg` — Checks whether the given bytes look like an SVG document
 `crates/engine/image/src/lib.rs:89` **fn** `decode_to` — Декодирует растровое изображение по сигнатуре первых байтов и colour-manages
 `crates/engine/image/src/lib.rs:106` **fn** `decode` — Декодирует растровое изображение по сигнатуре первых байтов
-`crates/engine/image/src/lib.rs:145` **enum** `ImageError` — Ошибка `decode`
-`crates/engine/image/src/lib.rs:211` **enum** `IccGamut` — Идентифицированный цветовой охват ICC профиля
-`crates/engine/image/src/lib.rs:226` **struct** `IccProfile` — ICC профиль изображения (опциональный)
-`crates/engine/image/src/lib.rs:234` **fn** `is_valid` — Проверяет минимальный размер ICC профиля (128 байт)
-`crates/engine/image/src/lib.rs:244` **fn** `detect_gamut` — Определяет цветовой охват по сигнатуре пространства данных (bytes 16-19)
-`crates/engine/image/src/lib.rs:309` **fn** `correct_rgba_pixels` — Применяет ICC-коррекцию к RGBA8 пикселям in-place
-`crates/engine/image/src/lib.rs:445` **struct** `Image` — Декодированное растровое изображение в плотной row-major упаковке
-`crates/engine/image/src/lib.rs:459` **fn** `detect_color_space` — Детектирует цветовое пространство изображения из ICC профиля или сигнатуры изображения
-`crates/engine/image/src/lib.rs:469` **fn** `to_rgba8` — Возвращает пиксели в формате RGBA8 (4 байта на пиксель)
-`crates/engine/image/src/lib.rs:513` **fn** `to_rgba8_tone_mapped` — Alias for `to_rgba8()`. Tone-mapping is now applied automatically
-`crates/engine/image/src/lib.rs:524` **fn** `apply_icc_rgb_transform` — Applies a compiled ICC matrix-shaper transform to RGBA8 pixels in place
-`crates/engine/image/src/lib.rs:609` **fn** `apply_tone_mapping` — Apply tone mapping for a detected color space
-`crates/engine/image/src/lib.rs:669` **fn** `resize_bilinear` — Масштабирует `src` до `(dst_w × dst_h)` билинейной интерполяцией
-`crates/engine/image/src/lib.rs:721` **fn** `resize_area_avg` — Масштабирует `src` до `(dst_w × dst_h)` усреднением по площади (box filter)
-`crates/engine/image/src/lib.rs:840` **enum** `PixelFormat` — Формат пикселя декодированного изображения. Все варианты — 8 бит на канал
-`crates/engine/image/src/lib.rs:864` **enum** `DecodeError` — Ошибки декодирования PNG
+`crates/engine/image/src/lib.rs:146` **enum** `ImageError` — Ошибка `decode`
+`crates/engine/image/src/lib.rs:212` **enum** `IccGamut` — Идентифицированный цветовой охват ICC профиля
+`crates/engine/image/src/lib.rs:227` **struct** `IccProfile` — ICC профиль изображения (опциональный)
+`crates/engine/image/src/lib.rs:235` **fn** `is_valid` — Проверяет минимальный размер ICC профиля (128 байт)
+`crates/engine/image/src/lib.rs:245` **fn** `detect_gamut` — Определяет цветовой охват по сигнатуре пространства данных (bytes 16-19)
+`crates/engine/image/src/lib.rs:310` **fn** `correct_rgba_pixels` — Применяет ICC-коррекцию к RGBA8 пикселям in-place
+`crates/engine/image/src/lib.rs:446` **struct** `Image` — Декодированное растровое изображение в плотной row-major упаковке
+`crates/engine/image/src/lib.rs:460` **fn** `detect_color_space` — Детектирует цветовое пространство изображения из ICC профиля или сигнатуры изображения
+`crates/engine/image/src/lib.rs:470` **fn** `to_rgba8` — Возвращает пиксели в формате RGBA8 (4 байта на пиксель)
+`crates/engine/image/src/lib.rs:514` **fn** `to_rgba8_tone_mapped` — Alias for `to_rgba8()`. Tone-mapping is now applied automatically
+`crates/engine/image/src/lib.rs:525` **fn** `apply_icc_rgb_transform` — Applies a compiled ICC matrix-shaper transform to RGBA8 pixels in place
+`crates/engine/image/src/lib.rs:610` **fn** `apply_tone_mapping` — Apply tone mapping for a detected color space
+`crates/engine/image/src/lib.rs:670` **fn** `resize_bilinear` — Масштабирует `src` до `(dst_w × dst_h)` билинейной интерполяцией
+`crates/engine/image/src/lib.rs:722` **fn** `resize_area_avg` — Масштабирует `src` до `(dst_w × dst_h)` усреднением по площади (box filter)
+`crates/engine/image/src/lib.rs:841` **enum** `PixelFormat` — Формат пикселя декодированного изображения. Все варианты — 8 бит на канал
+`crates/engine/image/src/lib.rs:865` **enum** `DecodeError` — Ошибки декодирования PNG
 `crates/engine/image/src/png/mod.rs:59` **fn** `decode_png`
 `crates/engine/image/src/png/mod.rs:101` **fn** `encode_png_rgba8` — Кодирует RGBA8 изображение в PNG формат
 `crates/engine/image/src/webp/mod.rs:24` **struct** `WebpError` — Ошибка декодирования WebP
@@ -1369,13 +1371,13 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 
 ## lumen-js  (239 symbols)
 
-`crates/js/src/audio_element.rs:54` **fn** `set_audio_playback_provider` — Install the platform audio playback backend
+`crates/js/src/audio_element.rs:55` **fn** `set_audio_playback_provider` — Install the platform audio playback backend
 `crates/js/src/broadcast_channel.rs:60` **struct** `LocalChannel` — A channel instance owned by the current runtime: the receiver half plus its id
 `crates/js/src/broadcast_channel.rs:71` **type** `BroadcastRegistry` — All `BroadcastChannel` instances created in this runtime
-`crates/js/src/broadcast_channel.rs:79` **fn** `register` — Register a new channel instance for `name` and return its unique id
-`crates/js/src/broadcast_channel.rs:99` **fn** `post` — Deliver `json` to every channel named `name` except the sender (`sender_id`)
-`crates/js/src/broadcast_channel.rs:118` **fn** `close` — Remove the channel instance `id` from the global hub and this runtime
-`crates/js/src/broadcast_channel.rs:134` **fn** `drain` — Drain all pending messages addressed to this runtime's channels
+`crates/js/src/broadcast_channel.rs:80` **fn** `register` — Register a new channel instance for `name` and return its unique id
+`crates/js/src/broadcast_channel.rs:101` **fn** `post` — Deliver `json` to every channel named `name` except the sender (`sender_id`)
+`crates/js/src/broadcast_channel.rs:121` **fn** `close` — Remove the channel instance `id` from the global hub and this runtime
+`crates/js/src/broadcast_channel.rs:138` **fn** `drain` — Drain all pending messages addressed to this runtime's channels
 `crates/js/src/canvas2d.rs:274` **fn** `present_rgba` — Present a WebGPU-rendered RGBA8 frame into the `<canvas>` `nid`'s CPU buffer
 `crates/js/src/canvas2d.rs:296` **fn** `flush_dirty` — Drain dirty canvases and return their current RGBA buffers
 `crates/js/src/clipboard.rs:35` **fn** `set_clipboard_provider` — Install the host clipboard provider backing `navigator.clipboard`
@@ -1389,8 +1391,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/css_properties_values_api.rs:44` **fn** `get_registered_properties` — Get the global registered properties registry, initializing it if necessary
 `crates/js/src/css_properties_values_api.rs:50` **struct** `RegisteredProperty` — Definition of a custom CSS property
 `crates/js/src/documentpip_bindings.rs:23` **enum** `DocPipRequest` — A Document PiP request emitted by the JS API, awaiting the shell
-`crates/js/src/documentpip_bindings.rs:50` **fn** `enqueue` — Enqueue a Document PiP request. Public so non-JS engine paths can reuse the channel
-`crates/js/src/documentpip_bindings.rs:57` **fn** `take_docpip_requests` — Drain and return all pending Document PiP requests
+`crates/js/src/documentpip_bindings.rs:51` **fn** `enqueue` — Enqueue a Document PiP request. Public so non-JS engine paths can reuse the channel
+`crates/js/src/documentpip_bindings.rs:59` **fn** `take_docpip_requests` — Drain and return all pending Document PiP requests
 `crates/js/src/dom.rs:25` **enum** `NavigateRequest` — Navigation request emitted by JS (`location.href =`, `location.assign()`,
 `crates/js/src/dom.rs:57` **enum** `HistoryUrlUpdate` — Notification emitted by `history.pushState`/`history.replaceState` so the
 `crates/js/src/dom.rs:87` **enum** `NavAction` — Discriminant embedded in `pending_navigation_updates` to tell the shell
@@ -1399,8 +1401,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/dom.rs:126` **struct** `PrintRequest` — A print request emitted by `window.print()` (W-2 Phase 1)
 `crates/js/src/dom.rs:159` **enum** `FullscreenRequest` — A fullscreen API request emitted by JS `element.requestFullscreen()` or
 `crates/js/src/download_bindings.rs:25` **struct** `DownloadRequest` — A single pending download asked for by JS, awaiting the shell to start it
-`crates/js/src/download_bindings.rs:44` **fn** `enqueue` — Enqueue a download request. Public so non-JS engine paths (e.g. a future
-`crates/js/src/download_bindings.rs:51` **fn** `take_download_requests` — Drain and return all pending download requests
+`crates/js/src/download_bindings.rs:45` **fn** `enqueue` — Enqueue a download request. Public so non-JS engine paths (e.g. a future
+`crates/js/src/download_bindings.rs:53` **fn** `take_download_requests` — Drain and return all pending download requests
 `crates/js/src/esm.rs:16` **struct** `ImportMap` — Import map: specifier mappings for bare specifiers and scoped paths
 `crates/js/src/esm.rs:28` **fn** `parse` — Parse an import map from a JSON string
 `crates/js/src/esm.rs:64` **fn** `resolve` — Resolve a specifier using this import map
@@ -1436,13 +1438,13 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/import_attributes.rs:310` **fn** `strip_import_attributes` — Strip `with { ... }` / `assert { ... }` import-attribute clauses from
 `crates/js/src/import_meta.rs:23` **fn** `transform_import_meta` — Transform `import.meta` in `source`, binding `url` as `.url`
 `crates/js/src/lib.rs:171` **fn** `deterministic_seed_from_url` — Compute a deterministic u64 seed from a URL for deterministic render mode (8F)
-`crates/js/src/media_capture.rs:56` **fn** `set_audio_capture_provider` — Install the platform audio capture backend
+`crates/js/src/media_capture.rs:57` **fn** `set_audio_capture_provider` — Install the platform audio capture backend
 `crates/js/src/navigator_bindings.rs:35` **struct** `NavigatorProfile` — High-entropy `navigator` / `screen` / timezone values exposed to JavaScript
 `crates/js/src/navigator_bindings.rs:85` **fn** `set_navigator_profile` — Install a process-wide navigator profile (9F.1). Subsequent calls to the
 `crates/js/src/navigator_bindings.rs:92` **fn** `current_navigator_profile` — Return the currently configured profile, or the default if none was set
 `crates/js/src/network_log_bindings.rs:27` **struct** `NetworkLogRecord` — A single network request logged by JS, awaiting the shell's drain
-`crates/js/src/network_log_bindings.rs:50` **fn** `enqueue` — Enqueue a network-log record. Public so non-JS engine paths can reuse the
-`crates/js/src/network_log_bindings.rs:62` **fn** `take_network_log_records` — Drain and return all pending network-log records
+`crates/js/src/network_log_bindings.rs:51` **fn** `enqueue` — Enqueue a network-log record. Public so non-JS engine paths can reuse the
+`crates/js/src/network_log_bindings.rs:64` **fn** `take_network_log_records` — Drain and return all pending network-log records
 `crates/js/src/notifications_bindings.rs:20` **struct** `NotificationRequest` — A notification request queued by `new Notification(...)` in JS
 `crates/js/src/notifications_bindings.rs:33` **type** `NotificationQueue` — Shared queue of pending notification requests
 `crates/js/src/notifications_bindings.rs:39` **fn** `drain_notifications` — Drain all pending notification requests from the queue
@@ -1463,8 +1465,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/paint_worklet.rs:43` **fn** `get_paint_worklet_registry` — Get the global paint worklet registry, initializing it if necessary
 `crates/js/src/paint_worklet.rs:49` **struct** `PaintWorkletDef` — Definition of a registered paint worklet
 `crates/js/src/pip_bindings.rs:29` **enum** `PipRequest` — A picture-in-picture request emitted by the JS PiP API, awaiting the shell
-`crates/js/src/pip_bindings.rs:64` **fn** `enqueue` — Enqueue a PiP request. Public so non-JS engine paths can reuse the channel
-`crates/js/src/pip_bindings.rs:71` **fn** `take_pip_requests` — Drain and return all pending PiP requests
+`crates/js/src/pip_bindings.rs:65` **fn** `enqueue` — Enqueue a PiP request. Public so non-JS engine paths can reuse the channel
+`crates/js/src/pip_bindings.rs:73` **fn** `take_pip_requests` — Drain and return all pending PiP requests
 `crates/js/src/pointer_lock.rs:42` **fn** `request_pointer_lock` — Request pointer lock for element with given node ID
 `crates/js/src/pointer_lock.rs:50` **fn** `exit_pointer_lock` — Exit pointer lock
 `crates/js/src/pointer_lock.rs:58` **fn** `set_movement` — Set relative mouse movement delta (called from shell DeviceEvent::MouseMotion)
@@ -1473,21 +1475,21 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/pointer_lock.rs:83` **fn** `get_locked_element_nid` — Get the DOM node ID of the locked element, or None
 `crates/js/src/pointer_lock.rs:89` **fn** `take_movement` — Get the current movement delta and reset it to zero
 `crates/js/src/pointer_lock.rs:100` **fn** `take_pending_grab` — Take pending OS cursor grab request, resetting it to None
-`crates/js/src/screen_capture.rs:51` **fn** `set_screen_capture_provider` — Install the platform screen capture backend
+`crates/js/src/screen_capture.rs:52` **fn** `set_screen_capture_provider` — Install the platform screen capture backend
 `crates/js/src/shared_worker.rs:61` **type** `SharedWorkerOutbox` — Outbound queue owned by a single page runtime
-`crates/js/src/shared_worker.rs:91` **fn** `drain_messages` — Drain all messages a runtime's shared-worker ports have received
+`crates/js/src/shared_worker.rs:92` **fn** `drain_messages` — Drain all messages a runtime's shared-worker ports have received
 `crates/js/src/sri.rs:10` **enum** `SriAlgorithm` — Hash algorithm accepted in the `integrity` attribute
 `crates/js/src/sri.rs:17` **struct** `SriToken` — One parsed token from an `integrity` string
 `crates/js/src/sri.rs:27` **fn** `parse_integrity_metadata` — Parses a space-separated list of integrity tokens
-`crates/js/src/sri.rs:56` **fn** `check_sri` — Returns `true` if `body` passes the SRI check encoded in `integrity`
+`crates/js/src/sri.rs:57` **fn** `check_sri` — Returns `true` if `body` passes the SRI check encoded in `integrity`
 `crates/js/src/surface_api.rs:80` **fn** `set_global_privacy_control` — Enable or disable the Global Privacy Control signal on the JS side
 `crates/js/src/surface_api.rs:86` **fn** `global_privacy_control_enabled` — The currently configured Global Privacy Control state (default `false`)
 `crates/js/src/text_track_store.rs:22` **struct** `CueData` — One WebVTT cue exposed to JS as a `TextTrackCue` / `VTTCue`
 `crates/js/src/text_track_store.rs:35` **struct** `TextTrackData` — One `<track>` element exposed to JS as a `TextTrack`
 `crates/js/src/text_track_store.rs:56` **struct** `TextTrackStore` — Per-`<video>` text-track snapshot, keyed by DOM node index (`el.__nid__`)
-`crates/js/src/text_track_store.rs:66` **fn** `tracks_json` — Serialize the tracks of one `<video>` to a JSON array string
-`crates/js/src/text_track_store.rs:110` **fn** `set_text_track_store` — Install the text-track store from the shell
-`crates/js/src/text_track_store.rs:115` **fn** `get_text_track_store` — Return a clone of the installed store, or `None` in headless/CI mode
+`crates/js/src/text_track_store.rs:67` **fn** `tracks_json` — Serialize the tracks of one `<video>` to a JSON array string
+`crates/js/src/text_track_store.rs:112` **fn** `set_text_track_store` — Install the text-track store from the shell
+`crates/js/src/text_track_store.rs:118` **fn** `get_text_track_store` — Return a clone of the installed store, or `None` in headless/CI mode
 `crates/js/src/v8_runtime.rs:55` **fn** `ensure_v8_platform` — Initialize the V8 platform for this process
 `crates/js/src/v8_runtime.rs:423` **struct** `DomTouched` — BUG-341 S7 — outcome of draining the page-side DOM-mutation tracker since
 `crates/js/src/v8_runtime.rs:445` **type** `CustomPropertySnapshot` — Per-node snapshot of resolved CSS custom properties: node id → the map of
@@ -1542,18 +1544,18 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/v8_runtime.rs:1136` **fn** `register_img_bitmaps` — Register decoded `<img>` bitmaps for canvas `drawImage`, keyed by node id
 `crates/js/src/v8_runtime.rs:1152` **fn** `debug_heap_stats` — V8 isolate heap statistics: `(total_heap_size, used_heap_size)` in bytes
 `crates/js/src/v8_runtime.rs:1165` **fn** `set_import_map` — Install the import map (HTML LS §8.1.6.2) used to resolve bare module
-`crates/js/src/v8_runtime.rs:1263` **fn** `install_console_natives` — Register the three console natives (`_lumen_console_log`,
-`crates/js/src/v8_runtime.rs:1332` **fn** `install_dom` — Install DOM-core native bindings (`_lumen_*`, 184 functions) and the
+`crates/js/src/v8_runtime.rs:1271` **fn** `install_console_natives` — Register the three console natives (`_lumen_console_log`,
+`crates/js/src/v8_runtime.rs:1342` **fn** `install_dom` — Install DOM-core native bindings (`_lumen_*`, 184 functions) and the
 `crates/js/src/video_gif_store.rs:36` **struct** `VideoPlaybackState` — Per-`<video>` playback timing, stored by the shell after a GIF is decoded
 `crates/js/src/video_gif_store.rs:57` **fn** `current_ms` — Playback position in ms at a given real-clock instant
 `crates/js/src/video_gif_store.rs:66` **fn** `is_ended` — Whether playback has naturally ended (finite loop count exhausted)
 `crates/js/src/video_gif_store.rs:75` **fn** `duration_secs` — Duration in seconds exposed to JS as `video.duration`
 `crates/js/src/video_gif_store.rs:84` **fn** `freeze` — Snapshot `position_ms` to the current playback position and clear epoch
 `crates/js/src/video_gif_store.rs:96` **struct** `VideoGifStore` — Shared state for all `<video>`-element GIF animations, keyed by DOM node index
-`crates/js/src/video_gif_store.rs:116` **fn** `set_video_gif_store` — Install the video GIF store from the shell
-`crates/js/src/video_gif_store.rs:121` **fn** `get_video_gif_store` — Return a clone of the installed store, or `None` in headless/CI mode
+`crates/js/src/video_gif_store.rs:117` **fn** `set_video_gif_store` — Install the video GIF store from the shell
+`crates/js/src/video_gif_store.rs:123` **fn** `get_video_gif_store` — Return a clone of the installed store, or `None` in headless/CI mode
 `crates/js/src/view_transitions.rs:17` **enum** `ViewTransitionEvent` — Events emitted by `document.startViewTransition` and drained by the shell
-`crates/js/src/wake_lock.rs:43` **fn** `set_wake_lock_provider` — Install the platform wake-lock backend
+`crates/js/src/wake_lock.rs:44` **fn** `set_wake_lock_provider` — Install the platform wake-lock backend
 `crates/js/src/wasm/interp.rs:21` **struct** `Trap` — A runtime trap (maps to `WebAssembly.RuntimeError` on the JS side)
 `crates/js/src/wasm/interp.rs:32` **trait** `HostImports` — Host import callback surface. The interpreter calls this when WASM invokes
 `crates/js/src/wasm/interp.rs:39` **struct** `NullHost` — A no-op host that traps on any imported call. Used when a module declares no
@@ -1605,9 +1607,9 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/worker.rs:59` **type** `WorkerRegistry` — All live Worker instances for the current page, keyed by worker ID
 `crates/js/src/worker.rs:65` **type** `WorkerMessageQueue` — Outbound message queue: messages posted by worker threads to the main thread
 `crates/js/src/worker.rs:72` **type** `WorkerBlobStore` — Shared blob store: blob URL → decoded script text
-`crates/js/src/worker.rs:79` **fn** `post_to_worker` — Send a JSON-serialized message to a live worker thread
-`crates/js/src/worker.rs:89` **fn** `terminate_worker` — Terminate a worker and remove it from the registry
-`crates/js/src/worker.rs:98` **fn** `drain_messages` — Drain all pending messages sent from worker threads to the main thread
+`crates/js/src/worker.rs:80` **fn** `post_to_worker` — Send a JSON-serialized message to a live worker thread
+`crates/js/src/worker.rs:91` **fn** `terminate_worker` — Terminate a worker and remove it from the registry
+`crates/js/src/worker.rs:101` **fn** `drain_messages` — Drain all pending messages sent from worker threads to the main thread
 
 ## lumen-knowledge  (68 symbols)
 
@@ -1668,9 +1670,9 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/knowledge/src/semantic.rs:29` **struct** `SemanticHit` — Result of a [`SemanticIndex::nearest`] query
 `crates/knowledge/src/semantic.rs:44` **struct** `SemanticIndex` — In-memory linear-scan nearest-neighbour index over embedding vectors
 `crates/knowledge/src/semantic.rs:62` **fn** `new` — Create an empty index
-`crates/knowledge/src/semantic.rs:67` **fn** `insert` — Insert or replace the embedding for `rowid`
-`crates/knowledge/src/semantic.rs:74` **fn** `remove` — Remove the embedding for `rowid`, if present. No-op if absent
-`crates/knowledge/src/semantic.rs:85` **fn** `nearest` — Return up to `limit` indexed entries with the highest cosine
+`crates/knowledge/src/semantic.rs:68` **fn** `insert` — Insert or replace the embedding for `rowid`
+`crates/knowledge/src/semantic.rs:76` **fn** `remove` — Remove the embedding for `rowid`, if present. No-op if absent
+`crates/knowledge/src/semantic.rs:88` **fn** `nearest` — Return up to `limit` indexed entries with the highest cosine
 `crates/knowledge/src/store.rs:37` **struct** `DefaultKnowledgeStore` — SQLite-backed [`KnowledgeStore`]. One instance per browser process
 `crates/knowledge/src/store.rs:57` **fn** `open` — Open (or create) a `DefaultKnowledgeStore` in `base_dir`
 `crates/knowledge/src/store.rs:71` **fn** `open_in_memory` — Create an in-memory `DefaultKnowledgeStore` (tests only)
@@ -1770,32 +1772,32 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/box_tree.rs:1083` **fn** `collect_selectlist_label` — Collect the selected `<option>` label from a `<selectlist>` element
 `crates/engine/layout/src/box_tree.rs:1121` **fn** `is_selectlist` — Returns `true` when `node` is a `<selectlist>` element (Customizable Select)
 `crates/engine/layout/src/box_tree.rs:1213` **fn** `is_open_details` — Returns `true` when `id` is a `<details>` element with the `open` attribute set
-`crates/engine/layout/src/box_tree.rs:2143` **struct** `ImageRequest` — Запрос на предзагрузку изображения: URL после picking-а по
-`crates/engine/layout/src/box_tree.rs:2161` **fn** `collect_image_requests` — Обходит DOM и возвращает запросы на загрузку для всех `<img>`-элементов
-`crates/engine/layout/src/box_tree.rs:2187` **fn** `collect_background_image_requests` — Обходит готовое layout-дерево и возвращает уникальные URL-ы из
-`crates/engine/layout/src/box_tree.rs:2343` **struct** `LayoutBox`
-`crates/engine/layout/src/box_tree.rs:2400` **struct** `BoxOrigin` — Where a layout box came from — the identity of a box for all
-`crates/engine/layout/src/box_tree.rs:2426` **enum** `BoxRole` — Disambiguates the many boxes one DOM node — or no node at all — can
-`crates/engine/layout/src/box_tree.rs:2454` **struct** `InlineSegment` — Отрезок inline-контента с собственным стилем (до layout)
-`crates/engine/layout/src/box_tree.rs:2500` **enum** `PseudoKind` — Marks an inline segment as the target of a CSS structural pseudo-element
-`crates/engine/layout/src/box_tree.rs:2532` **struct** `InlineFrag` — Позиционированный текстовый фрагмент в строке (после layout)
-`crates/engine/layout/src/box_tree.rs:2571` **enum** `BoxKind`
-`crates/engine/layout/src/box_tree.rs:3414` **fn** `layout` — Lay out a document without a text measurer. For tests and headless dump modes
-`crates/engine/layout/src/box_tree.rs:3440` **fn** `layout_measured` — Layout without a text measurer. For tests and headless modes; uses `layout_measured_hyp` with `dark_mode=false`
-`crates/engine/layout/src/box_tree.rs:3453` **fn** `layout_measured_hyp` — Layout with a real hyphenation provider (for `hyphens: auto`)
-`crates/engine/layout/src/box_tree.rs:3476` **fn** `layout_measured_hyp_with_counters` — Like [`layout_measured_hyp`], but also returns the [`CounterMap`] the cascade
-`crates/engine/layout/src/box_tree.rs:3543` **fn** `lay_out_incremental` — Incremental re-layout pass: skips clean subtrees, re-lays out only dirty ones
-`crates/engine/layout/src/box_tree.rs:3582` **fn** `layout_streaming_incremental` — Streaming incremental layout (PH1-2b)
-`crates/engine/layout/src/box_tree.rs:3629` **fn** `layout_mutation_incremental` — Incremental re-layout for JS DOM mutations (ADR-016 M4)
-`crates/engine/layout/src/box_tree.rs:3685` **fn** `layout_mutation_incremental_restyle` — BUG-341 S5: incremental re-layout for a pure interactive-state transition
-`crates/engine/layout/src/box_tree.rs:3868` **fn** `build_iframe_document` — Parse inline HTML from an `<iframe srcdoc="...">` attribute (HTML spec §4.8.5)
-`crates/engine/layout/src/box_tree.rs:3943` **fn** `canvas_background_color` — CSS Backgrounds §3.11.1 — the canvas background color
-`crates/engine/layout/src/box_tree.rs:5328` **fn** `incremental_build_box` — BUG-341 S4 — incremental box-build entry point
-`crates/engine/layout/src/box_tree.rs:11999` **fn** `resolve_auto_fill_fit_count` — CSS Grid Layout L3 §9 — Resolve `repeat(auto-fill|auto-fit, <track-list>)` count
-`crates/engine/layout/src/box_tree.rs:12182` **fn** `measure_text_w` — Measures text width (letter_spacing applied between each character)
-`crates/engine/layout/src/box_tree.rs:12201` **fn** `measure_text_w_families` — Как [`measure_text_w`], но учитывает CSS `font-family` каскад
-`crates/engine/layout/src/box_tree.rs:12231` **fn** `measure_text_w_varied` — Как [`measure_text_w_families`], но учитывает CSS `font-variation-settings`
-`crates/engine/layout/src/box_tree.rs:13532` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
+`crates/engine/layout/src/box_tree.rs:2144` **struct** `ImageRequest` — Запрос на предзагрузку изображения: URL после picking-а по
+`crates/engine/layout/src/box_tree.rs:2162` **fn** `collect_image_requests` — Обходит DOM и возвращает запросы на загрузку для всех `<img>`-элементов
+`crates/engine/layout/src/box_tree.rs:2188` **fn** `collect_background_image_requests` — Обходит готовое layout-дерево и возвращает уникальные URL-ы из
+`crates/engine/layout/src/box_tree.rs:2344` **struct** `LayoutBox`
+`crates/engine/layout/src/box_tree.rs:2401` **struct** `BoxOrigin` — Where a layout box came from — the identity of a box for all
+`crates/engine/layout/src/box_tree.rs:2427` **enum** `BoxRole` — Disambiguates the many boxes one DOM node — or no node at all — can
+`crates/engine/layout/src/box_tree.rs:2455` **struct** `InlineSegment` — Отрезок inline-контента с собственным стилем (до layout)
+`crates/engine/layout/src/box_tree.rs:2501` **enum** `PseudoKind` — Marks an inline segment as the target of a CSS structural pseudo-element
+`crates/engine/layout/src/box_tree.rs:2533` **struct** `InlineFrag` — Позиционированный текстовый фрагмент в строке (после layout)
+`crates/engine/layout/src/box_tree.rs:2572` **enum** `BoxKind`
+`crates/engine/layout/src/box_tree.rs:3415` **fn** `layout` — Lay out a document without a text measurer. For tests and headless dump modes
+`crates/engine/layout/src/box_tree.rs:3441` **fn** `layout_measured` — Layout without a text measurer. For tests and headless modes; uses `layout_measured_hyp` with `dark_mode=false`
+`crates/engine/layout/src/box_tree.rs:3454` **fn** `layout_measured_hyp` — Layout with a real hyphenation provider (for `hyphens: auto`)
+`crates/engine/layout/src/box_tree.rs:3477` **fn** `layout_measured_hyp_with_counters` — Like [`layout_measured_hyp`], but also returns the [`CounterMap`] the cascade
+`crates/engine/layout/src/box_tree.rs:3544` **fn** `lay_out_incremental` — Incremental re-layout pass: skips clean subtrees, re-lays out only dirty ones
+`crates/engine/layout/src/box_tree.rs:3583` **fn** `layout_streaming_incremental` — Streaming incremental layout (PH1-2b)
+`crates/engine/layout/src/box_tree.rs:3630` **fn** `layout_mutation_incremental` — Incremental re-layout for JS DOM mutations (ADR-016 M4)
+`crates/engine/layout/src/box_tree.rs:3686` **fn** `layout_mutation_incremental_restyle` — BUG-341 S5: incremental re-layout for a pure interactive-state transition
+`crates/engine/layout/src/box_tree.rs:3869` **fn** `build_iframe_document` — Parse inline HTML from an `<iframe srcdoc="...">` attribute (HTML spec §4.8.5)
+`crates/engine/layout/src/box_tree.rs:3944` **fn** `canvas_background_color` — CSS Backgrounds §3.11.1 — the canvas background color
+`crates/engine/layout/src/box_tree.rs:5329` **fn** `incremental_build_box` — BUG-341 S4 — incremental box-build entry point
+`crates/engine/layout/src/box_tree.rs:12221` **fn** `resolve_auto_fill_fit_count` — CSS Grid Layout L3 §9 — Resolve `repeat(auto-fill|auto-fit, <track-list>)` count
+`crates/engine/layout/src/box_tree.rs:12404` **fn** `measure_text_w` — Measures text width (letter_spacing applied between each character)
+`crates/engine/layout/src/box_tree.rs:12423` **fn** `measure_text_w_families` — Как [`measure_text_w`], но учитывает CSS `font-family` каскад
+`crates/engine/layout/src/box_tree.rs:12453` **fn** `measure_text_w_varied` — Как [`measure_text_w_families`], но учитывает CSS `font-variation-settings`
+`crates/engine/layout/src/box_tree.rs:13756` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
 `crates/engine/layout/src/color_mix.rs:38` **enum** `MixColorSpace` — CSS Color L5 §10.2 — interpolation color space for `color-mix()`
 `crates/engine/layout/src/color_mix.rs:63` **fn** `from_css` — Parse a CSS `color-mix()` interpolation space identifier (case-insensitive)
 `crates/engine/layout/src/color_mix.rs:80` **fn** `is_polar` — Returns `true` if this space has a hue (polar) axis
@@ -1820,42 +1822,42 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/counters.rs:265` **fn** `keys` — Iterate the nodes this cache holds a style for, in arbitrary order
 `crates/engine/layout/src/counters.rs:270` **fn** `iter` — Iterate `(node, style)` pairs in arbitrary order
 `crates/engine/layout/src/counters.rs:287` **fn** `from_plain` — A cache holding exactly `styles`, as though one pass had just written it
-`crates/engine/layout/src/counters.rs:342` **struct** `PrevCascade` — BUG-341 S24 — the cascade as it stood *before* the current pass, for
-`crates/engine/layout/src/counters.rs:355` **fn** `get` — The style the previous pass cascaded for `id`, if it had one
-`crates/engine/layout/src/counters.rs:363` **fn** `contains_key` — Whether the previous pass cascaded a style for `id` at all
-`crates/engine/layout/src/counters.rs:371` **fn** `unchanged` — A view over a cascade the current pass has not displaced anything from
-`crates/engine/layout/src/counters.rs:383` **struct** `CounterMap` — Document-order snapshot of CSS generated-content state
-`crates/engine/layout/src/counters.rs:491` **fn** `counters` — Returns the counter snapshot for `id`, if any
-`crates/engine/layout/src/counters.rs:497` **fn** `quote_depths` — Returns the ordered quote-depth indices for the given `(id, slot)`'s
-`crates/engine/layout/src/counters.rs:503` **fn** `style_for` — Returns the `ComputedStyle` this map's traversal computed for `id`, if
-`crates/engine/layout/src/counters.rs:511` **fn** `prev_cascade` — BUG-341 S24 — the cascade as the *previous* pass left it, for the graft
-`crates/engine/layout/src/counters.rs:521` **fn** `replaced_styles` — What this pass displaced from the carried cache (BUG-341 S24): for every
-`crates/engine/layout/src/counters.rs:540` **fn** `into_styles` — Hand the carried cascade cache on to the next pass (BUG-341 S24)
-`crates/engine/layout/src/counters.rs:552` **fn** `style_arc` — Like [`Self::style_for`], but hands back the shared allocation itself
-`crates/engine/layout/src/counters.rs:561` **fn** `styles` — Returns the full per-node `ComputedStyle` cascade cache (BUG-341 S2)
-`crates/engine/layout/src/counters.rs:573` **fn** `counter_snapshot_count` — How many per-node counter snapshots this map actually stores
-`crates/engine/layout/src/counters.rs:580` **fn** `clean_subtrees` — Returns the whole-subtree-unchanged node set (BUG-341 S4) — see the
-`crates/engine/layout/src/counters.rs:663` **fn** `precompute_counters` — Build a `CounterMap` by walking the DOM in pre-order
-`crates/engine/layout/src/counters.rs:697` **struct** `RestyleDelta` — BUG-341 S3 — incremental-cascade root-set + reuse cache (brief §3/§4)
-`crates/engine/layout/src/counters.rs:768` **enum** `ContentDirty` — BUG-341 S16 — per-node DOM-content dirtiness for one incremental cycle
-`crates/engine/layout/src/counters.rs:797` **fn** `tracked` — Whether this cycle has a complete per-node content-mutation record, and
-`crates/engine/layout/src/counters.rs:804` **fn** `contains` — Whether `id`'s own content may have changed this cycle. `true` for
-`crates/engine/layout/src/counters.rs:815` **fn** `nothing_changed` — BUG-341 S26 — whether this record positively states that *no* node's
-`crates/engine/layout/src/counters.rs:833` **fn** `incremental_precompute_counters` — BUG-341 S3 — incremental cascade: like [`precompute_counters`], but reuses
-`crates/engine/layout/src/counters.rs:1108` **fn** `set_incremental_restyle` — Enables/disables the incremental cascade for subsequent
-`crates/engine/layout/src/counters.rs:1113` **fn** `incremental_restyle_enabled` — Whether the incremental cascade is currently enabled on this thread
-`crates/engine/layout/src/counters.rs:1126` **struct** `CascadeStats` — BUG-341 S3/S17 — per-pass tally of what the cascade stage recomputed versus
-`crates/engine/layout/src/counters.rs:1194` **fn** `take_cascade_stats` — Returns the accumulated [`CascadeStats`] and resets the tally
-`crates/engine/layout/src/counters.rs:1448` **fn** `format_counter` — Format a counter integer value according to the given `list-style-type` keyword
-`crates/engine/layout/src/counters.rs:1515` **enum** `CounterSystem` — Numbering algorithm for a `@counter-style` rule — CSS Counter Styles L3 §4
-`crates/engine/layout/src/counters.rs:1534` **struct** `RangeBound` — Counter range bound: `None` means ±infinite (CSS Counter Styles L3 §5)
-`crates/engine/layout/src/counters.rs:1543` **enum** `CounterRange` — Range descriptor value (CSS Counter Styles L3 §5)
-`crates/engine/layout/src/counters.rs:1552` **struct** `CounterStyleDef` — Parsed `@counter-style` rule — CSS Counter Styles L3 §2
-`crates/engine/layout/src/counters.rs:1590` **type** `CounterStyleRegistry` — Maps counter style names to their parsed `CounterStyleDef`
-`crates/engine/layout/src/counters.rs:1593` **fn** `build_counter_style_registry` — Build a `CounterStyleRegistry` from all `@counter-style` rules in a stylesheet
-`crates/engine/layout/src/counters.rs:1872` **fn** `format_counter_with_registry` — Format a counter value using the registry (custom `@counter-style`) first,
-`crates/engine/layout/src/counters.rs:2042` **fn** `resolve_counter_value` — CSS Counter Styles L3 §2 — format counter `n` using a resolved `CounterStyleDef`
-`crates/engine/layout/src/counters.rs:2055` **fn** `build_list_marker_text` — CSS Lists L3 §2.1 — canonical wiring point for `list-style-type` + `@counter-style`
+`crates/engine/layout/src/counters.rs:343` **struct** `PrevCascade` — BUG-341 S24 — the cascade as it stood *before* the current pass, for
+`crates/engine/layout/src/counters.rs:356` **fn** `get` — The style the previous pass cascaded for `id`, if it had one
+`crates/engine/layout/src/counters.rs:364` **fn** `contains_key` — Whether the previous pass cascaded a style for `id` at all
+`crates/engine/layout/src/counters.rs:372` **fn** `unchanged` — A view over a cascade the current pass has not displaced anything from
+`crates/engine/layout/src/counters.rs:384` **struct** `CounterMap` — Document-order snapshot of CSS generated-content state
+`crates/engine/layout/src/counters.rs:492` **fn** `counters` — Returns the counter snapshot for `id`, if any
+`crates/engine/layout/src/counters.rs:498` **fn** `quote_depths` — Returns the ordered quote-depth indices for the given `(id, slot)`'s
+`crates/engine/layout/src/counters.rs:504` **fn** `style_for` — Returns the `ComputedStyle` this map's traversal computed for `id`, if
+`crates/engine/layout/src/counters.rs:512` **fn** `prev_cascade` — BUG-341 S24 — the cascade as the *previous* pass left it, for the graft
+`crates/engine/layout/src/counters.rs:522` **fn** `replaced_styles` — What this pass displaced from the carried cache (BUG-341 S24): for every
+`crates/engine/layout/src/counters.rs:541` **fn** `into_styles` — Hand the carried cascade cache on to the next pass (BUG-341 S24)
+`crates/engine/layout/src/counters.rs:553` **fn** `style_arc` — Like [`Self::style_for`], but hands back the shared allocation itself
+`crates/engine/layout/src/counters.rs:562` **fn** `styles` — Returns the full per-node `ComputedStyle` cascade cache (BUG-341 S2)
+`crates/engine/layout/src/counters.rs:574` **fn** `counter_snapshot_count` — How many per-node counter snapshots this map actually stores
+`crates/engine/layout/src/counters.rs:581` **fn** `clean_subtrees` — Returns the whole-subtree-unchanged node set (BUG-341 S4) — see the
+`crates/engine/layout/src/counters.rs:666` **fn** `precompute_counters` — Build a `CounterMap` by walking the DOM in pre-order
+`crates/engine/layout/src/counters.rs:700` **struct** `RestyleDelta` — BUG-341 S3 — incremental-cascade root-set + reuse cache (brief §3/§4)
+`crates/engine/layout/src/counters.rs:771` **enum** `ContentDirty` — BUG-341 S16 — per-node DOM-content dirtiness for one incremental cycle
+`crates/engine/layout/src/counters.rs:800` **fn** `tracked` — Whether this cycle has a complete per-node content-mutation record, and
+`crates/engine/layout/src/counters.rs:807` **fn** `contains` — Whether `id`'s own content may have changed this cycle. `true` for
+`crates/engine/layout/src/counters.rs:818` **fn** `nothing_changed` — BUG-341 S26 — whether this record positively states that *no* node's
+`crates/engine/layout/src/counters.rs:836` **fn** `incremental_precompute_counters` — BUG-341 S3 — incremental cascade: like [`precompute_counters`], but reuses
+`crates/engine/layout/src/counters.rs:1111` **fn** `set_incremental_restyle` — Enables/disables the incremental cascade for subsequent
+`crates/engine/layout/src/counters.rs:1116` **fn** `incremental_restyle_enabled` — Whether the incremental cascade is currently enabled on this thread
+`crates/engine/layout/src/counters.rs:1129` **struct** `CascadeStats` — BUG-341 S3/S17 — per-pass tally of what the cascade stage recomputed versus
+`crates/engine/layout/src/counters.rs:1197` **fn** `take_cascade_stats` — Returns the accumulated [`CascadeStats`] and resets the tally
+`crates/engine/layout/src/counters.rs:1451` **fn** `format_counter` — Format a counter integer value according to the given `list-style-type` keyword
+`crates/engine/layout/src/counters.rs:1518` **enum** `CounterSystem` — Numbering algorithm for a `@counter-style` rule — CSS Counter Styles L3 §4
+`crates/engine/layout/src/counters.rs:1537` **struct** `RangeBound` — Counter range bound: `None` means ±infinite (CSS Counter Styles L3 §5)
+`crates/engine/layout/src/counters.rs:1546` **enum** `CounterRange` — Range descriptor value (CSS Counter Styles L3 §5)
+`crates/engine/layout/src/counters.rs:1555` **struct** `CounterStyleDef` — Parsed `@counter-style` rule — CSS Counter Styles L3 §2
+`crates/engine/layout/src/counters.rs:1593` **type** `CounterStyleRegistry` — Maps counter style names to their parsed `CounterStyleDef`
+`crates/engine/layout/src/counters.rs:1596` **fn** `build_counter_style_registry` — Build a `CounterStyleRegistry` from all `@counter-style` rules in a stylesheet
+`crates/engine/layout/src/counters.rs:1876` **fn** `format_counter_with_registry` — Format a counter value using the registry (custom `@counter-style`) first,
+`crates/engine/layout/src/counters.rs:2046` **fn** `resolve_counter_value` — CSS Counter Styles L3 §2 — format counter `n` using a resolved `CounterStyleDef`
+`crates/engine/layout/src/counters.rs:2059` **fn** `build_list_marker_text` — CSS Lists L3 §2.1 — canonical wiring point for `list-style-type` + `@counter-style`
 `crates/engine/layout/src/field_sizing.rs:48` **fn** `field_sizing_content_intrinsic` — Computes content-based intrinsic dimensions for an HTML form control under
 `crates/engine/layout/src/font_palette.rs:20` **struct** `PaletteColorOverride` — Resolved CPAL color override: `(palette_index, color)`
 `crates/engine/layout/src/font_palette.rs:38` **fn** `resolve_font_palette_overrides` — Resolves `@font-palette-values` overrides for a given element
@@ -1872,8 +1874,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/image_set.rs:70` **fn** `accepts` — Returns `true` if `mime_type` is accepted
 `crates/engine/layout/src/image_set.rs:250` **fn** `is_image_set` — CSS Images L4 §5 — is `value` an `image-set()` / `-webkit-image-set()`
 `crates/engine/layout/src/image_set.rs:262` **fn** `parse_image_set` — Parses an `image-set()` / `-webkit-image-set()` expression into a list of
-`crates/engine/layout/src/image_set.rs:280` **fn** `select_image_set_candidate` — CSS Images L4 §5 — selects the best candidate from a parsed `image-set()`
-`crates/engine/layout/src/image_set.rs:309` **fn** `select_image_set_url` — Convenience wrapper: parses `value` and immediately selects the best URL
+`crates/engine/layout/src/image_set.rs:281` **fn** `select_image_set_candidate` — CSS Images L4 §5 — selects the best candidate from a parsed `image-set()`
+`crates/engine/layout/src/image_set.rs:310` **fn** `select_image_set_url` — Convenience wrapper: parses `value` and immediately selects the best URL
 `crates/engine/layout/src/incremental.rs:38` **struct** `DirtyBits` — Bitflag tracking which aspects of a [`LayoutBox`] need recalculation
 `crates/engine/layout/src/incremental.rs:76` **fn** `is_clean` — Returns `true` when no bits are set (layout is up-to-date)
 `crates/engine/layout/src/incremental.rs:80` **fn** `is_dirty` — Returns `true` when any bit is set
@@ -1922,17 +1924,17 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/line_break.rs:30` **fn** `break_opportunities` — Byte offsets inside `text` at which a soft wrap is allowed
 `crates/engine/layout/src/masonry.rs:33` **fn** `lay_out_masonry` — Greedy waterfall masonry placement algorithm (CSS Grid L3 §14)
 `crates/engine/layout/src/masonry.rs:64` **fn** `min_track_idx` — Returns the index of the track with the minimum running height
-`crates/engine/layout/src/mathml.rs:28` **enum** `MathStyle` — CSS `math-style` (MathML Core §2.1.1). Inherited. Initial: `Normal`
-`crates/engine/layout/src/mathml.rs:44` **fn** `math_depth_scale` — Relative font scale between two `math-depth` levels
-`crates/engine/layout/src/mathml.rs:50` **enum** `MathmlElementKind` — Represents the type of MathML element and its visual role
-`crates/engine/layout/src/mathml.rs:76` **struct** `MathmlBox` — MathML box: container for mathematical notation
-`crates/engine/layout/src/mathml.rs:94` **fn** `new` — Create a new MathML box for a given element type
-`crates/engine/layout/src/mathml.rs:106` **fn** `with_denominator` — Set denominator boxes for mfrac elements
-`crates/engine/layout/src/mathml.rs:112` **fn** `with_annotation` — Set annotation (exponent/subscript) boxes
-`crates/engine/layout/src/mathml.rs:118` **fn** `with_annotation_scale` — Set the scaling factor for annotations (superscript/subscript)
-`crates/engine/layout/src/mathml.rs:124` **fn** `with_math_style` — Set the CSS `math-style` (taken from the element's `ComputedStyle`)
-`crates/engine/layout/src/mathml.rs:140` **fn** `collect_mathml_structure` — Collect MathML element structure from a DOM node
-`crates/engine/layout/src/mathml.rs:174` **fn** `lay_out_mathml` — Layout algorithm for MathML content
+`crates/engine/layout/src/mathml.rs:38` **enum** `MathStyle` — CSS `math-style` (MathML Core §2.1.1). Inherited. Initial: `Normal`
+`crates/engine/layout/src/mathml.rs:54` **fn** `math_depth_scale` — Relative font scale between two `math-depth` levels
+`crates/engine/layout/src/mathml.rs:60` **enum** `MathmlElementKind` — Represents the type of MathML element and its visual role
+`crates/engine/layout/src/mathml.rs:86` **struct** `MathmlBox` — MathML box: container for mathematical notation
+`crates/engine/layout/src/mathml.rs:104` **fn** `new` — Create a new MathML box for a given element type
+`crates/engine/layout/src/mathml.rs:116` **fn** `with_denominator` — Set denominator boxes for mfrac elements
+`crates/engine/layout/src/mathml.rs:122` **fn** `with_annotation` — Set annotation (exponent/subscript) boxes
+`crates/engine/layout/src/mathml.rs:128` **fn** `with_annotation_scale` — Set the scaling factor for annotations (superscript/subscript)
+`crates/engine/layout/src/mathml.rs:134` **fn** `with_math_style` — Set the CSS `math-style` (taken from the element's `ComputedStyle`)
+`crates/engine/layout/src/mathml.rs:150` **fn** `collect_mathml_structure` — Collect MathML element structure from a DOM node
+`crates/engine/layout/src/mathml.rs:184` **fn** `lay_out_mathml` — Layout algorithm for MathML content
 `crates/engine/layout/src/motion_path.rs:30` **struct** `MotionTransform` — Result of resolving a motion offset along an `offset-path`
 `crates/engine/layout/src/motion_path.rs:53` **fn** `resolve_motion_transform` — Resolve the motion transform for an element with `offset-path: path(...)`
 `crates/engine/layout/src/motion_path.rs:559` **fn** `flatten_path_to_polygon` — Flattens an SVG path `d` string into a polygon (CSS Shapes L1 §4 `path()`)
@@ -2356,68 +2358,68 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/style.rs:6744` **fn** `root` — Стартовые значения для корня документа
 `crates/engine/layout/src/style.rs:7065` **fn** `take_compute_style_calls` — Returns the number of [`compute_style`] runs since the last drain, and
 `crates/engine/layout/src/style.rs:7183` **fn** `compute_style`
-`crates/engine/layout/src/style.rs:8770` **fn** `compute_style_from_declarations` — Build a `ComputedStyle` from a flat list of declarations with neutral context
-`crates/engine/layout/src/style.rs:8923` **fn** `merge_pseudo_inherited` — CSS Pseudo-elements L4 §3.4 — inheritance through the `::first-line` /
-`crates/engine/layout/src/style.rs:8983` **fn** `compute_pseudo_element_style` — Вычисляет стиль для псевдоэлемента `::before` или `::after` элемента `node`
-`crates/engine/layout/src/style.rs:9224` **fn** `compute_selection_style` — Computes the `::selection` override style for a DOM element
-`crates/engine/layout/src/style.rs:9286` **fn** `validate_against_syntax` — CSS Properties and Values L1 §2 — упрощённая валидация значения
-`crates/engine/layout/src/style.rs:11805` **fn** `ua_form_element_colors` — UA stylesheet для HTML form controls (HTML5 §15.5 «Rendering»)
-`crates/engine/layout/src/style.rs:12034` **fn** `parse_font_family` — Парсит `font-family: a, "b c", d` в Vec<String>. Запятые разделяют
-`crates/engine/layout/src/style.rs:12097` **fn** `parse_font_variation_settings` — Парсит CSS `font-variation-settings` (CSS Fonts L4 §7)
-`crates/engine/layout/src/style.rs:12140` **fn** `parse_font_feature_settings` — Парсит CSS `font-feature-settings` (CSS Fonts L3 §6)
-`crates/engine/layout/src/style.rs:12181` **enum** `FontPalette` — CSS Fonts L4 §11.3 — computed value of `font-palette`
-`crates/engine/layout/src/style.rs:12198` **fn** `parse_font_palette` — Парсит CSS `font-palette`: `normal | light | dark | <dashed-ident>`
-`crates/engine/layout/src/style.rs:12276` **fn** `default_font_family` — Дефолтный список `font-family` документа — см. [`DEFAULT_FONT_FAMILY`]
-`crates/engine/layout/src/style.rs:12297` **fn** `set_cq_context` — Sets the nearest-container size for `cq*` unit resolution during the container re-layout pass
-`crates/engine/layout/src/style.rs:12302` **fn** `clear_cq_context` — Clears the `cq*` context after the container re-layout pass completes
-`crates/engine/layout/src/style.rs:12322` **fn** `push_ch_ex_context` — Installs the `ch`/`ex` metric context (absolute px per unit) for the box being
-`crates/engine/layout/src/style.rs:12328` **fn** `pop_ch_ex_context` — Restores the `ch`/`ex` metric context to a value previously returned by
-`crates/engine/layout/src/style.rs:12352` **fn** `set_interactive_state` — Sets the interactive hover/focus/active state for the next layout pass
-`crates/engine/layout/src/style.rs:12363` **fn** `clear_interactive_state` — Clears hover/focus/active state after layout
-`crates/engine/layout/src/style.rs:12547` **struct** `StateRestyleIndex` — BUG-341 S7/S14 — everything [`restyle_root_set_for_state_change`] needs to
-`crates/engine/layout/src/style.rs:12564` **fn** `needs_fanout` — S7 — whether a flipped node's invalidation widens to its parent
-`crates/engine/layout/src/style.rs:12569` **fn** `is_conservative` — S14 — whether per-node narrowing is disabled for this document/sheet
-`crates/engine/layout/src/style.rs:12575` **fn** `state_compound_count` — S14 — number of state-dependent compounds the narrowing tests each
-`crates/engine/layout/src/style.rs:12589` **fn** `state_flip_can_matter` — S14 — can an interactive-state flip on `node` change *any* computed
-`crates/engine/layout/src/style.rs:12653` **fn** `restyle_state_index` — BUG-341 S7/S14 — builds the [`StateRestyleIndex`] for one layout pass
-`crates/engine/layout/src/style.rs:12697` **fn** `restyle_root_set_for_state_change` — BUG-341 S3/S7 — restyle root-set (brief §4) for an interactive-state
-`crates/engine/layout/src/style.rs:12849` **struct** `NodeRestyleIndex` — BUG-341 S17 — what [`restyle_root_set_for_node_change`] needs to know about
-`crates/engine/layout/src/style.rs:12873` **fn** `is_conservative` — Whether per-node narrowing is disabled for this document/sheet pair
-`crates/engine/layout/src/style.rs:12880` **fn** `has_has_dependency` — BUG-349 — whether `sheet` contains a `:has()` selector, forcing
-`crates/engine/layout/src/style.rs:12886` **fn** `sibling_source_count` — Number of sibling-reachable compounds the narrowing tests each changed
-`crates/engine/layout/src/style.rs:12897` **fn** `attr_change_needs_fanout` — Can a write to `node`'s `attr` attribute change the computed style of
-`crates/engine/layout/src/style.rs:12912` **fn** `restyle_node_index` — BUG-341 S17 — builds the [`NodeRestyleIndex`] for one layout pass
-`crates/engine/layout/src/style.rs:12933` **enum** `NodeChange` — BUG-341 S17 — one reported DOM mutation, as
-`crates/engine/layout/src/style.rs:12982` **fn** `restyle_root_set_for_node_change` — BUG-341 S3/S17 — restyle root-set (brief §4) for DOM attribute/class/
-`crates/engine/layout/src/style.rs:13017` **fn** `set_forced_colors` — Enables/disables Forced Colors Mode (CSS Color Adjustment L1 §3) for all
-`crates/engine/layout/src/style.rs:13022` **fn** `forced_colors_active` — True when Forced Colors Mode is active on the current thread
-`crates/engine/layout/src/style.rs:13041` **fn** `set_print_media` — Selects the `print` (`true`) or `screen` (`false`) `@media` type for all
-`crates/engine/layout/src/style.rs:13046` **fn** `print_media_active` — True when the current layout pass renders for `print` media
-`crates/engine/layout/src/style.rs:13075` **struct** `StyleEnvSnapshot` — Snapshot of all style-pass thread-locals needed for rayon worker threads
-`crates/engine/layout/src/style.rs:13086` **fn** `capture` — Capture the current thread's style environment
-`crates/engine/layout/src/style.rs:13098` **fn** `install` — Install this snapshot on the **current** (worker) thread
-`crates/engine/layout/src/style.rs:13178` **enum** `LengthOrAuto` — CSS `<length> | auto` — для margin и offset-свойств, где `auto` имеет
-`crates/engine/layout/src/style.rs:13186` **fn** `is_auto`
-`crates/engine/layout/src/style.rs:13193` **fn** `to_px_opt` — Returns the raw pixel value for `Length::Px` variants; `Auto` and all
-`crates/engine/layout/src/style.rs:13203` **fn** `resolve` — Резолвит в пиксели. `Auto` → `None`; нерезолвируемый `%` → `None`
-`crates/engine/layout/src/style.rs:13211` **fn** `resolve_or_zero` — Резолвит в пиксели; для `Auto` и нерезолвируемых значений → 0.0
-`crates/engine/layout/src/style.rs:13222` **enum** `Length` — Типизированная длина CSS до резолва в пиксели
-`crates/engine/layout/src/style.rs:13297` **enum** `CalcNode` — CSS Values L4 §10 — AST `calc()`-выражения. Хранится как двоичное дерево
-`crates/engine/layout/src/style.rs:13326` **enum** `MathFn` — CSS Values L4 §10.7-10.9 — научные math-функции. Имена case-insensitive
-`crates/engine/layout/src/style.rs:13355` **enum** `RoundStrategy` — CSS Values L4 §10.5.1 — стратегия округления для `round()`
-`crates/engine/layout/src/style.rs:13379` **fn** `resolve` — Резолвит выражение в `f32`-пиксели по тем же правилам, что
-`crates/engine/layout/src/style.rs:13577` **fn** `resolve` — Возвращает длину в пикселях. `em_basis` — fs, относительно которого
-`crates/engine/layout/src/style.rs:13626` **fn** `is_intrinsic` — Returns `true` if this is an intrinsic sizing keyword (min-content,
-`crates/engine/layout/src/style.rs:13632` **fn** `resolve_or_zero` — Резолвит с `cb_width` как percent_basis; возвращает 0.0 при неудаче
-`crates/engine/layout/src/style.rs:13638` **fn** `px` — Извлекает пиксельное значение для уже-разрешённых `Px`-значений
-`crates/engine/layout/src/style.rs:13794` **fn** `parse_length`
-`crates/engine/layout/src/style.rs:17810` **fn** `resolve_logical_property` — Resolve CSS Logical Properties based on writing-mode
-`crates/engine/layout/src/style.rs:19928` **fn** `parse_transform_list` — Парсит `<transform-list>` — последовательность `func(args)` через
-`crates/engine/layout/src/style.rs:21346` **fn** `parse_grid_template_areas` — CSS Grid L1 §7.3 — parse `grid-template-areas` value
-`crates/engine/layout/src/style.rs:21426` **fn** `parse_background_gradient` — CSS Images L3/L4 §3.3/§3.7 — parses color stops from a CSS gradient string
-`crates/engine/layout/src/style.rs:21838` **fn** `parse_gradient_stops` — The leading direction / angle / shape argument (e.g. `to right`,
-`crates/engine/layout/src/style.rs:22897` **fn** `parse_color`
-`crates/engine/layout/src/style.rs:23073` **fn** `system_color` — CSS Color Module Level 4 §6.2 — резолв системных цветовых ключевых слов
+`crates/engine/layout/src/style.rs:8771` **fn** `compute_style_from_declarations` — Build a `ComputedStyle` from a flat list of declarations with neutral context
+`crates/engine/layout/src/style.rs:8924` **fn** `merge_pseudo_inherited` — CSS Pseudo-elements L4 §3.4 — inheritance through the `::first-line` /
+`crates/engine/layout/src/style.rs:8984` **fn** `compute_pseudo_element_style` — Вычисляет стиль для псевдоэлемента `::before` или `::after` элемента `node`
+`crates/engine/layout/src/style.rs:9225` **fn** `compute_selection_style` — Computes the `::selection` override style for a DOM element
+`crates/engine/layout/src/style.rs:9287` **fn** `validate_against_syntax` — CSS Properties and Values L1 §2 — упрощённая валидация значения
+`crates/engine/layout/src/style.rs:11807` **fn** `ua_form_element_colors` — UA stylesheet для HTML form controls (HTML5 §15.5 «Rendering»)
+`crates/engine/layout/src/style.rs:12036` **fn** `parse_font_family` — Парсит `font-family: a, "b c", d` в Vec<String>. Запятые разделяют
+`crates/engine/layout/src/style.rs:12099` **fn** `parse_font_variation_settings` — Парсит CSS `font-variation-settings` (CSS Fonts L4 §7)
+`crates/engine/layout/src/style.rs:12142` **fn** `parse_font_feature_settings` — Парсит CSS `font-feature-settings` (CSS Fonts L3 §6)
+`crates/engine/layout/src/style.rs:12183` **enum** `FontPalette` — CSS Fonts L4 §11.3 — computed value of `font-palette`
+`crates/engine/layout/src/style.rs:12200` **fn** `parse_font_palette` — Парсит CSS `font-palette`: `normal | light | dark | <dashed-ident>`
+`crates/engine/layout/src/style.rs:12278` **fn** `default_font_family` — Дефолтный список `font-family` документа — см. [`DEFAULT_FONT_FAMILY`]
+`crates/engine/layout/src/style.rs:12299` **fn** `set_cq_context` — Sets the nearest-container size for `cq*` unit resolution during the container re-layout pass
+`crates/engine/layout/src/style.rs:12304` **fn** `clear_cq_context` — Clears the `cq*` context after the container re-layout pass completes
+`crates/engine/layout/src/style.rs:12324` **fn** `push_ch_ex_context` — Installs the `ch`/`ex` metric context (absolute px per unit) for the box being
+`crates/engine/layout/src/style.rs:12330` **fn** `pop_ch_ex_context` — Restores the `ch`/`ex` metric context to a value previously returned by
+`crates/engine/layout/src/style.rs:12354` **fn** `set_interactive_state` — Sets the interactive hover/focus/active state for the next layout pass
+`crates/engine/layout/src/style.rs:12365` **fn** `clear_interactive_state` — Clears hover/focus/active state after layout
+`crates/engine/layout/src/style.rs:12549` **struct** `StateRestyleIndex` — BUG-341 S7/S14 — everything [`restyle_root_set_for_state_change`] needs to
+`crates/engine/layout/src/style.rs:12566` **fn** `needs_fanout` — S7 — whether a flipped node's invalidation widens to its parent
+`crates/engine/layout/src/style.rs:12571` **fn** `is_conservative` — S14 — whether per-node narrowing is disabled for this document/sheet
+`crates/engine/layout/src/style.rs:12577` **fn** `state_compound_count` — S14 — number of state-dependent compounds the narrowing tests each
+`crates/engine/layout/src/style.rs:12591` **fn** `state_flip_can_matter` — S14 — can an interactive-state flip on `node` change *any* computed
+`crates/engine/layout/src/style.rs:12655` **fn** `restyle_state_index` — BUG-341 S7/S14 — builds the [`StateRestyleIndex`] for one layout pass
+`crates/engine/layout/src/style.rs:12699` **fn** `restyle_root_set_for_state_change` — BUG-341 S3/S7 — restyle root-set (brief §4) for an interactive-state
+`crates/engine/layout/src/style.rs:12851` **struct** `NodeRestyleIndex` — BUG-341 S17 — what [`restyle_root_set_for_node_change`] needs to know about
+`crates/engine/layout/src/style.rs:12875` **fn** `is_conservative` — Whether per-node narrowing is disabled for this document/sheet pair
+`crates/engine/layout/src/style.rs:12882` **fn** `has_has_dependency` — BUG-349 — whether `sheet` contains a `:has()` selector, forcing
+`crates/engine/layout/src/style.rs:12888` **fn** `sibling_source_count` — Number of sibling-reachable compounds the narrowing tests each changed
+`crates/engine/layout/src/style.rs:12899` **fn** `attr_change_needs_fanout` — Can a write to `node`'s `attr` attribute change the computed style of
+`crates/engine/layout/src/style.rs:12914` **fn** `restyle_node_index` — BUG-341 S17 — builds the [`NodeRestyleIndex`] for one layout pass
+`crates/engine/layout/src/style.rs:12935` **enum** `NodeChange` — BUG-341 S17 — one reported DOM mutation, as
+`crates/engine/layout/src/style.rs:12984` **fn** `restyle_root_set_for_node_change` — BUG-341 S3/S17 — restyle root-set (brief §4) for DOM attribute/class/
+`crates/engine/layout/src/style.rs:13019` **fn** `set_forced_colors` — Enables/disables Forced Colors Mode (CSS Color Adjustment L1 §3) for all
+`crates/engine/layout/src/style.rs:13024` **fn** `forced_colors_active` — True when Forced Colors Mode is active on the current thread
+`crates/engine/layout/src/style.rs:13043` **fn** `set_print_media` — Selects the `print` (`true`) or `screen` (`false`) `@media` type for all
+`crates/engine/layout/src/style.rs:13048` **fn** `print_media_active` — True when the current layout pass renders for `print` media
+`crates/engine/layout/src/style.rs:13077` **struct** `StyleEnvSnapshot` — Snapshot of all style-pass thread-locals needed for rayon worker threads
+`crates/engine/layout/src/style.rs:13088` **fn** `capture` — Capture the current thread's style environment
+`crates/engine/layout/src/style.rs:13100` **fn** `install` — Install this snapshot on the **current** (worker) thread
+`crates/engine/layout/src/style.rs:13180` **enum** `LengthOrAuto` — CSS `<length> | auto` — для margin и offset-свойств, где `auto` имеет
+`crates/engine/layout/src/style.rs:13188` **fn** `is_auto`
+`crates/engine/layout/src/style.rs:13195` **fn** `to_px_opt` — Returns the raw pixel value for `Length::Px` variants; `Auto` and all
+`crates/engine/layout/src/style.rs:13205` **fn** `resolve` — Резолвит в пиксели. `Auto` → `None`; нерезолвируемый `%` → `None`
+`crates/engine/layout/src/style.rs:13213` **fn** `resolve_or_zero` — Резолвит в пиксели; для `Auto` и нерезолвируемых значений → 0.0
+`crates/engine/layout/src/style.rs:13224` **enum** `Length` — Типизированная длина CSS до резолва в пиксели
+`crates/engine/layout/src/style.rs:13299` **enum** `CalcNode` — CSS Values L4 §10 — AST `calc()`-выражения. Хранится как двоичное дерево
+`crates/engine/layout/src/style.rs:13328` **enum** `MathFn` — CSS Values L4 §10.7-10.9 — научные math-функции. Имена case-insensitive
+`crates/engine/layout/src/style.rs:13357` **enum** `RoundStrategy` — CSS Values L4 §10.5.1 — стратегия округления для `round()`
+`crates/engine/layout/src/style.rs:13381` **fn** `resolve` — Резолвит выражение в `f32`-пиксели по тем же правилам, что
+`crates/engine/layout/src/style.rs:13579` **fn** `resolve` — Возвращает длину в пикселях. `em_basis` — fs, относительно которого
+`crates/engine/layout/src/style.rs:13628` **fn** `is_intrinsic` — Returns `true` if this is an intrinsic sizing keyword (min-content,
+`crates/engine/layout/src/style.rs:13634` **fn** `resolve_or_zero` — Резолвит с `cb_width` как percent_basis; возвращает 0.0 при неудаче
+`crates/engine/layout/src/style.rs:13640` **fn** `px` — Извлекает пиксельное значение для уже-разрешённых `Px`-значений
+`crates/engine/layout/src/style.rs:13796` **fn** `parse_length`
+`crates/engine/layout/src/style.rs:17813` **fn** `resolve_logical_property` — Resolve CSS Logical Properties based on writing-mode
+`crates/engine/layout/src/style.rs:19931` **fn** `parse_transform_list` — Парсит `<transform-list>` — последовательность `func(args)` через
+`crates/engine/layout/src/style.rs:21350` **fn** `parse_grid_template_areas` — CSS Grid L1 §7.3 — parse `grid-template-areas` value
+`crates/engine/layout/src/style.rs:21430` **fn** `parse_background_gradient` — CSS Images L3/L4 §3.3/§3.7 — parses color stops from a CSS gradient string
+`crates/engine/layout/src/style.rs:21843` **fn** `parse_gradient_stops` — The leading direction / angle / shape argument (e.g. `to right`,
+`crates/engine/layout/src/style.rs:22902` **fn** `parse_color`
+`crates/engine/layout/src/style.rs:23078` **fn** `system_color` — CSS Color Module Level 4 §6.2 — резолв системных цветовых ключевых слов
 `crates/engine/layout/src/subgrid.rs:24` **struct** `SubgridContext` — Resolved track sizes and cumulative offsets for one grid axis (columns or rows)
 `crates/engine/layout/src/subgrid.rs:35` **fn** `from_parent_tracks` — Build from a slice of parent track sizes and the gap value used between them
 `crates/engine/layout/src/subgrid.rs:46` **fn** `total_size` — Total span width/height occupied by all inherited tracks (including inter-track gaps)
@@ -2470,7 +2472,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/auth.rs:619` **struct** `StaticCredentialProvider` — Простой credential-провайдер с фиксированной табличкой `(origin, realm) →
 `crates/network/src/auth.rs:624` **fn** `new`
 `crates/network/src/auth.rs:632` **fn** `with` — Точное совпадение `(origin, realm)`
-`crates/network/src/auth.rs:640` **fn** `add` — Зарегистрировать creds после конструирования. `&self` (не `&mut`) —
+`crates/network/src/auth.rs:641` **fn** `add` — Зарегистрировать creds после конструирования. `&self` (не `&mut`) —
 `crates/network/src/brotli.rs:24` **struct** `BrotliContentDecoder` — `ContentDecoder` для `Content-Encoding: br`. Stateless: один экземпляр
 `crates/network/src/coop.rs:37` **enum** `CrossOriginOpenerPolicy` — Value of the `Cross-Origin-Opener-Policy` header
 `crates/network/src/coop.rs:59` **fn** `parse` — Parse the value of a `Cross-Origin-Opener-Policy` header
@@ -2518,29 +2520,29 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/csp.rs:140` **fn** `effective_sources` — Returns the effective source list for `directive`, falling back to
 `crates/network/src/csp.rs:159` **fn** `parse_csp_header` — Parse a `Content-Security-Policy` header value into a [`CspPolicy`]
 `crates/network/src/csp.rs:166` **fn** `parse_csp_report_only_header` — Parse a report-only variant of the CSP header
-`crates/network/src/ctap2.rs:70` **enum** `Ctap2Error` — Error produced by the CTAP2 HID transport layer
-`crates/network/src/ctap2.rs:104` **trait** `HidDevice` — Platform-agnostic USB HID device I/O
-`crates/network/src/ctap2.rs:124` **struct** `CtapHidChannel` — An established CTAPHID channel with a specific device
-`crates/network/src/ctap2.rs:133` **fn** `init` — Perform the CTAPHID_INIT handshake and return a channel with the
-`crates/network/src/ctap2.rs:160` **fn** `send_cbor` — Send a CTAP2 CBOR command and return the CBOR response payload (status
-`crates/network/src/ctap2.rs:633` **fn** `extract_credential_id` — Extract the credential ID from the `authenticatorData` byte string
-`crates/network/src/ctap2.rs:716` **fn** `probe_usb_fido_devices` — Enumerate connected FIDO2 USB HID devices using the platform HID backend
-`crates/network/src/ctap2.rs:729` **fn** `platform_enumerate_ctap2_devices` — Platform-native FIDO2 USB HID device enumeration
-`crates/network/src/ctap2.rs:873` **struct** `WinHidDevice` — A real USB HID device opened via Win32 `CreateFile`
-`crates/network/src/ctap2.rs:933` **fn** `enumerate` — Enumerate USB HID FIDO2 devices via Win32 SetupDi + HidD APIs
-`crates/network/src/ctap2.rs:1108` **struct** `LinuxHidDevice` — A FIDO2 device exposed as a Linux `/dev/hidrawN` character device
-`crates/network/src/ctap2.rs:1203` **fn** `enumerate` — Scan `/dev/hidraw0`..`/dev/hidraw31` and return FIDO2 devices
-`crates/network/src/ctap2.rs:1242` **struct** `CtapRoamingTransport` — [`CredentialProvider`] that uses a connected FIDO2 USB security key
-`crates/network/src/ctap2.rs:1246` **fn** `new` — Create a new roaming transport
-`crates/network/src/ctap2.rs:1338` **struct** `CompositeCredentialProvider` — A [`CredentialProvider`] that delegates to a priority-ordered list
-`crates/network/src/ctap2.rs:1344` **fn** `new` — Create a composite from an ordered list of providers
-`crates/network/src/ctap2.rs:1383` **struct** `MockHidDevice` — A scripted in-memory [`HidDevice`] for unit tests
-`crates/network/src/ctap2.rs:1393` **fn** `new` — Create a blank mock with no queued responses
-`crates/network/src/ctap2.rs:1402` **fn** `push_response` — Push a raw 65-byte HID report to the response queue
-`crates/network/src/ctap2.rs:1407` **fn** `queue_init_response` — Build and queue a CTAPHID_INIT response for the given nonce + CID
-`crates/network/src/ctap2.rs:1424` **fn** `queue_cbor_response` — Build and queue a successful CTAPHID_CBOR response with the given payload
-`crates/network/src/ctap2.rs:1454` **fn** `written_reports` — Return all written reports (as slices) for inspection
-`crates/network/src/ctap2.rs:1485` **fn** `seal` — Reverse the internal response queue so items are served FIFO
+`crates/network/src/ctap2.rs:71` **enum** `Ctap2Error` — Error produced by the CTAP2 HID transport layer
+`crates/network/src/ctap2.rs:105` **trait** `HidDevice` — Platform-agnostic USB HID device I/O
+`crates/network/src/ctap2.rs:125` **struct** `CtapHidChannel` — An established CTAPHID channel with a specific device
+`crates/network/src/ctap2.rs:134` **fn** `init` — Perform the CTAPHID_INIT handshake and return a channel with the
+`crates/network/src/ctap2.rs:161` **fn** `send_cbor` — Send a CTAP2 CBOR command and return the CBOR response payload (status
+`crates/network/src/ctap2.rs:634` **fn** `extract_credential_id` — Extract the credential ID from the `authenticatorData` byte string
+`crates/network/src/ctap2.rs:717` **fn** `probe_usb_fido_devices` — Enumerate connected FIDO2 USB HID devices using the platform HID backend
+`crates/network/src/ctap2.rs:730` **fn** `platform_enumerate_ctap2_devices` — Platform-native FIDO2 USB HID device enumeration
+`crates/network/src/ctap2.rs:874` **struct** `WinHidDevice` — A real USB HID device opened via Win32 `CreateFile`
+`crates/network/src/ctap2.rs:937` **fn** `enumerate` — Enumerate USB HID FIDO2 devices via Win32 SetupDi + HidD APIs
+`crates/network/src/ctap2.rs:1120` **struct** `LinuxHidDevice` — A FIDO2 device exposed as a Linux `/dev/hidrawN` character device
+`crates/network/src/ctap2.rs:1215` **fn** `enumerate` — Scan `/dev/hidraw0`..`/dev/hidraw31` and return FIDO2 devices
+`crates/network/src/ctap2.rs:1254` **struct** `CtapRoamingTransport` — [`CredentialProvider`] that uses a connected FIDO2 USB security key
+`crates/network/src/ctap2.rs:1258` **fn** `new` — Create a new roaming transport
+`crates/network/src/ctap2.rs:1350` **struct** `CompositeCredentialProvider` — A [`CredentialProvider`] that delegates to a priority-ordered list
+`crates/network/src/ctap2.rs:1356` **fn** `new` — Create a composite from an ordered list of providers
+`crates/network/src/ctap2.rs:1395` **struct** `MockHidDevice` — A scripted in-memory [`HidDevice`] for unit tests
+`crates/network/src/ctap2.rs:1405` **fn** `new` — Create a blank mock with no queued responses
+`crates/network/src/ctap2.rs:1415` **fn** `push_response` — Push a raw 65-byte HID report to the response queue
+`crates/network/src/ctap2.rs:1420` **fn** `queue_init_response` — Build and queue a CTAPHID_INIT response for the given nonce + CID
+`crates/network/src/ctap2.rs:1437` **fn** `queue_cbor_response` — Build and queue a successful CTAPHID_CBOR response with the given payload
+`crates/network/src/ctap2.rs:1468` **fn** `written_reports` — Return all written reports (as slices) for inspection
+`crates/network/src/ctap2.rs:1502` **fn** `seal` — Reverse the internal response queue so items are served FIFO
 `crates/network/src/dns.rs:93` **struct** `SystemDnsResolver` — DNS-резолвер на основе системного getaddrinfo (через std::net)
 `crates/network/src/doh.rs:46` **fn** `encode_query` — Закодировать стандартный DNS query — header + одна question. RD=1
 `crates/network/src/doh.rs:100` **fn** `decode_answer_ips` — Распакованный DNS-ответ — без CNAME-цепочек, только IP-адреса из
@@ -2574,9 +2576,9 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h2/conn.rs:162` **fn** `connect` — Establish an HTTP/2 connection with Chrome-matching SETTINGS
 `crates/network/src/h2/conn.rs:171` **fn** `connect_with_profile` — Establish an HTTP/2 connection over `stream` with SETTINGS matching the given profile
 `crates/network/src/h2/conn.rs:364` **fn** `fetch` — Perform a single HTTP/2 request and collect the response
-`crates/network/src/h2/conn.rs:388` **fn** `fetch_with_body` — [`fetch`](Self::fetch) with a request body (POST/PUT/PATCH/DELETE)
-`crates/network/src/h2/conn.rs:617` **fn** `send_request` — Send a single HTTP/2 request without waiting for the response
-`crates/network/src/h2/conn.rs:660` **fn** `read_response_for_stream` — Read and assemble the complete response for a specific stream ID
+`crates/network/src/h2/conn.rs:389` **fn** `fetch_with_body` — [`fetch`](Self::fetch) with a request body (POST/PUT/PATCH/DELETE)
+`crates/network/src/h2/conn.rs:618` **fn** `send_request` — Send a single HTTP/2 request without waiting for the response
+`crates/network/src/h2/conn.rs:662` **fn** `read_response_for_stream` — Read and assemble the complete response for a specific stream ID
 `crates/network/src/h2/frame.rs:107` **enum** `FrameError` — Codec-level error. The codec produces only two RFC 9113 §7 error codes on
 `crates/network/src/h2/frame.rs:150` **struct** `Priority` — Stream priority block — used by the PRIORITY frame and by HEADERS when the
 `crates/network/src/h2/frame.rs:162` **enum** `Frame` — Parsed/encodable HTTP/2 frame (RFC 9113 §6). For padded frames the carried
@@ -3005,15 +3007,15 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/path_migration.rs:273` **fn** `probe_state` — The state of the new-path validation, or `None` when not migrating
 `crates/network/src/h3/path_migration.rs:280` **fn** `probing_cid_seq` — The peer connection-ID sequence in use on the path being probed
 `crates/network/src/h3/path_migration.rs:288` **fn** `deadline` — The instant the in-progress migration's validation is abandoned, or `None`
-`crates/network/src/h3/path_migration.rs:308` **fn** `initiate` — Begin migrating to a new path (RFC 9000 §9.2), emitting the first
-`crates/network/src/h3/path_migration.rs:347` **fn** `send_challenge` — Record and return a fresh `PATH_CHALLENGE` retransmission on the path being
-`crates/network/src/h3/path_migration.rs:361` **fn** `on_received` — Record `bytes` received on the path being probed, raising its
-`crates/network/src/h3/path_migration.rs:370` **fn** `on_sent` — Record `bytes` sent on the path being probed, lowering its
-`crates/network/src/h3/path_migration.rs:380` **fn** `send_allowance` — How many more bytes may be sent on the path being probed right now
-`crates/network/src/h3/path_migration.rs:390` **fn** `can_send` — Whether a datagram of `bytes` bytes may be sent on the path being probed
-`crates/network/src/h3/path_migration.rs:401` **fn** `is_blocked` — Whether the endpoint is blocked from sending on the path being probed by
-`crates/network/src/h3/path_migration.rs:416` **fn** `on_path_response` — Process the data of a received `PATH_RESPONSE` on the path being probed
-`crates/network/src/h3/path_migration.rs:435` **fn** `on_timeout` — Abandon the in-progress migration if its validation deadline has been
+`crates/network/src/h3/path_migration.rs:309` **fn** `initiate` — Begin migrating to a new path (RFC 9000 §9.2), emitting the first
+`crates/network/src/h3/path_migration.rs:348` **fn** `send_challenge` — Record and return a fresh `PATH_CHALLENGE` retransmission on the path being
+`crates/network/src/h3/path_migration.rs:362` **fn** `on_received` — Record `bytes` received on the path being probed, raising its
+`crates/network/src/h3/path_migration.rs:371` **fn** `on_sent` — Record `bytes` sent on the path being probed, lowering its
+`crates/network/src/h3/path_migration.rs:381` **fn** `send_allowance` — How many more bytes may be sent on the path being probed right now
+`crates/network/src/h3/path_migration.rs:391` **fn** `can_send` — Whether a datagram of `bytes` bytes may be sent on the path being probed
+`crates/network/src/h3/path_migration.rs:402` **fn** `is_blocked` — Whether the endpoint is blocked from sending on the path being probed by
+`crates/network/src/h3/path_migration.rs:418` **fn** `on_path_response` — Process the data of a received `PATH_RESPONSE` on the path being probed
+`crates/network/src/h3/path_migration.rs:437` **fn** `on_timeout` — Abandon the in-progress migration if its validation deadline has been
 `crates/network/src/h3/path_mtu.rs:67` **enum** `PmtuState` — The phase of the DPLPMTUD search (RFC 8899 §5.2)
 `crates/network/src/h3/path_mtu.rs:98` **struct** `PathMtuDiscovery` — The QUIC DPLPMTUD state machine (RFC 9000 §14.2–14.4, RFC 8899)
 `crates/network/src/h3/path_mtu.rs:126` **fn** `new` — Creates a discovery machine that first confirms the [`QUIC_MIN_PLPMTU`]
@@ -3338,14 +3340,14 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/stream_manager.rs:235` **fn** `send_stream_ids` — The identifiers of every stream with a sending half, ascending. The send
 `crates/network/src/h3/stream_manager.rs:241` **fn** `recv_flow` — The connection-wide receive flow-control budget (RFC 9000 §4.1)
 `crates/network/src/h3/stream_manager.rs:247` **fn** `recv_stream_limit` — The receive-side stream-count limit for `dir` (RFC 9000 §4.6)
-`crates/network/src/h3/stream_manager.rs:268` **fn** `recv_stream` — Dispatches a received STREAM frame (RFC 9000 §19.8), delivering `data` at
-`crates/network/src/h3/stream_manager.rs:301` **fn** `recv_reset` — Dispatches a received RESET_STREAM frame (RFC 9000 §19.4): the peer aborts
-`crates/network/src/h3/stream_manager.rs:327` **fn** `recv_stop_sending` — Dispatches a received STOP_SENDING frame (RFC 9000 §19.5): the peer requests
-`crates/network/src/h3/stream_manager.rs:355` **fn** `recv_max_stream_data` — Dispatches a received MAX_STREAM_DATA frame (RFC 9000 §19.10): raises the
-`crates/network/src/h3/stream_manager.rs:379` **fn** `recv_stream_data_blocked` — Dispatches a received STREAM_DATA_BLOCKED frame (RFC 9000 §19.13): the peer
-`crates/network/src/h3/stream_manager.rs:390` **fn** `read` — Pops and returns the contiguous readable prefix of `stream_id`, advancing
-`crates/network/src/h3/stream_manager.rs:404` **fn** `connection_window_update` — Re-advertises the connection-wide receive limit as `read + window` and
-`crates/network/src/h3/stream_manager.rs:492` **fn** `recv_stream_finished` — The number of a stream's halves that have fully closed, for the caller to feed
+`crates/network/src/h3/stream_manager.rs:269` **fn** `recv_stream` — Dispatches a received STREAM frame (RFC 9000 §19.8), delivering `data` at
+`crates/network/src/h3/stream_manager.rs:303` **fn** `recv_reset` — Dispatches a received RESET_STREAM frame (RFC 9000 §19.4): the peer aborts
+`crates/network/src/h3/stream_manager.rs:329` **fn** `recv_stop_sending` — Dispatches a received STOP_SENDING frame (RFC 9000 §19.5): the peer requests
+`crates/network/src/h3/stream_manager.rs:357` **fn** `recv_max_stream_data` — Dispatches a received MAX_STREAM_DATA frame (RFC 9000 §19.10): raises the
+`crates/network/src/h3/stream_manager.rs:381` **fn** `recv_stream_data_blocked` — Dispatches a received STREAM_DATA_BLOCKED frame (RFC 9000 §19.13): the peer
+`crates/network/src/h3/stream_manager.rs:392` **fn** `read` — Pops and returns the contiguous readable prefix of `stream_id`, advancing
+`crates/network/src/h3/stream_manager.rs:406` **fn** `connection_window_update` — Re-advertises the connection-wide receive limit as `read + window` and
+`crates/network/src/h3/stream_manager.rs:494` **fn** `recv_stream_finished` — The number of a stream's halves that have fully closed, for the caller to feed
 `crates/network/src/h3/timer.rs:72` **enum** `TimerKind` — Which of the connection's timers a deadline belongs to
 `crates/network/src/h3/timer.rs:113` **struct** `ArmedTimer` — A single armed timer: the instant it is due and which timer it is
 `crates/network/src/h3/timer.rs:129` **struct** `ConnectionTimers` — The multiplexer over a connection's individual timer deadlines
@@ -3541,15 +3543,15 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/http_cache.rs:137` **struct** `CacheEntrySnapshot` — Owned snapshot of a cache entry returned by `HttpCacheBackend::get`
 `crates/network/src/http_cache.rs:160` **trait** `HttpCacheBackend` — Shared interface for HTTP cache backends (in-memory and disk)
 `crates/network/src/http_cache.rs:195` **struct** `HttpCache`
-`crates/network/src/http_cache.rs:202` **fn** `new` — Create an empty cache with LRU eviction and 50 MB limit
-`crates/network/src/http_cache.rs:211` **fn** `len` — Number of entries currently stored
-`crates/network/src/http_cache.rs:216` **fn** `is_empty`
-`crates/network/src/http_cache.rs:350` **enum** `CacheLookup` — `CacheLookup` is unused externally; we use `get()` which returns `Option<CacheEntrySnapshot>`
-`crates/network/src/http_cache.rs:360` **enum** `DiskCacheError` — Error type for [`DiskHttpCache`] operations
-`crates/network/src/http_cache.rs:390` **struct** `DiskHttpCache` — SQLite-backed HTTP cache that survives browser restarts (RFC 7234 Phase 1)
-`crates/network/src/http_cache.rs:399` **fn** `new` — Open or create a cache database at `path`
-`crates/network/src/http_cache.rs:423` **fn** `open_default` — Open or create the default cache database at [`lumen_cache_dir`]`/http_cache.db`
-`crates/network/src/http_cache.rs:567` **fn** `lumen_cache_dir` — Returns the Lumen cache directory for the current user
+`crates/network/src/http_cache.rs:203` **fn** `new` — Create an empty cache with LRU eviction and 50 MB limit
+`crates/network/src/http_cache.rs:212` **fn** `len` — Number of entries currently stored
+`crates/network/src/http_cache.rs:217` **fn** `is_empty`
+`crates/network/src/http_cache.rs:354` **enum** `CacheLookup` — `CacheLookup` is unused externally; we use `get()` which returns `Option<CacheEntrySnapshot>`
+`crates/network/src/http_cache.rs:364` **enum** `DiskCacheError` — Error type for [`DiskHttpCache`] operations
+`crates/network/src/http_cache.rs:394` **struct** `DiskHttpCache` — SQLite-backed HTTP cache that survives browser restarts (RFC 7234 Phase 1)
+`crates/network/src/http_cache.rs:403` **fn** `new` — Open or create a cache database at `path`
+`crates/network/src/http_cache.rs:427` **fn** `open_default` — Open or create the default cache database at [`lumen_cache_dir`]`/http_cache.db`
+`crates/network/src/http_cache.rs:574` **fn** `lumen_cache_dir` — Returns the Lumen cache directory for the current user
 `crates/network/src/intercept.rs:25` **struct** `GlobalIntercept` — One network intercept rule registered via `network.addIntercept` and
 `crates/network/src/intercept.rs:41` **enum** `InterceptDecision` — Decision delivered for a paused request via `network.continueRequest`
 `crates/network/src/intercept.rs:59` **fn** `add_global_intercept` — Register (or replace, if `id` already exists) a global intercept rule
@@ -3566,44 +3568,44 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/lib.rs:167` **fn** `global_ua_override` — The active `User-Agent` override, if any
 `crates/network/src/lib.rs:1049` **type** `PageChunkSink` — Как [`ChunkSink`], но порция сопровождается URL hop-а, чьё тело стримится
 `crates/network/src/lib.rs:1064` **struct** `PageResponse` — Ответ на навигационный запрос — возврат [`HttpClient::fetch_page`] /
-`crates/network/src/lib.rs:3011` **struct** `HttpProxy` — HTTP proxy configuration (RFC 7230 proxy behavior)
-`crates/network/src/lib.rs:3023` **fn** `new` — Создать новый прокси без аутентификации
-`crates/network/src/lib.rs:3032` **fn** `with_basic_auth` — Создать прокси с базовой аутентификацией (username:password)
-`crates/network/src/lib.rs:3075` **struct** `HttpClient` — HTTP/1.1 + HTTPS клиент
-`crates/network/src/lib.rs:3131` **fn** `new`
-`crates/network/src/lib.rs:3160` **fn** `with_sink` — Подключить EventSink. По умолчанию sink-а нет (события не эмитятся)
-`crates/network/src/lib.rs:3171` **fn** `with_filter` — Подключить RequestFilter. По умолчанию фильтра нет — `fetch` всегда
-`crates/network/src/lib.rs:3183` **fn** `with_interceptor` — Подключить Service Worker перехватчик fetch-запросов. Проверяется
-`crates/network/src/lib.rs:3192` **fn** `with_pool` — Подключить shared `ConnectionPool`. По умолчанию у каждого `HttpClient`
-`crates/network/src/lib.rs:3202` **fn** `with_h2_pool` — Подключить shared `H2Pool` (RFC 9113 §9.1.1). По умолчанию HTTP/2
-`crates/network/src/lib.rs:3211` **fn** `with_dns_resolver` — Подключить DNS-резолвер. По умолчанию — `SystemDnsResolver` (через
-`crates/network/src/lib.rs:3228` **fn** `with_hsts` — Подключить HSTS-store (RFC 6797). По умолчанию — нет:
-`crates/network/src/lib.rs:3243` **fn** `has_hsts` — Подключён ли HSTS-store к этому клиенту
-`crates/network/src/lib.rs:3258` **fn** `with_credentials` — Подключить credential-провайдер для HTTP authentication (RFC 7235 /
-`crates/network/src/lib.rs:3269` **fn** `with_tab` — Указать `TabId`, который попадёт в каждое emit-ое событие. В Phase 0
-`crates/network/src/lib.rs:3289` **fn** `with_mixed_content_policy` — Подключить mixed-content policy (W3C Mixed Content §5). По умолчанию
-`crates/network/src/lib.rs:3313` **fn** `with_content_decoder` — Зарегистрировать `ContentDecoder` для одного encoding. Декодер попадает
-`crates/network/src/lib.rs:3327` **fn** `with_http3` — Включить путь диспетчеризации HTTP/3 (QUIC) — RFC 9114 / RFC 7838
-`crates/network/src/lib.rs:3390` **fn** `with_cors_cache` — Запросить только диапазон байт ресурса (RFC 7233). Если сервер
-`crates/network/src/lib.rs:3402` **fn** `with_cookie_jar` — Attach a cookie store. The provider receives `Cookie:` injection
-`crates/network/src/lib.rs:3426` **fn** `with_http_cache` — Подключить HTTP response cache (RFC 7234)
-`crates/network/src/lib.rs:3437` **fn** `with_proxy` — Подключить HTTP прокси (RFC 7230). По умолчанию прокси не подключён — запросы
-`crates/network/src/lib.rs:3450` **fn** `with_socks5_proxy` — Подключить SOCKS5 прокси (RFC 1928) для туннелирования всех TCP-соединений
-`crates/network/src/lib.rs:3461` **fn** `with_fingerprint_profile` — Установить HTTP fingerprinting profile (Standard/Strict/Tor) для Chrome-matching
-`crates/network/src/lib.rs:3469` **fn** `fingerprint_profile` — Получить текущий HTTP fingerprinting profile
-`crates/network/src/lib.rs:3480` **fn** `with_tls_profile` — Override the TLS fingerprint profile independently of the HTTP profile
-`crates/network/src/lib.rs:3486` **fn** `tls_profile` — Получить текущий TLS fingerprinting profile
-`crates/network/src/lib.rs:3520` **fn** `fetch_cors` — CORS-enabled fetch для cross-origin subresource (Fetch §3-§4)
-`crates/network/src/lib.rs:3573` **fn** `fetch_range`
-`crates/network/src/lib.rs:3645` **fn** `fetch_multi_range` — Multi-range запрос (RFC 7233 §4.1). Один request на несколько
-`crates/network/src/lib.rs:3736` **fn** `fetch_subresource` — Загрузить подресурс с проверкой mixed-content по подключённой
-`crates/network/src/lib.rs:3844` **fn** `fetch_conditional` — Perform a **conditional GET** (RFC 7232) and report whether the resource
-`crates/network/src/lib.rs:3904` **enum** `ConditionalFetch` — Outcome of [`HttpClient::fetch_conditional`]
-`crates/network/src/lib.rs:3932` **fn** `fetch_page` — Fetch a top-level page and return the response body together with all
-`crates/network/src/lib.rs:4013` **fn** `fetch_page_streaming` — Как [`HttpClient::fetch_page`], но тело финального 2xx-ответа стримится
-`crates/network/src/lib.rs:4671` **struct** `InMemoryFetchInterceptor` — In-memory реализация `FetchInterceptor` для тестов без SQLite
-`crates/network/src/lib.rs:4677` **fn** `new`
-`crates/network/src/lib.rs:4684` **fn** `insert` — Добавить запись: ответ для (origin, url) берётся из кэша без сети
+`crates/network/src/lib.rs:3075` **struct** `HttpProxy` — HTTP proxy configuration (RFC 7230 proxy behavior)
+`crates/network/src/lib.rs:3087` **fn** `new` — Создать новый прокси без аутентификации
+`crates/network/src/lib.rs:3096` **fn** `with_basic_auth` — Создать прокси с базовой аутентификацией (username:password)
+`crates/network/src/lib.rs:3139` **struct** `HttpClient` — HTTP/1.1 + HTTPS клиент
+`crates/network/src/lib.rs:3195` **fn** `new`
+`crates/network/src/lib.rs:3224` **fn** `with_sink` — Подключить EventSink. По умолчанию sink-а нет (события не эмитятся)
+`crates/network/src/lib.rs:3235` **fn** `with_filter` — Подключить RequestFilter. По умолчанию фильтра нет — `fetch` всегда
+`crates/network/src/lib.rs:3247` **fn** `with_interceptor` — Подключить Service Worker перехватчик fetch-запросов. Проверяется
+`crates/network/src/lib.rs:3256` **fn** `with_pool` — Подключить shared `ConnectionPool`. По умолчанию у каждого `HttpClient`
+`crates/network/src/lib.rs:3266` **fn** `with_h2_pool` — Подключить shared `H2Pool` (RFC 9113 §9.1.1). По умолчанию HTTP/2
+`crates/network/src/lib.rs:3275` **fn** `with_dns_resolver` — Подключить DNS-резолвер. По умолчанию — `SystemDnsResolver` (через
+`crates/network/src/lib.rs:3292` **fn** `with_hsts` — Подключить HSTS-store (RFC 6797). По умолчанию — нет:
+`crates/network/src/lib.rs:3307` **fn** `has_hsts` — Подключён ли HSTS-store к этому клиенту
+`crates/network/src/lib.rs:3322` **fn** `with_credentials` — Подключить credential-провайдер для HTTP authentication (RFC 7235 /
+`crates/network/src/lib.rs:3333` **fn** `with_tab` — Указать `TabId`, который попадёт в каждое emit-ое событие. В Phase 0
+`crates/network/src/lib.rs:3353` **fn** `with_mixed_content_policy` — Подключить mixed-content policy (W3C Mixed Content §5). По умолчанию
+`crates/network/src/lib.rs:3377` **fn** `with_content_decoder` — Зарегистрировать `ContentDecoder` для одного encoding. Декодер попадает
+`crates/network/src/lib.rs:3391` **fn** `with_http3` — Включить путь диспетчеризации HTTP/3 (QUIC) — RFC 9114 / RFC 7838
+`crates/network/src/lib.rs:3454` **fn** `with_cors_cache` — Запросить только диапазон байт ресурса (RFC 7233). Если сервер
+`crates/network/src/lib.rs:3466` **fn** `with_cookie_jar` — Attach a cookie store. The provider receives `Cookie:` injection
+`crates/network/src/lib.rs:3490` **fn** `with_http_cache` — Подключить HTTP response cache (RFC 7234)
+`crates/network/src/lib.rs:3501` **fn** `with_proxy` — Подключить HTTP прокси (RFC 7230). По умолчанию прокси не подключён — запросы
+`crates/network/src/lib.rs:3514` **fn** `with_socks5_proxy` — Подключить SOCKS5 прокси (RFC 1928) для туннелирования всех TCP-соединений
+`crates/network/src/lib.rs:3525` **fn** `with_fingerprint_profile` — Установить HTTP fingerprinting profile (Standard/Strict/Tor) для Chrome-matching
+`crates/network/src/lib.rs:3533` **fn** `fingerprint_profile` — Получить текущий HTTP fingerprinting profile
+`crates/network/src/lib.rs:3544` **fn** `with_tls_profile` — Override the TLS fingerprint profile independently of the HTTP profile
+`crates/network/src/lib.rs:3550` **fn** `tls_profile` — Получить текущий TLS fingerprinting profile
+`crates/network/src/lib.rs:3584` **fn** `fetch_cors` — CORS-enabled fetch для cross-origin subresource (Fetch §3-§4)
+`crates/network/src/lib.rs:3637` **fn** `fetch_range`
+`crates/network/src/lib.rs:3709` **fn** `fetch_multi_range` — Multi-range запрос (RFC 7233 §4.1). Один request на несколько
+`crates/network/src/lib.rs:3800` **fn** `fetch_subresource` — Загрузить подресурс с проверкой mixed-content по подключённой
+`crates/network/src/lib.rs:3908` **fn** `fetch_conditional` — Perform a **conditional GET** (RFC 7232) and report whether the resource
+`crates/network/src/lib.rs:3968` **enum** `ConditionalFetch` — Outcome of [`HttpClient::fetch_conditional`]
+`crates/network/src/lib.rs:3996` **fn** `fetch_page` — Fetch a top-level page and return the response body together with all
+`crates/network/src/lib.rs:4077` **fn** `fetch_page_streaming` — Как [`HttpClient::fetch_page`], но тело финального 2xx-ответа стримится
+`crates/network/src/lib.rs:4773` **struct** `InMemoryFetchInterceptor` — In-memory реализация `FetchInterceptor` для тестов без SQLite
+`crates/network/src/lib.rs:4779` **fn** `new`
+`crates/network/src/lib.rs:4787` **fn** `insert` — Добавить запись: ответ для (origin, url) берётся из кэша без сети
 `crates/network/src/mixed_content.rs:33` **enum** `RequestDestination` — Назначение подресурса по Fetch spec §3.2.7 «request destination» —
 `crates/network/src/mixed_content.rs:59` **enum** `MixedContentLevel` — Mixed-content уровень для запроса в secure-контексте
 `crates/network/src/mixed_content.rs:75` **fn** `is_strict_blocked` — Должны ли мы блокировать запрос по строгому режиму. По умолчанию
@@ -3674,7 +3676,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/tls/fingerprint.rs:404` **struct** `JA4ChromeSnapshot` — Reference Chrome 130 JA4_r parameters for snapshot testing
 `crates/network/src/tls/mod.rs:30` **enum** `TlsProfile` — TLS fingerprint profile — controls cipher suites, kx_groups, ALPN, and
 `crates/network/src/tls/mod.rs:47` **fn** `http_to_tls_profile` — Map an `HttpProfile` to the corresponding `TlsProfile`
-`crates/network/src/tls/mod.rs:64` **fn** `build_client_config` — Build a `ClientConfig` for the given `TlsProfile`
+`crates/network/src/tls/mod.rs:65` **fn** `build_client_config` — Build a `ClientConfig` for the given `TlsProfile`
 `crates/network/src/webauthn.rs:62` **struct** `VirtualAuthenticator` — In-memory software authenticator: generates and stores ES256 passkeys and
 `crates/network/src/webauthn.rs:69` **fn** `new` — Create an empty authenticator with no registered credentials
 `crates/network/src/webauthn.rs:74` **fn** `credential_count` — Number of credentials currently registered (test / introspection helper)
@@ -3761,18 +3763,18 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/compositor.rs:154` **trait** `Compositor` — Compositor: получает обновления сцены через `commit`, отдаёт активную
 `crates/engine/paint/src/compositor.rs:187` **struct** `InProcessCompositor` — Single-thread in-process compositor: синхронный swap, без Mutex
 `crates/engine/paint/src/compositor.rs:196` **fn** `new`
-`crates/engine/paint/src/compositor.rs:331` **struct** `ThreadedCompositor` — Thread-safe compositor: тот же API two-buffer-а, но `commit` и
-`crates/engine/paint/src/compositor.rs:338` **fn** `new`
-`crates/engine/paint/src/compositor.rs:349` **fn** `handle` — Cheap-clone handle для другого потока: shared доступ к тому же
-`crates/engine/paint/src/compositor.rs:434` **struct** `ThreadedCompositorHandle` — Cheap-clone handle на тот же state, что и parent [`ThreadedCompositor`]
-`crates/engine/paint/src/compositor.rs:440` **fn** `commit`
-`crates/engine/paint/src/compositor.rs:456` **fn** `flush_pending`
-`crates/engine/paint/src/compositor.rs:474` **fn** `has_pending`
-`crates/engine/paint/src/compositor.rs:483` **fn** `active_tree`
-`crates/engine/paint/src/compositor.rs:492` **fn** `active_trees`
-`crates/engine/paint/src/compositor.rs:526` **struct** `CompositorThread` — Реальный compositor thread: отдельный OS-поток с vsync tick-loop
-`crates/engine/paint/src/compositor.rs:535` **fn** `spawn` — Запускает compositor thread. `handle` — разделяемый доступ к state
-`crates/engine/paint/src/compositor.rs:560` **fn** `shutdown` — Запрашивает завершение потока и блокируется до его выхода
+`crates/engine/paint/src/compositor.rs:334` **struct** `ThreadedCompositor` — Thread-safe compositor: тот же API two-buffer-а, но `commit` и
+`crates/engine/paint/src/compositor.rs:341` **fn** `new`
+`crates/engine/paint/src/compositor.rs:352` **fn** `handle` — Cheap-clone handle для другого потока: shared доступ к тому же
+`crates/engine/paint/src/compositor.rs:442` **struct** `ThreadedCompositorHandle` — Cheap-clone handle на тот же state, что и parent [`ThreadedCompositor`]
+`crates/engine/paint/src/compositor.rs:449` **fn** `commit`
+`crates/engine/paint/src/compositor.rs:466` **fn** `flush_pending`
+`crates/engine/paint/src/compositor.rs:485` **fn** `has_pending`
+`crates/engine/paint/src/compositor.rs:495` **fn** `active_tree`
+`crates/engine/paint/src/compositor.rs:505` **fn** `active_trees`
+`crates/engine/paint/src/compositor.rs:539` **struct** `CompositorThread` — Реальный compositor thread: отдельный OS-поток с vsync tick-loop
+`crates/engine/paint/src/compositor.rs:548` **fn** `spawn` — Запускает compositor thread. `handle` — разделяемый доступ к state
+`crates/engine/paint/src/compositor.rs:573` **fn** `shutdown` — Запрашивает завершение потока и блокируется до его выхода
 `crates/engine/paint/src/dash_math.rs:24` **fn** `dashed_border_offsets` — Returns `(offset, length)` pairs along a border side of length `total` for a
 `crates/engine/paint/src/dash_math.rs:53` **fn** `dotted_border_offsets` — Returns `(offset, length)` pairs along a border side of length `total` for a
 `crates/engine/paint/src/dash_math.rs:88` **fn** `dash_segments` — Разбивает полосу длиной `total_length` на серию dash-сегментов
@@ -3940,78 +3942,78 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/renderer.rs:2106` **enum** `ImageRegisterError` — Ошибка `Renderer::register_image`
 `crates/engine/paint/src/renderer.rs:2460` **struct** `Renderer`
 `crates/engine/paint/src/renderer.rs:2956` **fn** `load_counter` — Reads a diagnostics counter
-`crates/engine/paint/src/renderer.rs:3421` **fn** `new`
-`crates/engine/paint/src/renderer.rs:3626` **fn** `new_headless` — Creates a headless `Renderer` for off-screen rendering without a winit window
-`crates/engine/paint/src/renderer.rs:4818` **fn** `warm_lazy_pipelines_blocking` — Прогревает ленивые пайплайны синхронно, на вызывающем потоке
-`crates/engine/paint/src/renderer.rs:4833` **fn** `pipelines_compiled` — Сколько ленивых пайплайнов **этот** рендер скомпилировал за свою жизнь
-`crates/engine/paint/src/renderer.rs:4844` **fn** `submissions` — Сколько командных списков **кадра** отправил в очередь этот рендер
-`crates/engine/paint/src/renderer.rs:4855` **fn** `rrect_clip_levels` — Сколько скруглённых клипов этот рендер обслужил offscreen-уровнем
-`crates/engine/paint/src/renderer.rs:4865` **fn** `cull_merges` — Сколько разрезов пасса родителя склеено обратно после выброса
-`crates/engine/paint/src/renderer.rs:4874` **fn** `plan_passes` — Сколько пассов (элементов плана кадра) закодировал этот рендер
-`crates/engine/paint/src/renderer.rs:4885` **fn** `state_elisions` — Сколько команд состояния пасса не отправлено, потому что нужное
-`crates/engine/paint/src/renderer.rs:4895` **fn** `draw_merges` — Сколько вызовов `draw` слито с предыдущим (BUG-405 срез 10)
-`crates/engine/paint/src/renderer.rs:4904` **fn** `set_state_elision_enabled` — Включает/выключает отсев повторных команд состояния пасса
-`crates/engine/paint/src/renderer.rs:4915` **fn** `atlas_bytes_uploaded` — Сколько байт пикселей атласа глифов отправлено в GPU этим рендером
-`crates/engine/paint/src/renderer.rs:4926` **fn** `atlas_uploads` — Сколько раз атлас глифов заливался в GPU этим рендером
-`crates/engine/paint/src/renderer.rs:4935` **fn** `set_atlas_partial_upload_enabled` — Включает/выключает построчную заливку атласа (BUG-405 срез 11) на этом
-`crates/engine/paint/src/renderer.rs:4945` **fn** `filter_passes` — Сколько render-пассов закодировали filter-элементы планов этого
-`crates/engine/paint/src/renderer.rs:4957` **fn** `shadow_draws` — Сколько внешних теней (`box-shadow`) этот рендер нарисовал
-`crates/engine/paint/src/renderer.rs:4968` **fn** `nested_shader_clips` — Сколько вложенных скруглённых клипов этот рендер обслужил ВТОРЫМ
-`crates/engine/paint/src/renderer.rs:4979` **fn** `coverage_cache_stats` — Сколько раз покрытие SVG-супа взято готовым из кэша, а не пересчитано
-`crates/engine/paint/src/renderer.rs:4990` **fn** `svg_shape_cache_stats` — Сколько команд SVG получили готовую фигуру из кэша (BUG-405 срез 12),
-`crates/engine/paint/src/renderer.rs:4999` **fn** `set_svg_shape_cache_enabled` — Включает/выключает мемоизацию фигур SVG (BUG-405 срез 12)
-`crates/engine/paint/src/renderer.rs:5005` **fn** `text_run_cache_stats` — Попаданий и промахов кэша укладки текста (BUG-405 срез 13) за жизнь
-`crates/engine/paint/src/renderer.rs:5014` **fn** `set_text_run_cache_enabled` — Включает/выключает мемоизацию укладки текстового run-а (BUG-405 срез 13)
-`crates/engine/paint/src/renderer.rs:5023` **fn** `set_coverage_cache_enabled` — Включает/выключает кэш покрытия SVG-супов (BUG-405 срез 9)
-`crates/engine/paint/src/renderer.rs:5032` **fn** `set_nested_shader_clip_enabled` — Включает/выключает второй шейдерный контур (BUG-405 срез 8)
-`crates/engine/paint/src/renderer.rs:5041` **fn** `set_shadow_analytic_enabled` — Включает/выключает аналитическую размытую тень (BUG-405 срез 7)
-`crates/engine/paint/src/renderer.rs:5051` **fn** `set_blur_merge_enabled` — Включает/выключает склейку вертикального прохода блюра с композитом
-`crates/engine/paint/src/renderer.rs:5062` **fn** `set_cull_merge_enabled` — Включает/выключает склейку пасса родителя вокруг выброшенного
-`crates/engine/paint/src/renderer.rs:5070` **fn** `warmed_pipeline_count` — Сколько ленивых ячеек пайплайнов уже заполнено (BUG-405/406)
-`crates/engine/paint/src/renderer.rs:6149` **fn** `with_font_provider` — Заменяет источник лукапа face-ов. Полезно для тестов (mock-provider) и
-`crates/engine/paint/src/renderer.rs:6157` **fn** `set_font_provider` — Заменяет `FontProvider` на работающем рендере. Используется shell-ом,
-`crates/engine/paint/src/renderer.rs:6174` **fn** `preload_fallback_chain` — Эагерно загружает указанные family-имена через текущий `FontProvider`,
-`crates/engine/paint/src/renderer.rs:6189` **fn** `gpu_fingerprint` — Returns the normalized GPU fingerprint (vendor/renderer strings)
-`crates/engine/paint/src/renderer.rs:6202` **fn** `preload_curated_fallbacks` — Shortcut: эагерно загружает `CURATED_FALLBACK_FAMILIES` (Noto Color
-`crates/engine/paint/src/renderer.rs:6546` **fn** `register_image` — Регистрирует декодированное изображение в GPU-cache под ключом `src`
-`crates/engine/paint/src/renderer.rs:6922` **fn** `unregister_image` — Снимает регистрацию изображения. После этого `DrawImage` для `src`
-`crates/engine/paint/src/renderer.rs:6931` **fn** `clear_images` — Снимает регистрацию всех картинок (например, при переходе на новую
-`crates/engine/paint/src/renderer.rs:6939` **fn** `has_image` — Зарегистрирована ли картинка с таким `src` (для shell-логирования)
-`crates/engine/paint/src/renderer.rs:6957` **fn** `upload_layer_snapshot` — Загружает CPU-пиксели (`Rgba8`, 4 байта/пиксель) как именованный
-`crates/engine/paint/src/renderer.rs:7026` **fn** `evict_layer_snapshot` — Удаляет снимок с `id`. GPU-память освобождается при drop-е
-`crates/engine/paint/src/renderer.rs:7032` **fn** `clear_layer_snapshots` — Удаляет все снимки (например, при переходе на новую страницу)
-`crates/engine/paint/src/renderer.rs:7039` **fn** `has_layer_snapshot` — Зарегистрирован ли снимок с таким `id`
-`crates/engine/paint/src/renderer.rs:7044` **fn** `layer_cache` — Получить ссылку на layer cache для статистики / монитора GPU памяти
-`crates/engine/paint/src/renderer.rs:7052` **fn** `set_backdrop_cache_enabled` — Enables or disables the `backdrop-filter` result cache (CSS Filter
-`crates/engine/paint/src/renderer.rs:7061` **fn** `clear_backdrop_cache` — Drops every cached `backdrop-filter` texture and its metadata. The next
-`crates/engine/paint/src/renderer.rs:7068` **fn** `backdrop_cache_len` — Number of live cached `backdrop-filter` textures (for stats / tests)
-`crates/engine/paint/src/renderer.rs:7075` **fn** `backdrop_cache_on_memory_pressure` — Forwards a memory-pressure signal to the `backdrop-filter` cache and
-`crates/engine/paint/src/renderer.rs:7088` **fn** `atlas_on_memory_pressure` — Forwards a memory-pressure signal to the glyph atlas so it can evict
-`crates/engine/paint/src/renderer.rs:7094` **fn** `layer_cache_mut` — Получить мutable ссылку для прямого управления кэшем (advanced usage)
-`crates/engine/paint/src/renderer.rs:7100` **fn** `access_layer` — Отметить layer как используемый текущим render pass
-`crates/engine/paint/src/renderer.rs:7107` **fn** `cache_layer` — Кэшировать layer слой. Returns `true` if this is a new layer, `false` if updated
-`crates/engine/paint/src/renderer.rs:7113` **fn** `return_layer_to_pool` — Return an off-screen layer texture to the pool for recycling (Phase 2 ADR-008)
-`crates/engine/paint/src/renderer.rs:7129` **fn** `promote_layer` — Promote a node to its own GPU layer for `will-change: transform/opacity/filter`
-`crates/engine/paint/src/renderer.rs:7140` **fn** `is_layer_promoted` — Returns `true` if the given node has a promoted GPU layer
-`crates/engine/paint/src/renderer.rs:7145` **fn** `demote_layer` — Remove the promoted GPU layer for a node, freeing its cache entry
-`crates/engine/paint/src/renderer.rs:7151` **fn** `clear_layer_cache` — Очистить весь layer cache (полная эвикция) и очистить texture pool
-`crates/engine/paint/src/renderer.rs:7157` **fn** `texture_pool_len` — Get the number of free textures in the pool (for diagnostics)
-`crates/engine/paint/src/renderer.rs:7162` **fn** `texture_pool_len_for_size` — Get the number of free textures of a specific size (for diagnostics)
-`crates/engine/paint/src/renderer.rs:7170` **fn** `texture_pool_report` — Однострочная сводка по пулу offscreen-слоёв для `LUMEN_MEM_REPORT`
-`crates/engine/paint/src/renderer.rs:7188` **fn** `clear_texture_pool` — Clear all pooled textures (e.g., when resizing or memory pressure is high)
-`crates/engine/paint/src/renderer.rs:7194` **fn** `snapshot_dimensions` — Возвращает `(width, height)` снимка, или `None` если `id` не зарегистрирован
-`crates/engine/paint/src/renderer.rs:7200` **fn** `resize` — Resizes the render target. For windowed mode, reconfigures the wgpu surface
-`crates/engine/paint/src/renderer.rs:7230` **fn** `set_scale_factor` — Обновить device-pixel-ratio. Вызывается shell-ом по `WindowEvent::ScaleFactorChanged`
-`crates/engine/paint/src/renderer.rs:7240` **fn** `scale_factor` — Текущий device-pixel-ratio. Для отладки / тестов (UI обычно его не читает —
-`crates/engine/paint/src/renderer.rs:7250` **fn** `target_color_space` — Target color space for this renderer's output surface
-`crates/engine/paint/src/renderer.rs:7259` **fn** `set_canvas_background` — Updates the root-element canvas background used as the framebuffer clear colour
-`crates/engine/paint/src/renderer.rs:7305` **fn** `viewport_size` — Текущий viewport в **logical** (CSS) пикселях: `physical / scale_factor`
-`crates/engine/paint/src/renderer.rs:8052` **fn** `render` — `scroll_y ≥ 0`, `scroll_x ≥ 0`. Negatives caller обязан клампить до 0
-`crates/engine/paint/src/renderer.rs:8065` **fn** `render_with_anim` — Как [`render`](Self::render), но с диапазонами анимируемых сегментов
-`crates/engine/paint/src/renderer.rs:13012` **fn** `render_to_image_cpu` — CPU-based rasterization using tiny-skia (feature="cpu-render" only)
-`crates/engine/paint/src/renderer.rs:13038` **fn** `render_tile`
-`crates/engine/paint/src/renderer.rs:13077` **fn** `render_to_image` — Renders display commands and returns a CPU `Image` (RGBA8)
-`crates/engine/paint/src/renderer.rs:13180` **fn** `render_print_pages` — Renders a print display list into one `Image` per page
+`crates/engine/paint/src/renderer.rs:3480` **fn** `new`
+`crates/engine/paint/src/renderer.rs:3685` **fn** `new_headless` — Creates a headless `Renderer` for off-screen rendering without a winit window
+`crates/engine/paint/src/renderer.rs:4877` **fn** `warm_lazy_pipelines_blocking` — Прогревает ленивые пайплайны синхронно, на вызывающем потоке
+`crates/engine/paint/src/renderer.rs:4892` **fn** `pipelines_compiled` — Сколько ленивых пайплайнов **этот** рендер скомпилировал за свою жизнь
+`crates/engine/paint/src/renderer.rs:4903` **fn** `submissions` — Сколько командных списков **кадра** отправил в очередь этот рендер
+`crates/engine/paint/src/renderer.rs:4914` **fn** `rrect_clip_levels` — Сколько скруглённых клипов этот рендер обслужил offscreen-уровнем
+`crates/engine/paint/src/renderer.rs:4924` **fn** `cull_merges` — Сколько разрезов пасса родителя склеено обратно после выброса
+`crates/engine/paint/src/renderer.rs:4933` **fn** `plan_passes` — Сколько пассов (элементов плана кадра) закодировал этот рендер
+`crates/engine/paint/src/renderer.rs:4944` **fn** `state_elisions` — Сколько команд состояния пасса не отправлено, потому что нужное
+`crates/engine/paint/src/renderer.rs:4954` **fn** `draw_merges` — Сколько вызовов `draw` слито с предыдущим (BUG-405 срез 10)
+`crates/engine/paint/src/renderer.rs:4963` **fn** `set_state_elision_enabled` — Включает/выключает отсев повторных команд состояния пасса
+`crates/engine/paint/src/renderer.rs:4974` **fn** `atlas_bytes_uploaded` — Сколько байт пикселей атласа глифов отправлено в GPU этим рендером
+`crates/engine/paint/src/renderer.rs:4985` **fn** `atlas_uploads` — Сколько раз атлас глифов заливался в GPU этим рендером
+`crates/engine/paint/src/renderer.rs:4994` **fn** `set_atlas_partial_upload_enabled` — Включает/выключает построчную заливку атласа (BUG-405 срез 11) на этом
+`crates/engine/paint/src/renderer.rs:5004` **fn** `filter_passes` — Сколько render-пассов закодировали filter-элементы планов этого
+`crates/engine/paint/src/renderer.rs:5016` **fn** `shadow_draws` — Сколько внешних теней (`box-shadow`) этот рендер нарисовал
+`crates/engine/paint/src/renderer.rs:5027` **fn** `nested_shader_clips` — Сколько вложенных скруглённых клипов этот рендер обслужил ВТОРЫМ
+`crates/engine/paint/src/renderer.rs:5038` **fn** `coverage_cache_stats` — Сколько раз покрытие SVG-супа взято готовым из кэша, а не пересчитано
+`crates/engine/paint/src/renderer.rs:5049` **fn** `svg_shape_cache_stats` — Сколько команд SVG получили готовую фигуру из кэша (BUG-405 срез 12),
+`crates/engine/paint/src/renderer.rs:5058` **fn** `set_svg_shape_cache_enabled` — Включает/выключает мемоизацию фигур SVG (BUG-405 срез 12)
+`crates/engine/paint/src/renderer.rs:5064` **fn** `text_run_cache_stats` — Попаданий и промахов кэша укладки текста (BUG-405 срез 13) за жизнь
+`crates/engine/paint/src/renderer.rs:5073` **fn** `set_text_run_cache_enabled` — Включает/выключает мемоизацию укладки текстового run-а (BUG-405 срез 13)
+`crates/engine/paint/src/renderer.rs:5082` **fn** `set_coverage_cache_enabled` — Включает/выключает кэш покрытия SVG-супов (BUG-405 срез 9)
+`crates/engine/paint/src/renderer.rs:5091` **fn** `set_nested_shader_clip_enabled` — Включает/выключает второй шейдерный контур (BUG-405 срез 8)
+`crates/engine/paint/src/renderer.rs:5100` **fn** `set_shadow_analytic_enabled` — Включает/выключает аналитическую размытую тень (BUG-405 срез 7)
+`crates/engine/paint/src/renderer.rs:5110` **fn** `set_blur_merge_enabled` — Включает/выключает склейку вертикального прохода блюра с композитом
+`crates/engine/paint/src/renderer.rs:5121` **fn** `set_cull_merge_enabled` — Включает/выключает склейку пасса родителя вокруг выброшенного
+`crates/engine/paint/src/renderer.rs:5129` **fn** `warmed_pipeline_count` — Сколько ленивых ячеек пайплайнов уже заполнено (BUG-405/406)
+`crates/engine/paint/src/renderer.rs:6208` **fn** `with_font_provider` — Заменяет источник лукапа face-ов. Полезно для тестов (mock-provider) и
+`crates/engine/paint/src/renderer.rs:6216` **fn** `set_font_provider` — Заменяет `FontProvider` на работающем рендере. Используется shell-ом,
+`crates/engine/paint/src/renderer.rs:6233` **fn** `preload_fallback_chain` — Эагерно загружает указанные family-имена через текущий `FontProvider`,
+`crates/engine/paint/src/renderer.rs:6248` **fn** `gpu_fingerprint` — Returns the normalized GPU fingerprint (vendor/renderer strings)
+`crates/engine/paint/src/renderer.rs:6261` **fn** `preload_curated_fallbacks` — Shortcut: эагерно загружает `CURATED_FALLBACK_FAMILIES` (Noto Color
+`crates/engine/paint/src/renderer.rs:6605` **fn** `register_image` — Регистрирует декодированное изображение в GPU-cache под ключом `src`
+`crates/engine/paint/src/renderer.rs:6981` **fn** `unregister_image` — Снимает регистрацию изображения. После этого `DrawImage` для `src`
+`crates/engine/paint/src/renderer.rs:6990` **fn** `clear_images` — Снимает регистрацию всех картинок (например, при переходе на новую
+`crates/engine/paint/src/renderer.rs:6998` **fn** `has_image` — Зарегистрирована ли картинка с таким `src` (для shell-логирования)
+`crates/engine/paint/src/renderer.rs:7016` **fn** `upload_layer_snapshot` — Загружает CPU-пиксели (`Rgba8`, 4 байта/пиксель) как именованный
+`crates/engine/paint/src/renderer.rs:7085` **fn** `evict_layer_snapshot` — Удаляет снимок с `id`. GPU-память освобождается при drop-е
+`crates/engine/paint/src/renderer.rs:7091` **fn** `clear_layer_snapshots` — Удаляет все снимки (например, при переходе на новую страницу)
+`crates/engine/paint/src/renderer.rs:7098` **fn** `has_layer_snapshot` — Зарегистрирован ли снимок с таким `id`
+`crates/engine/paint/src/renderer.rs:7103` **fn** `layer_cache` — Получить ссылку на layer cache для статистики / монитора GPU памяти
+`crates/engine/paint/src/renderer.rs:7111` **fn** `set_backdrop_cache_enabled` — Enables or disables the `backdrop-filter` result cache (CSS Filter
+`crates/engine/paint/src/renderer.rs:7120` **fn** `clear_backdrop_cache` — Drops every cached `backdrop-filter` texture and its metadata. The next
+`crates/engine/paint/src/renderer.rs:7127` **fn** `backdrop_cache_len` — Number of live cached `backdrop-filter` textures (for stats / tests)
+`crates/engine/paint/src/renderer.rs:7134` **fn** `backdrop_cache_on_memory_pressure` — Forwards a memory-pressure signal to the `backdrop-filter` cache and
+`crates/engine/paint/src/renderer.rs:7147` **fn** `atlas_on_memory_pressure` — Forwards a memory-pressure signal to the glyph atlas so it can evict
+`crates/engine/paint/src/renderer.rs:7153` **fn** `layer_cache_mut` — Получить мutable ссылку для прямого управления кэшем (advanced usage)
+`crates/engine/paint/src/renderer.rs:7159` **fn** `access_layer` — Отметить layer как используемый текущим render pass
+`crates/engine/paint/src/renderer.rs:7166` **fn** `cache_layer` — Кэшировать layer слой. Returns `true` if this is a new layer, `false` if updated
+`crates/engine/paint/src/renderer.rs:7172` **fn** `return_layer_to_pool` — Return an off-screen layer texture to the pool for recycling (Phase 2 ADR-008)
+`crates/engine/paint/src/renderer.rs:7188` **fn** `promote_layer` — Promote a node to its own GPU layer for `will-change: transform/opacity/filter`
+`crates/engine/paint/src/renderer.rs:7199` **fn** `is_layer_promoted` — Returns `true` if the given node has a promoted GPU layer
+`crates/engine/paint/src/renderer.rs:7204` **fn** `demote_layer` — Remove the promoted GPU layer for a node, freeing its cache entry
+`crates/engine/paint/src/renderer.rs:7210` **fn** `clear_layer_cache` — Очистить весь layer cache (полная эвикция) и очистить texture pool
+`crates/engine/paint/src/renderer.rs:7216` **fn** `texture_pool_len` — Get the number of free textures in the pool (for diagnostics)
+`crates/engine/paint/src/renderer.rs:7221` **fn** `texture_pool_len_for_size` — Get the number of free textures of a specific size (for diagnostics)
+`crates/engine/paint/src/renderer.rs:7229` **fn** `texture_pool_report` — Однострочная сводка по пулу offscreen-слоёв для `LUMEN_MEM_REPORT`
+`crates/engine/paint/src/renderer.rs:7247` **fn** `clear_texture_pool` — Clear all pooled textures (e.g., when resizing or memory pressure is high)
+`crates/engine/paint/src/renderer.rs:7253` **fn** `snapshot_dimensions` — Возвращает `(width, height)` снимка, или `None` если `id` не зарегистрирован
+`crates/engine/paint/src/renderer.rs:7259` **fn** `resize` — Resizes the render target. For windowed mode, reconfigures the wgpu surface
+`crates/engine/paint/src/renderer.rs:7289` **fn** `set_scale_factor` — Обновить device-pixel-ratio. Вызывается shell-ом по `WindowEvent::ScaleFactorChanged`
+`crates/engine/paint/src/renderer.rs:7299` **fn** `scale_factor` — Текущий device-pixel-ratio. Для отладки / тестов (UI обычно его не читает —
+`crates/engine/paint/src/renderer.rs:7309` **fn** `target_color_space` — Target color space for this renderer's output surface
+`crates/engine/paint/src/renderer.rs:7318` **fn** `set_canvas_background` — Updates the root-element canvas background used as the framebuffer clear colour
+`crates/engine/paint/src/renderer.rs:7364` **fn** `viewport_size` — Текущий viewport в **logical** (CSS) пикселях: `physical / scale_factor`
+`crates/engine/paint/src/renderer.rs:8111` **fn** `render` — `scroll_y ≥ 0`, `scroll_x ≥ 0`. Negatives caller обязан клампить до 0
+`crates/engine/paint/src/renderer.rs:8124` **fn** `render_with_anim` — Как [`render`](Self::render), но с диапазонами анимируемых сегментов
+`crates/engine/paint/src/renderer.rs:13283` **fn** `render_to_image_cpu` — CPU-based rasterization using tiny-skia (feature="cpu-render" only)
+`crates/engine/paint/src/renderer.rs:13309` **fn** `render_tile`
+`crates/engine/paint/src/renderer.rs:13348` **fn** `render_to_image` — Renders display commands and returns a CPU `Image` (RGBA8)
+`crates/engine/paint/src/renderer.rs:13451` **fn** `render_print_pages` — Renders a print display list into one `Image` per page
 `crates/engine/paint/src/scroll_cache.rs:60` **enum** `ScrollFramePlan` — What the render backend should do with the current frame, given the retained
 `crates/engine/paint/src/scroll_cache.rs:116` **fn** `label` — A stable one-word label for the plan variant — `"blit"`,
 `crates/engine/paint/src/scroll_cache.rs:131` **struct** `ScrollCache` — Bookkeeping for the retained scroll-content surface (ADR-016 M3)
@@ -4133,7 +4135,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgpu_compute.rs:982` **enum** `GpuOp` — Одна записанная операция command-encoder для исполнения на `queue.submit`
 `crates/engine/paint/src/webgpu_compute.rs:1037` **fn** `submit` — Исполняет набор операций в одном `CommandEncoder` и сабмитит на очередь
 
-## lumen-shell  (937 symbols)
+## lumen-shell  (943 symbols)
 
 `crates/shell/src/adblock.rs:44` **fn** `browser_data_dir` — Root of all browser user data (portable): `<exe_dir>/data`
 `crates/shell/src/adblock.rs:52` **fn** `adblock_dir` — `<data>/adblock` — root of the ad-block subsystem's files
@@ -4196,17 +4198,17 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/click_log.rs:194` **fn** `log_page_ready` — Страница полностью применена (apply_loaded_page завершён)
 `crates/shell/src/config.rs:49` **fn** `init_global` — Install the process-global fingerprint profile. Idempotent: the first call
 `crates/shell/src/config.rs:55` **fn** `global` — Return the process-global fingerprint profile, or the default if unset
-`crates/shell/src/config.rs:123` **fn** `init_adblock` — Initialise the ad-block subsystem and install the process-global filter
-`crates/shell/src/config.rs:152` **struct** `FingerprintProfile` — User-configurable fingerprint identity (9F.1)
-`crates/shell/src/config.rs:230` **fn** `effective_tls_profile` — Resolve the effective TLS profile: explicit override, else derived from
-`crates/shell/src/config.rs:242` **fn** `navigator_profile` — Build the JS-side [`lumen_js::NavigatorProfile`] from this config
-`crates/shell/src/config.rs:272` **fn** `install_navigator` — Install the navigator/screen/timezone values into the process-global JS
-`crates/shell/src/config.rs:286` **fn** `apply_http` — Stamp the HTTP and TLS fingerprint onto an [`HttpClient`] builder, and
-`crates/shell/src/config.rs:362` **fn** `effective_socks5_proxy` — Resolve the effective SOCKS5 proxy: explicit override first, then
-`crates/shell/src/config.rs:385` **fn** `config_path` — Resolve the path to the portable `fingerprint.toml`
-`crates/shell/src/config.rs:394` **fn** `load` — Load and parse the fingerprint profile from the default config path
-`crates/shell/src/config.rs:407` **fn** `set_http3` — Rewrite the `http3` key in the portable `fingerprint.toml`, preserving every
-`crates/shell/src/config.rs:440` **fn** `parse` — Parse a flat `key = value` TOML subset into a [`FingerprintProfile`]
+`crates/shell/src/config.rs:124` **fn** `init_adblock` — Initialise the ad-block subsystem and install the process-global filter
+`crates/shell/src/config.rs:153` **struct** `FingerprintProfile` — User-configurable fingerprint identity (9F.1)
+`crates/shell/src/config.rs:231` **fn** `effective_tls_profile` — Resolve the effective TLS profile: explicit override, else derived from
+`crates/shell/src/config.rs:243` **fn** `navigator_profile` — Build the JS-side [`lumen_js::NavigatorProfile`] from this config
+`crates/shell/src/config.rs:273` **fn** `install_navigator` — Install the navigator/screen/timezone values into the process-global JS
+`crates/shell/src/config.rs:287` **fn** `apply_http` — Stamp the HTTP and TLS fingerprint onto an [`HttpClient`] builder, and
+`crates/shell/src/config.rs:363` **fn** `effective_socks5_proxy` — Resolve the effective SOCKS5 proxy: explicit override first, then
+`crates/shell/src/config.rs:386` **fn** `config_path` — Resolve the path to the portable `fingerprint.toml`
+`crates/shell/src/config.rs:395` **fn** `load` — Load and parse the fingerprint profile from the default config path
+`crates/shell/src/config.rs:409` **fn** `set_http3` — Rewrite the `http3` key in the portable `fingerprint.toml`, preserving every
+`crates/shell/src/config.rs:442` **fn** `parse` — Parse a flat `key = value` TOML subset into a [`FingerprintProfile`]
 `crates/shell/src/deterministic.rs:15` **struct** `DetConfig` — Parsed deterministic-mode configuration from CLI args
 `crates/shell/src/deterministic.rs:27` **fn** `extract_deterministic` — Extract all deterministic-mode flags from CLI args
 `crates/shell/src/devtools/console_panel.rs:49` **enum** `ConsoleLevel` — Severity level of a console message
@@ -4389,12 +4391,12 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/hints.rs:172` **fn** `build_hints_overlay` — Build the viewport-locked overlay display list for all active hint badges
 `crates/shell/src/image_cache.rs:44` **enum** `DecodedImage` — Decoded image payload shared between the streaming progressive loader and the
 `crates/shell/src/image_cache.rs:86` **struct** `DecodedImageCache` — Shared, generation-scoped decoded-image cache for page `<img>` resources
-`crates/shell/src/image_cache.rs:96` **fn** `debug_stats` — TEMP BUG-272 diagnostics: (entries, decoded pixel bytes) currently held
-`crates/shell/src/image_cache.rs:118` **fn** `reset` — Drop all cached entries and adopt navigation `generation`
-`crates/shell/src/image_cache.rs:130` **fn** `reset_new` — Drop all cached entries and bump to a fresh generation
-`crates/shell/src/image_cache.rs:137` **fn** `current_generation` — The navigation generation the cache is currently scoped to
-`crates/shell/src/image_cache.rs:148` **fn** `get_or_decode` — Decode `src` through the cache for navigation `generation`
-`crates/shell/src/image_cache.rs:191` **fn** `get_or_decode_current` — Convenience for the UI-thread consumer ([`fetch_and_decode_images`]): decode
+`crates/shell/src/image_cache.rs:97` **fn** `debug_stats` — TEMP BUG-272 diagnostics: (entries, decoded pixel bytes) currently held
+`crates/shell/src/image_cache.rs:120` **fn** `reset` — Drop all cached entries and adopt navigation `generation`
+`crates/shell/src/image_cache.rs:133` **fn** `reset_new` — Drop all cached entries and bump to a fresh generation
+`crates/shell/src/image_cache.rs:141` **fn** `current_generation` — The navigation generation the cache is currently scoped to
+`crates/shell/src/image_cache.rs:153` **fn** `get_or_decode` — Decode `src` through the cache for navigation `generation`
+`crates/shell/src/image_cache.rs:196` **fn** `get_or_decode_current` — Convenience for the UI-thread consumer ([`fetch_and_decode_images`]): decode
 `crates/shell/src/input/gesture.rs:36` **enum** `GestureDir` — Six-way gesture direction code
 `crates/shell/src/input/gesture.rs:55` **enum** `GestureAction` — Shell action emitted when a completed gesture matches a binding
 `crates/shell/src/input/gesture.rs:81` **struct** `GestureMap` — Configurable mapping from [`GestureDir`] to [`GestureAction`]
@@ -4791,8 +4793,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/platform/dark_mode.rs:20` **fn** `theme_prefers_dark` — Maps an OS colour-scheme [`Theme`] to the `prefers-color-scheme: dark`
 `crates/shell/src/platform/display_color_profile.rs:29` **struct** `PlatformDisplayColorProfile` — Linux / macOS display-color-profile provider: no OS ICC query yet,
 `crates/shell/src/platform/display_color_profile.rs:33` **fn** `new` — Create the provider. No OS resources are acquired
-`crates/shell/src/platform/display_color_profile.rs:114` **struct** `PlatformDisplayColorProfile` — Windows display-color-profile provider via GDI `GetICMProfile`
-`crates/shell/src/platform/display_color_profile.rs:119` **fn** `new`
+`crates/shell/src/platform/display_color_profile.rs:119` **struct** `PlatformDisplayColorProfile` — Windows display-color-profile provider via GDI `GetICMProfile`
+`crates/shell/src/platform/display_color_profile.rs:124` **fn** `new`
 `crates/shell/src/platform/file_dialog.rs:14` **struct** `FilePickerEntry`
 `crates/shell/src/platform/file_dialog.rs:34` **fn** `open_file_dialog` — Open the OS file-picker dialog and return selected files
 `crates/shell/src/platform/file_dialog.rs:55` **fn** `entries_to_json_with_tokens` — Build a JSON array that includes opaque `token` values instead of raw paths
@@ -4800,11 +4802,11 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/platform/wake_lock.rs:25` **struct** `PlatformWakeLock` — Platform-backed wake-lock provider
 `crates/shell/src/platform/wake_lock.rs:32` **fn** `new` — Create a new provider with no lock held initially
 `crates/shell/src/prefetch.rs:57` **struct** `PrefetchCache` — Shared, generation-scoped byte cache for page subresources. See module docs
-`crates/shell/src/prefetch.rs:67` **fn** `debug_stats` — TEMP BUG-272 diagnostics: (entries, cached body bytes) currently held
-`crates/shell/src/prefetch.rs:83` **fn** `reset` — Drop all cached entries and adopt navigation `generation`
-`crates/shell/src/prefetch.rs:90` **fn** `current_generation` — The navigation generation the cache is currently scoped to
-`crates/shell/src/prefetch.rs:105` **fn** `fetch` — Fetch `url` through the cache for navigation `generation`
-`crates/shell/src/prefetch.rs:150` **fn** `fetch_current` — Convenience for the UI-thread consumer (`parse_and_layout`): fetch using the
+`crates/shell/src/prefetch.rs:68` **fn** `debug_stats` — TEMP BUG-272 diagnostics: (entries, cached body bytes) currently held
+`crates/shell/src/prefetch.rs:85` **fn** `reset` — Drop all cached entries and adopt navigation `generation`
+`crates/shell/src/prefetch.rs:93` **fn** `current_generation` — The navigation generation the cache is currently scoped to
+`crates/shell/src/prefetch.rs:109` **fn** `fetch` — Fetch `url` through the cache for navigation `generation`
+`crates/shell/src/prefetch.rs:154` **fn** `fetch_current` — Convenience for the UI-thread consumer (`parse_and_layout`): fetch using the
 `crates/shell/src/reader_view.rs:18` **struct** `ArticleContent` — Article content extracted from a raw HTML page
 `crates/shell/src/reader_view.rs:37` **fn** `extract_article` — Parse `html` and extract the main article content
 `crates/shell/src/reader_view.rs:52` **fn** `build_reader_html` — Wrap an [`ArticleContent`] in the reader template and return a
@@ -4873,8 +4875,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/scrollbar.rs:185` **struct** `ScrollDrag` — Снапшот состояния на момент начала drag-а: scroll_y страницы и cursor_y
 `crates/shell/src/scrollbar.rs:191` **fn** `new`
 `crates/shell/src/scrollbar.rs:199` **fn** `scroll_for` — Желаемый `scroll_y` при текущей позиции курсора. Если scrollbar
-`crates/shell/src/session_persist.rs:31` **fn** `open_store` — Open the session store at [`SESSION_DB_PATH`], falling back to an in-memory
-`crates/shell/src/session_persist.rs:43` **fn** `active_index` — Index of the tab to make active after restore: the first `is_active` tab, or
+`crates/shell/src/session_persist.rs:32` **fn** `open_store` — Open the session store at [`SESSION_DB_PATH`], falling back to an in-memory
+`crates/shell/src/session_persist.rs:44` **fn** `active_index` — Index of the tab to make active after restore: the first `is_active` tab, or
 `crates/shell/src/source_view.rs:15` **fn** `build_view_source_html` — Wrap `raw` HTML source in a syntax-highlighted page
 `crates/shell/src/spellcheck.rs:22` **fn** `spell_data_dir` — Папка с пользовательскими словарями: `<exe_dir>/data/spell`
 `crates/shell/src/spellcheck.rs:29` **struct** `MultiDictionary` — Комбинированный словарь нескольких локалей. Слово считается верным,
@@ -4889,6 +4891,12 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/spellcheck.rs:284` **fn** `load_user_words` — Загружает пользовательский словарь: по одному слову в строке, lowercase
 `crates/shell/src/spellcheck.rs:297` **fn** `add_user_word` — Добавляет слово (lowercase) в файл пользовательского словаря, дописывая
 `crates/shell/src/spellcheck.rs:308` **fn** `build_spell_overlay` — Строит команды отрисовки волнистого подчёркивания для ошибочных диапазонов
+`crates/shell/src/startup_trace.rs:101` **struct** `Startup` — Fixed-startup stopwatch, created on the first line of `run_cli` and consulted
+`crates/shell/src/startup_trace.rs:122` **fn** `begin` — Starts the stopwatch. Call as the first statement of `run_cli`, before
+`crates/shell/src/startup_trace.rs:158` **fn** `phase` — Opens a named startup phase. The phase ends when the returned guard is
+`crates/shell/src/startup_trace.rs:170` **fn** `dispatch` — Closes the fixed-startup accounting at the moment the CLI mode is known
+`crates/shell/src/startup_trace.rs:198` **fn** `log_exit` — Reports the process's whole lifetime, as the OS sees it, on the way out of
+`crates/shell/src/startup_trace.rs:213` **struct** `Phase` — One named startup phase; see [`Startup::phase`]
 `crates/shell/src/surface/ctx.rs:22` **struct** `PaintCtx` — Read-only context for [`super::Panel::paint`]
 `crates/shell/src/surface/ctx.rs:39` **fn** `new` — Build a paint context with default (non-focused, non-hovered) hints
 `crates/shell/src/surface/ctx.rs:56` **struct** `EventCtx` — Side effects a panel may request while handling an event
@@ -4971,8 +4979,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/tab_lifecycle/manager.rs:164` **fn** `tab_state` — Returns the current state of a tab, or `None` if the tab is unknown
 `crates/shell/src/tab_lifecycle/manager.rs:169` **fn** `is_active` — Returns `true` if `id` is the foreground (Active) tab
 `crates/shell/src/tab_lifecycle/manager.rs:177` **fn** `tick_idle` — Advance all background tabs whose idle timeout has elapsed, and apply
-`crates/shell/src/tab_lifecycle/manager.rs:227` **fn** `lru_evict` — Evict least-recently-used background tabs until the number of
-`crates/shell/src/tab_lifecycle/manager.rs:283` **fn** `snapshot` — Returns a snapshot of all tab IDs and their current states
+`crates/shell/src/tab_lifecycle/manager.rs:228` **fn** `lru_evict` — Evict least-recently-used background tabs until the number of
+`crates/shell/src/tab_lifecycle/manager.rs:284` **fn** `snapshot` — Returns a snapshot of all tab IDs and their current states
 `crates/shell/src/tab_lifecycle/restore.rs:22` **struct** `TabMetadata` — Lightweight per-tab identity kept in RAM while a tab is hibernated (T3)
 `crates/shell/src/tab_lifecycle/sleep.rs:24` **fn** `serialize_form_state` — Serialise a `FormState` map to a compact JSON string
 `crates/shell/src/tab_lifecycle/sleep.rs:47` **fn** `deserialize_form_state` — Deserialise a JSON string produced by [`serialize_form_state`] back into a `FormState`
@@ -5082,26 +5090,26 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/a11y_prefs.rs:105` **struct** `A11yPrefs` — Persistent accessibility preferences store
 `crates/storage/src/a11y_prefs.rs:128` **fn** `open` — Open (or create) an on-disk accessibility preferences database
 `crates/storage/src/a11y_prefs.rs:134` **fn** `open_in_memory` — Create an in-memory accessibility preferences database (for tests / ephemeral sessions)
-`crates/storage/src/a11y_prefs.rs:184` **fn** `font_size_multiplier` — Font-size scale multiplier (e.g. 1.0, 1.25, 1.5)
-`crates/storage/src/a11y_prefs.rs:189` **fn** `set_font_size_multiplier` — Set font-size scale multiplier
-`crates/storage/src/a11y_prefs.rs:194` **fn** `reduced_motion` — Whether `prefers-reduced-motion` is active
-`crates/storage/src/a11y_prefs.rs:199` **fn** `set_reduced_motion` — Set prefers-reduced-motion
-`crates/storage/src/a11y_prefs.rs:204` **fn** `forced_colors` — Whether `prefers-forced-colors` is active
-`crates/storage/src/a11y_prefs.rs:209` **fn** `set_forced_colors` — Set forced-colors preference
-`crates/storage/src/a11y_prefs.rs:214` **fn** `cursor_size` — Cursor magnification level
-`crates/storage/src/a11y_prefs.rs:219` **fn** `set_cursor_size` — Set cursor magnification level
-`crates/storage/src/a11y_prefs.rs:224` **fn** `snapshot` — Read all preferences into a snapshot value
-`crates/storage/src/a11y_prefs.rs:234` **fn** `apply_snapshot` — Persist all fields from a snapshot in one call
+`crates/storage/src/a11y_prefs.rs:186` **fn** `font_size_multiplier` — Font-size scale multiplier (e.g. 1.0, 1.25, 1.5)
+`crates/storage/src/a11y_prefs.rs:191` **fn** `set_font_size_multiplier` — Set font-size scale multiplier
+`crates/storage/src/a11y_prefs.rs:196` **fn** `reduced_motion` — Whether `prefers-reduced-motion` is active
+`crates/storage/src/a11y_prefs.rs:201` **fn** `set_reduced_motion` — Set prefers-reduced-motion
+`crates/storage/src/a11y_prefs.rs:206` **fn** `forced_colors` — Whether `prefers-forced-colors` is active
+`crates/storage/src/a11y_prefs.rs:211` **fn** `set_forced_colors` — Set forced-colors preference
+`crates/storage/src/a11y_prefs.rs:216` **fn** `cursor_size` — Cursor magnification level
+`crates/storage/src/a11y_prefs.rs:221` **fn** `set_cursor_size` — Set cursor magnification level
+`crates/storage/src/a11y_prefs.rs:226` **fn** `snapshot` — Read all preferences into a snapshot value
+`crates/storage/src/a11y_prefs.rs:236` **fn** `apply_snapshot` — Persist all fields from a snapshot in one call
 `crates/storage/src/adblock.rs:29` **struct** `Subscription` — A filter-list subscription the user follows
 `crates/storage/src/adblock.rs:40` **struct** `ListMeta` — Cache metadata for one downloaded filter list
 `crates/storage/src/adblock.rs:63` **struct** `AdblockStore` — SQLite-backed store for ad-block subscriptions and list cache metadata
 `crates/storage/src/adblock.rs:75` **fn** `open` — Open (or create) the SQLite store at `path`, creating tables if needed
 `crates/storage/src/adblock.rs:81` **fn** `open_in_memory` — Open an in-memory store (tests)
-`crates/storage/src/adblock.rs:112` **fn** `list_subscriptions` — All subscriptions, ordered by title for stable display
-`crates/storage/src/adblock.rs:134` **fn** `set_subscription` — Insert or update a subscription (keyed by URL)
-`crates/storage/src/adblock.rs:150` **fn** `seed_defaults_if_empty` — Seed the given default subscriptions, but only when the table is empty
-`crates/storage/src/adblock.rs:169` **fn** `get_meta` — Fetch cache metadata for a list slug, if present
-`crates/storage/src/adblock.rs:193` **fn** `upsert_meta` — Insert or replace cache metadata for a list (keyed by slug)
+`crates/storage/src/adblock.rs:113` **fn** `list_subscriptions` — All subscriptions, ordered by title for stable display
+`crates/storage/src/adblock.rs:136` **fn** `set_subscription` — Insert or update a subscription (keyed by URL)
+`crates/storage/src/adblock.rs:153` **fn** `seed_defaults_if_empty` — Seed the given default subscriptions, but only when the table is empty
+`crates/storage/src/adblock.rs:173` **fn** `get_meta` — Fetch cache metadata for a list slug, if present
+`crates/storage/src/adblock.rs:198` **fn** `upsert_meta` — Insert or replace cache metadata for a list (keyed by slug)
 `crates/storage/src/autofill.rs:17` **struct** `AutofillEntry`
 `crates/storage/src/autofill.rs:25` **struct** `Autofill`
 `crates/storage/src/autofill.rs:36` **fn** `open`
@@ -5158,28 +5166,28 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/browser_settings.rs:91` **struct** `BrowserSettings` — Persistent settings store
 `crates/storage/src/browser_settings.rs:114` **fn** `open` — Open (or create) an on-disk settings database
 `crates/storage/src/browser_settings.rs:120` **fn** `open_in_memory` — Create an in-memory settings database (for tests / ephemeral sessions)
-`crates/storage/src/browser_settings.rs:180` **fn** `homepage` — Homepage / new-tab URL
-`crates/storage/src/browser_settings.rs:185` **fn** `set_homepage` — Set homepage URL
-`crates/storage/src/browser_settings.rs:190` **fn** `search_engine_id` — ID of the default search engine (`SearchProviderEntry::id`)
-`crates/storage/src/browser_settings.rs:195` **fn** `set_search_engine_id` — Set default search engine ID
-`crates/storage/src/browser_settings.rs:200` **fn** `shields_enabled` — Whether shields (tracker blocker) are globally enabled
-`crates/storage/src/browser_settings.rs:205` **fn** `set_shields_enabled` — Set shields on/off
-`crates/storage/src/browser_settings.rs:210` **fn** `fingerprint_mode` — Fingerprint resistance mode: `"standard"`, `"strict"`, or `"off"`
-`crates/storage/src/browser_settings.rs:215` **fn** `set_fingerprint_mode` — Set fingerprint resistance mode
-`crates/storage/src/browser_settings.rs:220` **fn** `doh_enabled` — Whether DNS-over-HTTPS is enabled
-`crates/storage/src/browser_settings.rs:225` **fn** `set_doh_enabled` — Set DNS-over-HTTPS on/off
-`crates/storage/src/browser_settings.rs:230` **fn** `font_size` — Base font size in CSS px (e.g. 16.0)
-`crates/storage/src/browser_settings.rs:235` **fn** `set_font_size` — Set base font size
-`crates/storage/src/browser_settings.rs:240` **fn** `theme` — UI theme: `"dark"`, `"light"`, or `"system"`
-`crates/storage/src/browser_settings.rs:245` **fn** `set_theme` — Set UI theme
-`crates/storage/src/browser_settings.rs:250` **fn** `download_path` — Absolute path to the default download directory. Empty = OS default
-`crates/storage/src/browser_settings.rs:255` **fn** `set_download_path` — Set default download directory path
-`crates/storage/src/browser_settings.rs:260` **fn** `tab_layout` — Tab layout mode: `"horizontal"` or `"vertical"` (GG-4)
-`crates/storage/src/browser_settings.rs:265` **fn** `set_tab_layout` — Set tab layout mode
-`crates/storage/src/browser_settings.rs:270` **fn** `panel_layout` — Serialised docked-panel layout string (F2-6c); empty = built-in defaults
-`crates/storage/src/browser_settings.rs:275` **fn** `set_panel_layout` — Persist the serialised docked-panel layout
-`crates/storage/src/browser_settings.rs:280` **fn** `snapshot` — Read all settings into a snapshot value
-`crates/storage/src/browser_settings.rs:296` **fn** `apply_snapshot` — Persist all fields from a snapshot in one call
+`crates/storage/src/browser_settings.rs:182` **fn** `homepage` — Homepage / new-tab URL
+`crates/storage/src/browser_settings.rs:187` **fn** `set_homepage` — Set homepage URL
+`crates/storage/src/browser_settings.rs:192` **fn** `search_engine_id` — ID of the default search engine (`SearchProviderEntry::id`)
+`crates/storage/src/browser_settings.rs:197` **fn** `set_search_engine_id` — Set default search engine ID
+`crates/storage/src/browser_settings.rs:202` **fn** `shields_enabled` — Whether shields (tracker blocker) are globally enabled
+`crates/storage/src/browser_settings.rs:207` **fn** `set_shields_enabled` — Set shields on/off
+`crates/storage/src/browser_settings.rs:212` **fn** `fingerprint_mode` — Fingerprint resistance mode: `"standard"`, `"strict"`, or `"off"`
+`crates/storage/src/browser_settings.rs:217` **fn** `set_fingerprint_mode` — Set fingerprint resistance mode
+`crates/storage/src/browser_settings.rs:222` **fn** `doh_enabled` — Whether DNS-over-HTTPS is enabled
+`crates/storage/src/browser_settings.rs:227` **fn** `set_doh_enabled` — Set DNS-over-HTTPS on/off
+`crates/storage/src/browser_settings.rs:232` **fn** `font_size` — Base font size in CSS px (e.g. 16.0)
+`crates/storage/src/browser_settings.rs:237` **fn** `set_font_size` — Set base font size
+`crates/storage/src/browser_settings.rs:242` **fn** `theme` — UI theme: `"dark"`, `"light"`, or `"system"`
+`crates/storage/src/browser_settings.rs:247` **fn** `set_theme` — Set UI theme
+`crates/storage/src/browser_settings.rs:252` **fn** `download_path` — Absolute path to the default download directory. Empty = OS default
+`crates/storage/src/browser_settings.rs:257` **fn** `set_download_path` — Set default download directory path
+`crates/storage/src/browser_settings.rs:262` **fn** `tab_layout` — Tab layout mode: `"horizontal"` or `"vertical"` (GG-4)
+`crates/storage/src/browser_settings.rs:267` **fn** `set_tab_layout` — Set tab layout mode
+`crates/storage/src/browser_settings.rs:272` **fn** `panel_layout` — Serialised docked-panel layout string (F2-6c); empty = built-in defaults
+`crates/storage/src/browser_settings.rs:277` **fn** `set_panel_layout` — Persist the serialised docked-panel layout
+`crates/storage/src/browser_settings.rs:282` **fn** `snapshot` — Read all settings into a snapshot value
+`crates/storage/src/browser_settings.rs:298` **fn** `apply_snapshot` — Persist all fields from a snapshot in one call
 `crates/storage/src/cache_storage.rs:19` **struct** `CachedEntry`
 `crates/storage/src/cache_storage.rs:30` **struct** `CacheStorage`
 `crates/storage/src/cache_storage.rs:41` **fn** `open`
@@ -5293,23 +5301,23 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/http_cache.rs:253` **fn** `clear_expired` — Удалить expired записи. Возвращает число удалённых строк
 `crates/storage/src/http_cache.rs:268` **fn** `clear` — Полная очистка кеша
 `crates/storage/src/http_cache.rs:279` **fn** `count` — Общее число записей
-`crates/storage/src/indexed_db.rs:42` **fn** `origin_key` — Вычислить безопасный файловый ключ для origin
-`crates/storage/src/indexed_db.rs:65` **struct** `IdbStore` — Per-origin persistence для IndexedDB поверх [`StorageBackend`]
-`crates/storage/src/indexed_db.rs:76` **fn** `new` — Создать store для конкретного `origin` поверх разделяемого `backend`
-`crates/storage/src/indexed_db.rs:89` **fn** `open_or_create` — Открыть или создать выделенный SQLite-файл для IndexedDB
-`crates/storage/src/indexed_db.rs:101` **fn** `for_origin` — Открыть или создать IDB-хранилище для `etld_plus_one` в директории `idb_dir`
-`crates/storage/src/indexed_db.rs:147` **struct** `NativeIdbStore` — Structured per-origin SQLite backend for IndexedDB (Phase 3)
-`crates/storage/src/indexed_db.rs:198` **fn** `open_or_create` — Open or create the structured IDB store at `path` (file is created if absent)
-`crates/storage/src/indexed_db.rs:205` **fn** `open_in_memory` — Open an in-memory structured IDB store (tests / ephemeral sessions)
-`crates/storage/src/indexed_db.rs:214` **fn** `for_origin` — Open/create the structured store for `etld_plus_one` under `idb_dir`
+`crates/storage/src/indexed_db.rs:43` **fn** `origin_key` — Вычислить безопасный файловый ключ для origin
+`crates/storage/src/indexed_db.rs:66` **struct** `IdbStore` — Per-origin persistence для IndexedDB поверх [`StorageBackend`]
+`crates/storage/src/indexed_db.rs:77` **fn** `new` — Создать store для конкретного `origin` поверх разделяемого `backend`
+`crates/storage/src/indexed_db.rs:90` **fn** `open_or_create` — Открыть или создать выделенный SQLite-файл для IndexedDB
+`crates/storage/src/indexed_db.rs:102` **fn** `for_origin` — Открыть или создать IDB-хранилище для `etld_plus_one` в директории `idb_dir`
+`crates/storage/src/indexed_db.rs:148` **struct** `NativeIdbStore` — Structured per-origin SQLite backend for IndexedDB (Phase 3)
+`crates/storage/src/indexed_db.rs:199` **fn** `open_or_create` — Open or create the structured IDB store at `path` (file is created if absent)
+`crates/storage/src/indexed_db.rs:206` **fn** `open_in_memory` — Open an in-memory structured IDB store (tests / ephemeral sessions)
+`crates/storage/src/indexed_db.rs:215` **fn** `for_origin` — Open/create the structured store for `etld_plus_one` under `idb_dir`
 `crates/storage/src/keyboard_shortcuts.rs:15` **struct** `KeyboardShortcutEntry` — A single keybinding: a command name paired with its modifier + key strings
 `crates/storage/src/keyboard_shortcuts.rs:27` **struct** `KeyboardShortcuts` — Persistent store for keyboard shortcut overrides
 `crates/storage/src/keyboard_shortcuts.rs:51` **fn** `open` — Open (or create) an on-disk shortcuts database
 `crates/storage/src/keyboard_shortcuts.rs:57` **fn** `open_in_memory` — Create an in-memory shortcuts database (for tests / ephemeral sessions)
-`crates/storage/src/keyboard_shortcuts.rs:63` **fn** `all` — Return all stored overrides
-`crates/storage/src/keyboard_shortcuts.rs:83` **fn** `get` — Return the stored override for `command`, or `None` if using default
-`crates/storage/src/keyboard_shortcuts.rs:100` **fn** `set` — Save (or overwrite) a binding override for `command`
-`crates/storage/src/keyboard_shortcuts.rs:113` **fn** `remove` — Remove the override for `command` (reverts to compile-time default)
+`crates/storage/src/keyboard_shortcuts.rs:64` **fn** `all` — Return all stored overrides
+`crates/storage/src/keyboard_shortcuts.rs:85` **fn** `get` — Return the stored override for `command`, or `None` if using default
+`crates/storage/src/keyboard_shortcuts.rs:103` **fn** `set` — Save (or overwrite) a binding override for `command`
+`crates/storage/src/keyboard_shortcuts.rs:117` **fn** `remove` — Remove the override for `command` (reverts to compile-time default)
 `crates/storage/src/newtab_tiles.rs:24` **struct** `PinnedTile` — One pinned newtab tile
 `crates/storage/src/newtab_tiles.rs:37` **struct** `NewtabTiles` — SQLite-backed registry of pinned newtab tiles
 `crates/storage/src/newtab_tiles.rs:49` **fn** `open` — Open persistent tile store at `path`
@@ -5384,11 +5392,11 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/print_prefs.rs:45` **struct** `PrintPrefsSnapshot` — All print preferences as a copyable value type
 `crates/storage/src/print_prefs.rs:87` **struct** `PrintPrefs` — Print preferences backed by SQLite
 `crates/storage/src/print_prefs.rs:99` **fn** `open` — Open (or create) the SQLite store for print preferences
-`crates/storage/src/print_prefs.rs:120` **fn** `load_snapshot` — Load the current snapshot of all print preferences
-`crates/storage/src/print_prefs.rs:146` **fn** `save_snapshot` — Persist a snapshot of print preferences to the database
+`crates/storage/src/print_prefs.rs:121` **fn** `load_snapshot` — Load the current snapshot of all print preferences
+`crates/storage/src/print_prefs.rs:148` **fn** `save_snapshot` — Persist a snapshot of print preferences to the database
 `crates/storage/src/profile_vault.rs:52` **fn** `generate_storage_key` — Generate a cryptographically random 32-byte storage key
-`crates/storage/src/profile_vault.rs:102` **fn** `seal` — Seal a 32-byte `storage_key` under `password`
-`crates/storage/src/profile_vault.rs:130` **fn** `open` — Open a sealed blob, recovering the 32-byte storage key
+`crates/storage/src/profile_vault.rs:104` **fn** `seal` — Seal a 32-byte `storage_key` under `password`
+`crates/storage/src/profile_vault.rs:132` **fn** `open` — Open a sealed blob, recovering the 32-byte storage key
 `crates/storage/src/profiles.rs:30` **struct** `Profile` — Один профиль пользователя
 `crates/storage/src/profiles.rs:49` **struct** `ProfileRegistry`
 `crates/storage/src/profiles.rs:60` **fn** `open`
@@ -5442,18 +5450,18 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/safe_browsing.rs:282` **struct** `SafeBrowsingList` — SQLite-backed список Safe Browsing записей
 `crates/storage/src/safe_browsing.rs:293` **fn** `open`
 `crates/storage/src/safe_browsing.rs:299` **fn** `open_in_memory`
-`crates/storage/src/safe_browsing.rs:329` **fn** `add_hash` — Добавить запись по уже-хэшированному значению. `full_hash` обязан
-`crates/storage/src/safe_browsing.rs:358` **fn** `add_url` — Удобный wrapper: канонизировать URL → SHA-256 → `add_hash`
-`crates/storage/src/safe_browsing.rs:389` **fn** `lookup_hash` — Прямой lookup по полному хэшу (32 байта). Возвращает первое
-`crates/storage/src/safe_browsing.rs:415` **fn** `lookup_url` — Главный entry-point фильтрации: проверить URL против всех списков,
-`crates/storage/src/safe_browsing.rs:423` **fn** `lookup_url_with_psl` — Версия [`Self::lookup_url`] с опциональной PSL-обрезкой host-suffix
-`crates/storage/src/safe_browsing.rs:443` **fn** `clear_list` — Удалить все записи указанного списка. `clear_list("google-v4")` —
-`crates/storage/src/safe_browsing.rs:456` **fn** `clear_all` — Удалить все записи во всех списках. Используется при logout/profile
-`crates/storage/src/safe_browsing.rs:465` **fn** `count_in` — Сколько записей в конкретном списке
-`crates/storage/src/safe_browsing.rs:478` **fn** `count_total` — Сколько всего записей во всех списках
-`crates/storage/src/safe_browsing.rs:498` **struct** `SafeBrowsingFilter` — Тонкая обёртка над [`SafeBrowsingList`] для подключения в
-`crates/storage/src/safe_browsing.rs:505` **fn** `new`
-`crates/storage/src/safe_browsing.rs:513` **fn** `with_psl` — Builder-конструктор с подключённым `PublicSuffixList`. С PSL
+`crates/storage/src/safe_browsing.rs:330` **fn** `add_hash` — Добавить запись по уже-хэшированному значению. `full_hash` обязан
+`crates/storage/src/safe_browsing.rs:359` **fn** `add_url` — Удобный wrapper: канонизировать URL → SHA-256 → `add_hash`
+`crates/storage/src/safe_browsing.rs:391` **fn** `lookup_hash` — Прямой lookup по полному хэшу (32 байта). Возвращает первое
+`crates/storage/src/safe_browsing.rs:417` **fn** `lookup_url` — Главный entry-point фильтрации: проверить URL против всех списков,
+`crates/storage/src/safe_browsing.rs:425` **fn** `lookup_url_with_psl` — Версия [`Self::lookup_url`] с опциональной PSL-обрезкой host-suffix
+`crates/storage/src/safe_browsing.rs:446` **fn** `clear_list` — Удалить все записи указанного списка. `clear_list("google-v4")` —
+`crates/storage/src/safe_browsing.rs:460` **fn** `clear_all` — Удалить все записи во всех списках. Используется при logout/profile
+`crates/storage/src/safe_browsing.rs:470` **fn** `count_in` — Сколько записей в конкретном списке
+`crates/storage/src/safe_browsing.rs:484` **fn** `count_total` — Сколько всего записей во всех списках
+`crates/storage/src/safe_browsing.rs:504` **struct** `SafeBrowsingFilter` — Тонкая обёртка над [`SafeBrowsingList`] для подключения в
+`crates/storage/src/safe_browsing.rs:511` **fn** `new`
+`crates/storage/src/safe_browsing.rs:519` **fn** `with_psl` — Builder-конструктор с подключённым `PublicSuffixList`. С PSL
 `crates/storage/src/search_history.rs:20` **struct** `SearchQuery`
 `crates/storage/src/search_history.rs:31` **struct** `SearchHistory`
 `crates/storage/src/search_history.rs:42` **fn** `open`
@@ -5468,17 +5476,17 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/search_history.rs:210` **fn** `count`
 `crates/storage/src/search_providers.rs:21` **struct** `SearchProviderEntry` — Один поисковый провайдер
 `crates/storage/src/search_providers.rs:37` **fn** `build_url` — Подставить query на место `{query}` с URL-encoding по RFC 3986
-`crates/storage/src/search_providers.rs:81` **struct** `SearchProviders` — Реестр поисковых провайдеров
-`crates/storage/src/search_providers.rs:92` **fn** `open`
-`crates/storage/src/search_providers.rs:98` **fn** `open_in_memory`
-`crates/storage/src/search_providers.rs:133` **fn** `add` — Добавить провайдера. Имя уникально
-`crates/storage/src/search_providers.rs:152` **fn** `get` — Получить провайдера по id
-`crates/storage/src/search_providers.rs:169` **fn** `get_by_name`
-`crates/storage/src/search_providers.rs:187` **fn** `list_all` — Все провайдеры в порядке создания
-`crates/storage/src/search_providers.rs:209` **fn** `delete`
-`crates/storage/src/search_providers.rs:221` **fn** `set_default`
-`crates/storage/src/search_providers.rs:246` **fn** `default`
-`crates/storage/src/search_providers.rs:266` **fn** `count`
+`crates/storage/src/search_providers.rs:82` **struct** `SearchProviders` — Реестр поисковых провайдеров
+`crates/storage/src/search_providers.rs:93` **fn** `open`
+`crates/storage/src/search_providers.rs:99` **fn** `open_in_memory`
+`crates/storage/src/search_providers.rs:134` **fn** `add` — Добавить провайдера. Имя уникально
+`crates/storage/src/search_providers.rs:153` **fn** `get` — Получить провайдера по id
+`crates/storage/src/search_providers.rs:170` **fn** `get_by_name`
+`crates/storage/src/search_providers.rs:188` **fn** `list_all` — Все провайдеры в порядке создания
+`crates/storage/src/search_providers.rs:210` **fn** `delete`
+`crates/storage/src/search_providers.rs:222` **fn** `set_default`
+`crates/storage/src/search_providers.rs:247` **fn** `default`
+`crates/storage/src/search_providers.rs:267` **fn** `count`
 `crates/storage/src/service_workers.rs:21` **enum** `UpdateViaCache`
 `crates/storage/src/service_workers.rs:32` **fn** `as_str`
 `crates/storage/src/service_workers.rs:39` **fn** `parse`
@@ -5603,4 +5611,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 5526 symbols in 24 crates*
+*Total: 5534 symbols in 24 crates*
