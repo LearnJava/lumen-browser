@@ -194,7 +194,19 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   ten categories chosen to exercise the orchestrator's hazards (https-only, ws,
   reftest-dominated, an unexecutable test type) rather than the engine.
   Scoring — including "an id that never ran scores 0" — is written down in
-  `docs/wpt/pass-rate.md`.
+  `docs/wpt/pass-rate.md`. Two flags exist because a corpus run must never
+  quietly misreport its own coverage:
+  - `--skip-https` excludes `.https.` ids from the *run* (they stay in the
+    denominator and score 0). Measured cost of not skipping them: 200 sampled
+    https ids gave 200 TIMEOUT / 0 subtests / 200 `UnknownIssuer`, ~39 s each —
+    ≈14 h for all 6874 to reach a result already known ([BUG-785](../../bugs/BUG-785-OPEN.md)).
+    The summary prints `NOT RUN ON PURPOSE` with the count and the reason.
+  - a shard killed on its budget is recovered from the mozlog raw stream
+    (`--log-wptreport` is written only at the end, so a kill used to lose the
+    whole shard). Recovered shards are named in the summary; a shard that ran
+    nothing because everything was excluded is reported separately
+    (`ran nothing`), so the "recovered" line keeps meaning "something went
+    wrong".
 - `tests/wpt/expectations.py` — **ours** (TEST-3, `docs/tasks/p2-test-track.md`) — generates and
   gates on per-category `.ini` baselines for `run_report.py --update-expected`/`--check`, on top
   of the same native `wptrunner` `--metadata` mechanism `run_suite.py` uses for `dom/nodes`, not
