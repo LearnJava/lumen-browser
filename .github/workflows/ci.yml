@@ -5,9 +5,22 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # `p[1-5]-*` are the role task branches (CLAUDE.md §Git workflow). They are
+    # pushed to origin so CI can gate them BEFORE the local `--no-ff` merge —
+    # without this pattern a branch push runs nothing, because the project
+    # merges locally and does not open pull requests (docs/ci-offload.md §8,
+    # variant 1, decided 2026-08-18).
+    branches: [main, 'p[1-5]-*']
     tags-ignore: ['**']   # release.yml handles tags
   pull_request:
+
+# One run per branch. A second push supersedes the first: with branch gating a
+# task branch gets pushed several times, and 20-minute runs would otherwise pile
+# up against the 20-job free-tier limit. `main` is exempt — every commit that
+# lands there keeps its own result.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
   CARGO_TERM_COLOR: always
