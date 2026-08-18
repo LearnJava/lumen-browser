@@ -19,6 +19,11 @@
 //! - DeltaSetIndexMap (используется HVAR для glyph_id → (outer, inner)
 //!   маппинга) — отдельный тип, добавится при подключении HVAR.
 
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
 use crate::binary::BinaryReader;
 use crate::face::FontError;
 

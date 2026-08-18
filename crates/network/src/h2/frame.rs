@@ -24,6 +24,11 @@
 //!   if a sender wants padding for traffic analysis, the connection layer
 //!   wraps the payload before reaching the codec.
 
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
 use std::fmt;
 
 use lumen_core::error::Error;

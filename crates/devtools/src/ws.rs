@@ -8,8 +8,10 @@ use std::io::{self, Read, Write};
 
 use lumen_core::hash::ws_accept_key;
 
+/// Отказ на уровне WebSocket-соединения DevTools.
 #[derive(Debug)]
 pub enum WsError {
+    /// Ошибка ввода-вывода сокета (обрыв, таймаут, отказ ОС).
     Io(io::Error),
     /// HTTP-запрос не является корректным WebSocket Upgrade.
     BadHandshake(&'static str),

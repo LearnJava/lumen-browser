@@ -22,6 +22,11 @@
 //! Phase 1: add a platform backend behind [`HidDevice`] — Windows `HidD_*` +
 //! `SetupDi`, Linux `hidraw`, macOS `IOHIDDevice`.
 
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
 use lumen_core::ext::{
     CredentialProvider, WebAuthnCreateRequest, WebAuthnCreateResponse, WebAuthnError,
     WebAuthnGetRequest, WebAuthnGetResponse,

@@ -11,6 +11,11 @@
 //! (unread / read / archived), теги. Сам readability-extract,
 //! загрузка ресурсов при save, и UI — отдельные задачи.
 
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Mutex;

@@ -8,6 +8,11 @@
 //! Phase 0: storage layer. Реальный matcher (origin → policy) + apply
 //! при HTTP-request — задача `lumen-network`.
 
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
 use std::path::Path;
 use std::sync::Mutex;
 

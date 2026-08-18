@@ -21,6 +21,11 @@
 //! (см. roadmap «CORS preflight» в `lumen-plan.md`). Этот модуль остаётся
 //! pure-функцией от входа — что облегчает unit-тестирование без mock-сервера.
 
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};

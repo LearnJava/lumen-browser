@@ -7,6 +7,11 @@
 //! and guarantees that the snapshot serialised by [`Document::to_bytes`] is a flat
 //! byte blob with no pointer fixups.
 
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
 // Catch the most common forms of accidental Rc-in-arena.
 #![deny(clippy::rc_buffer)]
 

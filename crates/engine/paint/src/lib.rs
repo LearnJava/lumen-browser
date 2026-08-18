@@ -6,6 +6,11 @@
 //! - [`backend`] стабильный трейт [`RenderBackend`] — контракт всех GPU-бэкендов.
 //! - [`renderer`] wgpu-бэкенд; доступен только с feature `backend-wgpu` (ADR-010).
 
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
 pub mod atlas;
 pub mod backend;
 pub mod blend_modes;

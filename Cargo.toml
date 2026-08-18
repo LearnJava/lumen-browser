@@ -59,6 +59,14 @@ expect_used = "deny"
 # правило не действовало бы на новый код.
 unwrap_used = "deny"
 
+# «/// на всех публичных структурах, полях и функциях» (CLAUDE.md §Code
+# conventions). Замер — 1866 недокументированных элементов в 127 файлах.
+# Долг закрыт файловыми #![allow(missing_docs)] (не крейтовыми): новый файл
+# обязан документировать публичный API, даже если крейт в долгу. Счётчики по
+# крейтам и владельцы — docs/lint-policy.md §10.
+[workspace.lints.rust]
+missing_docs = "deny"
+
 [workspace.dependencies]
 lumen-core = { path = "crates/core" }
 lumen-ai = { path = "crates/ai" }

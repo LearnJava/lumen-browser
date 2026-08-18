@@ -14,6 +14,11 @@
 //! - `document.domain` setter — намеренно deprecated в HTML LS, в Lumen
 //!   реализовывать не будем (нарушает same-origin guarantee).
 
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
 use lumen_core::url::Url;
 
 /// «Tuple origin» = `(scheme, host, port)`. Сравнение — компонент-к-компоненту,

@@ -15,6 +15,11 @@
 //! - `:`      — comment, ignored
 //! - blank line — dispatch event (if data buffer non-empty)
 
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
 use std::io::{BufRead, BufReader, Read, Write};
 use std::sync::Arc;
 use std::time::Duration;

@@ -8,6 +8,11 @@
 //! Phase 0: serializers. Реальный fetch с этими encoding-ами (Content-Type
 //! заголовок, body upload) — отдельная задача в HttpClient.
 
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
 use std::fmt::Write as _;
 
 /// Запись формы — пара (name, value) с опциональным filename (для multipart).
