@@ -41,6 +41,52 @@ WPT-VENDOR), health-журнал с panic-hook (PERF-6), KNOWN_DEBTORS-храп�
   `fuzz/regressions/` и добавлены в корпус.
 - Инвариант: цель — отсутствие паник/UB на произвольном входе, не корректность разбора.
 
+### TEST-1: состояние (2026-08-18, сессия P2)
+
+Реализация закоммичена на неслитой ветке `p2-test-1` (branch = сигнал резервации
+задачи, main не трогала): `fuzz/Cargo.toml` (не член основного workspace, пустая
+`[workspace]`), 5 таргетов в `fuzz/fuzz_targets/`, курированный seed-корпус
+(56 файлов) в `fuzz/corpus/<target>/` из `graphic_tests/`, `samples/`,
+`assets/fonts/`, `crates/engine/image/tests/fixtures/`, `tests/wpt/`, `fuzz/README.md`.
+
+Весь Rust-код **успешно компилируется и линкуется** до финальной стадии
+(`cargo +nightly fuzz build --no-include-main-msvc` дошёл до линковки на всех
+5 таргетах — сигнатуры входных точек verified: `lumen_css_parser::{parse,
+parse_inline_style, parse_selector_list}`, `lumen_html_parser::parse`,
+`lumen_core::url::Url::{parse, resolve}`, `lumen_font::{maybe_decode_font,
+Font::parse}`, `lumen_image::decode`).
+
+**Реально прогнать `cargo +nightly fuzz run` на dev-машине не удалось —
+окружение, не дефект харнесса:**
+
+1. **Нативный Windows-MSVC**: nightly `x86_64-pc-windows-msvc` от rustup не
+   поставляет `librustc-nightly_rt.asan.a` (ASan-рантайм для линковки) —
+   `cargo fuzz build --no-include-main-msvc` падает на линковке с "no such
+   file or directory".
+2. **Тот же таргет без ASan** (`-s none`, только SanitizerCoverage): линковщик
+   MSVC (rust-lld в режиме `-flavor link`) не резолвит `__start___sancov_*`/
+   `__stop___sancov_*` — секционные boundary-символы, которые SanitizerCoverage
+   ожидает от линковщика. Это не баг конкретной версии тулчейна, а разница
+   форматов объектных файлов: секционная агрегация, на которой держится этот
+   трюк, — свойство ELF/Mach-O, PE/COFF (Windows) её не предоставляет тем же
+   способом. Отсюда и `--no-include-main-msvc`-поддержка cargo-fuzz для
+   Windows остаётся «basic»/экспериментальной даже в актуальном changelog.
+3. **WSL (Ubuntu, штатный дистрибутив на этой машине)** — там нет `sudo`
+   без пароля, поэтому `apt install build-essential` (C-тулчейн, нужен
+   `libfuzzer-sys`'у для сборки самого рантайма libFuzzer) недоступен из
+   сессии. `rustup`+nightly+`cargo-fuzz` внутри WSL установлены и рабочие —
+   не хватает только компилятора C/C++.
+
+**Для следующей сессии (любой, не обязательно P2):**
+- Самый быстрый путь — пользователь один раз выполняет в WSL
+  `sudo apt install -y build-essential clang`, дальше `fuzz/README.md`
+  описывает весь остальной flow без дополнительных вопросов.
+- Альтернатива без WSL: Linux-окружение с любым C-тулчейном (CI-контейнер,
+  другая машина) — код уже готов, апробировать нужно только рантайм.
+- Портативный MinGW-w64 на Windows пробовать не стоит без крайней
+  необходимости: GNU ld тоже эмитит PE/COFF на этом таргете, то же
+  ограничение с `__start_`/`__stop_`-секциями вероятно сохранится.
+
 ## TEST-2: DOM/layout-фаззер страниц в стиле Domato (L)
 
 Генеративный фаззинг целых страниц — то, что у Ladybird регулярно находит краши в DOM, layout,
