@@ -30,6 +30,7 @@ use sha2::{Digest, Sha256};
 use std::sync::{Arc, Mutex};
 
 /// Generate 8 random bytes from the OS CSPRNG for the CTAPHID_INIT nonce.
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 fn random_nonce() -> [u8; 8] {
     let mut buf = [0u8; 8];
     getrandom::getrandom(&mut buf).expect("OS CSPRNG unavailable");

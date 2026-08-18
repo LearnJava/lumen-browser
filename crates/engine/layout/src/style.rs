@@ -9508,6 +9508,7 @@ fn complex_has_host(complex: &ComplexSelector) -> bool {
 /// 3. `node` matches every selector in `inner_sel`.
 /// 4. The outer context (compound minus `::slotted`) matches the shadow host (node's parent).
 ///    If the outer context is empty, no ancestor check is needed.
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn matches_slotted_complex(
     complex: &ComplexSelector,
     doc: &Document,

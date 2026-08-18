@@ -120,6 +120,7 @@ fn build_http_cache(private: bool) -> Option<Arc<dyn HttpCacheBackend>> {
 /// are still loaded and installed so the filter is ready the moment the user
 /// opts in.
 #[must_use]
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn init_adblock() -> std::sync::Arc<lumen_storage::adblock::AdblockStore> {
     use lumen_storage::adblock::AdblockStore;
 
@@ -404,6 +405,7 @@ pub fn load() -> Option<FingerprintProfile> {
 /// loaded once into a process-global [`OnceLock`] at startup ([`global`]), so
 /// this only takes effect on the next launch — the caller is responsible for
 /// surfacing a "restart required" hint.
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn set_http3(enabled: bool) -> std::io::Result<()> {
     let path = config_path().expect("config_path always returns Some");
     set_http3_at(&path, enabled)

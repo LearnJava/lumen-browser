@@ -17,6 +17,7 @@
 /// 32 hex characters (128 bits) from the OS CSPRNG — same primitive already
 /// used for key generation elsewhere in the workspace (`crates/js/src/subtle_crypto.rs`,
 /// `crates/network/src/webauthn.rs`).
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn generate_token() -> String {
     let mut buf = [0u8; 16];
     getrandom::getrandom(&mut buf).expect("OS CSPRNG unavailable");

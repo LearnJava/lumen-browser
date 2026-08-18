@@ -15512,6 +15512,7 @@ fn text_run_cache_disabled() -> bool {
 /// [`push_text_glyphs_mixed`] to measure a segment's real width without a
 /// separate shaping pass.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 fn push_text_glyphs(
     out: &mut Vec<TextVertex>,
     rect: Rect,

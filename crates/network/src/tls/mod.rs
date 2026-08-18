@@ -61,6 +61,7 @@ pub fn http_to_tls_profile(http: HttpProfile) -> TlsProfile {
 /// - Protocol versions: TLS 1.2 + 1.3 for Standard, TLS 1.3 only for
 ///   Strict and Tor.
 /// - ALPN: h2 + http/1.1 for Standard/Strict; http/1.1 only for Tor.
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn build_client_config(profile: TlsProfile, root_store: rustls::RootCertStore) -> ClientConfig {
     use rustls::crypto::aws_lc_rs as crypto;
 

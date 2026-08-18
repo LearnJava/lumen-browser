@@ -4901,6 +4901,7 @@ impl FemtovgBackend {
         self.filter_cache_bytes = 0;
     }
 
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     fn render_command(&mut self, cmd: &DisplayCommand) {
         // ADR-016 M0.2: skip self-contained leaf draws whose box is fully
         // off-screen under the current transform. Structural commands return

@@ -275,6 +275,7 @@ fn audio_thread(
 // ── AudioPlaybackProvider implementation ─────────────────────────────────────
 
 impl AudioPlaybackProvider for PlatformAudioPlayer {
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     fn alloc_handle(&self) -> u64 {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let state = Arc::new(Mutex::new(AudioElementState::new()));
@@ -296,6 +297,7 @@ impl AudioPlaybackProvider for PlatformAudioPlayer {
         self.handles.lock().unwrap().remove(&handle);
     }
 
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     fn load(&self, handle: u64, url: &str) {
         let url = url.to_owned();
         // Reset ready_state to loading (1) to indicate load started.

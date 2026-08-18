@@ -86,6 +86,7 @@ impl OriginIsolationContext {
     ///
     /// All storage starts empty. The cookie jar is in-memory (ephemeral);
     /// for persistent storage wire a `SqliteStorage` backend instead.
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn new(origin: &str) -> Self {
         let group = OriginGroup::for_origin(origin);
         let idb_backend: Arc<Mutex<dyn StorageBackend>> =

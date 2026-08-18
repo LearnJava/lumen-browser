@@ -57,6 +57,7 @@ pub fn generate_storage_key() -> Result<[u8; KEY_LEN]> {
 }
 
 /// Derive a 32-byte wrapping key from `password` and `salt` using PBKDF2-HMAC-SHA256.
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 fn derive_wrapping_key(password: &[u8], salt: &[u8]) -> [u8; KEY_LEN] {
     pbkdf2_hmac_sha256(password, salt, PBKDF2_ITERATIONS, KEY_LEN)
         .try_into()
@@ -66,6 +67,7 @@ fn derive_wrapping_key(password: &[u8], salt: &[u8]) -> [u8; KEY_LEN] {
 /// PBKDF2-HMAC-SHA256 (RFC 2898 §5.2).
 ///
 /// Returns `dk_len` bytes of derived key material. `dk_len` must be ≤ 32.
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 fn pbkdf2_hmac_sha256(password: &[u8], salt: &[u8], iterations: u32, dk_len: usize) -> Vec<u8> {
     use hmac::Mac;
 
