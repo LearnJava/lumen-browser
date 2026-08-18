@@ -12,6 +12,14 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # Репозиторный .cargo/config.toml задаёт `build.rustc-wrapper = "sccache"`
+  # (он несущий локально, docs/build-speed.md). На раннерах sccache нет, и
+  # ЛЮБАЯ команда cargo падает мгновенно: «could not execute process `sccache
+  # ... rustc -vV` (never executed)». Пустой RUSTC_WRAPPER перебивает config и
+  # отключает обёртку — проверено A/B по счётчику `sccache --show-stats`.
+  # Не заменять установкой sccache в CI: docs/ci-offload.md §5 — он решает ту же
+  # задачу, что и кэш зависимостей, но требует внешнего хранилища.
+  RUSTC_WRAPPER: ""
 
 jobs:
   check:

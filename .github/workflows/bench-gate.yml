@@ -18,6 +18,12 @@ on:
       - 'bench/**'
       - '.github/workflows/bench-gate.yml'
 
+env:
+  # См. комментарий в ci.yml: репозиторный .cargo/config.toml требует sccache,
+  # которого на раннерах нет. Этот workflow не отработал ни разу (0 прогонов на
+  # 2026-08-18), поэтому дефект в нём никогда и не проявлялся.
+  RUSTC_WRAPPER: ""
+
 jobs:
   benchmark:
     name: Performance Regression Gate

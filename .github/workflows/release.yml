@@ -14,6 +14,10 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # См. комментарий в ci.yml: репозиторный .cargo/config.toml требует sccache,
+  # которого на раннерах нет. Без этой строки первый же тег `v*.*.*` уронит
+  # релизную сборку на всех четырёх таргетах.
+  RUSTC_WRAPPER: ""
 
 jobs:
   build:
