@@ -1370,6 +1370,7 @@ pub(crate) fn verify_signature(alg_json: &str, key_id: u32, sig: &[u8], data: &[
 
 /// Dispatch RSA signature verification to the appropriate scheme.
 #[cfg(any(feature = "v8-backend", test))]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn rsa_verify(
     alg_name: &str,
     hash: &str,

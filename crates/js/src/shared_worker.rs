@@ -88,6 +88,7 @@ static PORT_COUNTER: AtomicU32 = AtomicU32::new(1);
 /// Drain all messages a runtime's shared-worker ports have received.
 ///
 /// Returns the drained `(port_id, json)` list and clears the queue atomically.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn drain_messages(outbox: &SharedWorkerOutbox) -> Vec<(u32, String)> {
     std::mem::take(&mut outbox.lock().unwrap())
 }
@@ -370,6 +371,7 @@ fn hub_v8() -> &'static Mutex<HashMap<String, SharedWorkerThread>> {
 /// Returns the freshly-allocated, process-unique port id.
 #[cfg(feature = "v8-backend")]
 #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn connect_shared_worker_v8(key: String, script: String, outbox: SharedWorkerOutbox) -> u32 {
     let port_id = PORT_COUNTER.fetch_add(1, Ordering::Relaxed);
     let mut map = hub_v8().lock().unwrap();
@@ -400,6 +402,7 @@ fn connect_shared_worker_v8(key: String, script: String, outbox: SharedWorkerOut
 ///
 /// No-op if `key` has no live worker (e.g. it already exited).
 #[cfg(feature = "v8-backend")]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn post_to_shared_worker_v8(key: &str, port_id: u32, json: String) {
     if let Some(t) = hub_v8().lock().unwrap().get(key) {
         let _ = t.tx.send(SwInMsg::Post { port_id, json });
@@ -411,6 +414,7 @@ fn post_to_shared_worker_v8(key: &str, port_id: u32, json: String) {
 /// The worker-side port mapping is dropped; the worker thread itself stays
 /// alive for other clients (shared workers outlive individual connections).
 #[cfg(feature = "v8-backend")]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn close_shared_worker_port_v8(key: &str, port_id: u32) {
     if let Some(t) = hub_v8().lock().unwrap().get(key) {
         let _ = t.tx.send(SwInMsg::Close { port_id });
@@ -476,6 +480,7 @@ pub(crate) fn install_shared_worker_bindings_v8(
 /// worker script, then services `Connect`/`Post`/`Close` messages until the
 /// channel closes.
 #[cfg(feature = "v8-backend")]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn run_shared_worker_thread_v8(script: String, rx: Receiver<SwInMsg>) {
     let rt = match V8JsRuntime::new() {
         Ok(r) => r,
@@ -540,6 +545,7 @@ fn run_shared_worker_thread_v8(script: String, rx: Receiver<SwInMsg>) {
 /// worker-side `MessagePort` factory, the `_lumen_sw_dispatch_*` hooks the
 /// Rust loop calls, `console` (→ stderr), and a minimal `setTimeout` stub.
 #[cfg(feature = "v8-backend")]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn install_shared_worker_globals_v8(
     rt: &V8JsRuntime,
     ports: Arc<Mutex<HashMap<u32, SharedWorkerOutbox>>>,
@@ -595,6 +601,9 @@ fn urlencode(s: &str) -> String {
 /// worker thread.
 #[cfg(all(test, feature = "v8-backend"))]
 mod tests_v8 {
+    // Хелперы тестового модуля: исключение из clippy.toml покрывает
+    // только тело `#[test]` (docs/lint-policy.md §10).
+    #![allow(clippy::unwrap_used)]
     use super::*;
     use lumen_core::JsValue;
 

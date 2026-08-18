@@ -772,6 +772,9 @@ mod tests {
 /// `Context2D` directly).
 #[cfg(all(test, feature = "v8-backend"))]
 mod tests_v8 {
+    // Хелперы тестового модуля: исключение из clippy.toml покрывает
+    // только тело `#[test]` (docs/lint-policy.md §10).
+    #![allow(clippy::unwrap_used)]
     use lumen_core::JsValue;
     use lumen_core::ext::JsRuntime as _;
 

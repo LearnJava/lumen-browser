@@ -58,6 +58,7 @@ impl ServiceWorkerInterceptor {
 }
 
 impl FetchInterceptor for ServiceWorkerInterceptor {
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn intercept(&self, url: &Url, origin: &str) -> Option<Vec<u8>> {
         // 1. Есть ли SW, scope которого покрывает путь этого URL?
         // find_for_url ожидает path (как /app/page), не полный URL.

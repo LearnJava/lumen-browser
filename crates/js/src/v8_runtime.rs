@@ -1267,6 +1267,7 @@ impl V8JsRuntime {
     /// This is the S2 proof-of-concept that typed Rust closures can be
     /// registered via the compat layer and called from JS with auto-converted
     /// arguments.  S3 will extend this to all 184 `install_primitives` natives.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn install_console_natives(
         &self,
         console_messages: Arc<std::sync::Mutex<Vec<(u8, String)>>>,
@@ -1327,6 +1328,7 @@ impl V8JsRuntime {
 // Navigator-normalization/CSS-Houdini/SubtleCrypto/TrustedTypes, are separate
 // future slices that each need their own ctx-taking install fn ported.
 
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 impl V8JsRuntime {
     /// Install DOM-core native bindings (`_lumen_*`, 184 functions) and the
     /// `WEB_API_SHIM` JavaScript that builds `document`, `window`, `console`,
@@ -1336,6 +1338,7 @@ impl V8JsRuntime {
     /// Mirrors [`crate::QuickJsRuntime::install_dom`] but scoped to the DOM-core
     /// piece only (`dom::install_dom_api`'s `install_primitives` + shim eval).
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn install_dom(
         &self,
         doc: Arc<Mutex<lumen_dom::Document>>,
@@ -5659,6 +5662,7 @@ macro_rules! with_tc {
 }
 
 impl JsRuntime for V8JsRuntime {
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn eval(&self, script: &str) -> JsResult<JsValue> {
         self.run(|inner| {
             with_tc!(inner, |tc, _ctx| {
@@ -5736,6 +5740,7 @@ impl JsRuntime for V8JsRuntime {
         })
     }
 
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn set_global(&self, name: &str, value: JsValue) -> JsResult<()> {
         self.run(|inner| {
             with_tc!(inner, |tc, ctx| {
@@ -5754,6 +5759,7 @@ impl JsRuntime for V8JsRuntime {
         })
     }
 
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn get_global(&self, name: &str) -> JsResult<JsValue> {
         self.run(|inner| {
             with_tc!(inner, |tc, ctx| {
@@ -5772,6 +5778,7 @@ impl JsRuntime for V8JsRuntime {
         })
     }
 
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn call_function(&self, name: &str, args: &[JsValue]) -> JsResult<JsValue> {
         self.run(|inner| {
             with_tc!(inner, |tc, ctx| {
@@ -5979,6 +5986,7 @@ fn from_v8<'s>(scope: &v8::PinScope<'s, '_>, val: v8::Local<'s, v8::Value>) -> J
 /// identity hashes of every object/array currently being walked on the
 /// current path (push on entry, pop on exit) so a self-reference anywhere in
 /// the chain is caught instead of recursed into forever.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn from_v8_bounded<'s>(
     scope: &v8::PinScope<'s, '_>,
     val: v8::Local<'s, v8::Value>,

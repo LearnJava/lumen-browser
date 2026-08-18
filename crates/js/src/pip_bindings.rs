@@ -61,6 +61,7 @@ fn queue() -> &'static Mutex<Vec<PipRequest>> {
 }
 
 /// Enqueue a PiP request. Public so non-JS engine paths can reuse the channel.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn enqueue(req: PipRequest) {
     queue().lock().unwrap().push(req);
 }
@@ -68,6 +69,7 @@ pub fn enqueue(req: PipRequest) {
 /// Drain and return all pending PiP requests.
 ///
 /// Called by the shell each event-loop tick; the queue is left empty.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn take_pip_requests() -> Vec<PipRequest> {
     std::mem::take(&mut *queue().lock().unwrap())
 }
@@ -135,6 +137,9 @@ pub(crate) fn test_guard() -> std::sync::MutexGuard<'static, ()> {
 
 #[cfg(all(test, feature = "v8-backend"))]
 mod tests {
+    // Хелперы тестового модуля: исключение из clippy.toml покрывает
+    // только тело `#[test]` (docs/lint-policy.md §10).
+    #![allow(clippy::unwrap_used)]
     use super::*;
     use crate::v8_runtime::V8JsRuntime;
     use lumen_core::ext::JsRuntime as _;

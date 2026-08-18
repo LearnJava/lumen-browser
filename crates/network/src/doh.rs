@@ -433,6 +433,7 @@ impl CachedDnsResolver {
 }
 
 impl DnsResolver for CachedDnsResolver {
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn resolve(&self, hostname: &str, port: u16) -> Result<Vec<SocketAddr>> {
         let key = (hostname.to_string(), port);
         let now = Self::now_ms();

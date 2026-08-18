@@ -51,11 +51,13 @@ fn provider_lock() -> &'static RwLock<Option<Arc<dyn AudioPlaybackProvider>>> {
 ///
 /// Must be called once by the shell before any JS context is created.
 /// Thread-safe; subsequent calls replace the previous provider.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn set_audio_playback_provider(p: Arc<dyn AudioPlaybackProvider>) {
     *provider_lock().write().unwrap() = Some(p);
 }
 
 #[cfg(feature = "v8-backend")]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn get_provider() -> Option<Arc<dyn AudioPlaybackProvider>> {
     provider_lock().read().unwrap().clone()
 }
@@ -584,6 +586,9 @@ const AUDIO_ELEMENT_SHIM: &str = r#"(function() {
 /// removed in S12b-B21; this module ports its 16 tests to V8 verbatim).
 #[cfg(all(test, feature = "v8-backend"))]
 mod tests_v8 {
+    // Хелперы тестового модуля: исключение из clippy.toml покрывает
+    // только тело `#[test]` (docs/lint-policy.md §10).
+    #![allow(clippy::unwrap_used)]
     use std::sync::Arc;
 
     use lumen_core::ext::{JsRuntime as _, NullAudioPlaybackProvider};

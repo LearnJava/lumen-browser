@@ -2104,6 +2104,7 @@ impl SseCancel {
     /// Signals cancellation and wakes any thread parked in [`sleep`](Self::sleep).
     ///
     /// Sets the internal flag to `true` and notifies all waiters. Idempotent.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn signal(&self) {
         let (lock, cvar) = &*self.inner;
         let mut cancelled = lock.lock().unwrap();
@@ -2112,6 +2113,7 @@ impl SseCancel {
     }
 
     /// Returns whether cancellation has been signalled.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn is_cancelled(&self) -> bool {
         let (lock, _) = &*self.inner;
         *lock.lock().unwrap()
@@ -2121,6 +2123,7 @@ impl SseCancel {
     ///
     /// Returns `true` if cancellation was (or becomes) signalled — the caller
     /// should stop — and `false` if the timeout elapsed first.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn sleep(&self, dur: std::time::Duration) -> bool {
         let (lock, cvar) = &*self.inner;
         let cancelled = lock.lock().unwrap();

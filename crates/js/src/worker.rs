@@ -76,6 +76,7 @@ pub type WorkerBlobStore = Arc<Mutex<HashMap<String, String>>>;
 /// Send a JSON-serialized message to a live worker thread.
 ///
 /// No-op if `id` is not registered (e.g. worker already terminated).
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn post_to_worker(registry: &WorkerRegistry, id: u32, json: String) {
     if let Some(h) = registry.lock().unwrap().get(&id) {
         let _ = h.tx.send(WorkerInMsg::Post(json));
@@ -86,6 +87,7 @@ pub fn post_to_worker(registry: &WorkerRegistry, id: u32, json: String) {
 ///
 /// Sends a `Terminate` message so the worker thread exits its event loop and
 /// the associated `JoinHandle` can be dropped.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn terminate_worker(registry: &WorkerRegistry, id: u32) {
     if let Some(h) = registry.lock().unwrap().remove(&id) {
         let _ = h.tx.send(WorkerInMsg::Terminate);
@@ -95,6 +97,7 @@ pub fn terminate_worker(registry: &WorkerRegistry, id: u32) {
 /// Drain all pending messages sent from worker threads to the main thread.
 ///
 /// Returns the drained list; clears the internal queue atomically.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn drain_messages(queue: &WorkerMessageQueue) -> Vec<(u32, String)> {
     std::mem::take(&mut queue.lock().unwrap())
 }
@@ -193,6 +196,7 @@ fn percent_decode(s: &str) -> String {
 ///
 /// Returns `None` for any other scheme (external HTTP/HTTPS URLs require async
 /// network access which is not available inside a synchronous worker thread).
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn resolve_import_url(url: &str, blob_store: &WorkerBlobStore) -> Option<String> {
     if let Some(rest) = url.strip_prefix("data:") {
         let comma = rest.find(',').unwrap_or(rest.len());
@@ -651,6 +655,7 @@ const WORKER_SHIM: &str = r#"(function() {
 /// Must be called after the core DOM shim so that `TextDecoder` and
 /// `_object_url_store` are available for blob-URL resolution in the constructor.
 #[cfg(feature = "v8-backend")]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn install_worker_bindings_v8(
     rt: &V8JsRuntime,
     registry: &WorkerRegistry,
@@ -750,6 +755,7 @@ pub(crate) fn fetch_worker_script(provider: Option<&dyn lumen_core::ext::JsFetch
 /// the ID in the JS `Worker` object and uses it for `postMessage`/`terminate`.
 #[cfg(feature = "v8-backend")]
 #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn spawn_worker_v8(
     registry: &WorkerRegistry,
     queue: &WorkerMessageQueue,
@@ -844,6 +850,7 @@ fn run_worker_thread_v8(
 /// generic compat layer's `IntoJsReturn` has no error/throw variant (same
 /// reasoning as `wasm_compile_native_v8` in S9).
 #[cfg(feature = "v8-backend")]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn install_worker_globals_v8(
     rt: &V8JsRuntime,
     worker_id: u32,

@@ -104,6 +104,7 @@ fn thread_lane() -> u64 {
 
 /// Starts recording. Installs a fresh time origin and clears any previous
 /// events. No-op-safe to call once at the start of a traced navigation.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn enable() {
     *recorder().lock().unwrap() = Some(Recorder {
         start: Instant::now(),
@@ -142,6 +143,7 @@ pub fn span(name: impl Into<String>, cat: &'static str) -> SpanGuard {
 
 /// Records a zero-duration instant marker ("i" event) at the current time —
 /// e.g. `first-paint`, `dom-content-loaded`. No-op when disabled.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn instant(name: impl Into<String>, cat: &'static str) {
     if !enabled() {
         return;
@@ -165,6 +167,7 @@ pub fn instant(name: impl Into<String>, cat: &'static str) {
 /// Stops recording and returns the collected timeline serialised as Chrome
 /// Trace Event Format JSON (`{"traceEvents":[…],"displayTimeUnit":"ms"}`), or
 /// `None` if the tracer was never enabled. Clears the recorder either way.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn finish() -> Option<String> {
     ENABLED.store(false, Ordering::Relaxed);
     let rec = recorder().lock().unwrap().take()?;
@@ -241,6 +244,7 @@ impl SpanGuard {
 }
 
 impl Drop for SpanGuard {
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn drop(&mut self) {
         let Some(inner) = self.inner.take() else {
             return;

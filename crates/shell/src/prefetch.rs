@@ -64,6 +64,7 @@ impl PrefetchCache {
     }
 
     /// TEMP BUG-272 diagnostics: (entries, cached body bytes) currently held.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn debug_stats(&self) -> (usize, usize) {
         let inner = self.inner.lock().unwrap();
         let mut bytes = 0usize;
@@ -80,6 +81,7 @@ impl PrefetchCache {
     /// Called on the UI thread at navigation start (before the streaming thread is
     /// spawned), so producer warm-ups and the consumer all observe the same
     /// generation for one navigation.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn reset(&self, generation: u64) {
         let mut inner = self.inner.lock().unwrap();
         inner.generation = generation;
@@ -87,6 +89,7 @@ impl PrefetchCache {
     }
 
     /// The navigation generation the cache is currently scoped to.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn current_generation(&self) -> u64 {
         self.inner.lock().unwrap().generation
     }
@@ -102,6 +105,7 @@ impl PrefetchCache {
     ///
     /// `fetch` returns raw bytes on success or an error string; the error is cached
     /// too so waiters share one outcome instead of stampeding the network.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn fetch(
         &self,
         generation: u64,

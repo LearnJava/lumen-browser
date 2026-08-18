@@ -8724,6 +8724,7 @@ fn pseudo_element_matches(kind: &PseudoElementKind, name: &str) -> bool {
     pseudo_element_name(kind).eq_ignore_ascii_case(name)
 }
 
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn matches_complex_for_pseudo(
     complex: &ComplexSelector,
     pseudo: &str,
@@ -14019,6 +14020,7 @@ fn parse_calc_factor(tokens: &[CalcToken], pos: &mut usize) -> Option<CalcNode> 
 /// съедена), ожидает `)` в конце. Поддерживает `calc` (один expr),
 /// `min` / `max` (1+ expr через `,`), `clamp` (ровно 3 expr через `,`).
 /// Неизвестное имя → None.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn parse_function_call(
     name: &str,
     tokens: &[CalcToken],
@@ -21344,6 +21346,7 @@ fn parse_single_mask_layer(
 ///
 /// Malformed rows (different column count) are silently dropped to keep the
 /// grid rectangular.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn parse_grid_template_areas(val: &str) -> Vec<Vec<String>> {
     // Extract all quoted strings in order.
     let mut rows: Vec<Vec<String>> = Vec::new();
@@ -21836,6 +21839,7 @@ fn parse_pct_or_keyword_y(s: &str) -> f32 {
 /// to `<percentage>` per CSS Images L4 §3.7. Angles are normalised to
 /// `Length::Percent` where 360° (1 full turn) maps to 100% — this lets the
 /// downstream renderer treat conic and linear/radial stops uniformly.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn parse_gradient_stops(s: &str) -> Vec<GradientStop> {
     let s = s.trim();
     let lower = s.to_ascii_lowercase();

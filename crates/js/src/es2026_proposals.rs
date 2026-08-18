@@ -584,6 +584,9 @@ const DISPOSABLE_STACK_SHIM: &str = r#"(function() {
 /// removed in S12b-B18; this module ports its 13 tests to V8 verbatim).
 #[cfg(all(test, feature = "v8-backend"))]
 mod tests_v8 {
+    // Хелперы тестового модуля: исключение из clippy.toml покрывает
+    // только тело `#[test]` (docs/lint-policy.md §10).
+    #![allow(clippy::unwrap_used)]
     use crate::v8_runtime::V8JsRuntime;
     use lumen_core::{JsRuntime, JsValue};
 

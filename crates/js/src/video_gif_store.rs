@@ -113,11 +113,13 @@ fn store_lock() -> &'static RwLock<Option<Arc<VideoGifStore>>> {
 /// Install the video GIF store from the shell.
 ///
 /// Must be called once before any JS context is created.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn set_video_gif_store(s: Arc<VideoGifStore>) {
     *store_lock().write().unwrap() = Some(s);
 }
 
 /// Return a clone of the installed store, or `None` in headless/CI mode.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn get_video_gif_store() -> Option<Arc<VideoGifStore>> {
     store_lock().read().unwrap().clone()
 }

@@ -53,6 +53,11 @@ panic = "deny"
 # точечными #[allow] на уровне функции, см. docs/lint-policy.md §10:
 # правило живёт для всего нового кода, а не отключено по крейтам.
 expect_used = "deny"
+# «no unwrap() в проде» (CLAUDE.md §Code conventions). Замер — 865 срабатываний,
+# из них 354 в тестовом коде. Остальные 511 унаследованы точечно, реестр —
+# docs/lint-policy.md §10. Крейтового отключения нет намеренно: иначе
+# правило не действовало бы на новый код.
+unwrap_used = "deny"
 
 [workspace.dependencies]
 lumen-core = { path = "crates/core" }

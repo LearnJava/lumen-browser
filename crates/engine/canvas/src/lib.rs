@@ -335,6 +335,7 @@ impl CanvasGradient {
         }
     }
 
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn sample_at(&self, t: f32) -> CanvasColor {
         if self.stops.is_empty() { return CanvasColor::rgba(0, 0, 0, 255); }
         if self.stops.len() == 1 { return self.stops[0].color; }
