@@ -25,8 +25,8 @@
 // документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
 #![allow(missing_docs)]
 
-use std::cell::OnceCell;
-use std::collections::HashMap;
+use std::cell::{OnceCell, RefCell};
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -2789,13 +2789,13 @@ struct HotPipelines {
     image: wgpu::RenderPipeline,
     /// Градиентная заливка.
     gradient: wgpu::RenderPipeline,
-    /// Сколько РАЗНЫХ потоков скомпилировало эти пять пайплайнов — гейт
+    /// Какие РАЗНЫЕ потоки скомпилировали эти пять пайплайнов — гейт
     /// среза 2 BUG-406. Ставить его на wall-clock нельзя: разброс старта на
     /// этой машине доходит до 2.5× между прогонами (`docs/perf-method.md`),
     /// а «компиляции разъехались по потокам» проверяется точно и не зависит
     /// ни от железа, ни от загрузки машины. 5 — параллельный путь, 1 —
     /// `LUMEN_SERIAL_PIPELINES=1`.
-    threads: usize,
+    threads: HashSet<std::thread::ThreadId>,
 }
 
 /// `LUMEN_SERIAL_PIPELINES=1` — собирать горячие пайплайны по очереди на
@@ -2803,6 +2803,115 @@ struct HotPipelines {
 /// бинарнике и как откат, если параллельная сборка где-то мешает драйверу.
 fn hot_pipelines_serial() -> bool {
     std::env::var("LUMEN_SERIAL_PIPELINES").is_ok_and(|v| v == "1" || v == "true")
+}
+
+/// `LUMEN_WAIT_HOT_PIPELINES=1` — дождаться горячих пайплайнов прямо в
+/// `init_pipelines` (поведение среза 2 BUG-406: параллельно, но конструктор
+/// блокируется). Нужен для A/B среза 3 в одном бинарнике и как откат.
+fn hot_pipelines_awaited_in_ctor() -> bool {
+    std::env::var("LUMEN_WAIT_HOT_PIPELINES").is_ok_and(|v| v == "1" || v == "true")
+}
+
+/// Какой из пяти горячих пайплайнов имеется в виду (BUG-406 срез 3). Нужен
+/// потому, что по `wgpu::RenderPipeline` отличить их друг от друга нельзя, а
+/// приезжают они с фоновых потоков в произвольном порядке.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum HotKind {
+    /// → [`Renderer::fill_pipeline`].
+    Fill,
+    /// → [`Renderer::rrect_pipeline`].
+    RRect,
+    /// → [`Renderer::text_pipeline`].
+    Text,
+    /// → [`Renderer::image_pipeline`].
+    Image,
+    /// → [`Renderer::gradient_pipeline`].
+    Gradient,
+}
+
+/// Все пять горячих видов в порядке запуска потоков.
+const HOT_KINDS: [HotKind; 5] =
+    [HotKind::Fill, HotKind::RRect, HotKind::Text, HotKind::Image, HotKind::Gradient];
+
+/// Готовый горячий пайплайн вместе с видом и потоком-сборщиком.
+type HotDelivery = (HotKind, std::thread::ThreadId, wgpu::RenderPipeline);
+
+/// Входы сборки горячих пайплайнов — ровно те хэндлы, которых достаточно, и
+/// ничего сверх. Все поля `Clone + Send` (в wgpu 26 хэндлы внутри `Arc`),
+/// поэтому снимок уезжает на фоновый поток так же, как [`PipelineDeps`] у
+/// ленивых.
+#[derive(Clone)]
+struct HotDeps {
+    /// Устройство, на котором компилируются пайплайны.
+    device: wgpu::Device,
+    /// Формат цветового attachment-а.
+    format: wgpu::TextureFormat,
+    /// Layout viewport-униформы (bind group 0) — нужен всем пяти.
+    uniform_bgl: wgpu::BindGroupLayout,
+    /// Layout атласа глифов — нужен `text`.
+    atlas_bgl: wgpu::BindGroupLayout,
+    /// Layout сэмплируемой картинки — нужен `image`.
+    image_bgl: wgpu::BindGroupLayout,
+    /// Layout буфера стопов градиента — нужен `gradient`.
+    gradient_bgl: wgpu::BindGroupLayout,
+}
+
+impl HotDeps {
+    /// Компилирует один горячий пайплайн. Дескрипторы те же, что и до среза 3,
+    /// — вид выбирает только, какой из пяти билдеров позвать.
+    fn build(&self, kind: HotKind) -> wgpu::RenderPipeline {
+        match kind {
+            HotKind::Fill => build_fill_pipeline(&self.device, self.format, &self.uniform_bgl),
+            HotKind::RRect => build_rrect_pipeline(&self.device, self.format, &self.uniform_bgl),
+            HotKind::Text => {
+                build_text_pipeline(&self.device, self.format, &self.uniform_bgl, &self.atlas_bgl)
+            }
+            HotKind::Image => {
+                build_image_pipeline(&self.device, self.format, &self.uniform_bgl, &self.image_bgl)
+            }
+            HotKind::Gradient => build_gradient_pipeline(
+                &self.device,
+                self.format,
+                &self.uniform_bgl,
+                &self.gradient_bgl,
+            ),
+        }
+    }
+}
+
+/// Запускает сборку пяти горячих пайплайнов на пяти отдельных потоках и
+/// возвращает канал, в который каждый кладёт свой результат СРАЗУ по
+/// готовности (BUG-406 срез 3).
+///
+/// Отличие от [`build_hot_pipelines`] — не в параллельности (она была и в
+/// срезе 2), а в том, что вызывающий поток здесь никого не ждёт. На DX12/Intel
+/// цена компиляции привязана к **вызывающему** потоку (`create_render_pipeline`
+/// возвращается раньше, чем драйвер дособрал шейдер), поэтому конструктор
+/// рендера переставал отвечать ровно на время сборки; теперь этого времени в
+/// нём нет, а кадр ждёт только тот пайплайн, который ему действительно нужен,
+/// и к тому моменту фон уже успел отработать сетевой/парсерный кусок старта.
+///
+/// Потоки отвязанные (не `scope`): они переживают выход из `init_pipelines` по
+/// построению. Если приёмник умрёт раньше отправителя, `send` вернёт `Err` и
+/// поток просто завершится — пайплайн будет собран заново кадром.
+fn spawn_hot_pipelines(deps: &HotDeps) -> std::sync::mpsc::Receiver<HotDelivery> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    for kind in HOT_KINDS {
+        let deps = deps.clone();
+        let tx = tx.clone();
+        let spawned = std::thread::Builder::new()
+            .name(format!("lumen-hot-{kind:?}"))
+            .spawn(move || {
+                let pipeline = deps.build(kind);
+                let _ = tx.send((kind, std::thread::current().id(), pipeline));
+            });
+        if spawned.is_err() {
+            // Поток не стартовал — кадр соберёт этот пайплайн сам через
+            // `HotDeps::build`; счётчик `hot_built_on_ui` это покажет.
+            eprintln!("[wgpu] поток сборки горячего пайплайна {kind:?} не стартовал");
+        }
+    }
+    rx
 }
 
 /// Пайплайн вместе с id потока, который его скомпилировал (см.
@@ -2855,7 +2964,7 @@ fn build_hot_pipelines(
             text: build_text_pipeline(device, format, uniform_bgl, atlas_bgl),
             image: build_image_pipeline(device, format, uniform_bgl, image_bgl),
             gradient: build_gradient_pipeline(device, format, uniform_bgl, gradient_bgl),
-            threads: 1,
+            threads: HashSet::from([std::thread::current().id()]),
         };
     }
     // Четыре потока плюс вызывающий: пятый пайплайн строится здесь же — поток
@@ -2873,9 +2982,7 @@ fn build_hot_pipelines(
         let fill = on_this_thread(build_fill_pipeline(device, format, uniform_bgl));
         let built = [fill, join_pipeline(rrect), join_pipeline(text), join_pipeline(image),
             join_pipeline(gradient)];
-        let ids: std::collections::HashSet<std::thread::ThreadId> =
-            built.iter().map(|(id, _)| *id).collect();
-        let threads = ids.len();
+        let threads: HashSet<std::thread::ThreadId> = built.iter().map(|(id, _)| *id).collect();
         let [fill, rrect, text, image, gradient] = built;
         HotPipelines {
             fill: fill.1,
@@ -3113,18 +3220,23 @@ pub struct Renderer {
     /// каждый кадр после его окончания.
     warm_started: bool,
 
-    fill_pipeline: wgpu::RenderPipeline,
+    /// Сплошная заливка. BUG-406 срез 3: ячейка наполняется фоновым потоком
+    /// сборки горячих пайплайнов, читается только через [`Self::fill_pipeline`].
+    fill_pipeline: OnceCell<wgpu::RenderPipeline>,
     /// BUG-406: ленивая компиляция — `OnceCell` заполняется при первом
     /// использовании (`circle_pipeline()`), не при старте окна.
     circle_pipeline: OnceCell<wgpu::RenderPipeline>,
     /// CSS border-radius SDF pipeline. Uses `RRectVertex` layout.
-    rrect_pipeline: wgpu::RenderPipeline,
+    /// BUG-406 срез 3: см. [`Self::fill_pipeline`].
+    rrect_pipeline: OnceCell<wgpu::RenderPipeline>,
     /// BUG-405 срез 7 — аналитическая размытая rrect (`box-shadow`), формат
     /// `ShadowVertex`. Ленивая компиляция: страница без теней за неё не платит,
     /// прогрев подхватывает её в общем списке (`build_all_lazy`).
     shadow_pipeline: OnceCell<wgpu::RenderPipeline>,
-    text_pipeline: wgpu::RenderPipeline,
-    image_pipeline: wgpu::RenderPipeline,
+    /// Квады глифов из атласа. BUG-406 срез 3: см. [`Self::fill_pipeline`].
+    text_pipeline: OnceCell<wgpu::RenderPipeline>,
+    /// Текстурный квад картинки. BUG-406 срез 3: см. [`Self::fill_pipeline`].
+    image_pipeline: OnceCell<wgpu::RenderPipeline>,
     /// Blit-каскад mip-цепочки картинок: пасс «mip N−1 → mip N» при
     /// `register_image` (fullscreen triangle, bilinear = 2×2 box).
     /// BUG-406: ленивая компиляция — `OnceCell` заполняется при первом
@@ -3220,7 +3332,8 @@ pub struct Renderer {
     small_depth_cache: HashMap<(u32, u32), wgpu::TextureView>,
     /// CSS Images L3 §3.3 — linear/radial gradient pipeline.
     gradient_bgl: wgpu::BindGroupLayout,
-    gradient_pipeline: wgpu::RenderPipeline,
+    /// Градиентная заливка. BUG-406 срез 3: см. [`Self::fill_pipeline`].
+    gradient_pipeline: OnceCell<wgpu::RenderPipeline>,
     scratch_layer: Option<OffscreenLayer>,
     layer_sampler: wgpu::Sampler,
     layer_textures: Vec<OffscreenLayer>,
@@ -3323,9 +3436,21 @@ pub struct Renderer {
     texture_pool: crate::texture_pool::TexturePool<crate::texture_pool::PooledTexture>,
     /// Normalized GPU fingerprint: prevents WebGL renderer/vendor fingerprinting (ADR-007).
     gpu_fingerprint: GpuFingerprint,
-    /// Сколько разных потоков собрало горячие пайплайны этого рендера —
-    /// см. [`HotPipelines::threads`] и [`Renderer::hot_pipeline_threads`].
-    hot_pipeline_threads: usize,
+    /// Потоки, собравшие горячие пайплайны этого рендера — см.
+    /// [`Renderer::hot_pipeline_threads`]. `RefCell`: при фоновой сборке
+    /// (BUG-406 срез 3) множество пополняется по мере приёма пайплайнов, то
+    /// есть уже из `&self`-аксессоров кадра.
+    hot_pipeline_threads: RefCell<HashSet<std::thread::ThreadId>>,
+    /// Приёмник горячих пайплайнов с фоновых потоков сборки (BUG-406 срез 3).
+    /// `None` — сборка была синхронной (headless, `LUMEN_SERIAL_PIPELINES=1`,
+    /// `LUMEN_WAIT_HOT_PIPELINES=1`) либо канал уже опустел.
+    hot_rx: RefCell<Option<std::sync::mpsc::Receiver<HotDelivery>>>,
+    /// Входы сборки горячих пайплайнов — нужны, чтобы кадр мог собрать
+    /// пайплайн сам, если фоновый поток не стартовал или умер (BUG-406 срез 3).
+    hot_deps: HotDeps,
+    /// Сколько горячих пайплайнов пришлось скомпилировать САМОМУ UI-потоку —
+    /// гейт среза 3 BUG-406, см. [`Renderer::hot_pipelines_built_on_ui_thread`].
+    hot_built_on_ui: std::cell::Cell<usize>,
 }
 
 /// Creates a `Depth32Float` texture + view sized `width×height` for GPU depth testing.
@@ -4451,21 +4576,49 @@ impl Renderer {
             }],
         });
         // ── Горячие пайплайны (BUG-406) ───────────────────────────────────
-        let HotPipelines {
-            fill: fill_pipeline,
-            rrect: rrect_pipeline,
-            text: text_pipeline,
-            image: image_pipeline,
-            gradient: gradient_pipeline,
-            threads: hot_pipeline_threads,
-        } = build_hot_pipelines(
-            &device,
+        let hot_deps = HotDeps {
+            device: device.clone(),
             format,
-            &uniform_bgl,
-            &atlas_bgl,
-            &image_bgl,
-            &gradient_bgl,
-        );
+            uniform_bgl: uniform_bgl.clone(),
+            atlas_bgl: atlas_bgl.clone(),
+            image_bgl: image_bgl.clone(),
+            gradient_bgl: gradient_bgl.clone(),
+        };
+        // Срез 3: по умолчанию конструктор НЕ ждёт компиляции — пять потоков
+        // стартуют и кладут результат в канал, а `init_pipelines` идёт дальше.
+        // Ждать остаётся только под двумя рычагами отката. Headless идёт тем же
+        // путём намеренно: кадр всё равно упирается в `await_all_hot_pipelines`
+        // на входе в `render`, зато путей остаётся один, а гейт среза
+        // проверяется тестом без окна.
+        let wait_in_ctor = hot_pipelines_serial() || hot_pipelines_awaited_in_ctor();
+        let fill_pipeline = OnceCell::new();
+        let rrect_pipeline = OnceCell::new();
+        let text_pipeline = OnceCell::new();
+        let image_pipeline = OnceCell::new();
+        let gradient_pipeline = OnceCell::new();
+        let hot_pipeline_threads: HashSet<std::thread::ThreadId>;
+        let hot_rx;
+        if wait_in_ctor {
+            let HotPipelines { fill, rrect, text, image, gradient, threads } =
+                build_hot_pipelines(
+                    &device,
+                    format,
+                    &uniform_bgl,
+                    &atlas_bgl,
+                    &image_bgl,
+                    &gradient_bgl,
+                );
+            drop(fill_pipeline.set(fill));
+            drop(rrect_pipeline.set(rrect));
+            drop(text_pipeline.set(text));
+            drop(image_pipeline.set(image));
+            drop(gradient_pipeline.set(gradient));
+            hot_pipeline_threads = threads;
+            hot_rx = None;
+        } else {
+            hot_pipeline_threads = HashSet::new();
+            hot_rx = Some(spawn_hot_pipelines(&hot_deps));
+        }
         mark(&t_init, "hot-pipelines");
 
         // ── Сэмплеры картинок ─────────────────────────────────────────────
@@ -4958,12 +5111,16 @@ impl Renderer {
             pending_readback: None,
             texture_pool: crate::texture_pool::TexturePool::new(),
             gpu_fingerprint,
-            hot_pipeline_threads,
+            hot_pipeline_threads: RefCell::new(hot_pipeline_threads),
+            hot_rx: RefCell::new(hot_rx),
+            hot_deps,
+            hot_built_on_ui: std::cell::Cell::new(0),
         };
         // BUG-406: `LUMEN_EAGER_PIPELINES=1` возвращает доленивое поведение —
         // все 16 пайплайнов компилируются в `init_pipelines`. Нужен для A/B в
         // одном бинарнике и как откат, если ленивая компиляция где-то мешает.
         if std::env::var("LUMEN_EAGER_PIPELINES").is_ok_and(|v| v == "1" || v == "true") {
+            renderer.await_all_hot_pipelines();
             renderer.warm_lazy_pipelines_blocking();
             mark(&t_init, "eager-warm");
         }
@@ -5085,7 +5242,119 @@ impl Renderer {
     /// потокам» — точное утверждение.
     #[must_use]
     pub fn hot_pipeline_threads(&self) -> usize {
-        self.hot_pipeline_threads
+        self.hot_pipeline_threads.borrow().len()
+    }
+
+    /// Сколько горячих пайплайнов пришлось скомпилировать самому UI-потоку —
+    /// гейт среза 3 BUG-406, ожидаемое значение **0**.
+    ///
+    /// Ненулевое означает, что кадр не дождался фонового потока, а собрал
+    /// пайплайн сам (поток не стартовал, канал оборвался, или сборка вообще
+    /// была синхронной), — то есть цена компиляции вернулась на UI-поток,
+    /// ровно то, что срез убирает. Как и соседние счётчики, утверждение об
+    /// идентичности, а не о времени (`docs/perf-method.md`).
+    #[must_use]
+    pub fn hot_pipelines_built_on_ui_thread(&self) -> usize {
+        self.hot_built_on_ui.get()
+    }
+
+    /// Ячейка соответствующего вида — единственное место, где вид
+    /// [`HotKind`] превращается в конкретное поле.
+    fn hot_cell(&self, kind: HotKind) -> &OnceCell<wgpu::RenderPipeline> {
+        match kind {
+            HotKind::Fill => &self.fill_pipeline,
+            HotKind::RRect => &self.rrect_pipeline,
+            HotKind::Text => &self.text_pipeline,
+            HotKind::Image => &self.image_pipeline,
+            HotKind::Gradient => &self.gradient_pipeline,
+        }
+    }
+
+    /// Ждёт с фоновых потоков (BUG-406 срез 3) именно пайплайн вида `want`,
+    /// попутно раскладывая по ячейкам всё, что приехало раньше него.
+    ///
+    /// Ждать здесь правильнее, чем собирать самому: на DX12/Intel штраф
+    /// компиляции привязан к потоку-вызывающему, поэтому «собрать самому»
+    /// стоило бы UI-потоку тех же ~0.8 с, ради переноса которых сделан срез.
+    /// Собственная сборка остаётся только аварийной веткой — когда фонового
+    /// потока нет вовсе (не стартовал, уже отдал всё, либо сборка была
+    /// синхронной и ячейка почему-то пуста).
+    fn await_hot(&self, want: HotKind) -> wgpu::RenderPipeline {
+        let t0 = std::time::Instant::now();
+        loop {
+            // `borrow_mut` на время одного `recv` — приём кладёт чужие
+            // пайплайны в их ячейки, а те трогают только `OnceCell`.
+            let received = {
+                let guard = self.hot_rx.borrow();
+                let Some(rx) = guard.as_ref() else { break };
+                rx.recv()
+            };
+            match received {
+                Ok((kind, thread, pipeline)) => {
+                    self.hot_pipeline_threads.borrow_mut().insert(thread);
+                    if kind == want {
+                        if crate::frame_log_enabled() {
+                            eprintln!(
+                                "[wgpu] hot-wait {want:?}: {:.0}ms",
+                                t0.elapsed().as_secs_f64() * 1000.0
+                            );
+                        }
+                        return pipeline;
+                    }
+                    drop(self.hot_cell(kind).set(pipeline));
+                }
+                // Отправители кончились, а нужного вида среди них не было —
+                // дальше ждать нечего.
+                Err(_) => {
+                    *self.hot_rx.borrow_mut() = None;
+                    break;
+                }
+            }
+        }
+        self.hot_built_on_ui.set(self.hot_built_on_ui.get() + 1);
+        self.hot_pipeline_threads.borrow_mut().insert(std::thread::current().id());
+        self.hot_deps.build(want)
+    }
+
+    /// Материализует все пять горячих пайплайнов (BUG-406 срез 3). Нужен
+    /// `LUMEN_EAGER_PIPELINES=1` и тестам-гейтам: без него ячейки на
+    /// фоновом пути пусты до первого кадра.
+    fn await_all_hot_pipelines(&self) {
+        for kind in HOT_KINDS {
+            // Именно `get_or_init`, а не прямой `await_hot`: ожидание одного
+            // вида попутно раскладывает по ячейкам все приехавшие раньше него,
+            // и второй раз ждать их из канала уже нечего — отправитель своё
+            // отдал. Прямой вызов упирался бы в обрыв канала и достраивал
+            // пайплайн на UI-потоке, то есть ровно то, что срез убирает.
+            self.hot_cell(kind).get_or_init(|| self.await_hot(kind));
+        }
+    }
+
+    /// Сплошная заливка. BUG-406 срез 3: ждёт фоновый поток сборки, если тот
+    /// ещё не отдал пайплайн (см. [`Self::await_hot`]).
+    fn fill_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.fill_pipeline.get_or_init(|| self.await_hot(HotKind::Fill))
+    }
+
+    /// Скруглённый прямоугольник (SDF). BUG-406 срез 3, см.
+    /// [`Self::fill_pipeline`].
+    fn rrect_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.rrect_pipeline.get_or_init(|| self.await_hot(HotKind::RRect))
+    }
+
+    /// Квады глифов из атласа. BUG-406 срез 3, см. [`Self::fill_pipeline`].
+    fn text_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.text_pipeline.get_or_init(|| self.await_hot(HotKind::Text))
+    }
+
+    /// Текстурный квад картинки. BUG-406 срез 3, см. [`Self::fill_pipeline`].
+    fn image_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.image_pipeline.get_or_init(|| self.await_hot(HotKind::Image))
+    }
+
+    /// Градиентная заливка. BUG-406 срез 3, см. [`Self::fill_pipeline`].
+    fn gradient_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.gradient_pipeline.get_or_init(|| self.await_hot(HotKind::Gradient))
     }
 
     /// Сколько командных списков **кадра** отправил в очередь этот рендер
@@ -8398,6 +8667,15 @@ impl Renderer {
         // того как кадр полезет за пайплайнами. Не блокирует: не приехало —
         // ячейка останется пустой и кадр скомпилирует пайплайн сам, как раньше.
         self.drain_warmed_pipelines();
+
+        // BUG-406 срез 3: горячие пайплайны, наоборот, дожидаются — но ЗДЕСЬ, до
+        // захвата surface-текстуры, а не посреди уже открытого пасса: ждать
+        // секунду, держа кадр swapchain-а, значит рисковать таймаутом презента.
+        // Со второго кадра все пять ячеек полны и вызов вырождается в пять
+        // проверок `OnceCell`. Ждать конкретно нужный вид (аварийная ветка
+        // `await_hot` в аксессорах) толку не даёт: пять компиляций идут
+        // параллельно, так что ожидание всех пяти ≈ ожиданию самой долгой.
+        self.await_all_hot_pipelines();
 
         // BUG-274: снимки диагностических счётчиков на входе в кадр — печатаем
         // дельту за кадр, а не процессный итог (кумулятивные числа не отвечают
@@ -11837,7 +12115,7 @@ impl Renderer {
                         }
                         DrawOp::Fill { v_start, v_count } => {
                             if let Some(vb) = &fill_vbuf {
-                                bind_and_draw!($pass, &self.fill_pipeline, None, vb, *v_start, *v_count);
+                                bind_and_draw!($pass, self.fill_pipeline(), None, vb, *v_start, *v_count);
                             }
                         }
                         DrawOp::Circle { v_start, v_count } => {
@@ -11847,7 +12125,7 @@ impl Renderer {
                         }
                         DrawOp::RRect { v_start, v_count } => {
                             if let Some(vb) = &rrect_vbuf {
-                                bind_and_draw!($pass, &self.rrect_pipeline, None, vb, *v_start, *v_count);
+                                bind_and_draw!($pass, self.rrect_pipeline(), None, vb, *v_start, *v_count);
                             }
                         }
                         DrawOp::Shadow { v_start, v_count } => {
@@ -11857,7 +12135,7 @@ impl Renderer {
                         }
                         DrawOp::Text { v_start, v_count } => {
                             if let Some(vb) = &text_vbuf {
-                                bind_and_draw!($pass, &self.text_pipeline, Some(&self.atlas_bind_group), vb, *v_start, *v_count);
+                                bind_and_draw!($pass, self.text_pipeline(), Some(&self.atlas_bind_group), vb, *v_start, *v_count);
                             }
                         }
                         DrawOp::Image { v_start, v_count, image_batch_idx } => {
@@ -11865,7 +12143,7 @@ impl Renderer {
                                 &image_vbuf,
                                 image_bind_groups.get(*image_batch_idx as usize),
                             ) {
-                                bind_and_draw!($pass, &self.image_pipeline, Some(bind_group), vb, *v_start, *v_count);
+                                bind_and_draw!($pass, self.image_pipeline(), Some(bind_group), vb, *v_start, *v_count);
                             }
                         }
                         DrawOp::Gradient { v_start, v_count, grad_batch_idx } => {
@@ -11873,7 +12151,7 @@ impl Renderer {
                                 &grad_vbuf,
                                 grad_bind_groups.get(*grad_batch_idx as usize),
                             ) {
-                                bind_and_draw!($pass, &self.gradient_pipeline, Some(bind_group), vb, *v_start, *v_count);
+                                bind_and_draw!($pass, self.gradient_pipeline(), Some(bind_group), vb, *v_start, *v_count);
                             }
                         }
                         DrawOp::CrossFade { v_start, v_count, cf_batch_idx } => {
@@ -12393,7 +12671,7 @@ impl Renderer {
                                 timestamp_writes: None,
                                 occlusion_query_set: None,
                             });
-                            pass.set_pipeline(&self.gradient_pipeline);
+                            pass.set_pipeline(self.gradient_pipeline());
                             pass.set_bind_group(0, &self.uniform_bind_group, &[0]);
                             pass.set_bind_group(1, &grad_bg, &[]);
                             pass.set_vertex_buffer(0, grad_vbuf_m.slice(..));
@@ -18438,10 +18716,47 @@ mod tests {
             .expect("bundled font");
         let r = Renderer::new_headless(bytes, 64, 48, ColorSpace::Srgb)
             .expect("headless renderer");
+        // Срез 3: пайплайны приезжают с фоновых потоков лениво, поэтому потоки
+        // становятся известны только после материализации всех пяти. Кадр
+        // делает ровно этот вызов на входе в `render`.
+        r.await_all_hot_pipelines();
         assert_eq!(
             r.hot_pipeline_threads(),
             5,
             "горячие пайплайны снова компилируются на одном потоке",
+        );
+    }
+
+    /// BUG-406 срез 3: горячие пайплайны не должен компилировать UI-поток.
+    ///
+    /// Гейт среза. Срез 2 увёл компиляции на пять потоков, но конструктор
+    /// рендера ждал их все, поэтому окно не пампило сообщения всё время
+    /// сборки. Срез 3 ожидание убрал: потоки стартуют в `init_pipelines`, а
+    /// вызывающий забирает готовое позже. Сколько это дало по времени —
+    /// вопрос wall-clock (числа в `bugs/BUG-406-OPEN.md`); тест пиннит
+    /// утверждение об идентичности: ни один из пяти не собран потоком-
+    /// владельцем рендера. Ненулевой счётчик означает, что аварийная ветка
+    /// `await_hot` сработала и цена вернулась на UI-поток.
+    ///
+    /// Требует GPU-адаптер, поэтому `#[ignore]`; запуск:
+    /// `cargo test -p lumen-paint --features backend-wgpu
+    ///  hot_pipelines_never_built_on_owner_thread -- --include-ignored`.
+    #[test]
+    #[ignore = "requires GPU adapter"]
+    fn hot_pipelines_never_built_on_owner_thread() {
+        let bytes = std::fs::read("../../../assets/fonts/Inter-Regular.ttf")
+            .expect("bundled font");
+        let r = Renderer::new_headless(bytes, 64, 48, ColorSpace::Srgb)
+            .expect("headless renderer");
+        r.await_all_hot_pipelines();
+        assert_eq!(
+            r.hot_pipelines_built_on_ui_thread(),
+            0,
+            "горячий пайплайн скомпилирован потоком-владельцем рендера",
+        );
+        assert!(
+            !r.hot_pipeline_threads.borrow().contains(&std::thread::current().id()),
+            "поток-владелец попал в число сборщиков горячих пайплайнов",
         );
     }
 
