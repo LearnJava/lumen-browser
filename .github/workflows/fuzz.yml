@@ -1,0 +1,216 @@
+name: Fuzz
+
+# cargo-fuzz/libFuzzer run of the TEST-1 harnesses (`fuzz/`, see fuzz/README.md).
+#
+# Why this lives in CI rather than on a dev machine: libFuzzer needs an ASan
+# runtime and ELF section-boundary symbols (`__start___sancov_*`), neither of
+# which Windows/MSVC provides — the local blocker documented in CLAUDE.md
+# §Known gotchas and docs/tasks/p2-test-track.md#test-1-состояние. A Linux
+# runner has both out of the box, so this job is the only place the harnesses
+# actually execute.
+#
+# Deliberately NOT part of ci.yml: a meaningful fuzz run is tens of minutes and
+# is not a merge gate — a task branch must not wait for it.
+
+on:
+  # Manual run — the knob to reach for after touching a parser, with a longer
+  # budget than the scheduled sweep.
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: 'Seconds per target'
+        required: false
+        default: '300'
+      targets:
+        description: 'Space-separated target list (empty = all)'
+        required: false
+        default: ''
+
+  # Weekly sweep. Not nightly: the corpus is not persisted between runs (see
+  # "Corpus" below), so consecutive runs re-explore the same shallow space —
+  # daily repetition would burn runner time for very little new coverage.
+  schedule:
+    - cron: '0 5 * * 1'   # Mondays, 05:00 UTC
+
+  # Rot guard: any change to the harnesses themselves gets a short run, so a
+  # harness that stops compiling (or starts crashing on its own seed corpus) is
+  # caught at the commit that broke it rather than up to a week later.
+  push:
+    branches: [main, 'p[1-5]-*']
+    paths:
+      - 'fuzz/**'
+      - '.github/workflows/fuzz.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # `fuzz/` is not a workspace member, but cargo still walks up to the repo root
+  # and picks up `.cargo/config.toml`. Its `rustc-wrapper` line is commented out
+  # today; an empty value keeps this job working if it is ever restored
+  # (CLAUDE.md §Known gotchas — the two-month CI outage).
+  RUSTC_WRAPPER: ""
+
+jobs:
+  fuzz:
+    name: cargo-fuzz (ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      # `tests/wpt` is ~105k of the tracked files and the seed corpus under
+      # `fuzz/corpus/` is self-contained (copies, not references), so the same
+      # exclusion as ci.yml applies. Pointing a run at the WPT tree, as
+      # fuzz/README.md describes, is a local-only option.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          sparse-checkout: |
+            /*
+            !/tests/wpt
+          sparse-checkout-cone-mode: false
+
+      # Nightly is required by cargo-fuzz itself: the instrumentation goes in via
+      # `-Z sanitizer=address`, a nightly-only flag. This does not affect the
+      # browser build — `fuzz/Cargo.toml` carries its own empty `[workspace]`
+      # table precisely so the nightly requirement cannot leak into it, and the
+      # repo's `rust-toolchain.toml` pin (1.97.0) still governs every other job.
+      #
+      # `llvm-tools` is NOT requested: it is only needed for `cargo fuzz coverage`
+      # and, when installed next to an existing `llvm-tools` component, fails the
+      # whole toolchain install on a file conflict over `bin/llc`.
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+
+      # libfuzzer-sys builds the libFuzzer runtime from its vendored C++ sources
+      # through the `cc` crate. ubuntu-latest ships a C++ compiler, but which one
+      # is default has changed across runner images — pin the expectation.
+      - name: Install clang
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends clang
+
+      - name: Cargo dependency cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+        with:
+          # `fuzz/` is its own workspace with its own `fuzz/target`; without this
+          # the action would cache the (unused) root workspace instead.
+          workspaces: fuzz
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # `cargo install cargo-fuzz` is a 2-4 minute build of a tool that changes a
+      # few times a year. Bump the `-v1` suffix to force a re-install (there is no
+      # version input to hash — pinning a version here would silently freeze the
+      # tool instead).
+      - name: Cache cargo-fuzz binary
+        id: cache-cargo-fuzz
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-fuzz
+          key: ${{ runner.os }}-cargo-fuzz-v1
+
+      - name: Install cargo-fuzz
+        if: steps.cache-cargo-fuzz.outputs.cache-hit != 'true'
+        run: cargo install cargo-fuzz --locked
+
+      - name: Pick run parameters
+        run: |
+          # A push-triggered run only proves the harness still works; the real
+          # sweeps are the scheduled and manual ones.
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "FUZZ_SECONDS=60" >> "$GITHUB_ENV"
+          else
+            echo "FUZZ_SECONDS=${{ github.event.inputs.duration || 300 }}" >> "$GITHUB_ENV"
+          fi
+          targets="${{ github.event.inputs.targets }}"
+          if [ -z "$targets" ]; then
+            targets="fuzz_css_parser fuzz_html_parser fuzz_url fuzz_font fuzz_image"
+          fi
+          echo "FUZZ_TARGETS=$targets" >> "$GITHUB_ENV"
+
+      # Build every target once up front, so a compile break is reported as a
+      # build failure instead of as a crash in whichever target ran first.
+      - name: Build harnesses
+        working-directory: fuzz
+        run: cargo +nightly fuzz build
+
+      # Committed crash repros run first and are cheap: they are single-input
+      # replays, not fuzzing. A regression file is named `<target>-<desc>`
+      # (fuzz/README.md §Crashes), which is what the target is derived from here.
+      # The directory is empty today — no crash has been found yet.
+      - name: Replay committed regressions
+        working-directory: fuzz
+        run: |
+          set -u
+          failed=""
+          shopt -s nullglob
+          for f in regressions/*; do
+            [ -f "$f" ] || continue
+            name=$(basename "$f")
+            target="${name%%-*}"
+            echo "::group::replay $name ($target)"
+            if ! cargo +nightly fuzz run "$target" "$f"; then
+              failed="$failed $name"
+            fi
+            echo "::endgroup::"
+          done
+          if [ -n "$failed" ]; then
+            echo "::error::regressions reproduced again:$failed"
+            exit 1
+          fi
+
+      # One job, targets in sequence: a 5-way matrix would rebuild the whole
+      # instrumented dependency tree five times and take five of the 20 free-tier
+      # concurrency slots (docs/ci-offload.md §4).
+      #
+      # A failing target does not abort the loop — one crash must not hide the
+      # other four targets' results. Failures are collected and re-raised at the
+      # end.
+      - name: Fuzz targets
+        working-directory: fuzz
+        run: |
+          set -u
+          failed=""
+          for target in $FUZZ_TARGETS; do
+            echo "::group::fuzz $target (${FUZZ_SECONDS}s)"
+            # -timeout: a single input taking longer than this counts as a hang,
+            # which is a finding in its own right (an infinite loop in a parser
+            # is a DoS on any page that embeds it).
+            if ! cargo +nightly fuzz run "$target" -- \
+                 -max_total_time="$FUZZ_SECONDS" -timeout=25; then
+              failed="$failed $target"
+            fi
+            echo "::endgroup::"
+          done
+          if [ -n "$failed" ]; then
+            echo "::error::crashing targets:$failed — repro inputs are in the run artifacts"
+            exit 1
+          fi
+
+      # The repro input is the whole value of a failed run: without it the log
+      # says "crash" and nothing reproducible. `fuzz/artifacts/` is gitignored,
+      # so this upload is the only copy.
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-${{ github.run_id }}
+          path: fuzz/artifacts/
+          if-no-files-found: ignore
+          retention-days: 30
+
+      # libFuzzer writes coverage-increasing inputs back into `fuzz/corpus/<target>`
+      # as it runs. They are not committed automatically (fuzz/README.md warns
+      # against `git add -A` there), but they are worth keeping for triage and for
+      # hand-picking new seeds — a run that found nothing still tells you what it
+      # explored.
+      - name: Upload grown corpus
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-corpus-${{ github.run_id }}
+          path: fuzz/corpus/
+          retention-days: 7

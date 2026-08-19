@@ -18,7 +18,42 @@ Goal: no panics/UB on arbitrary input, not correctness of parsing.
 | `fuzz_font` | `lumen_font::{maybe_decode_font, Font::parse}` | `&[u8]` (WOFF/WOFF2/raw TTF/OTF bytes) |
 | `fuzz_image` | `lumen_image::decode` | `&[u8]` (PNG/JPEG/GIF/WebP/AVIF bytes, dispatched by magic bytes) |
 
-## Setup
+## Where these actually run: CI
+
+**The primary way to run these harnesses is the `Fuzz` GitHub Actions
+workflow** ([../.github/workflows/fuzz.yml](../.github/workflows/fuzz.yml)),
+not a dev machine. libFuzzer needs an ASan runtime and ELF section-boundary
+symbols that Windows/MSVC does not provide (details in the "Setup" section
+below and in `docs/tasks/p2-test-track.md#test-1-состояние`); a Linux runner
+has both.
+
+| Trigger | Budget per target | Purpose |
+|---|---|---|
+| push touching `fuzz/**` | 60 s | harness rot guard |
+| weekly cron (Mon 05:00 UTC) | 300 s | the actual sweep |
+| `workflow_dispatch` | `duration` input (default 300 s) | on-demand, after touching a parser |
+
+`workflow_dispatch` also takes a `targets` input (space-separated, empty =
+all five). To launch a longer run of one target:
+
+```bash
+gh workflow run fuzz.yml -f duration=1800 -f targets=fuzz_css_parser
+gh run watch                     # or: gh run list --workflow=fuzz.yml
+```
+
+A crash uploads its repro input as the `fuzz-artifacts-<run-id>` artifact
+(the only copy — `fuzz/artifacts/` is gitignored); every run uploads the
+libFuzzer-grown corpus as `fuzz-corpus-<run-id>`, kept 7 days. Download with
+`gh run download <run-id>`, then minimize and file per the "Crashes" section
+below.
+
+The corpus is **not** persisted between CI runs — each run starts from the
+committed seeds. That is why the sweep is weekly rather than nightly: without
+accumulated coverage, consecutive runs re-explore the same shallow space.
+Promoting genuinely interesting inputs from a `fuzz-corpus-*` artifact into
+the committed seed set is a manual, reviewed step.
+
+## Setup (local)
 
 `cargo-fuzz` needs a nightly toolchain and (on Windows) is only recently
 and partially supported — this repo's dev machines are Windows/MSVC, so
