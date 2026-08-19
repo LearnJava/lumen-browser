@@ -73,7 +73,7 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-08-19",
+ "generated": "2026-08-20",
  "counts": {
   "open": 328,
   "fixed": 424,
@@ -7951,10 +7951,10 @@
   },
   "BUG-405": {
    "status": "open",
-   "title": "+",
-   "component": "x",
+   "title": "Прокрутка реальных сайтов рвано залипает: на `https://lenta.ru` (43 кадра/прогон, dev-release, дефолтный wgpu) p50 ≈9 мс, но avg ≈210 мс и max **3.1–3.6 с** — р…",
+   "component": "paint (wgpu — путь отрисовки вновь открывшейся полосы при scroll-blit, `crates/engine/paint/src/renderer.rs`)",
    "date": null,
-   "debtor": true
+   "debtor": false
   },
   "BUG-406": {
    "status": "open",
@@ -11481,6 +11481,9 @@
   "paint (wgpu `renderer.rs`, `BeginStickyLayer`)": [
    "BUG-336"
   ],
+  "paint (wgpu — путь отрисовки вновь открывшейся полосы при scroll-blit, `crates/engine/paint/src/renderer.rs`)": [
+   "BUG-405"
+  ],
   "paint/cpu_raster": [
    "BUG-052"
   ],
@@ -11640,9 +11643,6 @@
   ],
   "wptrunner-интеграция (`browsers/lumen.py` `env_options`)": [
    "BUG-301"
-  ],
-  "x": [
-   "BUG-405"
   ],
   "не изолирован (layout / paint / js)": [
    "BUG-733"
