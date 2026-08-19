@@ -2531,18 +2531,18 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/ctap2.rs:879` **struct** `WinHidDevice` — A real USB HID device opened via Win32 `CreateFile`
 `crates/network/src/ctap2.rs:942` **fn** `enumerate` — Enumerate USB HID FIDO2 devices via Win32 SetupDi + HidD APIs
 `crates/network/src/ctap2.rs:1125` **struct** `LinuxHidDevice` — A FIDO2 device exposed as a Linux `/dev/hidrawN` character device
-`crates/network/src/ctap2.rs:1220` **fn** `enumerate` — Scan `/dev/hidraw0`..`/dev/hidraw31` and return FIDO2 devices
-`crates/network/src/ctap2.rs:1259` **struct** `CtapRoamingTransport` — [`CredentialProvider`] that uses a connected FIDO2 USB security key
-`crates/network/src/ctap2.rs:1263` **fn** `new` — Create a new roaming transport
-`crates/network/src/ctap2.rs:1355` **struct** `CompositeCredentialProvider` — A [`CredentialProvider`] that delegates to a priority-ordered list
-`crates/network/src/ctap2.rs:1361` **fn** `new` — Create a composite from an ordered list of providers
-`crates/network/src/ctap2.rs:1400` **struct** `MockHidDevice` — A scripted in-memory [`HidDevice`] for unit tests
-`crates/network/src/ctap2.rs:1410` **fn** `new` — Create a blank mock with no queued responses
-`crates/network/src/ctap2.rs:1420` **fn** `push_response` — Push a raw 65-byte HID report to the response queue
-`crates/network/src/ctap2.rs:1425` **fn** `queue_init_response` — Build and queue a CTAPHID_INIT response for the given nonce + CID
-`crates/network/src/ctap2.rs:1442` **fn** `queue_cbor_response` — Build and queue a successful CTAPHID_CBOR response with the given payload
-`crates/network/src/ctap2.rs:1473` **fn** `written_reports` — Return all written reports (as slices) for inspection
-`crates/network/src/ctap2.rs:1507` **fn** `seal` — Reverse the internal response queue so items are served FIFO
+`crates/network/src/ctap2.rs:1222` **fn** `enumerate` — Scan `/dev/hidraw0`..`/dev/hidraw31` and return FIDO2 devices
+`crates/network/src/ctap2.rs:1261` **struct** `CtapRoamingTransport` — [`CredentialProvider`] that uses a connected FIDO2 USB security key
+`crates/network/src/ctap2.rs:1265` **fn** `new` — Create a new roaming transport
+`crates/network/src/ctap2.rs:1357` **struct** `CompositeCredentialProvider` — A [`CredentialProvider`] that delegates to a priority-ordered list
+`crates/network/src/ctap2.rs:1363` **fn** `new` — Create a composite from an ordered list of providers
+`crates/network/src/ctap2.rs:1402` **struct** `MockHidDevice` — A scripted in-memory [`HidDevice`] for unit tests
+`crates/network/src/ctap2.rs:1412` **fn** `new` — Create a blank mock with no queued responses
+`crates/network/src/ctap2.rs:1422` **fn** `push_response` — Push a raw 65-byte HID report to the response queue
+`crates/network/src/ctap2.rs:1427` **fn** `queue_init_response` — Build and queue a CTAPHID_INIT response for the given nonce + CID
+`crates/network/src/ctap2.rs:1444` **fn** `queue_cbor_response` — Build and queue a successful CTAPHID_CBOR response with the given payload
+`crates/network/src/ctap2.rs:1475` **fn** `written_reports` — Return all written reports (as slices) for inspection
+`crates/network/src/ctap2.rs:1509` **fn** `seal` — Reverse the internal response queue so items are served FIFO
 `crates/network/src/dns.rs:93` **struct** `SystemDnsResolver` — DNS-резолвер на основе системного getaddrinfo (через std::net)
 `crates/network/src/doh.rs:46` **fn** `encode_query` — Закодировать стандартный DNS query — header + одна question. RD=1
 `crates/network/src/doh.rs:100` **fn** `decode_answer_ips` — Распакованный DNS-ответ — без CNAME-цепочек, только IP-адреса из
