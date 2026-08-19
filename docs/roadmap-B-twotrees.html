@@ -2215,9 +2215,9 @@
       {
        "id": "PERF-7",
        "title": "PERF-7: ночной перф-гейт на новых метриках",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Регрессионный перф-гейт поверх PERF-2/3/4/5: ночной (или пред-мержевый для тяжёлых веток) прогон корпуса, запись метрик в журнал, пороги в crates/bench/src/ci_gate.rs (механизм гейта уже существует — расширить новыми метриками). Аналог храповика KNOWN_DEBTORS, но для миллисекунд и мегабайт. **Передана P2 2026-08-19** вместе с хвостом дорожки CI: перф-гейт остался единственным преемником удалённого `bench-gate.yml` ([docs/ci-offload.md §11.5](docs/ci-offload.md)), а гейт по дельте wall-clock на shared runner запрещён (§9 там же и [perf-method.md](docs/perf-method.md)) — пороги только абсолютные, с большим запасом"
+       "note": "ЗАКРЫТ 2026-08-20 (ветка p2-perf-7). Расширен существующий механизм `crates/bench/src/ci_gate.rs` (`lumen-bench --ci`) четвёртой абсолютной проверкой — `cold_start < 2000мс` (headless `--screenshot`-спавн, тот же механизм, что у автономного бенча `--startup` из PERF-4, переиспользован через `pub(crate) startup::{locate_binary, spawn_once}`, порог с десятикратным запасом над локальным базлайном 136.8мс). Заведён `.github/workflows/perf-gate.yml`: nightly (04:00 UTC) + push на путях `layout`/`paint`/`font`/`encoding`/`html-parser`/`css-parser`/`shell`/`bench` (пред-мержевый прогон для «тяжёлых» веток) + `workflow_dispatch`; job строит `dev-release`-шелл и гоняет `--ci`. Пороги абсолютные, не по дельте wall-clock (§9 ci-offload.md, perf-method.md) — аналог KNOWN_DEBTORS для мс/МБ, как и было задумано. `continue-on-error: true` (приём 1 из двухшагового rollout `lint`/`snapshot-cpu`, ci-offload.md §11.3) — снять флаг отдельным приёмом после первых реальных прогонов на CI-железе. Метрики PERF-3/5/6 (input-latency/память/health-log) в гейт НЕ вошли: все три требуют живого окна (`--mcp-live-port`), а §9 явно запрещает переносить прогоны живого окна в CI (нет GPU/фокуса на shared runner) — остаются локальным `/lumen-perf-audit`-путём"
       },
       {
        "id": "PERF-8",
