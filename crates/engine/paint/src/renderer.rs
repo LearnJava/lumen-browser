@@ -4110,6 +4110,46 @@ fn band_cull_height(surface_h: u32, frac: f32) -> u32 {
     ((surface_h as f32 * frac).round() as u32).clamp(1, surface_h)
 }
 
+/// Какие `LoadOp::Clear` пасса ПОЛОСЫ заменить на `Load` под рычагом переписи
+/// (`LUMEN_BAND_PASS_LOAD` = `color` | `depth` | `both`): `(цвет, depth)`.
+///
+/// Рычаг ПЕРЕПИСИ BUG-405 срез 30 (пункт 62 остатка), пиксельно НЕВЕРНЫЙ:
+/// полоса стартует с содержимым прошлого кадра, а depth — с прошлыми
+/// значениями. Вопрос, ради которого он существует: из чего состоит
+/// ПОСТОЯННАЯ четверть надбавки промаха (2.9 мс из 11.7, срез 29), которую
+/// инкрементальная дорисовка (пункт 43) не адресует. Кандидаты пункта 62 —
+/// `Clear` цвета всей полосы, `Clear` полноразмерного depth и постоянная цена
+/// самого пасса (пункт 5); первые два эта пара битов и снимает по одному,
+/// остаток на доле 0.05 с обоими снятыми — третий.
+///
+/// Меряется вместе с [`band_draw_fraction`] на малой доле: чем меньше
+/// рисования, тем меньше искажает измерение единственный побочный эффект
+/// `depth`-плеча — старые значения глубины отбраковывают часть фрагментов,
+/// то есть удешевляют не только клир, но и рисование. Число draw-команд при
+/// этом не меняется, поэтому счётчики работы кадра гейтят тождество плеч, но
+/// НЕ ловят этот эффект — отсюда требование малой доли.
+fn band_pass_load_ops() -> (bool, bool) {
+    use std::sync::OnceLock;
+    static CHOICE: OnceLock<(bool, bool)> = OnceLock::new();
+    *CHOICE.get_or_init(|| {
+        std::env::var("LUMEN_BAND_PASS_LOAD")
+            .map_or((false, false), |v| band_pass_load_choice(&v))
+    })
+}
+
+/// Разбор значения `LUMEN_BAND_PASS_LOAD` в пару «грузить цвет, грузить depth».
+///
+/// Неизвестное значение — штатный путь (оба клира на месте): рычаг переписи не
+/// должен молча менять конфигурацию из-за опечатки в имени плеча.
+fn band_pass_load_choice(v: &str) -> (bool, bool) {
+    match v.trim() {
+        "color" => (true, false),
+        "depth" => (false, true),
+        "both" => (true, true),
+        _ => (false, false),
+    }
+}
+
 /// Геометрия полосы скролл-композитора под текущую поверхность:
 /// `(запас с каждой стороны, полная высота полосы)` в device px, либо причина
 /// отказа для `page-compose skip`.
@@ -8654,10 +8694,18 @@ impl Renderer {
             }
             if crate::frame_log_level() >= 2 {
                 eprintln!(
-                    "[frame:wgpu] page-compose MISS: band y={band_top_css:.0}..{:.0} css ({sw}x{band_h_px} px, {} anim segs, frac {})",
+                    "[frame:wgpu] page-compose MISS: band y={band_top_css:.0}..{:.0} css ({sw}x{band_h_px} px, {} anim segs, frac {}, load {})",
                     band_top_css + band_h_css,
                     ranges.len(),
                     band_draw_fraction().map_or(1.0, f64::from),
+                    // Гейт тождества плеч среза 30: какое из плеч рычага
+                    // `LUMEN_BAND_PASS_LOAD` реально доехало до пасса полосы.
+                    match band_pass_load_ops() {
+                        (true, true) => "both",
+                        (true, false) => "color",
+                        (false, true) => "depth",
+                        (false, false) => "none",
+                    },
                 );
             }
         } else if crate::frame_log_level() >= 2 {
@@ -9216,6 +9264,14 @@ impl Renderer {
         let cull_h = match (&mode, band_draw_fraction()) {
             (RenderPassMode::Band { .. }, Some(frac)) => band_cull_height(surface_h, frac),
             _ => surface_h,
+        };
+        // BUG-405 срез 30: рычаг переписи [`band_pass_load_ops`] — снять
+        // `Clear` цвета и/или depth У ПАССА ПОЛОСЫ, чтобы разложить постоянную
+        // статью надбавки промаха (пункт 62). Вне Band-рендера рычаг не
+        // действует: окно чистится каждым кадром независимо от полосы.
+        let (band_load_color, band_load_depth) = match &mode {
+            RenderPassMode::Band { .. } => band_pass_load_ops(),
+            _ => (false, false),
         };
 
         let dpr_f32 = self.scale_factor.max(1e-6) as f32;
@@ -12437,6 +12493,10 @@ impl Renderer {
                         &self.layer_textures[batch.target_level - 1].view
                     };
                     let load = match batch.load_op {
+                        // Рычаг переписи среза 30 действует только на клир
+                        // ЦЕЛИ пасса полосы (уровень 0): уровни-offscreen
+                        // чистятся своей текстурой, и их клир — не та статья.
+                        _ if band_load_color && batch.target_level == 0 => wgpu::LoadOp::Load,
                         LoadOpChoice::Clear(c) => wgpu::LoadOp::Clear(c),
                         LoadOpChoice::ClearTransparent => {
                             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
@@ -12458,7 +12518,12 @@ impl Renderer {
                              //            offscreen layer is independent of the parent frame.
                              load: if batch.target_level > 0 {
                                  wgpu::LoadOp::Clear(1.0)
-                             } else if matches!(batch.load_op, LoadOpChoice::Load) {
+                             } else if band_load_depth
+                                 || matches!(batch.load_op, LoadOpChoice::Load)
+                             {
+                                 // `band_load_depth` — рычаг переписи среза 30
+                                 // (пункт 62): снять клир глубины полосы, чтобы
+                                 // назвать его долю в постоянной статье.
                                  wgpu::LoadOp::Load
                              } else {
                                  wgpu::LoadOp::Clear(1.0)
@@ -19137,6 +19202,27 @@ mod tests {
         // Доля выше единицы не растягивает цель: отсев не может видеть больше
         // текстуры, чем создано.
         assert_eq!(band_cull_height(2541, 2.0), 2541);
+    }
+
+    /// BUG-405 срез 30: гейт на разбор рычага переписи [`band_pass_load_ops`]
+    /// → [`band_pass_load_choice`].
+    ///
+    /// Опасная точка рычага — не арифметика, а МОЛЧАЛИВОЕ плечо: опечатка в
+    /// имени («colour», пустая строка, `1`) не должна снимать ни одного клира,
+    /// иначе свип сравнит штатный путь со штатным путём и напечатает разницу
+    /// как эффект. Поэтому неизвестное значение = штатный путь, а плечи
+    /// перечислены поимённо.
+    #[test]
+    fn band_pass_load_choice_only_names_known_arms() {
+        assert_eq!(band_pass_load_choice("color"), (true, false));
+        assert_eq!(band_pass_load_choice("depth"), (false, true));
+        assert_eq!(band_pass_load_choice("both"), (true, true));
+        // Пробелы вокруг имени плеча — не опечатка (env из скрипта).
+        assert_eq!(band_pass_load_choice(" both "), (true, true));
+        // Всё остальное — штатный путь, оба клира на месте.
+        for v in ["", "1", "colour", "none", "color,depth"] {
+            assert_eq!(band_pass_load_choice(v), (false, false), "плечо {v:?}");
+        }
     }
 
     /// BUG-405 срез 23: сторона текстуры запрашивается по тиру адаптера, и
