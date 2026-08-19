@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-19",
  "counts": {
-  "open": 324,
+  "open": 325,
   "fixed": 424,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 748,
+ "total_bugs": 749,
  "phases": [
   {
    "id": "P0",
@@ -4826,6 +4826,13 @@
        "status": "done",
        "size": "M",
        "note": "Обе половины сделаны в минимальном исполнителе tests/wpt/ (tools/wptrunner не патчился): (1) `testdriver.js` — довендорен (repo-root `resources/testdriver.js`, `tests/wpt/VENDOR.md`, вынужденное расположение — так резолвит `environment.py`'s хардкод `repo_root`), `supports_testdriver=True`, poll-based drain `__wptrunner_message_queue` (`executorlumen.py`); реально исполняется `click` (`input.performActions`), остальные действия отклоняют промис теста явной ошибкой вместо блочного SKIP/зависания — DoD выполнен (доля SKIP по testdriver на пробе падает до нуля). (2) HTTPS-порт — `tests/wpt/config.json` https-порты `18443`/`18444` вместо `null`, `--ssl-type=pregenerated` с закоммиченным самоподписанным сертификатом (`tests/wpt/certs/`, README внутри); `.https.`-тест из WebCryptoAPI доезжает до настоящего TLS-хендшейка и получает `UnknownIssuer` вместо `invalid port: \"None\"` — DoD выполнен («содержательный результат», не «проходит»: доверие Lumen к тестовому CA — отдельная security-чувствительная Rust-задача вне скоупа Python-тулинга). Попутно найден и застабилизирован гейт: BUG-328 (HTMLCollection ownKeys/qux) регрессировал молча, `.ini` перепиннут в FAIL со ссылкой на баг"
+      },
+      {
+       "id": "WPT-RUN-4",
+       "title": "WPT-RUN-4: честная сводная цифра pass-rate по всему корпусу",
+       "status": "done",
+       "size": "M",
+       "note": "Честная сводная цифра pass-rate по ВСЕМУ вендоренному корпусу за один прогон (решения пользователя 2026-08-18). Знаменатель берётся из `MANIFEST.json`, а не из файлового глоба `run_report.py::all_vendored_test_ids()` — глоб и завышает (reftest-половинки и `-ref.html` суть файлы, а не id), и занижает (`?variant`, развёртка `.any.js`), поэтому прежние числа несопоставимы с wpt.fyi/Servo/Ladybird. Скоуп знаменателя — весь манифест БЕЗ изъятий: reftest-ы, которые мы пока не исполняем (TEST-4), и категории со скоупом 🚫 остаются внутри, неисполненное = непройденное; исключается только тип `support` (фикстуры), а `manual`/`visual` считаются отдельной строкой (их не исполняет ни один раннер, включая апстрим). Срез 1 (2026-08-18) — `tests/wpt/corpus_stats.py`: 273 категории, 73495 id, из них 67735 автоматизируемых (знаменатель), 5760 manual/visual, и 37319 testharness — то есть ПОТОЛОК сегодняшней цифры 55%: без reftest-исполнителя (TEST-4) остальные 45% недостижимы по построению, и цифру нельзя публиковать без этой оговорки. Остаток: оркестратор полного прогона (шардирование по категориям, чекпойнты, агрегация `--log-wptreport`), пилот на 10 разнородных категориях, затем полный прогон. `.ini`-ожидания этой задачей НЕ пишутся (первый проход — измерение, не гейт). Результат — `docs/wpt/runs/<дата>.json` + журнал `docs/wpt/pass-rate.md`. Бриф — docs/tasks/p2-wpt-runner-throughput.md **Сделано 2026-08-19:** весь корпус за один прогон (479 шардов, ~11 ч, --processes=6 --skip-https, 0 потерянных шардов) — **pass-rate 5.59%** (3783 из 67735 автоматизируемых id MANIFEST.json), сабтесты 151287/519359 (29.1%); производные цифры: 10.14% по testharness-корпусу, 12.42% по фактически прогнанному. Необъяснённых id ноль: 6874 непрогнанных testharness — https (BUG-785), остальные 30416 — типы без исполнителя (reftest 27386, crashtest 1892, wdspec 626, print-reftest 416, aamtest 96). Инструменты: tests/wpt/corpus_stats.py (знаменатель) + tests/wpt/run_corpus.py (шардированный прогон, чекпойнты/--resume, восстановление убитого шарда из mozlog-потока, --skip-https). Ловушка параллелизма снята замером: --processes=1 и =6 дают побитово одинаковый результат при 4.4x разнице во времени. Побочная находка: 4 битых .ini роняли 4 категории целиком (759 testharness-id не прогонялись ни разу, гейт --check по ним был мёртв) — починены, генератор expectations.py теперь валидирует свой вывод тем же парсером. Цифра и методика — docs/wpt/pass-rate.md, снимок — docs/wpt/runs/2026-08-18.json. Остаток дорожки: потолок 55.1% снимается только TEST-4/TEST-5 (reftest-исполнитель + Ahem)."
       }
      ]
     }
@@ -10102,6 +10109,13 @@
    "component": "paint (`background-blend-mode` в CPU-растре tiny-skia; тест `crates/driver/tests/cases/snapshot_cpu.rs::cpu_snapshots_match_references`, эталон `graphic_tests/snapshots/cpu/49-background-blend-mode.png`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-785": {
+   "status": "open",
+   "title": "Доверенные корни собираются ТОЛЬКО из `webpki_roots::TLS_SERVER_ROOTS`, в пяти независимых местах, и нет ни CLI-флага, ни env, ни конфига, чтобы добавить свой C…",
+   "component": "network (`crates/network/src/lib.rs:1620,1633,1650,1666`, `crates/network/src/dot.rs:265`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -10917,6 +10931,9 @@
   ],
   "network (`crates/network/src/lib.rs:1041` — `type PageResponse = (Vec<u8>, Vec<(String, String)>)`; `Response` без URL, `lib.rs:461`; цепочка проходится внутри `fetch_with_redirect`, `lib.rs:2601`), shell (`crates/shell/src/main.rs:3577` — `base: ResourceBase::Url(url.clone())`)": [
    "BUG-757"
+  ],
+  "network (`crates/network/src/lib.rs:1620,1633,1650,1666`, `crates/network/src/dot.rs:265`)": [
+   "BUG-785"
   ],
   "network (`crates/network/src/lib.rs:2566-2567` — вычисление `default_path` перед `jar.process_set_cookie`); потребители — `crates/storage/src/cookies.rs::parse_set_cookie_with_psl` и `path_matches`": [
    "BUG-756"
