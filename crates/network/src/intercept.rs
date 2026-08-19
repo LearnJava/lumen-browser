@@ -97,10 +97,21 @@ struct InterceptRegistry {
     next_id: u64,
 }
 
-fn registry() -> &'static (Mutex<InterceptRegistry>, Condvar) {
-    static REGISTRY: OnceLock<(Mutex<InterceptRegistry>, Condvar)> = OnceLock::new();
+/// `(registry, decision_condvar, registered_condvar)`: `decision_condvar` is
+/// notified by [`resolve_intercept`] when a pause's decision is set (what
+/// [`pause_for_intercept`]'s own wait blocks on); `registered_condvar` is
+/// notified by [`pause_for_intercept`] when a new pause is inserted (what
+/// [`wait_for_new_intercept_announcement`] blocks on) — two separate condvars
+/// on the same mutex so a decision-resolve can't spuriously wake a caller
+/// that is only waiting for a new registration, and vice versa.
+fn registry() -> &'static (Mutex<InterceptRegistry>, Condvar, Condvar) {
+    static REGISTRY: OnceLock<(Mutex<InterceptRegistry>, Condvar, Condvar)> = OnceLock::new();
     REGISTRY.get_or_init(|| {
-        (Mutex::new(InterceptRegistry { pending: HashMap::new(), next_id: 1 }), Condvar::new())
+        (
+            Mutex::new(InterceptRegistry { pending: HashMap::new(), next_id: 1 }),
+            Condvar::new(),
+            Condvar::new(),
+        )
     })
 }
 
@@ -118,7 +129,7 @@ pub fn pause_for_intercept(url: &str, phase: &str) -> Result<(), String> {
     if !matches_active_intercept(url, phase) {
         return Ok(());
     }
-    let (mutex, condvar) = registry();
+    let (mutex, decision_condvar, registered_condvar) = registry();
 
     let request_id = {
         let Ok(mut reg) = mutex.lock() else {
@@ -130,11 +141,12 @@ pub fn pause_for_intercept(url: &str, phase: &str) -> Result<(), String> {
             .insert(id.clone(), PendingIntercept { url: url.to_owned(), decision: None, announced: false });
         id
     };
+    registered_condvar.notify_all();
 
     let Ok(guard) = mutex.lock() else {
         return Err("intercept registry poisoned".to_owned());
     };
-    let wait_result = condvar.wait_timeout_while(guard, INTERCEPT_DECISION_TIMEOUT, |reg| {
+    let wait_result = decision_condvar.wait_timeout_while(guard, INTERCEPT_DECISION_TIMEOUT, |reg| {
         reg.pending.get(&request_id).is_some_and(|p| p.decision.is_none())
     });
     let Ok((mut guard, timeout)) = wait_result else {
@@ -163,12 +175,12 @@ pub fn pause_for_intercept(url: &str, phase: &str) -> Result<(), String> {
 /// error at this layer (the BiDi handler ACKs either way, mirroring the
 /// bare-ACK tolerance it already had before real bookkeeping existed).
 pub fn resolve_intercept(request_id: &str, decision: InterceptDecision) -> bool {
-    let (mutex, condvar) = registry();
+    let (mutex, decision_condvar, _registered_condvar) = registry();
     let Ok(mut reg) = mutex.lock() else { return false };
     let Some(pending) = reg.pending.get_mut(request_id) else { return false };
     pending.decision = Some(decision);
     drop(reg);
-    condvar.notify_all();
+    decision_condvar.notify_all();
     true
 }
 
@@ -176,9 +188,36 @@ pub fn resolve_intercept(request_id: &str, decision: InterceptDecision) -> bool 
 /// `network.beforeRequestSent` event a BiDi connection should deliver.
 /// Each pending request is reported at most once.
 pub fn drain_new_intercept_announcements() -> Vec<(String, String)> {
-    let (mutex, _condvar) = registry();
+    let (mutex, _decision_condvar, _registered_condvar) = registry();
     let Ok(mut reg) = mutex.lock() else { return Vec::new() };
     reg.pending
+        .iter_mut()
+        .filter(|(_, p)| !p.announced)
+        .map(|(id, p)| {
+            p.announced = true;
+            (id.clone(), p.url.clone())
+        })
+        .collect()
+}
+
+/// Block until a request newly paused (since the last announcement) appears,
+/// or `timeout` elapses — the event-driven counterpart to
+/// [`drain_new_intercept_announcements`]'s poll. `pause_for_intercept` notifies
+/// `registered_condvar` right after inserting a pending pause, so this wakes
+/// as soon as one exists instead of on a fixed poll schedule; that schedule
+/// (`for _ in 0..N { drain(); sleep(5ms) }`) is what made
+/// `global_intercept_pauses_real_fetch_until_resolved` and this module's own
+/// blocking tests flake under `scoped-test.sh`'s parallel load (BUG-783): the
+/// fetch thread could simply not get scheduled within the fixed wall-clock
+/// budget. Returns an empty `Vec` on timeout, same as an empty poll loop.
+pub fn wait_for_new_intercept_announcement(timeout: Duration) -> Vec<(String, String)> {
+    let (mutex, _decision_condvar, registered_condvar) = registry();
+    let Ok(guard) = mutex.lock() else { return Vec::new() };
+    let wait_result =
+        registered_condvar.wait_timeout_while(guard, timeout, |reg| !reg.pending.values().any(|p| !p.announced));
+    let Ok((mut guard, _timeout)) = wait_result else { return Vec::new() };
+    guard
+        .pending
         .iter_mut()
         .filter(|(_, p)| !p.announced)
         .map(|(id, p)| {
@@ -210,7 +249,7 @@ mod tests {
         if let Ok(mut rules) = GLOBAL_INTERCEPTS.write() {
             rules.clear();
         }
-        let (mutex, _) = registry();
+        let (mutex, _, _) = registry();
         if let Ok(mut reg) = mutex.lock() {
             reg.pending.clear();
         }
@@ -248,14 +287,7 @@ mod tests {
         });
         let handle = thread::spawn(move || pause_for_intercept(url, "beforeRequestSent"));
         // Wait until the request is registered, then resolve it as Continue.
-        let mut announced = Vec::new();
-        for _ in 0..200 {
-            announced = drain_new_intercept_announcements();
-            if !announced.is_empty() {
-                break;
-            }
-            thread::sleep(StdDuration::from_millis(5));
-        }
+        let announced = wait_for_new_intercept_announcement(StdDuration::from_secs(5));
         assert_eq!(announced.len(), 1, "expected exactly one paused request to be announced");
         let (request_id, seen_url) = &announced[0];
         assert_eq!(seen_url, url);
@@ -275,16 +307,8 @@ mod tests {
             url_patterns: vec![url.to_owned()],
         });
         let handle = thread::spawn(move || pause_for_intercept(url, "beforeRequestSent"));
-        let mut request_id = None;
-        for _ in 0..200 {
-            let announced = drain_new_intercept_announcements();
-            if let Some((id, _)) = announced.into_iter().next() {
-                request_id = Some(id);
-                break;
-            }
-            thread::sleep(StdDuration::from_millis(5));
-        }
-        let request_id = request_id.expect("request never registered");
+        let announced = wait_for_new_intercept_announcement(StdDuration::from_secs(5));
+        let request_id = announced.into_iter().next().map(|(id, _)| id).expect("request never registered");
         assert!(resolve_intercept(&request_id, InterceptDecision::Fail));
         let result = handle.join().expect("thread panicked");
         assert!(result.is_err());

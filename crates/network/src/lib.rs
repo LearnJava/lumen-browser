@@ -215,7 +215,7 @@ fn apply_ua_override_h2(mut headers: Vec<(Vec<u8>, Vec<u8>)>) -> Vec<(Vec<u8>, V
 
 pub use intercept::{
     GlobalIntercept, InterceptDecision, add_global_intercept, drain_new_intercept_announcements,
-    pause_for_intercept, remove_global_intercept, resolve_intercept,
+    pause_for_intercept, remove_global_intercept, resolve_intercept, wait_for_new_intercept_announcement,
 };
 pub use http_cache::{HttpCache, HttpCacheBackend, DiskHttpCache, lumen_cache_dir};
 pub use http::{
@@ -8724,16 +8724,10 @@ world\r\n\
         let fetch_url = url.clone();
         let handle = thread::spawn(move || HttpClient::new().fetch(&fetch_url));
 
-        let mut request_id = None;
-        for _ in 0..400 {
-            if let Some((id, seen_url)) = drain_new_intercept_announcements().into_iter().next() {
-                assert_eq!(seen_url, url.to_string());
-                request_id = Some(id);
-                break;
-            }
-            thread::sleep(std::time::Duration::from_millis(5));
-        }
-        let request_id = request_id.expect("fetch never registered as paused");
+        let announced = wait_for_new_intercept_announcement(std::time::Duration::from_secs(5));
+        let (request_id, seen_url) =
+            announced.into_iter().next().expect("fetch never registered as paused");
+        assert_eq!(seen_url, url.to_string());
         assert!(!handle.is_finished(), "fetch must stay blocked until resolved");
 
         assert!(resolve_intercept(&request_id, InterceptDecision::Continue));
