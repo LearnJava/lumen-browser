@@ -100,6 +100,43 @@ nightly toolchain with MSVC AddressSanitizer support (`rust-fuzz/cargo-fuzz`
 CHANGELOG, added recently) but is less battle-tested — prefer WSL unless
 you have a specific reason to fuzz on native Windows.
 
+### Verified end-to-end 2026-08-19
+
+The WSL route above was written from documentation while WSL was unusable on
+this machine (`CLAUDE.md` §Known gotchas carried a "cannot run locally, use CI"
+note for a day). It has now been executed for real, from Windows, without
+entering an interactive WSL shell:
+
+```bash
+wsl -- bash -lc 'cd /mnt/d/RustProjects/lumen-browser/fuzz && \
+  cargo +nightly fuzz run fuzz_url -- -max_total_time=60'
+```
+
+Toolchain in that distro: `rustc 1.100.0-nightly (2026-08-18)`, `cargo-fuzz
+0.13.2`, `clang 18.1.3`. Result: 651 579 executions in 61 s (~10 700 exec/s,
+RSS 532 MB, no crash). Rebuilding just the harness crate against a warm
+`fuzz/target/` took 8.6 s; a cold build of the dependency tree was not measured.
+
+Three things worth knowing before you copy the command:
+
+- **A run rewrites the seed corpus.** That 60-second `fuzz_url` run left **320
+  new untracked files** in `corpus/fuzz_url/`. This is normal libFuzzer
+  behaviour (see «Seed corpus» above) but it means `git add -A` after fuzzing
+  silently commits a few hundred junk inputs. Clean up with
+  `git clean -f fuzz/corpus/` unless you deliberately reviewed additions.
+- **`/mnt/d` works.** Building and fuzzing straight against the Windows-side
+  checkout over the 9p mount is fine — no need to clone into the WSL
+  filesystem. `fuzz/target/` there holds Linux artifacts and is gitignored, so
+  it does not disturb the Windows build.
+- **A pool worktree works too** — the path is just
+  `/mnt/d/RustProjects/lumen-browser/.claude/worktrees/p<N>-work/fuzz`. Each
+  slot keeps its own `fuzz/target/`, so the first run in a fresh slot pays a
+  cold build.
+
+Local runs do not replace [`.github/workflows/fuzz.yml`](../.github/workflows/fuzz.yml):
+CI is the unattended half (weekly sweep, and any push touching `fuzz/**`),
+local is the one you reach for when checking a fix or minimizing an input.
+
 ## Seed corpus
 
 `corpus/<target>/` holds a small curated seed set (checked in) sourced from
