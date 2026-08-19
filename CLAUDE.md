@@ -45,6 +45,7 @@ Version↔phase mapping (from `docs/plan/phases.md`): Phase 1 → v0.1, **Phase 
 | `DECISIONS.md` | Historical decisions (pre-ADR format). Read-only — add new decisions to `docs/decisions/` instead. |
 | `samples/page.html` | Test page for pipeline runs. |
 | `assets/fonts/Inter-Regular.ttf` | Bundled font (SIL OFL 1.1). |
+| `assets/fonts/Ahem.ttf` | Bundled font (3-Clause BSD, `assets/fonts/LICENSE-Ahem.txt`) — deterministic reftest font (TEST-5), vendored unmodified from `tests/wpt/fonts/Ahem.ttf`. Every glyph is a 1em solid square; picked up by lumen-font's asset-dir scan like any other bundled family, no dedicated registration code. |
 
 ---
 

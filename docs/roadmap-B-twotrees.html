@@ -4779,9 +4779,9 @@
       {
        "id": "TEST-5",
        "title": "TEST-5: шрифт Ahem для детерминированных reftest-ов",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Бандл шрифта Ahem (W3C, свободная лицензия; все глифы — квадраты em, стандарт детерминированных reftest-ов) в assets/fonts/ + регистрация в lumen-font наравне с Inter-Regular; загрузка как web-font из вендоренного дерева WPT через существующий TTF/WOFF2-путь; unit-тест метрик (advance==em, ascent/descent по спеке Ahem). Бриф docs/tasks/p2-test-track.md"
+       "note": "Закрыто (2026-08-19, P2). `assets/fonts/Ahem.ttf` вендорен байт-в-байт из `tests/wpt/fonts/Ahem.ttf` (sha256 совпадает), лицензия — `assets/fonts/LICENSE-Ahem.txt` (3-Clause BSD, тот же текст, что `tests/wpt/fonts/LICENSE-WPT.md`). Регистрация — бесплатно: `SystemFontIndex` в lumen-font сканирует `assets/fonts/` целиком и строит индекс по `name`-таблице каждого файла (`crates/engine/font/src/system_fonts.rs`), выделенного кода на Inter/Golos/JetBrains там никогда не было — `family_count()` в тесте `finds_bundled_inter` поднят 3→4. Метрики подтверждены новым интеграционным тестом `crates/engine/font/tests/cases/ahem_metrics.rs` (2 теста): `units_per_em == 1000`, `hhea.ascent == 800` / `descent == -200` (0.8em/0.2em по спеке Ahem), advance каждого из `{A,X,a,z,0,!,.,space}` == 1000 (ровно 1em). Веб-шрифтовая загрузка (`@font-face src: url(...)`, как в вендоренном `tests/wpt/fonts/ahem.css`) идёт через уже существующий generic TTF/WOFF2 fetch-путь (`font-display: swap`, PH3-19) — кода не потребовалось; `--dump-layout` для проверки не годится (однократный дамп не дожидается фонового `FontLoaded`), проверено живым MCP-окном: лог подтверждает `FontLoaded: «Ahem»`, а `resource://layout` показывает `div` с Ahem шириной ровно `4×50px=200` против `136.43` у того же текста в Inter (см. `docs/tasks/p2-test-track.md#test-5-состояние`). Графический тест не добавлен (опционален по брифу) — TEST-4 (reftest-executor), для которого Ahem и задумывался, ещё не сделан, добавлять эталон не для чего. Бриф docs/tasks/p2-test-track.md"
       },
       {
        "id": "TEST-6",
