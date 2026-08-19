@@ -52,14 +52,26 @@ WGPU_TOTAL_RE = re.compile(r'\[frame:wgpu\] total\s+([\d.]+)ms.*\bops (\d+)\b')
 PLAN_RE = re.compile(r'plan: draw (\d+)x[\d.]+ms comp \d+x[\d.]+ms mask \d+x[\d.]+ms filt (\d+)x')
 CMDMIX_RE = re.compile(r'cmd-mix: .*\bdraw (\d+)\b')
 MISS_RE = re.compile(
-    r'page-compose MISS: band y=([\-\d.]+)\.\.([\-\d.]+) css \((\d+)x(\d+) px.*frac ([\d.]+)\)')
+    r'page-compose MISS: band y=([\-\d.]+)\.\.([\-\d.]+) css \((\d+)x(\d+) px.*frac ([\d.]+)')
 HIT_RE = re.compile(r'page-compose HIT')
 SKIP_RE = re.compile(r'page-compose skip: (.*)')
 ADAPTER_RE = re.compile(r'\[wgpu\] adapter: (.*)')
+LOAD_RE = re.compile(r'page-compose MISS:.*\bload (\w+)')
 
 
-def run(frac: float, rep: int, ticks: int, delta: float, backend: str, page: str) -> str:
-    """Один прогон стенда с заданной долей перерисовки; путь к логу stderr."""
+def log_name(tag: str, rep: int, backend: str) -> str:
+    """Имя файла лога прогона — одно на (плечо, повтор, бэкенд)."""
+    return f'band_{tag}_r{rep}_{backend or "auto"}.log'
+
+
+def run(frac: float, rep: int, ticks: int, delta: float, backend: str, page: str,
+        extra_env: dict[str, str] | None = None, tag: str | None = None) -> str:
+    """Один прогон стенда с заданной долей перерисовки; путь к логу stderr.
+
+    `extra_env`/`tag` — для свипов, которые держат долю постоянной и меняют
+    другие рычаги полосы (срез 30, `scripts/band_pass_constant_census.py`):
+    имя лога тогда берётся из `tag`, иначе плечи затирали бы файлы друг друга.
+    """
     exe = os.path.join(REPO, 'target', 'dev-release', 'lumen.exe')
     if not os.path.exists(exe):
         raise SystemExit(f'нет {exe} — cargo build -p lumen-shell --profile dev-release')
@@ -77,11 +89,12 @@ def run(frac: float, rep: int, ticks: int, delta: float, backend: str, page: str
         env.pop('LUMEN_BAND_DRAW_FRACTION', None)
     else:
         env['LUMEN_BAND_DRAW_FRACTION'] = repr(frac)
+    env.update(extra_env or {})
 
     port = free_port()
     tmp_dir = os.path.join(REPO, '.tmp')
     os.makedirs(tmp_dir, exist_ok=True)
-    log_path = os.path.join(tmp_dir, f'band_frac_{frac:g}_r{rep}_{backend or "auto"}.log')
+    log_path = os.path.join(tmp_dir, log_name(tag or f'frac_{frac:g}', rep, backend))
     log_f = open(log_path, 'w', encoding='utf-8', errors='replace')
     proc = subprocess.Popen(
         [exe, '--maximized', '--mcp-live-port', str(port), 'about:blank'],
@@ -117,6 +130,7 @@ def parse(log_path: str) -> dict:
     pending = None
     band = None
     fracs: set[float] = set()
+    loads: set[str] = set()
     work: dict[str, list[float]] = {'ops': [], 'plan_draw': [], 'plan_filt': [], 'cmd_draw': []}
     last: dict[str, float] = {}
     adapter = ''
@@ -144,6 +158,9 @@ def parse(log_path: str) -> dict:
                 pending = 'miss'
                 band = (int(m.group(3)), int(m.group(4)))
                 fracs.add(float(m.group(5)))
+                lm = LOAD_RE.search(line)
+                if lm:
+                    loads.add(lm.group(1))
                 for k, v in last.items():
                     work[k].append(v)
                 continue
@@ -161,7 +178,7 @@ def parse(log_path: str) -> dict:
                 {'miss': miss, 'hit': hit, None: other}[pending].append((ms, sy))
                 pending = None
     return {'miss': miss, 'hit': hit, 'other': other, 'band': band,
-            'fracs': sorted(fracs), 'work': work,
+            'fracs': sorted(fracs), 'loads': sorted(loads), 'work': work,
             'adapter': adapter, 'skips': skips}
 
 
@@ -261,7 +278,7 @@ def main() -> int:
     for rep in range(args.repeats):
         for frac in args.fractions:
             log = os.path.join(
-                REPO, '.tmp', f'band_frac_{frac:g}_r{rep}_{args.backend or "auto"}.log')
+                REPO, '.tmp', log_name(f'frac_{frac:g}', rep, args.backend))
             if not args.report_only:
                 log = run(frac, rep, args.ticks, args.delta, args.backend, args.page)
             rows[frac].append(report(f'{frac:g} (повтор {rep})', parse(log)))
