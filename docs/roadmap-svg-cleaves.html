@@ -58,11 +58,11 @@
  "generated": "2026-08-20",
  "counts": {
   "open": 328,
-  "fixed": 424,
+  "fixed": 425,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 752,
+ "total_bugs": 753,
  "phases": [
   {
    "id": "P0",
@@ -5255,9 +5255,9 @@
       {
        "id": "CI-5",
        "title": "CI-5: артефакт dev-release из CI",
-       "status": "ready",
+       "status": "done",
        "size": "S",
-       "note": "Джоб выгрузки бинаря из CI ([docs/ci-offload.md §6](docs/ci-offload.md)). YAML готов в документе, в `.github/workflows/ci.yml` не заведён: `cargo build -p lumen-shell --profile dev-release` + `actions/upload-artifact@v4`, только на push в `main` (не плодить артефакты на ветках), `retention-days: 14`. Смысл узкий и его надо держать в голове: артефакт НЕ заменяет локальную сборку (инкремент 3.8 с против прогона в CI), он нужен для трёх случаев — бинарь под Linux/macOS (локально не собрать вообще), проверка сборки на чистой машине перед релизом, занятая длинным прогоном рабочая машина. Лимит артефактов Free 500 МБ, `lumen.exe` 77 МБ"
+       "note": "ЗАКРЫТ 2026-08-20 (ветка p2-ci-5): джоб `artifact` заведён в `.github/workflows/ci.yml` по YAML из [docs/ci-offload.md §6](docs/ci-offload.md) — `cargo build -p lumen-shell --profile dev-release` + `actions/upload-artifact@v4`, `retention-days: 14`, гейтится `if: github.ref == 'refs/heads/main'` (не плодит артефакты на ветках). Матрица трёх ОС (ubuntu/macos/windows) — покрывает все три заявленных случая применения (Linux/macOS-бинарь, чистая машина, занятая рабочая), не только «нельзя собрать локально». Не блокирует мерж, не дублирует локальную сборку — те же оговорки, что в §6. YAML провалидирован `python -c \"yaml.safe_load(...)\"`, живой прогон не запускался (push веток по правилу CLAUDE.md требует явной просьбы пользователя)"
       },
       {
        "id": "CI-6",
@@ -7933,8 +7933,8 @@
   },
   "BUG-405": {
    "status": "open",
-   "title": "Прокрутка реальных сайтов рвано залипает: на `https://lenta.ru` (43 кадра/прогон, dev-release, дефолтный wgpu) p50 ≈9 мс, но avg ≈210 мс и max **3.1–3.6 с** — р…",
-   "component": "paint (wgpu — путь отрисовки вновь открывшейся полосы при scroll-blit, `crates/engine/paint/src/renderer.rs`)",
+   "title": "paint (wgpu — путь отрисовки вновь открывшейся полосы при scroll-blit, `crates/engine/paint/src/renderer.rs`)",
+   "component": "COPY_DST`, пиксельно нейтрально), интерливед живой A/B 3 пары — надбавка min 16.87 мс с битами против 18.58 без. Инструмент — `band_copy_cost_census` (`#[ignore]`-тест `lumen-paint`); цена меряется НАКЛОНОМ по числу копий в submit-е, а прокси через `LoadOp::Clear` отвергнут (65 ГБ/с = fast-clear метаданными). Остаток пополнен п. 60 (пропорциональна ли цена промаха числу перерисованных строк при неизменной цели — не измерено, первый шаг среза 29) и п. 61 (ping-pong требует второй полосы +18.6 МиБ, кольцевой адресации — нет).",
    "date": null,
    "debtor": false
   },
@@ -10529,10 +10529,10 @@
    "debtor": false
   },
   "BUG-783": {
-   "status": "open",
-   "title": "Тест ждёт регистрации перехвата опросом с потолком по настенным часам (400 × 5 мс = 2 с) — под параллельной нагрузкой `scoped-test.sh` поток с реальным `fetch`…",
-   "component": "network (`crates/network/src/lib.rs:8723-8731`, тест `tests::global_intercept_pauses_real_fetch_until_resolved`)",
-   "date": null,
+   "status": "fixed",
+   "title": "Тест ждал регистрации перехвата опросом с потолком по настенным часам (400 × 5 мс = 2 с) — под параллельной нагрузкой `scoped-test.sh` поток с реальным `fetch`…",
+   "component": "network (`crates/network/src/intercept.rs`, тест `tests::global_intercept_pauses_real_fetch_until_resolved`)",
+   "date": "2026-08-20",
    "debtor": false
   },
   "BUG-784": {
@@ -10569,9 +10569,19 @@
    "component": "css-parser (`crates/engine/css-parser` — только `parse`, разбор таблицы стилей)",
    "date": null,
    "debtor": false
+  },
+  "BUG-789": {
+   "status": "open",
+   "title": "На macOS CI флакует retry-on-stale: сервер отдаёт первый ответ без `Connection: close` и сразу закрывает сокет, клиент должен заметить staleness и переоткрыть с…",
+   "component": "network (`crates/network/src/lib.rs:6674` — тест `tests::stale_pooled_connection_triggers_retry`, вероятно также продакшн retry-on-stale в connection-pool рядом)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
+  "COPY_DST`, пиксельно нейтрально), интерливед живой A/B 3 пары — надбавка min 16.87 мс с битами против 18.58 без. Инструмент — `band_copy_cost_census` (`#[ignore]`-тест `lumen-paint`); цена меряется НАКЛОНОМ по числу копий в submit-е, а прокси через `LoadOp::Clear` отвергнут (65 ГБ/с = fast-clear метаданными). Остаток пополнен п. 60 (пропорциональна ли цена промаха числу перерисованных строк при неизменной цели — не измерено, первый шаг среза 29) и п. 61 (ping-pong требует второй полосы +18.6 МиБ, кольцевой адресации — нет).": [
+   "BUG-405"
+  ],
   "`tools/wptrunner/wptrunner/browsers/lumen.py` + `crates/shell/src/main.rs`": [
    "BUG-315"
   ],
@@ -11313,14 +11323,17 @@
   "network (HTTP client)": [
    "BUG-278"
   ],
+  "network (`crates/network/src/intercept.rs`, тест `tests::global_intercept_pauses_real_fetch_until_resolved`)": [
+   "BUG-783"
+  ],
   "network (`crates/network/src/lib.rs:1041` — `type PageResponse = (Vec<u8>, Vec<(String, String)>)`; `Response` без URL, `lib.rs:461`; цепочка проходится внутри `fetch_with_redirect`, `lib.rs:2601`), shell (`crates/shell/src/main.rs:3577` — `base: ResourceBase::Url(url.clone())`)": [
    "BUG-757"
   ],
   "network (`crates/network/src/lib.rs:2566-2567` — вычисление `default_path` перед `jar.process_set_cookie`); потребители — `crates/storage/src/cookies.rs::parse_set_cookie_with_psl` и `path_matches`": [
    "BUG-756"
   ],
-  "network (`crates/network/src/lib.rs:8723-8731`, тест `tests::global_intercept_pauses_real_fetch_until_resolved`)": [
-   "BUG-783"
+  "network (`crates/network/src/lib.rs:6674` — тест `tests::stale_pooled_connection_triggers_retry`, вероятно также продакшн retry-on-stale в connection-pool рядом)": [
+   "BUG-789"
   ],
   "network (`crates/network/src/lib.rs::read_head`, `crates/network/src/h2/conn.rs`)": [
    "BUG-679"
@@ -11462,9 +11475,6 @@
   ],
   "paint (wgpu `renderer.rs`, `BeginStickyLayer`)": [
    "BUG-336"
-  ],
-  "paint (wgpu — путь отрисовки вновь открывшейся полосы при scroll-blit, `crates/engine/paint/src/renderer.rs`)": [
-   "BUG-405"
   ],
   "paint/cpu_raster": [
    "BUG-052"
