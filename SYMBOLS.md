@@ -59,7 +59,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 
 `crates/bench/src/bfcache_restore.rs:35` **fn** `run_bfcache_bench` — Runs the bfcache-restore benchmark, prints min/med/mean/p95/max, and
 `crates/bench/src/bfcache_restore.rs:83` **fn** `median_restore_ms` — P50 for the CI gate: fewer iterations than the interactive report (speed)
-`crates/bench/src/ci_gate.rs:43` **fn** `run_ci_gate` — Run the CI performance gate
+`crates/bench/src/ci_gate.rs:72` **fn** `run_ci_gate` — Run the CI performance gate
 `crates/bench/src/startup.rs:54` **fn** `run` — Точка входа: разбирает под-аргументы, гоняет бенч, печатает отчёт
 `crates/bench/src/util.rs:9` **fn** `get_rss_bytes` — Returns the current process RSS (resident set size) in bytes
 `crates/bench/src/util.rs:48` **fn** `extract_style_blocks` — Concatenates all `<style>` text blocks from the document
