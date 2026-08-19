@@ -1,7 +1,25 @@
 # sccache — кэширует результаты компиляции между сборками (в том числе чистыми).
 # Особенно полезен при пересборке после git clean или смене веток.
+#
+# ОТКЛЮЧЕНО 2026-08-19 при пине тулчейна на 1.97.0 (rust-toolchain.toml).
+# sccache 0.15.0 несовместим с 1.97.0: КАЖДЫЙ вызов компилятора через обёртку
+# падает с
+#   process didn't exit successfully: `sccache ... rustc.exe ...`
+#   (exit code: 0xc0000409, STATUS_STACK_BUFFER_OVERRUN)
+# на крейтах с длинной командной строкой. Ловится и на clippy-driver
+# (lumen-driver), и на обычном rustc (`cargo test -p lumen-layout`) — то есть
+# ломается сборка вообще, а не только линт. Проверено A/B: те же команды с
+# `RUSTC_WRAPPER=` проходят, workspace-clippy без обёртки зелёный целиком
+# (13 мин на чистом target).
+#
+# Выбор был «либо пин 1.97.0, либо sccache»; пин важнее — плавающий "stable"
+# давал разные линты у разработчика и в CI. Вернуть обёртку можно, когда
+# sccache обновится до версии, совместимой с 1.97.0: раскомментировать
+# `rustc-wrapper` ниже и прогнать `cargo test -p lumen-layout` (падало на нём).
+# Что теряем — docs/build-speed.md §3; в CI обёртка и так была отключена
+# (`RUSTC_WRAPPER: ""` в .github/workflows/ci.yml), так что CI это не меняет.
 [build]
-rustc-wrapper = "sccache"
+# rustc-wrapper = "sccache"
 
 # Порт sccache-сервера. Дефолтный 4226 попадает в зарезервированный Windows
 # диапазон port exclusion (winnat/Hyper-V/WSL), из-за чего сервер не стартует

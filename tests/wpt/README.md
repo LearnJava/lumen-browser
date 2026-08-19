@@ -175,6 +175,38 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   dynamicport tcp`) and was stolen by an unrelated process on 2026-07-28,
   costing three failed runs — hence the move above every common ephemeral
   range. See "Troubleshooting" below.
+- `tests/wpt/corpus_stats.py` — **ours** (WPT-RUN-4) — the pass-rate
+  *denominator*, read from `metadata/MANIFEST.json` rather than from a file
+  glob. Every other count in this tree (`all_vendored_test_ids()`, the numbers
+  quoted in `docs/wpt-status.md`) comes from globbing `*.html`, which
+  over-counts (a `-ref.html` is a file, not a runnable id) and under-counts
+  (`?variant`, `.any.js` expansion) at the same time, so none of them are
+  comparable to wpt.fyi/Servo/Ladybird. Prints per-category/per-type id counts;
+  `--json` dumps the table. What is in the denominator and why —
+  `docs/wpt/pass-rate.md`.
+- `tests/wpt/run_corpus.py` — **ours** (WPT-RUN-4) — runs the **whole**
+  vendored corpus in shards and scores it into one pass-rate. Selects from the
+  manifest, drives `run_smoke.py` as a subprocess per shard (a hung shard can
+  then be killed — by process *tree*, or the orphaned `lumen.exe` keeps its
+  BiDi port and breaks the next shard), checkpoints after every shard
+  (`--resume`), and updates `MANIFEST.json` exactly once per run (wptrunner's
+  default would rescan 72k files on each of the ~400 shards). `--pilot` runs
+  ten categories chosen to exercise the orchestrator's hazards (https-only, ws,
+  reftest-dominated, an unexecutable test type) rather than the engine.
+  Scoring — including "an id that never ran scores 0" — is written down in
+  `docs/wpt/pass-rate.md`. Two flags exist because a corpus run must never
+  quietly misreport its own coverage:
+  - `--skip-https` excludes `.https.` ids from the *run* (they stay in the
+    denominator and score 0). Measured cost of not skipping them: 200 sampled
+    https ids gave 200 TIMEOUT / 0 subtests / 200 `UnknownIssuer`, ~39 s each —
+    ≈14 h for all 6874 to reach a result already known ([BUG-785](../../bugs/BUG-785-OPEN.md)).
+    The summary prints `NOT RUN ON PURPOSE` with the count and the reason.
+  - a shard killed on its budget is recovered from the mozlog raw stream
+    (`--log-wptreport` is written only at the end, so a kill used to lose the
+    whole shard). Recovered shards are named in the summary; a shard that ran
+    nothing because everything was excluded is reported separately
+    (`ran nothing`), so the "recovered" line keeps meaning "something went
+    wrong".
 - `tests/wpt/expectations.py` — **ours** (TEST-3, `docs/tasks/p2-test-track.md`) — generates and
   gates on per-category `.ini` baselines for `run_report.py --update-expected`/`--check`, on top
   of the same native `wptrunner` `--metadata` mechanism `run_suite.py` uses for `dom/nodes`, not
