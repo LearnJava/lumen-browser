@@ -1057,6 +1057,332 @@
          "status": "done",
          "size": "M",
          "note": "Поглощён срезами S12b-F1..F4 (2026-08-04), заведёнными позже как более мелкая разбивка того же финального скоупа: F1 снял фичу `quickjs` из `crates/shell/Cargo.toml` и `QuickPersistentJs`-конструирования в `main.rs`; F2 удалил `QuickJsRuntime`/`QuickPersistentJs`/`__lum_args__` из `lib.rs`; F3 удалил `install_primitives`/`use rquickjs` из `dom.rs`; F4 убрал `rquickjs`-зависимость из `crates/js/Cargo.toml` и синхронизировал ADR-018/CAPABILITIES.md/subsystems/js.md/CLAUDE.md. DoD «rquickjs отсутствует в Cargo.lock» выполнен (см. S12b-F4). Эта строка — дубликат более старого плана, отдельной работы не потребовалось"
+        },
+        {
+         "id": "P3-v8-s12b-b1",
+         "title": "S12b-B1: снос rquickjs, мелкие модули (1/6)",
+         "status": "done",
+         "size": "S",
+         "note": "Батч удаления rquickjs, полоса 1 (831 стр / 13 тестов): trusted_types, typed_om_api, serial, scroll_snap_events, webxr. Процедура и ловушки — docs/tasks/p1-s12b-cleanup-queue.md §2–3"
+        },
+        {
+         "id": "P3-v8-s12b-b2",
+         "title": "S12b-B2: снос rquickjs, мелкие модули (2/6)",
+         "status": "done",
+         "size": "S",
+         "note": "Батч удаления rquickjs, полоса 1 (1108 стр / 31 тест): soft_navigation, bluetooth, eye_dropper, virtual_keyboard, local_font_access. Процедура и ловушки — docs/tasks/p1-s12b-cleanup-queue.md §2–3"
+        },
+        {
+         "id": "P3-v8-s12b-b3",
+         "title": "S12b-B3: снос rquickjs, мелкие модули (3/6)",
+         "status": "done",
+         "size": "S",
+         "note": "Полоса 1 (1235/37): sanitizer, ua_client_hints, reporting_api, launch_handler, storage_manager"
+        },
+        {
+         "id": "P3-v8-s12b-b4",
+         "title": "S12b-B4: снос rquickjs, мелкие модули (4/6)",
+         "status": "done",
+         "size": "S",
+         "note": "Полоса 1 (1369/35): webhid, network_log_bindings, css_properties_values_api, scheduler, paint_worklet"
+        },
+        {
+         "id": "P3-v8-s12b-b5",
+         "title": "S12b-B5: снос rquickjs, мелкие модули (5/6)",
+         "status": "done",
+         "size": "S",
+         "note": "Полоса 1 (1539/22): presentation_api, screen_orientation, window_management, navigation_api, speech"
+        },
+        {
+         "id": "P3-v8-s12b-b6",
+         "title": "S12b-B6: снос rquickjs, мелкие модули (6/6)",
+         "status": "done",
+         "size": "S",
+         "note": "Полоса 1 (1599/51): iframe_element, url_pattern, web_midi, surface_api, scroll_timeline"
+        },
+        {
+         "id": "P3-v8-s12b-b7",
+         "title": "S12b-B7: снос rquickjs, средние модули (1/8)",
+         "status": "done",
+         "size": "S",
+         "note": "Полоса 2 (1039/22): web_locks, webusb, close_watcher"
+        },
+        {
+         "id": "P3-v8-s12b-b8",
+         "title": "S12b-B8: снос rquickjs, средние модули (2/8)",
+         "status": "done",
+         "size": "S",
+         "note": "Полоса 2 (1139/45): gamepad, generic_sensor, shared_storage"
+        },
+        {
+         "id": "P3-v8-s12b-b9",
+         "title": "S12b-B9: снос rquickjs, средние модули (3/8)",
+         "status": "done",
+         "size": "S",
+         "note": "Полоса 2 (1244/33): element_internals, video_pip, media_session"
+        },
+        {
+         "id": "P3-v8-s12b-b10",
+         "title": "S12b-B10: снос rquickjs, средние модули (4/8)",
+         "status": "done",
+         "size": "S",
+         "note": "Полоса 2 (1321/29): long_animation_frames, form_validation, wake_lock"
+        },
+        {
+         "id": "P3-v8-s12b-b11",
+         "title": "S12b-B11: снос rquickjs, средние модули (5/8)",
+         "status": "done",
+         "size": "S",
+         "note": "Полоса 2 (1519/35): navigator_bindings, media_capture, screen_capture"
+        },
+        {
+         "id": "P3-v8-s12b-b12",
+         "title": "S12b-B12: снос rquickjs, средние модули (6/8)",
+         "status": "done",
+         "size": "S",
+         "note": "Полоса 2 (1638/51): geolocation, esm, idle_detection — модули с натив-состоянием в V8JsRuntime. ЗАКРЫТ 2026-08-04 (ветка p1-s12b-b12): geolocation+idle_detection перенесены (34 теста), esm исключён из батча — его rquickjs-сторона вшита в конструктор QuickJsRuntime, снос переезжает в S12b-F2. Детали — docs/tasks/ph3-v8-migration.md §S12b-B12"
+        },
+        {
+         "id": "P3-v8-s12b-b13",
+         "title": "S12b-B13: снос rquickjs, средние модули (7/8)",
+         "status": "done",
+         "size": "S",
+         "note": "Полоса 2 (1773/43): broadcast_channel, webrtc_stub, credentials — ЗАКРЫТ 2026-08-04 (ветка p1-s12b-b13): все 43 теста перенесены (14 broadcast_channel + 17 webrtc_stub + 12 credentials, из которых 5 fedcm_* портированы на V8, 7 остались engine-agnostic), плюс отдельный капкан — 4 скрытых теста в crates/js/tests/cases/webauthn_credentials.rs (интеграционный крейт, не dom.rs). Детали — docs/tasks/ph3-v8-migration.md §S12b-B13"
+        },
+        {
+         "id": "P3-v8-s12b-b14",
+         "title": "S12b-B14: снос rquickjs, средние модули (8/8)",
+         "status": "done",
+         "size": "S",
+         "note": "Полоса 2 (1312/35): xhr, file_input — ЗАКРЫТ 2026-08-04 (ветка p1-s12b-b14): все 35 тестов перенесены (17 xhr + 18 file_input, из которых 1 register_file_token_unique остался engine-agnostic, 17 портированы на V8). Полоса 2 (S12b-B7…B14) завершена целиком, 8/8. Детали — docs/tasks/ph3-v8-migration.md §S12b-B14"
+        },
+        {
+         "id": "P3-v8-s12b-b15",
+         "title": "S12b-B15: снос rquickjs, крупные модули (1/12)",
+         "status": "done",
+         "size": "M",
+         "note": "Полоса 3 (1383/18): web_codecs, decorators — ЗАКРЫТ 2026-08-04 (ветка p1-s12b-b15): оба модуля уже имели готовый V8-порт с волны S5-S7 (install_webcodecs_bindings_v8, install_decorator_shim_v8/maybe_transform_decorators_v8), батч свёлся к чистому сносу rquickjs-версий + переносу 18 тестов (8+10) на V8JsRuntime. Заодно снесены 2 вызова install_webcodecs_bindings в lib.rs (был дубль-вызов в install_dom) и 2 вызова maybe_transform_decorators (eval/eval_module QuickJsRuntime). Детали — docs/tasks/ph3-v8-migration.md §S12b-B15"
+        },
+        {
+         "id": "P3-v8-s12b-b16",
+         "title": "S12b-B16: снос rquickjs, крупные модули (2/12)",
+         "status": "done",
+         "size": "M",
+         "note": "Полоса 3 (1585/43): intl_bindings, media_devices — ЗАКРЫТ 2026-08-04 (ветка p1-s12b-b16): все 43 теста перенесены (19 intl_bindings + 24 media_devices), оба модуля уже имели готовый V8-порт с волны S5-S7. Находка — V8 несёт нативный ICU-based Intl, из-за чего собственный guard шима «уступить нативному Intl» делает откат-логику resolveLocale недостижимой под V8; 2 теста на fallback-поведение шима переписаны на инварианты, верные для обоих (нативного и шимового) Intl. Детали — docs/tasks/ph3-v8-migration.md §S12b-B16"
+        },
+        {
+         "id": "P3-v8-s12b-b17",
+         "title": "S12b-B17: снос rquickjs, крупные модули (3/12)",
+         "status": "done",
+         "size": "M",
+         "note": "Полоса 3 (1726/6): wasm/mod, sw_worker — ЗАКРЫТ 2026-08-04 (ветка p1-s12b-b17): оба модуля уже имели готовый V8-порт (wasm::v8_bridge с S9, spawn_sw_worker_v8 с S10), батч свёлся к сносу rquickjs-версий + переносу 11 недостающих тестов webassembly.rs на V8 (sw_worker.rs уже имел полный паритет 3/3). Портирование вскрыло 2 реальных бага V8-моста, не задетых прежним минимальным покрытием: v8_to_jsvalue не распознавал Uint8Array (падал в generic is_object()-ветку) и __lumen_wasm_mem_buffer возвращал plain Array вместо настоящего ArrayBuffer, ломая алиасинг Memory.buffer (U-4b). Оба исправлены. dom.rs's install_primitives (rquickjs) _lumen_sw_activate_script стал no-op — SW fetch interception недоступен под QuickJS-путём (не регресс, путь угасающий). Детали — docs/tasks/ph3-v8-migration.md §S12b-B17"
+        },
+        {
+         "id": "P3-v8-s12b-b18",
+         "title": "S12b-B18: снос rquickjs, крупные модули (4/12)",
+         "status": "done",
+         "size": "M",
+         "note": "Полоса 3 (1865/24): es2026_proposals, shared_worker — ЗАКРЫТ 2026-08-04 (ветка p1-s12b-b18): оба модуля уже имели готовый V8-порт (install_es2026_proposals_v8 с S5-S7, install_shared_worker_bindings_v8/HUB_V8 с S10), батч свёлся к сносу rquickjs-версий (install_es2026_proposals, HUB/connect_shared_worker/install_shared_worker_bindings/run_shared_worker_thread/install_shared_worker_globals) и переносу 21 теста (15 es2026_proposals + 6 shared_worker, из которых 3 уже имели V8-двойника) на V8. Багов не найдено. Детали — docs/tasks/ph3-v8-migration.md §S12b-B18"
+        },
+        {
+         "id": "P3-v8-s12b-b19",
+         "title": "S12b-B19: снос rquickjs, крупные модули (5/12)",
+         "status": "done",
+         "size": "M",
+         "note": "Полоса 3 (1878/39): notifications_bindings, web_audio — ЗАКРЫТ 2026-08-04 (ветка p1-s12b-b19): оба модуля уже имели готовый V8-порт (install_notifications_bindings_v8, install_web_audio_api_v8 с S5-S7), батч свёлся к сносу rquickjs-версий и переносу 39 тестов (26 notifications + 13 web_audio) на V8. Находка при портировании — 4 теста читали Promise.then()-переменную в том же eval(), исправлено разбиением на setup+read eval (V8 auto-drains microtasks между отдельными eval-вызовами). Детали — docs/tasks/ph3-v8-migration.md §S12b-B19"
+        },
+        {
+         "id": "P3-v8-s12b-b20",
+         "title": "S12b-B20: снос rquickjs, крупные модули (6/12)",
+         "status": "done",
+         "size": "M",
+         "note": "Полоса 3 (1042/33): filesystem_access — ЗАКРЫТ 2026-08-04 (ветка p1-s12b-b20): модуль уже имел готовый V8-порт (install_filesystem_access_v8 с S5-S7), батч свёлся к сносу rquickjs-версии и переносу 33 тестов (28 JS-шимовых + 5 pure-Rust) на V8. Всё оставшееся в модуле (реестры, ОС-пикеры, JSON-хелперы) стало недостижимо без v8-backend, поэтому индивидуально ужато под #[cfg(feature = \"v8-backend\")]. Находка — showXPicker() зовёт настоящий блокирующий OS-диалог из Promise.then()-колбэка; под старым rquickjs это было безопасно (eval() не гонял job queue), под V8 eval() дренирует микрозадачи и раньше вешал тест на реальном диалоге — исправлено JS-моком трёх _lumen_show_*_picker нативов в тестовом харнессе. Детали — docs/tasks/ph3-v8-migration.md §S12b-B20"
+        },
+        {
+         "id": "P3-v8-s12b-b21",
+         "title": "S12b-B21: снос rquickjs, крупные модули (7/12)",
+         "status": "done",
+         "size": "M",
+         "note": "Полоса 3 (2117/31): webgl_canvas, audio_element — ЗАКРЫТ 2026-08-04 (ветка p1-s12b-b21): оба модуля уже имели готовый V8-порт (install_webgl_canvas_v8 с S8, install_audio_element_bindings_v8 с S5-S7), батч свёлся к сносу rquickjs-версий и переносу 31 теста (13 webgl_canvas + 18 audio_element) на V8. Всё оставшееся в webgl_canvas.rs (CONTEXTS/NEXT_ID реестр, with_ctx, WEBGL_SHIM) и get_provider в audio_element.rs стало недостижимо без v8-backend, ужато под #[cfg(feature = \"v8-backend\")]. Багов не найдено; единственная адаптация — V8-хелпер with_audio() ставит DOM-стаб ДО install_audio_element_bindings_v8 (не после, как rquickjs install_all), т.к. V8-инсталлер регистрирует нативы и эвалит шим одним вызовом. Детали — docs/tasks/ph3-v8-migration.md §S12b-B21"
+        },
+        {
+         "id": "P3-v8-s12b-b22",
+         "title": "S12b-B22: снос rquickjs, крупные модули (8/12)",
+         "status": "done",
+         "size": "M",
+         "note": "Полоса 3 (2308/27): video_bindings, webassembly — ЗАКРЫТ 2026-08-04 (ветка p1-s12b-b22): `webassembly.rs` уже был полностью сведён на V8 в S12b-B17 (rquickjs-версии не осталось), батч свёлся к `video_bindings.rs` — модуль уже имел готовый V8-порт (install_video_bindings_v8 с S5-S7), снос rquickjs-версии (install_video_bindings/install_native_bindings) + call site в lib.rs, перенос 12 тестов на V8. Багов моста не найдено. Детали — docs/tasks/ph3-v8-migration.md §S12b-B22"
+        },
+        {
+         "id": "P3-v8-s12b-b23",
+         "title": "S12b-B23: снос rquickjs, крупные модули (9/12)",
+         "status": "done",
+         "size": "M",
+         "note": "Полоса 3 (1208/19): dom_parser — ЗАКРЫТ 2026-08-04 (ветка p1-s12b-b23): модуль уже имел готовый V8-порт (install_dom_parser_v8 с S5-S7), батч свёлся к сносу rquickjs-версии (install_dom_parser) + call site в lib.rs (заодно снята устаревшая ссылка на dom_parser в комментарии перед install_svg_bindings) и переносу 19 тестов на V8. Багов моста не найдено. Детали — docs/tasks/ph3-v8-migration.md §S12b-B23"
+        },
+        {
+         "id": "P3-v8-s12b-b24",
+         "title": "S12b-B24: снос rquickjs, крупные модули (10/12)",
+         "status": "done",
+         "size": "M",
+         "note": "Полоса 3 (1226/30): temporal_api — ЗАКРЫТ 2026-08-04 (ветка p1-s12b-b24): модуль уже имел готовый V8-порт (install_temporal_api_v8 с S5-S7), батч свёлся к сносу rquickjs-версии + переносу 30 тестов на V8. Находка (не баг) — V8 несёт нативный spec-conformant Temporal, шимовский defer-to-native guard всегда срабатывает, TEMPORAL_SHIM недостижим под V8; 2 теста, завязанных на шимовскую форму API (TimeZone-класс, числовое .month), переписаны на инварианты нативного Temporal. Детали — docs/tasks/ph3-v8-migration.md §S12b-B24"
+        },
+        {
+         "id": "P3-v8-s12b-b25",
+         "title": "S12b-B25: снос rquickjs, крупные модули (11/12)",
+         "status": "done",
+         "size": "M",
+         "note": "Полоса 3 (1231/20): svg — ЗАКРЫТ 2026-08-04 (ветка p1-s12b-b25): модуль уже имел готовый V8-порт (install_svg_bindings_v8 с S5-S7), батч свёлся к сносу rquickjs-версии (install_svg_bindings) + call site в lib.rs и переносу 20 тестов на V8. Багов моста не найдено; SVG_SHIM ужат под #[cfg(feature = \"v8-backend\")], модульный doc-comment переведён с /// на //! (иначе clippy empty_line_after_doc_comments после удаления install_svg_bindings). Детали — docs/tasks/ph3-v8-migration.md §S12b-B25"
+        },
+        {
+         "id": "P3-v8-s12b-b26",
+         "title": "S12b-B26: снос rquickjs, крупные модули (12/12, частично — install_offscreen_canvas_bindings отложен)",
+         "status": "done",
+         "size": "M",
+         "note": "Полоса 3 (1313/23): offscreen_canvas — ЧАСТИЧНО ЗАКРЫТ 2026-08-04 (ветка p1-s12b-b26): V8-порт уже существовал (install_offscreen_canvas_bindings_v8 с S5-S7); добавлены 14 тестов в новый tests_v8 (порт всех JS-интеграционных тестов из mod tests), 9 pure-Rust тестов не дублировались — уже движко-агностичны. rquickjs-инсталлер (install_offscreen_canvas_bindings) НЕ снесён — живая зависимость `worker.rs::run_worker_thread` (QuickJS worker-поток, реален под rollback-сборкой через `_lumen_create_worker`, не только в своих тестах): даёт OffscreenCanvas выделенным воркерам (HTML LS §4.12.14). Снос переносится на S12b-B27, когда worker.rs потеряет свой QuickJS-путь. cargo test -p lumen-js --features v8-backend: было 2576, стало 2590 (+14 новых tests_v8). cargo test -p lumen-js (default): без изменений (23 rquickjs-теста модуля остались). Оба clippy чистые; lumen-shell проверен под default (v8) и rollback (backend-femtovg,quickjs)"
+        },
+        {
+         "id": "P3-v8-s12b-b27",
+         "title": "S12b-B27: снос rquickjs, worker (+ довершить offscreen_canvas из B26)",
+         "status": "done",
+         "size": "M",
+         "note": "Полоса 4 (1497/26): worker — ЗАКРЫТ 2026-08-04 (ветка p1-s12b-b27): V8-порт уже существовал (install_worker_bindings_v8/spawn_worker_v8/run_worker_thread_v8/install_worker_globals_v8 с S10) как полностью самостоятельный второй Worker-поток (каждый воркер владеет либо rquickjs::Runtime, либо V8JsRuntime — не тонкий шим поверх одной реализации). Батч снёс rquickjs-сторону целиком (spawn_worker/run_worker_thread/install_worker_globals/install_worker_bindings + call site в lib.rs) и попутно довершил offscreen_canvas.rs (install_offscreen_canvas_bindings + call site + mod tests) — единственный живой вызывающий исчез вместе с этим батчем. Найден баг моста: QuickJsRuntime.workers/worker_next_id/worker_blob_store (в lib.rs, отдельные от одноимённых полей V8JsRuntime в v8_runtime.rs) остались мёртвыми — единственный писатель снесён; удалены (worker_messages осталась — читается pump_workers). Портировано 6 из 13 rquickjs-тестов worker.rs в tests_v8 (7→13), офскрин-канвас тесты дублировались с B26 без пробелов. cargo test -p lumen-js --features v8-backend: 2590→2569 (-27 rquickjs, +6 tests_v8). cargo test -p lumen-js (default): 505→478 (-27). Оба clippy чистые; lumen-shell проверен под default (v8) и rollback (backend-femtovg,backend-wgpu,quickjs). Детали — docs/tasks/ph3-v8-migration.md §S12b-B27"
+        },
+        {
+         "id": "P3-v8-s12b-b28",
+         "title": "S12b-B28: снос rquickjs, tc39_proposals",
+         "status": "done",
+         "size": "M",
+         "note": "Полоса 4 (1606/51): tc39_proposals — ЗАКРЫТ 2026-08-04 (ветка p1-s12b-b28): модуль уже имел готовый V8-порт (install_tc39_proposals_v8 с S5-S7), батч свёлся к сносу rquickjs-версии (install_tc39_proposals) + call site в lib.rs и переносу всех 51 mod tests в tests_v8. Находка — под V8 typeof Atomics.waitAsync === 'function' уже нативно (не в QuickJS), так что TC39_PROPOSALS_SHIM's waitAsync-раздел недостижим; 2 из 51 портированных тестов, полагавшихся на notify-driven Promise.then() settling, переписаны на асинхронно-наблюдаемое (res.async флаг + Atomics.notify() count) без ожидания фактического разрешения промиса — нативная реализация V8 планирует continuation через platform foreground-task queue, которую голый eval() этого тестового арнесса не прокачивает (нет Platform::PumpMessageLoop; подтверждено отдельно — даже setTimeout-промис не оседает между двумя eval()-вызовами, а сам setTimeout не определён без DOM-шима). Багов моста не найдено. Детали — docs/tasks/ph3-v8-migration.md §S12b-B28"
+        },
+        {
+         "id": "P3-v8-s12b-b29",
+         "title": "S12b-B29: снос rquickjs, webgpu",
+         "status": "done",
+         "size": "M",
+         "note": "Полоса 4 (2503/29): webgpu — ЗАКРЫТ 2026-08-04 (ветка p1-s12b-b29): модуль уже имел готовый V8-порт (install_webgpu_bindings_v8 с S9), батч свёлся к сносу rquickjs-версии (install_webgpu_bindings) + call site в lib.rs и переносу 28 уникальных тестов (включая 3 real_backend_* под фичей webgpu, реальный wgpu-девайс) в tests_v8. Багов моста не найдено. cargo test -p lumen-js (default): 427→402 lib (-25, только не-webgpu-гейченные). --features v8-backend: 2569→2568 (-1). --features v8-backend,webgpu: 2571, 28/28 модульных тестов зелёные. Оба clippy чистые; lumen-shell проверен под default (v8) и rollback (backend-femtovg,backend-wgpu,quickjs) — под rollback WebGPU-шим больше не ставится в QuickJS-рантайм. Детали — docs/tasks/ph3-v8-migration.md §S12b-B29"
+        },
+        {
+         "id": "P3-v8-s12b-b30",
+         "title": "S12b-B30: снос rquickjs, canvas2d",
+         "status": "done",
+         "size": "M",
+         "note": "Полоса 4 (2691/31): canvas2d — ЗАКРЫТ 2026-08-04 (ветка p1-s12b-b30): модуль уже имел готовый V8-порт (install_canvas2d_bindings_v8, S8; state — module-level thread_local!, не поле V8JsRuntime), батч свёлся к сносу rquickjs-версии (install_canvas2d_bindings, ~1000 строк) + call site в lib.rs и переносу 26 из 31 теста в tests_v8 (5 чисто-Rust тестов без движка остались разделены один раз в mod tests). Добавлен тестовый хелпер V8JsRuntime::run_for_test (#[cfg(test)]) — запускает произвольное замыкание на JS-потоке для ассертов без JS-геттера (line_width/global_alpha/text_align/text_baseline). Большинство приватных хелперов canvas2d.rs ужато под #[cfg(feature = \"v8-backend\")] (недостижимы без движка после сноса), 3 функции (BUNDLED_FONT/parse_canvas_font_size/measure_text_width) неизбежно остаются недостижимы в гипотетической no-features сборке — тот же паттерн, что уже был у offscreen_canvas.rs (B26, не исправлен) и worker.rs (B27, не исправлен), 11 таких ошибок были на main ДО этого батча. Детали — docs/tasks/ph3-v8-migration.md §S12b-B30"
+        },
+        {
+         "id": "P3-v8-s12b-b31",
+         "title": "S12b-B31: снос rquickjs, subtle_crypto (группа A закрыта)",
+         "status": "done",
+         "size": "M",
+         "note": "Полоса 4 (2717/39): subtle_crypto — ЗАКРЫТ 2026-08-04 (ветка p1-s12b-b31): V8-порт уже существовал (v8_runtime.rs:3818+, wrapper-only reg! поверх crate::subtle_crypto::*, с S12b-24), батч свёлся к сносу rquickjs-инсталлятора (install_subtle_bindings) + call site в dom.rs. Все 39 тестов — чистый Rust без JS-движка, порт не потребовался (то же явление, что и часть тестов offscreen_canvas в B26, но здесь весь модуль). Снос инсталлятора оставил всю реализацию недостижимой без v8-backend; в отличие от B30 (canvas2d, 3 неисправимых элемента) здесь весь модуль закрыт через #[cfg(any(feature = \"v8-backend\", test))] — 0 новых dead-code ошибок под `cargo clippy -p lumen-js --all-targets -- -D warnings` (без фич), т.к. все тесты чисто-рантаймо-независимые. Багов моста не найдено. Завершает группу A (B5…B31) целиком. Детали — docs/tasks/ph3-v8-migration.md §S12b-B31"
+        },
+        {
+         "id": "P3-v8-s12b-g0",
+         "title": "S12b-G0: триаж модулей без V8-порта",
+         "status": "done",
+         "size": "M",
+         "note": "Триаж 13 модулей, установленных ТОЛЬКО под QuickJS (contacts, background_sync, periodic_sync, storage_buckets, push_api, background_fetch, payment_request, media_stream_recording, view_transitions, cookie_store, cookie_banner, webgl_bindings, audio_bindings): под дефолтным V8 этих Web API нет вовсе. Решение порт/снос по каждому + BUG-NNN на регрессы + правка CAPABILITIES.md. Ничего не удалять. **Закрыт (P1, 2026-08-03):** 11/13 — вердикт «порт», реальный функциональный регресс V8-перехода (BUG-545 `view_transitions`/`startViewTransition` — ROADMAP числит `P2-viewtrans` done, но JS-триггер отсутствует под V8, движковый кросс-фейд не задет; BUG-546/547 `cookie_store`/`storage_buckets` — CAPABILITIES.md заявлял ✅ безусловно, понижены до 🟡; BUG-548 `cookie_banner` — пользовательский тумблер уже no-op под V8, был самодокументирован в коде, но не заведён; BUG-549 — 7 Phase-0-заглушек одним багом: contacts/background_sync/periodic_sync/push_api/background_fetch/payment_request/media_stream_recording, под QuickJS были feature-detectable, под V8 не существуют). 2/13 — вердикт «снос, не порт», НЕ регресс миграции: `webgl_bindings.rs` мёртв на обоих движках (не вызывается нигде вне тестов, вытеснен функциональным `webgl_canvas.rs`, бага не заведено); `audio_bindings.rs` (BUG-550) был уже затенён `web_audio.rs` внутри QuickJS ДО V8-перехода (оба шима пишут в один `globalThis.AudioContext`, `web_audio` ставится вторым и переписывает) — его богатая версия (доп. AudioNode-типы + ADR-007 audio-antifingerprint noise) не была доступна странице ни на одном движке. Оба переезжают в группу A (снос без порта) следующим срезом. Полная таблица решений и обновлённый G1…G7/A-снос план — `docs/tasks/p1-s12b-cleanup-queue.md` §1/§4",
+         "bugs": [
+          "BUG-545",
+          "BUG-546",
+          "BUG-547",
+          "BUG-548",
+          "BUG-549",
+          "BUG-550"
+         ]
+        },
+        {
+         "id": "P3-v8-s12b-g1",
+         "title": "S12b-G1: порт модулей без V8 (1/7)",
+         "status": "done",
+         "size": "S",
+         "note": "ЗАКРЫТ 2026-08-04 (ветка p1-s12b-g1): первый батч группы G — реальный порт, не удаление (ни один модуль не имел `_v8`-варианта). Оба — чистый `ctx.eval(SHIM)` без нативов, порт по «быстрому пути» без нативов (`p1-s12b-cleanup-queue.md` §4): `rquickjs::Ctx::eval` → `lumen_core::ext::JsRuntime::eval`, регистрация через `install_v8!` в `v8_runtime.rs::install_dom`, снос вызовов `init_*` из `lib.rs::install_dom`. `background_sync.rs` ссылается на 2 нативa (`_lumen_sw_sync_register`/`_lumen_sw_get_tags`) за `typeof`-гардом — грепом подтверждено, что нигде не зарегистрированы ни на одном движке, портировано как есть. 9 тестов (4 contacts + 5 background_sync) перенесены в `#[cfg(all(test, feature = \"v8-backend\"))]`. Багов моста не найдено. Закрывает 2/7 модулей BUG-549 (остальные 5 — в G3/G4, баг остаётся OPEN). `cargo test -p lumen-js --features v8-backend`: +9 тестов; `cargo test -p lumen-js` (дефолт): 376→367 (-9). Оба clippy-прохода чистые (no-features clippy — тот же довоенный baseline из B26/B27/B30, ноль новых ошибок). Детали — docs/tasks/ph3-v8-migration.md §S12b-G1"
+        },
+        {
+         "id": "P3-v8-s12b-g2",
+         "title": "S12b-G2: порт модулей без V8 (2/7)",
+         "status": "done",
+         "size": "S",
+         "note": "Второй батч группы G — ЗАКРЫТ 2026-08-04 (ветка p1-s12b-g2): реальный порт (ни один модуль не имел V8-варианта). Оба — чистый ctx.eval(SHIM), порт по «быстрому пути» из p1-s12b-cleanup-queue.md §4: rquickjs::Ctx::eval → lumen_core::ext::JsRuntime::eval, регистрация через install_v8! в v8_runtime.rs::install_dom, снос init_*-вызовов из lib.rs::install_dom. periodic_sync.rs ссылается на 2 нативa (_lumen_periodic_sync_register/_unregister) за typeof-гардом, нигде не зарегистрированы ни на одном движке — портировано как есть. 12 тестов (4 periodic_sync + 8 storage_buckets) перенесены в #[cfg(all(test, feature = \"v8-backend\"))] против голого V8JsRuntime::new(). Багов моста не найдено. Закрывает 4/7 модулей BUG-549 (остаток — G3/G4, баг остаётся OPEN); storage_buckets.rs также фигурирует в BUG-547 (CAPABILITIES.md overclaim, не исправлен этим батчем). cargo test -p lumen-js --features v8-backend: +12; cargo test -p lumen-js (default): 367→355 (-12). Оба clippy чистые (no-features clippy — идентичный 18-ошибочный baseline main, ноль новых). Детали — docs/tasks/ph3-v8-migration.md §S12b-G2"
+        },
+        {
+         "id": "P3-v8-s12b-g3",
+         "title": "S12b-G3: порт модулей без V8 (3/7)",
+         "status": "done",
+         "size": "S",
+         "note": "Третий батч группы G — ЗАКРЫТ 2026-08-04 (ветка p1-s12b-g3): реальный порт (ни один модуль не имел V8-варианта). Оба — чистый ctx.eval(SHIM), порт по «быстрому пути» из p1-s12b-cleanup-queue.md §4: rquickjs::Ctx::eval → lumen_core::ext::JsRuntime::eval, регистрация через install_v8! в v8_runtime.rs::install_dom, снос init_*-вызовов из lib.rs::install_dom. push_api.rs ссылается на 2 нативa (_lumen_push_subscribe/_unsubscribe), background_fetch.rs — на 3 (_lumen_bg_fetch_register/_activate/_abort), все за typeof-гардом, нигде не зарегистрированы ни на одном движке — портировано как есть. 13 тестов (7 push_api + 6 background_fetch) перенесены в #[cfg(all(test, feature = \"v8-backend\"))] против голого V8JsRuntime::new(). Багов моста не найдено. С учётом G1 (contacts/background_sync) и G2 (periodic_sync) закрывает 5/7 модулей BUG-549 (остаток — payment_request/media_stream_recording в G4, баг остаётся OPEN). cargo test -p lumen-js --features v8-backend: +13, суммарно 2568 passing; cargo test -p lumen-js (default): 355→342 (-13). Оба clippy чистые (no-features clippy — идентичный 18-ошибочный baseline main, ноль новых). Детали — docs/tasks/ph3-v8-migration.md §S12b-G3"
+        },
+        {
+         "id": "P3-v8-s12b-g4",
+         "title": "S12b-G4: порт модулей без V8 (4/7)",
+         "status": "done",
+         "size": "S",
+         "note": "Четвёртый батч группы G — ЗАКРЫТ 2026-08-04 (ветка p1-s12b-g4): реальный порт (ни один модуль не имел V8-варианта). Оба — чистый ctx.eval(SHIM), без нативов, порт по «быстрому пути» из p1-s12b-cleanup-queue.md §4: rquickjs::Ctx::eval → lumen_core::ext::JsRuntime::eval, регистрация через install_v8! в v8_runtime.rs::install_dom, снос init_*-вызовов из lib.rs::install_dom. 14 тестов (6 payment_request + 8 media_stream_recording) перенесены в #[cfg(all(test, feature = \"v8-backend\"))] против голого V8JsRuntime::new(). Багов моста не найдено. Закрывает последние 2/7 модулей BUG-549 — порт группы G завершён (само закрытие бага/правка CAPABILITIES.md — отдельным следующим шагом, вне объёма этого батча). cargo test -p lumen-js --features v8-backend: +14; cargo test -p lumen-js (default): 342→328 (-14). Оба clippy чистые (no-features clippy — идентичный 18-ошибочный baseline main, ноль новых). Детали — docs/tasks/ph3-v8-migration.md §S12b-G4"
+        },
+        {
+         "id": "P3-v8-s12b-g5",
+         "title": "S12b-G5: порт модулей без V8 (5/7)",
+         "status": "done",
+         "size": "M",
+         "note": "Пятый батч группы G — ЗАКРЫТ 2026-08-04 (ветка p1-s12b-g5): реальный порт (ни один модуль не имел V8-варианта). `cookie_store` — чистый ctx.eval(SHIM) без нативов (referenced `_lumen_cookie_store_set/delete` за typeof-гардом, нигде не зарегистрированы ни на одном движке, портировано как есть), тем же «быстрым путём», что G1-G4. `view_transitions` сложнее — 3 стейтфул-натива (`_lumen_vt_begin/end/cancel`, пишут в `Arc<Mutex<Vec<ViewTransitionEvent>>>`, дренится шеллом для кросс-фейда): добавлено поле `view_transition_events` на `V8JsRuntime` (по образцу `fullscreen_requests`), натив-регистрация через `register_native`/`into_v8_fn0`, установка — extra-arg вызов в `install_dom` (паттерн `pointer_capture`/`geolocation`, не голый `install_v8!`). Дополнительно закрыт второй фрагмент регресса: V8-обёртка `V8PersistentJs::take_view_transition_events` в `shell/src/main.rs` была захардкожена в `Vec::new()` — теперь реально дренит `V8JsRuntime`. 19 тестов (11 view_transitions + 8 cookie_store) перенесены в `#[cfg(all(test, feature = \"v8-backend\"))]`. Багов моста не найдено. Закрывает BUG-545 (view_transitions) и BUG-546 (cookie_store) — оба реальные регрессы V8-перехода, не заглушки-нативы; `CAPABILITIES.md` поднят с 🟡 QuickJS-only на ✅ для обоих. cargo test -p lumen-js --features v8-backend: +19; cargo test -p lumen-js (default): 328→309 (-19). Оба clippy чистые (no-features clippy — идентичный baseline main, ноль новых); lumen-shell проверен под default (v8) и rollback (backend-femtovg,backend-wgpu,quickjs), оба зелёные. Детали — docs/tasks/ph3-v8-migration.md §S12b-G5",
+         "bugs": [
+          "BUG-545",
+          "BUG-546"
+         ]
+        },
+        {
+         "id": "P3-v8-s12b-g6",
+         "title": "S12b-G6: порт модулей без V8 (6/7)",
+         "status": "done",
+         "size": "M",
+         "note": "Шестой (финальный) батч группы G — ЗАКРЫТ 2026-08-04 (ветка p1-s12b-g6): реальный порт (модуль не имел V8-варианта). `cookie_banner` — чистый ctx.eval(SHIM) без нативов, тем же «быстрым путём», что G1-G4, регистрация extra-arg сайтом (флаг enabled живёт на `self`) в `v8_runtime.rs::install_dom`. Добавлено поле `cookie_banner_dismiss: AtomicBool` + `set_cookie_banner_dismiss()` на `V8JsRuntime` (по образцу `QuickJsRuntime`) — закрывает реальный регресс BUG-548: оба сайта вызова в `crates/shell/src/main.rs` уже прокидывали флаг, но V8-ветка не имела метода для вызова, `KeyCommand::ToggleCookieBannerDismiss` был no-op на дефолтной сборке. 12 из 16 тестов перенесены в `#[cfg(all(test, feature = \"v8-backend\"))]` (4 чисто-Rust теста селектор-листа остались негейченными). Багов моста не найдено. `webgl_bindings` (564/21) из описания задачи по факту уже переезжал в отдельную задачу S12b-Asnos1 (снос без порта, мёртвый код на обоих движках) решением G0-триажа 2026-08-03 (`docs/tasks/p1-s12b-cleanup-queue.md` §4) — в объём G6 не входил. Закрывает группу G целиком (7/7 модулей портированы или списаны). cargo test -p lumen-js --features v8-backend: 16/16 cookie_banner (2568 всего, 0 fail); cargo test -p lumen-js (default): 309→297 (-12). Оба clippy чистые (no-features — идентичный 18-ошибочный baseline main, ноль новых). lumen-shell проверен под default (v8) и rollback (backend-femtovg,backend-wgpu,quickjs), оба зелёные. Детали — docs/tasks/ph3-v8-migration.md §S12b-G6",
+         "bugs": [
+          "BUG-548"
+         ]
+        },
+        {
+         "id": "P3-v8-s12b-asnos1",
+         "title": "S12b-Asnos1: снос webgl_bindings (мёртвый код)",
+         "status": "done",
+         "size": "S",
+         "note": "ЗАКРЫТ 2026-08-04 (ветка p1-s12b-asnos1): `webgl_bindings.rs` (564/21) удалён целиком — мёртвый код на обоих движках (не установлен ни в `QuickJsRuntime::install_dom`, ни в `v8_runtime.rs::install_dom`, V8-порта не было и не требовался), полностью вытеснен функциональным `webgl_canvas.rs`. `pub mod webgl_bindings;` снят из lib.rs, повисшая intra-doc ссылка в webgl_canvas.rs переписана в прозу. cargo test -p lumen-js (default): 297→276 (-21); --features v8-backend: 2568→2547 (-21, тесты жили только на rquickjs-стороне). Оба clippy чистые (no-features — тот же 18-ошибочный baseline main). lumen-shell (default v8 и rollback backend-femtovg,backend-wgpu,quickjs) оба зелёные. Детали — docs/tasks/ph3-v8-migration.md §S12b-Asnos1"
+        },
+        {
+         "id": "P3-v8-s12b-asnos2",
+         "title": "S12b-Asnos2: снос audio_bindings (rollback временно теряет AudioContext)",
+         "status": "done",
+         "size": "M",
+         "note": "ЗАКРЫТ 2026-08-04 (ветка p1-s12b-asnos2): `audio_bindings.rs` (1120/29) удалён целиком. Премиса BUG-550 («уже мёртв на обоих движках») устарела до начала батча: S12b-B19 (влит тем же днём, после подачи BUG-550) снёс именно затеняющий шим (`web_audio::install_web_audio_api`, rquickjs-двойник уже V8-портированного `web_audio`), а не затенённый — `audio_bindings` стал единственным `AudioContext` на rollback-сборке `--features quickjs` (без `v8-backend`), больше не мёртвым кодом там. Решение пользователя 2026-08-04 (после явного уточнения): снести как и планировалось — rollback-сборка временно теряет `AudioContext` целиком до сноса `QuickJsRuntime` в S12b-F2. `pub mod audio_bindings;` и вызов `install_audio_bindings` в `QuickJsRuntime::install_dom` (`lib.rs`) удалены. V8-порта не было и не требуется — `web_audio.rs` остаётся единственным провайдером на дефолтной сборке, не затронут. cargo test -p lumen-js (default): 276→247 (-29); --features v8-backend: 2547→2518 (-29). Оба clippy чистые (no-features — тот же 18-ошибочный baseline main). lumen-shell (default v8 и rollback backend-femtovg,backend-wgpu,quickjs) оба зелёные. Детали — docs/tasks/ph3-v8-migration.md §S12b-Asnos2",
+         "bugs": [
+          "BUG-550"
+         ]
+        },
+        {
+         "id": "P3-v8-s12b-f1",
+         "title": "S12b-F1: снять фичу quickjs в shell",
+         "status": "done",
+         "size": "M",
+         "note": "ЗАКРЫТ 2026-08-04 (ветка p1-s12b-f1): убрана фича `quickjs` из `crates/shell/Cargo.toml` (feature-блок теперь только `v8`, с обновлённым doc-комментарием); снесены три конструирующих ветки — `QuickPersistentJs` struct+impl (~305 строк, main.rs), quickjs-плечо `run_scripts_with_dom`, quickjs-плечо `Lumen::bfcache_thaw`; ~84 гейта `#[cfg(any(feature = \"quickjs\", feature = \"v8\"))]`/`not(any(...))`/`cfg_attr` упрощены до `#[cfg(feature = \"v8\")]`/`not(feature = \"v8\")` в main.rs, config.rs, tab_lifecycle/hibernate.rs, platform/file_dialog.rs; попутные doc-комментарии (main.rs, hibernate.rs, crates/js/Cargo.toml — webgpu-фича) поправлены на V8-формулировки. `cargo check`/`clippy -D warnings`/`test` -p lumen-shell (дефолт v8): чисто, 1565 passed. Побочная находка: `--no-default-features --features backend-femtovg,backend-wgpu` (no-engine, NullJsRuntime fallback) уже не собирается — 25×E0433 `lumen_js` unresolved (не-gated ссылки в video_gif_store/text_track_store/take_print_requests и др.); подтверждено пре-экзистентным на main до этого среза (тот же 25/25), не регрессия, не чинилось — кандидат в BUG для P3. Также: реальный WebGPU (`navigator.gpu` натив) был единственно доступен через shell-фичу `quickjs` (`lumen-js/webgpu`) — теперь ни одна фича shell её не включает, `navigator.gpu` под V8-дефолтом остаётся JS-шимом (Phase 0); это уже было верно и при дефолтной сборке до этого среза (только `--features quickjs` доставал реальный бэкенд), так что дефолтное поведение не изменилось, но CAPABILITIES.md's «✅ WebGPU complete» claim нуждается в сверке владельцем."
+        },
+        {
+         "id": "P3-v8-s12b-f2",
+         "title": "S12b-F2: удалить QuickJsRuntime",
+         "status": "done",
+         "size": "M",
+         "note": "ЗАКРЫТ 2026-08-04 (ветка p1-s12b-f2): `lumen-js/lib.rs` 1940→186 строк — снесены `QuickJsRuntime`, `Inner`/`JsJob`/`JsCommand`/`js_thread_main`, `install_dom`, `rq_err`/`exc_message`/`from_rq`/`to_rq`, костыль `__lum_args__`, `use rquickjs`, весь QuickJS `#[cfg(test)] mod tests` (28 тестов); `build_worker_messages_json` выжил под `#[cfg(feature = \"v8-backend\")]` (иначе мёртв под no-features). `esm.rs` — `impl Resolver/Loader` для `LumenResolver`/`LumenLoader` + `SharedPageUrl`/`ModuleRegistry`/`new_registry` снесены, `ImportMap`/`resolve_specifier_with` (уже движко-агностичное ядро) оставлены; 8 тестов через `LumenResolver` переписаны на прямой вызов `resolve_specifier_with` (7 сохранены, 1 снесён — тестировал удалённый механизм), 2 rquickjs-loader-теста снесены. `import_attributes.rs`/`import_meta.rs` — их e2e-тесты через QuickJsRuntime снесены целиком (не портированы): V8 парсит import attributes и import.meta нативно, `v8_esm.rs` уже имеет 1:1 покрытие — портирование дало бы дубль под неверным именем. `crates/js/tests/cases/indexed_db.rs` — уникальное покрытие (структурный IndexedDB-бэкенд), портирован 1:1 на `V8JsRuntime` (`install_dom`-сигнатуры идентичны), файл под `#![cfg(feature = \"v8-backend\")]`. `cargo check`/`clippy --all-targets -- -D warnings` чисты в обоих режимах (default — идентичный 18-ошибочный baseline main, ноль новых). `cargo test -p lumen-js` (default): 247→208 (-39); `--features v8-backend`: 2518→2479 lib (-39, та же дельта — ни один снесённый тест не был feature-gated) + 68 `tests/all.rs` (0 упавших, впервые видимый `indexed_db` в интеграционном сьюте, раньше жил в `lib.rs::mod tests`). Гоча: пре-экзистентный (не регресс, тот же на F1-baseline) линкер-конфликт `rust-lld`+rquickjs_sys+v8 на Windows MSVC — реальный прогон тестов подтверждён через `RUSTFLAGS=\"-Clinker=C:\\tmp\\msvc-link.bat\"` workaround из S1; чинится только сносом rquickjs целиком в F4. Вторая (уже реальная) гоча: устаревший инкрементальный кэш `.rcgu.o` после сноса типов давал третий, вводящий в заблуждение линкер-фейл (`drop_in_place<QuickJsRuntime>` не существующего типа) — чинится `cargo clean -p lumen-js`. Детали — docs/tasks/ph3-v8-migration.md §S12b-F2"
+        },
+        {
+         "id": "P3-v8-s12b-f3",
+         "title": "S12b-F3: удалить install_primitives из dom.rs",
+         "status": "done",
+         "size": "M",
+         "note": "ЗАКРЫТ 2026-08-04 (ветка p1-s12b-f3): `install_primitives` (461-3189, 2736 строк) и `use rquickjs` удалены из dom.rs; заодно снесён единственный вызывающий `install_dom_api` (был `pub fn`, поэтому не ловился dead_code — сам никогда не вызывался ни из lib.rs, ни откуда-либо ещё после S12b-F2) и мёртвый rquickjs-параллельный `HistoryState`/`HistoryEntry` (v8_runtime.rs несёт свою копию). Каскад: удаление install_primitives обнажило ~30 функций/импортов в dom.rs, ранее живых только через pub-реэкспорт install_dom_api — часть удалена целиком (0 вызывающих нигде: namespace_uri, set_text_content, remove_attribute, _parse_style_string/_serialize_style_map/_camel_to_kebab), часть догейчена `#[cfg(all(test, feature = \"v8-backend\"))]` (find_element_by_tag, find_first_matching, collect_text_content/_inner, set_attribute, cache_meta_method — используются только `mod tests`, чей собственный `use super::*` сам под v8-backend), `WEB_API_SHIM` — `#[cfg(feature = \"v8-backend\")]` (единственный потребитель — v8_runtime.rs::install_dom). Тот же каскад задел credentials.rs (`create`/`get`/`provider`/`uvpa_available` + 7 b64/json-хелперов — раньше жили через _lumen_webauthn_* реги в install_primitives) и clipboard.rs (`read_text`/`write_text`) — догейчены `#[cfg(any(test, feature = \"v8-backend\"))]` (mod tests в этих файлах engine-agnostic, зовёт их напрямую без feature-гейта), `uvpa_available` отдельно — только `v8-backend` (тестов нет). cargo test -p lumen-js --features v8-backend: 2479 lib + 68 integration (без изменений, тесты уже были на V8 после S12b-24). cargo test -p lumen-js (default): 208 lib. clippy --all-targets --features v8-backend: 0 ошибок. clippy --all-targets (no-features, декадирующий rquickjs-путь): 18 ошибок — идентичны main baseline (0 дельты, проверено построчным diff `-->` локаций). lumen-shell (default v8) clippy/check чистые. Следующий шаг — S12b-F4 (снять rquickjs из Cargo.toml). Детали — docs/tasks/ph3-v8-migration.md §S12b-F3"
+        },
+        {
+         "id": "P3-v8-s12b-f4",
+         "title": "S12b-F4: убрать зависимость rquickjs",
+         "status": "done",
+         "size": "S",
+         "note": "ЗАКРЫТ 2026-08-04 (ветка p1-s12b-f4): `rquickjs = { version = \"0.11\", features = [\"loader\"] }` и его комментарий удалены из `crates/js/Cargo.toml`; crate `description` изменён на \"Lumen JS runtime: V8 (rusty_v8) implementation of the JsRuntime trait\". Подтверждено grep'ом по `crates/js/src`/`crates/js/tests` — ноль call site (только исторические doc-комментарии, оставлены как есть). `rquickjs`/`rquickjs-core`/`rquickjs-sys` полностью исчезли из `Cargo.lock` (0 вхождений). Доксинк: `docs/plan/tech-stack.md` (строка JS engine), `CAPABILITIES.md` (заголовок lumen-js-секции + ~8 устаревших упоминаний \"QuickJS rollback path\"/\"--features quickjs\", включая попутную находку — BUG-547 сам был уже исправлен в S12b-G2, но CAPABILITIES.md/BUGS.md не были обновлены — закрыто в этом коммите), `subsystems/js.md` (шапка), `docs/decisions/ADR-018-v8-cutover.md` (Consequences/Future), `docs/decisions/ADR-004-js-runtime.md` (Status), корневой `CLAUDE.md`. Заодно закрыт дубль-пункт P3-v8-s12b-25 (тот же скоуп, заведён раньше как один срез, по факту исполнен через F1-F4) и родительский трекер `P3-v8-s12b`. Верификация: `cargo check`/`clippy --all-targets -D warnings`/`test` на `-p lumen-js` (`--features v8-backend`: 2479 lib + 68 integration, 0 fail, идентично F3; default: 208 lib, 0 fail, идентично F3; no-features clippy — тот же 18-ошибочный decaying-baseline, 0 дельты) и `-p lumen-shell` (default v8: check+clippy чистые). **Закрывает трек P3-v8-s12b целиком (S12b: rquickjs removal) — rquickjs больше не существует в рабочем пространстве ни как код, ни как Cargo-зависимость.**"
         }
        ]
       }
@@ -4343,6 +4669,71 @@
        "bugs": [
         "BUG-781"
        ]
+      },
+      {
+       "id": "WPT-VENDOR-html-semantics-embedded-content",
+       "title": "WPT: прогнать подсрез `html/semantics/embedded-content`",
+       "status": "done",
+       "size": "L",
+       "note": "Скоуп: ⬜ (кандидат). Подсрез `html/semantics`, вынесен из `WPT-VENDOR-html-semantics` 2026-08-04. 708 `testharness`-id (14 `testdriver`) — крупнейший подкаталог среза: `<iframe>`/`<embed>`/`<object>`/`<img>`/`<video>`/`<audio>`/`<picture>`/`<source>`/`<canvas>`/`<map>`/`<area>`/`<colgroup>`. DONE 2026-08-04: прогнан целиком, по 14 под-`--root`ам (media-elements/the-iframe-element/the-img-element/the-canvas-element/the-video-element/the-object-element/the-embed-element/the-audio-element/bfcache/image-maps/the-area-element/the-frame-element/crashtests/resources — ни один не пропущен), суммарно **351/708 harness OK, 333/1487 сабтестов passed** (`bfcache` — 0/6, все 6 TIMEOUT: bfcache для встроенного контента не реализован; `the-audio-element` — 1/14, самый дорогой подкаталог по времени, 34 с/id). Три новых бага (JS-глобалы/методы, отсутствуют целиком, не сломанные стабы): [BUG-568](bugs/BUG-568-OPEN.md) `document.write()`, [BUG-569](bugs/BUG-569-OPEN.md) `HTMLImageElement.prototype.decode()` (57 сабтестов), [BUG-570](bugs/BUG-570-OPEN.md) `VTTCue`/`TextTrackCue`/`TrackEvent` глобальные конструкторы (22 сабтеста). Переподтверждены уже заведённые: BUG-464/477 (`elementFromPoint`), BUG-478/551 (`getClientRects`), BUG-449 (`ImageData` не глобал). Доминирующий источник шума в `media-elements`/`the-video-element`/`the-audio-element` — НЕ движковый баг: `/common/media.js` и `/common/stringifiers.js` (общие WPT-хелперы вне категории) не вендорены, тот же задокументированный «survey gap», что у `FileAPI`/`IndexedDB` (`tests/wpt/VENDOR.md`) — 404 → `getVideoURI`/`getAudioURI`/`token is not defined` на ~416 сабтестах. `test_driver.Actions is not a constructor` (16 сабтестов, `image-maps`) — тоже известное ограничение: `docs/wpt-status.md`:22-24 документирует, что минимальный executor реализует только `click`. Гипотеза «упрётся в `<iframe>` без browsing context» (BUG-381/383) подтвердилась на `the-iframe-element` (59/144 harness OK) и заметной доле `the-embed-element`/`the-object-element`",
+       "bugs": [
+        "BUG-568",
+        "BUG-569",
+        "BUG-570"
+       ]
+      },
+      {
+       "id": "WPT-VENDOR-html-semantics-scripting-1",
+       "title": "WPT: прогнать подсрез `html/semantics/scripting-1`",
+       "status": "done",
+       "size": "L",
+       "note": "Скоуп: ⬜ (кандидат). Подсрез `html/semantics`, вынесен из `WPT-VENDOR-html-semantics` 2026-08-04. DONE 2026-08-04: прогнан целиком по 3 под-`--root`ам (`the-noscript-element`, `the-template-element`, `the-script-element` — ни один не пропущен). Итого **302/455 harness OK, 745/2225 сабтестов**: `the-noscript-element` 1/1, `the-template-element` 21/21 (330/660 сабтестов, остаток -- известный предел «`<iframe>` без browsing context», BUG-381/383), `the-script-element` 280/433 (414/1564 сабтестов, 47 TIMEOUT, 177 `module ... not found` -- заведомо BUG-446 network-loaded ESM import graph). Три новых бага: [BUG-571](bugs/BUG-571-FIXED.md) -- крупнейшая находка: `<script>`, вставленный в живой документ через DOM API (`createElement`+`appendChild`), никогда не исполняется вообще -- классический скрипт исполняется одноразовым обходом DOM ровно один раз за навигацию (`main.rs::run_scripts_with_dom`/`collect_scripts_ordered`), без аналога алгоритма «prepare a script element», привязанного к вставке узла; объясняет 218/575 `FAIL` в одной фикстуре (`script-type-and-language-js`) и, по всей видимости, большинство `scheduler:`/async-ordering отказов категории; минимум 60 файлов в `the-script-element/` используют динамическое создание скрипта. [BUG-572](bugs/BUG-572-OPEN.md) (`HTMLScriptElement.supports()` отсутствует целиком, 4 сабтеста) и [BUG-573](bugs/BUG-573-OPEN.md) (`Range.prototype.createContextualFragment` отсутствует, 3 сабтеста). Переподтверждены: BUG-446 (сетевой ESM-граф, 177 упоминаний), BUG-568 (`document.write`), BUG-380 (класс сессионного повторного использования результатов на `.https.`-тестах), предел `<iframe>` без browsing context (BUG-381/383)",
+       "bugs": [
+        "BUG-571",
+        "BUG-572",
+        "BUG-573"
+       ]
+      },
+      {
+       "id": "WPT-VENDOR-html-semantics-forms",
+       "title": "WPT: прогнать подсрез `html/semantics/forms`",
+       "status": "done",
+       "size": "L",
+       "note": "Скоуп: ⬜ (кандидат). Подсрез `html/semantics`, вынесен из `WPT-VENDOR-html-semantics` 2026-08-04. DONE 2026-08-04: вопреки наивной оценке «~13 ч, не помещается в сессию» (та же формула `(files − testdriver) × ~25с`, что развела `html`/`html-semantics`), реальный прогон `run_report.py --all --root html/semantics/forms --recursive --processes 6` занял **3 мин 33 с** — `--processes 6` сокращает время на порядок против однопроцессной оценки. Прогнан целиком, все 22 подкаталога (`<form>`/`<input>`/`<select>`/`<textarea>`/`<button>`/`<fieldset>`/`<label>`/`constraints`/`customizable-combobox`/`form-submission-0`/`form-submission-target` и т.д.), ни один не пропущен: **371/442 harness OK, 1783/4539 сабтестов**. Три новых бага, все root-caused отдельными пробами `--dump-layout` вне WPT-прогона (не только по WPT-сигналу): [BUG-574](bugs/BUG-574-OPEN.md) — крупнейшая находка: `Node.prototype.contains()` отсутствует целиком на любом виде узла (не сломанный стаб — самого метода нет), проявляется как `elementDocument.contains is not a function` внутри общего хелпера `resources/testdriver.js`'s `getInViewCenterPoint` — ломает `test_driver.click()`/`Actions` widely (75 сабтестов/36 файлов в одной этой категории); поскольку хелпер общий для всего WPT-раннера, а не специфичен для forms, весьма вероятно объясняет необъяснённый шум `Unhandled rejection` в уже закрытых срезах (не переаудированы задним числом, флагируется на будущее). [BUG-575](bugs/BUG-575-OPEN.md) — `Element.prototype.localName` отсутствует целиком (только `tagName`/`nodeName` реализованы); вскрыто `form-submission-target/resources/reltester.js`, где `submitter.localName !== \"form\"` всегда истинно и уводит на неверную ветку → `TypeError: Cannot set properties of undefined (setting 'rel')` (14 сабтестов/2 файла). [BUG-576](bugs/BUG-576-OPEN.md) — `HTMLOptionsCollection.prototype.add()` (т.е. `select.options.add()`) отсутствует, хотя зеркальный `HTMLSelectElement.prototype.add()` (`select.add()`) работает (4 сабтеста/2 файла). Малый попутный гэп без отдельного BUG-NNN (пропорционально размеру, по образцу `CustomElementRegistry` в `custom-elements`): `window.NodeList` глобальный конструктор не выставлен (`instanceof NodeList` падает `ReferenceError`, 9 сабтестов/2 файла). Переподтверждены: BUG-351 (`insertAdjacentHTML`, 91 упоминание), BUG-412 (`getElementsByName`), BUG-416 (`getElementsByTagName`), BUG-446 (сетевой ESM-граф), BUG-568 (`document.write`), предел `test_driver.Actions is not a constructor` (53 упоминания, известное ограничение минимального executor'а)",
+       "bugs": [
+        "BUG-574",
+        "BUG-575",
+        "BUG-576"
+       ]
+      },
+      {
+       "id": "WPT-VENDOR-html-semantics-document-metadata",
+       "title": "WPT: прогнать подсрез `html/semantics/document-metadata`",
+       "status": "done",
+       "size": "S",
+       "note": "Скоуп: ⬜ (кандидат). Подсрез `html/semantics`, вынесен из `WPT-VENDOR-html-semantics` 2026-08-04. `<head>`/`<title>`/`<base>`/`<link>`/`<meta>`/`<style>`. 105 `testharness`-id, 0 `testdriver`, файлы == id. `run_report.py --all --root html/semantics/document-metadata --recursive` — **8 мин 16 с, 58/101 harness OK, 12/140 сабтестов**: files==id предсказатель дешевизны подтвердился по времени, но не по результату — реальный сигнал, не стена SKIP. Три новых бага: BUG-565 (`document.head` всегда `undefined` — не довязан в отличие от `body`/`documentElement`, `.append`/`.appendChild`/`.prepend` кидают `TypeError`; 17 файлов подкаталога опираются на него), BUG-566 (`<meta http-equiv=\"refresh\">` не реализован вовсе — ни парсер, ни шелл не обрабатывают прагму `refresh`, найдено по отсутствию кода, WPT-сигнал зашумлён отдельными инфраструктурными гэпами: `<iframe>` без browsing context и невендоренный `/common/subset-tests.js`), BUG-567 (`HTMLTitleElement.prototype.text` отсутствует целиком — 22/22 сабтестов `title.text-01`/`title.text-03` падают на `undefined`). Крупный уже заведённый кластер CSSOM (`document.styleSheets`/`LinkStyle.sheet`) — BUG-471 (не новая находка), а `getComputedStyle()` на только что созданном/вставленном элементе без принудительного релэйаута (color-scheme/`CanvasText`-кластер, 10 файлов) — BUG-443 (тоже не новая находка)",
+       "bugs": [
+        "BUG-565",
+        "BUG-566",
+        "BUG-567"
+       ]
+      },
+      {
+       "id": "WPT-VENDOR-html-semantics-misc",
+       "title": "WPT: прогнать подсрез `html/semantics/{interactive-elements,popovers,permission-element,links,interestfor,selectors,the-button-element,tabular-data,menu,grouping-content,text-level-semantics,disabled-elements,edits,sections}` + 2 корневых файла",
+       "status": "done",
+       "size": "M",
+       "note": "Скоуп: ⬜ (кандидат). Подсрез `html/semantics`, вынесен из `WPT-VENDOR-html-semantics` 2026-08-04. DONE 2026-08-04: вопреки наивной оценке «~13 ч, не помещается в сессию» (та же формула, что развела `html`/`html-semantics`), реальный прогон — 14 подкаталогов отдельными `run_report.py --all --root html/semantics/<dir> --recursive --processes 6` + 2 корневых файла (`interfaces.html`, `rellist-feature-detection.html`) нерекурсивным `--root html/semantics` — занял суммарно **~15 мин**. Прогнано целиком, ни один подкаталог не пропущен: **316/444 harness OK, 591/5529 сабтестов**. Восемь новых багов, все root-caused прямым чтением `dom.rs` (не только по WPT-сигналу, по образцу предыдущих подсрезов): [BUG-577](bugs/BUG-577-OPEN.md) — крупнейшая находка всего среза: `Event.prototype.composedPath()` отсутствует целиком, наследуется всеми подтипами событий (`CustomEvent`/`UIEvent`/`MouseEvent`/…) — 288 попаданий, больше даже уже известного BUG-574 (`contains()`) в этом же срезе; вероятно объясняет необъяснённый шум и в уже закрытых срезах (не переаудированы задним числом). [BUG-578](bugs/BUG-578-OPEN.md) — popover/`<details>` `toggle`/`beforetoggle` диспатчатся как обычный `Event` с вручную приклеенными `oldState`/`newState`, интерфейса `ToggleEvent` нет вовсе (154, функциональность show/hide работает, это чисто гэп типа события). [BUG-579](bugs/BUG-579-OPEN.md) — `HTMLDialogElement.prototype.requestClose()` отсутствует, хотя `show`/`showModal`/`close` есть (154, `the-dialog-element/`). [BUG-580](bugs/BUG-580-OPEN.md) — `Element.prototype.getClientRects()` отсутствует при наличии `getBoundingClientRect()` (76, в основном через `popover-utils.js`'s `isVisible()`) + два мелких попутных гэпа без отдельного BUG-NNN: `Document.prototype.elementFromPoint` (8), `Node.prototype.getRootNode()` (6). [BUG-581](bugs/BUG-581-OPEN.md) — `HTMLTableElement`/`HTMLTableRowElement`/`HTMLTableSectionElement` — голые интерфейсы без единого специфичного метода/свойства (`rows`/`tBodies`/`insertRow`/`createTBody`/`deleteCaption` и т.д., 156, `tabular-data/`: 28/29 harness OK, но только 9/153 сабтестов). [BUG-582](bugs/BUG-582-OPEN.md) — Invoker Commands API (`command`/`commandfor`/`CommandEvent`) не реализован вовсе, хотя более узкий `popovertarget`/`popovertargetaction` работает (84, `the-button-element/command-and-commandfor/`). [BUG-583](bugs/BUG-583-OPEN.md) — элемент `<permission>` не реализован вовсе, падает в generic unknown-tag путь; единственный источник спеки — Chromium origin trial (48, `permission-element/`). [BUG-584](bugs/BUG-584-OPEN.md) — Interest Invokers API (`interestfor`/`InterestEvent`, hover/focus-аналог BUG-582) не реализован вовсе, целиком `.tentative.` (36, `interestfor/`). Переподтверждены: BUG-384 (named access on Window — доминирует в `ReferenceError: <id> is not defined` по короткому идентификатору popover/dialog/invoker/form/sibling и т.п., десятки файлов во всех 14 подкаталогах) и BUG-416 (`getElementsByTagName` на table). Попутно исправлен пропуск: строки BUGS.md для BUG-574/575/576 (найдены в `WPT-VENDOR-html-semantics-forms`, файлы `bugs/BUG-57{4,5,6}-OPEN.md` существовали, но не были добавлены в таблицу BUGS.md) — добавлены этой же правкой",
+       "bugs": [
+        "BUG-577",
+        "BUG-578",
+        "BUG-579",
+        "BUG-580",
+        "BUG-581",
+        "BUG-582",
+        "BUG-583",
+        "BUG-584"
+       ]
       }
      ]
     },
@@ -4815,7 +5206,7 @@
     {
      "id": "WPT-RUN",
      "title": "WPT-RUN: пропускная способность WPT-раннера",
-     "status": "done",
+     "status": "active",
      "size": "L",
      "note": "Дорожка пропускной способности WPT-раннера (владелец тулинга — P2; движковые баги по находкам — P3/P1). Превратить УЖЕ ВЕНДОРЕННЫЙ корпус в измеряемый: не вендорить новое (это WPT-VENDOR) и не писать новые тесты (это TEST), а снять три ограничения исполнителя. Повод: категория `css/` вендорена целиком (54350 файлов, 34607 id — рекорд корпуса), прогнана на 1.1% (382 id), и на этой пробе прошло 1294 из 2594 сабтестов — половина базовой блочной модели CSS1/CSS2 падает, а в BUGS.md на css-parser числится 13 багов из 429, т.е. счёт багов отражает, где искали, а не где они есть. Бриф — docs/tasks/p2-wpt-runner-throughput.md",
      "tasks": [
@@ -4839,6 +5230,59 @@
        "status": "done",
        "size": "M",
        "note": "Честная сводная цифра pass-rate по ВСЕМУ вендоренному корпусу за один прогон (решения пользователя 2026-08-18). Знаменатель берётся из `MANIFEST.json`, а не из файлового глоба `run_report.py::all_vendored_test_ids()` — глоб и завышает (reftest-половинки и `-ref.html` суть файлы, а не id), и занижает (`?variant`, развёртка `.any.js`), поэтому прежние числа несопоставимы с wpt.fyi/Servo/Ladybird. Скоуп знаменателя — весь манифест БЕЗ изъятий: reftest-ы, которые мы пока не исполняем (TEST-4), и категории со скоупом 🚫 остаются внутри, неисполненное = непройденное; исключается только тип `support` (фикстуры), а `manual`/`visual` считаются отдельной строкой (их не исполняет ни один раннер, включая апстрим). Срез 1 (2026-08-18) — `tests/wpt/corpus_stats.py`: 273 категории, 73495 id, из них 67735 автоматизируемых (знаменатель), 5760 manual/visual, и 37319 testharness — то есть ПОТОЛОК сегодняшней цифры 55%: без reftest-исполнителя (TEST-4) остальные 45% недостижимы по построению, и цифру нельзя публиковать без этой оговорки. Остаток: оркестратор полного прогона (шардирование по категориям, чекпойнты, агрегация `--log-wptreport`), пилот на 10 разнородных категориях, затем полный прогон. `.ini`-ожидания этой задачей НЕ пишутся (первый проход — измерение, не гейт). Результат — `docs/wpt/runs/<дата>.json` + журнал `docs/wpt/pass-rate.md`. Бриф — docs/tasks/p2-wpt-runner-throughput.md **Сделано 2026-08-19:** весь корпус за один прогон (479 шардов, ~11 ч, --processes=6 --skip-https, 0 потерянных шардов) — **pass-rate 5.59%** (3783 из 67735 автоматизируемых id MANIFEST.json), сабтесты 151287/519359 (29.1%); производные цифры: 10.14% по testharness-корпусу, 12.42% по фактически прогнанному. Необъяснённых id ноль: 6874 непрогнанных testharness — https (BUG-785), остальные 30416 — типы без исполнителя (reftest 27386, crashtest 1892, wdspec 626, print-reftest 416, aamtest 96). Инструменты: tests/wpt/corpus_stats.py (знаменатель) + tests/wpt/run_corpus.py (шардированный прогон, чекпойнты/--resume, восстановление убитого шарда из mozlog-потока, --skip-https). Ловушка параллелизма снята замером: --processes=1 и =6 дают побитово одинаковый результат при 4.4x разнице во времени. Побочная находка: 4 битых .ini роняли 4 категории целиком (759 testharness-id не прогонялись ни разу, гейт --check по ним был мёртв) — починены, генератор expectations.py теперь валидирует свой вывод тем же парсером. Цифра и методика — docs/wpt/pass-rate.md, снимок — docs/wpt/runs/2026-08-18.json. Остаток дорожки: потолок 55.1% снимается только TEST-4/TEST-5 (reftest-исполнитель + Ahem)."
+      },
+      {
+       "id": "WPT-RUN-5",
+       "title": "WPT-RUN-5: вторая полная цифра pass-rate (с reftest и https)",
+       "status": "ready",
+       "size": "M",
+       "note": "Перепрогнать ВЕСЬ корпус и снять вторую полную цифру pass-rate. Прогон 2026-08-18/19 (5.59 %, `docs/wpt/pass-rate.md`) объяснял 37 290 непрогнанных id двумя причинами, и обе с тех пор адресуемы: 27 386 reftest + 416 print-reftest стояли как «нет исполнителя (TEST-4)» — TEST-4 и TEST-5 закрыты 2026-08-19, уже ПОСЛЕ прогона; 6 874 testharness — https (BUG-785). Отсюда порядок: сначала BUG-785, потом один прогон, покрывающий обе группы — полный проход стоит ~11 часов, платить его дважды незачем. Ожидаемый сдвиг качественный: потолок 55.1 % поднимается почти до 96 % (вне досягаемости остаются только crashtest/wdspec/aamtest). Инструменты готовы: `tests/wpt/run_corpus.py` (шардирование, чекпойнты, `--resume`) + `tests/wpt/corpus_stats.py` (знаменатель). Методику знаменателя НЕ менять — цифра сопоставима с wpt.fyi/Servo/Ladybird именно потому, что берётся из `MANIFEST.json`. Результат — новая строка журнала и снимок `docs/wpt/runs/<дата>.json`",
+       "bugs": [
+        "BUG-785"
+       ]
+      },
+      {
+       "id": "WPT-RUN-6",
+       "title": "WPT-RUN-6: разбор массовых TIMEOUT (35 % прогонов)",
+       "status": "ready",
+       "size": "M",
+       "note": "Разобрать массовый TIMEOUT: 10 766 из 30 445 фактически прогнанных id (35 %) — вторая по величине статья после «нет исполнителя», и в отличие от неё это уже движок, а не обвязка. Начинать с покатегорийной разбивки снимка (`docs/wpt/runs/<дата>.json`, 266 категорий): отделить категории, где таймаутит всё подряд (общая причина — висящий промис, недокрученный event loop, ожидание сабресурса), от точечных. Общие причины оформлять багами P3 по одной на механизм, а не по одной на тест. Полезные готчи: `reference_pending_promise_tracer`, `reference_js_bundle_hang_bisection_technique`. Делать по свежему снимку WPT-RUN-5, а не по прогону 2026-08-18 — часть таймаутов может уйти вместе с https"
+      },
+      {
+       "id": "WPT-RUN-7",
+       "title": "WPT-RUN-7: expectations на все 289 категорий (живой гейт регрессий)",
+       "status": "ready",
+       "size": "L",
+       "note": "Довести охват expectations с 25 категорий до всех 289 `done`-категорий WPT-VENDOR. Система готова (TEST-3: `tests/wpt/expectations.py` + `run_report.py --update-expected`/`--check`), но пока baseline есть у 25 из 289, гейт `--check` по остальным ~264 мёртв: регрессия там не отловится ничем. Цена бездействия уже измерена — по ходу TEST-3 нашлись 4 битых `.ini`, из-за которых 4 категории (759 id) не прогонялись ни разу, а `--check` по ним молча возвращал успех. Обязательный порядок: после `--update-expected` немедленно прогонять `--check` и убеждаться в exit 0 — генератор валидирует свой вывод тем же парсером, но проверка сквозная. Baseline, который нельзя перегенерировать, не удалять"
+      },
+      {
+       "id": "WPT-RUN-8",
+       "title": "WPT-RUN-8: исполнители crashtest/print-reftest/aamtest",
+       "status": "opt",
+       "size": "M",
+       "note": "Исполнители для оставшихся типов манифеста, после WPT-RUN-5. По убыванию отдачи: crashtest 1 892 id (самый дешёвый — критерий «не упал», исполнителя уровня reftest не требует), print-reftest 416 (переиспользует TEST-4 поверх `--print-to-pdf`), aamtest 96. `wdspec` 626 — ОТДЕЛЬНОЕ решение, а не работа: это WebDriver-classic, у Lumen только BiDi, поэтому вопрос не «как исполнить», а «берём ли мы classic в скоуп вообще» — спросить пользователя, не решать молча"
+      }
+     ]
+    },
+    {
+     "id": "CI",
+     "title": "CI: перенос гейта задачи в GitHub Actions",
+     "status": "active",
+     "note": "Дорожка переноса гейта в GitHub Actions, владелец — P2. План и журнал — [docs/ci-offload.md](docs/ci-offload.md). Приёмы CI-1…CI-4 закрыты ролью P5 (кэш и checkout, пять джобов, `bench-gate.yml` удалён, чистка осиротевших worktree); отсюда очередь передана P2 вместе с хвостом, который P5 доделать не мог: правки в чужих крейтах меняют поведение. Незакрытыми остаются §6 (артефакт), §8 (рассинхрон с правилом мержа) и §11.3 (`snapshot-cpu` как гейт, упирается в BUG-784)",
+     "tasks": [
+      {
+       "id": "CI-5",
+       "title": "CI-5: артефакт dev-release из CI",
+       "status": "ready",
+       "size": "S",
+       "note": "Джоб выгрузки бинаря из CI ([docs/ci-offload.md §6](docs/ci-offload.md)). YAML готов в документе, в `.github/workflows/ci.yml` не заведён: `cargo build -p lumen-shell --profile dev-release` + `actions/upload-artifact@v4`, только на push в `main` (не плодить артефакты на ветках), `retention-days: 14`. Смысл узкий и его надо держать в голове: артефакт НЕ заменяет локальную сборку (инкремент 3.8 с против прогона в CI), он нужен для трёх случаев — бинарь под Linux/macOS (локально не собрать вообще), проверка сборки на чистой машине перед релизом, занятая длинным прогоном рабочая машина. Лимит артефактов Free 500 МБ, `lumen.exe` 77 МБ"
+      },
+      {
+       "id": "CI-6",
+       "title": "CI-6: §8 ci-offload под правило «мерж после каждого коммита»",
+       "status": "ready",
+       "size": "S",
+       "note": "Привести [docs/ci-offload.md §8](docs/ci-offload.md) в соответствие с решением пользователя от 2026-08-19. §8 описывает протокол «push ветки → ждём зелёного CI → мерж» (8 шагов), а `CLAUDE.md` §Git workflow с того же дня требует обратного: мержить и пушить после КАЖДОГО коммита, локальный гейт — единственная проверка перед мержем, ждать CI нельзя (~30 мин на коммит). Обе таблицы §8 и абзац про «вариант 1» переписать под живое правило; следить за CI на `main` после мержа остаётся"
       }
      ]
     }
@@ -10258,9 +10702,6 @@
   "dom (`Document::dirty_values` + `control_value`/`set_control_value`/`clear_control_value`), js (`dom.rs` — геттер/сеттер `value`; `v8_runtime.rs` — нативы `_lumen_{get,set,clear}_dirty_value`), layout (`box_tree.rs`, `style.rs`), shell (`forms.rs`, `main.rs`), driver (`session.rs`)": [
    "BUG-441"
   ],
-  "dom/js (no `\"permission\"` tag handling anywhere in `crates/dom`, `crates/html-parser`, `crates/js/src/dom.rs`)": [
-   "BUG-583"
-  ],
   "driver": [
    "BUG-061",
    "BUG-064",
@@ -10284,9 +10725,6 @@
   ],
   "encoding": [
    "BUG-162"
-  ],
-  "engine (no pragma-directive processing anywhere -- `grep -rn \"http.equiv\\": [
-   "BUG-566"
   ],
   "font": [
    "BUG-059",
@@ -10365,14 +10803,8 @@
   "js (`WEB_API_SHIM`, `document`/`Element` shape)": [
    "BUG-281"
   ],
-  "js (`crates/js/src/audio_bindings.rs` vs `crates/js/src/web_audio.rs`)": [
-   "BUG-550"
-  ],
   "js (`crates/js/src/close_watcher.rs`, `CLOSE_WATCHER_SHIM`)": [
    "BUG-340"
-  ],
-  "js (`crates/js/src/cookie_store.rs`)": [
-   "BUG-546"
   ],
   "js (`crates/js/src/credentials.rs:516-540` — `create_without_provider_rejects_not_allowed` / `create_and_get_through_installed_provider`, процесс-глобальный слот провайдера)": [
    "BUG-759"
@@ -10401,17 +10833,8 @@
   "js (`crates/js/src/dom.rs:12954-13070` — Web Animations `WEB_API_SHIM`, `Animation.prototype`)": [
    "BUG-704"
   ],
-  "js (`crates/js/src/dom.rs:14124-14128` `HTMLOptionsCollection.prototype`)": [
-   "BUG-576"
-  ],
-  "js (`crates/js/src/dom.rs:14888-14937`, `dom.rs:15013-15042` -- popover/`<details>` toggle dispatch)": [
-   "BUG-578"
-  ],
   "js (`crates/js/src/dom.rs:15412-15556` — WAAPI `Animation` шим)": [
    "BUG-530"
-  ],
-  "js (`crates/js/src/dom.rs:3342-3358` `Event.prototype`)": [
-   "BUG-577"
   ],
   "js (`crates/js/src/dom.rs:3441-3460` -- `MouseEvent` constructor)": [
    "BUG-558"
@@ -10425,20 +10848,11 @@
   "js (`crates/js/src/dom.rs:4264-4302`)": [
    "BUG-484"
   ],
-  "js (`crates/js/src/dom.rs:4608-4625` -- table interfaces generated as bare non-constructible stubs, no table-specific members anywhere)": [
-   "BUG-581"
-  ],
   "js (`crates/js/src/dom.rs:4780-4827` -- `_lumen_build_detached_document`)": [
    "BUG-552"
   ],
   "js (`crates/js/src/dom.rs:4999` -- `var navigator = {...}`)": [
    "BUG-624"
-  ],
-  "js (`crates/js/src/dom.rs:5667-5702` `<dialog>` API block)": [
-   "BUG-579"
-  ],
-  "js (`crates/js/src/dom.rs:6044-6049` -- `getBoundingClientRect` exists, no sibling `getClientRects`)": [
-   "BUG-580"
   ],
   "js (`crates/js/src/dom.rs:6190-6193`)": [
    "BUG-476"
@@ -10476,41 +10890,11 @@
   "js (`crates/js/src/dom.rs::_lumen_get_fonts`, ~line 6779)": [
    "BUG-564"
   ],
-  "js (`crates/js/src/dom.rs::_lumen_make_range` object literal, `dom.rs:6870-6944`)": [
-   "BUG-573"
-  ],
-  "js (`crates/js/src/dom.rs` -- `Document` wrapper has no `write`/`writeln`/`open`/`close` member at all)": [
-   "BUG-568"
-  ],
-  "js (`crates/js/src/dom.rs` -- `HTMLImageElement` wrapper has no `decode` member)": [
-   "BUG-569"
-  ],
-  "js (`crates/js/src/dom.rs` -- `HTMLScriptElement` has no `supports` static, only prototype reflection)": [
-   "BUG-572"
-  ],
-  "js (`crates/js/src/dom.rs` -- `HTMLTitleElement` registered as a tag-constructor name, `dom.rs:4614`/`4648`, with zero prototype members ever defined)": [
-   "BUG-567"
-  ],
-  "js (`crates/js/src/dom.rs` -- `VTTCue`/`TextTrackCue`/`TrackEvent` never installed as globals; `crates/js/src/text_track_store.rs` implements the cue data model but only names the interfaces in doc comments)": [
-   "BUG-570"
-  ],
   "js (`crates/js/src/dom.rs` -- `_lumen_build_element`, `_obj`)": [
    "BUG-556"
   ],
   "js (`crates/js/src/dom.rs` -- element wrapper factory)": [
    "BUG-551"
-  ],
-  "js (`crates/js/src/dom.rs` -- live `Document` object literal, ~line 7140: `get body()`/`get documentElement()` exist, `get head()` does not)": [
-   "BUG-565"
-  ],
-  "js (`crates/js/src/dom.rs` -- no `command`/`commandFor` reflection, no `CommandEvent`, no invoke-action dispatch anywhere)": [
-   "BUG-582"
-  ],
-  "js (`crates/js/src/dom.rs` -- no `interestFor`/`InterestEvent` anywhere)": [
-   "BUG-584"
-  ],
-  "js (`crates/js/src/dom.rs` -- only `tagName`/`nodeName` reflected, no `localName`)": [
-   "BUG-575"
   ],
   "js (`crates/js/src/dom.rs` — `Document` object literal, none of these seven accessors exist)": [
    "BUG-705"
@@ -10625,9 +11009,6 @@
   "js (`crates/js/src/permissions_policy.rs:37-44` — `FeaturePolicy.prototype.allowsFeature`)": [
    "BUG-697"
   ],
-  "js (`crates/js/src/storage_buckets.rs`)": [
-   "BUG-547"
-  ],
   "js (`crates/js/src/surface_api.rs` рядом с `navigator.doNotTrack`, строки 116-121) + network (`crates/network/src/http/headers.rs::build_request_headers`)": [
    "BUG-397"
   ],
@@ -10645,9 +11026,6 @@
   ],
   "js (`crates/js/src/v8_runtime.rs` — уровень изолята)": [
    "BUG-716"
-  ],
-  "js (`crates/js/src/view_transitions.rs`)": [
-   "BUG-545"
   ],
   "js (`crates/js/src/wasm/parser.rs:547-599` — `parse_element_section`)": [
    "BUG-700"
@@ -10687,12 +11065,6 @@
   ],
   "js shim (`crates/js/src/dom.rs:5613`, `_lumen_make_style` Proxy `dom.rs:4264`)": [
    "BUG-494"
-  ],
-  "js — `crates/js/src/{contacts,background_sync,periodic_sync,push_api,background_fetch,payment_request,media_stream_recording}.rs`": [
-   "BUG-549"
-  ],
-  "js+shell (`crates/js/src/cookie_banner.rs`, `crates/shell/src/main.rs`)": [
-   "BUG-548"
   ],
   "js/css-parser (`crates/js/src/dom.rs::CSS.supports`, `crates/engine/css-parser/src/parser.rs::SupportsCondition::evaluate`)": [
    "BUG-501"
@@ -10962,9 +11334,6 @@
   "network (`crates/network/src/lib.rs:1041` — `type PageResponse = (Vec<u8>, Vec<(String, String)>)`; `Response` без URL, `lib.rs:461`; цепочка проходится внутри `fetch_with_redirect`, `lib.rs:2601`), shell (`crates/shell/src/main.rs:3577` — `base: ResourceBase::Url(url.clone())`)": [
    "BUG-757"
   ],
-  "network (`crates/network/src/lib.rs:1620,1633,1650,1666`, `crates/network/src/dot.rs:265`)": [
-   "BUG-785"
-  ],
   "network (`crates/network/src/lib.rs:2566-2567` — вычисление `default_path` перед `jar.process_set_cookie`); потребители — `crates/storage/src/cookies.rs::parse_set_cookie_with_psl` и `path_matches`": [
    "BUG-756"
   ],
@@ -11164,9 +11533,6 @@
   ],
   "shell (`crates/shell/src/main.rs::apply_loaded_page`), js (`crates/js/src/dom.rs:12769` `window.getComputedStyle`)": [
    "BUG-555"
-  ],
-  "shell (`crates/shell/src/main.rs::collect_scripts_ordered`/`run_scripts_with_dom`), js (`crates/js/src/dom.rs` -- `HTMLScriptElement` reflection only, no insertion hook)": [
-   "BUG-571"
   ],
   "shell (`crates/shell/src/main.rs::commit_nav_state`)": [
    "BUG-352"
