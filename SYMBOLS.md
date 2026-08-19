@@ -2466,7 +2466,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/mcp/src/transport.rs:127` **fn** `push_incoming` — Поставить в очередь входящее JSON сообщение
 `crates/mcp/src/transport.rs:132` **fn** `take_outgoing` — Забрать все исходящие сообщения (очищает буфер)
 
-## lumen-network  (1212 symbols)
+## lumen-network  (1213 symbols)
 
 `crates/network/src/auth.rs:57` **fn** `get`
 `crates/network/src/auth.rs:624` **struct** `StaticCredentialProvider` — Простой credential-провайдер с фиксированной табличкой `(origin, realm) →
@@ -3556,9 +3556,10 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/intercept.rs:41` **enum** `InterceptDecision` — Decision delivered for a paused request via `network.continueRequest`
 `crates/network/src/intercept.rs:59` **fn** `add_global_intercept` — Register (or replace, if `id` already exists) a global intercept rule
 `crates/network/src/intercept.rs:67` **fn** `remove_global_intercept` — Remove a previously registered global intercept rule by id. No-op if unknown
-`crates/network/src/intercept.rs:117` **fn** `pause_for_intercept` — If `url` matches an active intercept rule for `phase`, register a pending
-`crates/network/src/intercept.rs:165` **fn** `resolve_intercept` — Deliver a decision for a paused request (`network.continueRequest`/
-`crates/network/src/intercept.rs:178` **fn** `drain_new_intercept_announcements` — Drain requests newly paused since the last call — data for the
+`crates/network/src/intercept.rs:128` **fn** `pause_for_intercept` — If `url` matches an active intercept rule for `phase`, register a pending
+`crates/network/src/intercept.rs:177` **fn** `resolve_intercept` — Deliver a decision for a paused request (`network.continueRequest`/
+`crates/network/src/intercept.rs:190` **fn** `drain_new_intercept_announcements` — Drain requests newly paused since the last call — data for the
+`crates/network/src/intercept.rs:213` **fn** `wait_for_new_intercept_announcement` — Block until a request newly paused (since the last announcement) appears,
 `crates/network/src/lib.rs:107` **fn** `set_global_adblock_enabled` — Enable or disable the process-global ad-block filter
 `crates/network/src/lib.rs:113` **fn** `global_adblock_enabled` — Whether the process-global ad-block filter is currently enabled
 `crates/network/src/lib.rs:122` **fn** `install_global_adblock_filter` — Install (or replace) the process-global ad-block filter
@@ -5613,4 +5614,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:228` **fn** `count`
 
 ---
-*Total: 5536 symbols in 24 crates*
+*Total: 5537 symbols in 24 crates*
