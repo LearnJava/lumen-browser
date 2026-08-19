@@ -40,11 +40,13 @@ fn provider_lock() -> &'static RwLock<Option<Arc<dyn WakeLockProvider>>> {
 ///
 /// Must be called once by the shell before any JS context is created.
 /// Thread-safe; subsequent calls replace the previous provider.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn set_wake_lock_provider(p: Arc<dyn WakeLockProvider>) {
     *provider_lock().write().unwrap() = Some(p);
 }
 
 #[cfg(feature = "v8-backend")]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn get_provider() -> Arc<dyn WakeLockProvider> {
     provider_lock()
         .read()
@@ -216,6 +218,9 @@ const WAKE_LOCK_SHIM: &str = r#"(function() {
 
 #[cfg(all(test, feature = "v8-backend"))]
 mod tests {
+    // Хелперы тестового модуля: исключение из clippy.toml покрывает
+    // только тело `#[test]` (docs/lint-policy.md §10).
+    #![allow(clippy::unwrap_used)]
     use super::*;
     use crate::v8_runtime::V8JsRuntime;
     use lumen_core::ext::JsRuntime as _;

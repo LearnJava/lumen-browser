@@ -65,6 +65,11 @@ mod windows_impl {
 
     /// Query primary display ICC profile path via GDI `GetICMProfileA`.
     fn query_gdi_icc_profile() -> Option<ColorSpace> {
+        // SAFETY: plain GDI FFI. `CreateDCA(NULL, NULL, NULL, NULL)` is the documented
+        // way to obtain a DC for the primary display; the null result is checked below
+        // before any use, the buffer handed to `GetICMProfileA` is sized by the
+        // preceding size query and its length travels with it, and the DC is released
+        // by `DeleteDC` on every exit path that reached a non-null handle.
         unsafe {
             let hdc = CreateDCA(
                 std::ptr::null(),

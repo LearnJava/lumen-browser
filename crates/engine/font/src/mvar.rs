@@ -18,6 +18,11 @@
 //!   `font-variation-settings`. Caller получает `(outer, inner)` индекс
 //!   для tag-а и сам комбинирует с base-метрикой.
 
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
 use crate::binary::BinaryReader;
 use crate::face::FontError;
 use crate::item_variation::ItemVariationStore;

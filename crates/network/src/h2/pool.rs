@@ -24,6 +24,11 @@
 //!     use conn, h2_pool.release(key, conn)
 //! ```
 
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -42,17 +47,20 @@ impl H2Pool {
     }
 
     /// Remove and return the pooled connection for `key`, if any.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn acquire(&self, key: &PoolKey) -> Option<H2Conn<RawStream>> {
         self.entries.lock().unwrap().remove(key)
     }
 
     /// Return a connection to the pool. If an entry already exists (e.g. the
     /// caller created a new conn after failing to acquire), the new one wins.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn release(&self, key: PoolKey, conn: H2Conn<RawStream>) {
         self.entries.lock().unwrap().insert(key, conn);
     }
 
     /// Discard the entry for `key` (called after an unrecoverable error).
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub(crate) fn evict(&self, key: &PoolKey) {
         self.entries.lock().unwrap().remove(key);
     }

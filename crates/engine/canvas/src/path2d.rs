@@ -459,6 +459,7 @@ fn skip_wsc_comma(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
     while chars.peek().map(|c| c.is_ascii_whitespace()).unwrap_or(false) { chars.next(); }
 }
 
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn parse_f32(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> f32 {
     skip_wsc(chars);
     let mut s = String::new();

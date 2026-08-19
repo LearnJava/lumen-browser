@@ -3,6 +3,11 @@
 //! Координатная система: ось X вправо, ось Y вниз (как принято в DOM/CSS).
 //! Единицы — логические пиксели (`f32`).
 
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]

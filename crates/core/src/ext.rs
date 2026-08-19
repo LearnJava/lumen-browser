@@ -8,6 +8,11 @@
 //! раздувался: потребитель зависит только от lumen-core и выбранной
 //! реализации, а не от всех альтернатив.
 
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -1854,6 +1859,23 @@ pub trait JsFetchProvider: Send + Sync {
     /// Returns `Err` for network errors or unsupported methods.
     fn fetch_sync(&self, url: &str, method: &str) -> Result<JsFetchResult>;
 
+    /// Как [`fetch_sync`](Self::fetch_sync), но **в обход перехвата service
+    /// worker-ом**.
+    ///
+    /// Нужен ровно одному вызывающему — сети самого service worker-а
+    /// (`fetch`/`importScripts` внутри его области). Через обычный путь его
+    /// запрос попал бы в `FetchInterceptor`, тот выбрал бы по scope этот же
+    /// воркер и отправил бы ему сообщение — а воркер в этот момент стоит
+    /// внутри своего же `fetch` и разобрать сообщение не может: поток ждёт
+    /// сам себя.
+    ///
+    /// Реализация по умолчанию совпадает с `fetch_sync` — у двойника в тестах
+    /// перехватчика нет; настоящий путь (`lumen-network::HttpClient`)
+    /// перекрывает метод.
+    fn fetch_bypassing_sw(&self, url: &str, method: &str) -> Result<JsFetchResult> {
+        self.fetch_sync(url, method)
+    }
+
     /// Perform a blocking HTTP request with a request body (POST/PUT/PATCH/DELETE).
     ///
     /// `content_type` is the `Content-Type` header value (e.g. `"application/x-www-form-urlencoded"`).
@@ -2087,6 +2109,7 @@ impl SseCancel {
     /// Signals cancellation and wakes any thread parked in [`sleep`](Self::sleep).
     ///
     /// Sets the internal flag to `true` and notifies all waiters. Idempotent.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn signal(&self) {
         let (lock, cvar) = &*self.inner;
         let mut cancelled = lock.lock().unwrap();
@@ -2095,6 +2118,7 @@ impl SseCancel {
     }
 
     /// Returns whether cancellation has been signalled.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn is_cancelled(&self) -> bool {
         let (lock, _) = &*self.inner;
         *lock.lock().unwrap()
@@ -2104,6 +2128,7 @@ impl SseCancel {
     ///
     /// Returns `true` if cancellation was (or becomes) signalled — the caller
     /// should stop — and `false` if the timeout elapsed first.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn sleep(&self, dur: std::time::Duration) -> bool {
         let (lock, cvar) = &*self.inner;
         let cancelled = lock.lock().unwrap();
@@ -3486,6 +3511,10 @@ mod tests {
         }
     }
 
+    // SAFETY: test double whose fields are `&'static str`, `usize`, `bool` and an
+    // `Option<MemoryPressureLevel>` — all plain data with no thread affinity. The
+    // impl exists only because `EvictableCache` implementors are stored behind a
+    // `Send` bound in the registry under test.
     unsafe impl Send for MockCache {}
 
     impl EvictableCache for MockCache {

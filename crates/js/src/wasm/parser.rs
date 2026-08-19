@@ -11,6 +11,11 @@
 //! opcodes, malformed sections) yields `Err` so `WebAssembly.compile`/`validate`
 //! reject cleanly rather than producing a half-decoded module.
 
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
 use super::value::{FuncType, Limits, ValType};
 
 /// Result of decoding, with a human-readable error for `CompileError`.

@@ -930,6 +930,9 @@ const SVG_SHIM: &str = r#"
 
 #[cfg(all(test, feature = "v8-backend"))]
 mod tests_v8 {
+    // Хелперы тестового модуля: исключение из clippy.toml покрывает
+    // только тело `#[test]` (docs/lint-policy.md §10).
+    #![allow(clippy::unwrap_used)]
     use lumen_core::ext::JsRuntime as _;
     use lumen_core::JsValue;
 

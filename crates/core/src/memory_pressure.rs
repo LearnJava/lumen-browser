@@ -200,12 +200,15 @@ mod macos_ffi {
 
     /// Polls VM statistics and returns `(used_pages, total_pages)`, or `None` on error.
     pub fn vm_used_total() -> Option<(u64, u64)> {
-        // SAFETY: VmStatistics64 is repr(C) and all-numeric; zeroing is a valid
-        // initial state. mach_host_self() always succeeds. host_statistics64 writes
-        // exactly HOST_VM_INFO64_COUNT * 4 bytes = sizeof(VmStatistics64) bytes into
-        // the struct, so there is no out-of-bounds write.
+        // SAFETY: VmStatistics64 is repr(C) and all-numeric, so an all-zero bit
+        // pattern is a valid value for every field; zeroing is a valid initial state.
         let mut stats: VmStatistics64 = unsafe { core::mem::zeroed() };
         let mut count = HOST_VM_INFO64_COUNT;
+        // SAFETY: mach_host_self() always succeeds and yields a valid host port.
+        // `stats` and `count` are live locals, so both pointers are non-null, aligned
+        // and valid for the whole call. host_statistics64 writes at most `count`
+        // (= HOST_VM_INFO64_COUNT) u32 words = sizeof(VmStatistics64) bytes into the
+        // struct, so there is no out-of-bounds write.
         let ret = unsafe {
             host_statistics64(mach_host_self(), HOST_VM_INFO64, &mut stats, &mut count)
         };

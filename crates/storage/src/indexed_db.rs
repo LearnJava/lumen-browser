@@ -39,6 +39,7 @@ const IDB_SNAPSHOT_KEY: &str = "__indexeddb__";
 ///
 /// Длина 16 символов = 64 бита энтропии — достаточно для изоляции тысяч
 /// origin-ов без коллизий на практике, при этом имя файла компактно.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn origin_key(etld_plus_one: &str) -> String {
     let hash = Sha256::digest(etld_plus_one.as_bytes());
     hash.iter()

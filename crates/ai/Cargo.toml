@@ -28,3 +28,8 @@ lumen-knowledge.workspace = true
 # reused here, not newly graduated.
 serde_json = "1.0"
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
+# Политики проекта как машинные проверки — [workspace.lints] в корневом
+# Cargo.toml, протокол docs/lint-policy.md.
+[lints]
+workspace = true

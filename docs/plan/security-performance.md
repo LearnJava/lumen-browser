@@ -88,13 +88,22 @@
   оба вызова обычно ставятся в одном месте (см. пример в doc-комментарии
   `profile.rs`). Компилируется в полный no-op без фичи — нулевая стоимость
   и нулевой лишний бинарный вес для обычной сборки.
-- **Бенчмарки в CI — реализовано, но не в точности как было заявлено здесь
-  раньше.** `.github/workflows/bench-gate.yml` → `crates/bench` (`lumen-bench
-  --ci`, task 9G.3, `ci_gate.rs`): полный `decode → html-parse → css-parse →
-  layout → paint` пайплайн на `samples/heavy.html` (порог: mean < 200мс, peak
-  RSS < 512МБ) + bfcache restore P50 < 50мс на `samples/page.html`
-  (`bfcache_restore.rs`). Это НЕ «layout простой страницы / парсинг HTML 10 МБ
-  / JS Speedometer» — тот список был аспирационным и не совпадает с тем, что
+- **Бенчмарков в CI нет** (уточнено 2026-08-19; прежняя редакция этого пункта
+  утверждала обратное и вдобавок связывала два разных механизма в один).
+  Как есть на самом деле:
+  - `lumen-bench --ci` (task 9G.3, `crates/bench/src/ci_gate.rs`) — полный
+    `decode → html-parse → css-parse → layout → paint` пайплайн на
+    `samples/heavy.html` (порог: mean < 200мс, peak RSS < 512МБ) + bfcache
+    restore P50 < 50мс на `samples/page.html` (`bfcache_restore.rs`). Код есть,
+    но **его не вызывает ни один workflow и ни один скрипт гейта**.
+  - `.github/workflows/bench-gate.yml` звал не его, а `python bench/compare.py`
+    (сравнение с `bench/baseline.json` по дельте 5%). **Workflow удалён
+    2026-08-19** — не отработал ни разу, гейтил по wall-clock на shared runner
+    против эталона «Phase 0 prototype». Разбор — `docs/ci-offload.md` §11.5.
+  - Подключение `ci_gate.rs` к ночному прогону — задача **PERF-7** в `ROADMAP.md`.
+
+  В любом случае это НЕ «layout простой страницы / парсинг HTML 10 МБ /
+  JS Speedometer» — тот список был аспирационным и не совпадает с тем, что
   реально измеряется.
 - Tracking регрессий по коммитам (графики) — не найдено; `bench/compare.py`
   сравнивает текущий прогон с `bench/baseline.json` (порог, не история).

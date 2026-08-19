@@ -8,6 +8,11 @@
 //!
 //! Whitespace-only текст и комментарии пропускаются.
 
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
 use lumen_core::geom::{Rect, Size};
 use lumen_core::ext::{HyphenationProvider, NullHyphenationProvider};
 use lumen_css_parser::Stylesheet;
@@ -1993,6 +1998,7 @@ fn lay_out_svg_children_positions(children: &mut [LayoutBox], ox: f32, oy: f32, 
     }
 }
 
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn lay_out_svg_element_position(b: &mut LayoutBox, ox: f32, oy: f32, sx: f32, sy: f32, parent_transform: &SvgTransform) {
     // Phase 2: full nested transform composition.
     // Get element's own transform (stored during box creation).
@@ -6648,6 +6654,63 @@ fn min_content_outer_width_of_contents(
 /// `cb` is the flex container's inner main size, used to resolve percentage
 /// min/max-width. Replaces the old approximation that fell back to the
 /// preliminary-pass stretched `item.rect.width` for text-only items (BUG-179).
+/// Потолок главной оси флекс-элемента во ВНЕШНИХ величинах (граничная рамка
+/// плюс поля) — `f32::INFINITY`, если максимум не задан или не разрешается в
+/// длину.
+///
+/// Нужен шагу «fix min/max violations» (CSS Flexbox §9.7 шаг 4): растущий
+/// элемент обязан замереть на своём `max-width`/`max-height`, а не забирать
+/// всё свободное место строки. Величина внешняя, потому что гипотетические
+/// главные размеры в `lay_out_flex` тоже внешние.
+fn flex_item_max_main_outer(item: &LayoutBox, cb: f32, viewport: Size, is_column: bool) -> f32 {
+    let s = &item.style;
+    let em = s.font_size;
+    let max_len = if is_column { s.max_height.as_ref() } else { s.max_width.as_ref() };
+    let Some(max_len) = max_len else {
+        return f32::INFINITY;
+    };
+    // Внутренние ключевые слова (`max-content` и родня) здесь не ограничивают:
+    // их разрешение требует измерения содержимого, а промах в бо́льшую сторону
+    // безопаснее, чем ложная заморозка элемента.
+    if max_len.is_intrinsic() {
+        return f32::INFINITY;
+    }
+    let Some(v) = max_len.resolve(em, Some(cb), viewport) else {
+        return f32::INFINITY;
+    };
+    let (p_start, p_end, b_start, b_end) = if is_column {
+        (
+            s.padding_top.resolve_or_zero(em, cb, viewport),
+            s.padding_bottom.resolve_or_zero(em, cb, viewport),
+            s.border_top_width,
+            s.border_bottom_width,
+        )
+    } else {
+        (
+            s.padding_left.resolve_or_zero(em, cb, viewport),
+            s.padding_right.resolve_or_zero(em, cb, viewport),
+            s.border_left_width,
+            s.border_right_width,
+        )
+    };
+    let border_box = match s.box_sizing {
+        BoxSizing::ContentBox => v + p_start + p_end + b_start + b_end,
+        BoxSizing::BorderBox => v,
+    };
+    let (m_start, m_end) = if is_column {
+        (
+            s.margin_top.resolve_or_zero(em, cb, viewport),
+            s.margin_bottom.resolve_or_zero(em, cb, viewport),
+        )
+    } else {
+        (
+            s.margin_left.resolve_or_zero(em, cb, viewport),
+            s.margin_right.resolve_or_zero(em, cb, viewport),
+        )
+    };
+    (border_box + m_start + m_end).max(0.0)
+}
+
 fn flex_auto_base_main_width(
     item: &LayoutBox,
     cb: f32,
@@ -10848,9 +10911,54 @@ fn lay_out_flex(
         if free_space > 0.0 {
             let total_grow: f32 = line_keys.iter().map(|&k| children[item_idxs[k]].style.flex_grow).sum();
             if total_grow > 0.0 {
-                for (j, &k) in line_keys.iter().enumerate() {
-                    let grow = children[item_idxs[k]].style.flex_grow;
-                    hyp_mains[j] += free_space * (grow / total_grow);
+                // CSS Flexbox §9.7 шаг 4 «fix min/max violations» — тот же цикл
+                // заморозки, что при сжатии ниже, только потолок здесь
+                // `max-width`/`max-height` элемента. Без него растущий элемент
+                // проезжал свой максимум: раскладка выдавала ему всю ширину
+                // строки, свободного места не оставалось (и `justify-content`,
+                // и auto-поля получали ноль), а видимая ширина всё равно
+                // упиралась в `max-width` при собственной раскладке элемента —
+                // отсюда «карточка во всю строку, но нарисована слева».
+                let grows: Vec<f32> =
+                    line_keys.iter().map(|&k| children[item_idxs[k]].style.flex_grow).collect();
+                let maxes: Vec<f32> = line_keys
+                    .iter()
+                    .map(|&k| {
+                        flex_item_max_main_outer(&children[item_idxs[k]], cb, viewport, is_column)
+                    })
+                    .collect();
+                let base: Vec<f32> = hyp_mains.clone();
+                let mut frozen: Vec<bool> = grows.iter().map(|&g| g <= 0.0).collect();
+                // Каждый проход замораживает хотя бы один элемент, поэтому `n`
+                // проходов заведомо хватает.
+                for _ in 0..n {
+                    let unfrozen: Vec<usize> = (0..n).filter(|&j| !frozen[j]).collect();
+                    if unfrozen.is_empty() {
+                        break;
+                    }
+                    let frozen_sum: f32 = (0..n).filter(|&j| frozen[j]).map(|j| hyp_mains[j]).sum();
+                    let unfrozen_base: f32 = unfrozen.iter().map(|&j| base[j]).sum();
+                    let remaining = container_main - line_gap_total - frozen_sum - unfrozen_base;
+                    let total_weight: f32 = unfrozen.iter().map(|&j| grows[j]).sum();
+                    if remaining <= 0.0 || total_weight <= 0.0 {
+                        for &j in &unfrozen {
+                            hyp_mains[j] = base[j].min(maxes[j]);
+                        }
+                        break;
+                    }
+                    let mut violated = false;
+                    for &j in &unfrozen {
+                        let target = base[j] + remaining * (grows[j] / total_weight);
+                        let clamped = target.min(maxes[j]);
+                        hyp_mains[j] = clamped;
+                        if clamped < target - 0.01 {
+                            frozen[j] = true;
+                            violated = true;
+                        }
+                    }
+                    if !violated {
+                        break;
+                    }
                 }
             }
         } else if free_space < 0.0 {
@@ -10934,21 +11042,59 @@ fn lay_out_flex(
         } else {
             0.0
         };
-        let (jc_start, jc_gap) = match s.justify_content {
-            AlignValue::End => (remaining, 0.0),
-            AlignValue::Center => (remaining / 2.0, 0.0),
-            AlignValue::SpaceBetween => {
-                if n <= 1 { (0.0, 0.0) } else { (0.0, remaining / (n - 1) as f32) }
+        // CSS Flexbox §8.1: `margin: auto` на ГЛАВНОЙ оси съедает всё
+        // положительное свободное место ДО того, как спрашивают
+        // `justify-content` — поэтому у элемента с `margin-left/right: auto`
+        // в строчном контейнере ничего не остаётся на распределение, и он
+        // встаёт по центру независимо от `justify-content`. Пока auto здесь
+        // резолвился в ноль, такой элемент прижимался к началу строки: живой
+        // пример — карточка формы входа `tbank.ru/login/` (`<main>` с
+        // `margin: auto` внутри `_PageWrapper` с `space-between`), которая
+        // стояла слева вместо центра.
+        let auto_main: Vec<(bool, bool)> = (0..n)
+            .map(|j| {
+                let is = &children[item_idxs[line_keys[j]]].style;
+                if is_column {
+                    (
+                        matches!(is.margin_top, LengthOrAuto::Auto),
+                        matches!(is.margin_bottom, LengthOrAuto::Auto),
+                    )
+                } else {
+                    (
+                        matches!(is.margin_left, LengthOrAuto::Auto),
+                        matches!(is.margin_right, LengthOrAuto::Auto),
+                    )
+                }
+            })
+            .collect();
+        let auto_main_count =
+            auto_main.iter().map(|(a, b)| usize::from(*a) + usize::from(*b)).sum::<usize>();
+        let auto_main_share = if auto_main_count > 0 && remaining > 0.0 {
+            remaining / auto_main_count as f32
+        } else {
+            0.0
+        };
+
+        let (jc_start, jc_gap) = if auto_main_share > 0.0 {
+            // Свободного места уже нет — распределять `justify-content` нечего.
+            (0.0, 0.0)
+        } else {
+            match s.justify_content {
+                AlignValue::End => (remaining, 0.0),
+                AlignValue::Center => (remaining / 2.0, 0.0),
+                AlignValue::SpaceBetween => {
+                    if n <= 1 { (0.0, 0.0) } else { (0.0, remaining / (n - 1) as f32) }
+                }
+                AlignValue::SpaceAround => {
+                    let per = remaining / n as f32;
+                    (per / 2.0, per)
+                }
+                AlignValue::SpaceEvenly => {
+                    let per = remaining / (n + 1) as f32;
+                    (per, per)
+                }
+                _ => (0.0, 0.0),
             }
-            AlignValue::SpaceAround => {
-                let per = remaining / n as f32;
-                (per / 2.0, per)
-            }
-            AlignValue::SpaceEvenly => {
-                let per = remaining / (n + 1) as f32;
-                (per, per)
-            }
-            _ => (0.0, 0.0),
         };
 
         // Final layout: position items along main axis.
@@ -10965,9 +11111,46 @@ fn lay_out_flex(
             let m_r = item_s.margin_right.resolve_or_zero(iem, cb, viewport);
             let m_t = item_s.margin_top.resolve_or_zero(iem, cb, viewport);
             let m_b = item_s.margin_bottom.resolve_or_zero(iem, cb, viewport);
+            // Доля auto-полей главной оси: перед элементом — та, что лежит со
+            // стороны начала обхода (у reverse-направления это поле конца).
+            let (auto_before, auto_after) = if is_reverse {
+                (auto_main[j].1, auto_main[j].0)
+            } else {
+                (auto_main[j].0, auto_main[j].1)
+            };
+            if auto_before {
+                main_cursor += auto_main_share;
+            }
 
             if is_column {
                 let inner_main = (outer_main - m_t - m_b).max(0.0);
+                // Поперечная ось колоночного контейнера — ГОРИЗОНТАЛЬ. До
+                // 2026-08-17 её не было вовсе: элемент всегда растягивался на
+                // всю ширину контейнера, поэтому ни `align-items: center`, ни
+                // `margin-left/right: auto` не двигали его с левого края
+                // (живой случай — карточка формы входа `tbank.ru/login/`
+                // внутри колоночной обёртки страницы).
+                let avail_cross = (content_width - m_l - m_r).max(0.0);
+                let auto_cross_l = matches!(item_s.margin_left, LengthOrAuto::Auto);
+                let auto_cross_r = matches!(item_s.margin_right, LengthOrAuto::Auto);
+                let cross_align = if matches!(item_s.align_self, AlignValue::Auto) {
+                    s.align_items
+                } else {
+                    item_s.align_self
+                };
+                let aligned_cross = matches!(
+                    cross_align,
+                    AlignValue::Start | AlignValue::End | AlignValue::Center
+                );
+                // Выровненный (не растянутый) элемент занимает по поперечной
+                // оси свой fit-content, а не всю ширину — иначе двигать нечего.
+                let used_cross = if auto_cross_l || auto_cross_r || aligned_cross {
+                    let max_c = max_content_outer_width(&children[i], measurer, viewport);
+                    let min_c = min_content_outer_width(&children[i], measurer, viewport);
+                    max_c.min(avail_cross).max(min_c).min(avail_cross).max(0.0)
+                } else {
+                    avail_cross
+                };
                 // `inner_main` is the item's resolved *border-box* main size (it is
                 // derived from the preliminary border-box height and the flex
                 // grow/shrink result). Force border-box before re-layout so the value
@@ -10984,7 +11167,7 @@ fn lay_out_flex(
                     &mut children[i],
                     content_x,
                     content_y + main_cursor,
-                    content_width - m_l - m_r,
+                    used_cross,
                     Some(inner_main),
                     measurer,
                     viewport,
@@ -10997,7 +11180,30 @@ fn lay_out_flex(
                         ..Default::default()
                     },
                 );
+                // Свободное место поперечной оси достаётся auto-полям, а если
+                // их нет — выравниванию (CSS Flexbox §8.1: auto старше
+                // `align-self`).
+                let free_cross = (avail_cross - children[i].rect.width).max(0.0);
+                let cross_shift = if auto_cross_l && auto_cross_r {
+                    free_cross / 2.0
+                } else if auto_cross_l {
+                    free_cross
+                } else if auto_cross_r {
+                    0.0
+                } else {
+                    match cross_align {
+                        AlignValue::Center => free_cross / 2.0,
+                        AlignValue::End => free_cross,
+                        _ => 0.0,
+                    }
+                };
+                if cross_shift != 0.0 {
+                    shift_tree(&mut children[i], cross_shift, 0.0);
+                }
                 main_cursor += outer_main + item_gap + jc_gap;
+                if auto_after {
+                    main_cursor += auto_main_share;
+                }
             } else {
                 let inner_main = (outer_main - m_l - m_r).max(0.0);
                 // CSS Flexbox §9.8: percentage cross sizes (e.g. height:100%) resolve
@@ -11021,6 +11227,9 @@ fn lay_out_flex(
                     },
                 );
                 main_cursor += outer_main + item_gap + jc_gap;
+                if auto_after {
+                    main_cursor += auto_main_share;
+                }
             }
         }
 
@@ -11050,7 +11259,25 @@ fn lay_out_flex(
                 let m_t = is.margin_top.resolve_or_zero(iem, cb, viewport);
                 let m_b = is.margin_bottom.resolve_or_zero(iem, cb, viewport);
                 let align = if matches!(is.align_self, AlignValue::Auto) { s.align_items } else { is.align_self };
+                // CSS Flexbox §8.1: auto-поле ПОПЕРЕЧНОЙ оси съедает свободное
+                // место раньше `align-self`/`align-items` (и отменяет stretch):
+                // два auto — по центру, одно — прижать к противоположному краю.
+                let auto_cross_start = matches!(is.margin_top, LengthOrAuto::Auto);
+                let auto_cross_end = matches!(is.margin_bottom, LengthOrAuto::Auto);
                 let outer_cross = item.rect.height + m_t + m_b;
+                if auto_cross_start || auto_cross_end {
+                    let free = (effective_cross - outer_cross).max(0.0);
+                    let shift = if auto_cross_start && auto_cross_end {
+                        free / 2.0
+                    } else if auto_cross_start {
+                        free
+                    } else {
+                        0.0
+                    };
+                    let new_y = content_y + cross_cursor + m_t + shift;
+                    shift_y_box(item, new_y - item.rect.y);
+                    continue;
+                }
                 // The item was laid out at the line's cross-start (`content_y +
                 // cross_cursor + m_t`). Cross alignment must move the *whole*
                 // subtree, not just `rect.y`: the item's descendants were already
@@ -12606,6 +12833,7 @@ fn balance_wrap(
 /// line onto the last line, so the last line has ≥ 2 fragments.
 /// The total line count may increase by at most 1.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn pretty_wrap(
     segments: &[InlineSegment],
     container_width: f32,
@@ -13464,6 +13692,7 @@ fn truncate_frag_with_ellipsis(
 /// or replaces overflowing text if the line is already too wide.
 ///
 /// Called only when a text measurer is available (same guard as `text-overflow: ellipsis`).
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn apply_line_clamp(
     lines: &mut Vec<Vec<InlineFrag>>,
     max_lines: u32,
@@ -15818,6 +16047,98 @@ mod tests {
         let (x, w) = abs_card_x_w("left: 10px; right: 10px; top: 8px;", "60px");
         assert_eq!(w, 380.0, "both insets must fill the gap, got {w}");
         assert_eq!(x, 10.0, "x must be the left inset, got {x}");
+    }
+
+    // ── auto-поля флекс-элемента (CSS Flexbox §8.1) ────────────────────────
+
+    /// Разложить один флекс-элемент со стилем `item_css` в контейнере со
+    /// стилем `container_css` (800×600) и вернуть его прямоугольник.
+    fn flex_item_rect(container_css: &str, item_css: &str) -> lumen_core::geom::Rect {
+        let html = r#"<div id="c"><div id="i"></div></div>"#;
+        let css = format!(
+            "body{{margin:0}}#c {{ display: flex; width: 400px; height: 200px; {container_css} }}\
+             #i {{ width: 100px; height: 50px; {item_css} }}"
+        );
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(&css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        find_by_id_all(&root, &doc, "i").expect("item not found").rect
+    }
+
+    #[test]
+    fn flex_item_auto_main_margins_center() {
+        // Оба auto-поля главной оси делят свободное место пополам: элемент по
+        // центру строки. Живой случай — карточка формы входа `tbank.ru/login/`,
+        // которая стояла слева, пока auto резолвился в ноль.
+        let r = flex_item_rect("", "margin-left: auto; margin-right: auto;");
+        assert_eq!(r.x, 150.0, "элемент должен встать по центру, x={}", r.x);
+    }
+
+    #[test]
+    fn flex_item_auto_main_margin_beats_justify_content() {
+        // Auto-поля съедают свободное место ДО `justify-content`, поэтому
+        // `space-between` с одним элементом ничего не меняет.
+        let r = flex_item_rect(
+            "justify-content: space-between;",
+            "margin-left: auto; margin-right: auto;",
+        );
+        assert_eq!(r.x, 150.0, "justify-content не должен перебивать auto, x={}", r.x);
+    }
+
+    #[test]
+    fn flex_item_single_auto_main_margin_pushes_to_end() {
+        // Одно auto слева — элемент прижат к концу строки.
+        let r = flex_item_rect("", "margin-left: auto;");
+        assert_eq!(r.x, 300.0, "элемент должен уехать вправо, x={}", r.x);
+    }
+
+    #[test]
+    fn flex_item_auto_cross_margins_center() {
+        // Поперечная ось: два auto центрируют и отменяют растяжение.
+        let r = flex_item_rect("", "margin-top: auto; margin-bottom: auto;");
+        assert_eq!(r.y, 75.0, "элемент должен встать по центру по вертикали, y={}", r.y);
+        assert_eq!(r.height, 50.0, "auto-поля отменяют stretch, h={}", r.height);
+    }
+
+    #[test]
+    fn flex_item_single_auto_cross_margin_pushes_to_end() {
+        let r = flex_item_rect("", "margin-top: auto;");
+        assert_eq!(r.y, 150.0, "элемент должен уехать вниз, y={}", r.y);
+    }
+
+    #[test]
+    fn flex_item_grow_stops_at_max_width() {
+        // §9.7 шаг 4: растущий элемент замирает на своём `max-width`, а не
+        // забирает всю строку. Без этого раскладка «выдавала» ему 400px,
+        // свободного места не оставалось, а нарисован он всё равно был на
+        // 150px — и любое выравнивание строки становилось бессмысленным.
+        let r = flex_item_rect("", "flex-grow: 1; max-width: 150px;");
+        assert_eq!(r.width, 150.0, "рост обязан упереться в max-width, w={}", r.width);
+    }
+
+    #[test]
+    fn flex_item_grow_with_max_width_leaves_room_for_auto_margin() {
+        // Связка обоих правил — ровно случай карточки формы входа: элемент
+        // растёт, упирается в `max-width`, остаток строки достаётся auto-полям.
+        let r = flex_item_rect("", "flex-grow: 1; max-width: 200px; margin-left: auto; margin-right: auto;");
+        assert_eq!(r.width, 200.0, "w={}", r.width);
+        assert_eq!(r.x, 100.0, "остаток строки делится поровну, x={}", r.x);
+    }
+
+    #[test]
+    fn flex_item_grow_without_max_still_fills_line() {
+        // Плечо сравнения: без потолка рост работает как раньше.
+        let r = flex_item_rect("", "flex-grow: 1;");
+        assert_eq!(r.width, 400.0, "без max-width элемент занимает строку, w={}", r.width);
+    }
+
+    #[test]
+    fn flex_item_without_auto_margins_unchanged() {
+        // Плечо сравнения: без auto-полей ничего не поменялось.
+        let r = flex_item_rect("justify-content: center;", "");
+        assert_eq!(r.x, 150.0, "justify-content: center по-прежнему работает, x={}", r.x);
+        let r = flex_item_rect("", "");
+        assert_eq!(r.x, 0.0, "по умолчанию элемент у начала строки, x={}", r.x);
     }
 
     #[test]

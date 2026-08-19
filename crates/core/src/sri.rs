@@ -11,6 +11,11 @@
 //! отдельно (свои реализации алгоритмов FIPS 180-4, поскольку «default —
 //! своё»; либо обёртка вокруг rustls/ring через exception #3).
 
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
 /// Алгоритм хеширования в SRI metadata.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SriAlgorithm {

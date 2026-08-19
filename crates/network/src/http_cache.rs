@@ -11,6 +11,11 @@
 //! - 304 Not Modified → reuse body, refresh metadata
 //! - Vary not supported (unsafe to cache Vary: * or Vary: Cookie)
 
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
 use lru::LruCache;
 use rusqlite::{params, Connection};
 use std::{
@@ -199,6 +204,7 @@ pub struct HttpCache {
 
 impl HttpCache {
     /// Create an empty cache with LRU eviction and 50 MB limit.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn new() -> Self {
         Self {
             entries: Mutex::new(LruCache::new(NonZeroUsize::new(10000).unwrap())),
@@ -239,6 +245,7 @@ impl Default for HttpCache {
 }
 
 impl HttpCacheBackend for HttpCache {
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn get(&self, url: &str) -> Option<CacheEntrySnapshot> {
         let mut entries = self.entries.lock().unwrap();
         entries.get(&cache_key(url)).map(|e| CacheEntrySnapshot {
@@ -252,6 +259,7 @@ impl HttpCacheBackend for HttpCache {
         })
     }
 
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn store(&self, url: &str, status: u16, body: Vec<u8>, headers: &[(String, String)]) {
         let cc_value = header_value(headers, "cache-control").unwrap_or_default();
         let cc = CacheControl::parse(cc_value);
@@ -313,6 +321,7 @@ impl HttpCacheBackend for HttpCache {
         entries.put(key, entry);
     }
 
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn revalidate(&self, url: &str, headers_304: &[(String, String)]) {
         let mut guard = self.entries.lock().unwrap();
         let key = cache_key(url);
@@ -427,6 +436,7 @@ impl DiskHttpCache {
 }
 
 impl HttpCacheBackend for DiskHttpCache {
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn get(&self, url: &str) -> Option<CacheEntrySnapshot> {
         let conn = self.conn.lock().unwrap();
         let key = cache_key(url);
@@ -477,6 +487,7 @@ impl HttpCacheBackend for DiskHttpCache {
         })
     }
 
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn store(&self, url: &str, status: u16, body: Vec<u8>, headers: &[(String, String)]) {
         let cc_value = header_value(headers, "cache-control").unwrap_or_default();
         let cc = CacheControl::parse(cc_value);
@@ -515,6 +526,7 @@ impl HttpCacheBackend for DiskHttpCache {
         );
     }
 
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn revalidate(&self, url: &str, headers_304: &[(String, String)]) {
         let key = cache_key(url);
         let conn = self.conn.lock().unwrap();

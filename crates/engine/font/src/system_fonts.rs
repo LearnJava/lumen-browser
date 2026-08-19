@@ -323,8 +323,8 @@ mod tests {
     #[test]
     fn finds_bundled_inter() {
         let idx = SystemFontIndex::with_dirs(vec![assets_dir()]);
-        // assets/fonts содержит Inter, Golos Text и JetBrains Mono (DS-4).
-        assert_eq!(idx.family_count(), 3, "should find all bundled families in assets/fonts");
+        // assets/fonts содержит Inter, Golos Text, JetBrains Mono (DS-4) и Ahem (TEST-5).
+        assert_eq!(idx.family_count(), 4, "should find all bundled families in assets/fonts");
         let paths = idx.lookup_family("Inter");
         assert_eq!(paths.len(), 1, "Inter Regular registered once");
         assert!(paths[0].file_name().unwrap().to_string_lossy().contains("Inter"));
@@ -405,5 +405,26 @@ mod tests {
         assert_eq!(guess_from_subfamily("Thin"), (100, FontStyle::Normal));
         assert_eq!(guess_from_subfamily("Oblique"), (400, FontStyle::Oblique));
         assert_eq!(guess_from_subfamily(""), (400, FontStyle::Normal));
+    }
+}
+
+#[cfg(test)]
+mod perf_census {
+    /// PERF census (2026-08-18): cost of the lazy system-font index build —
+    /// the suspected fixed ~100 ms every process pays at first layout, even
+    /// for a page with no text at all. Printed, not asserted.
+    #[test]
+    fn census_system_font_index_build_cost() {
+        let t0 = std::time::Instant::now();
+        let idx = super::shared_system_index();
+        let t_get = t0.elapsed();
+        let t1 = std::time::Instant::now();
+        let families = super::FontProvider::list_families(idx.as_ref());
+        let t_build = t1.elapsed();
+        eprintln!("[census] shared_system_index() handle: {t_get:?}");
+        eprintln!("[census] first index build: {t_build:?} ({} families)", families.len());
+        let t2 = std::time::Instant::now();
+        let _ = super::FontProvider::list_families(idx.as_ref());
+        eprintln!("[census] second call (cached): {:?}", t2.elapsed());
     }
 }

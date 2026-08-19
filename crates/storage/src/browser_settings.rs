@@ -124,6 +124,7 @@ impl BrowserSettings {
 
     // ── Low-level helpers ────────────────────────────────────────────────────
 
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     fn get_str(&self, key: &str, default: &str) -> String {
         let conn = self.conn.lock().expect("settings lock");
         conn.query_row(
@@ -134,6 +135,7 @@ impl BrowserSettings {
         .unwrap_or_else(|_| default.to_owned())
     }
 
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     fn set_str(&self, key: &str, value: &str) -> Result<()> {
         let conn = self.conn.lock().expect("settings lock");
         conn.execute(

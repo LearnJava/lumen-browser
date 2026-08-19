@@ -80,7 +80,16 @@ description = "Lumen: <одна строка что делает крейт>"
 # Добавляй только то, что реально нужно сейчас.
 # Новая external dep = "Why this dependency:" в коммите + обновление CLAUDE.md.
 lumen-core.workspace = true
+
+# Политики проекта как машинные проверки — [workspace.lints] в корневом
+# Cargo.toml, протокол docs/lint-policy.md.
+[lints]
+workspace = true
 ```
+
+**Секция `[lints]` обязательна.** Без неё крейт не подключает `[workspace.lints]`
+и молча выпадает из всех проектных правил (`undocumented_unsafe_blocks` и всё,
+что будет включено дальше) — сборка при этом зелёная, поэтому пропуск не заметен.
 
 Шаблон `src/lib.rs`:
 

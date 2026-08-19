@@ -9,6 +9,11 @@
 //!   → tessellate_fill(contours) → Vec<[f32;2]> fill triangle vertices
 //!   → tessellate_stroke(contours, half_w) → Vec<[f32;2]> stroke triangle vertices
 
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
 use std::f32::consts::PI;
 
 /// One SVG path command (absolute coords, after normalization).

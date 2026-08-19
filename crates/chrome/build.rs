@@ -16,6 +16,12 @@
 //! verbatim below so the same logic is unit-testable from `mod gate;` in
 //! `lib.rs` without duplication.
 
+// Постоянное исключение из `clippy::panic` (docs/lint-policy.md §10): паника —
+// это и есть штатный способ провалить сборку из build-скрипта. Возвращать
+// `Result` некуда, а «мягкий» отказ дал бы собранный бинарь с невалидным
+// ассетом хрома — ровно то, что этот скрипт обязан не допустить.
+#![allow(clippy::panic)]
+
 use std::collections::{BTreeSet, HashSet};
 use std::{env, fs, path::Path, path::PathBuf};
 
@@ -223,7 +229,9 @@ fn write_codegen(collected: &Collected) {
          /// Empty for now: the current asset renders its example lists as static markup;\n\
          /// CC-6 introduces `<template>` wrapping once the ChromeModel→DOM diff needs\n\
          /// real cloning (docs/tasks/p1-css-chrome.md CC-3 step 3 / CC-6).\n\
-         pub mod templates {\n    pub const IDS: &[&str] = &[\n",
+         pub mod templates {\n    \
+         /// Строковые id всех `<template>` в `assets/chrome/chrome.html`.\n    \
+         pub const IDS: &[&str] = &[\n",
     );
     for t in &collected.templates {
         out.push_str(&format!("        {t:?},\n"));

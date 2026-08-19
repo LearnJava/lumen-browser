@@ -112,36 +112,115 @@ A dirty `main` worktree blocks all other sessions — git refuses `checkout main
 
 ---
 
+## Merge and push after every commit (user, 2026-08-19)
+
+**Every commit is merged into `main` and pushed to `origin/main` right after it is made.** Work is
+not accumulated on a branch until the task is finished.
+
+```bash
+# per commit, not per task:
+cargo clippy -p <crate> -- -D warnings && cargo test -p <crate>   # local gate
+git commit -m "..."
+# merge into main (see "When the root checkout blocks the merge" below) and:
+git push origin main
+```
+
+Feature branches and `--no-ff` remain mandatory — direct commits to `main` are still forbidden.
+What changed is only the cadence.
+
+**Why:** unpushed work does not exist for anyone else. On 2026-08-19 several roles were holding
+unmerged branches simultaneously, the root checkout trailed `origin/main` by 21 commits, and
+parallel sessions duplicated effort and collided on bug numbers (the seventh such renumbering).
+Frequent small merges also replace one large end-of-task conflict with several trivial ones.
+
+**CI is no longer waited on before merging** (same decision, replaces the 2026-08-18 step 1b).
+The local gate is the only pre-merge check; CI is read *after* the push, on `main`, and fixed if
+it goes red. Waiting per commit would cost ~30 minutes each, which the per-commit cadence makes
+untenable. The local gate is therefore more important than before, not less — see "The local gate
+is NOT replaced by CI" below.
+
+### When the root checkout blocks the merge
+
+`main` is checked out in the repo root, and the root routinely carries another session's
+uncommitted files (`.gitignore`, `STATUS-P2.md`, screenshots). `git merge` there fails as soon as
+the merge touches one of those paths, and the files are not yours to stash or commit. Merge in a
+throwaway worktree taken from the remote instead:
+
+```bash
+git worktree add .claude/worktrees/merge-tmp -b merge-tmp-<task> origin/main
+cd .claude/worktrees/merge-tmp
+git merge --no-ff p<N>-task-name -m "Влить ветку p<N>-task-name: описание"
+git push origin HEAD:main
+cd - && git worktree remove .claude/worktrees/merge-tmp && git branch -D merge-tmp-<task>
+```
+
+Consequence to expect: the **local** `main` now trails `origin/main`. That also makes
+`scripts/worktree-pool.sh release` refuse to free the slot — it compares the slot's branch against
+local `main` and sees the work as unmerged. Free it directly instead:
+
+```bash
+git -C .claude/worktrees/p<N>-work checkout --detach origin/main
+git branch -D p<N>-task-name      # -d refuses for the same stale-main reason
+```
+
+---
+
 ## Task completion checklist (7 steps, all mandatory)
 
-**After task is done and ready to merge, execute ALL 7 steps in order. Missing even one step causes accumulated stale branches.**
+**When the task itself is done. Steps 1–3 have already run per commit under the rule above; here
+they cover whatever the final commit left. Missing a step leaves stale branches behind.**
 
 ```bash
 # 1. Verify code is production-ready
 cargo clippy -p <crate> -- -D warnings
 cargo test -p <crate>
 
-# 2. Merge branch to main with --no-ff
+# 2. Merge branch to main with --no-ff (in a throwaway worktree if the root is dirty)
 git checkout main
 git merge --no-ff p<N>-task-name -m "Merge p<N>-task-name: описание"
 
-# 3. Free the pool slot, then delete the branch
-#    (a slot still holding the branch makes `branch -d` fail:
-#     "cannot delete branch ... used by worktree at ...")
-bash scripts/worktree-pool.sh release p<N>-work
-git branch -d p<N>-task-name
+# 3. Push to remote
+git push origin main
 
 # 4. Update STATUS-PN.md on main
 # — delete the completed task's pointer line (history lives in git log)
 git add STATUS-PN.md
 git commit -m "P<N>: отметить task-name как завершённую"
-
-# 5. Push to remote
 git push origin main
 
-# 6. Pool slot: already freed in step 3 — the slot and its warm target/ stay.
+# 5. Free the pool slot, then delete the branch
+#    (a slot still holding the branch makes `branch -d` fail:
+#     "cannot delete branch ... used by worktree at ...")
+bash scripts/worktree-pool.sh release p<N>-work
+git branch -d p<N>-task-name
+
+# 6. Pool slot: already freed in step 5 — the slot and its warm target/ stay.
 #    Ad-hoc worktree (not a pool slot): delete it, it blocks other sessions.
 git worktree remove .claude/worktrees/<task-name>
+
+# 7. Delete the remote task branch, if one was ever pushed.
+git push origin --delete p<N>-task-name
 ```
 
-**Why all 7 are mandatory:** Skipping delete-branch (step 3) or leaving an ad-hoc worktree behind (step 6) leaves stale branches and directories that accumulate. Skipping STATUS update (step 4) loses task history. Both cause confusion in parallel sessions and merge conflicts. As of 2026-05-28, 37 stale branches had accumulated due to incomplete cleanup. Commit to all 7 steps every time.
+**Why all 7 are mandatory:** Skipping delete-branch (step 5) or leaving an ad-hoc worktree behind
+(step 6) leaves stale branches and directories that accumulate. Skipping the STATUS update (step 4)
+loses task history. Skipping step 7 leaves the remote littered — 29 stale remote branches had piled
+up by 2026-08-18, the oldest from June. Both cause confusion in parallel sessions and merge
+conflicts. As of 2026-05-28, 37 stale local branches had accumulated due to incomplete cleanup.
+
+### The local gate is NOT replaced by CI (yet)
+
+`docs/ci-offload.md` §8 sketches moving the gate to CI. **That has not happened.** Today `ci.yml`
+runs `cargo check -p lumen-shell` plus unit tests of 16 crates — it does **not** run
+`clippy --workspace` and does not run the CPU snapshot tests, so it is strictly *weaker* than the
+local gate. CI catches what the local gate cannot (Linux and macOS), the local gate catches what CI
+does not (lints, snapshots, scoped tests). Only once the `lint` and `snapshot-cpu` jobs of
+`docs/ci-offload.md` §4 exist and are green does trimming the local gate become a real question.
+
+Since 2026-08-19 CI is no longer a merge gate at all (it is read after the push), so the local gate
+is the *only* thing standing between a broken commit and `main`. Skipping it is not a shortcut —
+it is the whole check.
+
+A live example of what CI sees and the local gate cannot: `Clippy workspace — PROBE` is red on
+Linux and macOS because of `unwrap()` in `crates/network/src/ctap2.rs`, inside Unix-only code
+(`as_raw_fd`) that does not compile on Windows and that a Windows clippy therefore never lints.

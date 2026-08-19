@@ -305,6 +305,7 @@ impl ConnectionMigration {
     ///   confirmed (RFC 9000 §9).
     /// - [`MigrationError::AlreadyMigrating`] if a migration is already in
     ///   progress.
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn initiate(
         &mut self,
         data: [u8; PATH_DATA_LEN],
@@ -413,6 +414,7 @@ impl ConnectionMigration {
     /// ID is now active (RFC 9000 §9.5) and whether to reset the congestion
     /// controller and RTT estimator (RFC 9000 §9.4). Returns `None` when not
     /// migrating or when the data matches no outstanding challenge.
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn on_path_response(&mut self, data: [u8; PATH_DATA_LEN]) -> Option<MigrationOutcome> {
         let validator = self.validator.as_mut()?;
         if !validator.on_path_response(data) {

@@ -301,6 +301,7 @@ impl CascadeStyles {
 impl std::ops::Index<&NodeId> for CascadeStyles {
     type Output = Arc<ComputedStyle>;
 
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     fn index(&self, id: &NodeId) -> &Arc<ComputedStyle> {
         self.get(id).expect("no cascade entry for node")
     }
@@ -609,6 +610,7 @@ impl CounterCtx {
 
     /// Increment top-of-stack for each entry in `counter-increment`. Auto-creates a
     /// counter with value 0 if it has never been reset.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn apply_increment(&mut self, increments: &[(String, i32)]) {
         for (name, val) in increments {
             let stack = self.stacks.entry(name.clone()).or_default();
@@ -623,6 +625,7 @@ impl CounterCtx {
     /// (CSS Lists L3 §4). Auto-creates the counter (with the set value as its
     /// only scope) if it has never been reset — `counter-set` on a non-existent
     /// counter acts as though it created the counter.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn apply_set(&mut self, sets: &[(String, i32)]) {
         for (name, val) in sets {
             let stack = self.stacks.entry(name.clone()).or_default();
@@ -1674,6 +1677,7 @@ fn parse_symbols_list(value: &str) -> Vec<String> {
 }
 
 /// Parse a single CSS symbol (quoted string or ident).
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn parse_single_symbol(value: &str) -> String {
     let s = value.trim();
     if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')) {

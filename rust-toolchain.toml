@@ -1,4 +1,8 @@
 [toolchain]
-channel = "stable"
+# Пин, а не "stable": плавающий канал давал разные наборы линтов на разных
+# машинах — локально 1.96.1, на раннерах CI последний stable, отсюда clippy,
+# зелёный у разработчика и красный в CI. Версию поднимать осознанным
+# коммитом, прогнав workspace-clippy.
+channel = "1.97.0"
 components = ["rustfmt", "clippy"]
 profile = "minimal"

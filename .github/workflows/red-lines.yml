@@ -8,7 +8,12 @@ name: Red Lines (ADR-006/007)
 on:
   pull_request:
   push:
-    branches: [main]
+    # Task branches too — see the note in ci.yml (docs/ci-offload.md §8).
+    branches: [main, 'p[1-5]-*']
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   red-lines:

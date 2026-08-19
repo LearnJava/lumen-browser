@@ -20,6 +20,11 @@
 //! интерполяции fixed-size атласа (раньше всё рисовалось на 24 px и потом
 //! масштабировалось).
 
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
 use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::error::Error;
@@ -8184,6 +8189,7 @@ impl Renderer {
     /// обычного кадра, оффскрин-рендера полосы скролл-композитора и
     /// композиции полоса+overlay; отличия сведены к выбору целевого view,
     /// размеров «поверхности» и финализации (present / счётчики / хэш).
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn render_impl(
         &mut self,
         content: &[DisplayCommand],
@@ -15512,6 +15518,7 @@ fn text_run_cache_disabled() -> bool {
 /// [`push_text_glyphs_mixed`] to measure a segment's real width without a
 /// separate shaping pass.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 fn push_text_glyphs(
     out: &mut Vec<TextVertex>,
     rect: Rect,
@@ -16290,6 +16297,12 @@ fn shader_rrect_clip_allowed(cmds: &[DisplayCommand]) -> Vec<bool> {
 }
 
 fn as_bytes<T: Copy>(slice: &[T]) -> &[u8] {
+    // SAFETY: the produced slice has exactly `size_of_val(slice)` bytes and borrows
+    // `slice`, so it cannot outlive it or alias mutably. Reading `T` as bytes is
+    // sound only for a type without padding or uninitialised bytes — the `Copy`
+    // bound cannot express that, so it is a precondition on the caller. Every call
+    // site here passes a `#[repr(C)]` POD vertex/uniform struct on its way into a
+    // wgpu buffer, which is what the requirement amounts to.
     unsafe {
         std::slice::from_raw_parts(slice.as_ptr() as *const u8, std::mem::size_of_val(slice))
     }

@@ -385,6 +385,7 @@ impl<S: Read + Write> H2Conn<S> {
     /// response frames. In practice the peer's initial windows are ≥ 64 KiB, which
     /// covers API request bodies; larger uploads fall back to HTTP/1.1 in the
     /// caller, where the socket blocks on the OS buffer instead.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn fetch_with_body(
         &mut self,
         method: &str,
@@ -657,6 +658,7 @@ impl<S: Read + Write> H2Conn<S> {
     /// After this method returns, the stream ID is invalid and may be reused
     /// (by allocating a new one). Calling with a non-existent stream ID
     /// returns an error.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn read_response_for_stream(&mut self, sid: u32) -> Result<H2Response, Error> {
         if !self.pending_streams.contains_key(&sid) {
             return Err(Error::Network(format!("H2: no pending stream {sid}")));

@@ -1,6 +1,14 @@
 //! Печатает несколько глифов из bundled Inter-Regular.ttf как ASCII-art.
 //! Запуск: `cargo run --example preview -p lumen-font`.
 
+// Файл-инструмент (бенч/пример), а не движок: исключение из `clippy::unwrap_used`
+// равнозначно тестовому. Реестр — docs/lint-policy.md §10.
+#![allow(clippy::unwrap_used)]
+
+// Файл-инструмент (бенч/пример), а не движок: `expect_used` здесь — то же самое,
+// что в тесте. Реестр исключений — docs/lint-policy.md §10.
+#![allow(clippy::expect_used)]
+
 use std::path::PathBuf;
 
 use lumen_font::{Bitmap, Font, Rasterizer};

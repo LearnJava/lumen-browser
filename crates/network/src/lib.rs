@@ -19,6 +19,11 @@
 //! (через `lumen_core::ext`), которая возвращает заранее зарегистрированные
 //! fixture-данные вместо реальных HTTP-запросов.
 
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::sync::Arc;
@@ -2499,6 +2504,7 @@ fn destination_to_resource_type(dest: RequestDestination) -> lumen_core::ext::Re
 ///
 /// [BUG-757]: https://github.com/LearnJava/lumen-browser/blob/main/bugs/BUG-757-FIXED.md
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn fetch_with_redirect(
     url: &Url,
     hops_left: u8,
@@ -4285,100 +4291,23 @@ impl JsFetchProvider for HttpClient {
     /// одноимённый заголовок нашего fingerprint-набора (`Accept`,
     /// `Accept-Language`, `Cache-Control`, `User-Agent`), а не дублирует его.
     fn fetch_request(&self, req: &JsFetchRequest<'_>) -> Result<JsFetchResult> {
-        let url = Url::parse(req.url).map_err(|e| Error::InvalidUrl(e.to_string()))?;
-        let method_upper = req.method.to_ascii_uppercase();
-        match (req.body.is_some(), method_upper.as_str()) {
-            (false, "GET" | "HEAD") | (true, "POST" | "PUT" | "PATCH" | "DELETE") => {}
-            (false, m) => {
-                return Err(Error::Network(format!(
-                    "fetch: Phase 0 supports GET/HEAD only, got {m}"
-                )));
-            }
-            (true, m) => {
-                return Err(Error::Network(format!(
-                    "fetch_with_body: unsupported method {m}"
-                )));
-            }
-        }
-        // Предварительная отмена (AbortSignal, уже сработавший до отправки) и
-        // установка токена на поток: `do_request` глубоко в пути чтения поднимет
-        // по нему watchdog и порвёт сокет, если abort() случится в полёте.
-        let _scope = match req.token {
-            Some(t) if t.is_aborted() => {
-                return Err(Error::Aborted("fetch aborted before send".to_string()));
-            }
-            Some(t) => Some(AbortScope::new(t.clone())),
-            None => None,
-        };
-        // SW intercept before network — только для запросов без тела (GET/HEAD):
-        // CacheStorage адресуется URL-ом, тело в ключ не входит.
-        if req.body.is_none()
-            && let Some(ref interceptor) = self.interceptor
-        {
-            let origin = build_origin(&url);
-            if let Some(body) = interceptor.intercept(&url, &origin) {
-                return Ok(JsFetchResult {
-                    status: 200,
-                    status_text: "OK".into(),
-                    headers: vec![],
-                    body,
-                });
-            }
-        }
-        // Тот же путь, что у GET: куки, редиректы, HSTS, ad-block-фильтр,
-        // mixed-content, HTTP/2, retry на протухшем keep-alive. Своя ветка
-        // «сокет + write + read» для тела стояла здесь до 2026-08-17 и не имела
-        // ничего из перечисленного — POST уходил без Cookie, не ходил по
-        // Location и писал HTTP/1.1-байты в согласованное h2-соединение.
-        let request_body = req.body.as_ref().map(|b| RequestBody {
-            method: &method_upper,
-            content_type: b.content_type,
-            bytes: b.bytes,
-        });
-        let author_headers = build_author_headers(req.headers, request_body.is_some());
-        let accept_encoding = self.accept_encoding_header();
-        let destination = self.mixed_content.as_ref().map(|_| RequestDestination::Other);
-        let (resp, _final_url) = fetch_with_redirect(
-            &url,
-            5,
-            &self.pool,
-            self.h2_pool.as_deref(),
-            self.resolver.as_ref(),
-            self.tls_profile,
-            self.fingerprint_profile,
-            self.sink.as_deref(),
-            self.filter.as_deref(),
-            self.hsts.as_deref(),
-            self.credentials.as_deref(),
-            &self.decoders,
-            accept_encoding.as_deref(),
-            None,
-            None,
-            self.tab_id,
-            self.mixed_content.as_ref(),
-            destination,
-            None,
-            &author_headers,
-            self.cookie_jar.as_deref(),
-            self.top_level_site.as_deref(),
-            self.proxy.as_deref(),
-            self.socks5_proxy.as_deref(),
-            self.h3_alt_svc(),
-            self.h3_pool(),
-            None,  // PH1-2a: streaming sink — only fetch_page_streaming streams
-            false, // BUG-292: subresource, not a document navigation
-            request_body.as_ref(),
-        )?;
-        Ok(JsFetchResult {
-            status_text: http_status_text(resp.status).to_string(),
-            status: resp.status,
-            headers: resp
-                .headers
-                .into_iter()
-                .map(|(k, v)| (k.to_ascii_lowercase(), v))
-                .collect(),
-            body: resp.body,
-        })
+        self.fetch_request_impl(req, true)
+    }
+
+    /// Сеть самого service worker-а: тот же путь, но перехватчик пропускается,
+    /// иначе воркер отправил бы запрос самому себе и встал бы на ожидании
+    /// собственного ответа (см. описание метода в `lumen_core::ext`).
+    fn fetch_bypassing_sw(&self, url: &str, method: &str) -> Result<JsFetchResult> {
+        self.fetch_request_impl(
+            &JsFetchRequest {
+                url,
+                method,
+                headers: &[],
+                body: None,
+                token: None,
+            },
+            false,
+        )
     }
 
     fn fetch_sync(&self, url: &str, method: &str) -> Result<JsFetchResult> {
@@ -4450,6 +4379,113 @@ impl JsFetchProvider for HttpClient {
     }
 }
 
+impl HttpClient {
+    /// Общее тело JS-запроса. `allow_sw_intercept = false` — для запросов,
+    /// исходящих из самого service worker-а.
+    fn fetch_request_impl(
+        &self,
+        req: &JsFetchRequest<'_>,
+        allow_sw_intercept: bool,
+    ) -> Result<JsFetchResult> {
+        let url = Url::parse(req.url).map_err(|e| Error::InvalidUrl(e.to_string()))?;
+        let method_upper = req.method.to_ascii_uppercase();
+        match (req.body.is_some(), method_upper.as_str()) {
+            (false, "GET" | "HEAD") | (true, "POST" | "PUT" | "PATCH" | "DELETE") => {}
+            (false, m) => {
+                return Err(Error::Network(format!(
+                    "fetch: Phase 0 supports GET/HEAD only, got {m}"
+                )));
+            }
+            (true, m) => {
+                return Err(Error::Network(format!(
+                    "fetch_with_body: unsupported method {m}"
+                )));
+            }
+        }
+        // Предварительная отмена (AbortSignal, уже сработавший до отправки) и
+        // установка токена на поток: `do_request` глубоко в пути чтения поднимет
+        // по нему watchdog и порвёт сокет, если abort() случится в полёте.
+        let _scope = match req.token {
+            Some(t) if t.is_aborted() => {
+                return Err(Error::Aborted("fetch aborted before send".to_string()));
+            }
+            Some(t) => Some(AbortScope::new(t.clone())),
+            None => None,
+        };
+        // SW intercept before network — только для запросов без тела (GET/HEAD):
+        // CacheStorage адресуется URL-ом, тело в ключ не входит.
+        if allow_sw_intercept
+            && req.body.is_none()
+            && let Some(ref interceptor) = self.interceptor
+        {
+            let origin = build_origin(&url);
+            if let Some(body) = interceptor.intercept(&url, &origin) {
+                return Ok(JsFetchResult {
+                    status: 200,
+                    status_text: "OK".into(),
+                    headers: vec![],
+                    body,
+                });
+            }
+        }
+        // Тот же путь, что у GET: куки, редиректы, HSTS, ad-block-фильтр,
+        // mixed-content, HTTP/2, retry на протухшем keep-alive. Своя ветка
+        // «сокет + write + read» для тела стояла здесь до 2026-08-17 и не имела
+        // ничего из перечисленного — POST уходил без Cookie, не ходил по
+        // Location и писал HTTP/1.1-байты в согласованное h2-соединение.
+        let request_body = req.body.as_ref().map(|b| RequestBody {
+            method: &method_upper,
+            content_type: b.content_type,
+            bytes: b.bytes,
+        });
+        let author_headers = build_author_headers(req.headers, request_body.is_some());
+        let accept_encoding = self.accept_encoding_header();
+        let destination = self.mixed_content.as_ref().map(|_| RequestDestination::Other);
+        let (resp, _final_url) = fetch_with_redirect(
+            &url,
+            5,
+            &self.pool,
+            self.h2_pool.as_deref(),
+            self.resolver.as_ref(),
+            self.tls_profile,
+            self.fingerprint_profile,
+            self.sink.as_deref(),
+            self.filter.as_deref(),
+            self.hsts.as_deref(),
+            self.credentials.as_deref(),
+            &self.decoders,
+            accept_encoding.as_deref(),
+            None,
+            None,
+            self.tab_id,
+            self.mixed_content.as_ref(),
+            destination,
+            None,
+            &author_headers,
+            self.cookie_jar.as_deref(),
+            self.top_level_site.as_deref(),
+            self.proxy.as_deref(),
+            self.socks5_proxy.as_deref(),
+            self.h3_alt_svc(),
+            self.h3_pool(),
+            None,  // PH1-2a: streaming sink — only fetch_page_streaming streams
+            false, // BUG-292: subresource, not a document navigation
+            request_body.as_ref(),
+        )?;
+        Ok(JsFetchResult {
+            status_text: http_status_text(resp.status).to_string(),
+            status: resp.status,
+            headers: resp
+                .headers
+                .into_iter()
+                .map(|(k, v)| (k.to_ascii_lowercase(), v))
+                .collect(),
+            body: resp.body,
+        })
+    }
+
+}
+
 impl WebSocketProvider for HttpClient {
     fn connect_ws(
         &self,
@@ -4510,6 +4546,7 @@ struct JsWebSocketSessionImpl {
 
 impl JsWebSocketSessionImpl {
     /// Create a new session, spawning a background thread to receive frames.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn new(ws: websocket::WebSocket) -> Self {
         let protocol = ws.protocol().to_string();
         let queue: Arc<std::sync::Mutex<std::collections::VecDeque<JsWsEvent>>> =
@@ -4584,18 +4621,22 @@ impl JsWebSocketSessionImpl {
 }
 
 impl JsWebSocketSession for JsWebSocketSessionImpl {
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn send_text(&self, text: &str) -> Result<()> {
         self.session.lock().unwrap().send_text(text)
     }
 
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn send_binary(&self, data: &[u8]) -> Result<()> {
         self.session.lock().unwrap().send_binary(data)
     }
 
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn poll(&self) -> Option<JsWsEvent> {
         self.queue.lock().unwrap().pop_front()
     }
 
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn close(&self, code: u16, reason: &str) -> Result<()> {
         self.session.lock().unwrap().close(code, reason)
     }
@@ -4606,6 +4647,7 @@ impl JsWebSocketSession for JsWebSocketSessionImpl {
 }
 
 impl JsWebSocketProvider for HttpClient {
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn connect(&self, url: &str, protocols: &[String]) -> Result<Box<dyn JsWebSocketSession>> {
         let parsed = Url::parse(url)
             .map_err(|e| Error::Network(format!("ws: invalid URL: {e}")))?;
@@ -4654,6 +4696,7 @@ impl JsSseSessionImpl {
     /// wakes a pending reconnect delay immediately, and the loop also checks it
     /// before each read so an idle session exits promptly. A read already
     /// blocked in the socket finishes naturally when the server closes.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn new(mut session: Box<dyn SseSession>) -> Self {
         let queue: Arc<std::sync::Mutex<std::collections::VecDeque<JsSseEvent>>> =
             Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
@@ -4699,6 +4742,7 @@ impl JsSseSessionImpl {
 }
 
 impl JsSseSession for JsSseSessionImpl {
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn poll(&self) -> Option<JsSseEvent> {
         self.queue.lock().unwrap().pop_front()
     }
@@ -4744,6 +4788,7 @@ impl InMemoryFetchInterceptor {
     }
 
     /// Добавить запись: ответ для (origin, url) берётся из кэша без сети.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn insert(&self, origin: impl Into<String>, url: impl Into<String>, body: Vec<u8>) {
         self.cache
             .lock()
@@ -4759,6 +4804,7 @@ impl Default for InMemoryFetchInterceptor {
 }
 
 impl FetchInterceptor for InMemoryFetchInterceptor {
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn intercept(&self, url: &Url, origin: &str) -> Option<Vec<u8>> {
         self.cache
             .lock()

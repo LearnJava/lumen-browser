@@ -108,6 +108,9 @@ const IFRAME_ELEMENT_SHIM: &str = r#"(function() {
 
 #[cfg(all(test, feature = "v8-backend"))]
 mod tests {
+    // `expect()` в хелперах тестового модуля: исключение из clippy.toml
+    // покрывает только тело `#[test]` (docs/lint-policy.md §10).
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
     use crate::v8_runtime::V8JsRuntime;
     use lumen_core::ext::JsRuntime as _;
     use lumen_core::JsValue;

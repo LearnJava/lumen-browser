@@ -33,7 +33,8 @@ use crate::esm::{resolve_specifier_with, ImportMap};
 use crate::import_meta::transform_import_meta;
 use lumen_core::ext::JsFetchProvider;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 // ── Thread-local registry ─────────────────────────────────────────────────────
@@ -133,7 +134,7 @@ fn read_file_module(specifier: &str) -> Result<String, String> {
 /// «не найден» остаётся честным ответом, а не превращается в поход на
 /// несуществующий хост.
 fn fetch_module_source(specifier: &str) -> Result<String, String> {
-    let is_http = specifier.starts_with("http://") || specifier.starts_with("https://");
+    let is_http = is_http_specifier(specifier);
     if !is_http {
         // `file://` — только со страницы, которая сама открыта по `file://`:
         // страница из сети не имеет права дотянуться до диска через импорт.
@@ -149,8 +150,34 @@ fn fetch_module_source(specifier: &str) -> Result<String, String> {
     let Some(provider) = provider else {
         return Err(format!("module '{specifier}' not found (no fetch provider)"));
     };
+    match fetch_over_network(&provider, specifier) {
+        Ok(text) => Ok(text),
+        Err(msg) => {
+            with_state(|s| s.failed.insert(specifier.to_owned(), msg.clone()));
+            Err(msg)
+        }
+    }
+}
+
+/// `true` для спецификатора, который разрешается сетью.
+fn is_http_specifier(specifier: &str) -> bool {
+    specifier.starts_with("http://") || specifier.starts_with("https://")
+}
+
+/// Один сетевой поход за исходником модуля.
+///
+/// Не трогает thread-local реестр — поэтому вызывается и с JS-потока, и с
+/// воркеров [`fetch_batch`]: `ESM` живёт только на потоке изолята, и попытка
+/// прочитать его с воркера дала бы ЧУЖОЕ (пустое) состояние, а не общее.
+fn fetch_over_network(
+    provider: &Arc<dyn JsFetchProvider>,
+    specifier: &str,
+) -> Result<String, String> {
+    let mut fetch_span = lumen_core::trace::span(format!("module {specifier}"), "net");
+    let started = std::time::Instant::now();
     let outcome = match provider.fetch_sync(specifier, "GET") {
         Ok(res) if (200..300).contains(&res.status) => {
+            fetch_span.set_bytes(res.body.len());
             Ok(String::from_utf8_lossy(&res.body).into_owned())
         }
         Ok(res) => Err(format!(
@@ -159,13 +186,107 @@ fn fetch_module_source(specifier: &str) -> Result<String, String> {
         )),
         Err(e) => Err(format!("module '{specifier}': {e}")),
     };
-    match outcome {
-        Ok(text) => Ok(text),
-        Err(msg) => {
-            with_state(|s| s.failed.insert(specifier.to_owned(), msg.clone()));
-            Err(msg)
-        }
+    if esm_trace_enabled() {
+        let ms = started.elapsed().as_secs_f64() * 1000.0;
+        let verdict = match &outcome {
+            Ok(text) => format!("{} байт", text.len()),
+            Err(msg) => msg.clone(),
+        };
+        eprintln!("[esm] {ms:.0} мс {specifier} — {verdict}");
     }
+    outcome
+}
+
+/// `true`, если включена трассировка загрузчика модулей (`LUMEN_ESM_TRACE=1`):
+/// строка на stderr на каждый сетевой поход за модулем — сколько их и по
+/// сколько миллисекунд. Перепись графа модулей живой страницы делается только
+/// так: headless-режимы дампа остаются без `JsFetchProvider`, и модуль по
+/// сети там не грузится вовсе.
+fn esm_trace_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("LUMEN_ESM_TRACE").is_ok_and(|v| v == "1"))
+}
+
+/// `true`, если параллельный предзабор графа модулей отключён
+/// (`LUMEN_NO_ESM_PREFETCH=1`) — рычаг отката к прежнему поведению, когда
+/// каждый `import` ходил в сеть по очереди из резолв-колбэка. Плечо A/B:
+/// одно и то же плечо и по числу походов, и по времени сборки страницы.
+fn esm_prefetch_disabled() -> bool {
+    use std::sync::OnceLock;
+    static DISABLED: OnceLock<bool> = OnceLock::new();
+    *DISABLED.get_or_init(|| std::env::var("LUMEN_NO_ESM_PREFETCH").is_ok_and(|v| v == "1"))
+}
+
+/// Максимум одновременных сетевых походов за модулями одного графа.
+///
+/// Столько же, сколько `MAX_PARALLEL_FETCHES` у загрузчика подресурсов оболочки
+/// (`shell::parallel_map`): работа I/O-bound, потоки спят на сокете, а верхняя
+/// граница держится около браузерного лимита соединений на хост.
+const PREFETCH_PARALLELISM: usize = 8;
+
+/// Забрать исходники нескольких модулей одним параллельным заходом.
+///
+/// Результат `i` соответствует `specifiers[i]`. Реестр не трогается: вызывающий
+/// (JS-поток) сам разложит успехи в `sources`, а отказы в `failed`.
+fn fetch_batch(specifiers: &[String]) -> Vec<Result<String, String>> {
+    let provider = with_state(|s| s.fetcher.clone());
+    let Some(provider) = provider else {
+        return specifiers
+            .iter()
+            .map(|sp| Err(format!("module '{sp}' not found (no fetch provider)")))
+            .collect();
+    };
+    if specifiers.len() == 1 {
+        return vec![fetch_over_network(&provider, &specifiers[0])];
+    }
+
+    let mut results: Vec<Option<Result<String, String>>> =
+        (0..specifiers.len()).map(|_| None).collect();
+    let workers = PREFETCH_PARALLELISM.min(specifiers.len());
+    let next = AtomicUsize::new(0);
+    let (next_ref, provider_ref) = (&next, &provider);
+
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..workers)
+            .map(|_| {
+                scope.spawn(move || {
+                    let mut part = Vec::new();
+                    loop {
+                        let i = next_ref.fetch_add(1, Ordering::Relaxed);
+                        let Some(specifier) = specifiers.get(i) else {
+                            break;
+                        };
+                        part.push((i, fetch_over_network(provider_ref, specifier)));
+                    }
+                    part
+                })
+            })
+            .collect();
+        for handle in handles {
+            // Паника воркера не должна ронять загрузку всей страницы: его доля
+            // спецификаторов просто останется незабранной, и резолв-колбэк
+            // сходит за ней по одному, как до предзабора.
+            if let Ok(part) = handle.join() {
+                for (i, outcome) in part {
+                    if let Some(slot) = results.get_mut(i) {
+                        *slot = Some(outcome);
+                    }
+                }
+            }
+        }
+    });
+
+    results
+        .into_iter()
+        .enumerate()
+        .map(|(i, r)| {
+            r.unwrap_or_else(|| {
+                let sp = specifiers.get(i).map_or("?", |s| s.as_str());
+                Err(format!("module '{sp}': загрузка не завершилась"))
+            })
+        })
+        .collect()
 }
 
 /// Pre-register a module `source` under its resolved `specifier`.
@@ -378,6 +499,135 @@ fn module_for<'s>(
     }
 }
 
+/// Забрать по сети весь граф статических импортов скомпилированного модуля,
+/// уровень за уровнем, каждый уровень — одним параллельным заходом.
+///
+/// Зачем: `ResolveModuleCallback` обязан вернуть модуль немедленно, поэтому
+/// промах реестра внутри него — это синхронный сетевой поход прямо на
+/// JS-потоке. У code-split бандла таких промахов десятки, и они выстраиваются
+/// в очередь: страница платит СУММУ круговых задержек вместо самой долгой из
+/// них. HTML LS §8.1.3.2 («fetch the descendants of a module script») ровно
+/// поэтому забирает потомков параллельно.
+///
+/// Компиляция уровня здесь нужна не сама по себе, а чтобы увидеть импорты
+/// СЛЕДУЮЩЕГО уровня: они видны только у разобранного модуля
+/// (`Module::get_module_requests`). Собранный модуль ложится в тот же реестр
+/// под тем же ключом, что использует резолв-колбэк, поэтому позже колбэк
+/// получает готовый экземпляр, а не собирает второй (семантика module map).
+///
+/// Ошибки здесь молчаливые: разбор с ошибкой, 404 и оборванная сеть должны
+/// быть отданы странице тем же путём, что и без предзабора — из колбэка,
+/// одним исключением на импорт. Предзабор только греет реестр.
+fn prefetch_graph(scope: &mut v8::PinScope<'_, '_>, root_specifier: &str, root_key: &str) {
+    if esm_prefetch_disabled() {
+        return;
+    }
+    // Без сетевого моста забирать нечего: остаются `file://` и заранее
+    // зарегистрированные исходники, а они и так резолвятся без походов.
+    let Some(root) = with_state(|s| {
+        s.fetcher.as_ref()?;
+        s.modules.get(root_key).cloned()
+    }) else {
+        return;
+    };
+
+    let mut seen: HashSet<String> = HashSet::from([root_key.to_owned()]);
+    let mut frontier = vec![(root_specifier.to_owned(), root)];
+    let mut level = 0usize;
+
+    while !frontier.is_empty() {
+        level += 1;
+        // 1. Импорты всего уровня — с базой у каждого своей (относительный
+        //    путь считается от адреса ИМПОРТИРУЮЩЕГО модуля).
+        let mut wanted: Vec<(String, DeclaredType)> = Vec::new();
+        for (base, module) in &frontier {
+            let module = v8::Local::new(scope, module.clone());
+            let requests = module.get_module_requests();
+            for i in 0..requests.length() {
+                let Some(data) = requests.get(scope, i) else {
+                    continue;
+                };
+                let Ok(request) = v8::Local::<v8::ModuleRequest>::try_from(data) else {
+                    continue;
+                };
+                let raw = request.get_specifier().to_rust_string_lossy(scope);
+                // У `ModuleRequest` шаг атрибутов такой же, как у резолв-колбэка:
+                // [ключ, значение, смещение в исходнике].
+                let ty = declared_type(scope, request.get_import_attributes(), 3);
+                let resolved = resolve(base, &raw);
+                if seen.insert(cache_key(&resolved, &ty)) {
+                    wanted.push((resolved, ty));
+                }
+            }
+        }
+        if wanted.is_empty() {
+            return;
+        }
+
+        // 2. Сеть — одним заходом на весь уровень. Один и тот же URL,
+        //    импортированный и как JS, и как JSON, забирается один раз.
+        let mut missing: Vec<String> = Vec::new();
+        for (specifier, _) in &wanted {
+            let unknown = with_state(|s| {
+                !s.sources.contains_key(specifier) && !s.failed.contains_key(specifier)
+            });
+            if unknown && is_http_specifier(specifier) && !missing.contains(specifier) {
+                missing.push(specifier.clone());
+            }
+        }
+        if !missing.is_empty() {
+            let started = std::time::Instant::now();
+            let outcomes = fetch_batch(&missing);
+            if esm_trace_enabled() {
+                let ms = started.elapsed().as_secs_f64() * 1000.0;
+                eprintln!(
+                    "[esm] уровень {level}: {} модул(ей) одним заходом за {ms:.0} мс",
+                    missing.len()
+                );
+            }
+            for (specifier, outcome) in missing.iter().zip(outcomes) {
+                match outcome {
+                    Ok(text) => register_source(specifier, &text),
+                    Err(msg) => with_state(|s| {
+                        s.failed.insert(specifier.clone(), msg);
+                    }),
+                }
+            }
+        }
+
+        // 3. Разбор уровня — ради импортов следующего.
+        let mut next = Vec::new();
+        for (specifier, ty) in wanted {
+            let key = cache_key(&specifier, &ty);
+            // Уже собранный модуль пересобирать нельзя: второй экземпляр под
+            // тем же ключом означал бы второй прогон тела.
+            if let Some(existing) = with_state(|s| s.modules.get(&key).cloned()) {
+                next.push((specifier, existing));
+                continue;
+            }
+            let Some(source) = with_state(|s| s.sources.get(&specifier).cloned()) else {
+                continue;
+            };
+            let Ok(text) = module_text(&specifier, &source, &ty) else {
+                continue;
+            };
+            let compiled = {
+                // Исключение разбора гасится вместе с областью: настоящую
+                // ошибку страница получит из колбэка, когда до импорта дойдёт
+                // очередь.
+                v8::tc_scope!(let tc, scope);
+                compile(tc, &key, &specifier, &text).is_some()
+            };
+            if compiled
+                && let Some(module) = with_state(|s| s.modules.get(&key).cloned())
+            {
+                next.push((specifier, module));
+            }
+        }
+        frontier = next;
+    }
+}
+
 /// Throw a JS `Error` carrying `message` on `scope`.
 fn throw(scope: &mut v8::PinScope<'_, '_>, message: &str) {
     if let Some(msg) = v8::String::new(scope, message) {
@@ -465,6 +715,9 @@ fn load_and_evaluate<'s>(
     ty: &DeclaredType,
 ) -> Result<v8::Local<'s, v8::Value>, ()> {
     let module = module_for(scope, specifier, ty).ok_or(())?;
+    // Весь граф — до инстанцирования: иначе резолв-колбэк пойдёт за каждым
+    // импортом в сеть по очереди (см. [`prefetch_graph`]).
+    prefetch_graph(scope, specifier, &cache_key(specifier, ty));
     if module.get_status() == v8::ModuleStatus::Uninstantiated
         && module.instantiate_module(scope, resolve_module_callback).is_none()
     {
@@ -518,6 +771,9 @@ pub(crate) fn evaluate_entry_module(
     let text = transform_import_meta(source, &meta_url).unwrap_or_else(|| source.to_owned());
 
     let module = compile(scope, &specifier, &specifier, &text).ok_or(())?;
+    // Граф inline-модуля забирается так же, как у внешнего: его импорты — это
+    // и есть чанки приложения (см. [`prefetch_graph`]).
+    prefetch_graph(scope, &specifier, &specifier);
     if module.instantiate_module(scope, resolve_module_callback).is_none() {
         return Err(());
     }
@@ -557,10 +813,15 @@ pub(crate) fn evaluate_module_url(
 
 #[cfg(all(test, feature = "v8-backend"))]
 mod tests {
+    // Хелперы тестового модуля: исключение из clippy.toml покрывает
+    // только тело `#[test]` (docs/lint-policy.md §10).
+    #![allow(clippy::unwrap_used)]
     use crate::esm::ImportMap;
     use crate::v8_runtime::V8JsRuntime;
     use lumen_core::ext::JsRuntime as _;
     use lumen_core::JsValue;
+    use std::collections::HashMap;
+    use std::sync::Arc;
 
     /// Fresh runtime per test: every `V8JsRuntime` owns its JS thread, so the
     /// thread-local module registry starts empty and cannot leak between tests.
@@ -755,6 +1016,239 @@ mod tests {
         );
         rt.eval_module("import { v } from 'wrapper'; globalThis.__aa_v = v;").unwrap();
         assert_eq!(rt.eval("globalThis.__aa_v").unwrap(), JsValue::Number(7.0));
+    }
+
+    // ── Предзабор графа по сети ──────────────────────────────────────────────
+
+    /// Сетевой двойник, отдающий заранее заданные исходники модулей и
+    /// запоминающий, СКОЛЬКО запросов было в полёте одновременно.
+    ///
+    /// Одновременность — это и есть предмет проверки: до предзабора граф
+    /// забирался по одному запросу за раз из резолв-колбэка, и пик
+    /// одновременности не мог превысить единицу ни на каком графе.
+    struct GraphFetch {
+        /// URL → тело модуля; отсутствующий URL отдаётся как 404.
+        sources: HashMap<String, String>,
+        /// Запросы по URL в порядке поступления.
+        calls: std::sync::Mutex<Vec<String>>,
+        /// Сколько запросов в полёте прямо сейчас и максимум за прогон.
+        inflight: std::sync::Mutex<(usize, usize)>,
+    }
+
+    impl GraphFetch {
+        fn new(sources: &[(&str, &str)]) -> Arc<Self> {
+            Arc::new(Self {
+                sources: sources
+                    .iter()
+                    .map(|(u, s)| ((*u).to_owned(), (*s).to_owned()))
+                    .collect(),
+                calls: std::sync::Mutex::new(Vec::new()),
+                inflight: std::sync::Mutex::new((0, 0)),
+            })
+        }
+
+        /// Пик одновременности за прогон.
+        fn peak_inflight(&self) -> usize {
+            self.inflight.lock().map(|g| g.1).unwrap_or(0)
+        }
+
+        /// Сколько раз спрашивали именно этот URL.
+        fn calls_for(&self, url: &str) -> usize {
+            self.calls
+                .lock()
+                .map(|c| c.iter().filter(|u| u.as_str() == url).count())
+                .unwrap_or(0)
+        }
+
+        /// Всего запросов.
+        fn total_calls(&self) -> usize {
+            self.calls.lock().map(|c| c.len()).unwrap_or(0)
+        }
+    }
+
+    impl lumen_core::ext::JsFetchProvider for GraphFetch {
+        fn fetch_sync(
+            &self,
+            url: &str,
+            _method: &str,
+        ) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+            if let Ok(mut c) = self.calls.lock() {
+                c.push(url.to_owned());
+            }
+            if let Ok(mut g) = self.inflight.lock() {
+                g.0 += 1;
+                g.1 = g.1.max(g.0);
+            }
+            // Окно, внутри которого параллельные запросы успевают пересечься.
+            // Без задержки быстрый ответ может завершиться раньше, чем воркер
+            // рядом успеет войти в свой запрос, и пик остался бы единицей даже
+            // при работающем предзаборе.
+            std::thread::sleep(std::time::Duration::from_millis(40));
+            let body = self.sources.get(url).cloned();
+            if let Ok(mut g) = self.inflight.lock() {
+                g.0 -= 1;
+            }
+            match body {
+                Some(text) => Ok(lumen_core::ext::JsFetchResult {
+                    status: 200,
+                    status_text: "OK".into(),
+                    headers: vec![],
+                    body: text.into_bytes(),
+                }),
+                None => Ok(lumen_core::ext::JsFetchResult {
+                    status: 404,
+                    status_text: "Not Found".into(),
+                    headers: vec![],
+                    body: Vec::new(),
+                }),
+            }
+        }
+    }
+
+    /// Рантайм с установленным DOM и сетевым двойником — так же, как это
+    /// делает оболочка: `install_dom` кладёт провайдер и в шим, и в загрузчик
+    /// модулей.
+    fn rt_with_fetch(provider: Arc<GraphFetch>) -> V8JsRuntime {
+        use lumen_dom::Document;
+        use std::sync::Mutex;
+        let rt = V8JsRuntime::new().unwrap();
+        let doc = Arc::new(Mutex::new(Document::new()));
+        let p: Arc<dyn lumen_core::ext::JsFetchProvider> = provider;
+        rt.install_dom(
+            doc,
+            "https://example.com/app/",
+            Some(p),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+        )
+        .unwrap();
+        rt
+    }
+
+    #[test]
+    fn v8_module_graph_loads_from_network() {
+        // Базовый случай code-split бандла: ни один чанк заранее не
+        // зарегистрирован, всё приезжает по сети.
+        let net = GraphFetch::new(&[
+            (
+                "https://example.com/app/main.js",
+                "import { a } from './a.js'; export const m = a;",
+            ),
+            ("https://example.com/app/a.js", "export const a = 'chunk';"),
+        ]);
+        let rt = rt_with_fetch(Arc::clone(&net));
+        rt.eval_module(
+            "import { m } from 'https://example.com/app/main.js'; globalThis.__net = m;",
+        )
+        .unwrap();
+        assert_eq!(rt.eval("globalThis.__net").unwrap(), JsValue::String("chunk".into()));
+    }
+
+    #[test]
+    fn v8_module_graph_siblings_fetched_in_parallel() {
+        // Гейт предзабора — не время, а ОДНОВРЕМЕННОСТЬ: три соседних импорта
+        // одного уровня обязаны уехать в сеть одним заходом. Последовательный
+        // загрузчик (резолв-колбэк ходит за каждым импортом сам) не может дать
+        // пик больше единицы ни при каком стечении обстоятельств.
+        let net = GraphFetch::new(&[
+            (
+                "https://example.com/app/main.js",
+                "import { a } from './a.js'; import { b } from './b.js'; \
+                 import { c } from './c.js'; export const m = a + b + c;",
+            ),
+            ("https://example.com/app/a.js", "export const a = 1;"),
+            ("https://example.com/app/b.js", "export const b = 2;"),
+            ("https://example.com/app/c.js", "export const c = 4;"),
+        ]);
+        let rt = rt_with_fetch(Arc::clone(&net));
+        rt.eval_module(
+            "import { m } from 'https://example.com/app/main.js'; globalThis.__par = m;",
+        )
+        .unwrap();
+        assert_eq!(rt.eval("globalThis.__par").unwrap(), JsValue::Number(7.0));
+        assert!(
+            net.peak_inflight() >= 2,
+            "уровень графа должен забираться одним заходом, пик одновременности = {}",
+            net.peak_inflight()
+        );
+    }
+
+    #[test]
+    fn v8_module_graph_fetches_each_url_once() {
+        // Ромб: `shared.js` импортируют оба соседа. Предзабор не имеет права
+        // ни сходить за ним дважды, ни собрать второй экземпляр модуля —
+        // иначе его тело выполнилось бы два раза.
+        let net = GraphFetch::new(&[
+            (
+                "https://example.com/app/main.js",
+                "import { l } from './left.js'; import { r } from './right.js'; \
+                 export const m = l + r;",
+            ),
+            (
+                "https://example.com/app/left.js",
+                "import { s } from './shared.js'; export const l = s;",
+            ),
+            (
+                "https://example.com/app/right.js",
+                "import { s } from './shared.js'; export const r = s;",
+            ),
+            (
+                "https://example.com/app/shared.js",
+                "globalThis.__runs = (globalThis.__runs || 0) + 1; export const s = 5;",
+            ),
+        ]);
+        let rt = rt_with_fetch(Arc::clone(&net));
+        rt.eval_module(
+            "import { m } from 'https://example.com/app/main.js'; globalThis.__diamond = m;",
+        )
+        .unwrap();
+        assert_eq!(rt.eval("globalThis.__diamond").unwrap(), JsValue::Number(10.0));
+        assert_eq!(rt.eval("globalThis.__runs").unwrap(), JsValue::Number(1.0));
+        assert_eq!(net.calls_for("https://example.com/app/shared.js"), 1);
+        assert_eq!(net.total_calls(), 4);
+    }
+
+    #[test]
+    fn v8_module_graph_missing_child_reports_error() {
+        // Отказ сети предзабор гасит молча — ошибку обязан выдать резолв-колбэк,
+        // ровно как без предзабора.
+        let net = GraphFetch::new(&[(
+            "https://example.com/app/main.js",
+            "import { gone } from './gone.js'; export const m = gone;",
+        )]);
+        let rt = rt_with_fetch(Arc::clone(&net));
+        let err = rt
+            .eval_module("import { m } from 'https://example.com/app/main.js';")
+            .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("gone.js"), "ошибка должна называть модуль: {msg}");
+        // Второй заход за уже отказавшим модулем не делается.
+        assert_eq!(net.calls_for("https://example.com/app/gone.js"), 1);
+    }
+
+    #[test]
+    fn v8_dynamic_import_graph_loads_from_network() {
+        // Тот же путь, но вход — динамический `import()`: у code-split
+        // приложения именно он тянет чанки.
+        let net = GraphFetch::new(&[
+            (
+                "https://example.com/app/lazy.js",
+                "import { dep } from './dep.js'; export const v = dep;",
+            ),
+            ("https://example.com/app/dep.js", "export const dep = 'lazy';"),
+        ]);
+        let rt = rt_with_fetch(Arc::clone(&net));
+        rt.eval_module(
+            "import('https://example.com/app/lazy.js').then(m => { globalThis.__lazy = m.v; });",
+        )
+        .unwrap();
+        assert_eq!(rt.eval("globalThis.__lazy").unwrap(), JsValue::String("lazy".into()));
     }
 
     // ── import.meta ──────────────────────────────────────────────────────────

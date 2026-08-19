@@ -63,6 +63,7 @@ impl HyphenationProvider for KnuthLiangHyphenation {
         ]
     }
 
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn hyphenate(&self, word: &str, locale: &str) -> Vec<usize> {
         // Normalize to primary language subtag for cache keying.
         let effective = if locale.is_empty() { "en" } else { locale };

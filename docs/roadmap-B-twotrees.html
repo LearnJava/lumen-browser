@@ -73,14 +73,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-08-18",
+ "generated": "2026-08-19",
  "counts": {
-  "open": 321,
+  "open": 326,
   "fixed": 424,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 745,
+ "total_bugs": 750,
  "phases": [
   {
    "id": "P0",
@@ -1899,6 +1899,34 @@
        "status": "done",
        "size": "S",
        "note": "DONE 2026-07-17: scripts/perf_audit.py — 3 headless-замера на сайт (--dump-source / --dump-layout+LUMEN_PROFILE_TREE / --screenshot) → фазы сеть+парсинг / стиль+layout / paint, таймауты, error_lines, results.json+summary.md в .tmp/perf-audit/, --compare с дельтами (⚠ >20%); корпус docs/perf/corpus.txt (14 сайтов аудита 2026-07-02, вкл. антибот-403 намеренно); журнал docs/perf/journal.md + коммитируемые сырые прогоны docs/perf/runs/*.json; skill /lumen-perf-audit — полный автономный протокол прогон→анализ→журнал→BUG-NNN. ОБНОВЛЕНО 2026-07-17 (вторая итерация): дефолт — ЖИВОЙ режим (одно GUI-окно, каждый сайт в новой вкладке через новый MCP-инструмент new_tab = AutomationCommand::NewTab + open_new_tab; пользователь видит рендер, dwell+скролл на сайт; кумулятивная RAM тек/пик через WinAPI; per-site stderr-дельта + console-ошибки; TIMEOUT/DEAD с авторестартом окна как находкой); старое пофазное headless-разложение — флаг --phases. Ручной предшественник PERF-2/PERF-7 (тот же корпус и журнал)"
+      },
+      {
+       "id": "PERF-9",
+       "title": "PERF-9: стартовый снапшот V8 вместо разбора шима на каждую навигацию",
+       "status": "active",
+       "size": "M",
+       "note": "Стартовый снапшот V8 для `WEB_API_SHIM`. Сейчас `V8JsRuntime::new()` + `install_dom()` вызываются НА КАЖДУЮ НАВИГАЦИЮ (`crates/shell/src/main.rs:7188`/`19457`, `crates/driver/src/session.rs:1418`, `crates/driver/src/winit_session.rs:1155`) — новый изолят, новый контекст и полный разбор+исполнение шима каждый раз. Шим — сотни КБ JS (`WEB_API_SHIM_HEAD`…`TAIL_B`, `crates/js/src/dom.rs:335`…`12368`), и `web_api_shim()` (`dom.rs:15791`) собирает его ЧИСТОЙ конкатенацией констант, без единого параметра страницы — значит текст побайтово одинаков для любого URL и снапшот строится один раз на сборку. Идея заимствована у lightpanda-io/browser («supports embedding v8 snapshots for improved startup performance»). Цель: заменить eval шима на десериализацию готового изолята (`v8::SnapshotCreator`, rusty_v8 150.1.0). Ключевой риск: нативы `_lumen_*` — замыкания на конкретный Document/провайдеры, в снапшот не попадают и ставятся ПОСЛЕ десериализации; если шим вызывает натив на верхнем уровне и запекает результат, такой вызов переносится в ленивый геттер. Гейт эффекта — готовый бенч PERF-4 (`cargo run -p lumen-bench --release -- --startup`), базлайн `docs/perf/startup-runs/2026-07-18.json` (cold 136.8мс / warm med 125.3мс); метод — `docs/perf-method.md` (сравнение по min на чередующемся A/B, не по wall-clock одного прогона) Бриф: docs/tasks/perf-startup-census.md"
+      },
+      {
+       "id": "PERF-10",
+       "title": "PERF-10: прогон тестов без растеризации и живого окна",
+       "status": "planned",
+       "size": "M",
+       "note": "Режим прогона без растеризации для тестов. Сейчас ВСЕ автоматизационные поверхности гонят полный конвейер: `--screenshot`/`--dump-layout`/`--dump-display-list` считают layout+paint, `--mcp-live-port`/`--bidi-port` вдобавок держат живое окно и wgpu. Для категорий WPT, не проверяющих пиксели (`dom/*`, `html/*`, `fetch`, `xhr`, `webstorage`, `url*`, `websockets` — подавляющее большинство из 289), растеризация — чистые накладные, а живое окно приносит свой класс флейков (увод фокуса у gdigrab, token race, зомби `--ipc-server` — см. CLAUDE.md Known gotchas). Заимствовано у lightpanda-io/browser, но в ослабленном виде: они layout выбросили совсем, мы его сохраняем (нужен для `getBoundingClientRect` и геометрии в тех же тестах) и отключаем только paint/окно. Задача: флаг/режим «DOM+JS+layout, без paint и без окна» на существующих поверхностях + перевод на него тех категорий WPT, которым пиксели не нужны. Владелец тулинга — P2 (дорожка TEST, `docs/tasks/p2-test-track.md`); движковая часть при необходимости — P1. Зависимость: после PERF-9, чтобы не мерить два изменения разом"
+      },
+      {
+       "id": "PERF-11",
+       "title": "PERF-11: кэшировать индекс системных шрифтов вместо скана сотен файлов",
+       "status": "ready",
+       "size": "S",
+       "note": "Кэш индекса системных шрифтов на диске. ИЗМЕРЕНО 2026-08-18 (`cargo test -p lumen-font census_system_font -- --nocapture`, тест `system_fonts.rs::perf_census`): первое построение индекса — **124.4 мс** (174 семейства), повторное обращение 0.13 мс. `shared_system_index()` (`crates/engine/font/src/system_fonts.rs:86`) строит его лениво через `OnceLock`, а `build_index`/`scan_dir` читают и парсят имена/OS-2 у СОТЕН файлов в системных директориях шрифтов. Плата фиксированная и берётся с КАЖДОГО запуска процесса при первом layout — подтверждено independently процессным замером: страница вообще без текста (один `<div>`) стоит `--dump-source` 111 мс против `--dump-layout` 217 мс, то есть +106 мс за layout документа, в котором нечего верстать. Это больше, чем вся JS-инициализация (PERF-9, 86 мс), и в отличие от неё платится всегда, включая каждый графический тест, каждый WPT-тест и каждый headless-дамп. Задача: сериализовать индекс в `<exe_dir>/data/fonts/` (портируемая конвенция, CLAUDE.md Known gotchas — НЕ `%APPDATA%`), инвалидировать по mtime+размеру сканируемых директорий, при промахе строить как сейчас. Ожидаемо 124 мс → единицы мс Бриф: docs/tasks/perf-startup-census.md"
+      },
+      {
+       "id": "PERF-12",
+       "title": "PERF-12: разложить и сократить фиксированный старт процесса",
+       "status": "active",
+       "size": "S",
+       "note": "Фиксированная стоимость старта процесса. **ШАГ 1 (инструментация) СДЕЛАН 2026-08-18, ветка `p1-perf-12` — он опроверг постановку задачи.** Построено: `crates/shell/src/startup_trace.rs` (спаны `pre-main`/`config-load`/`arg-parse`/`services-init`, охватывающая полоса `startup (<режим>)`, stderr-раскладка под `LUMEN_STARTUP_LOG=1`), `lumen_core::trace::enable_at`/`record_span` (трейсер с началом отсчёта В ПРОШЛОМ — участок до `main()` иначе не выразим), время создания процесса у ОС через `GetProcessTimes`. Трейсер включается на первой строке `run_cli`, а не в `run_trace_nav` (повторный `enable()` сбросил бы origin). ИЗМЕРЕНО: наш код до диспетча — **0.7 мс** (`config-load` 0.1 / `arg-parse` 0.1 / `services-init` 0.0), `ensure_v8_platform` на этом пути НЕ вызывается вовсе; `pre-main` 26 мс тёплый / 145 мс холодный. Самих «111 мс» у процесса нет — контроль (min из 5, чередование) даёт ПЛОСКИЕ ~82 мс спавна для `hostname.exe` 15 КБ, `where.exe` 43 КБ и `git.exe` 4 МБ против 133 мс у 80-МБ `lumen.exe`: три четверти заявленного числа — константа оболочки и ОС, не наша плата. Собственная надбавка ≈ 51 мс и целиком объясняется размером бинаря (26 мс `pre-main` + ~25 мс exec/teardown вне `main`). ОСТАЛОСЬ: единственный рычаг — размер бинаря 80 МБ, это вопрос конфигурации сборки (`docs/build-speed.md`), а не кода старта; брать ПОСЛЕ PERF-11 (124 мс шрифтов > 51 мс образа). Побочно закрыта дыра waterfall: `navigation` 128 мс при 13.8 мс детских спанов, безымянных 114.7 мс между `parse-css` и `layout` — новые спаны `font-faces`/`system-fonts` свели её к 0.9 мс и назвали виновником `system_font_faces()`, то есть PERF-11 (у которой теперь есть точный гейт — спан `system-fonts`) Бриф: docs/tasks/perf-startup-census.md §5"
       }
      ]
     },
@@ -4717,7 +4745,7 @@
     {
      "id": "TEST",
      "title": "TEST: полнота тестирования движка (fuzzing / expectations / reftests / conformance)",
-     "status": "planned",
+     "status": "active",
      "note": "Дорожка полноты тестирования движка (владелец тулинга — P2; движковые фиксы по находкам — P3/P1). Индустриальные практики движков-с-нуля (Servo, Ladybird, WPT/Firefox) поверх уже существующего тулинга Lumen (graphic_tests, DEVX-2/3, P2-wpt, health-журнал PERF-6, KNOWN_DEBTORS-храповик): фаззинг парсеров и целых страниц, expectations-система для WPT, reftest-executor, Ahem, спец-конформанс (test262/Wasm/WebGL). Бриф с DoD по срезам — docs/tasks/p2-test-track.md. Рекомендуемый порядок: TEST-1 → TEST-2 → TEST-3 → TEST-4/TEST-5 → опц. TEST-6..8",
      "tasks": [
       {
@@ -4730,30 +4758,33 @@
       {
        "id": "TEST-2",
        "title": "TEST-2: DOM/layout-фаззер страниц (Domato-стиль)",
-       "status": "planned",
+       "status": "done",
        "size": "L",
-       "note": "Генеративный фаззер целых страниц в стиле Domato (Google Project Zero; у Ladybird стабильно находит краши в DOM/layout/декодерах/CSS-математике): scripts/page_fuzz.py генерирует случайные почти-валидные HTML/CSS/JS-страницы с фиксируемым seed, прогон пачками через headless --screenshot/--dump-layout --deterministic; сигналы — паника (panic-hook health.log из PERF-6), hang/таймаут, белый экран (rendered_units==0 при dom>=20); минимизатор-бисекция до репро; --selftest; находки в BUG-NNN, seed-регрессии — smoke-список. После TEST-1. Бриф docs/tasks/p2-test-track.md"
+       "note": "Генеративный фаззер целых страниц в стиле Domato: scripts/page_fuzz.py (грамматика тегов/CSS-SPECS.md ✅-свойств/JS-DOM-мутаций, headless --dump-layout runner с таймаутом, ddmin-минимизатор субдеревьев+splice+CSS-правил, --selftest зелёный). Прогон HEAD 1430 страниц (seed 1/100/5000, dev-release) — 0 паник/crash/hang, 0 реальных white-screen (2 ложных white_empty отфильтрованы гейтом expected_content_units — движок корректно не рисует страницы без контента). Харнесс валиден, находок для BUG-NNN на первом прогоне нет — расширять грамматику/увеличивать N в следующей сессии. Состояние — docs/tasks/p2-test-track.md#test-2-состояние"
       },
       {
        "id": "TEST-3",
        "title": "TEST-3: WPT expectations-система (гейт на регрессии)",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Expectations/metadata-система для WPT по образцу Firefox: per-test ожидаемые результаты, сгенерированные из текущего прогона run_report.py; новый режим run_report.py --check — exit≠0 только на отклонение от ожиданий (регрессия PASS, новый TIMEOUT), неожиданные PASS печатаются как «сузить ожидания» (храповик, аналог KNOWN_DEBTORS). Превращает 277 вендоренных категорий WPT-VENDOR из разового аудита в регрессионный набор. Бриф docs/tasks/p2-test-track.md"
+       "note": "Expectations/metadata-система для WPT по образцу Firefox поверх нативного `wptrunner`-формата (`--metadata`/`.ini`, не отдельный JSON): `tests/wpt/expectations.py` + `run_report.py --update-expected`/`--check` — exit≠0 только на отклонение от ожиданий (регрессия PASS, новый TIMEOUT), неожиданные PASS печатаются как «сузить ожидания» (храповик, аналог KNOWN_DEBTORS); никогда не трогает ручной S5/S6-гейт `dom/nodes`. Проверено сквозным прогоном + отрицательным сценарием. Baseline сгенерирован для 7/289 done-категорий (websockets/xml/x-frame-options/webrtc-svc/url/urlpattern/uievents) — полный охват отложен на следующую сессию (worklets не уложился в таймаут). Состояние — docs/tasks/p2-test-track.md#test-3-состояние"
       },
       {
        "id": "TEST-4",
        "title": "TEST-4: WPT reftest-executor (открывает css/-корпус)",
-       "status": "planned",
+       "status": "done",
        "size": "L",
-       "note": "Reftest-executor для WPT-интеграции: сейчас исполняются только testharness-тесты, а reftests — основной способ тестировать рендеринг (весь корпус css/ непрогоняем). Поддержка link rel=match/mismatch (цепочки), class=reftest-wait, meta fuzzy; скриншоты детерминированным CPU-рендером (screenshot_cpu_rgba, как snapshot-тесты) + пиксельное сравнение. Точки: tests/wpt/browsers/lumen.py + run_report.py. Смоук на 3–5 простых css/-reftest-ах. Желательно после TEST-5 (Ahem), иначе текстовые reftests зашумлены метриками шрифта. Бриф docs/tasks/p2-test-track.md"
+       "note": "`LumenRefTestExecutor`/`LumenIpcProtocol` (`tools/wptrunner/wptrunner/executors/executorlumen.py` + `browsers/lumen.py`) — reftest-исполнитель поверх `lumen --ipc-server` (детерминированный tiny-skia CPU-путь), не BiDi `captureScreenshot` (тот backend-зависим — живой wgpu-рендерер, см. готчу CLAUDE.md/срез 14 BUG-405). `LumenIpcProtocol` — независимый второй порт bincode-клиента, уже проверенного в `graphic_tests/run.py` (TAB-7). Свой `_run_server` в `LumenBrowser` — `--ipc-port` лишь информационный, порт всегда печатается в stdout, база `WebDriverBrowser` этого не ждёт. Сужение объёма: `class=reftest-wait` не поддержан — `--ipc-server` не докручивает JS-события после парсинга и не имеет `script.evaluate`-аналога для опроса. Смоук на 4 уже вендоренных css/-reftest-ах (без точечного вендоринга — категория вендорена целиком 2026-07-26): 3 PASS, 1 FAIL — исполнитель корректно различает совпадение/несовпадение. FAIL оказался реальной находкой: BUG-786 (`<style><![CDATA[...]]></style>` в `.xht`/XHTML теряет всё содержимое — нет отдельного XML-пути для top-level документов, всё уходит в HTML5 RAWTEXT-токенизацию `<style>`). `docs/wpt-status.md` целиком не переписан (277-строчная таблица, актуализация — отдельная работа по факту широких прогонов). Состояние — docs/tasks/p2-test-track.md#test-4-состояние",
+       "bugs": [
+        "BUG-786"
+       ]
       },
       {
        "id": "TEST-5",
        "title": "TEST-5: шрифт Ahem для детерминированных reftest-ов",
-       "status": "planned",
+       "status": "done",
        "size": "S",
-       "note": "Бандл шрифта Ahem (W3C, свободная лицензия; все глифы — квадраты em, стандарт детерминированных reftest-ов) в assets/fonts/ + регистрация в lumen-font наравне с Inter-Regular; загрузка как web-font из вендоренного дерева WPT через существующий TTF/WOFF2-путь; unit-тест метрик (advance==em, ascent/descent по спеке Ahem). Бриф docs/tasks/p2-test-track.md"
+       "note": "Закрыто (2026-08-19, P2). `assets/fonts/Ahem.ttf` вендорен байт-в-байт из `tests/wpt/fonts/Ahem.ttf` (sha256 совпадает), лицензия — `assets/fonts/LICENSE-Ahem.txt` (3-Clause BSD, тот же текст, что `tests/wpt/fonts/LICENSE-WPT.md`). Регистрация — бесплатно: `SystemFontIndex` в lumen-font сканирует `assets/fonts/` целиком и строит индекс по `name`-таблице каждого файла (`crates/engine/font/src/system_fonts.rs`), выделенного кода на Inter/Golos/JetBrains там никогда не было — `family_count()` в тесте `finds_bundled_inter` поднят 3→4. Метрики подтверждены новым интеграционным тестом `crates/engine/font/tests/cases/ahem_metrics.rs` (2 теста): `units_per_em == 1000`, `hhea.ascent == 800` / `descent == -200` (0.8em/0.2em по спеке Ahem), advance каждого из `{A,X,a,z,0,!,.,space}` == 1000 (ровно 1em). Веб-шрифтовая загрузка (`@font-face src: url(...)`, как в вендоренном `tests/wpt/fonts/ahem.css`) идёт через уже существующий generic TTF/WOFF2 fetch-путь (`font-display: swap`, PH3-19) — кода не потребовалось; `--dump-layout` для проверки не годится (однократный дамп не дожидается фонового `FontLoaded`), проверено живым MCP-окном: лог подтверждает `FontLoaded: «Ahem»`, а `resource://layout` показывает `div` с Ahem шириной ровно `4×50px=200` против `136.43` у того же текста в Inter (см. `docs/tasks/p2-test-track.md#test-5-состояние`). Графический тест не добавлен (опционален по брифу) — TEST-4 (reftest-executor), для которого Ahem и задумывался, ещё не сделан, добавлять эталон не для чего. Бриф docs/tasks/p2-test-track.md"
       },
       {
        "id": "TEST-6",
@@ -4798,6 +4829,13 @@
        "status": "done",
        "size": "M",
        "note": "Обе половины сделаны в минимальном исполнителе tests/wpt/ (tools/wptrunner не патчился): (1) `testdriver.js` — довендорен (repo-root `resources/testdriver.js`, `tests/wpt/VENDOR.md`, вынужденное расположение — так резолвит `environment.py`'s хардкод `repo_root`), `supports_testdriver=True`, poll-based drain `__wptrunner_message_queue` (`executorlumen.py`); реально исполняется `click` (`input.performActions`), остальные действия отклоняют промис теста явной ошибкой вместо блочного SKIP/зависания — DoD выполнен (доля SKIP по testdriver на пробе падает до нуля). (2) HTTPS-порт — `tests/wpt/config.json` https-порты `18443`/`18444` вместо `null`, `--ssl-type=pregenerated` с закоммиченным самоподписанным сертификатом (`tests/wpt/certs/`, README внутри); `.https.`-тест из WebCryptoAPI доезжает до настоящего TLS-хендшейка и получает `UnknownIssuer` вместо `invalid port: \"None\"` — DoD выполнен («содержательный результат», не «проходит»: доверие Lumen к тестовому CA — отдельная security-чувствительная Rust-задача вне скоупа Python-тулинга). Попутно найден и застабилизирован гейт: BUG-328 (HTMLCollection ownKeys/qux) регрессировал молча, `.ini` перепиннут в FAIL со ссылкой на баг"
+      },
+      {
+       "id": "WPT-RUN-4",
+       "title": "WPT-RUN-4: честная сводная цифра pass-rate по всему корпусу",
+       "status": "done",
+       "size": "M",
+       "note": "Честная сводная цифра pass-rate по ВСЕМУ вендоренному корпусу за один прогон (решения пользователя 2026-08-18). Знаменатель берётся из `MANIFEST.json`, а не из файлового глоба `run_report.py::all_vendored_test_ids()` — глоб и завышает (reftest-половинки и `-ref.html` суть файлы, а не id), и занижает (`?variant`, развёртка `.any.js`), поэтому прежние числа несопоставимы с wpt.fyi/Servo/Ladybird. Скоуп знаменателя — весь манифест БЕЗ изъятий: reftest-ы, которые мы пока не исполняем (TEST-4), и категории со скоупом 🚫 остаются внутри, неисполненное = непройденное; исключается только тип `support` (фикстуры), а `manual`/`visual` считаются отдельной строкой (их не исполняет ни один раннер, включая апстрим). Срез 1 (2026-08-18) — `tests/wpt/corpus_stats.py`: 273 категории, 73495 id, из них 67735 автоматизируемых (знаменатель), 5760 manual/visual, и 37319 testharness — то есть ПОТОЛОК сегодняшней цифры 55%: без reftest-исполнителя (TEST-4) остальные 45% недостижимы по построению, и цифру нельзя публиковать без этой оговорки. Остаток: оркестратор полного прогона (шардирование по категориям, чекпойнты, агрегация `--log-wptreport`), пилот на 10 разнородных категориях, затем полный прогон. `.ini`-ожидания этой задачей НЕ пишутся (первый проход — измерение, не гейт). Результат — `docs/wpt/runs/<дата>.json` + журнал `docs/wpt/pass-rate.md`. Бриф — docs/tasks/p2-wpt-runner-throughput.md **Сделано 2026-08-19:** весь корпус за один прогон (479 шардов, ~11 ч, --processes=6 --skip-https, 0 потерянных шардов) — **pass-rate 5.59%** (3783 из 67735 автоматизируемых id MANIFEST.json), сабтесты 151287/519359 (29.1%); производные цифры: 10.14% по testharness-корпусу, 12.42% по фактически прогнанному. Необъяснённых id ноль: 6874 непрогнанных testharness — https (BUG-785), остальные 30416 — типы без исполнителя (reftest 27386, crashtest 1892, wdspec 626, print-reftest 416, aamtest 96). Инструменты: tests/wpt/corpus_stats.py (знаменатель) + tests/wpt/run_corpus.py (шардированный прогон, чекпойнты/--resume, восстановление убитого шарда из mozlog-потока, --skip-https). Ловушка параллелизма снята замером: --processes=1 и =6 дают побитово одинаковый результат при 4.4x разнице во времени. Побочная находка: 4 битых .ini роняли 4 категории целиком (759 testharness-id не прогонялись ни разу, гейт --check по ним был мёртв) — починены, генератор expectations.py теперь валидирует свой вывод тем же парсером. Цифра и методика — docs/wpt/pass-rate.md, снимок — docs/wpt/runs/2026-08-18.json. Остаток дорожки: потолок 55.1% снимается только TEST-4/TEST-5 (reftest-исполнитель + Ahem)."
       }
      ]
     }
@@ -10053,6 +10091,41 @@
    "component": "js (`crates/js/src/dom_parser.rs:526-567` — `_vBuildDocument`; `DOMParser.prototype.parseFromString`, `dom_parser.rs:850-861`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-782": {
+   "status": "open",
+   "title": "**TEST-18 (картинки) ушёл с 2.31 % на 6.34 %** — порог теста 0.5 %, запись должника BUG-219 рассчитана на 2.11 %. Эталон `graphic_tests/results/latest.json` сня…",
+   "component": "paint/image (кандидаты — срезы 20–23 [BUG-405](bugs/BUG-405-OPEN.md) и [BUG-771](bugs/BUG-771-FIXED.md); коммит не бисекчен)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-783": {
+   "status": "open",
+   "title": "Тест ждёт регистрации перехвата опросом с потолком по настенным часам (400 × 5 мс = 2 с) — под параллельной нагрузкой `scoped-test.sh` поток с реальным `fetch`…",
+   "component": "network (`crates/network/src/lib.rs:8723-8731`, тест `tests::global_intercept_pauses_real_fetch_until_resolved`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-784": {
+   "status": "open",
+   "title": "**Детерминированный CPU-снапшот на деле недетерминирован:** два прогона `ubuntu-latest` на одном и том же коде (второй коммит ветки правит только `.md`) дали FA…",
+   "component": "paint (`background-blend-mode` в CPU-растре tiny-skia; тест `crates/driver/tests/cases/snapshot_cpu.rs::cpu_snapshots_match_references`, эталон `graphic_tests/snapshots/cpu/49-background-blend-mode.png`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-785": {
+   "status": "open",
+   "title": "Доверенные корни собираются ТОЛЬКО из `webpki_roots::TLS_SERVER_ROOTS`, в пяти независимых местах, и нет ни CLI-флага, ни env, ни конфига, чтобы добавить свой C…",
+   "component": "network (`crates/network/src/lib.rs:1620,1633,1650,1666`, `crates/network/src/dot.rs:265`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-786": {
+   "status": "open",
+   "title": "`<style><![CDATA[ ... ]]></style>` в `.xht`/XHTML-документах теряет ВСЁ содержимое стилей: `wptserve` отдаёт `.xht` как `application/xhtml+xml` (реальный XML-ти…",
+   "component": "движковый парсинг документов (нет XML-пути для `application/xhtml+xml`, вероятно `crates/engine/html-parser`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -10869,8 +10942,14 @@
   "network (`crates/network/src/lib.rs:1041` — `type PageResponse = (Vec<u8>, Vec<(String, String)>)`; `Response` без URL, `lib.rs:461`; цепочка проходится внутри `fetch_with_redirect`, `lib.rs:2601`), shell (`crates/shell/src/main.rs:3577` — `base: ResourceBase::Url(url.clone())`)": [
    "BUG-757"
   ],
+  "network (`crates/network/src/lib.rs:1620,1633,1650,1666`, `crates/network/src/dot.rs:265`)": [
+   "BUG-785"
+  ],
   "network (`crates/network/src/lib.rs:2566-2567` — вычисление `default_path` перед `jar.process_set_cookie`); потребители — `crates/storage/src/cookies.rs::parse_set_cookie_with_psl` и `path_matches`": [
    "BUG-756"
+  ],
+  "network (`crates/network/src/lib.rs:8723-8731`, тест `tests::global_intercept_pauses_real_fetch_until_resolved`)": [
+   "BUG-783"
   ],
   "network (`crates/network/src/lib.rs::read_head`, `crates/network/src/h2/conn.rs`)": [
    "BUG-679"
@@ -10959,6 +11038,9 @@
   "paint (`WgpuBackend`/`renderer.rs`) — wgpu-рендеринг расходится с femtovg": [
    "BUG-277"
   ],
+  "paint (`background-blend-mode` в CPU-растре tiny-skia; тест `crates/driver/tests/cases/snapshot_cpu.rs::cpu_snapshots_match_references`, эталон `graphic_tests/snapshots/cpu/49-background-blend-mode.png`)": [
+   "BUG-784"
+  ],
   "paint (`crates/engine/paint/src/renderer.rs` — пре-резолв face-ов `DrawText`)": [
    "BUG-771"
   ],
@@ -11015,6 +11097,9 @@
   ],
   "paint/image": [
    "BUG-032"
+  ],
+  "paint/image (кандидаты — срезы 20–23 [BUG-405](bugs/BUG-405-OPEN.md) и [BUG-771](bugs/BUG-771-FIXED.md); коммит не бисекчен)": [
+   "BUG-782"
   ],
   "paint/layout": [
    "BUG-096",

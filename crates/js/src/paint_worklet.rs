@@ -1,6 +1,11 @@
 //! CSS Paint Worklet API stub (Houdini) — Phase 0
 //! Implements CSS.paintWorklet.addModule() and paint() invocation registration.
 
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 

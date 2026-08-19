@@ -33,6 +33,7 @@ Version↔phase mapping (from `docs/plan/phases.md`): Phase 1 → v0.1, **Phase 
 | `docs/wpt-status.md` | WPT readiness: all 277 upstream top-level categories (scope ⬜/🚫, vendored status), plus a per-test detail table for the one vendored category (`dom/nodes`, 168 tests) with pass/fail and an assignable Владелец/Баг column. Regenerate the detail table with `tests/wpt/gen_status_md.py` after a fresh `run_report.py --all` run — read the file's own "Как обновить" section, not this line, for the exact commands. The category index's "Заметка" cell must stay a one-sentence summary + link — full per-category writeups live in `docs/wpt-vendor-notes/<slug>.md` (2026-08-09 split, see that section's own note for why). |
 | `docs/wpt-vendor-notes/` | One file per vendored WPT top-level category (`<slug>.md`, `/` → `-`), holding the full vendoring writeup that `tests/wpt/VENDOR.md`'s and `docs/wpt-status.md`'s category rows used to carry inline — split out 2026-08-09 once both files' row cells had grown past the `Read`-tool size limit. Linked from both tables; create alongside a new short row, don't grow the row itself. |
 | `docs/build-speed.md` | Compile-time optimization plan: current baseline, measurement protocol (S1–S5), ranked measures (stable / nightly / rejected), benchmark journal. Read before changing build config (profiles, `.cargo/config.toml`, sccache). |
+| `docs/ci-offload.md` | **Plan for moving part of the task gate to GitHub Actions** (the repo is public, so standard runners are free and unlimited): what moves and what stays local, cache/checkout/concurrency strategy under the 10 GB cache cap, how the assistant consumes run results via `gh`, and the rollout order. Nothing in it is implemented yet. Read before touching `.github/workflows/*` or proposing "let CI do it". |
 | `docs/lint-policy.md` | **Plan for turning this file's prose policies into machine-checked lints** (no `unwrap`/`panic` in prod, `// SAFETY:` on every `unsafe`, `///` on public items): ready-made clippy rules via `[workspace.lints]`, `clippy.toml` deny-lists, custom `dylint` rules, rollout protocol (one lint per commit, `warn` → fix → `deny`) and journal. Also records why forking rustc and the nightly compile-speed measures were rejected. Read before adding a new "must"/"forbidden" rule here — a rule a lint can check belongs there, not in prose. |
 | `docs/perf-method.md` | **How to measure, gate and accept a performance change** (census before the fix, profile the path you change, gate by counter/identity not wall-clock, interleaved A/B compared on min, instrumentation traps). Distilled from the 27 slices of BUG-341. Read before a perf task; the numbers themselves stay in `bugs/BUG-NNN-*.md`. |
 | `docs/automation.md` | **All automation/introspection surfaces of the browser and when to apply them** (dump modes, `--deterministic`, MCP tools/resources, BiDi, IPC, driver-API, `LUMEN_NO_*` paint-bisect flags, known stubs). Read before writing a debugging script or a new test harness — the capability usually already exists. |
@@ -44,6 +45,7 @@ Version↔phase mapping (from `docs/plan/phases.md`): Phase 1 → v0.1, **Phase 
 | `DECISIONS.md` | Historical decisions (pre-ADR format). Read-only — add new decisions to `docs/decisions/` instead. |
 | `samples/page.html` | Test page for pipeline runs. |
 | `assets/fonts/Inter-Regular.ttf` | Bundled font (SIL OFL 1.1). |
+| `assets/fonts/Ahem.ttf` | Bundled font (3-Clause BSD, `assets/fonts/LICENSE-Ahem.txt`) — deterministic reftest font (TEST-5), vendored unmodified from `tests/wpt/fonts/Ahem.ttf`. Every glyph is a 1em solid square; picked up by lumen-font's asset-dir scan like any other bundled family, no dedicated registration code. |
 
 ---
 
@@ -117,7 +119,7 @@ cargo run -p lumen-shell -- --dump-display-list samples/page.html  # headless pa
 3. Run `git branch` — verify you're on main
 4. Architecture context → `docs/plan/architecture.md` §1, §3; decisions → `docs/decisions/README.md`
 
-**Session end: push what you finished.** A completed task's merge commit (7-step checklist below, step 5) must be pushed to `origin/main` immediately, not left sitting local — other parallel sessions rely on seeing it to avoid duplicate/conflicting work on the same area.
+**Push after every commit, not at session end.** Each commit is merged into `main` and pushed to `origin/main` as soon as it is made (see "Git workflow" below) — nothing waits for the end of a task or a session, because other parallel sessions rely on seeing it to avoid duplicate or conflicting work.
 
 **Cargo output rules:** always `-p <crate>`, never `--workspace` (exception: P5). Success → 1 line. Errors → full `error[...]` block, skip all warnings. Test failure → test name + first 10 lines.
 
@@ -184,11 +186,14 @@ Every new `[dependencies]` entry requires this in the commit body:
 
 Full details (style, tests, error handling, unsafe) — [`docs/conventions.md`](docs/conventions.md).
 
-- **Rust 1.95+ stable**, Edition 2024, resolver "3", MSVC on Windows.
+- **Rust pinned to 1.97.0** (`rust-toolchain.toml`, since 2026-08-19 — it was a floating `"stable"`, which handed developers and CI runners different lint sets and made clippy green locally / red in CI). Edition 2024, resolver "3", MSVC on Windows. Raise the pin in its own commit after a clean `RUSTC_WRAPPER= cargo clippy --workspace`: a version bump invalidates every artifact in `target/` (stale ones surface as `E0786 "only metadata stub found for rlib dependency core"`, which reads like a broken dependency but is cured by `cargo clean`) and can add new lints.
 - `cargo clippy -p <crate> --all-targets -- -D warnings` must pass before every commit.
-- **`///` doc comments on all public structs, fields, and functions** — mandatory.
-- No `panic!` / `unwrap()` in production code; allowed in tests.
-- `unsafe` forbidden outside FFI boundaries; every block requires `// SAFETY:` comment.
+- **sccache is off** (`rustc-wrapper` commented out in `.cargo/config.toml`, 2026-08-19): version 0.15.0 crashes every compiler invocation under toolchain 1.97.0 with `STATUS_STACK_BUFFER_OVERRUN` (`0xc0000409`) on crates with a long command line — `rustc` as well as `clippy-driver`, so it breaks plain `cargo test`, not just linting. Re-enable only after sccache is updated and `cargo test -p lumen-layout` passes through it. CI never used the wrapper.
+- **`///` doc comments on all public structs, fields, and functions** — mandatory and **machine-checked** since 2026-08-18 (`missing_docs = "deny"` in `[workspace.lints.rust]`). Pre-existing debt (1866 items) is held behind **file-scoped** `#![allow(missing_docs)]` in 119 files, so a *new* file must document its public API even in a crate that still owes docs; the per-crate counts live in `docs/lint-policy.md` §10.
+- No `panic!` / `unwrap()` / `expect()` in production code; allowed in tests. **All three machine-checked** since 2026-08-18 (`clippy::panic`, `clippy::unwrap_used`, `clippy::expect_used`, all `deny` in `[workspace.lints]`). `clippy.toml`'s `allow-*-in-tests` frees only the body of a `#[test]` fn, so test roots and `#[cfg(test)] mod`s carry their own `#![allow]`. Grandfathered sites carry a function-scoped `#[allow]` (an `impl`-scoped one where the function could not be identified), never a crate-scoped one; every allow is listed in `docs/lint-policy.md` §10.
+- `unsafe` forbidden outside FFI boundaries; every block requires `// SAFETY:` comment. **Machine-checked** since 2026-08-18: `clippy::undocumented_unsafe_blocks = "deny"` in `[workspace.lints]`, so a missing comment is a build error, not a review finding. One comment above two adjacent `unsafe impl`s does not count as documenting the second.
+
+All three prose policies above are now enforced by `[workspace.lints]` — tier 0 of [`docs/lint-policy.md`](docs/lint-policy.md) was completed on 2026-08-18 (five rules enabled, one rejected on measurement). What remains is the grandfathered debt behind `#[allow]`, listed per crate with owners in that file's §10. Rules are enabled in `[workspace.lints]` (root `Cargo.toml`), configured in `clippy.toml`; every member crate opts in with `[lints] workspace = true`. **A new crate must carry that stanza** or it silently escapes every project lint — `/lumen-new-crate` adds it.
 - Names: `snake_case` functions/fields, `PascalCase` types, `SCREAMING_SNAKE` constants.
 
 ---
@@ -213,13 +218,20 @@ bash scripts/worktree-pool.sh release p<N>-work                           # free
 
 The slot (`.claude/worktrees/p1-work` … `p5-work`, plus `perf-base`) is created once and reused — only the branch changes, so `target/` stays warm and rebuilds are incremental. `git worktree remove` after every task deleted that cache and cost 9–15 min of cold build per task, plus 3 min for the `add` itself. Build **only `dev-release`** inside a slot (warm `dev-release` ≈ 4.7 GB; five slots on `debug` would be ~70 GB). The script refuses to switch a slot with uncommitted or unmerged work. Details — [`docs/git-workflow.md`](docs/git-workflow.md).
 
-**7-step completion checklist** (all mandatory, full details in `docs/git-workflow.md`):
+**Merge and push after EVERY commit** (user, 2026-08-19). Do not accumulate commits on a branch until the task is done: local gate → commit → `git merge --no-ff` into `main` → `git push origin main`, per commit. Feature branches and `--no-ff` stay mandatory; what changed is the cadence. Rationale: unpushed work does not exist for anyone else — on 2026-08-19 several roles held unmerged branches at once, the root checkout trailed `origin/main` by 21 commits, and parallel sessions duplicated work and collided on bug numbers. Frequent small merges also trade one large conflict for several trivial ones.
+
+**Do not wait for CI before merging** (same decision). The local gate is the only pre-merge check; watch CI on `main` afterwards and fix it if it goes red. Waiting per-commit would cost ~30 min each.
+
+**Task-completion checklist** (all mandatory, full details in `docs/git-workflow.md`). Steps 1–3 already ran per commit under the rule above; at task end they cover whatever the last commit left:
 1. `cargo clippy -p <crate> -- -D warnings` + `cargo test -p <crate>`
 2. `git merge --no-ff p<N>-task-name -m "Merge …"`
-3. `bash scripts/worktree-pool.sh release p<N>-work` then `git branch -d p<N>-task-name` (a slot holding the branch makes `branch -d` fail)
-4. Delete pointer line from `STATUS-PN.md`, commit
-5. `git push origin main`
-6. Pool slot — nothing to remove (freed in step 3). Ad-hoc worktree — `git worktree remove .claude/worktrees/<task-name>`
+3. `git push origin main`
+4. Delete pointer line from `STATUS-PN.md`, commit — then merge and push it too
+5. `bash scripts/worktree-pool.sh release p<N>-work` then `git branch -d p<N>-task-name` (a slot holding the branch makes `branch -d` fail)
+6. Pool slot — nothing to remove (freed in step 5). Ad-hoc worktree — `git worktree remove .claude/worktrees/<task-name>`
+7. `git push origin --delete p<N>-task-name` if the branch was ever pushed — the remote task branch has served its purpose
+
+**When the root checkout blocks the merge.** `main` is checked out in the repo root and often carries someone else's uncommitted files, so `git merge` there fails on paths you touched. Merge in a throwaway worktree instead — `git worktree add .claude/worktrees/merge-tmp -b <tmp> origin/main`, merge, `git push origin HEAD:main`, remove it. Note the local `main` then trails `origin/main`, which also makes `worktree-pool.sh release` refuse to free the slot (it compares against local `main`); free it with `git checkout --detach origin/main` inside the slot.
 
 ---
 
@@ -252,7 +264,7 @@ Update docs **in the same commit** as the code change. Use `grep -n` to find the
 | Architectural decision | `docs/decisions/ADR-NNN.md` | new file from TEMPLATE.md; update index |
 | Known gotcha found/fixed | `CLAUDE.md` → "Known gotchas" | append/remove bullet |
 | Perf slice merged with a transferable lesson | `docs/perf-method.md` | append the rule (one paragraph, slice ref in brackets); per-slice numbers stay in `bugs/BUG-NNN-*.md` |
-| New public API | `SYMBOLS.md` | `python scripts/gen_symbols.py` |
+| New public API — **or any edit that shifts line numbers under `crates/`** | `SYMBOLS.md` | `python scripts/gen_symbols.py`. The index stores `file:line`, so inserting a comment or an attribute drifts it just as much as adding an item. Since 2026-08-19 the CI `doc-drift` job is **blocking** and fails on the diff, so this is no longer optional bookkeeping. |
 | Roadmap/bug/CSS-module status change | `ROADMAP.md` → `python scripts/gen_roadmap.py` | edit ROADMAP.md if structure changed; CSS-module status alone needs no edit — the script re-pulls it from CSS-SPECS.md |
 
 ---
@@ -280,6 +292,7 @@ Full list with phases — [docs/plan/knowledge.md](docs/plan/knowledge.md) §12.
 ## Known gotchas
 
 - **Cargo.lock is committed** (workspace includes a binary).
+- **The committed `.cargo/config.toml` sets `build.rustc-wrapper = "sccache"`, so *any* environment without `sccache` on PATH fails instantly on every cargo command** — `error: could not execute process 'sccache …/rustc -vV' (never executed)`, before a single crate is compiled. This kept GitHub Actions red for two months: the config landed 2026-06-17 (`2ffbee511`), and `ci.yml` failed on all three OS at `cargo check -p lumen-shell` in every one of 1187 runs on `main` — nobody looked, because nothing surfaced the failure locally. Found 2026-08-18 (P5) while auditing CI for `docs/ci-offload.md`. Fixed by `RUSTC_WRAPPER: ""` in the `env:` of `ci.yml`/`release.yml`/`bench-gate.yml` (the last of these was itself deleted on 2026-08-19, `docs/ci-offload.md` §11.5 — don't go looking for it; an empty value overrides the config and disables the wrapper — verified A/B against `sccache --show-stats`, remembering that the counter lives on the server at `SCCACHE_SERVER_PORT=4444` set by that same config, not on the default port). **Consequence for any new automation** — a fresh container, a second machine, a colleague's checkout: install sccache or export an empty `RUSTC_WRAPPER`, otherwise cargo dies with a message that names sccache but reads like a toolchain failure.
 - **Line endings:** `.gitattributes` enforces LF. Git warning about CRLF→LF is normal.
 - **Archives in repo root are gitignored** (`/*.zip`, `/*.tar*`). Downloaded files won't accidentally get committed.
 - **Portable user data dir (`<exe_dir>/data/`).** The ad-block external-filter-list subsystem stores its data under `<exe_dir>/data/adblock/` (SQLite `adblock.db` for subscriptions + list metadata; `lists/<slug>.txt` bodies; `custom-rules.txt`) — see `shell/src/adblock.rs::browser_data_dir`. This is a **provisional** convention (user decision 2026-06-16): keep everything in the browser folder, do **not** use OS dirs (`%APPDATA%`/`~/.config`/`~/.cache`) or `lumen_cache_dir()`/`config_path()` for portable data. New subsystems needing portable data should add their own `data/<subsystem>/` subfolder via `browser_data_dir()`.

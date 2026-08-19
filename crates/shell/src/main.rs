@@ -61,6 +61,7 @@ mod reader_view;
 mod render_thread;
 mod source_view;
 mod spellcheck;
+mod startup_trace;
 mod svg_image;
 pub mod surface;
 mod runtime;
@@ -336,6 +337,9 @@ fn main() -> ExitCode {
     // froze the whole window mid-run. No-op unless stderr really is a pipe.
     diag_stderr::install();
     let code = run_cli();
+    // PERF-12: closes the startup accounting — see `startup_trace::log_exit`.
+    // Before `diag_stderr::flush`, so the line survives the bounded wait below.
+    startup_trace::log_exit();
     // The writer thread is detached, so the tail of the log would be lost when
     // `main` returns. Bounded wait: a parent that never reads must not turn
     // process exit into a second hang.
@@ -360,6 +364,12 @@ fn run_cli() -> ExitCode {
 
     // Anchor for launch->first-frame timing (§4 score table) — before any work.
     bench_frames::mark_process_start();
+    // PERF-12: fixed-startup stopwatch. Must precede the config load and the
+    // argument parse below, which are the phases it measures; it also switches
+    // the tracer on for `--trace-nav`, so that startup lands on the timeline
+    // instead of ahead of its origin.
+    let startup = startup_trace::Startup::begin();
+    let cfg_phase = startup.phase("config-load");
     // Load the fingerprint profile (9F.1) once, before any network or JS setup.
     // Absent config → engine defaults, so behaviour is unchanged out of the box.
     let mut startup_profile = config::load().unwrap_or_default();
@@ -382,7 +392,9 @@ fn run_cli() -> ExitCode {
         startup_profile.no_persistent_state = true;
     }
     config::init_global(startup_profile);
+    drop(cfg_phase);
 
+    let arg_phase = startup.phase("arg-parse");
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (devtools_port, rest_args) = match extract_devtools_port(&args) {
         Ok(r) => r,
@@ -492,6 +504,9 @@ fn run_cli() -> ExitCode {
         }
     };
 
+    drop(arg_phase);
+    let svc_phase = startup.phase("services-init");
+
     if let Some(port) = devtools_port
         && let Err(e) = DevToolsServer::spawn(port)
     {
@@ -562,6 +577,9 @@ fn run_cli() -> ExitCode {
         Some((session_source, scroll)) => (CliMode::OpenWindow(session_source), scroll),
         None => (cli, (0.0_f32, 0.0_f32)),
     };
+
+    drop(svc_phase);
+    startup.dispatch(cli.mode_name());
 
     match cli {
         CliMode::Dump { source, kind } => run_dump_mode(&source, kind, event_sink),
@@ -766,6 +784,7 @@ fn should_restore_session(source: &PageSource, automation_mode: bool) -> bool {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 fn run_window_mode(
     source: PageSource,
     event_sink: Arc<dyn EventSink>,
@@ -1358,7 +1377,10 @@ fn run_trace_nav(
     output: &std::path::Path,
     event_sink: Arc<dyn EventSink>,
 ) -> ExitCode {
-    lumen_core::trace::enable();
+    // PERF-12: the tracer is already recording — `startup_trace::Startup::begin`
+    // switched it on at the top of `run_cli`, anchored at process creation, so
+    // that fixed startup lands on the same timeline. Re-enabling here would
+    // reset the origin and drop every span taken before dispatch.
     let render = {
         // Корневой спан всей навигации; закрывается до `finish`, поэтому попадает
         // в таймлайн как охватывающая полоса.
@@ -2603,6 +2625,7 @@ impl NavEntry {
     ///
     /// The caller MUST have range-checked that the source stack is non-empty;
     /// `pop` is therefore expected to succeed.
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     fn shift_history_entry(
         nav_back: &mut Vec<NavEntry>,
         nav_fwd: &mut Vec<NavEntry>,
@@ -3765,6 +3788,27 @@ enum CliMode {
     IpcServer { port: Option<u16> },
 }
 
+impl CliMode {
+    /// Short stable label for this mode, used by the PERF-12 startup accounting
+    /// (`startup_trace::Startup::dispatch`) to name the point where fixed
+    /// startup ends and page work begins.
+    fn mode_name(&self) -> &'static str {
+        match self {
+            Self::OpenWindow(_) => "window",
+            Self::Dump { kind, .. } => match kind {
+                DumpKind::Source => "dump-source",
+                DumpKind::Layout => "dump-layout",
+                DumpKind::DisplayList => "dump-display-list",
+            },
+            Self::PrintToPdf { .. } => "print-to-pdf",
+            Self::Screenshot { .. } => "screenshot",
+            Self::TraceNav { .. } => "trace-nav",
+            Self::Mcp(_) => "mcp",
+            Self::IpcServer { .. } => "ipc-server",
+        }
+    }
+}
+
 /// Параметры MCP-режима.
 #[derive(Debug, Clone)]
 struct McpMode {
@@ -4402,6 +4446,8 @@ const MAX_PARALLEL_FETCHES: usize = 8;
 ///
 /// `f` получает `(индекс, &элемент)` и должна быть `Sync` (вызывается из всех
 /// потоков). Паники внутри `f` не глотаются — пробрасываются при join.
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn parallel_map<T, R, F>(items: &[T], f: F) -> Vec<R>
 where
     T: Sync,
@@ -5229,6 +5275,7 @@ struct PageSnapshot {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn parse_and_layout(
     bytes: &[u8],
     content_type: Option<&str>,
@@ -5469,7 +5516,15 @@ fn parse_and_layout(
     // local()-источники загружаются синхронно (из системного индекса, быстро).
     // url()-источники — только собираем в pending_web_fonts; фоновый поток
     // fetch+decode спавнится в apply_loaded_page → первый paint не ждёт сети.
-    let (font_registry, pending_web_fonts) = load_font_faces(&sheet.font_faces, base, sink, cookie_jar.clone());
+    let (font_registry, pending_web_fonts) = {
+        // PERF-12: this stretch — @font-face resolution through to the measurer's
+        // system faces below — was the single largest unnamed hole in the
+        // `--trace-nav` waterfall (114 ms of a 128 ms `navigation` on
+        // samples/page.html, against a `layout` span of 0.6 ms). It is dominated
+        // by the lazy system-font index build that PERF-11 caches.
+        let _s = lumen_core::trace::span("font-faces", "font");
+        load_font_faces(&sheet.font_faces, base, sink, cookie_jar.clone())
+    };
 
     // Populate document.fonts with FontFace objects from @font-face rules.
     // local() — immediately Loaded; url() — Loading (будет Loaded по FontLoaded).
@@ -5496,7 +5551,14 @@ fn parse_and_layout(
     let mut measurer = lumen_paint::MultiFontMeasurer::new(&font)
         .map_err(|e| format!("ошибка метрик шрифта: {e}"))?;
     // BUG-128: системные face-ы — те же, что выберет рендер.
-    measurer.set_system_faces(system_font_faces());
+    {
+        // PERF-11/PERF-12: `system_font_faces()` is where the lazy system font
+        // index is built on first use — hundreds of files parsed, once per
+        // process. Named separately from `font-faces` so the trace attributes
+        // the cost to the index rather than to @font-face handling.
+        let _s = lumen_core::trace::span("system-fonts", "font");
+        measurer.set_system_faces(system_font_faces());
+    }
     for rule in &sheet.font_faces {
         if !rule.family.is_empty()
             && let Some(bytes) = font_registry.face_bytes_for_family(&rule.family)
@@ -6243,6 +6305,7 @@ fn system_font_faces() -> Arc<lumen_paint::SystemFaceSet> {
 /// Единая точка сборки для всех layout-путей (полный / инкрементальный /
 /// restyle) — иначе системные семейства меряются по-разному в зависимости от
 /// того, есть ли на странице web-шрифты.
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 fn page_measurer(
     font: &lumen_font::Font<'static>,
     web_fonts: &[LoadedWebFont],
@@ -6269,6 +6332,8 @@ fn page_measurer(
 /// (`:hover`/`:focus`/`forced-colors`/`content-visibility` scroll) — thread-local
 /// (`lumen_layout::set_*`), поэтому вызывающая сторона обязана выставить его на
 /// **том же** потоке до вызова и сбросить после.
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn compute_layout(
     document: &Mutex<Document>,
     stylesheet: &lumen_css_parser::Stylesheet,
@@ -6309,6 +6374,8 @@ fn relayout_page_incremental(
 ///
 /// Same caller contract as [`compute_layout`]: thread-local interactive state
 /// must be set before the call and cleared afterwards.
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn compute_layout_incremental(
     document: &Mutex<Document>,
     stylesheet: &lumen_css_parser::Stylesheet,
@@ -6359,6 +6426,8 @@ fn relayout_page_incremental_restyle(
 /// BUG-341 S7: restyle-aware variant of [`compute_layout_incremental`] — see
 /// [`relayout_page_incremental_restyle`].
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn compute_layout_incremental_restyle(
     document: &Mutex<Document>,
     stylesheet: &lumen_css_parser::Stylesheet,
@@ -6549,6 +6618,7 @@ fn sw_store_for_base(
 }
 
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn render_bytes(
     bytes: &[u8],
     content_type: Option<&str>,
@@ -8701,6 +8771,7 @@ impl Lumen {
     /// Reads the `accept` and `multiple` attributes from the DOM, invokes the
     /// platform file dialog (blocking), then delivers the result to JS via
     /// `_lumen_deliver_file_list(nid, json)`.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn open_file_picker(&mut self, id: NodeId) {
         let (accept, multiple) = if let Some(src) = self.layout_source.as_ref() {
             let doc = src.document.lock().unwrap();
@@ -8949,6 +9020,7 @@ impl Lumen {
     /// `#findBar`/`#downloadsPanel` (CC-9), salvaged back into the tree at
     /// `#contentArea`'s former slot since they're real popovers, not preview
     /// placeholder content.
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
     fn relayout_chrome_host(&mut self) {
         if self.chrome_doc.is_none() {
             return;
@@ -10159,6 +10231,7 @@ impl Lumen {
     /// `self.layout_box` is **moved out** (not cloned) to avoid copying the
     /// potentially large tree; `apply_relayout_result` moves the fresh tree
     /// back in, so field is always `Some` after a successful call.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn try_relayout_raf_incremental(&mut self) -> bool {
         let Some(viewport) = self.relayout_viewport() else {
             return false;
@@ -10873,6 +10946,7 @@ impl Lumen {
     /// Fetched images are registered in the renderer immediately so the next
     /// repaint (already requested by `relayout`) shows them.
     #[cfg(feature = "v8")]
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn fetch_and_register_lazy_images(&mut self, requests: Vec<(u32, String)>) {
         let base = match &self.source {
             PageSource::File(p) => ResourceBase::File(p.clone()),
@@ -10980,6 +11054,7 @@ impl Lumen {
     /// [`lumen_js::TextTrackStore`] so `video.textTracks` reflects the parsed
     /// `<track>` cues. Fully replaces the store's contents (clear + repopulate),
     /// so navigating to a track-less page empties it.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn sync_text_track_store(&self) {
         let mut guard = self.text_track_store.tracks.lock().unwrap();
         guard.clear();
@@ -11013,6 +11088,7 @@ impl Lumen {
     ///
     /// Called once per render tick (Step 2.6) so video frames stay in sync with
     /// the render rate.  `elapsed_ms` is milliseconds since `self.epoch`.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn tick_video_gifs(&mut self, elapsed_ms: u64) {
         // Drain pending load requests queued by JS `__lumen_video_load`.
         let loads: Vec<(u32, String)> = self
@@ -11150,6 +11226,7 @@ impl Lumen {
     ///
     /// Triggers a full re-layout so that `:target`-based CSS rules take effect
     /// before the scroll position is calculated.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn navigate_fragment(&mut self, fragment: String) {
         // Same-document fragment navigation must keep the JS side in sync: update
         // `location`, push a same-document history entry, and fire `hashchange`
@@ -11889,6 +11966,7 @@ impl Lumen {
     /// Применить результат полного pipeline (fetch + parse + CSS + images).
     /// Используется и при streaming `LoadDone`, и может быть переиспользован
     /// в будущем для других путей загрузки.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn apply_loaded_page(&mut self, page: LoadedPage, new_layout_source: Option<LayoutSource>, new_js_ctx: Option<Arc<dyn PersistentJs>>) {
         // Drop JS closures before layout_source to release Arc clones in QuickJS.
         self.set_js_ctx(None);
@@ -12749,6 +12827,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         }
     }
 
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         // Warm-frame bench (LUMEN_BENCH=hover:N | scroll:N). Drives redraws
         // itself instead of waiting for a human, then exits. Placed first so a
@@ -14048,6 +14127,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         }
     }
 
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn window_event(
         &mut self,
         event_loop: &ActiveEventLoop,
@@ -17502,6 +17583,7 @@ impl Lumen {
         proceed
     }
 
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn handle_click_at(&mut self, x_css: f32, y_css: f32) {
         // Dismiss validation tooltip on any non-scrollbar click.
         self.validation_tooltip = None;
@@ -18257,6 +18339,7 @@ impl Lumen {
         route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
     }
 
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn handle_key(&mut self, event_loop: &ActiveEventLoop, key_event: &KeyEvent) {
         if key_event.state != ElementState::Pressed {
             return;
@@ -21146,6 +21229,7 @@ impl Lumen {
     /// Диспатчит JS click-событие, обрабатывает form-действие (checkbox/radio),
     /// и навигирует по ссылке если узел внутри `<a href>`. Используется
     /// hint-режимом для активации элемента без участия мыши.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn activate_node(&mut self, node_id: NodeId) {
         // JS click dispatch (bubbling от узла до document).
         // Hint-mode activations have no real mouse coordinates, so x/y are 0.
@@ -22106,6 +22190,7 @@ impl Lumen {
     ///
     /// The cursor position is converted from physical pixels to document-space
     /// CSS px (adds page scroll offsets so hit-testing works on scrolled pages).
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn try_scroll_overflow_container(&mut self, dx: f32, dy: f32) -> bool {
         let Some(cursor) = self.cursor_position else { return false };
         if self.layout_box.is_none() { return false; }
@@ -22205,6 +22290,7 @@ impl Lumen {
     /// boxes carry absolute (unscrolled) coordinates — see `PushScrollLayer`'s
     /// paint-time `translate(-scroll_x, -scroll_y)` — so each container's
     /// adjustment is independent of its ancestors' own scroll offset.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn scroll_nested_ancestors_into_view(&mut self, node: NodeId, target_rect: lumen_core::geom::Rect) {
         let Some(src) = self.layout_source.as_ref() else { return };
         let mut ancestor = src.document.lock().unwrap().get(node).parent;
@@ -23519,6 +23605,7 @@ impl Lumen {
     /// Restore per-page fields from a `PageSnapshot` into `self`.
     ///
     /// Called after a tab switch to make a previously-frozen tab active again.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn restore_page_snapshot(&mut self, snap: PageSnapshot) {
         self.display_list = snap.display_list;
         self.title = snap.title;
@@ -23615,6 +23702,7 @@ impl Lumen {
     ///
     /// Called after `save_page_snapshot()` to prepare `self` for a fresh tab
     /// before loading a URL or showing an empty page.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn reset_to_blank_tab(&mut self) {
         self.display_list = Vec::new();
         self.title = None;
@@ -28985,6 +29073,11 @@ mod tests {
         dispatch_preload_hints(&hints, &base, &sink, &mut std::collections::HashSet::new());
 
         let sink_any = sink.as_ref() as *const dyn EventSink as *const CollectingSink;
+        // SAFETY: `sink` was created two statements above as
+        // `Arc::new(CollectingSink(..))` and never reassigned, so the erased
+        // `dyn EventSink` really points at a `CollectingSink`; the pointer is
+        // derived from a live `Arc` that outlives the borrow. A test-only
+        // downcast — `EventSink` has no `Any` supertrait to do it safely.
         let events = unsafe { (*sink_any).0.lock().unwrap() };
         assert_eq!(events.len(), 2);
 
@@ -29025,6 +29118,11 @@ mod tests {
         dispatch_preload_hints(&hints, &base, &sink, &mut std::collections::HashSet::new());
 
         let sink_any = sink.as_ref() as *const dyn EventSink as *const CollectingSink;
+        // SAFETY: `sink` was created two statements above as
+        // `Arc::new(CollectingSink(..))` and never reassigned, so the erased
+        // `dyn EventSink` really points at a `CollectingSink`; the pointer is
+        // derived from a live `Arc` that outlives the borrow. A test-only
+        // downcast — `EventSink` has no `Any` supertrait to do it safely.
         let events = unsafe { (*sink_any).0.lock().unwrap() };
         // style.css появляется дважды — должен emit-иться один раз
         assert_eq!(events.len(), 2, "expected 2 unique urls, got {}", events.len());
@@ -29063,6 +29161,11 @@ mod tests {
         dispatch_preload_hints(&full, &base, &sink, &mut seen);
 
         let sink_any = sink.as_ref() as *const dyn EventSink as *const CollectingSink;
+        // SAFETY: `sink` was created two statements above as
+        // `Arc::new(CollectingSink(..))` and never reassigned, so the erased
+        // `dyn EventSink` really points at a `CollectingSink`; the pointer is
+        // derived from a live `Arc` that outlives the borrow. A test-only
+        // downcast — `EventSink` has no `Any` supertrait to do it safely.
         let events = unsafe { (*sink_any).0.lock().unwrap() };
         // reset.css — один раз (из первого вызова), hero.png — один раз (из второго)
         assert_eq!(events.len(), 2);
@@ -29096,6 +29199,11 @@ mod tests {
         dispatch_preload_hints(&hints, &base, &sink, &mut std::collections::HashSet::new());
 
         let sink_any = sink.as_ref() as *const dyn EventSink as *const CollectingSink;
+        // SAFETY: `sink` was created two statements above as
+        // `Arc::new(CollectingSink(..))` and never reassigned, so the erased
+        // `dyn EventSink` really points at a `CollectingSink`; the pointer is
+        // derived from a live `Arc` that outlives the borrow. A test-only
+        // downcast — `EventSink` has no `Any` supertrait to do it safely.
         let events = unsafe { (*sink_any).0.lock().unwrap() };
         assert_eq!(events.len(), 3);
 

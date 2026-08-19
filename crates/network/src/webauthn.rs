@@ -369,6 +369,7 @@ fn generate_es256_key() -> SigningKey {
 
 /// Fill `n` bytes from the OS CSPRNG. Panics only if the OS RNG is unavailable,
 /// which is unrecoverable for a security primitive.
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 fn random_bytes(n: usize) -> Vec<u8> {
     let mut buf = vec![0u8; n];
     getrandom::getrandom(&mut buf).expect("OS CSPRNG unavailable");

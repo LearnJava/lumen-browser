@@ -1,53 +1,181 @@
 name: CI
 
-# Cross-platform compilation check + unit tests on every push/PR to main.
-# Graphic tests (gdigrab + Edge comparison) are Windows-only and run separately.
+# Task-branch gate (docs/ci-offload.md §4 «Целевая раскладка джобов»).
+#
+# Hot path — everything that blocks a merge runs on ubuntu only, except `lint`
+# which also runs on macos (see that job's comment for why):
+#   test          compile check + unit tests
+#   doc-drift     generated docs vs committed ones
+#   lint          clippy --workspace (ubuntu + macos)
+#   snapshot-cpu  deterministic CPU snapshots (PROBE, continue-on-error — flaky
+#                 reference, BUG-784)
+#
+# Cold path — `cross` (macos + windows) is off the branch hot path and runs on
+# push-to-main and nightly: cross-platform breakage is real but is not a blocker
+# of the task being merged, and five parallel roles × 3 OS would eat the 20-job
+# free-tier concurrency limit on its own.
+#
+# Graphic tests (gdigrab + Edge comparison) stay local — they need a GPU and a
+# focused window (docs/ci-offload.md §9).
 
 on:
   push:
-    branches: [main]
+    # `p[1-5]-*` are the role task branches (CLAUDE.md §Git workflow). They are
+    # pushed to origin so CI can gate them BEFORE the local `--no-ff` merge —
+    # without this pattern a branch push runs nothing, because the project
+    # merges locally and does not open pull requests (docs/ci-offload.md §8,
+    # variant 1, decided 2026-08-18).
+    branches: [main, 'p[1-5]-*']
     tags-ignore: ['**']   # release.yml handles tags
   pull_request:
+  schedule:
+    # Nightly cross-platform sweep (03:00 UTC). The only scheduled run in the
+    # repo: `cross` is skipped on branch pushes, so without this macOS/Windows
+    # would only ever be exercised by a push to main.
+    - cron: '0 3 * * *'
+
+# One run per branch. A second push supersedes the first: with branch gating a
+# task branch gets pushed several times, and 20-minute runs would otherwise pile
+# up against the 20-job free-tier limit. `main` is exempt — every commit that
+# lands there keeps its own result.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # Репозиторный .cargo/config.toml задаёт `build.rustc-wrapper = "sccache"`
+  # (он несущий локально, docs/build-speed.md). На раннерах sccache нет, и
+  # ЛЮБАЯ команда cargo падает мгновенно: «could not execute process `sccache
+  # ... rustc -vV` (never executed)». Пустой RUSTC_WRAPPER перебивает config и
+  # отключает обёртку — проверено A/B по счётчику `sccache --show-stats`.
+  # Не заменять установкой sccache в CI: docs/ci-offload.md §5 — он решает ту же
+  # задачу, что и кэш зависимостей, но требует внешнего хранилища.
+  RUSTC_WRAPPER: ""
 
 jobs:
-  check:
-    name: Check & Test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+  test:
+    name: Check & Test (ubuntu)
+    runs-on: ubuntu-latest
 
     steps:
+      # `tests/wpt` is 105 702 of the 108 534 tracked files (vendored WPT) and no
+      # build job needs it — skipping it is the single biggest checkout saving.
+      # cone-mode must be off: the pattern is an exclusion, not a directory list.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          sparse-checkout: |
+            /*
+            !/tests/wpt
+          sparse-checkout-cone-mode: false
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
 
-      - name: Cache Cargo registry
-        uses: actions/cache@v4
+      # Do NOT cache `target/` wholesale: it is 38 GiB locally against a 10 GB
+      # per-repository budget, and the previous three-key-per-OS scheme guaranteed
+      # mutual eviction and a zero hit rate. `rust-cache` keeps dependency
+      # artifacts and drops workspace-crate ones, which is what actually fits.
+      # Third-party action — pinned by commit SHA, not by tag (ci-offload.md §5).
+      # `save-if` writes the cache only on `main`; task-branch runs restore from
+      # the base branch, so five parallel roles do not split the 10 GB budget.
+      - name: Cargo dependency cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-registry-
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          # rusty_v8 drops its ~220 MB prebuilt static library here
+          # (docs/build-speed.md §3.7); without it every cold job re-downloads it.
+          cache-directories: ~/.cargo/.rusty_v8
 
-      - name: Cache build artifacts
-        uses: actions/cache@v4
-        with:
-          path: target
-          key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-build-
-
-      # glutin (OpenGL context) and winit need X11/Wayland/EGL headers on Linux.
+      # glutin (OpenGL context) and winit need X11/Wayland/EGL headers on Linux;
+      # cpal/rodio (crates/shell audio) map to ALSA there, so alsa-sys needs
+      # libasound2-dev — without it the build script fails, Linux only.
       # rusqlite uses "bundled" so no libsqlite3 required.
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            libx11-dev libxcursor-dev libxi-dev libxrandr-dev \
+            libwayland-dev libxkbcommon-dev \
+            libegl-dev libgles2-mesa-dev \
+            libasound2-dev \
+            pkg-config
+
+      # Verify the main shell binary compiles.
+      - name: Compile check (lumen-shell)
+        run: cargo check -p lumen-shell
+
+      # Run unit tests for crates that have no windowing/GPU requirements.
+      # lumen-shell and lumen-paint (with GPU backends) are excluded here.
+      - name: Unit tests — core + parsers
+        run: |
+          cargo test -p lumen-core
+          cargo test -p lumen-html-parser
+          cargo test -p lumen-css-parser
+          cargo test -p lumen-dom
+
+      - name: Unit tests — engine
+        run: |
+          cargo test -p lumen-layout
+          cargo test -p lumen-font
+          cargo test -p lumen-encoding
+          cargo test -p lumen-image
+
+      - name: Unit tests — services
+        run: |
+          cargo test -p lumen-js
+          cargo test -p lumen-network
+          cargo test -p lumen-storage
+          cargo test -p lumen-ipc
+          cargo test -p lumen-knowledge
+
+  lint:
+    # Blocking since 2026-08-19 (docs/ci-offload.md §11.3, round 2).
+    #
+    # Tier 0 of docs/lint-policy.md (5 rules on `deny`: undocumented_unsafe_blocks,
+    # panic, expect_used, unwrap_used, missing_docs) was rolled out and verified on
+    # Windows/MSVC only. 12 files carry code behind `#[cfg(target_os = "linux")]`
+    # / `"macos"` / `unix`, which clippy had therefore never seen — this job's
+    # matrix runs it on ubuntu and macos too, closing that blind spot instead of
+    # taking it on trust.
+    #
+    # Ran as a `continue-on-error` probe first (round 1, 2026-08-18): it found a
+    # real gap (an undocumented `unsafe` block reachable only under
+    # `cfg(target_os = "macos")`, fixed) and a false one (a `clippy::question_mark`
+    # hit caused by the CI runner's floating `stable` toolchain landing ahead of
+    # the developer's pinned one, not a platform difference — resolved by pinning
+    # `rust-toolchain.toml` to 1.97.0 the same day). Full history — ci-offload.md §11.3.
+    name: Clippy workspace (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          sparse-checkout: |
+            /*
+            !/tests/wpt
+          sparse-checkout-cone-mode: false
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cargo dependency cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-directories: ~/.cargo/.rusty_v8
+
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: |
@@ -56,15 +184,146 @@ jobs:
             libx11-dev libxcursor-dev libxi-dev libxrandr-dev \
             libwayland-dev libxkbcommon-dev \
             libegl-dev libgles2-mesa-dev \
+            libasound2-dev \
             pkg-config
 
-      # Verify the main shell binary compiles on all platforms.
-      # This catches cross-platform breakage early without waiting for a full release build.
+      # `--message-format=short` is deliberately NOT used: it omits the lint name,
+      # which is the only thing that makes the probe output actionable
+      # (docs/lint-policy.md §10, gotcha list).
+      - name: cargo clippy --workspace --all-targets
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  snapshot-cpu:
+    # PROBE STAGE — see the `lint` comment; same two-step rollout.
+    #
+    # `snapshot_cpu.rs` claims platform-independent output (tiny-skia software
+    # raster, bundled Inter, no subresource fetches), and the 81 references in
+    # `graphic_tests/snapshots/cpu/` were all generated on Windows. That claim has
+    # never been checked. This run IS the check: if ubuntu matches the committed
+    # PNGs, drop `continue-on-error` and the job becomes the CI half of the pixel
+    # gate whose staleness keeps recurring (BUG-118 / 149 / 297 / 316). If it does
+    # not match, move the job to `windows-latest` (also free, just slower in
+    # queue) — docs/ci-offload.md §4.
+    name: CPU snapshots — PROBE (ubuntu)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          sparse-checkout: |
+            /*
+            !/tests/wpt
+          sparse-checkout-cone-mode: false
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo dependency cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-directories: ~/.cargo/.rusty_v8
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            libx11-dev libxcursor-dev libxi-dev libxrandr-dev \
+            libwayland-dev libxkbcommon-dev \
+            libegl-dev libgles2-mesa-dev \
+            libasound2-dev \
+            pkg-config
+
+      # Filter by test-fn name, not by module path: the driver tests are one
+      # consolidated binary (crates/driver/tests/all.rs, BT-1) and the rest of it
+      # wants a GPU.
+      - name: Deterministic CPU snapshots
+        run: cargo test -p lumen-driver --features cpu-render cpu_snapshots_match_references
+
+  doc-drift:
+    # Blocking from day one — unlike the two probes above this needs no build and
+    # no platform-specific behaviour, it just re-runs the generators and asks git
+    # whether anything moved.
+    #
+    # NOT included: `tests/wpt/run_report.py --check` (docs/ci-offload.md §4 lists
+    # it under doc-drift). It needs a full wptrunner run — hours, a live browser
+    # binary and a working `wss` server (CLAUDE.md §Known gotchas) — so it does not
+    # belong in a 2-minute job. It stays a manual P2 gate on the TEST track.
+    name: Doc drift (generated files)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          sparse-checkout: |
+            /*
+            !/tests/wpt
+          sparse-checkout-cone-mode: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      # SYMBOLS.md is a pure text scan of `crates/` — a public item added without
+      # regenerating it silently rots the index (CLAUDE.md §Doc sync rules).
+      - name: SYMBOLS.md is current
+        run: |
+          python scripts/gen_symbols.py
+          git diff --exit-code -- SYMBOLS.md
+
+      # The roadmap trees are generated from ROADMAP.md + BUGS.md + CSS-SPECS.md,
+      # so a bug flipped to FIXED without a regen leaves the trees lying.
+      #
+      # `-I` (ignore lines matching a regex) is load-bearing: gen_roadmap.py
+      # stamps a `"generated": "<today>"` field into the embedded JSON, so a byte
+      # comparison fails on any day later than the commit — and, because the
+      # runner is UTC while the author may not be, sometimes on the same day too.
+      # That is exactly how this job first went red. Do not "simplify" it back to
+      # a plain --exit-code; drop the stamp from the generator instead if this
+      # ever needs to be exact.
+      - name: Roadmap trees are current
+        run: |
+          python scripts/gen_roadmap.py
+          git diff --exit-code -I'"generated":' -- docs/roadmap-*.html
+
+  cross:
+    # Cold path: push-to-main and nightly only (see the header comment). Keeps the
+    # macOS/Windows coverage that the old 3-OS matrix gave — including the unit
+    # tests, which is how the macOS flake BUG-783 surfaced — without paying for it
+    # on every task-branch push.
+    name: Cross-platform (${{ matrix.os }})
+    if: github.event_name == 'schedule' || github.ref == 'refs/heads/main'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          sparse-checkout: |
+            /*
+            !/tests/wpt
+          sparse-checkout-cone-mode: false
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo dependency cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-directories: ~/.cargo/.rusty_v8
+
       - name: Compile check (lumen-shell)
         run: cargo check -p lumen-shell
 
-      # Run unit tests for crates that have no windowing/GPU requirements.
-      # lumen-shell and lumen-paint (with GPU backends) are excluded here.
       - name: Unit tests — core + parsers
         run: |
           cargo test -p lumen-core

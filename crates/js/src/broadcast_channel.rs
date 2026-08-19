@@ -76,6 +76,7 @@ pub type BroadcastRegistry = Arc<Mutex<Vec<LocalChannel>>>;
 ///
 /// Creates an `mpsc` pair: the sender joins the global hub under `name`, the
 /// receiver is stored in this runtime's `registry` for later draining.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn register(registry: &BroadcastRegistry, name: &str) -> u32 {
     let (tx, rx) = mpsc::channel::<String>();
     let id = {
@@ -96,6 +97,7 @@ pub fn register(registry: &BroadcastRegistry, name: &str) -> u32 {
 ///
 /// Subscribers whose receiver has been dropped (closed channel or dropped
 /// runtime) are pruned on send failure, so a stale hub self-heals.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn post(name: &str, sender_id: u32, json: &str) {
     let mut h = hub().lock().unwrap();
     if let Some(subs) = h.channels.get_mut(name) {
@@ -115,6 +117,7 @@ pub fn post(name: &str, sender_id: u32, json: &str) {
 ///
 /// After `close`, the instance no longer receives messages and its name is
 /// dropped from the hub once it has no remaining subscribers.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn close(registry: &BroadcastRegistry, id: u32, name: &str) {
     {
         let mut h = hub().lock().unwrap();
@@ -131,6 +134,7 @@ pub fn close(registry: &BroadcastRegistry, id: u32, name: &str) {
 /// Drain all pending messages addressed to this runtime's channels.
 ///
 /// Returns `(channel_id, json)` pairs; the receiver queues are emptied.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn drain(registry: &BroadcastRegistry) -> Vec<(u32, String)> {
     let reg = registry.lock().unwrap();
     let mut out = Vec::new();
@@ -298,6 +302,9 @@ const BROADCAST_CHANNEL_SHIM: &str = r#"(function() {
 
 #[cfg(all(test, feature = "v8-backend"))]
 mod tests {
+    // Хелперы тестового модуля: исключение из clippy.toml покрывает
+    // только тело `#[test]` (docs/lint-policy.md §10).
+    #![allow(clippy::unwrap_used)]
     use crate::v8_runtime::V8JsRuntime;
     use lumen_core::ext::JsRuntime as _;
     use lumen_dom::Document;

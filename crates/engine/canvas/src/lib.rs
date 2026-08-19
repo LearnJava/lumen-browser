@@ -253,11 +253,40 @@ pub struct ColorStop {
 #[derive(Debug, Clone)]
 pub enum GradientKind {
     /// CSS linear gradient: line from `(x0,y0)` to `(x1,y1)`.
-    Linear { x0: f32, y0: f32, x1: f32, y1: f32 },
+    Linear {
+        /// X начала линии градиента, пользовательские координаты.
+        x0: f32,
+        /// Y начала линии градиента.
+        y0: f32,
+        /// X конца линии градиента.
+        x1: f32,
+        /// Y конца линии градиента.
+        y1: f32,
+    },
     /// CSS radial gradient: inner circle `(x0,y0,r0)` → outer circle `(x1,y1,r1)`.
-    Radial { x0: f32, y0: f32, r0: f32, x1: f32, y1: f32, r1: f32 },
+    Radial {
+        /// X центра внутренней окружности.
+        x0: f32,
+        /// Y центра внутренней окружности.
+        y0: f32,
+        /// Радиус внутренней окружности.
+        r0: f32,
+        /// X центра внешней окружности.
+        x1: f32,
+        /// Y центра внешней окружности.
+        y1: f32,
+        /// Радиус внешней окружности.
+        r1: f32,
+    },
     /// CSS conic gradient: start angle (radians) around centre `(cx,cy)`.
-    Conic { angle: f32, cx: f32, cy: f32 },
+    Conic {
+        /// Начальный угол в радианах, отсчёт от положительной оси X.
+        angle: f32,
+        /// X центра.
+        cx: f32,
+        /// Y центра.
+        cy: f32,
+    },
 }
 
 /// Canvas gradient object (`createLinearGradient` / `createRadialGradient` / `createConicGradient`).
@@ -335,6 +364,7 @@ impl CanvasGradient {
         }
     }
 
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn sample_at(&self, t: f32) -> CanvasColor {
         if self.stops.is_empty() { return CanvasColor::rgba(0, 0, 0, 255); }
         if self.stops.len() == 1 { return self.stops[0].color; }

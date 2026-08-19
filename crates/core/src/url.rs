@@ -20,6 +20,11 @@
 //! authority (`http`/`https`/`file`/`ws`/`wss`), включая пути, дописанные
 //! [`Url::resolve`] (который всегда идёт через `parse`).
 
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
 use crate::error::{Error, Result};
 use std::fmt;
 
@@ -245,6 +250,7 @@ fn has_scheme(s: &str) -> bool {
     false
 }
 
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 fn split_scheme(s: &str) -> Result<(String, &str)> {
     if !has_scheme(s) {
         return Err(Error::InvalidUrl(format!("missing scheme: {s:?}")));

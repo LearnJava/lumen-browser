@@ -1,0 +1,16 @@
+# Настройка clippy для всего workspace. Правила включаются не здесь, а в
+# секции [workspace.lints] корневого Cargo.toml; здесь — их параметры и
+# собственные чёрные списки. Обоснование и протокол — docs/lint-policy.md §4.
+
+# Политика проекта (CLAUDE.md §Code conventions) запрещает unwrap/expect/panic
+# в продакшн-коде и разрешает их в тестах. Ключи действуют на весь `#[cfg(test)]`,
+# то есть покрывают и внутрифайловые `mod tests`, и каталоги `tests/`.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+
+# Собственные запреты без единой строки кода: путь + текст, который увидит
+# нарушитель. Кандидатов набирать из реальных разборов багов, а не выдумывать
+# заранее — поэтому списки пока пусты.
+disallowed-methods = []
+disallowed-types = []

@@ -1,13 +1,18 @@
 /// RGBA color used by the Canvas 2D API.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CanvasColor {
+    /// Красный канал, 0–255.
     pub r: u8,
+    /// Зелёный канал, 0–255.
     pub g: u8,
+    /// Синий канал, 0–255.
     pub b: u8,
+    /// Альфа, 0 (прозрачно) – 255 (непрозрачно). Не premultiplied.
     pub a: u8,
 }
 
 impl CanvasColor {
+    /// Собирает цвет из каналов 0–255 (альфа не premultiplied).
     pub fn rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
         Self { r, g, b, a }
     }

@@ -9,6 +9,11 @@
 //! `response_headers` хранит полный `meta_json` от JS-шима (method/status/headers).
 //! Реальная интеграция с fetch event (SW `respondWith`) — Phase 3+.
 
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
 use std::path::Path;
 use std::sync::Mutex;
 

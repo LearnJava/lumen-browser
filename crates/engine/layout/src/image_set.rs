@@ -277,6 +277,7 @@ pub fn parse_image_set(value: &str) -> Vec<ImageSetOption> {
 ///    closest to `dpr`.  Ties prefer the higher-resolution (sharper) asset.
 /// 3. Returns `None` when the candidate list is empty or all are filtered out.
 #[must_use]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn select_image_set_candidate<'a>(
     candidates: &'a [ImageSetOption],
     dpr: f32,

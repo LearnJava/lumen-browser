@@ -104,12 +104,68 @@ fn thread_lane() -> u64 {
 
 /// Starts recording. Installs a fresh time origin and clears any previous
 /// events. No-op-safe to call once at the start of a traced navigation.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn enable() {
     *recorder().lock().unwrap() = Some(Recorder {
         start: Instant::now(),
         events: Vec::new(),
     });
     ENABLED.store(true, Ordering::Relaxed);
+}
+
+/// Starts recording with an explicit time origin, normally one in the past.
+///
+/// [`enable`] anchors the timeline at the moment it is called, so everything
+/// that happened earlier is invisible *by construction* — including the process
+/// load, the CRT init and the argument parse that decided to trace at all.
+/// PERF-12 is about exactly that stretch, so the shell reconstructs the process
+/// creation instant and passes it here; spans that already finished by then are
+/// backfilled with [`record_span`].
+///
+/// Ignored (leaving the tracer off) if the recorder mutex is poisoned — a
+/// missing timeline is a lost measurement, not a reason to abort a page load.
+pub fn enable_at(origin: Instant) {
+    let Ok(mut slot) = recorder().lock() else {
+        return;
+    };
+    *slot = Some(Recorder {
+        start: origin,
+        events: Vec::new(),
+    });
+    drop(slot);
+    ENABLED.store(true, Ordering::Relaxed);
+}
+
+/// Records an already-finished span from start and end instants the caller
+/// captured itself, instead of from a [`SpanGuard`].
+///
+/// A guard cannot be opened in the past, so this is the only way to put a
+/// stretch that ended *before* the tracer was switched on onto the timeline —
+/// the pre-`main` process load (PERF-12). No-op while disabled.
+pub fn record_span(name: impl Into<String>, cat: &'static str, begin: Instant, end: Instant) {
+    if !enabled() {
+        return;
+    }
+    let tid = thread_lane();
+    let Ok(mut slot) = recorder().lock() else {
+        return;
+    };
+    let Some(rec) = slot.as_mut() else {
+        return;
+    };
+    // `saturating_duration_since` clamps rather than panics if `begin` predates
+    // the origin (possible when a caller passes a hand-computed instant).
+    let ts_us = begin.saturating_duration_since(rec.start).as_secs_f64() * 1_000_000.0;
+    let dur_us = end.saturating_duration_since(begin).as_secs_f64() * 1_000_000.0;
+    rec.events.push(Event {
+        name: name.into(),
+        cat,
+        phase: 'X',
+        ts_us,
+        dur_us,
+        tid,
+        args: BTreeMap::new(),
+    });
 }
 
 /// Whether the tracer is currently recording. A single relaxed atomic load;
@@ -142,6 +198,7 @@ pub fn span(name: impl Into<String>, cat: &'static str) -> SpanGuard {
 
 /// Records a zero-duration instant marker ("i" event) at the current time —
 /// e.g. `first-paint`, `dom-content-loaded`. No-op when disabled.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn instant(name: impl Into<String>, cat: &'static str) {
     if !enabled() {
         return;
@@ -165,6 +222,7 @@ pub fn instant(name: impl Into<String>, cat: &'static str) {
 /// Stops recording and returns the collected timeline serialised as Chrome
 /// Trace Event Format JSON (`{"traceEvents":[…],"displayTimeUnit":"ms"}`), or
 /// `None` if the tracer was never enabled. Clears the recorder either way.
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub fn finish() -> Option<String> {
     ENABLED.store(false, Ordering::Relaxed);
     let rec = recorder().lock().unwrap().take()?;
@@ -241,6 +299,7 @@ impl SpanGuard {
 }
 
 impl Drop for SpanGuard {
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn drop(&mut self) {
         let Some(inner) = self.inner.take() else {
             return;
@@ -283,6 +342,54 @@ mod tests {
         }
         instant("marker", "cat");
         // finish() returns None when never enabled since the last finish.
+        assert!(finish().is_none());
+    }
+
+    /// PERF-12: a span that finished before the tracer was switched on must
+    /// still land on the timeline, at a positive offset from an origin that
+    /// predates it. The regression this guards is the whole point of
+    /// `enable_at`: with plain `enable()` the origin is "now", so a backfilled
+    /// pre-`main` span clamps to ts 0 and its duration is invisible.
+    #[test]
+    fn backfilled_span_sits_between_origin_and_enable_point() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        let _ = finish();
+
+        let entry = Instant::now();
+        let origin = entry
+            .checked_sub(std::time::Duration::from_millis(50))
+            .expect("50ms before now is representable");
+        enable_at(origin);
+        record_span("pre-main", "startup", origin, entry);
+        let json = finish().expect("enabled -> Some");
+
+        let parsed = crate::json::parse(&json).expect("valid JSON");
+        let events = parsed
+            .get("traceEvents")
+            .and_then(JsonValue::as_array)
+            .expect("traceEvents array");
+        assert_eq!(events.len(), 1);
+        let ev = &events[0];
+        assert_eq!(ev.get("name").and_then(JsonValue::as_str), Some("pre-main"));
+        assert_eq!(ev.get("ts").and_then(JsonValue::as_number), Some(0.0));
+        let dur = ev
+            .get("dur")
+            .and_then(JsonValue::as_number)
+            .expect("dur present");
+        // 50 ms == 50_000 µs; allow slack for the `Instant::now()` calls around it.
+        assert!(
+            (49_000.0..51_000.0).contains(&dur),
+            "backfilled duration should be the real 50ms gap, got {dur}µs"
+        );
+    }
+
+    /// `record_span` must stay inert while the tracer is off, like `span`.
+    #[test]
+    fn record_span_is_inert_while_disabled() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        let _ = finish();
+        let now = Instant::now();
+        record_span("x", "startup", now, now);
         assert!(finish().is_none());
     }
 

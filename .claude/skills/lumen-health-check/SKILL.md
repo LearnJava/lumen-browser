@@ -45,6 +45,20 @@ cargo clippy --workspace --all-targets -- -D warnings
 блоки пропустить. Тривиальные фиксы (неиспользованный импорт, лишний `&`) в
 **своём** крейте можно сделать сразу; всё остальное — задача владельцу крейта.
 
+Тем же заходом — **крейты, выпавшие из проектных правил**. Правила яруса 0 живут
+в `[workspace.lints]` корневого `Cargo.toml` и действуют только на тех членов,
+чей `Cargo.toml` содержит `[lints] workspace = true`; без этой секции крейт молча
+не проверяется, а сборка остаётся зелёной (`docs/lint-policy.md` §3):
+
+```bash
+for f in crates/*/Cargo.toml crates/engine/*/Cargo.toml; do
+  grep -q '^\[lints\]' "$f" || echo "БЕЗ [lints]: $f"
+done
+```
+
+Ожидаемый вывод — пусто. `workspace-hack/Cargo.toml` в проверку не входит:
+генерируется `cargo-hakari`, кода не содержит.
+
 ---
 
 ## target: `stubs`

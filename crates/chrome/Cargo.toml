@@ -26,3 +26,8 @@ lumen-core = { workspace = true }
 # own restore step — `lumen-dom` already derives serde and depends on bincode
 # for T3 hibernation, so the measurement uses the exact mechanism CC-16 would.
 bincode = { workspace = true }
+
+# Политики проекта как машинные проверки — [workspace.lints] в корневом
+# Cargo.toml, протокол docs/lint-policy.md.
+[lints]
+workspace = true

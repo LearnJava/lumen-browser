@@ -46,6 +46,7 @@ use crate::video_gif_store::get_video_gif_store;
 /// plumbing is needed — each native captures its own `get_video_gif_store()`
 /// clone exactly like the rquickjs original. The JS shim is unchanged.
 #[cfg(feature = "v8-backend")]
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 pub(crate) fn install_video_bindings_v8(
     rt: &crate::v8_runtime::V8JsRuntime,
 ) -> lumen_core::JsResult<()> {
@@ -622,6 +623,9 @@ const VIDEO_SHIM: &str = r#"(function() {
 /// removed in S12b-B22; this module ports its 12 tests to V8 verbatim).
 #[cfg(all(test, feature = "v8-backend"))]
 mod tests_v8 {
+    // Хелперы тестового модуля: исключение из clippy.toml покрывает
+    // только тело `#[test]` (docs/lint-policy.md §10).
+    #![allow(clippy::unwrap_used)]
     use std::sync::{Arc, Mutex};
 
     use lumen_core::ext::JsRuntime as _;

@@ -1,3 +1,12 @@
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
+// Файл-инструмент (бенч/пример), а не движок: `expect_used` здесь — то же самое,
+// что в тесте. Реестр исключений — docs/lint-policy.md §10.
+#![allow(clippy::expect_used)]
+
 /// Generates samples/images/webp_sample.webp — a 200×150 blue-teal rectangle
 /// used in graphic_tests/18-images.html to verify WebP decoding.
 ///

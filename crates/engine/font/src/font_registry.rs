@@ -8,6 +8,11 @@
 //! `@font-face:<family_lower>/<weight>/<style>/<unicode-range-key>`;
 //! диска по ним нет — это только ключи для `bytes_store`.
 
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
@@ -79,6 +84,7 @@ impl FontRegistry {
     /// идентичность записи, поэтому второй и последующие сабсеты одной
     /// (family, weight, style) молча стирали предыдущие — реестр держал
     /// ровно один face вместо всех.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn register_from_bytes(
         &self,
         family: &str,
@@ -129,6 +135,7 @@ impl FontRegistry {
     }
 
     /// Количество зарегистрированных @font-face face-ов. Для тестов.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn custom_face_count(&self) -> usize {
         self.custom.read().unwrap().values().map(|v| v.len()).sum()
     }
@@ -157,6 +164,7 @@ impl FontRegistry {
     ///
     /// Используется [`lumen_paint::MultiFontMeasurer`] в shell для построения
     /// per-family измерителей из @font-face URL-источников.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn face_bytes_for_family(&self, family: &str) -> Option<Vec<u8>> {
         let key = family.to_ascii_lowercase();
         let custom = self.custom.read().unwrap();
@@ -182,6 +190,7 @@ impl Default for FontRegistry {
 }
 
 impl FontProvider for FontRegistry {
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn lookup_family(&self, family: &str) -> Vec<PathBuf> {
         let mut paths = self.system.lookup_family(family);
         let key = family.to_ascii_lowercase();
@@ -191,6 +200,7 @@ impl FontProvider for FontRegistry {
         paths
     }
 
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn list_families(&self) -> Vec<String> {
         let mut families = self.system.list_families();
         for faces in self.custom.read().unwrap().values() {
@@ -201,6 +211,7 @@ impl FontProvider for FontRegistry {
         families
     }
 
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn lookup_faces(&self, family: &str) -> Vec<FaceRecord> {
         let mut faces = self.system.lookup_faces(family);
         let key = family.to_ascii_lowercase();
@@ -212,6 +223,7 @@ impl FontProvider for FontRegistry {
 
     /// Возвращает байты для @font-face виртуальных путей; None для системных
     /// шрифтов (рендер тогда читает через `fs::read`).
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn read_face_bytes(&self, path: &Path) -> Option<Arc<[u8]>> {
         // `cloned()` on `Arc<[u8]>` bumps the refcount — no font-buffer copy.
         self.bytes_store.read().unwrap().get(path).cloned()

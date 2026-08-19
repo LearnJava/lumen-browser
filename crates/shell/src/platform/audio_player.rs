@@ -109,10 +109,12 @@ impl PlatformAudioPlayer {
         }
     }
 
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn with_handle<R>(&self, handle: u64, f: impl FnOnce(&HandleEntry) -> R) -> Option<R> {
         self.handles.lock().unwrap().get(&handle).map(f)
     }
 
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn send_cmd(&self, handle: u64, cmd: AudioCmd) {
         if let Some(entry) = self.handles.lock().unwrap().get(&handle) {
             let _ = entry.tx.try_send(cmd);
@@ -128,6 +130,7 @@ impl Default for PlatformAudioPlayer {
 
 // ── Audio thread body ─────────────────────────────────────────────────────────
 
+#[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
 fn audio_thread(
     rx: std::sync::mpsc::Receiver<AudioCmd>,
     state: Arc<Mutex<AudioElementState>>,
@@ -275,6 +278,8 @@ fn audio_thread(
 // ── AudioPlaybackProvider implementation ─────────────────────────────────────
 
 impl AudioPlaybackProvider for PlatformAudioPlayer {
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn alloc_handle(&self) -> u64 {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let state = Arc::new(Mutex::new(AudioElementState::new()));
@@ -291,11 +296,14 @@ impl AudioPlaybackProvider for PlatformAudioPlayer {
         id
     }
 
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn free_handle(&self, handle: u64) {
         self.send_cmd(handle, AudioCmd::Free);
         self.handles.lock().unwrap().remove(&handle);
     }
 
+    #[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn load(&self, handle: u64, url: &str) {
         let url = url.to_owned();
         // Reset ready_state to loading (1) to indicate load started.
@@ -342,6 +350,7 @@ impl AudioPlaybackProvider for PlatformAudioPlayer {
         self.send_cmd(handle, AudioCmd::Pause);
     }
 
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn stop(&self, handle: u64) {
         self.send_cmd(handle, AudioCmd::Stop);
         if let Some(entry) = self.handles.lock().unwrap().get(&handle) {
@@ -371,26 +380,31 @@ impl AudioPlaybackProvider for PlatformAudioPlayer {
         0.0
     }
 
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn duration(&self, handle: u64) -> f64 {
         self.with_handle(handle, |e| e.state.lock().unwrap().duration)
             .unwrap_or(f64::NAN)
     }
 
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn is_paused(&self, handle: u64) -> bool {
         self.with_handle(handle, |e| e.state.lock().unwrap().paused)
             .unwrap_or(true)
     }
 
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn is_ended(&self, handle: u64) -> bool {
         self.with_handle(handle, |e| e.state.lock().unwrap().ended)
             .unwrap_or(false)
     }
 
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn ready_state(&self, handle: u64) -> u32 {
         self.with_handle(handle, |e| e.state.lock().unwrap().ready_state)
             .unwrap_or(0)
     }
 
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn has_error(&self, handle: u64) -> bool {
         self.with_handle(handle, |e| e.state.lock().unwrap().has_error)
             .unwrap_or(false)

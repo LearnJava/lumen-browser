@@ -22,6 +22,11 @@
 //! Phase 1: add a platform backend behind [`HidDevice`] — Windows `HidD_*` +
 //! `SetupDi`, Linux `hidraw`, macOS `IOHIDDevice`.
 
+// Долг по документации: файл написан до включения `missing_docs` и пока не
+// покрыт. Область исключения — файл, а не крейт, поэтому НОВЫЙ файл обязан
+// документировать публичный API. Счётчики по крейтам — docs/lint-policy.md §10.
+#![allow(missing_docs)]
+
 use lumen_core::ext::{
     CredentialProvider, WebAuthnCreateRequest, WebAuthnCreateResponse, WebAuthnError,
     WebAuthnGetRequest, WebAuthnGetResponse,
@@ -30,6 +35,7 @@ use sha2::{Digest, Sha256};
 use std::sync::{Arc, Mutex};
 
 /// Generate 8 random bytes from the OS CSPRNG for the CTAPHID_INIT nonce.
+#[allow(clippy::expect_used)]  // унаследовано, docs/lint-policy.md §10
 fn random_nonce() -> [u8; 8] {
     let mut buf = [0u8; 8];
     getrandom::getrandom(&mut buf).expect("OS CSPRNG unavailable");
@@ -878,6 +884,9 @@ mod win_hid {
 
     // SAFETY: HANDLE is safe to move across threads on Windows (MSDN §synchobj).
     unsafe impl Send for WinHidDevice {}
+    // SAFETY: same reasoning as the `Send` impl directly above — a Windows HANDLE
+    // is a kernel-object index, not thread-affine state, so `&WinHidDevice` carries
+    // nothing that would be invalid to observe from another thread.
     unsafe impl Sync for WinHidDevice {}
 
     impl Drop for WinHidDevice {
@@ -1018,6 +1027,14 @@ mod win_hid {
 
             // Extract the null-terminated WCHAR device path (starts at byte offset 4).
             let path_offset = 4usize;
+            // SAFETY: `buf` holds `required` bytes just written by
+            // SetupDiGetDeviceInterfaceDetailW, and `max` is derived from `required`,
+            // so the slice stays inside the allocation and its borrow ends with `buf`.
+            // Caveat, stated rather than hidden: `Vec<u8>` guarantees only 1-byte
+            // alignment, so the `*const u16` cast relies on the system allocator
+            // handing out at least 2-byte-aligned blocks (true for malloc on every
+            // target we build for, but not a language guarantee). Reading the path
+            // through `std::ptr::read_unaligned` would remove the assumption.
             let wchar_slice: &[u16] = unsafe {
                 let ptr = buf.as_ptr().add(path_offset).cast::<u16>();
                 let max = (required as usize - path_offset) / 2;
@@ -1111,6 +1128,7 @@ mod linux_hid {
     }
 
     impl HidDevice for LinuxHidDevice {
+        #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
         fn write(&self, report: &[u8; 65]) -> Result<(), Ctap2Error> {
             self.file
                 .lock()
@@ -1119,6 +1137,7 @@ mod linux_hid {
                 .map_err(|e| Ctap2Error::Hid(e.to_string()))
         }
 
+        #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
         fn read_timeout(&self, timeout_ms: i32) -> Result<[u8; 65], Ctap2Error> {
             let fd = {
                 use std::os::unix::io::AsRawFd;
@@ -1399,6 +1418,7 @@ impl MockHidDevice {
     }
 
     /// Push a raw 65-byte HID report to the response queue.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn push_response(&self, report: [u8; 65]) {
         self.responses.lock().unwrap().push(report);
     }
@@ -1451,17 +1471,20 @@ impl MockHidDevice {
     }
 
     /// Return all written reports (as slices) for inspection.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn written_reports(&self) -> Vec<[u8; 65]> {
         self.writes.lock().unwrap().clone()
     }
 }
 
 impl HidDevice for MockHidDevice {
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn write(&self, report: &[u8; 65]) -> Result<(), Ctap2Error> {
         self.writes.lock().unwrap().push(*report);
         Ok(())
     }
 
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn read_timeout(&self, _timeout_ms: i32) -> Result<[u8; 65], Ctap2Error> {
         self.responses
             .lock()
@@ -1482,6 +1505,7 @@ impl HidDevice for MockHidDevice {
 // MockHidDevice pops from the back; reverse the queue so first-pushed = first-served.
 impl MockHidDevice {
     /// Reverse the internal response queue so items are served FIFO.
+    #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     pub fn seal(&self) {
         self.responses.lock().unwrap().reverse();
     }
