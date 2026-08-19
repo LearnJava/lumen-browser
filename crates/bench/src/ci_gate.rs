@@ -1,4 +1,4 @@
-//! CI performance gate for the rendering pipeline (task 9G.3).
+//! CI performance gate for the rendering pipeline (task 9G.3, extended by PERF-7).
 //!
 //! Invoked via `lumen-bench --ci`. Loads `samples/heavy.html`, runs the full
 //! `decode → html-parse → css-parse → layout → paint` pipeline 3 times (all
@@ -8,9 +8,28 @@
 //! - Peak RSS across all 3 runs < 512 MB
 //! - bfcache restore P50 (`bfcache_restore` module) < 50 ms on
 //!   `samples/page.html` (Ph3 `P3-bfcache` DoD step 9)
+//! - Cold process-spawn startup (PERF-4 mechanism, `startup` module) < 2000 ms
+//!   on `samples/page.html`
+//!
+//! All four thresholds are absolute ceilings with a big margin over the local
+//! baseline, not wall-clock deltas against a moving average — a shared CI
+//! runner is too noisy for the latter (`docs/ci-offload.md` §9,
+//! `docs/perf-method.md`). The gate is a regression *ratchet*, the numeric
+//! analogue of `KNOWN_DEBTORS` in `graphic_tests/run.py`: it exists to catch a
+//! blowup (a missing cache, an accidental O(n²), a re-parse per navigation),
+//! not to police single-digit-percent noise.
 //!
 //! Exits 0 on pass, 1 on failure. Prints a brief summary to stdout so CI
 //! logs can show the exact numbers that caused a regression.
+//!
+//! The cold-start check needs a pre-built `lumen` binary (`target/{dev-release,
+//! release,debug}/lumen[.exe]`, `--exe`, or `$LUMEN_EXE` — same lookup as the
+//! standalone `--startup` bench) and is NOT optional: unlike the in-process
+//! checks above it exercises real OS process creation and V8 platform/isolate
+//! init, which the in-process pipeline never touches. A missing binary is a
+//! gate failure, not a skip — CI always builds it first (`cargo build -p
+//! lumen-shell --profile dev-release`), and skipping silently would let the
+//! ratchet regress unnoticed exactly when the binary changes most.
 
 // Файл-инструмент (бенч/пример), а не движок: `expect_used` здесь — то же самое,
 // что в тесте. Реестр исключений — docs/lint-policy.md §10.
@@ -22,10 +41,16 @@ use std::time::{Duration, Instant};
 use lumen_core::geom::Size;
 
 use crate::bfcache_restore;
+use crate::startup;
 use crate::util::{extract_style_blocks, get_rss_bytes};
 
 const HEAVY_HTML: &[u8] = include_bytes!("../../../samples/heavy.html");
 const INTER_FONT: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+
+/// Local page used for the cold-start spawn (small, isolates startup from
+/// network/heavy layout — same choice `startup.rs`'s own `--startup` bench
+/// makes by default).
+const STARTUP_URL: &str = "samples/page.html";
 
 /// Number of measured pipeline runs.
 const CI_RUNS: usize = 3;
@@ -33,6 +58,10 @@ const CI_RUNS: usize = 3;
 const MEAN_TOTAL_LIMIT: Duration = Duration::from_millis(200);
 /// Maximum allowed peak RSS (512 MiB in bytes).
 const PEAK_RSS_LIMIT: u64 = 512 * 1024 * 1024;
+/// Maximum allowed cold-spawn startup time (PERF-4 baseline 136.8ms on a dev
+/// machine, `docs/perf/startup.md`; this ceiling leaves a >10x margin for
+/// unknown/slower CI hardware and cold OS page cache on a shared runner).
+const COLD_START_LIMIT: Duration = Duration::from_millis(2000);
 
 const VIEWPORT: Size = Size { width: 1024.0, height: 720.0 };
 
@@ -45,9 +74,10 @@ pub fn run_ci_gate() -> bool {
     let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer builds");
 
     println!(
-        "CI bench gate  runs={CI_RUNS}  limits: mean_total<{}ms  peak_rss<{}MB",
+        "CI bench gate  runs={CI_RUNS}  limits: mean_total<{}ms  peak_rss<{}MB  cold_start<{}ms",
         MEAN_TOTAL_LIMIT.as_millis(),
         PEAK_RSS_LIMIT / (1024 * 1024),
+        COLD_START_LIMIT.as_millis(),
     );
     println!("page: samples/heavy.html  ({} bytes)", HEAVY_HTML.len());
     println!();
@@ -73,6 +103,12 @@ pub fn run_ci_gate() -> bool {
     let bfcache_p50_ms = bfcache_restore::median_restore_ms(&measurer);
     let bfcache_ok = bfcache_p50_ms <= bfcache_restore::P50_LIMIT.as_secs_f64() * 1000.0;
 
+    let cold_start = measure_cold_start();
+    let (cold_start_ms, cold_start_ok) = match &cold_start {
+        Ok(d) => (d.as_secs_f64() * 1000.0, *d <= COLD_START_LIMIT),
+        Err(_) => (f64::NAN, false),
+    };
+
     println!();
     println!(
         "mean_total: {:.2}ms  (limit {}ms)  {}",
@@ -92,9 +128,17 @@ pub fn run_ci_gate() -> bool {
         bfcache_restore::P50_LIMIT.as_millis(),
         if bfcache_ok { "OK" } else { "EXCEEDED" },
     );
+    match &cold_start {
+        Ok(_) => println!(
+            "cold_start: {cold_start_ms:.2}ms  (limit {}ms)  {}",
+            COLD_START_LIMIT.as_millis(),
+            if cold_start_ok { "OK" } else { "EXCEEDED" },
+        ),
+        Err(e) => println!("cold_start: FAILED ({e})"),
+    }
     println!();
 
-    let passed = time_ok && rss_ok && bfcache_ok;
+    let passed = time_ok && rss_ok && bfcache_ok && cold_start_ok;
     if passed {
         println!("PASS");
     } else {
@@ -118,9 +162,34 @@ pub fn run_ci_gate() -> bool {
                 bfcache_restore::P50_LIMIT.as_millis(),
             );
         }
+        if !cold_start_ok {
+            match &cold_start {
+                Ok(d) => println!(
+                    "FAIL: cold_start {:.2}ms exceeds limit {}ms",
+                    d.as_secs_f64() * 1000.0,
+                    COLD_START_LIMIT.as_millis(),
+                ),
+                Err(e) => println!("FAIL: cold_start could not be measured: {e}"),
+            }
+        }
     }
 
     passed
+}
+
+/// Spawns the pre-built `lumen` binary once (`--screenshot` on
+/// [`STARTUP_URL`]) and returns the wall-clock time — the same mechanism as
+/// the standalone `--startup` bench's cold sample (`startup::spawn_once`),
+/// reused here instead of duplicated. Single spawn: unlike the standalone
+/// bench this gate has no interest in warm-spawn percentiles, only in
+/// catching a catastrophic regression on the path a user pays on every
+/// launch.
+fn measure_cold_start() -> Result<Duration, String> {
+    let exe = startup::locate_binary(None)?;
+    let shot = std::env::temp_dir().join("lumen-ci-gate-cold-start.png");
+    let result = startup::spawn_once(&exe, &shot, STARTUP_URL);
+    let _ = std::fs::remove_file(&shot);
+    result
 }
 
 /// Runs the full pipeline once on `HEAVY_HTML` and returns `(total_time, peak_rss)`.
@@ -152,6 +221,24 @@ mod tests {
         assert_eq!(MEAN_TOTAL_LIMIT.as_millis(), 200);
         assert_eq!(PEAK_RSS_LIMIT, 512 * 1024 * 1024);
         assert_eq!(CI_RUNS, 3);
+        assert_eq!(COLD_START_LIMIT.as_millis(), 2000);
+        assert_eq!(STARTUP_URL, "samples/page.html");
+    }
+
+    #[test]
+    fn gate_fails_on_slow_cold_start() {
+        let d = Duration::from_millis(2500);
+        assert!(d > COLD_START_LIMIT);
+    }
+
+    #[test]
+    fn measure_cold_start_does_not_panic() {
+        // No assumption about a pre-built binary in the unit-test environment
+        // (that would make `cargo test -p lumen-bench` depend on build order):
+        // this only checks the lookup+spawn path returns a `Result` instead of
+        // panicking. Whether it's Ok or Err depends on whether
+        // target/{dev-release,release,debug} happens to hold a binary already.
+        let _ = measure_cold_start();
     }
 
     #[test]

@@ -119,7 +119,10 @@ pub fn run(args: &[String]) -> i32 {
 ///
 /// stdout/stderr бинаря подавляются (баннер старта не должен засорять отчёт).
 /// Ошибка — если процесс не запустился или вышел с ненулевым кодом.
-fn spawn_once(exe: &Path, shot: &Path, url: &str) -> Result<Duration, String> {
+///
+/// `pub(crate)`: переиспользуется `ci_gate` (PERF-7) — тот же спавн-механизм,
+/// без второй копии `Command::new(...).arg("--screenshot")...`.
+pub(crate) fn spawn_once(exe: &Path, shot: &Path, url: &str) -> Result<Duration, String> {
     let start = Instant::now();
     let status = Command::new(exe)
         .arg("--screenshot")
@@ -256,7 +259,9 @@ fn parse_opts(args: &[String]) -> Result<Opts, String> {
 }
 
 /// Ищет собранный бинарь `lumen`: `--exe` > `$LUMEN_EXE` > `target/{профили}/lumen[.exe]`.
-fn locate_binary(explicit: Option<&Path>) -> Result<PathBuf, String> {
+///
+/// `pub(crate)`: переиспользуется `ci_gate` (PERF-7).
+pub(crate) fn locate_binary(explicit: Option<&Path>) -> Result<PathBuf, String> {
     if let Some(p) = explicit {
         return if p.exists() {
             Ok(p.to_path_buf())
