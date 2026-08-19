@@ -323,8 +323,8 @@ mod tests {
     #[test]
     fn finds_bundled_inter() {
         let idx = SystemFontIndex::with_dirs(vec![assets_dir()]);
-        // assets/fonts содержит Inter, Golos Text и JetBrains Mono (DS-4).
-        assert_eq!(idx.family_count(), 3, "should find all bundled families in assets/fonts");
+        // assets/fonts содержит Inter, Golos Text, JetBrains Mono (DS-4) и Ahem (TEST-5).
+        assert_eq!(idx.family_count(), 4, "should find all bundled families in assets/fonts");
         let paths = idx.lookup_family("Inter");
         assert_eq!(paths.len(), 1, "Inter Regular registered once");
         assert!(paths[0].file_name().unwrap().to_string_lossy().contains("Inter"));

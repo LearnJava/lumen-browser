@@ -9,6 +9,7 @@
 //! empties them when the feature is off.
 #![allow(dead_code)]
 
+mod ahem_metrics;
 mod composite_bbox;
 mod inter_real_font;
 mod inter_shaping;

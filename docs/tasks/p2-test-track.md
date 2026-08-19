@@ -297,6 +297,59 @@ baseline из-за таймаута (см. выше).
 - DoD: unit-тест метрик (advance == em, ascent/descent по спеке Ahem); опц. один graphic-тест
   на Ahem-типографику; лицензия в assets/fonts/.
 
+### TEST-5: состояние (2026-08-19, сессия P2)
+
+Закрыто. `Ahem.ttf` уже был вендорен в `tests/wpt/fonts/Ahem.ttf` (обычный vendored WPT-ресурс,
+не отдельная закачка) — скопирован байт-в-байт в `assets/fonts/Ahem.ttf` (sha256 совпадает).
+Лицензия — `assets/fonts/LICENSE-Ahem.txt`, 3-Clause BSD (текст идентичен
+`tests/wpt/fonts/LICENSE-WPT.md`, которым WPT лицензирует свои вспомогательные ресурсы).
+
+**Регистрация не потребовала кода.** `SystemFontIndex::build_index`
+(`crates/engine/font/src/system_fonts.rs`) рекурсивно сканирует директории из `default_font_dirs()`
++ явно заданные (тесты передают `assets/fonts/`), читает `name`/`OS/2` каждого `.ttf`/`.otf` и
+индексирует по family из таблицы `name` — Inter/Golos Text/JetBrains Mono никогда не имели
+специального кода на своё имя, и Ahem его тоже не получил: класть файл в `assets/fonts/` —
+единственный нужный шаг. Тест `finds_bundled_inter` (`system_fonts.rs`) поднят с
+`family_count() == 3` на `== 4`.
+
+**Метрики подтверждены не «на глаз», а прочитаны напрямую через fontTools** (`python -c
+"from fontTools.ttLib import TTFont; ..."`, см. историю сессии) и затем закреплены интеграционным
+тестом `crates/engine/font/tests/cases/ahem_metrics.rs` (2 теста, зарегистрированы в
+`tests/cases/mod.rs`) через наш собственный парсер (`Font::head/hhea/cmap/hmtx`), а не просто
+скопированы из вывода fontTools: `units_per_em == 1000`, `hhea.ascent == 800` (0.8em),
+`hhea.descent == -200` (0.2em ниже baseline, `ascent - descent == units_per_em`), и advance
+(`hmtx.advance_width`) для `{A, X, a, z, 0, !, ., space}` — то есть букв, цифры, пунктуации и
+пробела — везде ровно 1000 (1em). Это и есть контракт Ahem: сплошной квадрат ровно em×em для
+любого печатаемого символа.
+
+**Веб-шрифтовая загрузка не потребовала кода, проверено живым окном.** `@font-face { src:
+url(...) }` на `.ttf` (в т.ч. на сам `tests/wpt/fonts/ahem.css`, который вендоренные WPT-тесты
+используют как раз так) идёт через уже реализованный generic-путь загрузки веб-шрифтов
+(`font-display: swap`, PH3-19 — см. CAPABILITIES.md): фоновый поток `fetch_image_bytes` тянет байты
+относительно базового URL документа, `lumen_font::Font::parse` проверяет sfnt, движок шлёт
+`LoadEvent::FontLoaded` и триггерит relayout (FOUT-swap) — TTF/WOFF2 не различаются на уровне этого
+пути, Ahem ничем не отличается от любого другого `.ttf`.
+
+Headless `--dump-layout` **не годится** для этой проверки: она однократна и завершается до того,
+как фоновый fetch+`FontLoaded` успевает долететь (оба `<div>` в первой пробе измерились одинаково —
+136.43px, т.е. оба на самом деле легли на дефолтный fallback, не на запрошенный веб-шрифт). Реальная
+проверка — живое окно (`lumen.exe --mcp-live-port N about:blank` → MCP `navigate` на
+`file://.../ahem-check/ahem.html` с `@font-face{font-family:'Ahem';src:url('Ahem.ttf')}` и
+`<div style="font-family:Ahem;font-size:50px;display:inline-block">XXXX</div>` рядом с тем же
+текстом в `font-family:'Inter'`), опрошенное через MCP-ресурс `resource://layout` до появления
+свежей геометрии. stderr процесса подтверждает саму загрузку: `@font-face async загружен: «Ahem»
+weight=400` → `FontLoaded: «Ahem» weight=400`; результирующая раскладка — `div` с Ahem получил
+`border_box.width == 200.0` (ровно `4 символа × 50px` — то самое 1em-на-глиф, что закрепил
+`ahem_metrics.rs`), а соседний `div` с Inter — `136.42578` (обычные, разные по ширине буквы). Не
+закоммичено (скретч в `.tmp/ahem-check/`, gitignored) — воспроизводимо тем же рецептом при
+следующем touch TEST-4/TEST-5.
+
+**Графический тест не добавлен** — DoD помечает его опциональным, а его практическая ценность
+раскрывается вместе с TEST-4 (reftest-executor): без него Ahem используется только косвенно,
+через CPU-снапшоты обычных graphic_tests, где не нужна детерминированная типографика. Добавлять
+эталон сейчас означало бы поддерживать PNG, который ничего не проверяет специфичного для Ahem
+(тот же тест пройдёт и на bundled Inter). Возврат к этому пункту логичен при работе над TEST-4.
+
 ## TEST-6 (опц.): test262 smoke для V8-эмбеддинга (M)
 
 Сам V8 конформен test262 — проверяем **нашу интеграцию**: создание realm, глобальные объекты,
