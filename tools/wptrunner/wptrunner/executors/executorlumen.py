@@ -53,7 +53,10 @@ rather than hanging forever — the DoD is "not silently SKIPped", not "every
 """
 
 import asyncio
+import base64
 import json
+import socket
+import struct
 import traceback
 
 from webdriver.bidi.client import BidiSession
@@ -61,7 +64,7 @@ from webdriver.bidi.error import BidiException, UnknownErrorException
 from webdriver.bidi.modules.input import Actions
 from webdriver.bidi.modules.script import ContextTarget
 
-from .base import ExecutorException, TestharnessExecutor
+from .base import ExecutorException, RefTestExecutor, RefTestImplementation, TestharnessExecutor
 from .protocol import Protocol
 
 #: Global `tests/wpt/resources/testharnessreport.js` stashes the JSON-encoded
@@ -388,3 +391,211 @@ class LumenTestharnessExecutor(TestharnessExecutor):
             return None
         point = json.loads(value["value"])
         return point["x"], point["y"]
+
+
+# ── reftest support (TEST-4, docs/tasks/p2-test-track.md) ──────────────────
+#
+# `RefTestImplementation` (base.py) needs pixel-identical, backend-independent
+# screenshots to compare test vs. reference: `browsingContext.captureScreenshot`
+# (the BiDi call `LumenTestharnessExecutor` could otherwise reuse) rasterizes
+# via the *live* window's wgpu renderer (`WinitSession::screenshot` ->
+# `Renderer::new_headless`, `crates/driver/src/winit_session.rs`), which is
+# backend-dependent (Vulkan vs. Dx12 produce different antialiasing/blend
+# output on the same machine — see the wgpu-backend gotcha in CLAUDE.md, BUG-405
+# slice 14) and therefore unfit for a pass/fail pixel diff. `lumen --ipc-server`
+# (`crates/shell/src/main.rs::run_ipc_server`) renders through the deterministic
+# tiny-skia CPU path instead (`render_source_to_png`, the same one `--screenshot`
+# uses) — this is the surface the reftest executor drives.
+#
+# `LumenIpcProtocol` below is a second, independent port of the bincode client
+# already proven working in `graphic_tests/run.py` (`LumenIpcClient`, TAB-7) —
+# not imported from there, since that script runs under the system Python
+# rather than `tests/wpt/.venv` and the two call sites have no shared import
+# path. Wire format source of truth: `crates/ipc/src/lib.rs`.
+
+#: `IpcRequest`/`IpcResponse` enum variant tags — see `crates/ipc/src/lib.rs`.
+_REQ_AUTH = 3
+_REQ_CREATE_TAB = 4
+_REQ_NAVIGATE_TAB = 6
+_REQ_SCREENSHOT = 7
+
+_RESP_AUTH_OK = 4
+_RESP_TAB_CREATED = 6
+_RESP_NAVIGATED = 8
+_RESP_SCREENSHOT = 9
+_RESP_TAB_ERROR = 10
+
+
+class IpcError(Exception):
+    """Failure talking to `lumen --ipc-server` (protocol, connection, or a
+    `TabError` reply)."""
+
+
+def _u32(v):
+    return struct.pack("<I", v)
+
+
+def _bstr(s):
+    """bincode `String`/`Vec<u8>`: u64 LE length + UTF-8 bytes."""
+    b = s.encode("utf-8")
+    return struct.pack("<Q", len(b)) + b
+
+
+class _IpcCursor:
+    """Cursor over a decoded bincode response body."""
+
+    def __init__(self, data):
+        self.d = data
+        self.p = 0
+
+    def _take(self, n):
+        b = self.d[self.p:self.p + n]
+        if len(b) != n:
+            raise IpcError("truncated IPC message body")
+        self.p += n
+        return b
+
+    def u32(self):
+        return struct.unpack("<I", self._take(4))[0]
+
+    def vec(self):
+        n = struct.unpack("<Q", self._take(8))[0]
+        return self._take(n)
+
+    def string(self):
+        return self.vec().decode("utf-8", "replace")
+
+
+class LumenIpcProtocol(Protocol):
+    """Bare bincode-over-TCP session against `lumen --ipc-server`
+    (`crates/ipc/src/lib.rs`). One tab is created in `after_connect` and
+    reused for every test in the run, mirroring `LumenBidiProtocol`'s
+    single-context reuse — safe here because `NavigateTab` only stashes a
+    `PageSource` in the tab slot (`crates/shell/src/main.rs`); the actual
+    load + layout + rasterize happens fresh on each `Screenshot` call, so
+    there is no BUG-380-class stale-document race to guard against."""
+
+    def __init__(self, executor, browser, **kwargs):
+        super().__init__(executor, browser)
+        self.sock = None
+        self.tab_id = None
+
+    def connect(self):
+        self.sock = socket.create_connection(
+            ("127.0.0.1", self.browser.ipc_port), timeout=30)
+        self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        self._send(_u32(_REQ_AUTH) + _bstr(self.browser.ipc_token))
+        c = self._recv()
+        if c.u32() != _RESP_AUTH_OK:
+            raise IpcError("lumen --ipc-server rejected the auth token")
+
+    def after_connect(self):
+        self._send(_u32(_REQ_CREATE_TAB))
+        c = self._recv()
+        if c.u32() != _RESP_TAB_CREATED:
+            raise IpcError("expected TabCreated")
+        self.tab_id = c.u32()
+
+    def teardown(self):
+        if self.sock is not None:
+            try:
+                self.sock.close()
+            except OSError:
+                pass
+            self.sock = None
+
+    def is_alive(self):
+        return self.sock is not None
+
+    def _send(self, payload):
+        self.sock.sendall(_u32(len(payload)) + payload)
+
+    def _read_exact(self, n):
+        buf = bytearray()
+        while len(buf) < n:
+            chunk = self.sock.recv(n - len(buf))
+            if not chunk:
+                raise IpcError("IPC connection closed by lumen --ipc-server")
+            buf += chunk
+        return bytes(buf)
+
+    def _recv(self):
+        body_len = struct.unpack("<I", self._read_exact(4))[0]
+        return _IpcCursor(self._read_exact(body_len))
+
+    def navigate(self, url):
+        self._send(_u32(_REQ_NAVIGATE_TAB) + _u32(self.tab_id) + _bstr(url))
+        c = self._recv()
+        tag = c.u32()
+        if tag == _RESP_NAVIGATED:
+            return
+        if tag == _RESP_TAB_ERROR:
+            c.u32()
+            raise IpcError(f"NavigateTab: {c.string()}")
+        raise IpcError(f"expected Navigated, got variant {tag}")
+
+    def screenshot_png(self):
+        self._send(_u32(_REQ_SCREENSHOT) + _u32(self.tab_id))
+        c = self._recv()
+        tag = c.u32()
+        if tag == _RESP_SCREENSHOT:
+            c.u32()
+            return c.vec()
+        if tag == _RESP_TAB_ERROR:
+            c.u32()
+            raise IpcError(f"Screenshot: {c.string()}")
+        raise IpcError(f"expected Screenshot, got variant {tag}")
+
+
+class LumenRefTestExecutor(RefTestExecutor):
+    """reftest executor for Lumen, driven over `lumen --ipc-server` (TEST-4).
+
+    Scope cut (smoke pass, see `docs/tasks/p2-test-track.md#test-4`):
+    `class=reftest-wait` is not supported — `NavigateTab`/`Screenshot` run the
+    same single-shot, non-interactive pipeline as `--screenshot`/`--dump-layout`
+    (initial `<script>`s execute once during parse, but nothing pumps a later
+    JS-driven `reftest-wait` class removal before the render), and the IPC
+    protocol has no `script.evaluate`-equivalent to poll for one even if it
+    did. Pick reftest fixtures that render correctly on the first pass.
+    """
+
+    protocol_cls = LumenIpcProtocol
+
+    def __init__(self, logger, browser, server_config, timeout_multiplier=1,
+                 screenshot_cache=None, debug_info=None, **kwargs):
+        RefTestExecutor.__init__(self, logger, browser, server_config,
+                                 screenshot_cache=screenshot_cache,
+                                 timeout_multiplier=timeout_multiplier,
+                                 debug_info=debug_info)
+        self.protocol = self.protocol_cls(self, browser)
+        self.implementation = RefTestImplementation(self)
+
+    def reset(self):
+        self.implementation.reset()
+
+    def is_alive(self):
+        return self.protocol.is_alive()
+
+    def do_test(self, test):
+        result = self.implementation.run_test(test)
+        return self.convert_result(test, result)
+
+    def screenshot(self, test, viewport_size, dpi, page_ranges):
+        # https://github.com/web-platform-tests/wpt/issues/7135 — Lumen has no
+        # notion of a resizable viewport or a print-page range in this headless
+        # path (fixed at the CLI's own default, `crates/shell/src/main.rs`
+        # `SCREENSHOT_VP_W`/`SCREENSHOT_MIN_H`), same restriction Selenium's
+        # executor documents (`executorselenium.py`).
+        assert viewport_size is None
+        assert dpi is None
+        url = self.test_url(test)
+        timeout = test.timeout * self.timeout_multiplier + self.extra_timeout
+        self.protocol.sock.settimeout(timeout)
+        try:
+            self.protocol.navigate(url)
+            png = self.protocol.screenshot_png()
+        except socket.timeout:
+            return False, ("TIMEOUT", f"Timed out rendering {url}")
+        except IpcError as e:
+            return False, ("FAIL", str(e))
+        return True, [base64.b64encode(png).decode("ascii")]

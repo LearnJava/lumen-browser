@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-19",
  "counts": {
-  "open": 325,
+  "open": 326,
   "fixed": 424,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 749,
+ "total_bugs": 750,
  "phases": [
   {
    "id": "P0",
@@ -4754,9 +4754,12 @@
       {
        "id": "TEST-4",
        "title": "TEST-4: WPT reftest-executor (открывает css/-корпус)",
-       "status": "planned",
+       "status": "done",
        "size": "L",
-       "note": "Reftest-executor для WPT-интеграции: сейчас исполняются только testharness-тесты, а reftests — основной способ тестировать рендеринг (весь корпус css/ непрогоняем). Поддержка link rel=match/mismatch (цепочки), class=reftest-wait, meta fuzzy; скриншоты детерминированным CPU-рендером (screenshot_cpu_rgba, как snapshot-тесты) + пиксельное сравнение. Точки: tests/wpt/browsers/lumen.py + run_report.py. Смоук на 3–5 простых css/-reftest-ах. Желательно после TEST-5 (Ahem), иначе текстовые reftests зашумлены метриками шрифта. Бриф docs/tasks/p2-test-track.md"
+       "note": "`LumenRefTestExecutor`/`LumenIpcProtocol` (`tools/wptrunner/wptrunner/executors/executorlumen.py` + `browsers/lumen.py`) — reftest-исполнитель поверх `lumen --ipc-server` (детерминированный tiny-skia CPU-путь), не BiDi `captureScreenshot` (тот backend-зависим — живой wgpu-рендерер, см. готчу CLAUDE.md/срез 14 BUG-405). `LumenIpcProtocol` — независимый второй порт bincode-клиента, уже проверенного в `graphic_tests/run.py` (TAB-7). Свой `_run_server` в `LumenBrowser` — `--ipc-port` лишь информационный, порт всегда печатается в stdout, база `WebDriverBrowser` этого не ждёт. Сужение объёма: `class=reftest-wait` не поддержан — `--ipc-server` не докручивает JS-события после парсинга и не имеет `script.evaluate`-аналога для опроса. Смоук на 4 уже вендоренных css/-reftest-ах (без точечного вендоринга — категория вендорена целиком 2026-07-26): 3 PASS, 1 FAIL — исполнитель корректно различает совпадение/несовпадение. FAIL оказался реальной находкой: BUG-786 (`<style><![CDATA[...]]></style>` в `.xht`/XHTML теряет всё содержимое — нет отдельного XML-пути для top-level документов, всё уходит в HTML5 RAWTEXT-токенизацию `<style>`). `docs/wpt-status.md` целиком не переписан (277-строчная таблица, актуализация — отдельная работа по факту широких прогонов). Состояние — docs/tasks/p2-test-track.md#test-4-состояние",
+       "bugs": [
+        "BUG-786"
+       ]
       },
       {
        "id": "TEST-5",
@@ -10096,6 +10099,13 @@
    "status": "open",
    "title": "Доверенные корни собираются ТОЛЬКО из `webpki_roots::TLS_SERVER_ROOTS`, в пяти независимых местах, и нет ни CLI-флага, ни env, ни конфига, чтобы добавить свой C…",
    "component": "network (`crates/network/src/lib.rs:1620,1633,1650,1666`, `crates/network/src/dot.rs:265`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-786": {
+   "status": "open",
+   "title": "`<style><![CDATA[ ... ]]></style>` в `.xht`/XHTML-документах теряет ВСЁ содержимое стилей: `wptserve` отдаёт `.xht` как `application/xhtml+xml` (реальный XML-ти…",
+   "component": "движковый парсинг документов (нет XML-пути для `application/xhtml+xml`, вероятно `crates/engine/html-parser`)",
    "date": null,
    "debtor": false
   }

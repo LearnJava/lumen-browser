@@ -286,6 +286,81 @@ baseline из-за таймаута (см. выше).
 - Зависимость: TEST-5 (Ahem) желателен до массовых прогонов css/ — иначе текстовые reftests
   зашумлены метриками шрифта.
 
+### TEST-4: состояние (2026-08-19, сессия P2)
+
+Реализовано и влито: `LumenRefTestExecutor`/`LumenIpcProtocol`
+(`tools/wptrunner/wptrunner/executors/executorlumen.py`) + вайринг в
+`tools/wptrunner/wptrunner/browsers/lumen.py` (`__wptrunner__["executor"]["reftest"]`).
+
+**Решение по протоколу (не по брифу буквально)**: reftest-скриншоты идут через
+`lumen --ipc-server` (детерминированный tiny-skia CPU-путь,
+`crates/ipc/src/lib.rs`), а не через `browsingContext.captureScreenshot`
+(BiDi), которым брифовый черновик неявно предполагал переиспользовать
+`LumenTestharnessExecutor`. Причина: `captureScreenshot` рендерит через живой
+wgpu-рендерер живого окна (`WinitSession::screenshot` →
+`Renderer::new_headless`) — backend-зависим (Vulkan vs Dx12, см. готчу в
+CLAUDE.md, срез 14 BUG-405), непригоден для пиксельного diff. `--ipc-server`
+уже даёт нужный путь (`render_source_to_png`, тот же, что `--screenshot`) и
+уже имел рабочий bincode-клиент на Python — `LumenIpcClient` в
+`graphic_tests/run.py` (TAB-7). `LumenIpcProtocol` — независимый второй порт
+того же протокола (не импорт: `graphic_tests/run.py` живёт под системным
+Python, `tests/wpt/.venv` отдельно).
+
+**Почему нужен свой `_run_server`**: `--ipc-port` в `crates/shell/src/main.rs`
+документирован как чисто информационный — порт всегда выбирает ОС и печатает
+его в stdout (`LUMEN_IPC_PORT=`), в отличие от `--bidi-port`, где порт
+заранее выделяет сам `wptrunner`. Базовый `WebDriverBrowser._run_server`
+поэтому не годится для IPC-режима (он поллит `self.port` — заранее
+назначенный, для IPC несвязанный порт); `LumenBrowser._run_server`
+override'ит его для `ipc_mode=True`, ожидая захвата порта/токена
+`_IpcCapturingOutputHandler`'ом вместо `wait_for_service`.
+
+**Сужение объёма (сознательное, зафиксировано в докстринге
+`LumenRefTestExecutor`)**: `class="reftest-wait"` не поддержан. `NavigateTab`
+у `--ipc-server` лишь сохраняет `PageSource` в слот вкладки — реальные
+load+layout+растеризация происходят лениво на `Screenshot`
+(`crates/shell/src/main.rs::run_ipc_server`), тем же однократным
+неинтерактивным путём, что `--screenshot`/`--dump-layout` (скрипты
+исполняются один раз при парсинге, но ничего не докручивает JS-события
+после). У IPC-протокола и нет аналога `script.evaluate`, чтобы опрашивать
+снятие класса. Смоук-фикстуры подобраны без reftest-wait — полноценная
+поддержка (если понадобится для широких прогонов `css/`) требует либо нового
+IPC-запроса, либо отдельного протокола поверх BiDi с CPU-скриншотом (не
+существует), в этой сессии не делалось.
+
+**Смоук (DoD)**: 4 уже вендоренных reftest-а из `css/` (категория `css/`
+вендорена целиком ещё 2026-07-26, точечного вендоринга под эту задачу не
+понадобилось) — `css/CSS2/normal-flow/block-in-inline-{align,baseline,
+first-line}-001.html` и `css/css-backgrounds/background-334.html`, через
+`python tests/wpt/run_smoke.py <id...>` (`LUMEN_PROFILE=dev-release`, Git
+Bash: `MSYS2_ARG_CONV_EXCL="*"` — иначе MSYS переписывает ведущий `/css/...`
+в `C:/Program Files/Git/css/...`). Результат: **3 PASS, 1 FAIL** — ровно то,
+что и должно быть: три CSS2-рефтеста (без картинок) совпали с эталоном
+пиксель-в-пиксель, а `background-334` (эталон — `.xht`) разошёлся на 4880
+пикселей, что оказалось РЕАЛЬНОЙ находкой, не браком исполнителя (см. ниже).
+Смоук подтверждает: executor корректно различает совпадение/несовпадение, не
+просто всегда зелёный.
+
+**Побочная находка — [BUG-786](../../bugs/BUG-786-OPEN.md)**: `<style>`
+внутри `<![CDATA[ ... ]]>` в `.xht`/XHTML-документах теряет всё содержимое
+целиком. `wptserve` отдаёт `.xht` как `application/xhtml+xml` (реальный
+XML-тип), но у Lumen нет отдельного XML-пути для top-level документов —
+всё уходит в HTML5-токенизатор, где `<style>` это RAWTEXT и CDATA-маркеры
+остаются буквальным текстом, ломая всё правило целиком. Подтверждено
+минимальным repro (`--dump-layout`), не предположением по скриншоту.
+Системный класс — паттерн стандартен для старых CSS2.1-референсов WPT.
+Заведено P2, чинится P1/P3.
+
+**Не сделано в этой сессии**: `class=reftest-wait`, `<meta name="fuzzy">`
+допуск (`RefTestImplementation` его уже поддерживает нативно — не
+понадобился на этих 4 фикстурах, не проверялся), reftest-цепочки через
+несколько `rel=match`/`rel=mismatch`. `docs/wpt-status.md` не переписан
+целиком (277-строчная таблица, каждая строка уже фиксирует «reftest в X, не
+исполняются раннером» — актуализация задним числом это отдельная
+многочасовая работа, не входит в DoD смоука); следующая сессия, продолжающая
+TEST-4 на широкий `css/`-прогон, должна это сделать по факту прогона, а не
+заранее.
+
 ## TEST-5: шрифт Ahem (S)
 
 Стандартный инструмент детерминированных reftest-ов: все глифы — квадраты em, известные метрики.
