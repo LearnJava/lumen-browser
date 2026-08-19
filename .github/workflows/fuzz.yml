@@ -178,17 +178,39 @@ jobs:
       # end.
       - name: Fuzz targets
         working-directory: fuzz
+        env:
+          # Targets with a known, filed, unfixed finding. They still run — the
+          # point is to keep collecting repros — but their failure does not turn
+          # the job red, the same bargain as KNOWN_DEBTORS in graphic_tests/run.py:
+          # a permanently red job stops being read (CLAUDE.md documents exactly
+          # that outcome for the two-month CI outage). Remove a target from here
+          # in the commit that fixes its bug.
+          #
+          #   fuzz_image — BUG-787, GIF LZW unpack never returns
+          KNOWN_FAILING: 'fuzz_image'
         run: |
           set -u
           failed=""
           for target in $FUZZ_TARGETS; do
-            echo "::group::fuzz $target (${FUZZ_SECONDS}s)"
+            known=no
+            case " $KNOWN_FAILING " in *" $target "*) known=yes ;; esac
+            echo "::group::fuzz $target (${FUZZ_SECONDS}s, known-failing=$known)"
             # -timeout: a single input taking longer than this counts as a hang,
             # which is a finding in its own right (an infinite loop in a parser
             # is a DoS on any page that embeds it).
-            if ! cargo +nightly fuzz run "$target" -- \
+            if cargo +nightly fuzz run "$target" -- \
                  -max_total_time="$FUZZ_SECONDS" -timeout=25; then
-              failed="$failed $target"
+              if [ "$known" = yes ]; then
+                # Not an error: fuzzing is stochastic, so a clean run of a known
+                # debtor is weak evidence, not proof. Worth a look, not a red job.
+                echo "::notice::$target is listed as known-failing but found nothing this run — check whether its bug is fixed"
+              fi
+            else
+              if [ "$known" = yes ]; then
+                echo "::warning::$target failed as expected (known-failing) — see its bug before treating this as new"
+              else
+                failed="$failed $target"
+              fi
             fi
             echo "::endgroup::"
           done

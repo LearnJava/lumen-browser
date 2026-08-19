@@ -47,6 +47,20 @@ libFuzzer-grown corpus as `fuzz-corpus-<run-id>`, kept 7 days. Download with
 `gh run download <run-id>`, then minimize and file per the "Crashes" section
 below.
 
+### Known-failing targets
+
+A target with a filed, unfixed finding is listed in the workflow's
+`KNOWN_FAILING` variable. It still runs and still uploads repros, but its
+failure does not turn the job red — the same bargain as `KNOWN_DEBTORS` in
+`graphic_tests/run.py`, and for the same reason: a permanently red job stops
+being read. If such a target finds nothing in a run, the job prints a
+`::notice` suggesting its bug may be fixed (weak evidence — fuzzing is
+stochastic). **Remove a target from `KNOWN_FAILING` in the commit that fixes
+its bug.**
+
+Currently listed: `fuzz_image` — [BUG-787](../bugs/BUG-787-OPEN.md), GIF LZW
+unpack never returns.
+
 The corpus is **not** persisted between CI runs — each run starts from the
 committed seeds. That is why the sweep is weekly rather than nightly: without
 accumulated coverage, consecutive runs re-explore the same shallow space.
