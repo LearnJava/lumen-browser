@@ -2,11 +2,13 @@ name: CI
 
 # Task-branch gate (docs/ci-offload.md §4 «Целевая раскладка джобов»).
 #
-# Hot path — everything that blocks a merge runs on ubuntu only:
+# Hot path — everything that blocks a merge runs on ubuntu only, except `lint`
+# which also runs on macos (see that job's comment for why):
 #   test          compile check + unit tests
 #   doc-drift     generated docs vs committed ones
-#   lint          clippy --workspace  (PROBE, continue-on-error — see below)
-#   snapshot-cpu  deterministic CPU snapshots (PROBE, continue-on-error)
+#   lint          clippy --workspace (ubuntu + macos)
+#   snapshot-cpu  deterministic CPU snapshots (PROBE, continue-on-error — flaky
+#                 reference, BUG-784)
 #
 # Cold path — `cross` (macos + windows) is off the branch hot path and runs on
 # push-to-main and nightly: cross-platform breakage is real but is not a blocker
@@ -132,23 +134,23 @@ jobs:
           cargo test -p lumen-knowledge
 
   lint:
-    # PROBE STAGE — `continue-on-error` on purpose, do NOT remove it as a
-    # "leftover" without reading docs/ci-offload.md §11.3 first.
+    # Blocking since 2026-08-19 (docs/ci-offload.md §11.3, round 2).
     #
     # Tier 0 of docs/lint-policy.md (5 rules on `deny`: undocumented_unsafe_blocks,
     # panic, expect_used, unwrap_used, missing_docs) was rolled out and verified on
     # Windows/MSVC only. 12 files carry code behind `#[cfg(target_os = "linux")]`
-    # / `"macos"` / `unix`, which clippy has therefore NEVER seen: the
-    # `#[allow]`-registry (§10) cannot be complete for those platforms. A blocking
-    # job here would red-line every branch for pre-existing debt.
+    # / `"macos"` / `unix`, which clippy had therefore never seen — this job's
+    # matrix runs it on ubuntu and macos too, closing that blind spot instead of
+    # taking it on trust.
     #
-    # Two-step rollout, same as the lint rules themselves (lint-policy.md §6):
-    #   step 1 (this) — collect the Linux/macOS violation list from a real run;
-    #   step 2        — close them in a dedicated commit, then drop
-    #                   `continue-on-error` and this whole comment block.
-    name: Clippy workspace — PROBE (${{ matrix.os }})
+    # Ran as a `continue-on-error` probe first (round 1, 2026-08-18): it found a
+    # real gap (an undocumented `unsafe` block reachable only under
+    # `cfg(target_os = "macos")`, fixed) and a false one (a `clippy::question_mark`
+    # hit caused by the CI runner's floating `stable` toolchain landing ahead of
+    # the developer's pinned one, not a platform difference — resolved by pinning
+    # `rust-toolchain.toml` to 1.97.0 the same day). Full history — ci-offload.md §11.3.
+    name: Clippy workspace (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
