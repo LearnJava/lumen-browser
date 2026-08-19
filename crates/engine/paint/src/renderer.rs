@@ -13653,6 +13653,42 @@ impl Renderer {
                         .collect::<Vec<_>>()
                         .join(" | ");
                     eprintln!("[frame:wgpu]   alloc-census (total): {s}");
+
+                    // BUG-405 срез 26: та же перепись, свёрнутая ПО МЕТКЕ.
+                    // Строка выше — топ-8 по ключу `(label, w, h)`, и на
+                    // реальной странице её занимают картинки: каждая своего
+                    // размера, то есть свой ключ со счётчиком 1. Метка,
+                    // создавшая три текстуры трёх разных размеров, из топ-8
+                    // при этом вытесняется целиком — а вопрос п.54 («сколько
+                    // слоёв уровня создаётся за сессию») ставится именно к
+                    // метке, а не к размеру.
+                    // `rows` уже отсортирован по убыванию счётчика, поэтому
+                    // размерные классы внутри метки приходят в том же порядке.
+                    let mut by_label: Vec<(&'static str, u64, Vec<String>)> = Vec::new();
+                    for ((l, w, h), n) in &rows {
+                        let size = format!("{w}x{h} x{n}");
+                        match by_label.iter_mut().find(|(name, _, _)| name == l) {
+                            Some(e) => {
+                                e.1 += n;
+                                e.2.push(size);
+                            }
+                            None => by_label.push((l, *n, vec![size])),
+                        }
+                    }
+                    by_label.sort_by_key(|&(_, n, _)| std::cmp::Reverse(n));
+                    let s = by_label
+                        .iter()
+                        .map(|(l, n, sizes)| {
+                            format!(
+                                "{l} x{n} ({} разм.: {}{})",
+                                sizes.len(),
+                                sizes.iter().take(4).cloned().collect::<Vec<_>>().join(", "),
+                                if sizes.len() > 4 { ", …" } else { "" },
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" | ");
+                    eprintln!("[frame:wgpu]   alloc-census (по метке): {s}");
                 }
 
                 // Порядок повторяет `plan_kind` выше; `rclip` — общий слот 6
