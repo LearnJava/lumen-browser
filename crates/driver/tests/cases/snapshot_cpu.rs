@@ -318,6 +318,20 @@ fn cpu_snapshots_match_references() {
             .filter(|(a, b)| a != b)
             .count();
         if diff != 0 {
+            // BUG-784 срез 2 (P2, 2026-08-20): временная диагностика — печатает
+            // координаты и значения различающихся байт, чтобы понять, кучно ли
+            // расхождение лежит (граница тайла) или размазано (общее округление).
+            // Убрать перед мержем в main, не совместимо с "не мержить" из карточки.
+            let stride = (actual.width * 4) as usize;
+            eprintln!("=== {page}: diff byte positions (x,y,channel,ref,actual) ===");
+            for (i, (r, a)) in ref_rgba.iter().zip(actual_rgba.iter()).enumerate() {
+                if r != a {
+                    let y = i / stride;
+                    let x = (i % stride) / 4;
+                    let ch = i % 4;
+                    eprintln!("  ({x},{y}) ch{ch}: ref={r} actual={a}");
+                }
+            }
             failures.push(format!(
                 "{page}: {diff} differing bytes (of {})",
                 ref_rgba.len()
