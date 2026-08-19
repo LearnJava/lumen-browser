@@ -4064,6 +4064,52 @@ fn band_copy_usage_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var("LUMEN_BAND_COPY_USAGE").is_ok_and(|v| v == "1"))
 }
 
+/// Доля высоты полосы, которую разрешено ПЕРЕРИСОВЫВАТЬ на промахе
+/// (`LUMEN_BAND_DRAW_FRACTION`, `0 < v < 1`), либо `None` — рисуется вся полоса.
+///
+/// Рычаг ПЕРЕПИСИ BUG-405 срез 29 (пункт 60 остатка), пиксельно НЕВЕРНЫЙ: ниже
+/// доли полоса остаётся пустой, и композит показывает мусор. Вопрос, ради
+/// которого он существует: падает ли цена промаха пропорционально числу
+/// ПЕРЕРИСОВАННЫХ строк при неизменном размере ЦЕЛИ. Свип среза 27
+/// (`LUMEN_BAND_MARGIN_CSS`) менял площадь рисования вместе с размером
+/// текстуры, а инкрементальная дорисовка (пункт 43) меняет только первое, и
+/// срез 25 уже ловил случай, где цена привязана к объекту текстуры, а не к
+/// обработанной площади. Без этого числа выигрыш правки не назван.
+///
+/// Реализован ПОНИЖЕНИЕМ высоты цели, которую видит отсев Band-рендера
+/// ([`Renderer::render_impl`], `cull_h`): текстура, пасс и depth остаются
+/// полноразмерными, а невидимые уровни и пустые scissor-ы отсекаются по доле —
+/// то есть ровно тем механизмом, которым уже отсекается содержимое за
+/// пределами полосы. Клип-обёртка вокруг списка (первый заход среза 29)
+/// отвергнута замером: она удваивала число элементов плана (`filt` 18 → 38,
+/// `draw` 28 → 68, `layers` 1 → 2) и делала промах ВДВОЕ дороже при меньшем
+/// числе draw'ов — то есть мерила другую конфигурацию, а не ту же дешевле.
+///
+/// Ловушка «`SetScissor` из списка затирает scissor пасса» этим путём закрыта
+/// сама собой: понижена не команда, а граница, по которой scissor каждой
+/// команды считается ([`sync_scissor_to_stack`]).
+///
+/// Гейт тождества плеч — `frac` в строке `page-compose MISS` и падение `ops`
+/// в `[frame:wgpu] total` (`scripts/band_draw_fraction_census.py`).
+fn band_draw_fraction() -> Option<f32> {
+    use std::sync::OnceLock;
+    static FRACTION: OnceLock<Option<f32>> = OnceLock::new();
+    *FRACTION.get_or_init(|| {
+        std::env::var("LUMEN_BAND_DRAW_FRACTION")
+            .ok()
+            .and_then(|v| v.trim().parse::<f32>().ok())
+            .filter(|v| v.is_finite() && *v > 0.0 && *v < 1.0)
+    })
+}
+
+/// Высота цели, которую видит отсев Band-рендера, под долей [`band_draw_fraction`].
+///
+/// Ноль запрещён: `cull_h = 0` схлопнул бы КАЖДЫЙ scissor в пустой и померил бы
+/// «полоса не рисуется вовсе», а не «рисуется её доля».
+fn band_cull_height(surface_h: u32, frac: f32) -> u32 {
+    ((surface_h as f32 * frac).round() as u32).clamp(1, surface_h)
+}
+
 /// Геометрия полосы скролл-композитора под текущую поверхность:
 /// `(запас с каждой стороны, полная высота полосы)` в device px, либо причина
 /// отказа для `page-compose skip`.
@@ -8608,9 +8654,10 @@ impl Renderer {
             }
             if crate::frame_log_level() >= 2 {
                 eprintln!(
-                    "[frame:wgpu] page-compose MISS: band y={band_top_css:.0}..{:.0} css ({sw}x{band_h_px} px, {} anim segs)",
+                    "[frame:wgpu] page-compose MISS: band y={band_top_css:.0}..{:.0} css ({sw}x{band_h_px} px, {} anim segs, frac {})",
                     band_top_css + band_h_css,
                     ranges.len(),
+                    band_draw_fraction().map_or(1.0, f64::from),
                 );
             }
         } else if crate::frame_log_level() >= 2 {
@@ -9160,6 +9207,16 @@ impl Renderer {
         let mut current_scissor: Option<DeviceScissor> = None;
         // Размеры цели пасса (для Band — полосы), не поверхности окна.
         let (surface_w, surface_h) = (sw0, sh0);
+        // BUG-405 срез 29: высота цели ДЛЯ ОТСЕВА — обычно она же, но под
+        // рычагом переписи [`band_draw_fraction`] это доля высоты полосы.
+        // Отсев (scissor команд и видимость уровней) считает цель короче,
+        // тогда как сама текстура, пасс и depth остаются полноразмерными:
+        // так меряется цена промаха по числу ПЕРЕРИСОВАННЫХ строк при
+        // неизменном размере цели (пункт 60 остатка).
+        let cull_h = match (&mode, band_draw_fraction()) {
+            (RenderPassMode::Band { .. }, Some(frac)) => band_cull_height(surface_h, frac),
+            _ => surface_h,
+        };
 
         let dpr_f32 = self.scale_factor.max(1e-6) as f32;
         // CSS-px размер цели пасса — ровно то, что уходит в `Uniforms.viewport`
@@ -9467,7 +9524,7 @@ impl Renderer {
             }
             match cmd {
                 DisplayCommand::FillRect { rect, color } => {
-                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
+                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, cull_h) {
                         continue;
                     }
                     let alpha = 1.0_f32;
@@ -9498,7 +9555,7 @@ impl Renderer {
                     }
                 }
                 DisplayCommand::FillRoundedRect { rect, color, radii } => {
-                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
+                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, cull_h) {
                         continue;
                     }
                     let r = translate_rect(*rect, dx, dy);
@@ -9519,7 +9576,7 @@ impl Renderer {
                     styles: [st, sr, sb, sl],
                     radii,
                 } => {
-                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
+                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, cull_h) {
                         continue;
                     }
                     let alpha = 1.0_f32;
@@ -9717,7 +9774,7 @@ impl Renderer {
                         continue;
                     }
                     let t_sciss = cmd_log.then(std::time::Instant::now);
-                    let scissor_ok = sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h);
+                    let scissor_ok = sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, cull_h);
                     if let Some(t0) = t_sciss {
                         sub_add(&TEXT_SUB.sciss, t0);
                     }
@@ -9818,7 +9875,7 @@ impl Renderer {
                     if *width <= 0.0 {
                         continue;
                     }
-                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
+                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, cull_h) {
                         continue;
                     }
                     let alpha = 1.0_f32;
@@ -9895,7 +9952,7 @@ impl Renderer {
                     object_position,
                     image_rendering,
                 } => {
-                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
+                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, cull_h) {
                         continue;
                     }
                     let alpha = 1.0_f32;
@@ -9999,7 +10056,7 @@ impl Renderer {
                     // fetches it (the `loading="lazy"` attribute never clears).
                     // Draw the registered image if present, else the grey
                     // placeholder — same behaviour as DrawImage. (BUG-163)
-                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
+                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, cull_h) {
                         continue;
                     }
                     let alpha = 1.0_f32;
@@ -10245,7 +10302,7 @@ impl Renderer {
                                 x1 * dpr_f32 <= 0.0
                                     || y1 * dpr_f32 <= 0.0
                                     || x0 * dpr_f32 >= surface_w as f32
-                                    || y0 * dpr_f32 >= surface_h as f32
+                                    || y0 * dpr_f32 >= cull_h as f32
                             }
                             LevelBounds::Unbounded => false,
                         };
@@ -10349,7 +10406,7 @@ impl Renderer {
                                     x1 * dpr_f32 <= 0.0
                                         || y1 * dpr_f32 <= 0.0
                                         || x0 * dpr_f32 >= surface_w as f32
-                                        || y0 * dpr_f32 >= surface_h as f32
+                                        || y0 * dpr_f32 >= cull_h as f32
                                 }
                                 LevelBounds::Unbounded => false,
                             };
@@ -10423,7 +10480,7 @@ impl Renderer {
                                 x1 * dpr_f32 <= 0.0
                                     || y1 * dpr_f32 <= 0.0
                                     || x0 * dpr_f32 >= surface_w as f32
-                                    || y0 * dpr_f32 >= surface_h as f32
+                                    || y0 * dpr_f32 >= cull_h as f32
                             }
                             LevelBounds::Unbounded => false,
                         };
@@ -10460,7 +10517,7 @@ impl Renderer {
                 }
                 // CSS Backgrounds L3 §3.3/3.4/3.5 — background-size/position/repeat.
                 DisplayCommand::DrawBackgroundImage { rect, origin_rect, src, size, position, repeat, image_rendering } => {
-                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
+                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, cull_h) {
                         continue;
                     }
                     // `area`  — paint/clip bounds (background-clip). Tiles are drawn only inside.
@@ -10591,7 +10648,7 @@ impl Renderer {
                 }
                 // CSS Images L3 §3.3 — GPU linear gradient pipeline.
                 DisplayCommand::DrawLinearGradient { rect, angle_deg, stops, repeating } => {
-                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
+                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, cull_h) {
                         continue;
                     }
                     if stops.is_empty() {
@@ -10614,7 +10671,7 @@ impl Renderer {
                 }
                 // CSS Images L3 §3.5 — GPU radial gradient pipeline.
                 DisplayCommand::DrawRadialGradient { rect, center_x_pct, center_y_pct, radius_x, radius_y, stops, repeating } => {
-                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
+                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, cull_h) {
                         continue;
                     }
                     if stops.is_empty() {
@@ -10641,7 +10698,7 @@ impl Renderer {
                 }
                 // CSS Images L4 §3.7 — GPU conic gradient pipeline.
                 DisplayCommand::DrawConicGradient { rect, center_x_pct, center_y_pct, from_angle_deg, stops, repeating } => {
-                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
+                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, cull_h) {
                         continue;
                     }
                     if stops.is_empty() {
@@ -10665,7 +10722,7 @@ impl Renderer {
                     draw_ops.push(DrawOp::Gradient { v_start, v_count, grad_batch_idx });
                 }
                 DisplayCommand::DrawLayerSnapshot { id, rect, alpha } => {
-                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
+                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, cull_h) {
                         continue;
                     }
                     let scrolled = translate_rect(*rect, dx, dy);
@@ -11130,9 +11187,9 @@ impl Renderer {
                                 let (ix0, iy0) = (x0 - pad_css, y0 - pad_css);
                                 let (ix1, iy1) = (x1 + pad_css, y1 + pad_css);
                                 let sx0 = ((ix0 * dpr_f32).floor().max(0.0) as u32).min(surface_w);
-                                let sy0 = ((iy0 * dpr_f32).floor().max(0.0) as u32).min(surface_h);
+                                let sy0 = ((iy0 * dpr_f32).floor().max(0.0) as u32).min(cull_h);
                                 let sx1 = ((ix1 * dpr_f32).ceil().max(0.0) as u32).min(surface_w);
-                                let sy1 = ((iy1 * dpr_f32).ceil().max(0.0) as u32).min(surface_h);
+                                let sy1 = ((iy1 * dpr_f32).ceil().max(0.0) as u32).min(cull_h);
                                 if sx1 <= sx0 || sy1 <= sy0 {
                                     // Контент целиком за пределами surface —
                                     // фильтр не виден, его контент-пассы тоже
@@ -11335,7 +11392,7 @@ impl Renderer {
                     }
                 }
                 DisplayCommand::DrawSvgPath { vertices, color } => {
-                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
+                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, cull_h) {
                         continue;
                     }
                     let v_start = fill_vertices.len() as u32;
@@ -11361,7 +11418,7 @@ impl Renderer {
                 DisplayCommand::DrawSvgFill { contours, color } => {
                     let _t_arm = sub_timer(cmd_log, &SVG_SUB.arm);
                     let t_sciss = cmd_log.then(std::time::Instant::now);
-                    let scissor_ok = sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h);
+                    let scissor_ok = sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, cull_h);
                     if let Some(t0) = t_sciss {
                         sub_add(&SVG_SUB.sciss, t0);
                     }
@@ -11395,7 +11452,7 @@ impl Renderer {
                 DisplayCommand::DrawSvgStroke { contours, color, params } => {
                     let _t_arm = sub_timer(cmd_log, &SVG_SUB.arm);
                     let t_sciss = cmd_log.then(std::time::Instant::now);
-                    let scissor_ok = sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h);
+                    let scissor_ok = sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, cull_h);
                     if let Some(t0) = t_sciss {
                         sub_add(&SVG_SUB.sciss, t0);
                     }
@@ -11502,7 +11559,7 @@ impl Renderer {
                 // clip/transform stack (parent's, NOT scroll layer's).
                 // Colors from `scrollbar-color` (CSS Scrollbars L1 §3).
                 DisplayCommand::DrawScrollbar { track_rect, thumb_rect, track_color, thumb_color, .. } => {
-                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
+                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, cull_h) {
                         continue;
                     }
                     for (rect, color) in &[(*track_rect, *track_color), (*thumb_rect, *thumb_color)] {
@@ -11524,7 +11581,7 @@ impl Renderer {
                 // DevTools box model overlay (7E.3): four semi-transparent layers
                 // drawn outside-in. Uses the same fill pipeline as FillRect.
                 DisplayCommand::BoxModelOverlay { margin, border, padding, content } => {
-                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
+                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, cull_h) {
                         continue;
                     }
                     // Standard DevTools palette (Chrome-matching), ~50% alpha.
@@ -11568,7 +11625,7 @@ impl Renderer {
                 // The quad covers `dest` after scroll translation; both textures
                 // sample at the full UV range [0,1]×[0,1] (CSS Images L4 §4.1).
                 DisplayCommand::DrawCrossFade { dest, src_a, src_b, progress } => {
-                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
+                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, cull_h) {
                         continue;
                     }
                     // Look up both GpuImage entries. Use intrinsic-size key
@@ -19059,6 +19116,27 @@ mod tests {
             band_geometry(1920, 1017, 1.0, MAX, true, Some(100.0)),
             Err("вьюпорт не оставляет запаса в лимите текстуры"),
         );
+    }
+
+    /// BUG-405 срез 29: гейт на арифметику рычага переписи
+    /// [`band_draw_fraction`] → [`band_cull_height`].
+    ///
+    /// Рычаг понижает высоту цели ТОЛЬКО для отсева, поэтому его единственная
+    /// опасная точка — вырождение: доля, дающая ноль строк, схлопнула бы каждый
+    /// scissor в пустой, и свип померил бы «полоса не рисуется» вместо «полоса
+    /// рисуется на четверть». Полная доля обязана возвращать саму высоту —
+    /// иначе плечо 1.0 свипа не совпадает со штатным путём.
+    #[test]
+    fn band_cull_height_is_a_fraction_of_the_target() {
+        // Полоса развёрнутого окна 1920×1017 (см. `band_geometry` выше).
+        assert_eq!(band_cull_height(2541, 1.0), 2541, "полная доля = штатный путь");
+        assert_eq!(band_cull_height(2541, 0.5), 1271);
+        assert_eq!(band_cull_height(2541, 0.25), 635);
+        // Вырождение: доля меньше строки — одна строка, но не ноль.
+        assert_eq!(band_cull_height(2541, 0.0001), 1);
+        // Доля выше единицы не растягивает цель: отсев не может видеть больше
+        // текстуры, чем создано.
+        assert_eq!(band_cull_height(2541, 2.0), 2541);
     }
 
     /// BUG-405 срез 23: сторона текстуры запрашивается по тиру адаптера, и
