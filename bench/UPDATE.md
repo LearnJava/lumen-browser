@@ -109,14 +109,20 @@ Starting with bench-ram-axis (9G.5), benchmark tracks **three RAM axes**:
 
 ## Performance gate triggers
 
-The CI gate at `.github/workflows/bench-gate.yml` runs on any PR modifying:
+**There is no CI gate.** `.github/workflows/bench-gate.yml`, which used to run this
+comparison on every PR touching the engine crates, was **deleted on 2026-08-19**
+(`docs/ci-offload.md` §11.5): it gated on a 5 % delta of wall-clock medians measured on a
+shared runner — for the `decode` phase that meant a 0.075 µs threshold, i.e. pure noise —
+against a baseline captured on 2026-05-28 under `"lumen_version": "Phase 0 prototype"`. It
+never ran once, because its trigger was `pull_request` and this project gates branches by
+push instead (`docs/ci-offload.md` §8).
 
-- `crates/driver/` — automation API
-- `crates/mcp/`, `crates/bidi/` — protocol servers
-- `crates/network/`, `crates/storage/`, `crates/shell/` — runtime  
-- `crates/canvas/`, `crates/js/` — JS bindings
-- `crates/engine/**` — rendering pipeline
-- `crates/bench/`, `bench/` — benchmark infrastructure
+Run this comparison **locally**, where the machine is stable and the numbers mean something.
+Refresh `baseline.json` first — the committed one predates Phase 1 and Phase 2 entirely.
+
+The successor gate is **PERF-7** in `ROADMAP.md`: a nightly corpus run with thresholds in
+`crates/bench/src/ci_gate.rs`, which uses absolute ceilings (mean < 200 ms, peak RSS < 512 MB)
+rather than percentage deltas — the only shape of wall-clock gate that survives runner jitter.
 
 Thresholds:
 - **Time (all phases)**: 5% regression in median or p95 fails the gate

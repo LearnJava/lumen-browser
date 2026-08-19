@@ -95,14 +95,26 @@ Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>"
 
 ## CI Gate Behavior
 
-The `.github/workflows/bench-gate.yml` job runs on every PR:
+**None — this comparison does not run in CI.** The `.github/workflows/bench-gate.yml` job
+described here was **deleted on 2026-08-19** (`docs/ci-offload.md` §11.5). It had never
+executed a single time: its trigger was `pull_request`, and this project gates task branches
+by pushing them, without opening PRs.
+
+Its criteria are kept here for reference, because they are what you should apply *by hand*
+when you run the comparison locally — and they are also why it could not stay in CI: a 5 %
+delta on medians measured in microseconds is below the noise floor of a shared runner.
 
 1. Runs `cargo run -p lumen-bench --release`.
 2. Compares **median** and **p95** against `baseline.json`.
-3. **Fails PR if:**
+3. **Counts as a regression if:**
    - Time regression > 5% on any phase.
    - RAM regression > 5% on T0 or any phase.
    - Restore SLO regression > 20% on T1→T0, T2→T0, T3→T0 (when benchmarks exist).
+
+The separate `lumen-bench --ci` entry point (`src/ci_gate.rs`) is a *different* mechanism —
+absolute ceilings (mean < 200 ms, peak RSS < 512 MB, bfcache P50 < 50 ms) rather than deltas
+against a baseline. It is currently invoked by nothing; wiring it up is **PERF-7** in
+`ROADMAP.md`.
 
 ## Regression Investigation
 
