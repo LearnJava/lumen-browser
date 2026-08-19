@@ -86,12 +86,19 @@ jobs:
         uses: dtolnay/rust-toolchain@nightly
 
       # libfuzzer-sys builds the libFuzzer runtime from its vendored C++ sources
-      # through the `cc` crate. ubuntu-latest ships a C++ compiler, but which one
-      # is default has changed across runner images — pin the expectation.
-      - name: Install clang
+      # through the `cc` crate, so this job needs a C++ compiler — the runner
+      # image already carries clang and g++, so it is only reported, not installed.
+      #
+      # This step used to be `apt-get update && apt-get install clang`. It hung for
+      # 52 minutes on the first main-branch run (32277922403, cancelled by hand):
+      # apt on the hosted runners stalls periodically, and here it was buying
+      # nothing. Do not reintroduce an apt step without checking the image
+      # manifest first — an unnecessary network dependency is a recurring source
+      # of stuck jobs (docs/ci-offload.md §12).
+      - name: Report C++ toolchain
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -y --no-install-recommends clang
+          clang --version || true
+          c++ --version || true
 
       - name: Cargo dependency cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
