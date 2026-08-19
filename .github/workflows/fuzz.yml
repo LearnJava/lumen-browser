@@ -193,8 +193,10 @@ jobs:
           # that outcome for the two-month CI outage). Remove a target from here
           # in the commit that fixes its bug.
           #
-          #   fuzz_image — BUG-787, GIF LZW unpack never returns
-          KNOWN_FAILING: 'fuzz_image'
+          #   fuzz_image      — BUG-787, GIF LZW unpack never returns
+          #   fuzz_css_parser — BUG-788, parse() blows up to hundreds of MiB on
+          #                     a kilobyte of malformed CSS
+          KNOWN_FAILING: 'fuzz_image fuzz_css_parser'
         run: |
           set -u
           failed=""

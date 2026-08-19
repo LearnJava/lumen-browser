@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-19",
  "counts": {
-  "open": 327,
+  "open": 328,
   "fixed": 424,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 751,
+ "total_bugs": 752,
  "phases": [
   {
    "id": "P0",
@@ -10118,6 +10118,13 @@
    "component": "image (`crates/engine/image/src/gif.rs` — `AnimatedGif::frame_image`, вызов `gif::Frames::decode_lzw_encoded_frame_into_buffer`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-788": {
+   "status": "open",
+   "title": "`lumen_css_parser::parse` аллоцирует **912 МиБ** на 12 КБ битого CSS (в CI убит libFuzzer'ом: «out-of-memory, used 2179Mb, limit 2048Mb»). Перепроверено на Wind…",
+   "component": "css-parser (`crates/engine/css-parser` — только `parse`, разбор таблицы стилей)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -10154,6 +10161,9 @@
   ],
   "css-parser (`crates/engine/css-parser/src/parser.rs::skip_ws_and_comments`)": [
    "BUG-510"
+  ],
+  "css-parser (`crates/engine/css-parser` — только `parse`, разбор таблицы стилей)": [
+   "BUG-788"
   ],
   "css-parser (нет обработки нигде в `css-parser`/`layout`)": [
    "BUG-487"
