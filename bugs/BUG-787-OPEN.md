@@ -22,7 +22,21 @@
 00000030: 2020 2020 5a20 2020 2020 2020 2020 2020      Z
 ```
 
-Репро целиком — артефакт `fuzz-artifacts-32274370138` прогона
+**Минимизированное репро — 78 байт** (`cargo fuzz tmin`, дальше не ужимается:
+«failed to minimize beyond … (78 bytes)»). Раскодировать `base64 -d`:
+
+```
+R0lGODlhAQABAIAAAAB/AAAAACH5BGAHAP8ALAAAAAABAAEAAAICNUQBICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIAA7
+```
+
+Разбор: `GIF89a`, логический экран 1×1 с глобальной палитрой, Graphic Control
+Extension (`21 F9 04 …`), image descriptor 1×1 (`2C`), LZW minimum code size
+`02`, один подблок из двух байт (`35 44`), затем подблок `01 20`, дальше
+33 байта `0x20`, терминатор блоков `00` и трейлер `3B`. То есть картинка
+объявлена как один пиксель, а LZW-поток за ней — мусор; именно на нём
+распаковщик и не возвращается.
+
+Исходное (неминимизированное, 111 байт) — артефакт `fuzz-artifacts-32274370138` прогона
 [32274370138](https://github.com/LearnJava/lumen-browser/actions/runs/32274370138)
 (`gh run download 32274370138 -n fuzz-artifacts-32274370138`), имя файла
 `timeout-ca30162df0d5faa438184bb16e4771da977fe0d0`. В `fuzz/regressions/`
