@@ -1,0 +1,108 @@
+name: Perf gate
+
+# PERF-7 (docs/ci-offload.md §11.5 successor to the deleted bench-gate.yml):
+# regression ratchet over `crates/bench/src/ci_gate.rs` (`lumen-bench --ci`),
+# the numeric analogue of KNOWN_DEBTORS in graphic_tests/run.py. It asserts
+# ABSOLUTE ceilings with a big margin (mean pipeline time, peak RSS, bfcache
+# restore P50, cold process-spawn startup) — never a wall-clock delta against
+# a moving baseline, because a shared runner is too noisy for that
+# (docs/ci-offload.md §9, docs/perf-method.md). The point is to catch a
+# blowup (a missing cache, an accidental re-init per navigation), not to
+# police single-digit-percent noise.
+#
+# Deliberately NOT part of ci.yml and NOT a merge gate: unlike `lint`/`test`,
+# a red run here does not mean the change is wrong — it means a number needs
+# a human look (root-cause it, then either fix it or, like a graphic-tests
+# KNOWN_DEBTOR, file a bug and move on). A task branch must not wait for it.
+# PROBE STAGE (continue-on-error): mirrors the `lint`/`snapshot-cpu` two-round
+# rollout in ci.yml (docs/ci-offload.md §11.3) — collect real CI-hardware
+# numbers first, then decide whether any threshold needs adjusting before the
+# job's failure is trusted at face value.
+
+on:
+  # Manual run — after touching layout/paint/font/startup code, or to see
+  # current numbers without waiting for the nightly schedule.
+  workflow_dispatch:
+
+  # Nightly sweep, independent of whether anything perf-sensitive changed
+  # that day — this is what "ночной прогон корпуса" in the ROADMAP.md PERF-7
+  # row means: a standing watch, not a per-PR check.
+  schedule:
+    - cron: '0 4 * * *'   # 04:00 UTC
+
+  # Pre-merge signal on branches that touch a perf-sensitive path ("тяжёлые
+  # ветки" in the PERF-7 description) — paint/layout/font/encoding, the
+  # pipeline crates/bench/src/ci_gate.rs itself exercises, plus the shell
+  # binary the cold-start check spawns and the gate's own source.
+  push:
+    branches: [main, 'p[1-5]-*']
+    paths:
+      - 'crates/engine/layout/**'
+      - 'crates/engine/paint/**'
+      - 'crates/engine/font/**'
+      - 'crates/engine/encoding/**'
+      - 'crates/engine/html-parser/**'
+      - 'crates/engine/css-parser/**'
+      - 'crates/shell/**'
+      - 'crates/bench/**'
+      - 'samples/heavy.html'
+      - 'samples/page.html'
+      - '.github/workflows/perf-gate.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # See ci.yml's identical comment — an unset wrapper makes every cargo
+  # invocation die instantly on a runner without sccache installed
+  # (CLAUDE.md §Known gotchas, the two-month CI outage).
+  RUSTC_WRAPPER: ""
+
+jobs:
+  perf-gate:
+    name: Perf gate (ubuntu)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          sparse-checkout: |
+            /*
+            !/tests/wpt
+          sparse-checkout-cone-mode: false
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo dependency cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-directories: ~/.cargo/.rusty_v8
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            libx11-dev libxcursor-dev libxi-dev libxrandr-dev \
+            libwayland-dev libxkbcommon-dev \
+            libegl-dev libgles2-mesa-dev \
+            libasound2-dev \
+            pkg-config
+
+      # The cold-start check inside ci_gate.rs spawns a real `lumen` binary
+      # (`--screenshot`, headless CPU raster — no GPU/window needed, unlike
+      # the graphic-tests pixel gate), so it must exist before `--ci` runs.
+      # dev-release, not release: matches what every other job in this repo
+      # builds and measures locally (docs/build-speed.md), and ci_gate.rs's
+      # own binary lookup checks dev-release first.
+      - name: Build dev-release shell (for the cold-start check)
+        run: cargo build -p lumen-shell --profile dev-release
+
+      - name: cargo run -p lumen-bench --release -- --ci
+        run: cargo run -p lumen-bench --release -- --ci

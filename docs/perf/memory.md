@@ -76,6 +76,11 @@ python scripts/mem_perf.py --selftest                   # статистика �
 `--compare <prev.json>` печатает дельту ключевых метрик (`plateau_rss_mb`,
 `per_tab_mb`, `hold_slope_mb_per_min`, `unattributed_mb`); рост > 20% помечается
 ⚠ (память вверх = хуже). Отдельный флаг: `leak_suspected` = наклон hold больше
-`--leak-mb-per-min` (по умолчанию 5). Порог для гейта — задача PERF-7 (ночной
-перф-гейт поверх метрик PERF-2/3/4/5, механизм в
-[`crates/bench/src/ci_gate.rs`](../../crates/bench/src/ci_gate.rs)).
+`--leak-mb-per-min` (по умолчанию 5). **PERF-7 (2026-08-20) закрыт без порога для
+ЭТОЙ метрики**: харнесс поднимает живое окно (`--mcp-live-port`), а
+`docs/ci-offload.md` §9 явно запрещает переносить прогоны живого окна в CI (нет
+GPU/фокуса на shared runner) — единственная метрика PERF-7 фактически завела
+порог для, это cold-старт из PERF-4 (headless `--screenshot`, без окна), см.
+[`crates/bench/src/ci_gate.rs`](../../crates/bench/src/ci_gate.rs) и
+[`perf-gate.yml`](../../.github/workflows/perf-gate.yml). Регрессия памяти
+остаётся локальным `--compare`-гейтом, как и раньше.
