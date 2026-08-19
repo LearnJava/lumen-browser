@@ -13,7 +13,9 @@ name: CI
 # Cold path — `cross` (macos + windows) is off the branch hot path and runs on
 # push-to-main and nightly: cross-platform breakage is real but is not a blocker
 # of the task being merged, and five parallel roles × 3 OS would eat the 20-job
-# free-tier concurrency limit on its own.
+# free-tier concurrency limit on its own. `artifact` (ubuntu + macos + windows)
+# is push-to-main only too — it uploads the dev-release binary, docs/ci-offload.md
+# §6, and is not a merge gate either.
 #
 # Graphic tests (gdigrab + Edge comparison) stay local — they need a GPU and a
 # focused window (docs/ci-offload.md §9).
@@ -132,6 +134,60 @@ jobs:
           cargo test -p lumen-storage
           cargo test -p lumen-ipc
           cargo test -p lumen-knowledge
+
+  artifact:
+    # CI-5 (docs/ci-offload.md §6). Not a merge gate, not a replacement for
+    # local iteration (incremental dev-release rebuild is 3.8-8.6s locally vs.
+    # a 25-45 min CI run) — it exists for three narrow cases: a Linux/macOS
+    # binary (can't be built on this dev machine at all), a clean-machine
+    # build check before a release, or a binary needed while the local
+    # machine is busy with a long run. Runs only on push to `main`, so task
+    # branches don't churn through the 500 MB Free artifact quota.
+    name: Artifact — dev-release (${{ matrix.os }})
+    if: github.ref == 'refs/heads/main'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          sparse-checkout: |
+            /*
+            !/tests/wpt
+          sparse-checkout-cone-mode: false
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo dependency cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-directories: ~/.cargo/.rusty_v8
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            libx11-dev libxcursor-dev libxi-dev libxrandr-dev \
+            libwayland-dev libxkbcommon-dev \
+            libegl-dev libgles2-mesa-dev \
+            libasound2-dev \
+            pkg-config
+
+      - name: Build dev-release shell
+        run: cargo build -p lumen-shell --profile dev-release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lumen-${{ runner.os }}-dev-release
+          path: target/dev-release/lumen*
+          retention-days: 14
 
   lint:
     # Blocking since 2026-08-19 (docs/ci-offload.md §11.3, round 2).
