@@ -146,11 +146,18 @@ jobs:
         run: |
           set -u
           failed=""
+          known=$(cargo +nightly fuzz list)
           shopt -s nullglob
           for f in regressions/*; do
             [ -f "$f" ] || continue
             name=$(basename "$f")
             target="${name%%-*}"
+            # A misnamed file would otherwise fail as an opaque "unknown target".
+            if ! printf '%s\n' "$known" | grep -qx "$target"; then
+              echo "::error::regressions/$name must be named <target>-<desc>; '$target' is not a fuzz target"
+              failed="$failed $name"
+              continue
+            fi
             echo "::group::replay $name ($target)"
             if ! cargo +nightly fuzz run "$target" "$f"; then
               failed="$failed $name"
