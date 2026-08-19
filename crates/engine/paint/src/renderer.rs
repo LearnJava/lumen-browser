@@ -4046,6 +4046,24 @@ fn band_margin_override_css() -> Option<f32> {
     })
 }
 
+/// `true`, если текстура полосы создаётся ПРИГОДНОЙ для копирования
+/// (`LUMEN_BAND_COPY_USAGE=1`): к штатным `RENDER_ATTACHMENT | TEXTURE_BINDING`
+/// добавляются `COPY_SRC | COPY_DST`.
+///
+/// Рычаг переписи BUG-405 срез 28. Инкрементальная дорисовка полосы (п. 43
+/// остатка) требует от текстуры права быть источником и приёмником копии, а
+/// само это право на многих драйверах отключает сжатие цели без потерь — то
+/// есть может подорожать сам ПРОМАХ, который правка и удешевляет. Плечи
+/// различаются только этими двумя битами, поэтому надбавку промаха до и после
+/// меряет один бинарник (`scripts/band_miss_census.py`, `docs/perf-method.md`).
+/// Пиксельно нейтрально: биты usage не меняют ни содержимого текстуры, ни
+/// одного пути отрисовки.
+fn band_copy_usage_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("LUMEN_BAND_COPY_USAGE").is_ok_and(|v| v == "1"))
+}
+
 /// Геометрия полосы скролл-композитора под текущую поверхность:
 /// `(запас с каждой стороны, полная высота полосы)` в device px, либо причина
 /// отказа для `page-compose skip`.
@@ -8217,8 +8235,14 @@ impl Renderer {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: self.surface_format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: if band_copy_usage_enabled() {
+                wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC
+                    | wgpu::TextureUsages::COPY_DST
+            } else {
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING
+            },
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -19086,6 +19110,229 @@ mod tests {
         .expect("на поднятом лимите полоса обязана быть");
         // Запас упирается в потолок 768 CSS px, а не в лимит текстуры.
         assert_eq!((m, h), (768, 2937), "полоса ужата там, где лимит уже не жмёт");
+    }
+
+    /// BUG-405 срез 28: перепись цены КОПИИ полосы GPU→GPU (пункт 43 остатка).
+    ///
+    /// Это инструмент переписи, а не гейт: он печатает таблицу и проверяет
+    /// только осмысленность собственных чисел. Вопрос, ради которого написан:
+    /// инкрементальная дорисовка полосы (не перерисовывать всю полосу на
+    /// промахе, а сдвинуть её и дорисовать вышедшую кромку) уже строилась
+    /// 2026-07-13 и была откачена — диагноз того среза называет убийцей не
+    /// сэкономленный fill, а саму `copy_texture_to_texture` перекрытия. Тот
+    /// замер снят на полосе ~1890 px (3.9 МБ копии); на развёрнутом окне
+    /// полоса 1920×2541, а копия перекрытия — 1920×1322, то есть 10.2 МБ.
+    /// Прежде чем строить путь заново, нужна цена этой копии на этом
+    /// устройстве.
+    ///
+    /// Метод. Меряется ТОЛЬКО `submit` + ожидание GPU (`PollType::Wait`);
+    /// запись команд в encoder за скобками, потому что правку интересует
+    /// работа устройства, а не наша. Цена одной копии берётся как НАКЛОН по
+    /// числу копий в одном submit-е (`(t(8) − t(1)) / 7`), а не как `t(1)`:
+    /// так из числа уходит пол пола — цена самого submit-а и барьера, — и
+    /// остаётся то, что платит именно копия. Пол печатается отдельной строкой
+    /// (пустой encoder), чтобы было видно, велика ли поправка. Первое
+    /// обращение к свежей текстуре одноразово дорого (п. 40 остатка), поэтому
+    /// перед замером каждая пара текстур прогревается.
+    ///
+    /// Второе плечо — налог за право копировать: те же биты
+    /// `COPY_SRC | COPY_DST`, что нужны правке, на многих драйверах отключают
+    /// сжатие цели без потерь, то есть могут удорожить сам промах. Здесь он
+    /// меряется прокси-работой (пасс с `Clear` по всей полосе — та же запись
+    /// во всю площадь, что и на промахе, но без нашей геометрии) в интерливед
+    /// A/B; живой ответ на том же вопросе даёт рычаг
+    /// `LUMEN_BAND_COPY_USAGE=1` со `scripts/band_miss_census.py`.
+    ///
+    /// Требует GPU-адаптер, поэтому `#[ignore]`. Бэкенд задавать обязательно
+    /// (числа DX12 и Vulkan несопоставимы, срез 14):
+    /// `WGPU_BACKEND=vulkan cargo test -p lumen-paint --features backend-wgpu
+    ///  band_copy_cost_census -- --include-ignored --nocapture`.
+    #[test]
+    #[ignore = "requires GPU adapter"]
+    fn band_copy_cost_census() {
+        /// Медиана выборки.
+        fn med(mut v: Vec<f64>) -> f64 {
+            v.sort_by(f64::total_cmp);
+            v[v.len() / 2]
+        }
+        /// Один замер: `reps` записей в один encoder, затем submit и ожидание.
+        fn shot(
+            device: &wgpu::Device,
+            queue: &wgpu::Queue,
+            reps: usize,
+            mut rec: impl FnMut(&mut wgpu::CommandEncoder),
+        ) -> f64 {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("band-copy-census"),
+            });
+            for _ in 0..reps {
+                rec(&mut enc);
+            }
+            let t0 = std::time::Instant::now();
+            queue.submit(Some(enc.finish()));
+            let _ = device.poll(wgpu::PollType::Wait);
+            t0.elapsed().as_secs_f64() * 1000.0
+        }
+
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default().with_env());
+        let Ok(adapter) = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::LowPower,
+            compatible_surface: None,
+            force_fallback_adapter: false,
+        })) else {
+            println!("нет GPU-адаптера — перепись пропущена");
+            return;
+        };
+        let info = adapter.get_info();
+        let mut limits = wgpu::Limits::downlevel_defaults();
+        limits.max_texture_dimension_2d = adapter
+            .limits()
+            .max_texture_dimension_2d
+            .min(MAX_TEXTURE_DIM_TARGET);
+        let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("band-copy-census"),
+            required_features: wgpu::Features::empty(),
+            required_limits: limits,
+            memory_hints: wgpu::MemoryHints::default(),
+            trace: wgpu::Trace::Off,
+        }))
+        .expect("устройство переписи");
+        println!(
+            "\nадаптер: {} ({:?}, {:?}), сторона текстуры {}",
+            info.name,
+            info.device_type,
+            info.backend,
+            device.limits().max_texture_dimension_2d,
+        );
+
+        // Формат цели — как у поверхности окна на Windows; на цену копии
+        // влияет только через 4 байта на пиксель.
+        const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8UnormSrgb;
+        let make = |w: u32, h: u32, copyable: bool| {
+            let mut usage =
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
+            if copyable {
+                usage |= wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST;
+            }
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("band-census-tex"),
+                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: FMT,
+                usage,
+                view_formats: &[],
+            })
+        };
+
+        const SAMPLES: usize = 9;
+        // Пол: пустой submit с ожиданием. Всё, что ниже, — над ним.
+        let floor = med((0..SAMPLES).map(|_| shot(&device, &queue, 0, |_| {})).collect());
+        println!("пол (пустой submit + ожидание): {floor:.3} мс");
+
+        // Точки свипа: ширина, высота полосы, высота копии, что это такое.
+        // 1920×2541 — полоса развёрнутого окна 1920×1017 (срез 27); 1322 —
+        // перекрытие, остающееся после хода 1219 px до промаха; 1219 — кромка,
+        // которую пришлось бы дорисовать. 1024×1890/983 — масштаб замера
+        // 2026-07-13, ради сопоставимости с его отрицательным результатом.
+        let points: [(u32, u32, u32, &str); 5] = [
+            (1920, 2541, 2541, "вся полоса развёрнутого окна"),
+            (1920, 2541, 1322, "перекрытие после хода 1219 px"),
+            (1920, 2541, 1219, "кромка (то, что дорисовывалось бы)"),
+            (1024, 1890, 983, "перекрытие на стенде 2026-07-13"),
+            (1024, 1890, 1890, "вся полоса стенда 2026-07-13"),
+        ];
+        println!(
+            "\n{:<38} {:>10} {:>8} {:>9} {:>9} {:>9}",
+            "копия", "МБ", "t(1),мс", "t(8),мс", "цена,мс", "ГБ/с",
+        );
+        let mut copy_ms: Vec<(u32, f64)> = Vec::new();
+        for (w, band_h, copy_h, what) in points {
+            if band_h > device.limits().max_texture_dimension_2d {
+                println!("{what}: полоса выше лимита текстуры — точка пропущена");
+                continue;
+            }
+            let src = make(w, band_h, true);
+            let dst = make(w, band_h, true);
+            let copy = |enc: &mut wgpu::CommandEncoder| {
+                enc.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &src,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d { x: 0, y: band_h - copy_h, z: 0 },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &dst,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::Extent3d { width: w, height: copy_h, depth_or_array_layers: 1 },
+                );
+            };
+            // Прогрев: первое обращение к свежей текстуре одноразово дорого.
+            for _ in 0..3 {
+                shot(&device, &queue, 1, copy);
+            }
+            let t1 = med((0..SAMPLES).map(|_| shot(&device, &queue, 1, copy)).collect());
+            let t8 = med((0..SAMPLES).map(|_| shot(&device, &queue, 8, copy)).collect());
+            let each = (t8 - t1) / 7.0;
+            let mb = f64::from(w) * f64::from(copy_h) * 4.0 / 1024.0 / 1024.0;
+            println!(
+                "{:<38} {mb:>10.1} {t1:>8.3} {t8:>9.3} {each:>9.3} {:>9.2}",
+                format!("{w}x{copy_h} ({what})"),
+                mb / 1024.0 / each * 1000.0,
+            );
+            copy_ms.push((copy_h, each));
+            assert!(each.is_finite() && each > 0.0, "цена копии не измерена: {each}");
+        }
+
+        // Налог за право копировать: пасс `Clear` по всей полосе на текстуре
+        // со штатными битами usage против текстуры с COPY_SRC|COPY_DST.
+        // Интерливед A/B, сравнение по МИНИМУМУ (`docs/perf-method.md`).
+        let plain = make(1920, 2541, false);
+        let copyable = make(1920, 2541, true);
+        let clear = |tex: &wgpu::Texture, enc: &mut wgpu::CommandEncoder| {
+            let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+            let _pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("band-census-clear"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+        };
+        let (mut a, mut b) = (Vec::new(), Vec::new());
+        for i in 0..(SAMPLES * 2) {
+            let plain_ms = shot(&device, &queue, 4, |e| clear(&plain, e));
+            let copy_ms_ = shot(&device, &queue, 4, |e| clear(&copyable, e));
+            if i >= 3 {
+                // первые заходы — прогрев обеих целей (п. 40 остатка)
+                a.push(plain_ms);
+                b.push(copy_ms_);
+            }
+        }
+        let min = |v: &[f64]| v.iter().copied().fold(f64::INFINITY, f64::min);
+        println!(
+            "\nналог за COPY_SRC|COPY_DST (4 пасса Clear по 1920x2541, {} пар):\n  \
+             штатные биты: min {:.3} p50 {:.3} мс\n  \
+             с копией:     min {:.3} p50 {:.3} мс",
+            a.len(),
+            min(&a),
+            med(a.clone()),
+            min(&b),
+            med(b.clone()),
+        );
     }
 
     /// Побитовое равенство двух наборов вершин текста.
