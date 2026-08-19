@@ -257,7 +257,7 @@ Update docs **in the same commit** as the code change. Use `grep -n` to find the
 | Architectural decision | `docs/decisions/ADR-NNN.md` | new file from TEMPLATE.md; update index |
 | Known gotcha found/fixed | `CLAUDE.md` → "Known gotchas" | append/remove bullet |
 | Perf slice merged with a transferable lesson | `docs/perf-method.md` | append the rule (one paragraph, slice ref in brackets); per-slice numbers stay in `bugs/BUG-NNN-*.md` |
-| New public API | `SYMBOLS.md` | `python scripts/gen_symbols.py` |
+| New public API — **or any edit that shifts line numbers under `crates/`** | `SYMBOLS.md` | `python scripts/gen_symbols.py`. The index stores `file:line`, so inserting a comment or an attribute drifts it just as much as adding an item. Since 2026-08-19 the CI `doc-drift` job is **blocking** and fails on the diff, so this is no longer optional bookkeeping. |
 | Roadmap/bug/CSS-module status change | `ROADMAP.md` → `python scripts/gen_roadmap.py` | edit ROADMAP.md if structure changed; CSS-module status alone needs no edit — the script re-pulls it from CSS-SPECS.md |
 
 ---
