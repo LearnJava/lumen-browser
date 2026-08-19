@@ -59,6 +59,8 @@ __pycache__/
 # from S5 onward are NOT covered by these patterns.
 /tests/wpt/metadata/MANIFEST.json
 /tests/wpt/metadata/.cache/
+# WPT-RUN-4: run_corpus.py's own manifest cache, regenerated per run
+/tests/wpt/.wptcache/
 last_session.db-shm
 last_session.db-wal
 

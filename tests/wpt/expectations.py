@@ -48,6 +48,7 @@ sys.path[:0] = [
 ]
 from wptrunner.manifestupdate import get_test_name  # noqa: E402
 from wptrunner.wptmanifest.node import DataNode, KeyValueNode, ValueNode  # noqa: E402
+from wptrunner.wptmanifest.parser import parse as wptmanifest_parse  # noqa: E402
 from wptrunner.wptmanifest.serializer import serialize  # noqa: E402
 from manifest import manifest as wpt_manifest  # noqa: E402
 
@@ -134,22 +135,46 @@ def _test_node_for(result: dict) -> DataNode:
 
     test_node = DataNode(test_name)
 
-    if harness_status != DEFAULT_TEST_STATUS:
+    if harness_status and harness_status != DEFAULT_TEST_STATUS:
         kv = KeyValueNode("expected")
         kv.append(ValueNode(harness_status))
         test_node.append(kv)
 
     for st in subtests:
         st_status = st.get("status", DEFAULT_SUBTEST_STATUS)
-        if st_status == DEFAULT_SUBTEST_STATUS:
+        if not st_status or st_status == DEFAULT_SUBTEST_STATUS:
             continue
-        sub_node = DataNode(st.get("name", ""))
+        st_name = st.get("name", "")
+        if not _expressible_heading(st_name):
+            continue
+        sub_node = DataNode(st_name)
         kv = KeyValueNode("expected")
         kv.append(ValueNode(st_status))
         sub_node.append(kv)
         test_node.append(sub_node)
 
     return test_node if test_node.children else None
+
+
+def _expressible_heading(name: str) -> bool:
+    """Whether `name` can be a `[section]` heading at all.
+
+    `wptmanifest`'s grammar closes a heading on the line it opened
+    (`parser.py::heading_state` raises "EOL in heading"), so a subtest whose
+    name contains a newline cannot be expressed — and writing one produces a
+    file that makes wptrunner **abort the entire shard** before running a
+    single test, not merely ignore that one expectation. WPT-RUN-4 hit exactly
+    this: `css/css-shadow/part/pseudo-elements-after-part.html.ini` (a subtest
+    named after a multi-line CSS block) silently disabled all 206 ids of
+    `css/css-shadow`, and a second broken file disabled all 896 of
+    `content-security-policy` — 759 tests absent from every run and from the
+    `--check` gate, with no error anywhere except that shard's log.
+
+    Dropping the expectation is the honest failure mode: the subtest then
+    reports as unexpected (visible) instead of taking its whole category down
+    with it (invisible).
+    """
+    return not any(ch in name for ch in "\r\n")
 
 
 def build_expected_ini(results_for_file: list) -> str:
@@ -166,7 +191,23 @@ def build_expected_ini(results_for_file: list) -> str:
 
     if not root.children:
         return ""
-    return serialize(root)
+    text = serialize(root)
+
+    # Round-trip through the same parser wptrunner uses at load time. A file
+    # this generator cannot read back is one that aborts a whole shard at run
+    # time (see `_expressible_heading`), so refusing to write it is strictly
+    # better than emitting it: a missing baseline shows up as unexpected
+    # results, a poisoned one shows up as a silently empty category.
+    try:
+        # bytes, not str: `manifestexpected.py` opens `.ini` files with
+        # `open(path, "rb")`, and the tokenizer only handles the byte form —
+        # handing it a `str` fails on every file, valid or not.
+        wptmanifest_parse(text.encode("utf-8"))
+    except Exception as exc:  # noqa: BLE001 — any parse failure is disqualifying
+        print(f"refusing to write unparseable .ini ({exc}); expectations dropped for this file",
+              file=sys.stderr)
+        return ""
+    return text
 
 
 def write_expected(results: list, root: str) -> dict:
