@@ -2384,6 +2384,511 @@ fn timed_pipeline(
     pipeline
 }
 
+/// Пайплайн сплошных прямоугольников — самый частый примитив страницы.
+/// Горячий: компилируется при старте (BUG-406).
+fn build_fill_pipeline(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    uniform_bgl: &wgpu::BindGroupLayout,
+) -> wgpu::RenderPipeline {
+    let fill_shader = timed_shader(device, wgpu::ShaderModuleDescriptor {
+        label: Some("fill-shader"),
+        source: wgpu::ShaderSource::Wgsl(format!("{SDF_RRECT_WGSL}{CLIP_UNIFORM_WGSL}{FILL_SHADER_SRC}").into()),
+    });
+    let fill_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("fill-layout"),
+        bind_group_layouts: &[uniform_bgl],
+        push_constant_ranges: &[],
+    });
+    timed_pipeline(device, &wgpu::RenderPipelineDescriptor {
+        label: Some("fill-pipeline"),
+        layout: Some(&fill_layout),
+        vertex: wgpu::VertexState {
+            module: &fill_shader,
+            entry_point: Some("vs_main"),
+            buffers: &[wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<FillVertex>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &[
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x2,
+                        offset: 0,
+                        shader_location: 0, // pos
+                    },
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32,
+                        offset: 8,
+                        shader_location: 1, // z (CSS depth px)
+                    },
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x4,
+                        offset: 12,
+                        shader_location: 2, // color
+                    },
+                ],
+            }],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &fill_shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        primitive: wgpu::PrimitiveState::default(),
+        // CSS Transforms L2 §6 — depth test for preserve-3d rendering contexts.
+        // LessEqual: closer elements (smaller depth) win; equal depth preserves
+        // painter's order (last-drawn wins), matching the 2D flat-compositing path.
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: true,
+            depth_compare: wgpu::CompareFunction::LessEqual,
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState::default(),
+        multiview: None,
+        cache: None,
+    })
+}
+
+/// Пайплайн скруглённого прямоугольника (SDF) — фоны и рамки с `border-radius`.
+/// Горячий: компилируется при старте (BUG-406).
+fn build_rrect_pipeline(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    uniform_bgl: &wgpu::BindGroupLayout,
+) -> wgpu::RenderPipeline {
+    let rrect_shader = timed_shader(device, wgpu::ShaderModuleDescriptor {
+        label: Some("rrect-shader"),
+        source: wgpu::ShaderSource::Wgsl(format!("{SDF_RRECT_WGSL}{CLIP_UNIFORM_WGSL}{RRECT_SHADER_SRC}").into()),
+    });
+    let rrect_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("rrect-layout"),
+        bind_group_layouts: &[uniform_bgl],
+        push_constant_ranges: &[],
+    });
+    timed_pipeline(device, &wgpu::RenderPipelineDescriptor {
+        label: Some("rrect-pipeline"),
+        layout: Some(&rrect_layout),
+        vertex: wgpu::VertexState {
+            module: &rrect_shader,
+            entry_point: Some("vs_main"),
+            buffers: &[wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<RRectVertex>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &[
+                    // loc 0: pos (vec2)
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x2,
+                        offset: 0,
+                        shader_location: 0,
+                    },
+                    // loc 1: z (f32, CSS depth px)
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32,
+                        offset: 8,
+                        shader_location: 1,
+                    },
+                    // loc 2: color (vec4)
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x4,
+                        offset: 12,
+                        shader_location: 2,
+                    },
+                    // loc 3: center (vec2)
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x2,
+                        offset: 28,
+                        shader_location: 3,
+                    },
+                    // loc 4: half_size (vec2)
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x2,
+                        offset: 36,
+                        shader_location: 4,
+                    },
+                    // loc 5: radii_x (vec4: horizontal tl, tr, br, bl)
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x4,
+                        offset: 44,
+                        shader_location: 5,
+                    },
+                    // loc 6: radii_y (vec4: vertical tl, tr, br, bl)
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x4,
+                        offset: 60,
+                        shader_location: 6,
+                    },
+                ],
+            }],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &rrect_shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        primitive: wgpu::PrimitiveState::default(),
+        // CSS Transforms L2 §6 — SDF rounded rects participate in 3D depth
+        // testing under preserve-3d. LessEqual matches FillVertex pipeline so
+        // border-radius backgrounds occlude correctly under 3D transforms.
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: true,
+            depth_compare: wgpu::CompareFunction::LessEqual,
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState::default(),
+        multiview: None,
+        cache: None,
+    })
+}
+
+/// Пайплайн текста (квады глифов из атласа).
+/// Горячий: компилируется при старте (BUG-406).
+fn build_text_pipeline(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    uniform_bgl: &wgpu::BindGroupLayout,
+    atlas_bgl: &wgpu::BindGroupLayout,
+) -> wgpu::RenderPipeline {
+    let text_shader = timed_shader(device, wgpu::ShaderModuleDescriptor {
+        label: Some("text-shader"),
+        source: wgpu::ShaderSource::Wgsl(format!("{SDF_RRECT_WGSL}{CLIP_UNIFORM_WGSL}{TEXT_SHADER_SRC}").into()),
+    });
+    let text_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("text-layout"),
+        bind_group_layouts: &[uniform_bgl, atlas_bgl],
+        push_constant_ranges: &[],
+    });
+    timed_pipeline(device, &wgpu::RenderPipelineDescriptor {
+        label: Some("text-pipeline"),
+        layout: Some(&text_layout),
+        vertex: wgpu::VertexState {
+            module: &text_shader,
+            entry_point: Some("vs_main"),
+            buffers: &[wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<TextVertex>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &[
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x2,
+                        offset: 0,
+                        shader_location: 0, // pos
+                    },
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32,
+                        offset: 8,
+                        shader_location: 1, // z (CSS depth px)
+                    },
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x2,
+                        offset: 12,
+                        shader_location: 2, // uv
+                    },
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x4,
+                        offset: 20,
+                        shader_location: 3, // color
+                    },
+                ],
+            }],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &text_shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        primitive: wgpu::PrimitiveState::default(),
+        // CSS Transforms L2 §6 — text participates in 3D depth testing under
+        // preserve-3d. LessEqual matches FillVertex pipeline so 3D-transformed
+        // text occludes/is occluded by background rects consistently.
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: true,
+            depth_compare: wgpu::CompareFunction::LessEqual,
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState::default(),
+        multiview: None,
+        cache: None,
+    })
+}
+
+/// Пайплайн растровой картинки (текстурный квад, bind group на картинку).
+/// Горячий: компилируется при старте (BUG-406).
+fn build_image_pipeline(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    uniform_bgl: &wgpu::BindGroupLayout,
+    image_bgl: &wgpu::BindGroupLayout,
+) -> wgpu::RenderPipeline {
+    let image_shader = timed_shader(device, wgpu::ShaderModuleDescriptor {
+        label: Some("image-shader"),
+        source: wgpu::ShaderSource::Wgsl(format!("{SDF_RRECT_WGSL}{CLIP_UNIFORM_WGSL}{IMAGE_SHADER_SRC}").into()),
+    });
+    let image_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("image-layout"),
+        bind_group_layouts: &[uniform_bgl, image_bgl],
+        push_constant_ranges: &[],
+    });
+    timed_pipeline(device, &wgpu::RenderPipelineDescriptor {
+        label: Some("image-pipeline"),
+        layout: Some(&image_layout),
+        vertex: wgpu::VertexState {
+            module: &image_shader,
+            entry_point: Some("vs_main"),
+            buffers: &[wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<ImageVertex>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &[
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x2,
+                        offset: 0,
+                        shader_location: 0, // pos
+                    },
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32,
+                        offset: 8,
+                        shader_location: 1, // z (CSS depth px)
+                    },
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x2,
+                        offset: 12,
+                        shader_location: 2, // uv
+                    },
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32,
+                        offset: 20,
+                        shader_location: 3, // alpha
+                    },
+                ],
+            }],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &image_shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        primitive: wgpu::PrimitiveState::default(),
+        // CSS Transforms L2 §6 — image quads participate in 3D depth testing
+        // under preserve-3d. LessEqual matches FillVertex/TextVertex pipelines.
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: true,
+            depth_compare: wgpu::CompareFunction::LessEqual,
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState::default(),
+        multiview: None,
+        cache: None,
+    })
+}
+
+/// Пайплайн градиентов (linear + radial).
+/// Горячий: компилируется при старте (BUG-406).
+fn build_gradient_pipeline(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    uniform_bgl: &wgpu::BindGroupLayout,
+    gradient_bgl: &wgpu::BindGroupLayout,
+) -> wgpu::RenderPipeline {
+    let gradient_shader = timed_shader(device, wgpu::ShaderModuleDescriptor {
+        label: Some("gradient-shader"),
+        source: wgpu::ShaderSource::Wgsl(format!("{SDF_RRECT_WGSL}{CLIP_UNIFORM_WGSL}{GRADIENT_SHADER_SRC}").into()),
+    });
+    let gradient_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("gradient-layout"),
+        bind_group_layouts: &[uniform_bgl, gradient_bgl],
+        push_constant_ranges: &[],
+    });
+    timed_pipeline(device, &wgpu::RenderPipelineDescriptor {
+        label: Some("gradient-pipeline"),
+        layout: Some(&gradient_layout),
+        vertex: wgpu::VertexState {
+            module: &gradient_shader,
+            entry_point: Some("vs_main"),
+            buffers: &[wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<GradVertex>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &[
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x2,
+                        offset: 0,
+                        shader_location: 0,
+                    },
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x2,
+                        offset: 8,
+                        shader_location: 1,
+                    },
+                ],
+            }],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &gradient_shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: false,
+            depth_compare: wgpu::CompareFunction::Always,
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState::default(),
+        multiview: None,
+        cache: None,
+    })
+}
+
+/// Пять пайплайнов, без которых не обходится почти ни одна страница
+/// (`fill` / `rrect` / `text` / `image` / `gradient`). Остальные одиннадцать
+/// компилируются лениво — см. [`PipelineDeps::build_all_lazy`] и BUG-406.
+struct HotPipelines {
+    /// Сплошная заливка прямоугольника.
+    fill: wgpu::RenderPipeline,
+    /// Скруглённый прямоугольник (SDF).
+    rrect: wgpu::RenderPipeline,
+    /// Квады глифов из атласа.
+    text: wgpu::RenderPipeline,
+    /// Текстурный квад картинки.
+    image: wgpu::RenderPipeline,
+    /// Градиентная заливка.
+    gradient: wgpu::RenderPipeline,
+    /// Сколько РАЗНЫХ потоков скомпилировало эти пять пайплайнов — гейт
+    /// среза 2 BUG-406. Ставить его на wall-clock нельзя: разброс старта на
+    /// этой машине доходит до 2.5× между прогонами (`docs/perf-method.md`),
+    /// а «компиляции разъехались по потокам» проверяется точно и не зависит
+    /// ни от железа, ни от загрузки машины. 5 — параллельный путь, 1 —
+    /// `LUMEN_SERIAL_PIPELINES=1`.
+    threads: usize,
+}
+
+/// `LUMEN_SERIAL_PIPELINES=1` — собирать горячие пайплайны по очереди на
+/// вызывающем потоке (поведение до среза 2 BUG-406). Нужен для A/B в одном
+/// бинарнике и как откат, если параллельная сборка где-то мешает драйверу.
+fn hot_pipelines_serial() -> bool {
+    std::env::var("LUMEN_SERIAL_PIPELINES").is_ok_and(|v| v == "1" || v == "true")
+}
+
+/// Пайплайн вместе с id потока, который его скомпилировал (см.
+/// [`HotPipelines::threads`]).
+type PipelineOnThread = (std::thread::ThreadId, wgpu::RenderPipeline);
+
+/// Оборачивает сборщик так, чтобы он заодно сообщил свой поток.
+fn on_this_thread(pipeline: wgpu::RenderPipeline) -> PipelineOnThread {
+    (std::thread::current().id(), pipeline)
+}
+
+/// Забирает пайплайн у потока сборки. Паника внутри потока пробрасывается
+/// дальше как есть: без пайплайна кадр всё равно не соберётся, а `unwrap`
+/// в продакшне запрещён (`clippy::unwrap_used`).
+fn join_pipeline(
+    handle: std::thread::ScopedJoinHandle<'_, PipelineOnThread>,
+) -> PipelineOnThread {
+    match handle.join() {
+        Ok(pipeline) => pipeline,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
+}
+
+/// Собирает все пять горячих пайплайнов, по умолчанию — **параллельно**
+/// (BUG-406, срез 2).
+///
+/// Причина: на DX12/Intel `create_render_pipeline` возвращается раньше, чем
+/// драйвер дособрал шейдер, и остаток (~1.0–1.6 с на пайплайн) догоняет
+/// **вызывающий** поток уже за пределами вызова — то же наблюдение, на котором
+/// стоит фоновый прогрев ленивых пайплайнов
+/// ([`Renderer::spawn_pipeline_warmup`]). Пять последовательных компиляций
+/// поэтому складываются, а выданные с разных потоков — перекрываются. На
+/// Vulkan разрыва нет, и параллельность там просто нейтральна.
+///
+/// Пиксельно нейтрально по построению: дескрипторы те же, меняется только
+/// поток-создатель. `wgpu::Device` — `Send + Sync`, одновременное создание
+/// пайплайнов на нём разрешено.
+fn build_hot_pipelines(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    uniform_bgl: &wgpu::BindGroupLayout,
+    atlas_bgl: &wgpu::BindGroupLayout,
+    image_bgl: &wgpu::BindGroupLayout,
+    gradient_bgl: &wgpu::BindGroupLayout,
+) -> HotPipelines {
+    if hot_pipelines_serial() {
+        return HotPipelines {
+            fill: build_fill_pipeline(device, format, uniform_bgl),
+            rrect: build_rrect_pipeline(device, format, uniform_bgl),
+            text: build_text_pipeline(device, format, uniform_bgl, atlas_bgl),
+            image: build_image_pipeline(device, format, uniform_bgl, image_bgl),
+            gradient: build_gradient_pipeline(device, format, uniform_bgl, gradient_bgl),
+            threads: 1,
+        };
+    }
+    // Четыре потока плюс вызывающий: пятый пайплайн строится здесь же — поток
+    // под него пришлось бы всё равно дожидаться.
+    std::thread::scope(|scope| {
+        let rrect =
+            scope.spawn(|| on_this_thread(build_rrect_pipeline(device, format, uniform_bgl)));
+        let text = scope
+            .spawn(|| on_this_thread(build_text_pipeline(device, format, uniform_bgl, atlas_bgl)));
+        let image = scope
+            .spawn(|| on_this_thread(build_image_pipeline(device, format, uniform_bgl, image_bgl)));
+        let gradient = scope.spawn(|| {
+            on_this_thread(build_gradient_pipeline(device, format, uniform_bgl, gradient_bgl))
+        });
+        let fill = on_this_thread(build_fill_pipeline(device, format, uniform_bgl));
+        let built = [fill, join_pipeline(rrect), join_pipeline(text), join_pipeline(image),
+            join_pipeline(gradient)];
+        let ids: std::collections::HashSet<std::thread::ThreadId> =
+            built.iter().map(|(id, _)| *id).collect();
+        let threads = ids.len();
+        let [fill, rrect, text, image, gradient] = built;
+        HotPipelines {
+            fill: fill.1,
+            rrect: rrect.1,
+            text: text.1,
+            image: image.1,
+            gradient: gradient.1,
+            threads,
+        }
+    })
+}
+
+
 /// Неизменяемые wgpu-хэндлы, которых достаточно для сборки любого ленивого
 /// пайплайна (BUG-406). Выделены из [`Renderer`] отдельной структурой ради
 /// BUG-405: все поля здесь — `Clone + Send + Sync` (в wgpu 26 хэндлы внутри
@@ -2818,6 +3323,9 @@ pub struct Renderer {
     texture_pool: crate::texture_pool::TexturePool<crate::texture_pool::PooledTexture>,
     /// Normalized GPU fingerprint: prevents WebGL renderer/vendor fingerprinting (ADR-007).
     gpu_fingerprint: GpuFingerprint,
+    /// Сколько разных потоков собрало горячие пайплайны этого рендера —
+    /// см. [`HotPipelines::threads`] и [`Renderer::hot_pipeline_threads`].
+    hot_pipeline_threads: usize,
 }
 
 /// Creates a `Depth32Float` texture + view sized `width×height` for GPU depth testing.
@@ -3900,235 +4408,10 @@ impl Renderer {
         });
 
         mark(&t_init, "pre-pipelines");
-        // ── Fill pipeline ─────────────────────────────────────────────────
-        let fill_shader = timed_shader(&device, wgpu::ShaderModuleDescriptor {
-            label: Some("fill-shader"),
-            source: wgpu::ShaderSource::Wgsl(format!("{SDF_RRECT_WGSL}{CLIP_UNIFORM_WGSL}{FILL_SHADER_SRC}").into()),
-        });
-        let fill_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("fill-layout"),
-            bind_group_layouts: &[&uniform_bgl],
-            push_constant_ranges: &[],
-        });
-        let fill_pipeline = timed_pipeline(&device, &wgpu::RenderPipelineDescriptor {
-            label: Some("fill-pipeline"),
-            layout: Some(&fill_layout),
-            vertex: wgpu::VertexState {
-                module: &fill_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<FillVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x2,
-                            offset: 0,
-                            shader_location: 0, // pos
-                        },
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32,
-                            offset: 8,
-                            shader_location: 1, // z (CSS depth px)
-                        },
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x4,
-                            offset: 12,
-                            shader_location: 2, // color
-                        },
-                    ],
-                }],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &fill_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            // CSS Transforms L2 §6 — depth test for preserve-3d rendering contexts.
-            // LessEqual: closer elements (smaller depth) win; equal depth preserves
-            // painter's order (last-drawn wins), matching the 2D flat-compositing path.
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::LessEqual,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
-
-
-        // ── RRect (SDF rounded-rect) pipeline ─────────────────────────────
-        let rrect_shader = timed_shader(&device, wgpu::ShaderModuleDescriptor {
-            label: Some("rrect-shader"),
-            source: wgpu::ShaderSource::Wgsl(format!("{SDF_RRECT_WGSL}{CLIP_UNIFORM_WGSL}{RRECT_SHADER_SRC}").into()),
-        });
-        let rrect_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("rrect-layout"),
-            bind_group_layouts: &[&uniform_bgl],
-            push_constant_ranges: &[],
-        });
-        let rrect_pipeline = timed_pipeline(&device, &wgpu::RenderPipelineDescriptor {
-            label: Some("rrect-pipeline"),
-            layout: Some(&rrect_layout),
-            vertex: wgpu::VertexState {
-                module: &rrect_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<RRectVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[
-                        // loc 0: pos (vec2)
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x2,
-                            offset: 0,
-                            shader_location: 0,
-                        },
-                        // loc 1: z (f32, CSS depth px)
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32,
-                            offset: 8,
-                            shader_location: 1,
-                        },
-                        // loc 2: color (vec4)
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x4,
-                            offset: 12,
-                            shader_location: 2,
-                        },
-                        // loc 3: center (vec2)
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x2,
-                            offset: 28,
-                            shader_location: 3,
-                        },
-                        // loc 4: half_size (vec2)
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x2,
-                            offset: 36,
-                            shader_location: 4,
-                        },
-                        // loc 5: radii_x (vec4: horizontal tl, tr, br, bl)
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x4,
-                            offset: 44,
-                            shader_location: 5,
-                        },
-                        // loc 6: radii_y (vec4: vertical tl, tr, br, bl)
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x4,
-                            offset: 60,
-                            shader_location: 6,
-                        },
-                    ],
-                }],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &rrect_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            // CSS Transforms L2 §6 — SDF rounded rects participate in 3D depth
-            // testing under preserve-3d. LessEqual matches FillVertex pipeline so
-            // border-radius backgrounds occlude correctly under 3D transforms.
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::LessEqual,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
-
-        // ── Text pipeline ─────────────────────────────────────────────────
-        let text_shader = timed_shader(&device, wgpu::ShaderModuleDescriptor {
-            label: Some("text-shader"),
-            source: wgpu::ShaderSource::Wgsl(format!("{SDF_RRECT_WGSL}{CLIP_UNIFORM_WGSL}{TEXT_SHADER_SRC}").into()),
-        });
-        let text_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("text-layout"),
-            bind_group_layouts: &[&uniform_bgl, &atlas_bgl],
-            push_constant_ranges: &[],
-        });
-        let text_pipeline = timed_pipeline(&device, &wgpu::RenderPipelineDescriptor {
-            label: Some("text-pipeline"),
-            layout: Some(&text_layout),
-            vertex: wgpu::VertexState {
-                module: &text_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<TextVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x2,
-                            offset: 0,
-                            shader_location: 0, // pos
-                        },
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32,
-                            offset: 8,
-                            shader_location: 1, // z (CSS depth px)
-                        },
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x2,
-                            offset: 12,
-                            shader_location: 2, // uv
-                        },
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x4,
-                            offset: 20,
-                            shader_location: 3, // color
-                        },
-                    ],
-                }],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &text_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            // CSS Transforms L2 §6 — text participates in 3D depth testing under
-            // preserve-3d. LessEqual matches FillVertex pipeline so 3D-transformed
-            // text occludes/is occluded by background rects consistently.
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::LessEqual,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
-
-        // ── Image pipeline (RGBA texture-quad, per-image bind group) ──────
+        // ── BGL горячих пайплайнов ────────────────────────────────────────
+        // Оба подняты сюда из своих бывших блоков (image / gradient): сборка
+        // пайплайнов идёт одним параллельным вызовом ниже, и все её входы
+        // должны существовать до него (BUG-406, срез 2).
         let image_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("image-bgl"),
             entries: &[
@@ -4150,6 +4433,42 @@ impl Renderer {
                 },
             ],
         });
+        let gradient_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("gradient-bgl"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    // Read-only storage, не uniform: список стопов имеет
+                    // произвольную длину (`array<GradStop>`), а uniform-массив
+                    // требует фиксированного размера и молча терял хвост —
+                    // BUG-277 срез 11.
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+        // ── Горячие пайплайны (BUG-406) ───────────────────────────────────
+        let HotPipelines {
+            fill: fill_pipeline,
+            rrect: rrect_pipeline,
+            text: text_pipeline,
+            image: image_pipeline,
+            gradient: gradient_pipeline,
+            threads: hot_pipeline_threads,
+        } = build_hot_pipelines(
+            &device,
+            format,
+            &uniform_bgl,
+            &atlas_bgl,
+            &image_bgl,
+            &gradient_bgl,
+        );
+        mark(&t_init, "hot-pipelines");
+
+        // ── Сэмплеры картинок ─────────────────────────────────────────────
         let image_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("image-sampler-linear"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -4178,74 +4497,6 @@ impl Renderer {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             ..Default::default()
         });
-        let image_shader = timed_shader(&device, wgpu::ShaderModuleDescriptor {
-            label: Some("image-shader"),
-            source: wgpu::ShaderSource::Wgsl(format!("{SDF_RRECT_WGSL}{CLIP_UNIFORM_WGSL}{IMAGE_SHADER_SRC}").into()),
-        });
-        let image_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("image-layout"),
-            bind_group_layouts: &[&uniform_bgl, &image_bgl],
-            push_constant_ranges: &[],
-        });
-        let image_pipeline = timed_pipeline(&device, &wgpu::RenderPipelineDescriptor {
-            label: Some("image-pipeline"),
-            layout: Some(&image_layout),
-            vertex: wgpu::VertexState {
-                module: &image_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<ImageVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x2,
-                            offset: 0,
-                            shader_location: 0, // pos
-                        },
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32,
-                            offset: 8,
-                            shader_location: 1, // z (CSS depth px)
-                        },
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x2,
-                            offset: 12,
-                            shader_location: 2, // uv
-                        },
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32,
-                            offset: 20,
-                            shader_location: 3, // alpha
-                        },
-                    ],
-                }],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &image_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            // CSS Transforms L2 §6 — image quads participate in 3D depth testing
-            // under preserve-3d. LessEqual matches FillVertex/TextVertex pipelines.
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::LessEqual,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
-
 
         // ── Cross-fade BGL (CSS Images L4 §4; пайплайн ленив, BUG-406) ────
         // BGL group 1 — two textures + sampler + progress uniform.
@@ -4550,81 +4801,6 @@ impl Renderer {
             ],
         });
 
-
-        // ── Gradient pipeline (linear + radial) ──────────────────────────────
-        let gradient_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("gradient-bgl"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    // Read-only storage, не uniform: список стопов имеет
-                    // произвольную длину (`array<GradStop>`), а uniform-массив
-                    // требует фиксированного размера и молча терял хвост —
-                    // BUG-277 срез 11.
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-        let gradient_shader = timed_shader(&device, wgpu::ShaderModuleDescriptor {
-            label: Some("gradient-shader"),
-            source: wgpu::ShaderSource::Wgsl(format!("{SDF_RRECT_WGSL}{CLIP_UNIFORM_WGSL}{GRADIENT_SHADER_SRC}").into()),
-        });
-        let gradient_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("gradient-layout"),
-            bind_group_layouts: &[&uniform_bgl, &gradient_bgl],
-            push_constant_ranges: &[],
-        });
-        let gradient_pipeline = timed_pipeline(&device, &wgpu::RenderPipelineDescriptor {
-            label: Some("gradient-pipeline"),
-            layout: Some(&gradient_layout),
-            vertex: wgpu::VertexState {
-                module: &gradient_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<GradVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x2,
-                            offset: 0,
-                            shader_location: 0,
-                        },
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x2,
-                            offset: 8,
-                            shader_location: 1,
-                        },
-                    ],
-                }],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &gradient_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::Always,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
-
         mark(&t_init, "pipelines-done");
         let atlas = GlyphAtlas::new(ATLAS_DIM);
         mark(&t_init, "glyph-atlas");
@@ -4782,6 +4958,7 @@ impl Renderer {
             pending_readback: None,
             texture_pool: crate::texture_pool::TexturePool::new(),
             gpu_fingerprint,
+            hot_pipeline_threads,
         };
         // BUG-406: `LUMEN_EAGER_PIPELINES=1` возвращает доленивое поведение —
         // все 16 пайплайнов компилируются в `init_pipelines`. Нужен для A/B в
@@ -4896,6 +5073,19 @@ impl Renderer {
     #[must_use]
     pub fn pipelines_compiled(&self) -> u64 {
         self.pdeps.built.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Сколько РАЗНЫХ потоков скомпилировало пять горячих пайплайнов этого
+    /// рендера (BUG-406, срез 2): 5 на параллельном пути (по умолчанию), 1
+    /// под `LUMEN_SERIAL_PIPELINES=1`.
+    ///
+    /// Гейт правки стоит на нём, а не на времени старта: разброс wall-clock
+    /// компиляции на DX12 доходит до 2.5× между прогонами одного и того же
+    /// бинарника (`docs/perf-method.md`), а «компиляции разъехались по
+    /// потокам» — точное утверждение.
+    #[must_use]
+    pub fn hot_pipeline_threads(&self) -> usize {
+        self.hot_pipeline_threads
     }
 
     /// Сколько командных списков **кадра** отправил в очередь этот рендер
@@ -18227,6 +18417,32 @@ mod tests {
         let band = r.page_band.as_ref().expect("полоса обязана пересоздаться");
         assert_eq!((band.w_px, band.h_px), (80, 240), "размер не обновился");
         assert_eq!(band.key, 0, "пересозданная полоса выдала себя за валидную");
+    }
+
+    /// BUG-406 срез 2: пять горячих пайплайнов собраны РАЗНЫМИ потоками.
+    ///
+    /// Гейт правки. Wall-clock старта в него не годится: на DX12 разброс
+    /// между прогонами одного бинарника доходит до 2.5× (`docs/perf-method.md`,
+    /// числа — в `bugs/BUG-406-OPEN.md`), поэтому проверяется идентичность —
+    /// компиляции действительно выданы с пяти разных потоков, а не сложены
+    /// в один. Дефект переноса (случайно вернувшаяся последовательная сборка)
+    /// уронит именно этот `assert_eq`.
+    ///
+    /// Требует GPU-адаптер, поэтому `#[ignore]`; запуск:
+    /// `cargo test -p lumen-paint --features backend-wgpu
+    ///  hot_pipelines_built_on_distinct_threads -- --include-ignored`.
+    #[test]
+    #[ignore = "requires GPU adapter"]
+    fn hot_pipelines_built_on_distinct_threads() {
+        let bytes = std::fs::read("../../../assets/fonts/Inter-Regular.ttf")
+            .expect("bundled font");
+        let r = Renderer::new_headless(bytes, 64, 48, ColorSpace::Srgb)
+            .expect("headless renderer");
+        assert_eq!(
+            r.hot_pipeline_threads(),
+            5,
+            "горячие пайплайны снова компилируются на одном потоке",
+        );
     }
 
     /// BUG-771: слот пре-резолва face-а адресуется индексом САМОЙ команды.
