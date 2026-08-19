@@ -1128,6 +1128,7 @@ mod linux_hid {
     }
 
     impl HidDevice for LinuxHidDevice {
+        #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
         fn write(&self, report: &[u8; 65]) -> Result<(), Ctap2Error> {
             self.file
                 .lock()
@@ -1136,6 +1137,7 @@ mod linux_hid {
                 .map_err(|e| Ctap2Error::Hid(e.to_string()))
         }
 
+        #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
         fn read_timeout(&self, timeout_ms: i32) -> Result<[u8; 65], Ctap2Error> {
             let fd = {
                 use std::os::unix::io::AsRawFd;

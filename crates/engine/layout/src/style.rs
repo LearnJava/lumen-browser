@@ -22029,13 +22029,8 @@ fn apply_font_size(
     // computed value time — она просто не применяется.
     let expanded;
     let raw: &str = if decl.value.contains("var(") || decl.value.contains("env(") {
-        match expand_vars_and_env(&decl.value, &style.custom_props) {
-            Some(v) => {
-                expanded = v;
-                expanded.as_str()
-            }
-            None => return None,
-        }
+        expanded = expand_vars_and_env(&decl.value, &style.custom_props)?;
+        expanded.as_str()
     } else {
         decl.value.as_str()
     };
