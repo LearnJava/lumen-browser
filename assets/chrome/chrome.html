@@ -596,6 +596,7 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
 <symbol id="i-trash" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></symbol>
 <symbol id="i-ext" viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></symbol>
 <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
+<symbol id="i-bell" viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></symbol>
 <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></symbol>
 <symbol id="i-menu" viewBox="0 0 24 24"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></symbol>
 <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="14" y1="4" x2="14" y2="20"/></symbol>
@@ -811,7 +812,14 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
               <div class="shield-stat"><span class="num" id="statAds">0</span><span class="lbl">рекламы<br>скрыто</span></div>
               <div class="shield-stat"><span class="num" id="statFp">0</span><span class="lbl">fingerprint-<br>попыток</span></div>
             </div>
-            <h4>Разрешения — figma.com</h4>
+            <div class="set-row" id="shieldSiteRow">
+              <div class="st-text">
+                <div class="st-title">Щиты на этом сайте</div>
+                <div class="st-desc" id="shieldSiteState">Вкл</div>
+              </div>
+              <div class="toggle on" id="shieldSiteToggle" data-action="toggle-site-shields"><div class="thumb"></div></div>
+            </div>
+            <h4>Разрешения — <span id="permDomain">figma.com</span></h4>
             <div class="perm-row">
               <svg class="icon icon-lg" style="position:relative"><use href="#i-camera"/></svg>
               <div class="perm-name">Камера</div>
@@ -825,6 +833,22 @@ body[data-layout="horizontal"] .vertical-only{ display:none !important; }
               <div class="perm-name">Микрофон</div>
               <div class="perm-actions">
                 <button class="perm-btn allow selected-allow" title="Разрешить" data-action="set-permission" data-perm="allow">✓</button>
+                <button class="perm-btn deny" title="Запретить" data-action="set-permission" data-perm="deny">✕</button>
+              </div>
+            </div>
+            <div class="perm-row">
+              <svg class="icon icon-lg" style="position:relative"><use href="#i-bell"/></svg>
+              <div class="perm-name">Уведомления</div>
+              <div class="perm-actions">
+                <button class="perm-btn allow" title="Разрешить" data-action="set-permission" data-perm="allow">✓</button>
+                <button class="perm-btn deny" title="Запретить" data-action="set-permission" data-perm="deny">✕</button>
+              </div>
+            </div>
+            <div class="perm-row">
+              <svg class="icon icon-lg" style="position:relative"><use href="#i-copy"/></svg>
+              <div class="perm-name">Буфер обмена</div>
+              <div class="perm-actions">
+                <button class="perm-btn allow" title="Разрешить" data-action="set-permission" data-perm="allow">✓</button>
                 <button class="perm-btn deny" title="Запретить" data-action="set-permission" data-perm="deny">✕</button>
               </div>
             </div>

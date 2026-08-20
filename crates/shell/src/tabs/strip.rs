@@ -78,11 +78,15 @@ pub struct TabEntry {
     pub group_id: Option<usize>,
     /// Whether the built-in ad/tracker request filter is active for this tab.
     ///
-    /// Per-tab and independent: toggled by the checkbox rendered inside the tab
-    /// (at its left edge). Synced into the process-global toggle
-    /// (`lumen_network::set_global_adblock_enabled`) when the tab becomes active
-    /// or its checkbox is flipped, so the filter that governs the tab's page
-    /// fetches reflects this flag. Default `false`.
+    /// **Vestigial — read by nothing since [BUG-411](../../../../bugs/BUG-411-FIXED.md).**
+    /// It was toggled by a checkbox rendered inside the tab, which CC-15
+    /// removed along with the rest of the legacy tab painting, so it has been
+    /// stuck at its `false` default ever since; the tab-switch handler that
+    /// pushed it into `lumen_network::set_global_adblock_enabled` therefore
+    /// disabled filtering on every tab switch. Filtering is now keyed to the
+    /// host instead (`ShieldsPanel::enabled_for_current`). Kept only because
+    /// session snapshots round-trip the field; deleting it is chrome-track
+    /// cleanup, not a bug fix.
     pub adblock: bool,
 }
 

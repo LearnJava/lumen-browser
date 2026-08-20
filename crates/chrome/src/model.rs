@@ -69,10 +69,27 @@ pub struct ChromeModel {
     /// trackers/ads/fingerprint breakdown would be fabricated), so this binds
     /// only the one real number rather than inventing the other two.
     pub blocked_total: u32,
-    /// Grant state for the two permission rows the frozen design covers, in
-    /// asset order (`Камера`, `Микрофон`) — `PermissionKind::ALL`'s first two
-    /// entries. The design has no rows for `Notifications`/`Clipboard`.
-    pub permissions: [ChromePermState; 2],
+    /// Grant state for the four permission rows, in asset order (`Камера`,
+    /// `Микрофон`, `Уведомления`, `Буфер обмена`) — exactly
+    /// `PermissionKind::ALL`. The last two rows were added to the design
+    /// reference by [BUG-411](../../../bugs/BUG-411-FIXED.md); before that the
+    /// asset had only the first two, which left `Notifications`/`Clipboard`
+    /// unreachable from the UI.
+    pub permissions: [ChromePermState; 4],
+    /// Host the popover applies to (`shieldSiteRow` + the `#permDomain` span in
+    /// its `Разрешения — …` heading), or empty when no host-bearing page is
+    /// loaded (`about:blank`, `file://`) — [BUG-411](../../../bugs/BUG-411-FIXED.md).
+    ///
+    /// Mirrors `ShieldsPanel::current_domain`; an empty string renders as
+    /// [`NO_DOMAIN_LABEL`] rather than leaving the design's `figma.com` demo
+    /// text in place.
+    pub popover_domain: String,
+    /// Whether request filtering is on for [`Self::popover_domain`] — drives
+    /// `#shieldSiteToggle`'s `.on` class and `#shieldSiteState`'s Вкл/Выкл
+    /// text ([BUG-411](../../../bugs/BUG-411-FIXED.md)). Mirrors
+    /// `ShieldsPanel::enabled_for_current`, which is also what the shell
+    /// pushes into `lumen_network::set_global_adblock_enabled`.
+    pub site_shields_on: bool,
     /// `#cpOverlay` snapshot (CC-10) — mirrors `CommandPalette`.
     pub palette: ChromePaletteModel,
     /// `#certOverlay` snapshot (CC-10) — mirrors `CertPanel`.
@@ -695,7 +712,7 @@ pub fn bind_model(doc: &mut Document, model: &ChromeModel) {
     bind_find_bar(doc, &model.find);
     bind_downloads(doc, model.downloads_open, &model.downloads);
     bind_archive(doc, model.archive_open, &model.archive);
-    bind_popover(doc, model.popover_open, model.blocked_total, &model.permissions);
+    bind_popover(doc, model);
     bind_palette(doc, &model.palette);
     bind_cert(doc, &model.cert);
     bind_print(doc, &model.print);
@@ -1199,18 +1216,38 @@ fn build_arc_card(doc: &mut Document, e: &ChromeArchiveEntryModel) -> NodeId {
     card
 }
 
+/// Stand-in for [`ChromeModel::popover_domain`] when the loaded page has no
+/// host to name (`about:blank`, `file://`) — [BUG-411](../../../bugs/BUG-411-FIXED.md).
+/// Without it the design reference's `figma.com` demo text would stay on
+/// screen and read as a real domain.
+pub const NO_DOMAIN_LABEL: &str = "этой странице";
+
 /// Toggles `#permPopover`'s `.open` class, writes `blocked_total` into
-/// `#statTrackers`, and marks the two permission rows' allow/deny buttons
-/// per `permissions` (CC-9).
-fn bind_popover(doc: &mut Document, open: bool, blocked_total: u32, permissions: &[ChromePermState; 2]) {
+/// `#statTrackers`, binds the per-site shields row (`#shieldSiteToggle`'s
+/// `.on` class + `#shieldSiteState`'s Вкл/Выкл text) and the popover's
+/// `#permDomain` heading span, and marks each permission row's allow/deny
+/// buttons per `permissions` (CC-9; domain + shields row + rows 3/4 added by
+/// [BUG-411](../../../bugs/BUG-411-FIXED.md)).
+fn bind_popover(doc: &mut Document, model: &ChromeModel) {
     let Some(popover) = doc.find_by_id(crate::ids::PERM_POPOVER) else { return };
-    set_class_token(doc, popover, "open", open);
+    set_class_token(doc, popover, "open", model.popover_open);
     if let Some(stat) = doc.find_by_id(crate::ids::STAT_TRACKERS) {
-        set_text(doc, stat, &blocked_total.to_string());
+        set_text(doc, stat, &model.blocked_total.to_string());
+    }
+    let domain =
+        if model.popover_domain.is_empty() { NO_DOMAIN_LABEL } else { model.popover_domain.as_str() };
+    if let Some(span) = doc.find_by_id(crate::ids::PERM_DOMAIN) {
+        set_text(doc, span, domain);
+    }
+    if let Some(toggle) = doc.find_by_id(crate::ids::SHIELD_SITE_TOGGLE) {
+        set_class_token(doc, toggle, "on", model.site_shields_on);
+    }
+    if let Some(state) = doc.find_by_id(crate::ids::SHIELD_SITE_STATE) {
+        set_text(doc, state, if model.site_shields_on { "Вкл" } else { "Выкл" });
     }
     let rows: Vec<NodeId> =
         doc.get(popover).children.iter().copied().filter(|&c| has_class(doc, c, "perm-row")).collect();
-    for (row, state) in rows.into_iter().zip(permissions.iter()) {
+    for (row, state) in rows.into_iter().zip(model.permissions.iter()) {
         bind_permission_row(doc, row, *state);
     }
 }
@@ -2748,7 +2785,12 @@ mod tests {
         let model = ChromeModel {
             popover_open: true,
             blocked_total: 42,
-            permissions: [ChromePermState::Allow, ChromePermState::Deny],
+            permissions: [
+                ChromePermState::Allow,
+                ChromePermState::Deny,
+                ChromePermState::Deny,
+                ChromePermState::Allow,
+            ],
             ..ChromeModel::default()
         };
         bind_model(&mut doc, &model);
@@ -2768,7 +2810,8 @@ mod tests {
 
         let rows: Vec<NodeId> =
             doc.get(popover).children.iter().copied().filter(|&c| has_class(&doc, c, "perm-row")).collect();
-        assert_eq!(rows.len(), 2);
+        // BUG-411 added the Notifications/Clipboard rows the design was missing.
+        assert_eq!(rows.len(), 4);
         let camera_actions = doc.get(rows[0]).children.iter().copied().find(|&c| has_class(&doc, c, "perm-actions")).unwrap();
         let camera_allow = doc.get(camera_actions).children.iter().copied().find(|&c| has_class(&doc, c, "allow")).unwrap();
         assert!(has_class(&doc, camera_allow, "selected-allow"));
@@ -2776,6 +2819,42 @@ mod tests {
         let mic_actions = doc.get(rows[1]).children.iter().copied().find(|&c| has_class(&doc, c, "perm-actions")).unwrap();
         let mic_deny = doc.get(mic_actions).children.iter().copied().find(|&c| has_class(&doc, c, "deny")).unwrap();
         assert!(has_class(&doc, mic_deny, "selected-deny"));
+
+        // BUG-411: rows 3/4 (Notifications, Clipboard) were unreachable before
+        // the asset gained them — bind them from the same array.
+        let notif_actions = doc.get(rows[2]).children.iter().copied().find(|&c| has_class(&doc, c, "perm-actions")).unwrap();
+        let notif_deny = doc.get(notif_actions).children.iter().copied().find(|&c| has_class(&doc, c, "deny")).unwrap();
+        assert!(has_class(&doc, notif_deny, "selected-deny"));
+        let clip_actions = doc.get(rows[3]).children.iter().copied().find(|&c| has_class(&doc, c, "perm-actions")).unwrap();
+        let clip_allow = doc.get(clip_actions).children.iter().copied().find(|&c| has_class(&doc, c, "allow")).unwrap();
+        assert!(has_class(&doc, clip_allow, "selected-allow"));
+    }
+
+    /// BUG-411: the popover names the host it applies to, and its shields row
+    /// reflects (and is the only UI for) the per-site filter state.
+    #[test]
+    fn popover_binds_domain_and_site_shields_row() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            popover_open: true,
+            popover_domain: "example.org".to_owned(),
+            site_shields_on: false,
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let span = doc.find_by_id(crate::ids::PERM_DOMAIN).expect("asset has #permDomain");
+        assert_eq!(text_of(&doc, span), "example.org");
+        let toggle = doc.find_by_id(crate::ids::SHIELD_SITE_TOGGLE).expect("asset has #shieldSiteToggle");
+        assert!(!has_class(&doc, toggle, "on"));
+        let state = doc.find_by_id(crate::ids::SHIELD_SITE_STATE).expect("asset has #shieldSiteState");
+        assert_eq!(text_of(&doc, state), "Выкл");
+
+        let model = ChromeModel { popover_open: true, site_shields_on: true, ..ChromeModel::default() };
+        bind_model(&mut doc, &model);
+        // Empty domain must not leave the design's `figma.com` demo text behind.
+        assert_eq!(text_of(&doc, span), NO_DOMAIN_LABEL);
+        assert!(has_class(&doc, toggle, "on"));
+        assert_eq!(text_of(&doc, state), "Вкл");
     }
 
     #[test]

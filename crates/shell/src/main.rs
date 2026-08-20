@@ -1269,6 +1269,17 @@ fn run_window_mode(
         cert_info: None,
         cert_panel: panels::cert_panel::CertPanel::new(),
     };
+    // BUG-411: seed the shields fallback from the persisted "Блокировать
+    // рекламу" setting and push it at the process-global filter, which
+    // `config::init_adblock` deliberately leaves off. Before this the setting
+    // was write-only — nothing read `BrowserSettings::shields_enabled` back —
+    // and after CC-15 removed the in-tab checkbox there was no reachable UI
+    // that enabled filtering at all.
+    {
+        let on = app.settings_store.shields_enabled();
+        app.shields.set_default_enabled(on);
+        app.sync_adblock_filter();
+    }
     // PH3-20: install the session-global Service Worker fetch interceptor.
     // It shares the same `sw_worker_store` + `cache_store` the page runtime uses,
     // so an activated SW serves cache-first responses to subresource/`fetch()`
@@ -9450,10 +9461,10 @@ impl Lumen {
         // control exists for `PermissionPanel::visible` (`Ctrl+Shift+P`), so
         // either legacy toggle shows it.
         let popover_open = self.shields.visible || self.permission.visible;
-        let permissions = [
-            panels::permission_panel::PermissionKind::Camera,
-            panels::permission_panel::PermissionKind::Microphone,
-        ]
+        // BUG-411: all four `PermissionKind::ALL` rows — the asset gained the
+        // Notifications/Clipboard rows the frozen design was missing, so their
+        // state is no longer unreachable from the UI.
+        let permissions = panels::permission_panel::PermissionKind::ALL
         .map(|kind| match self.permission.state_for(kind) {
             panels::permission_panel::PermissionState::Allow => lumen_chrome::ChromePermState::Allow,
             panels::permission_panel::PermissionState::Deny => lumen_chrome::ChromePermState::Deny,
@@ -9631,6 +9642,11 @@ impl Lumen {
             popover_open,
             blocked_total: self.shields.blocked_total_count(),
             permissions,
+            // BUG-411: the popover names the host it applies to and carries the
+            // per-site shields switch — both lost when CC-15-4 removed the
+            // legacy panels that used to show them.
+            popover_domain: self.shields.current_domain.clone().unwrap_or_default(),
+            site_shields_on: self.shields.enabled_for_current(),
             palette,
             cert,
             print: lumen_chrome::ChromePrintModel {
@@ -10083,6 +10099,21 @@ impl Lumen {
             // as every other `draft` field.
             ChromeAction::ToggleShields => {
                 self.settings_panel.toggle_shields();
+                // BUG-411: the setting is the fallback every host without a
+                // per-site exception uses, so a flip here has to reach the
+                // live filter too — not just the draft that `close_settings_panel`
+                // will persist.
+                self.shields.set_default_enabled(self.settings_panel.draft.shields_enabled);
+                self.sync_adblock_filter();
+                self.relayout_chrome_host();
+            }
+            // BUG-411: the per-site switch restored into `#permPopover`. Unlike
+            // `ToggleShields` above (the global setting) this keys off the
+            // current host, and unlike the legacy panel's switch — which only
+            // ever painted itself — it drives the real process-global filter.
+            ChromeAction::ToggleSiteShields => {
+                self.shields.toggle_current_site();
+                self.sync_adblock_filter();
                 self.relayout_chrome_host();
             }
             ChromeAction::ToggleFingerprintMode => {
@@ -10199,6 +10230,19 @@ impl Lumen {
         let popover = doc.find_by_id(lumen_chrome::ids::PERM_POPOVER)?;
         let idx = doc.get(popover).children.iter().copied().filter(|&c| has_class(c, "perm-row")).position(|c| c == cur)?;
         panels::permission_panel::PermissionKind::ALL.get(idx).copied()
+    }
+
+    /// BUG-411: push the shields state of the current host into the
+    /// process-global ad-block toggle, so `#permPopover`'s switch is the real
+    /// control rather than an indicator.
+    ///
+    /// The filter itself stays installed either way (`config::init_adblock`);
+    /// this only flips whether `fetch_single`'s gate consults it. Call after
+    /// anything that can change the answer of
+    /// [`shields_panel::ShieldsPanel::enabled_for_current`]: a navigation
+    /// (new host), the popover switch, the settings toggle, a tab switch.
+    fn sync_adblock_filter(&self) {
+        lumen_network::set_global_adblock_enabled(self.shields.enabled_for_current());
     }
 
     /// ADR-016 M2.2b: route an **async-safe chrome-inset relayout** off the UI
@@ -12168,6 +12212,9 @@ impl Lumen {
             });
             self.shields.clear_log();
             self.shields.set_domain(domain);
+            // BUG-411: the new host may carry its own shields exception —
+            // re-point the live filter at it.
+            self.sync_adblock_filter();
         }
 
         // Clear the network panel log so each page starts with a fresh request list.
@@ -15230,7 +15277,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         ) {
                             match hit {
                                 panels::shields_panel::ShieldsHit::Toggle => {
-                                    self.shields.enabled = !self.shields.enabled;
+                                    // BUG-411: same per-site flip the engine
+                                    // popover's switch performs (this legacy
+                                    // hit-test is still ungated — BUG-404).
+                                    self.shields.toggle_current_site();
+                                    self.sync_adblock_filter();
                                     self.request_redraw();
                                 }
                                 panels::shields_panel::ShieldsHit::Close => {
@@ -21203,6 +21254,11 @@ impl Lumen {
         self.vertical_tabs.visible =
             tabs::strip::TabLayout::from_str(&draft.tab_layout) == tabs::strip::TabLayout::Vertical;
         let _ = self.settings_store.apply_snapshot(&draft);
+        // BUG-411: `Escape`/click-outside close paths never went through
+        // `ChromeAction::ToggleShields`, so re-apply the draft's shields flag
+        // as the fallback here too before pushing it at the live filter.
+        self.shields.set_default_enabled(draft.shields_enabled);
+        self.sync_adblock_filter();
         // HTTP/3 lives in fingerprint.toml, loaded once into a process-global
         // at startup — only rewrite the file (and note the restart) if the
         // draft actually changed it.
@@ -24478,11 +24534,13 @@ impl Lumen {
         self.tab_strip.active = idx;
         self.tab_strip.set_tab_state(idx, TabState::Active);
         self.tab_strip.update_last_activated(idx, now_ms);
-        // Sync the process-global ad-block toggle to this tab's per-tab flag so
-        // the filter governing its subresource fetches matches the tab.
-        if let Some(tab) = self.tab_strip.tabs.get(idx) {
-            lumen_network::set_global_adblock_enabled(tab.adblock);
-        }
+        // BUG-411: re-point the process-global ad-block toggle at the shields
+        // state of the host now in front. This used to read `TabEntry::adblock`
+        // — a field the legacy in-tab checkbox wrote and CC-15 removed, leaving
+        // it permanently `false`, so every tab switch silently disabled
+        // filtering for the rest of the session. The restored navigation
+        // handler below re-syncs on the host once the restored page loads.
+        self.sync_adblock_filter();
 
         self.reset_to_blank_tab();
 

@@ -2,11 +2,14 @@
 //! the top-right corner of the window.
 //!
 //! The legacy display-list renderer was removed in CC-15-4 — under the engine
-//! chrome (default since CC-14) the popover is `#permPopover`, which binds only
-//! the blocked-request counter. The domain readout and the shields on/off
-//! indicator this module still models are therefore not shown anywhere:
-//! `BUG-411`. `hit_test` is deliberately kept (still called ungated, itself a
-//! `BUG-404` site) — see those two bug files before deleting anything here.
+//! chrome (default since CC-14) the popover is `#permPopover`. `BUG-411`
+//! restored the domain readout and the shields switch there and, at the same
+//! time, turned the switch from a pure indicator into the real control: the
+//! per-site state below is what the shell pushes into
+//! `lumen_network::set_global_adblock_enabled`, so flipping it actually stops
+//! (or resumes) request filtering. `hit_test` is deliberately kept (still
+//! called ungated, itself a `BUG-404` site) — see that bug file before
+//! deleting anything here.
 //!
 //! Toggled with `Ctrl+Shift+S`.
 //!
@@ -22,6 +25,7 @@
 //! list-format reason (`"easylist"`/`"hosts"`), not a tracker-vs-ad category,
 //! so a split would be fabricated rather than measured.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use lumen_core::event::Event;
@@ -103,11 +107,25 @@ pub struct ShieldsPanel {
     /// `true` while the floating panel is visible.  Toggled via Ctrl+Shift+S
     /// or by clicking the shield button in the toolbar (future task).
     pub visible: bool,
-    /// Whether shields (request filtering) are enabled for `current_domain`.
+    /// Whether shields (request filtering) are on when a host has no explicit
+    /// per-site choice — mirrors the persisted `BrowserSettings::shields_enabled`
+    /// ("Блокировать рекламу" in `#view-settings`), pushed in by the shell via
+    /// [`ShieldsPanel::set_default_enabled`].
     ///
-    /// Starts `true` globally.  When the user toggles shields off for a
-    /// domain, the shell disables the filter for that domain.
-    pub enabled: bool,
+    /// Before [BUG-411](../../../../bugs/BUG-411-FIXED.md) this was a plain
+    /// `enabled: bool` nothing read: the legacy panel painted it, and its
+    /// removal in CC-15-4 left the field write-only.
+    default_enabled: bool,
+    /// Per-host overrides of [`Self::default_enabled`], keyed by the same
+    /// lowercase hostname [`Self::set_domain`] stores
+    /// ([BUG-411](../../../../bugs/BUG-411-FIXED.md)).
+    ///
+    /// Session-scoped: not persisted, so a restart falls every host back to
+    /// the setting. Persisting per-site exceptions needs a store of its own
+    /// (`BrowserSettings` holds one flat `shields_enabled` bool) — out of
+    /// scope here, and an unpersisted exception is the honest behaviour of a
+    /// "for this site" switch that has nowhere to be written yet.
+    site_overrides: HashMap<String, bool>,
     /// Hostname of the currently loaded page (e.g. `"example.com"`).
     ///
     /// `None` while no page is loaded or for local file: URLs.
@@ -122,7 +140,56 @@ pub struct ShieldsPanel {
 impl ShieldsPanel {
     /// Create a new hidden panel backed by the given shared `log`.
     pub fn new(log: Arc<Mutex<BlockedLog>>) -> Self {
-        Self { visible: false, enabled: true, current_domain: None, blocked_total: 0, log }
+        Self {
+            visible: false,
+            default_enabled: true,
+            site_overrides: HashMap::new(),
+            current_domain: None,
+            blocked_total: 0,
+            log,
+        }
+    }
+
+    /// Set the fallback used by hosts with no per-site choice — call whenever
+    /// the persisted "Блокировать рекламу" setting is loaded or changed
+    /// ([BUG-411](../../../../bugs/BUG-411-FIXED.md)).
+    ///
+    /// Existing per-site overrides survive: a host the user explicitly switched
+    /// keeps its choice for the session, exactly as a per-site exception should.
+    pub fn set_default_enabled(&mut self, enabled: bool) {
+        self.default_enabled = enabled;
+    }
+
+    /// Whether request filtering is on for [`Self::current_domain`] — the
+    /// per-site override if the host has one, otherwise
+    /// [`Self::default_enabled`] ([BUG-411](../../../../bugs/BUG-411-FIXED.md)).
+    ///
+    /// This is the single value the shell mirrors into
+    /// `lumen_network::set_global_adblock_enabled`, so it decides whether the
+    /// installed filter actually runs.
+    #[must_use]
+    pub fn enabled_for_current(&self) -> bool {
+        match &self.current_domain {
+            Some(domain) => self.site_overrides.get(domain).copied().unwrap_or(self.default_enabled),
+            None => self.default_enabled,
+        }
+    }
+
+    /// Flip shields for [`Self::current_domain`] and return the new state
+    /// ([BUG-411](../../../../bugs/BUG-411-FIXED.md)).
+    ///
+    /// With no host loaded (`about:blank`, `file://`) there is nothing to key
+    /// an exception to, so the flip lands on [`Self::default_enabled`] instead
+    /// — the switch stays meaningful rather than silently doing nothing.
+    pub fn toggle_current_site(&mut self) -> bool {
+        let next = !self.enabled_for_current();
+        match &self.current_domain {
+            Some(domain) => {
+                self.site_overrides.insert(domain.clone(), next);
+            }
+            None => self.default_enabled = next,
+        }
+        next
     }
 
     /// Flip panel visibility.
@@ -247,9 +314,50 @@ mod tests {
         let log = make_log();
         let mut p = ShieldsPanel::new(log);
         p.visible = true;
-        p.enabled = enabled;
+        p.set_default_enabled(enabled);
         p.current_domain = domain.map(|s| s.to_owned());
         p
+    }
+
+    // ── Per-site shields (BUG-411) ───────────────────────────────────────────
+
+    #[test]
+    fn enabled_for_current_falls_back_to_the_default_without_an_override() {
+        let mut p = make_panel_visible(true, Some("example.org"));
+        assert!(p.enabled_for_current());
+        p.set_default_enabled(false);
+        assert!(!p.enabled_for_current());
+    }
+
+    #[test]
+    fn toggle_current_site_overrides_only_that_host() {
+        let mut p = make_panel_visible(true, Some("example.org"));
+        assert!(!p.toggle_current_site());
+        assert!(!p.enabled_for_current());
+        // A different host is untouched by the exception.
+        p.set_domain(Some("other.test".to_owned()));
+        assert!(p.enabled_for_current());
+        // …and coming back restores it.
+        p.set_domain(Some("example.org".to_owned()));
+        assert!(!p.enabled_for_current());
+    }
+
+    #[test]
+    fn per_site_override_survives_a_default_change() {
+        let mut p = make_panel_visible(true, Some("example.org"));
+        p.toggle_current_site();
+        p.set_default_enabled(false);
+        assert!(!p.enabled_for_current());
+        p.set_default_enabled(true);
+        assert!(!p.enabled_for_current(), "an explicit per-site choice outranks the setting");
+    }
+
+    #[test]
+    fn toggle_without_a_host_flips_the_default() {
+        let mut p = make_panel_visible(true, None);
+        assert!(!p.toggle_current_site());
+        // With no host, `enabled_for_current` *is* the default.
+        assert!(!p.enabled_for_current());
     }
 
     const WIN_W: f32 = 1024.0;

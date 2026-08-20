@@ -85,7 +85,7 @@ Wide}`/`PrintField::{PageRange,OutputPath}`/`PrintPanel::paper`/
 * [BUG-408](BUG-408-FIXED.md), [BUG-409](BUG-409-FIXED.md), [BUG-410](BUG-410-FIXED.md) —
   тот же класс (уже закрыты): функциональность легаси-хрома, не
   перенесённая в движковый, вскрытая срезами CC-15-3/4.
-* [BUG-411](BUG-411-OPEN.md) — тот же класс, ещё открыт.
+* [BUG-411](BUG-411-FIXED.md) — тот же класс (исправлен 2026-08-20).
 * [BUG-421](BUG-421-OPEN.md) — тот же пробел в `#view-settings` (в том числе
   общая проблема неразличимых `data-action="toggle-switch"` — здесь не
   требовалась, у печати свои собственные `data-action`).

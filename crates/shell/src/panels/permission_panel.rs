@@ -7,10 +7,11 @@
 //! a future task.
 //!
 //! The legacy display-list renderer was removed in CC-15-4 — under the engine
-//! chrome the rows live in `#permPopover`, which the frozen design gives only
-//! two of (Camera, Microphone), leaving Notifications/Clipboard unreachable
-//! from the UI: `BUG-411`. `hit_test` is kept (still called ungated, a
-//! `BUG-404` site).
+//! chrome the rows live in `#permPopover`. The frozen design gave it only two
+//! (Camera, Microphone), which left Notifications/Clipboard unreachable from
+//! the UI until `BUG-411` added the missing two rows to the reference; all four
+//! of `PermissionKind::ALL` are now bound, in that order. `hit_test` is kept
+//! (still called ungated, a `BUG-404` site).
 //!
 //! Toggled with `Ctrl+Shift+P`.
 
