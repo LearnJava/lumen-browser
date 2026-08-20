@@ -149,27 +149,54 @@ def load_manifest() -> dict:
 def plan_shards(manifest: dict, categories: list) -> list:
     """Split the selected categories into runnable shards.
 
-    A shard is `{"name", "prefix", "ids"}` where `prefix` is what gets passed
-    to wptrunner as a positional test filter. Categories under
+    A shard is `{"name", "prefix", "ids", "auto_ids"}` where `prefix` is what
+    gets passed to wptrunner as a positional test filter. Categories under
     `SHARD_THRESHOLD` ids stay whole; larger ones split on their second path
     component so that no single `wptreport.json` — and no single timeout —
     covers more than a slice.
+
+    A shard with `auto_ids == 0` is dropped: wptrunner's default test types
+    exclude `manual`/`visual`, so a directory holding nothing else has no test
+    wptrunner will even look at — it answers "Unable to find any tests at the
+    path(s)" and leaves a zero-byte report. Corpus-wide that is 14 shards /
+    260 ids (`appmanifest`, `css/CSS2/i18n`, `annotation-*`, …), each paying a
+    full wptserve boot to produce nothing and then showing up in the summary's
+    "ran nothing" line as if a filter had eaten them. They are not in the
+    scored denominator either (`score_reports` skips the same two types), so
+    dropping them changes no number, only the noise.
+
+    `ids` deliberately stays the *full* id count, `manual`/`visual` included:
+    it feeds `shard_timeout`, which budgets wall-clock, and the measured rate
+    (3.0 s/id) is already above the 2.0 s/id default — the slack a
+    manual-heavy directory carries is protective, and tightening it here would
+    buy nothing but fresh budget kills.
     """
     by_category = {}
-    for _test_type, category, test_id in corpus_stats.iter_ids(manifest):
+    automatable = set()
+    for test_type, category, test_id in corpus_stats.iter_ids(manifest):
         by_category.setdefault(category, []).append(test_id)
+        if test_type not in corpus_stats.NON_AUTOMATABLE_TYPES:
+            automatable.add(test_id)
 
     shards = []
+    dropped = 0
     for category in categories:
         ids = by_category.get(category)
         if not ids:
             print(f"warning: category not in manifest, skipped: {category}", file=sys.stderr)
             continue
-        shards.extend(_split([category], ids))
+        for shard in _split([category], ids, automatable):
+            if shard["auto_ids"]:
+                shards.append(shard)
+            else:
+                dropped += 1
+    if dropped:
+        print(f"{dropped} shards hold only manual/visual tests — not planned "
+              f"(wptrunner runs neither; they are not in the denominator)", file=sys.stderr)
     return shards
 
 
-def _split(prefix_parts: list, ids: list) -> list:
+def _split(prefix_parts: list, ids: list, automatable: set) -> list:
     """Recursively split a directory's ids until each shard fits the threshold.
 
     One level of splitting is not enough: `css/CSS2` alone is 9228 ids, which
@@ -183,7 +210,7 @@ def _split(prefix_parts: list, ids: list) -> list:
     depth = len(prefix_parts)
     name = "/".join(prefix_parts)
     if len(ids) <= SHARD_THRESHOLD:
-        return [{"name": name, "prefix": f"/{name}/", "ids": len(ids)}]
+        return [_shard(name, f"/{name}/", ids, automatable)]
 
     groups = {}
     for test_id in ids:
@@ -196,7 +223,7 @@ def _split(prefix_parts: list, ids: list) -> list:
     if len(groups) == 1 and "" in groups:
         # Flat directory, nothing deeper to split on — accept the oversized
         # shard rather than inventing a split wptrunner can't express.
-        return [{"name": name, "prefix": f"/{name}/", "ids": len(ids)}]
+        return [_shard(name, f"/{name}/", ids, automatable)]
 
     shards = []
     for key, group_ids in sorted(groups.items()):
@@ -206,11 +233,19 @@ def _split(prefix_parts: list, ids: list) -> list:
             # subdirectory we just split out, running them twice. Corpus-wide
             # this is 5 such nodes totalling ~100 ids, so listing them
             # explicitly is both exact and short enough for a command line.
-            shards.append({"name": f"{name} (bare)", "prefix": None,
-                           "test_ids": sorted(group_ids), "ids": len(group_ids)})
+            shard = _shard(f"{name} (bare)", None, group_ids, automatable)
+            shard["test_ids"] = sorted(group_ids)
+            shards.append(shard)
         else:
-            shards.extend(_split(prefix_parts + [key], group_ids))
+            shards.extend(_split(prefix_parts + [key], group_ids, automatable))
     return shards
+
+
+def _shard(name: str, prefix, ids: list, automatable: set) -> dict:
+    """One shard record: full id count for the budget, automatable count for
+    the decision whether the shard is worth running at all."""
+    return {"name": name, "prefix": prefix, "ids": len(ids),
+            "auto_ids": sum(1 for test_id in ids if test_id in automatable)}
 
 
 def shard_report_path(out_dir: str, shard: dict) -> str:
@@ -370,6 +405,7 @@ def run_shard(shard: dict, binary: str, out_dir: str, processes: int, timeout: i
         # that legitimately found no tests, which does write an empty report.
         outcome = "no-report"
     return {"name": shard["name"], "prefix": shard["prefix"], "ids": shard["ids"],
+            "auto_ids": shard.get("auto_ids"),
             "outcome": outcome, "returncode": returncode, "seconds": round(elapsed, 1),
             "report": os.path.relpath(report_path, REPO_ROOT) if os.path.isfile(report_path) else None}
 
@@ -622,7 +658,9 @@ def print_summary(scored: dict, shard_states: list) -> None:
     empty = scored.get("empty_shards", [])
     if empty:
         print(f"  ran nothing:      {len(empty)} shards had every test excluded/filtered "
-              f"(not a loss — e.g. an all-https category under --skip-https)")
+              f"(not a loss — an all-https category under --skip-https, or, in an out-dir "
+              f"written before manual/visual-only shards stopped being planned, a directory "
+              f"wptrunner has no runnable test type for)")
     for entry in scored.get("recovered_shards", []):
         print(f"  RECOVERED:        {entry['shard']} — {entry['results']} results salvaged "
               f"from the raw log (shard did not finish)")
@@ -714,7 +752,8 @@ def main() -> int:
             return 1
 
         shards = plan_shards(manifest, categories)
-        print(f"{len(shards)} shards, {sum(s['ids'] for s in shards)} manifest ids, "
+        print(f"{len(shards)} shards, {sum(s['ids'] for s in shards)} manifest ids "
+              f"({sum(s['auto_ids'] for s in shards)} automatable — the scored denominator), "
               f"--processes={args.processes}", flush=True)
 
         exclude_file = None
@@ -753,7 +792,13 @@ def main() -> int:
     # aggregate-only run reports against the same denominator as the run that
     # produced the shards.
     scope = {s["name"].split(" ")[0].split("/")[0] for s in shard_states} or None
-    all_categories = {c for _t, c, _i in corpus_stats.iter_ids(manifest)}
+    # Only categories that hold at least one automatable test can ever be
+    # planned (`plan_shards` drops the rest) or scored (`score_reports` skips
+    # `manual`/`visual`), so the "is this a full run" comparison has to use the
+    # same 266 — against all 273 a genuinely full run would forever report
+    # itself as partial.
+    all_categories = {c for t, c, _i in corpus_stats.iter_ids(manifest)
+                      if t not in corpus_stats.NON_AUTOMATABLE_TYPES}
     if scope and scope >= all_categories:
         scope = None
     scored = score_reports(manifest, args.out_dir, scope)
