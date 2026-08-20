@@ -1,7 +1,7 @@
 {
   "binary": "target/dev-release/lumen",
   "commit": "27080c7de",
-  "finished": "2026-08-20T19:33:43",
+  "finished": "2026-08-20T20:30:52",
   "processes": 6,
   "scope": [
     "FileAPI",
@@ -66,7 +66,9 @@
       "css__CSS2__generate",
       "css__CSS2__i18n",
       "css__CSS2__page-box",
-      "css__css-gcpm"
+      "css__css-gcpm",
+      "css__css-round-display",
+      "css__css-speech"
     ],
     "per_category": {
       "FileAPI": {
@@ -674,14 +676,14 @@
           "reftest": 24552,
           "testharness": 7447
         },
-        "harness_ok": 5075,
+        "harness_ok": 8939,
         "ids": 33496,
-        "not_run": 17589,
-        "pass_rate": 0.0985,
-        "ran": 15907,
-        "score": 3299.05,
-        "subtests_passed": 23234,
-        "subtests_total": 70412
+        "not_run": 7586,
+        "pass_rate": 0.1606,
+        "ran": 25910,
+        "score": 5380.41,
+        "subtests_passed": 44285,
+        "subtests_total": 116545
       },
       "dom": {
         "by_type": {
@@ -701,8 +703,8 @@
     },
     "recovered_shards": [
       {
-        "results": 764,
-        "shard": "css__css-grid__grid-lanes"
+        "results": 815,
+        "shard": "css__css-transforms"
       },
       {
         "results": 129,
@@ -718,22 +720,23 @@
       }
     ],
     "status_counts": {
-      "ERROR": 570,
-      "FAIL": 9860,
-      "NOT-RUN": 18105,
-      "OK": 3017,
-      "PASS": 2933,
-      "TIMEOUT": 2918
+      "ERROR": 587,
+      "FAIL": 15521,
+      "NOT-RUN": 8102,
+      "OK": 5271,
+      "PASS": 4543,
+      "SKIP": 6,
+      "TIMEOUT": 3373
     },
     "totals": {
-      "harness_ok": 5950,
+      "harness_ok": 9814,
       "ids": 37403,
-      "not_run": 18105,
-      "pass_rate": 0.0977,
-      "ran": 19298,
-      "score": 3653.84,
-      "subtests_passed": 26673,
-      "subtests_total": 81670
+      "not_run": 8102,
+      "pass_rate": 0.1533,
+      "ran": 29301,
+      "score": 5735.19,
+      "subtests_passed": 47724,
+      "subtests_total": 127803
     }
   },
   "shards": [
@@ -1879,6 +1882,411 @@
       "report": ".tmp/wpt-corpus/css__css-grid__grid-items.json",
       "returncode": 64,
       "seconds": 60.6
+    },
+    {
+      "ids": 885,
+      "name": "css/css-grid/grid-lanes",
+      "outcome": "ran",
+      "prefix": "/css/css-grid/grid-lanes/",
+      "report": ".tmp/wpt-corpus/css__css-grid__grid-lanes.json",
+      "returncode": 64,
+      "seconds": 976.7
+    },
+    {
+      "ids": 68,
+      "name": "css/css-grid/grid-model",
+      "outcome": "ran",
+      "prefix": "/css/css-grid/grid-model/",
+      "report": ".tmp/wpt-corpus/css__css-grid__grid-model.json",
+      "returncode": 64,
+      "seconds": 32.3
+    },
+    {
+      "ids": 3,
+      "name": "css/css-grid/implicit-grids",
+      "outcome": "ran",
+      "prefix": "/css/css-grid/implicit-grids/",
+      "report": ".tmp/wpt-corpus/css__css-grid__implicit-grids.json",
+      "returncode": 64,
+      "seconds": 12.6
+    },
+    {
+      "ids": 61,
+      "name": "css/css-grid/layout-algorithm",
+      "outcome": "ran",
+      "prefix": "/css/css-grid/layout-algorithm/",
+      "report": ".tmp/wpt-corpus/css__css-grid__layout-algorithm.json",
+      "returncode": 64,
+      "seconds": 68.4
+    },
+    {
+      "ids": 61,
+      "name": "css/css-grid/parsing",
+      "outcome": "ran",
+      "prefix": "/css/css-grid/parsing/",
+      "report": ".tmp/wpt-corpus/css__css-grid__parsing.json",
+      "returncode": 64,
+      "seconds": 30.7
+    },
+    {
+      "ids": 20,
+      "name": "css/css-grid/placement",
+      "outcome": "ran",
+      "prefix": "/css/css-grid/placement/",
+      "report": ".tmp/wpt-corpus/css__css-grid__placement.json",
+      "returncode": 64,
+      "seconds": 33.8
+    },
+    {
+      "ids": 126,
+      "name": "css/css-grid/subgrid",
+      "outcome": "ran",
+      "prefix": "/css/css-grid/subgrid/",
+      "report": ".tmp/wpt-corpus/css__css-grid__subgrid.json",
+      "returncode": 64,
+      "seconds": 229.7
+    },
+    {
+      "ids": 122,
+      "name": "css/css-highlight-api",
+      "outcome": "ran",
+      "prefix": "/css/css-highlight-api/",
+      "report": ".tmp/wpt-corpus/css__css-highlight-api.json",
+      "returncode": 64,
+      "seconds": 30.0
+    },
+    {
+      "ids": 23,
+      "name": "css/css-image-animation",
+      "outcome": "ran",
+      "prefix": "/css/css-image-animation/",
+      "report": ".tmp/wpt-corpus/css__css-image-animation.json",
+      "returncode": 64,
+      "seconds": 22.3
+    },
+    {
+      "ids": 508,
+      "name": "css/css-images",
+      "outcome": "ran",
+      "prefix": "/css/css-images/",
+      "report": ".tmp/wpt-corpus/css__css-images.json",
+      "returncode": 64,
+      "seconds": 40.6
+    },
+    {
+      "ids": 350,
+      "name": "css/css-inline",
+      "outcome": "ran",
+      "prefix": "/css/css-inline/",
+      "report": ".tmp/wpt-corpus/css__css-inline.json",
+      "returncode": 64,
+      "seconds": 51.2
+    },
+    {
+      "ids": 153,
+      "name": "css/css-layout-api",
+      "outcome": "ran",
+      "prefix": "/css/css-layout-api/",
+      "report": ".tmp/wpt-corpus/css__css-layout-api.json",
+      "returncode": 64,
+      "seconds": 43.3
+    },
+    {
+      "ids": 4,
+      "name": "css/css-link-params",
+      "outcome": "ran",
+      "prefix": "/css/css-link-params/",
+      "report": ".tmp/wpt-corpus/css__css-link-params.json",
+      "returncode": 64,
+      "seconds": 14.1
+    },
+    {
+      "ids": 219,
+      "name": "css/css-lists",
+      "outcome": "ran",
+      "prefix": "/css/css-lists/",
+      "report": ".tmp/wpt-corpus/css__css-lists.json",
+      "returncode": 64,
+      "seconds": 25.7
+    },
+    {
+      "ids": 92,
+      "name": "css/css-logical",
+      "outcome": "ran",
+      "prefix": "/css/css-logical/",
+      "report": ".tmp/wpt-corpus/css__css-logical.json",
+      "returncode": 64,
+      "seconds": 27.6
+    },
+    {
+      "ids": 548,
+      "name": "css/css-masking",
+      "outcome": "ran",
+      "prefix": "/css/css-masking/",
+      "report": ".tmp/wpt-corpus/css__css-masking.json",
+      "returncode": 64,
+      "seconds": 45.4
+    },
+    {
+      "ids": 47,
+      "name": "css/css-mixins",
+      "outcome": "ran",
+      "prefix": "/css/css-mixins/",
+      "report": ".tmp/wpt-corpus/css__css-mixins.json",
+      "returncode": 64,
+      "seconds": 28.8
+    },
+    {
+      "ids": 1,
+      "name": "css/css-motion-path",
+      "outcome": "ran",
+      "prefix": "/css/css-motion-path/",
+      "report": ".tmp/wpt-corpus/css__css-motion-path.json",
+      "returncode": 64,
+      "seconds": 11.1
+    },
+    {
+      "ids": 716,
+      "name": "css/css-multicol",
+      "outcome": "ran",
+      "prefix": "/css/css-multicol/",
+      "report": ".tmp/wpt-corpus/css__css-multicol.json",
+      "returncode": 64,
+      "seconds": 56.8
+    },
+    {
+      "ids": 24,
+      "name": "css/css-namespaces",
+      "outcome": "ran",
+      "prefix": "/css/css-namespaces/",
+      "report": ".tmp/wpt-corpus/css__css-namespaces.json",
+      "returncode": 64,
+      "seconds": 14.1
+    },
+    {
+      "ids": 45,
+      "name": "css/css-nesting",
+      "outcome": "ran",
+      "prefix": "/css/css-nesting/",
+      "report": ".tmp/wpt-corpus/css__css-nesting.json",
+      "returncode": 64,
+      "seconds": 28.8
+    },
+    {
+      "ids": 767,
+      "name": "css/css-overflow",
+      "outcome": "ran",
+      "prefix": "/css/css-overflow/",
+      "report": ".tmp/wpt-corpus/css__css-overflow.json",
+      "returncode": 64,
+      "seconds": 75.7
+    },
+    {
+      "ids": 12,
+      "name": "css/css-overscroll-behavior",
+      "outcome": "ran",
+      "prefix": "/css/css-overscroll-behavior/",
+      "report": ".tmp/wpt-corpus/css__css-overscroll-behavior.json",
+      "returncode": 64,
+      "seconds": 15.7
+    },
+    {
+      "ids": 278,
+      "name": "css/css-page",
+      "outcome": "ran",
+      "prefix": "/css/css-page/",
+      "report": ".tmp/wpt-corpus/css__css-page.json",
+      "returncode": 64,
+      "seconds": 45.3
+    },
+    {
+      "ids": 118,
+      "name": "css/css-paint-api",
+      "outcome": "ran",
+      "prefix": "/css/css-paint-api/",
+      "report": ".tmp/wpt-corpus/css__css-paint-api.json",
+      "returncode": 64,
+      "seconds": 25.5
+    },
+    {
+      "ids": 1,
+      "name": "css/css-parser-api",
+      "outcome": "ran",
+      "prefix": "/css/css-parser-api/",
+      "report": ".tmp/wpt-corpus/css__css-parser-api.json",
+      "returncode": 64,
+      "seconds": 24.1
+    },
+    {
+      "ids": 380,
+      "name": "css/css-position",
+      "outcome": "ran",
+      "prefix": "/css/css-position/",
+      "report": ".tmp/wpt-corpus/css__css-position.json",
+      "returncode": 64,
+      "seconds": 57.9
+    },
+    {
+      "ids": 124,
+      "name": "css/css-properties-values-api",
+      "outcome": "ran",
+      "prefix": "/css/css-properties-values-api/",
+      "report": ".tmp/wpt-corpus/css__css-properties-values-api.json",
+      "returncode": 64,
+      "seconds": 40.9
+    },
+    {
+      "ids": 347,
+      "name": "css/css-pseudo",
+      "outcome": "ran",
+      "prefix": "/css/css-pseudo/",
+      "report": ".tmp/wpt-corpus/css__css-pseudo.json",
+      "returncode": 64,
+      "seconds": 50.7
+    },
+    {
+      "ids": 35,
+      "name": "css/css-rhythm",
+      "outcome": "ran",
+      "prefix": "/css/css-rhythm/",
+      "report": ".tmp/wpt-corpus/css__css-rhythm.json",
+      "returncode": 64,
+      "seconds": 22.4
+    },
+    {
+      "ids": 15,
+      "name": "css/css-round-display",
+      "outcome": "ran",
+      "prefix": "/css/css-round-display/",
+      "report": ".tmp/wpt-corpus/css__css-round-display.json",
+      "returncode": 64,
+      "seconds": 8.0
+    },
+    {
+      "ids": 178,
+      "name": "css/css-ruby",
+      "outcome": "ran",
+      "prefix": "/css/css-ruby/",
+      "report": ".tmp/wpt-corpus/css__css-ruby.json",
+      "returncode": 64,
+      "seconds": 50.1
+    },
+    {
+      "ids": 79,
+      "name": "css/css-scroll-anchoring",
+      "outcome": "ran",
+      "prefix": "/css/css-scroll-anchoring/",
+      "report": ".tmp/wpt-corpus/css__css-scroll-anchoring.json",
+      "returncode": 64,
+      "seconds": 60.9
+    },
+    {
+      "ids": 189,
+      "name": "css/css-scroll-snap",
+      "outcome": "ran",
+      "prefix": "/css/css-scroll-snap/",
+      "report": ".tmp/wpt-corpus/css__css-scroll-snap.json",
+      "returncode": 64,
+      "seconds": 94.4
+    },
+    {
+      "ids": 57,
+      "name": "css/css-scrollbars",
+      "outcome": "ran",
+      "prefix": "/css/css-scrollbars/",
+      "report": ".tmp/wpt-corpus/css__css-scrollbars.json",
+      "returncode": 64,
+      "seconds": 36.5
+    },
+    {
+      "ids": 206,
+      "name": "css/css-shadow",
+      "outcome": "ran",
+      "prefix": "/css/css-shadow/",
+      "report": ".tmp/wpt-corpus/css__css-shadow.json",
+      "returncode": 64,
+      "seconds": 51.9
+    },
+    {
+      "ids": 379,
+      "name": "css/css-shapes",
+      "outcome": "ran",
+      "prefix": "/css/css-shapes/",
+      "report": ".tmp/wpt-corpus/css__css-shapes.json",
+      "returncode": 64,
+      "seconds": 83.4
+    },
+    {
+      "ids": 5,
+      "name": "css/css-size-adjust",
+      "outcome": "ran",
+      "prefix": "/css/css-size-adjust/",
+      "report": ".tmp/wpt-corpus/css__css-size-adjust.json",
+      "returncode": 64,
+      "seconds": 26.1
+    },
+    {
+      "ids": 751,
+      "name": "css/css-sizing",
+      "outcome": "ran",
+      "prefix": "/css/css-sizing/",
+      "report": ".tmp/wpt-corpus/css__css-sizing.json",
+      "returncode": 64,
+      "seconds": 137.4
+    },
+    {
+      "ids": 11,
+      "name": "css/css-speech",
+      "outcome": "ran",
+      "prefix": "/css/css-speech/",
+      "report": ".tmp/wpt-corpus/css__css-speech.json",
+      "returncode": 64,
+      "seconds": 11.0
+    },
+    {
+      "ids": 16,
+      "name": "css/css-style-attr",
+      "outcome": "ran",
+      "prefix": "/css/css-style-attr/",
+      "report": ".tmp/wpt-corpus/css__css-style-attr.json",
+      "returncode": 64,
+      "seconds": 15.8
+    },
+    {
+      "ids": 47,
+      "name": "css/css-syntax",
+      "outcome": "ran",
+      "prefix": "/css/css-syntax/",
+      "report": ".tmp/wpt-corpus/css__css-syntax.json",
+      "returncode": 64,
+      "seconds": 23.2
+    },
+    {
+      "ids": 336,
+      "name": "css/css-tables",
+      "outcome": "ran",
+      "prefix": "/css/css-tables/",
+      "report": ".tmp/wpt-corpus/css__css-tables.json",
+      "returncode": 64,
+      "seconds": 42.8
+    },
+    {
+      "ids": 1991,
+      "name": "css/css-text",
+      "outcome": "ran",
+      "prefix": "/css/css-text/",
+      "report": ".tmp/wpt-corpus/css__css-text.json",
+      "returncode": 64,
+      "seconds": 223.4
+    },
+    {
+      "ids": 438,
+      "name": "css/css-text-decor",
+      "outcome": "ran",
+      "prefix": "/css/css-text-decor/",
+      "report": ".tmp/wpt-corpus/css__css-text-decor.json",
+      "returncode": 64,
+      "seconds": 22.5
     }
   ]
 }
