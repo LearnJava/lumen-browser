@@ -202,8 +202,10 @@ tab-bar for both layouts (CC-8) are done — see below and `crates/shell/src/mai
   mutually-exclusive `.view.active` (`ChromeContentView`, `bind_content_view`), derived from whichever
   legacy panel (`history_panel`/`bookmark_panel`/`settings_panel`) is `visible`. History/bookmarks
   render real data (`HistoryPanel::rows`/`BookmarkPanel::folders`/`visible_entries()`) via
-  `bind_history`/`bind_bookmarks`; per-row actions (star/copy/delete, folder click) stay unbound — the
-  frozen markup carries no `data-action` hooks on them. Settings section-nav switches for real
+  `bind_history`/`bind_bookmarks`; per-row actions (open/star/copy/delete, clear-all, folder click,
+  bookmark delete) are bound since [BUG-422](../bugs/BUG-422-FIXED.md) — the reference gained the
+  `onclick` hooks, the rebuilt rows re-stamp the generated `data-action` plus a `data-hist-url`/
+  `data-bm-url`/`data-bm-folder` context attribute. Settings section-nav switches for real
   (`Lumen::chrome_settings_section`, independent of the legacy `SettingsSection` enum — the design's 6
   tabs and the legacy 7 don't line up); only the 2 Adblock & Fingerprinting toggles with clean 1:1
   backing fields are bound read-only (`bind_settings`). `#rightSidebar` merges the legacy

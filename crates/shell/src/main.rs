@@ -9576,11 +9576,13 @@ impl Lumen {
         let mut bookmark_folders = vec![lumen_chrome::ChromeBookmarkFolderModel {
             label: "Все закладки".to_owned(),
             active: self.bookmark_panel.selected_folder.is_none(),
+            filter: None,
         }];
         bookmark_folders.extend(self.bookmark_panel.folders.iter().map(|f| {
             lumen_chrome::ChromeBookmarkFolderModel {
                 label: f.clone(),
                 active: self.bookmark_panel.selected_folder.as_deref() == Some(f.as_str()),
+                filter: Some(f.clone()),
             }
         }));
         let bookmarks = lumen_chrome::ChromeBookmarksModel {
@@ -9740,6 +9742,20 @@ impl Lumen {
     fn chrome_data_id(&self, nid: NodeId, attr: &str) -> Option<i64> {
         let (doc, _) = self.chrome_doc.as_ref()?;
         doc.get(nid).get_attr(attr)?.parse().ok()
+    }
+
+    /// BUG-422: the string sibling of [`Self::chrome_data_id`] — reads a
+    /// `data-*` attribute off `nid` as an owned `String`.
+    ///
+    /// The `#view-history`/`#view-bookmarks` row actions key off the entry's
+    /// URL rather than an integer id: `History::delete`/`Bookmarks::delete`/
+    /// `Bookmarks::add` all take a URL, and `Lumen::refresh_history`'s FTS
+    /// branch fabricates `HistoryItem::id` from the result position, so the
+    /// id is not a stable handle under an active search query. Owned because
+    /// every caller mutates `self` right after reading.
+    fn chrome_data_attr(&self, nid: NodeId, attr: &str) -> Option<String> {
+        let (doc, _) = self.chrome_doc.as_ref()?;
+        doc.get(nid).get_attr(attr).map(str::to_owned)
     }
 
     /// CC-5/CC-6: routes a chrome `data-action` click to the shell's existing
@@ -9943,6 +9959,89 @@ impl Lumen {
                     }
                 }
                 self.relayout_chrome_host();
+            }
+            // BUG-422: `#view-history`/`#view-bookmarks` entry actions. Every
+            // one of them resolves the clicked node through `data-hist-url`/
+            // `data-bm-url`/`data-bm-folder` (stamped by `bind_history`/
+            // `bind_bookmarks`, `crates/chrome/src/model.rs`) — the same
+            // attribute-carries-the-context shape as `data-tab-id` above.
+            //
+            // Opening an entry also drops the view back to the page: the four
+            // `#contentArea` views are mutually exclusive, so navigating while
+            // `#view-history` is active would load the page behind a list that
+            // stays on screen. Mirrors `ShowView`'s "page" arm.
+            ChromeAction::OpenHistoryEntry => {
+                if let Some(url) = self.chrome_data_attr(nid, "data-hist-url").filter(|u| !u.is_empty()) {
+                    self.history_panel.visible = false;
+                    self.navigate_to(PageSource::Url(url));
+                    self.relayout_chrome_host();
+                }
+            }
+            // The design's per-row star. `Bookmarks::add` upserts on the URL,
+            // so a repeat click is idempotent rather than a duplicate row.
+            // Folder `""` = the tree root, matching what `BookmarkPanel`
+            // treats as the unfiltered set.
+            ChromeAction::BookmarkHistoryEntry => {
+                if let Some(url) = self.chrome_data_attr(nid, "data-hist-url").filter(|u| !u.is_empty()) {
+                    let title = self
+                        .chrome_data_attr(nid, "data-hist-title")
+                        .filter(|t| !t.is_empty())
+                        .unwrap_or_else(|| url.clone());
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0);
+                    let _ = self.bookmarks.add(&url, &title, "", &[], "", now);
+                    if self.bookmark_panel.visible {
+                        self.refresh_bookmarks();
+                    }
+                    self.relayout_chrome_host();
+                }
+            }
+            ChromeAction::CopyHistoryEntry => {
+                if let Some(url) = self.chrome_data_attr(nid, "data-hist-url").filter(|u| !u.is_empty()) {
+                    use lumen_core::ext::ClipboardProvider;
+                    platform::clipboard::PlatformClipboard.write_text(&url);
+                }
+            }
+            ChromeAction::DeleteHistoryEntry => {
+                if let Some(url) = self.chrome_data_attr(nid, "data-hist-url").filter(|u| !u.is_empty()) {
+                    let _ = self.history_store.delete(&url);
+                    self.refresh_history();
+                    self.relayout_chrome_host();
+                }
+            }
+            // `.hist-head`'s "Очистить" button. Wipes the store, not just the
+            // panel's cached rows — `refresh_history` then re-reads it.
+            ChromeAction::ClearHistory => {
+                let _ = self.history_store.clear();
+                self.refresh_history();
+                self.relayout_chrome_host();
+            }
+            ChromeAction::OpenBookmark => {
+                if let Some(url) = self.chrome_data_attr(nid, "data-bm-url").filter(|u| !u.is_empty()) {
+                    self.bookmark_panel.visible = false;
+                    self.navigate_to(PageSource::Url(url));
+                    self.relayout_chrome_host();
+                }
+            }
+            ChromeAction::DeleteBookmark => {
+                if let Some(url) = self.chrome_data_attr(nid, "data-bm-url").filter(|u| !u.is_empty()) {
+                    let _ = self.bookmarks.delete(&url);
+                    self.refresh_bookmarks();
+                    self.relayout_chrome_host();
+                }
+            }
+            // `data-bm-folder` is always present on a bound `.bm-folder` row —
+            // `""` is the "Все закладки" row and means "no filter", so an
+            // empty value is meaningful here (unlike the URL actions above).
+            ChromeAction::SelectFolder => {
+                if let Some(folder) = self.chrome_data_attr(nid, "data-bm-folder") {
+                    self.bookmark_panel.selected_folder =
+                        if folder.is_empty() { None } else { Some(folder) };
+                    self.bookmark_panel.scroll_y = 0.0;
+                    self.relayout_chrome_host();
+                }
             }
             ChromeAction::SelectTab => {
                 if let Some(id) = self.chrome_data_id(nid, "data-tab-id")
