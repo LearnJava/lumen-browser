@@ -186,6 +186,38 @@ def shard_report_path(out_dir: str, shard: dict) -> str:
     return os.path.join(out_dir, shard["name"].replace("/", "__") + ".json")
 
 
+def _descendant_pids(root: int) -> list:
+    """Every PID in the tree rooted at `root` (root included), via `ps -eo pid,ppid`.
+
+    Portable across Linux/macOS, unlike `/proc` (Linux-only). A one-shot
+    snapshot, not a live walk — fine here since the tree is about to be killed,
+    not inspected repeatedly.
+    """
+    try:
+        out = subprocess.run(["ps", "-eo", "pid,ppid"], capture_output=True,
+                             text=True, check=False).stdout
+    except OSError:
+        return [root]
+    children = {}
+    for line in out.splitlines()[1:]:
+        parts = line.split()
+        if len(parts) != 2:
+            continue
+        try:
+            pid, ppid = int(parts[0]), int(parts[1])
+        except ValueError:
+            continue
+        children.setdefault(ppid, []).append(pid)
+
+    result = []
+    stack = [root]
+    while stack:
+        pid = stack.pop()
+        result.append(pid)
+        stack.extend(children.get(pid, []))
+    return result
+
+
 def kill_tree(proc) -> None:
     """Kill the shard subprocess *and* the browser processes it spawned.
 
@@ -194,21 +226,28 @@ def kill_tree(proc) -> None:
     next shard. Killing by PID tree (never by image name — that would take out
     unrelated browser windows, including another session's).
 
-    On POSIX the tree is a process *group*, not something `taskkill /T` has an
-    equivalent for — `run_shard` spawns with `start_new_session=True` so the
-    shard subprocess becomes its own group leader, and this kills the whole
-    group by PGID. Without that pairing `proc.kill()` alone only reaps the
-    `run_smoke.py` child; found running WPT-RUN-5 on Linux (this codepath was
-    Windows-only until then, `taskkill /F /T` already walked the tree there).
+    On POSIX the tree is *not* a process group: `run_shard` spawning
+    `run_smoke.py` with `start_new_session=True` only makes `run_smoke.py`
+    itself a group leader — wptrunner then puts each `lumen` it launches in
+    its *own* group (verified: PGID == PID on every orphaned `lumen`, not
+    `run_smoke.py`'s), so `os.killpg` on `run_smoke.py`'s group misses them
+    all. Confirmed the hard way running WPT-RUN-5 on Linux: a WebCryptoAPI
+    timeout left 6 `lumen` processes running past their shard, which then
+    piled up under `accelerometer`'s own 6 and pushed the machine (7.6 GB RAM)
+    into OOM territory, killing `run_corpus.py` itself. Walking the real PPID
+    tree (what `taskkill /F /T` does on Windows) is the fix that actually
+    reaches them, since they're still direct children of `run_smoke.py`'s PID
+    by the kernel's own bookkeeping regardless of which group they sit in.
     """
     if os.name == "nt":
         subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
                        capture_output=True, check=False)
     else:
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        for pid in reversed(_descendant_pids(proc.pid)):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
 
 def shard_timeout(shard: dict, base: int, per_id: float) -> int:
