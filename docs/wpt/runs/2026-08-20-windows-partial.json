@@ -1,7 +1,7 @@
 {
   "binary": "D:\\RustProjects\\lumen-browser\\.claude\\worktrees\\p2-work\\target\\dev-release\\lumen.exe",
-  "commit": "6a2330366",
-  "finished": "2026-08-20T15:48:24",
+  "commit": "3e9bf8aef",
+  "finished": "2026-08-20T17:26:02",
   "processes": 6,
   "scope": [
     "FileAPI",
@@ -125,7 +125,8 @@
       "css__filter-effects",
       "dpub-aria",
       "graphics-aam",
-      "html__canvas__offscreen__canvas-context"
+      "html__canvas__offscreen__text",
+      "html__document-isolation-policy"
     ],
     "per_category": {
       "FileAPI": {
@@ -1365,14 +1366,14 @@
           "reftest": 1382,
           "testharness": 8399
         },
-        "harness_ok": 164,
+        "harness_ok": 905,
         "ids": 9981,
-        "not_run": 9620,
-        "pass_rate": 0.0057,
-        "ran": 361,
-        "score": 56.97,
-        "subtests_passed": 82,
-        "subtests_total": 366
+        "not_run": 7913,
+        "pass_rate": 0.0137,
+        "ran": 2068,
+        "score": 136.59,
+        "subtests_passed": 130,
+        "subtests_total": 1217
       }
     },
     "recovered_shards": [
@@ -1450,24 +1451,24 @@
       }
     ],
     "status_counts": {
-      "": 84,
-      "ERROR": 771,
-      "FAIL": 16629,
-      "NOT-RUN": 18315,
-      "OK": 7187,
-      "PASS": 5111,
+      "": 110,
+      "ERROR": 772,
+      "FAIL": 16799,
+      "NOT-RUN": 16608,
+      "OK": 7884,
+      "PASS": 5155,
       "SKIP": 16,
-      "TIMEOUT": 4043
+      "TIMEOUT": 4812
     },
     "totals": {
-      "harness_ok": 12298,
+      "harness_ok": 13039,
       "ids": 52156,
-      "not_run": 18315,
-      "pass_rate": 0.1255,
-      "ran": 33841,
-      "score": 6543.99,
-      "subtests_passed": 56490,
-      "subtests_total": 159763
+      "not_run": 16608,
+      "pass_rate": 0.127,
+      "ran": 35548,
+      "score": 6623.61,
+      "subtests_passed": 56538,
+      "subtests_total": 160614
     }
   },
   "shards": [
@@ -3684,6 +3685,213 @@
       "report": ".tmp\\wpt-corpus\\html__canvas__offscreen (bare).json",
       "returncode": 64,
       "seconds": 304.0
+    },
+    {
+      "ids": 30,
+      "name": "html/canvas/offscreen/canvas-context",
+      "outcome": "ran",
+      "prefix": "/html/canvas/offscreen/canvas-context/",
+      "report": ".tmp\\wpt-corpus\\html__canvas__offscreen__canvas-context.json",
+      "returncode": 1,
+      "seconds": 70.1
+    },
+    {
+      "ids": 70,
+      "name": "html/canvas/offscreen/canvas-host",
+      "outcome": "ran",
+      "prefix": "/html/canvas/offscreen/canvas-host/",
+      "report": ".tmp\\wpt-corpus\\html__canvas__offscreen__canvas-host.json",
+      "returncode": 1,
+      "seconds": 151.4
+    },
+    {
+      "ids": 8,
+      "name": "html/canvas/offscreen/color-type",
+      "outcome": "ran",
+      "prefix": "/html/canvas/offscreen/color-type/",
+      "report": ".tmp\\wpt-corpus\\html__canvas__offscreen__color-type.json",
+      "returncode": 1,
+      "seconds": 41.3
+    },
+    {
+      "ids": 220,
+      "name": "html/canvas/offscreen/compositing",
+      "outcome": "ran",
+      "prefix": "/html/canvas/offscreen/compositing/",
+      "report": ".tmp\\wpt-corpus\\html__canvas__offscreen__compositing.json",
+      "returncode": 1,
+      "seconds": 265.5
+    },
+    {
+      "ids": 4,
+      "name": "html/canvas/offscreen/conformance-requirements",
+      "outcome": "ran",
+      "prefix": "/html/canvas/offscreen/conformance-requirements/",
+      "report": ".tmp\\wpt-corpus\\html__canvas__offscreen__conformance-requirements.json",
+      "returncode": 1,
+      "seconds": 26.7
+    },
+    {
+      "ids": 54,
+      "name": "html/canvas/offscreen/drawing-images-to-the-canvas",
+      "outcome": "ran",
+      "prefix": "/html/canvas/offscreen/drawing-images-to-the-canvas/",
+      "report": ".tmp\\wpt-corpus\\html__canvas__offscreen__drawing-images-to-the-canvas.json",
+      "returncode": 143,
+      "seconds": 28.6
+    },
+    {
+      "ids": 64,
+      "name": "html/canvas/offscreen/drawing-rectangles-to-the-canvas",
+      "outcome": "ran",
+      "prefix": "/html/canvas/offscreen/drawing-rectangles-to-the-canvas/",
+      "report": ".tmp\\wpt-corpus\\html__canvas__offscreen__drawing-rectangles-to-the-canvas.json",
+      "returncode": 1,
+      "seconds": 100.1
+    },
+    {
+      "ids": 479,
+      "name": "html/canvas/offscreen/fill-and-stroke-styles",
+      "outcome": "ran",
+      "prefix": "/html/canvas/offscreen/fill-and-stroke-styles/",
+      "report": ".tmp\\wpt-corpus\\html__canvas__offscreen__fill-and-stroke-styles.json",
+      "returncode": 143,
+      "seconds": 482.6
+    },
+    {
+      "ids": 54,
+      "name": "html/canvas/offscreen/filters",
+      "outcome": "ran",
+      "prefix": "/html/canvas/offscreen/filters/",
+      "report": ".tmp\\wpt-corpus\\html__canvas__offscreen__filters.json",
+      "returncode": 1,
+      "seconds": 125.8
+    },
+    {
+      "ids": 160,
+      "name": "html/canvas/offscreen/layers",
+      "outcome": "ran",
+      "prefix": "/html/canvas/offscreen/layers/",
+      "report": ".tmp\\wpt-corpus\\html__canvas__offscreen__layers.json",
+      "returncode": 1,
+      "seconds": 133.5
+    },
+    {
+      "ids": 66,
+      "name": "html/canvas/offscreen/line-styles",
+      "outcome": "ran",
+      "prefix": "/html/canvas/offscreen/line-styles/",
+      "report": ".tmp\\wpt-corpus\\html__canvas__offscreen__line-styles.json",
+      "returncode": 1,
+      "seconds": 135.4
+    },
+    {
+      "ids": 52,
+      "name": "html/canvas/offscreen/manual",
+      "outcome": "ran",
+      "prefix": "/html/canvas/offscreen/manual/",
+      "report": ".tmp\\wpt-corpus\\html__canvas__offscreen__manual.json",
+      "returncode": 1,
+      "seconds": 103.8
+    },
+    {
+      "ids": 410,
+      "name": "html/canvas/offscreen/path-objects",
+      "outcome": "ran",
+      "prefix": "/html/canvas/offscreen/path-objects/",
+      "report": ".tmp\\wpt-corpus\\html__canvas__offscreen__path-objects.json",
+      "returncode": 143,
+      "seconds": 82.5
+    },
+    {
+      "ids": 118,
+      "name": "html/canvas/offscreen/pixel-manipulation",
+      "outcome": "ran",
+      "prefix": "/html/canvas/offscreen/pixel-manipulation/",
+      "report": ".tmp\\wpt-corpus\\html__canvas__offscreen__pixel-manipulation.json",
+      "returncode": 1,
+      "seconds": 228.8
+    },
+    {
+      "ids": 74,
+      "name": "html/canvas/offscreen/reset",
+      "outcome": "ran",
+      "prefix": "/html/canvas/offscreen/reset/",
+      "report": ".tmp\\wpt-corpus\\html__canvas__offscreen__reset.json",
+      "returncode": 1,
+      "seconds": 130.0
+    },
+    {
+      "ids": 116,
+      "name": "html/canvas/offscreen/shadows",
+      "outcome": "ran",
+      "prefix": "/html/canvas/offscreen/shadows/",
+      "report": ".tmp\\wpt-corpus\\html__canvas__offscreen__shadows.json",
+      "returncode": 1,
+      "seconds": 188.8
+    },
+    {
+      "ids": 254,
+      "name": "html/canvas/offscreen/text",
+      "outcome": "ran",
+      "prefix": "/html/canvas/offscreen/text/",
+      "report": ".tmp\\wpt-corpus\\html__canvas__offscreen__text.json",
+      "returncode": 143,
+      "seconds": 31.4
+    },
+    {
+      "ids": 40,
+      "name": "html/canvas/offscreen/the-canvas-state",
+      "outcome": "ran",
+      "prefix": "/html/canvas/offscreen/the-canvas-state/",
+      "report": ".tmp\\wpt-corpus\\html__canvas__offscreen__the-canvas-state.json",
+      "returncode": 1,
+      "seconds": 119.0
+    },
+    {
+      "ids": 44,
+      "name": "html/canvas/offscreen/transformations",
+      "outcome": "ran",
+      "prefix": "/html/canvas/offscreen/transformations/",
+      "report": ".tmp\\wpt-corpus\\html__canvas__offscreen__transformations.json",
+      "returncode": 64,
+      "seconds": 126.6
+    },
+    {
+      "ids": 8,
+      "name": "html/canvas/offscreen/wide-gamut-canvas",
+      "outcome": "ran",
+      "prefix": "/html/canvas/offscreen/wide-gamut-canvas/",
+      "report": ".tmp\\wpt-corpus\\html__canvas__offscreen__wide-gamut-canvas.json",
+      "returncode": 1,
+      "seconds": 74.2
+    },
+    {
+      "ids": 6,
+      "name": "html/capability-delegation",
+      "outcome": "ran",
+      "prefix": "/html/capability-delegation/",
+      "report": ".tmp\\wpt-corpus\\html__capability-delegation.json",
+      "returncode": 1,
+      "seconds": 62.7
+    },
+    {
+      "ids": 103,
+      "name": "html/cross-origin-embedder-policy",
+      "outcome": "ran",
+      "prefix": "/html/cross-origin-embedder-policy/",
+      "report": ".tmp\\wpt-corpus\\html__cross-origin-embedder-policy.json",
+      "returncode": 143,
+      "seconds": 198.2
+    },
+    {
+      "ids": 160,
+      "name": "html/cross-origin-opener-policy",
+      "outcome": "ran",
+      "prefix": "/html/cross-origin-opener-policy/",
+      "report": ".tmp\\wpt-corpus\\html__cross-origin-opener-policy.json",
+      "returncode": 143,
+      "seconds": 579.2
     }
   ]
 }
