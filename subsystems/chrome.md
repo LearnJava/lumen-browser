@@ -369,8 +369,18 @@ tab-bar for both layouts (CC-8) are done — see below and `crates/shell/src/mai
   one isn't a simple offset swap — `.cp-row` carries no `data-action`/`data-idx` at all, so removing
   the legacy hit-test would break palette-row activation outright; needs either a measured chrome-node
   rect or new `ChromeAction`s (tracked as [BUG-461](../bugs/BUG-461-OPEN.md)). One parity gap filed:
-  BUG-411 (`#permPopover` carries neither the current domain nor the shields on/off indicator, and
-  has rows only for Camera/Microphone — Notifications and Clipboard are unreachable from the UI).
+  [BUG-411](../bugs/BUG-411-FIXED.md) (`#permPopover` carried neither the current domain nor the
+  shields on/off indicator, and had rows only for Camera/Microphone — Notifications and Clipboard
+  were unreachable from the UI). **Fixed 2026-08-20 (P3):** the design reference gained
+  `#permDomain`, a `#shieldSiteRow`/`#shieldSiteToggle` per-site shields switch (new
+  `data-action="toggle-site-shields"` → `ChromeAction::ToggleSiteShields`) and the two missing
+  `.perm-row`s, all built from CSS classes the asset already had, so the `build.rs` parse-gate was
+  untouched. `ChromeModel` gained `popover_domain`/`site_shields_on` and `permissions` went to
+  `[ChromePermState; 4]`. The switch is the real control, not the legacy indicator: it flips
+  `ShieldsPanel`'s per-host state, which `Lumen::sync_adblock_filter` mirrors into
+  `lumen_network::set_global_adblock_enabled` — the same call `switch_tab` used to feed with the
+  orphaned `TabEntry::adblock` (permanently `false` since CC-15 removed the in-tab checkbox), which
+  had been silently disabling filtering on every tab switch.
 
 - **CC-15-5: three orphan `Palette` fields removed** (`crates/shell/src/panels/themes.rs`):
   `toolbar_bg`, `tab_sleep_bg`, `tab_hibernate_bg` — the only fields of the 17 with no reader outside

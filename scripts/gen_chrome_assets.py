@@ -175,6 +175,10 @@ ONCLICK_EXACT_ACTIONS: dict[str, tuple[str, dict[str, str]]] = {
     # (`SettingsPanel::draft.shields_enabled`/`.fingerprint_mode`), so they
     # get their own actions instead of the unresolvable shared one.
     "toggleShields(this)": ("toggle-shields", {}),
+    # BUG-411: the per-site shields toggle restored into `#permPopover` — a
+    # distinct action from the settings-page `toggle-shields` above, since it
+    # keys off the current domain rather than the global setting.
+    "toggleSiteShields(this)": ("toggle-site-shields", {}),
     "toggleFingerprintMode(this)": ("toggle-fingerprint-mode", {}),
     "closeRightSidebar()": ("close-right-sidebar", {}),
     "openAiSidebar()": ("open-ai-sidebar", {}),

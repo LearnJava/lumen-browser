@@ -25,7 +25,7 @@ pub use model::{
     ChromeHistoryModel, ChromeHistoryRow, ChromeModel, ChromePaletteModel,
     ChromePaletteResultModel, ChromePermState, ChromePrintModel, ChromeRightSidebarModel, ChromeSettingsModel,
     ChromeSidebarTab, ChromeSuggestionModel, ChromeTabGroup, ChromeTabModel, ChromeWorkspaceModel, OmniboxModel,
-    SelectorTouch,
+    SelectorTouch, NO_DOMAIN_LABEL,
 };
 
 /// Error returned by [`ChromeIds::resolve`] when the chrome [`lumen_dom::Document`]

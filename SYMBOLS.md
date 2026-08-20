@@ -199,34 +199,34 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/chrome/src/lib.rs:41` **struct** `ChromeIdError` — Error returned by [`ChromeIds::resolve`] when the chrome [`lumen_dom::Document`]
 `crates/chrome/src/lib.rs:86` **fn** `parse_document` — Parses `html` (the chrome asset's contents — a runtime host passes
 `crates/chrome/src/model.rs:27` **struct** `ChromeModel` — Snapshot of shell state [`bind_model`] reflects into the chrome document
-`crates/chrome/src/model.rs:97` **enum** `ChromeContentView` — Which content view fills `#contentArea` (CC-10b) — bound to `.view.active`
-`crates/chrome/src/model.rs:111` **struct** `ChromeHistoryModel` — `#view-history` snapshot (CC-10b) — mirrors `HistoryPanel::rows`
-`crates/chrome/src/model.rs:124` **enum** `ChromeHistoryRow` — One row of [`ChromeHistoryModel::rows`]
-`crates/chrome/src/model.rs:143` **struct** `ChromeBookmarksModel` — `#view-bookmarks` snapshot (CC-10b) — mirrors `BookmarkPanel`
-`crates/chrome/src/model.rs:158` **struct** `ChromeBookmarkFolderModel` — One `.bm-folder` row
-`crates/chrome/src/model.rs:169` **struct** `ChromeBookmarkCardModel` — One `.bm-card` in `#view-bookmarks`'s `.bm-grid` (CC-10b). Per-card
-`crates/chrome/src/model.rs:195` **struct** `ChromeSettingsModel` — `#view-settings` snapshot (CC-10b) — mirrors a subset of `SettingsPanel`
-`crates/chrome/src/model.rs:212` **struct** `ChromeRightSidebarModel` — `#rightSidebar` snapshot (CC-10b) — merges the legacy `AiPanel`/
-`crates/chrome/src/model.rs:222` **enum** `ChromeSidebarTab` — `#rightSidebar`'s two tabs (CC-10b)
-`crates/chrome/src/model.rs:235` **struct** `ChromeDropdownModel` — `#omniDropdown` snapshot (CC-9): whether it's open, plus its suggestion
-`crates/chrome/src/model.rs:251` **struct** `ChromeSuggestionModel` — One `.dd-row` in `#omniDropdown` (CC-9)
-`crates/chrome/src/model.rs:270` **struct** `ChromeFindModel` — `#findBar` snapshot (CC-9) — mirrors [`OmniboxModel`]'s "engine renders,
-`crates/chrome/src/model.rs:289` **struct** `ChromeDownloadModel` — One `.dl-card` in `#downloadsPanel`'s `.dl-list` (CC-9)
-`crates/chrome/src/model.rs:307` **struct** `ChromeArchiveEntryModel` — One `.arc-card` in `#archivePanel`'s `.arc-list` (BUG-408) — mirrors one
-`crates/chrome/src/model.rs:328` **struct** `ChromePaletteModel` — `#cpOverlay` snapshot (CC-10) — mirrors `CommandPalette`
-`crates/chrome/src/model.rs:349` **struct** `ChromePaletteResultModel` — One `.cp-row` in `#cpList` (CC-10)
-`crates/chrome/src/model.rs:370` **struct** `ChromeCertModel` — `#certOverlay` snapshot (CC-10) — mirrors `CertPanel`/`PanelCertData`
-`crates/chrome/src/model.rs:398` **struct** `ChromePrintModel` — `#printOverlay` snapshot ([BUG-420](../../../bugs/BUG-420-FIXED.md)) —
-`crates/chrome/src/model.rs:412` **enum** `ChromePermState` — Grant state for one permission row (CC-9) — mirrors the shell's
-`crates/chrome/src/model.rs:430` **struct** `OmniboxModel` — Omnibox snapshot [`bind_model`] reflects into `#omniInput`/`#omniWarn`
-`crates/chrome/src/model.rs:443` **struct** `ChromeTabModel` — One tab row for the sidebar tab list (`#sbTabs`)
-`crates/chrome/src/model.rs:482` **struct** `ChromeTabGroup` — A tab's group membership, as rendered by `.group-stripe` (BUG-409)
-`crates/chrome/src/model.rs:503` **struct** `ChromeWorkspaceModel` — One workspace button for the sidebar switcher (`.sb-workspaces`)
-`crates/chrome/src/model.rs:521` **struct** `ChromeMutations` — What one [`bind_model_tracked`] call changed in the document, split by what
-`crates/chrome/src/model.rs:552` **fn** `is_empty` — `true` when this bind changed nothing at all
-`crates/chrome/src/model.rs:560` **struct** `SelectorTouch` — What changed about one selector-relevant node in a [`ChromeMutations`]
-`crates/chrome/src/model.rs:664` **fn** `bind_model` — Binds `model` into `doc`: `data-theme`/`data-layout`/`data-profile` on
-`crates/chrome/src/model.rs:726` **fn** `bind_model_tracked` — Like [`bind_model`], but also reports what the call actually changed, split
+`crates/chrome/src/model.rs:114` **enum** `ChromeContentView` — Which content view fills `#contentArea` (CC-10b) — bound to `.view.active`
+`crates/chrome/src/model.rs:128` **struct** `ChromeHistoryModel` — `#view-history` snapshot (CC-10b) — mirrors `HistoryPanel::rows`
+`crates/chrome/src/model.rs:141` **enum** `ChromeHistoryRow` — One row of [`ChromeHistoryModel::rows`]
+`crates/chrome/src/model.rs:160` **struct** `ChromeBookmarksModel` — `#view-bookmarks` snapshot (CC-10b) — mirrors `BookmarkPanel`
+`crates/chrome/src/model.rs:175` **struct** `ChromeBookmarkFolderModel` — One `.bm-folder` row
+`crates/chrome/src/model.rs:186` **struct** `ChromeBookmarkCardModel` — One `.bm-card` in `#view-bookmarks`'s `.bm-grid` (CC-10b). Per-card
+`crates/chrome/src/model.rs:212` **struct** `ChromeSettingsModel` — `#view-settings` snapshot (CC-10b) — mirrors a subset of `SettingsPanel`
+`crates/chrome/src/model.rs:229` **struct** `ChromeRightSidebarModel` — `#rightSidebar` snapshot (CC-10b) — merges the legacy `AiPanel`/
+`crates/chrome/src/model.rs:239` **enum** `ChromeSidebarTab` — `#rightSidebar`'s two tabs (CC-10b)
+`crates/chrome/src/model.rs:252` **struct** `ChromeDropdownModel` — `#omniDropdown` snapshot (CC-9): whether it's open, plus its suggestion
+`crates/chrome/src/model.rs:268` **struct** `ChromeSuggestionModel` — One `.dd-row` in `#omniDropdown` (CC-9)
+`crates/chrome/src/model.rs:287` **struct** `ChromeFindModel` — `#findBar` snapshot (CC-9) — mirrors [`OmniboxModel`]'s "engine renders,
+`crates/chrome/src/model.rs:306` **struct** `ChromeDownloadModel` — One `.dl-card` in `#downloadsPanel`'s `.dl-list` (CC-9)
+`crates/chrome/src/model.rs:324` **struct** `ChromeArchiveEntryModel` — One `.arc-card` in `#archivePanel`'s `.arc-list` (BUG-408) — mirrors one
+`crates/chrome/src/model.rs:345` **struct** `ChromePaletteModel` — `#cpOverlay` snapshot (CC-10) — mirrors `CommandPalette`
+`crates/chrome/src/model.rs:366` **struct** `ChromePaletteResultModel` — One `.cp-row` in `#cpList` (CC-10)
+`crates/chrome/src/model.rs:387` **struct** `ChromeCertModel` — `#certOverlay` snapshot (CC-10) — mirrors `CertPanel`/`PanelCertData`
+`crates/chrome/src/model.rs:415` **struct** `ChromePrintModel` — `#printOverlay` snapshot ([BUG-420](../../../bugs/BUG-420-FIXED.md)) —
+`crates/chrome/src/model.rs:429` **enum** `ChromePermState` — Grant state for one permission row (CC-9) — mirrors the shell's
+`crates/chrome/src/model.rs:447` **struct** `OmniboxModel` — Omnibox snapshot [`bind_model`] reflects into `#omniInput`/`#omniWarn`
+`crates/chrome/src/model.rs:460` **struct** `ChromeTabModel` — One tab row for the sidebar tab list (`#sbTabs`)
+`crates/chrome/src/model.rs:499` **struct** `ChromeTabGroup` — A tab's group membership, as rendered by `.group-stripe` (BUG-409)
+`crates/chrome/src/model.rs:520` **struct** `ChromeWorkspaceModel` — One workspace button for the sidebar switcher (`.sb-workspaces`)
+`crates/chrome/src/model.rs:538` **struct** `ChromeMutations` — What one [`bind_model_tracked`] call changed in the document, split by what
+`crates/chrome/src/model.rs:569` **fn** `is_empty` — `true` when this bind changed nothing at all
+`crates/chrome/src/model.rs:577` **struct** `SelectorTouch` — What changed about one selector-relevant node in a [`ChromeMutations`]
+`crates/chrome/src/model.rs:681` **fn** `bind_model` — Binds `model` into `doc`: `data-theme`/`data-layout`/`data-profile` on
+`crates/chrome/src/model.rs:743` **fn** `bind_model_tracked` — Like [`bind_model`], but also reports what the call actually changed, split
 
 ## lumen-core  (295 symbols)
 
@@ -4146,7 +4146,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgpu_compute.rs:982` **enum** `GpuOp` — Одна записанная операция command-encoder для исполнения на `queue.submit`
 `crates/engine/paint/src/webgpu_compute.rs:1037` **fn** `submit` — Исполняет набор операций в одном `CommandEncoder` и сабмитит на очередь
 
-## lumen-shell  (943 symbols)
+## lumen-shell  (946 symbols)
 
 `crates/shell/src/adblock.rs:44` **fn** `browser_data_dir` — Root of all browser user data (portable): `<exe_dir>/data`
 `crates/shell/src/adblock.rs:52` **fn** `adblock_dir` — `<data>/adblock` — root of the ad-block subsystem's files
@@ -4604,18 +4604,18 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panels/note_viewer.rs:110` **fn** `panel_height` — Total height of the overlay given the current content
 `crates/shell/src/panels/note_viewer.rs:118` **fn** `hit_test` — Hit-test a click at `(px, py)` in viewport coordinates
 `crates/shell/src/panels/note_viewer.rs:153` **fn** `build_note_viewer` — Build the display list for the note viewer overlay
-`crates/shell/src/panels/permission_panel.rs:50` **enum** `PermissionKind` — A single browser permission kind tracked by the panel
-`crates/shell/src/panels/permission_panel.rs:73` **enum** `PermissionState` — Grant state for a single permission on a single origin
-`crates/shell/src/panels/permission_panel.rs:86` **fn** `cycle` — Cycle to the next state: Ask → Allow → Deny → Ask
-`crates/shell/src/panels/permission_panel.rs:98` **struct** `PermissionPanel` — Per-site permission popover state (7C.2)
-`crates/shell/src/panels/permission_panel.rs:113` **fn** `new` — Create a new hidden panel with no stored permissions
-`crates/shell/src/panels/permission_panel.rs:122` **fn** `toggle` — Flip panel visibility
-`crates/shell/src/panels/permission_panel.rs:127` **fn** `set_origin` — Update the current origin on navigation (does not clear stored grants)
-`crates/shell/src/panels/permission_panel.rs:134` **fn** `state_for` — Return the stored state for `kind` at the current origin
-`crates/shell/src/panels/permission_panel.rs:147` **fn** `cycle_permission` — Cycle the state for `kind` at the current origin to the next value
-`crates/shell/src/panels/permission_panel.rs:166` **fn** `set_permission` — Set the state for `kind` at the current origin directly (CC-9's
-`crates/shell/src/panels/permission_panel.rs:184` **enum** `PermissionHit` — Result of a click inside the permission panel
-`crates/shell/src/panels/permission_panel.rs:197` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the permission panel
+`crates/shell/src/panels/permission_panel.rs:51` **enum** `PermissionKind` — A single browser permission kind tracked by the panel
+`crates/shell/src/panels/permission_panel.rs:74` **enum** `PermissionState` — Grant state for a single permission on a single origin
+`crates/shell/src/panels/permission_panel.rs:87` **fn** `cycle` — Cycle to the next state: Ask → Allow → Deny → Ask
+`crates/shell/src/panels/permission_panel.rs:99` **struct** `PermissionPanel` — Per-site permission popover state (7C.2)
+`crates/shell/src/panels/permission_panel.rs:114` **fn** `new` — Create a new hidden panel with no stored permissions
+`crates/shell/src/panels/permission_panel.rs:123` **fn** `toggle` — Flip panel visibility
+`crates/shell/src/panels/permission_panel.rs:128` **fn** `set_origin` — Update the current origin on navigation (does not clear stored grants)
+`crates/shell/src/panels/permission_panel.rs:135` **fn** `state_for` — Return the stored state for `kind` at the current origin
+`crates/shell/src/panels/permission_panel.rs:148` **fn** `cycle_permission` — Cycle the state for `kind` at the current origin to the next value
+`crates/shell/src/panels/permission_panel.rs:167` **fn** `set_permission` — Set the state for `kind` at the current origin directly (CC-9's
+`crates/shell/src/panels/permission_panel.rs:185` **enum** `PermissionHit` — Result of a click inside the permission panel
+`crates/shell/src/panels/permission_panel.rs:198` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the permission panel
 `crates/shell/src/panels/pip_os_window.rs:53` **struct** `PipOsConfig` — Geometry for the floating PiP window, in logical (CSS) pixels
 `crates/shell/src/panels/pip_os_window.rs:76` **fn** `sized` — A window sized to `width`×`height` (e.g. `documentPictureInPicture
 `crates/shell/src/panels/pip_os_window.rs:98` **fn** `pip_window_attributes` — Build the winit attributes for the floating PiP window
@@ -4710,19 +4710,22 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panels/settings_panel.rs:155` **fn** `toggle_shields` — Flip the "Блокировать рекламу" (shields) toggle
 `crates/shell/src/panels/settings_panel.rs:165` **fn** `toggle_fingerprint_mode` — Flip the "Блокировать фингерпринтинг" toggle
 `crates/shell/src/panels/settings_panel.rs:171` **fn** `scroll_by` — Scroll the content area by `dy` CSS px (positive = down)
-`crates/shell/src/panels/shields_panel.rs:50` **struct** `BlockedLog` — Shared accumulator for the total blocked-request count
-`crates/shell/src/panels/shields_panel.rs:59` **fn** `record` — Increment the total if `url` has a valid HTTP(S) host
-`crates/shell/src/panels/shields_panel.rs:66` **fn** `clear` — Clear the total (call on every top-level navigation)
-`crates/shell/src/panels/shields_panel.rs:79` **struct** `ShieldCountSink` — [`EventSink`] wrapper that forwards every event to an inner sink AND
-`crates/shell/src/panels/shields_panel.rs:102` **struct** `ShieldsPanel` — Shields floating panel state (7C.4)
-`crates/shell/src/panels/shields_panel.rs:124` **fn** `new` — Create a new hidden panel backed by the given shared `log`
-`crates/shell/src/panels/shields_panel.rs:129` **fn** `toggle` — Flip panel visibility
-`crates/shell/src/panels/shields_panel.rs:134` **fn** `set_domain` — Update `current_domain` and refresh blocked counts
-`crates/shell/src/panels/shields_panel.rs:141` **fn** `refresh` — Pull the latest total from the shared [`BlockedLog`] into the panel
-`crates/shell/src/panels/shields_panel.rs:148` **fn** `clear_log` — Clear the shared blocked log (call on top-level navigation)
-`crates/shell/src/panels/shields_panel.rs:156` **fn** `blocked_total_count` — Total blocked-request count for the current page (from last `refresh`)
-`crates/shell/src/panels/shields_panel.rs:165` **enum** `ShieldsHit` — Result of a click inside the shields panel
-`crates/shell/src/panels/shields_panel.rs:178` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the shields panel
+`crates/shell/src/panels/shields_panel.rs:54` **struct** `BlockedLog` — Shared accumulator for the total blocked-request count
+`crates/shell/src/panels/shields_panel.rs:63` **fn** `record` — Increment the total if `url` has a valid HTTP(S) host
+`crates/shell/src/panels/shields_panel.rs:70` **fn** `clear` — Clear the total (call on every top-level navigation)
+`crates/shell/src/panels/shields_panel.rs:83` **struct** `ShieldCountSink` — [`EventSink`] wrapper that forwards every event to an inner sink AND
+`crates/shell/src/panels/shields_panel.rs:106` **struct** `ShieldsPanel` — Shields floating panel state (7C.4)
+`crates/shell/src/panels/shields_panel.rs:142` **fn** `new` — Create a new hidden panel backed by the given shared `log`
+`crates/shell/src/panels/shields_panel.rs:159` **fn** `set_default_enabled` — Set the fallback used by hosts with no per-site choice — call whenever
+`crates/shell/src/panels/shields_panel.rs:171` **fn** `enabled_for_current` — Whether request filtering is on for [`Self::current_domain`] — the
+`crates/shell/src/panels/shields_panel.rs:184` **fn** `toggle_current_site` — Flip shields for [`Self::current_domain`] and return the new state
+`crates/shell/src/panels/shields_panel.rs:196` **fn** `toggle` — Flip panel visibility
+`crates/shell/src/panels/shields_panel.rs:201` **fn** `set_domain` — Update `current_domain` and refresh blocked counts
+`crates/shell/src/panels/shields_panel.rs:208` **fn** `refresh` — Pull the latest total from the shared [`BlockedLog`] into the panel
+`crates/shell/src/panels/shields_panel.rs:215` **fn** `clear_log` — Clear the shared blocked log (call on top-level navigation)
+`crates/shell/src/panels/shields_panel.rs:223` **fn** `blocked_total_count` — Total blocked-request count for the current page (from last `refresh`)
+`crates/shell/src/panels/shields_panel.rs:232` **enum** `ShieldsHit` — Result of a click inside the shields panel
+`crates/shell/src/panels/shields_panel.rs:245` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the shields panel
 `crates/shell/src/panels/shortcuts_panel.rs:48` **struct** `ShortcutRow` — One entry in the shortcuts list: human label + current binding
 `crates/shell/src/panels/shortcuts_panel.rs:61` **fn** `binding_label` — Formatted binding string shown in the key badge (e.g. `"Ctrl+R"`)
 `crates/shell/src/panels/shortcuts_panel.rs:77` **fn** `default_rows` — Compile-time default bindings for all displayed commands
@@ -5042,38 +5045,38 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/tabs/groups.rs:102` **struct** `TabGroup` — A named, colour-coded group of tabs
 `crates/shell/src/tabs/groups.rs:117` **fn** `new` — Create an expanded group with the given id, label and colour
 `crates/shell/src/tabs/strip.rs:40` **struct** `TabEntry` — Metadata for one browser tab
-`crates/shell/src/tabs/strip.rs:90` **struct** `TabStrip` — State of the tab strip (tab list + active index)
-`crates/shell/src/tabs/strip.rs:105` **fn** `new` — Create the initial tab strip with one blank tab
-`crates/shell/src/tabs/strip.rs:126` **fn** `len` — Number of open tabs
-`crates/shell/src/tabs/strip.rs:134` **fn** `push_blank` — Append a new blank tab and return its index
-`crates/shell/src/tabs/strip.rs:158` **fn** `push_with_opener` — Append a new blank child tab opened by the tab with `opener_id`
-`crates/shell/src/tabs/strip.rs:179` **fn** `update_last_activated` — Record `now_ms` as the activation timestamp for the tab at `idx`
-`crates/shell/src/tabs/strip.rs:189` **fn** `set_tab_container` — Assign `container` to the tab at `idx`. Out-of-bounds index is a no-op
-`crates/shell/src/tabs/strip.rs:197` **fn** `remove` — Remove the tab at `idx`. Returns the new active index (clamped to valid
-`crates/shell/src/tabs/strip.rs:209` **fn** `set_active_title` — Update the title of the active tab
-`crates/shell/src/tabs/strip.rs:219` **fn** `set_tab_state` — Update the lifecycle state of the tab at `idx`
-`crates/shell/src/tabs/strip.rs:229` **fn** `move_tab` — Reorder: move the tab currently at `src` so that it ends up at `dst`
-`crates/shell/src/tabs/strip.rs:248` **fn** `toggle_pin` — Toggle the pinned flag of the tab at `idx`. Returns the new state
-`crates/shell/src/tabs/strip.rs:258` **fn** `is_pinned` — `true` if the tab at `idx` is pinned. Out-of-bounds → `false`
-`crates/shell/src/tabs/strip.rs:269` **fn** `duplicate` — Insert a duplicate of the tab at `src` immediately to its right
-`crates/shell/src/tabs/strip.rs:297` **fn** `close_others` — Remove every tab except `keep_idx` and any pinned tabs
-`crates/shell/src/tabs/strip.rs:322` **fn** `close_right` — Remove all non-pinned tabs positioned to the right of `idx`
-`crates/shell/src/tabs/strip.rs:348` **fn** `create_group` — Create a new expanded [`TabGroup`] with `label` and `color`
-`crates/shell/src/tabs/strip.rs:357` **fn** `group` — Borrow the group with the given id, if it exists
-`crates/shell/src/tabs/strip.rs:363` **fn** `group_of` — The group id of the tab at `idx`, or `None` when ungrouped / out of bounds
-`crates/shell/src/tabs/strip.rs:371` **fn** `assign_to_group` — Assign the tab at `idx` to the group `group_id`
-`crates/shell/src/tabs/strip.rs:385` **fn** `ungroup` — Remove the tab at `idx` from its group (no-op if already ungrouped or
-`crates/shell/src/tabs/strip.rs:393` **fn** `toggle_collapse` — Toggle the collapsed flag of the group `id`. Returns the new collapsed
-`crates/shell/src/tabs/strip.rs:404` **fn** `is_collapsed` — `true` if the group `id` exists and is collapsed
-`crates/shell/src/tabs/strip.rs:410` **fn** `group_color` — The colour of the group `id`, or `None` for an unknown group
-`crates/shell/src/tabs/strip.rs:416` **fn** `group_members` — Strip indices of every tab in the group `id`, in left-to-right order
-`crates/shell/src/tabs/strip.rs:427` **fn** `remove_group` — Remove the group `id` and ungroup all of its member tabs. No-op if the
-`crates/shell/src/tabs/strip.rs:443` **fn** `visible_indices` — Strip indices of the tabs that should be drawn, in order
-`crates/shell/src/tabs/strip.rs:467` **struct** `TabDragState` — State for an in-progress tab drag-and-drop
-`crates/shell/src/tabs/strip.rs:481` **fn** `drop_target` — Compute the tab index where the dragged tab would be dropped if the
-`crates/shell/src/tabs/strip.rs:491` **enum** `TabLayout` — Tab layout mode: horizontal strip or vertical sidebar
-`crates/shell/src/tabs/strip.rs:501` **fn** `from_str` — Parse from a stored settings string (`"horizontal"` or `"vertical"`)
-`crates/shell/src/tabs/strip.rs:506` **fn** `as_str` — Serialize to a settings string
+`crates/shell/src/tabs/strip.rs:94` **struct** `TabStrip` — State of the tab strip (tab list + active index)
+`crates/shell/src/tabs/strip.rs:109` **fn** `new` — Create the initial tab strip with one blank tab
+`crates/shell/src/tabs/strip.rs:130` **fn** `len` — Number of open tabs
+`crates/shell/src/tabs/strip.rs:138` **fn** `push_blank` — Append a new blank tab and return its index
+`crates/shell/src/tabs/strip.rs:162` **fn** `push_with_opener` — Append a new blank child tab opened by the tab with `opener_id`
+`crates/shell/src/tabs/strip.rs:183` **fn** `update_last_activated` — Record `now_ms` as the activation timestamp for the tab at `idx`
+`crates/shell/src/tabs/strip.rs:193` **fn** `set_tab_container` — Assign `container` to the tab at `idx`. Out-of-bounds index is a no-op
+`crates/shell/src/tabs/strip.rs:201` **fn** `remove` — Remove the tab at `idx`. Returns the new active index (clamped to valid
+`crates/shell/src/tabs/strip.rs:213` **fn** `set_active_title` — Update the title of the active tab
+`crates/shell/src/tabs/strip.rs:223` **fn** `set_tab_state` — Update the lifecycle state of the tab at `idx`
+`crates/shell/src/tabs/strip.rs:233` **fn** `move_tab` — Reorder: move the tab currently at `src` so that it ends up at `dst`
+`crates/shell/src/tabs/strip.rs:252` **fn** `toggle_pin` — Toggle the pinned flag of the tab at `idx`. Returns the new state
+`crates/shell/src/tabs/strip.rs:262` **fn** `is_pinned` — `true` if the tab at `idx` is pinned. Out-of-bounds → `false`
+`crates/shell/src/tabs/strip.rs:273` **fn** `duplicate` — Insert a duplicate of the tab at `src` immediately to its right
+`crates/shell/src/tabs/strip.rs:301` **fn** `close_others` — Remove every tab except `keep_idx` and any pinned tabs
+`crates/shell/src/tabs/strip.rs:326` **fn** `close_right` — Remove all non-pinned tabs positioned to the right of `idx`
+`crates/shell/src/tabs/strip.rs:352` **fn** `create_group` — Create a new expanded [`TabGroup`] with `label` and `color`
+`crates/shell/src/tabs/strip.rs:361` **fn** `group` — Borrow the group with the given id, if it exists
+`crates/shell/src/tabs/strip.rs:367` **fn** `group_of` — The group id of the tab at `idx`, or `None` when ungrouped / out of bounds
+`crates/shell/src/tabs/strip.rs:375` **fn** `assign_to_group` — Assign the tab at `idx` to the group `group_id`
+`crates/shell/src/tabs/strip.rs:389` **fn** `ungroup` — Remove the tab at `idx` from its group (no-op if already ungrouped or
+`crates/shell/src/tabs/strip.rs:397` **fn** `toggle_collapse` — Toggle the collapsed flag of the group `id`. Returns the new collapsed
+`crates/shell/src/tabs/strip.rs:408` **fn** `is_collapsed` — `true` if the group `id` exists and is collapsed
+`crates/shell/src/tabs/strip.rs:414` **fn** `group_color` — The colour of the group `id`, or `None` for an unknown group
+`crates/shell/src/tabs/strip.rs:420` **fn** `group_members` — Strip indices of every tab in the group `id`, in left-to-right order
+`crates/shell/src/tabs/strip.rs:431` **fn** `remove_group` — Remove the group `id` and ungroup all of its member tabs. No-op if the
+`crates/shell/src/tabs/strip.rs:447` **fn** `visible_indices` — Strip indices of the tabs that should be drawn, in order
+`crates/shell/src/tabs/strip.rs:471` **struct** `TabDragState` — State for an in-progress tab drag-and-drop
+`crates/shell/src/tabs/strip.rs:485` **fn** `drop_target` — Compute the tab index where the dragged tab would be dropped if the
+`crates/shell/src/tabs/strip.rs:495` **enum** `TabLayout` — Tab layout mode: horizontal strip or vertical sidebar
+`crates/shell/src/tabs/strip.rs:505` **fn** `from_str` — Parse from a stored settings string (`"horizontal"` or `"vertical"`)
+`crates/shell/src/tabs/strip.rs:510` **fn** `as_str` — Serialize to a settings string
 `crates/shell/src/tabs/tree.rs:22` **fn** `depth_of` — Compute the tree depth of the tab with `id` in the given slice
 `crates/shell/src/tabs/tree.rs:38` **fn** `children_of` — Return the IDs of direct children of `parent_id` in strip order
 `crates/shell/src/tabs/tree.rs:48` **fn** `subtree_ids` — Collect the IDs of all tabs in the subtree rooted at `root_id` (inclusive)
@@ -5622,4 +5625,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:228` **fn** `count`
 
 ---
-*Total: 5545 symbols in 24 crates*
+*Total: 5548 symbols in 24 crates*
