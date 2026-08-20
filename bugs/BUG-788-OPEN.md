@@ -75,7 +75,8 @@ IGxlZnQ7IH0KLmZlTGVmdCB7IGFsaWdlIGxlZnQ7IH0KLmFsZXhFbmQgeyBhbGlnbg==
 ## Что уже сделано
 
 `fuzz_css_parser` внесён в `KNOWN_FAILING` воркфлоу `.github/workflows/fuzz.yml`
-рядом с `fuzz_image` ([BUG-787](BUG-787-OPEN.md)) — таргет продолжает гоняться
+(рядом с ним там стоял `fuzz_image` — [BUG-787](BUG-787-FIXED.md), снят
+2026-08-20 вместе с фиксом) — таргет продолжает гоняться
 и собирать репро, но не красит джоб. **Убрать его из списка в коммите с
 фиксом.**
 

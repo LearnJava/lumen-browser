@@ -1,9 +1,9 @@
 # BUG-787 — `lumen_image::decode` зависает навсегда на 111-байтном GIF (LZW-распаковка кадра не завершается)
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-20
 **Заведён:** 2026-08-19 (TEST-1, первый реальный прогон cargo-fuzz — CI-джоб `fuzz`)
 **Область:** image (`crates/engine/image/src/gif.rs` — `AnimatedGif::frame_image`, вызов `gif::Frames::decode_lzw_encoded_frame_into_buffer`)
-**Владелец:** P3 (движок). Заведён P2 в ходе тулинговой задачи, здесь не чинится.
+**Владелец:** P3 (движок). Заведён P2 в ходе тулинговой задачи, исправлен P3 2026-08-20.
 
 ## Симптом
 
@@ -93,3 +93,76 @@ Extension (`21 F9 04 …`), image descriptor 1×1 (`2C`), LZW minimum code size
 списком `cargo fuzz list`) и добавить его же в `fuzz/corpus/fuzz_image/`.
 Отдельно — юнит-тест в `gif.rs`, проверяющий, что `decode` на этом вводе
 возвращает `Err` за разумное время.
+
+---
+
+## Фикс (2026-08-20, P3)
+
+### Корень — в апстриме, и он не обходится настройкой
+
+`gif` 0.14.2, `reader/decoder.rs:257-263`:
+
+```rust
+self.pixel_converter.read_into_buffer(frame, buf, &mut move |out| loop {
+    let (bytes_read, bytes_written, status) = lzw_reader.decode_bytes(data, out)?;
+    data = data.get(bytes_read..).unwrap_or_default();
+    if bytes_written > 0 || matches!(status, LzwStatus::NoProgress) {
+        return Ok(bytes_written);
+    }
+})?;
+```
+
+Выход из цикла — только «что-то записано» либо `NoProgress`. А `weezl` 0.1.12
+после end-кода уходит в `has_ended` и на любой вход отвечает
+`(consumed_in: 0, consumed_out: 0, status: Done)` — не `NoProgress`. Кадр, чей
+LZW-поток кончился (или начался с end-кода, как в этом репро: `35 44` при
+`min_code_size = 2` — это код 5 = END при `CLEAR = 4`) раньше, чем заполнен
+кадровый буфер, крутит этот `loop` вечно. Никаких опций `DecodeOptions`,
+меняющих условие выхода, у крейта нет; 0.14.2 — последняя версия на crates.io
+на 2026-08-20, обновлением это не лечится.
+
+### Что сделано
+
+Пиксельный проход перестал ходить в `gif::FrameDecoder`
+(`crates/engine/image/src/gif.rs`):
+
+- `lzw_decode_into` — свой цикл поверх `weezl::decode::Decoder::decode_bytes`
+  с тремя условиями остановки сразу: буфер кадра заполнен · декодер вернул не
+  `Ok` (`Done`/`NoProgress`) · итерация не сдвинула ни вход, ни выход. Входной
+  срез монотонно укорачивается, так что цикл конечен при любом содержимом.
+- `decode_frame_rgba` — палитра кадра (или глобальная), transparent-index и
+  deinterlace (`interlace_row_order`, GIF spec §20.c.ii). Поведение
+  побайтно повторяет конвертер `gif` (`reader/converter.rs:139-160`), включая
+  «индекс, которого нет в палитре, → пиксель не трогаем» и игнор
+  `frame.left`/`frame.top` ([BUG-763](BUG-763-OPEN.md) — отдельный баг, здесь
+  не чинится).
+- Оборванный поток (`written < width × height`) даёт
+  `GifError::DecodeError("LZW-поток кадра оборван: N из M пикселей")`.
+  Это ужесточение: раньше такой кадр вешал процесс, теперь картинка не
+  декодируется вовсе. Частичный кадр не показываем — у нас нет прогрессивного
+  показа, для которого он был бы полезен.
+- `GifCursor` вместо `frames: Box<FrameDecoder>` держит `global_palette:
+  Option<Vec<u8>>`; `weezl` стал прямой зависимостью `lumen-image`
+  (транзитивно он и так был — через `gif`).
+- Свойство «хвост потока за последним пикселем не читаем», ради которого был
+  сделан [BUG-396](BUG-396-FIXED.md), сохранено: цикл выходит по заполнению
+  буфера раньше, чем смотрит на статус.
+
+### Тесты
+
+- `bug787_frame_with_truncated_lzw_stream_errors_instead_of_hanging` —
+  минимизированное 78-байтное репро (константа в тесте побайтно равна
+  `fuzz/regressions/fuzz_image-gif-lzw-hang`): контейнерный проход по-прежнему
+  видит кадр 1×1, а `frame_image(0)` и `decode` **возвращаются** с
+  `DecodeError`.
+- `interlace_row_order_matches_spec_passes`, `interlaced_frame_rows_land_in_screen_order`
+  — порядок строк чересстрочного кадра (своя реализация вместо
+  `gif::reader::converter::InterlaceIterator`).
+- `frame_pixel_outside_palette_stays_transparent` — индекс вне палитры остаётся
+  прозрачным. Тонкость: палитру меньше двух записей брать нельзя — `gif::Encoder`
+  дополняет её до степени двойки, и «отсутствующий» индекс попал бы в дописанный
+  чёрный цвет.
+- Репро положено в `fuzz/regressions/fuzz_image-gif-lzw-hang` и
+  `fuzz/corpus/fuzz_image/gif-lzw-ends-early.gif`; `fuzz_image` убран из
+  `KNOWN_FAILING` в `.github/workflows/fuzz.yml` — таргет снова блокирующий, а
+  шаг replay гоняет это репро на каждом прогоне.

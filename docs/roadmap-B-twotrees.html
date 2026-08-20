@@ -75,8 +75,8 @@
 {
  "generated": "2026-08-20",
  "counts": {
-  "open": 327,
-  "fixed": 426,
+  "open": 326,
+  "fixed": 427,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -5144,7 +5144,7 @@
        "title": "TEST-1: cargo-fuzz харнессы на парсеры",
        "status": "done",
        "size": "M",
-       "note": "Закрыто (2026-08-19, P2). Харнессы (5 таргетов, seed-корпус 56 файлов) сделаны 2026-08-18, но исполнить их на dev-машине нельзя в принципе: libFuzzer требует ASan-рантайм и секционные символы `__start___sancov_*`, которых Windows/MSVC не даёт, а WSL непригоден (rustup валит nightly на конфликте llvm-tools за `bin/llc`; диск C: заполнен на 100%, ext4.vhdx не растёт, корневая ФС в read-only). Прогон вынесен в CI: `.github/workflows/fuzz.yml`, джоб `fuzz` на ubuntu-latest, nightly ставится только внутри джоба (пин 1.97.0 и сборка браузера не затронуты — `fuzz/` не член основного workspace). Триггеры: push, задевший `fuzz/**` (60 c на таргет), cron по понедельникам (300 c), `workflow_dispatch` с входами duration/targets. Один джоб с последовательными таргетами, а не матрица из пяти (пятикратная пересборка инструментированного дерева + пять из 20 слотов конкурентности); падение таргета не прерывает цикл. Первый же прогон (32274370138) дал находку: `fuzz_image` — `timeout after 29 seconds` на 111-байтном GIF89a 1×1, перепроверено вне фаззера (>60 c в dev-release на Windows), локализовано до `decode_lzw_encoded_frame_into_buffer` крейта `gif` 0.14.2 → BUG-787 (чинит P3). Таргет внесён в `KNOWN_FAILING` воркфлоу, чтобы джоб не был вечно красным; убрать в коммите с фиксом. Состояние — docs/tasks/p2-test-track.md#test-1-состояние-2026-08-19-сессия-p2--прогон-вынесен-в-ci",
+       "note": "Закрыто (2026-08-19, P2). Харнессы (5 таргетов, seed-корпус 56 файлов) сделаны 2026-08-18, но исполнить их на dev-машине нельзя в принципе: libFuzzer требует ASan-рантайм и секционные символы `__start___sancov_*`, которых Windows/MSVC не даёт, а WSL непригоден (rustup валит nightly на конфликте llvm-tools за `bin/llc`; диск C: заполнен на 100%, ext4.vhdx не растёт, корневая ФС в read-only). Прогон вынесен в CI: `.github/workflows/fuzz.yml`, джоб `fuzz` на ubuntu-latest, nightly ставится только внутри джоба (пин 1.97.0 и сборка браузера не затронуты — `fuzz/` не член основного workspace). Триггеры: push, задевший `fuzz/**` (60 c на таргет), cron по понедельникам (300 c), `workflow_dispatch` с входами duration/targets. Один джоб с последовательными таргетами, а не матрица из пяти (пятикратная пересборка инструментированного дерева + пять из 20 слотов конкурентности); падение таргета не прерывает цикл. Первый же прогон (32274370138) дал находку: `fuzz_image` — `timeout after 29 seconds` на 111-байтном GIF89a 1×1, перепроверено вне фаззера (>60 c в dev-release на Windows), локализовано до `decode_lzw_encoded_frame_into_buffer` крейта `gif` 0.14.2 → BUG-787 (починен P3 2026-08-20: свой LZW-цикл поверх `weezl` вместо `gif::FrameDecoder`; репро в `fuzz/regressions/`, таргет снят с `KNOWN_FAILING` и снова блокирующий). Состояние — docs/tasks/p2-test-track.md#test-1-состояние-2026-08-19-сессия-p2--прогон-вынесен-в-ci",
        "bugs": [
         "BUG-787"
        ]
@@ -10575,10 +10575,10 @@
    "debtor": false
   },
   "BUG-787": {
-   "status": "open",
+   "status": "fixed",
    "title": "`lumen_image::decode` **зависает навсегда** на 111-байтном GIF89a 1×1: >60 с в dev-release на Windows, в CI убит libFuzzer'ом («timeout after 29 seconds»). Лока…",
    "component": "image (`crates/engine/image/src/gif.rs` — `AnimatedGif::frame_image`, вызов `gif::Frames::decode_lzw_encoded_frame_into_buffer`)",
-   "date": null,
+   "date": "2026-08-20",
    "debtor": false
   },
   "BUG-788": {

@@ -1,7 +1,9 @@
 use std::io::Cursor;
 use std::sync::{Arc, Mutex};
-use gif::streaming_decoder::FrameDecoder;
 use gif::{DecodeOptions, Decoder};
+use weezl::BitOrder;
+use weezl::decode::Decoder as LzwDecoder;
+use weezl::LzwStatus;
 use crate::{Image, PixelFormat};
 
 /// GIF сигнатура: "GIF87a" или "GIF89a" (6 байтов).
@@ -101,8 +103,8 @@ fn frame_index_for(delays_cs: &[u16], loop_count: GifLoopCount, elapsed_ms: u64)
 }
 
 /// Опции контейнерного прохода: LZW-данные кадров **не** разжимаются на месте, а выдаются
-/// как есть (`skip_frame_decoding`), чтобы пиксели каждого кадра распаковывались отдельным
-/// [`FrameDecoder`] строго до заполнения кадрового буфера.
+/// как есть (`skip_frame_decoding`), чтобы пиксели каждого кадра распаковывал
+/// [`decode_frame_rgba`] строго до заполнения кадрового буфера.
 ///
 /// BUG-396: у `gif::Decoder` со встроенным LZW нет способа «дочитать кадр и перейти к
 /// следующему» — `next_frame_info` докручивает LZW-поток текущего кадра до конца, даже если
@@ -110,7 +112,7 @@ fn frame_index_for(delays_cs: &[u16], loop_count: GifLoopCount, elapsed_ms: u64)
 /// (giflib и производные: ширина растёт на один код раньше, чем ждёт `weezl`), несут после
 /// последнего пикселя биты, которые декодер прочитывает как несуществующий код — вся анимация
 /// падала `invalid code in LZW stream`, хотя пиксели всех кадров декодируются верно. Контейнерный
-/// проход без LZW этих битов не касается, а `FrameDecoder` останавливается на `width × height`
+/// проход без LZW этих битов не касается, а пиксельный останавливается на `width × height`
 /// пикселях и до хвоста не доходит — ровно так же ведут себя Chromium и Pillow.
 fn container_options() -> DecodeOptions {
     let mut options = DecodeOptions::new();
@@ -119,12 +121,154 @@ fn container_options() -> DecodeOptions {
     options
 }
 
-/// Опции пиксельного прохода [`FrameDecoder`]: RGBA-выход, палитра и transparent-index
-/// применяются самим конвертером.
-fn pixel_options() -> DecodeOptions {
-    let mut options = DecodeOptions::new();
-    options.set_color_output(gif::ColorOutput::RGBA);
-    options
+/// Байтов на пиксель в RGBA8-выходе.
+const RGBA_CHANNELS: usize = 4;
+
+/// Байтов на запись глобальной/локальной палитры GIF (RGB-триплет).
+const PALETTE_CHANNELS: usize = 3;
+
+/// Допустимый диапазон LZW minimum code size (GIF spec §22.c.ii — до 8 бит на индекс;
+/// `gif`/`weezl` принимают до 11, повторяем их границу, чтобы не сузить приём файлов).
+const LZW_MIN_CODE_SIZE_RANGE: core::ops::RangeInclusive<u8> = 1..=11;
+
+/// Порядок строк, в котором чересстрочный (interlaced) GIF выдаёт их из потока:
+/// четыре прохода — каждый восьмой от 0, каждый восьмой от 4, каждый четвёртый от 2,
+/// каждый второй от 1 (GIF spec §20.c.ii). `rows[i]` — экранная строка для `i`-й
+/// строки потока.
+fn interlace_row_order(height: usize) -> Vec<usize> {
+    let mut rows = Vec::with_capacity(height);
+    for (start, step) in [(0usize, 8usize), (4, 8), (2, 4), (1, 2)] {
+        let mut row = start;
+        while row < height {
+            rows.push(row);
+            row += step;
+        }
+    }
+    rows
+}
+
+/// Распаковывает LZW-поток кадра в `out` (по индексу палитры на байт) и возвращает число
+/// записанных байтов. Останавливается, как только `out` заполнен, — хвост потока за
+/// последним пикселем не читается вовсе (BUG-396: энкодеры семейства giflib оставляют там
+/// биты, которые `weezl` прочитывает как несуществующий код).
+///
+/// # BUG-787: почему распаковка своя, а не `gif::FrameDecoder`
+///
+/// `gif` 0.14.2 в `decode_lzw_encoded_frame_into_buffer` крутит
+/// `loop { … if bytes_written > 0 || status == NoProgress { return } }`, а `weezl` после
+/// end-кода навсегда отвечает `(0, 0, Done)` (`decode.rs::advance`, ранний выход по
+/// `has_ended`). Кадр, чей поток кончился раньше, чем заполнен буфер, вешает этот цикл
+/// НАВСЕГДА — на 78-байтном GIF процесс не возвращал управление за 60 с. Класс — DoS:
+/// путь пользовательский (`<img>` из сети). Здесь цикл завершается по трём условиям сразу:
+/// буфер заполнен, декодер сообщил `Done`/`NoProgress`, либо итерация не сдвинула ни вход,
+/// ни выход. Апстрим не чинен: 0.14.2 — последняя версия на crates.io на 2026-08-20.
+///
+/// # Errors
+/// - [`GifError::DecodeError`] — `weezl` отверг код в потоке до того, как кадр заполнен.
+fn lzw_decode_into(min_code_size: u8, data: &[u8], out: &mut [u8]) -> Result<usize, GifError> {
+    let mut decoder = LzwDecoder::new(BitOrder::Lsb, min_code_size);
+    let mut in_pos = 0usize;
+    let mut out_pos = 0usize;
+
+    while out_pos < out.len() {
+        let (input, output) = (
+            data.get(in_pos..).unwrap_or_default(),
+            out.get_mut(out_pos..).unwrap_or_default(),
+        );
+        let result = decoder.decode_bytes(input, output);
+        in_pos = in_pos.saturating_add(result.consumed_in);
+        out_pos = out_pos.saturating_add(result.consumed_out);
+
+        // Кадр заполнен — что бы декодер ни сообщил про хвост, он уже не наш.
+        if out_pos >= out.len() {
+            break;
+        }
+        match result.status {
+            // Единственная ветка, продолжающая цикл, и только когда шаг что-то сдвинул:
+            // иначе следующая итерация повторит его байт в байт (это и есть зависание).
+            Ok(LzwStatus::Ok) if result.consumed_in > 0 || result.consumed_out > 0 => {}
+            Ok(_) => break,
+            Err(e) => return Err(GifError::DecodeError(e.to_string())),
+        }
+    }
+
+    Ok(out_pos)
+}
+
+/// Раскладывает один кадр в RGBA8: распаковывает LZW, применяет палитру кадра (или глобальную)
+/// и transparent-index, при `frame.interlaced` расставляет строки по местам.
+///
+/// Пишет в префикс `out` длиной `frame.width × frame.height × 4` — как это делал
+/// `gif::FrameDecoder`, чей конвертер тоже игнорировал `frame.left`/`frame.top`. Пиксель,
+/// чьего индекса нет в палитре, не трогается (в `out` он останется нулём = прозрачным
+/// чёрным) — тоже поведение `gif`.
+///
+/// # Errors
+/// - [`GifError::DecodeError`] — недопустимый LZW minimum code size, слишком маленький `out`
+///   или поток, оборвавшийся раньше, чем заполнен кадр (BUG-787).
+fn decode_frame_rgba(
+    frame: &gif::Frame<'_>,
+    global_palette: Option<&[u8]>,
+    out: &mut [u8],
+) -> Result<(), GifError> {
+    let frame_w = frame.width as usize;
+    let frame_h = frame.height as usize;
+    let pixels = frame_w
+        .checked_mul(frame_h)
+        .ok_or_else(|| GifError::DecodeError("переполнение размера кадра".to_string()))?;
+    let rgba_len = pixels
+        .checked_mul(RGBA_CHANNELS)
+        .ok_or_else(|| GifError::DecodeError("переполнение размера кадра".to_string()))?;
+    let out = out
+        .get_mut(..rgba_len)
+        .ok_or_else(|| GifError::DecodeError("буфер кадра меньше самого кадра".to_string()))?;
+
+    // Первый байт данных кадра — LZW minimum code size, дальше сам поток
+    // (`skip_frame_decoding` отдаёт кадр именно в таком виде).
+    let (&min_code_size, data) = frame.buffer.split_first().unwrap_or((&2, &[]));
+    if !LZW_MIN_CODE_SIZE_RANGE.contains(&min_code_size) {
+        return Err(GifError::DecodeError(format!(
+            "недопустимый LZW minimum code size: {min_code_size}"
+        )));
+    }
+
+    let mut indexed = vec![0u8; pixels];
+    let written = lzw_decode_into(min_code_size, data, &mut indexed)?;
+    if written < pixels {
+        return Err(GifError::DecodeError(format!(
+            "LZW-поток кадра оборван: {written} из {pixels} пикселей"
+        )));
+    }
+
+    let palette = frame.palette.as_deref().or(global_palette).unwrap_or_default();
+    let transparent = frame.transparent;
+    let interlace = frame.interlaced.then(|| interlace_row_order(frame_h));
+
+    for src_row in 0..frame_h {
+        let dst_row = interlace
+            .as_ref()
+            .map_or(src_row, |rows| rows.get(src_row).copied().unwrap_or(src_row));
+        let src_start = src_row * frame_w;
+        let dst_start = dst_row * frame_w * RGBA_CHANNELS;
+        let (Some(src), Some(dst)) = (
+            indexed.get(src_start..src_start + frame_w),
+            out.get_mut(dst_start..dst_start + frame_w * RGBA_CHANNELS),
+        ) else {
+            return Err(GifError::DecodeError(format!("строка {dst_row} вне кадра")));
+        };
+        for (rgba, &idx) in dst.chunks_exact_mut(RGBA_CHANNELS).zip(src) {
+            let offset = usize::from(idx) * PALETTE_CHANNELS;
+            let Some(color) = palette.get(offset..offset + PALETTE_CHANNELS) else {
+                continue;
+            };
+            rgba[0] = color[0];
+            rgba[1] = color[1];
+            rgba[2] = color[2];
+            rgba[3] = if transparent == Some(idx) { 0x00 } else { 0xFF };
+        }
+    }
+
+    Ok(())
 }
 
 /// Ленивое состояние декодера: живой forward-only `gif::Decoder` над `Arc<[u8]>`-байтами,
@@ -141,8 +285,8 @@ struct GifCursor {
     /// В `Box`, чтобы объёмный `gif::Decoder` не раздувал `AnimatedGif` при простое (курсор `None`
     /// всё равно резервирует место под самый большой вариант `Option`).
     reader: Box<Decoder<Cursor<Arc<[u8]>>>>,
-    /// Распаковщик LZW-данных одного кадра в RGBA-пиксели. Держит глобальную палитру файла.
-    frames: Box<FrameDecoder>,
+    /// Глобальная палитра файла (RGB-триплеты) — подставляется кадрам без локальной.
+    global_palette: Option<Vec<u8>>,
     /// Индекс следующего кадра, который выдаст `reader` (число уже прочитанных кадров).
     next_idx: usize,
     /// Кэш последнего выданного кадра `(индекс, пиксели)` — обслуживает повторный запрос
@@ -156,13 +300,13 @@ impl GifCursor {
         let reader = container_options()
             .read_info(Cursor::new(Arc::clone(encoded)))
             .map_err(|e| GifError::DecodeError(e.to_string()))?;
-        let mut frames = FrameDecoder::new(pixel_options());
-        if let Some(palette) = reader.global_palette() {
-            frames.set_global_palette(palette.to_vec());
-        }
+        let global_palette = reader
+            .global_palette()
+            .filter(|p| !p.is_empty())
+            .map(<[u8]>::to_vec);
         Ok(Self {
             reader: Box::new(reader),
-            frames: Box::new(frames),
+            global_palette,
             next_idx: 0,
             last: None,
         })
@@ -304,8 +448,9 @@ impl AnimatedGif {
         // decoded too (disposal makes each frame depend on its predecessors).
         let mut buffer = Vec::new();
         while cursor.next_idx <= idx {
-            // Disjoint field borrows: `frame` borrows `cursor.reader`, the unpacker is
-            // `cursor.frames`.
+            // Disjoint field borrows: `frame` borrows `cursor.reader`, the palette is
+            // `cursor.global_palette`.
+            let global_palette = cursor.global_palette.as_deref();
             let Some(frame) = cursor
                 .reader
                 .read_next_frame()
@@ -314,10 +459,7 @@ impl AnimatedGif {
                 break;
             };
             buffer = vec![0u8; frame_bytes];
-            cursor
-                .frames
-                .decode_lzw_encoded_frame_into_buffer(frame, &mut buffer)
-                .map_err(|e| GifError::DecodeError(e.to_string()))?;
+            decode_frame_rgba(frame, global_palette, &mut buffer)?;
             cursor.next_idx += 1;
         }
 
@@ -363,9 +505,9 @@ pub fn decode_gif(bytes: &[u8]) -> Result<Image, GifError> {
 ///
 /// Кадры не материализуются в память при загрузке: проход идёт по контейнеру и собирает лишь
 /// задержки, LZW-данные при этом не распаковываются вовсе (см. [`container_options`]), а сами
-/// кадры декодируются по запросу через [`AnimatedGif::frame_image`]. Пиксели выдаёт
-/// `gif::FrameDecoder` с `ColorOutput::RGBA` — палитра и transparent-index применяются
-/// автоматически.
+/// кадры декодируются по запросу через [`AnimatedGif::frame_image`]. Пиксели в RGBA8 выдаёт
+/// [`decode_frame_rgba`] — палитра, transparent-index и deinterlace применяются им же
+/// (BUG-787: `gif::FrameDecoder` зависал на кадре с оборванным LZW-потоком).
 ///
 /// # Shell integration handoff
 /// Шелл вызывает `gif.frame_index_at(elapsed_ms)` на каждом render-тике, и при смене индекса —
@@ -727,6 +869,116 @@ mod tests {
         assert_eq!(f2.data, [0, 255, 0, 255].repeat(4), "кадр 2 — зелёный непрозрачный");
     }
 
+    // ── BUG-787: LZW-поток кадра кончается раньше, чем заполнен кадр ────────
+
+    /// Минимизированное (`cargo fuzz tmin`, 78 байт) репро BUG-787: синтаксически
+    /// правдоподобный GIF89a 1×1, у которого первый же LZW-код кадра — end code.
+    ///
+    /// Кадр объявлен размером в один пиксель, а поток за ним не выдаёт ни одного индекса:
+    /// `35 44` при `min_code_size = 2` читается как код 5 = END (`CLEAR = 4`, `END = 5`).
+    /// В `gif` 0.14.2 такой кадр вешает `decode_lzw_encoded_frame_into_buffer` навсегда
+    /// (см. комментарий у [`lzw_decode_into`]); здесь он обязан дать ошибку и вернуться.
+    const LZW_ENDS_EARLY_GIF: &[u8] = &[
+        0x47, 0x49, 0x46, 0x38, 0x39, 0x61, // "GIF89a"
+        0x01, 0x00, 0x01, 0x00, 0x80, 0x00, 0x00, // 1×1, GCT из 2 цветов
+        0x00, 0x7f, 0x00, 0x00, 0x00, 0x00, // палитра
+        0x21, 0xf9, 0x04, 0x60, 0x07, 0x00, 0xff, 0x00, // GCE
+        0x2c, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, // дескриптор кадра
+        0x02, 0x02, 0x35, 0x44, // LZW: min code size 2, подблок из двух байт
+        0x01, 0x20, // подблок из одного байта
+        0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, //
+        0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, //
+        0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, // хвост подблока
+        0x00, // терминатор блоков
+        0x3b, // trailer
+    ];
+
+    #[test]
+    fn bug787_frame_with_truncated_lzw_stream_errors_instead_of_hanging() {
+        // Контейнерный проход обязан отработать: кадр объявлен, метаданные читаются.
+        let gif = decode_gif_animated(LZW_ENDS_EARLY_GIF).expect("метаданные декодируются");
+        assert_eq!(gif.frame_count(), 1);
+        assert_eq!((gif.width, gif.height), (1, 1));
+
+        // Ключ теста: пиксельный проход обязан ВЕРНУТЬСЯ, притом ошибкой.
+        match gif.frame_image(0) {
+            Err(GifError::DecodeError(msg)) => {
+                assert!(msg.contains("оборван"), "ожидалось сообщение об обрыве, получено {msg}");
+            }
+            r => panic!("ожидалась DecodeError, получено {r:?}"),
+        }
+        match decode_gif(LZW_ENDS_EARLY_GIF) {
+            Err(GifError::DecodeError(_)) => {}
+            r => panic!("ожидалась DecodeError из decode_gif, получено {r:?}"),
+        }
+        // Точка входа фаззера (`fuzz/fuzz_targets/fuzz_image.rs`) — ровно она и висла;
+        // CI проигрывает те же байты из `fuzz/regressions/fuzz_image-gif-lzw-hang`.
+        assert!(
+            crate::decode(LZW_ENDS_EARLY_GIF).is_err(),
+            "lumen_image::decode обязан вернуть ошибку, а не крутиться"
+        );
+    }
+
+    // ── чересстрочные кадры (deinterlace) ───────────────────────────────────
+
+    #[test]
+    fn interlace_row_order_matches_spec_passes() {
+        // Порядок из GIF spec §20.c.ii, сверен с `gif::reader::converter::InterlaceIterator`.
+        assert_eq!(interlace_row_order(1), vec![0]);
+        assert_eq!(interlace_row_order(3), vec![0, 2, 1]);
+        assert_eq!(interlace_row_order(5), vec![0, 4, 2, 1, 3]);
+        assert_eq!(interlace_row_order(8), vec![0, 4, 2, 6, 1, 3, 5, 7]);
+        assert_eq!(interlace_row_order(9), vec![0, 8, 4, 2, 6, 1, 3, 5, 7]);
+        assert_eq!(interlace_row_order(11), vec![0, 8, 4, 2, 6, 10, 1, 3, 5, 7, 9]);
+        // Перестановка: каждая строка встречается ровно один раз.
+        let mut sorted = interlace_row_order(23);
+        sorted.sort_unstable();
+        assert_eq!(sorted, (0..23).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn interlaced_frame_rows_land_in_screen_order() {
+        // 1×8, глобальная палитра из 8 оттенков красного: индекс i → (i, 0, 0).
+        let palette: Vec<u8> = (0..8u8).flat_map(|i| [i, 0, 0]).collect();
+        // Пиксели идут в порядке ПОТОКА, а декодер обязан разложить их по экранным строкам:
+        // на i-й позиции потока лежит индекс, равный её экранной строке.
+        let stream_pixels: Vec<u8> = interlace_row_order(8)
+            .into_iter()
+            .map(|row| u8::try_from(row).expect("строка < 8"))
+            .collect();
+        assert_eq!(stream_pixels, vec![0, 4, 2, 6, 1, 3, 5, 7]);
+
+        let mut out = Vec::new();
+        {
+            let mut enc = gif::Encoder::new(&mut out, 1, 8, &palette).expect("encoder");
+            let mut frame = gif::Frame::from_indexed_pixels(1, 8, stream_pixels, None);
+            frame.interlaced = true;
+            enc.write_frame(&frame).expect("frame");
+        }
+
+        let gif = decode_gif_animated(&out).expect("decode");
+        let img = gif.frame_image(0).expect("кадр 0");
+        let expected: Vec<u8> = (0..8u8).flat_map(|row| [row, 0, 0, 255]).collect();
+        assert_eq!(img.data, expected, "строки чересстрочного кадра должны встать по местам");
+    }
+
+    #[test]
+    fn frame_pixel_outside_palette_stays_transparent() {
+        // Палитра из двух цветов, а кадр ссылается на индекс 3 — его в палитре нет
+        // (индекс влезает в min code size 2, но за таблицу цветов выходит). Меньше двух
+        // записей палитру брать нельзя: `gif::Encoder` дополняет её до степени двойки,
+        // и «отсутствующий» индекс попал бы в дописанный нулевой цвет.
+        let palette: Vec<u8> = vec![9, 9, 9, 1, 2, 3];
+        let mut out = Vec::new();
+        {
+            let mut enc = gif::Encoder::new(&mut out, 2, 1, &palette).expect("encoder");
+            let frame = gif::Frame::from_indexed_pixels(2, 1, vec![0u8, 3], None);
+            enc.write_frame(&frame).expect("frame");
+        }
+        let gif = decode_gif_animated(&out).expect("decode");
+        let img = gif.frame_image(0).expect("кадр 0");
+        assert_eq!(img.data, vec![9, 9, 9, 255, 0, 0, 0, 0], "пиксель вне палитры — прозрачный");
+    }
 
     #[test]
     fn animated_gif_is_send_sync() {
