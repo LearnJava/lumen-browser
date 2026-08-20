@@ -1617,8 +1617,7 @@ pub(crate) fn tls_config_h1_for_profile(profile: tls::TlsProfile) -> Arc<rustls:
     static CONFIGS: OnceLock<HashMap<tls::TlsProfile, Arc<rustls::ClientConfig>>> = OnceLock::new();
 
     let configs = CONFIGS.get_or_init(|| {
-        let mut root_store = rustls::RootCertStore::empty();
-        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let root_store = tls::trusted_root_store();
 
         let mut map = HashMap::new();
         for prof in &[tls::TlsProfile::Standard, tls::TlsProfile::Strict, tls::TlsProfile::Tor] {
@@ -1630,9 +1629,7 @@ pub(crate) fn tls_config_h1_for_profile(profile: tls::TlsProfile) -> Arc<rustls:
     });
 
     configs.get(&profile).cloned().unwrap_or_else(|| {
-        let mut root_store = rustls::RootCertStore::empty();
-        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        let mut cfg = tls::build_client_config(profile, root_store);
+        let mut cfg = tls::build_client_config(profile, tls::trusted_root_store());
         cfg.alpn_protocols = vec![b"http/1.1".to_vec()];
         Arc::new(cfg)
     })
@@ -1647,8 +1644,7 @@ pub(crate) fn tls_config_for_profile(profile: tls::TlsProfile) -> Arc<rustls::Cl
     static CONFIGS: OnceLock<HashMap<tls::TlsProfile, Arc<rustls::ClientConfig>>> = OnceLock::new();
 
     let configs = CONFIGS.get_or_init(|| {
-        let mut root_store = rustls::RootCertStore::empty();
-        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let root_store = tls::trusted_root_store();
 
         let mut map = HashMap::new();
         for prof in &[tls::TlsProfile::Standard, tls::TlsProfile::Strict, tls::TlsProfile::Tor] {
@@ -1663,9 +1659,7 @@ pub(crate) fn tls_config_for_profile(profile: tls::TlsProfile) -> Arc<rustls::Cl
         .cloned()
         .unwrap_or_else(|| {
             // Fallback: construct on-the-fly if not cached (shouldn't happen)
-            let mut root_store = rustls::RootCertStore::empty();
-            root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-            Arc::new(tls::build_client_config(profile, root_store))
+            Arc::new(tls::build_client_config(profile, tls::trusted_root_store()))
         })
 }
 

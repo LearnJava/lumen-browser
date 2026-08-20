@@ -19,10 +19,68 @@ pub use fingerprint::{
     CHROME_130_JA3_SNAPSHOT, CHROME_130_JA4_SNAPSHOT,
 };
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use rustls::ClientConfig;
 
 use crate::http::HttpProfile;
+
+/// Environment variable naming an extra PEM file of trusted CA certificates.
+///
+/// Read once (cached) and appended to the built-in `webpki-roots` bundle by
+/// every [`trusted_root_store`] call — the single point of trust-root
+/// construction for this crate (BUG-785). Before this, five call sites
+/// (`lib.rs` ×4, `dot.rs` ×1) each built a `RootCertStore` from
+/// `webpki_roots::TLS_SERVER_ROOTS` alone with no way to add a CA, so a
+/// self-signed CA (e.g. WPT's test CA, `tests/wpt/certs/ca-cert.pem`) could
+/// never be trusted and every `.https.` request against it failed
+/// `UnknownIssuer` before the request was even sent.
+pub const EXTRA_CA_CERT_ENV: &str = "LUMEN_EXTRA_CA_CERT";
+
+/// Build a `RootCertStore`: the built-in webpki roots plus, if
+/// `LUMEN_EXTRA_CA_CERT` names a readable, parsable PEM file, its
+/// certificates. Use this everywhere a `RootCertStore` is needed instead of
+/// building one ad hoc — see [`EXTRA_CA_CERT_ENV`].
+pub fn trusted_root_store() -> rustls::RootCertStore {
+    let mut root_store = rustls::RootCertStore::empty();
+    root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    root_store.add_parsable_certificates(extra_ca_certs().iter().cloned());
+    root_store
+}
+
+/// Load and cache the extra CA certificates named by `LUMEN_EXTRA_CA_CERT`,
+/// if any. An unset env var, unreadable file, or unparsable PEM all degrade
+/// to an empty list (with a diagnostic on stderr) rather than failing — TLS
+/// must keep working off the built-in roots alone.
+fn extra_ca_certs() -> &'static [rustls::pki_types::CertificateDer<'static>] {
+    static CACHE: OnceLock<Vec<rustls::pki_types::CertificateDer<'static>>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        let Ok(path) = std::env::var(EXTRA_CA_CERT_ENV) else {
+            return Vec::new();
+        };
+        match std::fs::read(&path) {
+            Ok(bytes) => parse_pem_certs(&path, &bytes),
+            Err(e) => {
+                eprintln!("{EXTRA_CA_CERT_ENV}={path}: не удалось прочитать файл, игнорирую ({e})");
+                Vec::new()
+            }
+        }
+    })
+}
+
+/// Parse PEM-encoded certificates out of `bytes`. Split out of
+/// [`extra_ca_certs`] so it can be unit-tested without touching the
+/// process-global env var or the `OnceLock` cache (both read only once per
+/// process, which makes them unsuitable for a `#[test]` that wants to vary
+/// the input).
+fn parse_pem_certs(path: &str, bytes: &[u8]) -> Vec<rustls::pki_types::CertificateDer<'static>> {
+    let certs: Vec<_> = rustls_pemfile::certs(&mut { bytes })
+        .filter_map(|r| r.ok())
+        .collect();
+    if certs.is_empty() {
+        eprintln!("{EXTRA_CA_CERT_ENV}={path}: в PEM не нашлось ни одного сертификата");
+    }
+    certs
+}
 
 /// TLS fingerprint profile — controls cipher suites, kx_groups, ALPN, and
 /// protocol versions offered in the TLS ClientHello.
@@ -162,6 +220,58 @@ mod tests {
     fn tor_profile_http11_only() {
         let cfg = build_client_config(TlsProfile::Tor, empty_root_store());
         assert_eq!(cfg.alpn_protocols, vec![b"http/1.1".to_vec()]);
+    }
+
+    // WPT's vendored self-signed test CA (`tests/wpt/certs/ca-cert.pem`),
+    // inlined so this test does not depend on that file's path/existence.
+    const WPT_TEST_CA_PEM: &str = "\
+-----BEGIN CERTIFICATE-----
+MIIDXjCCAkagAwIBAgIUQOPzlblqAQyDzD7lVY+V50ZCkGUwDQYJKoZIhvcNAQEL
+BQAwFDESMBAGA1UEAwwJMTI3LjAuMC4xMCAXDTI2MDgwMjA2MTcwNloYDzIxMjYw
+NzA5MDYxNzA2WjAUMRIwEAYDVQQDDAkxMjcuMC4wLjEwggEiMA0GCSqGSIb3DQEB
+AQUAA4IBDwAwggEKAoIBAQDF1qw9u3zMp1lz7iQB3lvvgh39kStU/wYfbKRA4KZ4
+5siqVOtZpisUXgHwk0fuJu0blbUAqtbrJGyG4R9k48eeAPSDltbRL3LyeZZ0HtiY
+GGIugr+mZERu/rfXL6fqIB1c4xpIoGoYANTA721ZFabaD0aTOG1Cx9aTGQjxcGnJ
+t/PgfFLpWJfRYWg6Wi7UzwIS+4iH1J6KqflBRtft3fqOIxIIfje6xN9ZOaHd1X3t
+dvkJ5xEMwYsziluhIFT9Q/N9/VnAyliMQlU7do2sCYDxY8RrdvMiqLRwwc1/yS1t
+Q0zKRuAlwBS32SLheP82dum5DschgeFMWg0Jf0PxOD8JAgMBAAGjgaUwgaIwHQYD
+VR0OBBYEFA/51BUIeePPEMzTQrnDNs2fX508MB8GA1UdIwQYMBaAFA/51BUIeePP
+EMzTQrnDNs2fX508MC0GA1UdEQQmMCSHBH8AAAGCEXdlYi1wbGF0Zm9ybS50ZXN0
+ggkxMjcuMC4wLjEwDAYDVR0TAQH/BAIwADAOBgNVHQ8BAf8EBAMCBaAwEwYDVR0l
+BAwwCgYIKwYBBQUHAwEwDQYJKoZIhvcNAQELBQADggEBAG8wxKQcdTekk/SqNJAT
+pUgBbhWfh7QuacrlYqPZ9PvXzyp7DW2bMSSUE0Bu/tyXp03XACKbqf56Lc93dWPO
+SuVTKdJ0NzyDGVu/ZLgXq3sfKbl+TNMWOWhCE0gQiFilM3pkqcURnkLJmbFB/8Ns
+14QUq7cHj0Y3wX1/s3y+yLh5Yht/j1BNnSPzV8cP3rvZ6rVB5IfPSGuyhzP3r0nV
+T+N0lu+g+Vk4UfyZ6+GRYUwA78hs2CNV3MqMqMLYgb8zveL/cVaWWtSXppu+BI3M
+5wtZ1ZzlCFyUeFeF1Yso1Sxv2hLEM7zMtrjfmqLKkJLuglzxuDRWNFQjERqi0A/o
+lwI=
+-----END CERTIFICATE-----
+";
+
+    #[test]
+    fn parse_pem_certs_reads_valid_cert() {
+        let certs = parse_pem_certs("test.pem", WPT_TEST_CA_PEM.as_bytes());
+        assert_eq!(certs.len(), 1);
+    }
+
+    #[test]
+    fn parse_pem_certs_empty_on_garbage_input() {
+        let certs = parse_pem_certs("test.pem", b"not a pem file at all");
+        assert!(certs.is_empty());
+    }
+
+    #[test]
+    fn parse_pem_certs_empty_on_empty_input() {
+        let certs = parse_pem_certs("test.pem", b"");
+        assert!(certs.is_empty());
+    }
+
+    #[test]
+    fn trusted_root_store_includes_builtin_roots_even_without_env_var() {
+        // No LUMEN_EXTRA_CA_CERT set in the test environment — must still
+        // produce a non-empty store from the built-in webpki roots.
+        let store = trusted_root_store();
+        assert!(!store.is_empty());
     }
 
     #[test]
