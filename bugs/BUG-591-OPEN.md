@@ -98,3 +98,22 @@ error, and the same path for a later `postMessage` handler) still only
 worker's reply channel — an uncaught exception inside an *already-started*
 worker still cannot reach the parent's `error` handler. This bug stays OPEN
 for that mechanism.
+
+**Corpus-scale confirmation (P2, WPT-RUN-6, 2026-08-20/21):** the
+`eprintln!`-only path is directly visible, one line per occurrence, in every
+`.tmp/wpt-corpus/*.log` from the completed WPT-RUN-5 Windows run —
+`[worker-0] v8 script error: Runtime("importScripts: cannot load script:
+/resources/testharness.js")` / `[shared-worker] v8 script error:
+Runtime("importScripts is not supported")` — the exact stderr line this
+section describes, at the exact moment `.any.worker.html`/`.worker.html`/
+`.any.sharedworker.html`'s wptrunner-generated bootstrap fails on its first
+statement (see [BUG-778](bugs/BUG-778-OPEN.md) for the importScripts gap
+itself). Because nothing reaches the parent, `fetch_tests_from_worker()`
+just waits out its ~10s per-file timeout: 1210 of 6205 TIMEOUT ids in that
+run (19.5%) are this exact mechanism, the single largest TIMEOUT cluster
+measured in the whole corpus. Fixing the missing-feature side (BUG-778)
+alone would likely convert most of these from TIMEOUT to a fast ERROR/FAIL
+(testharness.js still wouldn't load) — this pipeline gap is what's needed on
+top for the parent to *observe* that quickly instead of waiting out the
+timeout, and would also matter independently for the many `html/webappapis`
+files listed above.
