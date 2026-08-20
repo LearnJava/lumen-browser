@@ -1,7 +1,7 @@
 {
   "binary": "D:\\RustProjects\\lumen-browser\\.claude\\worktrees\\p2-work\\target\\dev-release\\lumen.exe",
-  "commit": "3e9bf8aef",
-  "finished": "2026-08-20T17:26:02",
+  "commit": "74798498e",
+  "finished": "2026-08-20T19:32:51",
   "processes": 6,
   "scope": [
     "FileAPI",
@@ -102,7 +102,21 @@
     "gyroscope",
     "hr-time",
     "hsts",
-    "html"
+    "html",
+    "html-aam",
+    "html-longdesc",
+    "html-media-capture",
+    "html-ruby-extensions",
+    "https-upgrades",
+    "idle-detection",
+    "imagebitmap-renderingcontext",
+    "import-maps",
+    "inert",
+    "input-device-capabilities",
+    "input-events",
+    "installedapp",
+    "intersection-observer",
+    "intervention-reporting"
   ],
   "scored": {
     "empty_shards": [
@@ -125,8 +139,11 @@
       "css__filter-effects",
       "dpub-aria",
       "graphics-aam",
+      "html-longdesc",
       "html__canvas__offscreen__text",
-      "html__document-isolation-policy"
+      "html__semantics__edits",
+      "intervention-reporting",
+      "is-input-pending"
     ],
     "per_category": {
       "FileAPI": {
@@ -1366,14 +1383,185 @@
           "reftest": 1382,
           "testharness": 8399
         },
-        "harness_ok": 905,
+        "harness_ok": 3055,
         "ids": 9981,
-        "not_run": 7913,
-        "pass_rate": 0.0137,
-        "ran": 2068,
-        "score": 136.59,
-        "subtests_passed": 130,
-        "subtests_total": 1217
+        "not_run": 4218,
+        "pass_rate": 0.0842,
+        "ran": 5763,
+        "score": 840.4,
+        "subtests_passed": 12424,
+        "subtests_total": 30781
+      },
+      "html-aam": {
+        "by_type": {
+          "testharness": 16
+        },
+        "harness_ok": 16,
+        "ids": 16,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 16,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 341
+      },
+      "html-media-capture": {
+        "by_type": {
+          "testharness": 2
+        },
+        "harness_ok": 1,
+        "ids": 2,
+        "not_run": 0,
+        "pass_rate": 0.415,
+        "ran": 2,
+        "score": 0.83,
+        "subtests_passed": 5,
+        "subtests_total": 6
+      },
+      "html-ruby-extensions": {
+        "by_type": {
+          "reftest": 84
+        },
+        "harness_ok": 82,
+        "ids": 84,
+        "not_run": 0,
+        "pass_rate": 0.9762,
+        "ran": 84,
+        "score": 82.0,
+        "subtests_passed": 0,
+        "subtests_total": 0
+      },
+      "https-upgrades": {
+        "by_type": {
+          "testharness": 6
+        },
+        "harness_ok": 0,
+        "ids": 6,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 6,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 0
+      },
+      "idle-detection": {
+        "by_type": {
+          "testharness": 12
+        },
+        "harness_ok": 0,
+        "ids": 12,
+        "not_run": 7,
+        "pass_rate": 0.0,
+        "ran": 5,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 0
+      },
+      "imagebitmap-renderingcontext": {
+        "by_type": {
+          "testharness": 14
+        },
+        "harness_ok": 12,
+        "ids": 14,
+        "not_run": 0,
+        "pass_rate": 0.0714,
+        "ran": 14,
+        "score": 1.0,
+        "subtests_passed": 1,
+        "subtests_total": 20
+      },
+      "import-maps": {
+        "by_type": {
+          "testharness": 57
+        },
+        "harness_ok": 35,
+        "ids": 57,
+        "not_run": 0,
+        "pass_rate": 0.1661,
+        "ran": 57,
+        "score": 9.47,
+        "subtests_passed": 24,
+        "subtests_total": 100
+      },
+      "inert": {
+        "by_type": {
+          "testharness": 29
+        },
+        "harness_ok": 22,
+        "ids": 29,
+        "not_run": 0,
+        "pass_rate": 0.1672,
+        "ran": 29,
+        "score": 4.85,
+        "subtests_passed": 31,
+        "subtests_total": 96
+      },
+      "input-device-capabilities": {
+        "by_type": {
+          "testharness": 1
+        },
+        "harness_ok": 0,
+        "ids": 1,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 1,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 0
+      },
+      "input-events": {
+        "by_type": {
+          "testharness": 33
+        },
+        "harness_ok": 25,
+        "ids": 33,
+        "not_run": 0,
+        "pass_rate": 0.0188,
+        "ran": 33,
+        "score": 0.62,
+        "subtests_passed": 120,
+        "subtests_total": 1749
+      },
+      "installedapp": {
+        "by_type": {
+          "testharness": 2
+        },
+        "harness_ok": 0,
+        "ids": 2,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 2,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 0
+      },
+      "intersection-observer": {
+        "by_type": {
+          "crashtest": 2,
+          "reftest": 1,
+          "testharness": 143
+        },
+        "harness_ok": 81,
+        "ids": 146,
+        "not_run": 2,
+        "pass_rate": 0.0122,
+        "ran": 144,
+        "score": 1.78,
+        "subtests_passed": 5,
+        "subtests_total": 169
+      },
+      "intervention-reporting": {
+        "by_type": {
+          "testharness": 2
+        },
+        "harness_ok": 0,
+        "ids": 2,
+        "not_run": 2,
+        "pass_rate": 0.0,
+        "ran": 0,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 0
       }
     },
     "recovered_shards": [
@@ -1448,27 +1636,35 @@
       {
         "results": 314,
         "shard": "fetch"
+      },
+      {
+        "results": 1,
+        "shard": "html__dom"
+      },
+      {
+        "results": 69,
+        "shard": "html__semantics__popovers"
       }
     ],
     "status_counts": {
-      "": 110,
-      "ERROR": 772,
-      "FAIL": 16799,
-      "NOT-RUN": 16608,
-      "OK": 7884,
-      "PASS": 5155,
-      "SKIP": 16,
-      "TIMEOUT": 4812
+      "": 122,
+      "ERROR": 876,
+      "FAIL": 17162,
+      "NOT-RUN": 12924,
+      "OK": 9909,
+      "PASS": 5554,
+      "SKIP": 73,
+      "TIMEOUT": 5940
     },
     "totals": {
-      "harness_ok": 13039,
-      "ids": 52156,
-      "not_run": 16608,
-      "pass_rate": 0.127,
-      "ran": 35548,
-      "score": 6623.61,
-      "subtests_passed": 56538,
-      "subtests_total": 160614
+      "harness_ok": 15463,
+      "ids": 52560,
+      "not_run": 12924,
+      "pass_rate": 0.1413,
+      "ran": 39636,
+      "score": 7427.97,
+      "subtests_passed": 69018,
+      "subtests_total": 192659
     }
   },
   "shards": [
@@ -3892,6 +4088,456 @@
       "report": ".tmp\\wpt-corpus\\html__cross-origin-opener-policy.json",
       "returncode": 143,
       "seconds": 579.2
+    },
+    {
+      "ids": 38,
+      "name": "html/document-isolation-policy",
+      "outcome": "ran",
+      "prefix": "/html/document-isolation-policy/",
+      "report": ".tmp\\wpt-corpus\\html__document-isolation-policy.json",
+      "returncode": 1,
+      "seconds": 551.4
+    },
+    {
+      "ids": 392,
+      "name": "html/dom",
+      "outcome": "ran",
+      "prefix": "/html/dom/",
+      "report": ".tmp\\wpt-corpus\\html__dom.json",
+      "returncode": 143,
+      "seconds": 33.9
+    },
+    {
+      "ids": 426,
+      "name": "html/editing",
+      "outcome": "ran",
+      "prefix": "/html/editing/",
+      "report": ".tmp\\wpt-corpus\\html__editing.json",
+      "returncode": 1,
+      "seconds": 156.5
+    },
+    {
+      "ids": 1,
+      "name": "html/embedded-content",
+      "outcome": "ran",
+      "prefix": "/html/embedded-content/",
+      "report": ".tmp\\wpt-corpus\\html__embedded-content.json",
+      "returncode": 1,
+      "seconds": 27.8
+    },
+    {
+      "ids": 156,
+      "name": "html/infrastructure",
+      "outcome": "ran",
+      "prefix": "/html/infrastructure/",
+      "report": ".tmp\\wpt-corpus\\html__infrastructure.json",
+      "returncode": 1,
+      "seconds": 354.7
+    },
+    {
+      "ids": 195,
+      "name": "html/interaction",
+      "outcome": "ran",
+      "prefix": "/html/interaction/",
+      "report": ".tmp\\wpt-corpus\\html__interaction.json",
+      "returncode": 143,
+      "seconds": 41.7
+    },
+    {
+      "ids": 16,
+      "name": "html/links",
+      "outcome": "ran",
+      "prefix": "/html/links/",
+      "report": ".tmp\\wpt-corpus\\html__links.json",
+      "returncode": 1,
+      "seconds": 37.0
+    },
+    {
+      "ids": 1,
+      "name": "html/meta",
+      "outcome": "ran",
+      "prefix": "/html/meta/",
+      "report": ".tmp\\wpt-corpus\\html__meta.json",
+      "returncode": 1,
+      "seconds": 34.6
+    },
+    {
+      "ids": 26,
+      "name": "html/obsolete",
+      "outcome": "ran",
+      "prefix": "/html/obsolete/",
+      "report": ".tmp\\wpt-corpus\\html__obsolete.json",
+      "returncode": 1,
+      "seconds": 38.1
+    },
+    {
+      "ids": 478,
+      "name": "html/rendering",
+      "outcome": "ran",
+      "prefix": "/html/rendering/",
+      "report": ".tmp\\wpt-corpus\\html__rendering.json",
+      "returncode": 1,
+      "seconds": 94.9
+    },
+    {
+      "ids": 2,
+      "name": "html/scripting",
+      "outcome": "ran",
+      "prefix": "/html/scripting/",
+      "report": ".tmp\\wpt-corpus\\html__scripting.json",
+      "returncode": 1,
+      "seconds": 34.5
+    },
+    {
+      "ids": 2,
+      "name": "html/select",
+      "outcome": "ran",
+      "prefix": "/html/select/",
+      "report": ".tmp\\wpt-corpus\\html__select.json",
+      "returncode": 1,
+      "seconds": 19.3
+    },
+    {
+      "ids": 2,
+      "name": "html/semantics (bare)",
+      "outcome": "ran",
+      "prefix": null,
+      "report": ".tmp\\wpt-corpus\\html__semantics (bare).json",
+      "returncode": 1,
+      "seconds": 23.6
+    },
+    {
+      "ids": 7,
+      "name": "html/semantics/disabled-elements",
+      "outcome": "ran",
+      "prefix": "/html/semantics/disabled-elements/",
+      "report": ".tmp\\wpt-corpus\\html__semantics__disabled-elements.json",
+      "returncode": 1,
+      "seconds": 36.5
+    },
+    {
+      "ids": 118,
+      "name": "html/semantics/document-metadata",
+      "outcome": "ran",
+      "prefix": "/html/semantics/document-metadata/",
+      "report": ".tmp\\wpt-corpus\\html__semantics__document-metadata.json",
+      "returncode": 1,
+      "seconds": 196.1
+    },
+    {
+      "ids": 2,
+      "name": "html/semantics/edits",
+      "outcome": "ran",
+      "prefix": "/html/semantics/edits/",
+      "report": ".tmp\\wpt-corpus\\html__semantics__edits.json",
+      "returncode": 143,
+      "seconds": 66.6
+    },
+    {
+      "ids": 805,
+      "name": "html/semantics/embedded-content",
+      "outcome": "ran",
+      "prefix": "/html/semantics/embedded-content/",
+      "report": ".tmp\\wpt-corpus\\html__semantics__embedded-content.json",
+      "returncode": 1,
+      "seconds": 950.6
+    },
+    {
+      "ids": 677,
+      "name": "html/semantics/forms",
+      "outcome": "ran",
+      "prefix": "/html/semantics/forms/",
+      "report": ".tmp\\wpt-corpus\\html__semantics__forms.json",
+      "returncode": 64,
+      "seconds": 311.9
+    },
+    {
+      "ids": 45,
+      "name": "html/semantics/grouping-content",
+      "outcome": "ran",
+      "prefix": "/html/semantics/grouping-content/",
+      "report": ".tmp\\wpt-corpus\\html__semantics__grouping-content.json",
+      "returncode": 1,
+      "seconds": 50.6
+    },
+    {
+      "ids": 181,
+      "name": "html/semantics/interactive-elements",
+      "outcome": "ran",
+      "prefix": "/html/semantics/interactive-elements/",
+      "report": ".tmp\\wpt-corpus\\html__semantics__interactive-elements.json",
+      "returncode": 1,
+      "seconds": 160.2
+    },
+    {
+      "ids": 38,
+      "name": "html/semantics/interestfor",
+      "outcome": "ran",
+      "prefix": "/html/semantics/interestfor/",
+      "report": ".tmp\\wpt-corpus\\html__semantics__interestfor.json",
+      "returncode": 1,
+      "seconds": 113.4
+    },
+    {
+      "ids": 37,
+      "name": "html/semantics/links",
+      "outcome": "ran",
+      "prefix": "/html/semantics/links/",
+      "report": ".tmp\\wpt-corpus\\html__semantics__links.json",
+      "returncode": 64,
+      "seconds": 224.1
+    },
+    {
+      "ids": 21,
+      "name": "html/semantics/menu",
+      "outcome": "ran",
+      "prefix": "/html/semantics/menu/",
+      "report": ".tmp\\wpt-corpus\\html__semantics__menu.json",
+      "returncode": 1,
+      "seconds": 177.6
+    },
+    {
+      "ids": 2,
+      "name": "html/semantics/obsolete",
+      "outcome": "ran",
+      "prefix": "/html/semantics/obsolete/",
+      "report": ".tmp\\wpt-corpus\\html__semantics__obsolete.json",
+      "returncode": 64,
+      "seconds": 63.1
+    },
+    {
+      "ids": 114,
+      "name": "html/semantics/permission-element",
+      "outcome": "ran",
+      "prefix": "/html/semantics/permission-element/",
+      "report": ".tmp\\wpt-corpus\\html__semantics__permission-element.json",
+      "returncode": 1,
+      "seconds": 126.5
+    },
+    {
+      "ids": 116,
+      "name": "html/semantics/popovers",
+      "outcome": "ran",
+      "prefix": "/html/semantics/popovers/",
+      "report": ".tmp\\wpt-corpus\\html__semantics__popovers.json",
+      "returncode": 143,
+      "seconds": 80.8
+    },
+    {
+      "ids": 533,
+      "name": "html/semantics/scripting-1",
+      "outcome": "ran",
+      "prefix": "/html/semantics/scripting-1/",
+      "report": ".tmp\\wpt-corpus\\html__semantics__scripting-1.json",
+      "returncode": 64,
+      "seconds": 585.3
+    },
+    {
+      "ids": 2,
+      "name": "html/semantics/sections",
+      "outcome": "ran",
+      "prefix": "/html/semantics/sections/",
+      "report": ".tmp\\wpt-corpus\\html__semantics__sections.json",
+      "returncode": 1,
+      "seconds": 81.2
+    },
+    {
+      "ids": 33,
+      "name": "html/semantics/selectors",
+      "outcome": "ran",
+      "prefix": "/html/semantics/selectors/",
+      "report": ".tmp\\wpt-corpus\\html__semantics__selectors.json",
+      "returncode": 1,
+      "seconds": 105.9
+    },
+    {
+      "ids": 29,
+      "name": "html/semantics/tabular-data",
+      "outcome": "ran",
+      "prefix": "/html/semantics/tabular-data/",
+      "report": ".tmp\\wpt-corpus\\html__semantics__tabular-data.json",
+      "returncode": 1,
+      "seconds": 108.7
+    },
+    {
+      "ids": 37,
+      "name": "html/semantics/text-level-semantics",
+      "outcome": "ran",
+      "prefix": "/html/semantics/text-level-semantics/",
+      "report": ".tmp\\wpt-corpus\\html__semantics__text-level-semantics.json",
+      "returncode": 1,
+      "seconds": 96.8
+    },
+    {
+      "ids": 32,
+      "name": "html/semantics/the-button-element",
+      "outcome": "ran",
+      "prefix": "/html/semantics/the-button-element/",
+      "report": ".tmp\\wpt-corpus\\html__semantics__the-button-element.json",
+      "returncode": 1,
+      "seconds": 100.1
+    },
+    {
+      "ids": 409,
+      "name": "html/syntax",
+      "outcome": "ran",
+      "prefix": "/html/syntax/",
+      "report": ".tmp\\wpt-corpus\\html__syntax.json",
+      "returncode": 1,
+      "seconds": 491.5
+    },
+    {
+      "ids": 15,
+      "name": "html/the-xhtml-syntax",
+      "outcome": "ran",
+      "prefix": "/html/the-xhtml-syntax/",
+      "report": ".tmp\\wpt-corpus\\html__the-xhtml-syntax.json",
+      "returncode": 1,
+      "seconds": 72.0
+    },
+    {
+      "ids": 21,
+      "name": "html/user-activation",
+      "outcome": "ran",
+      "prefix": "/html/user-activation/",
+      "report": ".tmp\\wpt-corpus\\html__user-activation.json",
+      "returncode": 143,
+      "seconds": 56.2
+    },
+    {
+      "ids": 368,
+      "name": "html/webappapis",
+      "outcome": "ran",
+      "prefix": "/html/webappapis/",
+      "report": ".tmp\\wpt-corpus\\html__webappapis.json",
+      "returncode": 1,
+      "seconds": 374.7
+    },
+    {
+      "ids": 16,
+      "name": "html-aam",
+      "outcome": "ran",
+      "prefix": "/html-aam/",
+      "report": ".tmp\\wpt-corpus\\html-aam.json",
+      "returncode": 1,
+      "seconds": 35.1
+    },
+    {
+      "ids": 23,
+      "name": "html-longdesc",
+      "outcome": "ran",
+      "prefix": "/html-longdesc/",
+      "report": ".tmp\\wpt-corpus\\html-longdesc.json",
+      "returncode": 64,
+      "seconds": 6.6
+    },
+    {
+      "ids": 15,
+      "name": "html-media-capture",
+      "outcome": "ran",
+      "prefix": "/html-media-capture/",
+      "report": ".tmp\\wpt-corpus\\html-media-capture.json",
+      "returncode": 1,
+      "seconds": 31.5
+    },
+    {
+      "ids": 84,
+      "name": "html-ruby-extensions",
+      "outcome": "ran",
+      "prefix": "/html-ruby-extensions/",
+      "report": ".tmp\\wpt-corpus\\html-ruby-extensions.json",
+      "returncode": 1,
+      "seconds": 48.6
+    },
+    {
+      "ids": 6,
+      "name": "https-upgrades",
+      "outcome": "ran",
+      "prefix": "/https-upgrades/",
+      "report": ".tmp\\wpt-corpus\\https-upgrades.json",
+      "returncode": 1,
+      "seconds": 54.3
+    },
+    {
+      "ids": 12,
+      "name": "idle-detection",
+      "outcome": "ran",
+      "prefix": "/idle-detection/",
+      "report": ".tmp\\wpt-corpus\\idle-detection.json",
+      "returncode": 143,
+      "seconds": 29.8
+    },
+    {
+      "ids": 14,
+      "name": "imagebitmap-renderingcontext",
+      "outcome": "ran",
+      "prefix": "/imagebitmap-renderingcontext/",
+      "report": ".tmp\\wpt-corpus\\imagebitmap-renderingcontext.json",
+      "returncode": 1,
+      "seconds": 37.0
+    },
+    {
+      "ids": 57,
+      "name": "import-maps",
+      "outcome": "ran",
+      "prefix": "/import-maps/",
+      "report": ".tmp\\wpt-corpus\\import-maps.json",
+      "returncode": 1,
+      "seconds": 81.5
+    },
+    {
+      "ids": 29,
+      "name": "inert",
+      "outcome": "ran",
+      "prefix": "/inert/",
+      "report": ".tmp\\wpt-corpus\\inert.json",
+      "returncode": 1,
+      "seconds": 39.8
+    },
+    {
+      "ids": 1,
+      "name": "input-device-capabilities",
+      "outcome": "ran",
+      "prefix": "/input-device-capabilities/",
+      "report": ".tmp\\wpt-corpus\\input-device-capabilities.json",
+      "returncode": 1,
+      "seconds": 29.8
+    },
+    {
+      "ids": 33,
+      "name": "input-events",
+      "outcome": "ran",
+      "prefix": "/input-events/",
+      "report": ".tmp\\wpt-corpus\\input-events.json",
+      "returncode": 1,
+      "seconds": 94.7
+    },
+    {
+      "ids": 2,
+      "name": "installedapp",
+      "outcome": "ran",
+      "prefix": "/installedapp/",
+      "report": ".tmp\\wpt-corpus\\installedapp.json",
+      "returncode": 1,
+      "seconds": 86.3
+    },
+    {
+      "ids": 146,
+      "name": "intersection-observer",
+      "outcome": "ran",
+      "prefix": "/intersection-observer/",
+      "report": ".tmp\\wpt-corpus\\intersection-observer.json",
+      "returncode": 1,
+      "seconds": 189.5
+    },
+    {
+      "ids": 2,
+      "name": "intervention-reporting",
+      "outcome": "ran",
+      "prefix": "/intervention-reporting/",
+      "report": ".tmp\\wpt-corpus\\intervention-reporting.json",
+      "returncode": 143,
+      "seconds": 22.5
     }
   ]
 }
