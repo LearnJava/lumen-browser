@@ -136,6 +136,32 @@ def inject_probe(source: str, where: str) -> str:
     return _STYLE_PAIR_RE.sub(replace, source)
 
 
+#: Query flag for the repair probe: serve the document with the `<![CDATA[` and
+#: `]]>` markers stripped out of every author `<style>` block, i.e. the page as it
+#: would reach the engine once [BUG-786](../../bugs/BUG-786-OPEN.md) is fixed.
+#: This is the one probe that can price the bug instead of counting its reach:
+#: rendering both sides of a reftest pair twice — as served and repaired — says
+#: which verdicts the fix would MOVE, in both directions (a FAIL that only the
+#: lost rule caused, and a PASS that only the loss made possible).
+REPAIR_FLAG = "lumen_repair=1"
+
+_CDATA_OPEN_RE = re.compile(r"<!\[CDATA\[")
+_CDATA_CLOSE_RE = re.compile(r"\]\]>")
+
+
+def repair_cdata(source: str) -> str:
+    """Drop CDATA markers inside author `<style>` blocks, leaving the CSS alone.
+
+    Only inside `<style>`: the markers are meaningful XML everywhere else in an
+    XHTML document, and a document-wide replace would change what is being
+    measured (script content, text nodes) instead of the stylesheet.
+    """
+    def replace(match):
+        head, body, tail = match.group(1), match.group(2), match.group(3)
+        return head + _CDATA_CLOSE_RE.sub("", _CDATA_OPEN_RE.sub("", body)) + tail
+    return _STYLE_PAIR_RE.sub(replace, source)
+
+
 class _StripHandler(http.server.SimpleHTTPRequestHandler):
     """Static file server that also serves a stylesheet-free copy on request."""
 
@@ -147,7 +173,8 @@ class _StripHandler(http.server.SimpleHTTPRequestHandler):
         for where in ("start", "end"):
             if f"{PROBE_FLAG}={where}" in self.path:
                 probe = where
-        if STRIP_FLAG not in self.path and probe is None:
+        repair = REPAIR_FLAG in self.path
+        if STRIP_FLAG not in self.path and probe is None and not repair:
             return super().do_GET()
         path = self.translate_path(self.path)
         try:
@@ -157,7 +184,13 @@ class _StripHandler(http.server.SimpleHTTPRequestHandler):
             self.send_error(404)
             return None
         text = raw.decode("utf-8", "replace")
-        body = (inject_probe(text, probe) if probe else strip_author_css(text)).encode("utf-8")
+        if probe:
+            text = inject_probe(text, probe)
+        elif repair:
+            text = repair_cdata(text)
+        else:
+            text = strip_author_css(text)
+        body = text.encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", self.guess_type(path))
         self.send_header("Content-Length", str(len(body)))

@@ -132,6 +132,18 @@ already-vendored `html`/`css` categories that were not flagged at the
 time because their `<svg>` usage was incidental to the test, not the
 subject under test).
 
+One more manifestation outside the SVG DOM itself, found 2026-08-20 while
+fixing [BUG-412](BUG-412-FIXED.md): any shim code that keys off the
+namespace sees markup-parsed foreign content as HTML. `document.getElementsByName`
+must match HTML-namespace elements only (HTML LS §3.1.5), and its
+`_lumen_is_html_namespace` filter is correct — but a `<svg name=x>` written
+literally in the page reports `namespaceURI === 'http://www.w3.org/1999/xhtml'`
+and so is still returned, which is exactly what `document.getElementsByName-namespace.html`
+checks. The same blindness applies to `_lumen_html_collection_named`/
+`_lumen_html_collection_own_names` (DOM §4.2.10.2 exposes the `name` attribute of
+HTML-namespace elements only). Both close together with this bug, with no
+separate fix point.
+
 ## Не расследовано
 
 `ReferenceError: svg is not defined` (135 hits, `let svg =

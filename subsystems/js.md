@@ -494,6 +494,22 @@ the time — read dates.
   (descendants only). Static array, not a live `HTMLCollection`, same as `getElementsByTagName`.
   Known limitation (as with `getElementsByTagName`): class tokens are spliced into the selector
   without CSS escaping — exotic class names with special chars are unsupported.
+- **`document.getElementsByName(elementName)` + the `NodeList` interface (BUG-412 fix, [P3] 2026-08-20).**
+  The third accessor of HTML LS §3.1.5 was missing outright (`'getElementsByName' in document` ===
+  `false`), so every call threw `is not a function`. Unlike its two neighbours above it returns a
+  **live** collection: `_lumen_make_nid_collection` — the `Proxy` `document.images` already uses —
+  over `_lumen_elements_named_nids(name)`. Three details worth keeping in mind when touching it:
+  (1) the member query is the fixed selector `[name]` plus a JS string comparison, **not** a
+  `[name="…"]` selector, so an argument with quotes/backslashes/newlines needs no CSS escaping
+  (the known limitation of `getElementsByClassName` above does not apply here);
+  (2) members are filtered by `_lumen_is_html_namespace`, because the spec matches HTML elements
+  only — with markup-parsed foreign content still landing in the XHTML namespace
+  ([BUG-685](../bugs/BUG-685-OPEN.md)) that filter only bites for `createElementNS`-built nodes so far;
+  (3) `NodeList` (DOM §4.2.10.1) is a separate marker interface from `HTMLCollection` — HTML LS
+  requires this accessor to return one, and the WPT interface test asserts `instanceof NodeList` **and**
+  `!(instanceof HTMLCollection)`. To keep one `Proxy` implementation for both, the shared factory took a
+  third parameter `noNamed`, which drops the named half (`namedItem`, `list['someName']`, named
+  own-keys): that is `HTMLCollection` behaviour (DOM §4.2.10.2) and a `NodeList` must not have it.
 - **`Image` / `HTMLImageElement` constructors (BUG-305 fix, [P3] 2026-07-19).**
   Both were absent from `WEB_API_SHIM`, so `new Image()` (image preloading, tracking pixels, canvas
   sources) threw `Image is not defined` and took the whole script down (ria.ru). Added two global
