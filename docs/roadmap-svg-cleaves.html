@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-20",
  "counts": {
-  "open": 325,
+  "open": 326,
   "fixed": 430,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 755,
+ "total_bugs": 756,
  "phases": [
   {
    "id": "P0",
@@ -5216,11 +5216,12 @@
       {
        "id": "WPT-RUN-5",
        "title": "WPT-RUN-5: вторая полная цифра pass-rate (с reftest и https)",
-       "status": "done",
+       "status": "ready",
        "size": "M",
-       "note": "Перепрогнать ВЕСЬ корпус и снять вторую полную цифру pass-rate. Прогон 2026-08-18/19 (5.59 %, `docs/wpt/pass-rate.md`) объяснял 37 290 непрогнанных id двумя причинами, и обе с тех пор адресуемы: 27 386 reftest + 416 print-reftest стояли как «нет исполнителя (TEST-4)» — TEST-4 и TEST-5 закрыты 2026-08-19, уже ПОСЛЕ прогона; 6 874 testharness — https (BUG-785). Отсюда порядок: сначала BUG-785, потом один прогон, покрывающий обе группы — полный проход стоит ~11 часов, платить его дважды незачем. Ожидаемый сдвиг качественный: потолок 55.1 % поднимается почти до 96 % (вне досягаемости остаются только crashtest/wdspec/aamtest). Инструменты готовы: `tests/wpt/run_corpus.py` (шардирование, чекпойнты, `--resume`) + `tests/wpt/corpus_stats.py` (знаменатель). Методику знаменателя НЕ менять — цифра сопоставима с wpt.fyi/Servo/Ladybird именно потому, что берётся из `MANIFEST.json`. Результат — новая строка журнала и снимок `docs/wpt/runs/<дата>.json`",
+       "note": "Перепрогнать ВЕСЬ корпус и снять вторую полную цифру pass-rate. Прогон 2026-08-18/19 (5.59 %, `docs/wpt/pass-rate.md`) объяснял 37 290 непрогнанных id двумя причинами, и обе с тех пор адресуемы: 27 386 reftest + 416 print-reftest стояли как «нет исполнителя (TEST-4)» — TEST-4 и TEST-5 закрыты 2026-08-19, уже ПОСЛЕ прогона; 6 874 testharness — https (BUG-785). Отсюда порядок: сначала BUG-785, потом один прогон, покрывающий обе группы — полный проход стоит ~11 часов, платить его дважды незачем. Ожидаемый сдвиг качественный: потолок 55.1 % поднимается почти до 96 % (вне досягаемости остаются только crashtest/wdspec/aamtest). Инструменты готовы: `tests/wpt/run_corpus.py` (шардирование, чекпойнты, `--resume`) + `tests/wpt/corpus_stats.py` (знаменатель). Методику знаменателя НЕ менять — цифра сопоставима с wpt.fyi/Servo/Ladybird именно потому, что берётся из `MANIFEST.json`. Ход 2026-08-20: по решению пользователя прогон идёт на двух машинах параллельно, снимки раздельные (`runs/2026-08-20-{windows,linux}-partial.json`), состояние Linux-половины и команда `--resume` — в [docs/tasks/p2-wpt-runner-throughput.md](docs/tasks/p2-wpt-runner-throughput.md). Ожидание про «потолок почти 96 %» НЕ материализуется: https-id исполняются, но дают ноль из-за [BUG-792](bugs/BUG-792-OPEN.md) (тело close-delimited https-ответа теряется без `close_notify`) — 635 прогнанных https-тестов, 0 harness OK, 0 сабтестов. Результат — новая строка журнала и снимок `docs/wpt/runs/<дата>.json`",
        "bugs": [
-        "BUG-785"
+        "BUG-785",
+        "BUG-792"
        ]
       },
       {
@@ -10588,6 +10589,13 @@
    "status": "open",
    "title": "Остаток заявки [BUG-427](bugs/BUG-427-FIXED.md). До главной Дзена движок не доезжает живьём: `yandex.ru` → 302 `dzen.ru` → 302 `sso.passport.yandex.ru/push`, и…",
    "component": "не локализован (кандидаты: shell/network — куки и JS-редирект SSO; layout — inline-бокс сайдбара)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-792": {
+   "status": "open",
+   "title": "**https-ответ без TLS `close_notify` теряет тело целиком.** `wptserve` отдаёт close-delimited ответы (ни `Content-Length`, ни `chunked`), а `rustls` на обрыве б…",
+   "component": "network (`crates/network/src/lib.rs` — EOF-фреймирование тела: `read_response`, `read_framed_buffered`, streaming-путь)",
    "date": null,
    "debtor": false
   }
