@@ -52,3 +52,62 @@ prioritizing — it silently degrades signal quality for every WPT category
 whose tests route through `test_driver`'s element-targeted helpers
 (`send_keys`, `action_sequence`, `get_computed_label`, etc.), not just the
 one file already on record.
+
+## Реконфирмация 2026-08-21 (WPT-RUN-6 срез 3): единственная причина 307 TIMEOUT в `editing/`
+
+`WPT-RUN-6` (разбор массовых TIMEOUT по Windows-снимку `WPT-RUN-5`) взял
+`editing` — четвёртая по размеру нераспознанная категория (307 TIMEOUT из
+429 прогнанных, 71.6 %). Дедупликация по базовому файлу (без `?variant`)
+даёт всего **32 уникальных файла** — то есть один и тот же дефект
+размножен `<meta name="variant">`-развёрткой ~10×.
+
+Живой прогон одного файла (`editing/other/cefalse-boundaries-deletion.html`
+— **не использующего** `test_driver` вовсе, только `document.execCommand`)
+подтверждает механизм напрямую:
+
+```
+script error: JS runtime error: Cannot read properties of undefined (reading 'test_driver')
+...
+TEST_END: TIMEOUT, expected OK
+```
+
+Причина — `editing/include/editor-test-utils.js`, `EditorTestUtils`
+constructor:
+
+```js
+constructor(aEditingHost, aHarnessWindow = window) {
+  this.editingHost = aEditingHost;
+  if (aHarnessWindow != this.window && this.window.test_driver) {
+```
+
+`this.window` — геттер `get window() { return this.document.defaultView; }`
+— всегда `undefined` (этот баг). `aHarnessWindow != this.window` истинно
+(реальный `window` не равен `undefined`), поэтому JS безусловно вычисляет
+`this.window.test_driver` и падает синхронно **в конструкторе**, ещё до
+регистрации хотя бы одного `test()`/`promise_test()` — testharness.js не
+получает ни одного теста и никогда не публикует `harness_status`, отсюда
+TIMEOUT, а не FAIL. Это бьёт КАЖДЫЙ файл, инстанциирующий
+`EditorTestUtils` — включая те, что вообще не используют `test_driver`
+(как в репро), потому что проверка безусловна.
+
+**Масштаб:** `editor-test-utils.js` подключают **82 файла** в `editing/`
+(шире, чем 32 уже попавших в TIMEOUT этого прогона — часть остальных 50,
+видимо, падает по другим, ранее объясненным причинам раньше, чем
+доходит до этой строки, или ещё не прогонялась). В целом по корпусу
+`.defaultView` встречается в 42 файлах напрямую, из них 11 — `html/`,
+7 — `custom-elements/`, 4 — `dom/`, 4 — `css/`, что подтверждает
+предсказание 2026-08-05 «across every category routing through
+`test_driver`'s element-targeted helpers» — сюда добавляется целый класс
+«безусловная проверка в конструкторе хелпера», не завязанный на
+`test_driver` вовсе.
+
+Отдельно в этом же срезе подтверждена **не новая** причина:
+`css/css-grid/alignment` (162 TIMEOUT, 74.7 %) — это целиком уже известный
+[BUG-564](BUG-564-OPEN.md) (`document.fonts.ready` не резолвится):
+`<body onload="document.fonts.ready.then(() => { checkLayout('.grid'); })">`
+в каждом файле категории.
+
+Обновлённая доля объяснённых TIMEOUT по срезу 1 WPT-RUN-6 (2296/6205, 37 %)
+растёт минимум на 307 — `editing/` не входил в срезы 1-2. `css-grid/alignment`
+не добавляется отдельно — он уже внутри 384/452 по идиоме `fonts.ready`,
+посчитанной по всему корпусу в срезе 1.
