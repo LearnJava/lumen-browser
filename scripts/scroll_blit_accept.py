@@ -145,20 +145,30 @@ def _capture_cropped(proc, origin: tuple[int, int], raw: str, cropped: str) -> N
     gt.ffmpeg_crop(raw, cropped, origin[0], origin[1])
 
 
-def run_flag(exe: str, fixture: str, blit_on: bool, tag: str) -> list[str] | None:
+def run_flag(exe: str, fixture: str, blit_on: bool, tag: str,
+             env_extra: dict[str, str] | None = None,
+             maximized: bool = False) -> list[str] | None:
     """Drive one live window through STOPS; return the list of cropped PNGs
-    (one per stop) or None on a setup/capture failure."""
+    (one per stop) or None on a setup/capture failure.
+
+    `env_extra` lets a sibling harness reuse this driver for a *different*
+    kill-switch (`scripts/band_ring_accept.py`, BUG-405 slice 32); `maximized`
+    does the same for a window size the scroll compositor actually engages on.
+    """
     port = free_port()
     env = dict(os.environ)
     if blit_on:
         env.pop("LUMEN_SCROLL_BLIT", None)  # default on; explicit pop keeps env clean
     else:
         env["LUMEN_SCROLL_BLIT"] = "0"  # kill-switch: disable the default-on path
+    env.update(env_extra or {})
     log_path = os.path.join(TMP, f"{tag}.stderr.log")
     log_f = open(log_path, "w", encoding="utf-8", errors="replace")
+    cmd = [exe, "--mcp-live-port", str(port), "--no-scrollbar", "about:blank"]
+    if maximized:
+        cmd.insert(1, "--maximized")
     proc = subprocess.Popen(
-        [exe, "--mcp-live-port", str(port), "--no-scrollbar", "about:blank"],
-        cwd=REPO, env=env, stdout=subprocess.DEVNULL, stderr=log_f,
+        cmd, cwd=REPO, env=env, stdout=subprocess.DEVNULL, stderr=log_f,
     )
     crops: list[str] = []
     try:
@@ -188,7 +198,10 @@ def run_flag(exe: str, fixture: str, blit_on: bool, tag: str) -> list[str] | Non
             # STOPS are absolute; scroll_by_delta is relative, so send the delta
             # from the previous target (0 is the calibrated start).
             prev = STOPS[i - 1] if i > 0 else 0
-            c.call("scroll", {"target": {"css": "body"}, "delta": {"x": 0, "y": target - prev}})
+            # Цель скролла — CSS-селектор строкой: форма `{"css": …}` MCP
+            # больше не принимает (ошибка `Invalid target`, поймана BUG-405
+            # срезом 32 — харнесс лежал непрогнанным с ADR-016 M3.2.1c).
+            c.call("scroll", {"target": "body", "delta": {"x": 0, "y": target - prev}})
             time.sleep(SETTLE)
             cropped = os.path.join(TMP, f"{tag}_stop{i:02d}.png")
             raw = os.path.join(TMP, f"{tag}_stop{i:02d}_raw.png")
