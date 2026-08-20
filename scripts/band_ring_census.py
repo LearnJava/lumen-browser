@@ -156,11 +156,13 @@ def summarize(rows: dict[str, list[dict]]) -> None:
     # Модель среза 29: надбавка(доля) = 2.91 + 8.75·доля на полосе 1920×2541.
     share = statistics.mean(_col(rows.get('кольцо', []), 'share')) if rows.get('кольцо') else 0.0
     if share:
-        pred = 1.0 - (2.91 + 8.75 * share) / (2.91 + 8.75)
-        got = 1.0 - new['surcharge'] / ref['surcharge'] if ref['surcharge'] else float('nan')
+        pred = (2.91 + 8.75 * share) / (2.91 + 8.75) - 1.0
+        got = new['surcharge'] / ref['surcharge'] - 1.0 if ref['surcharge'] else float('nan')
+        # Оба числа — ИЗМЕНЕНИЕ надбавки, знак «−» = дешевле. До среза 33 они
+        # печатались в противоположных знаковых соглашениях в одной строке.
         print(f'\nнадбавка ОДНОГО промаха: {ref["surcharge"]:.2f} → {new["surcharge"]:.2f} мс '
               f'({100 * got:+.0f} %); модель среза 29 при доле {share:.0%} обещала '
-              f'{-100 * pred:+.0f} %')
+              f'{100 * pred:+.0f} % (снята на стенде С УРОВНЯМИ, см. срез 33)')
 
 
 def main() -> int:
