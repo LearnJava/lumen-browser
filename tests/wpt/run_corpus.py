@@ -402,6 +402,57 @@ def https_ids(manifest: dict, scope: set = None) -> list:
                    and (scope is None or c in scope)})
 
 
+NO_TESTS_MARKERS = ("Unable to find any tests at the path(s)", "No tests ran")
+# wptrunner's own exit codes: 0 = everything as expected, 1 = unexpected
+# results, 64 = something logged CRITICAL (`wptrunner.py::start`, which asserts
+# nothing above 64 is ever returned). Anything else means the process was ended
+# from outside rather than deciding to stop.
+WPTRUNNER_RETURNCODES = (0, 1, 64)
+LOG_TAIL_BYTES = 8192
+EMPTY_REPORT_RETRY_PAUSE = 10
+
+
+def report_is_empty(report_path: str) -> bool:
+    """True when a shard's `wptreport.json` carries no verdicts.
+
+    Deliberately cheap — missing file or zero bytes, no parse. wptrunner opens
+    the report up front and writes it once at the end, so a shard that dies
+    before its first test leaves exactly a zero-byte file, which is the case
+    this has to catch. A report big enough to parse is taken at face value:
+    checking it properly would mean reading every shard's JSON (hundreds of MB
+    across a corpus run) to catch a case that does not happen.
+    """
+    return not os.path.isfile(report_path) or os.path.getsize(report_path) == 0
+
+
+def log_says_no_tests(log_path: str) -> bool:
+    """True when wptrunner itself said this shard had nothing to run.
+
+    The two markers are the only legitimate ways to end up with no verdicts:
+    the path holds no tests at all (a category in `MANIFEST.json` whose files
+    are not vendored), or every test in it was filtered out (`--exclude-file`,
+    a directory whose only types have no executor). Both are terminal — running
+    the shard again produces the same nothing — and both must be told apart
+    from a shard that *failed* before running anything, which is not terminal
+    and must be retried. Only the tail is read: wptrunner logs these last.
+    """
+    if not os.path.isfile(log_path):
+        return False
+    with open(log_path, "rb") as fh:
+        fh.seek(max(os.path.getsize(log_path) - LOG_TAIL_BYTES, 0))
+        tail = fh.read().decode("utf-8", "replace")
+    return any(marker in tail for marker in NO_TESTS_MARKERS)
+
+
+def shard_produced_nothing(out_dir: str, shard: dict) -> bool:
+    """True when neither the report nor the raw stream of a shard holds a verdict."""
+    report_path = shard_report_path(out_dir, shard)
+    if not report_is_empty(report_path):
+        return False
+    raw_path = os.path.splitext(report_path)[0] + RAW_SUFFIX
+    return not rescue_results(raw_path)
+
+
 def run_shard(shard: dict, binary: str, out_dir: str, processes: int, timeout: int,
               exclude_file: str = None) -> dict:
     """Run one shard as a subprocess; never raises on a failing shard."""
@@ -427,37 +478,60 @@ def run_shard(shard: dict, binary: str, out_dir: str, processes: int, timeout: i
         argv.append(f"--processes={processes}")
     argv.extend(shard["test_ids"] if shard.get("test_ids") else [shard["prefix"]])
 
-    # Rotate whatever the previous attempt salvaged out of the way — see
-    # RAW_PREV_SUFFIX. Only a non-empty stream is worth keeping, and only one
-    # generation: the older it gets the less it can add over the newer runs.
-    prev_path = os.path.splitext(report_path)[0] + RAW_PREV_SUFFIX
-    if os.path.isfile(raw_path) and os.path.getsize(raw_path) > 0:
-        os.replace(raw_path, prev_path)
+    # A shard that dies before its first test is worth one immediate second
+    # attempt: it costs seconds, and the failure it recovers from is transient.
+    # WPT-RUN-5 slice 16 measured what skipping the retry costs — on the
+    # Windows half of the 2026-08-20 corpus run 158 shards (17 683 manifest
+    # ids, 26 % of the corpus) came back in ~11 s with a zero-byte report and
+    # were recorded `ran`, so they scored 0 and `--resume` never looked at them
+    # again. The mode matches an exception out of wptserve startup (a port from
+    # the previous shard still bound), which the next attempt does not hit.
+    for attempt in range(2):
+        # Rotate whatever the previous attempt salvaged out of the way — see
+        # RAW_PREV_SUFFIX. Only a non-empty stream is worth keeping, and only one
+        # generation: the older it gets the less it can add over the newer runs.
+        prev_path = os.path.splitext(report_path)[0] + RAW_PREV_SUFFIX
+        if os.path.isfile(raw_path) and os.path.getsize(raw_path) > 0:
+            os.replace(raw_path, prev_path)
 
-    started = time.time()
-    with open(log_path, "w", encoding="utf-8") as log:
-        proc = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT, cwd=REPO_ROOT,
-                                 start_new_session=(os.name != "nt"))
-        try:
-            returncode = proc.wait(timeout=timeout)
-            outcome = "ran"
-        except subprocess.TimeoutExpired:
-            kill_tree(proc)
-            proc.wait()
-            returncode = None
-            outcome = "timeout"
-    elapsed = time.time() - started
+        started = time.time()
+        with open(log_path, "w", encoding="utf-8") as log:
+            proc = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT, cwd=REPO_ROOT,
+                                     start_new_session=(os.name != "nt"))
+            try:
+                returncode = proc.wait(timeout=timeout)
+                outcome = "ran"
+            except subprocess.TimeoutExpired:
+                kill_tree(proc)
+                proc.wait()
+                returncode = None
+                outcome = "timeout"
+        elapsed = time.time() - started
 
-    # A killed shard leaves the empty file wptrunner opened up front; it would
-    # otherwise show up as an unreadable report at aggregation time.
-    if outcome == "timeout" and os.path.isfile(report_path) and os.path.getsize(report_path) == 0:
-        os.remove(report_path)
+        # A killed shard leaves the empty file wptrunner opened up front; it would
+        # otherwise show up as an unreadable report at aggregation time.
+        if outcome == "timeout" and os.path.isfile(report_path) and os.path.getsize(report_path) == 0:
+            os.remove(report_path)
 
-    if outcome == "ran" and not os.path.isfile(report_path):
-        # wptrunner exited without writing a report — a crash during startup
-        # (port conflict, missing cert, bad filter). Distinguished from a run
-        # that legitimately found no tests, which does write an empty report.
-        outcome = "no-report"
+        if outcome == "ran" and returncode not in WPTRUNNER_RETURNCODES:
+            # Ended from outside — on the Windows half of the 2026-08-20 corpus
+            # run, 41 shards exited 143 (SIGTERM) holding 13 136 ids, of which
+            # only what the raw stream had salvaged was ever scored. Recording
+            # that as `ran` is what made those ids look like engine failures
+            # instead of a shard that never got to them.
+            outcome = "signalled"
+        if outcome == "ran" and shard_produced_nothing(out_dir, shard):
+            # No verdicts at all. Either wptrunner said there was nothing to run
+            # — terminal, and not a loss — or the shard failed before its first
+            # test, which is a loss and is why `ran` is not the answer here: an
+            # outcome of `ran` is what makes `--resume` treat a shard as done.
+            outcome = "no-tests" if log_says_no_tests(log_path) else "empty-report"
+        if outcome != "empty-report" or attempt:
+            break
+        print(f"  shard {shard['name']}: no verdicts in {elapsed:.0f}s and no "
+              f"'nothing to run' from wptrunner — retrying once", flush=True)
+        time.sleep(EMPTY_REPORT_RETRY_PAUSE)
+
     return {"name": shard["name"], "prefix": shard["prefix"], "ids": shard["ids"],
             "auto_ids": shard.get("auto_ids"),
             "outcome": outcome, "returncode": returncode, "seconds": round(elapsed, 1),
@@ -602,24 +676,58 @@ def resumable_states(previous: list, out_dir: str, retry_timeouts: bool) -> list
       `run_shard` rotates the raw stream first, so a shorter second attempt
       cannot destroy the first one's results.
 
-    Any other outcome (`no-report` — wptrunner died at startup) is always
-    retried: it failed fast, so retrying is cheap, and it produced nothing.
+    Any other outcome (`no-report`/`empty-report` — wptrunner died at startup)
+    is always retried: it failed fast, so retrying is cheap, and it produced
+    nothing.
+
+    `ran` is also *verified* rather than believed, because the outcome recorded
+    by an older run cannot be trusted to mean what it says: before slice 16 a
+    shard that failed before its first test was recorded `ran` with a zero-byte
+    report, and the run's own summary counted it as complete. Re-checking the
+    disk is what lets such a state file heal on the next `--resume` instead of
+    keeping its hole forever — the Windows half of the 2026-08-20 run has 158
+    of them, 17 683 manifest ids. The check is one `stat` per shard unless the
+    report really is empty, so it costs nothing on a healthy run.
     """
-    states, kept, retried = [], [], []
+    states, kept, retried, hollow = [], [], [], []
     for state in previous:
         if state["outcome"] == "ran":
+            if shard_produced_nothing(out_dir, state) and not log_says_no_tests(
+                    os.path.splitext(shard_report_path(out_dir, state))[0] + ".log"):
+                hollow.append(state["name"])
+                retried.append(state["name"])
+                continue
+            if state.get("returncode") not in WPTRUNNER_RETURNCODES:
+                # An older state file recorded `ran` for a shard the OS ended
+                # (see WPTRUNNER_RETURNCODES); re-read it as what it was, so
+                # that a partial shard is at least visible and `--retry-timeouts`
+                # can reach it.
+                state = dict(state, outcome="signalled")
+            else:
+                states.append(state)
+                continue
+        if state["outcome"] == "no-tests":
             states.append(state)
             continue
-        if state["outcome"] == "timeout" and not retry_timeouts:
-            raw_path = os.path.splitext(shard_report_path(out_dir, state))[0] + RAW_SUFFIX
-            if rescue_results(raw_path):
+        if state["outcome"] in ("timeout", "signalled") and not retry_timeouts:
+            report_path = shard_report_path(out_dir, state)
+            raw_path = os.path.splitext(report_path)[0] + RAW_SUFFIX
+            # A report that survived is protected the same way a salvaged raw
+            # stream is: wptrunner truncates `--log-wptreport` when it opens it,
+            # so replaying a shard destroys what it already had before it can
+            # add anything. `--retry-timeouts` is the way to say that trade is
+            # worth making.
+            if rescue_results(raw_path) or not report_is_empty(report_path):
                 states.append(state)
                 kept.append(state["name"])
                 continue
         retried.append(state["name"])
     if kept:
-        print(f"--resume: {len(kept)} budget-killed shard(s) kept partial rather than replayed "
+        print(f"--resume: {len(kept)} killed shard(s) kept partial rather than replayed "
               f"({', '.join(kept)}) — pass --retry-timeouts to run them again", flush=True)
+    if hollow:
+        print(f"--resume: {len(hollow)} shard(s) recorded as complete produced no verdicts at all "
+              f"and will run again ({', '.join(hollow[:8])})", flush=True)
     if retried:
         print(f"--resume: {len(retried)} shard(s) will run again ({', '.join(retried[:8])})", flush=True)
     return states
@@ -720,7 +828,11 @@ def print_summary(scored: dict, shard_states: list) -> None:
     for entry in scored.get("recovered_shards", []):
         print(f"  RECOVERED:        {entry['shard']} — {entry['results']} results salvaged "
               f"from the raw log (shard did not finish)")
-    bad = [s for s in shard_states if s["outcome"] != "ran"]
+    nothing = [s for s in shard_states if s["outcome"] == "no-tests"]
+    if nothing:
+        print(f"  ran nothing:      {len(nothing)} shard(s) wptrunner had nothing to run in "
+              f"(not a loss — no vendored files, or every test filtered out)")
+    bad = [s for s in shard_states if s["outcome"] not in ("ran", "no-tests")]
     if bad:
         print(f"  PROBLEM SHARDS:   {len(bad)} — " + ", ".join(f"{s['name']}({s['outcome']})" for s in bad[:8]))
         if len(bad) > 8:

@@ -210,6 +210,20 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
     nothing because everything was excluded is reported separately
     (`ran nothing`), so the "recovered" line keeps meaning "something went
     wrong".
+  - a shard that produced **no verdicts at all** is not reported as `ran`.
+    wptrunner opens `--log-wptreport` up front, so a shard that dies before its
+    first test leaves a zero-byte report that used to be indistinguishable from
+    a category with nothing to run — and `ran` is what makes `--resume` treat a
+    shard as finished. The two are now told apart by wptrunner's own words in
+    the shard log (`Unable to find any tests` / `No tests ran` → `no-tests`,
+    terminal; anything else → `empty-report`, retried once on the spot and
+    again on the next `--resume`). Same for a shard that exits on a code
+    wptrunner never returns (anything but 0/1/64): it was ended from outside,
+    is recorded as `signalled`, and is reachable by `--retry-timeouts`.
+    Measured cost of not doing this: on the Windows half of the 2026-08-20
+    corpus run, 158 shards (17 683 ids) came back in ~11 s with an empty report
+    and 41 more (13 136 ids) were killed mid-run — 36 % of the corpus scored 0
+    while the run reported 479/479 shards `ran` (WPT-RUN-5 slice 16).
   - `--resume` therefore treats a budget-killed shard whose raw stream
     salvaged something as **done**, instead of replaying it: the budget is the
     same and the machine is no faster, so the replay dies at the same wall and
@@ -229,6 +243,14 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   line means the number is not publishable until it is explained — on the
   2026-08-20 Linux run that bucket was empty (0 of 24 702 reftest ids, 0 of
   15 572 testharness ids outside the killed shards).
+  `--snapshot docs/wpt/runs/<date>.json` runs the same audit on a *published*
+  snapshot, which is all another machine's number ships with — the run
+  directory stays on that machine. `--compare <second snapshot>` additionally
+  checks the two runs against each other on the categories both reached (the
+  engine is deterministic, so a category both ran to the same depth must
+  produce identical counters) and prints what the halves are worth fused, per
+  category, taking whichever run executed more of it. Added by slice 16, which
+  is how the Windows half's 36 % hole was found.
 - `tests/wpt/expectations.py` — **ours** (TEST-3, `docs/tasks/p2-test-track.md`) — generates and
   gates on per-category `.ini` baselines for `run_report.py --update-expected`/`--check`, on top
   of the same native `wptrunner` `--metadata` mechanism `run_suite.py` uses for `dom/nodes`, not
