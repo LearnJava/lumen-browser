@@ -99,6 +99,43 @@ def has_author_css(source: str) -> bool:
                    for m in _LINK_RE.finditer(source)))
 
 
+#: Query flag for the mechanism probe (`--explain`): serve the same document with
+#: one extra, deliberately observable declaration injected into every author
+#: `<style>` block — at its start (`lumen_probe=start`) or at its end
+#: (`lumen_probe=end`). Stripping answers "did any author declaration matter";
+#: injecting answers the next question down, "did the block reach the CSS parser
+#: at all", and the start/end split localises the loss inside the block.
+PROBE_FLAG = "lumen_probe"
+
+#: The injected rule. `margin-left` on the root moves every box in the layout
+#: dump, so one comparison covers any page; a paint-only marker would miss a
+#: document that paints nothing. It is written last-wins-safe: an author rule
+#: setting the root's `margin-left` would mask it, which shows up as a page whose
+#: start and end probes are both invisible and is reported, not silently counted.
+PROBE_RULE = "html{margin-left:37px}"
+
+_STYLE_PAIR_RE = re.compile(r"(<style\b[^>]*>)(.*?)(</style\s*>)", re.S | re.I)
+
+
+def inject_probe(source: str, where: str) -> str:
+    """Add `PROBE_RULE` at the start/end of every author `<style>` block.
+
+    Inside the `<![CDATA[ … ]]>` wrapper when there is one — the point of the
+    probe is to test the block as the engine sees it, and a marker placed outside
+    the wrapper would answer a different question.
+    """
+    def replace(match):
+        head, body, tail = match.group(1), match.group(2), match.group(3)
+        if where == "start":
+            body = (body.replace("<![CDATA[", "<![CDATA[\n" + PROBE_RULE + "\n", 1)
+                    if "<![CDATA[" in body else "\n" + PROBE_RULE + "\n" + body)
+        else:
+            body = (body.replace("]]>", "\n" + PROBE_RULE + "\n]]>", 1)
+                    if "]]>" in body else body + "\n" + PROBE_RULE + "\n")
+        return head + body + tail
+    return _STYLE_PAIR_RE.sub(replace, source)
+
+
 class _StripHandler(http.server.SimpleHTTPRequestHandler):
     """Static file server that also serves a stylesheet-free copy on request."""
 
@@ -106,7 +143,11 @@ class _StripHandler(http.server.SimpleHTTPRequestHandler):
         pass
 
     def do_GET(self):  # noqa: N802 - name fixed by BaseHTTPRequestHandler
-        if STRIP_FLAG not in self.path:
+        probe = None
+        for where in ("start", "end"):
+            if f"{PROBE_FLAG}={where}" in self.path:
+                probe = where
+        if STRIP_FLAG not in self.path and probe is None:
             return super().do_GET()
         path = self.translate_path(self.path)
         try:
@@ -115,7 +156,8 @@ class _StripHandler(http.server.SimpleHTTPRequestHandler):
         except OSError:
             self.send_error(404)
             return None
-        body = strip_author_css(raw.decode("utf-8", "replace")).encode("utf-8")
+        text = raw.decode("utf-8", "replace")
+        body = (inject_probe(text, probe) if probe else strip_author_css(text)).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", self.guess_type(path))
         self.send_header("Content-Length", str(len(body)))
@@ -206,6 +248,61 @@ def classify_test(test_id: str, binary: str, port: int, timeout: int) -> str:
     return "inert"
 
 
+#: Layout alone is enough for the probe (unlike `classify_test`, which needs both
+#: dumps): `PROBE_RULE` moves geometry by construction, so a second comparison
+#: would only double the cost.
+PROBE_MODE = "--dump-layout"
+
+
+def probe_test(test_id: str, binary: str, port: int, timeout: int) -> str:
+    """Where an `inert` test lost its CSS: `sheet_live` / `first_rule_eaten` / …
+
+    Reads as: `sheet_live` — the block reaches the CSS parser and the author's own
+    declarations are the inert part (an unsupported property, a media query that
+    does not match, a declaration overridden by itself); `first_rule_eaten` — the
+    block is parsed but its opening rule is not, the signature of the
+    `<![CDATA[` wrapper swallowing one rule as a bad prelude
+    ([BUG-786](../../bugs/BUG-786-OPEN.md)); `sheet_lost` — nothing in the block
+    took effect, i.e. a whole-stylesheet loss; `no_style_block` — the test's
+    author CSS is a `<link>` or a `style=` attribute, which this probe does not
+    reach and cannot speak about.
+    """
+    source = source_of(test_id)
+    if source is None:
+        return "error"
+    if not _STYLE_PAIR_RE.search(source):
+        return "no_style_block"
+    base = f"http://127.0.0.1:{port}{test_id}"
+    sep = "&" if "?" in test_id else "?"
+    plain = dump(binary, PROBE_MODE, base, timeout)
+    if plain is None:
+        return "error"
+    seen = {}
+    for where in ("start", "end"):
+        out = dump(binary, PROBE_MODE, f"{base}{sep}{PROBE_FLAG}={where}", timeout)
+        if out is None:
+            return "error"
+        seen[where] = out != plain
+    if seen["start"] and seen["end"]:
+        return "sheet_live"
+    if seen["end"]:
+        return "first_rule_eaten"
+    if seen["start"]:
+        return "tail_eaten"
+    return "sheet_lost"
+
+
+def explain(ids: list, binary: str, port: int, timeout: int, jobs: int) -> dict:
+    """`probe_test` over `ids`, in parallel; returns `{test_id: mechanism}`."""
+    out = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+        futures = {pool.submit(probe_test, tid, binary, port, timeout): tid
+                   for tid in ids}
+        for future in concurrent.futures.as_completed(futures):
+            out[futures[future]] = future.result()
+    return out
+
+
 def reftest_verdicts(out_dir: str, manifest: dict) -> dict:
     """`{test_id: status}` for every executed reftest, PASS or FAIL."""
     types = {}
@@ -250,6 +347,34 @@ def summarise(name: str, buckets: dict) -> dict:
     return dict(counts)
 
 
+def main_explain(args) -> int:
+    """`--explain`: split the `inert` ids of an earlier run by mechanism."""
+    with open(args.explain, encoding="utf-8") as fh:
+        previous = json.load(fh)
+    inert = sorted(tid for tid, bucket in previous.get("buckets", {}).items()
+                   if bucket == "inert")
+    print(f"{len(inert)} inert PASSes from {args.explain}")
+    server, port = start_server()
+    try:
+        mechanisms = explain(inert, args.binary, port, args.timeout, args.jobs)
+    finally:
+        server.shutdown()
+    counts = collections.Counter(mechanisms.values())
+    print()
+    for name, n in counts.most_common():
+        print(f"  {name:<18} {n:>4}  {100.0 * n / max(len(inert), 1):.1f} %")
+    print()
+    for tid in inert:
+        flag = "negative" if is_negative_test(tid) else ""
+        print(f"  {mechanisms[tid]:<18} {cdata_audit.classify(tid):<11} {tid} {flag}")
+    if args.json:
+        with open(args.json, "w", encoding="utf-8") as fh:
+            json.dump({"source": args.explain, "mechanisms": mechanisms,
+                       "counts": dict(counts)}, fh, indent=2)
+        print(f"\nwrote {args.json}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -276,8 +401,16 @@ def main() -> int:
                         help="concurrent dumps; keep low while a corpus run is in flight")
     parser.add_argument("--timeout", type=int, default=30, help="seconds per dump")
     parser.add_argument("--seed", type=int, default=786, help="control-sample seed")
+    parser.add_argument("--explain", default=None,
+                        help="skip the classification and probe the mechanism behind the "
+                             "`inert` ids of an earlier --json run instead: which of them "
+                             "lost the stylesheet and which merely have declarations this "
+                             "engine ignores")
     parser.add_argument("--json", default=None, help="write the numbers here as JSON")
     args = parser.parse_args()
+
+    if args.explain:
+        return main_explain(args)
 
     with open(args.manifest, encoding="utf-8") as fh:
         manifest = json.load(fh)

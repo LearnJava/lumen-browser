@@ -1,7 +1,7 @@
 {
   "binary": "target/dev-release/lumen",
   "commit": "27080c7de",
-  "finished": "2026-08-20T20:30:52",
+  "finished": "2026-08-20T22:59:51",
   "processes": 6,
   "scope": [
     "FileAPI",
@@ -54,7 +54,35 @@
     "cpu-performance",
     "credential-management",
     "css",
-    "dom"
+    "cssom",
+    "custom-elements",
+    "delegated-ink",
+    "density-size-correction",
+    "deprecation-reporting",
+    "device-bound-session-credentials",
+    "device-memory",
+    "device-posture",
+    "digital-credentials",
+    "direct-sockets",
+    "document-picture-in-picture",
+    "document-policy",
+    "dom",
+    "domparsing",
+    "domxpath",
+    "dpub-aam",
+    "dpub-aria",
+    "ecmascript",
+    "editing",
+    "element-timing",
+    "encoding",
+    "encoding-detection",
+    "encrypted-media",
+    "entries-api",
+    "event-timing",
+    "eventsource",
+    "eyedropper",
+    "fedcm",
+    "fenced-frame"
   ],
   "scored": {
     "empty_shards": [
@@ -68,7 +96,8 @@
       "css__CSS2__page-box",
       "css__css-gcpm",
       "css__css-round-display",
-      "css__css-speech"
+      "css__css-speech",
+      "dpub-aria"
     ],
     "per_category": {
       "FileAPI": {
@@ -676,14 +705,174 @@
           "reftest": 24552,
           "testharness": 7447
         },
-        "harness_ok": 8939,
+        "harness_ok": 11544,
         "ids": 33496,
-        "not_run": 7586,
-        "pass_rate": 0.1606,
-        "ran": 25910,
-        "score": 5380.41,
-        "subtests_passed": 44285,
-        "subtests_total": 116545
+        "not_run": 1497,
+        "pass_rate": 0.1961,
+        "ran": 31999,
+        "score": 6568.44,
+        "subtests_passed": 57341,
+        "subtests_total": 151822
+      },
+      "cssom": {
+        "by_type": {
+          "crashtest": 2
+        },
+        "harness_ok": 0,
+        "ids": 2,
+        "not_run": 2,
+        "pass_rate": 0.0,
+        "ran": 0,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 0
+      },
+      "custom-elements": {
+        "by_type": {
+          "crashtest": 3,
+          "print-reftest": 1,
+          "reftest": 2,
+          "testharness": 182
+        },
+        "harness_ok": 125,
+        "ids": 188,
+        "not_run": 4,
+        "pass_rate": 0.0461,
+        "ran": 184,
+        "score": 8.66,
+        "subtests_passed": 406,
+        "subtests_total": 3924
+      },
+      "delegated-ink": {
+        "by_type": {
+          "testharness": 5
+        },
+        "harness_ok": 4,
+        "ids": 5,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 5,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 13
+      },
+      "density-size-correction": {
+        "by_type": {
+          "reftest": 20,
+          "testharness": 2
+        },
+        "harness_ok": 9,
+        "ids": 22,
+        "not_run": 0,
+        "pass_rate": 0.3636,
+        "ran": 22,
+        "score": 8.0,
+        "subtests_passed": 0,
+        "subtests_total": 6
+      },
+      "deprecation-reporting": {
+        "by_type": {
+          "testharness": 2
+        },
+        "harness_ok": 0,
+        "ids": 2,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 2,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 0
+      },
+      "device-bound-session-credentials": {
+        "by_type": {
+          "testharness": 27
+        },
+        "harness_ok": 1,
+        "ids": 27,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 27,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 1
+      },
+      "device-memory": {
+        "by_type": {
+          "testharness": 4
+        },
+        "harness_ok": 0,
+        "ids": 4,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 4,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 0
+      },
+      "device-posture": {
+        "by_type": {
+          "testharness": 5
+        },
+        "harness_ok": 0,
+        "ids": 5,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 5,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 0
+      },
+      "digital-credentials": {
+        "by_type": {
+          "testharness": 24
+        },
+        "harness_ok": 2,
+        "ids": 24,
+        "not_run": 0,
+        "pass_rate": 0.0417,
+        "ran": 24,
+        "score": 1.0,
+        "subtests_passed": 1,
+        "subtests_total": 2
+      },
+      "direct-sockets": {
+        "by_type": {
+          "testharness": 3
+        },
+        "harness_ok": 0,
+        "ids": 3,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 3,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 0
+      },
+      "document-picture-in-picture": {
+        "by_type": {
+          "testharness": 22
+        },
+        "harness_ok": 1,
+        "ids": 22,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 22,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 1
+      },
+      "document-policy": {
+        "by_type": {
+          "testharness": 10
+        },
+        "harness_ok": 1,
+        "ids": 10,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 10,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 19
       },
       "dom": {
         "by_type": {
@@ -699,12 +888,212 @@
         "score": 114.64,
         "subtests_passed": 2030,
         "subtests_total": 5616
+      },
+      "domparsing": {
+        "by_type": {
+          "crashtest": 3,
+          "testharness": 57
+        },
+        "harness_ok": 47,
+        "ids": 60,
+        "not_run": 3,
+        "pass_rate": 0.1927,
+        "ran": 57,
+        "score": 11.56,
+        "subtests_passed": 123,
+        "subtests_total": 1457
+      },
+      "domxpath": {
+        "by_type": {
+          "crashtest": 2,
+          "testharness": 32
+        },
+        "harness_ok": 28,
+        "ids": 34,
+        "not_run": 2,
+        "pass_rate": 0.0294,
+        "ran": 32,
+        "score": 1.0,
+        "subtests_passed": 2,
+        "subtests_total": 126
+      },
+      "dpub-aam": {
+        "by_type": {
+          "testharness": 1
+        },
+        "harness_ok": 1,
+        "ids": 1,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 1,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 39
+      },
+      "ecmascript": {
+        "by_type": {
+          "testharness": 2
+        },
+        "harness_ok": 2,
+        "ids": 2,
+        "not_run": 0,
+        "pass_rate": 1.0,
+        "ran": 2,
+        "score": 2.0,
+        "subtests_passed": 21,
+        "subtests_total": 21
+      },
+      "editing": {
+        "by_type": {
+          "crashtest": 142,
+          "testharness": 700
+        },
+        "harness_ok": 178,
+        "ids": 842,
+        "not_run": 142,
+        "pass_rate": 0.0372,
+        "ran": 700,
+        "score": 31.29,
+        "subtests_passed": 451,
+        "subtests_total": 5248
+      },
+      "element-timing": {
+        "by_type": {
+          "testharness": 52
+        },
+        "harness_ok": 51,
+        "ids": 52,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 52,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 51
+      },
+      "encoding": {
+        "by_type": {
+          "crashtest": 1,
+          "reftest": 4,
+          "testharness": 1338
+        },
+        "harness_ok": 37,
+        "ids": 1343,
+        "not_run": 1,
+        "pass_rate": 0.0119,
+        "ran": 1342,
+        "score": 16.0,
+        "subtests_passed": 315,
+        "subtests_total": 2274
+      },
+      "encoding-detection": {
+        "by_type": {
+          "testharness": 75
+        },
+        "harness_ok": 44,
+        "ids": 75,
+        "not_run": 0,
+        "pass_rate": 0.0267,
+        "ran": 75,
+        "score": 2.0,
+        "subtests_passed": 2,
+        "subtests_total": 44
+      },
+      "encrypted-media": {
+        "by_type": {
+          "testharness": 99
+        },
+        "harness_ok": 2,
+        "ids": 99,
+        "not_run": 2,
+        "pass_rate": 0.0101,
+        "ran": 97,
+        "score": 1.0,
+        "subtests_passed": 4,
+        "subtests_total": 5
+      },
+      "entries-api": {
+        "by_type": {
+          "testharness": 1
+        },
+        "harness_ok": 0,
+        "ids": 1,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 1,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 0
+      },
+      "event-timing": {
+        "by_type": {
+          "testharness": 74
+        },
+        "harness_ok": 69,
+        "ids": 74,
+        "not_run": 0,
+        "pass_rate": 0.0135,
+        "ran": 74,
+        "score": 1.0,
+        "subtests_passed": 1,
+        "subtests_total": 73
+      },
+      "eventsource": {
+        "by_type": {
+          "testharness": 99
+        },
+        "harness_ok": 48,
+        "ids": 99,
+        "not_run": 0,
+        "pass_rate": 0.3131,
+        "ran": 99,
+        "score": 31.0,
+        "subtests_passed": 48,
+        "subtests_total": 100
+      },
+      "eyedropper": {
+        "by_type": {
+          "testharness": 2
+        },
+        "harness_ok": 0,
+        "ids": 2,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 2,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 0
+      },
+      "fedcm": {
+        "by_type": {
+          "testharness": 81
+        },
+        "harness_ok": 0,
+        "ids": 81,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 81,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 0
+      },
+      "fenced-frame": {
+        "by_type": {
+          "testharness": 199
+        },
+        "harness_ok": 1,
+        "ids": 199,
+        "not_run": 0,
+        "pass_rate": 0.0025,
+        "ran": 199,
+        "score": 0.5,
+        "subtests_passed": 1,
+        "subtests_total": 2
       }
     },
     "recovered_shards": [
       {
-        "results": 815,
-        "shard": "css__css-transforms"
+        "results": 335,
+        "shard": "fetch"
       },
       {
         "results": 129,
@@ -717,26 +1106,30 @@
       {
         "results": 83,
         "shard": "bluetooth"
+      },
+      {
+        "results": 97,
+        "shard": "encrypted-media"
       }
     ],
     "status_counts": {
-      "ERROR": 587,
-      "FAIL": 15521,
-      "NOT-RUN": 8102,
-      "OK": 5271,
-      "PASS": 4543,
-      "SKIP": 6,
-      "TIMEOUT": 3373
+      "ERROR": 1361,
+      "FAIL": 18440,
+      "NOT-RUN": 2169,
+      "OK": 7602,
+      "PASS": 5468,
+      "SKIP": 9,
+      "TIMEOUT": 5632
     },
     "totals": {
-      "harness_ok": 9814,
-      "ids": 37403,
-      "not_run": 8102,
-      "pass_rate": 0.1533,
-      "ran": 29301,
-      "score": 5735.19,
-      "subtests_passed": 47724,
-      "subtests_total": 127803
+      "harness_ok": 13070,
+      "ids": 40681,
+      "not_run": 2169,
+      "pass_rate": 0.173,
+      "ran": 38512,
+      "score": 7038.23,
+      "subtests_passed": 62155,
+      "subtests_total": 176486
     }
   },
   "shards": [
@@ -2287,6 +2680,456 @@
       "report": ".tmp/wpt-corpus/css__css-text-decor.json",
       "returncode": 64,
       "seconds": 22.5
+    },
+    {
+      "ids": 934,
+      "name": "css/css-transforms",
+      "outcome": "ran",
+      "prefix": "/css/css-transforms/",
+      "report": ".tmp/wpt-corpus/css__css-transforms.json",
+      "returncode": 64,
+      "seconds": 2038.5
+    },
+    {
+      "ids": 194,
+      "name": "css/css-transitions",
+      "outcome": "ran",
+      "prefix": "/css/css-transitions/",
+      "report": ".tmp/wpt-corpus/css__css-transitions.json",
+      "returncode": 64,
+      "seconds": 67.3
+    },
+    {
+      "ids": 376,
+      "name": "css/css-typed-om",
+      "outcome": "ran",
+      "prefix": "/css/css-typed-om/",
+      "report": ".tmp/wpt-corpus/css__css-typed-om.json",
+      "returncode": 64,
+      "seconds": 128.5
+    },
+    {
+      "ids": 1354,
+      "name": "css/css-ui",
+      "outcome": "ran",
+      "prefix": "/css/css-ui/",
+      "report": ".tmp/wpt-corpus/css__css-ui.json",
+      "returncode": 64,
+      "seconds": 47.6
+    },
+    {
+      "ids": 498,
+      "name": "css/css-values",
+      "outcome": "ran",
+      "prefix": "/css/css-values/",
+      "report": ".tmp/wpt-corpus/css__css-values.json",
+      "returncode": 64,
+      "seconds": 110.4
+    },
+    {
+      "ids": 245,
+      "name": "css/css-variables",
+      "outcome": "ran",
+      "prefix": "/css/css-variables/",
+      "report": ".tmp/wpt-corpus/css__css-variables.json",
+      "returncode": 64,
+      "seconds": 43.1
+    },
+    {
+      "ids": 489,
+      "name": "css/css-view-transitions",
+      "outcome": "ran",
+      "prefix": "/css/css-view-transitions/",
+      "report": ".tmp/wpt-corpus/css__css-view-transitions.json",
+      "returncode": 64,
+      "seconds": 196.5
+    },
+    {
+      "ids": 101,
+      "name": "css/css-viewport",
+      "outcome": "ran",
+      "prefix": "/css/css-viewport/",
+      "report": ".tmp/wpt-corpus/css__css-viewport.json",
+      "returncode": 64,
+      "seconds": 20.7
+    },
+    {
+      "ids": 53,
+      "name": "css/css-will-change",
+      "outcome": "ran",
+      "prefix": "/css/css-will-change/",
+      "report": ".tmp/wpt-corpus/css__css-will-change.json",
+      "returncode": 64,
+      "seconds": 10.3
+    },
+    {
+      "ids": 1368,
+      "name": "css/css-writing-modes",
+      "outcome": "ran",
+      "prefix": "/css/css-writing-modes/",
+      "report": ".tmp/wpt-corpus/css__css-writing-modes.json",
+      "returncode": 64,
+      "seconds": 55.6
+    },
+    {
+      "ids": 1,
+      "name": "css/css-zoom",
+      "outcome": "ran",
+      "prefix": "/css/css-zoom/",
+      "report": ".tmp/wpt-corpus/css__css-zoom.json",
+      "returncode": 64,
+      "seconds": 5.3
+    },
+    {
+      "ids": 219,
+      "name": "css/cssom",
+      "outcome": "ran",
+      "prefix": "/css/cssom/",
+      "report": ".tmp/wpt-corpus/css__cssom.json",
+      "returncode": 64,
+      "seconds": 83.6
+    },
+    {
+      "ids": 224,
+      "name": "css/cssom-view",
+      "outcome": "ran",
+      "prefix": "/css/cssom-view/",
+      "report": ".tmp/wpt-corpus/css__cssom-view.json",
+      "returncode": 64,
+      "seconds": 84.5
+    },
+    {
+      "ids": 1,
+      "name": "css/fetching",
+      "outcome": "ran",
+      "prefix": "/css/fetching/",
+      "report": ".tmp/wpt-corpus/css__fetching.json",
+      "returncode": 64,
+      "seconds": 16.2
+    },
+    {
+      "ids": 11,
+      "name": "css/fill-stroke",
+      "outcome": "ran",
+      "prefix": "/css/fill-stroke/",
+      "report": ".tmp/wpt-corpus/css__fill-stroke.json",
+      "returncode": 64,
+      "seconds": 38.8
+    },
+    {
+      "ids": 386,
+      "name": "css/filter-effects",
+      "outcome": "ran",
+      "prefix": "/css/filter-effects/",
+      "report": ".tmp/wpt-corpus/css__filter-effects.json",
+      "returncode": 64,
+      "seconds": 36.9
+    },
+    {
+      "ids": 30,
+      "name": "css/geometry",
+      "outcome": "ran",
+      "prefix": "/css/geometry/",
+      "report": ".tmp/wpt-corpus/css__geometry.json",
+      "returncode": 64,
+      "seconds": 29.6
+    },
+    {
+      "ids": 96,
+      "name": "css/mediaqueries",
+      "outcome": "ran",
+      "prefix": "/css/mediaqueries/",
+      "report": ".tmp/wpt-corpus/css__mediaqueries.json",
+      "returncode": 64,
+      "seconds": 31.4
+    },
+    {
+      "ids": 146,
+      "name": "css/motion",
+      "outcome": "ran",
+      "prefix": "/css/motion/",
+      "report": ".tmp/wpt-corpus/css__motion.json",
+      "returncode": 64,
+      "seconds": 16.6
+    },
+    {
+      "ids": 26,
+      "name": "css/printing",
+      "outcome": "ran",
+      "prefix": "/css/printing/",
+      "report": ".tmp/wpt-corpus/css__printing.json",
+      "returncode": 64,
+      "seconds": 5.8
+    },
+    {
+      "ids": 3,
+      "name": "css/reference",
+      "outcome": "ran",
+      "prefix": "/css/reference/",
+      "report": ".tmp/wpt-corpus/css__reference.json",
+      "returncode": 64,
+      "seconds": 6.3
+    },
+    {
+      "ids": 819,
+      "name": "css/selectors",
+      "outcome": "ran",
+      "prefix": "/css/selectors/",
+      "report": ".tmp/wpt-corpus/css__selectors.json",
+      "returncode": 64,
+      "seconds": 425.2
+    },
+    {
+      "ids": 2,
+      "name": "cssom",
+      "outcome": "ran",
+      "prefix": "/cssom/",
+      "report": ".tmp/wpt-corpus/cssom.json",
+      "returncode": 64,
+      "seconds": 5.4
+    },
+    {
+      "ids": 188,
+      "name": "custom-elements",
+      "outcome": "ran",
+      "prefix": "/custom-elements/",
+      "report": ".tmp/wpt-corpus/custom-elements.json",
+      "returncode": 64,
+      "seconds": 147.8
+    },
+    {
+      "ids": 5,
+      "name": "delegated-ink",
+      "outcome": "ran",
+      "prefix": "/delegated-ink/",
+      "report": ".tmp/wpt-corpus/delegated-ink.json",
+      "returncode": 64,
+      "seconds": 17.3
+    },
+    {
+      "ids": 22,
+      "name": "density-size-correction",
+      "outcome": "ran",
+      "prefix": "/density-size-correction/",
+      "report": ".tmp/wpt-corpus/density-size-correction.json",
+      "returncode": 64,
+      "seconds": 17.2
+    },
+    {
+      "ids": 2,
+      "name": "deprecation-reporting",
+      "outcome": "ran",
+      "prefix": "/deprecation-reporting/",
+      "report": ".tmp/wpt-corpus/deprecation-reporting.json",
+      "returncode": 64,
+      "seconds": 26.2
+    },
+    {
+      "ids": 27,
+      "name": "device-bound-session-credentials",
+      "outcome": "ran",
+      "prefix": "/device-bound-session-credentials/",
+      "report": ".tmp/wpt-corpus/device-bound-session-credentials.json",
+      "returncode": 64,
+      "seconds": 82.8
+    },
+    {
+      "ids": 4,
+      "name": "device-memory",
+      "outcome": "ran",
+      "prefix": "/device-memory/",
+      "report": ".tmp/wpt-corpus/device-memory.json",
+      "returncode": 64,
+      "seconds": 72.6
+    },
+    {
+      "ids": 5,
+      "name": "device-posture",
+      "outcome": "ran",
+      "prefix": "/device-posture/",
+      "report": ".tmp/wpt-corpus/device-posture.json",
+      "returncode": 64,
+      "seconds": 52.0
+    },
+    {
+      "ids": 24,
+      "name": "digital-credentials",
+      "outcome": "ran",
+      "prefix": "/digital-credentials/",
+      "report": ".tmp/wpt-corpus/digital-credentials.json",
+      "returncode": 64,
+      "seconds": 72.7
+    },
+    {
+      "ids": 3,
+      "name": "direct-sockets",
+      "outcome": "ran",
+      "prefix": "/direct-sockets/",
+      "report": ".tmp/wpt-corpus/direct-sockets.json",
+      "returncode": 64,
+      "seconds": 21.9
+    },
+    {
+      "ids": 24,
+      "name": "document-picture-in-picture",
+      "outcome": "ran",
+      "prefix": "/document-picture-in-picture/",
+      "report": ".tmp/wpt-corpus/document-picture-in-picture.json",
+      "returncode": 64,
+      "seconds": 82.8
+    },
+    {
+      "ids": 10,
+      "name": "document-policy",
+      "outcome": "ran",
+      "prefix": "/document-policy/",
+      "report": ".tmp/wpt-corpus/document-policy.json",
+      "returncode": 64,
+      "seconds": 28.4
+    },
+    {
+      "ids": 60,
+      "name": "domparsing",
+      "outcome": "ran",
+      "prefix": "/domparsing/",
+      "report": ".tmp/wpt-corpus/domparsing.json",
+      "returncode": 64,
+      "seconds": 31.4
+    },
+    {
+      "ids": 34,
+      "name": "domxpath",
+      "outcome": "ran",
+      "prefix": "/domxpath/",
+      "report": ".tmp/wpt-corpus/domxpath.json",
+      "returncode": 64,
+      "seconds": 19.9
+    },
+    {
+      "ids": 40,
+      "name": "dpub-aam",
+      "outcome": "ran",
+      "prefix": "/dpub-aam/",
+      "report": ".tmp/wpt-corpus/dpub-aam.json",
+      "returncode": 64,
+      "seconds": 6.3
+    },
+    {
+      "ids": 1,
+      "name": "dpub-aria",
+      "outcome": "ran",
+      "prefix": "/dpub-aria/",
+      "report": ".tmp/wpt-corpus/dpub-aria.json",
+      "returncode": 64,
+      "seconds": 3.3
+    },
+    {
+      "ids": 2,
+      "name": "ecmascript",
+      "outcome": "ran",
+      "prefix": "/ecmascript/",
+      "report": ".tmp/wpt-corpus/ecmascript.json",
+      "returncode": 64,
+      "seconds": 6.7
+    },
+    {
+      "ids": 851,
+      "name": "editing",
+      "outcome": "ran",
+      "prefix": "/editing/",
+      "report": ".tmp/wpt-corpus/editing.json",
+      "returncode": 64,
+      "seconds": 1095.2
+    },
+    {
+      "ids": 52,
+      "name": "element-timing",
+      "outcome": "ran",
+      "prefix": "/element-timing/",
+      "report": ".tmp/wpt-corpus/element-timing.json",
+      "returncode": 64,
+      "seconds": 20.5
+    },
+    {
+      "ids": 1343,
+      "name": "encoding",
+      "outcome": "ran",
+      "prefix": "/encoding/",
+      "report": ".tmp/wpt-corpus/encoding.json",
+      "returncode": 64,
+      "seconds": 1395.3
+    },
+    {
+      "ids": 75,
+      "name": "encoding-detection",
+      "outcome": "ran",
+      "prefix": "/encoding-detection/",
+      "report": ".tmp/wpt-corpus/encoding-detection.json",
+      "returncode": 64,
+      "seconds": 147.7
+    },
+    {
+      "ids": 99,
+      "name": "encrypted-media",
+      "outcome": "timeout",
+      "prefix": "/encrypted-media/",
+      "report": null,
+      "returncode": null,
+      "seconds": 798.0
+    },
+    {
+      "ids": 16,
+      "name": "entries-api",
+      "outcome": "ran",
+      "prefix": "/entries-api/",
+      "report": ".tmp/wpt-corpus/entries-api.json",
+      "returncode": 64,
+      "seconds": 16.1
+    },
+    {
+      "ids": 75,
+      "name": "event-timing",
+      "outcome": "ran",
+      "prefix": "/event-timing/",
+      "report": ".tmp/wpt-corpus/event-timing.json",
+      "returncode": 64,
+      "seconds": 35.5
+    },
+    {
+      "ids": 99,
+      "name": "eventsource",
+      "outcome": "ran",
+      "prefix": "/eventsource/",
+      "report": ".tmp/wpt-corpus/eventsource.json",
+      "returncode": 64,
+      "seconds": 121.8
+    },
+    {
+      "ids": 2,
+      "name": "eyedropper",
+      "outcome": "ran",
+      "prefix": "/eyedropper/",
+      "report": ".tmp/wpt-corpus/eyedropper.json",
+      "returncode": 64,
+      "seconds": 21.6
+    },
+    {
+      "ids": 81,
+      "name": "fedcm",
+      "outcome": "ran",
+      "prefix": "/fedcm/",
+      "report": ".tmp/wpt-corpus/fedcm.json",
+      "returncode": 64,
+      "seconds": 563.5
+    },
+    {
+      "ids": 199,
+      "name": "fenced-frame",
+      "outcome": "ran",
+      "prefix": "/fenced-frame/",
+      "report": ".tmp/wpt-corpus/fenced-frame.json",
+      "returncode": 64,
+      "seconds": 723.4
     }
   ]
 }
