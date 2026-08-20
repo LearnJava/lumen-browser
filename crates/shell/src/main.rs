@@ -582,10 +582,14 @@ fn run_cli() -> ExitCode {
     startup.dispatch(cli.mode_name());
 
     match cli {
-        CliMode::Dump { source, kind } => run_dump_mode(&source, kind, event_sink),
+        CliMode::Dump { source, kind } => {
+            run_dump_mode(&source, kind, event_sink, viewport_override)
+        }
         CliMode::OpenWindow(source) => run_window_mode(source, event_sink, blocked_log, network_log, initial_scroll, no_scrollbar, maximized, det_cfg, viewport_override, automation_handle, automation_cmd_tx, automation_rx, bidi_port.is_some() || mcp_live_port.is_some()),
         CliMode::PrintToPdf { source, output } => run_print_to_pdf(&source, &output, event_sink),
-        CliMode::Screenshot { source, output } => run_screenshot(&source, &output, event_sink),
+        CliMode::Screenshot { source, output } => {
+            run_screenshot(&source, &output, event_sink, viewport_override)
+        }
         CliMode::TraceNav { source, output } => run_trace_nav(&source, &output, event_sink),
         CliMode::Mcp(mcp) => run_mcp_mode(mcp),
         CliMode::IpcServer { port } => run_ipc_server(port, event_sink),
@@ -1307,8 +1311,13 @@ fn run_window_mode(
     ExitCode::SUCCESS
 }
 
-fn run_dump_mode(source: &PageSource, kind: DumpKind, event_sink: Arc<dyn EventSink>) -> ExitCode {
-    match run_dump(source, kind, event_sink) {
+fn run_dump_mode(
+    source: &PageSource,
+    kind: DumpKind,
+    event_sink: Arc<dyn EventSink>,
+    viewport_override: Option<(f32, f32)>,
+) -> ExitCode {
+    match run_dump(source, kind, event_sink, viewport_override) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("Ошибка dump {}: {err}", source.describe());
@@ -1352,8 +1361,9 @@ fn run_screenshot(
     source: &PageSource,
     output: &std::path::Path,
     event_sink: Arc<dyn EventSink>,
+    viewport_override: Option<(f32, f32)>,
 ) -> ExitCode {
-    match do_screenshot(source, output, event_sink) {
+    match do_screenshot(source, output, event_sink, viewport_override) {
         Ok((w, h)) => {
             eprintln!("Снимок сохранён: {} ({w}×{h})", output.display());
             ExitCode::SUCCESS
@@ -1385,7 +1395,7 @@ fn run_trace_nav(
         // Корневой спан всей навигации; закрывается до `finish`, поэтому попадает
         // в таймлайн как охватывающая полоса.
         let _nav = lumen_core::trace::span("navigation", "nav");
-        render_source_to_png(source, event_sink)
+        render_source_to_png(source, event_sink, None)
     };
     let json = match lumen_core::trace::finish() {
         Some(j) => j,
@@ -1422,15 +1432,17 @@ fn run_trace_nav(
 /// воспроизводим и работает на любой ОС/в CI.
 ///
 /// Высота снимка = высота layout-корня, зажатая в
-/// `[SCREENSHOT_MIN_H, SCREENSHOT_MAX_H]`, ширина — `SCREENSHOT_VP_W`.
+/// `[SCREENSHOT_MIN_H, SCREENSHOT_MAX_H]`, ширина — `SCREENSHOT_VP_W`
+/// либо ширина из `--viewport`, если он задан.
 ///
 /// Возвращает `(width, height)` сохранённого PNG.
 fn do_screenshot(
     source: &PageSource,
     output: &std::path::Path,
     event_sink: Arc<dyn EventSink>,
+    viewport_override: Option<(f32, f32)>,
 ) -> Result<(u32, u32), Box<dyn Error>> {
-    let (png, width, height) = render_source_to_png(source, event_sink)?;
+    let (png, width, height) = render_source_to_png(source, event_sink, viewport_override)?;
     std::fs::write(output, &png)?;
     Ok((width, height))
 }
@@ -1448,6 +1460,7 @@ fn do_screenshot(
 fn render_source_to_png(
     source: &PageSource,
     event_sink: Arc<dyn EventSink>,
+    viewport_override: Option<(f32, f32)>,
 ) -> Result<(Vec<u8>, u32, u32), Box<dyn Error>> {
     use lumen_paint::Renderer;
 
@@ -1463,7 +1476,10 @@ fn render_source_to_png(
         let _s = lumen_core::trace::span("fetch-document", "net");
         source.load_bytes(event_sink.clone(), None)?
     };
-    let vp = Size::new(SCREENSHOT_VP_W, SCREENSHOT_MIN_H);
+    let vp = match viewport_override {
+        Some((w, h)) => Size::new(w, h),
+        None => Size::new(SCREENSHOT_VP_W, SCREENSHOT_MIN_H),
+    };
     let parsed = parse_and_layout(
         &raw.bytes,
         raw.content_type,
@@ -1495,8 +1511,8 @@ fn render_source_to_png(
         .layout
         .rect
         .height
-        .clamp(SCREENSHOT_MIN_H, SCREENSHOT_MAX_H);
-    let width = SCREENSHOT_VP_W as u32;
+        .clamp(vp.height, SCREENSHOT_MAX_H);
+    let width = vp.width as u32;
     let height = content_h.ceil() as u32;
 
     // BUG-428: Canvas 2D pixels live in per-node CPU buffers inside the JS runtime
@@ -1683,7 +1699,7 @@ fn run_ipc_server(port: Option<u16>, event_sink: Arc<dyn EventSink>) -> ExitCode
                     }
                 }
                 IpcRequest::Screenshot { tab_id } => match tabs.get(&tab_id) {
-                    Some(source) => match render_source_to_png(source, event_sink.clone()) {
+                    Some(source) => match render_source_to_png(source, event_sink.clone(), None) {
                         Ok((png, _w, _h)) => IpcResponse::Screenshot { tab_id, png },
                         Err(e) => IpcResponse::TabError {
                             tab_id,
@@ -1995,13 +2011,29 @@ fn encode_images_as_pdf(images: &[lumen_image::Image], page_w: u32, page_h: u32)
     pdf.finish()
 }
 
+/// Viewport для `--dump-layout`/`--dump-display-list`.
+///
+/// По умолчанию 1024×720 — тот же размер, что у `--screenshot` и графических
+/// тестов, поэтому дампы сопоставимы со снимками. `--viewport WxH` его
+/// переопределяет: без этого дефекты раскладки, зависящие от ширины окна
+/// (BUG-424 — правый кластер тулбара на 1920), нельзя ни воспроизвести
+/// headless, ни закрыть тестом.
+fn dump_viewport(viewport_override: Option<(f32, f32)>) -> Size {
+    match viewport_override {
+        Some((w, h)) => Size::new(w, h),
+        None => Size::new(1024.0, 720.0),
+    }
+}
+
 fn run_dump(
     source: &PageSource,
     kind: DumpKind,
     event_sink: Arc<dyn EventSink>,
+    viewport_override: Option<(f32, f32)>,
 ) -> Result<(), Box<dyn Error>> {
     let cookie_jar = Arc::new(lumen_storage::CookieJar::open_in_memory()?);
     let raw = source.load_bytes(event_sink.clone(), Some(cookie_jar))?;
+    let dump_vp = dump_viewport(viewport_override);
     match kind {
         DumpKind::Source => {
             let encoding = lumen_encoding::detect(&raw.bytes, raw.content_type);
@@ -2011,13 +2043,13 @@ fn run_dump(
             Ok(())
         }
         DumpKind::Layout => {
-            let vp = Size::new(1024.0, 720.0);
+            let vp = dump_vp;
             let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, deterministic::DetConfig::default(), false, None, false, None, None, lumen_core::ColorSpace::Srgb, false)?;
             print!("{}", lumen_layout::serialize_layout_tree(&parsed.layout));
             Ok(())
         }
         DumpKind::DisplayList => {
-            let vp = Size::new(1024.0, 720.0);
+            let vp = dump_vp;
             let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, deterministic::DetConfig::default(), false, None, false, None, None, lumen_core::ColorSpace::Srgb, false)?;
             let dl = paint_ordered(&parsed.layout);
             print!("{}", lumen_paint::serialize_display_list(&dl));

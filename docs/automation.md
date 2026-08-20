@@ -50,6 +50,7 @@ Related docs: [`docs/commands.md`](commands.md) (day-to-day commands), [`docs/gr
 ## CLI flags (crates/shell/src/main.rs, `print_usage()`)
 
 Headless one-shot: `--dump-source` · `--dump-layout` · `--dump-display-list` · `--screenshot` · `--trace-nav <out.json>` (PERF-1, load waterfall as Chrome-trace JSON) · `--print-to-pdf`.
+`--viewport WxH` applies to `--dump-layout`/`--dump-display-list`/`--screenshot` too (BUG-424, 2026-08-20 — before that it reached only the live window and the three headless modes were pinned to 1024×720, so no width-dependent layout defect could be reproduced or regression-tested without a GPU window). Default is unchanged at 1024×720, i.e. every existing golden/snapshot keeps its size.
 Servers: `--ipc-server [--ipc-port N]` · `--mcp [url]` · `--mcp-port N` · `--mcp-live-port N <src>` · `--bidi-port N` · `--devtools-port N` (CDP, stub — see below). **All four TCP automation ports require a token** (ADR-024 §Access model, DEVX-15) — see below.
 
 ### Access model: mandatory per-run token (ADR-024, DEVX-15)

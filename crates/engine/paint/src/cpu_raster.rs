@@ -236,6 +236,12 @@ pub(crate) fn rasterize_cpu(
     // BUG-140: вид каждого открытого PushClip* — общий PopClip закрывает
     // rect-клипы (pop clip_stack) и shape-клипы (закрытие слоя) по-разному.
     let mut clip_kinds: Vec<CpuClipKind> = Vec::new();
+    // BUG-424: клип-стек, сохранённый на каждый `PushTransform`. Содержимое
+    // слоя трансформации рисуется в ДО-трансформных координатах (аффинность
+    // применяется на композите), а внешние клипы заданы в координатах
+    // документа — поэтому внутри слоя они пересчитываются обратной матрицей,
+    // а на `PopTransform` восстанавливаются отсюда.
+    let mut clip_saves: Vec<Vec<Rect>> = Vec::new();
 
     for cmd in commands {
         match cmd {
@@ -499,6 +505,21 @@ pub(crate) fn rasterize_cpu(
                     .ok_or("Failed to create transform layer")?;
                 layers.push(CpuLayer::new(layer));
                 layer_ops.push(LayerComposite::Transform(t));
+                // BUG-424: draws inside this layer use pre-transform coordinates,
+                // so an ambient clip expressed in document space must be mapped
+                // back through the inverse before it can gate them. Without this
+                // the clip rejected the whole layer: a `<use>`-scaled SVG icon
+                // (`viewBox="0 0 24 24"` painted at 14px) draws its path at local
+                // 0…24 while the clip sat at the icon's document rect — disjoint,
+                // so every stroke was culled and the icon rendered blank.
+                clip_saves.push(clip_stack.clone());
+                if let Some(active) = clip_rect
+                    && let Some(inv) = matrix.invert_2d_affine()
+                {
+                    clip_stack = vec![transform_rect_bbox(active, &inv)];
+                    clip_rect = clip_intersection(&clip_stack);
+                    clip_mask = build_clip_mask(width, height, clip_rect);
+                }
             }
             // CSS Compositing & Blending L1 §5 — `mix-blend-mode` on the box.
             // Like `PushOpacity`, the subtree renders into a transparent
@@ -591,10 +612,19 @@ pub(crate) fn rasterize_cpu(
             | DisplayCommand::PopBlendMode
             | DisplayCommand::PopFilter
             | DisplayCommand::PopMask => {
-                if let (Some(top), Some(op)) = (layers.pop(), layer_ops.pop())
-                    && let Some(dst) = layers.last_mut()
-                {
-                    close_layer(dst, &top, &op);
+                if let (Some(top), Some(op)) = (layers.pop(), layer_ops.pop()) {
+                    // BUG-424: restore the document-space clip the matching
+                    // `PushTransform` swapped for its local-space image.
+                    if matches!(op, LayerComposite::Transform(_))
+                        && let Some(saved) = clip_saves.pop()
+                    {
+                        clip_stack = saved;
+                        clip_rect = clip_intersection(&clip_stack);
+                        clip_mask = build_clip_mask(width, height, clip_rect);
+                    }
+                    if let Some(dst) = layers.last_mut() {
+                        close_layer(dst, &top, &op);
+                    }
                 }
             }
             // CSS Filter Effects L1 §6.2 — `backdrop-filter`. Unlike the group
@@ -1504,6 +1534,38 @@ fn composite_transform_layer(
         quality: tiny_skia::FilterQuality::Bilinear,
     };
     dst.draw_pixmap(0, 0, src.as_ref(), &paint, transform, None);
+}
+
+/// Axis-aligned bounding box of `rect` mapped through the 2D affine `m`.
+///
+/// BUG-424: used to carry an ambient clip across a `PushTransform` boundary.
+/// Inside a transform layer the CPU rasterizer draws in pre-transform
+/// coordinates, so the document-space clip is mapped by the *inverse* matrix
+/// before it gates those draws. For a translate/scale matrix — the SVG
+/// icon-sprite case (`viewBox` → CSS px) — the image is exactly a rect; under
+/// rotation/skew the bbox is a superset of the true parallelogram, i.e. it
+/// clips conservatively (never removes ink the exact clip would keep). Same
+/// policy as the wgpu backend's `apply_transform_to_clip` (BUG-140).
+fn transform_rect_bbox(rect: Rect, m: &lumen_layout::Mat4) -> Rect {
+    let (x0, y0) = (rect.x, rect.y);
+    let (x1, y1) = (rect.x + rect.width, rect.y + rect.height);
+    let corners = [
+        m.transform_point_2d(x0, y0),
+        m.transform_point_2d(x1, y0),
+        m.transform_point_2d(x0, y1),
+        m.transform_point_2d(x1, y1),
+    ];
+    let mut min_x = f32::MAX;
+    let mut min_y = f32::MAX;
+    let mut max_x = f32::MIN;
+    let mut max_y = f32::MIN;
+    for (sx, sy) in corners {
+        min_x = min_x.min(sx);
+        min_y = min_y.min(sy);
+        max_x = max_x.max(sx);
+        max_y = max_y.max(sy);
+    }
+    Rect::new(min_x, min_y, (max_x - min_x).max(0.0), (max_y - min_y).max(0.0))
 }
 
 /// Geometric intersection of every clip rect on the stack.
@@ -3721,6 +3783,39 @@ mod tests {
         assert_eq!(px(&img, 25, 15), (0, 0, 255, 255), "fill moved by (20,10)");
         // The untranslated origin is now empty → background white.
         assert_eq!(px(&img, 5, 5), (255, 255, 255, 255), "origin cleared by translate");
+    }
+
+    /// BUG-424: an ambient clip must survive a `PushTransform` boundary by being
+    /// mapped into the layer's pre-transform space.
+    ///
+    /// This is the icon-sprite shape verbatim: the emitter wraps the icon in
+    /// `PushClipRect` at its document rect (30,10,14,14) and a `PushTransform`
+    /// carrying `viewBox`→CSS-px scale plus the same offset, then draws the path
+    /// in local `viewBox` units (0…24). Before the fix the clip was tested
+    /// against those local coordinates, the two rects were disjoint, and every
+    /// stroke of every toolbar icon was culled — the chrome painted blank
+    /// buttons.
+    #[test]
+    fn bug424_clip_maps_into_transform_layer_space() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let scale = 14.0 / 24.0;
+        let mut m = lumen_layout::Mat4::scale_2d(scale, scale);
+        m.0[12] = 30.0;
+        m.0[13] = 10.0;
+        let cmds = vec![
+            DisplayCommand::PushClipRect { rect: rect(30.0, 10.0, 14.0, 14.0) },
+            DisplayCommand::PushTransform { matrix: m },
+            // Local viewBox units, as `<symbol viewBox="0 0 24 24">` content is.
+            DisplayCommand::FillRect { rect: rect(0.0, 0.0, 24.0, 24.0), color: blue },
+            DisplayCommand::PopTransform,
+            DisplayCommand::PopClip,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        // Centre of the icon's document rect is painted.
+        let (r, g, b, _) = px(&img, 37, 17);
+        assert!(b > 200 && r < 60 && g < 60, "icon must paint inside its clip, got ({r},{g},{b})");
+        // The clip still holds: nothing leaks past the icon's document rect.
+        assert_eq!(px(&img, 50, 17), (255, 255, 255, 255), "clip must still bound the layer");
     }
 
     /// An identity `PushTransform` is a no-op: compositing the layer through the
