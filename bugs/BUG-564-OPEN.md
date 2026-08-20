@@ -58,3 +58,27 @@ registered before the throw) and `anchor-name-inline-001.html` (0 subtests —
 the only script block is the throwing one). Not scoped further outside this
 category; any test on any page waiting on `document.fonts.ready` will hit the
 same throw.
+
+**Re-measured corpus-wide, WPT-RUN-6 (2026-08-20/21), against the completed
+Windows WPT-RUN-5 snapshot (479/479 shards, `docs/wpt/runs/2026-08-20-windows-partial.json`
++ raw per-shard reports in `.tmp/wpt-corpus/`):** 660 files in the vendored
+corpus (`tests/wpt/`) reference `document.fonts.ready` (`grep -rl`), most
+following the same `<body onload="document.fonts.ready.then(() => {
+runTests(); })">` idiom seen in `css/css-grid/alignment/*` (Ahem-font
+baseline/layout checks — `runTests()`/`done()` never fires). Of the 452 of
+those 660 ids that were actually executed in the Windows run (the rest fell
+in shards budget-killed before reaching them or in categories the harness
+never started), **384 timed out — 85.0%**, against a 15.2% baseline TIMEOUT
+rate across the whole run (6205/40850). This is the single largest identified
+TIMEOUT mechanism outside the Worker family (see [BUG-778](BUG-778-OPEN.md)),
+spans dozens of categories (`css-grid`, `css-flexbox`, `css-align`,
+`css-anchor-position`, `css-display`, and more — not isolated to
+`css-anchor-position` as originally found), and per the "Причина" section
+above is still a one-line fix. 452/660 is a floor, not the true blast
+radius: 166 of 479 shards in this run produced no per-test data at all
+(budget-killed before writing a report or crashing near-instantly — see
+`docs/tasks/p2-wpt-runner-throughput.md`), so the true count of affected ids
+is higher once those categories are covered by a future run. Audit script
+(scratch, not committed): `.tmp/fonts_ready_overlap.py` in the `p2-wpt-run-6`
+session — grep the vendored corpus for the string, cross-reference against
+`test_end` status entries in `.tmp/wpt-corpus/*.json`/`*.raw.jsonl`.
