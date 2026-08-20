@@ -99,6 +99,24 @@ pub struct GlyphAtlas {
     /// Логический timestamp (инкрементируется при каждом доступе).
     /// Используется для LRU эвикции.
     current_tick: u64,
+    /// Был ли отказ `insert` **из-за нехватки места** с момента последнего
+    /// [`take_exhausted`](GlyphAtlas::take_exhausted) (BUG-435). Отказ по
+    /// пустому/слишком большому битмапу флаг не поднимает: там место ни при
+    /// чём и повторная попытка ничего не изменит.
+    exhausted: bool,
+}
+
+/// Итог [`GlyphAtlas::try_insert`]. Отличает «нет места» от «класть нечего»:
+/// первое лечится сбросом атласа, второе — свойство самого глифа, и caller
+/// имеет право запомнить его навсегда (BUG-435).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InsertOutcome {
+    /// Глиф в атласе (положен сейчас или уже был).
+    Inserted(GlyphEntry),
+    /// Битмап пуст или не влезает в атлас целиком — место ни при чём.
+    Rejected,
+    /// Место в атласе исчерпано.
+    OutOfSpace,
 }
 
 const PADDING: u32 = 1;
@@ -117,6 +135,7 @@ impl GlyphAtlas {
             dirty: true,
             dirty_rows: Some((0, size)),
             current_tick: 0,
+            exhausted: false,
         }
     }
 
@@ -195,22 +214,34 @@ impl GlyphAtlas {
     }
 
     /// Кладёт растеризованный глиф в атлас. Возвращает `None` если место
-    /// исчерпано. Если ключ уже в кэше — возвращает существующую запись
-    /// без перезаписи пикселей (но обновляет last_accessed).
+    /// исчерпано **или** класть нечего; причину отказа даёт
+    /// [`try_insert`](GlyphAtlas::try_insert).
     pub fn insert(&mut self, key: AtlasKey, bitmap: &Bitmap) -> Option<GlyphEntry> {
+        match self.try_insert(key, bitmap) {
+            InsertOutcome::Inserted(entry) => Some(entry),
+            InsertOutcome::Rejected | InsertOutcome::OutOfSpace => None,
+        }
+    }
+
+    /// Кладёт растеризованный глиф в атлас, различая причины отказа. Если ключ
+    /// уже в кэше — возвращает существующую запись без перезаписи пикселей (но
+    /// обновляет last_accessed). Отказ по месту поднимает флаг
+    /// [`exhausted`](GlyphAtlas::exhausted).
+    pub fn try_insert(&mut self, key: AtlasKey, bitmap: &Bitmap) -> InsertOutcome {
         if self.cache.contains_key(&key) {
             self.current_tick = self.current_tick.saturating_add(1);
             if let Some(e) = self.cache.get_mut(&key) {
                 e.last_accessed = self.current_tick;
-                return Some(*e);
+                return InsertOutcome::Inserted(*e);
             }
-            return None;
+            return InsertOutcome::Rejected;
         }
         if bitmap.width == 0 || bitmap.height == 0 {
-            return None;
+            return InsertOutcome::Rejected;
         }
         if bitmap.width > self.width || bitmap.height > self.height {
-            return None;
+            // Глиф больше всего атласа — сброс не поможет, это не исчерпание.
+            return InsertOutcome::Rejected;
         }
 
         // Помещается ли в текущую полку?
@@ -224,7 +255,8 @@ impl GlyphAtlas {
         // Влезает ли по вертикали?
         let glyph_bottom = self.shelf_y + bitmap.height.max(self.shelf_height);
         if glyph_bottom > self.height {
-            return None;
+            self.exhausted = true;
+            return InsertOutcome::OutOfSpace;
         }
 
         let x = self.cursor_x;
@@ -249,7 +281,35 @@ impl GlyphAtlas {
             last_accessed: self.current_tick,
         };
         self.cache.insert(key, entry);
-        Some(entry)
+        InsertOutcome::Inserted(entry)
+    }
+
+    /// Был ли отказ по месту с последнего [`take_exhausted`](GlyphAtlas::take_exhausted).
+    pub fn exhausted(&self) -> bool {
+        self.exhausted
+    }
+
+    /// Забирает флаг исчерпания, сбрасывая его. Renderer зовёт это на старте
+    /// кадра: `true` — атлас пора сбросить и растеризовать глифы заново
+    /// (BUG-435).
+    pub fn take_exhausted(&mut self) -> bool {
+        std::mem::take(&mut self.exhausted)
+    }
+
+    /// Полный сброс: кэш пуст, курсоры упаковки в начале, флаг исчерпания снят.
+    /// Пиксели не обнуляются — их не с чем сэмплировать, пока на них не
+    /// сошлётся новая запись.
+    ///
+    /// **Все внешние мемоизации записей атласа обязаны быть сброшены вместе с
+    /// этим вызовом** (`Renderer::cached_glyphs`, `TextRunCache`): координаты
+    /// старых записей после сброса будут переписаны новыми глифами.
+    pub fn reset(&mut self) {
+        self.cache.clear();
+        self.mark_dirty_rows(0, self.height);
+        self.cursor_x = 0;
+        self.shelf_y = 0;
+        self.shelf_height = 0;
+        self.exhausted = false;
     }
 
     /// React to an OS memory pressure event by evicting glyphs from the cache.
@@ -272,14 +332,7 @@ impl GlyphAtlas {
                 let keys: Vec<_> = candidates.into_iter().map(|(k, _)| k).collect();
                 self.remove_keys(&keys);
             }
-            MemoryPressureLevel::High => {
-                self.cache.clear();
-                self.mark_dirty_rows(0, self.height);
-                // Reset packing cursors so new glyphs fill from the top.
-                self.cursor_x = 0;
-                self.shelf_y = 0;
-                self.shelf_height = 0;
-            }
+            MemoryPressureLevel::High => self.reset(),
         }
     }
 }
@@ -304,11 +357,7 @@ impl lumen_core::EvictableCache for GlyphAtlas {
     }
 
     fn clear(&mut self) {
-        self.cache.clear();
-        self.mark_dirty_rows(0, self.height);
-        self.cursor_x = 0;
-        self.shelf_y = 0;
-        self.shelf_height = 0;
+        GlyphAtlas::reset(self);
     }
 
     fn cache_name(&self) -> &'static str {
@@ -598,5 +647,50 @@ mod tests {
         // После High новые глифы должны вставляться с начала.
         assert_eq!(atlas.cursor_x, 0);
         assert_eq!(atlas.shelf_y, 0);
+    }
+
+    // ── BUG-435: исчерпание места отличимо и обратимо ────────────────────
+
+    #[test]
+    fn out_of_space_raises_the_exhausted_flag() {
+        let mut atlas = GlyphAtlas::new(24);
+        for id in 1..=4 {
+            assert!(matches!(
+                atlas.try_insert(k(id), &bitmap(10, 10, 100)),
+                InsertOutcome::Inserted(_)
+            ));
+        }
+        assert!(!atlas.exhausted(), "пока всё влезало, флага быть не должно");
+        assert_eq!(atlas.try_insert(k(5), &bitmap(10, 10, 100)), InsertOutcome::OutOfSpace);
+        assert!(atlas.exhausted());
+        assert!(atlas.take_exhausted(), "флаг забирается");
+        assert!(!atlas.exhausted(), "и снимается при взятии");
+    }
+
+    #[test]
+    fn rejected_bitmap_is_not_exhaustion() {
+        let mut atlas = GlyphAtlas::new(24);
+        // Пустой битмап и глиф больше самого атласа — место ни при чём:
+        // сброс их не спасёт, и caller вправе запомнить отказ навсегда.
+        assert_eq!(atlas.try_insert(k(1), &bitmap(0, 10, 100)), InsertOutcome::Rejected);
+        assert_eq!(atlas.try_insert(k(2), &bitmap(30, 10, 100)), InsertOutcome::Rejected);
+        assert!(!atlas.exhausted());
+    }
+
+    #[test]
+    fn reset_returns_capacity_after_exhaustion() {
+        let mut atlas = GlyphAtlas::new(24);
+        for id in 1..=4 {
+            assert!(atlas.insert(k(id), &bitmap(10, 10, 100)).is_some());
+        }
+        assert_eq!(atlas.try_insert(k(5), &bitmap(10, 10, 100)), InsertOutcome::OutOfSpace);
+
+        atlas.reset();
+        assert!(!atlas.exhausted());
+        assert!(atlas.get(k(1)).is_none(), "старые записи сброшены");
+        assert!(
+            matches!(atlas.try_insert(k(5), &bitmap(10, 10, 100)), InsertOutcome::Inserted(_)),
+            "после сброса место снова есть"
+        );
     }
 }

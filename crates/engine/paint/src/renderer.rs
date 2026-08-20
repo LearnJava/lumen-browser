@@ -42,7 +42,7 @@ use lumen_image::{correct_rgba_pixels, Image, PixelFormat};
 use lumen_layout::{BackgroundRepeat, BackgroundSize, BorderStyle, Color, FilterFn, FontStretch, FontStyle, FontWeight, GradientStop, ImageRendering, Mat4, ObjectFit, ObjectPosition, OutlineStyle, PositionComponent, font_palette::FontPaletteSelection, style::TextOrientation};
 use winit::window::Window;
 
-use crate::atlas::{AtlasKey, GlyphAtlas, GlyphEntry};
+use crate::atlas::{AtlasKey, GlyphAtlas, GlyphEntry, InsertOutcome};
 use crate::display_list::{
     fit_image_quad, fit_image_rect, space_axis_geometry, BlendMode, CornerRadii, MaskMode,
     ResolvedClipShape,
@@ -3460,6 +3460,9 @@ pub struct Renderer {
 
     atlas_texture: wgpu::Texture,
     atlas_bind_group: wgpu::BindGroup,
+    /// Сколько раз атлас глифов сбрасывался из-за исчерпания места (BUG-435).
+    /// Растёт — атласу 1024×1024 тесно на этом контенте.
+    atlas_resets: u64,
 
     image_bgl: wgpu::BindGroupLayout,
     image_sampler: wgpu::Sampler,
@@ -5505,6 +5508,7 @@ impl Renderer {
             uniform_slots,
             atlas_texture,
             atlas_bind_group,
+            atlas_resets: 0,
             image_bgl,
             image_sampler,
             image_sampler_nearest,
@@ -8061,6 +8065,51 @@ impl Renderer {
     pub fn atlas_on_memory_pressure(&mut self, level: lumen_core::ext::MemoryPressureLevel) {
         self.content_generation = self.content_generation.wrapping_add(1);
         self.atlas.on_memory_pressure(level);
+        // BUG-435: мемоизации записей атласа живут ВНЕ атласа и переживали
+        // эвикцию. При `High` атлас откатывает курсоры упаковки, новые глифы
+        // ложатся поверх старых пикселей — уцелевший `cached_glyphs` после
+        // этого рисовал бы чужие буквы; при `Medium` он просто отменял бы
+        // эвикцию, возвращая уже удалённые записи.
+        self.cached_glyphs.clear();
+        self.text_run_cache.clear();
+    }
+
+    /// Сколько раз атлас глифов сбрасывался из-за исчерпания места (BUG-435).
+    pub fn atlas_resets(&self) -> u64 {
+        self.atlas_resets
+    }
+
+    /// Сбрасывает атлас глифов, если в прошлом кадре ему не хватило места
+    /// (BUG-435).
+    ///
+    /// Атлас 1024×1024 копит глифы всех размеров, начертаний и загруженных
+    /// @font-face-сабсетов страницы и никогда сам не освобождается: эвикция
+    /// была только по внешнему memory-pressure. Переполнившись, он молча
+    /// переставал принимать новые глифы — буква не рисовалась, advance
+    /// оставался, и так до конца процесса, включая хром браузера.
+    ///
+    /// Сброс отложен до старта кадра намеренно: внутри кадра часть квадов уже
+    /// уложена по координатам старых записей, и переупаковка атласа под ними
+    /// подменила бы пиксели. Цена — один кадр без «новых» глифов; они
+    /// появляются на следующем.
+    ///
+    /// Вместе с атласом чистятся обе внешние мемоизации его записей, иначе они
+    /// вернули бы координаты, которые уже переписаны. Поколение контента
+    /// бампается, чтобы кадр не был пропущен как идентичный предыдущему
+    /// (глифы-то другие).
+    fn recover_exhausted_atlas(&mut self) {
+        if !self.atlas.take_exhausted() {
+            return;
+        }
+        self.atlas.reset();
+        self.cached_glyphs.clear();
+        self.text_run_cache.clear();
+        self.atlas_resets += 1;
+        self.content_generation = self.content_generation.wrapping_add(1);
+        let n = self.atlas_resets;
+        timed_log(|| {
+            eprintln!("[atlas] место исчерпано — сброс #{n}, глифы растеризуются заново");
+        });
     }
 
     /// Получить мutable ссылку для прямого управления кэшем (advanced usage).
@@ -9254,6 +9303,10 @@ impl Renderer {
         scroll_x: f32,
         anim_ranges: &[std::ops::Range<usize>],
     ) -> Result<(), wgpu::SurfaceError> {
+        // BUG-435: место в атласе кончилось на прошлом кадре — сбрасываем ДО
+        // хэша кадра, чтобы бамп поколения контента попал в хэш и кадр не был
+        // пропущен как идентичный.
+        self.recover_exhausted_atlas();
         // Skip-identical-frame (p1-exp-wgpu-only): тотальный хэш кадра —
         // display list + overlay + scroll + размер поверхности (структурный
         // фолд команд, см. hash_display_list) — складывается с поколением
@@ -16850,6 +16903,15 @@ impl TextRunCache {
             std::sync::Arc::new(plan),
         ));
     }
+
+    /// Выбрасывает все планы. Обязателен при сбросе/эвикции атласа: планы
+    /// держат готовые `CachedGlyph` со старыми координатами записей, и после
+    /// сброса они указывали бы на пиксели уже других глифов (BUG-435).
+    /// Счётчики попаданий/промахов процесса не трогаются — это статистика.
+    fn clear(&mut self) {
+        self.buckets.clear();
+        self.stored = 0;
+    }
 }
 
 /// Численная часть ключа run-а для [`TextRunCache`] — всё, от чего зависит
@@ -17269,8 +17331,34 @@ fn ensure_glyph(
         t0.elapsed().as_nanos() as u64,
         std::sync::atomic::Ordering::Relaxed,
     );
-    cached.insert(key, result);
-    result
+    match result {
+        GlyphRaster::Ready(g) => {
+            cached.insert(key, Some(g));
+            Some(g)
+        }
+        GlyphRaster::Empty => {
+            // Глифу нечего рисовать (пробел, нет outline-а, растеризатор вернул
+            // пусто) — свойство самого глифа, помним навсегда.
+            cached.insert(key, None);
+            None
+        }
+        // BUG-435: отказ по МЕСТУ мемоизировать нельзя. Раньше он попадал в
+        // `cached` как `None` и держался там вечно — буква исчезала до конца
+        // жизни процесса, в том числе в хроме, хотя атлас на старте следующего
+        // кадра уже сброшен и место есть.
+        GlyphRaster::OutOfSpace => None,
+    }
+}
+
+/// Итог растеризации глифа в атлас (BUG-435): «нет места» отличается от
+/// «класть нечего», потому что первое лечится сбросом атласа, а второе нет.
+enum GlyphRaster {
+    /// Глиф в атласе.
+    Ready(CachedGlyph),
+    /// Рисовать нечего — outline пуст/не Simple, растеризация не дала битмап.
+    Empty,
+    /// Атлас исчерпан.
+    OutOfSpace,
 }
 
 fn rasterize_and_insert(
@@ -17280,23 +17368,31 @@ fn rasterize_and_insert(
     units_per_em: u16,
     key: AtlasKey,
     coords: &[f32],
-) -> Option<CachedGlyph> {
+) -> GlyphRaster {
     // `glyph_resolved_with_coords` разворачивает composite в Simple
     // рекурсивно и применяет gvar deltas в указанной точке пространства
     // осей. Пустой coords (default-instance) → short-circuit на путь
     // `glyph_resolved` (для non-VF шрифтов или CSS без
     // `font-variation-settings`).
-    let glyph = font.glyph_resolved_with_coords(key.glyph_id, coords).ok().flatten()?;
+    let Some(glyph) = font.glyph_resolved_with_coords(key.glyph_id, coords).ok().flatten() else {
+        return GlyphRaster::Empty;
+    };
     if !matches!(glyph.outline, Outline::Simple(_)) {
-        return None;
+        return GlyphRaster::Empty;
     }
     let raster = Rasterizer::new(f32::from(key.size_bin), units_per_em);
-    let bitmap: Bitmap = raster.rasterize(&glyph)?;
-    let entry = atlas.insert(key, &bitmap)?;
+    let Some(bitmap): Option<Bitmap> = raster.rasterize(&glyph) else {
+        return GlyphRaster::Empty;
+    };
+    let entry = match atlas.try_insert(key, &bitmap) {
+        InsertOutcome::Inserted(entry) => entry,
+        InsertOutcome::Rejected => return GlyphRaster::Empty,
+        InsertOutcome::OutOfSpace => return GlyphRaster::OutOfSpace,
+    };
     // HVAR delta applied: for variable fonts, advance width varies per axis instance.
     // Font::advance_width_varied falls back to hmtx base when HVAR is absent.
     let advance_native = font.advance_width_varied(key.glyph_id, hmtx, coords);
-    Some(CachedGlyph {
+    GlyphRaster::Ready(CachedGlyph {
         entry,
         left: bitmap.left,
         top: bitmap.top,
@@ -19437,6 +19533,45 @@ mod tests {
         // Advance берётся у базового глифа (600/1000 em при 32px = 19.2px),
         // а не суммой advance-ов слоёв.
         assert!((end_x - 19.2).abs() < 0.01, "pen advanced to {end_x}");
+    }
+
+    /// BUG-435: отказ атласа по МЕСТУ не должен попадать в `cached_glyphs` —
+    /// иначе буква не нарисуется уже никогда, даже после сброса атласа.
+    #[test]
+    fn atlas_exhaustion_is_not_memoized_and_heals_after_reset() {
+        let bytes = build_color_font();
+        let metrics = build_face_metrics(&bytes);
+        let faces = vec![LoadedFace { bytes: Arc::from(bytes.as_slice()), metrics }];
+        let mut lazy = LazyParsedFaces::new(&faces);
+        let mut atlas = GlyphAtlas::new(64);
+        let mut cached: HashMap<AtlasKey, Option<CachedGlyph>> = HashMap::new();
+
+        // Забиваем атлас чужой записью так, чтобы места больше не осталось.
+        let filler = Bitmap {
+            width: 60,
+            height: 60,
+            pixels: vec![255; 60 * 60],
+            left: 0.0,
+            top: 0.0,
+        };
+        assert!(atlas.insert(AtlasKey::new(u16::MAX, 0, 1, 0), &filler).is_some());
+
+        let key = atlas_key(0, 1, 32, 0);
+        assert!(
+            ensure_glyph(&mut cached, &mut atlas, &mut lazy, 0, 1, 32, &[]).is_none(),
+            "в переполненный атлас глиф не лёг"
+        );
+        assert!(atlas.exhausted(), "атлас пометил себя исчерпанным");
+        assert!(
+            !cached.contains_key(&key),
+            "отказ по месту мемоизировать нельзя — он временный"
+        );
+
+        // Сброс атласа (в рантайме — на старте следующего кадра).
+        atlas.reset();
+        let g = ensure_glyph(&mut cached, &mut atlas, &mut lazy, 0, 1, 32, &[]);
+        assert!(g.is_some(), "после сброса тот же глиф растеризуется и ложится");
+        assert!(cached.get(&key).copied().flatten().is_some(), "и попадает в мемоизацию");
     }
 
     #[test]
