@@ -1750,6 +1750,11 @@ pub(crate) fn hash_command_into(
 }
 
 /// Хеширует одну команду структурно, без аллокаций.
+///
+/// [`hash_display_list_dual`] сворачивает кадр через этот дайджест: свёртка
+/// команды, попадающая в оба кадровых хэша, считается один раз. Границы команд
+/// при этом становятся явными (в непрерывном потоке они были неявными) — это
+/// строже, а не слабее: «размазать» поля соседних команд друг в друга нельзя.
 pub(crate) fn hash_one_command(cmd: &DisplayCommand) -> u64 {
     use std::hash::Hasher;
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -1876,6 +1881,84 @@ pub fn hash_display_list_skipping(
         hash_command_into(cmd, &mut hasher);
     }
     hasher.finish()
+}
+
+/// Оба кадровых хэша за ОДИН обход списка (BUG-405 срез 35, пункт 70).
+///
+/// Возвращает `(хэш кадра, ключ полосы)` — те же две свёртки, что кадр раньше
+/// считал двумя раздельными обходами ([`hash_display_list`] по
+/// `content` + `overlay` со скроллом и размерами поверхности,
+/// [`hash_display_list_skipping`] по статичной части `content` при нулевом
+/// скролле и размерах полосы). Значения ДРУГИЕ, чем у пары: оба хэша
+/// сравниваются только с хэшем предыдущего кадра того же процесса, поэтому
+/// важны их свойства (см. гейты `dual_*` в тестах), а не конкретные числа.
+///
+/// **Почему один проход дешевле.** Скролл и размеры входят в оба хэша
+/// отдельными полями, а не через обход, а сами команды у хэшей общие — при
+/// пустом `skip` полностью, иначе с точностью до выколотых диапазонов. Список
+/// разбирается один раз, и общая часть сворачивается ОДНИМ потоком SipHash:
+/// команда даёт 64-битный дайджест, который уходит в оба хешера. Тройник
+/// ([`TeeHasher`]) остаётся только для кадров с непустым `skip`, где у плеч
+/// разные множества команд, — там экономится разбор, но не байты.
+///
+/// `skip` обязан быть отсортирован и не пересекаться — то же требование, что
+/// у [`hash_display_list_skipping`]; overlay в ключ не входит вовсе
+/// (viewport-locked, см. [`hash_content`]).
+#[must_use]
+pub fn hash_display_list_dual(
+    content: &[DisplayCommand],
+    overlay: &[DisplayCommand],
+    skip: &[std::ops::Range<usize>],
+    scroll: (f32, f32),
+    surface: (u32, u32),
+    band: (u32, u32),
+) -> (u64, u64) {
+    use std::hash::Hasher;
+
+    let (scroll_x, scroll_y) = scroll;
+    let (surface_w, surface_h) = surface;
+    let (key_w, key_h) = band;
+
+    let mut frame = std::collections::hash_map::DefaultHasher::new();
+    frame.write_u32(surface_w);
+    frame.write_u32(surface_h);
+    frame.write_u32(scroll_x.to_bits());
+    frame.write_u32(scroll_y.to_bits());
+    frame.write_usize(content.len());
+    frame.write_usize(overlay.len());
+
+    let skipped: usize = skip.iter().map(std::ops::Range::len).sum();
+    let mut key = std::collections::hash_map::DefaultHasher::new();
+    key.write_u32(key_w);
+    key.write_u32(key_h);
+    key.write_usize(content.len().saturating_sub(skipped));
+
+    if skip.is_empty() {
+        // Горячий случай (страница без анимируемых сегментов): у плеч одно и
+        // то же множество команд, поэтому дайджест команды считается один раз
+        // и пишется в оба хешера — байты команды сворачиваются однократно.
+        for cmd in content {
+            let d = hash_one_command(cmd);
+            frame.write_u64(d);
+            key.write_u64(d);
+        }
+    } else {
+        let mut skip_iter = skip.iter().peekable();
+        for (i, cmd) in content.iter().enumerate() {
+            while skip_iter.peek().is_some_and(|r| r.end <= i) {
+                skip_iter.next();
+            }
+            let d = hash_one_command(cmd);
+            frame.write_u64(d);
+            if !skip_iter.peek().is_some_and(|r| r.contains(&i)) {
+                key.write_u64(d);
+            }
+        }
+    }
+    for cmd in overlay {
+        frame.write_u64(hash_one_command(cmd));
+    }
+    (frame.finish(), key.finish())
 }
 
 /// How a frame differs from the previously presented one (ADR-016 M0.5).
@@ -15153,6 +15236,88 @@ mod tests {
         );
     }
 
+    /// Гейт среза 35 (BUG-405, пункт 70) — ключ полосы из слитого хэша
+    /// scroll-инвариантен и равен ключу материализованной статики.
+    ///
+    /// Это свойство, на котором стоит полоса: кадр с выколотыми сегментами и
+    /// кадр, где тех же сегментов нет вовсе, обязаны дать один ключ, иначе
+    /// каждый анимационный тик читался бы как смена содержимого. Побитового
+    /// равенства со старой парой у слитого хэша нет по построению (см. его
+    /// док), поэтому гейтим свойства, а не числа.
+    #[test]
+    fn dual_key_equals_materialized_static() {
+        let content = hash_corpus();
+        let skip = vec![1usize..3, 5usize..9];
+        let mut materialized: DisplayList = Vec::new();
+        let mut prev = 0usize;
+        for r in &skip {
+            materialized.extend_from_slice(&content[prev..r.start]);
+            prev = r.end;
+        }
+        materialized.extend_from_slice(&content[prev..]);
+
+        let overlay = vec![DisplayCommand::FillRect {
+            rect: Rect::new(1.0, 2.0, 3.0, 4.0),
+            color: Color { r: 1, g: 2, b: 3, a: 4 },
+        }];
+        let (_, key_skipped) =
+            hash_display_list_dual(&content, &overlay, &skip, (0.0, 40.0), (1024, 720), (1024, 1800));
+        let (_, key_materialized) =
+            hash_display_list_dual(&materialized, &[], &[], (0.0, 0.0), (800, 600), (1024, 1800));
+        assert_eq!(
+            key_skipped, key_materialized,
+            "ключ полосы обязан зависеть только от статики и размеров полосы",
+        );
+
+        // Скролл, размер поверхности и overlay в ключ не входят; размер полосы
+        // входит.
+        let (_, key_scrolled) =
+            hash_display_list_dual(&content, &[], &skip, (7.0, 999.0), (640, 480), (1024, 1800));
+        assert_eq!(key_skipped, key_scrolled, "ключ обязан быть scroll-инвариантен");
+        let (_, key_other_band) =
+            hash_display_list_dual(&content, &overlay, &skip, (0.0, 40.0), (1024, 720), (1024, 2400));
+        assert_ne!(key_skipped, key_other_band, "смена размера полосы обязана менять ключ");
+    }
+
+    /// Гейт среза 35: хэш кадра из слитого прохода различает всё, что различал
+    /// раздельный, — состояние вьюпорта, полосы `content`/`overlay` и любую
+    /// команду, которую [`hash_command_into`] считает разной.
+    #[test]
+    fn dual_frame_hash_is_total() {
+        let dual = |c: &[DisplayCommand], o: &[DisplayCommand], sx, sy, w, h| {
+            hash_display_list_dual(c, o, &[], (sx, sy), (w, h), (1024, 1800)).0
+        };
+        let content = vec![red_fill(5.0)];
+        let base = dual(&content, &[], 0.0, 0.0, 1024, 720);
+        assert_eq!(base, dual(&content, &[], 0.0, 0.0, 1024, 720), "детерминизм");
+        assert_ne!(base, dual(&[red_fill(6.0)], &[], 0.0, 0.0, 1024, 720), "команда");
+        assert_ne!(base, dual(&content, &[], 0.0, 40.0, 1024, 720), "scroll_y");
+        assert_ne!(base, dual(&content, &[], 12.0, 0.0, 1024, 720), "scroll_x");
+        assert_ne!(base, dual(&content, &[], 0.0, 0.0, 800, 720), "width");
+        assert_ne!(base, dual(&content, &[], 0.0, 0.0, 1024, 600), "height");
+        // Полоса, в которой лежит команда, значима: перенос из content в
+        // overlay обязан менять хэш.
+        assert_ne!(
+            dual(&content, &[], 0.0, 0.0, 1024, 720),
+            dual(&[], &content, 0.0, 0.0, 1024, 720),
+            "полоса команды",
+        );
+        // Дайджест на команду не должен огрублять фолд: всё, что различает
+        // Debug, обязано различать и пара «кадр + ключ».
+        let corpus = hash_corpus();
+        for (i, a) in corpus.iter().enumerate() {
+            for (j, b) in corpus.iter().enumerate().skip(i + 1) {
+                if debug_hash_one(a) != debug_hash_one(b) {
+                    assert_ne!(
+                        dual(std::slice::from_ref(a), &[], 0.0, 0.0, 1024, 720),
+                        dual(std::slice::from_ref(b), &[], 0.0, 0.0, 1024, 720),
+                        "слитый хэш грубее Debug на corpus[{i}] vs corpus[{j}]",
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn compose_plan_replays_enclosing_context() {
         use lumen_layout::property_trees::Mat4 as M;
@@ -17261,6 +17426,92 @@ mod tests {
             debug_ms / structural_ms.max(f64::MIN_POSITIVE),
         );
         assert!(structural_ms < debug_ms, "структурный фолд обязан быть быстрее Debug-фолда");
+    }
+
+    /// Перепись среза 35 (BUG-405, пункт 70): два раздельных обхода списка
+    /// против одного слитого, на двух кадрах — текстовом (как
+    /// `samples/bench-text-scroll.html`, где живёт пункт 70) и смешанном.
+    ///
+    /// `cargo test -p lumen-paint --profile dev-release hash_dual_bench -- --ignored --nocapture`
+    #[test]
+    #[ignore = "бенч: запускать вручную с --profile dev-release --nocapture"]
+    fn hash_dual_bench() {
+        use std::time::Instant;
+
+        // Текстовый кадр: строки абзаца, как их кладёт inline-flow.
+        let mut text_frame: Vec<DisplayCommand> = Vec::with_capacity(1000);
+        for i in 0..1000 {
+            #[expect(clippy::cast_precision_loss, reason = "координаты стенда")]
+            let y = (i as f32) * 19.2;
+            text_frame.push(DisplayCommand::DrawText {
+                rect: Rect::new(24.0, y, 872.0, 19.2),
+                text: format!("Строка {i} — типичный отрезок абзаца в 60 символов."),
+                font_size: 16.0,
+                color: Color { r: 34, g: 34, b: 34, a: 255 },
+                font_family: vec!["Inter".to_string(), "sans-serif".to_string()],
+                font_weight: lumen_layout::style::FontWeight(400),
+                font_style: lumen_layout::style::FontStyle::Normal,
+                font_stretch: lumen_layout::style::FontStretch(100),
+                font_variation_axes: Vec::new(),
+                font_features: Vec::new(),
+                font_palette: None,
+                tab_size: 8.0,
+                highlight_name: None,
+                text_orientation: None,
+            });
+        }
+
+        // Смешанный кадр: тот же корпус, что у `hash_display_list_bench`.
+        let mut mixed: Vec<DisplayCommand> = Vec::with_capacity(1060);
+        let corpus = hash_corpus();
+        let mut i = 0.0_f32;
+        while mixed.len() < 1060 {
+            for c in &corpus {
+                let mut c = c.clone();
+                if let DisplayCommand::FillRect { rect, .. } = &mut c {
+                    rect.x += i;
+                }
+                mixed.push(c);
+                i += 0.25;
+            }
+        }
+        mixed.truncate(1060);
+
+        let iters = 300;
+        let mut sink = 0u64;
+        for (label, frame) in [("text", &text_frame), ("mixed", &mixed)] {
+            // A: как считает кадр до среза 35 — два независимых обхода.
+            let t0 = Instant::now();
+            for _ in 0..iters {
+                sink ^= hash_display_list(frame, &[], 0.0, 40.0, 1024, 720);
+                sink ^= hash_display_list_skipping(frame, &[], &[], 0.0, 0.0, 1024, 1800);
+            }
+            let two_ms = t0.elapsed().as_secs_f64() * 1000.0 / f64::from(iters);
+
+            // B: один обход, байты команды расходятся в оба хешера.
+            let t1 = Instant::now();
+            for _ in 0..iters {
+                let (a, b) =
+                    hash_display_list_dual(frame, &[], &[], (0.0, 40.0), (1024, 720), (1024, 1800));
+                sink ^= a ^ b;
+            }
+            let dual_ms = t1.elapsed().as_secs_f64() * 1000.0 / f64::from(iters);
+
+            // C: один хэш — сколько стоит сам обход с одним плечом.
+            let t2 = Instant::now();
+            for _ in 0..iters {
+                sink ^= hash_display_list(frame, &[], 0.0, 40.0, 1024, 720);
+            }
+            let one_ms = t2.elapsed().as_secs_f64() * 1000.0 / f64::from(iters);
+
+            eprintln!(
+                "[dual bench] {label}: {} cmds × {iters} — два прохода {two_ms:.3} ms, \
+                 слитый {dual_ms:.3} ms ({:+.1} %), один хэш {one_ms:.3} ms",
+                frame.len(),
+                (dual_ms - two_ms) / two_ms.max(f64::MIN_POSITIVE) * 100.0,
+            );
+        }
+        eprintln!("[dual bench] sink={sink}");
     }
 
     // ── ADR-016 M0.5: content-only hash + frame-delta classification ──────

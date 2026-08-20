@@ -49,8 +49,10 @@ TOP_RE = re.compile(
     r'\[frame\]\s+top: scroll ([\d.]+) sda ([\d.]+) anim ([\d.]+) js ([\d.]+) '
     r'build ([\d.]+) paint ([\d.]+) \(лог ([\d.]+)\)')
 HASH_RE = re.compile(r'frame-hash: ([\d.]+)ms')
+# Срез 35 свёл ключ полосы в общий проход по списку: отдельной статьи `key` в
+# строке больше нет, вся цена хэширования печатается строкой `frame-hash`.
 COMPOSE_RE = re.compile(
-    r'compose-top: skip ([\d.]+) geom ([\d.]+) split ([\d.]+) key ([\d.]+) band ([\d.]+)')
+    r'compose-top: skip ([\d.]+) geom ([\d.]+) split ([\d.]+) band ([\d.]+)')
 WGPU_RE = re.compile(r'\[frame:wgpu\] total\s+([\d.]+)ms')
 ADAPTER_RE = re.compile(r'\[wgpu\] adapter: (.*)')
 
@@ -59,7 +61,7 @@ ARMS = [('лог 1', '1'), ('лог 2', '2')]
 # Статьи кадра попадания в порядке печати сводки. `лог` — измеренная цена
 # печати самого пофазного блока (счётчик `FRAME_LOG_NANOS`), `невязка` — то,
 # что не назвала ни одна статья.
-COLUMNS = ['shell', 'hash', 'key', 'band-реш.', 'пасс', 'лог', 'невязка']
+COLUMNS = ['shell', 'hash', 'band-реш.', 'пасс', 'лог', 'невязка']
 
 
 def parse(log_path: str) -> dict:
@@ -93,8 +95,7 @@ def parse(log_path: str) -> dict:
             m = COMPOSE_RE.search(line)
             if m:
                 g = [float(x) for x in m.groups()]
-                cur['key'] = g[3]
-                cur['band-реш.'] = g[0] + g[1] + g[2] + g[4]
+                cur['band-реш.'] = g[0] + g[1] + g[2] + g[3]
                 continue
             m = WGPU_RE.search(line)
             if m:
@@ -115,7 +116,7 @@ def parse(log_path: str) -> dict:
                 ys.append(float(m.group(2)))
                 if 'paint' in cur:
                     named = sum(cur.get(k, 0.0) for k in
-                                ('hash', 'key', 'band-реш.', 'пасс', 'лог'))
+                                ('hash', 'band-реш.', 'пасс', 'лог'))
                     cur['невязка'] = max(cur['paint'] - named, 0.0)
                     cur['честный'] = max(cur['total'] - cur.get('лог', 0.0), 0.0)
                 frames.append(cur)
