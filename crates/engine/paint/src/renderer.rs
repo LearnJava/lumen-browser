@@ -4324,6 +4324,31 @@ fn dual_hash_disabled() -> bool {
     *OFF.get_or_init(|| std::env::var("LUMEN_NO_DUAL_HASH").is_ok_and(|v| v != "0"))
 }
 
+/// `LUMEN_NO_COMPOSE_OVERLAY=1` — не рисовать overlay в кадре КОМПОЗИЦИИ
+/// (BUG-405 срез 36, пункт 76 остатка).
+///
+/// Рычаг ПЕРЕПИСИ, а не настройка: без overlay кадр пиксельно неверен (хром
+/// исчезает), зато разница плеч даёт цену хрома внутри композитного пасса —
+/// единственной статьи, которая после среза 35 крупнее хэша. Промах полосы
+/// рычаг не трогает вовсе: в полосу overlay не идёт никогда.
+///
+/// Гейт тождества плеч — счётчик РАБОТЫ, а не эхо самого рычага (пункт 69):
+/// `ops` и `cmd-mix draw` в строке кадра обязаны упасть вместе с ним.
+fn compose_overlay_disabled() -> bool {
+    use std::sync::OnceLock;
+    static OFF: OnceLock<bool> = OnceLock::new();
+    *OFF.get_or_init(|| std::env::var("LUMEN_NO_COMPOSE_OVERLAY").is_ok_and(|v| v != "0"))
+}
+
+thread_local! {
+    /// Дайджесты команд overlay прошлого Compose-кадра — только диагностика
+    /// (BUG-405 срез 36): заполняется под `LUMEN_FRAME_LOG=2` и нужна ровно
+    /// для одного числа — сколько команд хрома изменилось за кадр прокрутки.
+    /// Живёт вне `Renderer`, чтобы штатный путь не носил поля ради переписи.
+    static OVERLAY_PREV: std::cell::RefCell<Vec<u64>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
 fn band_ring_enabled() -> bool {
     use std::sync::OnceLock;
     static ON: OnceLock<bool> = OnceLock::new();
@@ -9145,10 +9170,65 @@ impl Renderer {
             });
         }
 
+        // BUG-405 срез 36: overlay — единственное содержимое композитного кадра
+        // помимо блита полосы, поэтому вопрос «сколько стоит хром на кадре
+        // прокрутки» решается его дайджестом (меняется ли он от кадра к кадру)
+        // и плечом рычага (сколько стоит его рисовать). Дайджест считается
+        // только под пофазным логом — штатный путь за диагностику не платит.
+        if crate::frame_log_level() >= 2 {
+            // Целиком внутри `timed_log`: сама эта диагностика — тоже
+            // инструмент, и её цена обязана попасть в счётчик инструмента, а
+            // не в неназванную работу движка (ровно ловушка среза 34, п. 71).
+            timed_log(|| {
+                // Дайджесты команд хрома + сколько их изменилось против
+                // прошлого кадра: «дайджест кадра другой» и «хром надо
+                // перерисовать целиком» — разные утверждения, и кэш хрома
+                // имеет смысл ровно настолько, насколько мал `changed`.
+                let digests: Vec<u64> = overlay
+                    .iter()
+                    .map(crate::display_list::hash_one_command)
+                    .collect();
+                let frame_d = digests.iter().fold(0u64, |acc, d| acc.rotate_left(7) ^ *d);
+                let (changed, prev_len, at) = OVERLAY_PREV.with(|p| {
+                    let mut prev = p.borrow_mut();
+                    // Адрес первой изменившейся команды: следующий срез должен
+                    // знать не только «сколько», но и «какая» — от этого
+                    // зависит, выкалывается ли она из кэша одним диапазоном.
+                    let at = digests.iter().zip(prev.iter()).position(|(a, b)| a != b);
+                    let changed = digests
+                        .iter()
+                        .zip(prev.iter())
+                        .filter(|(a, b)| a != b)
+                        .count()
+                        + digests.len().abs_diff(prev.len());
+                    let prev_len = prev.len();
+                    *prev = digests;
+                    (changed, prev_len, at)
+                });
+                // Вид команды — по началу её `Debug`: отдельного `kind()` у
+                // `DisplayCommand` нет. Первые поля (у прямоугольника это его
+                // геометрия) и отвечают, что именно в хроме едет за прокруткой.
+                let names: String = at
+                    .map(|i| {
+                        let dbg: String =
+                            format!("{:?}", overlay[i]).chars().take(90).collect();
+                        format!(" at {i} {dbg}")
+                    })
+                    .unwrap_or_default();
+                eprintln!(
+                    "[frame:wgpu]   overlay: {} cmds digest {frame_d:016x} \
+                     changed {changed}/{prev_len}{names}",
+                    overlay.len(),
+                );
+            });
+        }
+
         // Split: анимируемые сегменты рисуются как content-полоса Compose-кадра
         // (получают штатный сдвиг -scroll_y) — поверх blit-а, под overlay.
         let seg_content: &[DisplayCommand] = seg_plan.unwrap_or(&[]);
-        self.render_impl(seg_content, overlay, scroll_y, 0.0, RenderPassMode::Compose)?;
+        let compose_overlay: &[DisplayCommand] =
+            if compose_overlay_disabled() { &[] } else { overlay };
+        self.render_impl(seg_content, compose_overlay, scroll_y, 0.0, RenderPassMode::Compose)?;
         Ok(true)
     }
 
