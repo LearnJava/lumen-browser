@@ -2981,6 +2981,18 @@ function _lumen_element_child_nids(nid) {
 // satisfy `x instanceof HTMLCollection`. Not constructible from script.
 function HTMLCollection() { throw new TypeError('Illegal constructor'); }
 
+// NodeList marker prototype (DOM Standard §4.2.10.1). Separate interface from
+// HTMLCollection above because HTML LS §3.1.5 requires `getElementsByName` to
+// hand back a NodeList specifically — a collection answering `instanceof
+// HTMLCollection` fails that half of the interface (BUG-412). Only the surface
+// the collection Proxy below can back is provided: `length`, indices, `item`,
+// `forEach` and iteration; `entries`/`keys`/`values` are not implemented.
+function NodeList() { throw new TypeError('Illegal constructor'); }
+NodeList.prototype.forEach = function(cb, thisArg) {
+    if (typeof cb !== 'function') throw new TypeError('callback is not a function');
+    for (var i = 0; i < this.length; i++) cb.call(thisArg, this[i], i, this);
+};
+
 // BUG-328: the `name`-attribute half of `namedItem`/`ownKeys` (below) only
 // applies to elements in the HTML namespace (DOM §4.2.10.2) — an element
 // created with createElementNS(null-or-empty-string, ...) (`Namespace::None`,
@@ -2989,6 +3001,26 @@ function HTMLCollection() { throw new TypeError('Illegal constructor'); }
 // in both functions below is intentionally namespace-blind).
 function _lumen_is_html_namespace(nid) {
     return _lumen_u2n(_lumen_get_namespace_uri(nid)) === 'http://www.w3.org/1999/xhtml';
+}
+
+// HTML LS §3.1.5 — the member set behind `document.getElementsByName(name)`:
+// every element of the document that is in the HTML namespace (so a foreign
+// `<svg name=x>`/`<math name=x>` does NOT match) and whose `name` content
+// attribute is exactly `name`. Comparison is case-sensitive and an `id` of the
+// same value never matches — `name` is not one of the attributes selectors
+// fold case for, so the native `[name]` query plus this JS comparison agree.
+// The fixed, always-valid `[name]` selector is queried and the value compared
+// here rather than a `[name=\"...\"]` selector being built, so an argument
+// carrying quotes, backslashes or newlines needs no CSS string escaping to
+// stay correct.
+function _lumen_elements_named_nids(name) {
+    var all = _lumen_query_selector_all('[name]');
+    var out = [];
+    for (var i = 0; i < all.length; i++) {
+        if (!_lumen_is_html_namespace(all[i])) continue;
+        if (_lumen_u2n(_lumen_get_attr(all[i], 'name')) === name) out.push(all[i]);
+    }
+    return out;
 }
 
 // `namedItem` semantics (DOM §4.2.10.2): the first element in `ids` (tree
@@ -3050,8 +3082,10 @@ function _lumen_make_html_collection(owner_nid) {
 // the current member node ids, `protoObj` decides which interface the result
 // claims to implement. Split out of `_lumen_make_html_collection` so
 // `HTMLFormControlsCollection` (BUG-383) shares it instead of re-implementing
-// indexed and named access.
-function _lumen_make_nid_collection(idsFn, protoObj) {
+// indexed and named access. `noNamed` drops the named half (`namedItem`,
+// `list['someName']`, named own-keys): that is HTMLCollection behaviour
+// (DOM §4.2.10.2), while a NodeList exposes indices alone (BUG-412).
+function _lumen_make_nid_collection(idsFn, protoObj, noNamed) {
     var proto = Object.create(protoObj);
     function ids() { return idsFn(); }
     return new Proxy(proto, {
@@ -3064,7 +3098,7 @@ function _lumen_make_nid_collection(idsFn, protoObj) {
                     return i < list.length ? _lumen_make_element(list[i]) : null;
                 };
             }
-            if (prop === 'namedItem') {
+            if (prop === 'namedItem' && !noNamed) {
                 return function(name) { return _lumen_html_collection_named(ids(), String(name)); };
             }
             if (typeof prop === 'string' && /^[0-9]+$/.test(prop)) {
@@ -3072,18 +3106,20 @@ function _lumen_make_nid_collection(idsFn, protoObj) {
                 var idx = parseInt(prop, 10);
                 return idx < list.length ? _lumen_make_element(list[idx]) : undefined;
             }
-            if (typeof prop === 'string' && prop !== 'constructor') {
+            if (!noNamed && typeof prop === 'string' && prop !== 'constructor') {
                 var named = _lumen_html_collection_named(ids(), prop);
                 if (named !== null) return named;
             }
             return target[prop];
         },
         has: function(target, prop) {
-            if (prop === 'length' || prop === 'item' || prop === 'namedItem') return true;
+            if (prop === 'length' || prop === 'item') return true;
+            if (prop === 'namedItem') return !noNamed;
             if (typeof prop === 'string' && /^[0-9]+$/.test(prop)) {
                 return parseInt(prop, 10) < ids().length;
             }
-            if (typeof prop === 'string' && _lumen_html_collection_named(ids(), prop) !== null) return true;
+            if (!noNamed && typeof prop === 'string'
+                && _lumen_html_collection_named(ids(), prop) !== null) return true;
             return prop in target;
         },
         // BUG-323: `ownKeys` + `getOwnPropertyDescriptor` so `for-in`,
@@ -3098,6 +3134,7 @@ function _lumen_make_nid_collection(idsFn, protoObj) {
             var list = ids();
             var keys = [];
             for (var i = 0; i < list.length; i++) keys.push(String(i));
+            if (noNamed) return keys;
             var names = _lumen_html_collection_own_names(list);
             for (var k = 0; k < names.length; k++) keys.push(names[k]);
             return keys;
@@ -3111,7 +3148,7 @@ function _lumen_make_nid_collection(idsFn, protoObj) {
                 }
                 return undefined;
             }
-            if (typeof prop === 'string') {
+            if (!noNamed && typeof prop === 'string') {
                 var named = _lumen_html_collection_named(ids(), prop);
                 if (named !== null) {
                     return { value: named, writable: false, enumerable: false, configurable: true };
@@ -5266,6 +5303,21 @@ var document = {
         var sel = _lumen_class_selector(names);
         if (sel === null) return [];
         return _lumen_query_selector_all(sel).map(_lumen_make_element);
+    },
+    // HTML LS §3.1.5: getElementsByName(elementName) — the HTML-namespace
+    // elements whose `name` attribute equals the argument, in tree order
+    // (BUG-412: the method was missing from the shim entirely, so every call
+    // threw `is not a function`). Unlike the two accessors above this returns a
+    // LIVE NodeList rather than a static array: the spec's own liveness is what
+    // `document.images` already gets from the same Proxy, and named-access is
+    // switched off because a NodeList has no `namedItem`. The DOMString
+    // conversion of the argument is what makes `getElementsByName(null)` look
+    // for the literal name `null`.
+    getElementsByName: function(elementName) {
+        var name = String(elementName);
+        return _lumen_make_nid_collection(
+            function() { return _lumen_elements_named_nids(name); },
+            NodeList.prototype, true);
     },
     // HTML LS §3.1.5 — `document.images`: a live HTMLCollection of the `img`
     // elements in the document, in tree order (BUG-732: was `undefined`, so
@@ -11166,6 +11218,7 @@ window.MutationRecord        = MutationRecord;
 window.ResizeObserver        = ResizeObserver;
 window.IntersectionObserver  = IntersectionObserver;
 window.HTMLCollection        = HTMLCollection;
+window.NodeList              = NodeList;
 window.NodeFilter            = NodeFilter;
 window.TreeWalker            = _TreeWalker;
 window.NodeIterator          = _NodeIterator;
@@ -13848,6 +13901,9 @@ window.HTMLOptionsCollection = HTMLOptionsCollection;
 // interface instead of answering the `[object Object]` that made the old
 // `Array` masquerade so hard to spot.
 [['HTMLCollection', HTMLCollection.prototype],
+ // BUG-412: `getElementsByName` hands out a NodeList, so `[...list]` and
+ // `Object.prototype.toString.call(list)` must work on it too.
+ ['NodeList', NodeList.prototype],
  ['HTMLFormControlsCollection', HTMLFormControlsCollection.prototype],
  ['HTMLOptionsCollection', HTMLOptionsCollection.prototype],
  // NamedNodeMap (BUG-732) is indexed the same way, so `[...el.attributes]`
@@ -19947,6 +20003,67 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(none, lumen_core::JsValue::Number(0.0));
+        }
+
+        #[test]
+        fn get_elements_by_name_document() {
+            // BUG-412: getElementsByName was missing from WEB_API_SHIM entirely
+            // (`'getElementsByName' in document` === false). HTML LS §3.1.5:
+            // matches the `name` content attribute case-sensitively, ignores
+            // `id`, ignores elements outside the HTML namespace, and runs the
+            // argument through the DOMString conversion first.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var d = document.createElement('div'); \
+                     d.setAttribute('name', 'abcd'); document.body.appendChild(d); \
+                     var n = document.createElement('div'); \
+                     n.setAttribute('name', 'null'); document.body.appendChild(n); \
+                     var u = document.createElement('div'); \
+                     u.setAttribute('name', 'undefined'); document.body.appendChild(u); \
+                     var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); \
+                     svg.setAttribute('name', 'abcd'); document.body.appendChild(svg); \
+                     document.getElementsByName('abcd').length === 1 && \
+                     document.getElementsByName('abcd')[0] === d && \
+                     document.getElementsByName('ABCD').length === 0 && \
+                     document.getElementsByName('main').length === 0 && \
+                     document.getElementsByName('nope').length === 0 && \
+                     document.getElementsByName(null)[0] === n && \
+                     document.getElementsByName(undefined)[0] === u",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn get_elements_by_name_is_live_node_list() {
+            // BUG-412: the result is a live NodeList (DOM §4.2.10.1), not the
+            // static array `getElementsByTagName`/`getElementsByClassName`
+            // settle for and not an HTMLCollection — so it tracks later
+            // insertions/removals and carries no `namedItem`.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var input = document.createElement('input'); \
+                     input.setAttribute('name', 'test'); document.body.appendChild(input); \
+                     var list = document.getElementsByName('test'); \
+                     var l1 = list.length; \
+                     var embed = document.createElement('embed'); \
+                     embed.setAttribute('name', 'test'); document.body.appendChild(embed); \
+                     var l2 = list.length; \
+                     document.body.removeChild(embed); \
+                     var l3 = list.length; \
+                     l1 === 1 && l2 === 2 && l3 === 1 && \
+                     list instanceof NodeList && !(list instanceof HTMLCollection) && \
+                     Object.prototype.toString.call(list) === '[object NodeList]' && \
+                     !('namedItem' in list) && list.item(0) === input && \
+                     list.item(9) === null && \
+                     (function() { var seen = 0; \
+                        list.forEach(function(el) { if (el === input) seen++; }); \
+                        return seen === 1; })()",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
         }
 
         #[test]
