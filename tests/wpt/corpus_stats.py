@@ -91,14 +91,20 @@ def supported_types(path: str = LUMEN_BROWSER_PY) -> frozenset:
     return SUPPORTED_TYPES_FALLBACK
 
 
-def iter_ids(manifest: dict):
-    """Yield `(test_type, category, test_id)` for every test in the manifest.
+def iter_entries(manifest: dict):
+    """Yield `(test_type, category, test_id, extras)` for every test in the manifest.
 
     `test_id` is the URL `wptrunner` addresses the test by (leading `/`), which
     is also the id `run_report.py`/`run_smoke.py` take on the command line. A
     manifest leaf is `[hash, entry, ...]` with one entry per generated id; an
     entry's first field is the URL, or `None` when it equals the file path
-    (the common case for a plain `.html` test with no variants).
+    (the common case for a plain `.html` test with no variants); its second is
+    the per-test metadata dict (`{"timeout": "long"}` and friends), absent for
+    the majority of tests and normalised to `{}` here.
+
+    `extras` is what `shard_timeout` budgets a shard's wall-clock from: the
+    manifest already states which tests wptrunner will wait 60 s on rather
+    than 10, so the budget can be derived instead of tuned (WPT-RUN-5 slice 15).
     """
     for test_type, tree in manifest.get("items", {}).items():
         if test_type in NON_TEST_TYPES:
@@ -115,7 +121,15 @@ def iter_ids(manifest: dict):
             category = path[0] if path else ""
             for entry in node[1:]:
                 url = entry[0] if entry and entry[0] else file_path
-                yield test_type, category, "/" + url.lstrip("/")
+                extras = entry[1] if len(entry) > 1 and isinstance(entry[1], dict) else {}
+                yield test_type, category, "/" + url.lstrip("/"), extras
+
+
+def iter_ids(manifest: dict):
+    """`iter_entries` without the per-test metadata — the shape every caller
+    that only needs the id set has used since WPT-RUN-4."""
+    for test_type, category, test_id, _extras in iter_entries(manifest):
+        yield test_type, category, test_id
 
 
 def collect(manifest: dict) -> dict:
