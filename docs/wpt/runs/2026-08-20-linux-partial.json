@@ -1,7 +1,7 @@
 {
-  "binary": "target/dev-release/lumen",
-  "commit": "2f82cb219",
-  "finished": "2026-08-20T18:00:20",
+  "binary": "/home/konstantin/RustroverProjects/lumen-browser/.claude/worktrees/p2-work/target/release/lumen.exe",
+  "commit": "2b09dcd00",
+  "finished": "2026-08-20T18:17:48",
   "processes": 6,
   "scope": [
     "FileAPI",
@@ -40,6 +40,11 @@
     "compression",
     "compute-pressure",
     "connection-allowlist",
+    "console",
+    "contacts",
+    "container-timing",
+    "content-dpr",
+    "content-index",
     "dom"
   ],
   "scored": {
@@ -474,6 +479,72 @@
         "subtests_passed": 91,
         "subtests_total": 235
       },
+      "console": {
+        "by_type": {
+          "testharness": 19
+        },
+        "harness_ok": 5,
+        "ids": 19,
+        "not_run": 0,
+        "pass_rate": 0.0921,
+        "ran": 19,
+        "score": 1.75,
+        "subtests_passed": 6,
+        "subtests_total": 22
+      },
+      "contacts": {
+        "by_type": {
+          "testharness": 1
+        },
+        "harness_ok": 0,
+        "ids": 1,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 1,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 0
+      },
+      "container-timing": {
+        "by_type": {
+          "testharness": 19
+        },
+        "harness_ok": 19,
+        "ids": 19,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 19,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 19
+      },
+      "content-dpr": {
+        "by_type": {
+          "reftest": 5,
+          "testharness": 1
+        },
+        "harness_ok": 2,
+        "ids": 6,
+        "not_run": 0,
+        "pass_rate": 0.1667,
+        "ran": 6,
+        "score": 1.0,
+        "subtests_passed": 0,
+        "subtests_total": 1
+      },
+      "content-index": {
+        "by_type": {
+          "testharness": 5
+        },
+        "harness_ok": 0,
+        "ids": 5,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 5,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 0
+      },
       "dom": {
         "by_type": {
           "crashtest": 20,
@@ -492,8 +563,8 @@
     },
     "recovered_shards": [
       {
-        "results": 3,
-        "shard": "console"
+        "results": 785,
+        "shard": "content-security-policy"
       },
       {
         "results": 129,
@@ -509,22 +580,22 @@
       }
     ],
     "status_counts": {
-      "ERROR": 118,
-      "FAIL": 40,
+      "ERROR": 123,
+      "FAIL": 44,
       "NOT-RUN": 419,
-      "OK": 630,
-      "PASS": 8,
-      "TIMEOUT": 1448
+      "OK": 655,
+      "PASS": 9,
+      "TIMEOUT": 1463
     },
     "totals": {
-      "harness_ok": 638,
-      "ids": 2663,
+      "harness_ok": 664,
+      "ids": 2713,
       "not_run": 419,
-      "pass_rate": 0.0928,
-      "ran": 2244,
-      "score": 247.23,
-      "subtests_passed": 3049,
-      "subtests_total": 8809
+      "pass_rate": 0.0921,
+      "ran": 2294,
+      "score": 249.98,
+      "subtests_passed": 3055,
+      "subtests_total": 8851
     }
   },
   "shards": [
@@ -860,6 +931,51 @@
       "report": ".tmp/wpt-corpus/connection-allowlist.json",
       "returncode": 64,
       "seconds": 211.8
+    },
+    {
+      "ids": 20,
+      "name": "console",
+      "outcome": "ran",
+      "prefix": "/console/",
+      "report": ".tmp/wpt-corpus/console.json",
+      "returncode": 64,
+      "seconds": 55.2
+    },
+    {
+      "ids": 1,
+      "name": "contacts",
+      "outcome": "ran",
+      "prefix": "/contacts/",
+      "report": ".tmp/wpt-corpus/contacts.json",
+      "returncode": 64,
+      "seconds": 21.3
+    },
+    {
+      "ids": 19,
+      "name": "container-timing",
+      "outcome": "ran",
+      "prefix": "/container-timing/",
+      "report": ".tmp/wpt-corpus/container-timing.json",
+      "returncode": 64,
+      "seconds": 9.7
+    },
+    {
+      "ids": 6,
+      "name": "content-dpr",
+      "outcome": "ran",
+      "prefix": "/content-dpr/",
+      "report": ".tmp/wpt-corpus/content-dpr.json",
+      "returncode": 64,
+      "seconds": 7.5
+    },
+    {
+      "ids": 5,
+      "name": "content-index",
+      "outcome": "ran",
+      "prefix": "/content-index/",
+      "report": ".tmp/wpt-corpus/content-index.json",
+      "returncode": 64,
+      "seconds": 52.2
     }
   ]
 }
