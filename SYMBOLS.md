@@ -3945,80 +3945,80 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/renderer.rs:2224` **enum** `ImageRegisterError` — Ошибка `Renderer::register_image`
 `crates/engine/paint/src/renderer.rs:3190` **struct** `Renderer`
 `crates/engine/paint/src/renderer.rs:3733` **fn** `load_counter` — Reads a diagnostics counter
-`crates/engine/paint/src/renderer.rs:4526` **fn** `new`
-`crates/engine/paint/src/renderer.rs:4731` **fn** `new_headless` — Creates a headless `Renderer` for off-screen rendering without a winit window
-`crates/engine/paint/src/renderer.rs:5641` **fn** `warm_lazy_pipelines_blocking` — Прогревает ленивые пайплайны синхронно, на вызывающем потоке
-`crates/engine/paint/src/renderer.rs:5656` **fn** `pipelines_compiled` — Сколько ленивых пайплайнов **этот** рендер скомпилировал за свою жизнь
-`crates/engine/paint/src/renderer.rs:5669` **fn** `hot_pipeline_threads` — Сколько РАЗНЫХ потоков скомпилировало пять горячих пайплайнов этого
-`crates/engine/paint/src/renderer.rs:5682` **fn** `hot_pipelines_built_on_ui_thread` — Сколько горячих пайплайнов пришлось скомпилировать самому UI-потоку —
-`crates/engine/paint/src/renderer.rs:5792` **fn** `submissions` — Сколько командных списков **кадра** отправил в очередь этот рендер
-`crates/engine/paint/src/renderer.rs:5803` **fn** `rrect_clip_levels` — Сколько скруглённых клипов этот рендер обслужил offscreen-уровнем
-`crates/engine/paint/src/renderer.rs:5813` **fn** `cull_merges` — Сколько разрезов пасса родителя склеено обратно после выброса
-`crates/engine/paint/src/renderer.rs:5822` **fn** `plan_passes` — Сколько пассов (элементов плана кадра) закодировал этот рендер
-`crates/engine/paint/src/renderer.rs:5833` **fn** `state_elisions` — Сколько команд состояния пасса не отправлено, потому что нужное
-`crates/engine/paint/src/renderer.rs:5843` **fn** `draw_merges` — Сколько вызовов `draw` слито с предыдущим (BUG-405 срез 10)
-`crates/engine/paint/src/renderer.rs:5852` **fn** `set_state_elision_enabled` — Включает/выключает отсев повторных команд состояния пасса
-`crates/engine/paint/src/renderer.rs:5863` **fn** `atlas_bytes_uploaded` — Сколько байт пикселей атласа глифов отправлено в GPU этим рендером
-`crates/engine/paint/src/renderer.rs:5874` **fn** `atlas_uploads` — Сколько раз атлас глифов заливался в GPU этим рендером
-`crates/engine/paint/src/renderer.rs:5883` **fn** `set_atlas_partial_upload_enabled` — Включает/выключает построчную заливку атласа (BUG-405 срез 11) на этом
-`crates/engine/paint/src/renderer.rs:5893` **fn** `filter_passes` — Сколько render-пассов закодировали filter-элементы планов этого
-`crates/engine/paint/src/renderer.rs:5905` **fn** `shadow_draws` — Сколько внешних теней (`box-shadow`) этот рендер нарисовал
-`crates/engine/paint/src/renderer.rs:5916` **fn** `nested_shader_clips` — Сколько вложенных скруглённых клипов этот рендер обслужил ВТОРЫМ
-`crates/engine/paint/src/renderer.rs:5927` **fn** `coverage_cache_stats` — Сколько раз покрытие SVG-супа взято готовым из кэша, а не пересчитано
-`crates/engine/paint/src/renderer.rs:5938` **fn** `svg_shape_cache_stats` — Сколько команд SVG получили готовую фигуру из кэша (BUG-405 срез 12),
-`crates/engine/paint/src/renderer.rs:5947` **fn** `set_svg_shape_cache_enabled` — Включает/выключает мемоизацию фигур SVG (BUG-405 срез 12)
-`crates/engine/paint/src/renderer.rs:5953` **fn** `text_run_cache_stats` — Попаданий и промахов кэша укладки текста (BUG-405 срез 13) за жизнь
-`crates/engine/paint/src/renderer.rs:5962` **fn** `set_text_run_cache_enabled` — Включает/выключает мемоизацию укладки текстового run-а (BUG-405 срез 13)
-`crates/engine/paint/src/renderer.rs:5971` **fn** `set_coverage_cache_enabled` — Включает/выключает кэш покрытия SVG-супов (BUG-405 срез 9)
-`crates/engine/paint/src/renderer.rs:5980` **fn** `set_nested_shader_clip_enabled` — Включает/выключает второй шейдерный контур (BUG-405 срез 8)
-`crates/engine/paint/src/renderer.rs:5989` **fn** `set_shadow_analytic_enabled` — Включает/выключает аналитическую размытую тень (BUG-405 срез 7)
-`crates/engine/paint/src/renderer.rs:5999` **fn** `set_blur_merge_enabled` — Включает/выключает склейку вертикального прохода блюра с композитом
-`crates/engine/paint/src/renderer.rs:6010` **fn** `set_cull_merge_enabled` — Включает/выключает склейку пасса родителя вокруг выброшенного
-`crates/engine/paint/src/renderer.rs:6018` **fn** `warmed_pipeline_count` — Сколько ленивых ячеек пайплайнов уже заполнено (BUG-405/406)
-`crates/engine/paint/src/renderer.rs:7097` **fn** `with_font_provider` — Заменяет источник лукапа face-ов. Полезно для тестов (mock-provider) и
-`crates/engine/paint/src/renderer.rs:7105` **fn** `set_font_provider` — Заменяет `FontProvider` на работающем рендере. Используется shell-ом,
-`crates/engine/paint/src/renderer.rs:7122` **fn** `preload_fallback_chain` — Эагерно загружает указанные family-имена через текущий `FontProvider`,
-`crates/engine/paint/src/renderer.rs:7137` **fn** `gpu_fingerprint` — Returns the normalized GPU fingerprint (vendor/renderer strings)
-`crates/engine/paint/src/renderer.rs:7150` **fn** `preload_curated_fallbacks` — Shortcut: эагерно загружает `CURATED_FALLBACK_FAMILIES` (Noto Color
-`crates/engine/paint/src/renderer.rs:7494` **fn** `register_image` — Регистрирует декодированное изображение в GPU-cache под ключом `src`
-`crates/engine/paint/src/renderer.rs:7870` **fn** `unregister_image` — Снимает регистрацию изображения. После этого `DrawImage` для `src`
-`crates/engine/paint/src/renderer.rs:7879` **fn** `clear_images` — Снимает регистрацию всех картинок (например, при переходе на новую
-`crates/engine/paint/src/renderer.rs:7887` **fn** `has_image` — Зарегистрирована ли картинка с таким `src` (для shell-логирования)
-`crates/engine/paint/src/renderer.rs:7905` **fn** `upload_layer_snapshot` — Загружает CPU-пиксели (`Rgba8`, 4 байта/пиксель) как именованный
-`crates/engine/paint/src/renderer.rs:7974` **fn** `evict_layer_snapshot` — Удаляет снимок с `id`. GPU-память освобождается при drop-е
-`crates/engine/paint/src/renderer.rs:7980` **fn** `clear_layer_snapshots` — Удаляет все снимки (например, при переходе на новую страницу)
-`crates/engine/paint/src/renderer.rs:7987` **fn** `has_layer_snapshot` — Зарегистрирован ли снимок с таким `id`
-`crates/engine/paint/src/renderer.rs:7992` **fn** `layer_cache` — Получить ссылку на layer cache для статистики / монитора GPU памяти
-`crates/engine/paint/src/renderer.rs:8000` **fn** `set_backdrop_cache_enabled` — Enables or disables the `backdrop-filter` result cache (CSS Filter
-`crates/engine/paint/src/renderer.rs:8009` **fn** `clear_backdrop_cache` — Drops every cached `backdrop-filter` texture and its metadata. The next
-`crates/engine/paint/src/renderer.rs:8016` **fn** `backdrop_cache_len` — Number of live cached `backdrop-filter` textures (for stats / tests)
-`crates/engine/paint/src/renderer.rs:8023` **fn** `backdrop_cache_on_memory_pressure` — Forwards a memory-pressure signal to the `backdrop-filter` cache and
-`crates/engine/paint/src/renderer.rs:8036` **fn** `atlas_on_memory_pressure` — Forwards a memory-pressure signal to the glyph atlas so it can evict
-`crates/engine/paint/src/renderer.rs:8042` **fn** `layer_cache_mut` — Получить мutable ссылку для прямого управления кэшем (advanced usage)
-`crates/engine/paint/src/renderer.rs:8048` **fn** `access_layer` — Отметить layer как используемый текущим render pass
-`crates/engine/paint/src/renderer.rs:8055` **fn** `cache_layer` — Кэшировать layer слой. Returns `true` if this is a new layer, `false` if updated
-`crates/engine/paint/src/renderer.rs:8061` **fn** `return_layer_to_pool` — Return an off-screen layer texture to the pool for recycling (Phase 2 ADR-008)
-`crates/engine/paint/src/renderer.rs:8077` **fn** `promote_layer` — Promote a node to its own GPU layer for `will-change: transform/opacity/filter`
-`crates/engine/paint/src/renderer.rs:8088` **fn** `is_layer_promoted` — Returns `true` if the given node has a promoted GPU layer
-`crates/engine/paint/src/renderer.rs:8093` **fn** `demote_layer` — Remove the promoted GPU layer for a node, freeing its cache entry
-`crates/engine/paint/src/renderer.rs:8099` **fn** `clear_layer_cache` — Очистить весь layer cache (полная эвикция) и очистить texture pool
-`crates/engine/paint/src/renderer.rs:8105` **fn** `texture_pool_len` — Get the number of free textures in the pool (for diagnostics)
-`crates/engine/paint/src/renderer.rs:8110` **fn** `texture_pool_len_for_size` — Get the number of free textures of a specific size (for diagnostics)
-`crates/engine/paint/src/renderer.rs:8118` **fn** `texture_pool_report` — Однострочная сводка по пулу offscreen-слоёв для `LUMEN_MEM_REPORT`
-`crates/engine/paint/src/renderer.rs:8136` **fn** `clear_texture_pool` — Clear all pooled textures (e.g., when resizing or memory pressure is high)
-`crates/engine/paint/src/renderer.rs:8142` **fn** `snapshot_dimensions` — Возвращает `(width, height)` снимка, или `None` если `id` не зарегистрирован
-`crates/engine/paint/src/renderer.rs:8148` **fn** `resize` — Resizes the render target. For windowed mode, reconfigures the wgpu surface
-`crates/engine/paint/src/renderer.rs:8178` **fn** `set_scale_factor` — Обновить device-pixel-ratio. Вызывается shell-ом по `WindowEvent::ScaleFactorChanged`
-`crates/engine/paint/src/renderer.rs:8188` **fn** `scale_factor` — Текущий device-pixel-ratio. Для отладки / тестов (UI обычно его не читает —
-`crates/engine/paint/src/renderer.rs:8198` **fn** `target_color_space` — Target color space for this renderer's output surface
-`crates/engine/paint/src/renderer.rs:8207` **fn** `set_canvas_background` — Updates the root-element canvas background used as the framebuffer clear colour
-`crates/engine/paint/src/renderer.rs:8253` **fn** `viewport_size` — Текущий viewport в **logical** (CSS) пикселях: `physical / scale_factor`
-`crates/engine/paint/src/renderer.rs:9156` **fn** `render` — `scroll_y ≥ 0`, `scroll_x ≥ 0`. Negatives caller обязан клампить до 0
-`crates/engine/paint/src/renderer.rs:9169` **fn** `render_with_anim` — Как [`render`](Self::render), но с диапазонами анимируемых сегментов
-`crates/engine/paint/src/renderer.rs:14580` **fn** `render_to_image_cpu` — CPU-based rasterization using tiny-skia (feature="cpu-render" only)
-`crates/engine/paint/src/renderer.rs:14606` **fn** `render_tile`
-`crates/engine/paint/src/renderer.rs:14645` **fn** `render_to_image` — Renders display commands and returns a CPU `Image` (RGBA8)
-`crates/engine/paint/src/renderer.rs:14748` **fn** `render_print_pages` — Renders a print display list into one `Image` per page
+`crates/engine/paint/src/renderer.rs:4551` **fn** `new`
+`crates/engine/paint/src/renderer.rs:4756` **fn** `new_headless` — Creates a headless `Renderer` for off-screen rendering without a winit window
+`crates/engine/paint/src/renderer.rs:5666` **fn** `warm_lazy_pipelines_blocking` — Прогревает ленивые пайплайны синхронно, на вызывающем потоке
+`crates/engine/paint/src/renderer.rs:5681` **fn** `pipelines_compiled` — Сколько ленивых пайплайнов **этот** рендер скомпилировал за свою жизнь
+`crates/engine/paint/src/renderer.rs:5694` **fn** `hot_pipeline_threads` — Сколько РАЗНЫХ потоков скомпилировало пять горячих пайплайнов этого
+`crates/engine/paint/src/renderer.rs:5707` **fn** `hot_pipelines_built_on_ui_thread` — Сколько горячих пайплайнов пришлось скомпилировать самому UI-потоку —
+`crates/engine/paint/src/renderer.rs:5817` **fn** `submissions` — Сколько командных списков **кадра** отправил в очередь этот рендер
+`crates/engine/paint/src/renderer.rs:5828` **fn** `rrect_clip_levels` — Сколько скруглённых клипов этот рендер обслужил offscreen-уровнем
+`crates/engine/paint/src/renderer.rs:5838` **fn** `cull_merges` — Сколько разрезов пасса родителя склеено обратно после выброса
+`crates/engine/paint/src/renderer.rs:5847` **fn** `plan_passes` — Сколько пассов (элементов плана кадра) закодировал этот рендер
+`crates/engine/paint/src/renderer.rs:5858` **fn** `state_elisions` — Сколько команд состояния пасса не отправлено, потому что нужное
+`crates/engine/paint/src/renderer.rs:5868` **fn** `draw_merges` — Сколько вызовов `draw` слито с предыдущим (BUG-405 срез 10)
+`crates/engine/paint/src/renderer.rs:5877` **fn** `set_state_elision_enabled` — Включает/выключает отсев повторных команд состояния пасса
+`crates/engine/paint/src/renderer.rs:5888` **fn** `atlas_bytes_uploaded` — Сколько байт пикселей атласа глифов отправлено в GPU этим рендером
+`crates/engine/paint/src/renderer.rs:5899` **fn** `atlas_uploads` — Сколько раз атлас глифов заливался в GPU этим рендером
+`crates/engine/paint/src/renderer.rs:5908` **fn** `set_atlas_partial_upload_enabled` — Включает/выключает построчную заливку атласа (BUG-405 срез 11) на этом
+`crates/engine/paint/src/renderer.rs:5918` **fn** `filter_passes` — Сколько render-пассов закодировали filter-элементы планов этого
+`crates/engine/paint/src/renderer.rs:5930` **fn** `shadow_draws` — Сколько внешних теней (`box-shadow`) этот рендер нарисовал
+`crates/engine/paint/src/renderer.rs:5941` **fn** `nested_shader_clips` — Сколько вложенных скруглённых клипов этот рендер обслужил ВТОРЫМ
+`crates/engine/paint/src/renderer.rs:5952` **fn** `coverage_cache_stats` — Сколько раз покрытие SVG-супа взято готовым из кэша, а не пересчитано
+`crates/engine/paint/src/renderer.rs:5963` **fn** `svg_shape_cache_stats` — Сколько команд SVG получили готовую фигуру из кэша (BUG-405 срез 12),
+`crates/engine/paint/src/renderer.rs:5972` **fn** `set_svg_shape_cache_enabled` — Включает/выключает мемоизацию фигур SVG (BUG-405 срез 12)
+`crates/engine/paint/src/renderer.rs:5978` **fn** `text_run_cache_stats` — Попаданий и промахов кэша укладки текста (BUG-405 срез 13) за жизнь
+`crates/engine/paint/src/renderer.rs:5987` **fn** `set_text_run_cache_enabled` — Включает/выключает мемоизацию укладки текстового run-а (BUG-405 срез 13)
+`crates/engine/paint/src/renderer.rs:5996` **fn** `set_coverage_cache_enabled` — Включает/выключает кэш покрытия SVG-супов (BUG-405 срез 9)
+`crates/engine/paint/src/renderer.rs:6005` **fn** `set_nested_shader_clip_enabled` — Включает/выключает второй шейдерный контур (BUG-405 срез 8)
+`crates/engine/paint/src/renderer.rs:6014` **fn** `set_shadow_analytic_enabled` — Включает/выключает аналитическую размытую тень (BUG-405 срез 7)
+`crates/engine/paint/src/renderer.rs:6024` **fn** `set_blur_merge_enabled` — Включает/выключает склейку вертикального прохода блюра с композитом
+`crates/engine/paint/src/renderer.rs:6035` **fn** `set_cull_merge_enabled` — Включает/выключает склейку пасса родителя вокруг выброшенного
+`crates/engine/paint/src/renderer.rs:6043` **fn** `warmed_pipeline_count` — Сколько ленивых ячеек пайплайнов уже заполнено (BUG-405/406)
+`crates/engine/paint/src/renderer.rs:7122` **fn** `with_font_provider` — Заменяет источник лукапа face-ов. Полезно для тестов (mock-provider) и
+`crates/engine/paint/src/renderer.rs:7130` **fn** `set_font_provider` — Заменяет `FontProvider` на работающем рендере. Используется shell-ом,
+`crates/engine/paint/src/renderer.rs:7147` **fn** `preload_fallback_chain` — Эагерно загружает указанные family-имена через текущий `FontProvider`,
+`crates/engine/paint/src/renderer.rs:7162` **fn** `gpu_fingerprint` — Returns the normalized GPU fingerprint (vendor/renderer strings)
+`crates/engine/paint/src/renderer.rs:7175` **fn** `preload_curated_fallbacks` — Shortcut: эагерно загружает `CURATED_FALLBACK_FAMILIES` (Noto Color
+`crates/engine/paint/src/renderer.rs:7519` **fn** `register_image` — Регистрирует декодированное изображение в GPU-cache под ключом `src`
+`crates/engine/paint/src/renderer.rs:7895` **fn** `unregister_image` — Снимает регистрацию изображения. После этого `DrawImage` для `src`
+`crates/engine/paint/src/renderer.rs:7904` **fn** `clear_images` — Снимает регистрацию всех картинок (например, при переходе на новую
+`crates/engine/paint/src/renderer.rs:7912` **fn** `has_image` — Зарегистрирована ли картинка с таким `src` (для shell-логирования)
+`crates/engine/paint/src/renderer.rs:7930` **fn** `upload_layer_snapshot` — Загружает CPU-пиксели (`Rgba8`, 4 байта/пиксель) как именованный
+`crates/engine/paint/src/renderer.rs:7999` **fn** `evict_layer_snapshot` — Удаляет снимок с `id`. GPU-память освобождается при drop-е
+`crates/engine/paint/src/renderer.rs:8005` **fn** `clear_layer_snapshots` — Удаляет все снимки (например, при переходе на новую страницу)
+`crates/engine/paint/src/renderer.rs:8012` **fn** `has_layer_snapshot` — Зарегистрирован ли снимок с таким `id`
+`crates/engine/paint/src/renderer.rs:8017` **fn** `layer_cache` — Получить ссылку на layer cache для статистики / монитора GPU памяти
+`crates/engine/paint/src/renderer.rs:8025` **fn** `set_backdrop_cache_enabled` — Enables or disables the `backdrop-filter` result cache (CSS Filter
+`crates/engine/paint/src/renderer.rs:8034` **fn** `clear_backdrop_cache` — Drops every cached `backdrop-filter` texture and its metadata. The next
+`crates/engine/paint/src/renderer.rs:8041` **fn** `backdrop_cache_len` — Number of live cached `backdrop-filter` textures (for stats / tests)
+`crates/engine/paint/src/renderer.rs:8048` **fn** `backdrop_cache_on_memory_pressure` — Forwards a memory-pressure signal to the `backdrop-filter` cache and
+`crates/engine/paint/src/renderer.rs:8061` **fn** `atlas_on_memory_pressure` — Forwards a memory-pressure signal to the glyph atlas so it can evict
+`crates/engine/paint/src/renderer.rs:8067` **fn** `layer_cache_mut` — Получить мutable ссылку для прямого управления кэшем (advanced usage)
+`crates/engine/paint/src/renderer.rs:8073` **fn** `access_layer` — Отметить layer как используемый текущим render pass
+`crates/engine/paint/src/renderer.rs:8080` **fn** `cache_layer` — Кэшировать layer слой. Returns `true` if this is a new layer, `false` if updated
+`crates/engine/paint/src/renderer.rs:8086` **fn** `return_layer_to_pool` — Return an off-screen layer texture to the pool for recycling (Phase 2 ADR-008)
+`crates/engine/paint/src/renderer.rs:8102` **fn** `promote_layer` — Promote a node to its own GPU layer for `will-change: transform/opacity/filter`
+`crates/engine/paint/src/renderer.rs:8113` **fn** `is_layer_promoted` — Returns `true` if the given node has a promoted GPU layer
+`crates/engine/paint/src/renderer.rs:8118` **fn** `demote_layer` — Remove the promoted GPU layer for a node, freeing its cache entry
+`crates/engine/paint/src/renderer.rs:8124` **fn** `clear_layer_cache` — Очистить весь layer cache (полная эвикция) и очистить texture pool
+`crates/engine/paint/src/renderer.rs:8130` **fn** `texture_pool_len` — Get the number of free textures in the pool (for diagnostics)
+`crates/engine/paint/src/renderer.rs:8135` **fn** `texture_pool_len_for_size` — Get the number of free textures of a specific size (for diagnostics)
+`crates/engine/paint/src/renderer.rs:8143` **fn** `texture_pool_report` — Однострочная сводка по пулу offscreen-слоёв для `LUMEN_MEM_REPORT`
+`crates/engine/paint/src/renderer.rs:8161` **fn** `clear_texture_pool` — Clear all pooled textures (e.g., when resizing or memory pressure is high)
+`crates/engine/paint/src/renderer.rs:8167` **fn** `snapshot_dimensions` — Возвращает `(width, height)` снимка, или `None` если `id` не зарегистрирован
+`crates/engine/paint/src/renderer.rs:8173` **fn** `resize` — Resizes the render target. For windowed mode, reconfigures the wgpu surface
+`crates/engine/paint/src/renderer.rs:8203` **fn** `set_scale_factor` — Обновить device-pixel-ratio. Вызывается shell-ом по `WindowEvent::ScaleFactorChanged`
+`crates/engine/paint/src/renderer.rs:8213` **fn** `scale_factor` — Текущий device-pixel-ratio. Для отладки / тестов (UI обычно его не читает —
+`crates/engine/paint/src/renderer.rs:8223` **fn** `target_color_space` — Target color space for this renderer's output surface
+`crates/engine/paint/src/renderer.rs:8232` **fn** `set_canvas_background` — Updates the root-element canvas background used as the framebuffer clear colour
+`crates/engine/paint/src/renderer.rs:8278` **fn** `viewport_size` — Текущий viewport в **logical** (CSS) пикселях: `physical / scale_factor`
+`crates/engine/paint/src/renderer.rs:9236` **fn** `render` — `scroll_y ≥ 0`, `scroll_x ≥ 0`. Negatives caller обязан клампить до 0
+`crates/engine/paint/src/renderer.rs:9249` **fn** `render_with_anim` — Как [`render`](Self::render), но с диапазонами анимируемых сегментов
+`crates/engine/paint/src/renderer.rs:14660` **fn** `render_to_image_cpu` — CPU-based rasterization using tiny-skia (feature="cpu-render" only)
+`crates/engine/paint/src/renderer.rs:14686` **fn** `render_tile`
+`crates/engine/paint/src/renderer.rs:14725` **fn** `render_to_image` — Renders display commands and returns a CPU `Image` (RGBA8)
+`crates/engine/paint/src/renderer.rs:14828` **fn** `render_print_pages` — Renders a print display list into one `Image` per page
 `crates/engine/paint/src/scroll_cache.rs:60` **enum** `ScrollFramePlan` — What the render backend should do with the current frame, given the retained
 `crates/engine/paint/src/scroll_cache.rs:116` **fn** `label` — A stable one-word label for the plan variant — `"blit"`,
 `crates/engine/paint/src/scroll_cache.rs:131` **struct** `ScrollCache` — Bookkeeping for the retained scroll-content surface (ADR-016 M3)
