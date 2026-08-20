@@ -2054,6 +2054,67 @@ struct PendingBaseBlit {
     quads: Vec<(Rect, [f32; 2], [f32; 2])>,
 }
 
+/// Всё, что кадр обязан знать о полосе ДО хэширования списка (BUG-405 срез 35).
+///
+/// Результат `Renderer::prepare_page_compose`: путь компоновки применим, вот
+/// его геометрия и план static/animated split-а. Ключ полосы считается по
+/// `sw`/`band_h_px` и `ranges`, поэтому подготовка обязана быть раньше хэша.
+struct ComposePrep {
+    /// Ширина полосы (= ширина поверхности), device px.
+    sw: u32,
+    /// Масштаб поверхности (device px на CSS px).
+    dpr: f32,
+    /// Запас полосы за пределами вьюпорта, CSS px (половина полного запаса).
+    margin_css: f32,
+    /// Высота полосы, device px.
+    band_h_px: u32,
+    /// Высота полосы, CSS px.
+    band_h_css: f32,
+    /// Высота вьюпорта, CSS px.
+    vp_h_css: f32,
+    /// Effective-диапазоны анимируемых сегментов (пусто = split не применён).
+    ranges: Vec<std::ops::Range<usize>>,
+    /// План реплея сегментов поверх блита (`None` = сегментов нет).
+    seg_plan: Option<crate::display_list::DisplayList>,
+}
+
+/// Секундомер подстатей кадра компоновки (`compose-top`, BUG-405 срез 34).
+///
+/// Метки берутся только под `LUMEN_FRAME_LOG=2` — как и весь пофазный лог;
+/// без него `mark` вырождается в проверку `Option`. Живёт в кадре, а не в
+/// одной функции: срез 35 разнёс подготовку, хэш и саму компоновку по трём
+/// вызовам, а печатается разбивка по-прежнему одной строкой.
+struct ComposeMarks {
+    /// Начало отсчёта; `None` — лог выключен, метки не берутся.
+    t0: Option<std::time::Instant>,
+    /// Накопленные отсечки от `t0`, мс: skip / geom / split / hash / band.
+    ms: [f64; 5],
+}
+
+impl ComposeMarks {
+    /// Заводит секундомер, если пофазный лог включён.
+    fn new() -> Self {
+        Self {
+            t0: (crate::frame_log_level() >= 2).then(std::time::Instant::now),
+            ms: [0.0; 5],
+        }
+    }
+
+    /// Включён ли лог (метки заполнены и их можно печатать).
+    fn enabled(&self) -> bool {
+        self.t0.is_some()
+    }
+
+    /// Отсечка `i`-й подстатьи.
+    fn mark(&mut self, i: usize) {
+        if let Some(t0) = self.t0
+            && let Some(slot) = self.ms.get_mut(i)
+        {
+            *slot = t0.elapsed().as_secs_f64() * 1e3;
+        }
+    }
+}
+
 /// Строки цели Band-рендера, которые пассу РАЗРЕШЕНО перерисовать
 /// (BUG-405 срез 32, кольцевая адресация полосы — пункт 58 остатка).
 /// `None` в [`RenderPassMode::Band`] = вся полоса, штатный полный промах.
@@ -4249,6 +4310,20 @@ fn band_pass_load_choice(v: &str) -> (bool, bool) {
 /// заведомо самый неудобный для неё (`bench-static-scroll.html` кладёт по
 /// гауссову блюру на строку, то есть цена промаха там принадлежит уровням, а не
 /// строкам).
+/// `LUMEN_NO_DUAL_HASH=1` — считать два кадровых хэша двумя РАЗДЕЛЬНЫМИ
+/// обходами списка, как до среза 35 (BUG-405, пункт 70 остатка).
+///
+/// Плечо A/B и рычаг отката: работа в обоих плечах одна и та же (хэш кадра для
+/// skip-identical и scroll-инвариантный ключ полосы), меряется одной и той же
+/// меткой `frame-hash`, поэтому разница плеч — цена самого второго обхода.
+/// Значения хэшей у плеч разные, но каждое плечо самосогласовано: обе свёртки
+/// сравниваются только с прошлым кадром того же процесса.
+fn dual_hash_disabled() -> bool {
+    use std::sync::OnceLock;
+    static OFF: OnceLock<bool> = OnceLock::new();
+    *OFF.get_or_init(|| std::env::var("LUMEN_NO_DUAL_HASH").is_ok_and(|v| v != "0"))
+}
+
 fn band_ring_enabled() -> bool {
     use std::sync::OnceLock;
     static ON: OnceLock<bool> = OnceLock::new();
@@ -8702,19 +8777,19 @@ impl Renderer {
     /// [`build_display_list_ordered_with_anim_split`]: crate::display_list::build_display_list_ordered_with_anim_split
     /// [`anim_split_compose_plan`]: crate::display_list::anim_split_compose_plan
     ///
-    /// Возвращает `Ok(true)`, если кадр показан этим путём.
-    fn try_page_compose(
+    /// Эта половина — только подготовка: проверки применимости, геометрия
+    /// полосы и план split-а. `None` — путь неприменим, кадр идёт монолитом.
+    /// Отделена от [`compose_page`](Self::compose_page) срезом 35 (BUG-405,
+    /// пункт 70), потому что ключ полосы считается теперь тем же проходом по
+    /// списку, что и хэш кадра, — а для этого его входы (размеры полосы и
+    /// effective-диапазоны сегментов) должны быть известны ДО хэша.
+    fn prepare_page_compose(
         &mut self,
         content: &[DisplayCommand],
-        overlay: &[DisplayCommand],
-        scroll_y: f32,
         scroll_x: f32,
         anim_ranges: &[std::ops::Range<usize>],
-    ) -> Result<bool, wgpu::SurfaceError> {
-        // BUG-405 срез 34 (пункт 68): подстатьи самого композитора. Метки
-        // берутся только под `LUMEN_FRAME_LOG=2` — как и весь пофазный лог.
-        let t_c0 = (crate::frame_log_level() >= 2).then(std::time::Instant::now);
-        let mut cm = [0.0_f64; 5];
+        marks: &mut ComposeMarks,
+    ) -> Option<ComposePrep> {
         let skip = if self.surface.is_none() {
             Some("headless (нет surface)")
         } else if scroll_compositor_disabled() {
@@ -8733,11 +8808,9 @@ impl Renderer {
         };
         if let Some(reason) = skip {
             self.note_compose_skip(reason);
-            return Ok(false);
+            return None;
         }
-        if let Some(t0) = t_c0 {
-            cm[0] = t0.elapsed().as_secs_f64() * 1e3;
-        }
+        marks.mark(0);
         let (sw, sh) = self.surface_dims();
         let dpr = self.scale_factor.max(1e-6) as f32;
         let vp_h_css = sh as f32 / dpr;
@@ -8754,7 +8827,7 @@ impl Renderer {
                 Ok(g) => g,
                 Err(reason) => {
                     self.note_compose_skip(reason);
-                    return Ok(false);
+                    return None;
                 }
             };
         self.last_compose_skip = None;
@@ -8764,70 +8837,73 @@ impl Renderer {
         // которому ниже считается её верх.
         let margin_css = margin_px as f32 / dpr;
         let band_h_css = band_h_px as f32 / dpr;
-
-        // BUG-405 срез 20: прогрев полосы. Дальше по функции полоса создаётся
-        // лениво — на первом промахе, то есть на первом кадре ПРОКРУТКИ, — и
-        // первая отрисовка в свежую цель стоит на порядок дороже последующих
-        // (перепись: `drop(pass)` 4.6 мс против 0.15 мс на следующих промахах
-        // с той же текстурой). Создаём и прогреваем её здесь, на кадре
-        // загрузки: сюда доходят только страницы, для которых композитор в
-        // принципе применим (ранние `return` выше уже отсеяли непригодные), а
-        // размер полосы зависит только от поверхности и dpr, которые к этому
-        // моменту известны.
-        if self.page_band.is_none() && !band_warm_disabled() {
-            self.warm_page_band(sw, band_h_px);
-        }
-
-        if let Some(t0) = t_c0 {
-            cm[1] = t0.elapsed().as_secs_f64() * 1e3;
-        }
+        marks.mark(1);
 
         // Static/animated split: план оверлея сегментов. При конфликте
         // painter's order план сам расширяет диапазоны tail-split-ом —
         // хэш/полосу дальше считаем по ЕГО effective-диапазонам. Полный
         // отказ (нереплеябельный контекст и т.п.) — split выключается на
         // кадр, ключ считается по полному списку (= поведение до среза).
-        let mut ranges: &[std::ops::Range<usize>] = if anim_split_disabled() {
+        let ranges: &[std::ops::Range<usize>] = if anim_split_disabled() {
             &[]
         } else {
             anim_ranges
         };
-        let effective_ranges: Vec<std::ops::Range<usize>>;
+        let mut effective_ranges: Vec<std::ops::Range<usize>> = Vec::new();
         let seg_plan: Option<crate::display_list::DisplayList> = if ranges.is_empty() {
             None
         } else {
             match crate::display_list::anim_split_compose_plan(content, ranges) {
                 Some((p, eff)) => {
                     effective_ranges = eff;
-                    ranges = &effective_ranges;
                     Some(p)
                 }
-                None => {
-                    ranges = &[];
-                    None
-                }
+                None => None,
             }
         };
 
-        if let Some(t0) = t_c0 {
-            cm[2] = t0.elapsed().as_secs_f64() * 1e3;
-        }
+        marks.mark(2);
+        Some(ComposePrep {
+            sw,
+            dpr,
+            margin_css,
+            band_h_px,
+            band_h_css,
+            vp_h_css,
+            ranges: effective_ranges,
+            seg_plan,
+        })
+    }
 
-        // Scroll-инвариантный ключ содержимого полосы (по статике при split-е).
-        // BUG-405 срез 34: второй O(n)-хэш того же списка на том же кадре —
-        // считается и на попадании, где полосу не трогают вовсе.
-        let key = {
-            use std::hash::Hasher;
-            let mut h = std::collections::hash_map::DefaultHasher::new();
-            h.write_u64(crate::display_list::hash_display_list_skipping(
-                content, ranges, &[], 0.0, 0.0, sw, band_h_px,
-            ));
-            h.write_u64(self.content_generation);
-            h.finish()
-        };
+    /// Собирает кадр из полосы: попадание — blit + overlay, промах — рендер
+    /// полосы и та же композиция. Подготовка (применимость, геометрия, план
+    /// сегментов) уже сделана [`prepare_page_compose`](Self::prepare_page_compose),
+    /// `key` посчитан вместе с хэшом кадра одним проходом по списку.
+    ///
+    /// Возвращает `Ok(true)`, если кадр показан этим путём.
+    fn compose_page(
+        &mut self,
+        content: &[DisplayCommand],
+        overlay: &[DisplayCommand],
+        scroll_y: f32,
+        prep: &ComposePrep,
+        key: u64,
+        marks: &mut ComposeMarks,
+    ) -> Result<bool, wgpu::SurfaceError> {
+        let ComposePrep { sw, dpr, margin_css, band_h_px, band_h_css, vp_h_css, .. } = *prep;
+        let ranges: &[std::ops::Range<usize>] = &prep.ranges;
+        let seg_plan = prep.seg_plan.as_deref();
 
-        if let Some(t0) = t_c0 {
-            cm[3] = t0.elapsed().as_secs_f64() * 1e3;
+        // BUG-405 срез 20: прогрев полосы. Ниже по функции полоса создаётся
+        // лениво — на первом промахе, то есть на первом кадре ПРОКРУТКИ, — и
+        // первая отрисовка в свежую цель стоит на порядок дороже последующих
+        // (перепись: `drop(pass)` 4.6 мс против 0.15 мс на следующих промахах
+        // с той же текстурой). Создаём и прогреваем её здесь, на кадре
+        // загрузки: сюда доходят только страницы, для которых композитор в
+        // принципе применим (подготовка уже отсеяла непригодные), а размер
+        // полосы зависит только от поверхности и dpr.
+        if self.page_band.is_none() && !band_warm_disabled() {
+            self.warm_page_band(sw, band_h_px);
         }
 
         // Контент стабилен, если его ключ совпал с ключом прошлого кадра.
@@ -9047,22 +9123,23 @@ impl Renderer {
                 dpr,
             ),
         });
-        if let Some(t0) = t_c0 {
-            cm[4] = t0.elapsed().as_secs_f64() * 1e3;
+        marks.mark(4);
+        if marks.enabled() {
             // Подстатьи композитора ДО композитного пасса. `skip` — проверки
             // применимости (включая O(n) поиск sticky-слоя), `geom` — размеры
-            // полосы и её прогрев, `split` — план анимируемых сегментов,
-            // `key` — scroll-инвариантный хэш содержимого полосы, `band` —
-            // решение попадание/промах вместе с рендером полосы на промахе.
+            // полосы, `split` — план анимируемых сегментов, `band` — прогрев,
+            // решение попадание/промах и рендер полосы на промахе. Ключа
+            // полосы среди статей больше нет: срез 35 свёл его в общий проход
+            // по списку, и его цена печатается строкой `frame-hash`.
+            let ms = marks.ms;
             timed_log(|| {
                 eprintln!(
                     "[frame:wgpu]   compose-top: skip {:.2} geom {:.2} split {:.2} \
-                     key {:.2} band {:.2} | {} cmds",
-                    cm[0],
-                    cm[1] - cm[0],
-                    cm[2] - cm[1],
-                    cm[3] - cm[2],
-                    cm[4] - cm[3],
+                     band {:.2} | {} cmds",
+                    ms[0],
+                    ms[1] - ms[0],
+                    ms[2] - ms[1],
+                    ms[4] - ms[3],
                     content.len(),
                 );
             });
@@ -9070,7 +9147,7 @@ impl Renderer {
 
         // Split: анимируемые сегменты рисуются как content-полоса Compose-кадра
         // (получают штатный сдвиг -scroll_y) — поверх blit-а, под overlay.
-        let seg_content: &[DisplayCommand] = seg_plan.as_deref().unwrap_or(&[]);
+        let seg_content: &[DisplayCommand] = seg_plan.unwrap_or(&[]);
         self.render_impl(seg_content, overlay, scroll_y, 0.0, RenderPassMode::Compose)?;
         Ok(true)
     }
@@ -9114,27 +9191,60 @@ impl Renderer {
         // пассе композитора 0.9 мс — остаток платится здесь, в оркестраторе, и
         // до среза 34 не был расписан ни одной статьёй. Хэш кадра — O(n) по
         // всему списку и считается на КАЖДОМ кадре, включая попадания.
-        let t_hash0 = (crate::frame_log_level() >= 2).then(std::time::Instant::now);
-        let base_hash = crate::display_list::hash_display_list(
-            content, overlay, scroll_x, scroll_y, sw0, sh0,
-        );
-        if let Some(t0) = t_hash0 {
-            let ms = t0.elapsed().as_secs_f64() * 1e3;
+        //
+        // Срез 35 (пункт 70): вторым таким O(n)-хэшом был ключ полосы, и вместе
+        // они стоили дороже композитного пасса. Теперь список обходится ОДИН
+        // раз на оба хэша, поэтому подготовка компоновки (её размеры и
+        // диапазоны сегментов — входы ключа) идёт до хэша, а не после.
+        let mut marks = ComposeMarks::new();
+        let prep = self.prepare_page_compose(content, scroll_x, anim_ranges, &mut marks);
+        let skip: &[std::ops::Range<usize>] = prep.as_ref().map_or(&[], |p| &p.ranges);
+        let band_dims = prep.as_ref().map_or((0, 0), |p| (p.sw, p.band_h_px));
+        let (base_hash, band_key_base) = if dual_hash_disabled() {
+            // Плечо A/B: два раздельных обхода, как до среза 35.
+            (
+                crate::display_list::hash_display_list(
+                    content, overlay, scroll_x, scroll_y, sw0, sh0,
+                ),
+                crate::display_list::hash_display_list_skipping(
+                    content, skip, &[], 0.0, 0.0, band_dims.0, band_dims.1,
+                ),
+            )
+        } else {
+            crate::display_list::hash_display_list_dual(
+                content,
+                overlay,
+                skip,
+                (scroll_x, scroll_y),
+                (sw0, sh0),
+                band_dims,
+            )
+        };
+        marks.mark(3);
+        if marks.enabled() {
+            let ms = marks.ms[3] - marks.ms[2];
+            let (nc, no) = (content.len(), overlay.len());
+            let mode = if dual_hash_disabled() { "два прохода" } else { "один проход" };
             timed_log(|| {
-                eprintln!(
-                    "[frame:wgpu] frame-hash: {ms:.2}ms ({} + {} cmds)",
-                    content.len(),
-                    overlay.len(),
-                );
+                eprintln!("[frame:wgpu] frame-hash: {ms:.2}ms ({nc} + {no} cmds, {mode})");
             });
+            // Печать стоит 0.1–0.3 мс (срез 34) — сдвигаем метку, чтобы она не
+            // легла в статью `band` соседней строки.
+            marks.mark(3);
         }
-        let frame_hash = {
+        // Поколение контента (register_image / GIF-кадры / снапшоты / шрифты /
+        // canvas-bg) складывается с обеими свёртками: список тот же, а пиксели
+        // уже другие.
+        let generation = self.content_generation;
+        let fold_gen = |base: u64| {
             use std::hash::Hasher;
             let mut h = std::collections::hash_map::DefaultHasher::new();
-            h.write_u64(base_hash);
-            h.write_u64(self.content_generation);
+            h.write_u64(base);
+            h.write_u64(generation);
             h.finish()
         };
+        let frame_hash = fold_gen(base_hash);
+        let band_key = fold_gen(band_key_base);
         if self.surface.is_some()
             && !frame_skip_disabled()
             && self.last_frame_hash == Some(frame_hash)
@@ -9148,8 +9258,10 @@ impl Renderer {
 
         // Скролл-композитор страницы (EXPERIMENT.md §2): при попадании кадр
         // собирается из персистентной полосы + overlay, минуя перерисовку
-        // контента. `false` — путь неприменим, рисуем монолитом как раньше.
-        if self.try_page_compose(content, overlay, scroll_y, scroll_x, anim_ranges)? {
+        // контента. `None`/`false` — путь неприменим, рисуем монолитом.
+        if let Some(prep) = prep
+            && self.compose_page(content, overlay, scroll_y, &prep, band_key, &mut marks)?
+        {
             self.last_frame_hash = Some(frame_hash);
             return Ok(());
         }
