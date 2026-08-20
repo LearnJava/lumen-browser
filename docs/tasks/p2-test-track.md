@@ -157,12 +157,23 @@ libFuzzer: timeout after 29 seconds` на 111-байтном GIF89a 1×1. Ско
 красило джоб (тот же размен, что `KNOWN_DEBTORS` в `graphic_tests/run.py`:
 вечно красный джоб перестают читать). **С фиксом 2026-08-20 обе половины
 размена отыграны назад:** репро лежит в `fuzz/regressions/fuzz_image-gif-lzw-hang`
-и в `fuzz/corpus/fuzz_image/`, таргет из `KNOWN_FAILING` убран. Локально
-cargo-fuzz не гонялся (нужен инструментированный прогон, см. §TEST-1) —
-те же 78 байт проверены юнит-тестом
-`gif::tests::bug787_frame_with_truncated_lzw_stream_errors_instead_of_hanging`,
-он же зовёт точку входа таргета `lumen_image::decode`; сам replay проверит
-ближайший прогон джоба `fuzz`.
+и в `fuzz/corpus/fuzz_image/`, таргет из `KNOWN_FAILING` убран.
+
+Обе половины проверены локально через WSL, прежде чем полагаться на CI:
+
+```
+cargo +nightly fuzz run fuzz_image regressions/fuzz_image-gif-lzw-hang
+  → Executed … in 23 ms, exit 0        (весь вызов 1 мин 12 с: 60 с пересборка lumen-image)
+cargo +nightly fuzz run fuzz_image -- -max_total_time=60
+  → Done 16898 runs in 67 second(s), 0 крэшей, artifacts/ пуст
+```
+
+`fuzz/target/` в корневом чекауте прогрет с 2026-08-19 (там же гонялся
+`fuzz_url`), и бинарь `fuzz_image` уже лежал собранным — поэтому проверка фикса
+стоит минуту, а не холодную сборку инструментированного дерева. Готча из
+`fuzz/README.md` подтвердилась на практике: 60-секундный прогон дописал **371**
+файл в `corpus/fuzz_image/`, убрано `git clean -f fuzz/corpus/` — replay
+(прогон одного файла) корпус не трогает, а фаззинг трогает.
 
 **Второй прогон — вторая находка, [BUG-788](../../bugs/BUG-788-OPEN.md).**
 Первый прогон на `main` (32277922403) 52 минуты простоял на `apt-get install
