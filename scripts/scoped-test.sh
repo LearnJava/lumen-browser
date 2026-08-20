@@ -34,6 +34,15 @@ for f in $changed; do
   d=$(dirname "$f")
   while [ "$d" != "." ] && [ ! -f "$d/Cargo.toml" ]; do d=$(dirname "$d"); done
   [ -f "$d/Cargo.toml" ] || continue
+  # Только члены основного workspace (`members` в корневом Cargo.toml — это
+  # crates/** плюс workspace-hack). У `fuzz/` собственный пустой [workspace],
+  # так что правка в fuzz/** давала `-p lumen-fuzz` и весь гейт падал на
+  # «package ID specification did not match any packages», не запустив ни
+  # одного теста (поймано на фиксе BUG-787, 2026-08-20).
+  case "$d" in
+    crates/*|workspace-hack) : ;;
+    *) continue ;;
+  esac
   name=$(pkg_name "$d")
   [ -n "$name" ] && pkgs="$pkgs $name"
 done

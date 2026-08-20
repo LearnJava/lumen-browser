@@ -2276,6 +2276,7 @@ dependencies = [
  "image-webp",
  "lumen-core",
  "png",
+ "weezl",
  "workspace-hack",
  "zune-core",
  "zune-jpeg",

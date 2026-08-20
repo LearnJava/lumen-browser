@@ -1302,19 +1302,19 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/image/src/decode_cache.rs:225` **fn** `clear` — Evict all cached entries regardless of budget
 `crates/engine/image/src/decode_cache.rs:233` **fn** `lru_candidates` — Return LRU candidates sorted from least- to most-recently used
 `crates/engine/image/src/decode_cache.rs:248` **fn** `on_memory_pressure` — React to an OS memory pressure event by evicting proportionally
-`crates/engine/image/src/gif.rs:14` **enum** `GifError` — Ошибки декодирования GIF
-`crates/engine/image/src/gif.rs:39` **fn** `is_gif` — Проверяет, является ли начало `bytes` валидной GIF сигнатурой (GIF87a или GIF89a)
-`crates/engine/image/src/gif.rs:56` **enum** `GifLoopCount` — Количество повторений анимации GIF
-`crates/engine/image/src/gif.rs:179` **struct** `AnimatedGif` — Анимированный GIF с **ленивым** декодированием кадров
-`crates/engine/image/src/gif.rs:226` **fn** `frame_count` — Количество кадров анимации (всегда ≥ 1)
-`crates/engine/image/src/gif.rs:232` **fn** `frame_delay_ms` — Задержка кадра `idx` в миллисекундах. Индекс за границей клампится к последнему кадру
-`crates/engine/image/src/gif.rs:239` **fn** `total_cycle_ms` — Суммарная длительность одного прохода анимации в миллисекундах
-`crates/engine/image/src/gif.rs:247` **fn** `resident_bytes` — Резидентный объём памяти GIF в байтах: закодированные байты плюс закэшированный
-`crates/engine/image/src/gif.rs:262` **fn** `frame_index_at` — Возвращает индекс кадра для `elapsed_ms` миллисекунд от начала анимации
-`crates/engine/image/src/gif.rs:276` **fn** `frame_image` — Декодирует и возвращает пиксели кадра `idx` (RGBA8, полный экранный буфер
-`crates/engine/image/src/gif.rs:343` **fn** `frame_at` — Возвращает пиксели кадра для `elapsed_ms` миллисекунд от начала анимации
-`crates/engine/image/src/gif.rs:357` **fn** `decode_gif` — Декодирует GIF файл и возвращает первый кадр
-`crates/engine/image/src/gif.rs:379` **fn** `decode_gif_animated` — Декодирует метаданные GIF (размер, цикличность, per-frame задержки) и возвращает
+`crates/engine/image/src/gif.rs:16` **enum** `GifError` — Ошибки декодирования GIF
+`crates/engine/image/src/gif.rs:41` **fn** `is_gif` — Проверяет, является ли начало `bytes` валидной GIF сигнатурой (GIF87a или GIF89a)
+`crates/engine/image/src/gif.rs:58` **enum** `GifLoopCount` — Количество повторений анимации GIF
+`crates/engine/image/src/gif.rs:323` **struct** `AnimatedGif` — Анимированный GIF с **ленивым** декодированием кадров
+`crates/engine/image/src/gif.rs:370` **fn** `frame_count` — Количество кадров анимации (всегда ≥ 1)
+`crates/engine/image/src/gif.rs:376` **fn** `frame_delay_ms` — Задержка кадра `idx` в миллисекундах. Индекс за границей клампится к последнему кадру
+`crates/engine/image/src/gif.rs:383` **fn** `total_cycle_ms` — Суммарная длительность одного прохода анимации в миллисекундах
+`crates/engine/image/src/gif.rs:391` **fn** `resident_bytes` — Резидентный объём памяти GIF в байтах: закодированные байты плюс закэшированный
+`crates/engine/image/src/gif.rs:406` **fn** `frame_index_at` — Возвращает индекс кадра для `elapsed_ms` миллисекунд от начала анимации
+`crates/engine/image/src/gif.rs:420` **fn** `frame_image` — Декодирует и возвращает пиксели кадра `idx` (RGBA8, полный экранный буфер
+`crates/engine/image/src/gif.rs:485` **fn** `frame_at` — Возвращает пиксели кадра для `elapsed_ms` миллисекунд от начала анимации
+`crates/engine/image/src/gif.rs:499` **fn** `decode_gif` — Декодирует GIF файл и возвращает первый кадр
+`crates/engine/image/src/gif.rs:521` **fn** `decode_gif_animated` — Декодирует метаданные GIF (размер, цикличность, per-frame задержки) и возвращает
 `crates/engine/image/src/heic.rs:18` **struct** `HeicError` — Error decoding a HEIC/HEIF image
 `crates/engine/image/src/heic.rs:33` **fn** `is_heic` — Detects HEIC/HEIF image format
 `crates/engine/image/src/heic.rs:66` **fn** `decode_heic` — Stub HEIC/HEIF decoder (Phase 1)

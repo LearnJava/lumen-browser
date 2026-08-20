@@ -147,7 +147,8 @@ jobs:
       # Committed crash repros run first and are cheap: they are single-input
       # replays, not fuzzing. A regression file is named `<target>-<desc>`
       # (fuzz/README.md §Crashes), which is what the target is derived from here.
-      # The directory is empty today — no crash has been found yet.
+      # Contents today: fuzz_image-gif-lzw-hang (BUG-787, 78-byte GIF whose LZW
+      # stream ends before the frame is full — used to hang the decoder forever).
       - name: Replay committed regressions
         working-directory: fuzz
         run: |
@@ -193,10 +194,13 @@ jobs:
           # that outcome for the two-month CI outage). Remove a target from here
           # in the commit that fixes its bug.
           #
-          #   fuzz_image      — BUG-787, GIF LZW unpack never returns
           #   fuzz_css_parser — BUG-788, parse() blows up to hundreds of MiB on
           #                     a kilobyte of malformed CSS
-          KNOWN_FAILING: 'fuzz_image fuzz_css_parser'
+          #
+          # fuzz_image was listed for BUG-787 (GIF LZW unpack never returned);
+          # fixed 2026-08-20, its repro now lives in regressions/ and is replayed
+          # by the step above, so the target is a blocking gate again.
+          KNOWN_FAILING: 'fuzz_css_parser'
         run: |
           set -u
           failed=""

@@ -20,6 +20,14 @@ zune-core = "0.5"
 image-webp = "0.2"
 png = "0.17"
 gif = "0.14"
+# Provisional: LZW-распаковка кадров GIF собственным циклом вместо
+# `gif::FrameDecoder`, который зависает навсегда на кадре с оборванным потоком
+# (BUG-787). Тот же weezl, что уже тянет `gif`, — новых транзитивных зависимостей нет.
+# Trait-anchor: lumen_core::ext::ImageDecoder (единственная точка вызова —
+# lumen_image::gif::lzw_decode_into).
+# Graduation: уходит только вместе с `gif` — пока контейнер разбирает он,
+# weezl в дереве в любом случае (docs/plan/tech-stack.md §5).
+weezl = "0.1"
 flate2.workspace = true
 # Provisional: image 0.25 для AVIF-декодирования через libavif (Phase 0).
 # Trait-anchor: lumen_core::ext::ImageDecoder (AvifImageDecoder).

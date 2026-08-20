@@ -60,9 +60,12 @@ its bug.**
 
 Currently listed:
 
-- `fuzz_image` — [BUG-787](../bugs/BUG-787-OPEN.md), GIF LZW unpack never returns.
 - `fuzz_css_parser` — [BUG-788](../bugs/BUG-788-OPEN.md), `parse` blows up to
   hundreds of MiB on a kilobyte of malformed CSS.
+
+Delisted: `fuzz_image` ([BUG-787](../bugs/BUG-787-FIXED.md), GIF LZW unpack
+never returned) — fixed 2026-08-20, repro committed as
+`regressions/fuzz_image-gif-lzw-hang`.
 
 The corpus is **not** persisted between CI runs — each run starts from the
 committed seeds. That is why the sweep is weekly rather than nightly: without
