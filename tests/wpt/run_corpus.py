@@ -39,6 +39,7 @@ Usage (from repo root, venv per tests/wpt/README.md):
 import argparse
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -188,16 +189,26 @@ def shard_report_path(out_dir: str, shard: dict) -> str:
 def kill_tree(proc) -> None:
     """Kill the shard subprocess *and* the browser processes it spawned.
 
-    `Popen.kill()` only reaps the Python child; every `lumen.exe` wptrunner
+    `Popen.kill()` only reaps the Python child; every `lumen` wptrunner
     started stays alive and keeps holding its BiDi port, which then breaks the
     next shard. Killing by PID tree (never by image name — that would take out
     unrelated browser windows, including another session's).
+
+    On POSIX the tree is a process *group*, not something `taskkill /T` has an
+    equivalent for — `run_shard` spawns with `start_new_session=True` so the
+    shard subprocess becomes its own group leader, and this kills the whole
+    group by PGID. Without that pairing `proc.kill()` alone only reaps the
+    `run_smoke.py` child; found running WPT-RUN-5 on Linux (this codepath was
+    Windows-only until then, `taskkill /F /T` already walked the tree there).
     """
     if os.name == "nt":
         subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
                        capture_output=True, check=False)
     else:
-        proc.kill()
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 
 def shard_timeout(shard: dict, base: int, per_id: float) -> int:
@@ -259,7 +270,8 @@ def run_shard(shard: dict, binary: str, out_dir: str, processes: int, timeout: i
 
     started = time.time()
     with open(log_path, "w", encoding="utf-8") as log:
-        proc = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT, cwd=REPO_ROOT)
+        proc = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT, cwd=REPO_ROOT,
+                                 start_new_session=(os.name != "nt"))
         try:
             returncode = proc.wait(timeout=timeout)
             outcome = "ran"
