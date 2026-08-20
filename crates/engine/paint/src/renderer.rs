@@ -86,6 +86,15 @@ const BAND_MIN_MARGIN_RATIO: f32 = 0.25;
 /// переворачивается между свипами и между метриками при модуле ≤3 %.
 const BAND_MARGIN_CAP_CSS: f32 = 768.0;
 
+/// CSS-`z` квада, которым пасс кромки кольцевой полосы заливает её фон
+/// (BUG-405 срез 32).
+///
+/// Шейдер переводит CSS-`z` в глубину как `0.5 − z/20000`, обрезая в `[0,1]`,
+/// поэтому −10000 — это ровно дальняя плоскость: квад пишет ту же глубину 1.0,
+/// которую оставил бы `LoadOp::Clear(1.0)`, и не отбраковывает содержимое с
+/// отрицательным `z-index`, как отбраковал бы фон на `z = 0`.
+const BAND_STRIP_BG_Z: f32 = -10_000.0;
+
 /// Сторона текстуры, которую движок запрашивает у устройства, когда адаптер
 /// её отдаёт (BUG-405 срез 23).
 ///
@@ -2010,6 +2019,12 @@ struct PageBandCache {
     key: u64,
     /// Y верхнего края полосы в документных CSS px (≥ 0).
     band_top_css: f32,
+    /// База кольцевой адресации: документный Y (CSS px), лежащий в строке 0
+    /// текстуры. Совпадает с `band_top_css` сразу после ПОЛНОЙ перерисовки и
+    /// расходится с ним по мере инкрементальных сдвигов: строка текстуры
+    /// `(y − ring_base_css)·dpr mod h_px` держит документную строку `y`
+    /// (BUG-405 срез 32, пункт 58 остатка).
+    ring_base_css: f32,
     /// Ширина текстуры полосы в device px (= ширине surface).
     w_px: u32,
     /// Высота текстуры полосы в device px (surface + 2×запас).
@@ -2032,12 +2047,27 @@ struct PageBandCache {
 struct PendingBaseBlit {
     /// Bind group `image_bgl` поверх текстуры полосы (linear sampler).
     bind_group: wgpu::BindGroup,
-    /// Смещение полосы относительно viewport-а: `band_top_css - scroll_y` (≤ 0).
-    dy_css: f32,
-    /// Ширина квада в CSS px (= ширине viewport-а).
-    w_css: f32,
-    /// Высота квада в CSS px (= высоте полосы).
-    h_css: f32,
+    /// Квады блита: прямоугольник в CSS px кадра плюс uv-угол текстуры полосы.
+    /// Штатно один (uv `[0,0]`…`[1,1]`, вся полоса со сдвигом
+    /// `band_top_css − scroll_y`); при ненулевой фазе кольца (срез 32) — два,
+    /// по обе стороны шва, чтобы не заводить sampler с `Repeat`.
+    quads: Vec<(Rect, [f32; 2], [f32; 2])>,
+}
+
+/// Строки цели Band-рендера, которые пассу РАЗРЕШЕНО перерисовать
+/// (BUG-405 срез 32, кольцевая адресация полосы — пункт 58 остатка).
+/// `None` в [`RenderPassMode::Band`] = вся полоса, штатный полный промах.
+///
+/// Клип строк заводится не scissor-ом пасса, а базовым элементом `clip_stack`
+/// (`SetScissor` из списка иначе затирает scissor пасса — ловушка пункта 60):
+/// так его наследует и отсев команд, и scissor каждого батча, и композиты
+/// offscreen-уровней.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BandStrip {
+    /// Первая перерисовываемая строка текстуры полосы, device px.
+    row0: u32,
+    /// Сколько строк перерисовывается, device px (> 0).
+    rows: u32,
 }
 
 /// Финальная цель одного `render_impl`-вызова.
@@ -2056,6 +2086,9 @@ enum RenderPassMode {
         w_px: u32,
         /// Высота полосы в device px.
         h_px: u32,
+        /// Кромка кольца: какие строки полосы пасс перерисовывает.
+        /// `None` — вся полоса (клир цвета, как до среза 32).
+        strip: Option<BandStrip>,
     },
     /// Композиция кадра из готовой полосы (через `pending_base_blit`) +
     /// overlay: present и `FRAMES_RENDERED`, но `last_frame_hash` обновляет
@@ -3370,6 +3403,9 @@ pub struct Renderer {
     image_bgl: wgpu::BindGroupLayout,
     image_sampler: wgpu::Sampler,
     image_sampler_nearest: wgpu::Sampler,
+    /// Sampler блита полосы скролл-композитора: линейный, но `Repeat` по V —
+    /// полоса адресуется кольцом (BUG-405 срез 32).
+    band_sampler: wgpu::Sampler,
     /// Декодированные изображения в CPU-памяти. Хранятся для on-demand
     /// ресайза под конкретный layout-размер (CPU bilinear resize).
     raw_images: HashMap<String, Image>,
@@ -4161,6 +4197,118 @@ fn band_pass_load_choice(v: &str) -> (bool, bool) {
     }
 }
 
+/// Включена ли кольцевая адресация полосы (`LUMEN_BAND_RING=1`).
+///
+/// **По умолчанию ВЫКЛЮЧЕНА, и это результат замера, а не осторожность**
+/// (BUG-405 срез 32, `scripts/band_ring_census.py`). Схема построена и
+/// пиксельно верна — промах перерисовывает только вышедшую вперёд кромку
+/// (≈60 % строк вместо 100 %), план кадра полосы падает с `draw` 25 / `filt` 16
+/// до 16 / 10, а гейт `scripts/band_ring_accept.py` даёт 0.000 % расхождения на
+/// всех четырёх стендах, — но цена прокрутки НЕ падает: 6 интерливед-повторов с
+/// вращением порядка дали надбавку 13.63 против 13.17 мс/1000 px (+3.5 % при
+/// разбросе 5.54), то есть ровно ноль. Экономия на строках (модель среза 29
+/// обещала −30 %) съедается вторым пассом там, где кромку режет край текстуры,
+/// и уровнями, которые кромка пересекает и потому рисует целиком.
+///
+/// Рычаг оставлен включаемым: следующему, кто возьмётся за пункт 43, он даёт
+/// рабочую реализацию вместо чистого листа — и стенд, на котором она мерилась,
+/// заведомо самый неудобный для неё (`bench-static-scroll.html` кладёт по
+/// гауссову блюру на строку, то есть цена промаха там принадлежит уровням, а не
+/// строкам).
+fn band_ring_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("LUMEN_BAND_RING").is_ok_and(|v| v != "0"))
+}
+
+/// Одна кромка кольцевой полосы: непрерывный диапазон строк ТЕКСТУРЫ и
+/// документная строка, попадающая в первую из них. Всё в device px.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RingStrip {
+    /// Первая перерисовываемая строка текстуры полосы.
+    row0: u32,
+    /// Сколько строк перерисовывается (> 0).
+    rows: u32,
+    /// Документный Y строки `row0`.
+    doc_y0: i64,
+}
+
+/// План инкрементальной дорисовки полосы при сдвиге её верха
+/// `old_top` → `new_top` (BUG-405 срез 32, пункт 43/58 остатка).
+///
+/// Текстура полосы трактуется как ТОР по Y: документная строка `y` живёт в
+/// строке текстуры `(y − ring_base) mod band_h`, поэтому сдвиг полосы не
+/// требует ни копии (пункт 61: ping-pong стоил бы второй полной текстуры), ни
+/// перерисовки перекрытия — обновить надо только вышедшую вперёд кромку.
+/// Кромка, разрезанная краем текстуры, отдаётся ДВУМЯ строчными диапазонами:
+/// один пасс через край невозможен, потому что scissor непрерывен.
+///
+/// `None` — кольцом не обойтись, нужна полная перерисовка: сдвиг нулевой либо
+/// не меньше высоты полосы (перекрытия нет вовсе).
+fn ring_advance_plan(
+    band_h: u32,
+    ring_base: i64,
+    old_top: i64,
+    new_top: i64,
+) -> Option<Vec<RingStrip>> {
+    if band_h == 0 {
+        return None;
+    }
+    let h = i64::from(band_h);
+    let delta = new_top - old_top;
+    if delta == 0 || delta.abs() >= h {
+        return None;
+    }
+    // Вниз освобождается хвост полосы (документные строки за прежним низом),
+    // вверх — её голова. В обоих случаях длина кромки = |сдвиг|.
+    let doc_y0 = if delta > 0 { old_top + h } else { new_top };
+    let count = delta.unsigned_abs();
+    let row0 = (doc_y0 - ring_base).rem_euclid(h) as u32;
+    let first = count.min(u64::from(band_h - row0));
+    // `count < h`, поэтому кромка режется краем текстуры не больше одного раза.
+    let mut strips = vec![RingStrip { row0, rows: first as u32, doc_y0 }];
+    if count > first {
+        strips.push(RingStrip {
+            row0: 0,
+            rows: (count - first) as u32,
+            doc_y0: doc_y0 + first as i64,
+        });
+    }
+    Some(strips)
+}
+
+/// Квад блита полосы на Compose-кадре: `(прямоугольник в CSS px кадра, uv0,
+/// uv1)`.
+///
+/// `dy_css` — сдвиг верха полосы относительно вьюпорта (`band_top − scroll_y`,
+/// ≤ 0), `phase_px` — фаза кольца (строка текстуры, в которой лежит верх
+/// полосы). Фаза сдвигает uv по V на ту же долю: квад по-прежнему один и
+/// по-прежнему покрывает ровно одну высоту текстуры, но его `v` уходит за
+/// единицу, а `Repeat` у [`Renderer::band_sampler`] заворачивает хвост в
+/// голову. При нулевой фазе это ровно `0…1`, то есть путь до среза 32.
+///
+/// Разрезать квад по шву вместо `Repeat` НЕЛЬЗЯ: на шве текстуры документно
+/// соседствуют строки `H−1` и `0`, и при дробном сдвиге блита (нецелый
+/// `scroll_y`) линейная фильтрация обязана взять обе, а два квада с
+/// `ClampToEdge` подсунули бы каждому свой край. Шов попадает во вьюпорт почти
+/// всегда, внешние края полосы — почти никогда, поэтому цена ошибки у этих
+/// двух вариантов разная на порядок.
+fn band_blit_quads(
+    dy_css: f32,
+    w_css: f32,
+    band_h_px: u32,
+    phase_px: u32,
+    dpr: f32,
+) -> Vec<(Rect, [f32; 2], [f32; 2])> {
+    let h_css = band_h_px as f32 / dpr;
+    let v = if band_h_px == 0 { 0.0 } else { phase_px as f32 / band_h_px as f32 };
+    vec![(
+        Rect { x: 0.0, y: dy_css, width: w_css, height: h_css },
+        [0.0, v],
+        [1.0, 1.0 + v],
+    )]
+}
+
 /// Геометрия полосы скролл-композитора под текущую поверхность:
 /// `(запас с каждой стороны, полная высота полосы)` в device px, либо причина
 /// отказа для `page-compose skip`.
@@ -4791,6 +4939,22 @@ impl Renderer {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             ..Default::default()
         });
+        // Sampler блита полосы: как линейный выше, но по V — `Repeat`
+        // (BUG-405 срез 32). Полоса адресуется кольцом, поэтому её строка
+        // `H−1` документно соседствует со строкой `0`: при дробном сдвиге
+        // блита фильтрации на шве нужны обе, а `ClampToEdge` подсунула бы
+        // край. При нулевой фазе кольца (полоса только что перерисована
+        // целиком) uv остаются в `0…1` и режим ни на что не влияет.
+        let band_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("page-band-sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            ..Default::default()
+        });
         let image_sampler_nearest = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("image-sampler-nearest"),
             mag_filter: wgpu::FilterMode::Nearest,
@@ -5210,6 +5374,7 @@ impl Renderer {
             image_bgl,
             image_sampler,
             image_sampler_nearest,
+            band_sampler,
             raw_images: HashMap::new(),
             images: HashMap::new(),
             layer_snapshots: HashMap::new(),
@@ -8353,6 +8518,9 @@ impl Renderer {
             blit_bg,
             key: 0, // невалиден, пока Band-рендер не пройдёт
             band_top_css,
+            // Свежая полоса перерисовывается целиком, то есть фаза кольца
+            // нулевая: строка 0 текстуры держит документную строку `band_top`.
+            ring_base_css: band_top_css,
             w_px: sw,
             h_px: band_h_px,
             depth_t,
@@ -8379,7 +8547,16 @@ impl Renderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.image_sampler),
+                    // `Repeat` по V нужен только кольцу (срез 32): без него
+                    // фаза всегда нулевая, uv не выходят из `0…1`, и штатный
+                    // путь остаётся на том же sampler-е, что до среза, — то
+                    // есть выключенный рычаг не меняет ни одного пикселя даже
+                    // на краю полосы.
+                    resource: wgpu::BindingResource::Sampler(if band_ring_enabled() {
+                        &self.band_sampler
+                    } else {
+                        &self.image_sampler
+                    }),
                 },
             ],
         })
@@ -8659,6 +8836,41 @@ impl Renderer {
                 .page_band
                 .as_ref()
                 .is_none_or(|b| b.w_px != sw || b.h_px != band_h_px);
+            // BUG-405 срез 32 (пункты 43/58 остатка): перекрытие старой и новой
+            // полосы уже нарисовано и лежит в текстуре — перерисовать надо
+            // только вышедшую вперёд кромку. Кольцевая адресация (текстура как
+            // тор по Y) обходится без копии перекрытия и без второй текстуры.
+            //
+            // Условия применимости: полоса не пересоздаётся, её содержимое
+            // ВАЛИДНО и того же ключа (иначе перекрывать нечего), а верх полосы
+            // ложится на целую device-строку — при дробном dpr номер строки
+            // кольца перестал бы быть целым, и кромка поехала бы на полпикселя.
+            // Полупрозрачный фон холста кольцу противопоказан: клир полной
+            // перерисовки ЗАМЕНЯЕТ пиксель, а квад фона кромки смешивается с
+            // тем, что лежало в её строках, — то есть с чужой документной
+            // строкой. Случай экзотический (фон холста непрозрачен на всех
+            // реальных страницах), и дешевле его отсечь, чем заводить
+            // «замещающий» pipeline ради него.
+            let opaque_bg = self.canvas_bg.is_none_or(|c| c.a == 255);
+            let ring = if !band_ring_enabled() || recreate || !opaque_bg {
+                None
+            } else {
+                self.page_band.as_ref().and_then(|b| {
+                    if b.key == 0 || b.key != key {
+                        return None;
+                    }
+                    let row_of = |css: f32| {
+                        let px = css * dpr;
+                        ((px.round() - px).abs() < 1e-3).then_some(px.round() as i64)
+                    };
+                    ring_advance_plan(
+                        band_h_px,
+                        row_of(b.ring_base_css)?,
+                        row_of(b.band_top_css)?,
+                        row_of(band_top_css)?,
+                    )
+                })
+            };
             if recreate {
                 self.create_page_band(sw, band_h_px, band_top_css);
             }
@@ -8689,23 +8901,53 @@ impl Renderer {
                 .unwrap_or_else(|| create_depth_texture(&self.device, sw, band_h_px));
             let saved_depth_t = self.depth_texture.replace(band_depth_t);
             let saved_depth_v = self.depth_view.replace(band_depth_v);
-            let band_result = self.render_impl(
-                &static_content,
-                &[],
-                band_top_css,
-                0.0,
-                RenderPassMode::Band { view, w_px: sw, h_px: band_h_px },
-            );
+            // Кольцо: пасс на кромку (два, если её разрезал край текстуры).
+            // Полный промах — один пасс со `strip: None`, ровно как до среза 32.
+            let passes: Vec<(f32, Option<BandStrip>)> = match &ring {
+                Some(strips) => strips
+                    .iter()
+                    .map(|s| {
+                        // Документный Y строки 0 текстуры для этого пасса:
+                        // содержимое кладётся в свои строки обычным сдвигом
+                        // рендера, а лишнее отсекает клип кромки.
+                        let origin_px = s.doc_y0 - i64::from(s.row0);
+                        (origin_px as f32 / dpr, Some(BandStrip { row0: s.row0, rows: s.rows }))
+                    })
+                    .collect(),
+                None => vec![(band_top_css, None)],
+            };
+            let rows_drawn: u32 = match &ring {
+                Some(strips) => strips.iter().map(|s| s.rows).sum(),
+                None => band_h_px,
+            };
+            let mut band_result = Ok(());
+            for (origin_css, strip) in passes {
+                band_result = self.render_impl(
+                    &static_content,
+                    &[],
+                    origin_css,
+                    0.0,
+                    RenderPassMode::Band { view: view.clone(), w_px: sw, h_px: band_h_px, strip },
+                );
+                if band_result.is_err() {
+                    break;
+                }
+            }
             self.depth_texture = saved_depth_t;
             self.depth_view = saved_depth_v;
             band_result?;
             if let Some(b) = self.page_band.as_mut() {
                 b.key = key;
                 b.band_top_css = band_top_css;
+                if ring.is_none() {
+                    // Полная перерисовка обнуляет фазу кольца: строка 0
+                    // текстуры снова держит документную строку `band_top`.
+                    b.ring_base_css = band_top_css;
+                }
             }
             if crate::frame_log_level() >= 2 {
                 eprintln!(
-                    "[frame:wgpu] page-compose MISS: band y={band_top_css:.0}..{:.0} css ({sw}x{band_h_px} px, {} anim segs, frac {}, load {})",
+                    "[frame:wgpu] page-compose MISS: band y={band_top_css:.0}..{:.0} css ({sw}x{band_h_px} px, rows {rows_drawn}/{band_h_px}, {} anim segs, frac {}, load {})",
                     band_top_css + band_h_css,
                     ranges.len(),
                     band_draw_fraction().map_or(1.0, f64::from),
@@ -8726,16 +8968,27 @@ impl Renderer {
         // Композиция: blit полосы со сдвигом + overlay поверх. Bind group
         // блита взята готовой из кэша полосы (срез 21) — её входы не зависят
         // ни от скролла, ни от содержимого кадра.
-        let Some((band_top_css, bind_group)) =
-            self.page_band.as_ref().map(|b| (b.band_top_css, b.blit_bg.clone()))
+        let Some((band_top_css, ring_base_css, bind_group)) = self
+            .page_band
+            .as_ref()
+            .map(|b| (b.band_top_css, b.ring_base_css, b.blit_bg.clone()))
         else {
             return Ok(false);
         };
+        // Фаза кольца: на сколько строк текстуры съехал верх полосы против
+        // базы. Ноль (полоса только что перерисована целиком) даёт ровно один
+        // квад с uv 0…1 — путь до среза 32.
+        let phase_px = (((band_top_css - ring_base_css) * dpr).round() as i64)
+            .rem_euclid(i64::from(band_h_px)) as u32;
         self.pending_base_blit = Some(PendingBaseBlit {
             bind_group,
-            dy_css: band_top_css - scroll_y,
-            w_css: sw as f32 / dpr,
-            h_css: band_h_css,
+            quads: band_blit_quads(
+                band_top_css - scroll_y,
+                sw as f32 / dpr,
+                band_h_px,
+                phase_px,
+                dpr,
+            ),
         });
         // Split: анимируемые сегменты рисуются как content-полоса Compose-кадра
         // (получают штатный сдвиг -scroll_y) — поверх blit-а, под overlay.
@@ -8985,6 +9238,12 @@ impl Renderer {
             ClearTransparent,
             /// Load existing contents (accumulate).
             Load,
+            /// Первый батч уровня 0 в пассе кромки кольцевой полосы (BUG-405
+            /// срез 32): цвет ГРУЗИТСЯ — клир снёс бы строки полосы за
+            /// пределами кромки, их фон рисует явный квад, — а глубина всё
+            /// равно ЧИСТИТСЯ: она живёт один пасс, и `Load` притащил бы сюда
+            /// значения прошлой кромки.
+            LoadColorClearDepth,
         }
         struct DrawBatchPlan { target_level: usize, load_op: LoadOpChoice, ops_start: usize, ops_end: usize }
         struct CompositePlan { from_level: usize, comp_v_start: u32, mode: BlendMode }
@@ -9284,6 +9543,12 @@ impl Renderer {
             RenderPassMode::Band { .. } => band_pass_load_ops(),
             _ => (false, false),
         };
+        // BUG-405 срез 32: кромка кольца — какие строки цели пасс имеет право
+        // перерисовать. `None` (и любой не-Band режим) — вся цель.
+        let band_strip = match &mode {
+            RenderPassMode::Band { strip, .. } => *strip,
+            _ => None,
+        };
 
         let dpr_f32 = self.scale_factor.max(1e-6) as f32;
         // CSS-px размер цели пасса — ровно то, что уходит в `Uniforms.viewport`
@@ -9326,7 +9591,9 @@ impl Renderer {
                 }
                 let first = level_first.get(current_level).copied().unwrap_or(false);
                 let load_op = if first {
-                    if current_level == 0 {
+                    if current_level == 0 && band_strip.is_some() {
+                        LoadOpChoice::LoadColorClearDepth
+                    } else if current_level == 0 {
                         let rgba = self.canvas_bg
                             .map_or_else(
                                 || Self::wgpu_color_for_canvas_bg(&Color::WHITE, self.target_color_space),
@@ -9444,17 +9711,89 @@ impl Renderer {
         // на месте контента, который она заменяет. Обычный image-квад:
         // painter's order и батчинг не нарушаются.
         if let Some(blit) = self.pending_base_blit.take() {
-            let v_start = image_vertices.len() as u32;
-            push_image_quad(
-                &mut image_vertices,
-                Rect { x: 0.0, y: blit.dy_css, width: blit.w_css, height: blit.h_css },
-                [0.0, 0.0],
-                [1.0, 1.0],
-                1.0,
-            );
             let image_batch_idx = image_bind_groups.len() as u32;
             image_bind_groups.push(blit.bind_group);
-            draw_ops.push(DrawOp::Image { v_start, v_count: 6, image_batch_idx });
+            // Квадов два, когда полоса адресуется кольцом и шов попал внутрь
+            // вьюпорта (срез 32); иначе один — как раньше.
+            for (rect, uv0, uv1) in blit.quads {
+                let v_start = image_vertices.len() as u32;
+                push_image_quad(&mut image_vertices, rect, uv0, uv1, 1.0);
+                draw_ops.push(DrawOp::Image { v_start, v_count: 6, image_batch_idx });
+            }
+        }
+
+        // BUG-405 срез 32: кромка кольцевой полосы. Пасс перерисовывает только
+        // свои строки, и ограничение это живёт ТРЕМЯ отдельными механизмами,
+        // потому что у них разная область действия:
+        //
+        // * `strip_rect` — клип, который [`sync_scissor_to_stack`] подмешивает
+        //   в scissor КАЖДОЙ команды уровня 0. Не `clip_stack`: тот
+        //   пересекается с CSS-клипами и уехал бы внутрь offscreen-уровней,
+        //   а туда ему нельзя (см. ниже). Не scissor пасса: его затирает
+        //   первый же `SetScissor` из списка (ловушка пункта 60 остатка).
+        // * `cull_y0/cull_y1` — границы отсева команд, тоже только на уровне 0.
+        // * `cull_top_px/cull_bot_px` — те же границы для отсева НЕВИДИМЫХ
+        //   УРОВНЕЙ, здесь глубина уже не важна: что бы уровень ни рисовал, в
+        //   кадр он попадает через композит в уровень 0, обрезанный кромкой.
+        //
+        // Внутрь уровня кромка НЕ проникает: блюр читает свою текстуру целиком,
+        // и обрезанный по кромке источник дал бы у её края другой результат,
+        // чем полная перерисовка. Уровень рисуется целиком, а обрезается его
+        // композит — то есть кромка экономит на уровнях только выброшенными
+        // целиком, а не срезанными наполовину.
+        //
+        // Клир цвета такому пассу запрещён (он не скрайзится и снёс бы
+        // соседние строки кольца), поэтому фон кромки заливается явным квадом
+        // на ДАЛЬНЕЙ плоскости: записанная им глубина 1.0 совпадает с той,
+        // которую оставил бы `Clear(1.0)`, то есть квад не отбраковывает
+        // содержимое с отрицательным `z`, как отбраковал бы на `z = 0`.
+        let strip_rect: Option<Rect> = band_strip.map(|s| Rect {
+            x: 0.0,
+            y: s.row0 as f32 / dpr_f32,
+            width: viewport_w,
+            height: s.rows as f32 / dpr_f32,
+        });
+        let (cull_y0, cull_y1) = match strip_rect {
+            Some(r) => (r.y, r.y + r.height),
+            None => (0.0, viewport_css_h),
+        };
+        let cull_top_px = cull_y0 * dpr_f32;
+        let cull_bot_px = (cull_y1 * dpr_f32).min(cull_h as f32);
+        if let Some(strip) = strip_rect {
+            let scissor = css_rect_to_device_scissor(strip, dpr_f32, surface_w, cull_h);
+            if !scissor.is_empty() {
+                draw_ops.push(DrawOp::SetScissor(scissor));
+                current_scissor = Some(scissor);
+                let bg = self.canvas_bg.map_or_else(
+                    || Self::wgpu_color_for_canvas_bg(&Color::WHITE, self.target_color_space),
+                    |bg| Self::wgpu_color_for_canvas_bg(&bg, self.target_color_space),
+                );
+                let v_start = fill_vertices.len() as u32;
+                push_fill_quad(&mut fill_vertices, strip, bg);
+                for v in &mut fill_vertices[v_start as usize..] {
+                    v.z = BAND_STRIP_BG_Z;
+                }
+                draw_ops.push(DrawOp::Fill { v_start, v_count: 6 });
+            }
+        }
+        // Клип кромки действует только на уровне 0 — см. блок выше.
+        macro_rules! strip_clip_now {
+            () => {
+                if current_level == 0 { strip_rect } else { None }
+            };
+        }
+        macro_rules! sync_scissor {
+            () => {
+                sync_scissor_to_stack(
+                    &clip_stack,
+                    strip_clip_now!(),
+                    &mut current_scissor,
+                    &mut draw_ops,
+                    dpr_f32,
+                    surface_w,
+                    cull_h,
+                )
+            };
         }
 
         // BUG-405 срез 4: пред-проход по спискам — какие скруглённые клипы
@@ -9573,11 +9912,19 @@ impl Renderer {
             // level/clip/transform stacks balanced.
             let t_cull = cmd_log.then(std::time::Instant::now);
             let culled = cmd.cull_rect().is_some_and(|local| {
+                // Кромка кольца сужает отсев только на уровне 0: содержимое
+                // offscreen-уровня обязано попасть в его текстуру целиком.
+                let (cy0, cy1) = if current_level == 0 {
+                    (cull_y0, cull_y1)
+                } else {
+                    (0.0, viewport_css_h)
+                };
                 leaf_is_offscreen(
                     translate_rect(local, dx, dy),
                     transform_stack.last(),
                     viewport_css_w,
-                    viewport_css_h,
+                    cy0,
+                    cy1,
                 )
             });
             if let Some(t0) = t_cull {
@@ -9591,7 +9938,7 @@ impl Renderer {
             }
             match cmd {
                 DisplayCommand::FillRect { rect, color } => {
-                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, cull_h) {
+                    if !sync_scissor!() {
                         continue;
                     }
                     let alpha = 1.0_f32;
@@ -9622,7 +9969,7 @@ impl Renderer {
                     }
                 }
                 DisplayCommand::FillRoundedRect { rect, color, radii } => {
-                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, cull_h) {
+                    if !sync_scissor!() {
                         continue;
                     }
                     let r = translate_rect(*rect, dx, dy);
@@ -9643,7 +9990,7 @@ impl Renderer {
                     styles: [st, sr, sb, sl],
                     radii,
                 } => {
-                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, cull_h) {
+                    if !sync_scissor!() {
                         continue;
                     }
                     let alpha = 1.0_f32;
@@ -9841,7 +10188,7 @@ impl Renderer {
                         continue;
                     }
                     let t_sciss = cmd_log.then(std::time::Instant::now);
-                    let scissor_ok = sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, cull_h);
+                    let scissor_ok = sync_scissor!();
                     if let Some(t0) = t_sciss {
                         sub_add(&TEXT_SUB.sciss, t0);
                     }
@@ -9942,7 +10289,7 @@ impl Renderer {
                     if *width <= 0.0 {
                         continue;
                     }
-                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, cull_h) {
+                    if !sync_scissor!() {
                         continue;
                     }
                     let alpha = 1.0_f32;
@@ -10019,7 +10366,7 @@ impl Renderer {
                     object_position,
                     image_rendering,
                 } => {
-                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, cull_h) {
+                    if !sync_scissor!() {
                         continue;
                     }
                     let alpha = 1.0_f32;
@@ -10123,7 +10470,7 @@ impl Renderer {
                     // fetches it (the `loading="lazy"` attribute never clears).
                     // Draw the registered image if present, else the grey
                     // placeholder — same behaviour as DrawImage. (BUG-163)
-                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, cull_h) {
+                    if !sync_scissor!() {
                         continue;
                     }
                     let alpha = 1.0_f32;
@@ -10367,9 +10714,9 @@ impl Renderer {
                             LevelBounds::Empty => true,
                             LevelBounds::Rect { x0, y0, x1, y1 } => {
                                 x1 * dpr_f32 <= 0.0
-                                    || y1 * dpr_f32 <= 0.0
+                                    || y1 * dpr_f32 <= cull_top_px
                                     || x0 * dpr_f32 >= surface_w as f32
-                                    || y0 * dpr_f32 >= cull_h as f32
+                                    || y0 * dpr_f32 >= cull_bot_px
                             }
                             LevelBounds::Unbounded => false,
                         };
@@ -10471,9 +10818,9 @@ impl Renderer {
                                 LevelBounds::Empty => true,
                                 LevelBounds::Rect { x0, y0, x1, y1 } => {
                                     x1 * dpr_f32 <= 0.0
-                                        || y1 * dpr_f32 <= 0.0
+                                        || y1 * dpr_f32 <= cull_top_px
                                         || x0 * dpr_f32 >= surface_w as f32
-                                        || y0 * dpr_f32 >= cull_h as f32
+                                        || y0 * dpr_f32 >= cull_bot_px
                                 }
                                 LevelBounds::Unbounded => false,
                             };
@@ -10545,9 +10892,9 @@ impl Renderer {
                             LevelBounds::Empty => true,
                             LevelBounds::Rect { x0, y0, x1, y1 } => {
                                 x1 * dpr_f32 <= 0.0
-                                    || y1 * dpr_f32 <= 0.0
+                                    || y1 * dpr_f32 <= cull_top_px
                                     || x0 * dpr_f32 >= surface_w as f32
-                                    || y0 * dpr_f32 >= cull_h as f32
+                                    || y0 * dpr_f32 >= cull_bot_px
                             }
                             LevelBounds::Unbounded => false,
                         };
@@ -10584,7 +10931,7 @@ impl Renderer {
                 }
                 // CSS Backgrounds L3 §3.3/3.4/3.5 — background-size/position/repeat.
                 DisplayCommand::DrawBackgroundImage { rect, origin_rect, src, size, position, repeat, image_rendering } => {
-                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, cull_h) {
+                    if !sync_scissor!() {
                         continue;
                     }
                     // `area`  — paint/clip bounds (background-clip). Tiles are drawn only inside.
@@ -10715,7 +11062,7 @@ impl Renderer {
                 }
                 // CSS Images L3 §3.3 — GPU linear gradient pipeline.
                 DisplayCommand::DrawLinearGradient { rect, angle_deg, stops, repeating } => {
-                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, cull_h) {
+                    if !sync_scissor!() {
                         continue;
                     }
                     if stops.is_empty() {
@@ -10738,7 +11085,7 @@ impl Renderer {
                 }
                 // CSS Images L3 §3.5 — GPU radial gradient pipeline.
                 DisplayCommand::DrawRadialGradient { rect, center_x_pct, center_y_pct, radius_x, radius_y, stops, repeating } => {
-                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, cull_h) {
+                    if !sync_scissor!() {
                         continue;
                     }
                     if stops.is_empty() {
@@ -10765,7 +11112,7 @@ impl Renderer {
                 }
                 // CSS Images L4 §3.7 — GPU conic gradient pipeline.
                 DisplayCommand::DrawConicGradient { rect, center_x_pct, center_y_pct, from_angle_deg, stops, repeating } => {
-                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, cull_h) {
+                    if !sync_scissor!() {
                         continue;
                     }
                     if stops.is_empty() {
@@ -10789,7 +11136,7 @@ impl Renderer {
                     draw_ops.push(DrawOp::Gradient { v_start, v_count, grad_batch_idx });
                 }
                 DisplayCommand::DrawLayerSnapshot { id, rect, alpha } => {
-                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, cull_h) {
+                    if !sync_scissor!() {
                         continue;
                     }
                     let scrolled = translate_rect(*rect, dx, dy);
@@ -11159,6 +11506,16 @@ impl Renderer {
                         );
                         let want =
                             css_rect_to_device_scissor(padded, dpr_f32, surface_w, surface_h);
+                        // Кромка кольца (срез 32) в `clip_stack` не лежит и
+                        // сюда не попадает — и это существенно: условие `uncut`
+                        // держит равенство картинки со старым путём, который
+                        // размывал уже обрезанную ФИГУРУ, а кромка режет не
+                        // фигуру, а окно перерисовки, и обрезанный ею результат
+                        // совпадает с тем, что нарисовал бы полный пасс. Первая
+                        // редакция среза клала кромку в стек — и каждая тень у
+                        // её границы уезжала на offscreen-уровень: `layers`
+                        // 1 → 2, `filt` 16 → 26, промах вдвое дороже полной
+                        // перерисовки (тот же отказ, что в пункте 60).
                         let desired = match clip_stack.last() {
                             Some(c) => {
                                 css_rect_to_device_scissor(*c, dpr_f32, surface_w, surface_h)
@@ -11177,14 +11534,7 @@ impl Renderer {
                             continue;
                         }
                         if uncut {
-                            if sync_scissor_to_stack(
-                                &clip_stack,
-                                &mut current_scissor,
-                                &mut draw_ops,
-                                dpr_f32,
-                                surface_w,
-                                surface_h,
-                            ) {
+                            if sync_scissor!() {
                                 let v_start = shadow_vertices.len() as u32;
                                 push_shadow_quad(
                                     &mut shadow_vertices,
@@ -11253,10 +11603,23 @@ impl Renderer {
                                 let pad_css = blur_pad / dpr_f32;
                                 let (ix0, iy0) = (x0 - pad_css, y0 - pad_css);
                                 let (ix1, iy1) = (x1 + pad_css, y1 + pad_css);
+                                // Кромка кольца (срез 32) режет пассы фильтра
+                                // по Y, когда композит идёт прямо в уровень 0:
+                                // результат за кромкой всё равно не нужен, а
+                                // ИСТОЧНИК блюра остаётся целым (содержимое
+                                // уровня кромкой не обрезано). Вложенный
+                                // фильтр (`current_level > 1`) так резать
+                                // нельзя: его результат читает родительский
+                                // уровень целиком.
+                                let (ty0, ty1) = if current_level == 1 {
+                                    (cull_top_px, cull_bot_px)
+                                } else {
+                                    (0.0, cull_h as f32)
+                                };
                                 let sx0 = ((ix0 * dpr_f32).floor().max(0.0) as u32).min(surface_w);
-                                let sy0 = ((iy0 * dpr_f32).floor().max(0.0) as u32).min(cull_h);
+                                let sy0 = ((iy0 * dpr_f32).floor().max(ty0) as u32).min(ty1 as u32);
                                 let sx1 = ((ix1 * dpr_f32).ceil().max(0.0) as u32).min(surface_w);
-                                let sy1 = ((iy1 * dpr_f32).ceil().max(0.0) as u32).min(cull_h);
+                                let sy1 = ((iy1 * dpr_f32).ceil().max(ty0) as u32).min(ty1 as u32);
                                 if sx1 <= sx0 || sy1 <= sy0 {
                                     // Контент целиком за пределами surface —
                                     // фильтр не виден, его контент-пассы тоже
@@ -11459,7 +11822,7 @@ impl Renderer {
                     }
                 }
                 DisplayCommand::DrawSvgPath { vertices, color } => {
-                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, cull_h) {
+                    if !sync_scissor!() {
                         continue;
                     }
                     let v_start = fill_vertices.len() as u32;
@@ -11485,7 +11848,7 @@ impl Renderer {
                 DisplayCommand::DrawSvgFill { contours, color } => {
                     let _t_arm = sub_timer(cmd_log, &SVG_SUB.arm);
                     let t_sciss = cmd_log.then(std::time::Instant::now);
-                    let scissor_ok = sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, cull_h);
+                    let scissor_ok = sync_scissor!();
                     if let Some(t0) = t_sciss {
                         sub_add(&SVG_SUB.sciss, t0);
                     }
@@ -11519,7 +11882,7 @@ impl Renderer {
                 DisplayCommand::DrawSvgStroke { contours, color, params } => {
                     let _t_arm = sub_timer(cmd_log, &SVG_SUB.arm);
                     let t_sciss = cmd_log.then(std::time::Instant::now);
-                    let scissor_ok = sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, cull_h);
+                    let scissor_ok = sync_scissor!();
                     if let Some(t0) = t_sciss {
                         sub_add(&SVG_SUB.sciss, t0);
                     }
@@ -11626,7 +11989,7 @@ impl Renderer {
                 // clip/transform stack (parent's, NOT scroll layer's).
                 // Colors from `scrollbar-color` (CSS Scrollbars L1 §3).
                 DisplayCommand::DrawScrollbar { track_rect, thumb_rect, track_color, thumb_color, .. } => {
-                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, cull_h) {
+                    if !sync_scissor!() {
                         continue;
                     }
                     for (rect, color) in &[(*track_rect, *track_color), (*thumb_rect, *thumb_color)] {
@@ -11648,7 +12011,7 @@ impl Renderer {
                 // DevTools box model overlay (7E.3): four semi-transparent layers
                 // drawn outside-in. Uses the same fill pipeline as FillRect.
                 DisplayCommand::BoxModelOverlay { margin, border, padding, content } => {
-                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, cull_h) {
+                    if !sync_scissor!() {
                         continue;
                     }
                     // Standard DevTools palette (Chrome-matching), ~50% alpha.
@@ -11692,7 +12055,7 @@ impl Renderer {
                 // The quad covers `dest` after scroll translation; both textures
                 // sample at the full UV range [0,1]×[0,1] (CSS Images L4 §4.1).
                 DisplayCommand::DrawCrossFade { dest, src_a, src_b, progress } => {
-                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, cull_h) {
+                    if !sync_scissor!() {
                         continue;
                     }
                     // Look up both GpuImage entries. Use intrinsic-size key
@@ -12459,6 +12822,7 @@ impl Renderer {
                             LoadOpChoice::Clear(_) => "c",
                             LoadOpChoice::ClearTransparent => "t",
                             LoadOpChoice::Load => "l",
+                            LoadOpChoice::LoadColorClearDepth => "r",
                         }
                     );
                     for op in &draw_ops[batch.ops_start..batch.ops_end] {
@@ -12512,7 +12876,9 @@ impl Renderer {
                         LoadOpChoice::ClearTransparent => {
                             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
                         }
-                        LoadOpChoice::Load => wgpu::LoadOp::Load,
+                        LoadOpChoice::Load | LoadOpChoice::LoadColorClearDepth => {
+                            wgpu::LoadOp::Load
+                        }
                     };
                     // All render passes must supply a depth attachment because the
                     // fill/rrect/circle pipelines use depth_write_enabled:true.
@@ -14329,7 +14695,17 @@ const WGPU_CULL_SLOP_CSS_PX: f32 = 256.0;
 /// rotation/scale — a command is only culled when its entire footprint is
 /// off-screen. A missing or non-affine (3D/perspective) transform disables
 /// culling (`false`), so no visible pixel is ever dropped.
-fn leaf_is_offscreen(screen_rect: Rect, m: Option<&Mat4>, vw: f32, vh: f32) -> bool {
+/// Верхняя граница отсева (`cull_y0`) обычно 0, но пасс кромки кольцевой
+/// полосы (BUG-405 срез 32) видит только свои строки: команда выше кромки для
+/// него так же невидима, как команда ниже цели. Без этого кромка платила бы
+/// полный обход списка — а срез 29 мерил цену доли ИМЕННО механизмом отсева.
+fn leaf_is_offscreen(
+    screen_rect: Rect,
+    m: Option<&Mat4>,
+    vw: f32,
+    cull_y0: f32,
+    vh: f32,
+) -> bool {
     if screen_rect.width <= 0.0 || screen_rect.height <= 0.0 {
         return false;
     }
@@ -14355,7 +14731,7 @@ fn leaf_is_offscreen(screen_rect: Rect, m: Option<&Mat4>, vw: f32, vh: f32) -> b
         max_y = max_y.max(sy);
     }
     let slop = WGPU_CULL_SLOP_CSS_PX;
-    max_x < -slop || max_y < -slop || min_x > vw + slop || min_y > vh + slop
+    max_x < -slop || max_y < cull_y0 - slop || min_x > vw + slop || min_y > vh + slop
 }
 
 /// Применяет 2D-аффинную матрицу к `pos` вершинам в диапазоне `verts`.
@@ -16852,16 +17228,25 @@ fn emit_outline_side(
 /// `current_scissor=None` означает, что `SetScissor` ещё не выставлялся
 /// в этом render-loop-е — тогда команда добавляется даже если desired==full
 /// (нет гарантии, что предыдущий кадр оставил scissor на полный размер).
+/// `extra` — клип, не входящий в CSS-стек: кромка кольцевой полосы (BUG-405
+/// срез 32). Он пересекается с вершиной стека, но в сам стек не кладётся —
+/// иначе он ушёл бы внутрь offscreen-уровней вместе с `PushClipRect`, а туда
+/// ему нельзя (уровень обязан рисоваться целиком, обрезается его композит).
 fn sync_scissor_to_stack(
     clip_stack: &[Rect],
+    extra: Option<Rect>,
     current_scissor: &mut Option<DeviceScissor>,
     ops: &mut Vec<DrawOp>,
     dpr: f32,
     surface_w: u32,
     surface_h: u32,
 ) -> bool {
-    let desired = match clip_stack.last() {
-        Some(rect) => css_rect_to_device_scissor(*rect, dpr, surface_w, surface_h),
+    let css = match (clip_stack.last().copied(), extra) {
+        (Some(a), Some(b)) => Some(intersect_rects(a, b)),
+        (a, b) => a.or(b),
+    };
+    let desired = match css {
+        Some(rect) => css_rect_to_device_scissor(rect, dpr, surface_w, surface_h),
         None => DeviceScissor::full(surface_w, surface_h),
     };
     if Some(desired) != *current_scissor {
@@ -17311,7 +17696,7 @@ mod tests {
     fn sync_scissor_pushes_full_on_empty_stack() {
         let mut current: Option<DeviceScissor> = None;
         let mut ops: Vec<DrawOp> = Vec::new();
-        let ok = sync_scissor_to_stack(&[], &mut current, &mut ops, 1.0, 1024, 720);
+        let ok = sync_scissor_to_stack(&[], None, &mut current, &mut ops, 1.0, 1024, 720);
         assert!(ok);
         assert_eq!(ops.len(), 1);
         assert!(matches!(ops[0], DrawOp::SetScissor(s) if s == DeviceScissor::full(1024, 720)));
@@ -17323,9 +17708,9 @@ mod tests {
         // Первый вызов выставляет full; второй с тем же стеком — не пушит.
         let mut current: Option<DeviceScissor> = None;
         let mut ops: Vec<DrawOp> = Vec::new();
-        sync_scissor_to_stack(&[], &mut current, &mut ops, 1.0, 1024, 720);
+        sync_scissor_to_stack(&[], None, &mut current, &mut ops, 1.0, 1024, 720);
         let n_after_first = ops.len();
-        sync_scissor_to_stack(&[], &mut current, &mut ops, 1.0, 1024, 720);
+        sync_scissor_to_stack(&[], None, &mut current, &mut ops, 1.0, 1024, 720);
         assert_eq!(ops.len(), n_after_first, "повторный вызов не должен пушить op");
     }
 
@@ -17333,10 +17718,10 @@ mod tests {
     fn sync_scissor_pushes_on_stack_change() {
         let mut current: Option<DeviceScissor> = None;
         let mut ops: Vec<DrawOp> = Vec::new();
-        sync_scissor_to_stack(&[], &mut current, &mut ops, 1.0, 1024, 720);
+        sync_scissor_to_stack(&[], None, &mut current, &mut ops, 1.0, 1024, 720);
         // Стек добавил clip — scissor сужается.
         let stack = vec![Rect::new(100.0, 100.0, 200.0, 200.0)];
-        sync_scissor_to_stack(&stack, &mut current, &mut ops, 1.0, 1024, 720);
+        sync_scissor_to_stack(&stack, None, &mut current, &mut ops, 1.0, 1024, 720);
         assert_eq!(ops.len(), 2);
         assert!(matches!(
             ops[1],
@@ -17351,7 +17736,7 @@ mod tests {
         let mut current: Option<DeviceScissor> = None;
         let mut ops: Vec<DrawOp> = Vec::new();
         let stack = vec![Rect::new(2000.0, 2000.0, 100.0, 100.0)];
-        let ok = sync_scissor_to_stack(&stack, &mut current, &mut ops, 1.0, 1024, 720);
+        let ok = sync_scissor_to_stack(&stack, None, &mut current, &mut ops, 1.0, 1024, 720);
         assert!(!ok);
     }
 
@@ -17573,7 +17958,7 @@ mod tests {
         let mut current: Option<DeviceScissor> = None;
         let mut ops: Vec<DrawOp> = Vec::new();
         let stack = vec![Rect::new(50.0, 50.0, 100.0, 100.0)];
-        sync_scissor_to_stack(&stack, &mut current, &mut ops, 2.0, 2048, 1440);
+        sync_scissor_to_stack(&stack, None, &mut current, &mut ops, 2.0, 2048, 1440);
         assert!(matches!(
             ops[0],
             DrawOp::SetScissor(s) if s == DeviceScissor { x: 100, y: 100, width: 200, height: 200 }
@@ -19213,6 +19598,105 @@ mod tests {
         // Доля выше единицы не растягивает цель: отсев не может видеть больше
         // текстуры, чем создано.
         assert_eq!(band_cull_height(2541, 2.0), 2541);
+    }
+
+    /// BUG-405 срез 32: гейт на арифметику кольцевой дорисовки
+    /// [`ring_advance_plan`] — какие строки текстуры перерисовывает сдвиг
+    /// полосы.
+    ///
+    /// Опасных точек три, и все три проверяются здесь, потому что живой стенд
+    /// на них не наступит: (1) перекрытие обязано ПЕРЕЖИВАТЬ сдвиг — план,
+    /// покрывающий больше строк, чем |сдвиг|, означал бы, что кольцо ничего не
+    /// экономит; (2) кромка, разрезанная краем текстуры, обязана прийти двумя
+    /// диапазонами — один пасс через край невозможен, scissor непрерывен;
+    /// (3) сдвиг не меньше высоты полосы обязан ОТКАЗАТЬ (перекрытия нет
+    /// вовсе), а не вернуть план на всю полосу задом наперёд.
+    #[test]
+    fn ring_advance_plan_redraws_only_the_edge() {
+        // Полоса развёрнутого окна 1920×1017 (см. `band_geometry` выше).
+        const H: u32 = 2541;
+        // Первый сдвиг вниз от свежей полосы: база = прежний верх, значит
+        // кромка ложится в голову текстуры, край её не режет.
+        assert_eq!(
+            ring_advance_plan(H, 0, 0, 1229),
+            Some(vec![RingStrip { row0: 0, rows: 1229, doc_y0: 2541 }]),
+        );
+        // Второй сдвиг той же длины: фаза уже 1229, но кромка ещё влезает в
+        // хвост текстуры целиком (1229 + 1229 ≤ 2541) — по-прежнему один пасс.
+        assert_eq!(
+            ring_advance_plan(H, 0, 1229, 2458),
+            Some(vec![RingStrip { row0: 1229, rows: 1229, doc_y0: 3770 }]),
+        );
+        // Третий сдвиг: до края текстуры осталось 83 строки, и кромку режет
+        // край — два диапазона, вместе ровно |сдвиг| строк.
+        assert_eq!(
+            ring_advance_plan(H, 0, 2458, 3687),
+            Some(vec![
+                RingStrip { row0: 2458, rows: 83, doc_y0: 4999 },
+                RingStrip { row0: 0, rows: 1146, doc_y0: 5082 },
+            ]),
+        );
+        // Скролл вверх обновляет ГОЛОВУ полосы, а не хвост.
+        assert_eq!(
+            ring_advance_plan(H, 0, 1000, 700),
+            Some(vec![RingStrip { row0: 700, rows: 300, doc_y0: 700 }]),
+        );
+        // Сдвиг ровно на высоту полосы и больше — перекрытия нет, кольцо
+        // отказывает в пользу полной перерисовки.
+        assert_eq!(ring_advance_plan(H, 0, 0, i64::from(H)), None);
+        assert_eq!(ring_advance_plan(H, 0, 5000, 0), None);
+        // Нулевой сдвиг — промах пришёл не от движения полосы, дорисовывать
+        // нечего: полная перерисовка (иначе кольцо вернуло бы пустой план и
+        // полоса осталась бы с прежним содержимым под новым ключом).
+        assert_eq!(ring_advance_plan(H, 0, 700, 700), None);
+        // Инвариант на весь диапазон сдвигов при произвольной фазе: строк
+        // ровно |сдвиг|, они лежат внутри текстуры и не пересекаются.
+        for base in [0_i64, 137, 2540] {
+            for delta in [-2540_i64, -999, -1, 1, 613, 2540] {
+                let strips = ring_advance_plan(H, base, 4000, 4000 + delta)
+                    .unwrap_or_else(|| panic!("нет плана для сдвига {delta}"));
+                let rows: u32 = strips.iter().map(|s| s.rows).sum();
+                assert_eq!(u64::from(rows), delta.unsigned_abs(), "сдвиг {delta}");
+                for s in &strips {
+                    assert!(s.rows > 0 && s.row0 + s.rows <= H, "вышли за текстуру: {s:?}");
+                }
+                if let [a, b] = strips.as_slice() {
+                    assert_eq!(a.row0 + a.rows, H, "первый диапазон обязан упереться в край");
+                    assert_eq!(b.row0, 0, "второй обязан начинаться со строки 0");
+                }
+            }
+        }
+    }
+
+    /// BUG-405 срез 32: гейт на квад блита кольцевой полосы
+    /// [`band_blit_quads`].
+    ///
+    /// Нулевая фаза обязана давать РОВНО uv `0…1` — это путь до среза, и любое
+    /// его изменение переставляло бы пиксели на каждом кадре композиции, а не
+    /// только после сдвига полосы. Ненулевая фаза обязана сдвигать ОБА конца
+    /// диапазона на одну и ту же долю: диапазон короче или длиннее единицы
+    /// растянул бы полосу по вертикали, а это уже не сдвиг, а масштаб.
+    #[test]
+    fn band_blit_quad_offsets_uv_by_the_ring_phase() {
+        const H: u32 = 2541;
+        let one = band_blit_quads(-762.0, 1920.0, H, 0, 1.0);
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].1, [0.0, 0.0]);
+        assert_eq!(one[0].2, [1.0, 1.0]);
+        assert_eq!(one[0].0.height, 2541.0);
+
+        let shifted = band_blit_quads(-762.0, 1920.0, H, 1229, 1.0);
+        assert_eq!(shifted.len(), 1, "квад один при любой фазе — заворачивает sampler");
+        // Геометрия квада от фазы не зависит: сдвигаются только uv.
+        assert_eq!(shifted[0].0.height, one[0].0.height);
+        assert_eq!(shifted[0].0.y, one[0].0.y);
+        assert!((shifted[0].1[1] - 1229.0 / 2541.0).abs() < 1e-6, "верх полосы = фаза");
+        assert!(
+            (shifted[0].2[1] - shifted[0].1[1] - 1.0).abs() < 1e-6,
+            "диапазон uv обязан остаться ровно в одну высоту текстуры",
+        );
+        // По горизонтали кольца нет — u остаётся 0…1 при любой фазе.
+        assert_eq!((shifted[0].1[0], shifted[0].2[0]), (0.0, 1.0));
     }
 
     /// BUG-405 срез 30: гейт на разбор рычага переписи [`band_pass_load_ops`]
