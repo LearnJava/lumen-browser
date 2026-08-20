@@ -189,7 +189,10 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   manifest, drives `run_smoke.py` as a subprocess per shard (a hung shard can
   then be killed — by process *tree*, or the orphaned `lumen.exe` keeps its
   BiDi port and breaks the next shard), checkpoints after every shard
-  (`--resume`), and updates `MANIFEST.json` exactly once per run (wptrunner's
+  (`--resume`), budgets each shard's wall-clock from the per-test timeouts the
+  manifest declares (`timeout: long` → 60 s, otherwise 10 s, plus wptrunner's
+  5 s `extra_timeout`, divided by `--processes`) instead of a flat per-id
+  constant, and updates `MANIFEST.json` exactly once per run (wptrunner's
   default would rescan 72k files on each of the ~400 shards). `--pilot` runs
   ten categories chosen to exercise the orchestrator's hazards (https-only, ws,
   reftest-dominated, an unexecutable test type) rather than the engine.
@@ -212,11 +215,20 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
     same and the machine is no faster, so the replay dies at the same wall and
     buys nothing — measured at 50 min per resume on the 2026-08-20 Linux run.
     Which shards were kept is printed, not silent. `--retry-timeouts` runs them
-    again, which is what a resume with a raised `--shard-timeout-per-id` wants;
+    again, which is what a resume with a wider budget wants;
     that is safe because the previous raw stream is rotated to `.raw.jsonl.prev`
     and both generations are read at scoring time, so a shorter retry cannot
     destroy the results the first attempt already had (mozlog opens `--log-raw`
     with mode `"w"`).
+- `tests/wpt/score_audit.py` — **ours** (WPT-RUN-5 slice 15) — audits a run's
+  *zero bucket* before its number is published: splits every id with no verdict
+  into "type has no executor" / "shard killed on its budget" / **leak** (an id
+  lost inside a shard that ran to completion), prices what the killed shards
+  were actually worth, and fits the wall-clock cost of a TIMEOUT against a
+  resolved test. Read-only, safe against a live run's `--out-dir`. A `LEAK`
+  line means the number is not publishable until it is explained — on the
+  2026-08-20 Linux run that bucket was empty (0 of 24 702 reftest ids, 0 of
+  15 572 testharness ids outside the killed shards).
 - `tests/wpt/expectations.py` — **ours** (TEST-3, `docs/tasks/p2-test-track.md`) — generates and
   gates on per-category `.ini` baselines for `run_report.py --update-expected`/`--check`, on top
   of the same native `wptrunner` `--metadata` mechanism `run_suite.py` uses for `dom/nodes`, not
