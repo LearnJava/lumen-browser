@@ -12,9 +12,10 @@ is what `wptrunner` itself selects tests from, and what wpt.fyi/Servo/Ladybird
 report against, so it is the only defensible denominator.
 
 Scope decision (user, 2026-08-18): the denominator is the **whole vendored
-manifest, no exemptions** — reftests we cannot execute yet (`TEST-4`) and
-categories `docs/wpt-status.md` marks out of scope (media, hardware APIs,
-ad-tech) all stay in. Anything not run counts as not passed. The one type
+manifest, no exemptions** — types with no executor at all (`crashtest`,
+`wdspec`, `print-reftest`, `aamtest`; `WPT-RUN-8`) and categories
+`docs/wpt-status.md` marks out of scope (media, hardware APIs, ad-tech) all
+stay in. Anything not run counts as not passed. The one type
 excluded is `support`, which holds fixtures (images, helper scripts), not
 tests. `manual`/`visual` are counted but reported on their own line: no
 automated runner executes them, upstream included, so folding them into the
@@ -27,6 +28,7 @@ Usage (from repo root, venv per tests/wpt/README.md):
 """
 
 import argparse
+import ast
 import json
 import os
 import sys
@@ -42,10 +44,51 @@ NON_TEST_TYPES = frozenset({"support"})
 #: counted and reported, but kept out of the headline automatable denominator.
 NON_AUTOMATABLE_TYPES = frozenset({"manual", "visual"})
 
-#: Test types `browsers/lumen.py` currently registers an executor for. Every
-#: other automatable type is a runner gap, not an engine result — see `TEST-4`
-#: (reftest executor) and `docs/tasks/p2-test-track.md`.
-SUPPORTED_TYPES = frozenset({"testharness"})
+#: `browsers/lumen.py`, the single source of truth for which test types Lumen
+#: has an executor for at all.
+LUMEN_BROWSER_PY = os.path.join(REPO_ROOT, "tools", "wptrunner", "wptrunner",
+                                "browsers", "lumen.py")
+
+#: Fallback for `supported_types()` when `lumen.py` cannot be parsed — the set
+#: as of 2026-08-20 (`testharness` since WPT-RUN-2, `reftest` since TEST-4).
+SUPPORTED_TYPES_FALLBACK = frozenset({"testharness", "reftest"})
+
+
+def supported_types(path: str = LUMEN_BROWSER_PY) -> frozenset:
+    """Test types `browsers/lumen.py` registers an executor for, read from it.
+
+    Hard-coding this list is what made the ceiling in `docs/wpt/pass-rate.md`
+    stale: `TEST-4` registered `reftest` on 2026-08-19, the constant here kept
+    saying `testharness` only, and every later print understated the ceiling by
+    27 386 reftest ids. So the list is parsed out of the `__wptrunner__`
+    literal instead — with `ast`, not `import`, because importing that module
+    drags in the whole `wptrunner` package.
+
+    Every automatable type NOT in this set is a runner gap, not an engine
+    result (`WPT-RUN-8`, `docs/tasks/p2-test-track.md`).
+    """
+    try:
+        tree = ast.parse(open(path, encoding="utf-8").read(), filename=path)
+    except (OSError, SyntaxError) as exc:
+        print(f"warning: cannot read executors from {path} ({exc}); "
+              f"falling back to {sorted(SUPPORTED_TYPES_FALLBACK)}", file=sys.stderr)
+        return SUPPORTED_TYPES_FALLBACK
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(isinstance(t, ast.Name) and t.id == "__wptrunner__" for t in node.targets):
+            continue
+        if not isinstance(node.value, ast.Dict):
+            break
+        for key, value in zip(node.value.keys, node.value.values):
+            if isinstance(key, ast.Constant) and key.value == "executor" and isinstance(value, ast.Dict):
+                return frozenset(k.value for k in value.keys if isinstance(k, ast.Constant))
+        break
+
+    print(f"warning: no __wptrunner__[\"executor\"] mapping in {path}; "
+          f"falling back to {sorted(SUPPORTED_TYPES_FALLBACK)}", file=sys.stderr)
+    return SUPPORTED_TYPES_FALLBACK
 
 
 def iter_ids(manifest: dict):
@@ -92,13 +135,15 @@ def summarize(per_category: dict) -> dict:
             totals[test_type] = totals.get(test_type, 0) + count
 
     automatable = {t: n for t, n in totals.items() if t not in NON_AUTOMATABLE_TYPES}
-    supported = {t: n for t, n in automatable.items() if t in SUPPORTED_TYPES}
+    supported_set = supported_types()
+    supported = {t: n for t, n in automatable.items() if t in supported_set}
     return {
         "per_type": totals,
         "total_ids": sum(totals.values()),
         "automatable_ids": sum(automatable.values()),
         "non_automatable_ids": sum(totals[t] for t in NON_AUTOMATABLE_TYPES if t in totals),
         "executable_ids": sum(supported.values()),
+        "executable_types": sorted(supported_set),
         "categories": len(per_category),
     }
 
@@ -136,7 +181,9 @@ def main() -> int:
     print(f"total ids:             {summary['total_ids']}")
     print(f"  automatable:         {summary['automatable_ids']}   <- pass-rate denominator")
     print(f"  manual/visual:       {summary['non_automatable_ids']}   (no runner executes these)")
-    print(f"  executable today:    {summary['executable_ids']}   ({', '.join(sorted(SUPPORTED_TYPES))} only)")
+    ceiling = 100.0 * summary["executable_ids"] / summary["automatable_ids"] if summary["automatable_ids"] else 0.0
+    print(f"  executable today:    {summary['executable_ids']}   "
+          f"({', '.join(summary['executable_types'])} only) -> ceiling {ceiling:.1f}%")
 
     if args.json_out:
         os.makedirs(os.path.dirname(os.path.abspath(args.json_out)), exist_ok=True)
