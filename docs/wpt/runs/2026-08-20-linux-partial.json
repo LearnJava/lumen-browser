@@ -1,7 +1,7 @@
 {
-  "binary": "/home/konstantin/RustroverProjects/lumen-browser/.claude/worktrees/p2-work/target/release/lumen.exe",
-  "commit": "2b09dcd00",
-  "finished": "2026-08-20T18:17:48",
+  "binary": "target/dev-release/lumen",
+  "commit": "27080c7de",
+  "finished": "2026-08-20T18:36:04",
   "processes": 6,
   "scope": [
     "FileAPI",
@@ -45,6 +45,13 @@
     "container-timing",
     "content-dpr",
     "content-index",
+    "content-security-policy",
+    "contenteditable",
+    "cookies",
+    "cookiestore",
+    "core-aam",
+    "cors",
+    "cpu-performance",
     "dom"
   ],
   "scored": {
@@ -545,6 +552,101 @@
         "subtests_passed": 0,
         "subtests_total": 0
       },
+      "content-security-policy": {
+        "by_type": {
+          "reftest": 2,
+          "testharness": 894
+        },
+        "harness_ok": 176,
+        "ids": 896,
+        "not_run": 0,
+        "pass_rate": 0.1008,
+        "ran": 896,
+        "score": 90.36,
+        "subtests_passed": 224,
+        "subtests_total": 1159
+      },
+      "contenteditable": {
+        "by_type": {
+          "crashtest": 1,
+          "reftest": 1,
+          "testharness": 2
+        },
+        "harness_ok": 3,
+        "ids": 4,
+        "not_run": 1,
+        "pass_rate": 0.625,
+        "ran": 3,
+        "score": 2.5,
+        "subtests_passed": 4,
+        "subtests_total": 6
+      },
+      "cookies": {
+        "by_type": {
+          "testharness": 82
+        },
+        "harness_ok": 11,
+        "ids": 82,
+        "not_run": 0,
+        "pass_rate": 0.0888,
+        "ran": 82,
+        "score": 7.28,
+        "subtests_passed": 70,
+        "subtests_total": 876
+      },
+      "cookiestore": {
+        "by_type": {
+          "testharness": 74
+        },
+        "harness_ok": 0,
+        "ids": 74,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 74,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 0
+      },
+      "core-aam": {
+        "by_type": {
+          "aamtest": 96,
+          "testharness": 1
+        },
+        "harness_ok": 1,
+        "ids": 97,
+        "not_run": 96,
+        "pass_rate": 0.0,
+        "ran": 1,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 8
+      },
+      "cors": {
+        "by_type": {
+          "testharness": 27
+        },
+        "harness_ok": 19,
+        "ids": 27,
+        "not_run": 0,
+        "pass_rate": 0.173,
+        "ran": 27,
+        "score": 4.67,
+        "subtests_passed": 86,
+        "subtests_total": 357
+      },
+      "cpu-performance": {
+        "by_type": {
+          "testharness": 1
+        },
+        "harness_ok": 0,
+        "ids": 1,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 1,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 0
+      },
       "dom": {
         "by_type": {
           "crashtest": 20,
@@ -563,8 +665,8 @@
     },
     "recovered_shards": [
       {
-        "results": 785,
-        "shard": "content-security-policy"
+        "results": 11,
+        "shard": "credential-management"
       },
       {
         "results": 129,
@@ -580,22 +682,22 @@
       }
     ],
     "status_counts": {
-      "ERROR": 123,
+      "ERROR": 370,
       "FAIL": 44,
-      "NOT-RUN": 419,
-      "OK": 655,
-      "PASS": 9,
-      "TIMEOUT": 1463
+      "NOT-RUN": 516,
+      "OK": 862,
+      "PASS": 12,
+      "TIMEOUT": 2090
     },
     "totals": {
-      "harness_ok": 664,
-      "ids": 2713,
-      "not_run": 419,
-      "pass_rate": 0.0921,
-      "ran": 2294,
-      "score": 249.98,
-      "subtests_passed": 3055,
-      "subtests_total": 8851
+      "harness_ok": 874,
+      "ids": 3894,
+      "not_run": 516,
+      "pass_rate": 0.0911,
+      "ran": 3378,
+      "score": 354.78,
+      "subtests_passed": 3439,
+      "subtests_total": 11257
     }
   },
   "shards": [
@@ -976,6 +1078,69 @@
       "report": ".tmp/wpt-corpus/content-index.json",
       "returncode": 64,
       "seconds": 52.2
+    },
+    {
+      "ids": 896,
+      "name": "content-security-policy",
+      "outcome": "ran",
+      "prefix": "/content-security-policy/",
+      "report": ".tmp/wpt-corpus/content-security-policy.json",
+      "returncode": 64,
+      "seconds": 1259.1
+    },
+    {
+      "ids": 4,
+      "name": "contenteditable",
+      "outcome": "ran",
+      "prefix": "/contenteditable/",
+      "report": ".tmp/wpt-corpus/contenteditable.json",
+      "returncode": 64,
+      "seconds": 6.7
+    },
+    {
+      "ids": 82,
+      "name": "cookies",
+      "outcome": "ran",
+      "prefix": "/cookies/",
+      "report": ".tmp/wpt-corpus/cookies.json",
+      "returncode": 64,
+      "seconds": 356.3
+    },
+    {
+      "ids": 74,
+      "name": "cookiestore",
+      "outcome": "ran",
+      "prefix": "/cookiestore/",
+      "report": ".tmp/wpt-corpus/cookiestore.json",
+      "returncode": 64,
+      "seconds": 260.4
+    },
+    {
+      "ids": 275,
+      "name": "core-aam",
+      "outcome": "ran",
+      "prefix": "/core-aam/",
+      "report": ".tmp/wpt-corpus/core-aam.json",
+      "returncode": 64,
+      "seconds": 6.2
+    },
+    {
+      "ids": 27,
+      "name": "cors",
+      "outcome": "ran",
+      "prefix": "/cors/",
+      "report": ".tmp/wpt-corpus/cors.json",
+      "returncode": 64,
+      "seconds": 34.4
+    },
+    {
+      "ids": 1,
+      "name": "cpu-performance",
+      "outcome": "ran",
+      "prefix": "/cpu-performance/",
+      "report": ".tmp/wpt-corpus/cpu-performance.json",
+      "returncode": 64,
+      "seconds": 21.3
     }
   ]
 }
