@@ -76,11 +76,11 @@
  "generated": "2026-08-20",
  "counts": {
   "open": 325,
-  "fixed": 429,
+  "fixed": 430,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 754,
+ "total_bugs": 755,
  "phases": [
   {
    "id": "P0",
@@ -8104,10 +8104,10 @@
    "debtor": false
   },
   "BUG-427": {
-   "status": "open",
-   "title": "Вёрстка https://yandex.ru: поисковая строка наезжает на шапку, правая колонка — пустые серые плашки, подписи карточек съехали, ряд ссылок шапки наложен сам на с…",
-   "component": "layout / paint (не локализован)",
-   "date": null,
+   "status": "fixed",
+   "title": "Вёрстка https://yandex.ru (после редиректа — главная Дзена). Переоценено после починки BUG-423: поисковая строка поверх шапки **не воспроизвелась**; пустые серы…",
+   "component": "layout (`box_tree.rs::lay_out_flex` — строчная ветка; `box_tree.rs::min_content_outer_width_of_contents`)",
+   "date": "2026-08-20",
    "debtor": false
   },
   "BUG-428": {
@@ -10601,6 +10601,13 @@
    "component": "image (`crates/engine/image/src/gif.rs` — `AnimatedGif::frame_image`, строка `buffer = vec![0u8; frame_bytes]`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-791": {
+   "status": "open",
+   "title": "Остаток заявки [BUG-427](bugs/BUG-427-FIXED.md). До главной Дзена движок не доезжает живьём: `yandex.ru` → 302 `dzen.ru` → 302 `sso.passport.yandex.ru/push`, и…",
+   "component": "не локализован (кандидаты: shell/network — куки и JS-редирект SSO; layout — inline-бокс сайдбара)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -11192,6 +11199,9 @@
    "BUG-237",
    "BUG-241"
   ],
+  "layout (`box_tree.rs::lay_out_flex` — строчная ветка; `box_tree.rs::min_content_outer_width_of_contents`)": [
+   "BUG-427"
+  ],
   "layout (`box_tree.rs::lay_out_flex`)": [
    "BUG-460"
   ],
@@ -11292,9 +11302,6 @@
   ],
   "layout / css-parser (`@color-profile`, `color()`)": [
    "BUG-282"
-  ],
-  "layout / paint (не локализован)": [
-   "BUG-427"
   ],
   "layout+paint": [
    "BUG-005",
@@ -11666,6 +11673,9 @@
   ],
   "не изолирован (layout / paint / js)": [
    "BUG-733"
+  ],
+  "не локализован (кандидаты: shell/network — куки и JS-редирект SSO; layout — inline-бокс сайдбара)": [
+   "BUG-791"
   ],
   "неясно — вероятно порядок загрузки скриптов в шелле или тайминг, специфичный для wptrunner/BiDi-навигации": [
    "BUG-506"
