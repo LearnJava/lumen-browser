@@ -166,3 +166,8 @@ LZW-поток кончился (или начался с end-кода, как �
   `fuzz/corpus/fuzz_image/gif-lzw-ends-early.gif`; `fuzz_image` убран из
   `KNOWN_FAILING` в `.github/workflows/fuzz.yml` — таргет снова блокирующий, а
   шаг replay гоняет это репро на каждом прогоне.
+- Сам cargo-fuzz прогнан локально (WSL, `rustc 1.100.0-nightly`, `cargo-fuzz
+  0.13.2`), а не оставлен на CI: replay репро — **23 мс**, exit 0; следом
+  60-секундный фаззинг таргета — **16 898 прогонов, 0 крэшей**, `artifacts/`
+  пуст. Прогон дописал 371 файл в `corpus/fuzz_image/` (штатное поведение
+  libFuzzer, см. `fuzz/README.md`) — убрано `git clean -f fuzz/corpus/`.
