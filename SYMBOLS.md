@@ -202,31 +202,31 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/chrome/src/model.rs:114` **enum** `ChromeContentView` — Which content view fills `#contentArea` (CC-10b) — bound to `.view.active`
 `crates/chrome/src/model.rs:128` **struct** `ChromeHistoryModel` — `#view-history` snapshot (CC-10b) — mirrors `HistoryPanel::rows`
 `crates/chrome/src/model.rs:141` **enum** `ChromeHistoryRow` — One row of [`ChromeHistoryModel::rows`]
-`crates/chrome/src/model.rs:160` **struct** `ChromeBookmarksModel` — `#view-bookmarks` snapshot (CC-10b) — mirrors `BookmarkPanel`
-`crates/chrome/src/model.rs:175` **struct** `ChromeBookmarkFolderModel` — One `.bm-folder` row
-`crates/chrome/src/model.rs:186` **struct** `ChromeBookmarkCardModel` — One `.bm-card` in `#view-bookmarks`'s `.bm-grid` (CC-10b). Per-card
-`crates/chrome/src/model.rs:212` **struct** `ChromeSettingsModel` — `#view-settings` snapshot (CC-10b) — mirrors a subset of `SettingsPanel`
-`crates/chrome/src/model.rs:229` **struct** `ChromeRightSidebarModel` — `#rightSidebar` snapshot (CC-10b) — merges the legacy `AiPanel`/
-`crates/chrome/src/model.rs:239` **enum** `ChromeSidebarTab` — `#rightSidebar`'s two tabs (CC-10b)
-`crates/chrome/src/model.rs:252` **struct** `ChromeDropdownModel` — `#omniDropdown` snapshot (CC-9): whether it's open, plus its suggestion
-`crates/chrome/src/model.rs:268` **struct** `ChromeSuggestionModel` — One `.dd-row` in `#omniDropdown` (CC-9)
-`crates/chrome/src/model.rs:287` **struct** `ChromeFindModel` — `#findBar` snapshot (CC-9) — mirrors [`OmniboxModel`]'s "engine renders,
-`crates/chrome/src/model.rs:306` **struct** `ChromeDownloadModel` — One `.dl-card` in `#downloadsPanel`'s `.dl-list` (CC-9)
-`crates/chrome/src/model.rs:324` **struct** `ChromeArchiveEntryModel` — One `.arc-card` in `#archivePanel`'s `.arc-list` (BUG-408) — mirrors one
-`crates/chrome/src/model.rs:345` **struct** `ChromePaletteModel` — `#cpOverlay` snapshot (CC-10) — mirrors `CommandPalette`
-`crates/chrome/src/model.rs:366` **struct** `ChromePaletteResultModel` — One `.cp-row` in `#cpList` (CC-10)
-`crates/chrome/src/model.rs:387` **struct** `ChromeCertModel` — `#certOverlay` snapshot (CC-10) — mirrors `CertPanel`/`PanelCertData`
-`crates/chrome/src/model.rs:415` **struct** `ChromePrintModel` — `#printOverlay` snapshot ([BUG-420](../../../bugs/BUG-420-FIXED.md)) —
-`crates/chrome/src/model.rs:429` **enum** `ChromePermState` — Grant state for one permission row (CC-9) — mirrors the shell's
-`crates/chrome/src/model.rs:447` **struct** `OmniboxModel` — Omnibox snapshot [`bind_model`] reflects into `#omniInput`/`#omniWarn`
-`crates/chrome/src/model.rs:460` **struct** `ChromeTabModel` — One tab row for the sidebar tab list (`#sbTabs`)
-`crates/chrome/src/model.rs:499` **struct** `ChromeTabGroup` — A tab's group membership, as rendered by `.group-stripe` (BUG-409)
-`crates/chrome/src/model.rs:520` **struct** `ChromeWorkspaceModel` — One workspace button for the sidebar switcher (`.sb-workspaces`)
-`crates/chrome/src/model.rs:538` **struct** `ChromeMutations` — What one [`bind_model_tracked`] call changed in the document, split by what
-`crates/chrome/src/model.rs:569` **fn** `is_empty` — `true` when this bind changed nothing at all
-`crates/chrome/src/model.rs:577` **struct** `SelectorTouch` — What changed about one selector-relevant node in a [`ChromeMutations`]
-`crates/chrome/src/model.rs:681` **fn** `bind_model` — Binds `model` into `doc`: `data-theme`/`data-layout`/`data-profile` on
-`crates/chrome/src/model.rs:743` **fn** `bind_model_tracked` — Like [`bind_model`], but also reports what the call actually changed, split
+`crates/chrome/src/model.rs:162` **struct** `ChromeBookmarksModel` — `#view-bookmarks` snapshot (CC-10b) — mirrors `BookmarkPanel`
+`crates/chrome/src/model.rs:177` **struct** `ChromeBookmarkFolderModel` — One `.bm-folder` row
+`crates/chrome/src/model.rs:194` **struct** `ChromeBookmarkCardModel` — One `.bm-card` in `#view-bookmarks`'s `.bm-grid` (CC-10b). Since
+`crates/chrome/src/model.rs:220` **struct** `ChromeSettingsModel` — `#view-settings` snapshot (CC-10b) — mirrors a subset of `SettingsPanel`
+`crates/chrome/src/model.rs:237` **struct** `ChromeRightSidebarModel` — `#rightSidebar` snapshot (CC-10b) — merges the legacy `AiPanel`/
+`crates/chrome/src/model.rs:247` **enum** `ChromeSidebarTab` — `#rightSidebar`'s two tabs (CC-10b)
+`crates/chrome/src/model.rs:260` **struct** `ChromeDropdownModel` — `#omniDropdown` snapshot (CC-9): whether it's open, plus its suggestion
+`crates/chrome/src/model.rs:276` **struct** `ChromeSuggestionModel` — One `.dd-row` in `#omniDropdown` (CC-9)
+`crates/chrome/src/model.rs:295` **struct** `ChromeFindModel` — `#findBar` snapshot (CC-9) — mirrors [`OmniboxModel`]'s "engine renders,
+`crates/chrome/src/model.rs:314` **struct** `ChromeDownloadModel` — One `.dl-card` in `#downloadsPanel`'s `.dl-list` (CC-9)
+`crates/chrome/src/model.rs:332` **struct** `ChromeArchiveEntryModel` — One `.arc-card` in `#archivePanel`'s `.arc-list` (BUG-408) — mirrors one
+`crates/chrome/src/model.rs:353` **struct** `ChromePaletteModel` — `#cpOverlay` snapshot (CC-10) — mirrors `CommandPalette`
+`crates/chrome/src/model.rs:374` **struct** `ChromePaletteResultModel` — One `.cp-row` in `#cpList` (CC-10)
+`crates/chrome/src/model.rs:395` **struct** `ChromeCertModel` — `#certOverlay` snapshot (CC-10) — mirrors `CertPanel`/`PanelCertData`
+`crates/chrome/src/model.rs:423` **struct** `ChromePrintModel` — `#printOverlay` snapshot ([BUG-420](../../../bugs/BUG-420-FIXED.md)) —
+`crates/chrome/src/model.rs:437` **enum** `ChromePermState` — Grant state for one permission row (CC-9) — mirrors the shell's
+`crates/chrome/src/model.rs:455` **struct** `OmniboxModel` — Omnibox snapshot [`bind_model`] reflects into `#omniInput`/`#omniWarn`
+`crates/chrome/src/model.rs:468` **struct** `ChromeTabModel` — One tab row for the sidebar tab list (`#sbTabs`)
+`crates/chrome/src/model.rs:507` **struct** `ChromeTabGroup` — A tab's group membership, as rendered by `.group-stripe` (BUG-409)
+`crates/chrome/src/model.rs:528` **struct** `ChromeWorkspaceModel` — One workspace button for the sidebar switcher (`.sb-workspaces`)
+`crates/chrome/src/model.rs:546` **struct** `ChromeMutations` — What one [`bind_model_tracked`] call changed in the document, split by what
+`crates/chrome/src/model.rs:577` **fn** `is_empty` — `true` when this bind changed nothing at all
+`crates/chrome/src/model.rs:585` **struct** `SelectorTouch` — What changed about one selector-relevant node in a [`ChromeMutations`]
+`crates/chrome/src/model.rs:689` **fn** `bind_model` — Binds `model` into `doc`: `data-theme`/`data-layout`/`data-profile` on
+`crates/chrome/src/model.rs:751` **fn** `bind_model_tracked` — Like [`bind_model`], but also reports what the call actually changed, split
 
 ## lumen-core  (295 symbols)
 

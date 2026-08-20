@@ -16,7 +16,7 @@
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use lumen_dom::{Attribute, Document, NodeData, NodeId, QualName};
+use lumen_dom::{Attribute, Document, Namespace, NodeData, NodeId, QualName};
 
 /// Snapshot of shell state [`bind_model`] reflects into the chrome document.
 ///
@@ -141,10 +141,12 @@ pub struct ChromeHistoryModel {
 pub enum ChromeHistoryRow {
     /// A `.hist-day` date-group label (e.g. `"Сегодня"`).
     Group(String),
-    /// A `.hist-item` entry. Per-row actions (star/copy/delete, `.hist-actions`
-    /// in the design) carry no `data-action`/id hooks in the frozen markup —
-    /// same class of gap as CC-9's per-download-card buttons — so this binds
-    /// only the display fields and the row itself omits `.hist-actions`.
+    /// A `.hist-item` entry. Since [BUG-422](../../../bugs/BUG-422-FIXED.md)
+    /// the rebuilt row carries `data-action="open-history-entry"` plus the
+    /// design's `.hist-actions` strip (bookmark/copy/delete), each button
+    /// stamped with `data-hist-url`/`data-hist-title` — no extra model field
+    /// is needed, `url`/`title` below are the only context the shell reads
+    /// back (both `History::delete` and `Bookmarks::add` key off the URL).
     Entry {
         /// `.hist-title`.
         title: String,
@@ -159,10 +161,10 @@ pub enum ChromeHistoryRow {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ChromeBookmarksModel {
     /// `.bm-tree` folder rows, in display order — `"Все закладки"` (the
-    /// `None`-filter entry) followed by `BookmarkPanel::folders`. Clicking a
-    /// folder is out of this slice's DoD (`.bm-folder` carries no
-    /// `data-action` hook in the frozen markup) — only the active-folder
-    /// highlight is bound.
+    /// `None`-filter entry) followed by `BookmarkPanel::folders`. Since
+    /// [BUG-422](../../../bugs/BUG-422-FIXED.md) each row also carries
+    /// `data-action="select-folder"` + `data-bm-folder`, so clicking one
+    /// re-filters the grid.
     pub folders: Vec<ChromeBookmarkFolderModel>,
     /// `.bm-toolbar .title` — the active folder's display name.
     pub title: String,
@@ -177,11 +179,17 @@ pub struct ChromeBookmarkFolderModel {
     pub label: String,
     /// `true` for the currently selected filter — adds `.active`.
     pub active: bool,
+    /// The `BookmarkPanel::selected_folder` value this row sets when clicked
+    /// (`None` = the "all folders" row), stamped as `data-bm-folder`
+    /// (BUG-422). Kept separate from `label` because the root row's label is
+    /// display text, not a folder path.
+    pub filter: Option<String>,
 }
 
-/// One `.bm-card` in `#view-bookmarks`'s `.bm-grid` (CC-10b). Per-card
-/// actions are out of this slice's DoD — same gap as
-/// [`ChromeHistoryRow::Entry`].
+/// One `.bm-card` in `#view-bookmarks`'s `.bm-grid` (CC-10b). Since
+/// [BUG-422](../../../bugs/BUG-422-FIXED.md) the card carries
+/// `data-action="open-bookmark"` and a `.bm-actions` delete button, both
+/// keyed off `url` — same shape as [`ChromeHistoryRow::Entry`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChromeBookmarkCardModel {
     /// `.bm-fav` single-letter fallback (first letter of `title`/`url`).
@@ -792,6 +800,11 @@ fn bind_history(doc: &mut Document, history: &ChromeHistoryModel) {
 fn build_hist_item(doc: &mut Document, title: &str, url: &str, time_label: &str) -> NodeId {
     let item = doc.create_element(QualName::html("div"));
     set_attr(doc, item, "class", "hist-item");
+    // BUG-422: the row itself opens the entry; the `.hist-actions` buttons
+    // appended below carry their own `data-action` and shadow it, because
+    // `Lumen::chrome_action_at` walks the hit path closest-node-first.
+    set_attr(doc, item, "data-action", "open-history-entry");
+    set_attr(doc, item, "data-hist-url", url);
 
     let fav = doc.create_element(QualName::html("div"));
     set_attr(doc, fav, "class", "hist-fav");
@@ -814,7 +827,48 @@ fn build_hist_item(doc: &mut Document, title: &str, url: &str, time_label: &str)
     append_text(doc, time, time_label);
     attach_child(doc, item, time);
 
+    // BUG-422: the design's hover-revealed action strip. Rebuilt here rather
+    // than left to the static asset markup because `bind_history` deletes
+    // and recreates every `.hist-item`; `aria-label` mirrors what
+    // `gen_chrome_assets.py`'s `ARIA_LABEL_RULES` injects into the asset's
+    // own copies of these buttons, so the a11y tree matches either way.
+    let actions = doc.create_element(QualName::html("div"));
+    set_attr(doc, actions, "class", "hist-actions");
+    for (action, icon, label) in [
+        ("bookmark-history-entry", "#i-star", "Добавить в закладки"),
+        ("copy-history-entry", "#i-copy", "Копировать ссылку"),
+        ("delete-history-entry", "#i-trash", "Удалить из истории"),
+    ] {
+        let btn = doc.create_element(QualName::html("button"));
+        set_attr(doc, btn, "class", "tb-btn");
+        set_attr(doc, btn, "data-action", action);
+        set_attr(doc, btn, "data-hist-url", url);
+        set_attr(doc, btn, "data-hist-title", title);
+        set_attr(doc, btn, "aria-label", label);
+        append_icon(doc, btn, icon);
+        attach_child(doc, actions, btn);
+    }
+    attach_child(doc, item, actions);
+
     item
+}
+
+/// Appends the asset's `<svg class="icon"><use href="#…"/></svg>` sprite
+/// reference to `parent`.
+///
+/// BUG-422: the history/bookmark row actions are the first list rebuilt here
+/// that needs a real icon rather than the single-letter fallback CC-6 chose
+/// for favicons — these buttons have no text at all, so a letter would be
+/// meaningless. The sprite `<symbol>`s live in the asset itself, so this only
+/// has to construct the two-element reference; both elements go in the SVG
+/// namespace, matching what the parser produces for the asset's own copies.
+fn append_icon(doc: &mut Document, parent: NodeId, symbol_href: &str) {
+    let svg = doc.create_element(QualName { namespace: Namespace::Svg, local: "svg".to_owned() });
+    set_attr(doc, svg, "class", "icon");
+    let use_el = doc.create_element(QualName { namespace: Namespace::Svg, local: "use".to_owned() });
+    set_attr(doc, use_el, "href", symbol_href);
+    attach_child(doc, svg, use_el);
+    attach_child(doc, parent, svg);
 }
 
 /// Rebuilds `.bm-tree`'s `.bm-folder` list, `.bm-toolbar .title`, and
@@ -832,6 +886,10 @@ fn bind_bookmarks(doc: &mut Document, bookmarks: &ChromeBookmarksModel) {
                 class.push_str(" indent");
             }
             set_attr(doc, node, "class", &class);
+            // BUG-422: `""` is the "all folders" row — an absent attribute
+            // would be indistinguishable from a stale asset row.
+            set_attr(doc, node, "data-action", "select-folder");
+            set_attr(doc, node, "data-bm-folder", folder.filter.as_deref().unwrap_or(""));
             append_text(doc, node, &folder.label);
             attach_child(doc, tree, node);
         }
@@ -852,6 +910,9 @@ fn bind_bookmarks(doc: &mut Document, bookmarks: &ChromeBookmarksModel) {
 fn build_bm_card(doc: &mut Document, card: &ChromeBookmarkCardModel) -> NodeId {
     let node = doc.create_element(QualName::html("div"));
     set_attr(doc, node, "class", "bm-card");
+    // BUG-422: same row-opens / button-shadows-it shape as `build_hist_item`.
+    set_attr(doc, node, "data-action", "open-bookmark");
+    set_attr(doc, node, "data-bm-url", &card.url);
 
     let fav = doc.create_element(QualName::html("div"));
     set_attr(doc, fav, "class", "bm-fav");
@@ -867,6 +928,17 @@ fn build_bm_card(doc: &mut Document, card: &ChromeBookmarkCardModel) -> NodeId {
     set_attr(doc, url, "class", "bm-url");
     append_text(doc, url, &card.url);
     attach_child(doc, node, url);
+
+    let actions = doc.create_element(QualName::html("div"));
+    set_attr(doc, actions, "class", "bm-actions");
+    let del = doc.create_element(QualName::html("button"));
+    set_attr(doc, del, "class", "tb-btn");
+    set_attr(doc, del, "data-action", "delete-bookmark");
+    set_attr(doc, del, "data-bm-url", &card.url);
+    set_attr(doc, del, "aria-label", "Удалить закладку");
+    append_icon(doc, del, "#i-trash");
+    attach_child(doc, actions, del);
+    attach_child(doc, node, actions);
 
     node
 }
@@ -3110,8 +3182,16 @@ mod tests {
         let model = ChromeModel {
             bookmarks: ChromeBookmarksModel {
                 folders: vec![
-                    ChromeBookmarkFolderModel { label: "Все закладки".to_owned(), active: false },
-                    ChromeBookmarkFolderModel { label: "Работа".to_owned(), active: true },
+                    ChromeBookmarkFolderModel {
+                        label: "Все закладки".to_owned(),
+                        active: false,
+                        filter: None,
+                    },
+                    ChromeBookmarkFolderModel {
+                        label: "Работа".to_owned(),
+                        active: true,
+                        filter: Some("Работа".to_owned()),
+                    },
                 ],
                 title: "Работа".to_owned(),
                 cards: vec![ChromeBookmarkCardModel {
@@ -3136,6 +3216,149 @@ mod tests {
         assert_eq!(cards.len(), 1, "old demo cards must be gone, only the 1 model card remains");
         let title_el = doc.get(cards[0]).children.iter().copied().find(|&c| has_class(&doc, c, "bm-title")).unwrap();
         assert_eq!(text_of(&doc, title_el), "Rust");
+    }
+
+    // ── BUG-422: per-entry actions on the two list views ────────────────────
+
+    #[test]
+    fn bug422_history_rows_carry_open_and_per_row_actions() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            history: ChromeHistoryModel {
+                banner: false,
+                rows: vec![ChromeHistoryRow::Entry {
+                    title: "Example".to_owned(),
+                    url: "https://example.com/a".to_owned(),
+                    time_label: "14:02".to_owned(),
+                }],
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let wrap = find_by_class(&doc, "hist-wrap").expect("asset has .hist-wrap");
+        let item = doc
+            .get(wrap)
+            .children
+            .iter()
+            .copied()
+            .find(|&c| has_class(&doc, c, "hist-item"))
+            .expect("one rebuilt row");
+        assert_eq!(doc.get(item).get_attr("data-action"), Some("open-history-entry"));
+        assert_eq!(doc.get(item).get_attr("data-hist-url"), Some("https://example.com/a"));
+
+        let actions = doc
+            .get(item)
+            .children
+            .iter()
+            .copied()
+            .find(|&c| has_class(&doc, c, "hist-actions"))
+            .expect("the rebuilt row carries the design's action strip");
+        let buttons: Vec<&str> = doc
+            .get(actions)
+            .children
+            .iter()
+            .filter_map(|&c| doc.get(c).get_attr("data-action"))
+            .collect();
+        assert_eq!(
+            buttons,
+            vec!["bookmark-history-entry", "copy-history-entry", "delete-history-entry"]
+        );
+        // Every button carries its own copy of the row context — the click
+        // resolves on the button itself, not on its `.hist-item` ancestor.
+        for &b in &doc.get(actions).children.clone() {
+            assert_eq!(doc.get(b).get_attr("data-hist-url"), Some("https://example.com/a"));
+            assert_eq!(doc.get(b).get_attr("data-hist-title"), Some("Example"));
+        }
+    }
+
+    #[test]
+    fn bug422_history_row_action_buttons_carry_the_sprite_icon() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            history: ChromeHistoryModel {
+                banner: false,
+                rows: vec![ChromeHistoryRow::Entry {
+                    title: "Example".to_owned(),
+                    url: "https://example.com/a".to_owned(),
+                    time_label: "14:02".to_owned(),
+                }],
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+        let wrap = find_by_class(&doc, "hist-wrap").expect("asset has .hist-wrap");
+        let item = doc.get(wrap).children.iter().copied().find(|&c| has_class(&doc, c, "hist-item")).unwrap();
+        let actions = doc.get(item).children.iter().copied().find(|&c| has_class(&doc, c, "hist-actions")).unwrap();
+        let first = doc.get(actions).children[0];
+        let svg = doc.get(first).children[0];
+        match &doc.get(svg).data {
+            NodeData::Element { name, .. } => {
+                assert_eq!(name.local, "svg");
+                assert_eq!(name.namespace, lumen_dom::Namespace::Svg);
+            }
+            other => panic!("expected an <svg> element, got {other:?}"),
+        }
+        let use_el = doc.get(svg).children[0];
+        assert_eq!(doc.get(use_el).get_attr("href"), Some("#i-star"));
+    }
+
+    #[test]
+    fn bug422_bookmark_folders_and_cards_carry_actions() {
+        let mut doc = parse_asset();
+        let model = ChromeModel {
+            bookmarks: ChromeBookmarksModel {
+                folders: vec![
+                    ChromeBookmarkFolderModel {
+                        label: "Все закладки".to_owned(),
+                        active: true,
+                        filter: None,
+                    },
+                    ChromeBookmarkFolderModel {
+                        label: "/Work".to_owned(),
+                        active: false,
+                        filter: Some("/Work".to_owned()),
+                    },
+                ],
+                title: "Все закладки".to_owned(),
+                cards: vec![ChromeBookmarkCardModel {
+                    fav_letter: "R".to_owned(),
+                    title: "Rust".to_owned(),
+                    url: "https://rust-lang.org/".to_owned(),
+                }],
+            },
+            ..ChromeModel::default()
+        };
+        bind_model(&mut doc, &model);
+
+        let tree = find_by_class(&doc, "bm-tree").expect("asset has .bm-tree");
+        let folders: Vec<NodeId> =
+            doc.get(tree).children.iter().copied().filter(|&c| has_class(&doc, c, "bm-folder")).collect();
+        assert_eq!(doc.get(folders[0]).get_attr("data-action"), Some("select-folder"));
+        // The root row's filter is empty, not absent — an absent attribute is
+        // how `dispatch_chrome_action` recognises a stale/unbound asset row.
+        assert_eq!(doc.get(folders[0]).get_attr("data-bm-folder"), Some(""));
+        assert_eq!(doc.get(folders[1]).get_attr("data-bm-folder"), Some("/Work"));
+
+        let grid = find_by_class(&doc, "bm-grid").expect("asset has .bm-grid");
+        let card = doc
+            .get(grid)
+            .children
+            .iter()
+            .copied()
+            .find(|&c| has_class(&doc, c, "bm-card"))
+            .expect("one rebuilt card");
+        assert_eq!(doc.get(card).get_attr("data-action"), Some("open-bookmark"));
+        assert_eq!(doc.get(card).get_attr("data-bm-url"), Some("https://rust-lang.org/"));
+        let actions = doc
+            .get(card)
+            .children
+            .iter()
+            .copied()
+            .find(|&c| has_class(&doc, c, "bm-actions"))
+            .expect("the rebuilt card carries a delete button");
+        let del = doc.get(actions).children[0];
+        assert_eq!(doc.get(del).get_attr("data-action"), Some("delete-bookmark"));
+        assert_eq!(doc.get(del).get_attr("data-bm-url"), Some("https://rust-lang.org/"));
     }
 
     #[test]

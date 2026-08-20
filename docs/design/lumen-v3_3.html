@@ -446,13 +446,15 @@ body[data-theme="dark"] .hist-banner{ background:#332b06; border-color:#5c4d0f; 
 .bm-view-toggle button{ padding:5px 8px; border:none; background:var(--surface-0); }
 .bm-view-toggle button.active{ background:var(--surface-2); }
 .bm-grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:12px; }
-.bm-card{ border:1px solid var(--stroke); border-radius:var(--radius-lg); padding:10px; cursor:pointer; }
+.bm-card{ border:1px solid var(--stroke); border-radius:var(--radius-lg); padding:10px; cursor:pointer; position:relative; }
 .bm-card:hover{ background:var(--surface-1); }
 .bm-card.readlater{ border-left:3px solid var(--orange); position:relative; }
 .bm-card .rl-badge{ position:absolute; top:8px; right:8px; font-size:9.5px; background:rgba(240,138,46,.14); color:var(--orange); padding:2px 6px; border-radius:999px; font-weight:600; }
 .bm-card .bm-fav{ width:24px; height:24px; border-radius:5px; background:var(--surface-2); display:flex; align-items:center; justify-content:center; margin-bottom:8px; font-size:11px; }
 .bm-card .bm-title{ font-size:12.5px; margin-bottom:2px; }
 .bm-card .bm-url{ font-size:10.5px; color:var(--text-secondary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.bm-actions{ position:absolute; bottom:6px; right:6px; display:flex; gap:2px; opacity:0; transition:opacity .1s; }
+.bm-card:hover .bm-actions{ opacity:1; }
 
 /* ---------- Settings ---------- */
 .settings-wrap{ display:flex; height:100%; }
@@ -1173,24 +1175,24 @@ body.qa-cvd .content-area{ filter:grayscale(1) contrast(.9); }
                 <div class="hist-search"><svg class="icon"><use href="#i-search"/></svg><input placeholder="Поиск по истории (полнотекстовый)"></div>
                 <button class="hist-btn"><svg class="icon"><use href="#i-calendar"/></svg>Даты</button>
                 <button class="hist-btn"><svg class="icon"><use href="#i-download"/></svg>Экспорт</button>
-                <button class="hist-btn"><svg class="icon"><use href="#i-trash"/></svg>Очистить</button>
+                <button class="hist-btn" onclick="histClear()"><svg class="icon"><use href="#i-trash"/></svg>Очистить</button>
               </div>
 
               <div class="hist-day">Сегодня</div>
-              <div class="hist-item"><div class="hist-fav">L</div><div><div class="hist-title">Дизайн-система Lumen — Figma</div><div class="hist-url">figma.com/file/lumen-ds</div></div><div class="hist-time">14:02</div>
-                <div class="hist-actions"><button class="tb-btn"><svg class="icon"><use href="#i-star"/></svg></button><button class="tb-btn"><svg class="icon"><use href="#i-copy"/></svg></button><button class="tb-btn"><svg class="icon"><use href="#i-trash"/></svg></button></div></div>
-              <div class="hist-item"><div class="hist-fav">M</div><div><div class="hist-title">Почта — Входящие</div><div class="hist-url">mail.example.com/inbox</div></div><div class="hist-time">11:47</div>
-                <div class="hist-actions"><button class="tb-btn"><svg class="icon"><use href="#i-star"/></svg></button><button class="tb-btn"><svg class="icon"><use href="#i-copy"/></svg></button><button class="tb-btn"><svg class="icon"><use href="#i-trash"/></svg></button></div></div>
+              <div class="hist-item" onclick="histOpen(this)"><div class="hist-fav">L</div><div><div class="hist-title">Дизайн-система Lumen — Figma</div><div class="hist-url">figma.com/file/lumen-ds</div></div><div class="hist-time">14:02</div>
+                <div class="hist-actions"><button class="tb-btn" onclick="histStar(event,this)"><svg class="icon"><use href="#i-star"/></svg></button><button class="tb-btn" onclick="histCopy(event,this)"><svg class="icon"><use href="#i-copy"/></svg></button><button class="tb-btn" onclick="histDelete(event,this)"><svg class="icon"><use href="#i-trash"/></svg></button></div></div>
+              <div class="hist-item" onclick="histOpen(this)"><div class="hist-fav">M</div><div><div class="hist-title">Почта — Входящие</div><div class="hist-url">mail.example.com/inbox</div></div><div class="hist-time">11:47</div>
+                <div class="hist-actions"><button class="tb-btn" onclick="histStar(event,this)"><svg class="icon"><use href="#i-star"/></svg></button><button class="tb-btn" onclick="histCopy(event,this)"><svg class="icon"><use href="#i-copy"/></svg></button><button class="tb-btn" onclick="histDelete(event,this)"><svg class="icon"><use href="#i-trash"/></svg></button></div></div>
 
               <div class="hist-day">Вчера</div>
-              <div class="hist-item"><div class="hist-fav">R</div><div><div class="hist-title">wgpu — Rust graphics API</div><div class="hist-url">wgpu.rs/guide</div></div><div class="hist-time">21:14</div>
-                <div class="hist-actions"><button class="tb-btn"><svg class="icon"><use href="#i-star"/></svg></button><button class="tb-btn"><svg class="icon"><use href="#i-copy"/></svg></button><button class="tb-btn"><svg class="icon"><use href="#i-trash"/></svg></button></div></div>
-              <div class="hist-item"><div class="hist-fav">Б</div><div><div class="hist-title">Т-Банк — Счета</div><div class="hist-url">tbank.example/accounts</div></div><div class="hist-time">19:02</div>
-                <div class="hist-actions"><button class="tb-btn"><svg class="icon"><use href="#i-star"/></svg></button><button class="tb-btn"><svg class="icon"><use href="#i-copy"/></svg></button><button class="tb-btn"><svg class="icon"><use href="#i-trash"/></svg></button></div></div>
+              <div class="hist-item" onclick="histOpen(this)"><div class="hist-fav">R</div><div><div class="hist-title">wgpu — Rust graphics API</div><div class="hist-url">wgpu.rs/guide</div></div><div class="hist-time">21:14</div>
+                <div class="hist-actions"><button class="tb-btn" onclick="histStar(event,this)"><svg class="icon"><use href="#i-star"/></svg></button><button class="tb-btn" onclick="histCopy(event,this)"><svg class="icon"><use href="#i-copy"/></svg></button><button class="tb-btn" onclick="histDelete(event,this)"><svg class="icon"><use href="#i-trash"/></svg></button></div></div>
+              <div class="hist-item" onclick="histOpen(this)"><div class="hist-fav">Б</div><div><div class="hist-title">Т-Банк — Счета</div><div class="hist-url">tbank.example/accounts</div></div><div class="hist-time">19:02</div>
+                <div class="hist-actions"><button class="tb-btn" onclick="histStar(event,this)"><svg class="icon"><use href="#i-star"/></svg></button><button class="tb-btn" onclick="histCopy(event,this)"><svg class="icon"><use href="#i-copy"/></svg></button><button class="tb-btn" onclick="histDelete(event,this)"><svg class="icon"><use href="#i-trash"/></svg></button></div></div>
 
               <div class="hist-day">Понедельник</div>
-              <div class="hist-item"><div class="hist-fav">A</div><div><div class="hist-title">Аналитика — Dashboard Q3</div><div class="hist-url">analytics.example/q3</div></div><div class="hist-time">10:30</div>
-                <div class="hist-actions"><button class="tb-btn"><svg class="icon"><use href="#i-star"/></svg></button><button class="tb-btn"><svg class="icon"><use href="#i-copy"/></svg></button><button class="tb-btn"><svg class="icon"><use href="#i-trash"/></svg></button></div></div>
+              <div class="hist-item" onclick="histOpen(this)"><div class="hist-fav">A</div><div><div class="hist-title">Аналитика — Dashboard Q3</div><div class="hist-url">analytics.example/q3</div></div><div class="hist-time">10:30</div>
+                <div class="hist-actions"><button class="tb-btn" onclick="histStar(event,this)"><svg class="icon"><use href="#i-star"/></svg></button><button class="tb-btn" onclick="histCopy(event,this)"><svg class="icon"><use href="#i-copy"/></svg></button><button class="tb-btn" onclick="histDelete(event,this)"><svg class="icon"><use href="#i-trash"/></svg></button></div></div>
             </div>
           </div>
 
@@ -1198,10 +1200,10 @@ body.qa-cvd .content-area{ filter:grayscale(1) contrast(.9); }
           <div class="view" id="view-bookmarks">
             <div class="bm-wrap">
               <div class="bm-tree">
-                <div class="bm-folder active"><svg class="icon"><use href="#i-folder"/></svg>Все закладки</div>
-                <div class="bm-folder indent"><svg class="icon"><use href="#i-folder"/></svg>Работа</div>
-                <div class="bm-folder indent"><svg class="icon"><use href="#i-folder"/></svg>Референсы</div>
-                <div class="bm-folder"><svg class="icon"><use href="#i-book"/></svg>Read Later</div>
+                <div class="bm-folder active" onclick="bmFolder(this)"><svg class="icon"><use href="#i-folder"/></svg>Все закладки</div>
+                <div class="bm-folder indent" onclick="bmFolder(this)"><svg class="icon"><use href="#i-folder"/></svg>Работа</div>
+                <div class="bm-folder indent" onclick="bmFolder(this)"><svg class="icon"><use href="#i-folder"/></svg>Референсы</div>
+                <div class="bm-folder" onclick="bmFolder(this)"><svg class="icon"><use href="#i-book"/></svg>Read Later</div>
               </div>
               <div class="bm-main">
                 <div class="bm-toolbar">
@@ -1212,12 +1214,12 @@ body.qa-cvd .content-area{ filter:grayscale(1) contrast(.9); }
                   </div>
                 </div>
                 <div class="bm-grid">
-                  <div class="bm-card"><div class="bm-fav">R</div><div class="bm-title">Rust wgpu Guide</div><div class="bm-url">wgpu.rs/guide</div></div>
-                  <div class="bm-card"><div class="bm-fav">F</div><div class="bm-title">Figma — Lumen DS</div><div class="bm-url">figma.com/file/lumen-ds</div></div>
-                  <div class="bm-card"><div class="bm-fav">G</div><div class="bm-title">lumen-browser/core</div><div class="bm-url">github.com/lumen/core</div></div>
+                  <div class="bm-card" onclick="bmOpen(this)"><div class="bm-fav">R</div><div class="bm-title">Rust wgpu Guide</div><div class="bm-url">wgpu.rs/guide</div><div class="bm-actions"><button class="tb-btn" onclick="bmDelete(event,this)"><svg class="icon"><use href="#i-trash"/></svg></button></div></div>
+                  <div class="bm-card" onclick="bmOpen(this)"><div class="bm-fav">F</div><div class="bm-title">Figma — Lumen DS</div><div class="bm-url">figma.com/file/lumen-ds</div><div class="bm-actions"><button class="tb-btn" onclick="bmDelete(event,this)"><svg class="icon"><use href="#i-trash"/></svg></button></div></div>
+                  <div class="bm-card" onclick="bmOpen(this)"><div class="bm-fav">G</div><div class="bm-title">lumen-browser/core</div><div class="bm-url">github.com/lumen/core</div><div class="bm-actions"><button class="tb-btn" onclick="bmDelete(event,this)"><svg class="icon"><use href="#i-trash"/></svg></button></div></div>
                   <div class="bm-card readlater" onclick="alert('Демо: карточка помечена как прочитанная и архивирована')"><span class="rl-badge">Непрочитано</span><div class="bm-fav"><svg class="icon"><use href="#i-book"/></svg></div><div class="bm-title">Почему borders дешевле теней</div><div class="bm-url">blog.example/borders-vs-shadows</div></div>
                   <div class="bm-card readlater" onclick="alert('Демо: карточка помечена как прочитанная и архивирована')"><span class="rl-badge">Непрочитано</span><div class="bm-fav"><svg class="icon"><use href="#i-book"/></svg></div><div class="bm-title">Anti-aliasing в кастомных рендерах</div><div class="bm-url">gfx.example/aa-notes</div></div>
-                  <div class="bm-card"><div class="bm-fav">N</div><div class="bm-title">Notion — Roadmap Lumen</div><div class="bm-url">notion.so/lumen-roadmap</div></div>
+                  <div class="bm-card" onclick="bmOpen(this)"><div class="bm-fav">N</div><div class="bm-title">Notion — Roadmap Lumen</div><div class="bm-url">notion.so/lumen-roadmap</div><div class="bm-actions"><button class="tb-btn" onclick="bmDelete(event,this)"><svg class="icon"><use href="#i-trash"/></svg></button></div></div>
                 </div>
               </div>
             </div>
@@ -1899,6 +1901,14 @@ function toggleShields(el){ toggleSwitch(el); }
    behaviour, its own data-action so the shell can key it to the current
    domain rather than to the global setting. */
 function toggleSiteShields(el){ toggleSwitch(el); }
+function histOpen(el){ alert('Демо: переход в '+el.querySelector('.hist-url').textContent); }
+function histStar(e,el){ e.stopPropagation(); alert('Демо: страница добавлена в закладки'); }
+function histCopy(e,el){ e.stopPropagation(); alert('Демо: ссылка скопирована'); }
+function histDelete(e,el){ e.stopPropagation(); el.closest('.hist-item').remove(); }
+function histClear(){ document.querySelectorAll('.hist-item,.hist-day').forEach(n=>n.remove()); }
+function bmFolder(el){ document.querySelectorAll('.bm-folder').forEach(n=>n.classList.remove('active')); el.classList.add('active'); document.querySelector('.bm-toolbar .title').textContent = el.textContent.trim(); }
+function bmOpen(el){ alert('Демо: переход в '+el.querySelector('.bm-url').textContent); }
+function bmDelete(e,el){ e.stopPropagation(); el.closest('.bm-card').remove(); }
 function toggleFingerprintMode(el){ toggleSwitch(el); }
 
 /* ---------- Focus mode + рабочий Помодоро-таймер ---------- */
