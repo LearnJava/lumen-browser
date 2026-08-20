@@ -83,7 +83,7 @@ cross-axis alignment для `flex-direction: column` (в коде так и на
 
 ## Связанные
 
-* [BUG-424](BUG-424-OPEN.md) — второй визуальный дефект того же ассета.
+* [BUG-424](BUG-424-FIXED.md) — второй визуальный дефект того же ассета.
 * [BUG-460](BUG-460-OPEN.md) — побочный эффект: column-flex `align-items`
   кроме `stretch` не считается для ширины.
 * [BUG-333](BUG-333-FIXED.md) / [BUG-343](BUG-343-FIXED.md) — закрыли пункты

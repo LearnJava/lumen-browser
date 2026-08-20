@@ -121,7 +121,14 @@ def strip_demo_bar_html(html: str) -> str:
 
 
 def strip_qa_panel_html(html: str) -> str:
-    html = re.sub(r'\n\s*<div class="qa-net-banner"[^>]*></div>', "", html)
+    # BUG-424: the banner carries text ("Эмуляция: Slow 3G — throttling
+    # активен"), so the old `></div>` (empty-element) pattern never matched and
+    # the div survived into the shipped chrome — while `strip_qa_css` did
+    # remove its rule, `display:none` included. The result was an unstyled QA
+    # banner permanently painted over the real UI. Match the content too.
+    html = re.sub(
+        r'\n\s*<div class="qa-net-banner"[^>]*>.*?</div>', "", html, flags=re.DOTALL
+    )
     html = _strip_balanced_element(
         html, r'<aside class="qa-panel"', "aside", label="qa-panel element"
     )
