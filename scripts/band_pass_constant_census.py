@@ -203,7 +203,13 @@ def main() -> int:
 
     rows: dict[str, list[dict]] = {a: [] for a in arms}
     for rep in range(args.repeats):
-        for arm in arms:
+        # Порядок плеч ВРАЩАЕТСЯ по кругам (срез 31, п. 64): интерливед сам по
+        # себе не снимает позиционного смещения — плечо, стоящее в круге
+        # первым, платит за состояние машины после сноса прошлого круга, и на
+        # этом стенде такая плата (~2 мс/1000 px пути) больше измеряемого
+        # эффекта. Числа среза 30 сняты ДО вращения.
+        shift = rep % len(arms)
+        for arm in arms[shift:] + arms[:shift]:
             frac, env, expect = ARMS[arm]
             frac = args.fraction if frac is None else frac
             tag = f'pass_{arm}'

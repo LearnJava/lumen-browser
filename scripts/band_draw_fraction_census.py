@@ -276,7 +276,13 @@ def main() -> int:
 
     rows: dict[float, list[dict]] = {f: [] for f in args.fractions}
     for rep in range(args.repeats):
-        for frac in args.fractions:
+        # Порядок плеч ВРАЩАЕТСЯ по кругам (срез 31, п. 64): интерливед сам по
+        # себе не снимает позиционного смещения — плечо, стоящее в круге
+        # первым, платит за состояние машины после сноса прошлого круга, и на
+        # этом стенде такая плата (~2 мс/1000 px пути) больше измеряемого
+        # эффекта. Числа срезов 29/30 сняты ДО вращения.
+        shift = rep % len(args.fractions)
+        for frac in args.fractions[shift:] + args.fractions[:shift]:
             log = os.path.join(
                 REPO, '.tmp', log_name(f'frac_{frac:g}', rep, args.backend))
             if not args.report_only:
