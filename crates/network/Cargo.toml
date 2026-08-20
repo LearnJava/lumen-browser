@@ -18,6 +18,10 @@ lumen-ipc = { workspace = true }
 # Exception #3 (§5): TLS / X.509 / crypto. Своя реализация — security antipattern.
 rustls = { version = "0.23", features = ["std"] }
 webpki-roots = "0.26"
+# Exception #3 (§5): X.509 PEM decode. Partner-crate to rustls (same org) for
+# parsing the extra-CA PEM file (BUG-785) — hand-rolling base64/PEM parsing of
+# certificate data is exactly the "don't write your own crypto" antipattern.
+rustls-pemfile = "2"
 # Provisional accelerator (§5): Brotli decompressor для HTTP `Content-Encoding: br`.
 # Trait-anchor — `ContentDecoder` в lumen-core::ext. Graduation criterion: edge-case
 # в формате (RFC 7932 стабилен, реалистично — никогда). Pure-Rust, без unsafe-в-логике.

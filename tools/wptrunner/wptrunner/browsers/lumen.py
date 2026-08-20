@@ -75,7 +75,17 @@ def browser_kwargs(logger, test_type, run_info_data, config, **kwargs):
     # screenshots, see the module docstring of `executorlumen.py`'s reftest
     # section) instead of `--bidi-port` — `LumenBrowser.ipc_mode` switches
     # `make_command`/`executor_browser` between the two wire protocols.
-    return {"binary": kwargs["binary"], "ipc_mode": test_type == "reftest"}
+    #
+    # BUG-785: `--ca-cert-path` (wptrunner's own vendored test CA,
+    # `tests/wpt/certs/ca-cert.pem`) is forwarded to `LumenBrowser` so it can
+    # set `LUMEN_EXTRA_CA_CERT` on the child process — see
+    # `crates/network/src/tls/mod.rs::trusted_root_store`. Without it every
+    # `.https.` test fails `UnknownIssuer` before the request is even sent.
+    return {
+        "binary": kwargs["binary"],
+        "ipc_mode": test_type == "reftest",
+        "ca_cert_path": kwargs.get("ca_cert_path"),
+    }
 
 
 def executor_kwargs(logger, test_type, test_environment, run_info_data, **kwargs):
@@ -181,8 +191,14 @@ class LumenBrowser(WebDriverBrowser):
     listener to come up. `binary` doubles as `webdriver_binary` — Lumen
     speaks BiDi itself, there is no separate driver process."""
 
-    def __init__(self, logger, binary, ipc_mode=False, **kwargs):
-        super().__init__(logger, binary=binary, webdriver_binary=binary, **kwargs)
+    def __init__(self, logger, binary, ipc_mode=False, ca_cert_path=None, **kwargs):
+        env = dict(kwargs.pop("env", None) or {})
+        if ca_cert_path:
+            # BUG-785: the browser has no CLI flag for this, only an env var
+            # (single point of trust-root construction — see
+            # `crates/network/src/tls/mod.rs`).
+            env["LUMEN_EXTRA_CA_CERT"] = ca_cert_path
+        super().__init__(logger, binary=binary, webdriver_binary=binary, env=env or None, **kwargs)
         self.ipc_mode = ipc_mode
 
     def make_command(self):

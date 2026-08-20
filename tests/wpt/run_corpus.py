@@ -213,13 +213,18 @@ def shard_timeout(shard: dict, base: int, per_id: float) -> int:
 
 
 def https_ids(manifest: dict, scope: set = None) -> list:
-    """Every `.https.` test id — the ones BUG-785 makes unreachable at the TLS
-    layer, whatever the engine does above it.
+    """Every `.https.` test id.
+
+    BUG-785 (fixed 2026-08-20) made these unreachable at the TLS layer,
+    whatever the engine did above it — `--skip-https` below dates from when
+    that was still true unconditionally. Now `LUMEN_EXTRA_CA_CERT` lets the
+    browser trust WPT's test CA, so these ids run for real; the flag stays as
+    an opt-in for a fast/partial run, not because the ids are still
+    unreachable by construction.
 
     Kept as its own function because these ids stay in the *denominator* while
-    being skippable in the *run*: `--skip-https` trades observation for hours of
-    wall-clock on a result already proven by sampling, and must never quietly
-    shrink what the pass-rate divides by.
+    being skippable in the *run*: `--skip-https` trades observation for hours
+    of wall-clock, and must never quietly shrink what the pass-rate divides by.
     """
     return sorted({i for t, c, i in corpus_stats.iter_ids(manifest)
                    if ".https." in i
@@ -475,7 +480,8 @@ def main() -> int:
     parser.add_argument("--skip-manifest-update", action="store_true", help="trust MANIFEST.json as-is")
     parser.add_argument("--run-json", default=None, help="write the scored run snapshot here (docs/wpt/runs/<date>.json)")
     parser.add_argument("--skip-https", action="store_true",
-                        help="do not run .https. tests (BUG-785 makes them fail at TLS regardless); "
+                        help="do not run .https. tests (BUG-785 fixed 2026-08-20 — this now just "
+                             "trades a slower, complete run for a faster, partial one); "
                              "they stay in the denominator and score 0, the summary says how many")
     args = parser.parse_args()
 
@@ -516,7 +522,7 @@ def main() -> int:
             with open(exclude_file, "w", encoding="utf-8") as fh:
                 fh.write("\n".join(skipped) + "\n")
             print(f"--skip-https: {len(skipped)} ids excluded from the run "
-                  f"(still in the denominator, scored 0 — BUG-785)", flush=True)
+                  f"(still in the denominator, scored 0)", flush=True)
 
         shard_states = []
         if args.resume and os.path.isfile(state_path):
@@ -560,8 +566,8 @@ def main() -> int:
         with open(state_path, encoding="utf-8") as fh:
             skipped_count = json.load(fh).get("skipped_https", 0)
     if skipped_count:
-        print(f"  NOT RUN ON PURPOSE: {skipped_count} .https. ids — unreachable at TLS "
-              f"(BUG-785), scored 0, sampling confirmed the outcome")
+        print(f"  NOT RUN ON PURPOSE: {skipped_count} .https. ids excluded by --skip-https, "
+              f"scored 0")
 
     if args.run_json:
         os.makedirs(os.path.dirname(os.path.abspath(args.run_json)), exist_ok=True)

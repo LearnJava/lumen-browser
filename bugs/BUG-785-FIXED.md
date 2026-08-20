@@ -1,9 +1,12 @@
 # BUG-785 — нет способа доверить движку дополнительный CA: весь HTTPS-корпус WPT недостижим
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-08-20
 **Заведён:** 2026-08-18 (WPT-RUN-4, пилотный прогон корпуса)
 **Область:** `lumen-network` (`crates/network/src/lib.rs`, `crates/network/src/dot.rs`)
-**Владелец:** P1/P3 (движок). Заведён P2 в ходе тулинговой задачи, здесь не чинится.
+**Владелец:** P1/P3 (движок), но исправлено P2 с явного разрешения пользователя
+(единая точка расширения `RootCertStore` — небольшая, изолированная правка в
+`lumen-network`, вне обычного скоупа P2, но не требующая знания остального
+движка).
 
 ## Симптом
 
@@ -91,3 +94,37 @@ UnknownIssuer:  200 попаданий в логе      (по одному на 
   порт действительно выделяется (было `invalid port: "None"`). Дальше запрос
   доходит до TLS и умирает уже там; это другой, не покрытый той задачей слой.
 - Цифра pass-rate и её оговорки — `docs/wpt/pass-rate.md`.
+
+## Починка (2026-08-20)
+
+Единая точка сборки `RootCertStore` — `tls::trusted_root_store()`
+(`crates/network/src/tls/mod.rs`): встроенные `webpki-roots` плюс, если задана
+переменная окружения `LUMEN_EXTRA_CA_CERT`, сертификаты из указанного ею
+PEM-файла (парсинг — `rustls-pemfile`, partner-crate к `rustls`, а не
+самописный base64/PEM-разбор — «не пишите свой crypto», `docs/plan/tech-stack.md`
+§5). Файл читается и кэшируется один раз (`OnceLock`); нечитаемый файл или
+пустой/битый PEM молча деградируют к пустому списку (с диагностикой в stderr),
+TLS продолжает работать на встроенных корнях. Все пять мест, дублировавших
+сборку `RootCertStore` (`lib.rs` ×4, `dot.rs` ×1), переведены на эту функцию.
+
+`tools/wptrunner/wptrunner/browsers/lumen.py` (продуктовый плагин Lumen для
+wptrunner, не часть неизменяемого вендоренного ядра) прокидывает уже
+существующий `--ca-cert-path` (`tests/wpt/certs/ca-cert.pem`, `run_smoke.py`)
+в `LUMEN_EXTRA_CA_CERT` при запуске дочернего процесса — `browser_kwargs`
+добавляет `ca_cert_path` в `**kwargs`, `LumenBrowser.__init__` кладёт его в
+`env`. `--skip-https` (`tests/wpt/run_corpus.py`) можно снимать в WPT-RUN-5.
+
+**Проверка (живой прогон):** `run_smoke.py` на
+`/WebCryptoAPI/crypto_key_cached_slots.https.any.html` — TLS-рукопожатие
+проходит, HTML/JS реально грузятся по HTTPS (`Reload: https://127.0.0.1:18443/...`,
+`загрузка 471 байт`), `UnknownIssuer` нигде не встречается. Тест всё равно
+кончается `TIMEOUT`, но по другой, не связанной с TLS причине
+(`add_completion_callback is not defined` — отдельный, не заведённый этой
+задачей гэп) — именно критерий «Что считать починкой» выше: тест добегает и
+отчитывается содержательно, а не падает до отправки запроса.
+
+Регрессионные тесты — `crates/network/src/tls/mod.rs` (`parse_pem_certs_*`,
+`trusted_root_store_includes_builtin_roots_even_without_env_var`) и сквозной
+`crates/network/tests/cases/bug785_extra_ca.rs` (реальное TLS-рукопожатие по
+loopback против сертификата WPT: без добавления CA — `UnknownIssuer`, с
+добавлением — успех).

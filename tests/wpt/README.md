@@ -199,7 +199,7 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   - `--skip-https` excludes `.https.` ids from the *run* (they stay in the
     denominator and score 0). Measured cost of not skipping them: 200 sampled
     https ids gave 200 TIMEOUT / 0 subtests / 200 `UnknownIssuer`, ~39 s each —
-    ≈14 h for all 6874 to reach a result already known ([BUG-785](../../bugs/BUG-785-OPEN.md)).
+    ≈14 h for all 6874 to reach a result already known ([BUG-785](../../bugs/BUG-785-FIXED.md)).
     The summary prints `NOT RUN ON PURPOSE` with the count and the reason.
   - a shard killed on its budget is recovered from the mozlog raw stream
     (`--log-wptreport` is written only at the end, so a kill used to lose the

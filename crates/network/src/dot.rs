@@ -262,10 +262,8 @@ fn default_tls_config() -> Arc<rustls::ClientConfig> {
     static CONFIG: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
     CONFIG
         .get_or_init(|| {
-            let mut root_store = rustls::RootCertStore::empty();
-            root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
             let cfg = rustls::ClientConfig::builder()
-                .with_root_certificates(root_store)
+                .with_root_certificates(crate::tls::trusted_root_store())
                 .with_no_client_auth();
             Arc::new(cfg)
         })

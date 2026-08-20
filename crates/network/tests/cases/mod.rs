@@ -9,5 +9,6 @@
 //! empties them when the feature is off.
 #![allow(dead_code)]
 
+mod bug785_extra_ca;
 mod http_client_fingerprint_profile;
 mod tls_integration;
