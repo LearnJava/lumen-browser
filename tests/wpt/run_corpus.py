@@ -33,7 +33,7 @@ Usage (from repo root, venv per tests/wpt/README.md):
 
     <venv>/python tests/wpt/run_corpus.py --binary PATH [--pilot | --all |
         --categories a,b,c] [--processes N] [--out-dir DIR] [--resume]
-        [--aggregate-only] [--run-json PATH]
+        [--retry-timeouts] [--aggregate-only] [--run-json PATH]
 """
 
 import argparse
@@ -79,6 +79,14 @@ SHARD_THRESHOLD = 2000
 #: Suffix of the parallel mozlog stream each shard writes next to its report.
 #: Named once because aggregation matches reports and streams by name.
 RAW_SUFFIX = ".raw.jsonl"
+
+#: Suffix a shard's previous mozlog stream is rotated to before the shard is
+#: run again. mozlog opens `--log-raw` with mode `"w"` (`mozlog/commandline.py`),
+#: so a retry truncates the stream *before* producing anything: without this
+#: rotation a retry that gets less far than the first attempt permanently
+#: destroys results the run already had. Aggregation reads both and lets the
+#: newer stream win per id, so a retry can only ever add.
+RAW_PREV_SUFFIX = RAW_SUFFIX + ".prev"
 
 #: Statuses that mean the test itself finished cleanly. Subtest failures are
 #: scored separately; this only says the harness completed.
@@ -311,6 +319,13 @@ def run_shard(shard: dict, binary: str, out_dir: str, processes: int, timeout: i
         argv.append(f"--processes={processes}")
     argv.extend(shard["test_ids"] if shard.get("test_ids") else [shard["prefix"]])
 
+    # Rotate whatever the previous attempt salvaged out of the way — see
+    # RAW_PREV_SUFFIX. Only a non-empty stream is worth keeping, and only one
+    # generation: the older it gets the less it can add over the newer runs.
+    prev_path = os.path.splitext(report_path)[0] + RAW_PREV_SUFFIX
+    if os.path.isfile(raw_path) and os.path.getsize(raw_path) > 0:
+        os.replace(raw_path, prev_path)
+
     started = time.time()
     with open(log_path, "w", encoding="utf-8") as log:
         proc = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT, cwd=REPO_ROOT,
@@ -377,6 +392,26 @@ def results_from_raw_log(raw_path: str) -> dict:
     return {k: v for k, v in results.items() if v["status"]}
 
 
+def rescue_results(raw_path: str) -> dict:
+    """Rebuild `{test_id: result}` from a shard's raw stream *and its rotated
+    predecessor* (`RAW_PREV_SUFFIX`), newer winning per id.
+
+    A retried shard is not guaranteed to get as far as the attempt before it —
+    the budget is wall-clock, so a busier machine salvages fewer ids. Reading
+    both generations makes a retry monotone: it can add results, never remove
+    them. Everything else in the pipeline calls this rather than
+    `results_from_raw_log` directly, so the two attempts are indistinguishable
+    from one longer one at scoring time.
+    """
+    prev_path = raw_path + ".prev" if raw_path.endswith(RAW_SUFFIX) else None
+    merged = {}
+    if prev_path and os.path.isfile(prev_path):
+        merged.update(results_from_raw_log(prev_path))
+    if os.path.isfile(raw_path):
+        merged.update(results_from_raw_log(raw_path))
+    return merged
+
+
 def load_results(out_dir: str) -> tuple:
     """Load every shard's results, falling back to the raw stream per shard.
 
@@ -414,7 +449,7 @@ def load_results(out_dir: str) -> tuple:
             pass
 
         raw_path = os.path.splitext(path)[0] + RAW_SUFFIX
-        rescued = results_from_raw_log(raw_path) if os.path.isfile(raw_path) else {}
+        rescued = rescue_results(raw_path)
         if rescued:
             results.update(rescued)
             recovered.append((entry[:-5], len(rescued)))
@@ -427,11 +462,56 @@ def load_results(out_dir: str) -> tuple:
 
     for entry in raw_only:
         name = entry[: -len(RAW_SUFFIX)]
-        rescued = results_from_raw_log(os.path.join(out_dir, entry))
+        rescued = rescue_results(os.path.join(out_dir, entry))
         if rescued:
             results.update(rescued)
             recovered.append((name, len(rescued)))
     return results, recovered, empty
+
+
+def resumable_states(previous: list, out_dir: str, retry_timeouts: bool) -> list:
+    """Decide which shards of a previous run `--resume` must not run again.
+
+    `ran` is obvious. The interesting case is `timeout` — a shard killed on its
+    wall-clock budget. Replaying it costs the *whole* budget a second time and
+    buys nothing: the budget is the same, the machine is no faster, and the
+    shard dies at the same wall. Measured on the 2026-08-20 Linux corpus run,
+    that was 50 minutes per resume for three shards (`WebCryptoAPI`, `ai`,
+    `bluetooth`) whose results had already been salvaged from the raw stream —
+    and every resume paid it again, because the old filter kept only `ran`.
+
+    So a killed shard that salvaged something is treated as done, and the run
+    says so out loud rather than reporting it as complete. Two deliberate
+    exceptions:
+
+    * a killed shard that salvaged **nothing** is retried — there is no partial
+      result to protect and one more attempt may be all it needs;
+    * `--retry-timeouts` retries them all, which is what a resume with a raised
+      `--shard-timeout-per-id` wants (`WPT-RUN-9`). That path is safe because
+      `run_shard` rotates the raw stream first, so a shorter second attempt
+      cannot destroy the first one's results.
+
+    Any other outcome (`no-report` — wptrunner died at startup) is always
+    retried: it failed fast, so retrying is cheap, and it produced nothing.
+    """
+    states, kept, retried = [], [], []
+    for state in previous:
+        if state["outcome"] == "ran":
+            states.append(state)
+            continue
+        if state["outcome"] == "timeout" and not retry_timeouts:
+            raw_path = os.path.splitext(shard_report_path(out_dir, state))[0] + RAW_SUFFIX
+            if rescue_results(raw_path):
+                states.append(state)
+                kept.append(state["name"])
+                continue
+        retried.append(state["name"])
+    if kept:
+        print(f"--resume: {len(kept)} budget-killed shard(s) kept partial rather than replayed "
+              f"({', '.join(kept)}) — pass --retry-timeouts to run them again", flush=True)
+    if retried:
+        print(f"--resume: {len(retried)} shard(s) will run again ({', '.join(retried[:8])})", flush=True)
+    return states
 
 
 def score_reports(manifest: dict, out_dir: str, scope: set = None) -> dict:
@@ -546,6 +626,11 @@ def main() -> int:
     parser.add_argument("--shard-timeout-base", type=int, default=600, help="fixed part of a shard's time budget, seconds (default: 600)")
     parser.add_argument("--shard-timeout-per-id", type=float, default=2.0, help="per-id part of a shard's time budget, seconds (default: 2.0)")
     parser.add_argument("--resume", action="store_true", help="skip shards that already produced a report")
+    parser.add_argument("--retry-timeouts", action="store_true",
+                        help="on --resume, run budget-killed shards again instead of keeping "
+                             "the results salvaged from their raw stream (use together with a "
+                             "raised --shard-timeout-per-id; the previous stream is rotated, "
+                             "so a shorter retry cannot lose results)")
     parser.add_argument("--aggregate-only", action="store_true", help="score existing reports in --out-dir, run nothing")
     parser.add_argument("--skip-manifest-update", action="store_true", help="trust MANIFEST.json as-is")
     parser.add_argument("--run-json", default=None, help="write the scored run snapshot here (docs/wpt/runs/<date>.json)")
@@ -597,7 +682,8 @@ def main() -> int:
         shard_states = []
         if args.resume and os.path.isfile(state_path):
             with open(state_path, encoding="utf-8") as fh:
-                shard_states = [s for s in json.load(fh)["shards"] if s["outcome"] == "ran"]
+                previous = json.load(fh)["shards"]
+            shard_states = resumable_states(previous, args.out_dir, args.retry_timeouts)
         done = {s["name"] for s in shard_states}
 
         for index, shard in enumerate(shards, 1):
