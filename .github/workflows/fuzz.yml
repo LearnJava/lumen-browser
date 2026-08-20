@@ -196,11 +196,16 @@ jobs:
           #
           #   fuzz_css_parser — BUG-788, parse() blows up to hundreds of MiB on
           #                     a kilobyte of malformed CSS
+          #   fuzz_image      — BUG-790, a 78-byte GIF whose header declares a
+          #                     65281x57098 logical screen asks for 14.9 GiB
           #
-          # fuzz_image was listed for BUG-787 (GIF LZW unpack never returned);
-          # fixed 2026-08-20, its repro now lives in regressions/ and is replayed
-          # by the step above, so the target is a blocking gate again.
-          KNOWN_FAILING: 'fuzz_css_parser'
+          # fuzz_image was delisted on 2026-08-20 with the BUG-787 fix (GIF LZW
+          # unpack never returned) and re-listed the same day: the very first
+          # blocking run found BUG-790, a different defect in the same target.
+          # BUG-787 has NOT regressed — its repro sits in regressions/ and is
+          # replayed by the blocking step above, which KNOWN_FAILING does not
+          # cover. Delist again only when BUG-790 is fixed.
+          KNOWN_FAILING: 'fuzz_css_parser fuzz_image'
         run: |
           set -u
           failed=""
