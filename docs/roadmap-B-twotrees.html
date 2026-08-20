@@ -75,8 +75,8 @@
 {
  "generated": "2026-08-20",
  "counts": {
-  "open": 327,
-  "fixed": 427,
+  "open": 325,
+  "fixed": 429,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -8083,10 +8083,10 @@
    "debtor": false
   },
   "BUG-424": {
-   "status": "open",
+   "status": "fixed",
    "title": "Иконки движкового хрома рисовались мусором/пропадали. **Переразбор P1 2026-07-30 опроверг заявку про `<use>`/`<symbol>`** (резолвится верно всегда; водораздел п…",
    "component": "paint (`display_list.rs::emit_svg_shape`, `box_tree.rs::lay_out_svg_element_position`/`svg_paint_matrix`/`shift_tree`/`shift_y_box`) — **general engine bug, not chrome-specific**",
-   "date": null,
+   "date": "2026-08-20",
    "debtor": true
   },
   "BUG-425": {
@@ -8160,10 +8160,10 @@
    "debtor": false
   },
   "BUG-435": {
-   "status": "open",
-   "title": "**Текст хрома терял буквы на yandex.ru (`Костя · Личный` → `тя · Личны`) — причина не найдена.** Заявлено вместе с [BUG-423](bugs/BUG-423-FIXED.md), но объяснен…",
-   "component": "shell/paint (цепочка не установлена)",
-   "date": null,
+   "status": "fixed",
+   "title": "**Буквы пропадали навсегда при исчерпании атласа глифов — и на странице, и в хроме браузера.** `GlyphAtlas` — одна текстура 1024×1024 на процесс (хром и страниц…",
+   "component": "paint (`atlas.rs` — `try_insert`/`exhausted`/`reset`; `renderer.rs` — `ensure_glyph`, `rasterize_and_insert`, `recover_exhausted_atlas`, `atlas_on_memory_pressure`)",
+   "date": "2026-08-20",
    "debtor": false
   },
   "BUG-436": {
@@ -11450,6 +11450,9 @@
   "paint (`WgpuBackend`/`renderer.rs`) — wgpu-рендеринг расходится с femtovg": [
    "BUG-277"
   ],
+  "paint (`atlas.rs` — `try_insert`/`exhausted`/`reset`; `renderer.rs` — `ensure_glyph`, `rasterize_and_insert`, `recover_exhausted_atlas`, `atlas_on_memory_pressure`)": [
+   "BUG-435"
+  ],
   "paint (`background-blend-mode` в CPU-растре tiny-skia; тест `crates/driver/tests/cases/snapshot_cpu.rs::cpu_snapshots_match_references`, эталон `graphic_tests/snapshots/cpu/49-background-blend-mode.png`)": [
    "BUG-784"
   ],
@@ -11626,9 +11629,6 @@
   ],
   "shell/paint": [
    "BUG-163"
-  ],
-  "shell/paint (цепочка не установлена)": [
-   "BUG-435"
   ],
   "shell/storage": [
    "BUG-238"
