@@ -76,6 +76,10 @@ PILOT_CATEGORIES = [
 #: component. Keeps a single `wptreport.json` (and a single failure) bounded.
 SHARD_THRESHOLD = 2000
 
+#: Suffix of the parallel mozlog stream each shard writes next to its report.
+#: Named once because aggregation matches reports and streams by name.
+RAW_SUFFIX = ".raw.jsonl"
+
 #: Statuses that mean the test itself finished cleanly. Subtest failures are
 #: scored separately; this only says the harness completed.
 HARNESS_OK = frozenset({"OK", "PASS"})
@@ -287,7 +291,7 @@ def run_shard(shard: dict, binary: str, out_dir: str, processes: int, timeout: i
     """Run one shard as a subprocess; never raises on a failing shard."""
     report_path = shard_report_path(out_dir, shard)
     log_path = os.path.splitext(report_path)[0] + ".log"
-    raw_path = os.path.splitext(report_path)[0] + ".raw.jsonl"
+    raw_path = os.path.splitext(report_path)[0] + RAW_SUFFIX
     argv = [
         sys.executable,
         os.path.join(TESTS_ROOT, "run_smoke.py"),
@@ -379,6 +383,11 @@ def load_results(out_dir: str) -> tuple:
     Returns `(results, recovered, empty)`. `recovered` names shards whose
     numbers came from the raw stream, so the summary can say so out loud
     instead of quietly reporting a partial shard as if it were complete.
+    A shard killed on its time budget has **no** `wptreport.json` at all
+    (`run_shard` deletes the zero-byte file wptrunner opened up front), so the
+    raw streams are enumerated in their own right, not merely as a fallback for
+    a report that exists — otherwise the shards that most need rescuing, the
+    killed ones, are the exact shards the rescue never sees.
     `empty` names shards that legitimately ran nothing — with `--skip-https`
     a category can have every one of its tests excluded, and wptrunner then
     leaves a zero-byte report. That is not a lost shard, and must not be
@@ -388,9 +397,12 @@ def load_results(out_dir: str) -> tuple:
     results = {}
     recovered = []
     empty = []
-    for entry in sorted(os.listdir(out_dir)):
-        if not entry.endswith(".json") or entry == "state.json":
-            continue
+    entries = sorted(os.listdir(out_dir))
+    reports = [e for e in entries if e.endswith(".json") and e != "state.json"]
+    have_report = set(reports)
+    raw_only = [e for e in entries if e.endswith(RAW_SUFFIX)
+                and e[: -len(RAW_SUFFIX)] + ".json" not in have_report]
+    for entry in reports:
         path = os.path.join(out_dir, entry)
         try:
             with open(path, encoding="utf-8") as fh:
@@ -401,7 +413,7 @@ def load_results(out_dir: str) -> tuple:
         except (json.JSONDecodeError, OSError):
             pass
 
-        raw_path = os.path.splitext(path)[0] + ".raw.jsonl"
+        raw_path = os.path.splitext(path)[0] + RAW_SUFFIX
         rescued = results_from_raw_log(raw_path) if os.path.isfile(raw_path) else {}
         if rescued:
             results.update(rescued)
@@ -412,6 +424,13 @@ def load_results(out_dir: str) -> tuple:
             empty.append(entry[:-5])
         else:
             print(f"warning: unreadable report and no raw log, ignored: {entry}", file=sys.stderr)
+
+    for entry in raw_only:
+        name = entry[: -len(RAW_SUFFIX)]
+        rescued = results_from_raw_log(os.path.join(out_dir, entry))
+        if rescued:
+            results.update(rescued)
+            recovered.append((name, len(rescued)))
     return results, recovered, empty
 
 

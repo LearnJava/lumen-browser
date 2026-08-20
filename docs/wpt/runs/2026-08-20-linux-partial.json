@@ -1,0 +1,865 @@
+{
+  "binary": "target/dev-release/lumen",
+  "commit": "2f82cb219",
+  "finished": "2026-08-20T18:00:20",
+  "processes": 6,
+  "scope": [
+    "FileAPI",
+    "IndexedDB",
+    "WebCryptoAPI",
+    "accelerometer",
+    "accessibility",
+    "accname",
+    "acid",
+    "ai",
+    "ambient-light",
+    "animation-worklet",
+    "annotation-model",
+    "annotation-protocol",
+    "annotation-vocab",
+    "apng",
+    "appmanifest",
+    "attribution-reporting",
+    "audio-output",
+    "audio-session",
+    "autoplay-policy-detection",
+    "avif",
+    "background-fetch",
+    "background-sync",
+    "badging",
+    "battery-status",
+    "beacon",
+    "bluetooth",
+    "browsing-topics",
+    "captured-mouse-events",
+    "clear-site-data",
+    "client-hints",
+    "clipboard-apis",
+    "close-watcher",
+    "compat",
+    "compression",
+    "compute-pressure",
+    "connection-allowlist",
+    "dom"
+  ],
+  "scored": {
+    "empty_shards": [
+      "annotation-model",
+      "annotation-protocol",
+      "annotation-vocab",
+      "appmanifest"
+    ],
+    "per_category": {
+      "FileAPI": {
+        "by_type": {
+          "crashtest": 2,
+          "reftest": 1,
+          "testharness": 110
+        },
+        "harness_ok": 47,
+        "ids": 113,
+        "not_run": 2,
+        "pass_rate": 0.1332,
+        "ran": 111,
+        "score": 15.05,
+        "subtests_passed": 306,
+        "subtests_total": 641
+      },
+      "IndexedDB": {
+        "by_type": {
+          "testharness": 813
+        },
+        "harness_ok": 198,
+        "ids": 813,
+        "not_run": 0,
+        "pass_rate": 0.082,
+        "ran": 813,
+        "score": 66.67,
+        "subtests_passed": 394,
+        "subtests_total": 1233
+      },
+      "WebCryptoAPI": {
+        "by_type": {
+          "testharness": 313
+        },
+        "harness_ok": 0,
+        "ids": 313,
+        "not_run": 184,
+        "pass_rate": 0.0,
+        "ran": 129,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 0
+      },
+      "accelerometer": {
+        "by_type": {
+          "testharness": 12
+        },
+        "harness_ok": 2,
+        "ids": 12,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 12,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 4
+      },
+      "accessibility": {
+        "by_type": {
+          "crashtest": 57,
+          "testharness": 1
+        },
+        "harness_ok": 1,
+        "ids": 58,
+        "not_run": 57,
+        "pass_rate": 0.0,
+        "ran": 1,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 1
+      },
+      "accname": {
+        "by_type": {
+          "testharness": 19
+        },
+        "harness_ok": 18,
+        "ids": 19,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 19,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 481
+      },
+      "acid": {
+        "by_type": {
+          "reftest": 2,
+          "testharness": 1
+        },
+        "harness_ok": 0,
+        "ids": 3,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 3,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 0
+      },
+      "ai": {
+        "by_type": {
+          "crashtest": 1,
+          "testharness": 168
+        },
+        "harness_ok": 0,
+        "ids": 169,
+        "not_run": 84,
+        "pass_rate": 0.0,
+        "ran": 85,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 0
+      },
+      "ambient-light": {
+        "by_type": {
+          "testharness": 10
+        },
+        "harness_ok": 2,
+        "ids": 10,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 10,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 2
+      },
+      "animation-worklet": {
+        "by_type": {
+          "reftest": 15,
+          "testharness": 24
+        },
+        "harness_ok": 0,
+        "ids": 39,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 39,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 0
+      },
+      "apng": {
+        "by_type": {
+          "reftest": 1,
+          "testharness": 1
+        },
+        "harness_ok": 1,
+        "ids": 2,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 2,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 1
+      },
+      "attribution-reporting": {
+        "by_type": {
+          "testharness": 24
+        },
+        "harness_ok": 0,
+        "ids": 24,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 24,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 0
+      },
+      "audio-output": {
+        "by_type": {
+          "testharness": 10
+        },
+        "harness_ok": 0,
+        "ids": 10,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 10,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 0
+      },
+      "audio-session": {
+        "by_type": {
+          "testharness": 3
+        },
+        "harness_ok": 0,
+        "ids": 3,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 3,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 0
+      },
+      "autoplay-policy-detection": {
+        "by_type": {
+          "testharness": 3
+        },
+        "harness_ok": 2,
+        "ids": 3,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 3,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 5
+      },
+      "avif": {
+        "by_type": {
+          "reftest": 1
+        },
+        "harness_ok": 1,
+        "ids": 1,
+        "not_run": 0,
+        "pass_rate": 1.0,
+        "ran": 1,
+        "score": 1.0,
+        "subtests_passed": 0,
+        "subtests_total": 0
+      },
+      "background-fetch": {
+        "by_type": {
+          "testharness": 14
+        },
+        "harness_ok": 0,
+        "ids": 14,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 14,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 0
+      },
+      "background-sync": {
+        "by_type": {
+          "testharness": 2
+        },
+        "harness_ok": 0,
+        "ids": 2,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 2,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 0
+      },
+      "badging": {
+        "by_type": {
+          "testharness": 8
+        },
+        "harness_ok": 0,
+        "ids": 8,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 8,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 0
+      },
+      "battery-status": {
+        "by_type": {
+          "testharness": 17
+        },
+        "harness_ok": 0,
+        "ids": 17,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 17,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 0
+      },
+      "beacon": {
+        "by_type": {
+          "testharness": 17
+        },
+        "harness_ok": 0,
+        "ids": 17,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 17,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 16
+      },
+      "bluetooth": {
+        "by_type": {
+          "testharness": 155
+        },
+        "harness_ok": 2,
+        "ids": 155,
+        "not_run": 72,
+        "pass_rate": 0.0,
+        "ran": 83,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 15
+      },
+      "browsing-topics": {
+        "by_type": {
+          "testharness": 13
+        },
+        "harness_ok": 2,
+        "ids": 13,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 13,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 4
+      },
+      "captured-mouse-events": {
+        "by_type": {
+          "testharness": 4
+        },
+        "harness_ok": 2,
+        "ids": 4,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 4,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 6
+      },
+      "clear-site-data": {
+        "by_type": {
+          "testharness": 13
+        },
+        "harness_ok": 0,
+        "ids": 13,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 13,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 10
+      },
+      "client-hints": {
+        "by_type": {
+          "testharness": 132
+        },
+        "harness_ok": 3,
+        "ids": 132,
+        "not_run": 0,
+        "pass_rate": 0.0227,
+        "ran": 132,
+        "score": 3.0,
+        "subtests_passed": 3,
+        "subtests_total": 3
+      },
+      "clipboard-apis": {
+        "by_type": {
+          "testharness": 58
+        },
+        "harness_ok": 5,
+        "ids": 58,
+        "not_run": 0,
+        "pass_rate": 0.0345,
+        "ran": 58,
+        "score": 2.0,
+        "subtests_passed": 10,
+        "subtests_total": 13
+      },
+      "close-watcher": {
+        "by_type": {
+          "testharness": 65
+        },
+        "harness_ok": 61,
+        "ids": 65,
+        "not_run": 0,
+        "pass_rate": 0.0306,
+        "ran": 65,
+        "score": 1.99,
+        "subtests_passed": 19,
+        "subtests_total": 95
+      },
+      "compat": {
+        "by_type": {
+          "reftest": 25,
+          "testharness": 13
+        },
+        "harness_ok": 18,
+        "ids": 38,
+        "not_run": 0,
+        "pass_rate": 0.2716,
+        "ran": 38,
+        "score": 10.32,
+        "subtests_passed": 12,
+        "subtests_total": 109
+      },
+      "compression": {
+        "by_type": {
+          "testharness": 74
+        },
+        "harness_ok": 15,
+        "ids": 74,
+        "not_run": 0,
+        "pass_rate": 0.1457,
+        "ran": 74,
+        "score": 10.78,
+        "subtests_passed": 184,
+        "subtests_total": 318
+      },
+      "compute-pressure": {
+        "by_type": {
+          "testharness": 45
+        },
+        "harness_ok": 1,
+        "ids": 45,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 45,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 1
+      },
+      "connection-allowlist": {
+        "by_type": {
+          "testharness": 73
+        },
+        "harness_ok": 27,
+        "ids": 73,
+        "not_run": 0,
+        "pass_rate": 0.2982,
+        "ran": 73,
+        "score": 21.77,
+        "subtests_passed": 91,
+        "subtests_total": 235
+      },
+      "dom": {
+        "by_type": {
+          "crashtest": 20,
+          "reftest": 3,
+          "testharness": 320
+        },
+        "harness_ok": 230,
+        "ids": 343,
+        "not_run": 20,
+        "pass_rate": 0.3342,
+        "ran": 323,
+        "score": 114.64,
+        "subtests_passed": 2030,
+        "subtests_total": 5616
+      }
+    },
+    "recovered_shards": [
+      {
+        "results": 3,
+        "shard": "console"
+      },
+      {
+        "results": 129,
+        "shard": "WebCryptoAPI"
+      },
+      {
+        "results": 85,
+        "shard": "ai"
+      },
+      {
+        "results": 83,
+        "shard": "bluetooth"
+      }
+    ],
+    "status_counts": {
+      "ERROR": 118,
+      "FAIL": 40,
+      "NOT-RUN": 419,
+      "OK": 630,
+      "PASS": 8,
+      "TIMEOUT": 1448
+    },
+    "totals": {
+      "harness_ok": 638,
+      "ids": 2663,
+      "not_run": 419,
+      "pass_rate": 0.0928,
+      "ran": 2244,
+      "score": 247.23,
+      "subtests_passed": 3049,
+      "subtests_total": 8809
+    }
+  },
+  "shards": [
+    {
+      "ids": 343,
+      "name": "dom",
+      "outcome": "ran",
+      "prefix": "/dom/",
+      "report": ".tmp/wpt-corpus/dom.json",
+      "returncode": 1,
+      "seconds": 257.7
+    },
+    {
+      "ids": 125,
+      "name": "FileAPI",
+      "outcome": "ran",
+      "prefix": "/FileAPI/",
+      "report": ".tmp/wpt-corpus/FileAPI.json",
+      "returncode": 1,
+      "seconds": 293.7
+    },
+    {
+      "ids": 813,
+      "name": "IndexedDB",
+      "outcome": "ran",
+      "prefix": "/IndexedDB/",
+      "report": ".tmp/wpt-corpus/IndexedDB.json",
+      "returncode": 1,
+      "seconds": 1798.1
+    },
+    {
+      "ids": 313,
+      "name": "WebCryptoAPI",
+      "outcome": "timeout",
+      "prefix": "/WebCryptoAPI/",
+      "report": null,
+      "returncode": null,
+      "seconds": 1226.5
+    },
+    {
+      "ids": 13,
+      "name": "accelerometer",
+      "outcome": "ran",
+      "prefix": "/accelerometer/",
+      "report": ".tmp/wpt-corpus/accelerometer.json",
+      "returncode": 64,
+      "seconds": 164.0
+    },
+    {
+      "ids": 58,
+      "name": "accessibility",
+      "outcome": "ran",
+      "prefix": "/accessibility/",
+      "report": ".tmp/wpt-corpus/accessibility.json",
+      "returncode": 64,
+      "seconds": 32.8
+    },
+    {
+      "ids": 178,
+      "name": "accname",
+      "outcome": "ran",
+      "prefix": "/accname/",
+      "report": ".tmp/wpt-corpus/accname.json",
+      "returncode": 64,
+      "seconds": 46.3
+    },
+    {
+      "ids": 3,
+      "name": "acid",
+      "outcome": "ran",
+      "prefix": "/acid/",
+      "report": ".tmp/wpt-corpus/acid.json",
+      "returncode": 64,
+      "seconds": 23.0
+    },
+    {
+      "ids": 169,
+      "name": "ai",
+      "outcome": "timeout",
+      "prefix": "/ai/",
+      "report": null,
+      "returncode": null,
+      "seconds": 938.1
+    },
+    {
+      "ids": 10,
+      "name": "ambient-light",
+      "outcome": "ran",
+      "prefix": "/ambient-light/",
+      "report": ".tmp/wpt-corpus/ambient-light.json",
+      "returncode": 64,
+      "seconds": 88.7
+    },
+    {
+      "ids": 39,
+      "name": "animation-worklet",
+      "outcome": "ran",
+      "prefix": "/animation-worklet/",
+      "report": ".tmp/wpt-corpus/animation-worklet.json",
+      "returncode": 64,
+      "seconds": 97.8
+    },
+    {
+      "ids": 7,
+      "name": "annotation-model",
+      "outcome": "ran",
+      "prefix": "/annotation-model/",
+      "report": ".tmp/wpt-corpus/annotation-model.json",
+      "returncode": 64,
+      "seconds": 3.1
+    },
+    {
+      "ids": 1,
+      "name": "annotation-protocol",
+      "outcome": "ran",
+      "prefix": "/annotation-protocol/",
+      "report": ".tmp/wpt-corpus/annotation-protocol.json",
+      "returncode": 64,
+      "seconds": 3.1
+    },
+    {
+      "ids": 6,
+      "name": "annotation-vocab",
+      "outcome": "ran",
+      "prefix": "/annotation-vocab/",
+      "report": ".tmp/wpt-corpus/annotation-vocab.json",
+      "returncode": 64,
+      "seconds": 3.1
+    },
+    {
+      "ids": 2,
+      "name": "apng",
+      "outcome": "ran",
+      "prefix": "/apng/",
+      "report": ".tmp/wpt-corpus/apng.json",
+      "returncode": 64,
+      "seconds": 6.2
+    },
+    {
+      "ids": 59,
+      "name": "appmanifest",
+      "outcome": "ran",
+      "prefix": "/appmanifest/",
+      "report": ".tmp/wpt-corpus/appmanifest.json",
+      "returncode": 64,
+      "seconds": 3.1
+    },
+    {
+      "ids": 24,
+      "name": "attribution-reporting",
+      "outcome": "ran",
+      "prefix": "/attribution-reporting/",
+      "report": ".tmp/wpt-corpus/attribution-reporting.json",
+      "returncode": 64,
+      "seconds": 401.6
+    },
+    {
+      "ids": 11,
+      "name": "audio-output",
+      "outcome": "ran",
+      "prefix": "/audio-output/",
+      "report": ".tmp/wpt-corpus/audio-output.json",
+      "returncode": 64,
+      "seconds": 52.8
+    },
+    {
+      "ids": 3,
+      "name": "audio-session",
+      "outcome": "ran",
+      "prefix": "/audio-session/",
+      "report": ".tmp/wpt-corpus/audio-session.json",
+      "returncode": 64,
+      "seconds": 21.5
+    },
+    {
+      "ids": 3,
+      "name": "autoplay-policy-detection",
+      "outcome": "ran",
+      "prefix": "/autoplay-policy-detection/",
+      "report": ".tmp/wpt-corpus/autoplay-policy-detection.json",
+      "returncode": 64,
+      "seconds": 16.6
+    },
+    {
+      "ids": 1,
+      "name": "avif",
+      "outcome": "ran",
+      "prefix": "/avif/",
+      "report": ".tmp/wpt-corpus/avif.json",
+      "returncode": 64,
+      "seconds": 5.5
+    },
+    {
+      "ids": 14,
+      "name": "background-fetch",
+      "outcome": "ran",
+      "prefix": "/background-fetch/",
+      "report": ".tmp/wpt-corpus/background-fetch.json",
+      "returncode": 64,
+      "seconds": 169.4
+    },
+    {
+      "ids": 2,
+      "name": "background-sync",
+      "outcome": "ran",
+      "prefix": "/background-sync/",
+      "report": ".tmp/wpt-corpus/background-sync.json",
+      "returncode": 64,
+      "seconds": 71.5
+    },
+    {
+      "ids": 8,
+      "name": "badging",
+      "outcome": "ran",
+      "prefix": "/badging/",
+      "report": ".tmp/wpt-corpus/badging.json",
+      "returncode": 64,
+      "seconds": 102.8
+    },
+    {
+      "ids": 22,
+      "name": "battery-status",
+      "outcome": "ran",
+      "prefix": "/battery-status/",
+      "report": ".tmp/wpt-corpus/battery-status.json",
+      "returncode": 64,
+      "seconds": 105.6
+    },
+    {
+      "ids": 17,
+      "name": "beacon",
+      "outcome": "ran",
+      "prefix": "/beacon/",
+      "report": ".tmp/wpt-corpus/beacon.json",
+      "returncode": 64,
+      "seconds": 161.0
+    },
+    {
+      "ids": 155,
+      "name": "bluetooth",
+      "outcome": "timeout",
+      "prefix": "/bluetooth/",
+      "report": null,
+      "returncode": null,
+      "seconds": 910.1
+    },
+    {
+      "ids": 13,
+      "name": "browsing-topics",
+      "outcome": "ran",
+      "prefix": "/browsing-topics/",
+      "report": ".tmp/wpt-corpus/browsing-topics.json",
+      "returncode": 64,
+      "seconds": 41.6
+    },
+    {
+      "ids": 5,
+      "name": "captured-mouse-events",
+      "outcome": "ran",
+      "prefix": "/captured-mouse-events/",
+      "report": ".tmp/wpt-corpus/captured-mouse-events.json",
+      "returncode": 64,
+      "seconds": 36.7
+    },
+    {
+      "ids": 13,
+      "name": "clear-site-data",
+      "outcome": "ran",
+      "prefix": "/clear-site-data/",
+      "report": ".tmp/wpt-corpus/clear-site-data.json",
+      "returncode": 64,
+      "seconds": 102.6
+    },
+    {
+      "ids": 132,
+      "name": "client-hints",
+      "outcome": "ran",
+      "prefix": "/client-hints/",
+      "report": ".tmp/wpt-corpus/client-hints.json",
+      "returncode": 64,
+      "seconds": 438.8
+    },
+    {
+      "ids": 61,
+      "name": "clipboard-apis",
+      "outcome": "ran",
+      "prefix": "/clipboard-apis/",
+      "report": ".tmp/wpt-corpus/clipboard-apis.json",
+      "returncode": 64,
+      "seconds": 243.8
+    },
+    {
+      "ids": 65,
+      "name": "close-watcher",
+      "outcome": "ran",
+      "prefix": "/close-watcher/",
+      "report": ".tmp/wpt-corpus/close-watcher.json",
+      "returncode": 64,
+      "seconds": 39.0
+    },
+    {
+      "ids": 38,
+      "name": "compat",
+      "outcome": "ran",
+      "prefix": "/compat/",
+      "report": ".tmp/wpt-corpus/compat.json",
+      "returncode": 64,
+      "seconds": 18.3
+    },
+    {
+      "ids": 74,
+      "name": "compression",
+      "outcome": "ran",
+      "prefix": "/compression/",
+      "report": ".tmp/wpt-corpus/compression.json",
+      "returncode": 64,
+      "seconds": 249.7
+    },
+    {
+      "ids": 45,
+      "name": "compute-pressure",
+      "outcome": "ran",
+      "prefix": "/compute-pressure/",
+      "report": ".tmp/wpt-corpus/compute-pressure.json",
+      "returncode": 64,
+      "seconds": 268.5
+    },
+    {
+      "ids": 73,
+      "name": "connection-allowlist",
+      "outcome": "ran",
+      "prefix": "/connection-allowlist/",
+      "report": ".tmp/wpt-corpus/connection-allowlist.json",
+      "returncode": 64,
+      "seconds": 211.8
+    }
+  ]
+}
