@@ -93,6 +93,25 @@ RAW_PREV_SUFFIX = RAW_SUFFIX + ".prev"
 HARNESS_OK = frozenset({"OK", "PASS"})
 
 
+#: `wptrunner`'s own per-test wall-clock ceilings at `timeout_multiplier=1`:
+#: a test the manifest marks `timeout: long` gets 60 s, every other test 10 s,
+#: and the executor's deadline is `timeout + extra_timeout` on top
+#: (`executors/base.py::extra_timeout = 5`, applied in `executorlumen.py`).
+#: 8 196 of the corpus's ids are `long` (WPT-RUN-5 slice 15) and they are not
+#: spread evenly — whole categories are 96-99 % `long`, which is what makes a
+#: flat per-id budget kill them. The sum of the three is what a hung test
+#: actually costs, measured: 15.08 s median for a short one, 65.29 s for a
+#: long one, against 15 s and 65 s predicted here.
+TIMEOUT_SHORT = 10.0
+TIMEOUT_LONG = 60.0
+TIMEOUT_EXTRA = 5.0
+
+#: Headroom over the summed ceilings, for imperfect parallelism (measured
+#: effective 5.8 of 6 processes) — not for per-test overshoot, which
+#: `TIMEOUT_EXTRA` already accounts for exactly.
+BUDGET_SLACK = 1.15
+
+
 def update_manifest() -> None:
     """Refresh `MANIFEST.json` once, up front, so shards can skip it."""
     sys.path[:0] = [
@@ -166,17 +185,21 @@ def plan_shards(manifest: dict, categories: list) -> list:
     dropping them changes no number, only the noise.
 
     `ids` deliberately stays the *full* id count, `manual`/`visual` included:
-    it feeds `shard_timeout`, which budgets wall-clock, and the measured rate
-    (3.0 s/id) is already above the 2.0 s/id default — the slack a
-    manual-heavy directory carries is protective, and tightening it here would
-    buy nothing but fresh budget kills.
+    it is what the summary and `state.json` report a shard's size as. The time
+    budget no longer comes from it — `shard_timeout` sums the declared per-test
+    ceilings of `auto_ids`/`long_ids` instead, which is both tighter (a
+    manual-heavy directory stops carrying phantom slack) and safer (a
+    long-heavy one stops being under-budgeted); see WPT-RUN-5 slice 15.
     """
     by_category = {}
     automatable = set()
-    for test_type, category, test_id in corpus_stats.iter_ids(manifest):
+    long_tests = set()
+    for test_type, category, test_id, extras in corpus_stats.iter_entries(manifest):
         by_category.setdefault(category, []).append(test_id)
         if test_type not in corpus_stats.NON_AUTOMATABLE_TYPES:
             automatable.add(test_id)
+            if extras.get("timeout") == "long":
+                long_tests.add(test_id)
 
     shards = []
     dropped = 0
@@ -185,7 +208,7 @@ def plan_shards(manifest: dict, categories: list) -> list:
         if not ids:
             print(f"warning: category not in manifest, skipped: {category}", file=sys.stderr)
             continue
-        for shard in _split([category], ids, automatable):
+        for shard in _split([category], ids, automatable, long_tests):
             if shard["auto_ids"]:
                 shards.append(shard)
             else:
@@ -196,7 +219,7 @@ def plan_shards(manifest: dict, categories: list) -> list:
     return shards
 
 
-def _split(prefix_parts: list, ids: list, automatable: set) -> list:
+def _split(prefix_parts: list, ids: list, automatable: set, long_tests: set) -> list:
     """Recursively split a directory's ids until each shard fits the threshold.
 
     One level of splitting is not enough: `css/CSS2` alone is 9228 ids, which
@@ -210,7 +233,7 @@ def _split(prefix_parts: list, ids: list, automatable: set) -> list:
     depth = len(prefix_parts)
     name = "/".join(prefix_parts)
     if len(ids) <= SHARD_THRESHOLD:
-        return [_shard(name, f"/{name}/", ids, automatable)]
+        return [_shard(name, f"/{name}/", ids, automatable, long_tests)]
 
     groups = {}
     for test_id in ids:
@@ -223,7 +246,7 @@ def _split(prefix_parts: list, ids: list, automatable: set) -> list:
     if len(groups) == 1 and "" in groups:
         # Flat directory, nothing deeper to split on — accept the oversized
         # shard rather than inventing a split wptrunner can't express.
-        return [_shard(name, f"/{name}/", ids, automatable)]
+        return [_shard(name, f"/{name}/", ids, automatable, long_tests)]
 
     shards = []
     for key, group_ids in sorted(groups.items()):
@@ -233,19 +256,22 @@ def _split(prefix_parts: list, ids: list, automatable: set) -> list:
             # subdirectory we just split out, running them twice. Corpus-wide
             # this is 5 such nodes totalling ~100 ids, so listing them
             # explicitly is both exact and short enough for a command line.
-            shard = _shard(f"{name} (bare)", None, group_ids, automatable)
+            shard = _shard(f"{name} (bare)", None, group_ids, automatable, long_tests)
             shard["test_ids"] = sorted(group_ids)
             shards.append(shard)
         else:
-            shards.extend(_split(prefix_parts + [key], group_ids, automatable))
+            shards.extend(_split(prefix_parts + [key], group_ids, automatable, long_tests))
     return shards
 
 
-def _shard(name: str, prefix, ids: list, automatable: set) -> dict:
-    """One shard record: full id count for the budget, automatable count for
-    the decision whether the shard is worth running at all."""
+def _shard(name: str, prefix, ids: list, automatable: set, long_tests: set) -> dict:
+    """One shard record: full id count for reporting, automatable count for the
+    decision whether the shard is worth running at all, and how many of those
+    declare `timeout: long` — the two numbers `shard_timeout` budgets from."""
+    auto = [test_id for test_id in ids if test_id in automatable]
     return {"name": name, "prefix": prefix, "ids": len(ids),
-            "auto_ids": sum(1 for test_id in ids if test_id in automatable)}
+            "auto_ids": len(auto),
+            "long_ids": sum(1 for test_id in auto if test_id in long_tests)}
 
 
 def shard_report_path(out_dir: str, shard: dict) -> str:
@@ -316,16 +342,44 @@ def kill_tree(proc) -> None:
                 pass
 
 
-def shard_timeout(shard: dict, base: int, per_id: float) -> int:
-    """Budget a shard's wall-clock by its size, not by a flat constant.
+def shard_timeout(shard: dict, base: int, per_id, processes: int = 1) -> int:
+    """Budget a shard's wall-clock from what the harness itself promises.
 
     WPT-RUN-4 pilot: a flat 1200s killed `encoding` (1343 ids) mid-run while
     being ten times more than `FileAPI` (125 ids) ever needed. A killed shard
     loses everything it had done — `wptreport.json` is only written at the end —
-    so the budget has to scale with the shard. Observed rate at
-    `--processes=6` was ~0.8s/id, so the default 2s/id is ~2.5x headroom.
+    so the budget has to scale with the shard.
+
+    Scaling by id count alone is still a guess, and WPT-RUN-5 slice 15 measured
+    why it is the wrong one: what a shard costs is set by the *declared*
+    per-test timeout, not by how many tests it holds. A test that times out
+    burns its whole ceiling — 10 s normally, **60 s** when the manifest marks it
+    `timeout: long` — while a test that resolves costs ~0.05 s. So a long-heavy
+    category where everything times out (`WebCryptoAPI`, `ai`, `bluetooth`,
+    `fledge`: 96-99 % `long`) runs at 9.5-11 s/id at `--processes=6`, 13x the
+    0.75 s/id of a healthy shard, and any flat per-id constant below that kills
+    it — which is exactly what happened to those five shards on 2026-08-20.
+
+    The manifest already states which tests get the long ceiling, so the budget
+    is derived rather than tuned: sum the ceilings of the shard's automatable
+    ids, divide by the process count (measured effective parallelism 5.8 of 6),
+    add `BUDGET_SLACK` for imperfect parallelism and the fixed `base` for the
+    wptserve boot (~38 s measured, the rest is headroom). The ceiling is the
+    declared timeout plus wptrunner's own `extra_timeout`, which is what makes
+    it match observation to two digits: 15.08 s measured for a short hung test,
+    65.29 s for a long one. Nothing is paid unless the shard actually hangs:
+    the budget is a kill ceiling, not a pause.
+
+    `per_id` overrides the derivation with the old flat rate when given
+    (`--shard-timeout-per-id`), kept for reproducing an earlier run's budgets.
     """
-    return int(base + shard["ids"] * per_id)
+    if per_id is not None:
+        return int(base + shard["ids"] * per_id)
+    long_ids = shard.get("long_ids", 0)
+    short_ids = max(shard.get("auto_ids", shard["ids"]) - long_ids, 0)
+    declared = (long_ids * (TIMEOUT_LONG + TIMEOUT_EXTRA)
+                + short_ids * (TIMEOUT_SHORT + TIMEOUT_EXTRA))
+    return int(base + declared * BUDGET_SLACK / max(processes, 1))
 
 
 def https_ids(manifest: dict, scope: set = None) -> list:
@@ -541,8 +595,10 @@ def resumable_states(previous: list, out_dir: str, retry_timeouts: bool) -> list
 
     * a killed shard that salvaged **nothing** is retried — there is no partial
       result to protect and one more attempt may be all it needs;
-    * `--retry-timeouts` retries them all, which is what a resume with a raised
-      `--shard-timeout-per-id` wants (`WPT-RUN-9`). That path is safe because
+    * `--retry-timeouts` retries them all, which is what a resume with a wider
+      budget wants (`WPT-RUN-9` — since WPT-RUN-5 slice 15 that means the
+      derived budget rather than a raised `--shard-timeout-per-id`, which now
+      only exists to reproduce an older run). That path is safe because
       `run_shard` rotates the raw stream first, so a shorter second attempt
       cannot destroy the first one's results.
 
@@ -681,7 +737,10 @@ def main() -> int:
     parser.add_argument("--processes", type=int, default=6, help="wptrunner --processes per shard (default: 6)")
     parser.add_argument("--out-dir", default=DEFAULT_OUT_DIR)
     parser.add_argument("--shard-timeout-base", type=int, default=600, help="fixed part of a shard's time budget, seconds (default: 600)")
-    parser.add_argument("--shard-timeout-per-id", type=float, default=2.0, help="per-id part of a shard's time budget, seconds (default: 2.0)")
+    parser.add_argument("--shard-timeout-per-id", type=float, default=None,
+                        help="flat per-id time budget, seconds; default is to derive the "
+                             "budget from the declared per-test timeouts in the manifest "
+                             "(see shard_timeout)")
     parser.add_argument("--resume", action="store_true", help="skip shards that already produced a report")
     parser.add_argument("--retry-timeouts", action="store_true",
                         help="on --resume, run budget-killed shards again instead of keeping "
@@ -776,7 +835,8 @@ def main() -> int:
             if shard["name"] in done:
                 print(f"[{index}/{len(shards)}] {shard['name']}: cached", flush=True)
                 continue
-            budget = shard_timeout(shard, args.shard_timeout_base, args.shard_timeout_per_id)
+            budget = shard_timeout(shard, args.shard_timeout_base, args.shard_timeout_per_id,
+                                   args.processes)
             print(f"[{index}/{len(shards)}] {shard['name']}: {shard['ids']} ids (budget {budget}s) ...", end="", flush=True)
             state = run_shard(shard, binary, args.out_dir, args.processes, budget, exclude_file)
             shard_states.append(state)
