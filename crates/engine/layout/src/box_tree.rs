@@ -6600,18 +6600,56 @@ fn min_content_outer_width_of_contents(
     let pr = s.padding_right.resolve_or_zero(em, 0.0, viewport);
     let content_w = match &b.kind {
         BoxKind::InlineRun { segments, .. } => {
-            // min-content = longest single word across all segments.
+            // min-content = widest unbreakable stretch of text.
+            //
+            // A space is a soft-wrap opportunity only where the segment's own
+            // `white-space`/`text-wrap-mode` permits wrapping. Under `nowrap`
+            // (and `pre`) there are none, so the stretch runs to the end of the
+            // segment — and on to the next segment, since nothing between two
+            // adjacent non-wrapping segments can break either. Splitting such
+            // text on spaces anyway reported the widest *word* as the whole
+            // run's minimum, which is what let a row of `white-space: nowrap`
+            // flex items shrink far below their text and paint over each other
+            // (BUG-427, dzen.ru topic tabs: "Москва — город будущего" claimed
+            // the width of "будущего").
+            //
+            // `pre` still breaks at preserved newlines, so its stretches are the
+            // segment's `\n`-separated lines rather than the whole segment.
             measurer.map_or(0.0, |m| {
-                segments.iter().flat_map(|seg| {
+                let mut best = 0.0_f32;
+                let mut run = 0.0_f32;
+                for seg in segments {
                     let ls = seg.style.letter_spacing;
                     let fams = &seg.style.font_family;
-                    let ts = seg.style.tab_size
-                        * m.char_width_with_families(' ', seg.style.font_size, fams);
-                    // Split on whitespace to find individual "words".
-                    seg.text.split_whitespace().map(move |word| {
-                        measure_text_w_families(word, seg.style.font_size, ls, ts, fams, m)
-                    })
-                }).fold(0.0_f32, f32::max)
+                    let fs = seg.style.font_size;
+                    let ts = seg.style.tab_size * m.char_width_with_families(' ', fs, fams);
+                    let piece =
+                        |t: &str| measure_text_w_families(t, fs, ls, ts, fams, m);
+                    let no_wrap = seg.style.white_space.is_nowrap()
+                        || seg.style.text_wrap_mode == TextWrapMode::Nowrap;
+                    if no_wrap {
+                        let mut lines = seg.text.split('\n');
+                        // The first line continues the stretch built so far.
+                        if let Some(first) = lines.next() {
+                            run += piece(first);
+                            best = best.max(run);
+                        }
+                        for line in lines {
+                            run = piece(line);
+                            best = best.max(run);
+                        }
+                    } else {
+                        // Wrappable: every space is a break opportunity, so the
+                        // longest word bounds the minimum (a leading word could
+                        // extend the previous stretch — deliberately not modelled,
+                        // as before).
+                        run = 0.0;
+                        for word in seg.text.split_whitespace() {
+                            best = best.max(piece(word));
+                        }
+                    }
+                }
+                best
             })
         }
         BoxKind::InlineBlockRow => {
@@ -11206,6 +11244,36 @@ fn lay_out_flex(
                 }
             } else {
                 let inner_main = (outer_main - m_l - m_r).max(0.0);
+                // BUG-427: `inner_main` is a *border-box* main size — the flex base
+                // size comes from `max_content_outer_width`, which already includes
+                // the item's own padding+border. Handing it to a content-box item as
+                // its used `width` made the re-layout add that padding+border a
+                // second time: the item's rect came out `padding_x + border_x` too
+                // wide while the main-axis cursor kept advancing by the correct
+                // border-box size, so every pair of adjacent padded row items
+                // overlapped by exactly that amount (dzen.ru topic tabs, 24 px of
+                // padding → chips drawn on top of each other; items with an explicit
+                // `width` escaped it because their base size came from style).
+                // Converted here rather than by forcing `box_sizing: BorderBox` the
+                // way the column arm does — that switch also reinterprets the item's
+                // own `height`, which is a *cross*-axis size in this arm and must
+                // keep its declared box-sizing (TEST-30's `.box`: 120px + 3px border
+                // is 126 tall, not 120).
+                let used_main = {
+                    let is = &children[i].style;
+                    match is.box_sizing {
+                        BoxSizing::BorderBox => inner_main,
+                        BoxSizing::ContentBox => {
+                            let iem = is.font_size;
+                            let pl = is.padding_left.resolve_or_zero(iem, cb, viewport);
+                            let pr = is.padding_right.resolve_or_zero(iem, cb, viewport);
+                            (inner_main - pl - pr
+                                - is.border_left_width
+                                - is.border_right_width)
+                                .max(0.0)
+                        }
+                    }
+                };
                 // CSS Flexbox §9.8: percentage cross sizes (e.g. height:100%) resolve
                 // against the flex container's definite cross size.
                 // BUG-294: margin-box start — `lay_out_inner` adds `m_l`/`m_t` itself
@@ -11222,7 +11290,7 @@ fn lay_out_flex(
                     hp,
                     false,
                     UsedSizeOverride {
-                        width: Some(inner_main),
+                        width: Some(used_main),
                         ..Default::default()
                     },
                 );
@@ -18785,6 +18853,61 @@ mod tests {
         let b = find_by_id_all(&root, &doc, "b").expect("b");
         assert_eq!(a.rect.x, 0.0, "a.x {}", a.rect.x);
         assert_eq!(b.rect.x, 70.0, "b.x {} (expected 70 = 0 + 60 + 10)", b.rect.x);
+    }
+
+    #[test]
+    fn flex_row_item_padding_applied_once() {
+        // BUG-427: a row flex item's own padding must be counted once. The flex base
+        // size handed back to the item's re-layout is already a border-box width, so
+        // the re-layout has to be forced to `border-box` (as the column arm is);
+        // otherwise a content-box item got padding+border added on top and its rect
+        // came out `padding_x + border_x` too wide, while the main-axis cursor still
+        // advanced by the correct border-box size — adjacent items then overlapped by
+        // exactly that amount (dzen.ru topic tabs).
+        // a: 100 content + 2×12 padding + 2×3 border = 130 → b starts at 130.
+        let html = r#"<div id="flex"><div id="a"><div class="in"></div></div><div id="b"><div class="in"></div></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;width:600px;height:100px}\
+                   #a,#b{padding:0 12px;border:3px solid #000}\
+                   .in{width:100px;height:40px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let b = find_by_id_all(&root, &doc, "b").expect("b");
+        assert_eq!(a.rect.width, 130.0, "a.width {} (expected 100+24+6)", a.rect.width);
+        assert_eq!(b.rect.x, 130.0, "b.x {} (must abut a's border-box edge)", b.rect.x);
+        assert_eq!(b.rect.width, 130.0, "b.width {}", b.rect.width);
+    }
+
+    #[test]
+    fn min_content_width_of_nowrap_text_is_max_content() {
+        // BUG-427: whitespace is a soft-wrap opportunity only where wrapping is
+        // allowed. Under `white-space: nowrap` the text cannot break at all, so its
+        // min-content width equals its max-content width — reporting the widest
+        // single word instead let a row of nowrap flex items shrink far below their
+        // text and paint on top of each other.
+        /// Fixed 8px per character, so the expected widths are exact.
+        struct Fixed8;
+        impl crate::TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 {
+                8.0
+            }
+        }
+        let html = r#"<div id="wrapy">aaaa bbbb cccc</div><div id="nowrapy">aaaa bbbb cccc</div><div id="maxy">aaaa bbbb cccc</div>"#;
+        let css = "body{margin:0} div{font-size:16px}\
+                   #wrapy{width:min-content}\
+                   #nowrapy{width:min-content;white-space:nowrap}\
+                   #maxy{width:max-content}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8);
+        let wrapy = find_by_id_all(&root, &doc, "wrapy").expect("wrapy").rect.width;
+        let nowrapy = find_by_id_all(&root, &doc, "nowrapy").expect("nowrapy").rect.width;
+        let maxy = find_by_id_all(&root, &doc, "maxy").expect("maxy").rect.width;
+        // 14 characters × 8px = 112 on one line; the widest word is 4 × 8 = 32.
+        assert_eq!(maxy, 112.0, "max-content {maxy}");
+        assert_eq!(nowrapy, 112.0, "nowrap min-content {nowrapy} must equal max-content");
+        assert_eq!(wrapy, 32.0, "wrappable min-content {wrapy} must be the widest word");
     }
 
     #[test]
