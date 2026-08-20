@@ -1145,6 +1145,35 @@ the time — read dates.
   — `[SecureContext]` gating is [BUG-765](../bugs/BUG-765-OPEN.md), and `WorkerGlobalScope` has no
   such property at all ([BUG-766](../bugs/BUG-766-OPEN.md)).
 
+- **`HTMLElement.innerText`/`outerText` — setters (BUG-413 slice 1, [P3] 2026-08-21).**
+  Neither property existed at all — not on the wrapper, not on a prototype — so `el.innerText = s`
+  quietly minted an expando and the caller died on the *next* statement (WPT's own helper reads
+  `offsetWidth`/`firstChild` off the result, which is why 169 subtests of
+  `html/dom/elements/the-innertext-and-outertext-properties/` failed on a line that never mentions
+  `innerText`). Both setters live in the live-wrapper factory (`_lumen_build_element`, JS shim)
+  next to `textContent`, and share one helper, `_lumen_rendered_text_nids` — HTML LS §3.2.7's
+  «rendered text fragment» literally: a run of non-break code points becomes a Text node, each
+  line break becomes a `<br>`, a `\r\n` pair counts as **one** break while `\n\n`/`\r\r` count as
+  two, and a leading or trailing break yields a lone `<br>`. Three details worth keeping in mind
+  when the getter (slice 2) lands on top:
+  - **The white-space caveat in the bug report is not in the spec.** The rendered-text-fragment
+    algorithm is unconditional; there is no `white-space: pre*` branch that would emit Text nodes
+    instead of `<br>`s. Only the *getter* depends on layout.
+  - **`outerText`'s merge is deliberately narrower than `normalize()`.** The spec merges exactly
+    the two Text nodes that used to touch the replaced element (steps 7–8), so
+    `A|B|<span>|D|E` becomes `A|BReplacedD|E`, not one node — `_lumen_merge_with_next_text` folds
+    a single next sibling and nothing else. Assigning `''` still inserts one empty Text node
+    (step 5), which is what makes the two neighbours end up merged with the element gone.
+  - **Absence outside the HTML namespace is emulated, not inherited.** Both are `HTMLElement`
+    members, but the shim builds one wrapper shape for every element, so the accessor is present
+    on an SVG/MathML wrapper too; `_lumen_assign_as_expando` redefines it as a plain data property
+    on assignment, which is what a write to a missing property does. The namespace check reads
+    `namespaceURI`, so it is correct for `createElementNS` and wrong for markup-parsed foreign
+    content — the parser has no foreign-content mode ([BUG-685](../bugs/BUG-685-OPEN.md)).
+  Reading either property is still `undefined`: the `innerText` getter must report *rendered* text
+  — the one place in HTML where a DOM API depends on layout — and is slice 2 of
+  [BUG-413](../bugs/BUG-413-OPEN.md).
+
 ## Deferred
 
 - WebGL: GLSL execution (per-vertex colour / texture sampling — currently flat `uniform4f` fill), `drawElements` / indexed draws, real textures. Backend stub lives in `lumen_paint::webgl`.

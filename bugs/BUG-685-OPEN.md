@@ -174,3 +174,31 @@ patches `createElementNS`; the tag→constructor table `SVG_TAG_MAP`
 already exists and can be reused directly). MathML foreign content has
 the same gap but is out of scope for this WPT category and not measured
 here.
+
+## Пересверка 2026-08-20 (P3, срез 1 [BUG-413](BUG-413-OPEN.md)) — MathML тоже, и цена в сабтестах
+
+Замерено при закрытии первого среза BUG-413 через шим (`v8_runtime_with_dom`,
+`_lumen_get_namespace_uri`) — тот же дефект виден и на `innerHTML`-фрагменте, не
+только на разборе полного документа:
+
+```js
+c.innerHTML = '<svg><rect></rect></svg><math><mi></mi></math>';
+String(c.firstChild.namespaceURI)             // http://www.w3.org/1999/xhtml  (ждём .../2000/svg)
+String(c.firstChild.firstChild.namespaceURI)  // http://www.w3.org/1999/xhtml  (ждём .../2000/svg)
+String(c.lastChild.namespaceURI)              // http://www.w3.org/1999/xhtml  (ждём .../1998/Math/MathML)
+String(c.firstChild.tagName)                  // SVG                           (ждём svg)
+```
+
+Уточнения к «Дальше» выше:
+
+- **MathML не «вне скоупа», а тот же дефект того же места.** Раздел «Дальше»
+  отложил его как не измеренный в категории `svg`; здесь он измерен и ведёт
+  себя идентично (`<math>`/`<mi>` → `Namespace::Html`). Отдельного бага не
+  требуется — таблицы §13.2.6.5 покрывают оба пространства имён сразу.
+- **Третий пострадавший потребитель namespace** (к `getElementsByName` и
+  прототипам SVG DOM): сеттеры `innerText`/`outerText`
+  ([BUG-413](BUG-413-OPEN.md), срез 1) — члены `HTMLElement`, поэтому на
+  SVG/MathML их быть не должно вовсе. Проверка сделана по `namespaceURI` и на
+  `createElementNS`-элементах работает; на разобранных из разметки — нет.
+  Цена ровно в сабтестах WPT: `innertext-setter.html` не берёт 4 (`<svg>`/`<math>`,
+  обычный и detached), `outertext-setter.html` — 2.

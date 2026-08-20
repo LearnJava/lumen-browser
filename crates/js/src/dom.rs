@@ -3374,6 +3374,75 @@ function _lumen_make_named_node_map(nid) {
     });
 }
 
+// ── HTML LS §3.2.7 `innerText` / `outerText` setters (BUG-413) ───────────────
+// Neither property existed at all — not on the wrapper, not on a prototype — so
+// `el.innerText = s` quietly minted an expando and every test in the WPT
+// directory `html/dom/elements/the-innertext-and-outertext-properties/` died on
+// the *next* statement. Only the two setters live here; the `innerText` getter
+// is «rendered text» and needs the layout boxes, which is a separate slice.
+
+// `innerText`/`outerText` are `HTMLElement` members, so an SVG or MathML element
+// — or a Text/Comment node, which shares this wrapper factory — has to behave as
+// if the property were simply absent. WPT asserts exactly that with
+// `testHTML('<svg>', 'abc', …)`.
+var _LUMEN_HTML_NS = 'http://www.w3.org/1999/xhtml';
+function _lumen_is_html_element_nid(n) {
+    return _lumen_u2n(_lumen_get_namespace_uri(n)) === _LUMEN_HTML_NS;
+}
+
+// Mimics assigning to an object that carries no such accessor: the own accessor
+// installed by the wrapper literal is shadowed by a plain data property, so the
+// write neither reaches the DOM nor silently vanishes.
+function _lumen_assign_as_expando(obj, prop, value) {
+    Object.defineProperty(obj, prop, {
+        value: value, writable: true, enumerable: true, configurable: true,
+    });
+}
+
+// Same overflow sentinel `createElement`/`createTextNode` check — the native
+// side answers -1 once the node budget is exhausted (BUG-457).
+function _lumen_new_node_or_throw(n) {
+    if (n < 0) { throw new DOMException('DOM node limit exceeded', 'QuotaExceededError'); }
+    return n;
+}
+
+// HTML LS §3.2.7 «rendered text fragment»: splits `input` on line breaks into the
+// Text nodes and `<br>` elements the two setters insert, returning their NodeIds
+// in tree order. A CRLF pair counts as ONE break, `\\n\\n` and `\\r\\r` as two, and
+// a leading or trailing break yields a `<br>` with no Text node beside it.
+function _lumen_rendered_text_nids(input) {
+    var out = [];
+    var i = 0;
+    while (i < input.length) {
+        var start = i;
+        while (i < input.length && input[i] !== '\\n' && input[i] !== '\\r') { i++; }
+        if (i > start) {
+            out.push(_lumen_new_node_or_throw(_lumen_create_text_node(input.slice(start, i))));
+        }
+        while (i < input.length && (input[i] === '\\n' || input[i] === '\\r')) {
+            if (input[i] === '\\r' && input[i + 1] === '\\n') { i++; }
+            i++;
+            out.push(_lumen_new_node_or_throw(_lumen_create_element('br')));
+        }
+    }
+    return out;
+}
+
+// HTML LS §3.2.7 «merge with the next text node»: when `nodeNid` and its next
+// sibling are both Text, fold the sibling's data into it and drop the sibling.
+// Deliberately narrower than `normalize()` — the `outerText` setter merges only
+// the two nodes that used to touch the replaced element, nothing else.
+function _lumen_merge_with_next_text(pid, nodeNid) {
+    if (nodeNid === null || !_lumen_is_text_node(nodeNid)) { return; }
+    var sibs = _lumen_get_children(pid);
+    var i = sibs.indexOf(nodeNid);
+    if (i < 0 || i + 1 >= sibs.length) { return; }
+    var next = sibs[i + 1];
+    if (!_lumen_is_text_node(next)) { return; }
+    _lumen_set_text_content(nodeNid, _lumen_get_text_content(nodeNid) + _lumen_get_text_content(next));
+    _lumen_remove_child(pid, next);
+}
+
 function _lumen_build_element(nid) {
     var _classList = _lumen_make_class_list(nid);
     var _style     = _lumen_make_style(nid);
@@ -3464,6 +3533,52 @@ function _lumen_build_element(nid) {
             var wrapped = [];
             for (var _ohi = 0; _ohi < newIds.length; _ohi++) { wrapped.push(_lumen_make_element(newIds[_ohi])); }
             this.replaceWith.apply(this, wrapped);
+        },
+        // HTML LS §3.2.7 (BUG-413). Setters only — the `innerText` getter has to
+        // report *rendered* text, which needs the layout boxes, and is a separate
+        // slice; reading either property still yields `undefined`, exactly as it
+        // did before. `[LegacyNullToEmptyString]` is why `null` becomes '' here
+        // while `undefined` stringifies to 'undefined'.
+        set innerText(v) {
+            if (!_lumen_is_html_element_nid(nid)) {
+                _lumen_assign_as_expando(this, 'innerText', v);
+                return;
+            }
+            var kids = _lumen_rendered_text_nids(v === null ? '' : String(v));
+            var old  = _lumen_get_children(nid).slice();
+            for (var _iti = 0; _iti < old.length; _iti++) { _lumen_remove_child(nid, old[_iti]); }
+            for (var _itj = 0; _itj < kids.length; _itj++) { _lumen_append_child(nid, kids[_itj]); }
+        },
+        // Same fragment, but it replaces the element itself and then re-joins the
+        // text nodes that used to sit either side of it. Assigning '' therefore
+        // removes the element and leaves a single merged neighbour behind.
+        set outerText(v) {
+            if (!_lumen_is_html_element_nid(nid)) {
+                _lumen_assign_as_expando(this, 'outerText', v);
+                return;
+            }
+            var pid = _lumen_u2n(_lumen_get_parent(nid));
+            if (pid === null) {
+                throw new DOMException(
+                    'Failed to set the outerText property: This element has no parent node.',
+                    'NoModificationAllowedError');
+            }
+            var sibs = _lumen_get_children(pid);
+            var idx  = sibs.indexOf(nid);
+            var prevNid = idx > 0 ? sibs[idx - 1] : null;
+            var nextNid = (idx >= 0 && idx + 1 < sibs.length) ? sibs[idx + 1] : null;
+            var kids = _lumen_rendered_text_nids(v === null ? '' : String(v));
+            // An all-empty assignment still has to leave a Text node behind, so
+            // that the merge below has something to fold the neighbours into.
+            if (kids.length === 0) { kids.push(_lumen_new_node_or_throw(_lumen_create_text_node('')));  }
+            for (var _oti = 0; _oti < kids.length; _oti++) { _lumen_insert_before(pid, kids[_oti], nid); }
+            _lumen_remove_child(pid, nid);
+            if (nextNid !== null) {
+                var after = _lumen_get_children(pid);
+                var ni    = after.indexOf(nextNid);
+                if (ni > 0) { _lumen_merge_with_next_text(pid, after[ni - 1]); }
+            }
+            _lumen_merge_with_next_text(pid, prevNid);
         },
         getAttribute:    function(n)    { return _lumen_u2n(_lumen_get_attr(nid, String(n))); },
         setAttribute:    function(n, v) {
@@ -20064,6 +20179,140 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn inner_text_setter_turns_line_breaks_into_br() {
+            // BUG-413: HTML LS §3.2.7 — the `innerText` setter replaces all
+            // children with the «rendered text fragment»: runs of text become
+            // Text nodes, every line break becomes a `<br>`, and a CRLF pair
+            // counts as one break while `\n\n` counts as two. `null` maps to the
+            // empty string ([LegacyNullToEmptyString]), `undefined` does not.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var c = document.getElementById('main'); \
+                     function set(v) { \
+                       var d = document.createElement('div'); c.appendChild(d); \
+                       d.innerText = v; return d.innerHTML; } \
+                     [set('abc'), set('abc\\ndef'), set('abc\\rdef'), \
+                      set('abc\\r\\ndef'), set('abc\\n\\ndef'), set('abc\\r\\rdef'), \
+                      set('\\r\\nabc'), set('abc\\r\\n'), set(''), set(null), \
+                      set(undefined), set('abc  def')].join('|')",
+                )
+                .unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String(
+                    "abc|abc<br>def|abc<br>def|abc<br>def|abc<br><br>def|abc<br><br>def|\
+                     <br>abc|abc<br>|||undefined|abc  def"
+                        .into()
+                )
+            );
+        }
+
+        #[test]
+        fn inner_text_setter_replaces_existing_children_with_one_text_node() {
+            // BUG-413: WPT `innertext-setter.html` asserts the assignment leaves
+            // exactly one — and a *new* — Text node behind, with no empty text
+            // siblings, both for a rendered element and for a detached one.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var live = document.getElementById('main'); \
+                     var oldChild = live.firstChild; \
+                     live.innerText = 'abc'; \
+                     var det = document.createElement('div'); \
+                     det.innerHTML = '<b>x</b>y'; det.innerText = 'zzz'; \
+                     live.firstChild.nodeType === 3 && live.firstChild.data === 'abc' && \
+                     live.firstChild.nextSibling === null && live.firstChild !== oldChild && \
+                     det.childNodes.length === 1 && det.firstChild.data === 'zzz'",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn inner_text_and_outer_text_absent_outside_html_namespace() {
+            // BUG-413: both are `HTMLElement` members, so on an SVG element the
+            // assignment must behave like a write to a plain object — the
+            // element's children stay untouched and the value reads back.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); \
+                     document.getElementById('main').appendChild(svg); \
+                     svg.innerText = 'abc'; svg.outerText = 'def'; \
+                     svg.innerHTML === '' && svg.innerText === 'abc' && \
+                     svg.outerText === 'def' && svg.parentNode !== null",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn outer_text_setter_merges_only_the_touching_text_nodes() {
+            // BUG-413: HTML LS §3.2.7 — the `outerText` setter replaces the
+            // element itself, then folds the Text nodes that used to sit either
+            // side of it into the inserted text. It is NOT a `normalize()`: the
+            // Text nodes further out stay separate.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var c = document.getElementById('main'); c.innerHTML = ''; \
+                     c.append('A', 'B', document.createElement('span'), 'D', 'E'); \
+                     c.childNodes[2].outerText = 'Replaced'; \
+                     c.innerHTML === 'ABReplacedDE' && c.childNodes.length === 3 && \
+                     c.childNodes[0].data === 'A' && \
+                     c.childNodes[1].data === 'BReplacedD' && \
+                     c.childNodes[2].data === 'E'",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn outer_text_setter_empty_string_removes_the_element() {
+            // BUG-413: an empty assignment still inserts one empty Text node, so
+            // the two neighbours end up merged into a single node and the element
+            // itself is gone.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var c = document.getElementById('main'); c.innerHTML = ''; \
+                     c.append('1', '2', document.createElement('span'), '3', '4'); \
+                     c.childNodes[2].outerText = ''; \
+                     var lonely = document.createElement('div'); \
+                     c.appendChild(lonely); \
+                     var only = document.createElement('p'); \
+                     lonely.appendChild(only); only.outerText = ''; \
+                     c.childNodes.length === 4 && c.childNodes[1].data === '23' && \
+                     lonely.childNodes.length === 1 && lonely.childNodes[0].data === ''",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn outer_text_setter_line_breaks_and_detached_element() {
+            // BUG-413: an all-newline assignment yields only `<br>`s with no Text
+            // nodes between them, and an element with no parent must throw
+            // NoModificationAllowedError instead of silently doing nothing.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var c = document.getElementById('main'); c.innerHTML = '<span>x</span>'; \
+                     c.firstElementChild.outerText = '\\n\\r\\n\\r'; \
+                     var threw = ''; \
+                     try { document.createElement('span').outerText = ''; } \
+                     catch (e) { threw = e.name; } \
+                     c.innerHTML + '/' + c.childNodes.length + '/' + threw",
+                )
+                .unwrap();
+            assert_eq!(
+                r,
+                lumen_core::JsValue::String("<br><br><br>/3/NoModificationAllowedError".into())
+            );
         }
 
         #[test]
