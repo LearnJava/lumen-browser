@@ -6193,6 +6193,22 @@ fn route_eval_js(
 /// над JS-хэндлом.
 ///
 /// Обобщает [`route_eval_js`] (частный случай `|js| js.eval_js(&script)`) на
+/// Наносекунды, потраченные рендерером на ПЕЧАТЬ пофазного лога за процесс
+/// (BUG-405 срез 34). Дельта за кадр — цена инструмента внутри фазы `paint`.
+///
+/// Счётчик живёт в wgpu-бэкенде, поэтому без него статья пустая: femtovg своего
+/// пофазного блока не печатает.
+#[cfg(feature = "backend-wgpu")]
+fn frame_log_nanos() -> u64 {
+    lumen_paint::load_counter(&lumen_paint::FRAME_LOG_NANOS)
+}
+
+/// Заглушка [`frame_log_nanos`] для сборки без wgpu-бэкенда.
+#[cfg(not(feature = "backend-wgpu"))]
+fn frame_log_nanos() -> u64 {
+    0
+}
+
 /// любое void-действие над `&Arc<dyn PersistentJs>` — нужно для батча
 /// per-tick pump-вызовов (`tick_timers`/`pump_websockets`/`pump_sse`/
 /// `pump_workers`/`pump_broadcast_channels`/`pump_shared_workers`), которые не
@@ -16019,6 +16035,18 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     self.request_redraw();
                 }
 
+                // BUG-405 срез 34 (пункт 68 остатка): разбивка кадра по шагам
+                // `RedrawRequested`. `[frame] total` меряет весь handler, а
+                // `[frame:wgpu] total` — только пасс композитора; на кадре
+                // ПОПАДАНИЯ полосы между ними 3.6 из 4.3 мс, и у них не было
+                // ни одной статьи. Метки берутся только при `LUMEN_FRAME_LOG`
+                // (та же `Option<Instant>`, что и у `total`), поэтому штатный
+                // путь не платит за них ничего.
+                let mut marks = [0.0_f64; 6];
+                if let Some(t0) = frame_log_t0 {
+                    marks[0] = t0.elapsed().as_secs_f64() * 1e3;
+                }
+
                 // Step 1.5: CSS Scroll-Driven Animations — update ScrollTimeline.currentTime.
                 // Spec §8.1.5.1 step «update scroll-linked animations» precedes CSS animations.
                 // Compute root-viewport block/inline progress and deliver to JS.
@@ -16049,6 +16077,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
                         j.deliver_scroll_progress(p_y, p_x);
                     });
+                }
+
+                if let Some(t0) = frame_log_t0 {
+                    marks[1] = t0.elapsed().as_secs_f64() * 1e3;
                 }
 
                 // Step 2: CSS Animations + Transitions tick (spec order: before rAF).
@@ -16168,6 +16200,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     self.tick_video_gifs(video_elapsed_ms);
                 }
 
+                if let Some(t0) = frame_log_t0 {
+                    marks[2] = t0.elapsed().as_secs_f64() * 1e3;
+                }
+
                 // Step 3: rAF callbacks + microtask checkpoint.
                 self.runtime.run_rendering_step(timestamp_ms);
 
@@ -16244,6 +16280,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // first frame that has page content, present happens at the
                 // end of this same handler (±1 frame accuracy is enough).
                 bench_frames::log_first_frame_once(self.display_list.len());
+
+                if let Some(t0) = frame_log_t0 {
+                    marks[3] = t0.elapsed().as_secs_f64() * 1e3;
+                }
 
                 // Step 5: PerformancePaintTiming (W3C Paint Timing §2).
                 // Delivered once per page load; subsequent frames skip this block.
@@ -17078,6 +17118,13 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     .as_ref()
                     .and_then(lumen_layout::canvas_background_color);
 
+                if let Some(t0) = frame_log_t0 {
+                    marks[4] = t0.elapsed().as_secs_f64() * 1e3;
+                }
+                // BUG-405 срез 34: снимок счётчика печати пофазного лога — его
+                // дельта за кадр и есть цена инструмента внутри `paint`.
+                let log_nanos_at_paint = frame_log_nanos();
+
                 if let Some(r) = self.renderer.as_mut() {
                     r.set_canvas_background(canvas_bg);
                     if let Some(combined) = split_combined {
@@ -17153,11 +17200,34 @@ impl ApplicationHandler<LoadEvent> for Lumen {
 
                 if let Some(t0) = frame_log_t0 {
                     let frame_ms = t0.elapsed().as_secs_f64() * 1000.0;
+                    marks[5] = frame_ms;
                     self.frame_stats.record(frame_ms as f32);
                     eprintln!(
                         "[frame] total {frame_ms:6.2}ms  (scroll_y {:.0}, dl {} cmds)",
                         self.scroll_y,
                         self.display_list.len(),
+                    );
+                    // BUG-405 срез 34: шаги handler-а как ИНТЕРВАЛЫ между
+                    // метками. `scroll` — шаги 1/1.6/1.7 плюс порог
+                    // fast-scroll, `sda` — шаг 1.5, `anim` — 2/2b/2.5/2.6,
+                    // `js` — 3/3.1/4/5 (rAF, релейаут по грязному DOM,
+                    // paint-timing), `build` — сборка overlay/chrome/anim-DL
+                    // шага 6 ДО обращения к рендереру, `paint` — сам вызов
+                    // рендерера (то, что изнутри печатает `[frame:wgpu]`).
+                    // `log` — сколько из `paint` съела печать самого пофазного
+                    // блока рендерера (на попадании она крупнее всей работы
+                    // кадра); честная цена кадра = total − log.
+                    let log_ms = (frame_log_nanos() - log_nanos_at_paint) as f64 / 1e6;
+                    eprintln!(
+                        "[frame]   top: scroll {:.2} sda {:.2} anim {:.2} js {:.2} \
+                         build {:.2} paint {:.2} (лог {:.2})",
+                        marks[0],
+                        marks[1] - marks[0],
+                        marks[2] - marks[1],
+                        marks[3] - marks[2],
+                        marks[4] - marks[3],
+                        marks[5] - marks[4],
+                        log_ms,
                     );
                     // ADR-016 M0.5: classify this frame against the previous one
                     // via the split fingerprint (content hash ⟂ scroll/page
