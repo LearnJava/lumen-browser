@@ -207,6 +207,16 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
     nothing because everything was excluded is reported separately
     (`ran nothing`), so the "recovered" line keeps meaning "something went
     wrong".
+  - `--resume` therefore treats a budget-killed shard whose raw stream
+    salvaged something as **done**, instead of replaying it: the budget is the
+    same and the machine is no faster, so the replay dies at the same wall and
+    buys nothing — measured at 50 min per resume on the 2026-08-20 Linux run.
+    Which shards were kept is printed, not silent. `--retry-timeouts` runs them
+    again, which is what a resume with a raised `--shard-timeout-per-id` wants;
+    that is safe because the previous raw stream is rotated to `.raw.jsonl.prev`
+    and both generations are read at scoring time, so a shorter retry cannot
+    destroy the results the first attempt already had (mozlog opens `--log-raw`
+    with mode `"w"`).
 - `tests/wpt/expectations.py` — **ours** (TEST-3, `docs/tasks/p2-test-track.md`) — generates and
   gates on per-category `.ini` baselines for `run_report.py --update-expected`/`--check`, on top
   of the same native `wptrunner` `--metadata` mechanism `run_suite.py` uses for `dom/nodes`, not
