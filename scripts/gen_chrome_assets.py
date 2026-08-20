@@ -180,6 +180,18 @@ ONCLICK_EXACT_ACTIONS: dict[str, tuple[str, dict[str, str]]] = {
     # keys off the current domain rather than the global setting.
     "toggleSiteShields(this)": ("toggle-site-shields", {}),
     "toggleFingerprintMode(this)": ("toggle-fingerprint-mode", {}),
+    # BUG-422: `#view-history`/`#view-bookmarks` had no per-entry actions at
+    # all. Each of these is backed by real state (`History`/`Bookmarks` stores,
+    # `BookmarkPanel::selected_folder`, the OS clipboard) — see
+    # `dispatch_chrome_action`.
+    "histOpen(this)": ("open-history-entry", {}),
+    "histStar(event,this)": ("bookmark-history-entry", {}),
+    "histCopy(event,this)": ("copy-history-entry", {}),
+    "histDelete(event,this)": ("delete-history-entry", {}),
+    "histClear()": ("clear-history", {}),
+    "bmFolder(this)": ("select-folder", {}),
+    "bmOpen(this)": ("open-bookmark", {}),
+    "bmDelete(event,this)": ("delete-bookmark", {}),
     "closeRightSidebar()": ("close-right-sidebar", {}),
     "openAiSidebar()": ("open-ai-sidebar", {}),
     "openCertViewer(event)": ("open-cert-viewer", {}),
@@ -361,6 +373,10 @@ ARIA_LABEL_RULES: list[tuple[str, dict[str, str], str]] = [
     ("close-tab", {}, "Закрыть вкладку"),
     ("archive-restore", {}, "Восстановить вкладку"),
     ("archive-dismiss", {}, "Удалить из архива"),
+    ("bookmark-history-entry", {}, "Добавить в закладки"),
+    ("copy-history-entry", {}, "Копировать ссылку"),
+    ("delete-history-entry", {}, "Удалить из истории"),
+    ("delete-bookmark", {}, "Удалить закладку"),
 ]
 
 _BUTTON_RE = re.compile(r"<button([^>]*)>((?:(?!</button>).)*?)</button>", re.DOTALL)
