@@ -3645,6 +3645,29 @@ pub static FRAMES_RENDERED: std::sync::atomic::AtomicU64 =
 pub static FRAMES_SKIPPED: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
+/// BUG-405 срез 34: наносекунды, потраченные кадром на ПЕЧАТЬ пофазного лога
+/// (`LUMEN_FRAME_LOG=2`, ~12 строк на кадр).
+///
+/// Печать идёт внутри окна, которое шелл меряет как `[frame] total`, поэтому
+/// на дешёвом кадре (попадание скролл-композитора, ~1.2 мс работы) инструмент
+/// становится крупнейшей статьёй кадра и завышает его в полтора раза. Без
+/// этого счётчика невязка разбивки читается как «неназванная работа движка».
+pub static FRAME_LOG_NANOS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Печатает диагностическую строку кадра, относя её цену на [`FRAME_LOG_NANOS`].
+///
+/// BUG-405 срез 34: строки скролл-композитора печатаются посреди кадра, и без
+/// такого учёта их цена оседает в невязке разбивки.
+fn timed_log(f: impl FnOnce()) {
+    let t = std::time::Instant::now();
+    f();
+    FRAME_LOG_NANOS.fetch_add(
+        t.elapsed().as_nanos() as u64,
+        std::sync::atomic::Ordering::Relaxed,
+    );
+}
+
 /// Reads a diagnostics counter.
 pub fn load_counter(c: &std::sync::atomic::AtomicU64) -> u64 {
     c.load(std::sync::atomic::Ordering::Relaxed)
@@ -8688,6 +8711,10 @@ impl Renderer {
         scroll_x: f32,
         anim_ranges: &[std::ops::Range<usize>],
     ) -> Result<bool, wgpu::SurfaceError> {
+        // BUG-405 срез 34 (пункт 68): подстатьи самого композитора. Метки
+        // берутся только под `LUMEN_FRAME_LOG=2` — как и весь пофазный лог.
+        let t_c0 = (crate::frame_log_level() >= 2).then(std::time::Instant::now);
+        let mut cm = [0.0_f64; 5];
         let skip = if self.surface.is_none() {
             Some("headless (нет surface)")
         } else if scroll_compositor_disabled() {
@@ -8707,6 +8734,9 @@ impl Renderer {
         if let Some(reason) = skip {
             self.note_compose_skip(reason);
             return Ok(false);
+        }
+        if let Some(t0) = t_c0 {
+            cm[0] = t0.elapsed().as_secs_f64() * 1e3;
         }
         let (sw, sh) = self.surface_dims();
         let dpr = self.scale_factor.max(1e-6) as f32;
@@ -8748,6 +8778,10 @@ impl Renderer {
             self.warm_page_band(sw, band_h_px);
         }
 
+        if let Some(t0) = t_c0 {
+            cm[1] = t0.elapsed().as_secs_f64() * 1e3;
+        }
+
         // Static/animated split: план оверлея сегментов. При конфликте
         // painter's order план сам расширяет диапазоны tail-split-ом —
         // хэш/полосу дальше считаем по ЕГО effective-диапазонам. Полный
@@ -8775,7 +8809,13 @@ impl Renderer {
             }
         };
 
+        if let Some(t0) = t_c0 {
+            cm[2] = t0.elapsed().as_secs_f64() * 1e3;
+        }
+
         // Scroll-инвариантный ключ содержимого полосы (по статике при split-е).
+        // BUG-405 срез 34: второй O(n)-хэш того же списка на том же кадре —
+        // считается и на попадании, где полосу не трогают вовсе.
         let key = {
             use std::hash::Hasher;
             let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -8785,6 +8825,10 @@ impl Renderer {
             h.write_u64(self.content_generation);
             h.finish()
         };
+
+        if let Some(t0) = t_c0 {
+            cm[3] = t0.elapsed().as_secs_f64() * 1e3;
+        }
 
         // Контент стабилен, если его ключ совпал с ключом прошлого кадра.
         // Нестабильный контент (анимация, GIF, стриминг парсера) в полосу не
@@ -8973,7 +9017,9 @@ impl Renderer {
                 );
             }
         } else if crate::frame_log_level() >= 2 {
-            eprintln!("[frame:wgpu] page-compose HIT ({} anim segs)", ranges.len());
+            timed_log(|| {
+                eprintln!("[frame:wgpu] page-compose HIT ({} anim segs)", ranges.len());
+            });
         }
 
         // Композиция: blit полосы со сдвигом + overlay поверх. Bind group
@@ -9001,6 +9047,27 @@ impl Renderer {
                 dpr,
             ),
         });
+        if let Some(t0) = t_c0 {
+            cm[4] = t0.elapsed().as_secs_f64() * 1e3;
+            // Подстатьи композитора ДО композитного пасса. `skip` — проверки
+            // применимости (включая O(n) поиск sticky-слоя), `geom` — размеры
+            // полосы и её прогрев, `split` — план анимируемых сегментов,
+            // `key` — scroll-инвариантный хэш содержимого полосы, `band` —
+            // решение попадание/промах вместе с рендером полосы на промахе.
+            timed_log(|| {
+                eprintln!(
+                    "[frame:wgpu]   compose-top: skip {:.2} geom {:.2} split {:.2} \
+                     key {:.2} band {:.2} | {} cmds",
+                    cm[0],
+                    cm[1] - cm[0],
+                    cm[2] - cm[1],
+                    cm[3] - cm[2],
+                    cm[4] - cm[3],
+                    content.len(),
+                );
+            });
+        }
+
         // Split: анимируемые сегменты рисуются как content-полоса Compose-кадра
         // (получают штатный сдвиг -scroll_y) — поверх blit-а, под overlay.
         let seg_content: &[DisplayCommand] = seg_plan.as_deref().unwrap_or(&[]);
@@ -9043,9 +9110,24 @@ impl Renderer {
         // разбивает кадр на band/compose-вызовы, чьи собственные хэши кадр
         // не описывают.
         let (sw0, sh0) = self.surface_dims();
+        // BUG-405 срез 34 (пункт 68 остатка): кадр ПОПАДАНИЯ стоит 4.3 мс при
+        // пассе композитора 0.9 мс — остаток платится здесь, в оркестраторе, и
+        // до среза 34 не был расписан ни одной статьёй. Хэш кадра — O(n) по
+        // всему списку и считается на КАЖДОМ кадре, включая попадания.
+        let t_hash0 = (crate::frame_log_level() >= 2).then(std::time::Instant::now);
         let base_hash = crate::display_list::hash_display_list(
             content, overlay, scroll_x, scroll_y, sw0, sh0,
         );
+        if let Some(t0) = t_hash0 {
+            let ms = t0.elapsed().as_secs_f64() * 1e3;
+            timed_log(|| {
+                eprintln!(
+                    "[frame:wgpu] frame-hash: {ms:.2}ms ({} + {} cmds)",
+                    content.len(),
+                    overlay.len(),
+                );
+            });
+        }
         let frame_hash = {
             use std::hash::Hasher;
             let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -14104,6 +14186,11 @@ impl Renderer {
         }
         if phase_log {
             let t_total = t_frame0.elapsed();
+            // BUG-405 срез 34: печать этого блока идёт ВНУТРИ окна, которое
+            // шелл меряет как `[frame] total`, поэтому её цена копится
+            // отдельным счётчиком — иначе она читается как неназванная работа
+            // движка (на кадре попадания это 1.6 мс при 1.2 мс самой работы).
+            let t_log0 = std::time::Instant::now();
             eprintln!(
                 "[frame:wgpu] total {:7.2}ms | faces {:6.2} collect {:6.2} prep {:6.2} \
                  acquire {:6.2} encode {:6.2} submit {:6.2} | ops {} layers {}",
@@ -14346,6 +14433,10 @@ impl Renderer {
                     );
                 }
             }
+            FRAME_LOG_NANOS.fetch_add(
+                t_log0.elapsed().as_nanos() as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
         }
         // Финализация по режиму: Band — служебный оффскрин-проход, не кадр
         // (не считаем и хэш не трогаем); Compose — настоящий кадр, но его
