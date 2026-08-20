@@ -112,6 +112,25 @@ def update_manifest() -> None:
     print(f"manifest updated in {time.time() - started:.0f}s", flush=True)
 
 
+def _snapshot_commit(path: str | None) -> str | None:
+    """Commit recorded by a previously written run snapshot, if it is readable.
+
+    Used only as a fallback for `--aggregate-only` over a checkpoint that
+    carries no commit: rescoring must not silently re-stamp a number with the
+    checkout doing the scoring.
+    """
+    if not path or not os.path.isfile(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            commit = json.load(fh).get("commit")
+    except (OSError, ValueError):
+        return None
+    if not isinstance(commit, str) or not commit or commit.startswith("unknown"):
+        return None
+    return commit
+
+
 def _git_head() -> str:
     """Short SHA of the checkout the run was made from, or `unknown`."""
     try:
@@ -653,8 +672,36 @@ def main() -> int:
 
     manifest = load_manifest()
 
+    # Provenance of an aggregate-only score belongs to the run that produced
+    # the shards, not to the checkout that happens to be scoring them: the
+    # binary and the commit are read back from the checkpoint. Inventing them
+    # here would stamp a number with a build that never ran a single test —
+    # exactly the comparison trap `--run-json` carries the fields to prevent.
+    run_commit = _git_head()
     if args.aggregate_only:
-        shard_states = json.load(open(state_path, encoding="utf-8"))["shards"] if os.path.isfile(state_path) else []
+        checkpoint = json.load(open(state_path, encoding="utf-8")) if os.path.isfile(state_path) else {}
+        shard_states = checkpoint.get("shards", [])
+        # Same reason as the commit: with no checkpoint there is no build to
+        # name, and the CLI default names one that never ran anything.
+        binary = args.binary or checkpoint.get("binary") or "unknown"
+        if checkpoint.get("commit"):
+            run_commit = checkpoint["commit"]
+        else:
+            # Checkpoint predates commit recording (or was written by a run
+            # still in flight under the old code). The snapshot being
+            # overwritten was written by that run itself, so its commit is the
+            # real one — take it before it is clobbered. Failing that, say
+            # "unknown" instead of passing the scoring checkout off as the one
+            # that ran the tests.
+            inherited = _snapshot_commit(args.run_json)
+            if inherited:
+                print(f"note: {state_path} records no commit; inheriting "
+                      f"{inherited} from {args.run_json}", file=sys.stderr)
+                run_commit = inherited
+            else:
+                print(f"warning: {state_path} records no commit; snapshot will say "
+                      f"'unknown (scored at {run_commit})'", file=sys.stderr)
+                run_commit = f"unknown (scored at {run_commit})"
     else:
         if args.all:
             categories = sorted({c for _t, c, _i in corpus_stats.iter_ids(manifest)})
@@ -698,7 +745,7 @@ def main() -> int:
             # Checkpoint after every shard: a corpus run outlives the session
             # that started it, and must be resumable from wherever it stopped.
             with open(state_path, "w", encoding="utf-8") as fh:
-                json.dump({"binary": binary, "shards": shard_states,
+                json.dump({"binary": binary, "commit": run_commit, "shards": shard_states,
                            "skipped_https": len(skipped) if args.skip_https else 0}, fh, indent=2)
 
     # A run only gets to be scored against what it actually covered. The scope
@@ -732,7 +779,7 @@ def main() -> int:
             # A pass-rate without the build it came from cannot be compared to
             # the next one — two snapshots differing by a commit look exactly
             # like two snapshots differing by an engine change.
-            "commit": _git_head(),
+            "commit": run_commit,
             "finished": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "processes": args.processes,
             "scope": sorted(scope) if scope else "full-corpus",
