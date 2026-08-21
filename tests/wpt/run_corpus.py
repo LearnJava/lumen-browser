@@ -52,6 +52,7 @@ DEFAULT_OUT_DIR = os.path.join(REPO_ROOT, ".tmp", "wpt-corpus")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import corpus_stats  # noqa: E402
+import port_guard  # noqa: E402
 
 #: Pilot selection (WPT-RUN-4 slice 2): ten categories picked to exercise the
 #: *orchestrator*, not the engine — one per hazard we expect to hit in the full
@@ -444,6 +445,34 @@ def log_says_no_tests(log_path: str) -> bool:
     return any(marker in tail for marker in NO_TESTS_MARKERS)
 
 
+#: How much of a shard log to read looking for the wptserve startup verdict.
+#: The whole block is inside the first few hundred lines; the logs themselves
+#: reach 3 MB.
+LOG_HEAD_BYTES = 200_000
+
+#: What wptserve says when it could not bind a port it needed. Its own words,
+#: because the numbers in the message are the ports and the errno differs per
+#: platform (`EADDRINUSE` is 98 on Linux, 10048 on Windows).
+PORT_CONFLICT_MARKERS = ("Address already in use",
+                         "is something already using that port")
+
+
+def log_says_port_conflict(log_path: str) -> bool:
+    """True when this shard failed to start its own servers.
+
+    On Windows that is fatal (the shard dies with an empty report — slice 16).
+    On Linux it is not, because whatever holds the port answers instead, which
+    is worse in a different way: the run keeps going, served by a process it
+    does not control, and nothing in the report says so. Recording the flag is
+    what makes the second case visible at all.
+    """
+    if not os.path.isfile(log_path):
+        return False
+    with open(log_path, "rb") as fh:
+        head = fh.read(LOG_HEAD_BYTES).decode("utf-8", "replace")
+    return any(marker in head for marker in PORT_CONFLICT_MARKERS)
+
+
 def shard_produced_nothing(out_dir: str, shard: dict) -> bool:
     """True when neither the report nor the raw stream of a shard holds a verdict."""
     report_path = shard_report_path(out_dir, shard)
@@ -532,10 +561,13 @@ def run_shard(shard: dict, binary: str, out_dir: str, processes: int, timeout: i
               f"'nothing to run' from wptrunner — retrying once", flush=True)
         time.sleep(EMPTY_REPORT_RETRY_PAUSE)
 
-    return {"name": shard["name"], "prefix": shard["prefix"], "ids": shard["ids"],
-            "auto_ids": shard.get("auto_ids"),
-            "outcome": outcome, "returncode": returncode, "seconds": round(elapsed, 1),
-            "report": os.path.relpath(report_path, REPO_ROOT) if os.path.isfile(report_path) else None}
+    state = {"name": shard["name"], "prefix": shard["prefix"], "ids": shard["ids"],
+             "auto_ids": shard.get("auto_ids"),
+             "outcome": outcome, "returncode": returncode, "seconds": round(elapsed, 1),
+             "report": os.path.relpath(report_path, REPO_ROOT) if os.path.isfile(report_path) else None}
+    if log_says_port_conflict(log_path):
+        state["port_conflict"] = True
+    return state
 
 
 def results_from_raw_log(raw_path: str) -> dict:
@@ -862,6 +894,11 @@ def main() -> int:
     parser.add_argument("--aggregate-only", action="store_true", help="score existing reports in --out-dir, run nothing")
     parser.add_argument("--skip-manifest-update", action="store_true", help="trust MANIFEST.json as-is")
     parser.add_argument("--run-json", default=None, help="write the scored run snapshot here (docs/wpt/runs/<date>.json)")
+    parser.add_argument("--no-port-guard", action="store_true",
+                        help="do not verify the run owns the wptserve ports before each shard "
+                             "(tests/wpt/port_guard.py); an escape hatch, not a speed-up — "
+                             "without it a stranded server answers for the run and the number "
+                             "describes files nobody chose")
     parser.add_argument("--skip-https", action="store_true",
                         help="do not run .https. tests (BUG-785 fixed 2026-08-20 — this now just "
                              "trades a slower, complete run for a faster, partial one); "
@@ -947,6 +984,21 @@ def main() -> int:
             if shard["name"] in done:
                 print(f"[{index}/{len(shards)}] {shard['name']}: cached", flush=True)
                 continue
+            # A shard that cannot bind its own ports does not fail — it is
+            # answered by whatever holds them, and scores against files and
+            # route parameters that belong to a run nobody is watching
+            # (slice 18). Checking here rather than once at startup is what
+            # catches the leak this run leaves behind itself.
+            if not args.no_port_guard:
+                try:
+                    port_guard.ensure_free(own_pid=os.getpid())
+                except port_guard.PortsBusy as exc:
+                    print(f"\n{exc}", file=sys.stderr)
+                    print(f"stopped before shard {index}/{len(shards)} "
+                          f"({shard['name']}); {len(shard_states)} shards are "
+                          f"checkpointed — rerun the same command with --resume",
+                          file=sys.stderr, flush=True)
+                    return 1
             budget = shard_timeout(shard, args.shard_timeout_base, args.shard_timeout_per_id,
                                    args.processes)
             print(f"[{index}/{len(shards)}] {shard['name']}: {shard['ids']} ids (budget {budget}s) ...", end="", flush=True)

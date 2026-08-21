@@ -251,6 +251,19 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   produce identical counters) and prints what the halves are worth fused, per
   category, taking whichever run executed more of it. Added by slice 16, which
   is how the Windows half's 36 % hole was found.
+- `tests/wpt/port_guard.py` — **ours** (WPT-RUN-5 slice 18) — makes sure a run
+  owns the `wptserve` ports before it uses them. `config.json` pins every port,
+  and `wptserve` starts its servers as `multiprocessing` children that survive
+  the run above them, so a run killed mid-flight strands a full set of servers
+  that live forever. The next run then does not fail: on Linux the stranded
+  server *answers* it (328 of the 342 shards of the 2026-08-20 Linux half were
+  served this way — every shard that got as far as needing a server), on
+  Windows the shard dies ~11 s in with an empty report (the 158-shard hole
+  slice 16 found). `--report` names the holders, `--reclaim` kills the stranded
+  ones, `--selftest` proves detect → classify → reclaim on a spare port. Never
+  kills a port holder that belongs to somebody else's *running* corpus run —
+  it stops and says so. `run_corpus.py` calls it before every shard;
+  `--no-port-guard` turns that off.
 - `tests/wpt/expectations.py` — **ours** (TEST-3, `docs/tasks/p2-test-track.md`) — generates and
   gates on per-category `.ini` baselines for `run_report.py --update-expected`/`--check`, on top
   of the same native `wptrunner` `--metadata` mechanism `run_suite.py` uses for `dom/nodes`, not
