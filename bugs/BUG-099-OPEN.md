@@ -52,7 +52,8 @@
 Диф детерминированного CPU-снапшота против Edge-эталона: **2.95% → 0.82%**.
 
 Тот же дефект покраски в border-box найден у `<img>`/`<video>`/`<iframe>` —
-заведён отдельно как [BUG-431](BUG-431-OPEN.md), в этот фикс не входит.
+заведён отдельно как [BUG-431](BUG-431-FIXED.md), в этот фикс не входит
+(починен отдельно, 2026-08-21).
 
 Тесты: `canvas_intrinsic_size_is_a_content_box_under_border_box_sizing`,
 `canvas_intrinsic_size_unchanged_under_content_box_sizing`,

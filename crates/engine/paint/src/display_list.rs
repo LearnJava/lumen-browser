@@ -7305,9 +7305,11 @@ fn emit_box_self(
                     radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
                 });
             }
+            // BUG-431: bitmap belongs in the content box, same rule as <canvas>
+            // (BUG-099) — painting at the border box slides it under the border.
             if *is_lazy {
                 out.push(DisplayCommand::LazyImageSlot {
-                    rect: b.rect,
+                    rect: content_box_rect(b),
                     node_id: b.node.index() as u32,
                     src: src.clone(),
                     object_fit: b.style.object_fit,
@@ -7315,7 +7317,7 @@ fn emit_box_self(
                 });
             } else {
                 out.push(DisplayCommand::DrawImage {
-                    rect: b.rect,
+                    rect: content_box_rect(b),
                     src: src.clone(),
                     alt: alt.clone(),
                     object_fit: b.style.object_fit,
@@ -7375,11 +7377,12 @@ fn emit_box_self(
             // The shell's tick loop re-registers the current GIF frame under this key
             // on every render tick, so the DrawImage command always shows the live frame.
             // CSS: object-fit — P4 wires ComputedStyle.object_fit to scale the frame.
+            // BUG-431: destination is the content box, not the border box.
             let nid = b.node.index();
             let is_gif_src = src.to_ascii_lowercase().ends_with(".gif") && !src.is_empty();
             if is_gif_src {
                 out.push(DisplayCommand::DrawImage {
-                    rect: b.rect,
+                    rect: content_box_rect(b),
                     src: format!("video:{nid}"),
                     alt: String::new(),
                     object_fit: b.style.object_fit,
@@ -7388,7 +7391,7 @@ fn emit_box_self(
                 });
             } else if !poster.is_empty() {
                 out.push(DisplayCommand::DrawImage {
-                    rect: b.rect,
+                    rect: content_box_rect(b),
                     src: poster.clone(),
                     alt: String::new(),
                     object_fit: b.style.object_fit,
@@ -7508,8 +7511,9 @@ fn emit_box_self(
                     radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
                 });
             }
+            // BUG-431: destination is the content box, not the border box.
             out.push(DisplayCommand::DrawImage {
-                rect: b.rect,
+                rect: content_box_rect(b),
                 src: src.clone(),
                 alt: String::new(),
                 object_fit: b.style.object_fit,
@@ -8157,9 +8161,11 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHi
                     radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
                 });
             }
+            // BUG-431: bitmap belongs in the content box, same rule as <canvas>
+            // (BUG-099) — painting at the border box slides it under the border.
             if *is_lazy {
                 out.push(DisplayCommand::LazyImageSlot {
-                    rect: b.rect,
+                    rect: content_box_rect(b),
                     node_id: b.node.index() as u32,
                     src: src.clone(),
                     object_fit: b.style.object_fit,
@@ -8169,7 +8175,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHi
                 // object-fit / object-position читаются на render-стадии вместе
                 // с известным intrinsic-размером изображения.
                 out.push(DisplayCommand::DrawImage {
-                    rect: b.rect,
+                    rect: content_box_rect(b),
                     src: src.clone(),
                     alt: alt.clone(),
                     object_fit: b.style.object_fit,
@@ -8225,11 +8231,12 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHi
             // The shell's tick loop re-registers the current GIF frame under this key
             // on every render tick, so the DrawImage command always shows the live frame.
             // CSS: object-fit — P4 wires ComputedStyle.object_fit to scale the frame.
+            // BUG-431: destination is the content box, not the border box.
             let nid = b.node.index();
             let is_gif_src = src.to_ascii_lowercase().ends_with(".gif") && !src.is_empty();
             if is_gif_src {
                 out.push(DisplayCommand::DrawImage {
-                    rect: b.rect,
+                    rect: content_box_rect(b),
                     src: format!("video:{nid}"),
                     alt: String::new(),
                     object_fit: b.style.object_fit,
@@ -8238,7 +8245,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHi
                 });
             } else if !poster.is_empty() {
                 out.push(DisplayCommand::DrawImage {
-                    rect: b.rect,
+                    rect: content_box_rect(b),
                     src: poster.clone(),
                     alt: String::new(),
                     object_fit: b.style.object_fit,
@@ -8352,8 +8359,9 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHi
                     radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
                 });
             }
+            // BUG-431: destination is the content box, not the border box.
             out.push(DisplayCommand::DrawImage {
-                rect: b.rect,
+                rect: content_box_rect(b),
                 src: src.clone(),
                 alt: String::new(),
                 object_fit: b.style.object_fit,
@@ -11237,6 +11245,21 @@ mod tests {
         assert!(s.contains(r#"alt="A photo""#), "must contain alt");
     }
 
+    /// BUG-431: the bitmap belongs in the content box, same rule as `<canvas>`
+    /// (BUG-099) — painting at the border box slid it under the border+padding.
+    #[test]
+    fn img_bitmap_is_painted_into_the_content_box() {
+        let dl = build(
+            r#"<img src="x" width="100" height="80">"#,
+            "*{margin:0}img{border:10px solid red;padding:5px}",
+        );
+        let imgs = images(&dl);
+        assert_eq!(imgs.len(), 1);
+        if let DisplayCommand::DrawImage { rect, .. } = imgs[0] {
+            assert_eq!((rect.x, rect.y, rect.width, rect.height), (15.0, 15.0, 100.0, 80.0));
+        }
+    }
+
     // ── Тесты loading="lazy" / LazyImageSlot ───────────────────────────────
 
     fn lazy_slots(dl: &DisplayList) -> Vec<&DisplayCommand> {
@@ -11275,6 +11298,22 @@ mod tests {
             assert_eq!(src, "banner.png");
             assert!((rect.width - 300.0).abs() < 0.1, "width={}", rect.width);
             assert!((rect.height - 150.0).abs() < 0.1, "height={}", rect.height);
+        }
+    }
+
+    /// BUG-431: the lazy slot's rect is later reused as the loaded image's
+    /// paint rect (shell BUG-163), so it must be content-box too, not just
+    /// the eager `DrawImage` path.
+    #[test]
+    fn lazy_img_slot_is_content_box() {
+        let dl = build(
+            r#"<img src="banner.png" loading="lazy" width="300" height="150">"#,
+            "*{margin:0}img{border:10px solid red;padding:5px}",
+        );
+        let slots = lazy_slots(&dl);
+        assert_eq!(slots.len(), 1);
+        if let DisplayCommand::LazyImageSlot { rect, .. } = slots[0] {
+            assert_eq!((rect.x, rect.y, rect.width, rect.height), (15.0, 15.0, 300.0, 150.0));
         }
     }
 
@@ -11381,6 +11420,41 @@ mod tests {
         if let DisplayCommand::DrawImage { rect, .. } = imgs[0] {
             assert!((rect.width - 640.0).abs() < 0.1, "width={}", rect.width);
             assert!((rect.height - 360.0).abs() < 0.1, "height={}", rect.height);
+        }
+    }
+
+    /// BUG-431: the poster frame belongs in the content box, same rule as
+    /// `<img>`/`<canvas>` — painting at the border box slid it under the
+    /// border+padding.
+    #[test]
+    fn video_poster_is_painted_into_the_content_box() {
+        let dl = build(
+            r#"<video src="clip.mp4" poster="thumb.jpg" width="100" height="80"></video>"#,
+            "*{margin:0}video{border:10px solid red;padding:5px}",
+        );
+        let imgs = images(&dl);
+        assert_eq!(imgs.len(), 1);
+        if let DisplayCommand::DrawImage { rect, .. } = imgs[0] {
+            assert_eq!((rect.x, rect.y, rect.width, rect.height), (15.0, 15.0, 100.0, 80.0));
+        }
+    }
+
+    // ── Тесты <iframe> / DrawImage placeholder ──────────────────────────────
+
+    /// BUG-431: the grey placeholder belongs in the content box, same rule as
+    /// `<img>`/`<video>`/`<canvas>` — painting at the border box slid it under
+    /// the border+padding.
+    #[test]
+    fn iframe_placeholder_is_painted_into_the_content_box() {
+        let dl = build(
+            r#"<iframe src="https://example.com" width="100" height="80"></iframe>"#,
+            "*{margin:0}iframe{border:10px solid red;padding:5px}",
+        );
+        let imgs = images(&dl);
+        assert_eq!(imgs.len(), 1);
+        if let DisplayCommand::DrawImage { rect, src, .. } = imgs[0] {
+            assert_eq!(src, "https://example.com");
+            assert_eq!((rect.x, rect.y, rect.width, rect.height), (15.0, 15.0, 100.0, 80.0));
         }
     }
 
