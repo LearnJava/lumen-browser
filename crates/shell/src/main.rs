@@ -6255,6 +6255,41 @@ fn frame_log_nanos() -> u64 {
     lumen_paint::load_counter(&lumen_paint::FRAME_LOG_NANOS)
 }
 
+/// Подстатьи вызова рендерера за процесс, мс (BUG-405 срез 37): подготовка
+/// компоновки, хэш кадра, решение полосы, сумма wgpu-пассов.
+///
+/// Дельта за кадр раскладывает статью `paint` на УРОВНЕ 1 — до среза 37
+/// разбивка существовала только на уровне 2, чья печать крупнее самого кадра
+/// попадания (пункт 71 остатка).
+#[cfg(feature = "backend-wgpu")]
+fn frame_phase_ms() -> [f64; 4] {
+    std::array::from_fn(|i| {
+        lumen_paint::FRAME_PHASE_NANOS
+            .get(i)
+            .map_or(0.0, |c| lumen_paint::load_counter(c) as f64 / 1e6)
+    })
+}
+
+/// Заглушка [`frame_phase_ms`] для сборки без wgpu-бэкенда.
+#[cfg(not(feature = "backend-wgpu"))]
+fn frame_phase_ms() -> [f64; 4] {
+    [0.0; 4]
+}
+
+/// Метка исхода пути компоновки на последнем кадре (BUG-405 срез 37) — по ней
+/// перепись отбирает кадры ПОПАДАНИЯ, не поднимая лог до уровня 2.
+#[cfg(feature = "backend-wgpu")]
+fn compose_outcome_label() -> &'static str {
+    lumen_paint::last_compose().label()
+}
+
+/// Заглушка [`compose_outcome_label`] для сборки без wgpu-бэкенда: путь
+/// компоновки живёт только в wgpu-рендерере, кадров попадания там не бывает.
+#[cfg(not(feature = "backend-wgpu"))]
+fn compose_outcome_label() -> &'static str {
+    "-"
+}
+
 /// Заглушка [`frame_log_nanos`] для сборки без wgpu-бэкенда.
 #[cfg(not(feature = "backend-wgpu"))]
 fn frame_log_nanos() -> u64 {
@@ -16503,6 +16538,21 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     }
                 }
 
+                // BUG-405 срез 37: подстатьи шага 6. Статья `build` кадра
+                // ПОПАДАНИЯ (0.22–0.32 мс по срезу 34) — вторая по величине
+                // после композитного пасса и входила туда одним числом.
+                // `chrome` — раскладка хрома по клип-полосам вокруг страницы,
+                // `sbar` — полоса прокрутки, `panels` — все остальные
+                // overlay-строители, остаток до `marks[4]` — хвост
+                // (split-view, инспектор, canvas-bg).
+                let mut bmarks = [0.0_f64; 3];
+                // Сколько команд хром стоит шеллу: (длина снимка chrome_dl,
+                // непустых полос, итог после раскладки). Хром копируется в
+                // КАЖДУЮ полосу целиком, поэтому итог кратен длине снимка — и
+                // именно этот множитель платит потом перепись пасса (срез 36:
+                // 132 команды overlay, из них меняется одна).
+                let mut chrome_mix = (0_usize, 0_usize, 0_usize);
+
                 // Step 6 (paint): build display list buffers and call renderer.
                 // Page-полоса: исходный display list + highlight-FillRect-ы
                 // перед своими DrawText (когда find открыт). Прокручивается.
@@ -16612,14 +16662,17 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         },
                     ];
                     let mut framed = lumen_paint::DisplayList::new();
+                    let mut strips_used = 0_usize;
                     for strip in strips {
                         if strip.width <= 0.0 || strip.height <= 0.0 {
                             continue;
                         }
+                        strips_used += 1;
                         framed.push(lumen_paint::DisplayCommand::PushClipRect { rect: strip });
                         framed.extend_from_slice(chrome_dl);
                         framed.push(lumen_paint::DisplayCommand::PopClip);
                     }
+                    chrome_mix = (chrome_dl.len(), strips_used, framed.len());
                     // CC-7: `#omniInput` editing stays owned by the legacy
                     // `address_bar` state machine — no native `<input>` caret
                     // exists (`crates/chrome/src/model.rs` only binds the
@@ -16649,6 +16702,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     framed.append(&mut overlay_buf);
                     overlay_buf = framed;
                 }
+                if let Some(t0) = frame_log_t0 {
+                    bmarks[0] = t0.elapsed().as_secs_f64() * 1e3;
+                }
 
                 // Scrollbar встаёт перед find-bar в overlay-буфере: рисуется
                 // первым = находится под find-bar-ом в painter's order. Они не
@@ -16667,6 +16723,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         combined.append(&mut overlay_buf);
                         overlay_buf = combined;
                     }
+                }
+                if let Some(t0) = frame_log_t0 {
+                    bmarks[1] = t0.elapsed().as_secs_f64() * 1e3;
                 }
 
                 // Forms: validation tooltip and color picker overlays.
@@ -17242,6 +17301,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     ));
                 }
 
+                if let Some(t0) = frame_log_t0 {
+                    bmarks[2] = t0.elapsed().as_secs_f64() * 1e3;
+                }
+
                 // Build the split-view combined DL before borrowing renderer,
                 // so the immutable borrow of self.split_view ends first.
                 let split_combined: Option<lumen_paint::DisplayList> = {
@@ -17312,10 +17375,23 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 if let Some(t0) = frame_log_t0 {
                     marks[4] = t0.elapsed().as_secs_f64() * 1e3;
                 }
+                // Длина overlay-буфера на входе в рендерер: перепись пасса
+                // (срез 36) считала её изнутри paint, здесь она нужна рядом с
+                // раскладкой хрома, чтобы видеть долю хрома в overlay.
+                let overlay_len = overlay_buf.len();
                 // BUG-405 срез 34: снимок счётчика печати пофазного лога — его
                 // дельта за кадр и есть цена инструмента внутри `paint`.
                 let log_nanos_at_paint = frame_log_nanos();
+                // BUG-405 срез 37: те же дельта-снимки для подстатей рендерера.
+                let phase_at_paint = frame_phase_ms();
 
+                // BUG-405 срез 37: цена ОБЁРТКИ страницы, платимая внутри окна
+                // `paint`, но снаружи всех счётчиков рендерера. Фаст-пас
+                // `supports_page_offset` умеет рисовать список по ссылке, но
+                // его отвечает `true` только femtovg — на штатном wgpu-бэкенде
+                // берётся ветка ниже, и она копирует весь display list каждый
+                // кадр. Без этой отсечки цена копии сидела бы в невязке.
+                let mut wrap_ms = 0.0_f64;
                 if let Some(r) = self.renderer.as_mut() {
                     r.set_canvas_background(canvas_bg);
                     if let Some(combined) = split_combined {
@@ -17353,6 +17429,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             // (static/animated split скролл-композитора wgpu-пути)
                             // прокидываются через render_with_anim.
                             r.set_page_offset(0.0, 0.0);
+                            let t_wrap = frame_log_t0.map(|t0| t0.elapsed());
                             let mut shifted: lumen_paint::DisplayList =
                                 Vec::with_capacity(base.len() + 2);
                             shifted.push(lumen_paint::DisplayCommand::PushTransform {
@@ -17376,6 +17453,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                 } else {
                                     Vec::new()
                                 };
+                            if let (Some(t0), Some(before)) = (frame_log_t0, t_wrap) {
+                                wrap_ms = (t0.elapsed() - before).as_secs_f64() * 1e3;
+                            }
                             if let Err(err) = r.render_with_anim(
                                 &shifted,
                                 &overlay_buf,
@@ -17419,6 +17499,41 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         marks[4] - marks[3],
                         marks[5] - marks[4],
                         log_ms,
+                    );
+                    // BUG-405 срез 37: подстатьи `build` плюс признак кадра.
+                    // `band` берётся счётчиком, а не строкой `page-compose
+                    // HIT` (она печатается только на уровне 2, чья надбавка
+                    // крупнее самого кадра попадания — пункт 71), поэтому
+                    // разбивку можно снимать на уровне 1.
+                    eprintln!(
+                        "[frame]   build: chrome {:.2} sbar {:.2} panels {:.2} \
+                         tail {:.2} | chrome {}x{}={} cmds, overlay {} | band {}",
+                        bmarks[0] - marks[3],
+                        bmarks[1] - bmarks[0],
+                        bmarks[2] - bmarks[1],
+                        marks[4] - bmarks[2],
+                        chrome_mix.0,
+                        chrome_mix.1,
+                        chrome_mix.2,
+                        overlay_len,
+                        compose_outcome_label(),
+                    );
+                    // Разбивка статьи `paint`. Печатается ПОСЛЕ таймера кадра,
+                    // поэтому в измеряемое окно не попадает — в отличие от
+                    // пофазного блока уровня 2 (пункт 71).
+                    let ph = frame_phase_ms();
+                    let d = |i: usize| ph[i] - phase_at_paint[i];
+                    let named = d(0) + d(1) + d(2) + d(3) + log_ms + wrap_ms;
+                    eprintln!(
+                        "[frame]   paint: prep {:.2} hash {:.2} band {:.2} пасс {:.2} \
+                         лог {:.2} обёртка {:.2} | невязка {:.2}",
+                        d(0),
+                        d(1),
+                        d(2),
+                        d(3),
+                        log_ms,
+                        wrap_ms,
+                        (marks[5] - marks[4] - named).max(0.0),
                     );
                     // ADR-016 M0.5: classify this frame against the previous one
                     // via the split fingerprint (content hash ⟂ scroll/page

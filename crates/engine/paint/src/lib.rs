@@ -355,8 +355,9 @@ pub use hit_test::{hit_test, HitTestResult};
 pub use layer_cache::{LayerCache, LayerKey};
 #[cfg(feature = "backend-wgpu")]
 pub use renderer::{
-    load_counter, ImageRegisterError, Renderer, SnapshotUploadError, FRAMES_RENDERED,
-    FRAMES_SKIPPED, FRAME_LOG_NANOS,
+    last_compose, load_counter, ComposeOutcome, ImageRegisterError, Renderer,
+    SnapshotUploadError, FRAMES_RENDERED, FRAMES_SKIPPED, FRAME_LOG_NANOS,
+    FRAME_PHASE_NANOS,
 };
 pub use scroll_snap::{find_scroll_snap_y, find_scroll_snap_y_proximity};
 pub use webgl::SoftwareWebGl;

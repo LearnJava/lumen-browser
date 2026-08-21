@@ -2093,16 +2093,27 @@ struct ComposeMarks {
 
 impl ComposeMarks {
     /// Заводит секундомер, если пофазный лог включён.
+    ///
+    /// BUG-405 срез 37: порог опущен со 2 до 1. Метки нужны не только своим
+    /// печатным строкам (они остались на уровне 2), но и счётчикам
+    /// [`FRAME_PHASE_NANOS`], по которым кадр раскладывается на УРОВНЕ 1 — там,
+    /// где надбавки пункта 71 нет.
     fn new() -> Self {
         Self {
-            t0: (crate::frame_log_level() >= 2).then(std::time::Instant::now),
+            t0: crate::frame_log_enabled().then(std::time::Instant::now),
             ms: [0.0; 5],
         }
     }
 
-    /// Включён ли лог (метки заполнены и их можно печатать).
+    /// Взяты ли метки (уровень ≥ 1). Печать своих строк требует уровня 2 —
+    /// см. [`ComposeMarks::printing`].
     fn enabled(&self) -> bool {
         self.t0.is_some()
+    }
+
+    /// Печатать ли пофазные строки компоновки (уровень ≥ 2).
+    fn printing(&self) -> bool {
+        self.t0.is_some() && crate::frame_log_level() >= 2
     }
 
     /// Отсечка `i`-й подстатьи.
@@ -2155,6 +2166,65 @@ enum RenderPassMode {
     /// overlay: present и `FRAMES_RENDERED`, но `last_frame_hash` обновляет
     /// вызывающий (`render()`) — хэш Compose-аргументов не описывает кадр.
     Compose,
+}
+
+/// Чем кончился путь компоновки (скролл-композитор) на последнем кадре —
+/// BUG-405 срез 37. Взводится [`Renderer::compose_page`], читается
+/// [`last_compose`].
+///
+/// Процессный счётчик, а не поле рендерера: рендерер живёт в отдельном потоке
+/// за прокси (`ThreadedRenderBackend`), и шеллу его состояние иначе не видно.
+/// Значения — дискриминанты [`ComposeOutcome`].
+static COMPOSE_OUTCOME: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Чем кончился путь компоновки (скролл-композитор) на кадре — BUG-405 срез 37.
+///
+/// Нужен переписи, а не движку: до среза 37 кадр ПОПАДАНИЯ опознавался строкой
+/// `page-compose HIT`, а она печатается только под `LUMEN_FRAME_LOG=2`, чей
+/// пофазный блок стоит 1.3–3.5 мс на кадр (пункт 71 остатка). Разбивку шелла
+/// надо снимать на уровне 1, где такой строки нет — и признак попадания берётся
+/// отсюда.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[repr(u8)]
+pub enum ComposeOutcome {
+    /// Путь компоновки не применялся (монолитный кадр или отказ подготовки).
+    #[default]
+    Skip = 0,
+    /// Попадание: кадр собран блитом готовой полосы плюс overlay.
+    Hit = 1,
+    /// Промах: полоса перерисована этим кадром, затем композиция.
+    Miss = 2,
+}
+
+impl ComposeOutcome {
+    /// Короткая метка для строки пофазного лога шелла.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Skip => "-",
+            Self::Hit => "hit",
+            Self::Miss => "miss",
+        }
+    }
+
+    /// Записать исход текущего кадра в процессный счётчик.
+    fn store(self) {
+        COMPOSE_OUTCOME.store(self as u8, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Исход пути компоновки на последнем отрисованном кадре (BUG-405 срез 37).
+///
+/// Читается шеллом ради одной строки пофазного лога: разбивку кадра попадания
+/// надо снимать на уровне 1, где строк `page-compose HIT/MISS` нет (пункт 71 —
+/// печать уровня 2 крупнее самого кадра попадания).
+#[must_use]
+pub fn last_compose() -> ComposeOutcome {
+    match COMPOSE_OUTCOME.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => ComposeOutcome::Hit,
+        2 => ComposeOutcome::Miss,
+        _ => ComposeOutcome::Skip,
+    }
 }
 
 /// GPU-ресурсы одного off-screen opacity layer-а. Создаётся лениво через
@@ -3718,6 +3788,55 @@ pub static FRAMES_SKIPPED: std::sync::atomic::AtomicU64 =
 /// этого счётчика невязка разбивки читается как «неназванная работа движка».
 pub static FRAME_LOG_NANOS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
+
+/// BUG-405 срез 37: подстатьи вызова рендерера в наносекундах, доступные на
+/// УРОВНЕ 1 покадрового лога.
+///
+/// До среза 37 разбивка кадра существовала только под `LUMEN_FRAME_LOG=2`, чей
+/// пофазный блок стоит 1.3–3.5 мс на кадр (пункт 71) — то есть больше самого
+/// кадра попадания. Счётчик снимает разбивку без единой печати внутри кадра:
+/// шелл читает дельту за кадр и печатает её ПОСЛЕ своего таймера.
+///
+/// Слоты: `0` — подготовка компоновки (применимость, геометрия полосы, план
+/// сегментов), `1` — хэш кадра (общий проход среза 35), `2` — решение
+/// попадание/промах вместе с рендером полосы на промахе, `3` — сумма
+/// wgpu-пассов кадра (`render_impl`, любой режим).
+///
+/// **Слоты складываются в кадр без пересечений только на ПОПАДАНИИ.** Отсечка
+/// `marks[4]` стоит перед композитным `render_impl`, но ПОСЛЕ рендера полосы,
+/// поэтому на промахе пасс полосы попадает и в слот 2, и в слот 3, а сумма
+/// слотов превышает кадр. Разбирать по слотам можно кадры, у которых
+/// [`last_compose`] вернул [`ComposeOutcome::Hit`]; на промахе слот 2 читается
+/// как «решение плюс полоса», а слот 3 — как «оба пасса», и складывать их
+/// нельзя.
+pub static FRAME_PHASE_NANOS: [std::sync::atomic::AtomicU64; 4] = [
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+];
+
+/// Разносит отсечки [`ComposeMarks`] по слотам 0–2 [`FRAME_PHASE_NANOS`].
+///
+/// Вызывается на каждом выходе из [`Renderer::render_with_anim`]: слоты обязаны
+/// покрывать кадр целиком, иначе разбивка на уровне 1 молча потеряет путь, по
+/// которому кадр ушёл (пропуск тождественного кадра, монолит, попадание).
+fn flush_compose_marks(marks: &ComposeMarks) {
+    if !marks.enabled() {
+        return;
+    }
+    let add = |i: usize, ms: f64| {
+        if let Some(slot) = FRAME_PHASE_NANOS.get(i) {
+            slot.fetch_add(
+                (ms.max(0.0) * 1e6) as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
+    };
+    add(0, marks.ms[2]);
+    add(1, marks.ms[3] - marks.ms[2]);
+    add(2, marks.ms[4] - marks.ms[3]);
+}
 
 /// Печатает диагностическую строку кадра, относя её цену на [`FRAME_LOG_NANOS`].
 ///
@@ -9150,6 +9269,7 @@ impl Renderer {
                     b.ring_base_css = band_top_css;
                 }
             }
+            ComposeOutcome::Miss.store();
             if crate::frame_log_level() >= 2 {
                 eprintln!(
                     "[frame:wgpu] page-compose MISS: band y={band_top_css:.0}..{:.0} css ({sw}x{band_h_px} px, rows {rows_drawn}/{band_h_px}, {} anim segs, frac {}, load {})",
@@ -9166,10 +9286,13 @@ impl Renderer {
                     },
                 );
             }
-        } else if crate::frame_log_level() >= 2 {
-            timed_log(|| {
-                eprintln!("[frame:wgpu] page-compose HIT ({} anim segs)", ranges.len());
-            });
+        } else {
+            ComposeOutcome::Hit.store();
+            if crate::frame_log_level() >= 2 {
+                timed_log(|| {
+                    eprintln!("[frame:wgpu] page-compose HIT ({} anim segs)", ranges.len());
+                });
+            }
         }
 
         // Композиция: blit полосы со сдвигом + overlay поверх. Bind group
@@ -9198,7 +9321,7 @@ impl Renderer {
             ),
         });
         marks.mark(4);
-        if marks.enabled() {
+        if marks.printing() {
             // Подстатьи композитора ДО композитного пасса. `skip` — проверки
             // применимости (включая O(n) поиск sticky-слоя), `geom` — размеры
             // полосы, `split` — план анимируемых сегментов, `band` — прогрев,
@@ -9329,6 +9452,11 @@ impl Renderer {
         // они стоили дороже композитного пасса. Теперь список обходится ОДИН
         // раз на оба хэша, поэтому подготовка компоновки (её размеры и
         // диапазоны сегментов — входы ключа) идёт до хэша, а не после.
+        // BUG-405 срез 37: исход прошлого кадра к этому отношения не имеет —
+        // `compose_page` может не дойти до своей развилки вовсе (отказ
+        // подготовки, нестабильный ключ), и тогда кадр обязан читаться как
+        // «компоновки не было», а не как повтор прошлого попадания.
+        ComposeOutcome::Skip.store();
         let mut marks = ComposeMarks::new();
         let prep = self.prepare_page_compose(content, scroll_x, anim_ranges, &mut marks);
         let skip: &[std::ops::Range<usize>] = prep.as_ref().map_or(&[], |p| &p.ranges);
@@ -9354,7 +9482,7 @@ impl Renderer {
             )
         };
         marks.mark(3);
-        if marks.enabled() {
+        if marks.printing() {
             let ms = marks.ms[3] - marks.ms[2];
             let (nc, no) = (content.len(), overlay.len());
             let mode = if dual_hash_disabled() { "два прохода" } else { "один проход" };
@@ -9386,6 +9514,7 @@ impl Renderer {
             if crate::frame_log_level() >= 2 {
                 eprintln!("[frame:wgpu] skip (identical frame)");
             }
+            flush_compose_marks(&marks);
             return Ok(());
         }
 
@@ -9396,9 +9525,11 @@ impl Renderer {
             && self.compose_page(content, overlay, scroll_y, &prep, band_key, &mut marks)?
         {
             self.last_frame_hash = Some(frame_hash);
+            flush_compose_marks(&marks);
             return Ok(());
         }
 
+        flush_compose_marks(&marks);
         self.render_impl(
             content,
             overlay,
@@ -14428,6 +14559,16 @@ impl Renderer {
             // старт BUG-406), позже незачем: до первой прокрутки надо успеть
             // скомпилировать хотя бы filter/blur.
             self.spawn_pipeline_warmup();
+        }
+        if crate::frame_log_enabled()
+            && let Some(slot) = FRAME_PHASE_NANOS.get(3)
+        {
+            // Слот 3 — сумма ВСЕХ wgpu-пассов кадра: на промахе их два (полоса
+            // и композиция), и разделять их здесь нечем — счётчик процессный.
+            slot.fetch_add(
+                t_frame0.elapsed().as_nanos() as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
         }
         if phase_log {
             let t_total = t_frame0.elapsed();
