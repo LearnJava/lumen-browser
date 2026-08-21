@@ -1192,11 +1192,11 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/font/src/shape.rs:65` **fn** `with_features` — Like [`Shaper::new`], but with CSS `font-feature-settings` overrides
 `crates/engine/font/src/shape.rs:78` **fn** `is_active` — Whether shaping will change anything versus base advances — i.e. the
 `crates/engine/font/src/shape.rs:88` **fn** `shape` — Shape a run of glyph ids into positioned glyphs
-`crates/engine/font/src/system_fonts.rs:31` **struct** `SystemFontIndex` — Простой ленивый индекс системных шрифтов
-`crates/engine/font/src/system_fonts.rs:44` **fn** `new` — Индекс, который при первом lookup просканирует стандартные пути
-`crates/engine/font/src/system_fonts.rs:53` **fn** `with_dirs` — Индекс с явно заданным списком директорий — для тестов и
-`crates/engine/font/src/system_fonts.rs:66` **fn** `family_count` — Сколько family-имён зарегистрировано. Для тестов и диагностики;
-`crates/engine/font/src/system_fonts.rs:86` **fn** `shared_system_index` — Процесс-глобальный индекс системных шрифтов
+`crates/engine/font/src/system_fonts.rs:38` **struct** `SystemFontIndex` — Простой ленивый индекс системных шрифтов
+`crates/engine/font/src/system_fonts.rs:51` **fn** `new` — Индекс, который при первом lookup просканирует стандартные пути
+`crates/engine/font/src/system_fonts.rs:60` **fn** `with_dirs` — Индекс с явно заданным списком директорий — для тестов и
+`crates/engine/font/src/system_fonts.rs:80` **fn** `family_count` — Сколько family-имён зарегистрировано. Для тестов и диагностики;
+`crates/engine/font/src/system_fonts.rs:100` **fn** `shared_system_index` — Процесс-глобальный индекс системных шрифтов
 `crates/engine/font/src/unicode_range.rs:12` **struct** `UnicodeRange` — Один диапазон кодепоинтов из `unicode-range:` дескриптора @font-face
 `crates/engine/font/src/unicode_range.rs:21` **fn** `contains` — Проверяет, входит ли кодепоинт `cp` в этот диапазон
 `crates/engine/font/src/unicode_range.rs:35` **fn** `parse_unicode_ranges` — Парсит CSS `unicode-range` дескриптор в список `UnicodeRange`
