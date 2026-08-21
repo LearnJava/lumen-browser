@@ -108,7 +108,13 @@ def accounting(manifest: dict, state: dict, results: dict, empty: list) -> dict:
             cause[f"no-executor:{test_type}"] += 1
         elif outcome[name] != "ran":
             cause["shard-killed"] += 1
-        elif name in empty_set:
+        elif name.replace("/", "__") in empty_set:
+            # `empty` (from `load_results`) holds on-disk report names, which
+            # replace "/" with "__" the same way run_corpus.py's own report
+            # paths do; `name` here is the state.json shard name and keeps
+            # the "/". Comparing the two forms directly always misses on any
+            # multi-segment category, misclassifying a legitimately empty
+            # shard as a leak.
             cause["shard-empty"] += 1
         else:
             cause["lost-in-ran-shard"] += 1
