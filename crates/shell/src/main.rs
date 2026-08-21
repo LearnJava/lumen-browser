@@ -1275,8 +1275,17 @@ fn run_window_mode(
     // was write-only — nothing read `BrowserSettings::shields_enabled` back —
     // and after CC-15 removed the in-tab checkbox there was no reachable UI
     // that enabled filtering at all.
+    //
+    // BUG-800: `LUMEN_NO_ADBLOCK=1` overrides the persisted default to off.
+    // EasyList's 100K+ rules false-positive on WPT's own test-infra request
+    // shapes (e.g. `common/security-features/subresource/document.py?...
+    // action=purge...`) — the request is silently blocked, the navigation
+    // that depended on it fails without an error (BUG-438), and the stale
+    // document poisons the next result. `tools/wptrunner/wptrunner/browsers/
+    // lumen.py` sets this for every automation-launched process.
     {
-        let on = app.settings_store.shields_enabled();
+        let no_adblock = std::env::var_os("LUMEN_NO_ADBLOCK").is_some();
+        let on = !no_adblock && app.settings_store.shields_enabled();
         app.shields.set_default_enabled(on);
         app.sync_adblock_filter();
     }

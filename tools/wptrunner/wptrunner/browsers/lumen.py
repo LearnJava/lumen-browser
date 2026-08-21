@@ -198,6 +198,15 @@ class LumenBrowser(WebDriverBrowser):
             # (single point of trust-root construction — see
             # `crates/network/src/tls/mod.rs`).
             env["LUMEN_EXTRA_CA_CERT"] = ca_cert_path
+        # BUG-800: the persisted ad-block ("shields") default is on, same as
+        # a real user session. EasyList false-positives on WPT's own
+        # test-infra request shapes (e.g. `common/security-features/
+        # subresource/document.py?...action=purge...`), the blocked request
+        # silently fails the navigation that depended on it (BUG-438), and
+        # the stale document poisons the next result read
+        # (`AssertionError: Got results from X, expected Y`). No test in
+        # this corpus should ever be exercising the ad-blocker itself.
+        env["LUMEN_NO_ADBLOCK"] = "1"
         super().__init__(logger, binary=binary, webdriver_binary=binary, env=env or None, **kwargs)
         self.ipc_mode = ipc_mode
 
