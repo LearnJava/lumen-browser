@@ -322,6 +322,25 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   `StaticHandler` would hand the probe the *live* run's substituted
   `--timeout-multiplier` (see the `CLAUDE.md` gotcha) — pages come from its own
   static server, as in `inert_style_audit.py`.
+- `tests/wpt/missing_helper_audit.py` — **ours** (WPT-RUN-5 slice 31) — prices the
+  unvendored-helper backlog (`WPT-RUN-11`) against the published number, the same
+  way `long_timeout_audit.py` prices a bug. `--census` counts the population by
+  the unit the denominator uses — ids blocked because something the *test itself*
+  references is absent, relative siblings included (8 858 ids, 13.1 %) — and what
+  those ids score today, so the ceiling of any repair is stated before a browser
+  starts. The probe re-runs each sampled id twice on one binary: arm A as
+  vendored, arm B with every checkout miss falling through to upstream **at the
+  pinned vendoring commit** (`VENDOR.md`), fetched once into `.tmp/`. Two rules
+  it exists to keep: nothing is ever written into `tests/wpt/` (a live corpus run
+  reads the doc root per request, so vendoring mid-run hands late shards a
+  different corpus than early ones), and the pin is not `master` (a later file
+  would measure vendoring drift instead of the backlog). `--prefix` probes one
+  stratum and projects over its own size — the population is heavy-tailed, and
+  slice 31's whole score delta came from `/editing/run/`. `--selftest` covers the
+  pure functions, including that the BiDi keepalive really is disabled: the
+  vendored transport takes the `websockets` default (20 s ping / 20 s timeout),
+  pages here block the main thread longer, and the client then kills the session —
+  that alone cost the first run 51 of 60 ids.
 - `tests/wpt/expectations.py` — **ours** (TEST-3, `docs/tasks/p2-test-track.md`) — generates and
   gates on per-category `.ini` baselines for `run_report.py --update-expected`/`--check`, on top
   of the same native `wptrunner` `--metadata` mechanism `run_suite.py` uses for `dom/nodes`, not
