@@ -371,6 +371,24 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   was open, even though nothing in the run's own bookkeeping calls them https.
   `--selftest` checks the split on a hand-built manifest instead of a six-hour
   run. Scoring is imported from `run_corpus.py`, never re-implemented.
+- `tests/wpt/timeout_audit.py` — **ours** (WPT-RUN-6 slice 9) — why a run's
+  TIMEOUTs are TIMEOUTs, read off the browser's own output instead of guessed
+  from the file name. Every `process_output` line is attributed to the exact
+  test that was running (browser pid from `test_end.extra.browser_pid` + the
+  `[test_start, test_end]` window — the mozlog `thread` field cannot do it,
+  all output arrives on one shared `ProcessReader` thread), then matched
+  against a precedence-ordered mechanism table keyed to bugs: TLS truncation
+  (BUG-792) sorts above the missing harness global it causes, worker
+  `importScripts` above the silent parent (BUG-778/591), and so on. A second
+  stage greps the test's own source for the *silent* mechanisms — a missing
+  `document.fonts.ready` (BUG-564) or an `<iframe>` with no nested browsing
+  context (BUG-480) print nothing at all — mapping generated ids
+  (`.any.worker.html` → `.any.js`) back to the file they came from;
+  `--no-source` turns it off. What no rule claims is the residual, reported by
+  category with a signature histogram, and `residual_ids` in `--json` is the
+  full list the next slice picks its target from. `--selftest` builds a
+  synthetic mozlog shard with two interleaved browsers and checks attribution,
+  precedence and both stages; every assertion was mutation-checked.
 - `tests/wpt/expectations.py` — **ours** (TEST-3, `docs/tasks/p2-test-track.md`) — generates and
   gates on per-category `.ini` baselines for `run_report.py --update-expected`/`--check`, on top
   of the same native `wptrunner` `--metadata` mechanism `run_suite.py` uses for `dom/nodes`, not
