@@ -40,7 +40,7 @@ Usage (from repo root, venv per tests/wpt/README.md):
         [--compare docs/wpt/runs/B.json] [--json OUT]
     <venv>/python tests/wpt/score_audit.py --selftest
 
-Slice 24 adds one distinction to the snapshot mode: a shard that produced no
+Slice 25 adds one distinction to the snapshot mode: a shard that produced no
 verdicts because it holds no test type this harness can execute is separated
 from one that produced none although it should have. Both look identical in a
 snapshot (same empty report, same exit code 64), so the manifest decides —
@@ -250,7 +250,7 @@ def runnable_ids_per_shard(shards: list, manifest: dict = None) -> dict:
     A shard that produced no verdicts is not automatically a hole: a directory
     whose only automatable tests are `crashtest`/`print-reftest`/`aamtest` has
     nothing wptrunner will run for lumen, so it answers "No tests ran" and
-    leaves an empty report *by construction* (WPT-RUN-5 slice 24 — corpus-wide
+    leaves an empty report *by construction* (WPT-RUN-5 slice 25 — corpus-wide
     6 shards / 50 ids). Telling that apart from a shard that should have run
     and did not needs the manifest, because the two are indistinguishable in a
     snapshot: the run's own `outcome` says `no-tests` only for runs scored
