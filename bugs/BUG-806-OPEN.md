@@ -1,0 +1,84 @@
+# BUG-806 — SMIL-анимация SVG отсутствует целиком: `<animate>`/`<set>` ничего не анимируют и никогда не шлют `beginEvent`/`endEvent`/`repeatEvent`
+
+**Статус:** OPEN
+**Заведён:** 2026-08-21 (WPT-RUN-6, срез 15 — кластер `svg/animations`, 26 из 31 TIMEOUT категории)
+**Область:** движок целиком — нет модели времени SMIL нигде в воркспейсе; в JS-слое `crates/js/src/svg.rs:762-795` четыре класса анимационных элементов (`SVGAnimateElement`, `SVGAnimateTransformElement`, `SVGAnimateMotionElement`, `SVGSetElement`) существуют как явные заглушки с пустыми телами `beginElement()`/`endElement()`, и даже они достижимы только через `document.createElementNS` ([BUG-685](BUG-685-OPEN.md))
+**Владелец:** P1/P3 (движок). Заведён P2 в ходе WPT-задачи, здесь не чинится.
+
+## Симптом
+
+Каждый тест `svg/animations`, ждущий анимационного события, висит до таймаута
+раннера с полностью пустым логом браузера — исключения нет, ждать нечего:
+
+```xml
+<!-- svg/animations/onbegin.svg -->
+<animate id="anim" attributeName="visibility" to="visible" begin="0s" end="2s"
+         onbegin="document.getElementById('anim2').beginElement()"/>
+<set id="anim2" attributeName="width" to="100" begin="indefinite"/>
+<script>
+  set.addEventListener('beginEvent', t.step_func_done(...));   // никогда
+</script>
+```
+
+## Прямое измерение
+
+`tests/wpt/verify_event_delivery_gaps.py --variant smil-events --variant smil-dom`
+(живое окно, http, улики читаются из stderr браузера; dev-release, Linux,
+2026-08-21, коммит `a7ee9468f`):
+
+| проба | ожидалось | получено |
+|---|---|---|
+| `<animate begin="0s" dur="100ms" repeatCount="2">` + слушатели `beginEvent`/`endEvent`/`repeatEvent` + атрибут `onbegin` | три события + вызов атрибута | **ни одного**, страница живёт (15 тиков `setInterval`) |
+| ширина `<rect>` через 1 с после начала анимации | анимируется | `10` — исходное значение |
+| `document.getElementById('s').constructor.name` для разметочного `<set>` | `SVGSetElement` | `HTMLUnknownElement` |
+| `typeof s.beginElement` | `function` | `undefined` |
+
+## Причина
+
+Двухслойная, и оба слоя нужно чинить:
+
+1. **Нет самого механизма SMIL.** В воркспейсе нет ни разбора атрибутов
+   `begin`/`dur`/`end`/`repeatCount`/`fill`, ни расписания активных
+   интервалов, ни применения анимированного значения к `animVal`, ни
+   диспетчеризации трёх событий SMIL. `grep -rn "attributeName" crates/`
+   даёт только `MutationRecord.attributeName` — совпадений по SMIL нет.
+2. **Даже заглушки недостижимы из разметки.** `svg.rs` регистрирует четыре
+   класса анимационных элементов, но только через monkey-patch
+   `createElementNS`; парсер, не реализующий foreign content
+   ([BUG-685](BUG-685-OPEN.md)), отдаёт разметочный `<animate>` как
+   `HTMLUnknownElement`, поэтому `anim.beginElement()` — `TypeError`, а не
+   no-op.
+
+Заметьте разницу с CSS-анимациями ([BUG-503](BUG-503-OPEN.md)): там движок
+анимацию планирует, но не сообщает о ней JS; здесь нет и самой анимации.
+
+## Масштаб
+
+26 из 31 TIMEOUT категории `svg/animations` в снимке WPT-RUN-5 (Linux) —
+весь остаток категории после того, как классификатор
+`tests/wpt/timeout_audit.py` разобрал прочие механизмы; механизм
+`smil-animation` забирает 27 id по всему снимку (плюс один в `svg/linking`).
+В вендоренном корпусе 314 файлов содержат хотя бы один из тегов
+`<animate>`/`<animateTransform>`/`<animateMotion>`/`<set >` (290 из них —
+сама `svg/animations`), так что цена починки выше, чем 27 id остатка: часть
+этих файлов сейчас падает по другим, более ранним причинам и до остатка не
+доходит.
+
+## Направление починки (не предписание)
+
+Минимум, разблокирующий категорию, — не полный SMIL, а модель времени +
+события: разобрать `begin`/`dur`/`end`/`repeatCount`, вести активный
+интервал в том же тике, что и CSS-анимации
+(`crates/shell/src/animation_scheduler.rs`), диспатчить `beginEvent`,
+`repeatEvent`, `endEvent` (плюс IDL-свойства `onbegin`/`onrepeat`/`onend`,
+которых тоже нет), и применять `to`/`from`/`values` к `animVal` целевого
+атрибута. Без [BUG-685](BUG-685-OPEN.md) это работать не будет — разметочный
+`<animate>` обязан быть SVG-узлом.
+
+## Как проверить фикс
+
+1. Проба выше: `verify_event_delivery_gaps.py --variant smil-events` печатает
+   `beginEvent`, `repeatEvent`, `endEvent`.
+2. `--variant smil-dom` печатает `ctor SVGSetElement` и `has-beginElement`.
+3. WPT: `run_report.py --all --root svg/animations --recursive` — счётчик
+   TIMEOUT уходит от 26 к единицам.

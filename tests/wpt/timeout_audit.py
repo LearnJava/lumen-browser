@@ -464,6 +464,40 @@ SOURCE_MARKERS = [
         "returns",
         mode="all",
     ),
+    Mechanism(
+        # Probed live in slice 15 (`verify_event_delivery_gaps.py`): a page
+        # holding listeners for all four animation and all four transition
+        # types hears none of them, while a WAAPI `finish` on the same page
+        # arrives — so this is the CSS-driven side specifically, not events in
+        # general. `grep -rn animationstart crates/` finds the interface and
+        # the `on*` attribute name and no dispatch site at all.
+        "css-animation-events", "BUG-503/BUG-536",
+        [r"animationstart|animationend|animationiteration|animationcancel|"
+         r"transitionrun|transitionstart|transitionend|transitioncancel"],
+        "a CSS animation/transition is invisible to JS — no event of either "
+        "family is ever dispatched, and neither `getComputedStyle` nor "
+        "`getBoundingClientRect` moves while one runs",
+    ),
+    Mechanism(
+        # `<animate>`/`<set>` in markup are `HTMLUnknownElement` (BUG-685), and
+        # even the `createElementNS` path only reaches `svg.rs`'s four
+        # explicitly-stubbed classes whose `beginElement()` bodies are empty.
+        "smil-animation", "BUG-806",
+        [r"beginEvent|endEvent|repeatEvent|\.beginElement\(|\.endElement\(|"
+         r"<animate\b|<animateTransform|<animateMotion|<set\b"],
+        "SMIL is absent — no timing model, no attribute animation, and the "
+        "`beginEvent`/`endEvent`/`repeatEvent` a test waits for never fire",
+    ),
+    Mechanism(
+        # Deliberately after the two above and after every wait-shaped marker:
+        # plenty of tests build an observer *and* an iframe, and the iframe is
+        # the older, better-understood cause.
+        "intersection-observer-initial", "BUG-807",
+        [r"new IntersectionObserver\("],
+        "the observation queued by `observe()` is never delivered — entries "
+        "arrive only as a side effect of a later relayout, so a test that "
+        "observes and waits hears nothing",
+    ),
     # Last on purpose: this marker is narrow, so anything a broader mechanism
     # can explain (a test that also builds an `<iframe>`, say) should be
     # reported under that one instead.
@@ -1227,6 +1261,48 @@ def selftest():
                          "assert_equals(au.volume, 1);</script>")
         check(classify_source("/a/audio-bare.html", tmp, {}) is None,
               "a srcless <audio> is healthy and must not be claimed")
+
+        # Stage 2, slice 15. Three event families the engine never dispatches;
+        # each was measured live by `verify_event_delivery_gaps.py` before the
+        # marker was written.
+        with open(os.path.join(tmp, "a", "transition.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>const w = new EventWatcher(t, div, ['transitionend']);\n"
+                         "return w.wait_for('transitionend');</script>")
+        check(classify_source("/a/transition.html", tmp, {}) == "css-animation-events",
+              "a transitionend wait was not claimed")
+        with open(os.path.join(tmp, "a", "animation.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>el.addEventListener('animationstart', t.step_func_done());"
+                         "</script>")
+        check(classify_source("/a/animation.html", tmp, {}) == "css-animation-events",
+              "an animationstart wait was not claimed")
+        with open(os.path.join(tmp, "a", "smil.svg"), "w", encoding="utf-8") as handle:
+            handle.write('<svg><rect><animate id="a" begin="0s" dur="5ms"/></rect>\n'
+                         "<script>a.addEventListener('endEvent', () => t.done());</script>"
+                         "</svg>")
+        check(classify_source("/a/smil.svg", tmp, {}) == "smil-animation",
+              "a SMIL endEvent wait was not claimed")
+        with open(os.path.join(tmp, "a", "io.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>new IntersectionObserver(es => t.done())"
+                         ".observe(document.body);</script>")
+        check(classify_source("/a/io.html", tmp, {}) == "intersection-observer-initial",
+              "an observe-and-wait IntersectionObserver test was not claimed")
+        # Ordering: the IO marker sorts last of the three because an observer
+        # is routine boilerplate in tests whose real wait is something else —
+        # here a frame that is never loaded at all (BUG-480).
+        with open(os.path.join(tmp, "a", "io-frame.html"), "w", encoding="utf-8") as handle:
+            handle.write("<iframe src=child.html></iframe>\n"
+                         "<script>iframe.onload = () => {};\n"
+                         "new IntersectionObserver(es => t.done()).observe(el);</script>")
+        check(classify_source("/a/io-frame.html", tmp, {}) == "iframe-no-nested-context",
+              "an IntersectionObserver must not outrank the frame the test waits on")
+        # A page that merely constructs the event type is not waiting for one:
+        # `new TransitionEvent(...)` works today (the interface exists), so the
+        # marker must key on a listener, not on the word.
+        with open(os.path.join(tmp, "a", "anim-plain.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>el.style.animation = 'fade 1s';\n"
+                         "assert_equals(getComputedStyle(el).animationName, 'fade');</script>")
+        check(classify_source("/a/anim-plain.html", tmp, {}) is None,
+              "a test that only reads animation style must not be claimed")
 
     for msg in failures:
         print("FAIL:", msg)

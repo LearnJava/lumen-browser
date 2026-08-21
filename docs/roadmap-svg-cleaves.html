@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-21",
  "counts": {
-  "open": 335,
-  "fixed": 434,
+  "open": 337,
+  "fixed": 435,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 769,
+ "total_bugs": 772,
  "phases": [
   {
    "id": "P0",
@@ -8141,11 +8141,11 @@
    "debtor": false
   },
   "BUG-431": {
-   "status": "open",
-   "title": "Содержимое `<img>`/`<video>` (GIF-кадр, poster)/`<iframe>`-заглушки красится в **border-box**, а не в content-box: обе ветки покраски кладут `DrawImage { rect:…",
+   "status": "fixed",
+   "title": "Содержимое `<img>`/`<video>` (GIF-кадр, poster)/`<iframe>`-заглушки красилось в **border-box**, а не в content-box: обе ветки покраски кладут `DrawImage { rect:…",
    "component": "paint (`display_list.rs`)",
-   "date": null,
-   "debtor": false
+   "date": "2026-08-21",
+   "debtor": true
   },
   "BUG-432": {
    "status": "open",
@@ -10715,6 +10715,27 @@
    "component": "network (`crates/network/src/h3/udp.rs:450` — `udp_round_trip`; тесты `tests::fetch_*`/`auth_*` в `crates/network/src/lib.rs`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-806": {
+   "status": "open",
+   "title": "**SMIL-анимация SVG отсутствует целиком:** `<animate>`/`<animateTransform>`/`<animateMotion>`/`<set>` ничего не анимируют и никогда не диспатчат `beginEvent`/`e…",
+   "component": "движок целиком (нет модели времени SMIL нигде в воркспейсе; в JS-слое `crates/js/src/svg.rs:762-795` — четыре класса анимационных элементов как явные заглушки с пустыми `beginElement()`/`endElement()`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-807": {
+   "status": "open",
+   "title": "`observe()` не ставит в очередь первичное наблюдение (Intersection Observer §3.2) — записи разбираются исключительно побочным эффектом релэйаута, поэтому на ста…",
+   "component": "js (`crates/js/src/dom.rs:9555` — `IntersectionObserver.prototype.observe`; доставка `dom.rs:9586` вызывается только из `crates/shell/src/main.rs:3316` `deliver_layout_observers`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-808": {
+   "status": "open",
+   "title": "WAAPI `Animation` — не `EventTarget`: `anim.addEventListener('finish', …)` бросает `TypeError: anim.addEventListener is not a function` (подтверждено логом живо…",
+   "component": "js (`crates/js/src/dom.rs:15333` — `function Animation(...)`, прототип не подключён к `EventTarget`; `dom.rs:15507` `_onFinish` зовёт только `this.onfinish`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -10973,6 +10994,9 @@
   "js (`crates/js/src/dom.rs:13800-13806` — `HTMLTrackElement.prototype` reflection; `crates/js/src/video_bindings.rs`/`crates/js/src/text_track_store.rs` — существующая `TextTrack`-машинерия, не привязанная к отдельному `<track>`)": [
    "BUG-795"
   ],
+  "js (`crates/js/src/dom.rs:15333` — `function Animation(...)`, прототип не подключён к `EventTarget`; `dom.rs:15507` `_onFinish` зовёт только `this.onfinish`)": [
+   "BUG-808"
+  ],
   "js (`crates/js/src/dom.rs:15412-15556` — WAAPI `Animation` шим)": [
    "BUG-530"
   ],
@@ -11023,6 +11047,9 @@
   ],
   "js (`crates/js/src/dom.rs:8915-9017` — `MessagePort`/`MessageChannel`)": [
    "BUG-706"
+  ],
+  "js (`crates/js/src/dom.rs:9555` — `IntersectionObserver.prototype.observe`; доставка `dom.rs:9586` вызывается только из `crates/shell/src/main.rs:3316` `deliver_layout_observers`)": [
+   "BUG-807"
   ],
   "js (`crates/js/src/dom.rs::WEB_API_SHIM` — 246 top-level `var`/`function _lumen_…`; регистрация нативов из Rust — `crates/js/src/v8_compat.rs::register_v8_native`/`_scoped`, 468 имён; плюс top-level объявления ~120 модульных шимов `crates/js/src/*.rs`)": [
    "BUG-753"
@@ -11813,6 +11840,9 @@
   ],
   "wptrunner-интеграция (`browsers/lumen.py` `env_options`)": [
    "BUG-301"
+  ],
+  "движок целиком (нет модели времени SMIL нигде в воркспейсе; в JS-слое `crates/js/src/svg.rs:762-795` — четыре класса анимационных элементов как явные заглушки с пустыми `beginElement()`/`endElement()`)": [
+   "BUG-806"
   ],
   "не изолирован (layout / paint / js)": [
    "BUG-733"
