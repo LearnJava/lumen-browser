@@ -1,7 +1,7 @@
 {
-  "binary": "D:\\RustProjects\\lumen-browser\\.claude\\worktrees\\p2-work\\target\\dev-release\\lumen.exe",
+  "binary": "target/dev-release/lumen",
   "commit": "30d0c70ab",
-  "finished": "2026-08-21T04:56:19",
+  "finished": "2026-08-21T05:06:21",
   "processes": 6,
   "scope": [
     "FileAPI",
@@ -142,7 +142,10 @@
     "mediacapture-insertable-streams",
     "mediacapture-record",
     "mediacapture-region",
-    "mediacapture-streams"
+    "mediacapture-streams",
+    "mediasession",
+    "merchant-validation",
+    "mimesniff"
   ],
   "scored": {
     "coverage": {
@@ -579,10 +582,6 @@
       "dpub-aria",
       "graphics-aam",
       "html-longdesc",
-      "mediasession",
-      "merchant-validation",
-      "mimesniff",
-      "mixed-content",
       "mst-content-hint",
       "nav-tracking-mitigations",
       "navigation-api",
@@ -2474,6 +2473,45 @@
         "score": 0.5,
         "subtests_passed": 1,
         "subtests_total": 3
+      },
+      "mediasession": {
+        "by_type": {
+          "testharness": 9
+        },
+        "harness_ok": 6,
+        "ids": 9,
+        "not_run": 0,
+        "pass_rate": 0.5311,
+        "ran": 9,
+        "score": 4.78,
+        "subtests_passed": 34,
+        "subtests_total": 56
+      },
+      "merchant-validation": {
+        "by_type": {
+          "testharness": 4
+        },
+        "harness_ok": 1,
+        "ids": 4,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "ran": 4,
+        "score": 0.0,
+        "subtests_passed": 0,
+        "subtests_total": 1
+      },
+      "mimesniff": {
+        "by_type": {
+          "testharness": 7
+        },
+        "harness_ok": 2,
+        "ids": 7,
+        "not_run": 0,
+        "pass_rate": 0.13,
+        "ran": 7,
+        "score": 0.91,
+        "subtests_passed": 262,
+        "subtests_total": 1943
       }
     },
     "recovered_shards": [
@@ -2560,27 +2598,31 @@
       {
         "results": 341,
         "shard": "mathml"
+      },
+      {
+        "results": 144,
+        "shard": "mixed-content"
       }
     ],
     "status_counts": {
       "": 128,
-      "ERROR": 987,
+      "ERROR": 988,
       "FAIL": 18675,
       "NOT-RUN": 11055,
-      "OK": 10676,
+      "OK": 10685,
       "PASS": 5926,
       "SKIP": 73,
-      "TIMEOUT": 6398
+      "TIMEOUT": 6408
     },
     "totals": {
-      "harness_ok": 16602,
-      "ids": 53918,
+      "harness_ok": 16611,
+      "ids": 53938,
       "not_run": 11055,
       "pass_rate": 0.148,
-      "ran": 42863,
-      "score": 7977.56,
-      "subtests_passed": 75021,
-      "subtests_total": 207014
+      "ran": 42883,
+      "score": 7983.24,
+      "subtests_passed": 75317,
+      "subtests_total": 209014
     }
   },
   "shards": [
@@ -5697,6 +5739,36 @@
       "report": ".tmp\\wpt-corpus\\mediacapture-streams.json",
       "returncode": 1,
       "seconds": 334.3
+    },
+    {
+      "auto_ids": 9,
+      "ids": 9,
+      "name": "mediasession",
+      "outcome": "ran",
+      "prefix": "/mediasession/",
+      "report": ".tmp\\wpt-corpus\\mediasession.json",
+      "returncode": 1,
+      "seconds": 37.4
+    },
+    {
+      "auto_ids": 4,
+      "ids": 4,
+      "name": "merchant-validation",
+      "outcome": "ran",
+      "prefix": "/merchant-validation/",
+      "report": ".tmp\\wpt-corpus\\merchant-validation.json",
+      "returncode": 1,
+      "seconds": 32.4
+    },
+    {
+      "auto_ids": 7,
+      "ids": 7,
+      "name": "mimesniff",
+      "outcome": "ran",
+      "prefix": "/mimesniff/",
+      "report": ".tmp\\wpt-corpus\\mimesniff.json",
+      "returncode": 1,
+      "seconds": 70.4
     }
   ]
 }
