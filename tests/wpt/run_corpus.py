@@ -765,7 +765,46 @@ def resumable_states(previous: list, out_dir: str, retry_timeouts: bool) -> list
     return states
 
 
-def score_reports(manifest: dict, out_dir: str, scope: set = None) -> dict:
+def coverage_breakdown(manifest: dict, results: dict, empty_shards: list,
+                       shard_states: list) -> dict:
+    """Why the ids with no verdict have none, as part of the run's own summary.
+
+    `never ran: N` is three unrelated things added together: types no executor
+    is registered for (a runner gap, `WPT-RUN-8`, known in advance), ids inside
+    a shard that visibly failed (recoverable — the shard is named in
+    `state.json`), and ids inside a shard that reported **success** (a silent
+    hole). The third is the Windows failure mode of slice 16: 479 of 479 shards
+    recorded `ran` while 36 % of the corpus had no verdict, and the summary said
+    only "never ran: 27117 — no executor, skipped, or lost shard", which is true
+    of all three.
+
+    The classification itself is `score_audit.accounting`, not a second copy of
+    it: that module is the one that knows the causes apart (including the
+    `shard-empty` case, which a naive "shard says ran, id has no verdict" rule
+    misreads as a leak). Calling it here only moves the verdict from an audit
+    someone has to remember to run into the line every run prints anyway. The
+    import is local because `score_audit` imports this module at top level.
+    """
+    import score_audit  # noqa: PLC0415 — circular at module level, by design
+
+    acc = score_audit.accounting(manifest, {"shards": shard_states}, results, empty_shards)
+    cause = acc["cause"]
+    lost = acc["lost_by_shard"]
+    return {
+        "by_type": acc["not_run_by_type"],
+        "no_executor": sum(n for name, n in cause.items() if name.startswith("no-executor:")),
+        "no_executor_by_type": {name.split(":", 1)[1]: n for name, n in cause.items()
+                                if name.startswith("no-executor:")},
+        "lost": sum(e["ids"] for e in lost),
+        "lost_by_shard": lost,
+        "lost_in_ran_shards": cause.get("lost-in-ran-shard", 0),
+        "shard_empty": cause.get("shard-empty", 0),
+        "leaked_examples": acc["leaked_examples"][:10],
+    }
+
+
+def score_reports(manifest: dict, out_dir: str, scope: set = None,
+                  shard_states: list = None) -> dict:
     """Score every automatable manifest id against whatever the shards produced.
 
     Ids with no result score 0 — that is the whole point of scoring against the
@@ -837,7 +876,50 @@ def score_reports(manifest: dict, out_dir: str, scope: set = None) -> dict:
 
     return {"totals": totals, "status_counts": status_counts, "per_category": per_category,
             "recovered_shards": [{"shard": name, "results": n} for name, n in recovered],
-            "empty_shards": empty_shards}
+            "empty_shards": empty_shards,
+            "coverage": coverage_breakdown(manifest, results, empty_shards,
+                                           shard_states or [])}
+
+
+def _print_coverage(coverage: dict, not_run: int) -> None:
+    """Print why the ids with no verdict have none — see `coverage_breakdown`."""
+    if not coverage:
+        return
+    gaps = coverage.get("no_executor_by_type") or {}
+    if gaps:
+        detail = ", ".join(f"{t}={n}" for t, n in sorted(gaps.items(), key=lambda kv: -kv[1]))
+        print(f"    no executor:  {coverage['no_executor']}  ({detail}) — a runner gap "
+              f"(WPT-RUN-8), not an engine result")
+    lost = coverage.get("lost_by_shard") or []
+    if lost:
+        head = ", ".join(f"{e['shard']}({e['cause']})={e['ids']}" for e in lost[:6])
+        more = f", and {len(lost) - 6} more" if len(lost) > 6 else ""
+        print(f"    lost:         {coverage['lost']}  in {len(lost)} shard(s): {head}{more}")
+    hollow = coverage.get("shard_empty") or 0
+    if hollow:
+        named = ", ".join(f"{e['shard']}={e['ids']}" for e in lost
+                          if e["cause"] == "shard-empty")
+        print(f"    EMPTY REPORT: {hollow} of those are in shard(s) recorded as `ran` that "
+              f"wrote no report at all: {named} — a checkpoint from before slice 16, where "
+              f"that outcome is `empty-report` and gets retried")
+    silent = coverage.get("lost_in_ran_shards") or 0
+    if silent:
+        named = ", ".join(f"{e['shard']}={e['ids']}" for e in lost
+                          if e["cause"] == "lost-in-ran-shard")
+        print(f"    SILENT HOLE:  {silent} ids scored 0 inside shard(s) that reported "
+              f"success: {named}")
+        print(f"                  the run says it covered them and no verdict exists — "
+              f"the number is not publishable until this is explained "
+              f"(tests/wpt/score_audit.py names the ids)")
+    # Ids the classifier never saw: their shard is not in `state.json` at all,
+    # so nothing ran them and nothing failed either. On a finished run this is
+    # zero; on a live or resumed one it is the tail still to come, and saying
+    # so is what keeps the three explained buckets from looking like the whole
+    # of `never ran`.
+    unseen = not_run - coverage.get("no_executor", 0) - coverage.get("lost", 0)
+    if unseen > 0:
+        print(f"    not attempted: {unseen}  no shard of theirs has run yet "
+              f"(in-flight or partial run)")
 
 
 def print_summary(scored: dict, shard_states: list) -> None:
@@ -847,7 +929,8 @@ def print_summary(scored: dict, shard_states: list) -> None:
     print(f"pass-rate: {totals['pass_rate'] * 100:.2f}%  "
           f"({totals['score']:.0f} of {totals['ids']} automatable manifest ids)")
     print(f"  ran:              {totals['ran']}")
-    print(f"  never ran:        {totals['not_run']}  (scored 0 — no executor, skipped, or lost shard)")
+    print(f"  never ran:        {totals['not_run']}  (scored 0)")
+    _print_coverage(scored.get("coverage") or {}, totals["not_run"])
     print(f"  harness OK:       {totals['harness_ok']}")
     print(f"  subtests:         {totals['subtests_passed']}/{totals['subtests_total']} passed")
     print("  statuses:         " + ", ".join(f"{k}={v}" for k, v in sorted(scored["status_counts"].items())))
@@ -872,6 +955,57 @@ def print_summary(scored: dict, shard_states: list) -> None:
     print("=" * 72)
 
 
+def _selftest() -> int:
+    """Prove the coverage breakdown on a hand-made run, without running anything.
+
+    The three buckets it separates only ever occur together on an 11-hour corpus
+    run, and the one that matters most — ids lost inside a shard that reported
+    success — is by construction the one a healthy run never produces. So it is
+    checked here instead: a four-category manifest, four shards with hand-picked
+    outcomes, and one verdict.
+    """
+    def leaf():
+        return ["hash", [None, {}]]
+
+    manifest = {"items": {
+        "testharness": {
+            "dom": {"ok.html": leaf(), "lost.html": leaf()},
+            "css": {"a.html": leaf()},
+            "encoding": {"e.html": leaf()},
+        },
+        "crashtest": {"svg": {"c.html": leaf()}},
+    }}
+    shard_states = [
+        {"name": "dom", "outcome": "ran"},
+        {"name": "css", "outcome": "timeout"},
+        {"name": "encoding", "outcome": "ran"},
+        {"name": "svg", "outcome": "ran"},
+    ]
+    results = {"/dom/ok.html": {"status": "OK", "subtests": []}}
+    # `load_results` reports empty shards by on-disk report name, "/" → "__".
+    empty_shards = ["encoding"]
+
+    got = coverage_breakdown(manifest, results, empty_shards, shard_states)
+    by_shard = {e["shard"]: (e["cause"], e["ids"]) for e in got["lost_by_shard"]}
+    checks = [
+        ("no-executor type counted apart", got["no_executor"] == 1
+         and got["no_executor_by_type"] == {"crashtest": 1}),
+        ("no-executor id not blamed on its shard", "svg" not in by_shard),
+        ("killed shard named with its cause", by_shard.get("css") == ("shard-killed", 1)),
+        ("silent hole counted", got["lost_in_ran_shards"] == 1),
+        ("silent hole named", by_shard.get("dom") == ("lost-in-ran-shard", 1)),
+        ("empty shard is not a silent hole", got["shard_empty"] == 1
+         and by_shard.get("encoding") == ("shard-empty", 1)),
+        ("lost excludes the no-executor id", got["lost"] == 3),
+        ("id with a verdict is not counted", got["by_type"].get("testharness") == 3),
+    ]
+    for label, ok in checks:
+        print(f"  {'PASS' if ok else 'FAIL'}  {label}")
+    failed = [label for label, ok in checks if not ok]
+    print(f"selftest: {'PASS' if not failed else 'FAIL (' + ', '.join(failed) + ')'}")
+    return 1 if failed else 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--binary", default=None, help="path to lumen.exe (default: target/$LUMEN_PROFILE/lumen.exe)")
@@ -892,6 +1026,8 @@ def main() -> int:
                              "raised --shard-timeout-per-id; the previous stream is rotated, "
                              "so a shorter retry cannot lose results)")
     parser.add_argument("--aggregate-only", action="store_true", help="score existing reports in --out-dir, run nothing")
+    parser.add_argument("--selftest", action="store_true",
+                        help="check the coverage breakdown on a synthetic run and exit")
     parser.add_argument("--skip-manifest-update", action="store_true", help="trust MANIFEST.json as-is")
     parser.add_argument("--run-json", default=None, help="write the scored run snapshot here (docs/wpt/runs/<date>.json)")
     parser.add_argument("--no-port-guard", action="store_true",
@@ -904,6 +1040,9 @@ def main() -> int:
                              "trades a slower, complete run for a faster, partial one); "
                              "they stay in the denominator and score 0, the summary says how many")
     args = parser.parse_args()
+
+    if args.selftest:
+        return _selftest()
 
     binary = args.binary or os.path.join(REPO_ROOT, "target", os.environ.get("LUMEN_PROFILE", "release"), "lumen.exe")
     os.makedirs(args.out_dir, exist_ok=True)
@@ -1025,7 +1164,7 @@ def main() -> int:
                       if t not in corpus_stats.NON_AUTOMATABLE_TYPES}
     if scope and scope >= all_categories:
         scope = None
-    scored = score_reports(manifest, args.out_dir, scope)
+    scored = score_reports(manifest, args.out_dir, scope, shard_states)
     if scope:
         print(f"\nscope: {len(scope)} of {len(all_categories)} categories "
               f"(partial run — denominator covers only what was selected)")

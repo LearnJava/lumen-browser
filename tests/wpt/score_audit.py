@@ -92,6 +92,7 @@ def accounting(manifest: dict, state: dict, results: dict, empty: list) -> dict:
     per_type = collections.Counter()
     not_run_type = collections.Counter()
     cause = collections.Counter()
+    by_shard = collections.Counter()
     leaked = []
 
     for test_type, category, test_id in corpus_stats.iter_ids(manifest):
@@ -106,8 +107,9 @@ def accounting(manifest: dict, state: dict, results: dict, empty: list) -> dict:
         not_run_type[test_type] += 1
         if test_type not in executable:
             cause[f"no-executor:{test_type}"] += 1
-        elif outcome[name] != "ran":
-            cause["shard-killed"] += 1
+            continue
+        if outcome[name] != "ran":
+            label = "shard-killed"
         elif name.replace("/", "__") in empty_set:
             # `empty` (from `load_results`) holds on-disk report names, which
             # replace "/" with "__" the same way run_corpus.py's own report
@@ -115,14 +117,26 @@ def accounting(manifest: dict, state: dict, results: dict, empty: list) -> dict:
             # the "/". Comparing the two forms directly always misses on any
             # multi-segment category, misclassifying a legitimately empty
             # shard as a leak.
-            cause["shard-empty"] += 1
+            label = "shard-empty"
         else:
-            cause["lost-in-ran-shard"] += 1
+            label = "lost-in-ran-shard"
             if len(leaked) < 50:
                 leaked.append({"type": test_type, "category": category, "id": test_id,
                                "shard": name})
+        cause[label] += 1
+        # Which shard lost them is the actionable half: "503 ids lost" is a
+        # number, "503 ids lost by these six shards, all killed on their
+        # budget" is a decision about whether the run is publishable. The
+        # cause travels with the shard because one `ran` shard losing ids is
+        # a defect while another is a known empty report, and a reader must
+        # not have to guess which.
+        by_shard[(name, outcome[name], label)] += 1
+    lost_by_shard = [{"shard": name, "outcome": shard_outcome, "cause": label, "ids": count}
+                     for (name, shard_outcome, label), count in
+                     sorted(by_shard.items(), key=lambda kv: -kv[1])]
     return {"per_type": dict(per_type), "not_run_by_type": dict(not_run_type),
-            "cause": dict(cause), "leaked_examples": leaked}
+            "cause": dict(cause), "lost_by_shard": lost_by_shard,
+            "leaked_examples": leaked}
 
 
 def kill_cost(manifest: dict, state: dict, out_dir: str) -> dict:
@@ -356,6 +370,18 @@ def print_snapshot_audit(path: str, snapshot: dict) -> dict:
     print("  ids with no verdict, by cause:")
     for name, n in sorted(acc["cause"].items(), key=lambda kv: -kv[1]):
         print(f"    {name:24} {n:6}")
+    # A snapshot scored by run_corpus.py since WPT-RUN-5 slice 19 carries the
+    # per-shard attribution the run itself computed, which is exact — this
+    # function's own split is a per-category upper bound (see
+    # `snapshot_accounting`). Print the exact figure next to it when it is
+    # there rather than replacing the approximation, so the two can be read
+    # against each other on the same snapshot.
+    exact = scored.get("coverage")
+    if exact:
+        acc["exact_coverage"] = exact
+        print(f"    recorded by the run itself: {exact['no_executor']} with no executor, "
+              f"{exact['lost']} lost in {len(exact['lost_by_shard'])} shard(s), "
+              f"{exact['lost_in_ran_shards']} of those inside a shard that reported success")
     hollow = acc["hollow_shards"]
     if hollow:
         ids = sum(s["ids"] for s in hollow)
@@ -450,6 +476,10 @@ def main() -> int:
     print("\n== ids with no verdict, by cause ==")
     for name, n in sorted(acc["cause"].items(), key=lambda kv: -kv[1]):
         print(f"  {name:28} {n:6}")
+    for entry in acc["lost_by_shard"][:10]:
+        print(f"      lost by {entry['shard']} ({entry['cause']}): {entry['ids']}")
+    if len(acc["lost_by_shard"]) > 10:
+        print(f"      ... and {len(acc['lost_by_shard']) - 10} more shard(s)")
     leak = acc["cause"].get("lost-in-ran-shard", 0)
     print(f"  {'LEAK' if leak else 'no leak':28} "
           f"{'ids scored 0 inside a shard that ran to completion' if leak else ''}")
