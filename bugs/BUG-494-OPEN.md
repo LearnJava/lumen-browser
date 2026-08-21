@@ -74,3 +74,49 @@ serialization logic at all. Committed `.ini` under
 `tests/wpt/metadata/css/css-backgrounds/parsing/
 background-shorthand-serialization.html.ini`, the bug's first dedicated
 `.ini` file.
+
+## Расширение: WPT-RUN-6 срез 14 (2026-08-21) — в strict-mode это не no-op, а TypeError
+
+Formulation above ("a **silent no-op**, no exception, no effect") holds only
+for sloppy-mode script. In a strict-mode file the same assignment is a hard
+`TypeError`, and it kills the script that made it — every statement after it
+in that `<script>` block never runs. Probe (`--dump-layout`, one page, four
+blocks):
+
+```
+[JS] SLOPPY-OK cssText=[]                                   # no-op, as filed
+[JS] STRICT-THROW TypeError: Cannot set property style of #<_ctor> which has only a getter
+[JS] STRICT-SCRIPT-END
+script error: JS runtime error: Cannot set property style of #<_ctor> which has only a getter
+[JS] LATER-SCRIPT-RAN                                       # a *separate* block still runs
+```
+
+The unguarded strict block printed nothing after the assignment: `UNGUARDED-
+CONTINUED` never appeared.
+
+This matters far beyond the one `css/css-borders` file the bug was filed on,
+because WPT's shared numeric helper `css/support/numeric-testcommon.js` opens
+with `'use strict'` and resets the target element with `testEl.style = ""`
+(line 104, again at 167) *before* registering any test. The helper throws
+there, the test file's inline script dies with it, not a single `test()` is
+ever registered — and because [BUG-591](BUG-591-OPEN.md) never dispatches the
+window `error` event, `testharness.js`'s `error_handler` (which would set the
+harness status to ERROR and call `done()`, `resources/testharness.js:5048`)
+never runs either. The file therefore reports **TIMEOUT**, not FAIL.
+
+Scale, measured on the WPT-RUN-5 snapshot: exactly **23** vendored files
+include `numeric-testcommon.js`, and all 23 are TIMEOUT with this error line
+as their only evidence — a 1:1 correspondence, no other consumer and no
+consumer that survives. Categories: `css/css-values` 19,
+`css/css-color`, `css/css-transforms`, `css/filter-effects`,
+`css/css-viewport/zoom` — one file each.
+
+Reproduced live 2026-08-21 (`run_report.py --root css/css-values --limit 12
+--processes 3`): `/css/css-values/acos-asin-atan-atan2-computed.html` →
+TIMEOUT, browser output ends with `Загружен скрипт: …/css/support/
+numeric-testcommon.js` followed by `script error: JS runtime error: Cannot
+set property style of #<_ctor> which has only a getter`. Neighbouring tests
+in the same run that do not use the helper finish normally.
+
+Classifier support: mechanism `inline-style-assign` in
+`tests/wpt/timeout_audit.py`.

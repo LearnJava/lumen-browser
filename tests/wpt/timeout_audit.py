@@ -33,6 +33,17 @@ importance — a test whose `testharness.js` was truncated by the TLS defect
 later, and reporting it as "missing harness global" would be reporting the
 symptom. Network-layer causes therefore sort above JS-level ones.
 
+**Three stages, in order of how much the evidence says.** `MECHANISMS` reads
+what the browser printed while the test ran and matches the error text that
+names a cause. What survives that goes to `SOURCE_MARKERS`, which greps the
+test (and its helpers) for a wait that cannot finish — the silent mechanisms,
+which by construction print nothing. Only then does `WEAK_MECHANISMS` claim
+the rest of the *noisy* ones: a page that threw an exception the engine
+printed but no listener ever saw. That last stage sorts below the source
+markers on purpose — "something threw" is true of a `document.fonts.ready`
+page too, and reporting it that way would bury a mechanism that has a name
+(WPT-RUN-6 slice 14).
+
 **Collateral damage.** A hung browser is not restarted between the tests of a
 shard, so every test still queued for that process times out too — printing
 nothing at all, because the process is already wedged. Those tests are not
@@ -161,10 +172,16 @@ MECHANISMS = [
         "defining helper was served but did not run, or is unvendored",
     ),
     Mechanism(
+        # The second text is `testdriver-extra.js::get_context` (line 118)
+        # refusing to act because `element.ownerDocument.defaultView` is
+        # falsy — the same missing property, thrown from wptrunner's own
+        # injected code rather than from a test helper (WPT-RUN-6 slice 14).
         "defaultview-test-driver", "BUG-622",
-        [r"Cannot read properties of undefined \(reading 'test_driver'\)"],
+        [r"Cannot read properties of undefined \(reading 'test_driver'\)",
+         r"Browsing context for element was detached"],
         "`document.defaultView` is absent, so WPT helpers that reach through "
-        "it (editing/editor-test-utils.js) throw before any test() runs",
+        "it (editing/editor-test-utils.js, testdriver-extra.js) throw before "
+        "any test() runs",
     ),
     Mechanism(
         "mixed-content-blocked", "BUG-796",
@@ -189,6 +206,69 @@ MECHANISMS = [
         "websocket", "BUG-799",
         [r"\[JS WebSocket\].*error"],
         "the page's WebSocket never connected",
+    ),
+    # --- The engine named the cause itself (WPT-RUN-6 slice 14) -----------
+    # A page-script exception is printed by the shell (`script error:` /
+    # `module error:`) and then goes nowhere: BUG-591 means the `error` event
+    # is never dispatched on the window, so `testharness.js`'s own
+    # `error_handler` — the code that would set the harness status to ERROR and
+    # call `done()` — never runs, and a file that should have failed in a
+    # second dies on the external timeout instead. The text of the line names
+    # the API that is missing, so each of these is an ordinary evidence
+    # mechanism owned by that API's bug; BUG-591 owns only the shared last
+    # step, the degradation of the verdict from FAIL/ERROR to TIMEOUT.
+    Mechanism(
+        "inline-style-assign", "BUG-494 (+BUG-591)",
+        [r"Cannot set property style of .* which has only a getter"],
+        "`el.style = \"...\"` has no `[PutForwards=cssText]` setter: a no-op "
+        "in sloppy mode, a TypeError in a strict-mode helper, which kills the "
+        "script that called it",
+    ),
+    Mechanism(
+        "cssom-stylesheets-missing", "BUG-471 (+BUG-591)",
+        [r"reading 'cssRules'", r"reading 'rules'",
+         r"styleSheets is not iterable",
+         r"(?:insertRule|deleteRule) is not a function",
+         r"CSSStyleSheet is not defined"],
+        "the CSSOM stylesheet model is not wired to the shim at all — "
+        "`document.styleSheets` is `undefined`, `<style>.sheet` absent",
+    ),
+    Mechanism(
+        "typed-om-incomplete", "BUG-554 (+BUG-591)",
+        [r"CSS\.[A-Za-z]+ is not a function",
+         r"CSS(?:Math[A-Za-z]*|VariableReferenceValue|PositionValue|"
+         r"TransformValue|ImageValue|UnparsedValue) is not defined"],
+        "CSS Typed OM has only the value/unit/keyword core — the numeric "
+        "factories (`CSS.px`, `CSS.deg`) and the math/transform classes are "
+        "absent",
+    ),
+    Mechanism(
+        "getclientrects-missing", "BUG-580 (+BUG-591)",
+        [r"getClientRects is not a function"],
+        "`Element.prototype.getClientRects` does not exist (only "
+        "`getBoundingClientRect` does)",
+    ),
+    Mechanism(
+        "font-loading-api", "BUG-467 (+BUG-591)",
+        [r"document\.fonts\.[A-Za-z]+ is not a function",
+         r"FontFace(?:Set|SetLoadEvent)? is not defined"],
+        "CSS Font Loading is a stub: `document.fonts` has no `load`/`check`, "
+        "and the `FontFace` constructors are missing",
+    ),
+    Mechanism(
+        "elementfrompoint-missing", "BUG-464 (+BUG-591)",
+        [r"elements?FromPoint is not a function"],
+        "there is no point→node hit test on the JS side at all",
+    ),
+    Mechanism(
+        # Not an engine gap in the API sense: the test ran and its assertion
+        # said the engine is wrong. It is here because the verdict is wrong
+        # too — a FAIL that BUG-591 turned into a TIMEOUT, so the run's own
+        # numbers understate the failures and overstate the hangs.
+        "assert-swallowed", "BUG-591",
+        [r"(?:script|module) error:.*\bassert_[a-z_]+:"],
+        "an assertion threw outside a `test()` body: a real FAIL, reported as "
+        "a TIMEOUT because the window `error` event never reaches the harness",
     ),
     # Last on purpose: a rejection is the *terminal* event of almost any
     # failure — a 404'd helper, a truncated https body and a missing DOM API
@@ -396,6 +476,28 @@ SOURCE_MARKERS = [
 ]
 
 
+#: Third stage, applied after both the evidence table and the source markers.
+#:
+#: "The page threw something" is real evidence — the browser said so — but it
+#: names no cause, so it must not outrank a source marker that does: a page
+#: whose `document.fonts.ready` is undefined *also* prints a `script error:`
+#: line, and reporting that one as "some exception" would bury the mechanism
+#: (WPT-RUN-6 slice 14). Whatever this stage claims is still a work list, not
+#: an answer — `swallowed_errors` in `--json` keeps the error texts so the
+#: next slice can pick the next API out of it.
+WEAK_MECHANISMS = [
+    Mechanism(
+        "script-error-swallowed", "BUG-591",
+        [r"^(?:script|module) error:", r"\[JS error\] Uncaught"],
+        "the page threw and the engine printed it, but no `error` event was "
+        "dispatched, so the harness never saw the failure",
+    ),
+]
+
+#: Lines that carry a page-script exception, for the `swallowed_errors`
+#: histogram of the third stage.
+_ERROR_LINE_RE = re.compile(r"^(?:script|module) error:|\[JS error\] Uncaught")
+
 
 def normalize(line):
     """Collapse a raw output line into a comparable signature."""
@@ -457,6 +559,13 @@ _SCRIPT_SRC_RE = re.compile(r"""<script[^>]*\ssrc\s*=\s*["']?([^"'\s>]+)""",
 #: alone finds no helper at all (WPT-RUN-6 slice 13).
 _META_SCRIPT_RE = re.compile(r"^\s*//\s*META:\s*script=(\S+)", re.MULTILINE)
 
+#: `import {runTests} from "./support/x.js"` / `import "./x.js"` — how an
+#: inline `<script type="module">` (and a module helper) pulls in its code.
+#: Neither include shape above sees it, so a test whose whole body is one
+#: `import` plus one call was invisible to this stage (WPT-RUN-6 slice 14).
+_ES_IMPORT_RE = re.compile(
+    r"""\bimport\s+(?:[\w*{}\s,$]+\s+from\s+)?['"]([^'"]+)['"]""")
+
 #: Never followed as a helper: the harness itself matches half the markers
 #: (`testharness.js` contains `addEventListener('load'`, `<iframe`, ...), so
 #: following it would claim every test in the corpus for whichever mechanism
@@ -478,6 +587,14 @@ def helper_paths(test_id, root):
     not a full closure: helpers of helpers are rare and each level widens what
     a marker may be attributed to.
 
+    A third shape is the ES-module `import`: a modern CSS test is often an
+    inline `<script type="module">` whose entire body is
+    `import {runTests} from "./support/x.js"` plus one call, and the helper it
+    names is where the marker lives. All 32 `css-grid/abspos` residual ids of
+    slice 13 were that shape — their `document.fonts.ready` (BUG-564) sits in
+    `positioned-grid-descendants.js` and nothing pointed at it from markup
+    (WPT-RUN-6 slice 14).
+
     Both include shapes have to be read, because they never coexist: a `.html`
     test writes `<script src>`, while a `.window.js`/`.any.js`/`.worker.js`
     source has no markup at all and declares the very same helpers as
@@ -494,7 +611,8 @@ def helper_paths(test_id, root):
     except OSError:
         return []
     out = []
-    for ref in _SCRIPT_SRC_RE.findall(text) + _META_SCRIPT_RE.findall(text):
+    for ref in (_SCRIPT_SRC_RE.findall(text) + _META_SCRIPT_RE.findall(text)
+                + _ES_IMPORT_RE.findall(text)):
         ref = ref.split("#")[0].split("?")[0]
         if not ref or ref in _NOT_A_HELPER or not ref.endswith(".js"):
             continue
@@ -593,11 +711,11 @@ def read_shard(path):
                [data for _, data in events[left:right] if data.strip()], pid)
 
 
-def classify(lines):
+def classify(lines, mechanisms=None):
     """Return the key of the first mechanism claiming these output lines."""
     if not lines:
         return NO_OUTPUT
-    for mech in MECHANISMS:
+    for mech in (MECHANISMS if mechanisms is None else mechanisms):
         if mech.matches(lines):
             return mech.key
     return UNCLASSIFIED
@@ -621,6 +739,8 @@ def audit(out_dir, category=None, root=WPT_ROOT, use_source=True,
     residual_ids = []
     totals = collections.Counter()
     hangs = {}
+    swallowed = collections.Counter()
+    swallowed_examples = collections.defaultdict(list)
 
     for path in sorted(glob.glob(os.path.join(out_dir, "*.raw.jsonl"))):
         shard = os.path.basename(path)[: -len(".raw.jsonl")]
@@ -665,6 +785,15 @@ def audit(out_dir, category=None, root=WPT_ROOT, use_source=True,
                                               follow_helpers=follow_helpers)
                 if from_source:
                     key = from_source
+            if key == UNCLASSIFIED:
+                weak = classify(lines, WEAK_MECHANISMS)
+                if weak != UNCLASSIFIED:
+                    key = weak
+                    for sig in sorted({normalize(line) for line in lines
+                                       if _ERROR_LINE_RE.search(line)}):
+                        swallowed[sig] += 1
+                        if len(swallowed_examples[sig]) < 5:
+                            swallowed_examples[sig].append(test)
             counts[key] += 1
             by_cat[category_of(test)][key] += 1
             if len(examples[key]) < 200:
@@ -688,6 +817,8 @@ def audit(out_dir, category=None, root=WPT_ROOT, use_source=True,
         "hung_browsers": sorted(hangs.values(),
                                 key=lambda h: -h["collateral"]),
         "residual_ids": residual_ids,
+        "swallowed_errors": dict(swallowed),
+        "swallowed_examples": {k: v for k, v in swallowed_examples.items()},
         "examples": {k: v for k, v in examples.items()},
         "residual_examples": {k: v for k, v in residual_examples.items()},
     }
@@ -704,6 +835,7 @@ def print_report(result, top=25, examples=3):
     print()
     refs = {m.key: m.ref for m in MECHANISMS}
     refs.update({m.key: m.ref + " (source marker)" for m in SOURCE_MARKERS})
+    refs.update({m.key: m.ref for m in WEAK_MECHANISMS})
     refs[HUNG_BROWSER] = "collateral — see the culprit list below"
     print(f"{'mechanism':28} {'tests':>7} {'share':>7}  owner")
     for key, count in sorted(result["mechanisms"].items(), key=lambda kv: -kv[1]):
@@ -730,6 +862,15 @@ def print_report(result, top=25, examples=3):
         if not unc:
             continue
         print(f"  {unc:6d} of {tot:6d} TIMEOUT   {cat}")
+    swallowed = result.get("swallowed_errors") or {}
+    if swallowed:
+        print()
+        print(f"exceptions nobody saw, by text (top {top}) — each is an engine "
+              f"gap or a real FAIL that BUG-591 turned into a TIMEOUT:")
+        for sig, count in sorted(swallowed.items(), key=lambda kv: -kv[1])[:top]:
+            print(f"  {count:6d}  {sig}")
+            for test in result.get("swallowed_examples", {}).get(sig, [])[:1]:
+                print(f"          e.g. {test}")
     print()
     print(f"top signatures inside the residual (top {top}):")
     for sig, count in sorted(result["residual_signatures"].items(),
@@ -810,6 +951,42 @@ def _write_selftest_shard(path):
     start("TestRunnerManager-0", 1300, "/a/silent-after-ok.html")
     end("TestRunnerManager-0", 1400, "/a/silent-after-ok.html", "TIMEOUT", 500)
 
+    # 8b. wptrunner's injected testdriver refusing to act: the element's
+    #     `ownerDocument.defaultView` is falsy, which is BUG-622 seen from the
+    #     harness side rather than from a test helper.
+    start("TestRunnerManager-2", 1420, "/a/testdriver.html")
+    out("503", 1430, "script error: JS runtime error: Error: Browsing context "
+                     "for element was detached")
+    end("TestRunnerManager-2", 1450, "/a/testdriver.html", "TIMEOUT", 503)
+
+    # 9. the engine named the cause itself: a strict-mode helper assigning to
+    #    `el.style`. Evidence beats everything the source could say.
+    start("TestRunnerManager-2", 1500, "/a/style-assign.html")
+    out("503", 1510, "Загружен скрипт: http://x/css/support/numeric-testcommon.js")
+    out("503", 1520, "script error: JS runtime error: Cannot set property style "
+                     "of #<_ctor> which has only a getter")
+    end("TestRunnerManager-2", 1600, "/a/style-assign.html", "TIMEOUT", 503)
+
+    # 10. an assertion that threw outside a test() body — a FAIL wearing a
+    #     TIMEOUT, which is a different finding from an engine gap.
+    start("TestRunnerManager-2", 1700, "/a/assert.html")
+    out("503", 1710, "script error: JS runtime error: assert_equals: expected 1 but got 2")
+    end("TestRunnerManager-2", 1800, "/a/assert.html", "TIMEOUT", 503)
+
+    # 11. an exception no table knows: the weak stage keeps it and files the
+    #     text in `swallowed_errors` for the next slice to pick up.
+    start("TestRunnerManager-2", 1900, "/a/unknown-throw.html")
+    out("503", 1910, "script error: JS runtime error: Frobnicate is not defined")
+    end("TestRunnerManager-2", 2000, "/a/unknown-throw.html", "TIMEOUT", 503)
+
+    # 12. an exception a *source marker* can explain (BUG-564 makes
+    #     `document.fonts.ready` undefined, and the page prints the resulting
+    #     TypeError). The named mechanism must win over "something threw".
+    start("TestRunnerManager-2", 2100, "/a/fonts-throw.html")
+    out("503", 2110, "script error: JS runtime error: Cannot read properties "
+                     "of undefined (reading 'then')")
+    end("TestRunnerManager-2", 2200, "/a/fonts-throw.html", "TIMEOUT", 503)
+
     with open(path, "w", encoding="utf-8") as handle:
         for event in events:
             handle.write(json.dumps(event, ensure_ascii=False) + "\n")
@@ -830,8 +1007,8 @@ def selftest():
         result = audit(tmp, use_source=False)
 
         mech = result["mechanisms"]
-        check(result["timeouts"] == 7,
-              f"expected 7 TIMEOUTs (the OK test excluded), got {result['timeouts']}")
+        check(result["timeouts"] == 12,
+              f"expected 12 TIMEOUTs (the OK test excluded), got {result['timeouts']}")
         check(result["statuses"].get("OK") == 1, "the OK test must still be counted")
         check(mech.get("https-body-truncated") == 1,
               f"TLS truncation must win over the missing global: {mech}")
@@ -839,6 +1016,8 @@ def selftest():
               f"the downstream symptom must not get its own row: {mech}")
         check(mech.get("worker-importscripts") == 1,
               f"worker importScripts not attributed: {mech}")
+        check(mech.get("defaultview-test-driver") == 1,
+              f"testdriver's own detached-context error not attributed: {mech}")
         check(mech.get("foreign-host-unresolvable") == 1,
               f"unresolvable host not attributed: {mech}")
         check(mech.get(HUNG_BROWSER) == 1,
@@ -863,6 +1042,22 @@ def selftest():
         # would have pulled it into /a/tls.https.html.
         check("/b/worker.worker.html" in result["examples"].get("worker-importscripts", []),
               "worker line attributed to the wrong test")
+        # Stage 1, slice 14: the error line names the API, so the mechanism is
+        # owned by that API's bug and not by the generic "it threw" bucket.
+        check(mech.get("inline-style-assign") == 1,
+              f"`el.style = ...` TypeError not attributed: {mech}")
+        check(mech.get("assert-swallowed") == 1,
+              f"a thrown assertion is its own finding, not an engine gap: {mech}")
+        # Stage 3: two noisy tests no table can name (`Frobnicate`, and the
+        # fonts one as long as no source is read).
+        check(mech.get("script-error-swallowed") == 2,
+              f"unnamed exceptions must land in the weak bucket: {mech}")
+        check(result["swallowed_errors"],
+              "the weak bucket must keep the error texts as a work list")
+        check(any("Frobnicate" in s for s in result["swallowed_errors"]),
+              f"unknown error text not recorded: {result['swallowed_errors']}")
+        check(all("assert_equals" not in s for s in result["swallowed_errors"]),
+              "a text a mechanism already claims must not be re-listed as unknown")
         sigs = result["residual_signatures"]
         check(any("Распарсено" in s for s in sigs),
               f"residual signature histogram is empty: {sigs}")
@@ -875,11 +1070,22 @@ def selftest():
         os.makedirs(os.path.join(tmp, "a"), exist_ok=True)
         with open(os.path.join(tmp, "a", "clean.html"), "w", encoding="utf-8") as handle:
             handle.write("<script>document.fonts.ready.then(() => done());</script>")
+        with open(os.path.join(tmp, "a", "fonts-throw.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>document.fonts.ready.then(() => done());</script>")
         with open(os.path.join(tmp, "a", "focus.window.js"), "w", encoding="utf-8") as handle:
             handle.write("addEventListener('load', () => { el.focus(); });")
         sourced = audit(tmp, root=tmp)
-        check(sourced["mechanisms"].get("fonts-ready") == 1,
+        check(sourced["mechanisms"].get("fonts-ready") == 2,
               f"source stage did not claim the silent test: {sourced['mechanisms']}")
+        # The ordering rule of slice 14: the noisy fonts test printed a
+        # TypeError, so the weak stage *could* have taken it — the named
+        # mechanism must get it first.
+        check("/a/fonts-throw.html" in sourced["examples"].get("fonts-ready", []),
+              f"a source marker must outrank the generic exception bucket: "
+              f"{sourced['examples'].get('script-error-swallowed')}")
+        check(sourced["mechanisms"].get("script-error-swallowed") == 1,
+              f"only the unnameable exception may stay in the weak bucket: "
+              f"{sourced['mechanisms']}")
         check(sourced["mechanisms"].get(UNCLASSIFIED) is None,
               f"source stage must consume the residual it explains: {sourced['mechanisms']}")
         check(result["mechanisms"].get(UNCLASSIFIED) == 1,
@@ -957,6 +1163,24 @@ def selftest():
               "a helper declared with // META: script= was not followed")
         check(classify_source("/a/meta.window.html", tmp, {}, follow_helpers=False) is None,
               "--no-helpers must also switch off META-declared helpers")
+        # Stage 2, slice 14: an inline `<script type="module">` whose body is
+        # one `import` plus one call. Neither `<script src>` nor `// META:`
+        # points at the helper, so the marker inside it was unreachable.
+        with open(os.path.join(tmp, "a", "module.html"), "w", encoding="utf-8") as handle:
+            handle.write('<script src="/resources/testharness.js"></script>\n'
+                         '<script type="module">\n'
+                         'import {runTests} from "./support/mod-helper.js";\n'
+                         'runTests({});\n</script>')
+        os.makedirs(os.path.join(tmp, "a", "support"), exist_ok=True)
+        with open(os.path.join(tmp, "a", "support", "mod-helper.js"), "w",
+                  encoding="utf-8") as handle:
+            handle.write("export function runTests() {\n"
+                         "  document.fonts.ready.then(() => done());\n}")
+        check(classify_source("/a/module.html", tmp, {}) == "fonts-ready",
+              "a helper reached only through an ES import was not followed")
+        check(classify_source("/a/module.html", tmp, {}, follow_helpers=False) is None,
+              "--no-helpers must also switch off ES-import helpers")
+
         # `<track>` built in script: the shape of `track-helpers.js`, which
         # every `track-webvtt-*.html` calls. The literal-tag-only marker missed
         # all 21 of them.
