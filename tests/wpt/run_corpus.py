@@ -37,11 +37,15 @@ Usage (from repo root, venv per tests/wpt/README.md):
 """
 
 import argparse
+import contextlib
+import io
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -111,6 +115,15 @@ TIMEOUT_EXTRA = 5.0
 #: effective 5.8 of 6 processes) — not for per-test overshoot, which
 #: `TIMEOUT_EXTRA` already accounts for exactly.
 BUDGET_SLACK = 1.15
+
+#: How much wider this code's budget has to be than the wall a killed shard
+#: actually died at before `--resume` calls the difference out. A resumed
+#: out-dir can carry shards killed under an older rule — the 2026-08-20 Linux
+#: half was started before slice 15 replaced the flat `600 + 2*ids` budget with
+#: the derived one, so its seven killed shards would now get 1.6-3.9x the wall
+#: they died at (WPT-RUN-5 slice 28). Below this ratio the difference is noise
+#: (rounding, a differing `--processes`) and saying so would be wrong.
+BUDGET_WIDENED = 1.1
 
 
 def update_manifest() -> None:
@@ -684,7 +697,8 @@ def load_results(out_dir: str) -> tuple:
     return results, recovered, empty
 
 
-def resumable_states(previous: list, out_dir: str, retry_timeouts: bool) -> list:
+def resumable_states(previous: list, out_dir: str, retry_timeouts: bool,
+                     budgets: dict = None) -> list:
     """Decide which shards of a previous run `--resume` must not run again.
 
     `ran` is obvious. The interesting case is `timeout` — a shard killed on its
@@ -720,6 +734,16 @@ def resumable_states(previous: list, out_dir: str, retry_timeouts: bool) -> list
     keeping its hole forever — the Windows half of the 2026-08-20 run has 158
     of them, 17 683 manifest ids. The check is one `stat` per shard unless the
     report really is empty, so it costs nothing on a healthy run.
+
+    `budgets` (`{shard name: seconds}`, what *this* code would give each shard)
+    is what turns "pass --retry-timeouts" from advice into a price. An out-dir
+    outlives the code that filled it: the 2026-08-20 Linux half was launched
+    before slice 15 derived the budget from the manifest's declared ceilings,
+    so its killed shards were cut off at the old flat rule's wall and this code
+    would now let them run 1.6-3.9x longer — there a retry is a real second
+    chance, not a replay of the same death. Without the comparison the operator
+    cannot tell that case from the one described above (same budget, same
+    machine, same wall), and the two want opposite decisions.
     """
     states, kept, retried, hollow = [], [], [], []
     for state in previous:
@@ -751,12 +775,27 @@ def resumable_states(previous: list, out_dir: str, retry_timeouts: bool) -> list
             # worth making.
             if rescue_results(raw_path) or not report_is_empty(report_path):
                 states.append(state)
-                kept.append(state["name"])
+                kept.append((state["name"], state.get("seconds") or 0.0))
                 continue
         retried.append(state["name"])
     if kept:
         print(f"--resume: {len(kept)} killed shard(s) kept partial rather than replayed "
-              f"({', '.join(kept)}) — pass --retry-timeouts to run them again", flush=True)
+              f"({', '.join(name for name, _ in kept)}) — pass --retry-timeouts to run them "
+              f"again", flush=True)
+        widened = [(name, wall, budgets[name]) for name, wall in kept
+                   if budgets and budgets.get(name)
+                   and budgets[name] > wall * BUDGET_WIDENED]
+        if widened:
+            detail = ", ".join(f"{name} {wall:.0f}s -> {budget}s"
+                               for name, wall, budget in widened[:6])
+            more = f", and {len(widened) - 6} more" if len(widened) > 6 else ""
+            hours = sum(budget for _n, _w, budget in widened) / 3600
+            print(f"--resume: {len(widened)} of them were killed under a budget narrower than "
+                  f"this code's ({detail}{more}) — a retry re-runs each shard whole, so it "
+                  f"costs up to {hours:.1f} h of wall clock and can only add ids that have no "
+                  f"verdict at all; price those ids first with "
+                  f"`score_audit.py --out-dir {out_dir}` (its kill-cost section says what the "
+                  f"salvaged part of the same shards was worth)", flush=True)
     if hollow:
         print(f"--resume: {len(hollow)} shard(s) recorded as complete produced no verdicts at all "
               f"and will run again ({', '.join(hollow[:8])})", flush=True)
@@ -999,11 +1038,59 @@ def _selftest() -> int:
         ("lost excludes the no-executor id", got["lost"] == 3),
         ("id with a verdict is not counted", got["by_type"].get("testharness") == 3),
     ]
+    checks.extend(_selftest_resume())
     for label, ok in checks:
         print(f"  {'PASS' if ok else 'FAIL'}  {label}")
     failed = [label for label, ok in checks if not ok]
     print(f"selftest: {'PASS' if not failed else 'FAIL (' + ', '.join(failed) + ')'}")
     return 1 if failed else 0
+
+
+def _selftest_resume() -> list:
+    """Prove that `--resume` prices a retry instead of merely offering one.
+
+    The case only occurs on a resumed out-dir older than the code resuming it,
+    which is exactly the case nobody can reproduce on demand — so it is built
+    here: two killed shards with salvaged results, one of which this code would
+    now budget wider than the wall it died at (WPT-RUN-5 slice 28).
+    """
+    out_dir = tempfile.mkdtemp(prefix="lumen-resume-selftest-")
+    try:
+        previous = [
+            {"name": "widened", "prefix": "/widened/", "ids": 300, "outcome": "timeout",
+             "seconds": 1000.0, "report": os.path.join(out_dir, "widened.json")},
+            {"name": "same", "prefix": "/same/", "ids": 300, "outcome": "timeout",
+             "seconds": 1000.0, "report": os.path.join(out_dir, "same.json")},
+        ]
+        for state in previous:
+            # Non-empty report: what makes a killed shard worth protecting.
+            with open(shard_report_path(out_dir, state), "w", encoding="utf-8") as fh:
+                json.dump({"results": []}, fh)
+        budgets = {"widened": 3000, "same": 1010}
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            kept = resumable_states(previous, out_dir, retry_timeouts=False, budgets=budgets)
+        said = buf.getvalue()
+
+        buf_retry = io.StringIO()
+        with contextlib.redirect_stdout(buf_retry):
+            replayed = resumable_states(previous, out_dir, retry_timeouts=True, budgets=budgets)
+
+        buf_blind = io.StringIO()
+        with contextlib.redirect_stdout(buf_blind):
+            resumable_states(previous, out_dir, retry_timeouts=False, budgets=None)
+
+        return [
+            ("killed shard with results is kept", len(kept) == 2),
+            ("widened budget named with both walls", "widened 1000s -> 3000s" in said),
+            ("budget within noise is not called widened", "same 1000s" not in said),
+            ("retry is priced in hours", "0.8 h of wall clock" in said),
+            ("--retry-timeouts still replays both", replayed == []),
+            ("no budgets, no price claimed", "narrower than" not in buf_blind.getvalue()),
+        ]
+    finally:
+        shutil.rmtree(out_dir, ignore_errors=True)
 
 
 def main() -> int:
@@ -1116,7 +1203,11 @@ def main() -> int:
         if args.resume and os.path.isfile(state_path):
             with open(state_path, encoding="utf-8") as fh:
                 previous = json.load(fh)["shards"]
-            shard_states = resumable_states(previous, args.out_dir, args.retry_timeouts)
+            budgets = {s["name"]: shard_timeout(s, args.shard_timeout_base,
+                                                args.shard_timeout_per_id, args.processes)
+                       for s in shards}
+            shard_states = resumable_states(previous, args.out_dir, args.retry_timeouts,
+                                            budgets)
         done = {s["name"] for s in shard_states}
 
         for index, shard in enumerate(shards, 1):
