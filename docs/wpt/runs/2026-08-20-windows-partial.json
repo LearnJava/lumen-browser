@@ -1,7 +1,7 @@
 {
-  "binary": "target/dev-release/lumen",
+  "binary": "D:\\RustProjects\\lumen-browser\\.claude\\worktrees\\p2-work\\target\\dev-release\\lumen.exe",
   "commit": "30d0c70ab",
-  "finished": "2026-08-21T05:06:21",
+  "finished": "2026-08-21T05:12:22",
   "processes": 6,
   "scope": [
     "FileAPI",
@@ -2600,7 +2600,7 @@
         "shard": "mathml"
       },
       {
-        "results": 144,
+        "results": 168,
         "shard": "mixed-content"
       }
     ],
