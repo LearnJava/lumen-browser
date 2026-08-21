@@ -3553,6 +3553,14 @@ pub struct Renderer {
     /// (картинки/GIF-кадры/снапшоты/шрифты/canvas-bg/промо-слои). Бампается
     /// каждой мутирующей операцией; входит в хэш кадра.
     content_generation: u64,
+    /// Фиксированное смещение страницы в CSS px (ADR-016 M0.4, BUG-405 срез 38).
+    ///
+    /// Применяется как самая внешняя трансляция КОНТЕНТА (не overlay-я) —
+    /// ровно то, что раньше шелл каждый кадр заворачивал в
+    /// `PushTransform(translate(offset))`, копируя ради этого весь display
+    /// list. Входит в поколение контента: смена смещения не меняет список, но
+    /// меняет пиксели.
+    page_offset: (f32, f32),
     /// Хэш последнего успешно отрисованного оконного кадра
     /// (display list + overlay + scroll + размер + `content_generation`).
     /// Совпадение со следующим кадром ⇒ пиксели идентичны ⇒ кадр пропускается.
@@ -5636,6 +5644,7 @@ impl Renderer {
             images: HashMap::new(),
             layer_snapshots: HashMap::new(),
             content_generation: 0,
+            page_offset: (0.0, 0.0),
             last_frame_hash: None,
             page_band: None,
             last_compose_skip: None,
@@ -8404,6 +8413,40 @@ impl Renderer {
         }
     }
 
+    /// Фиксированное смещение страницы в CSS px (ADR-016 M0.4, BUG-405 срез 38).
+    ///
+    /// Смещение опускает страницу под tab bar и сдвигает её вправо от левой
+    /// docked-панели. Раньше шелл добивался этого `PushTransform`-ом вокруг
+    /// всего display list-а — то есть глубоким клоном списка КАЖДЫЙ кадр
+    /// (0.42 мс, 19 % кадра попадания на стенде среза 37). Здесь смещение
+    /// становится затравкой стека трансформаций в [`render_impl`], что
+    /// эквивалентно той обёртке команда-в-команду: скролл по-прежнему
+    /// применяется к rect-у ДО матрицы, а страничная трансляция — после всех
+    /// вложенных, как самая внешняя.
+    ///
+    /// Смещение входит в поколение контента, а не в хэш списка: список от него
+    /// не меняется, а пиксели меняются — без бампа кадр после смены смещения
+    /// был бы пропущен как идентичный, а полоса скролл-композитора (в чьи
+    /// пиксели смещение запечено) переиспользована со старым смещением.
+    ///
+    /// Нефинитные значения (NaN/inf) сломали бы CTM — падаем на «без смещения»,
+    /// как femtovg-бэкенд.
+    ///
+    /// [`render_impl`]: Renderer::render_impl
+    pub fn set_page_offset(&mut self, x: f32, y: f32) {
+        let next = if x.is_finite() && y.is_finite() { (x, y) } else { (0.0, 0.0) };
+        if self.page_offset != next {
+            self.content_generation = self.content_generation.wrapping_add(1);
+            self.page_offset = next;
+        }
+    }
+
+    /// Текущее смещение страницы (см. [`set_page_offset`](Self::set_page_offset)).
+    #[must_use]
+    pub fn page_offset(&self) -> (f32, f32) {
+        self.page_offset
+    }
+
     fn wgpu_color_for_canvas_bg(color: &Color, target: ColorSpace) -> [f32; 4] {
         fn srgb_gamma_decode(c: f32) -> f32 {
             if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
@@ -9696,7 +9739,20 @@ impl Renderer {
         // справа моделирует «применить self до родителя» в column-major
         // конвенции, что соответствует CSS «inner transform applied first»).
         // На PopTransform — сбрасываем топ.
+        //
+        // BUG-405 срез 38: стек ЗАТРАВЛЕН страничным смещением (ADR-016 M0.4).
+        // До среза его клал сюда сам шелл — командой `PushTransform` в начале
+        // копии display list-а; копия и была самой дорогой снимаемой статьёй
+        // кадра попадания. Затравка эквивалентна той обёртке: топ стека — та же
+        // матрица, накопление вложенных `PushTransform` идёт через неё, и
+        // страничная трансляция остаётся самой внешней. Нулевое смещение
+        // (headless, `render_to_image`, тесты) стек не трогает — там обёртки
+        // не было и подавно, и путь «матрицы нет» обязан остаться прежним.
         let mut transform_stack: Vec<Mat4> = Vec::new();
+        let page_offset_seeded = self.page_offset != (0.0, 0.0);
+        if page_offset_seeded {
+            transform_stack.push(Mat4::translation_2d(self.page_offset.0, self.page_offset.1));
+        }
 
         // Render plan: список батчей и composite-переходов.
         #[derive(Clone, Copy)]
@@ -10325,9 +10381,18 @@ impl Renderer {
         // чтобы подпись текста overlay-а можно было сравнить между монолитным
         // кадром и кадром компоновки, у которых контент разный по построению.
         let mut overlay_text_v0: Option<usize> = None;
+        // BUG-405 срез 38: граница «контент | overlay» снимает затравку
+        // страничного смещения — overlay viewport-locked и смещения не берёт.
+        // В обёртке шелла эту роль играл замыкающий `PopTransform`, стоявший
+        // ровно перед overlay-списком.
+        let mut page_offset_dropped = !page_offset_seeded;
         for (cmd, is_overlay, cmd_idx) in iter_content.chain(iter_overlay) {
             if is_overlay && overlay_text_v0.is_none() {
                 overlay_text_v0 = Some(text_vertices.len());
+            }
+            if is_overlay && !page_offset_dropped {
+                transform_stack.clear();
+                page_offset_dropped = true;
             }
             if cmd_log {
                 let now = std::time::Instant::now();
@@ -14922,6 +14987,21 @@ impl Renderer {
         scroll_y: f32,
         scroll_x: f32,
     ) -> Result<lumen_image::Image, Box<dyn std::error::Error>> {
+        self.render_to_image_with_overlay(commands, &[], scroll_y, scroll_x)
+    }
+
+    /// Как [`render_to_image`](Self::render_to_image), но с overlay-списком.
+    ///
+    /// Отделено BUG-405 срезом 38: страничное смещение обязано ложиться на
+    /// контент и НЕ ложиться на overlay, поэтому гейт эквивалентности должен
+    /// уметь читать кадр, в котором есть оба списка.
+    fn render_to_image_with_overlay(
+        &mut self,
+        commands: &[crate::DisplayCommand],
+        overlay: &[crate::DisplayCommand],
+        scroll_y: f32,
+        scroll_x: f32,
+    ) -> Result<lumen_image::Image, Box<dyn std::error::Error>> {
         if self.surface.is_some() {
             return Err(
                 "render_to_image() requires headless renderer (created with new_headless())"
@@ -14930,7 +15010,7 @@ impl Renderer {
         }
 
         // Run the render pass; in headless mode, render() stores the texture in pending_readback.
-        self.render(commands, &[], scroll_y, scroll_x)
+        self.render(commands, overlay, scroll_y, scroll_x)
             .map_err(|e| format!("render failed: {e}"))?;
 
         let tex = self
@@ -19894,6 +19974,89 @@ mod tests {
         let band = r.page_band.as_ref().expect("полоса обязана пересоздаться");
         assert_eq!((band.w_px, band.h_px), (80, 240), "размер не обновился");
         assert_eq!(band.key, 0, "пересозданная полоса выдала себя за валидную");
+    }
+
+    /// BUG-405 срез 38: смещение страницы через `set_page_offset` даёт ТЕ ЖЕ
+    /// пиксели, что обёртка `PushTransform`, которую шелл строил каждый кадр.
+    ///
+    /// Гейт правки, и он именно об идентичности, а не о скорости: снятая
+    /// статья — копия display list-а (0.42 мс, 19 % кадра попадания на стенде
+    /// среза 37), но принимать правку можно только доказав, что кадр от неё не
+    /// изменился. Список нарочно содержит вложенный `PushTransform` с
+    /// поворотом: страничная трансляция обязана остаться САМОЙ ВНЕШНЕЙ
+    /// (`page · rot`), а наивная реализация «прибавить смещение к rect-у»
+    /// дала бы `rot · page` и провалила бы этот `assert`. Overlay в обеих
+    /// половинах один и тот же и смещения не берёт — если бы затравка не
+    /// снималась на границе списков, хром уехал бы вниз вместе со страницей.
+    ///
+    /// Требует GPU-адаптер, поэтому `#[ignore]`; запуск:
+    /// `cargo test -p lumen-paint --features backend-wgpu
+    ///  page_offset_matches_push_transform_wrapper -- --include-ignored`.
+    #[test]
+    #[ignore = "requires GPU adapter"]
+    fn page_offset_matches_push_transform_wrapper() {
+        use crate::DisplayCommand as C;
+
+        let (off_x, off_y) = (7.0_f32, 11.0_f32);
+        let rect = |x: f32, y: f32, w: f32, h: f32| Rect { x, y, width: w, height: h };
+        let rgb = |r: u8, g: u8, b: u8| Color { r, g, b, a: 255 };
+        let radii = |v: f32| crate::CornerRadii {
+            tl: v, tr: v, br: v, bl: v, tl_y: v, tr_y: v, br_y: v, bl_y: v,
+        };
+        let base: Vec<C> = vec![
+            C::FillRect { rect: rect(2.0, 3.0, 20.0, 10.0), color: rgb(200, 30, 40) },
+            C::PushClipRect { rect: rect(4.0, 6.0, 30.0, 20.0) },
+            C::FillRoundedRect {
+                rect: rect(5.0, 7.0, 25.0, 15.0),
+                color: rgb(30, 160, 90),
+                radii: radii(4.0),
+            },
+            C::PopClip,
+            C::PushTransform { matrix: Mat4::rotate_2d(0.35) },
+            C::FillRect { rect: rect(10.0, 12.0, 14.0, 9.0), color: rgb(20, 60, 220) },
+            C::PopTransform,
+        ];
+        // Overlay — viewport-locked хром: в обеих половинах идёт отдельным
+        // списком и обязан нарисоваться в одних и тех же пикселях.
+        let overlay: Vec<C> =
+            vec![C::FillRect { rect: rect(0.0, 0.0, 64.0, 4.0), color: rgb(250, 250, 10) }];
+
+        let bytes = std::fs::read("../../../assets/fonts/Inter-Regular.ttf")
+            .expect("bundled font");
+        let mut r = Renderer::new_headless(bytes, 64, 48, ColorSpace::Srgb)
+            .expect("headless renderer");
+
+        // Плечо A — как рисовал шелл до среза: смещения у рендерера нет,
+        // страница завёрнута в `PushTransform` внутри самого списка.
+        let mut wrapped: Vec<C> = Vec::with_capacity(base.len() + 2);
+        wrapped.push(C::PushTransform { matrix: Mat4::translation_2d(off_x, off_y) });
+        wrapped.extend_from_slice(&base);
+        wrapped.push(C::PopTransform);
+        let a = r
+            .render_to_image_with_overlay(&wrapped, &overlay, 5.0, 0.0)
+            .expect("render плеча A");
+
+        // Плечо B — фаст-пас: тот же список ПО ССЫЛКЕ, смещение у рендерера.
+        r.set_page_offset(off_x, off_y);
+        let b = r
+            .render_to_image_with_overlay(&base, &overlay, 5.0, 0.0)
+            .expect("render плеча B");
+
+        assert_eq!((a.width, a.height), (b.width, b.height), "разные размеры кадров");
+        assert!(
+            a.data == b.data,
+            "фаст-пас нарисовал не то же, что обёртка: {} байт из {} различаются",
+            a.data.iter().zip(&b.data).filter(|(x, y)| x != y).count(),
+            a.data.len(),
+        );
+
+        // Нулевое смещение обязано вернуть путь «матрицы нет» — headless и
+        // `render_to_image` обёртки не знали и знать не должны.
+        r.set_page_offset(0.0, 0.0);
+        assert_eq!(r.page_offset(), (0.0, 0.0), "сброс смещения не сработал");
+        // Нефинитное значение — «без смещения», как у femtovg.
+        r.set_page_offset(f32::NAN, 3.0);
+        assert_eq!(r.page_offset(), (0.0, 0.0), "NaN просочился в CTM");
     }
 
     /// BUG-406 срез 2: пять горячих пайплайнов собраны РАЗНЫМИ потоками.
