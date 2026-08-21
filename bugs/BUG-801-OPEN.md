@@ -88,6 +88,26 @@ let cell_free = fits && (try_c..try_ce_val)
 страницы (`*-ref.html`), которые как раз и раскладывают элементы по явным
 колонкам с выходом за их край.
 
+**Уточнение 2026-08-21 (WPT-RUN-6, срез 11).** Две из перечисленных категорий
+этому багу не принадлежат — они вешаются своими дефектами, найденными и
+измеренными отдельно: `css/css-transforms` — [BUG-803](BUG-803-OPEN.md)
+(вечный цикл в `parse_svg_transform`, одна страница `2d-rotate-notref.html`
+на 133 вердикта), `css/css-flexbox` — [BUG-802](BUG-802-OPEN.md)
+(экспоненциальный layout вложенного колоночного flex, пять `.xhtml`-страниц
+на 318 вердиктов). Строку выше читать вместе с этим абзацем.
+
+За самим BUG-801 по тому же снимку остаются **10 из 16 повисших процессов**
+(≈244 коллатеральных TIMEOUT), все в `css/css-grid`. Проверено поштучно под
+`--dump-layout`: виснут `grid-definition/grid-auto-repeat-multiple-values-002.html`,
+`grid-lanes/subgrid/.../line-names/column-line-names-012.html`,
+`subgrid/line-names-008.html`, `subgrid/line-names-012.html`,
+`subgrid/parent-repeat-auto-fit-001.html`, а у остальных пяти виснет не тест,
+а его **эталон** (`column-auto-repeat-021-ref.html`, `line-names-010-ref.html`,
+`line-names-005-ref.html`, `column-subgrid-grid-gap-003-ref.html`,
+`column-subgrid-writing-direction-001-ref.html`) — сам тест в одиночку
+проходит за 0.13 с. Отсюда практическое правило для триажа: страница-эталон
+рефтеста — полноправный источник зависания, и по id теста её не видно.
+
 Повторено вживую независимо от снимка:
 `run_report.py --all --root css/css-grid/grid-lanes/track-sizing/auto-repeat
 --recursive --processes 2` → 129 TIMEOUT из 169; первые 40 тестов проходят за

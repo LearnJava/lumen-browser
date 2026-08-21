@@ -33,6 +33,18 @@ importance — a test whose `testharness.js` was truncated by the TLS defect
 later, and reporting it as "missing harness global" would be reporting the
 symptom. Network-layer causes therefore sort above JS-level ones.
 
+**Collateral damage.** A hung browser is not restarted between the tests of a
+shard, so every test still queued for that process times out too — printing
+nothing at all, because the process is already wedged. Those tests are not
+defects of their own and counting them as one inflates whatever mechanism the
+source-marker stage happens to find in them. A zero-output TIMEOUT that
+follows another TIMEOUT on the same browser pid is therefore reported as
+`hung-browser` and pinned to its culprit: the last test that process was still
+able to say anything about. In the WPT-RUN-5 Linux snapshot that is 695 of
+15 592 TIMEOUTs (4.5 %) produced by exactly 16 hung processes, every one of
+them a page that hangs standalone under `--dump-layout` (WPT-RUN-6 slice 11).
+The culprit list is the actionable output — `hung_browsers` in `--json`.
+
 Usage (from repo root, venv per tests/wpt/README.md):
 
     <venv>/python tests/wpt/timeout_audit.py [--out-dir .tmp/wpt-corpus]
@@ -192,6 +204,11 @@ NO_OUTPUT = "no-output"
 #: Tests with output that no mechanism claims. This is the WPT-RUN-6 residual —
 #: the engine-level hangs still to be characterized.
 UNCLASSIFIED = "unclassified"
+
+#: Collateral: a silent TIMEOUT on a browser that had already timed out and was
+#: never restarted. See "Collateral damage" in the module docstring — these are
+#: victims of one culprit page, not 695 separate defects.
+HUNG_BROWSER = "hung-browser"
 
 #: Second stage, applied only to tests the output-based table could not claim.
 #:
@@ -395,7 +412,7 @@ def _parse_extra(extra):
 
 
 def read_shard(path):
-    """Yield `(test_id, status, [output lines])` for every test in one shard log.
+    """Yield `(test_id, status, [output lines], browser_pid)` per test in a shard.
 
     See the module docstring for the pid+time-window attribution rule.
     """
@@ -436,7 +453,8 @@ def read_shard(path):
         stamps = [stamp for stamp, _ in events]
         left = bisect.bisect_left(stamps, start)
         right = bisect.bisect_right(stamps, end)
-        yield name, status, [data for _, data in events[left:right] if data.strip()]
+        yield (name, status,
+               [data for _, data in events[left:right] if data.strip()], pid)
 
 
 def classify(lines):
@@ -466,16 +484,45 @@ def audit(out_dir, category=None, root=WPT_ROOT, use_source=True,
     residual_examples = collections.defaultdict(list)
     residual_ids = []
     totals = collections.Counter()
+    hangs = {}
 
     for path in sorted(glob.glob(os.path.join(out_dir, "*.raw.jsonl"))):
-        for test, status, lines in read_shard(path):
+        shard = os.path.basename(path)[: -len(".raw.jsonl")]
+        # Per browser process: the last test it printed anything about (the
+        # culprit candidate) and whether it is currently inside a run of
+        # TIMEOUTs. A test that finishes with any other status proves the
+        # process is still answering, so the run is broken there.
+        culprit = {}
+        wedged = set()
+        for test, status, lines, pid in read_shard(path):
             if not test:
                 continue
             if category and not test.strip("/").startswith(category.strip("/")):
                 continue
             totals[status] += 1
             if status != "TIMEOUT":
+                wedged.discard(pid)
+                if lines:
+                    culprit[pid] = test
                 continue
+            if not lines and pid in wedged:
+                key = HUNG_BROWSER
+                hang = hangs.setdefault((shard, pid), {
+                    "shard": shard, "pid": pid,
+                    "culprit": culprit.get(pid), "collateral": 0,
+                    "first_victim": test, "last_victim": test,
+                })
+                hang["collateral"] += 1
+                hang["last_victim"] = test
+                counts[key] += 1
+                by_cat[category_of(test)][key] += 1
+                if len(examples[key]) < 200:
+                    examples[key].append(test)
+                wedged.add(pid)
+                continue
+            wedged.add(pid)
+            if lines:
+                culprit[pid] = test
             key = classify(lines)
             if use_source and key in (NO_OUTPUT, UNCLASSIFIED):
                 from_source = classify_source(test, root, source_cache,
@@ -502,6 +549,8 @@ def audit(out_dir, category=None, root=WPT_ROOT, use_source=True,
         "mechanisms": dict(counts),
         "by_category": {cat: dict(c) for cat, c in by_cat.items()},
         "residual_signatures": dict(residual_sigs),
+        "hung_browsers": sorted(hangs.values(),
+                                key=lambda h: -h["collateral"]),
         "residual_ids": residual_ids,
         "examples": {k: v for k, v in examples.items()},
         "residual_examples": {k: v for k, v in residual_examples.items()},
@@ -519,12 +568,23 @@ def print_report(result, top=25, examples=3):
     print()
     refs = {m.key: m.ref for m in MECHANISMS}
     refs.update({m.key: m.ref + " (source marker)" for m in SOURCE_MARKERS})
+    refs[HUNG_BROWSER] = "collateral — see the culprit list below"
     print(f"{'mechanism':28} {'tests':>7} {'share':>7}  owner")
     for key, count in sorted(result["mechanisms"].items(), key=lambda kv: -kv[1]):
         share = 100.0 * count / total if total else 0.0
         print(f"{key:28} {count:7d} {share:6.1f}%  {refs.get(key, '—')}")
         for test in result["examples"].get(key, [])[:examples]:
             print(f"{'':28} {'':7}          {test}")
+    hangs = result.get("hung_browsers") or []
+    if hangs:
+        collateral = sum(h["collateral"] for h in hangs)
+        print()
+        print(f"hung browsers: {len(hangs)} process(es), {collateral} collateral "
+              f"TIMEOUT(s) — each culprit is one page to reproduce")
+        for hang in hangs[:top]:
+            print(f"  {hang['collateral']:6d}  {hang['culprit'] or '(no output on this pid)'}")
+            print(f"{'':10}shard {hang['shard']} pid {hang['pid']}, "
+                  f"first victim {hang['first_victim']}")
     print()
     print(f"unclassified by category (top {top}):")
     rows = [(cat, c.get(UNCLASSIFIED, 0), sum(c.values()))
@@ -585,7 +645,9 @@ def _write_selftest_shard(path):
     out("500", 310, "Распарсено: 42 DOM-узлов, 1 CSS-правил")
     end("TestRunnerManager-0", 400, "/a/clean.html", "TIMEOUT", 500)
 
-    # 4. no output at all while running.
+    # 4. no output at all while running, on a browser that already timed out
+    #    (test 2, same pid 501) — collateral of a wedged process, not a defect
+    #    of its own.
     start("TestRunnerManager-1", 500, "/b/silent.html")
     end("TestRunnerManager-1", 600, "/b/silent.html", "TIMEOUT", 501)
 
@@ -599,6 +661,18 @@ def _write_selftest_shard(path):
     out("501", 910, "✗ http://www1.127.0.0.1:18300/x (dns: resolve www1.127.0.0.1:18300: "
                     "network error: resolve www1.127.0.0.1: failed to lookup address information)")
     end("TestRunnerManager-1", 1000, "/b/origin.html", "TIMEOUT", 501)
+
+    # 7. silent, but the FIRST TIMEOUT of a fresh browser: nothing wedged it,
+    #    so it keeps its own `no-output` bucket. The pair 4/7 is the whole
+    #    difference the collateral rule makes.
+    start("TestRunnerManager-2", 1100, "/c/first-silent.html")
+    end("TestRunnerManager-2", 1200, "/c/first-silent.html", "TIMEOUT", 502)
+
+    # 8. silent TIMEOUT on pid 500, which timed out earlier (test 3) but then
+    #    finished test 5 with a real verdict — proof the process was still
+    #    answering, so the run of TIMEOUTs is broken and this is not collateral.
+    start("TestRunnerManager-0", 1300, "/a/silent-after-ok.html")
+    end("TestRunnerManager-0", 1400, "/a/silent-after-ok.html", "TIMEOUT", 500)
 
     with open(path, "w", encoding="utf-8") as handle:
         for event in events:
@@ -620,8 +694,8 @@ def selftest():
         result = audit(tmp, use_source=False)
 
         mech = result["mechanisms"]
-        check(result["timeouts"] == 5,
-              f"expected 5 TIMEOUTs (the OK test excluded), got {result['timeouts']}")
+        check(result["timeouts"] == 7,
+              f"expected 7 TIMEOUTs (the OK test excluded), got {result['timeouts']}")
         check(result["statuses"].get("OK") == 1, "the OK test must still be counted")
         check(mech.get("https-body-truncated") == 1,
               f"TLS truncation must win over the missing global: {mech}")
@@ -631,7 +705,19 @@ def selftest():
               f"worker importScripts not attributed: {mech}")
         check(mech.get("foreign-host-unresolvable") == 1,
               f"unresolvable host not attributed: {mech}")
-        check(mech.get(NO_OUTPUT) == 1, f"silent test not bucketed: {mech}")
+        check(mech.get(HUNG_BROWSER) == 1,
+              f"silent test after a TIMEOUT on the same pid is collateral: {mech}")
+        check(mech.get(NO_OUTPUT) == 2,
+              f"a silent timeout on a browser never proven wedged must stay its "
+              f"own finding: {mech}")
+        hangs = result["hung_browsers"]
+        check(len(hangs) == 1 and hangs[0]["collateral"] == 1,
+              f"one wedged process with one victim expected: {hangs}")
+        hang = hangs[0] if hangs else {}
+        check(hang.get("culprit") == "/b/worker.worker.html",
+              f"culprit must be the last test pid 501 still printed for: {hangs}")
+        check(hang.get("first_victim") == "/b/silent.html",
+              f"victim not recorded: {hangs}")
         check(mech.get(UNCLASSIFIED) == 1,
               f"the clean-but-hung test is the residual: {mech}")
         check(result["examples"].get(UNCLASSIFIED) == ["/a/clean.html"],

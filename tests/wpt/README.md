@@ -391,11 +391,19 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   `document.fonts.ready` (BUG-564) or an `<iframe>` with no nested browsing
   context (BUG-480) print nothing at all — mapping generated ids
   (`.any.worker.html` → `.any.js`) back to the file they came from;
-  `--no-source` turns it off. What no rule claims is the residual, reported by
-  category with a signature histogram, and `residual_ids` in `--json` is the
-  full list the next slice picks its target from. `--selftest` builds a
-  synthetic mozlog shard with two interleaved browsers and checks attribution,
-  precedence and both stages; every assertion was mutation-checked.
+  `--no-source` turns it off. A third rule (slice 11) separates *collateral*
+  from defects: a browser that hangs is not restarted inside a shard, so every
+  test still queued for that process also times out, printing nothing — a
+  zero-output TIMEOUT that follows another TIMEOUT on the same browser pid is
+  reported as `hung-browser` and pinned to its culprit, the last test that
+  process was still able to say anything about. On the WPT-RUN-5 Linux
+  snapshot that is 695 TIMEOUTs (4.5 %) from 16 processes, i.e. 16 pages to
+  reproduce rather than 695 findings; the list is `hung_browsers` in `--json`.
+  What no rule claims is the residual, reported by category with a signature
+  histogram, and `residual_ids` in `--json` is the full list the next slice
+  picks its target from. `--selftest` builds a synthetic mozlog shard with two
+  interleaved browsers and checks attribution, precedence and all three
+  stages; every assertion was mutation-checked.
 - `tests/wpt/rejection_trace.py` — **ours** (WPT-RUN-6 slice 10) — makes the
   single most common *silent* TIMEOUT class visible. Lumen never dispatches
   `unhandledrejection` ([BUG-716](../../bugs/BUG-716-OPEN.md)), and
