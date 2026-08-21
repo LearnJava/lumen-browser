@@ -95,3 +95,19 @@ should be checked for the same ✅→🟡 drift class as [BUG-368](BUG-368-OPEN.
   the underlying event *would* fire); does not explain this bug, since here
   `addEventListener('load'/'error', ...)` never fires either, because no
   dispatch exists at all, attribute-style or not.
+
+## WPT-RUN-6 срез 5 (`html/semantics/embedded-content/the-img-element`, 2026-08-21)
+
+Still fully reproducible 16 days later: `grep -n "naturalWidth\|naturalHeight" crates/js/src/dom.rs`
+— zero matches; no `onload` wiring tied to `<img>` either. Fresh category run
+(161 files, `run_report.py --all --root html/semantics/embedded-content/the-img-element
+--recursive --processes 6`, 3 min): **45/131 TIMEOUT (34.4%)** — 18 in
+`image-loading-lazy-*` (a genuinely-implemented feature, see the
+`// ── Lazy image loading (HTML LS §2.6.6.9) ──` block in `dom.rs:11486+`,
+but its completion is still signalled the same missing way), the remaining
+27 spread across `img.complete.html`, `data-url.html`,
+`natural-size-orientation.html`, `already-loaded-image-sync-width.html`,
+`invalid-src.html`, `nonexistent-image.html`, etc. Sampled both groups —
+every file awaits `img.onload` or reads `img.complete`/`naturalWidth`, same
+single root cause across the whole category, not two separate gaps. No new
+`BUG-NNN` filed.

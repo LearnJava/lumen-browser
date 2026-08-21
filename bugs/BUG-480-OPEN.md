@@ -107,3 +107,19 @@ the framed document actually running as a nested browsing context — since
 **0/6 harness OK, 0/157 subtests** — a uniform TIMEOUT wall, no
 category-specific defect (the `X-Frame-Options`/CSP `frame-ancestors`
 header logic under test is never reached). No new `BUG-NNN` filed.
+
+## WPT-RUN-6 срез 5 (`html/semantics/embedded-content/the-iframe-element`, 2026-08-21)
+
+161 files, `run_report.py --all --root html/semantics/embedded-content/the-iframe-element
+--recursive --processes 6` (5 min): **80/149 TIMEOUT (53.7%)** — the same
+uniform-TIMEOUT-wall shape as `x-frame-options` above, on a category more
+than 25x its size. Sampled every subgroup (`iframe_sandbox_*` — 28 files,
+`iframe-loading-lazy-*` — 21, `iframe_javascript_url_*` — 7, plus the
+remainder: `move_iframe_in_dom_*`, `srcdoc_change_hash.html`,
+`srcdoc_process_attributes.html`, `same_origin_parentage.html`,
+`cross-origin-to-whom(-part-2).window.html`, `iframe-load-event.html`, …) —
+every file checked awaits `iframe.onload` or reads
+`iframe.contentWindow`/`contentDocument`, confirming `crates/shell/src/main.rs:7229`'s
+own comment (`"URL-based iframe: Phase 0 — sub-document is not loaded"`) is
+the operative mechanism, not just the JS-shim accessor gap. No new `BUG-NNN`
+filed — folds under this bug's umbrella per the pattern above.
