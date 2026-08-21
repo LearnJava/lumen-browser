@@ -1,7 +1,7 @@
 # BUG-796 — собственный `content` на обёртке каждого элемента затеняет рефлекторный `HTMLMetaElement.content`; из-за этого WPT режет `timeout: long` по 10-секундному потолку
 
 **Статус:** OPEN
-**Заведён:** 2026-08-21 (WPT-RUN-5, срез 28 — разбор стоимости TIMEOUT в корпусном прогоне)
+**Заведён:** 2026-08-21 (WPT-RUN-5, срез 29 — разбор стоимости TIMEOUT в корпусном прогоне)
 **Область:** `crates/js/src/dom.rs` — обёртка элемента (`_lumen_make_element`, литерал со свойством `get content()`, «HTMLTemplateElement.content (HTML LS §4.12.3)») против таблицы рефлексии `_lumen_install_reflection(HTMLMetaElement.prototype, [... ['content','content','string'] ...])`
 **Владелец:** P1/P3 (движок). Заведён P2 в ходе WPT-задачи, здесь не чинится.
 
