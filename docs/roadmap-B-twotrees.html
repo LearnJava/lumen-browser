@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-21",
  "counts": {
-  "open": 337,
+  "open": 339,
   "fixed": 435,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 772,
+ "total_bugs": 774,
  "phases": [
   {
    "id": "P0",
@@ -4153,7 +4153,7 @@
        "title": "WPT: вендорить + прогнать категорию `subapps`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: 🚫 (вне скоупа). PWA-инсталляция. DONE 2026-08-06: вендорена + прогнана целиком (`--all --root subapps --recursive`, 2:00, 8 файлов, 8 отобранных id) — **1/8 harness OK, 1/1 сабтест**. `window.subApps`/`SubApps` не реализован вовсе (грep по `crates/` — ноль совпадений), ожидаемо для 🚫-scope; апстримный мок сам Chromium-only (`isChromiumBased`-гвард в `subapps-helpers.js` бросает `'Unsupported browser'` на любом другом движке) — содержательный прогон тестов невозможен в принципе, не только из-за гэпа движка. 7/8 `.https.` id — TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer` (см. `WPT-VENDOR-storage-access-api`); один (`list-error.tentative.https.html`) сначала дал `AssertionError: Got results from insecure-context-error…, expected list-error…` — реконфирмация [BUG-380](bugs/BUG-380-FIXED.md) (переиспользуемый browsing context отдаёт результаты предыдущего теста после неудачной навигации). Единственный не-`.https.` тест (`insecure-context-error.tentative.html`) прошёл — `window.subApps`/`window.SubApps` действительно `undefined`. Новых номеров бага не заведено"
+       "note": "Скоуп: 🚫 (вне скоупа). PWA-инсталляция. DONE 2026-08-06: вендорена + прогнана целиком (`--all --root subapps --recursive`, 2:00, 8 файлов, 8 отобранных id) — **1/8 harness OK, 1/1 сабтест**. `window.subApps`/`SubApps` не реализован вовсе (grep по `crates/` — ноль совпадений), ожидаемо для 🚫-scope; апстримный мок сам Chromium-only (`isChromiumBased`-гвард в `subapps-helpers.js` бросает `'Unsupported browser'` на любом другом движке) — содержательный прогон тестов невозможен в принципе, не только из-за гэпа движка. 7/8 `.https.` id — TIMEOUT на уже задокументированном TLS-гэпе `UnknownIssuer` (см. `WPT-VENDOR-storage-access-api`); один (`list-error.tentative.https.html`) сначала дал `AssertionError: Got results from insecure-context-error…, expected list-error…` — реконфирмация [BUG-380](bugs/BUG-380-FIXED.md) (переиспользуемый browsing context отдаёт результаты предыдущего теста после неудачной навигации). Единственный не-`.https.` тест (`insecure-context-error.tentative.html`) прошёл — `window.subApps`/`window.SubApps` действительно `undefined`. Новых номеров бага не заведено"
       },
       {
        "id": "WPT-VENDOR-subresource-integrity",
@@ -10754,6 +10754,20 @@
    "component": "js (`crates/js/src/dom.rs:15333` — `function Animation(...)`, прототип не подключён к `EventTarget`; `dom.rs:15507` `_onFinish` зовёт только `this.onfinish`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-809": {
+   "status": "open",
+   "title": "Layout Instability объявлен, но не доставляется ни разу: `PerformanceObserver.supportedEntryTypes` содержит `layout-shift` и `observe()` его принимает, а записи…",
+   "component": "shell (`crates/shell/src/main.rs:2925` — объявление `deliver_layout_shift` под `#[allow(dead_code)]`, реализация `main.rs:3359`; JS-хук `crates/js/src/dom.rs:11035`; список типов `dom.rs:10907`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-810": {
+   "status": "open",
+   "title": "Исполнитель WPT реализует ровно два testdriver-экшена (`click`, `generate_test_report`); `action_sequence`, `send_keys`, `bless`, `set_permission`, `delete_all_…",
+   "component": "tests/wpt tooling (`tools/wptrunner/wptrunner/executors/executorlumen.py:310-334` — `_handle_action`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -11743,6 +11757,9 @@
   "shell (`crates/shell/src/main.rs:1177` — `A11yPrefs::open_in_memory()`), automation (нет CLI-флага/переменной/BiDi-ручки), tooling (`tools/wptrunner/wptrunner/browsers/lumen.py`)": [
    "BUG-755"
   ],
+  "shell (`crates/shell/src/main.rs:2925` — объявление `deliver_layout_shift` под `#[allow(dead_code)]`, реализация `main.rs:3359`; JS-хук `crates/js/src/dom.rs:11035`; список типов `dom.rs:10907`)": [
+   "BUG-809"
+  ],
   "shell (`crates/shell/src/main.rs:525` — `let (_network_svc, _transport) = …`) / network (`crates/network/src/bin/network_service.rs`)": [
    "BUG-769"
   ],
@@ -11849,6 +11866,9 @@
   ],
   "test/snapshot (`snapshot_cpu.rs`, `graphic_tests/snapshots/cpu/`)": [
    "BUG-297"
+  ],
+  "tests/wpt tooling (`tools/wptrunner/wptrunner/executors/executorlumen.py:310-334` — `_handle_action`)": [
+   "BUG-810"
   ],
   "tooling (`scripts/scroll_perf.py`)": [
    "BUG-332"
