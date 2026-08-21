@@ -2259,7 +2259,7 @@
     {
      "id": "WPT-VENDOR",
      "title": "WPT-VENDOR: вендорить и прогнать остальные 276 категорий WPT",
-     "status": "active",
+     "status": "done",
      "note": "Дорожка вендоринга/прогона остальных категорий верхнеуровневого корпуса WPT (dom/nodes уже вендорена и прогнана, см. P2-wpt). Каждая дочерняя задача — одна категория из категорийного индекса docs/wpt-status.md: вендорить тестовое поддерево запиненного коммита (tests/wpt/VENDOR.md), прогнать через tests/wpt/run_report.py, синхронизировать docs/wpt-status.md. Провалы тестов не заводятся по одному — группируются в BUG-NNN по первопричине (методология в docs/wpt-status.md). Категории со скоупом 🚫 (вне архитектуры Lumen-читалки: медиа-конвейер, аппаратные API, ad-tech и т.п.) включены по прямому запросу пользователя 2026-07-21, несмотря на то что docs/wpt-status.md их помечает как вероятно вне скоупа — объём можно пересмотреть после первого прохода.",
      "tasks": [
       {
@@ -4738,9 +4738,9 @@
       {
        "id": "WPT-VENDOR-interfaces",
        "title": "WPT-VENDOR-interfaces: довендорить /interfaces/*.idl для idl_test",
-       "status": "ready",
+       "status": "done",
        "size": "M",
-       "note": "Найдено WPT-RUN-6 срезом 7 (2026-08-21): `resources/idlharness.js`'s `idl_test()` fetches `/interfaces/<spec>.idl` at runtime for every spec passed to `idl_test(srcs, deps, ...)` (`fetch_spec`, `resources/idlharness.js` пинненого коммита `35be3b44`) — этот каталог целиком не вендорен (`tests/wpt/interfaces/` не существует). После среза 7 (idlharness.js/webidl2.js довендорены) idlharness-тесты больше не TIMEOUT-ят, но 404-ятся именно тут — чистый FAIL вместо хёрнесс-креша, следующий шаг к PASS. Затрагивает `idlharness.any.js`/`idlharness.window.js` почти во всех 289 категорий (205 файлов по `grep -rl resources/idlharness.js`), каждому нужен свой набор `.idl` (обычно 2-4 файла: сам спек + зависимости вроде `dom`/`html`). Вендорить с того же пиненного коммита `35be3b44` — `git sparse-checkout add interfaces`, копировать только `.idl`-файлы, реально нужные текущим вендоренным категориям (не весь каталог — он большой)"
+       "note": "Найдено WPT-RUN-6 срезом 7 (2026-08-21): `resources/idlharness.js`'s `idl_test()` fetches `/interfaces/<spec>.idl` at runtime for every spec passed to `idl_test(srcs, deps, ...)` (`fetch_spec`, `resources/idlharness.js` пинненого коммита `35be3b44`) — этот каталог целиком не вендорен (`tests/wpt/interfaces/` не существует). После среза 7 (idlharness.js/webidl2.js довендорены) idlharness-тесты больше не TIMEOUT-ят, но 404-ятся именно тут — чистый FAIL вместо хёрнесс-креша, следующий шаг к PASS. ЗАКРЫТО 2026-08-21: спек-имена собраны не угадыванием, а извлечением аргументов `idl_test(srcs, deps, ...)` регексом по всем 205 файлам (`grep -rl idl_test\\( tests/wpt`) — 205 уникальных спеков (`dom`/`html` входят в список наравне с остальными, так как сами являются чужими deps). Довендорено с того же пиненного коммита `35be3b44f3` через переиспользуемый sparse-клон (`git sparse-checkout add interfaces` поверх уже существовавшего `/tmp/wpt-vendor-tmp`, тот же клон, что и другие категории) — скопированы только реально нужные `.idl` (203 из 205 спеков нашли файл `<spec>.idl` в апстримном `interfaces/`; 2 без совпадения — `sub-apps.tentative` и `worklets`, у обоих в апстриме нет спека с таким именем, идут в `fetch_spec` 404 как и раньше, отдельно не заводится). Итог — `tests/wpt/interfaces/`, 203 файла, 1.2 МБ. Подтверждено живым A/B (`run_report.py --all --root encoding --recursive`, порты временно сдвинуты на 18500…19100 мимо фонового WPT-RUN-5 и возвращены до коммита): `/encoding/idlharness.any.html` — было TIMEOUT (срез 1) → FAIL (срез 7, чистый 404 вместо хёрнесс-креша) → теперь `Test OK. Subtests passed 7/8`"
       }
      ]
     },
