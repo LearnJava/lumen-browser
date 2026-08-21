@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WPT-RUN-5 slice 21 (`docs/tasks/p2-wpt-runner-throughput.md`): check that a
+"""WPT-RUN-5 slice 22 (`docs/tasks/p2-wpt-runner-throughput.md`): check that a
 *running* `wptserve` hands out what this checkout would hand out.
 
 Why this exists. Slice 18 (`tests/wpt/port_guard.py`) found that every shard of
