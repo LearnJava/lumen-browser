@@ -35,7 +35,7 @@ use lumen_layout::{matches_selector, query_all, query_all_scoped, query_all_with
 use std::collections::{HashMap, HashSet};
 use v8::{ValueDeserializerHelper, ValueSerializerHelper};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::sync::{
     Once,
     mpsc::{Sender, SyncSender, sync_channel},
@@ -5661,6 +5661,114 @@ macro_rules! with_tc {
     }};
 }
 
+/// PERF-9 process-wide V8 bytecode cache: source-hash → `CachedData` bytes.
+///
+/// The engine's ~94 per-API module shims (`install_v8!` in `install_dom`,
+/// `crate::*::install_*_v8`) are `&'static str` constants run through
+/// `eval()` on **every navigation** — none of them takes a page parameter, so
+/// the text is byte-identical every time (the same property that made them
+/// PERF-9's originally-proposed snapshot batch, see
+/// `docs/tasks/perf-startup-census.md` §6). Caching the compiled bytecode
+/// captures most of that win without a snapshot's cost: no native call has to
+/// become lazy, because the script still *executes* normally on both a hit
+/// and a miss — only the parse phase is skipped on a hit.
+///
+/// `WEB_API_SHIM` itself is deliberately not routed through this cache: it
+/// runs as a *string argument* to indirect `eval()` (BUG-378, see the comment
+/// at the WEB_API_SHIM call site in `install_dom`), not as a `v8::Script`, so
+/// there is no `UnboundScript` here to attach cached bytecode to — fixing
+/// that would mean giving up the `configurable`/`enumerable:false` property
+/// indirect eval buys, which is a BUG-378 regression, not a PERF-9 change.
+static CODE_CACHE: LazyLock<Mutex<HashMap<u64, Vec<u8>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Below this size, the parse cost this cache exists to skip is cheap enough
+/// that hashing the source and touching the cache mutex is not worth it —
+/// most `eval()` calls are small one-off scripts (`_lumen_focus_update(3)`,
+/// deterministic-seed/UA/timezone overrides, …), not shims. Measured against
+/// the actual `*_SHIM` constants (`docs/tasks/perf-startup-census.md` §6):
+/// 512 bytes catches 96 of 98 module shims, missing only 637 of their 710 KB
+/// combined — well above genuinely dynamic one-off content, which tops out
+/// around a few dozen bytes.
+const CODE_CACHE_MIN_LEN: usize = 512;
+
+/// Bounds cache growth if a caller ever routes large, non-repeating content
+/// through `eval()`. Nothing in the engine does today — every script above
+/// `CODE_CACHE_MIN_LEN` is one of the static module shims — but `eval()` is a
+/// generic trait method, not shim-specific, so this is a defensive cap rather
+/// than a tuned figure.
+const CODE_CACHE_MAX_ENTRIES: usize = 512;
+
+fn code_cache_hash(src: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    src.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Compile `$src_str` (already interned as `$v8_src`) through `CODE_CACHE`.
+/// Below `CODE_CACHE_MIN_LEN` this is exactly `v8::Script::compile`. At or
+/// above it: consume a cached `UnboundScript` on a hit, or compile normally
+/// and store the result's code cache for next time. Self-heals on a rejected
+/// entry (recompiles and overwrites it) rather than trusting the cache to
+/// always be valid — correctness never depends on a hit.
+macro_rules! compile_cached {
+    ($tc:expr, $src_str:expr, $v8_src:expr) => {{
+        let __src_str: &str = $src_str;
+        let __v8_src: v8::Local<v8::String> = $v8_src;
+        if __src_str.len() < CODE_CACHE_MIN_LEN {
+            v8::Script::compile($tc, __v8_src, None)
+        } else {
+            let __hash = code_cache_hash(__src_str);
+            let __hit = CODE_CACHE
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(&__hash)
+                .cloned();
+            let mut __compiled = None;
+            if let Some(__bytes) = __hit {
+                let mut __source = v8::script_compiler::Source::new_with_cached_data(
+                    __v8_src,
+                    None,
+                    v8::CachedData::new(&__bytes),
+                );
+                if let Some(__unbound) = v8::script_compiler::compile_unbound_script(
+                    $tc,
+                    &mut __source,
+                    v8::script_compiler::CompileOptions::ConsumeCodeCache,
+                    v8::script_compiler::NoCacheReason::NoReason,
+                ) {
+                    let __rejected = __source
+                        .get_cached_data()
+                        .map(|d| d.rejected())
+                        .unwrap_or(true);
+                    if !__rejected {
+                        __compiled = Some(__unbound.bind_to_current_context($tc));
+                    }
+                }
+            }
+            if __compiled.is_none() {
+                let mut __source = v8::script_compiler::Source::new(__v8_src, None);
+                if let Some(__unbound) = v8::script_compiler::compile_unbound_script(
+                    $tc,
+                    &mut __source,
+                    v8::script_compiler::CompileOptions::NoCompileOptions,
+                    v8::script_compiler::NoCacheReason::NoReason,
+                ) {
+                    if let Some(__cache) = __unbound.create_code_cache() {
+                        let mut __map = CODE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+                        if __map.len() < CODE_CACHE_MAX_ENTRIES || __map.contains_key(&__hash) {
+                            __map.insert(__hash, __cache.to_vec());
+                        }
+                    }
+                    __compiled = Some(__unbound.bind_to_current_context($tc));
+                }
+            }
+            __compiled
+        }
+    }};
+}
+
 impl JsRuntime for V8JsRuntime {
     #[allow(clippy::unwrap_used)]  // унаследовано, docs/lint-policy.md §10
     fn eval(&self, script: &str) -> JsResult<JsValue> {
@@ -5669,7 +5777,7 @@ impl JsRuntime for V8JsRuntime {
                 let src = v8::String::new(tc, script)
                     .ok_or_else(|| JsError::Runtime("OOM: script string".into()))?;
 
-                let compiled = v8::Script::compile(tc, src, None);
+                let compiled = compile_cached!(tc, script, src);
                 if tc.has_caught() {
                     let exc = tc.exception().unwrap();
                     return Err(v8_err(tc, exc));
@@ -6167,6 +6275,67 @@ mod tests {
                 t_new + t_install
             );
         }
+    }
+
+    /// PERF-9: the module-shim bytecode cache (`CODE_CACHE`) must not change
+    /// what a script *returns* — only how fast it compiles. Evals the same
+    /// constant script above `CODE_CACHE_MIN_LEN` in three fresh isolates,
+    /// asserts identical results, and checks the cache entry under this
+    /// test's own key is populated by the miss and left untouched by the
+    /// two hits that follow.
+    #[test]
+    fn perf9_code_cache_hit_preserves_semantics() {
+        let big_script = format!(
+            "(function() {{ var acc = 0; for (var i = 0; i < 3; i++) {{ acc += i; }} return acc; }})();\n{}",
+            "// padding to clear CODE_CACHE_MIN_LEN\n".repeat(200)
+        );
+        assert!(big_script.len() >= CODE_CACHE_MIN_LEN, "test script must exceed the caching threshold");
+        let hash = code_cache_hash(&big_script);
+
+        CODE_CACHE.lock().unwrap_or_else(|e| e.into_inner()).remove(&hash);
+
+        let first = rt().eval(&big_script).unwrap();
+        assert_eq!(first, JsValue::Number(3.0));
+        // `CODE_CACHE` is process-wide and this test runs alongside every
+        // other test thread, so its total length is not a safe thing to
+        // assert on (BUG-class: another thread's unrelated `eval()` can grow
+        // it between two reads). Its byte content under *this test's own*
+        // key is race-free — nothing else in the suite evals this exact
+        // padded script — so pin that instead of the map's size.
+        let bytes_after_miss = CODE_CACHE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&hash)
+            .cloned();
+        assert!(
+            bytes_after_miss.is_some(),
+            "a miss above the threshold must populate the cache"
+        );
+
+        for _ in 0..2 {
+            let again = rt().eval(&big_script).unwrap();
+            assert_eq!(again, JsValue::Number(3.0));
+        }
+        let bytes_after_hits = CODE_CACHE.lock().unwrap_or_else(|e| e.into_inner()).get(&hash).cloned();
+        assert_eq!(
+            bytes_after_hits, bytes_after_miss,
+            "a cache hit must not rewrite or drop this test's own entry"
+        );
+    }
+
+    /// PERF-9: scripts below `CODE_CACHE_MIN_LEN` (the vast majority of
+    /// `eval()` calls — one-off dynamic snippets like `_lumen_focus_update`)
+    /// must never be cached, so the cache cannot grow unbounded on them.
+    #[test]
+    fn perf9_code_cache_skips_small_scripts() {
+        let small_script = "1 + 1";
+        assert!(small_script.len() < CODE_CACHE_MIN_LEN);
+        let hash = code_cache_hash(small_script);
+        assert_eq!(rt().eval(small_script).unwrap(), JsValue::Number(2.0));
+        assert!(
+            !CODE_CACHE.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&hash),
+            "a small script must not be added to the code cache"
+        );
     }
 
     /// PERF-9 census, third half: **which** natives the shim needs while it is
