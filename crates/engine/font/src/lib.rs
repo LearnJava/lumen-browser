@@ -31,6 +31,7 @@ pub mod colr;
 pub mod cpal;
 pub mod delta_set_index_map;
 pub mod face;
+mod font_cache;
 pub mod fvar;
 pub mod glyf;
 pub mod gpos;

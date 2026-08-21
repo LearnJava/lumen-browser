@@ -12,9 +12,16 @@
 //!
 //! Индекс строится лениво при первом `lookup_*` / `list_families`,
 //! чтобы конструктор оставался дёшевым (`SystemFontIndex::new()` не делает
-//! I/O). После первого скана результат кэшируется навсегда: live-watching
-//! директорий шрифтов — задача отдельная, в практике браузер всё равно
-//! пересоздаётся редко.
+//! I/O). В рамках одного инстанса результат кэшируется навсегда:
+//! live-watching директорий шрифтов — задача отдельная, в практике браузер
+//! всё равно пересоздаётся редко.
+//!
+//! Сам скан (сотни файлов в системных директориях) сериализуется на диск
+//! (`<exe_dir>/data/fonts/index.cache`, PERF-11, см. [`crate::font_cache`]):
+//! первый процесс на машине платит полный скан и пишет кэш, все следующие —
+//! читают небольшой текстовый файл вместо повторного парсинга каждого
+//! шрифта. Инвалидация по mtime+size директорий и версии сборки; битый или
+//! устаревший кэш деградирует в полный скан, никогда — в пустой индекс.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -58,7 +65,14 @@ impl SystemFontIndex {
     }
 
     fn index(&self) -> &HashMap<String, Vec<FaceRecord>> {
-        self.index.get_or_init(|| build_index(&self.dirs))
+        self.index.get_or_init(|| {
+            if let Some(cached) = crate::font_cache::read_index_cache(&self.dirs) {
+                return cached;
+            }
+            let built = build_index(&self.dirs);
+            crate::font_cache::write_index_cache(&self.dirs, &built);
+            built
+        })
     }
 
     /// Сколько family-имён зарегистрировано. Для тестов и диагностики;
@@ -366,6 +380,22 @@ mod tests {
         let idx = SystemFontIndex::with_dirs(vec![assets_dir()]);
         assert!(idx.lookup_family("NoSuchFont").is_empty());
         assert!(idx.lookup_faces("NoSuchFont").is_empty());
+    }
+
+    #[test]
+    fn cached_index_matches_cold_scan() {
+        // PERF-11 гейт: набор шрифтов из кэша обязан 1:1 совпасть с холодным
+        // сканом — иначе кэш молча теряет шрифты вместо честной задержки.
+        // Race-safe без явной блокировки: содержимое для dirs=[assets_dir()]
+        // детерминировано, так что параллельный прогон соседних тестов
+        // (тоже на assets_dir()) не может дать иной, но всё ещё валидный
+        // результат.
+        let dirs = vec![assets_dir()];
+        let cold = build_index(&dirs);
+
+        let _ = std::fs::remove_file(crate::font_cache::cache_path());
+        let idx = SystemFontIndex::with_dirs(dirs);
+        assert_eq!(*idx.index(), cold);
     }
 
     #[test]
