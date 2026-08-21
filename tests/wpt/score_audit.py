@@ -387,6 +387,11 @@ def compare_snapshots(left: dict, right: dict) -> dict:
     * **fusion** — per category, the run that executed more ids is the better
       observation of it, so `max(ran)` per category is a defensible joint
       figure. Reported next to both halves rather than instead of them.
+    * **like-for-like** — the categories both runs executed to the *same
+      depth*. This is the only sample where a score gap cannot be coverage,
+      so it is the one number that answers "does the platform move the
+      figure"; the shared-coverage totals above it do not, because a category
+      both runs *reached* is routinely a category one of them ran deeper.
     """
     lp, rp = left["scored"]["per_category"], right["scored"]["per_category"]
     shared = sorted(set(lp) & set(rp))
@@ -416,8 +421,31 @@ def compare_snapshots(left: dict, right: dict) -> dict:
                 "executed_rate": round(score / ran, 4) if ran else 0.0,
                 "coverage": round(ran / ids, 4) if ids else 0.0}
 
+    # Categories both runs executed to the same depth. `identical` already
+    # counts the ones that match everywhere, but a count alone cannot say how
+    # much of the corpus that agreement covers, and it hides the interesting
+    # half: a category run to equal depth whose score still differs is a real
+    # divergence between the two machines, not a coverage artefact, and there
+    # is nowhere else it can be seen.
+    same_ran = [c for c in shared if lp[c]["ran"] == rp[c]["ran"] and lp[c]["ran"]]
+    lfl_ran = sum(lp[c]["ran"] for c in same_ran)
+    lfl_left = sum(lp[c]["score"] for c in same_ran)
+    lfl_right = sum(rp[c]["score"] for c in same_ran)
+    identical_set = set(identical)
+    disagree = sorted(({"category": c, "ran": lp[c]["ran"],
+                        "left_score": round(lp[c]["score"], 2),
+                        "right_score": round(rp[c]["score"], 2)}
+                       for c in same_ran if c not in identical_set),
+                      key=lambda d: -abs(d["left_score"] - d["right_score"]))
+    like_for_like = {"categories": len(same_ran), "ran": lfl_ran,
+                     "left_score": round(lfl_left, 1), "right_score": round(lfl_right, 1),
+                     "delta_pp": round((lfl_left - lfl_right) / lfl_ran * 100, 3)
+                                 if lfl_ran else 0.0,
+                     "disagree": disagree}
+
     return {"shared_categories": len(shared), "identical": len(identical),
-            "drift": drift[:15],
+            "drift": drift[:15], "like_for_like": like_for_like,
+            "right_only_categories": sorted(set(rp) - set(lp)),
             "shared_totals": {"left": totals({c: lp[c] for c in shared}),
                               "right": totals({c: rp[c] for c in shared})},
             "left": totals(lp), "right": totals(rp), "fused": totals(fused),
@@ -496,12 +524,25 @@ def print_comparison(cmp: dict) -> None:
     for row in cmp["drift"][:8]:
         print(f"    {row['category']:24} ran {row['left_ran']:6}/{row['right_ran']:6}  "
               f"per-executed-id {row['left_per_ran']:.3f} vs {row['right_per_ran']:.3f}")
+    lfl = cmp["like_for_like"]
+    print(f"  like-for-like (same ran on both sides): {lfl['categories']} categories, "
+          f"{lfl['ran']} executed ids — left {lfl['left_score']:.1f}, "
+          f"right {lfl['right_score']:.1f}, delta {lfl['delta_pp']:+.3f} pp")
+    if lfl["disagree"]:
+        print(f"    disagreeing at equal depth: {len(lfl['disagree'])} categor"
+              f"{'y' if len(lfl['disagree']) == 1 else 'ies'}")
+        for row in lfl["disagree"][:8]:
+            print(f"      {row['category']:24} ran {row['ran']:6}  "
+                  f"{row['left_score']:.2f} vs {row['right_score']:.2f}")
+    else:
+        print("    the two machines agree on every category they ran to equal depth")
     fused = cmp["fused"]
     print(f"  fused (per category, whichever run executed more): "
           f"{fused['pass_rate'] * 100:.2f}% of the manifest "
           f"({fused['score']:.0f}/{fused['ids']}), coverage {fused['coverage'] * 100:.1f}%, "
           f"executed-id rate {fused['executed_rate'] * 100:.2f}%")
-    print(f"  categories the fusion took from the second run: {len(cmp['fused_from_right'])}")
+    print(f"  categories the fusion took from the second run: {len(cmp['fused_from_right'])}, "
+          f"of them reached only by it: {len(cmp['right_only_categories'])}")
 
 
 def _selftest() -> int:
@@ -555,6 +596,32 @@ def _selftest() -> int:
          acc["cause"].get("no-executor-for-type") == 1),
         ("hole is still counted as a hole",
          acc["cause"].get("shard-produced-nothing") == 1),
+    ]
+    # The like-for-like block of `--compare` decides whether two machines'
+    # halves may be added up, so its two failure modes are worth pinning down
+    # here: counting a category the runs executed to different depths (which
+    # would report coverage as disagreement) and losing a real disagreement
+    # among the equal-depth ones.
+    def cat(ids, ran, score):
+        return {"ids": ids, "ran": ran, "not_run": ids - ran, "harness_ok": ran,
+                "subtests_passed": 0, "score": score}
+
+    left_snap = {"scored": {"per_category": {
+        "same": cat(10, 10, 4.0), "differs": cat(10, 10, 4.0), "deeper": cat(10, 10, 5.0)}}}
+    right_snap = {"scored": {"per_category": {
+        "same": cat(10, 10, 4.0), "differs": cat(10, 10, 1.0), "deeper": cat(10, 4, 2.0),
+        "onlyright": cat(10, 10, 3.0)}}}
+    cmp = compare_snapshots(left_snap, right_snap)
+    lfl = cmp["like_for_like"]
+    checks += [
+        ("like-for-like takes only equal-depth categories", lfl["categories"] == 2),
+        ("like-for-like sums the executed ids of those", lfl["ran"] == 20),
+        ("like-for-like delta is scored per executed id",
+         abs(lfl["delta_pp"] - 15.0) < 1e-6),
+        ("equal-depth disagreement is named",
+         [d["category"] for d in lfl["disagree"]] == ["differs"]),
+        ("a category only the second run reached is reported as such",
+         cmp["right_only_categories"] == ["onlyright"]),
     ]
     for label, ok in checks:
         print(f"  {'PASS' if ok else 'FAIL'}  {label}")
