@@ -169,6 +169,19 @@ MECHANISMS = [
         [r"\[JS WebSocket\].*error"],
         "the page's WebSocket never connected",
     ),
+    # Last on purpose: a rejection is the *terminal* event of almost any
+    # failure — a 404'd helper, a truncated https body and a missing DOM API
+    # all end in one — so every mechanism with its own evidence must claim the
+    # test first. Only produced by a run instrumented with
+    # `tests/wpt/rejection_trace.py`; a normal run never prints this line,
+    # because BUG-716 means nothing in the engine reports a rejection at all.
+    Mechanism(
+        "unhandled-rejection", "BUG-716",
+        [r"LUMEN_UNHANDLED_REJECTION:"],
+        "the test failed inside a promise chain and Lumen never dispatched "
+        "`unhandledrejection`, so testharness.js never saw the failure and the "
+        "verdict degraded from FAIL to TIMEOUT (instrumented runs only)",
+    ),
 ]
 
 #: Tests that printed nothing at all while running get their own bucket: the
@@ -198,7 +211,13 @@ SOURCE_MARKERS = [
     ),
     Mechanism(
         "iframe-no-nested-context", "BUG-480",
-        [r"<iframe", r"iframe\.(?:onload|contentWindow|contentDocument)|"
+        # `createElement("iframe")` counts as much as the literal tag: the
+        # helpers that build the frame in script (WPT's own
+        # `moving-between-documents-helper.js`, `speculative-parsing-util.js`)
+        # never write one out (WPT-RUN-6 slice 10).
+        [r"<iframe|createElement\(['\"]iframe['\"]\)",
+         r"iframe\.(?:onload|contentWindow|contentDocument)|"
+         r"\.contentWindow\b|\.contentDocument\b|"
          r"\bsrcdoc\b|addEventListener\(['\"]load['\"]"],
         "URL-addressed subdocuments are never loaded, so `iframe.onload` and "
         "`contentWindow` access wait forever",
@@ -290,14 +309,70 @@ def _read_source(path, cache):
     return cache[path]
 
 
-def classify_source(test_id, root, cache):
+#: `<script src=...>` of a test file. Both shapes occur (quoted and bare).
+_SCRIPT_SRC_RE = re.compile(r"""<script[^>]*\ssrc\s*=\s*["']?([^"'\s>]+)""",
+                            re.IGNORECASE)
+
+#: Never followed as a helper: the harness itself matches half the markers
+#: (`testharness.js` contains `addEventListener('load'`, `<iframe`, ...), so
+#: following it would claim every test in the corpus for whichever mechanism
+#: sorts first.
+_NOT_A_HELPER = ("/resources/testharness.js", "/resources/testharnessreport.js",
+                 "/resources/testdriver.js", "/resources/testdriver-vendor.js")
+
+
+def helper_paths(test_id, root):
+    """Local `<script src>` helpers of a test, resolved to on-disk paths.
+
+    A generated test is frequently a three-line stub whose whole body is one
+    call into a shared helper — `moving-between-documents-helper.js` builds the
+    `<iframe>` and waits for its `postMessage`, `speculative-parsing-util.js`
+    hangs the assertion off `addEventListener('load')`. Reading only the stub
+    finds no marker at all, so those land in the residual as if the browser had
+    gone silent for an unknown reason (WPT-RUN-6 slice 10: 54 of the 107
+    `scripting-1` residual ids were one such helper). One level is followed,
+    not a full closure: helpers of helpers are rare and each level widens what
+    a marker may be attributed to.
+    """
+    src = source_path(test_id, root)
+    try:
+        with open(src, encoding="utf-8", errors="replace") as handle:
+            text = handle.read()
+    except OSError:
+        return []
+    out = []
+    for ref in _SCRIPT_SRC_RE.findall(text):
+        ref = ref.split("#")[0].split("?")[0]
+        if not ref or ref in _NOT_A_HELPER or not ref.endswith(".js"):
+            continue
+        if ref.startswith("/"):
+            path = os.path.join(root, ref.lstrip("/"))
+        elif "://" in ref:
+            continue
+        else:
+            path = os.path.normpath(os.path.join(os.path.dirname(src), ref))
+        if os.path.isfile(path):
+            out.append(path)
+    return out
+
+
+def classify_source(test_id, root, cache, follow_helpers=True):
     """Second-stage key for a test the output stage could not claim, or None.
 
-    Reads only the test's own source file — a marker reached through a helper
-    the test includes is missed, which keeps this a lower bound (see
-    `SOURCE_MARKERS`).
+    Reads the test's own source plus, unless `follow_helpers` is off, the
+    `<script src>` helpers it includes (`helper_paths`) — a marker in a helper
+    is a marker of the test, and the pre-slice-10 test-file-only reading made
+    the stage a strict lower bound (see `SOURCE_MARKERS`).
     """
     lines = _read_source(source_path(test_id, root), cache)
+    if lines is None:
+        return None
+    lines = list(lines)
+    if follow_helpers:
+        for path in helper_paths(test_id, root):
+            helper_lines = _read_source(path, cache)
+            if helper_lines:
+                lines += helper_lines
     if not lines:
         return None
     for mech in SOURCE_MARKERS:
@@ -374,11 +449,14 @@ def classify(lines):
     return UNCLASSIFIED
 
 
-def audit(out_dir, category=None, root=WPT_ROOT, use_source=True):
+def audit(out_dir, category=None, root=WPT_ROOT, use_source=True,
+          follow_helpers=True):
     """Classify every TIMEOUT in a run directory.
 
     `category` filters by manifest-id prefix (`html`, `html/canvas`, ...);
-    `use_source` enables the second, source-marker stage (`SOURCE_MARKERS`).
+    `use_source` enables the second, source-marker stage (`SOURCE_MARKERS`);
+    `follow_helpers` lets that stage read the test's `<script src>` helpers as
+    well as the test file itself (`helper_paths`).
     """
     source_cache = {}
     counts = collections.Counter()
@@ -400,7 +478,8 @@ def audit(out_dir, category=None, root=WPT_ROOT, use_source=True):
                 continue
             key = classify(lines)
             if use_source and key in (NO_OUTPUT, UNCLASSIFIED):
-                from_source = classify_source(test, root, source_cache)
+                from_source = classify_source(test, root, source_cache,
+                                              follow_helpers=follow_helpers)
                 if from_source:
                     key = from_source
             counts[key] += 1
@@ -590,6 +669,28 @@ def selftest():
         check(classify_source("/a/focus.window.html", tmp, {}) == "focus-in-load",
               "generated id was not mapped back to its .window.js source")
 
+        # Stage 2, helper following: a stub test whose whole body is a call
+        # into a helper. The marker lives in the helper, so reading the test
+        # file alone finds nothing — that was the pre-slice-10 blind spot.
+        with open(os.path.join(tmp, "a", "stub.html"), "w", encoding="utf-8") as handle:
+            handle.write('<script src="/resources/testharness.js"></script>\n'
+                         '<script src="helper.js"></script>\n'
+                         '<script>runTest();</script>')
+        with open(os.path.join(tmp, "a", "helper.js"), "w", encoding="utf-8") as handle:
+            handle.write("const iframe = document.createElement('iframe');\n"
+                         "iframe.contentWindow.postMessage('x');")
+        check(classify_source("/a/stub.html", tmp, {}) == "iframe-no-nested-context",
+              "marker inside an included helper was not found")
+        check(classify_source("/a/stub.html", tmp, {}, follow_helpers=False) is None,
+              "--no-helpers must restore the test-file-only reading")
+        # The harness itself is never followed: it matches several markers and
+        # would claim every test in the corpus for whichever sorts first.
+        os.makedirs(os.path.join(tmp, "resources"), exist_ok=True)
+        with open(os.path.join(tmp, "resources", "testharness.js"), "w", encoding="utf-8") as handle:
+            handle.write("document.fonts.ready.then(() => {});")
+        check(classify_source("/a/stub.html", tmp, {}) == "iframe-no-nested-context",
+              "testharness.js was followed as if it were a test helper")
+
     for msg in failures:
         print("FAIL:", msg)
     print("selftest:", "ok" if not failures else f"{len(failures)} failure(s)")
@@ -608,6 +709,10 @@ def main():
                         help="example ids printed per mechanism")
     parser.add_argument("--json", dest="json_out", default=None,
                         help="write the full result here")
+    parser.add_argument("--no-helpers", action="store_true",
+                        help="in the source-marker stage read only the test "
+                             "file, not the <script src> helpers it includes "
+                             "(the pre-WPT-RUN-6-slice-10 behaviour)")
     parser.add_argument("--no-source", action="store_true",
                         help="skip the source-marker stage (output evidence only)")
     parser.add_argument("--selftest", action="store_true",
@@ -623,7 +728,8 @@ def main():
         return 2
 
     result = audit(args.out_dir, category=args.category,
-                   use_source=not args.no_source)
+                   use_source=not args.no_source,
+                   follow_helpers=not args.no_helpers)
     print_report(result, top=args.top, examples=args.examples)
     if args.json_out:
         with open(args.json_out, "w", encoding="utf-8") as handle:

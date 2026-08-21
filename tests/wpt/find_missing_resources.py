@@ -16,6 +16,25 @@ majority) and only misses paths built via runtime string concatenation, which
 this style of test essentially never does — `check-layout-th.js` and
 `ahem.css` are both referenced as plain literal `src=`/`href=`.
 
+Two blind spots of that shape were measured and closed by `WPT-RUN-6` slice 10,
+both hit by the same real gap (`/common/dispatcher/dispatcher.py` was absent
+from the checkout while 897 corpus files drive their test through the helper
+that fetches it, and this script reported nothing):
+
+* **A literal path outside `src=`/`href=`/`url()`.** A helper fetches its
+  server endpoint from a plain string constant (`const dispatcher_path =
+  "/common/dispatcher/dispatcher.py"`, then `fetch(dispatcher_url + ...)`).
+  Nothing about that is runtime concatenation of the *path* — it is a literal,
+  just not in an attribute. `JS_REF_RE` therefore also matches quoted absolute
+  paths whose last segment has a resource extension (`RESOURCE_EXTS`).
+* **A missing file reached through a helper that is present.** A test includes
+  `dispatcher.js` (on disk, so not missing) and it is *that* file which
+  references the absent `.py`. Counting only direct references attributes the
+  gap to one non-test file and zero manifest ids, i.e. ranks the largest hole
+  in the tree below everything else. References are now followed transitively
+  through present, scannable helpers, so a missing path is charged to every
+  test file that reaches it (`--direct-only` restores the old behaviour).
+
 Usage:
 
     python tests/wpt/find_missing_resources.py [--root css] [--ext .html .htm .js]
@@ -48,6 +67,27 @@ TESTS_ROOT = os.path.join(REPO_ROOT, "tests", "wpt")
 REF_RE = re.compile(
     r"""(?:src|href)\s*=\s*["']?(/[^"'\s>]+)"""
     r"""|url\(\s*["']?(/[^"'\)\s]+)"""
+)
+
+#: Extensions a quoted absolute-path literal must end in to be read as a
+#: resource reference (`JS_REF_RE`). Without the whitelist the pattern also
+#: matches things that are not files at all — an origin path a test navigates
+#: to, a cookie path, a `/`-prefixed regexp — and every one of those would be
+#: reported as a missing resource.
+RESOURCE_EXTS = (
+    "js", "mjs", "py", "html", "htm", "xht", "xhtml", "svg", "css", "json",
+    "txt", "xml", "wasm", "png", "jpg", "jpeg", "gif", "webp", "woff", "woff2",
+    "ttf", "otf", "mp3", "mp4", "webm", "ogg", "wav", "pdf", "sub",
+)
+
+#: A site-absolute path written as a bare string literal — `fetch("/common/…")`,
+#: `new URL("/common/…", …)`, `importScripts("/resources/…")`, or a plain
+#: `const p = "/common/…"`. See the module docstring: this is a literal path,
+#: not runtime concatenation, and missing it hid the largest single vendoring
+#: hole in the tree (`WPT-RUN-6` slice 10).
+JS_REF_RE = re.compile(
+    r"""["'](/[^"'\s>]*?\.(?:""" + "|".join(RESOURCE_EXTS) + r""")(?:[?#][^"']*)?)["']""",
+    re.IGNORECASE,
 )
 
 DEFAULT_EXTS = (".html", ".htm", ".xht", ".xhtml", ".js")
@@ -83,8 +123,9 @@ def find_refs(path: str) -> "set[str]":
     except OSError:
         return set()
     refs = set()
-    for m in REF_RE.finditer(text):
-        ref = m.group(1) or m.group(2)
+    matches = [(m.group(1) or m.group(2)) for m in REF_RE.finditer(text)]
+    matches += [m.group(1) for m in JS_REF_RE.finditer(text)]
+    for ref in matches:
         # Strip query/fragment; wptserve pipe substitutions (?pipe=sub etc.)
         # don't change which file on disk is served.
         ref = ref.split("#", 1)[0].split("?", 1)[0]
@@ -93,6 +134,49 @@ def find_refs(path: str) -> "set[str]":
             continue
         refs.add(ref)
     return refs
+
+
+class RefGraph:
+    """Site-absolute references of every file, resolved transitively.
+
+    A test rarely names the file it dies on. It includes a helper that is
+    present (`/common/dispatcher/dispatcher.js`), and the helper fetches the
+    endpoint that is absent (`/common/dispatcher/dispatcher.py`). Charging the
+    gap only to files that name it directly puts the biggest hole in the tree
+    at one file and zero manifest ids; charging it to every test that reaches
+    it puts it where the runtime cost actually lands.
+    """
+
+    def __init__(self, exts: tuple):
+        self.exts = exts
+        self._refs = {}      # abs path -> direct refs
+        self._missing = {}   # abs path -> missing refs reachable from it
+
+    def direct_refs(self, path: str) -> "set[str]":
+        if path not in self._refs:
+            self._refs[path] = find_refs(path)
+        return self._refs[path]
+
+    def missing_from(self, path: str, _stack=()) -> "set[str]":
+        """Missing site-absolute paths reachable from `path`."""
+        cached = self._missing.get(path)
+        if cached is not None:
+            return cached
+        if path in _stack:
+            # Helper cycle (a.js includes b.js includes a.js): the outer frame
+            # already accounts for this file's own refs.
+            return set()
+        found = set()
+        for ref in self.direct_refs(path):
+            if ref in ROUTED_NOT_VENDORED:
+                continue
+            on_disk = os.path.join(TESTS_ROOT, ref.lstrip("/"))
+            if not os.path.isfile(on_disk):
+                found.add(ref)
+            elif ref.endswith(self.exts):
+                found |= self.missing_from(on_disk, _stack + (path,))
+        self._missing[path] = found
+        return found
 
 
 def count_blocked_ids(files_by_missing: dict, manifest_path=None) -> dict:
@@ -130,6 +214,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", default="css")
     parser.add_argument("--ext", nargs="+", default=list(DEFAULT_EXTS))
+    parser.add_argument("--direct-only", action="store_true",
+                        help="count only resources a test file names itself, "
+                             "without following references through helpers that "
+                             "are present (the pre-WPT-RUN-6-slice-10 behaviour)")
     parser.add_argument("--ids", action="store_true",
                         help="also count the manifest ids each missing file blocks")
     parser.add_argument("--manifest", default=None,
@@ -141,20 +229,29 @@ def main() -> int:
         print(f"no such root: {root_dir}", file=sys.stderr)
         return 1
 
+    exts = tuple(args.ext)
+    graph = RefGraph(exts)
     hit_counts = collections.Counter()
     routed = collections.Counter()
     files_by_missing = collections.defaultdict(set)
     scanned = 0
-    for path in iter_test_files(root_dir, tuple(args.ext)):
+    for path in iter_test_files(root_dir, exts):
         scanned += 1
-        for ref in find_refs(path):
+        for ref in graph.direct_refs(path):
             if ref in ROUTED_NOT_VENDORED:
                 routed[ref] += 1
+        missing = set()
+        for ref in graph.direct_refs(path):
+            if ref in ROUTED_NOT_VENDORED:
                 continue
             on_disk = os.path.join(TESTS_ROOT, ref.lstrip("/"))
             if not os.path.isfile(on_disk):
-                hit_counts[ref] += 1
-                files_by_missing[ref].add(path)
+                missing.add(ref)
+            elif not args.direct_only and ref.endswith(exts):
+                missing |= graph.missing_from(on_disk, (path,))
+        for ref in missing:
+            hit_counts[ref] += 1
+            files_by_missing[ref].add(path)
 
     print(f"scanned {scanned} files under {args.root}/")
     if routed:
