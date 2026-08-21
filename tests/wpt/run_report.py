@@ -282,6 +282,15 @@ def main() -> int:
     parser.add_argument("--binary", default=run_smoke.default_binary())
     parser.add_argument("--out", default=DEFAULT_OUT, help="HTML report path")
     parser.add_argument(
+        "--log-raw",
+        dest="log_raw",
+        default=None,
+        help="also write wptrunner's raw mozlog stream (JSON lines) here, the "
+        "way run_corpus.py does per shard — this is what tests/wpt/timeout_audit.py "
+        "reads, so pass it when a focused run is meant to be classified "
+        "(--out-dir of that script is a directory of such files)",
+    )
+    parser.add_argument(
         "--all",
         action="store_true",
         help="run every vendored test under --root, not just the curated/vetted subset",
@@ -394,6 +403,14 @@ def main() -> int:
         json_path = tmp.name
 
     extra_args = [f"--log-wptreport={json_path}"]
+    if args.log_raw:
+        # Same structured stream `run_corpus.py` writes per shard, so a focused
+        # run can be classified by `timeout_audit.py` (which needs mozlog's
+        # `process_output.process` browser pid to attribute a browser line to a
+        # test — the plain text log loses that once `--processes` interleaves
+        # several browsers). WPT-RUN-6 slice 10.
+        os.makedirs(os.path.dirname(os.path.abspath(args.log_raw)), exist_ok=True)
+        extra_args.append(f"--log-raw={args.log_raw}")
     if args.processes:
         extra_args.append(f"--processes={args.processes}")
     if args.timeout_multiplier:

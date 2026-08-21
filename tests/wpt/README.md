@@ -73,7 +73,7 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   diagnostics for free. The single most-referenced out-of-category helper in
   `css/` (1119 files — `tests/wpt/find_missing_resources.py --root css`).
 - `tests/wpt/find_missing_resources.py` — static scan for out-of-category
-  `src=`/`href=`/`url()` references a category's test files 404 on, without
+  `src=`/`href=`/`url()`/bare-string-literal references a category's test files 404 on, without
   running a single test (a live `--all --root css --recursive` run doesn't
   finish — see `docs/wpt-status.md` row `css`). Use before vendoring more
   helpers to find the next highest-ROI gap. `--root ""` scans the whole
@@ -85,8 +85,15 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   `wptrunner` static route rather than from the doc root
   (`/resources/testdriver.js`, `/resources/testharnessreport.js`) are excluded
   by name: they are legitimately absent from disk, and counting them
-  overstated the backlog by 3 236 ids. Corpus-wide today: 96 paths, 6 825
-  automatable ids (`WPT-RUN-11`).
+  overstated the backlog by 3 236 ids. Two blind spots were closed by
+  `WPT-RUN-6` slice 10 — a literal path written outside an attribute
+  (`const p = "/common/dispatcher/dispatcher.py"`, then `fetch(p)`) and a
+  missing file reached through a helper that *is* present, which is how the
+  largest hole in the tree stayed invisible: the scan reported nothing for
+  `common/dispatcher/`, whose absent `.py` endpoint blocks 857 ids.
+  `--direct-only` restores the pre-slice-10 attribution. Corpus-wide after
+  that slice's own vendoring: 265 paths, 5 898 automatable ids
+  (`WPT-RUN-11`), against 91 paths the old scan could see.
 - `tests/wpt/resources/testharnessreport.js` — **ours** (S4) — on harness
   completion, serializes `[url, harness_status, message, stack, subtests]` to
   JSON on `window.__lumen_wpt_results`, polled by `do_test` above.
@@ -389,6 +396,20 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   full list the next slice picks its target from. `--selftest` builds a
   synthetic mozlog shard with two interleaved browsers and checks attribution,
   precedence and both stages; every assertion was mutation-checked.
+- `tests/wpt/rejection_trace.py` — **ours** (WPT-RUN-6 slice 10) — makes the
+  single most common *silent* TIMEOUT class visible. Lumen never dispatches
+  `unhandledrejection` ([BUG-716](../../bugs/BUG-716-OPEN.md)), and
+  `testharness.js` reports a failure inside a promise chain only through that
+  event, so such a test does not FAIL — it goes quiet, produces an empty
+  browser log and dies on the harness timeout. `--on` appends a JS
+  reimplementation of the HTML LS §8.1.7.5 tracking half to Lumen's own
+  `resources/testharnessreport.js`; a rejection nobody chained onto prints
+  `LUMEN_UNHANDLED_REJECTION: <reason>`, which `timeout_audit.py` classifies
+  as the `unhandled-rejection` mechanism (last in the precedence table — a
+  rejection is the terminal event of almost any failure, so every mechanism
+  with its own evidence claims the test first). `--off` restores the file
+  byte-for-byte. An instrumented run is a diagnostic, not a measurement: it
+  wraps `Promise.prototype.then`, so never leave it on for a pass-rate run.
 - `tests/wpt/expectations.py` — **ours** (TEST-3, `docs/tasks/p2-test-track.md`) — generates and
   gates on per-category `.ini` baselines for `run_report.py --update-expected`/`--check`, on top
   of the same native `wptrunner` `--metadata` mechanism `run_suite.py` uses for `dom/nodes`, not
