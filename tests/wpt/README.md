@@ -357,6 +357,20 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   substitution, BiDi scoring loop and projection, so the two slices' numbers are
   in the same unit. Population: ids whose name carries `.https.`, the same rule
   BUG-792 counted its 7 190 with. `--census` needs no browser.
+- `tests/wpt/type_audit.py` — **ours** (WPT-RUN-5 slice 33) — asks what the
+  published number is made of, using nothing but the reports a run already
+  wrote (safe to point at a live `--out-dir`). Splits the score by manifest test
+  type, by whether wptserve hands the id out over TLS, and — with `--vs
+  <snapshot>` — per category against a snapshot taken *before* the reftest
+  executor existed. That last mode is the like-for-like comparison the headline
+  hides: a pre-reftest snapshot's per-category score is by construction a plain
+  testharness score, so putting today's plain score next to it separates "the
+  engine got better" from "two more executors landed". `TLS_MARKERS` is the
+  trap the slice found: `.h2.` ids are served on the TLS-only h2 port, so they
+  were as unreachable as `.https.` while [BUG-785](../../bugs/BUG-785-FIXED.md)
+  was open, even though nothing in the run's own bookkeeping calls them https.
+  `--selftest` checks the split on a hand-built manifest instead of a six-hour
+  run. Scoring is imported from `run_corpus.py`, never re-implemented.
 - `tests/wpt/expectations.py` — **ours** (TEST-3, `docs/tasks/p2-test-track.md`) — generates and
   gates on per-category `.ini` baselines for `run_report.py --update-expected`/`--check`, on top
   of the same native `wptrunner` `--metadata` mechanism `run_suite.py` uses for `dom/nodes`, not
