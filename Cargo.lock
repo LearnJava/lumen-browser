@@ -1633,7 +1633,6 @@ dependencies = [
  "bincode",
  "fst",
  "hyphenation_commons",
- "pocket-resources",
  "serde",
 ]
 
@@ -3292,12 +3291,6 @@ dependencies = [
  "flate2",
  "miniz_oxide",
 ]
-
-[[package]]
-name = "pocket-resources"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c135f38778ad324d9e9ee68690bac2c1a51f340fdf96ca13e2ab3914eb2e51d8"
 
 [[package]]
 name = "polling"

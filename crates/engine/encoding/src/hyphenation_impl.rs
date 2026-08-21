@@ -1,14 +1,38 @@
 //! Knuth–Liang automatic hyphenation via the `hyphenation` crate.
 //!
-//! Implements `HyphenationProvider` using pre-built TeX dictionaries for all
-//! languages bundled via `embed_all`. Dictionaries are deserialized on first
-//! use per locale and then cached in a `Mutex<HashMap>`.
+//! Implements `HyphenationProvider` using pre-built TeX dictionaries for the
+//! 11 languages `locale_to_language` recognizes. Dictionaries are vendored as
+//! `.bincode` files under `dictionaries/` and embedded with `include_bytes!`
+//! rather than the crate's own `embed_all` feature, which bundles all 82
+//! languages the crate ships (~3.0 MB) regardless of which ones the caller
+//! ever asks for (PERF-12, 2026-08-21). Deserialized on first use per locale
+//! and then cached in a `Mutex<HashMap>`.
 
 use std::collections::HashMap;
+use std::io::Cursor;
 use std::sync::Mutex;
 
 use hyphenation::{Hyphenator, Language, Load, Standard};
 use lumen_core::ext::HyphenationProvider;
+
+/// Vendored dictionary bytes for a supported language, or `None` if
+/// `locale_to_language` does not recognize it.
+fn dict_bytes(lang: Language) -> Option<&'static [u8]> {
+    match lang {
+        Language::EnglishUS => Some(include_bytes!("../dictionaries/en-us.standard.bincode")),
+        Language::Russian => Some(include_bytes!("../dictionaries/ru.standard.bincode")),
+        Language::German1996 => Some(include_bytes!("../dictionaries/de-1996.standard.bincode")),
+        Language::French => Some(include_bytes!("../dictionaries/fr.standard.bincode")),
+        Language::Ukrainian => Some(include_bytes!("../dictionaries/uk.standard.bincode")),
+        Language::Dutch => Some(include_bytes!("../dictionaries/nl.standard.bincode")),
+        Language::Spanish => Some(include_bytes!("../dictionaries/es.standard.bincode")),
+        Language::Portuguese => Some(include_bytes!("../dictionaries/pt.standard.bincode")),
+        Language::Italian => Some(include_bytes!("../dictionaries/it.standard.bincode")),
+        Language::Polish => Some(include_bytes!("../dictionaries/pl.standard.bincode")),
+        Language::Czech => Some(include_bytes!("../dictionaries/cs.standard.bincode")),
+        _ => None,
+    }
+}
 
 /// Knuth–Liang hyphenation with per-locale lazy-loaded embedded dictionaries.
 ///
@@ -78,7 +102,8 @@ impl HyphenationProvider for KnuthLiangHyphenation {
         // Lazy-load the dictionary on first use for this locale.
         if !cache.contains_key(&lang_key)
             && let Some(lang) = locale_to_language(&lang_key)
-            && let Ok(dict) = Standard::from_embedded(lang)
+            && let Some(bytes) = dict_bytes(lang)
+            && let Ok(dict) = Standard::from_reader(lang, &mut Cursor::new(bytes))
         {
             cache.insert(lang_key.clone(), dict);
         }
