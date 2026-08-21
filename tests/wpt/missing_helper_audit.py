@@ -97,6 +97,12 @@ REPORT_ARGS = {"output": 0, "timeout_multiplier": 1,
 HARNESS_CODES = {0: "OK", 1: "ERROR", 2: "TIMEOUT", 3: "PRECONDITION_FAILED"}
 SUBTEST_PASS = 0
 
+#: Statuses that mean "this arm produced no verdict at all", as opposed to a
+#: verdict that happens to score zero. `NOT-REPLACED` joins them for
+#: `tls_eof_audit.py`: a document that never replaced the outgoing one is the
+#: same nothing as a page that hung to the cap, just detected sooner.
+DEAD_STATUSES = frozenset({"TIMEOUT", "CAP", "NOT-REPLACED"})
+
 RESULTS_GLOBAL = "__lumen_wpt_results"
 STALE_GLOBAL = "__lumen_wpt_stale"
 POLL_INTERVAL_S = 0.1
@@ -382,11 +388,15 @@ def substitute(text: str, port: int) -> tuple:
 # private static server
 # --------------------------------------------------------------------------- #
 
-class _ArmHandler(http.server.SimpleHTTPRequestHandler):
+class ArmHandler(http.server.SimpleHTTPRequestHandler):
     """Serves `tests/wpt/`; arm B falls through to the upstream cache on a miss.
 
     `testharnessreport.js` carries wptserve's four `%(...)s` placeholders and is
     a syntax error served through them, in both arms alike.
+
+    Shared with `tls_eof_audit.py`, which reuses the tree, the placeholder
+    substitution and `.sub.` handling but frames its responses differently — the
+    name lost its underscore when the second caller appeared.
     """
 
     cache = None   # UpstreamCache for arm B, None for arm A
@@ -395,8 +405,13 @@ class _ArmHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, fmt, *args):  # noqa: D102 - silence per-request logging
         pass
 
-    def do_GET(self):  # noqa: N802 - name fixed by BaseHTTPRequestHandler
-        site_path = self.path.split("?")[0]
+    def render(self, site_path: str):
+        """`(body, content_type)` for a site path, or None if nothing serves it.
+
+        Split out of `do_GET` so a sibling audit can reuse the tree, the report
+        placeholders and the `.sub.` substitution while framing the response
+        differently — `tls_eof_audit.py` must answer without `Content-Length`.
+        """
         path = self.translate_path(site_path)
         raw = None
         if os.path.isfile(path):
@@ -408,16 +423,22 @@ class _ArmHandler(http.server.SimpleHTTPRequestHandler):
         elif self.cache is not None:
             raw = self.cache.get(site_path)
         if raw is None:
-            self.send_error(404)
             return None
         text = raw.decode("utf-8", "replace")
         if path.replace("\\", "/").endswith("/resources/testharnessreport.js"):
             text = text % REPORT_ARGS
         elif ".sub." in site_path:
             text, _unresolved = substitute(text, self.port)
-        body = text.encode("utf-8")
+        return text.encode("utf-8"), self.guess_type(path)
+
+    def do_GET(self):  # noqa: N802 - name fixed by BaseHTTPRequestHandler
+        rendered = self.render(self.path.split("?")[0])
+        if rendered is None:
+            self.send_error(404)
+            return None
+        body, content_type = rendered
         self.send_response(200)
-        self.send_header("Content-Type", self.guess_type(path))
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -427,7 +448,7 @@ class _ArmHandler(http.server.SimpleHTTPRequestHandler):
 def start_server(cache=None) -> tuple:
     """Serve `tests/wpt/` on a free port; returns (server, port)."""
     server_holder = {}
-    handler = type("_Arm", (_ArmHandler,), {"cache": cache})
+    handler = type("_Arm", (ArmHandler,), {"cache": cache})
     handler_partial = functools.partial(handler, directory=WPT_ROOT)
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler_partial)
     server.daemon_threads = True
@@ -451,11 +472,16 @@ def free_port() -> int:
         sock.close()
 
 
-def launch(binary: str) -> tuple:
-    """Start `binary --bidi-port <free>`; returns (proc, port, token)."""
+def launch(binary: str, env: dict = None) -> tuple:
+    """Start `binary --bidi-port <free>`; returns (proc, port, token).
+
+    `env` replaces the child's environment wholesale (callers pass a copy of
+    their own with additions) — `tls_eof_audit.py` needs `LUMEN_EXTRA_CA_CERT`.
+    """
     port = free_port()
     proc = subprocess.Popen([binary, "--bidi-port", str(port)],
-                            cwd=REPO_ROOT, stderr=subprocess.PIPE, text=True)
+                            cwd=REPO_ROOT, env=env,
+                            stderr=subprocess.PIPE, text=True)
     deadline = time.time() + 60
     while time.time() < deadline:
         if proc.poll() is not None:
@@ -487,8 +513,15 @@ def launch(binary: str) -> tuple:
     return proc, port, token
 
 
-async def run_one(session, context, url: str, cap: float) -> dict:
-    """Navigate and poll for testharness results; the arm's whole measurement."""
+async def run_one(session, context, url: str, cap: float, stale_cap: float = None) -> dict:
+    """Navigate and poll for testharness results; the arm's whole measurement.
+
+    `stale_cap` (seconds, None = never) ends the poll early while the *outgoing*
+    document is still in place — `navigate` answered but nothing replaced the
+    page, the BUG-438 shape. `tls_eof_audit.py` needs it: its arm A loses every
+    document body by construction, so without it every id in that arm would burn
+    the full `cap` waiting for a page that was never parsed.
+    """
     from webdriver.bidi.error import BidiException, UnknownErrorException
     from webdriver.bidi.modules.script import ContextTarget
 
@@ -523,6 +556,11 @@ async def run_one(session, context, url: str, cap: float) -> dict:
                             "subtests": len(subtests),
                             "passed": sum(1 for s in subtests if s[1] == SUBTEST_PASS),
                             "seconds": time.time() - started}
+                if (outer["k"] == "s" and stale_cap is not None
+                        and time.time() - started > stale_cap):
+                    # Still the outgoing document, long after `navigate` said
+                    # `complete`: the requested one never became a document.
+                    return {"status": "NOT-REPLACED", "seconds": time.time() - started}
         if time.time() - started > cap:
             return {"status": "CAP", "seconds": time.time() - started}
         await asyncio.sleep(POLL_INTERVAL_S)
@@ -564,9 +602,10 @@ class Browser:
     cannot recover turns one bad id into a whole arm of zeros.
     """
 
-    def __init__(self, binary: str):
+    def __init__(self, binary: str, env: dict = None):
         """Nothing is started until `start()`."""
         self.binary = binary
+        self.env = env
         self.proc = None
         self.session = None
         self.context = None
@@ -576,7 +615,7 @@ class Browser:
         """Launch the browser and take the top-level context."""
         from webdriver.bidi.client import BidiSession  # noqa: PLC0415
 
-        self.proc, port, token = launch(self.binary)
+        self.proc, port, token = launch(self.binary, self.env)
         self.session = BidiSession.bidi_only(
             f"ws://127.0.0.1:{port}",
             requested_capabilities={"alwaysMatch": {"token": token}})
@@ -614,9 +653,22 @@ class Browser:
 
 
 async def worker(binary: str, port_a: int, port_b: int, queue: list, lock,
-                 cap: float, results: dict, progress) -> None:
-    """One browser, both arms of every id it pulls off the shared queue."""
-    browser = Browser(binary)
+                 cap: float, results: dict, progress, scheme: str = "http",
+                 env: dict = None, stale_cap: float = None,
+                 order: tuple = ("a", "b")) -> None:
+    """One browser, both arms of every id it pulls off the shared queue.
+
+    `scheme`/`env`/`stale_cap`/`order` exist for `tls_eof_audit.py`, whose two
+    arms are TLS servers, whose browser needs the test CA and whose arm A never
+    gets a document at all; the defaults are this audit's own.
+
+    `order` is which arm goes first, not which arm is which: `stale_cap` can only
+    fire while some *previous* document is still in place, so an audit whose arm A
+    never loads anything wants arm B probed first — otherwise the first id of every
+    browser sits on `about:blank`, where the stale marker was never set, and burns
+    the full `cap` instead of being recognised as "nothing replaced the page".
+    """
+    browser = Browser(binary, env)
     await browser.start()
     try:
         while True:
@@ -625,11 +677,14 @@ async def worker(binary: str, port_a: int, port_b: int, queue: list, lock,
                     return
                 test_id = queue.pop()
             row = {}
-            for arm, port in (("a", port_a), ("b", port_b)):
-                url = f"http://127.0.0.1:{port}{test_id}"
+            ports = {"a": port_a, "b": port_b}
+            for arm in order:
+                port = ports[arm]
+                url = f"{scheme}://127.0.0.1:{port}{test_id}"
                 for attempt in (0, 1):
                     try:
-                        row[arm] = await run_one(browser.session, browser.context, url, cap)
+                        row[arm] = await run_one(browser.session, browser.context, url,
+                                                cap, stale_cap)
                         break
                     except Exception as exc:  # noqa: BLE001 - one id must not end the run
                         row[arm] = {"status": "PROBE-ERROR", "message": str(exc),
@@ -661,8 +716,8 @@ def classify(row: dict) -> tuple:
         return "probe-error", 0.0, 0.0
     score_a = score_of(arm_a["status"], arm_a.get("subtests", 0), arm_a.get("passed", 0))
     score_b = score_of(arm_b["status"], arm_b.get("subtests", 0), arm_b.get("passed", 0))
-    a_dead = arm_a["status"] in ("TIMEOUT", "CAP")
-    b_dead = arm_b["status"] in ("TIMEOUT", "CAP")
+    a_dead = arm_a["status"] in DEAD_STATUSES
+    b_dead = arm_b["status"] in DEAD_STATUSES
     if a_dead and not b_dead:
         return "revived", score_a, score_b
     if score_b > score_a + 1e-9:
