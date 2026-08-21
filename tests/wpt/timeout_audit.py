@@ -271,7 +271,46 @@ def _resource_event_marker(text):
     return any(_waits_on_var(text, var) for var in _CREATE_STYLE_RE.findall(text))
 
 
+#: `x = new Audio()` / `x = document.createElement('audio')`, capturing the
+#: variable so the `src` assignment can be required on that same one.
+_CREATE_AUDIO_RE = re.compile(
+    r"(?:var|let|const)?\s*(\w+)\s*=\s*(?:new Audio\(\s*\)|"
+    r"document\.createElement\(['\"]audio['\"]\))", re.IGNORECASE)
+
+
+def _audio_src_marker(text):
+    """BUG-799 marker: the page gives an `<audio>` element a `src`.
+
+    That single act freezes the page — `AudioPlaybackProvider::load` deadlocks
+    on its own `handles` mutex and never returns, so the assignment never
+    completes and no later script, timer or harness callback runs (verified by
+    `tests/wpt/verify_bug799_audio_timers.py`, WPT-RUN-6 slice 13). It is
+    therefore *terminal and early*: whatever else the test would have waited
+    for never gets the chance, which is why this marker sorts first.
+
+    All three shapes have to be recognized, because the shim funnels them into
+    the same `startLoad`: the markup attribute, `new Audio(url)` (the
+    constructor assigns `el.src`), and a `src` assignment on an element built
+    in script. A bare `new Audio()` is deliberately not enough — that shape is
+    healthy, `audio-no-src` in the probe's own table.
+    """
+    if re.search(r"<audio[^>]*\ssrc\s*=", text, re.IGNORECASE):
+        return True
+    if re.search(r"new Audio\(\s*['\"]", text):
+        return True
+    return any(re.search(rf"\b{re.escape(var)}\s*\.\s*src\s*=", text)
+               for var in _CREATE_AUDIO_RE.findall(text))
+
+
 SOURCE_MARKERS = [
+    # First on purpose: see `_audio_src_marker` — the page stops dead at the
+    # `src` assignment, before anything else it was going to do.
+    Mechanism(
+        "audio-src-deadlock", "BUG-799", [],
+        "giving an `<audio>` a `src` never returns (deadlock in the audio "
+        "provider), so the whole page freezes on the spot",
+        predicate=_audio_src_marker,
+    ),
     Mechanism(
         "fonts-ready", "BUG-564", [r"document\.fonts\.ready"],
         "`document.fonts.ready` is undefined, so the promise chain every test "
@@ -283,20 +322,36 @@ SOURCE_MARKERS = [
         # helpers that build the frame in script (WPT's own
         # `moving-between-documents-helper.js`, `speculative-parsing-util.js`)
         # never write one out (WPT-RUN-6 slice 10).
+        # The wait is as often for the frame's *message* as for its `load`:
+        # a sandboxed frame cannot be reached through `contentWindow` at all,
+        # so `iframe_sandbox_*` posts its result back and the parent listens
+        # (`onmessage = t.step_func_done(...)`). Requiring a `load`/DOM-access
+        # wait missed all ten of those (WPT-RUN-6 slice 13).
         [r"<iframe|createElement\(['\"]iframe['\"]\)",
          r"iframe\.(?:onload|contentWindow|contentDocument)|"
          r"\.contentWindow\b|\.contentDocument\b|"
-         r"\bsrcdoc\b|addEventListener\(['\"]load['\"]"],
+         r"\bsrcdoc\b|addEventListener\(['\"]load['\"]|"
+         r"\bonmessage\s*=|addEventListener\(['\"]message['\"]|"
+         r"\bframes\[|\bwindow\.frames\b"],
         "URL-addressed subdocuments are never loaded, so `iframe.onload` and "
         "`contentWindow` access wait forever",
         mode="all",
     ),
     Mechanism(
         "img-no-load-event", "BUG-630",
-        [r"new Image\(|<img", r"\.onload|\.complete\b|naturalWidth|"
+        [r"new Image\(|<img|createElement\(['\"]img['\"]\)",
+         r"\.onload|\.complete\b|naturalWidth|"
          r"addEventListener\(['\"]load['\"]"],
         "`<img>` dispatches neither `load` nor `error` and exposes no "
         "`complete`/`naturalWidth`",
+        mode="all",
+    ),
+    Mechanism(
+        "embed-object-no-load", "BUG-798",
+        [r"<embed|<object|createElement\(['\"](?:embed|object)['\"]\)",
+         r"\.onload|\.onerror|addEventListener\(['\"](?:load|error)['\"]"],
+        "`<embed>`/`<object>` have no resource-loading path at all, so neither "
+        "`load` nor `error` ever fires on them",
         mode="all",
     ),
     Mechanism(
@@ -306,7 +361,12 @@ SOURCE_MARKERS = [
         "cross-window channel the test builds is dead",
     ),
     Mechanism(
-        "track-element", "BUG-795", [r"<track|\.textTracks\b"],
+        # `createElement("track")` is the shape the whole `track-webvtt-*`
+        # family uses: `track-helpers.js::check_cues_from_track` builds the
+        # `<video>`/`<track>` pair in script and hangs the test off
+        # `trackElement.onload` (WPT-RUN-6 slice 13).
+        "track-element", "BUG-795",
+        [r"<track|\.textTracks\b|createElement\(['\"]track['\"]\)"],
         "`<track>` never dispatches `load`/`error` and has no `.track`",
     ),
     Mechanism(
@@ -390,6 +450,13 @@ def _read_source(path, cache):
 _SCRIPT_SRC_RE = re.compile(r"""<script[^>]*\ssrc\s*=\s*["']?([^"'\s>]+)""",
                             re.IGNORECASE)
 
+#: `// META: script=...` — how a *generated* test (`.any.js`, `.window.js`,
+#: `.worker.js`) declares its helpers. There is no `<script src>` anywhere in
+#: such a file: wptrunner's manifest step reads these comments and writes the
+#: `<script>` tags into the HTML it synthesizes, so reading the `.js` source
+#: alone finds no helper at all (WPT-RUN-6 slice 13).
+_META_SCRIPT_RE = re.compile(r"^\s*//\s*META:\s*script=(\S+)", re.MULTILINE)
+
 #: Never followed as a helper: the harness itself matches half the markers
 #: (`testharness.js` contains `addEventListener('load'`, `<iframe`, ...), so
 #: following it would claim every test in the corpus for whichever mechanism
@@ -399,7 +466,7 @@ _NOT_A_HELPER = ("/resources/testharness.js", "/resources/testharnessreport.js",
 
 
 def helper_paths(test_id, root):
-    """Local `<script src>` helpers of a test, resolved to on-disk paths.
+    """Local helpers of a test (`<script src>` and `// META: script=`), as paths.
 
     A generated test is frequently a three-line stub whose whole body is one
     call into a shared helper — `moving-between-documents-helper.js` builds the
@@ -410,6 +477,15 @@ def helper_paths(test_id, root):
     `scripting-1` residual ids were one such helper). One level is followed,
     not a full closure: helpers of helpers are rare and each level widens what
     a marker may be attributed to.
+
+    Both include shapes have to be read, because they never coexist: a `.html`
+    test writes `<script src>`, while a `.window.js`/`.any.js`/`.worker.js`
+    source has no markup at all and declares the very same helpers as
+    `// META: script=` comments. Ignoring the second shape made the stage blind
+    to *every* generated test whose evidence lives in a helper — the ten
+    `sandbox-top-navigation-*.window.js` ids of `the-iframe-element` build their
+    `<iframe>` in `remote-context-helper.js` and matched nothing at all
+    (WPT-RUN-6 slice 13).
     """
     src = source_path(test_id, root)
     try:
@@ -418,7 +494,7 @@ def helper_paths(test_id, root):
     except OSError:
         return []
     out = []
-    for ref in _SCRIPT_SRC_RE.findall(text):
+    for ref in _SCRIPT_SRC_RE.findall(text) + _META_SCRIPT_RE.findall(text):
         ref = ref.split("#")[0].split("?")[0]
         if not ref or ref in _NOT_A_HELPER or not ref.endswith(".js"):
             continue
@@ -866,6 +942,67 @@ def selftest():
                          "s.onload = () => t.done();</script>")
         check(classify_source("/a/script-var.html", tmp, {}) is None,
               "the working createElement script path must not be blamed on BUG-804")
+
+        # Stage 2, slice 13. A generated test declares its helpers as
+        # `// META: script=`, never as markup, so the `<script src>` reader saw
+        # a helper-less file and every such id fell into the residual.
+        with open(os.path.join(tmp, "a", "meta.window.js"), "w", encoding="utf-8") as handle:
+            handle.write("// META: script=/a/meta-helper.js\n"
+                         "// META: script=/resources/testdriver.js\n"
+                         "promise_test(async () => { await setupTest(); });")
+        with open(os.path.join(tmp, "a", "meta-helper.js"), "w", encoding="utf-8") as handle:
+            handle.write("const f = document.createElement('iframe');\n"
+                         "f.contentWindow.postMessage('x');")
+        check(classify_source("/a/meta.window.html", tmp, {}) == "iframe-no-nested-context",
+              "a helper declared with // META: script= was not followed")
+        check(classify_source("/a/meta.window.html", tmp, {}, follow_helpers=False) is None,
+              "--no-helpers must also switch off META-declared helpers")
+        # `<track>` built in script: the shape of `track-helpers.js`, which
+        # every `track-webvtt-*.html` calls. The literal-tag-only marker missed
+        # all 21 of them.
+        with open(os.path.join(tmp, "a", "track.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>const tr = document.createElement('track');\n"
+                         "tr.onload = () => t.done();</script>")
+        check(classify_source("/a/track.html", tmp, {}) == "track-element",
+              "createElement('track') with a load wait was not claimed")
+        # `<embed>`/`<object>`: no loading path at all (BUG-798). The wait is
+        # required — the tag alone appears in prose and in fallback markup.
+        with open(os.path.join(tmp, "a", "object.html"), "w", encoding="utf-8") as handle:
+            handle.write('<object data="x.svg"></object>\n'
+                         "<script>o.onerror = () => t.done();</script>")
+        check(classify_source("/a/object.html", tmp, {}) == "embed-object-no-load",
+              "an <object> with an error wait was not claimed")
+        with open(os.path.join(tmp, "a", "object-plain.html"), "w", encoding="utf-8") as handle:
+            handle.write('<object data="x.svg">fallback</object>')
+        check(classify_source("/a/object-plain.html", tmp, {}) is None,
+              "an <object> nobody waits on must not be claimed")
+        # A sandboxed frame cannot be reached through `contentWindow`, so the
+        # parent waits for its message instead — the shape of every
+        # `iframe_sandbox_*` test.
+        with open(os.path.join(tmp, "a", "frame-msg.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>onmessage = t.step_func_done(e => {});</script>\n"
+                         '<iframe sandbox="allow-scripts" src="child.html"></iframe>')
+        check(classify_source("/a/frame-msg.html", tmp, {}) == "iframe-no-nested-context",
+              "an <iframe> whose result arrives by postMessage was not claimed")
+        # BUG-799: an audio `src` freezes the page, so it outranks whatever
+        # else the test also does — here an `<iframe>` it never reaches.
+        with open(os.path.join(tmp, "a", "audio-src.html"), "w", encoding="utf-8") as handle:
+            handle.write('<audio src="/media/sine440.mp3"></audio>\n'
+                         "<iframe src=x.html></iframe>\n"
+                         "<script>onmessage = () => t.done();</script>")
+        check(classify_source("/a/audio-src.html", tmp, {}) == "audio-src-deadlock",
+              "an <audio src> must outrank every later wait in the same page")
+        with open(os.path.join(tmp, "a", "audio-var.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>const au = document.createElement('audio');\n"
+                         "au.src = '/media/sine440.mp3';</script>")
+        check(classify_source("/a/audio-var.html", tmp, {}) == "audio-src-deadlock",
+              "a src assignment on a created <audio> was not claimed")
+        # A bare `new Audio()` never touches the deadlocking path.
+        with open(os.path.join(tmp, "a", "audio-bare.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>const au = new Audio();\n"
+                         "assert_equals(au.volume, 1);</script>")
+        check(classify_source("/a/audio-bare.html", tmp, {}) is None,
+              "a srcless <audio> is healthy and must not be claimed")
 
     for msg in failures:
         print("FAIL:", msg)

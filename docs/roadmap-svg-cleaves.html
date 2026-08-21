@@ -10669,8 +10669,8 @@
   },
   "BUG-799": {
    "status": "open",
-   "title": "`the-audio-element`: 13/16 TIMEOUT на тестах с реальным сетевым `src` (`audio-loading-*.html`). Отчёт показывает `subcount 0/0` при `dur 25.02s` — то есть даже…",
-   "component": "js/shell, не локализовано точнее `crates/js/src/audio_element.rs`/`crates/shell/src/platform/audio_player.rs` — требует живого зонда, не подтверждено чтением кода",
+   "title": "**Присваивание `src` элементу `<audio>` не возвращает управление никогда** — самодедлок JS-потока, из-за которого на странице не выполняется ни один последующий…",
+   "component": "shell (`crates/shell/src/platform/audio_player.rs:314-326` — `PlatformAudioPlayer::load`, вторая блокировка `self.handles` внутри тела `if let`, чьё скрутини держит гард того же нереентерабельного `std::sync::Mutex`)",
    "date": null,
    "debtor": false
   },
@@ -11238,9 +11238,6 @@
   "js/shell граница (`crates/js/src/dom.rs:6196-6205` сеттеры, `crates/js/src/v8_runtime.rs:3106` `_lumen_request_scroll`)": [
    "BUG-523"
   ],
-  "js/shell, не локализовано точнее `crates/js/src/audio_element.rs`/`crates/shell/src/platform/audio_player.rs` — требует живого зонда, не подтверждено чтением кода": [
-   "BUG-799"
-  ],
   "layout": [
    "BUG-001",
    "BUG-003",
@@ -11720,6 +11717,9 @@
   ],
   "shell (`crates/shell/src/main.rs` — сидирование `ShieldsPanel::default_enabled`), tooling (`tools/wptrunner/wptrunner/browsers/lumen.py`)": [
    "BUG-800"
+  ],
+  "shell (`crates/shell/src/platform/audio_player.rs:314-326` — `PlatformAudioPlayer::load`, вторая блокировка `self.handles` внутри тела `if let`, чьё скрутини держит гард того же нереентерабельного `std::sync::Mutex`)": [
+   "BUG-799"
   ],
   "shell (`main.rs::handle_click_at`, ветка `FormClickAction::SubmitForm`), js (`dom.rs` — `WEB_API_SHIM`)": [
    "BUG-437"
