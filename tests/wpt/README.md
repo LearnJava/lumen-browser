@@ -341,6 +341,22 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   vendored transport takes the `websockets` default (20 s ping / 20 s timeout),
   pages here block the main thread longer, and the client then kills the session —
   that alone cost the first run 51 of 60 ids.
+- `tests/wpt/tls_eof_audit.py` — **ours** (WPT-RUN-5 slice 32) — prices
+  [BUG-792](../../bugs/BUG-792-OPEN.md) (a close-delimited https body is lost when
+  the peer closes with no TLS `close_notify`) against the published number. Both
+  arms are private TLS servers over `tests/wpt/` answering the *same* bytes
+  close-delimited, and the only difference is the end of the connection: arm A
+  closes abruptly, the way `wptserve` does, arm B sends `close_notify` — which
+  makes arm B's bytes exactly the bytes a fixed engine would hold, since the whole
+  content of the fix is "treat `UnexpectedEof` on EOF framing as the end of the
+  body". The arms are verified before any id is probed: a marker page is served
+  from both through `--dump-layout` and the run refuses to start unless arm A lost
+  it (`--no-check-framing` skips that, for debugging the harness only) — without
+  the check, an arm A that quietly worked would report a null delta reading as
+  "BUG-792 is free". It reuses `missing_helper_audit.py`'s server, `.sub.`
+  substitution, BiDi scoring loop and projection, so the two slices' numbers are
+  in the same unit. Population: ids whose name carries `.https.`, the same rule
+  BUG-792 counted its 7 190 with. `--census` needs no browser.
 - `tests/wpt/expectations.py` — **ours** (TEST-3, `docs/tasks/p2-test-track.md`) — generates and
   gates on per-category `.ini` baselines for `run_report.py --update-expected`/`--check`, on top
   of the same native `wptrunner` `--metadata` mechanism `run_suite.py` uses for `dom/nodes`, not
