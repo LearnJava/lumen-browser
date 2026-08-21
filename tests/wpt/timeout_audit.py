@@ -562,6 +562,61 @@ SOURCE_MARKERS = [
         "`beginEvent`/`endEvent`/`repeatEvent` a test waits for never fire",
     ),
     Mechanism(
+        # Probed live in slice 17 (`verify_layout_shift_and_peer_gaps.py`): the
+        # API is *advertised* — `supportedEntryTypes` lists `layout-shift` and
+        # `observe()` accepts it — and never delivers, because the Rust trigger
+        # `deliver_layout_shift` (`crates/shell/src/main.rs:2925`) is
+        # `#[allow(dead_code)]` with no call site in layout/reflow at all. The
+        # advertisement is what turns these into TIMEOUTs rather than FAILs:
+        # WPT's own `ScoreWatcher` (`layout-instability/resources/util.js`)
+        # throws unless the type is listed, so an honest "unsupported" would
+        # end the test at once instead of hanging it on `watcher.promise`.
+        "layout-shift-never-delivered", "BUG-809",
+        [r"['\"]layout-shift['\"]|\bScoreWatcher\b|\bLayoutShift\b"],
+        "no `layout-shift` entry is ever delivered (the shell-side trigger has "
+        "no call site), while `supportedEntryTypes` advertises the type — so a "
+        "CLS test observes, shifts and waits forever",
+    ),
+    Mechanism(
+        # Slice 17, same probe: offer/answer complete locally, but the two
+        # `RTCPeerConnection`s are never connected to each other —
+        # `ondatachannel` never fires on the remote side, `connectionState`
+        # is a getter hardcoded to `new`, and a data channel stays
+        # `connecting`. Every canonical WPT shape (`RTCPeerConnection-helper.js`
+        # `exchangeOfferAnswer` + wait on the remote peer) therefore hangs
+        # before its own assertions start.
+        "webrtc-no-remote-peer", "BUG-727",
+        [r"new RTCPeerConnection\(|createDataChannel\(|\bRTCDataChannel\b|"
+         r"RTCPeerConnection-helper"],
+        "the `RTCPeerConnection` stub never connects two peers — no "
+        "`ondatachannel`, no connection-state change, a data channel never "
+        "opens",
+    ),
+    Mechanism(
+        # Slice 17, confirmed live by instrumenting `_handle_action`: the
+        # action really does reach the executor, which answers
+        # `failure: action 'action_sequence' not implemented by Lumen's
+        # minimal WPT executor`; the page-side rejection is then swallowed
+        # (BUG-716) and the test hangs instead of failing. Element-targeted
+        # actions do not even get that far — `testdriver-extra.js`'s
+        # `get_context` throws on the missing `document.defaultView`
+        # (BUG-622) — but the observable outcome is the same silent TIMEOUT.
+        # `click`/`generate_test_report` are excluded: those two are
+        # implemented.
+        "testdriver-action-unimplemented", "BUG-810",
+        [r"test_driver\.Actions\(|test_driver\.action_sequence\(|"
+         r"test_driver\.send_keys\(|test_driver\.bless\(|"
+         r"test_driver\.set_permission\(|test_driver\.delete_all_cookies\(|"
+         r"test_driver\.get_computed_(?:role|label)\(|"
+         r"test_driver\.(?:add|remove)_virtual_authenticator\(|"
+         r"test_driver\.set_window_rect\(|test_driver\.minimize_window\(|"
+         r"test_driver\.freeze\(|test_driver\.send_report\("],
+        "every `test_driver.*` action but `click`/`generate_test_report` is "
+        "rejected by `executorlumen.py::_handle_action`, and the rejection is "
+        "invisible to the page — so the test waits on an action that will "
+        "never complete",
+    ),
+    Mechanism(
         # Deliberately after the two above and after every wait-shaped marker:
         # plenty of tests build an observer *and* an iframe, and the iframe is
         # the older, better-understood cause.
@@ -1522,6 +1577,67 @@ def selftest():
               "a sibling block's marker was attributed to this variant")
         check(classify_source("/a/subset.html", tmp, {}) == "fonts-ready",
               "a file with no ?include= must still be read whole")
+
+        # Stage 2, slice 17. Three more silent waits, each measured live
+        # before the marker was written (`verify_layout_shift_and_peer_gaps.py`
+        # for the first two, an instrumented `_handle_action` for the third).
+        with open(os.path.join(tmp, "a", "cls.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>new PerformanceObserver(l => t.done())\n"
+                         "  .observe({entryTypes: ['layout-shift']});\n"
+                         "shifter.style.top = '160px';</script>")
+        check(classify_source("/a/cls.html", tmp, {}) == "layout-shift-never-delivered",
+              "an observe-and-shift layout-instability test was not claimed")
+        # The category's own helper is the marker for the tests that never
+        # name the entry type themselves.
+        with open(os.path.join(tmp, "a", "cls-watcher.html"), "w", encoding="utf-8") as handle:
+            handle.write('<script src="util.js"></script>\n'
+                         "<script>const watcher = new ScoreWatcher;\n"
+                         "promise_test(async () => { await watcher.promise; });</script>")
+        check(classify_source("/a/cls-watcher.html", tmp, {})
+              == "layout-shift-never-delivered",
+              "a ScoreWatcher test was not claimed")
+        # A `PerformanceObserver` on a type the engine *does* deliver is not
+        # this mechanism — the marker must key on the entry type, not on the
+        # observer.
+        with open(os.path.join(tmp, "a", "perf-paint.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>new PerformanceObserver(l => t.done())\n"
+                         "  .observe({entryTypes: ['paint']});</script>")
+        check(classify_source("/a/perf-paint.html", tmp, {}) is None,
+              "an observer on a delivered entry type must not be claimed")
+        with open(os.path.join(tmp, "a", "rtc.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>const pc1 = new RTCPeerConnection();\n"
+                         "pc2.ondatachannel = t.step_func_done(() => {});\n"
+                         "pc1.createDataChannel('x');</script>")
+        check(classify_source("/a/rtc.html", tmp, {}) == "webrtc-no-remote-peer",
+              "a two-peer RTCPeerConnection test was not claimed")
+        with open(os.path.join(tmp, "a", "actions.html"), "w", encoding="utf-8") as handle:
+            handle.write('<script src="/resources/testdriver.js"></script>\n'
+                         "<script>promise_test(async () => {\n"
+                         "  await new test_driver.Actions().scroll(0, 0, 0, 50).send();\n"
+                         "});</script>")
+        check(classify_source("/a/actions.html", tmp, {})
+              == "testdriver-action-unimplemented",
+              "a test_driver.Actions() wait was not claimed")
+        # `click()` is implemented by the executor, so a test using only that
+        # one is not blocked by this gap.
+        with open(os.path.join(tmp, "a", "click.html"), "w", encoding="utf-8") as handle:
+            handle.write('<script src="/resources/testdriver.js"></script>\n'
+                         "<script>promise_test(async () => {\n"
+                         "  await test_driver.click(document.getElementById('b'));\n"
+                         "});</script>")
+        check(classify_source("/a/click.html", tmp, {}) is None,
+              "the implemented click action must not be blamed on BUG-810")
+        # Ordering: the frame that is never loaded is the older, better
+        # understood cause and keeps its tests (the shape of every
+        # `pointerevents/*-in-iframe.html`).
+        with open(os.path.join(tmp, "a", "actions-frame.html"), "w", encoding="utf-8") as handle:
+            handle.write('<script src="/resources/testdriver.js"></script>\n'
+                         "<iframe src=child.html></iframe>\n"
+                         "<script>iframe.onload = () => {};\n"
+                         "new test_driver.Actions().scroll(0, 0, 0, 50).send();</script>")
+        check(classify_source("/a/actions-frame.html", tmp, {})
+              == "iframe-no-nested-context",
+              "an unimplemented action must not outrank the frame the test waits on")
 
     for msg in failures:
         print("FAIL:", msg)
