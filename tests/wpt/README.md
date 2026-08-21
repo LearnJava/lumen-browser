@@ -279,6 +279,23 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   kills a port holder that belongs to somebody else's *running* corpus run —
   it stops and says so. `run_corpus.py` calls it before every shard;
   `--no-port-guard` turns that off.
+- `tests/wpt/host_audit.py` — **ours** (WPT-RUN-5 slice 20) — how much of the
+  corpus is addressed to a hostname this machine cannot resolve. WPT is a
+  multi-origin suite (five subdomains plus the separate `not-web-platform.test`
+  domain), and upstream makes those names work with a `/etc/hosts` entry
+  (`wpt make-hosts-file`). This runner skips that step — `browsers/lumen.py`
+  pins `browser_host` to the literal `127.0.0.1` — and `wptserve` builds its
+  subdomain family by prefixing that host, so the browser is handed
+  `www1.127.0.0.1` and `www2.not-web-platform.test`: **65 of the 66 configured
+  domains do not resolve**. 2 550 automatable ids (3.8 % of the corpus) name
+  one of them, and on the 2026-08-20 Linux run they TIMEOUT at 69.4 % against
+  18.1 % for everything else. `--probe` resolves every configured domain
+  (through `serve.py`'s own `ConfigBuilder`, not a second copy of the list) and
+  prints what a *running* server substituted into `/common/get-host-info.sub.js`;
+  with `--out-dir` it prices the exposure against a run, per category — that
+  within-category comparison is the control, because the marked ids are the
+  cross-origin ones and are harder than average on their own merits.
+  `--selftest` runs the built-in assertions. Fixing it is `WPT-RUN-10`.
 - `tests/wpt/expectations.py` — **ours** (TEST-3, `docs/tasks/p2-test-track.md`) — generates and
   gates on per-category `.ini` baselines for `run_report.py --update-expected`/`--check`, on top
   of the same native `wptrunner` `--metadata` mechanism `run_suite.py` uses for `dom/nodes`, not
