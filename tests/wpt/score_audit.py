@@ -38,6 +38,14 @@ Usage (from repo root, venv per tests/wpt/README.md):
         [--manifest PATH] [--json OUT]
     <venv>/python tests/wpt/score_audit.py --snapshot docs/wpt/runs/A.json
         [--compare docs/wpt/runs/B.json] [--json OUT]
+    <venv>/python tests/wpt/score_audit.py --selftest
+
+Slice 24 adds one distinction to the snapshot mode: a shard that produced no
+verdicts because it holds no test type this harness can execute is separated
+from one that produced none although it should have. Both look identical in a
+snapshot (same empty report, same exit code 64), so the manifest decides —
+without it the tool called 14 benign shards of the Linux half and 15 of the
+Windows half "HOLLOW", the same word its real 143-shard hole gets.
 
 Safe to run against a live run's `--out-dir`: it only reads.
 """
@@ -236,7 +244,57 @@ def wall_clock(state: dict, out_dir: str, min_results: int = 20) -> dict:
     }
 
 
-def snapshot_accounting(snapshot: dict) -> dict:
+def runnable_ids_per_shard(shards: list, manifest: dict = None) -> dict:
+    """`shard name -> how many ids of a type this harness can execute it holds`.
+
+    A shard that produced no verdicts is not automatically a hole: a directory
+    whose only automatable tests are `crashtest`/`print-reftest`/`aamtest` has
+    nothing wptrunner will run for lumen, so it answers "No tests ran" and
+    leaves an empty report *by construction* (WPT-RUN-5 slice 24 — corpus-wide
+    6 shards / 50 ids). Telling that apart from a shard that should have run
+    and did not needs the manifest, because the two are indistinguishable in a
+    snapshot: the run's own `outcome` says `no-tests` only for runs scored
+    since slice 16, and the exit code cannot be used at all — `64` merely means
+    something logged CRITICAL, which on a machine where the shard cannot bind
+    its own ports is *every* shard (339 of 358 rc=64 shards in the Linux half
+    carried full results).
+
+    Counting is by prefix and deliberately generous: a parent prefix also
+    counts the ids of the sub-shards split out of it, so the answer errs
+    towards "this shard did hold runnable tests" — the direction that keeps an
+    alarm rather than silences one. `test_ids` shards (the bare-directory
+    case) are exact.
+    """
+    if manifest is None:
+        try:
+            manifest = run_corpus.load_manifest()
+        except (OSError, ValueError):
+            return {}
+    executable = corpus_stats.supported_types()
+    by_category = collections.defaultdict(list)
+    for test_type, category, test_id in corpus_stats.iter_ids(manifest):
+        if test_type in executable:
+            by_category[category].append(test_id)
+
+    counts = {}
+    for shard in shards:
+        category = shard["name"].split(" ")[0].split("/")[0]
+        ids = by_category.get(category, ())
+        explicit = shard.get("test_ids")
+        if explicit:
+            wanted = set(explicit)
+            counts[shard["name"]] = sum(1 for test_id in ids if test_id in wanted)
+        elif shard.get("prefix"):
+            prefix = shard["prefix"]
+            counts[shard["name"]] = sum(1 for test_id in ids if test_id.startswith(prefix))
+        else:
+            # No way to attribute ids to it — leave it unclassified, which
+            # keeps it in the alarming bucket.
+            counts[shard["name"]] = None
+    return counts
+
+
+def snapshot_accounting(snapshot: dict, manifest: dict = None) -> dict:
     """Decompose a published run snapshot's zero bucket without its run directory.
 
     `accounting` above needs the shard reports; a number published by *another
@@ -266,8 +324,17 @@ def snapshot_accounting(snapshot: dict) -> dict:
     # `empty_shards` names shards by their *report file*, so `/` is already
     # `__` there while the shard list keeps the real category path.
     empty = set(scored.get("empty_shards", []))
+    # A shard with nothing this harness can execute produces an empty report on
+    # purpose, and calling that "hollow" next to a run whose shards really were
+    # lost (the Windows half's 158) is the tool crying wolf on its own output.
+    runnable = runnable_ids_per_shard(shards, manifest)
     for shard in shards:
-        shard["hollow"] = shard["name"].replace("/", "__") in empty
+        produced_nothing = shard["name"].replace("/", "__") in empty
+        shard["runnable_ids"] = runnable.get(shard["name"])
+        shard["no_runnable_type"] = bool(
+            produced_nothing
+            and (runnable.get(shard["name"]) == 0 or shard.get("outcome") == "no-tests"))
+        shard["hollow"] = produced_nothing and not shard["no_runnable_type"]
     by_category = collections.defaultdict(list)
     for shard in shards:
         by_category[shard["name"].split("/")[0]].append(shard)
@@ -300,6 +367,7 @@ def snapshot_accounting(snapshot: dict) -> dict:
     return {"cause": dict(cause),
             "unexplained_by_category": sorted(unexplained, key=lambda kv: -kv[1]),
             "hollow_shards": [s for s in shards if s["hollow"]],
+            "no_runnable_type_shards": [s for s in shards if s["no_runnable_type"]],
             "signalled_shards": [s for s in shards if not s["hollow"] and s["outcome"] == "ran"
                                  and s.get("returncode") not in run_corpus.WPTRUNNER_RETURNCODES]}
 
@@ -385,11 +453,23 @@ def print_snapshot_audit(path: str, snapshot: dict) -> dict:
     hollow = acc["hollow_shards"]
     if hollow:
         ids = sum(s["ids"] for s in hollow)
-        print(f"    HOLLOW SHARDS: {len(hollow)} shards ({ids} ids) produced no verdicts; "
+        # `ids` is the shard's whole manifest count; only the runnable part of
+        # it could ever have carried a verdict, so that is the size of the hole.
+        runnable_lost = sum(s["runnable_ids"] or 0 for s in hollow)
+        print(f"    HOLLOW SHARDS: {len(hollow)} shards ({ids} ids, {runnable_lost} of them "
+              f"runnable) produced no verdicts; "
               f"median {statistics.median(s['seconds'] for s in hollow):.0f}s")
         for shard in sorted(hollow, key=lambda s: -s["ids"])[:5]:
-            print(f"      {shard['name']:28} ids={shard['ids']:5} rc={shard['returncode']} "
-                  f"{shard['seconds']:.0f}s")
+            runnable = shard.get("runnable_ids")
+            print(f"      {shard['name']:28} ids={shard['ids']:5} "
+                  f"runnable={'?' if runnable is None else runnable:>5} "
+                  f"rc={shard['returncode']} {shard['seconds']:.0f}s")
+    benign = acc["no_runnable_type_shards"]
+    if benign:
+        print(f"    no runnable test type: {len(benign)} shards "
+              f"({sum(s['ids'] for s in benign)} ids) hold nothing this harness executes, so an "
+              f"empty report is what they are supposed to produce — not a hole "
+              f"(the ids are already in the no-executor ceiling)")
     signalled = acc["signalled_shards"]
     if signalled:
         print(f"    ENDED BY SIGNAL: {len(signalled)} shards ({sum(s['ids'] for s in signalled)} ids) "
@@ -424,6 +504,65 @@ def print_comparison(cmp: dict) -> None:
     print(f"  categories the fusion took from the second run: {len(cmp['fused_from_right'])}")
 
 
+def _selftest() -> int:
+    """Prove the empty-shard classifier on a hand-made snapshot.
+
+    The case it has to get right — a shard whose whole content is a type this
+    harness cannot execute — is indistinguishable from a lost shard by exit
+    code (`64` only means something logged CRITICAL) and, on any run scored
+    before slice 16, by `outcome` too. So the discriminator is the manifest,
+    and the four ways it can answer are checked here rather than waited for on
+    an 11-hour run.
+    """
+    def leaf():
+        return ["hash", [None, {}]]
+
+    manifest = {"items": {
+        "testharness": {"dom": {"ok.html": leaf()}, "referrer-policy": {"r.html": leaf()}},
+        "crashtest": {"print": {"c.html": leaf()}},
+        "manual": {"appmanifest": {"m.html": leaf()}},
+    }}
+    shards = [
+        {"name": "print", "prefix": "/print/", "ids": 1, "outcome": "ran", "returncode": 64,
+         "seconds": 3},
+        {"name": "referrer-policy", "prefix": "/referrer-policy/", "ids": 1, "outcome": "ran",
+         "returncode": 64, "seconds": 12},
+        {"name": "appmanifest", "prefix": "/appmanifest/", "ids": 1, "outcome": "no-tests",
+         "returncode": 64, "seconds": 3},
+        {"name": "dom", "prefix": "/dom/", "ids": 1, "outcome": "ran", "returncode": 1,
+         "seconds": 20},
+    ]
+    snapshot = {"shards": shards, "scored": {
+        "totals": {"ids": 3, "ran": 1, "score": 1.0, "pass_rate": 0.33},
+        "empty_shards": ["print", "referrer-policy", "appmanifest"],
+        "per_category": {
+            "print": {"not_run": 1, "by_type": {"crashtest": 1}},
+            "referrer-policy": {"not_run": 1, "by_type": {"testharness": 1}},
+            "dom": {"not_run": 0, "by_type": {"testharness": 1}},
+        }}}
+
+    acc = snapshot_accounting(snapshot, manifest)
+    hollow = {s["name"] for s in acc["hollow_shards"]}
+    benign = {s["name"] for s in acc["no_runnable_type_shards"]}
+    checks = [
+        ("no-executor-only shard is not called hollow", "print" in benign),
+        ("shard holding runnable tests stays hollow", hollow == {"referrer-policy"}),
+        ("`no-tests` outcome is believed without the manifest", "appmanifest" in benign),
+        ("a shard that produced verdicts is neither", "dom" not in hollow | benign),
+        ("hollow shard carries its runnable count",
+         acc["hollow_shards"][0]["runnable_ids"] == 1),
+        ("benign shard ids stay in the no-executor ceiling",
+         acc["cause"].get("no-executor-for-type") == 1),
+        ("hole is still counted as a hole",
+         acc["cause"].get("shard-produced-nothing") == 1),
+    ]
+    for label, ok in checks:
+        print(f"  {'PASS' if ok else 'FAIL'}  {label}")
+    failed = [label for label, ok in checks if not ok]
+    print(f"selftest: {'PASS' if not failed else 'FAIL (' + ', '.join(failed) + ')'}")
+    return 1 if failed else 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -437,7 +576,12 @@ def main() -> int:
     parser.add_argument("--compare", default=None,
                         help="second snapshot: check the two runs against each other on the "
                              "categories both reached, and report the fused figure")
+    parser.add_argument("--selftest", action="store_true",
+                        help="check the empty-shard classifier on a hand-made snapshot")
     args = parser.parse_args()
+
+    if args.selftest:
+        return _selftest()
 
     if args.snapshot:
         with open(args.snapshot, encoding="utf-8") as fh:
