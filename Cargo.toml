@@ -140,7 +140,14 @@ tracy-client = { version = "0.17", default-features = false }
 # Provisional: hyphenation — Knuth-Liang алгоритм переносов для CSS `hyphens: auto`.
 # Trait-anchor: `lumen-core::ext::HyphenationProvider`. Graduation: permanent когда
 # перенос слов станет стандартной частью pipeline (§5, Phase 2-3).
-hyphenation = { version = "0.8", features = ["embed_all"] }
+# БЕЗ фичи `embed_all` (PERF-12, 2026-08-21): она встраивает словари всех 82
+# языков крейта (~3.0 МБ в .rdata), а `locale_to_language()` в
+# crates/engine/encoding/src/hyphenation_impl.rs распознаёт только 11 — линкер
+# не может выбросить остальные 71, потому что `Standard::from_embedded` матчит
+# по всем embedded-вариантам разом. Нужные 11 словарей (497 КБ) вендорены в
+# crates/engine/encoding/dictionaries/ и грузятся через `include_bytes!` +
+# `Load::from_reader` (доступен без фичи embed_*) — см. docs/build-speed.md §4.6.
+hyphenation = { version = "0.8" }
 # Exception #8 (§5): pdf-writer — zero-copy PDF serialisation for --print-to-pdf.
 # Permanent-tier: content encoding (PDF), no suitable alternative in Rust ecosystem.
 # Provisional until print pipeline stabilises, then promoted to permanent.

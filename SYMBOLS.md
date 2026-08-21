@@ -972,8 +972,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/encoding/src/detect.rs:16` **fn** `detect` — Главная точка входа. Возвращает кодировку, в которой следует декодировать
 `crates/engine/encoding/src/detect.rs:99` **fn** `sniff_meta_charset` — Ищет `<meta charset>` или `<meta http-equiv="Content-Type" content="...; charset=X">`
 `crates/engine/encoding/src/ext_impl.rs:17` **struct** `HeuristicDetector` — Детектор кодировок по умолчанию
-`crates/engine/encoding/src/hyphenation_impl.rs:18` **struct** `KnuthLiangHyphenation` — Knuth–Liang hyphenation with per-locale lazy-loaded embedded dictionaries
-`crates/engine/encoding/src/hyphenation_impl.rs:24` **fn** `new` — Create a new provider with an empty cache
+`crates/engine/encoding/src/hyphenation_impl.rs:42` **struct** `KnuthLiangHyphenation` — Knuth–Liang hyphenation with per-locale lazy-loaded embedded dictionaries
+`crates/engine/encoding/src/hyphenation_impl.rs:48` **fn** `new` — Create a new provider with an empty cache
 `crates/engine/encoding/src/lib.rs:41` **enum** `Encoding` — Поддерживаемые в Phase 0 кодировки
 `crates/engine/encoding/src/lib.rs:65` **fn** `name` — Стабильное имя кодировки. Используется в API детектора
 `crates/engine/encoding/src/lib.rs:85` **fn** `canonical_name` — Каноничное имя кодировки по таблице «Names and labels» WHATWG Encoding
