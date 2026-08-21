@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-21",
  "counts": {
-  "open": 334,
+  "open": 335,
   "fixed": 434,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 768,
+ "total_bugs": 769,
  "phases": [
   {
    "id": "P0",
@@ -10726,6 +10726,13 @@
    "component": "js (`crates/js/src/dom.rs` — `_lumen_resource_track`, белый список `'script'\\",
    "date": null,
    "debtor": false
+  },
+  "BUG-805": {
+   "status": "open",
+   "title": "`scripts/scoped-test.sh` не может стать зелёным ни на одной правке, чьё замыкание втягивает `lumen-network` (то есть почти на любой правке движка): пакет даёт 1…",
+   "component": "network (`crates/network/src/h3/udp.rs:450` — `udp_round_trip`; тесты `tests::fetch_*`/`auth_*` в `crates/network/src/lib.rs`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -11502,6 +11509,9 @@
   ],
   "network (HTTP client)": [
    "BUG-278"
+  ],
+  "network (`crates/network/src/h3/udp.rs:450` — `udp_round_trip`; тесты `tests::fetch_*`/`auth_*` в `crates/network/src/lib.rs`)": [
+   "BUG-805"
   ],
   "network (`crates/network/src/intercept.rs`, тест `tests::global_intercept_pauses_real_fetch_until_resolved`)": [
    "BUG-783"
