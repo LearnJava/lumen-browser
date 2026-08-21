@@ -403,7 +403,27 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   histogram, and `residual_ids` in `--json` is the full list the next slice
   picks its target from. `--selftest` builds a synthetic mozlog shard with two
   interleaved browsers and checks attribution, precedence and all three
-  stages; every assertion was mutation-checked.
+  stages; every assertion was mutation-checked. Slice 13 widened the source
+  stage where it was structurally blind: helpers of a generated test are
+  declared as `// META: script=`, never as `<script src>`, and elements built
+  by `createElement('track'|'img'|'audio')` carry the same evidence as the
+  literal tag; it also added `embed-object-no-load` (BUG-798) and
+  `audio-src-deadlock` (BUG-799, first in the table — that freeze is terminal
+  and precedes every other wait on the page). Residual 1 805 → 1 488.
+- `tests/wpt/verify_bug799_audio_timers.py` — **ours** (WPT-RUN-6 slice 13) —
+  reproduces [BUG-799](../../bugs/BUG-799-OPEN.md) in about 90 s and shows what
+  it actually is. Seven pages, a fresh browser process on each, all served over
+  http out of this tree so `/media/*` resolves as it does under wptserve; each
+  page logs `PROBE tick N` from a 500 ms `setInterval`, and the count is read
+  off the browser's stderr rather than through an MCP `eval` — a frozen page
+  cannot answer `eval` at all, which is what slice 6 mistook for a broken live
+  window. Control, `<audio>` without `src` and `<video src>` tick 23 times in
+  12 s; `<audio src>` in markup, `a.src =` in script, a 404 `src` and a direct
+  `__lumen_audio_load` call tick zero — so the freeze is the `src` assignment
+  itself, not a missing media event. Two shapes worth copying into any new
+  probe: never put an `<audio>` on a page you are not probing for audio, and
+  start the browser on a real http page (a window opened on `about:blank` has
+  no JS context and fails every `eval`).
 - `tests/wpt/rejection_trace.py` — **ours** (WPT-RUN-6 slice 10) — makes the
   single most common *silent* TIMEOUT class visible. Lumen never dispatches
   `unhandledrejection` ([BUG-716](../../bugs/BUG-716-OPEN.md)), and
