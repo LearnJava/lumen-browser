@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-21",
  "counts": {
-  "open": 333,
+  "open": 334,
   "fixed": 434,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 767,
+ "total_bugs": 768,
  "phases": [
   {
    "id": "P0",
@@ -10719,6 +10719,13 @@
    "component": "layout (`crates/engine/layout/src/box_tree.rs:1341-1400` — `parse_svg_transform`, вызывается с `:1680`/`:1803` для атрибута `transform` любого SVG-узла)",
    "date": null,
    "debtor": false
+  },
+  "BUG-804": {
+   "status": "open",
+   "title": "'link'`; вход в машинерию `_lumen_resource_*` только из `createElement`/`createElementNS`), shell (`crates/shell/src/main.rs` — парсерный путь подресурсов: `Заг…",
+   "component": "js (`crates/js/src/dom.rs` — `_lumen_resource_track`, белый список `'script'\\",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -11075,6 +11082,9 @@
   ],
   "js (`crates/js/src/dom.rs` — `_lumen_on_handlers` table + `_lumen_dispatch`/`_lumen_dispatch_bubble`/`_lumen_dispatch_rich`; `_lumen_build_element`; `setAttribute`/`removeAttribute`)": [
    "BUG-360"
+  ],
+  "js (`crates/js/src/dom.rs` — `_lumen_resource_track`, белый список `'script'\\": [
+   "BUG-804"
   ],
   "js (`crates/js/src/dom.rs` — `_sw_make_registration`, ~line 4843) + all seven `ServiceWorkerRegistration.prototype`-attaching modules (`push_api.rs`, `background_sync.rs`, `periodic_sync.rs`, `background_fetch.rs`, `cookie_store.rs`, `content_index.rs`, `notifications_bindings.rs`)": [
    "BUG-657"

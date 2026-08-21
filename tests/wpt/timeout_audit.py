@@ -85,7 +85,7 @@ class Mechanism:
     work list — an unowned mechanism is a bug nobody has filed yet.
     """
 
-    def __init__(self, key, ref, patterns, note="", mode="any"):
+    def __init__(self, key, ref, patterns, note="", mode="any", predicate=None):
         self.key = key
         self.ref = ref
         self.patterns = [re.compile(p) for p in patterns]
@@ -96,8 +96,17 @@ class Mechanism:
         #: (`.focus(` is everywhere; `.focus(` *and* a `load` handler is the
         #: BUG-794 shape).
         self.mode = mode
+        #: Optional callable over the joined source text, used instead of
+        #: `patterns` when a line-at-a-time regex cannot express the marker.
+        #: BUG-804 needs it: `createElement('style')` alone is not evidence —
+        #: `resources/check-layout-th.js` mints one to highlight failures and
+        #: never waits on it — so the wait has to be tied to the *same*
+        #: variable, which is a two-step match across lines.
+        self.predicate = predicate
 
     def matches(self, lines):
+        if self.predicate is not None:
+            return self.predicate("\n".join(lines))
         hits = 0
         for pat in self.patterns:
             if any(pat.search(line) for line in lines):
@@ -220,6 +229,48 @@ HUNG_BROWSER = "hung-browser"
 #: source. Precedence-ordered like `MECHANISMS`, and deliberately a *lower*
 #: bound: a marker reached through a helper file this stage does not open is
 #: missed, the same limitation `host_audit.py` carries.
+
+#: An event-handler attribute on a parser-written `<style>`/`<link>`/`<script>`.
+#: The attribute form is the marker precisely because it can only come from
+#: markup: an element the parser wrote is exactly the one the engine's resource
+#: machinery never reaches (BUG-804).
+_RESOURCE_EVENT_ATTR_RE = re.compile(
+    r"<(?:style|link|script)[^>]*\son(?:load|error)\s*=", re.IGNORECASE)
+
+#: `x = document.createElement('style')`, capturing the variable so the wait
+#: can be required on the same one.
+_CREATE_STYLE_RE = re.compile(
+    r"(?:var|let|const)?\s*(\w+)\s*=\s*document\.createElement\("
+    r"['\"]style['\"]\)", re.IGNORECASE)
+
+
+def _waits_on_var(text, var):
+    """True if `text` hangs a `load`/`error` handler off `var` specifically."""
+    name = re.escape(var)
+    return re.search(
+        r"\b%s\s*\.\s*(?:onload|onerror)\b|"
+        r"\b%s\s*\.\s*addEventListener\(\s*['\"](?:load|error)['\"]" % (name, name),
+        text) is not None
+
+
+def _resource_event_marker(text):
+    """BUG-804 marker: the test waits for a `load`/`error` the engine never fires.
+
+    Two shapes, both verified live (WPT-RUN-6 slice 12). The attribute shape is
+    parser-inserted by construction. The `createElement('style')` shape is the
+    one case where even the working `createElement` path stays silent, because
+    `_lumen_resource_track` whitelists `script`/`link` only — but a created
+    `<style>` is only evidence when something actually waits on *it*, hence
+    `_waits_on_var`.
+
+    Deliberately NOT matched: `createElement('script'|'link')`. That path fires
+    `load` correctly (BUG-571/BUG-722), confirmed by the same A/B page.
+    """
+    if _RESOURCE_EVENT_ATTR_RE.search(text):
+        return True
+    return any(_waits_on_var(text, var) for var in _CREATE_STYLE_RE.findall(text))
+
+
 SOURCE_MARKERS = [
     Mechanism(
         "fonts-ready", "BUG-564", [r"document\.fonts\.ready"],
@@ -272,6 +323,15 @@ SOURCE_MARKERS = [
         "`element.focus()` called synchronously from a `load` handler never "
         "returns",
         mode="all",
+    ),
+    # Last on purpose: this marker is narrow, so anything a broader mechanism
+    # can explain (a test that also builds an `<iframe>`, say) should be
+    # reported under that one instead.
+    Mechanism(
+        "resource-no-load-event", "BUG-804", [],
+        "`<script>`/`<link>`/`<style>` written by the parser dispatch neither "
+        "`load` nor `error` (and `<style>` never does, however inserted)",
+        predicate=_resource_event_marker,
     ),
 ]
 
@@ -776,6 +836,36 @@ def selftest():
             handle.write("document.fonts.ready.then(() => {});")
         check(classify_source("/a/stub.html", tmp, {}) == "iframe-no-nested-context",
               "testharness.js was followed as if it were a test helper")
+
+        # Stage 2, BUG-804 (slice 12). An event-handler attribute on a
+        # parser-written resource element is the marker on its own — that
+        # element is by construction one the resource machinery never sees.
+        with open(os.path.join(tmp, "a", "style-attr.html"), "w", encoding="utf-8") as handle:
+            handle.write('<style onload="t.done()">#a{color:red}</style>')
+        check(classify_source("/a/style-attr.html", tmp, {}) == "resource-no-load-event",
+              "an onload attribute on a parser-written <style> was not claimed")
+        # A created `<style>` counts only when the wait is on that same
+        # variable. `resources/check-layout-th.js` mints one to highlight a
+        # failure and never waits on it; matching that shape would have handed
+        # this mechanism 40 unrelated `css-grid` tests.
+        with open(os.path.join(tmp, "a", "style-var.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>const st = document.createElement('style');\n"
+                         "st.onload = () => t.done();</script>")
+        check(classify_source("/a/style-var.html", tmp, {}) == "resource-no-load-event",
+              "createElement('style') with a wait on the same var was not claimed")
+        with open(os.path.join(tmp, "a", "style-nowait.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>const st = document.createElement('style');\n"
+                         "document.body.appendChild(st);\n"
+                         "other.addEventListener('load', () => {});</script>")
+        check(classify_source("/a/style-nowait.html", tmp, {}) is None,
+              "a created <style> nobody waits on must not be claimed")
+        # `createElement('script'|'link')` does fire `load` (BUG-571/BUG-722),
+        # verified by the slice-12 A/B page — the marker must not take it.
+        with open(os.path.join(tmp, "a", "script-var.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>const s = document.createElement('script');\n"
+                         "s.onload = () => t.done();</script>")
+        check(classify_source("/a/script-var.html", tmp, {}) is None,
+              "the working createElement script path must not be blamed on BUG-804")
 
     for msg in failures:
         print("FAIL:", msg)
