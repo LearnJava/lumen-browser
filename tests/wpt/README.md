@@ -224,6 +224,18 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
     corpus run, 158 shards (17 683 ids) came back in ~11 s with an empty report
     and 41 more (13 136 ids) were killed mid-run — 36 % of the corpus scored 0
     while the run reported 479/479 shards `ran` (WPT-RUN-5 slice 16).
+  - the summary and the `--run-json` snapshot say **why** the ids with no
+    verdict have none, instead of one `never ran: N` line covering four
+    unrelated causes: a type no executor is registered for (a runner gap,
+    `WPT-RUN-8`), a shard killed on its budget, a shard that wrote an empty
+    report, and — the one that matters — ids lost inside a shard that reported
+    success, printed as `SILENT HOLE` with the shards named. The classification
+    is `score_audit.accounting`, called from the run rather than copied into
+    it, so the audit and the summary can never disagree. Measured cost of not
+    printing it: the Windows half of the 2026-08-20 run finished
+    `479/479 shards ran` with 27 117 ids at zero, and which of them were a
+    ceiling and which a hole took a separate audit a day later
+    (WPT-RUN-5 slice 19). `--selftest` checks the split on a synthetic run.
   - `--resume` therefore treats a budget-killed shard whose raw stream
     salvaged something as **done**, instead of replaying it: the budget is the
     same and the machine is no faster, so the replay dies at the same wall and
@@ -243,6 +255,9 @@ S4 section for the full diagnosis trail (BiDi-eval-based bisection of
   line means the number is not publishable until it is explained — on the
   2026-08-20 Linux run that bucket was empty (0 of 24 702 reftest ids, 0 of
   15 572 testharness ids outside the killed shards).
+  Since slice 19 the same accounting also runs as part of `run_corpus.py`'s own
+  summary — this script stays the way to get the leaked ids listed, the kill
+  cost and the wall-clock fit, none of which belong in a run's summary line.
   `--snapshot docs/wpt/runs/<date>.json` runs the same audit on a *published*
   snapshot, which is all another machine's number ships with — the run
   directory stays on that machine. `--compare <second snapshot>` additionally
