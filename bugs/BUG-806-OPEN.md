@@ -82,3 +82,17 @@
 2. `--variant smil-dom` печатает `ctor SVGSetElement` и `has-beginElement`.
 3. WPT: `run_report.py --all --root svg/animations --recursive` — счётчик
    TIMEOUT уходит от 26 к единицам.
+
+## Уточнение цены (срез 16, 2026-08-21)
+
+Механизм `smil-animation` в `tests/wpt/timeout_audit.py` уменьшился с 27 id
+до 15: 12 файлов `svg/animations/*.svg` подключают harness как
+`<script xmlns="http://www.w3.org/1999/xhtml" src="/resources/testharness.js"/>`,
+то есть самозакрывающимся тегом, который HTML-парсер не закрывает
+([BUG-786](BUG-786-OPEN.md), третья грань). Их лог это подтверждает напрямую:
+`testharness.js` загружен, `testharnessreport.js` — нет, тело теста съедено
+как текст первого скрипта. До ожидания SMIL-события такой тест не доходит,
+поэтому его TIMEOUT принадлежит BUG-786, а не этому багу. Сам дефект (SMIL нет
+целиком) от этого не меняется — меняется только то, сколько TIMEOUT-ов
+корпуса объясняются им **сегодня**: после починки BUG-786 эти 12 вернутся
+сюда.
