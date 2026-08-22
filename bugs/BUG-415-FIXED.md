@@ -1,7 +1,7 @@
 # BUG-415 — отсоединённый документ (`createHTMLDocument`/`createDocument`/`new Document()`) не имеет ни методов `Node`, ни `head`/`body`
 
-**Статус:** OPEN
-**Компонент:** js (`crates/js/src/dom.rs:4728-4850` — `_lumen_build_detached_document`)
+**Статус:** FIXED 2026-08-22 (P3)
+**Компонент:** js (`crates/js/src/dom.rs` — `_lumen_build_detached_document`)
 **Найден:** 2026-07-28 (P2), WPT-VENDOR-html, срез `html/dom`
 
 ## Симптом
@@ -83,3 +83,69 @@ document-metadata-атрибутов (`characterSet`/`compatMode`/`URL`/…), к
 даёт 17 из 24 FAIL в `Document.body.html`, так что вклад этого фикса в цифры
 WPT, скорее всего, нулевой до того, как появятся методы `Node`. Направление
 починки (общий строитель для живого и отсоединённого документа) не изменилось.
+
+## Закрыто (P3, 2026-08-22)
+
+Остаток симптома закрыт в `_lumen_build_detached_document` — **без** сведения к одному
+строителю с живым `document`: это переписывание всего объекта документа (домен P1,
+BUG-358 со своей стороны остаётся OPEN), а здесь нужен был работающий `Node`-интерфейс
+поверх уже существующего списка `_children`.
+
+Что появилось:
+
+- **Мутации `Node` над собственным списком детей документа.** `insertBefore`/`removeChild`/
+  `replaceChild` + переписанный `appendChild`. Всё, что *ниже* документного элемента, —
+  обычное арена-поддерево и уже мутировало через обёртки элементов; своего арена-хранения
+  не имело ровно ребро «документ → ребёнок», оно живёт в `_children`. Общий пре-вставочный
+  шаг (DOM 4.2.3) вынесен в `_detached_adopt`: узел снимается и с арена-родителя, и из этого
+  списка, прежде чем вставляться. Поиск ребёнка (`_detached_child_index`) сравнивает сперва
+  по идентичности обёртки, потом по `nid` — обёртка арена-узла чеканится заново на каждом
+  обращении, поэтому одной идентичности мало.
+- **`ParentNode`/`Node`-аксессоры:** `hasChildNodes`, `firstChild`/`lastChild`,
+  `children`/`childElementCount`/`firstElementChild`/`lastElementChild`, `contains`
+  (унаследованный `Node.prototype.contains` ходит по `parentNode`, а у ребёнка документа
+  этой связи нет — мостится ровно один недостающий шаг), `cloneNode(deep)`.
+- **`readyState`** — всегда `'complete'` (HTML LS 3.1.5: документ без browsing context
+  ничего не грузит).
+- **Древесные аксессоры, ограниченные поддеревом документного элемента:**
+  `querySelector`/`querySelectorAll`/`getElementById`/`getElementsByTagName`/
+  `getElementsByClassName`. `id` и имя тега ищутся обходом, а не через селекторный движок:
+  это произвольный текст, и экранирование его в селектор превратило бы промах поиска в
+  ошибку разбора.
+- **`title`** — геттер (child text content, схлопнутый пробел) и сеттер (перенацелить
+  существующий `title`, иначе создать в `head`; без `head` — no-op, как требует спец).
+- **Сеттер `document.body`** (HTML LS 3.1.4): принимает только `body`/`frameset`
+  (иначе `HierarchyRequestError`, не-узел — `TypeError`), заменяет текущий body на месте
+  или дописывает к документному элементу.
+- **`HTMLFrameSetElement`** — интерфейса не было вовсе; добавлен в список конструкторов и
+  в `_lumen_html_tag_prototypes` (`FRAMESET`).
+
+Отдельно исправлена **область видимости `head`/`body`**: оба аксессора обязаны быть
+укоренены в *html-элементе*, которым по HTML LS 3.1.4 документный элемент является только
+если это `html` в HTML-пространстве имён. До этого обход начинался с любого документного
+элемента, поэтому `doc.appendChild(createElement('body'))` + `body.appendChild(frameset)`
+отдавал frameset как `doc.body`. Тот же обход в сеттере, наоборот, дописывает к
+документному элементу как таковому (спец так и требует; геттер после этого продолжает
+отдавать `null`).
+
+## Проверка
+
+Четыре юнит-теста в `dom::tests::v8_core` (`crates/js/src/dom.rs`):
+`detached_document_has_node_mutation_members`, `detached_document_body_scope_and_accessors`,
+`detached_document_body_setter` и порт `doc`-стороны самого WPT-теста —
+`detached_document_wpt_document_body_subtests` (каждый `assert_equals` оригинала = одна
+клауза, результат — индекс первого `false`).
+
+```
+cargo test -p lumen-js --features v8-backend detached_document
+```
+
+**Четыре сабтеста порта намеренно исключены** — те, что кладут элемент в чужое
+пространство имён и ждут, что он останется отличим от HTML-одноимённого. Арена хранит
+`Namespace` шестизначным перечислением, поэтому `createElementNS('http://example.org/test',
+'body')` неотличим от `createElement('body')`. Это [BUG-830](BUG-830-OPEN.md) — отдельный
+дефект слоем ниже, заведён в ходе этой починки.
+
+Что осталось за рамками: общий строитель для живого и отсоединённого документа
+([BUG-358](BUG-358-OPEN.md), [BUG-557](BUG-557-OPEN.md)) — раскол объектов документа как
+таковой не устранён, закрыта только эта его сторона.

@@ -58,11 +58,11 @@
  "generated": "2026-08-22",
  "counts": {
   "open": 349,
-  "fixed": 438,
+  "fixed": 439,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 787,
+ "total_bugs": 788,
  "phases": [
   {
    "id": "P0",
@@ -4003,7 +4003,7 @@
        "title": "WPT: вендорить + прогнать категорию `selection`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root selection --recursive`, ~5 мин 32 с, 100 файлов, 128 отобранных id) — **68/128 harness OK, 22/375 сабтестов**. Основной сигнал — реконфирмация уже открытых дефектов: [BUG-368](bugs/BUG-368-OPEN.md) (`innerHTML` — текстовая заглушка: `container.innerHTML = \"<svg>…\"`/`\"<details>…\"` не парсит разметку, `document.querySelector` не находит вставленные элементы, дальше `setBaseAndExtent(null,…)` не создаёт диапазон — «Selection.getRangeAt: no range», крупнейший кластер `anonymous/setBaseAndExtent-start-or-end-in-anonymous-shadow-container.html`); [BUG-384](bugs/BUG-384-FIXED.md) (именованный доступ `window.<id>` не реализован — `container is not defined` роняет весь top-level скрипт `bidi/modify.tentative.html` до регистрации тестов); [BUG-346](bugs/BUG-346-OPEN.md) (`..`-сегменты в `Url::resolve()` не схлопываются — `../../editing/include/editor-test-utils.js` уходит на сервер буквально и 404-ит, `EditorTestUtils is not defined` дальше по цепочке); [BUG-462](bugs/BUG-462-OPEN.md) (`Node.contains` отсутствует — `elementDocument.contains is not a function`, блокирует `test_driver.click()` в 28 сабтестах); [BUG-415](bugs/BUG-415-OPEN.md) (отсоединённый документ `createHTMLDocument()` без Node-методов/HTML-аксессоров — `foreignDoc.body` = `undefined`, `TypeError: Cannot read properties of undefined (reading 'appendChild')` в `common.js::setupRangeTests`, крупнейший ERROR-кластер — 15 файлов `addRange-*`/`extend-*`/`collapse-*`/`getRangeAt.html`/`isCollapsed.html`/`setBaseAndExtent.html` и др.). Живая проба (`--mcp-live-port`) нашла независимую находку — [BUG-671](bugs/BUG-671-OPEN.md): `window.Selection` (глобальный интерфейс-конструктор) отсутствует вовсе (`'Selection' in window === false`), при этом `getSelection()` работает и возвращает Selection-подобный объект с `constructor.name === \"Object\"` — `instanceof Selection` бросает `TypeError`. Блокирует sanity-check, повторённый почти в каждом файле категории (`getSelection.html` — 0/9 сабтестов). Один новый номер бага",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root selection --recursive`, ~5 мин 32 с, 100 файлов, 128 отобранных id) — **68/128 harness OK, 22/375 сабтестов**. Основной сигнал — реконфирмация уже открытых дефектов: [BUG-368](bugs/BUG-368-OPEN.md) (`innerHTML` — текстовая заглушка: `container.innerHTML = \"<svg>…\"`/`\"<details>…\"` не парсит разметку, `document.querySelector` не находит вставленные элементы, дальше `setBaseAndExtent(null,…)` не создаёт диапазон — «Selection.getRangeAt: no range», крупнейший кластер `anonymous/setBaseAndExtent-start-or-end-in-anonymous-shadow-container.html`); [BUG-384](bugs/BUG-384-FIXED.md) (именованный доступ `window.<id>` не реализован — `container is not defined` роняет весь top-level скрипт `bidi/modify.tentative.html` до регистрации тестов); [BUG-346](bugs/BUG-346-OPEN.md) (`..`-сегменты в `Url::resolve()` не схлопываются — `../../editing/include/editor-test-utils.js` уходит на сервер буквально и 404-ит, `EditorTestUtils is not defined` дальше по цепочке); [BUG-462](bugs/BUG-462-OPEN.md) (`Node.contains` отсутствует — `elementDocument.contains is not a function`, блокирует `test_driver.click()` в 28 сабтестах); [BUG-415](bugs/BUG-415-FIXED.md) (отсоединённый документ `createHTMLDocument()` без Node-методов/HTML-аксессоров — `foreignDoc.body` = `undefined`, `TypeError: Cannot read properties of undefined (reading 'appendChild')` в `common.js::setupRangeTests`, крупнейший ERROR-кластер — 15 файлов `addRange-*`/`extend-*`/`collapse-*`/`getRangeAt.html`/`isCollapsed.html`/`setBaseAndExtent.html` и др.). Живая проба (`--mcp-live-port`) нашла независимую находку — [BUG-671](bugs/BUG-671-OPEN.md): `window.Selection` (глобальный интерфейс-конструктор) отсутствует вовсе (`'Selection' in window === false`), при этом `getSelection()` работает и возвращает Selection-подобный объект с `constructor.name === \"Object\"` — `instanceof Selection` бросает `TypeError`. Блокирует sanity-check, повторённый почти в каждом файле категории (`getSelection.html` — 0/9 сабтестов). Один новый номер бага",
        "bugs": [
         "BUG-671"
        ]
@@ -4034,7 +4034,7 @@
        "title": "WPT: вендорить + прогнать категорию `shadow-dom`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root shadow-dom --recursive --processes=4`, ~4 мин, 393 файла, 276 отобранных id) — **198/276 harness OK, 221/1780 сабтестов**. Категория реально реализована (Shadow DOM работает end-to-end) — резко контрастирует с типичными пустыми прогонами. Доминирующий сигнал — реконфирмация уже открытых дефектов: [BUG-384](bugs/BUG-384-FIXED.md) (именованный доступ на `window`, крупнейший кластер), [BUG-346](bugs/BUG-346-OPEN.md) (`..`-сегменты в `Url::resolve()` — `../../../../html/resources/common.js` 404), [BUG-574](bugs/BUG-574-OPEN.md) (`Node.contains` отсутствует), [BUG-415](bugs/BUG-415-OPEN.md) (отсоединённый документ без Node-методов), [BUG-464](bugs/BUG-464-OPEN.md)/[BUG-477](bugs/BUG-477-OPEN.md) (`elementFromPoint`/`elementsFromPoint`), [BUG-601](bugs/BUG-601-OPEN.md) (`DOMTokenList` глобал), [BUG-471](bugs/BUG-471-OPEN.md) (CSSOM). Живая проба (`--mcp-live-port`) подтвердила независимую находку — [BUG-676](bugs/BUG-676-OPEN.md): `ShadowRoot` — плоский `{}`-литерал, не WebIDL-интерфейс: нет глобального конструктора `window.ShadowRoot`, нет `cloneNode()` (должен бросать `NotSupportedError`, а не отсутствовать), компаньон — `HTMLSlotElement.prototype.assign()` отсутствует рядом с рабочими `assignedNodes`/`assignedElements`. Один новый номер бага",
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-06: вендорена + прогнана целиком (`--all --root shadow-dom --recursive --processes=4`, ~4 мин, 393 файла, 276 отобранных id) — **198/276 harness OK, 221/1780 сабтестов**. Категория реально реализована (Shadow DOM работает end-to-end) — резко контрастирует с типичными пустыми прогонами. Доминирующий сигнал — реконфирмация уже открытых дефектов: [BUG-384](bugs/BUG-384-FIXED.md) (именованный доступ на `window`, крупнейший кластер), [BUG-346](bugs/BUG-346-OPEN.md) (`..`-сегменты в `Url::resolve()` — `../../../../html/resources/common.js` 404), [BUG-574](bugs/BUG-574-OPEN.md) (`Node.contains` отсутствует), [BUG-415](bugs/BUG-415-FIXED.md) (отсоединённый документ без Node-методов), [BUG-464](bugs/BUG-464-OPEN.md)/[BUG-477](bugs/BUG-477-OPEN.md) (`elementFromPoint`/`elementsFromPoint`), [BUG-601](bugs/BUG-601-OPEN.md) (`DOMTokenList` глобал), [BUG-471](bugs/BUG-471-OPEN.md) (CSSOM). Живая проба (`--mcp-live-port`) подтвердила независимую находку — [BUG-676](bugs/BUG-676-OPEN.md): `ShadowRoot` — плоский `{}`-литерал, не WebIDL-интерфейс: нет глобального конструктора `window.ShadowRoot`, нет `cloneNode()` (должен бросать `NotSupportedError`, а не отсутствовать), компаньон — `HTMLSlotElement.prototype.assign()` отсутствует рядом с рабочими `assignedNodes`/`assignedElements`. Один новый номер бага",
        "bugs": [
         "BUG-676"
        ]
@@ -8051,10 +8051,10 @@
    "debtor": false
   },
   "BUG-415": {
-   "status": "open",
+   "status": "fixed",
    "title": "Отсоединённый документ (`createHTMLDocument`/`createDocument`/`new Document()`) не имеет ни методов `Node` (`removeChild`/`insertBefore`/`replaceChild`/`cloneNo…",
-   "component": "js (`crates/js/src/dom.rs:4728-4850` — `_lumen_build_detached_document`)",
-   "date": null,
+   "component": "js (`crates/js/src/dom.rs` — `_lumen_build_detached_document`)",
+   "date": "2026-08-22",
    "debtor": false
   },
   "BUG-416": {
@@ -10863,6 +10863,13 @@
    "component": "js (`crates/js/src/dom.rs:6921`/`:6930` — `pushState`/`replaceState` зовут `_lumen_location_update(target)` сырым аргументом; `:6231` — `_lumen_location_update` разбирает эту строку как есть; `:11438` — комментарий шима, который это поведение уже фиксирует)",
    "date": null,
    "debtor": false
+  },
+  "BUG-830": {
+   "status": "open",
+   "title": "`createElementNS` с произвольным (не SVG, не пустым) namespace-URI схлопывает элемент в HTML: `createElementNS('http://example.org/test','body')` отдаёт `namesp…",
+   "component": "dom (`crates/engine/dom/src/lib.rs:119` — `enum Namespace`), js (`crates/js/src/v8_runtime.rs:2372-2394` — натив `_lumen_create_element_ns`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -10980,6 +10987,9 @@
   ],
   "dom (`Document::dirty_values` + `control_value`/`set_control_value`/`clear_control_value`), js (`dom.rs` — геттер/сеттер `value`; `v8_runtime.rs` — нативы `_lumen_{get,set,clear}_dirty_value`), layout (`box_tree.rs`, `style.rs`), shell (`forms.rs`, `main.rs`), driver (`session.rs`)": [
    "BUG-441"
+  ],
+  "dom (`crates/engine/dom/src/lib.rs:119` — `enum Namespace`), js (`crates/js/src/v8_runtime.rs:2372-2394` — натив `_lumen_create_element_ns`)": [
+   "BUG-830"
   ],
   "driver": [
    "BUG-061",

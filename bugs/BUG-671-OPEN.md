@@ -37,7 +37,7 @@ sanity-check `assert_true("Selection" in window, "…")`, который пад�
 уже открытые [BUG-368](BUG-368-OPEN.md) `innerHTML`-текстовая заглушка,
 [BUG-384](BUG-384-FIXED.md) именованный доступ на `window`, [BUG-346](BUG-346-OPEN.md)
 `..`-сегменты в `Url::resolve()`, [BUG-462](BUG-462-OPEN.md) `Node.contains`
-отсутствует, [BUG-415](BUG-415-OPEN.md) отсоединённый документ без Node-методов/
+отсутствует, [BUG-415](BUG-415-FIXED.md) отсоединённый документ без Node-методов/
 HTML-аксессоров), но независимая находка, не покрытая ни одним из них.
 
 Вне WPT: любой код, проверяющий тип результата `getSelection()` через

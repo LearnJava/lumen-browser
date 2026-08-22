@@ -2066,7 +2066,7 @@ DOMImplementation.prototype.constructor = DOMImplementation;
  'HTMLHtmlElement','HTMLHeadElement','HTMLBodyElement','HTMLTitleElement',
  'HTMLCanvasElement','HTMLVideoElement','HTMLAudioElement','HTMLIFrameElement',
  'HTMLTemplateElement','HTMLPreElement','HTMLBRElement','HTMLHRElement',
- 'HTMLDialogElement','HTMLUnknownElement'
+ 'HTMLDialogElement','HTMLFrameSetElement','HTMLUnknownElement'
 ].forEach(function(_name) {
     if (_name in globalThis) return;
     var _ctor = function() { throw new TypeError('Illegal constructor'); };
@@ -2101,6 +2101,7 @@ var _lumen_html_tag_prototypes = {
     'VIDEO': HTMLVideoElement, 'AUDIO': HTMLAudioElement, 'IFRAME': HTMLIFrameElement,
     'TEMPLATE': HTMLTemplateElement, 'PRE': HTMLPreElement, 'BR': HTMLBRElement,
     'HR': HTMLHRElement, 'DIALOG': HTMLDialogElement, 'IMG': HTMLImageElement,
+    'FRAMESET': HTMLFrameSetElement,
 };
 // BUG-367: HTML LS §3.1.3 — a tag name the HTML specification does not define
 // gets `HTMLUnknownElement`, not `HTMLElement`. Membership of this set is what
@@ -2310,8 +2311,20 @@ function _lumen_build_detached_document(proto, contentType) {
     // document element. The live `document` reads these off the arena
     // (`_lumen_get_head`/`_lumen_get_body`); here the tree is the detached
     // subtree hanging off `documentElement`, so walk its element children.
-    function _detached_doc_child(tags) {
+    // BUG-415: both accessors are rooted at the *html element*, which HTML LS
+    // 3.1.4 defines as the document element only when it is an `html` element
+    // in the HTML namespace — anything else (a `<body>` promoted to root) has
+    // no head and no body. Before this guard the walk started at whatever the
+    // document element happened to be, so `doc.appendChild(createElement('body'))`
+    // + `body.appendChild(frameset)` reported the frameset as `doc.body`.
+    function _detached_html_element() {
         var root = doc.documentElement;
+        if (!root || root.__nid__ === undefined) { return null; }
+        return (_lumen_is_html_element_nid(root.__nid__)
+            && _lumen_u2n(_lumen_get_local_name(root.__nid__)) === 'html') ? root : null;
+    }
+    function _detached_doc_child(tags) {
+        var root = _detached_html_element();
         if (!root) { return null; }
         var kids = root.children;
         for (var i = 0; i < kids.length; i++) {
@@ -2321,11 +2334,47 @@ function _lumen_build_detached_document(proto, contentType) {
     }
     Object.defineProperty(doc, 'head', {
         get: function() { return _detached_doc_child(['HEAD']); },
-        enumerable: true,
+        enumerable: true, configurable: true,
     });
     Object.defineProperty(doc, 'body', {
         get: function() { return _detached_doc_child(['BODY', 'FRAMESET']); },
-        enumerable: true,
+        // HTML LS 3.1.4 — the body setter: only a body/frameset element is
+        // accepted (anything else is a HierarchyRequestError, a non-node a
+        // WebIDL TypeError); it replaces the current body element in place, or
+        // is appended to the document element when there is none. With no
+        // document element at all there is nowhere to put it.
+        set: function(value) {
+            if (value === null || value === undefined || value.__nid__ === undefined) {
+                throw new TypeError('Document.body: the value is not an HTMLElement');
+            }
+            var tag = value.tagName;
+            if (tag !== 'BODY' && tag !== 'FRAMESET') {
+                throw new DOMException(
+                    'Document.body: the new value is neither a body nor a frameset element',
+                    'HierarchyRequestError');
+            }
+            var current = _detached_doc_child(['BODY', 'FRAMESET']);
+            if (current !== null && current.__nid__ === value.__nid__) { return; }
+            if (current !== null) {
+                var parent = _lumen_u2n(_lumen_get_parent(current.__nid__));
+                if (parent !== null) {
+                    _lumen_insert_before(parent, value.__nid__, current.__nid__);
+                    _lumen_remove_child(parent, current.__nid__);
+                    return;
+                }
+            }
+            // No body element yet: append to the *document element*, not to
+            // `_detached_html_element()` — the spec appends even when the root
+            // is not an `html` element (the getter then keeps reporting null).
+            var root = doc.documentElement;
+            if (!root || root.__nid__ === undefined) {
+                throw new DOMException(
+                    'Document.body: the document has no document element',
+                    'HierarchyRequestError');
+            }
+            _lumen_append_child(root.__nid__, value.__nid__);
+        },
+        enumerable: true, configurable: true,
     });
     // HTML LS §3.1.5 (BUG-486): a document with no browsing context never runs
     // scripts of its own, so its `currentScript` is always `null` — but the
@@ -2376,13 +2425,253 @@ function _lumen_build_detached_document(proto, contentType) {
         return _lumen_make_element(nid);
     };
     doc.createDocumentFragment = function() { return _lumen_make_document_fragment(_lumen_create_fragment()); };
-    doc.appendChild = function(node) {
-        if (node) {
-            if (typeof node.__lumen_setOwner === 'function') { node.__lumen_setOwner(doc); }
-            _children.push(node);
+    // -- BUG-415: Node / ParentNode over the document's own child list ------
+    // Everything *below* the document element is an ordinary arena subtree and
+    // already mutates through the element wrappers; what has no arena backing
+    // is the document->child edge itself, which lives in `_children`. Until now
+    // only `appendChild` existed here, so `doc.removeChild(doc.documentElement)`
+    // -- the first line of most WPT document tests -- threw
+    // `doc.removeChild is not a function` and took the rest of the file with it.
+    function _detached_child_index(node) {
+        if (node === null || node === undefined) { return -1; }
+        for (var i = 0; i < _children.length; i++) {
+            if (_children[i] === node) { return i; }
         }
+        // An arena-backed wrapper is minted afresh on every access, so wrapper
+        // identity alone is not enough - fall back to the node id.
+        var nid = _lumen_tree_nid(node);
+        if (nid === null) { return -1; }
+        for (var j = 0; j < _children.length; j++) {
+            if (_lumen_tree_nid(_children[j]) === nid) { return j; }
+        }
+        return -1;
+    }
+    // DOM 4.2.3 pre-insert: a node is removed from wherever it currently hangs
+    // before being inserted, be that an arena parent or this list.
+    function _detached_adopt(node) {
+        if (node === null || node === undefined) {
+            throw new TypeError('the argument is not a Node');
+        }
+        if (typeof node.__lumen_setOwner === 'function') { node.__lumen_setOwner(doc); }
+        var nid = _lumen_tree_nid(node);
+        if (nid !== null) {
+            var parent = _lumen_u2n(_lumen_get_parent(nid));
+            if (parent !== null) { _lumen_remove_child(parent, nid); }
+        }
+        var at = _detached_child_index(node);
+        if (at >= 0) { _children.splice(at, 1); }
+    }
+    doc.appendChild = function(node) {
+        _detached_adopt(node);
+        _children.push(node);
         return node;
     };
+    doc.insertBefore = function(node, ref) {
+        if (ref === null || ref === undefined) { return doc.appendChild(node); }
+        if (_detached_child_index(ref) < 0) {
+            throw new DOMException(
+                'insertBefore: the reference node is not a child of this document', 'NotFoundError');
+        }
+        _detached_adopt(node);
+        // The index is re-read after the adopt: removing `node` from this same
+        // list may have shifted the reference node down by one.
+        _children.splice(_detached_child_index(ref), 0, node);
+        return node;
+    };
+    doc.removeChild = function(node) {
+        var at = _detached_child_index(node);
+        if (at < 0) {
+            throw new DOMException(
+                'removeChild: the node is not a child of this document', 'NotFoundError');
+        }
+        _children.splice(at, 1);
+        return node;
+    };
+    doc.replaceChild = function(newChild, oldChild) {
+        if (_detached_child_index(oldChild) < 0) {
+            throw new DOMException(
+                'replaceChild: the node to replace is not a child of this document', 'NotFoundError');
+        }
+        _detached_adopt(newChild);
+        _children.splice(_detached_child_index(oldChild), 1, newChild);
+        return oldChild;
+    };
+    doc.hasChildNodes = function() { return _children.length > 0; };
+    Object.defineProperty(doc, 'firstChild', {
+        get: function() { return _children.length > 0 ? _children[0] : null; },
+        enumerable: true, configurable: true,
+    });
+    Object.defineProperty(doc, 'lastChild', {
+        get: function() { return _children.length > 0 ? _children[_children.length - 1] : null; },
+        enumerable: true, configurable: true,
+    });
+    Object.defineProperty(doc, 'children', {
+        get: function() {
+            var out = [];
+            for (var i = 0; i < _children.length; i++) {
+                if (_children[i] && _children[i].nodeType === 1) { out.push(_children[i]); }
+            }
+            return out;
+        },
+        enumerable: true, configurable: true,
+    });
+    Object.defineProperty(doc, 'childElementCount', {
+        get: function() { return doc.children.length; },
+        enumerable: true, configurable: true,
+    });
+    Object.defineProperty(doc, 'firstElementChild', {
+        get: function() { return doc.documentElement; },
+        enumerable: true, configurable: true,
+    });
+    Object.defineProperty(doc, 'lastElementChild', {
+        get: function() {
+            var kids = doc.children;
+            return kids.length > 0 ? kids[kids.length - 1] : null;
+        },
+        enumerable: true, configurable: true,
+    });
+    // DOM 4.4 Node.contains - the inherited `Node.prototype.contains` walks
+    // `parentNode` links, and an arena child of this document has none (the
+    // edge is in `_children`), so it would answer false for the document's own
+    // subtree. Bridge the one missing hop explicitly.
+    doc.contains = function(other) {
+        if (other === doc) { return true; }
+        for (var i = 0; i < _children.length; i++) {
+            if (_lumen_node_contains(_children[i], other)) { return true; }
+        }
+        return false;
+    };
+    // DOM 4.4 Node.cloneNode - a document clones into another document of the
+    // same interface and content type; `deep` also clones the children.
+    doc.cloneNode = function(deep) {
+        var copy = _lumen_build_detached_document(proto, contentType);
+        if (deep) {
+            for (var i = 0; i < _children.length; i++) {
+                var child = _children[i];
+                if (child && typeof child.cloneNode === 'function') {
+                    copy.appendChild(child.cloneNode(true));
+                }
+            }
+        }
+        return copy;
+    };
+    // HTML LS 3.1.5: a document with no browsing context never loads, so its
+    // ready state is `complete` from the moment it is created.
+    Object.defineProperty(doc, 'readyState', {
+        get: function() { return 'complete'; },
+        enumerable: true, configurable: true,
+    });
+    // -- BUG-415: tree accessors, scoped to the document element's subtree ---
+    // The scoped natives walk descendants only, so the document element itself
+    // is tested separately wherever it can legitimately match.
+    function _detached_root_nid() {
+        var root = doc.documentElement;
+        return (root && root.__nid__ !== undefined) ? root.__nid__ : null;
+    }
+    function _detached_walk(root, visit) {
+        var kids = _lumen_get_children(root);
+        for (var i = 0; i < kids.length; i++) {
+            if (visit(kids[i])) { return kids[i]; }
+            var hit = _detached_walk(kids[i], visit);
+            if (hit !== null) { return hit; }
+        }
+        return null;
+    }
+    doc.querySelector = function(sel) {
+        var root = _detached_root_nid();
+        if (root === null) { return null; }
+        var s = _lumen_sel(sel);
+        if (_lumen_node_matches_selector(root, s)) { return _lumen_make_element(root); }
+        var n = _lumen_u2n(_lumen_query_selector_scoped(root, s));
+        return n !== null ? _lumen_make_element(n) : null;
+    };
+    doc.querySelectorAll = function(sel) {
+        var root = _detached_root_nid();
+        if (root === null) { return []; }
+        var s = _lumen_sel(sel);
+        var hits = _lumen_node_matches_selector(root, s) ? [root] : [];
+        return hits.concat(_lumen_query_selector_all_scoped(root, s)).map(_lumen_make_element);
+    };
+    // Walked rather than routed through the selector engine: an `id` or a tag
+    // name is arbitrary text, not a selector, and escaping it into one would
+    // turn a lookup miss into a parse error.
+    doc.getElementById = function(id) {
+        var root = _detached_root_nid();
+        if (root === null) { return null; }
+        var want = String(id);
+        if (_lumen_u2n(_lumen_get_attr(root, 'id')) === want) { return _lumen_make_element(root); }
+        var hit = _detached_walk(root, function(n) {
+            return _lumen_u2n(_lumen_get_attr(n, 'id')) === want;
+        });
+        return hit !== null ? _lumen_make_element(hit) : null;
+    };
+    doc.getElementsByTagName = function(tag) {
+        var root = _detached_root_nid();
+        if (root === null) { return []; }
+        var want = String(tag);
+        var all = want === '*';
+        // DOM 4.5: for an HTML document an HTML-namespace element also matches
+        // the ASCII-lowercased name; everything else matches the qualified name
+        // exactly.
+        var lower = want.toLowerCase();
+        function _match(n) {
+            if (all) { return true; }
+            var qname = _lumen_qualified_tag_name(n);
+            if (qname === want) { return true; }
+            return _lumen_is_html_element_nid(n) && qname.toLowerCase() === lower;
+        }
+        var out = _match(root) ? [root] : [];
+        _detached_walk(root, function(n) {
+            if (_match(n)) { out.push(n); }
+            return false;
+        });
+        return out.map(_lumen_make_element);
+    };
+    doc.getElementsByClassName = function(names) {
+        var root = _detached_root_nid();
+        if (root === null) { return []; }
+        var sel = _lumen_class_selector(names);
+        if (sel === null) { return []; }
+        var hits = _lumen_node_matches_selector(root, sel) ? [root] : [];
+        return hits.concat(_lumen_query_selector_all_scoped(root, sel)).map(_lumen_make_element);
+    };
+    // HTML LS 3.1.5 document.title. Getter - the child text content of the
+    // title element, stripped and collapsed. Setter - retarget the existing
+    // title element, or create one in the head; with no head there is nowhere
+    // to put it and the assignment is a no-op, as the spec requires.
+    function _detached_title_element() {
+        var root = _detached_root_nid();
+        if (root === null) { return null; }
+        var hit = _detached_walk(root, function(n) {
+            return _lumen_u2n(_lumen_get_local_name(n)) === 'title';
+        });
+        return hit !== null ? _lumen_make_element(hit) : null;
+    }
+    Object.defineProperty(doc, 'title', {
+        get: function() {
+            var el = _detached_title_element();
+            if (el === null) { return ''; }
+            // Child text content (DOM 4.9) - Text children only, not the whole
+            // descendant text, which is what `textContent` would give.
+            var text = '';
+            var kids = _lumen_get_children(el.__nid__);
+            for (var i = 0; i < kids.length; i++) {
+                if (_lumen_is_text_node(kids[i])) { text += _lumen_get_text_content(kids[i]); }
+            }
+            return text.replace(/[ \\t\\n\\f\\r]+/g, ' ').replace(/^ /, '').replace(/ $/, '');
+        },
+        set: function(value) {
+            var el = _detached_title_element();
+            if (el === null) {
+                var head = doc.head;
+                if (head === null) { return; }
+                el = doc.createElement('title');
+                head.appendChild(el);
+            }
+            el.textContent = String(value);
+        },
+        enumerable: true, configurable: true,
+    });
     return doc;
 }
 
@@ -20308,6 +20597,167 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        /// BUG-415: the detached document had no `Node` mutation members at all
+        /// — `doc.removeChild(doc.documentElement)`, the opening line of most
+        /// WPT document tests, threw `is not a function`.
+        #[test]
+        fn detached_document_has_node_mutation_members() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "var d = document.implementation.createHTMLDocument('t'); \
+                     var root = d.documentElement; \
+                     d.removeChild(root) === root && d.documentElement === null \
+                     && d.body === null && d.hasChildNodes() === true \
+                     && d.appendChild(root) === root && d.documentElement === root \
+                     && d.lastChild === root && d.childElementCount === 1 \
+                     && d.contains(d.body) && d.contains(root) && !d.contains(null) \
+                     && (function() { \
+                            var x = d.createElement('x'); \
+                            return d.replaceChild(x, root) === root \
+                                && d.documentElement === x \
+                                && d.insertBefore(root, x) === root \
+                                && d.documentElement === root \
+                                && d.firstElementChild === root; \
+                        })()",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+            let throws = rt
+                .eval(
+                    "(function() { \
+                        var d = document.implementation.createHTMLDocument('t'); \
+                        try { d.removeChild(d.createElement('p')); return false; } \
+                        catch (e) { return e.name === 'NotFoundError'; } \
+                     })()",
+                )
+                .unwrap();
+            assert_eq!(throws, lumen_core::JsValue::Bool(true));
+        }
+
+        /// BUG-415: `body` must be rooted at an HTML-namespace `html` element,
+        /// and `readyState`/`title`/the tree accessors existed nowhere.
+        #[test]
+        fn detached_document_body_scope_and_accessors() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "var d = document.implementation.createHTMLDocument('hello'); \
+                     d.removeChild(d.documentElement); \
+                     var b = d.appendChild(d.createElement('body')); \
+                     b.appendChild(d.createElement('frameset')); \
+                     d.body === null \
+                     && document.implementation.createHTMLDocument('t').readyState === 'complete'",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+            let acc = rt
+                .eval(
+                    "var d2 = document.implementation.createHTMLDocument('  hello   world '); \
+                     d2.body.innerHTML = '<p id=\"a\" class=\"c\">x</p><span>y</span>'; \
+                     d2.title === 'hello world' \
+                     && d2.getElementById('a') !== null && d2.getElementById('a').tagName === 'P' \
+                     && d2.getElementById('nope') === null \
+                     && d2.querySelector('#a').tagName === 'P' \
+                     && d2.querySelectorAll('p, span').length === 2 \
+                     && d2.getElementsByTagName('span').length === 1 \
+                     && d2.getElementsByTagName('html').length === 1 \
+                     && d2.getElementsByClassName('c').length === 1 \
+                     && (d2.title = 'set', d2.title === 'set')",
+                )
+                .unwrap();
+            assert_eq!(acc, lumen_core::JsValue::Bool(true));
+        }
+
+        /// BUG-415: `document.body` had no setter on the detached document, and
+        /// `HTMLFrameSetElement` did not exist.
+        #[test]
+        fn detached_document_body_setter() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let ok = rt
+                .eval(
+                    "var d = document.implementation.createHTMLDocument('t'); \
+                     var f = d.createElement('frameset'); \
+                     f instanceof HTMLFrameSetElement \
+                     && (d.body = f, d.body.tagName === 'FRAMESET') \
+                     && (function() { \
+                            var e = document.implementation.createHTMLDocument('t'); \
+                            e.removeChild(e.documentElement); \
+                            try { e.body = e.createElement('body'); return false; } \
+                            catch (err) { return err.name === 'HierarchyRequestError'; } \
+                        })() \
+                     && (function() { \
+                            try { d.body = 'text'; return false; } \
+                            catch (err) { return err instanceof TypeError; } \
+                        })()",
+                )
+                .unwrap();
+            assert_eq!(ok, lumen_core::JsValue::Bool(true));
+        }
+
+        /// BUG-415: a port of the `doc`-side subtests of WPT
+        /// `html/dom/documents/dom-tree-accessors/Document.body.html`, the test
+        /// whose first `doc.removeChild(...)` used to take 17 of its 24 failures
+        /// with it. Each `assert_equals` of the original becomes one clause.
+        ///
+        /// The four subtests that put an element in a foreign namespace *and*
+        /// expect it to stay distinguishable from the HTML one are omitted: the
+        /// arena stores `Namespace` as a six-value enum, so
+        /// `createElementNS('http://example.org/test', 'body')` is indistinguishable
+        /// from `createElement('body')` — [BUG-830], a separate defect one layer down.
+        #[test]
+        fn detached_document_wpt_document_body_subtests() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let script = "\
+                function mk() { \
+                    var d = document.implementation.createHTMLDocument(''); \
+                    d.removeChild(d.documentElement); \
+                    return d; \
+                } \
+                var r = []; var d, html, b, f, x; \
+                r.push(mk().body === null); \
+                d = mk(); d.appendChild(d.createElement('html')); r.push(d.body === null); \
+                d = mk(); html = d.appendChild(d.createElement('html')); \
+                b = html.appendChild(d.createElement('body')); \
+                html.appendChild(d.createElement('frameset')); \
+                r.push(d.body.isSameNode(b)); \
+                d = mk(); html = d.appendChild(d.createElement('html')); \
+                f = html.appendChild(d.createElement('frameset')); \
+                html.appendChild(d.createElement('body')); \
+                r.push(d.body.isSameNode(f)); \
+                d = mk(); html = d.appendChild(d.createElement('html')); \
+                x = html.appendChild(d.createElement('x')); \
+                x.appendChild(d.createElement('body')); \
+                b = html.appendChild(d.createElement('body')); \
+                r.push(d.body.isSameNode(b)); \
+                d = mk(); d.appendChild(d.createElement('body')); r.push(d.body === null); \
+                d = mk(); d.appendChild(d.createElement('frameset')); r.push(d.body === null); \
+                d = mk(); b = d.appendChild(d.createElement('body')); \
+                b.appendChild(d.createElement('frameset')); r.push(d.body === null); \
+                d = mk(); f = d.appendChild(d.createElement('frameset')); \
+                f.appendChild(d.createElement('body')); r.push(d.body === null); \
+                d = document.implementation.createHTMLDocument(); \
+                b = d.createElement('body'); d.body = b; r.push(d.body.isSameNode(b)); \
+                d = document.implementation.createHTMLDocument(); \
+                f = d.createElement('frameset'); d.body = f; r.push(d.body.isSameNode(f)); \
+                d = mk(); html = d.appendChild(d.createElement('html')); \
+                f = html.appendChild(d.createElement('frameset')); \
+                b = d.createElement('body'); d.body = b; \
+                r.push(f.parentNode === null && d.body.isSameNode(b)); \
+                d = mk(); html = d.appendChild(d.createElement('html')); \
+                b = html.appendChild(d.createElement('body')); \
+                var f1 = html.appendChild(d.createElement('frameset')); \
+                var f2 = d.createElement('frameset'); d.body = f2; \
+                r.push(b.parentNode === null && f1.parentNode.isSameNode(html) \
+                       && d.body.isSameNode(f2) && f2.nextSibling.isSameNode(f1)); \
+                d = mk(); d.appendChild(d.createElement('test')); \
+                b = d.createElement('body'); d.body = b; \
+                r.push(d.documentElement.firstChild.isSameNode(b) && d.body === null); \
+                r.indexOf(false)";
+            let first_failure = rt.eval(script).unwrap();
+            assert_eq!(first_failure, lumen_core::JsValue::Number(-1.0));
         }
 
         #[test]
