@@ -107,6 +107,7 @@ use lumen_layout::{StartingStyleTracker, compute_style_from_declarations, resolv
 use lumen_layout::{collect_scroll_containers, collect_snap_containers, find_scroll_container_at, find_snap_target, set_scroll_position};
 #[cfg(feature = "v8")]
 use lumen_layout::{collect_computed_styles, collect_custom_properties, collect_layout_rects};
+use lumen_layout::apply_intrinsic_size;
 use lumen_layout::style::{ComputedStyle, ScrollBehavior};
 use lumen_layout::computed_style_to_map;
 use lumen_paint::{
@@ -5076,84 +5077,11 @@ fn decode_image(
     }
 }
 
-/// Доставляет intrinsic-размеры декодированной картинки в layout, дописывая
-/// `<img>` пустые презентационные атрибуты `width`/`height`.
-///
-/// Возвращает `true`, если атрибут действительно был дописан — то есть DOM
-/// изменился и странице нужен релейаут. `false` (ничего не изменилось) — когда
-/// автор задал оба размера сам или размеры уже дописаны прошлым вызовом; на нём
-/// держится сходимость повторного прохода [`Lumen::apply_stream_intrinsic_sizes`]
-/// (BUG-735), иначе «применили → релейаут → применили» зациклилось бы.
-fn apply_intrinsic_size(doc: &mut Document, node_id: NodeId, width: u32, height: u32) -> bool {
-    use lumen_dom::{Attribute, QualName};
-    let NodeData::Element { attrs, .. } = &mut doc.get_mut(node_id).data else {
-        return false;
-    };
-    // Presence of the author's width/height content attributes (any value —
-    // including percentages — counts as "set" and must never be duplicated).
-    let has_w = attrs.iter().any(|a| a.name.local.eq_ignore_ascii_case("width"));
-    let has_h = attrs.iter().any(|a| a.name.local.eq_ignore_ascii_case("height"));
-    // Author values parsed as non-negative integer px (HTML dimension-attr
-    // grammar). `None` when absent OR non-integer (e.g. `width="50%"`).
-    let attr_w = attrs
-        .iter()
-        .find(|a| a.name.local.eq_ignore_ascii_case("width"))
-        .and_then(|a| a.value.trim().parse::<u32>().ok());
-    let attr_h = attrs
-        .iter()
-        .find(|a| a.name.local.eq_ignore_ascii_case("height"))
-        .and_then(|a| a.value.trim().parse::<u32>().ok());
-
-    // BUG-269: fill the missing dimension from the intrinsic aspect ratio
-    // (CSS 2.1 §10.6.2) rather than from the raw intrinsic value, so a
-    // fixed-width `<img width="240">` (intrinsic 120×80) becomes 240×160, not
-    // 240×80 — and, crucially, is not left with a collapsed `height: auto` = 0.
-    // Push only into empty attribute slots (presentational hint, specificity 0
-    // — authored CSS still wins). A pixel-parsed author dimension drives the
-    // ratio; a non-integer one (percentage) falls back to the raw intrinsic
-    // value for the other axis.
-    let (new_w, new_h) = match (attr_w, attr_h) {
-        (Some(w), None) => {
-            let h = if width > 0 {
-                ((w as u64 * height as u64 + width as u64 / 2) / width as u64) as u32
-            } else {
-                height
-            };
-            (None, Some(h))
-        }
-        (None, Some(h)) => {
-            let w = if height > 0 {
-                ((h as u64 * width as u64 + height as u64 / 2) / height as u64) as u32
-            } else {
-                width
-            };
-            (Some(w), None)
-        }
-        // Both integers set, or one/both present but non-integer: fill any
-        // still-empty slot with the raw intrinsic value.
-        _ => (
-            (!has_w).then_some(width),
-            (!has_h).then_some(height),
-        ),
-    };
-
-    let mut changed = false;
-    if !has_w && let Some(w) = new_w {
-        attrs.push(Attribute {
-            name: QualName::html("width"),
-            value: w.to_string(),
-        });
-        changed = true;
-    }
-    if !has_h && let Some(h) = new_h {
-        attrs.push(Attribute {
-            name: QualName::html("height"),
-            value: h.to_string(),
-        });
-        changed = true;
-    }
-    changed
-}
+// BUG-430: `apply_intrinsic_size` переехала в `lumen-layout` (`box_tree.rs`),
+// к picker-у `collect_image_requests`, чей `ImageRequest` она и обслуживает —
+// headless-драйверу нужна та же логика заполнения слотов `width`/`height`, а
+// дублировать её (спец-правило BUG-269 про aspect ratio) означало бы два
+// расходящихся набора размеров у оконного и офлайн-путей.
 
 // ── Рендер ───────────────────────────────────────────────────────────────────
 
