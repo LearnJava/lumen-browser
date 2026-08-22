@@ -540,6 +540,111 @@ def _window_error_wait_marker(text, test_id=None):
     return False
 
 
+#: `setTimeout("code", 0)` / `setInterval(`code`, 0)` — the string-handler
+#: form of the timer API.
+_STRING_TIMER_RE = re.compile(r"""set(?:Timeout|Interval)\s*\(\s*(?:`|"|')""")
+
+#: The `string-compilation-*` family's evaluator table: a map/list of the ways
+#: a string can be compiled, `setTimeout` among them, applied to one and the
+#: same import expression. The string never appears next to the call, so
+#: `_STRING_TIMER_RE` cannot see it.
+_EVALUATOR_TABLE_RE = re.compile(r"\bevaluators\b")
+
+
+def _timer_string_handler_marker(text, test_id=None):
+    """True iff the test hands a *string* to `setTimeout`/`setInterval`.
+
+    BUG-830: `setTimeout` and `setInterval` (`crates/js/src/dom.rs:6809`,
+    `:6827`) open with `if (typeof fn !== 'function') return 0;` — a string
+    handler is dropped on the floor and a plausible timer id is returned, so
+    nothing throws and nothing runs. Measured live in slice 21
+    (`verify_navigation_form_import_gaps.py --variant settimeout-string`: the
+    function-handler control fires, neither string handler ever does).
+
+    Two shapes, because the family that hangs on this hardest never writes the
+    string next to the call: `string-compilation-*` builds a table of
+    evaluators (`eval`, `setTimeout`, `the Function constructor`, ...) and
+    feeds each the same `import()` source, so the evidence is the table plus
+    the name. `promise_test`s run sequentially, which is why one dead
+    evaluator takes the whole file with it.
+    """
+    body = "\n".join(text) if isinstance(text, list) else text
+    if _STRING_TIMER_RE.search(body):
+        return True
+    return bool(_EVALUATOR_TABLE_RE.search(body) and "setTimeout" in body)
+
+
+#: `location.hash = "x"` — the assignment that performs the same-document
+#: fragment navigation.
+_HASH_ASSIGN_RE = re.compile(r"location\.hash\s*=")
+
+#: `addEventListener("hashchange", ...)` — the only registration form the
+#: affected tests use (`window.onhashchange = ...` is assigned, not added, and
+#: would be in place before the assignment anyway).
+_HASHCHANGE_LISTEN_RE = re.compile(r"""addEventListener\(\s*["']hashchange["']""")
+
+
+def _hashchange_after_assignment_marker(text, test_id=None):
+    """True iff the test attaches its `hashchange` listener after the assignment.
+
+    BUG-831: `_lumen_set_location_hash` (`crates/js/src/dom.rs:6323`) calls
+    `_lumen_fire_hashchange` inline, so the event is delivered *during* the
+    assignment instead of from a queued task. Measured live in slice 21 as a
+    pair: `--variant nav-hashchange` (listener first) sees the event,
+    `--variant nav-hashchange-late` (listener attached on the next line) hears
+    nothing at all, on an otherwise identical page.
+
+    Order is the whole marker, which is why this is a predicate: the same two
+    lines in the other order are a *working* page, and matching them would
+    claim every fragment test in the corpus.
+    """
+    body = "\n".join(text) if isinstance(text, list) else text
+    assign = _HASH_ASSIGN_RE.search(body)
+    listen = _HASHCHANGE_LISTEN_RE.search(body)
+    return bool(assign and listen and listen.start() > assign.start())
+
+
+#: `postMessage(msg, {targetOrigin: ...})` — the `WindowPostMessageOptions`
+#: overload.
+_PM_OPTIONS_RE = re.compile(
+    r"postMessage\s*\([^;{]*?,\s*\{\s*(?:targetOrigin|transfer)\b", re.S)
+
+#: `postMessage("msg")` — the one-argument form, valid since the same spec
+#: change and equally unsupported. A bare call or an explicitly window-targeted
+#: one only: `port.postMessage(x)` / `worker.postMessage(x)` take exactly one
+#: argument by spec and are a different (working) API.
+_PM_ONE_ARG_RE = re.compile(
+    r"""(?<![.\w])(?:(?:window|parent|top)\.)?postMessage\s*\(\s*['"`][^'"`]*['"`]\s*\)""")
+
+#: A `postMessage` that crosses into a worker is a different mechanism (the
+#: worker stage owns it), so a file that starts one is left alone.
+_PM_WORKER_RE = re.compile(r"new\s+(?:Shared|Service)?Worker\s*\(|\.worker\.|worker\.postMessage")
+
+#: The wait: without it, a `postMessage` in the file is not what the test hangs
+#: on (`broken-origin.html` asserts a synchronous throw and is a FAIL, not a
+#: hang).
+_PM_WAIT_RE = re.compile(r"""onmessage\s*=|addEventListener\(\s*["']message["']""")
+
+
+def _postmessage_options_marker(text, test_id=None):
+    """True iff the test waits for a message it posted through the modern overload.
+
+    BUG-717: `window.postMessage` implements only the legacy string
+    `targetOrigin`; the one-argument form and the `WindowPostMessageOptions`
+    dictionary drop the message with no error, and `transfer` never produces
+    `e.ports`. Measured live in slice 19 (`verify_stream_scroll_message_gaps.py`
+    `--variant postmessage-options`), which is why slice 21 adds the marker
+    without a new measurement — the mechanism was already established, only
+    its ids were never attributed.
+    """
+    body = "\n".join(text) if isinstance(text, list) else text
+    if _PM_WORKER_RE.search(body):
+        return False
+    if not _PM_WAIT_RE.search(body):
+        return False
+    return bool(_PM_OPTIONS_RE.search(body) or _PM_ONE_ARG_RE.search(body))
+
+
 SOURCE_MARKERS = [
     # First on purpose: see `_audio_src_marker` — the page stops dead at the
     # `src` assignment, before anything else it was going to do. It sorts above
@@ -901,6 +1006,35 @@ SOURCE_MARKERS = [
         "`document.open()` does not exist, so a test that writes its own "
         "script and waits for it hears nothing",
     ),
+    Mechanism(
+        # Slice 21, measured before the marker was written. Sits below the
+        # `document.write` marker because a written script is the older and
+        # more specific cause, and above the window-error marker for the usual
+        # reason: this names a mechanism, that one only says "something threw".
+        "timer-string-handler", "BUG-830", [],
+        "the test schedules a *string* through `setTimeout`/`setInterval`, "
+        "which the shim drops without compiling it (and returns a timer id "
+        "anyway, so nothing looks wrong)",
+        predicate=_timer_string_handler_marker,
+    ),
+    Mechanism(
+        # Slice 21. Order-independent in practice — no other marker matches a
+        # bare `location.hash` assignment — but kept next to its neighbours in
+        # the same-document-navigation group rather than at the end.
+        "hashchange-listener-too-late", "BUG-831", [],
+        "the test sets `location.hash` and only then attaches its "
+        "`hashchange` listener; the engine dispatches the event synchronously "
+        "from the setter, so the listener is registered a line too late",
+        predicate=_hashchange_after_assignment_marker,
+    ),
+    Mechanism(
+        # Slice 21, from slice 19's measurement (see `_postmessage_options_marker`).
+        "postmessage-options-dropped", "BUG-717", [],
+        "the test posts a message through the one-argument or "
+        "`WindowPostMessageOptions` overload, which the shim drops silently, "
+        "and then waits for it to arrive",
+        predicate=_postmessage_options_marker,
+    ),
     # Truly last: "the test listens for an error" is the weakest of these
     # claims, so anything with a named cause above must take the test first.
     Mechanism(
@@ -986,6 +1120,70 @@ def worker_scripts(test_id, root, lines):
     for ref in _WORKER_URL_RE.findall("\n".join(lines)):
         ref = ref.split("#")[0].split("?")[0]
         if not ref or "://" in ref or ref.startswith(("data:", "blob:")):
+            continue
+        if ref.startswith("/"):
+            path = os.path.join(root, ref.lstrip("/"))
+        else:
+            path = os.path.normpath(os.path.join(os.path.dirname(src), ref))
+        if os.path.isfile(path) and path not in out:
+            out.append(path)
+    return out
+
+
+#: Fifth stage, matched against the *subframe document* a test embeds.
+#:
+#: The BUG-480 marker in `SOURCE_MARKERS` requires the wait to be visible in
+#: the test file — `iframe.onload`, `contentWindow`, an `onmessage` handler.
+#: A large family waits in the opposite direction: the parent defines a global
+#: (`window.t`, `do_test`, `parent.success`) and the *child* calls it once it
+#: has loaded, so the test file contains an `<iframe>`, a callback nobody in
+#: that file ever invokes, and no wait at all to match. Reading the child is
+#: what makes the wait visible, exactly as the worker stage reads the worker
+#: script: all of `unloading-documents/unload/*`, `the-location-interface/
+#: assign_*`, `opening-the-input-stream/01*`, `webstorage/event_*` and
+#: `xhr/open-url-multi-window*` are that shape (WPT-RUN-6 slice 21, 47 ids).
+#:
+#: The cause is still BUG-480 and nothing new: measured again in slice 21
+#: (`verify_navigation_form_import_gaps.py --variant iframe-src-child-runs`),
+#: a URL-addressed subframe never runs a line of script and `contentWindow` is
+#: null, so the callback the parent is waiting for cannot happen.
+SUBFRAME_SOURCE_MARKERS = [
+    Mechanism(
+        "iframe-child-callback-never-runs", "BUG-480",
+        [r"\bparent\s*\.|\btop\s*\.|\bwindow\.parent\b|postMessage\s*\("],
+        "the test waits for its subframe to call back into the page, and a "
+        "URL-addressed subframe never loads or runs any script at all",
+    ),
+]
+
+
+#: `<iframe src=...>`, `frame.src = '...'` and `setAttribute('src', '...')` —
+#: the three shapes a WPT test uses to point a subframe at a document. All
+#: three occur in the residual, and `setAttribute` is not decoration: it is how
+#: `the-history-interface/009.html` and `010.html` load their child.
+_IFRAME_SRC_RE = re.compile(
+    r"""<iframe[^>]*?\ssrc\s*=\s*["']([^"'>]+)["']"""
+    r"""|\.src\s*=\s*["']([^"']+)["']"""
+    r"""|setAttribute\(\s*['"]src['"]\s*,\s*['"]([^'"]+)['"]""",
+    re.IGNORECASE | re.DOTALL)
+
+
+def subframe_documents(test_id, root, lines):
+    """Paths of the local documents a test points a subframe at.
+
+    Resolved like `helper_paths`/`worker_scripts` and, like them, one level
+    deep. `javascript:`/`data:`/`about:` and cross-origin URLs are skipped
+    rather than guessed at — a `javascript:` frame is a different mechanism
+    (the URL is the script) and has to be measured on its own before it can be
+    claimed.
+    """
+    src = source_path(test_id, root)
+    out = []
+    for match in _IFRAME_SRC_RE.finditer("\n".join(lines)):
+        ref = next(group for group in match.groups() if group)
+        ref = ref.split("#")[0].split("?")[0]
+        if not ref or "://" in ref or ref.startswith(("data:", "javascript:",
+                                                      "blob:", "about:")):
             continue
         if ref.startswith("/"):
             path = os.path.join(root, ref.lstrip("/"))
@@ -1233,6 +1431,21 @@ def classify_source(test_id, root, cache, follow_helpers=True):
     if worker_lines:
         for mech in WORKER_SOURCE_MARKERS:
             if mech.matches(worker_lines, test_id):
+                return mech.key
+    # Fifth stage: what the *subframe* runs. Last for the same reason the
+    # worker stage is next-to-last — a test that also waits on a font, a
+    # stream or a `window.open` channel is claimed by that older cause first.
+    # Measured for overlap when the stage was added (slice 21): of the 47 ids
+    # it claims, none is matched by the worker table, so the two orders are
+    # equivalent on today's snapshot; last is the conservative choice anyway.
+    frame_lines = []
+    for path in subframe_documents(test_id, root, lines):
+        child_lines = _read_source(path, cache)
+        if child_lines:
+            frame_lines += child_lines
+    if frame_lines:
+        for mech in SUBFRAME_SOURCE_MARKERS:
+            if mech.matches(frame_lines, test_id):
                 return mech.key
     return None
 
@@ -2353,6 +2566,117 @@ def selftest():
                          "test(() => assert_true(!!document.getElementById('x')));</script>")
         check(classify_source("/dmi/write-markup.html", tmp, {}) is None,
               "document.write of plain markup works and must stay unclassified")
+
+        # BUG-830: a *string* handed to `setTimeout`/`setInterval` is dropped.
+        os.makedirs(os.path.join(tmp, "timers"), exist_ok=True)
+        with open(os.path.join(tmp, "timers", "string.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>async_test(function (t) {\n"
+                         "  setTimeout(\"t.done();\", 0);\n"
+                         "});</script>")
+        check(classify_source("/timers/string.html", tmp, {}) == "timer-string-handler",
+              "a string handed to setTimeout was not claimed")
+        # The `string-compilation-*` shape: the string never appears next to
+        # the call, only the evaluator table does.
+        with open(os.path.join(tmp, "timers", "evaluators.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>const evaluators = {\n"
+                         "  'eval': src => eval(src),\n"
+                         "  'setTimeout': src => setTimeout(src, 0),\n"
+                         "};\npromise_test(async () => { await evaluate(); });</script>")
+        check(classify_source("/timers/evaluators.html", tmp, {}) == "timer-string-handler",
+              "an evaluator table with a setTimeout entry was not claimed")
+        # The control: an ordinary function handler is the overwhelmingly
+        # common shape and must never be claimed.
+        with open(os.path.join(tmp, "timers", "function.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>async_test(function (t) {\n"
+                         "  setTimeout(t.step_func_done(function () {}), 0);\n"
+                         "});</script>")
+        check(classify_source("/timers/function.html", tmp, {}) is None,
+              "a function handler must stay unclassified")
+
+        # BUG-831: the listener is attached after the assignment that fires the
+        # (synchronously dispatched) event.
+        os.makedirs(os.path.join(tmp, "fragid"), exist_ok=True)
+        with open(os.path.join(tmp, "fragid", "late.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>var t = async_test();\n"
+                         "location.hash = 'x';\n"
+                         "addEventListener('hashchange', t.step_func_done(function () {}));\n"
+                         "</script>")
+        check(classify_source("/fragid/late.html", tmp, {}) == "hashchange-listener-too-late",
+              "a hashchange listener attached after the assignment was not claimed")
+        # The same two lines in the other order are a working page.
+        with open(os.path.join(tmp, "fragid", "early.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>var t = async_test();\n"
+                         "addEventListener('hashchange', t.step_func_done(function () {}));\n"
+                         "location.hash = 'x';\n"
+                         "</script>")
+        check(classify_source("/fragid/early.html", tmp, {}) is None,
+              "a hashchange listener attached first must stay unclassified")
+
+        # BUG-717: the modern `postMessage` overloads are dropped silently.
+        os.makedirs(os.path.join(tmp, "wm"), exist_ok=True)
+        with open(os.path.join(tmp, "wm", "options.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>async_test(function (t) {\n"
+                         "  onmessage = t.step_func_done(function () {});\n"
+                         "  window.postMessage('x', {targetOrigin: '*'});\n"
+                         "});</script>")
+        check(classify_source("/wm/options.html", tmp, {}) == "postmessage-options-dropped",
+              "a WindowPostMessageOptions post was not claimed")
+        with open(os.path.join(tmp, "wm", "one-arg.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>async_test(function (t) {\n"
+                         "  addEventListener('message', t.step_func_done(function () {}));\n"
+                         "  window.postMessage('x');\n"
+                         "});</script>")
+        check(classify_source("/wm/one-arg.html", tmp, {}) == "postmessage-options-dropped",
+              "a one-argument postMessage was not claimed")
+        # The legacy form works, so a test that uses it is not this mechanism.
+        with open(os.path.join(tmp, "wm", "legacy.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>async_test(function (t) {\n"
+                         "  onmessage = t.step_func_done(function () {});\n"
+                         "  window.postMessage('x', '*');\n"
+                         "});</script>")
+        check(classify_source("/wm/legacy.html", tmp, {}) is None,
+              "a legacy postMessage must stay unclassified")
+
+        # BUG-480, fifth stage: the wait lives in the *child* document.
+        os.makedirs(os.path.join(tmp, "frames", "resources"), exist_ok=True)
+        with open(os.path.join(tmp, "frames", "resources", "init.htm"), "w", encoding="utf-8") as handle:
+            handle.write("<script>parent.done_from_child();</script>")
+        with open(os.path.join(tmp, "frames", "parent.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>var t = async_test();\n"
+                         "function done_from_child() { t.done(); }</script>\n"
+                         '<iframe src="resources/init.htm"></iframe>')
+        check(classify_source("/frames/parent.html", tmp, {})
+              == "iframe-child-callback-never-runs",
+              "a callback made from the subframe was not claimed")
+        # `setAttribute('src', ...)` is how two of the history tests load
+        # their child, so the stage has to see that shape too.
+        with open(os.path.join(tmp, "frames", "setattr.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>var t = async_test();\n"
+                         "var f = document.createElement('iframe');\n"
+                         "f.setAttribute('src', 'resources/init.htm');\n"
+                         "document.body.appendChild(f);</script>")
+        check(classify_source("/frames/setattr.html", tmp, {})
+              == "iframe-child-callback-never-runs",
+              "a setAttribute-loaded subframe was not claimed")
+        # A child that talks to nobody is not evidence of a wait.
+        with open(os.path.join(tmp, "frames", "resources", "quiet.htm"), "w", encoding="utf-8") as handle:
+            handle.write("<p>nothing</p>")
+        with open(os.path.join(tmp, "frames", "quiet.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>test(function () { assert_true(true); });</script>\n"
+                         '<iframe src="resources/quiet.htm"></iframe>')
+        check(classify_source("/frames/quiet.html", tmp, {}) is None,
+              "a subframe that calls nothing must stay unclassified")
+        # A cross-origin or `javascript:` frame is a different mechanism and is
+        # skipped rather than guessed at. This one documents intent rather than
+        # guarding behaviour: dropping the `"://"` test leaves the outcome
+        # unchanged, because the resolved path does not exist on disk either
+        # way (measured as an equivalent mutant, WPT-RUN-6 slice 21).
+        with open(os.path.join(tmp, "frames", "remote.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>var t = async_test();\n"
+                         "function done_from_child() { t.done(); }</script>\n"
+                         '<iframe src="http://example.test/x.htm"></iframe>')
+        check(classify_source("/frames/remote.html", tmp, {}) is None,
+              "a cross-origin subframe must not be read from disk")
 
     for msg in failures:
         print("FAIL:", msg)
