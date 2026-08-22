@@ -20,6 +20,7 @@ mod scripted_render;
 mod snapshot_cpu;
 mod snapshot_generator;
 mod snapshot_vs_edge;
+mod subresource_images;
 mod test_00_calibration;
 mod test_automation_commands;
 mod test_bug338_nested_scroll;
