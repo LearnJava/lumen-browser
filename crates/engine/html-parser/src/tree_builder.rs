@@ -1062,6 +1062,15 @@ impl IncrementalTreeBuilder {
             // us away from InTemplate) or handle the head-level tag.
             self.insertion_mode = InsertionMode::InHead;
             self.dispatch(token);
+            if is_end_template {
+                // `process_template_end_tag` has already reset the insertion mode
+                // appropriately (§13.2.4.1). The restore below assumes «InHead means
+                // InHead did not transition us», which is false here: after a
+                // `<template>` closed while still in head, InHead *is* the answer
+                // (BUG-417) — forcing InTemplate back sent everything after
+                // `</template>` into the head element.
+                return;
+            }
             // A rawtext head element (<style>/<script>/<title>) switched us to Text
             // mode and captured `original_insertion_mode = InHead` (the mode we set
             // above). Correct it to InTemplate so the element's end tag returns us to
@@ -1127,13 +1136,13 @@ impl IncrementalTreeBuilder {
         // Pop the template content mode.
         self.template_mode_stack.pop();
 
-        // Reset insertion mode: if still in nested templates stay InTemplate,
-        // otherwise fall back to InBody (simplified reset_insertion_mode).
-        if self.template_mode_stack.is_empty() {
-            self.insertion_mode = InsertionMode::InBody;
-        } else {
-            self.insertion_mode = InsertionMode::InTemplate;
-        }
+        // §13.2.6.4.4 «In head», `</template>`: reset the insertion mode
+        // appropriately. Jumping straight to InBody (as this did before BUG-417)
+        // loses the «after head» transition when the template was seen while still
+        // in head — the mode says «in body» while no `<body>` exists, so everything
+        // after `</template>` lands in `<head>`/`<html>` and `document.body` stays
+        // null forever.
+        self.reset_insertion_mode();
 
         // WHATWG HTML §14.5 — Declarative Shadow DOM cleanup.
         // The <template shadowrootmode="..."> element is a syntactic marker only;
@@ -2115,30 +2124,44 @@ impl IncrementalTreeBuilder {
     fn reset_insertion_mode(&mut self) {
         for i in (0..self.open_elements.len()).rev() {
             let node = self.open_elements[i];
+            // §13.2.4.1 step 3: `last` is true for the first node of the stack.
+            // (No fragment-parsing context element exists in this parser, so
+            // there is nothing to substitute for `node` in that case.)
+            let last = i == 0;
             let local = self.element_local(node);
             let mode = match local {
                 "select" => {
-                    // §13.2.4.1 step 14: if any ancestor is a table-structure
-                    // element, use InSelectInTable rather than InSelect.
-                    let in_table_context = self.open_elements[..i].iter().any(|&a| {
-                        matches!(
-                            self.element_local(a),
-                            "table" | "thead" | "tbody" | "tfoot" | "tr" | "td" | "th"
-                                | "caption" | "template"
-                        )
-                    });
-                    if in_table_context {
-                        InsertionMode::InSelectInTable
-                    } else {
-                        InsertionMode::InSelect
+                    // §13.2.4.1 steps 4.1–4.8: walk ancestors outwards and stop at
+                    // the first one that decides the mode — a `<template>` means
+                    // plain InSelect, a `<table>` means InSelectInTable.
+                    let mut select_mode = InsertionMode::InSelect;
+                    if !last {
+                        for &ancestor in self.open_elements[..i].iter().rev() {
+                            match self.element_local(ancestor) {
+                                "template" => break,
+                                "table" => {
+                                    select_mode = InsertionMode::InSelectInTable;
+                                    break;
+                                }
+                                _ => {}
+                            }
+                        }
                     }
+                    select_mode
                 }
-                "td" | "th" => InsertionMode::InCell,
+                "td" | "th" if !last => InsertionMode::InCell,
                 "tr" => InsertionMode::InRow,
                 "tbody" | "thead" | "tfoot" => InsertionMode::InTableBody,
                 "caption" => InsertionMode::InCaption,
                 "colgroup" => InsertionMode::InColumnGroup,
                 "table" => InsertionMode::InTable,
+                // §13.2.4.1 step 11: inside a `<template>` the mode is the current
+                // template insertion mode. `template_mode_stack` holds the *content*
+                // mode here (InBody), so InTemplate is what dispatches through it.
+                "template" => InsertionMode::InTemplate,
+                // §13.2.4.1 step 12: `<head>` still open means we are back in head —
+                // the next flow content then closes head and creates `<body>`.
+                "head" if !last => InsertionMode::InHead,
                 "body" => InsertionMode::InBody,
                 "frameset" => InsertionMode::InFrameset,
                 "html" => {
@@ -3380,6 +3403,87 @@ mod tests {
         assert!(doc.get(tmpl).children.is_empty(), "template DOM children must be empty");
         let frag = doc.template_content(tmpl).expect("no content fragment");
         assert!(!doc.get(frag).children.is_empty(), "fragment must have children");
+        // BUG-417: the template must not cost us the <body> — the assertions above
+        // only describe the template itself, which stayed correct all along.
+        let _ = body_of(&doc);
+    }
+
+    /// BUG-417: a `<template>` seen while the parser is still «in head» must not
+    /// swallow `<body>`. `</template>` resets the insertion mode appropriately
+    /// (§13.2.4.1) — back to InHead — so the next flow content closes head and
+    /// creates the body; jumping straight to InBody skipped that transition and
+    /// left `document.body` null with the rest of the page inside `<head>`.
+    #[test]
+    fn template_before_body_still_creates_body() {
+        let doc = parse(
+            "<!DOCTYPE html><template id=t><div>inside</div></template><p id=b>AFTER-TEXT</p>",
+        );
+        // <body> exists at all (body_of panics otherwise)…
+        let body = body_of(&doc);
+        // …and everything after </template> lands in it, not in <head>.
+        let p = find_element(&doc, "p").expect("<p> after </template> must be parsed");
+        assert!(
+            doc.get(body).children.contains(&p),
+            "<p> after </template> must be a child of <body>, not <head>"
+        );
+        // The template itself is unharmed: still in <head>, content holds the DIV.
+        let head = head_of(&doc);
+        let tmpl = *doc
+            .get(head)
+            .children
+            .iter()
+            .find(|&&c| {
+                matches!(&doc.get(c).data, NodeData::Element { name, .. } if name.local == "template")
+            })
+            .expect("<template> must stay in <head>");
+        let frag = doc.template_content(tmpl).expect("no content fragment");
+        assert_eq!(
+            doc.get(frag).children.len(),
+            1,
+            "template content must still hold exactly the <div>"
+        );
+    }
+
+    /// BUG-417, second case of the report: explicit `<head>`/`<body>` around the
+    /// template. Here the page rendered, but `document.body` was still null and the
+    /// content landed under `<html>`.
+    #[test]
+    fn template_in_explicit_head_keeps_body() {
+        let doc = parse(
+            "<html><head><template><style>i{}</style></template></head><body><p>x</p></body></html>",
+        );
+        let body = body_of(&doc);
+        let p = find_element(&doc, "p").expect("<p> must be parsed");
+        assert!(
+            doc.get(body).children.contains(&p),
+            "<p> must be a child of <body>, not of <html>"
+        );
+    }
+
+    /// Regression guard for the nested case the old two-way branch handled: after
+    /// the inner `</template>` the parser must go back to the *outer* template's
+    /// content, not to `<body>`.
+    #[test]
+    fn nested_template_end_returns_to_outer_template() {
+        let doc = parse(
+            "<body><template id=outer><template id=inner></template><p>after</p></template></body>",
+        );
+        let outer = find_template(&doc).expect("outer template not found");
+        assert_eq!(doc.get(outer).get_attr("id"), Some("outer"));
+        let frag = doc.template_content(outer).expect("no content fragment");
+        let names: Vec<&str> = doc
+            .get(frag)
+            .children
+            .iter()
+            .map(|&c| match &doc.get(c).data {
+                NodeData::Element { name, .. } => name.local.as_str(),
+                _ => "",
+            })
+            .collect();
+        assert!(
+            names.contains(&"p"),
+            "content after the inner </template> must stay in the outer template, got {names:?}"
+        );
     }
 
     #[test]
