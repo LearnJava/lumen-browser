@@ -117,3 +117,60 @@ alone would likely convert most of these from TIMEOUT to a fast ERROR/FAIL
 top for the parent to *observe* that quickly instead of waiting out the
 timeout, and would also matter independently for the many `html/webappapis`
 files listed above.
+
+**The window `window.onerror`/`'error'`/`onunhandledrejection` reporting core
+is now wired (P1, 2026-08-22)** — [BUG-716](bugs/BUG-716-FIXED.md) closed the
+promise-rejection half; this slice closes the "report the exception" (HTML LS
+§8.1.3.6) half for four of its call sites:
+
+- **Timers** (`setTimeout`/`setInterval`, `_lumen_tick_timers`) and
+  **`requestAnimationFrame`** (`_lumen_run_raf_callbacks`) — both used to
+  swallow a callback's exception with a bare `catch(e){}`; now call the new
+  shim function `_lumen_report_exception(err)` (`crate::dom::WEB_API_SHIM`).
+- **`queueMicrotask`** — its callback used to run unwrapped as a
+  `Promise.prototype.then` fulfillment handler, so an uncaught throw became an
+  `unhandledrejection` on the untouched wrapper promise instead of the spec's
+  `'error'` event (`queue-microtask-exceptions.any.html` waits on `'error'`
+  and would have hung regardless of BUG-716). Now wrapped in its own
+  `try/catch`.
+- **Classic `<script>` execution, both insertion paths**: `_lumen_script_execute_classic`
+  (DOM-inserted scripts — `createElement('script')` + `appendChild`, and the
+  parser's own insertion) now calls `_lumen_report_exception(e)` instead of
+  only `_lumen_console_error`; the *initial* page-load loop
+  (`crates/shell/src/main.rs`) now calls a new Rust-side counterpart,
+  `V8JsRuntime::eval_and_report` (`v8_runtime.rs`), which additionally reads
+  `v8::Message` (populated by V8 for both compile *and* runtime errors) for a
+  structured filename/line/column and passes it straight through with the
+  live exception value — no `eval`/JSON round-trip, same technique BUG-716
+  used for the live `PromiseRejectionEvent.reason`.
+- **`window.onerror`'s calling convention** was also wrong independently of
+  whether it ever fired: `window.dispatchEvent`'s `'error'` branch called it
+  with the `Event` object as its sole argument, like every other `on<type>`
+  handler. Per WebIDL, `onerror`'s type is `OnErrorEventHandler`, not the
+  ordinary `EventHandler` — its "internal raw handler" is called with 5
+  positional arguments (`message, source, lineno, colno, error`) when the
+  event genuinely is an `ErrorEvent`, and a truthy return value cancels the
+  event (`event-handler-processing-algorithm-error/window-runtime-error.html`
+  checks exactly this). Both are now implemented.
+- 9 new tests (`dom.rs::tests::v8_core::bug591_*`, `v8_runtime.rs::tests::eval_and_report_*`).
+
+**Not in scope of this slice — still open:**
+- The Worker parent-side mechanism described above (`run_worker_thread_v8`'s
+  `eprintln!`-only error arms).
+- Module-script top-level runtime errors (`_lumen_script_run_module`'s
+  `.catch` still only fires the *element* `error`/`load` event, which
+  conflates a module's own load failure with a runtime throw in its body —
+  spec wants the latter to *also* go through "report the exception" while the
+  element still gets `load`; left alone this slice to avoid misfiring a page
+  `'error'` on an ordinary 404).
+- Exceptions thrown by an `addEventListener`/`on<type>` DOM event listener —
+  HTML LS's own "event listener invoke" step calls "report the exception" for
+  these too; today they still end at a bare `catch(e){}` in `_lumen_dispatch`
+  and friends.
+- `<body onerror>` forwarding to the special 5-arg form on a `Document`/child
+  element (`onerroreventhandler.html`'s `check1`/`check3`) — untestable here
+  regardless, it needs a cross-frame `<iframe>`, which this engine does not
+  support (a separate, unrelated gap).
+- Cross-origin "muted errors" (HTML LS's script-error-reporting redaction for
+  a script fetched without CORS from another origin) — not implemented; every
+  error reports its real message/location regardless of origin.
