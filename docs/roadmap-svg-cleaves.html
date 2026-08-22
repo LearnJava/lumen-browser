@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-22",
  "counts": {
-  "open": 354,
+  "open": 364,
   "fixed": 442,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 796,
+ "total_bugs": 806,
  "phases": [
   {
    "id": "P0",
@@ -10926,6 +10926,76 @@
    "component": "js (`crates/js/src/dom.rs:5844`–`5849` — `_lumen_script_prepare` сводит «атрибута нет» и «атрибут пустой» в одно `''` и выходит по `return`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-839": {
+   "status": "open",
+   "title": "`resource`-записи Resource Timing не создаются никогда, хотя тип объявлен в `supportedEntryTypes` и `observe()` его принимает: после `fetch()` и после трёх парс…",
+   "component": "js (`crates/js/src/dom.rs:11600` — `_lumen_record_resource_timing`, вызовы только из юнит-тестов шима `:18097`–`:18175`; `:11459` — `'resource'` в `_PERF_SUPPORTED_ENTRY_TYPES`; `:11539` — колбэк зовётся двумя аргументами)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-840": {
+   "status": "open",
+   "title": "Исключение из колбэка `PerformanceObserver` съедается пустым `catch`: ни `window.onerror`, ни строки в stderr (замер `--variant po-callback-throw`, 2026-08-22 —…",
+   "component": "js (`crates/js/src/dom.rs:11539` — `_perf_deliver_to_observer`: `try { obs._cb(list, obs); } catch(e) {}`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-841": {
+   "status": "open",
+   "title": "Транзакция без запросов не завершается никогда: `_idb_schedule_txn` зовут только `_idb_make_request` и `abort()`, поэтому пустая транзакция не попадает во флаш…",
+   "component": "js (`crates/js/src/dom.rs:12548` — `IDBDatabase.prototype.transaction` не ставит транзакцию в очередь; `:12471` — `_idb_flush_txn`, единственный путь к `complete`; `:12434` — `abort()`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-842": {
+   "status": "open",
+   "title": "Самоперевзводящийся запрос IndexedDB (идиома `keep_alive` из `IndexedDB/resources/support.js`) съедает страницу целиком: 16 340 900 итераций за 6 с, ни одного т…",
+   "component": "js (`crates/js/src/dom.rs:12474` — `while (txn._queue.length > 0 …)` в `_idb_flush_txn`; `:12494` — `_idb_make_request` дополняет ту же очередь; `:12466` — весь флаш идёт одним микротаском)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-843": {
+   "status": "open",
+   "title": "Нет очереди соединений: второй `open()` с большей версией апгрейдит базу под живым соединением, `versionchange` и `blocked` не приходят никогда (замер `--varian…",
+   "component": "js (`crates/js/src/dom.rs:13023` — `indexedDB.open` смотрит только на запись базы; `:12509` `onversionchange` и `:12351` `onblocked` объявлены и не диспатчатся ниоткуда)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-844": {
+   "status": "open",
+   "title": "`EventSource`: поток, законченный телом ответа (`Content-Length` + keep-alive — форма любого `.py`-обработчика `wptserve`), не считается законченным: ни `error`…",
+   "component": "network (`crates/network/src/sse.rs:393` — переподключение только по завершению чтения соединения) + js (`crates/js/src/dom.rs:7521`, `:7538` — ветки `open`/`close` в `_lumen_sse_pump_one`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-845": {
+   "status": "open",
+   "title": "`EventSource`: незавершённый блок оборванного соединения не выбрасывается, а склеивается с данными следующего (`data === \"test2\\ntest1\"`), и его `id:` уходит в…",
+   "component": "network (`crates/network/src/sse.rs:393`–`400` — парсер переживает переподключение; `:325` — EOF просто возвращает `Ok(false)`; `:122` — `id` пишется в `last_event_id` сразу при разборе строки)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-846": {
+   "status": "open",
+   "title": "Compression Streams отдают результат только после `writer.close()`: чтение до закрытия записывающей стороны не разрешается никогда (замер `--variant decompressi…",
+   "component": "js (`crates/js/src/dom.rs:8215` `CompressionStream`, `:8232` `DecompressionStream` — `transform` только копит, `enqueue` только во `flush`; `:8197` — комментарий шима, описывающий эту модель)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-847": {
+   "status": "open",
+   "title": "Задержка таймера не приводится к WebIDL `long`: `setTimeout(fn, Math.pow(2, 32))` ставится на 49 суток вперёд вместо немедленного срабатывания (ToInt32 даёт 0),…",
+   "component": "js (`crates/js/src/dom.rs:7345` `setTimeout`, `:7361` `setInterval` — `delay > 0 ? delay : 0` без верхней границы)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-848": {
+   "status": "open",
+   "title": "Запрос картинки собирается только с `<img>`: `<video poster>`, `<input type=image>` (и из разметки, и из скрипта), SVG `<image href>` и `<link rel=icon>` не пор…",
+   "component": "layout (`crates/engine/layout/src/box_tree.rs:2262` — `collect_requests_inner` матчит только `name.local == \"img\"`) + shell (`crates/shell/src/main.rs:6858` — `SubresourceHintFound` без потребителя, см. BUG-826)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -11172,6 +11242,18 @@
   "js (`crates/js/src/dom.rs:11454-11483` — `window.open`)": [
    "BUG-797"
   ],
+  "js (`crates/js/src/dom.rs:11539` — `_perf_deliver_to_observer`: `try { obs._cb(list, obs); } catch(e) {}`)": [
+   "BUG-840"
+  ],
+  "js (`crates/js/src/dom.rs:11600` — `_lumen_record_resource_timing`, вызовы только из юнит-тестов шима `:18097`–`:18175`; `:11459` — `'resource'` в `_PERF_SUPPORTED_ENTRY_TYPES`; `:11539` — колбэк зовётся двумя аргументами)": [
+   "BUG-839"
+  ],
+  "js (`crates/js/src/dom.rs:12474` — `while (txn._queue.length > 0 …)` в `_idb_flush_txn`; `:12494` — `_idb_make_request` дополняет ту же очередь; `:12466` — весь флаш идёт одним микротаском)": [
+   "BUG-842"
+  ],
+  "js (`crates/js/src/dom.rs:12548` — `IDBDatabase.prototype.transaction` не ставит транзакцию в очередь; `:12471` — `_idb_flush_txn`, единственный путь к `complete`; `:12434` — `abort()`)": [
+   "BUG-841"
+  ],
   "js (`crates/js/src/dom.rs:12772-12802`, `WEB_API_SHIM`)": [
    "BUG-490"
   ],
@@ -11183,6 +11265,9 @@
   ],
   "js (`crates/js/src/dom.rs:12954-13070` — Web Animations `WEB_API_SHIM`, `Animation.prototype`)": [
    "BUG-704"
+  ],
+  "js (`crates/js/src/dom.rs:13023` — `indexedDB.open` смотрит только на запись базы; `:12509` `onversionchange` и `:12351` `onblocked` объявлены и не диспатчатся ниоткуда)": [
+   "BUG-843"
   ],
   "js (`crates/js/src/dom.rs:13800-13806` — `HTMLTrackElement.prototype` reflection; `crates/js/src/video_bindings.rs`/`crates/js/src/text_track_store.rs` — существующая `TextTrack`-машинерия, не привязанная к отдельному `<track>`)": [
    "BUG-795"
@@ -11259,11 +11344,17 @@
   "js (`crates/js/src/dom.rs:7303-7620` — шим Streams; `:7331` `controller.error`, `:7353` конструктор игнорирует возврат `start()`, `:7406` `pipeTo`)": [
    "BUG-823"
   ],
+  "js (`crates/js/src/dom.rs:7345` `setTimeout`, `:7361` `setInterval` — `delay > 0 ? delay : 0` без верхней границы)": [
+   "BUG-847"
+  ],
   "js (`crates/js/src/dom.rs:7391` `tee`, `:7374` `getReader` игнорирует аргумент, `:7353` конструктор игнорирует `type:'bytes'`, `TextDecoderStream` там же)": [
    "BUG-824"
   ],
   "js (`crates/js/src/dom.rs:7463` — `_lumen_ce_upgrade_element`)": [
    "BUG-543"
+  ],
+  "js (`crates/js/src/dom.rs:8215` `CompressionStream`, `:8232` `DecompressionStream` — `transform` только копит, `enqueue` только во `flush`; `:8197` — комментарий шима, описывающий эту модель)": [
+   "BUG-846"
   ],
   "js (`crates/js/src/dom.rs:8915-9017` — `MessagePort`/`MessageChannel`)": [
    "BUG-706"
@@ -11617,6 +11708,9 @@
   "layout (`crates/engine/layout/src/box_tree.rs:1341-1400` — `parse_svg_transform`, вызывается с `:1680`/`:1803` для атрибута `transform` любого SVG-узла)": [
    "BUG-803"
   ],
+  "layout (`crates/engine/layout/src/box_tree.rs:2262` — `collect_requests_inner` матчит только `name.local == \"img\"`) + shell (`crates/shell/src/main.rs:6858` — `SubresourceHintFound` без потребителя, см. BUG-826)": [
+   "BUG-848"
+  ],
   "layout (`crates/engine/layout/src/box_tree.rs::flatten_contents`)": [
    "BUG-489"
   ],
@@ -11774,6 +11868,12 @@
   ],
   "network (`crates/network/src/lib.rs::read_head`, `crates/network/src/h2/conn.rs`)": [
    "BUG-679"
+  ],
+  "network (`crates/network/src/sse.rs:393` — переподключение только по завершению чтения соединения) + js (`crates/js/src/dom.rs:7521`, `:7538` — ветки `open`/`close` в `_lumen_sse_pump_one`)": [
+   "BUG-844"
+  ],
+  "network (`crates/network/src/sse.rs:393`–`400` — парсер переживает переподключение; `:325` — EOF просто возвращает `Ok(false)`; `:122` — `id` пишется в `last_event_id` сразу при разборе строки)": [
+   "BUG-845"
   ],
   "network (`crates/network/src/tls/mod.rs`, `http/headers.rs`)": [
    "BUG-331"

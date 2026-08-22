@@ -645,6 +645,261 @@ def _postmessage_options_marker(text, test_id=None):
     return bool(_PM_OPTIONS_RE.search(body) or _PM_ONE_ARG_RE.search(body))
 
 
+#: Tree `classify_source` is currently reading, so `_own_source` re-reads the
+#: test from the same place (the selftest runs against a temporary tree, and
+#: reading the real WPT checkout there would silently fall back to the joined
+#: text). Set on every `classify_source` call; single-threaded by construction.
+_SOURCE_ROOT = None
+
+
+def _own_source(text, test_id):
+    """The test file's own source, without the helpers `classify_source` joins in.
+
+    Needed by the IndexedDB rules and by nothing else so far: WPT's
+    `IndexedDB/resources/support.js` *defines* `keep_alive` — and, inside it, a
+    self-rearming `spin()` — so matching the joined text claims every test that
+    merely includes the helper (16 ids instead of 5, measured while writing
+    slice 22). Falls back to the joined text when the file cannot be read, so
+    the rule degrades to its old, wider self rather than to silence.
+    """
+    joined = "\n".join(text) if isinstance(text, list) else text
+    if not test_id:
+        return joined
+    try:
+        own = _decode_source(source_path(test_id, _SOURCE_ROOT or WPT_ROOT))
+    except OSError:
+        return joined
+    return own if own else joined
+
+
+#: WPT's own `IndexedDB/resources/support.js` helpers: both hold a transaction
+#: open by re-arming a request from that request's own `onsuccess`.
+_IDB_KEEP_ALIVE_RE = re.compile(r"\bkeep_alive\s*\(|\bis_transaction_active\s*\(")
+
+#: A function that issues an IndexedDB request and calls *itself* from the
+#: handler — the same spin written out by hand
+#: (`transaction-scheduling-*.any.js::doTransaction1Get`).
+_IDB_FN_RE = re.compile(r"function\s+(\w+)\s*\(")
+
+#: Cheap gate so the two rules above cannot claim a non-IndexedDB test that
+#: happens to define a recursive function.
+_IDB_TEST_RE = re.compile(r"\bindexedDB\b|\bindexeddb_test\s*\(|\bcreatedb\s*\(")
+
+
+def _idb_spin_marker(text, test_id=None):
+    """True iff the test holds a transaction open with a self-rearming request.
+
+    BUG-842: `_idb_flush_txn` (`crates/js/src/dom.rs:12474`) drains the
+    transaction's queue in a `while` loop inside one microtask, and a handler
+    that enqueues the next request refills that queue from inside the loop —
+    so the spin never yields. Measured in slice 22: 16.3M iterations in 6 s,
+    with no timer, no rendering and no later script of the document ever
+    running (`verify_perf_idb_sse_gaps.py --variant idb-spin-unbounded`), and
+    the page dead from the outside (`--variant idb-keep-alive`: zero output).
+
+    Two shapes count. The helper (`keep_alive`/`is_transaction_active`) is the
+    one four residual ids use; the hand-written one is a function that both
+    issues a request and re-calls itself, which is how the
+    `transaction-scheduling-*` pair keeps two transactions alive at once.
+    """
+    body = _own_source(text, test_id)
+    if not _IDB_TEST_RE.search(body):
+        return False
+    if _IDB_KEEP_ALIVE_RE.search(body):
+        return True
+    for match in _IDB_FN_RE.finditer(body):
+        name = match.group(1)
+        window = body[match.end():match.end() + 800]
+        if "objectStore(" not in window:
+            continue
+        # One rule for both ways of writing the loop: the handler *is* the
+        # function (`rq.onsuccess = spin;`) or calls it from a wrapper
+        # (`request.onsuccess = t.step_func(() => { doGet(); })`). Two
+        # separate regexes were tried first and turned out to be equivalent
+        # mutants — each matched both shapes.
+        if re.search(r"onsuccess\s*=.{0,400}?\b" + re.escape(name) + r"\s*[(;,)]",
+                     window, re.S):
+            return True
+    return False
+
+
+#: The two events a connection queue produces. `'versionchange'` as a bare
+#: string is deliberately NOT here: it is also the *mode* of an upgrade
+#: transaction (`assert_equals(tx.mode, 'versionchange')`), which half the
+#: IndexedDB suite writes without waiting for anything.
+_IDB_QUEUE_RE = re.compile(
+    r"\bonblocked\b|\bonversionchange\b|"
+    r"addEventListener\s*\(\s*['\"](?:blocked|versionchange)['\"]")
+
+
+def _idb_connection_queue_marker(text, test_id=None):
+    """True iff the test waits for `versionchange` / `blocked`.
+
+    BUG-843: `indexedDB.open` (`crates/js/src/dom.rs:13023`) looks only at the
+    stored database record, never at live connections; `onversionchange`
+    (`:12509`) and `onblocked` (`:12351`) are declared and dispatched by
+    nobody. Measured in slice 22 (`--variant idb-versionchange-blocked`: the
+    second `open()` upgrades at once, neither event arrives).
+    """
+    body = _own_source(text, test_id)
+    if not _IDB_TEST_RE.search(body):
+        return False
+    return bool(_IDB_QUEUE_RE.search(body))
+
+
+#: `const tx = db.transaction(...)` — the transaction's own variable name is
+#: what the rest of the rule is written against.
+_IDB_TXN_ASSIGN_RE = re.compile(r"(?:var|let|const)?\s*(\w+)\s*=\s*[\w.]*\bdb\w*\.transaction\s*\(")
+
+#: Any request method on an object store — the thing an "empty" transaction
+#: does not have.
+_IDB_REQUEST_RE = re.compile(
+    r"\.(?:put|get|add|delete|count|clear|openCursor|openKeyCursor|getAll|getAllKeys)\s*\(")
+
+
+def _idb_empty_transaction_marker(text, test_id=None):
+    """True iff the test awaits `complete` on a transaction with no requests.
+
+    BUG-841: a transaction reaches `_idb_flush_txn` only through
+    `_idb_schedule_txn`, which is called by the *first request inside it*
+    (`crates/js/src/dom.rs:12494`); `IDBDatabase.prototype.transaction`
+    (`:12548`) queues nothing, so a transaction that never gets a request
+    never commits. Measured in slice 22 (`--variant idb-tx-empty`: only
+    `idb-empty-armed`, no `complete`), against the control `--variant
+    idb-tx-complete`, where a transaction *with* a request completes in the
+    right order.
+
+    The rule reads one transaction at a time: a file whose other transactions
+    do have requests (`transaction-lifetime-empty.any.js`) still matches on
+    the empty one, which is the transaction its last subtest waits for.
+    """
+    body = _own_source(text, test_id)
+    if not _IDB_TEST_RE.search(body):
+        return False
+    for match in _IDB_TXN_ASSIGN_RE.finditer(body):
+        name = match.group(1)
+        window = body[match.end():match.end() + 900]
+        if not re.search(re.escape(name) + r"\.oncomplete\s*=|"
+                         + re.escape(name) + r"\.addEventListener\s*\(\s*['\"]complete",
+                         window):
+            continue
+        # Requests are attributed by *variable*, not by proximity: the tests
+        # this rule is for open three transactions in a row and then issue a
+        # request on the first one's store, below all three
+        # (`transaction-lifetime-empty.any.js`), so "is there a request within
+        # N characters" reads that one as belonging to the empty transactions.
+        if re.search(re.escape(name) + r"\.objectStore\s*\([^)]*\)\s*" + _IDB_REQUEST_RE.pattern,
+                     body):
+            continue
+        # A store variable's requests are looked for near *its own*
+        # assignment, not across the whole file: `store` is reused by a dozen
+        # unrelated subtests in `idbobjectstore_createIndex.any.js`, and a
+        # whole-file search reads one of those as this transaction's request.
+        busy = False
+        for store_match in re.finditer(r"(\w+)\s*=\s*" + re.escape(name)
+                                       + r"\.objectStore\s*\(", body):
+            store = store_match.group(1)
+            near = body[store_match.end():store_match.end() + 900]
+            if re.search(r"\b" + re.escape(store) + r"\s*" + _IDB_REQUEST_RE.pattern, near):
+                busy = True
+                break
+        if busy:
+            continue
+        return True
+    return False
+
+
+#: The three ways a test asks for a `resource` PerformanceEntry: through
+#: `observe()`, through the buffer, or through the registry's own table.
+_RT_OBSERVE_RE = re.compile(
+    r"entryTypes\s*:\s*\[[^\]]*['\"]resource['\"]|"
+    r"type\s*:\s*['\"]resource['\"]|"
+    r"getEntriesByType\s*\(\s*['\"]resource['\"]|"
+    r"\[\s*['\"]resource['\"]\s*,\s*['\"]PerformanceResourceTiming['\"]|"
+    r"\bdroppedEntriesCount\b")
+
+
+def _resource_timing_marker(text, test_id=None):
+    """True iff the test waits for a `resource` entry (or the callback's options).
+
+    BUG-839: `_lumen_record_resource_timing` (`crates/js/src/dom.rs:11600`)
+    has no caller outside the shim's own unit tests, so no `resource` entry is
+    ever produced on a live page — while `resource` *is* in
+    `supportedEntryTypes` and `observe()` accepts it, which is exactly what
+    turns these tests into TIMEOUTs instead of FAILs. The same bug's second
+    facet is the missing third callback argument, so a test reading
+    `droppedEntriesCount` counts too. Measured in slice 22 (`--variant
+    po-resource-fetch`, `--variant po-resource-subresource`,
+    `--variant po-callback-options`) against the control `--variant
+    po-mark-measure`, where `mark`/`measure` entries are delivered normally.
+    """
+    body = "\n".join(text) if isinstance(text, list) else text
+    if "PerformanceObserver" not in body and "getEntriesByType" not in body:
+        return False
+    return bool(_RT_OBSERVE_RE.search(body))
+
+
+#: A `DecompressionStream`/`CompressionStream` read.
+_CS_CTOR_RE = re.compile(r"new\s+(?:De)?[Cc]ompressionStream\s*\(")
+_CS_READ_RE = re.compile(r"\.read\s*\(\s*\)|getReader\s*\(")
+_CS_CLOSE_RE = re.compile(r"\.close\s*\(\s*\)|pipeThrough\s*\(|pipeTo\s*\(")
+
+
+def _compression_read_marker(text, test_id=None):
+    """True iff the test reads a compression stream without closing the writer.
+
+    BUG-846: the shim is a buffer-then-flush model by its own header comment
+    (`crates/js/src/dom.rs:8197`) — `transform` only accumulates and the single
+    output chunk is enqueued from `flush`, i.e. from `writable.close()`. A test
+    that writes a chunk and reads before closing therefore waits forever.
+    Measured in slice 22: `--variant decompression-basic` produces nothing,
+    while the control `--variant decompression-after-close` — the same page
+    plus `writer.close()` — decompresses correctly.
+
+    The `close`/`pipeThrough`/`pipeTo` exclusion is what keeps the rule honest:
+    those tests do reach the flush and fail (or pass) for other reasons.
+    """
+    body = "\n".join(text) if isinstance(text, list) else text
+    if not _CS_CTOR_RE.search(body) or not _CS_READ_RE.search(body):
+        return False
+    return not _CS_CLOSE_RE.search(body)
+
+
+#: The `fetch/metadata` templates all funnel through one helper name, and the
+#: element is what decides whether a request happens at all.
+_INDUCE_RE = re.compile(r"function\s+induceRequest\s*\(|\binduceRequest\s*\(")
+_SUBRESOURCE_ELEMENT_RE = re.compile(
+    r"createElement\s*\(\s*['\"](?:video|audio|link|input|img)['\"]|"
+    r"createElementNS\s*\([^)]*['\"](?:image|video|audio)['\"]\s*\)|"
+    r"<\s*(?:video|audio|input|image)\b|"
+    r"rel\s*=\s*['\"]icon['\"]|\bposter\b|type\s*=\s*['\"]image['\"]")
+
+
+def _element_subresource_marker(text, test_id=None):
+    """True iff the test induces a subresource request through an element.
+
+    BUG-848: `collect_requests_inner`
+    (`crates/engine/layout/src/box_tree.rs:2262`) matches `name.local == "img"`
+    and nothing else, so a `<video poster>`, an `<input type=image>` and an SVG
+    `<image>` never produce a request; `<link rel=icon>` reaches only the hint
+    scanner, whose single consumer prints a line to stderr (BUG-826). For
+    `<video src>`/`<audio src>` the cause is the missing resource selection
+    algorithm (BUG-825/BUG-799) — a different defect with the same observable
+    shape, which is why the ref names both.
+
+    Measured in slice 22 with the probe's own request-recording server, so
+    "no request was made" does not depend on the page or on the browser log:
+    `--variant req-video-poster`, `--variant req-input-image-src`,
+    `--variant req-svg-image`, `--variant req-link-icon` — none of the four
+    reaches the server, while the `<img>`/`<link rel=stylesheet>` controls on
+    the same pages do.
+    """
+    body = "\n".join(text) if isinstance(text, list) else text
+    if not _INDUCE_RE.search(body):
+        return False
+    return bool(_SUBRESOURCE_ELEMENT_RE.search(body))
+
+
 SOURCE_MARKERS = [
     # First on purpose: see `_audio_src_marker` — the page stops dead at the
     # `src` assignment, before anything else it was going to do. It sorts above
@@ -664,6 +919,15 @@ SOURCE_MARKERS = [
         "prefixed / self-closed / CDATA-wrapped scripts — the harness or the "
         "test body never runs",
         predicate=_xml_document_script_marker,
+    ),
+    # Third: a page frozen by an IndexedDB spin cannot be waiting for anything
+    # else either — measured as a dead page, not a slow one (slice 22).
+    Mechanism(
+        "idb-keep-alive-spin", "BUG-842", [],
+        "the test holds an IndexedDB transaction open with a self-rearming "
+        "request, and the shim drains that queue in one microtask — the page "
+        "spins forever and no other task source ever runs",
+        predicate=_idb_spin_marker,
     ),
     Mechanism(
         "fonts-ready", "BUG-564", [r"document\.fonts\.ready"],
@@ -1035,6 +1299,68 @@ SOURCE_MARKERS = [
         "and then waits for it to arrive",
         predicate=_postmessage_options_marker,
     ),
+    Mechanism(
+        # Slice 22. Below the spin marker on purpose: a file can do both, and
+        # a frozen page is the earlier cause.
+        "idb-no-connection-queue", "BUG-843", [],
+        "the test waits for `versionchange` / `blocked`, which the shim never "
+        "dispatches — a second `open()` upgrades under a live connection",
+        predicate=_idb_connection_queue_marker,
+    ),
+    Mechanism(
+        # Slice 22.
+        "idb-empty-transaction", "BUG-841", [],
+        "the test awaits `complete` on a transaction that never gets a "
+        "request, and only a request queues a transaction for commit",
+        predicate=_idb_empty_transaction_marker,
+    ),
+    Mechanism(
+        # Slice 22. Sorts below `layout-shift-never-delivered` in effect (that
+        # marker is far above) — the two name the same shape of defect for
+        # different entry types and cannot both match: their entry-type
+        # literals differ.
+        "resource-timing-entry-never-delivered", "BUG-839", [],
+        "the test waits for a `resource` PerformanceEntry (or for the "
+        "observer callback's `droppedEntriesCount`), neither of which the "
+        "engine ever produces although `resource` is advertised",
+        predicate=_resource_timing_marker,
+    ),
+    Mechanism(
+        # Slice 22. Every WPT `eventsource` stream is a `.py` handler answering
+        # with a Content-Length, and that shape never ends for the engine — so
+        # any test needing more than the first response's messages hangs.
+        "eventsource-no-reconnect", "BUG-844",
+        [r"new\s+EventSource\s*\(",
+         r"\.onmessage\s*=|\.onopen\s*=|addEventListener\s*\(\s*['\"](?:message|open)"],
+        "the test waits for a message or an `open` that only a reconnect can "
+        "deliver; a stream ended by the response body is never treated as "
+        "ended, and the reconnects that do happen fire no `open`",
+        mode="all",
+    ),
+    Mechanism(
+        # Slice 22.
+        "compression-stream-read-before-close", "BUG-846", [],
+        "the test reads a Compression Streams reader before closing the "
+        "writable side, and the shim emits its only chunk from `flush`",
+        predicate=_compression_read_marker,
+    ),
+    Mechanism(
+        # Slice 22.
+        "timer-overflow-delay", "BUG-847",
+        [r"set(?:Timeout|Interval)\s*\([^,]+,\s*(?:Math\.pow\(\s*2\s*,\s*3[12]\s*\)|2\s*\*\*\s*3[12]|\d{10,})"],
+        "the test schedules a timer with a delay above 2^31-1 and waits for "
+        "it to fire immediately (WebIDL `long` conversion), which the shim "
+        "does not apply",
+    ),
+    Mechanism(
+        # Slice 22. Below `preload-hint-never-fetched` and `media-element`:
+        # both name a narrower cause for the same silence.
+        "element-subresource-never-requested", "BUG-848/BUG-825", [],
+        "the test induces a subresource request through an element the "
+        "request collector does not know (`poster`, `<input type=image>`, SVG "
+        "`<image>`, `rel=icon`, media `src`) and waits for its `load`/`error`",
+        predicate=_element_subresource_marker,
+    ),
     # Truly last: "the test listens for an error" is the weakest of these
     # claims, so anything with a named cause above must take the test first.
     Mechanism(
@@ -1400,6 +1726,8 @@ def classify_source(test_id, root, cache, follow_helpers=True):
     is a marker of the test, and the pre-slice-10 test-file-only reading made
     the stage a strict lower bound (see `SOURCE_MARKERS`).
     """
+    global _SOURCE_ROOT
+    _SOURCE_ROOT = root
     lines = _read_source(source_path(test_id, root), cache)
     if lines is None:
         return None
@@ -2677,6 +3005,240 @@ def selftest():
                          '<iframe src="http://example.test/x.htm"></iframe>')
         check(classify_source("/frames/remote.html", tmp, {}) is None,
               "a cross-origin subframe must not be read from disk")
+
+        # ── slice 22 ────────────────────────────────────────────────────────
+        # BUG-842: a transaction held open by a self-rearming request. The
+        # helper form and the hand-written one both count, and the helper's
+        # own *definition* must not: `resources/support.js` is included by
+        # every IndexedDB test, so matching the joined text claimed 16 ids
+        # instead of 5 while this slice was being written.
+        os.makedirs(os.path.join(tmp, "idb", "resources"), exist_ok=True)
+        with open(os.path.join(tmp, "idb", "resources", "support.js"), "w", encoding="utf-8") as handle:
+            handle.write("function keep_alive(tx, store_name) {\n"
+                         "  let keepSpinning = true;\n"
+                         "  function spin() {\n"
+                         "    if (!keepSpinning) return;\n"
+                         "    tx.objectStore(store_name).get(0).onsuccess = spin;\n"
+                         "  }\n"
+                         "  spin();\n"
+                         "}\n")
+        with open(os.path.join(tmp, "idb", "keepalive.html"), "w", encoding="utf-8") as handle:
+            handle.write('<script src="resources/support.js"></script>\n'
+                         "<script>async_test(function (t) {\n"
+                         "  var tx = db.transaction('store', 'readonly');\n"
+                         "  var release = keep_alive(tx, 'store');\n"
+                         "  indexedDB.open('d', 1);\n"
+                         "});</script>")
+        check(classify_source("/idb/keepalive.html", tmp, {}) == "idb-keep-alive-spin",
+              "a keep_alive() spin was not claimed")
+        with open(os.path.join(tmp, "idb", "handspin.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>async_test(function (t) {\n"
+                         "  var open = indexedDB.open('d', 1);\n"
+                         "  function doGet() {\n"
+                         "    var request = tx.objectStore('store').get('key');\n"
+                         "    request.onsuccess = t.step_func(function () { doGet(); });\n"
+                         "  }\n"
+                         "  doGet();\n"
+                         "});</script>")
+        check(classify_source("/idb/handspin.html", tmp, {}) == "idb-keep-alive-spin",
+              "a hand-written request spin was not claimed")
+        # The other way to write the same loop: the handler *is* the function,
+        # passed by reference rather than called from a wrapper.
+        with open(os.path.join(tmp, "idb", "refspin.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>async_test(function (t) {\n"
+                         "  var open = indexedDB.open('d', 1);\n"
+                         "  function spin() {\n"
+                         "    tx.objectStore('store').get(0).onsuccess = spin;\n"
+                         "  }\n"
+                         "  spin();\n"
+                         "});</script>")
+        check(classify_source("/idb/refspin.html", tmp, {}) == "idb-keep-alive-spin",
+              "a by-reference request spin was not claimed")
+        # The helper alone is not evidence: a test that merely includes
+        # support.js and issues one request is a different (or no) mechanism.
+        with open(os.path.join(tmp, "idb", "plain.html"), "w", encoding="utf-8") as handle:
+            handle.write('<script src="resources/support.js"></script>\n'
+                         "<script>async_test(function (t) {\n"
+                         "  var open = indexedDB.open('d', 1);\n"
+                         "  open.onsuccess = t.step_func_done(function () {});\n"
+                         "});</script>")
+        check(classify_source("/idb/plain.html", tmp, {}) is None,
+              "including support.js must not count as a spin")
+
+        # BUG-843: the connection queue. `'versionchange'` as a bare string is
+        # also the *mode* of an upgrade transaction, so only the event forms
+        # count.
+        with open(os.path.join(tmp, "idb", "queue.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>async_test(function (t) {\n"
+                         "  var r = indexedDB.open('d', 2);\n"
+                         "  r.onblocked = t.step_func(function () {});\n"
+                         "  db.onversionchange = t.step_func_done(function () {});\n"
+                         "});</script>")
+        check(classify_source("/idb/queue.html", tmp, {}) == "idb-no-connection-queue",
+              "a versionchange/blocked wait was not claimed")
+        with open(os.path.join(tmp, "idb", "mode.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>test(function () {\n"
+                         "  var r = indexedDB.open('d', 1);\n"
+                         "  assert_equals(tx.mode, 'versionchange');\n"
+                         "});</script>")
+        check(classify_source("/idb/mode.html", tmp, {}) is None,
+              "the transaction *mode* string must not be read as a queue wait")
+
+        # BUG-841: a transaction that never gets a request never commits. The
+        # window has to end at the next transaction — `transaction-lifetime-
+        # empty.any.js` opens three in a row and issues a request on the
+        # first one's store below all three.
+        with open(os.path.join(tmp, "idb", "empty.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>async_test(function (t) {\n"
+                         "  var db = open.result;\n"
+                         "  var tx = db.transaction('store', 'readonly');\n"
+                         "  tx.oncomplete = t.step_func_done(function () {});\n"
+                         "  indexedDB.cmp(1, 2);\n"
+                         "});</script>")
+        check(classify_source("/idb/empty.html", tmp, {}) == "idb-empty-transaction",
+              "a transaction awaited without any request was not claimed")
+        with open(os.path.join(tmp, "idb", "three.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>async_test(function (t) {\n"
+                         "  var tx1 = db.transaction('store', 'readwrite');\n"
+                         "  var store = tx1.objectStore('store');\n"
+                         "  var tx2 = db.transaction('store', 'readonly');\n"
+                         "  tx2.oncomplete = t.step_func(function () {});\n"
+                         "  var rq = store.put('b', 2);\n"
+                         "  indexedDB.cmp(1, 2);\n"
+                         "});</script>")
+        check(classify_source("/idb/three.html", tmp, {}) == "idb-empty-transaction",
+              "an empty transaction next to a busy one was not claimed")
+        # A transaction with a request in it completes correctly (measured),
+        # so it must not be claimed.
+        with open(os.path.join(tmp, "idb", "busy.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>async_test(function (t) {\n"
+                         "  var tx = db.transaction('store', 'readwrite');\n"
+                         "  tx.oncomplete = t.step_func_done(function () {});\n"
+                         "  tx.objectStore('store').put('a', 1);\n"
+                         "  indexedDB.cmp(1, 2);\n"
+                         "});</script>")
+        check(classify_source("/idb/busy.html", tmp, {}) is None,
+              "a transaction with a request must stay unclassified")
+
+        # BUG-839: a `resource` entry (or the callback's options) is awaited.
+        os.makedirs(os.path.join(tmp, "rt"), exist_ok=True)
+        with open(os.path.join(tmp, "rt", "observe.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>async_test(function (t) {\n"
+                         "  new PerformanceObserver(t.step_func_done(function () {}))\n"
+                         "      .observe({entryTypes: ['resource']});\n"
+                         "  fetch('x.js');\n"
+                         "});</script>")
+        check(classify_source("/rt/observe.html", tmp, {})
+              == "resource-timing-entry-never-delivered",
+              "an observer waiting for a resource entry was not claimed")
+        with open(os.path.join(tmp, "rt", "dropped.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>async_test(function (t) {\n"
+                         "  new PerformanceObserver(t.step_func(function (l, o, options) {\n"
+                         "    assert_equals(options.droppedEntriesCount, 0);\n"
+                         "  })).observe({type: 'mark'});\n"
+                         "});</script>")
+        check(classify_source("/rt/dropped.html", tmp, {})
+              == "resource-timing-entry-never-delivered",
+              "a droppedEntriesCount read was not claimed")
+        # `mark`/`measure` are delivered, so an observer over them is not this
+        # mechanism.
+        with open(os.path.join(tmp, "rt", "marks.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>async_test(function (t) {\n"
+                         "  new PerformanceObserver(t.step_func_done(function () {}))\n"
+                         "      .observe({entryTypes: ['mark', 'measure']});\n"
+                         "  performance.mark('m');\n"
+                         "});</script>")
+        check(classify_source("/rt/marks.html", tmp, {}) is None,
+              "a mark/measure observer must stay unclassified")
+
+        # BUG-844: every WPT EventSource stream is a Content-Length response,
+        # which the engine never treats as ended.
+        os.makedirs(os.path.join(tmp, "es"), exist_ok=True)
+        with open(os.path.join(tmp, "es", "retry.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>var t = async_test();\n"
+                         "var source = new EventSource('resources/message.py');\n"
+                         "source.onopen = function () { t.done(); };\n"
+                         "</script>")
+        check(classify_source("/es/retry.html", tmp, {}) == "eventsource-no-reconnect",
+              "an EventSource open/message wait was not claimed")
+        # Constructing one and asserting synchronously is a FAIL, not a hang.
+        with open(os.path.join(tmp, "es", "ctor.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>test(function () {\n"
+                         "  var source = new EventSource('resources/message.py');\n"
+                         "  assert_equals(source.readyState, 0);\n"
+                         "});</script>")
+        check(classify_source("/es/ctor.html", tmp, {}) is None,
+              "an EventSource test with no event wait must stay unclassified")
+
+        # BUG-846: a compression stream read before the writable side closes.
+        os.makedirs(os.path.join(tmp, "cs"), exist_ok=True)
+        with open(os.path.join(tmp, "cs", "read.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>promise_test(async function () {\n"
+                         "  const ds = new DecompressionStream('deflate');\n"
+                         "  const reader = ds.readable.getReader();\n"
+                         "  ds.writable.getWriter().write(chunk);\n"
+                         "  const { value } = await reader.read();\n"
+                         "});</script>")
+        check(classify_source("/cs/read.html", tmp, {})
+              == "compression-stream-read-before-close",
+              "a read before close was not claimed")
+        with open(os.path.join(tmp, "cs", "closed.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>promise_test(async function () {\n"
+                         "  const ds = new DecompressionStream('deflate');\n"
+                         "  const writer = ds.writable.getWriter();\n"
+                         "  writer.write(chunk);\n"
+                         "  writer.close();\n"
+                         "  const { value } = await ds.readable.getReader().read();\n"
+                         "});</script>")
+        check(classify_source("/cs/closed.html", tmp, {}) is None,
+              "a stream whose writer is closed must stay unclassified")
+
+        # BUG-847: a delay that does not fit a signed 32-bit int.
+        os.makedirs(os.path.join(tmp, "tm"), exist_ok=True)
+        with open(os.path.join(tmp, "tm", "long.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>setup({single_test: true});\n"
+                         "setTimeout(done, Math.pow(2, 32));\n"
+                         "setTimeout(assert_unreached, 100);</script>")
+        check(classify_source("/tm/long.html", tmp, {}) == "timer-overflow-delay",
+              "an overflowing timer delay was not claimed")
+        with open(os.path.join(tmp, "tm", "short.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>setup({single_test: true});\n"
+                         "setTimeout(done, 3000);</script>")
+        check(classify_source("/tm/short.html", tmp, {}) is None,
+              "an ordinary delay must stay unclassified")
+
+        # BUG-848/BUG-825: a subresource induced through an element the
+        # request collector does not know.
+        os.makedirs(os.path.join(tmp, "fm"), exist_ok=True)
+        with open(os.path.join(tmp, "fm", "poster.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>function induceRequest(url) {\n"
+                         "  const video = document.createElement('video');\n"
+                         "  video.setAttribute('poster', url);\n"
+                         "  return new Promise((resolve) => { video.onload = resolve; });\n"
+                         "}\n"
+                         "promise_test(() => induceRequest('x.png'));</script>")
+        check(classify_source("/fm/poster.html", tmp, {})
+              == "element-subresource-never-requested",
+              "a poster-induced request was not claimed")
+        with open(os.path.join(tmp, "fm", "svg.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>function induceRequest(url) {\n"
+                         "  const image = document.createElementNS(\n"
+                         "    'http://www.w3.org/2000/svg', 'image');\n"
+                         "  image.setAttribute('href', url);\n"
+                         "}\n"
+                         "promise_test(() => induceRequest('x.svg'));</script>")
+        check(classify_source("/fm/svg.html", tmp, {})
+              == "element-subresource-never-requested",
+              "an SVG <image> built through createElementNS was not claimed")
+        # `fetch()`-induced requests work, so the same harness around a fetch
+        # is not this mechanism.
+        with open(os.path.join(tmp, "fm", "fetch.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>function induceRequest(url) {\n"
+                         "  return fetch(url);\n"
+                         "}\n"
+                         "promise_test(() => induceRequest('x.json'));</script>")
+        check(classify_source("/fm/fetch.html", tmp, {}) is None,
+              "a fetch-induced request must stay unclassified")
 
     for msg in failures:
         print("FAIL:", msg)
