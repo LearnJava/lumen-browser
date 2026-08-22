@@ -7684,6 +7684,13 @@ pub fn compute_style(
     // найти хотя бы какие-то hex-digits после padding-procedure.
     apply_bgcolor_presentational_hint(doc, node, &mut style);
 
+    // HTML LS §15.3.8 «Tables»: `background`/`bordercolor`/`cellspacing`
+    // presentational hints (BUG-603 point 2) — siblings of `bgcolor` above,
+    // narrower in scope (table-tree elements only, `cellspacing` table-only).
+    apply_background_image_presentational_hint(doc, node, &mut style);
+    apply_bordercolor_presentational_hint(doc, node, &mut style);
+    apply_cellspacing_presentational_hint(doc, node, &mut style);
+
     // HTML5 §15.3.6 «The page»: `text` атрибут на `<body>` и `<font color>`
     // на любом элементе мапаются на CSS `color` (presentational hint).
     // Парсятся тем же legacy-парсером, что и `bgcolor`. Author CSS поверх —
@@ -11291,6 +11298,87 @@ fn apply_bgcolor_presentational_hint(doc: &Document, node: NodeId, style: &mut C
         && let Some(c) = parse_legacy_color_html_attr(val)
     {
         style.background_color = Some(CssColor::Rgba(c));
+    }
+}
+
+/// HTML LS §15.3.8 «Tables»: `background` атрибут на `<body>` / table-tree
+/// элементах мапается на `background-image` (BUG-603 point 2). Тот же tag-set,
+/// что и у [`apply_bgcolor_presentational_hint`]. В отличие от `bgcolor`,
+/// значение не резолвится в абсолютный URL здесь — как и обычный CSS
+/// `background: url(...)`, сырая строка хранится в `BackgroundImage::Url` и
+/// резолвится относительно document base URL на paint/fetch стороне (см.
+/// использование `BackgroundImage::Url` в CSS-парсинге фона выше — там тоже
+/// хранится сырой текст, не резолвленный путь).
+fn apply_background_image_presentational_hint(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+    let NodeData::Element { name, .. } = &doc.get(node).data else {
+        return;
+    };
+    let tag = name.local.as_str();
+    if !matches!(
+        tag,
+        "body" | "table" | "thead" | "tbody" | "tfoot" | "tr" | "td" | "th"
+    ) {
+        return;
+    }
+    let node_ref = doc.get(node);
+    if let Some(val) = node_ref.get_attr("background") {
+        let val = val.trim();
+        if !val.is_empty() {
+            if style.background_layers.is_empty() {
+                style.background_layers.push(BackgroundLayer::default());
+            }
+            style.background_layers[0].image = BackgroundImage::Url(val.to_string());
+        }
+    }
+}
+
+/// HTML LS §15.3.8 «Tables»: `bordercolor` атрибут на table-tree элементах
+/// мапается на все четыре `border-*-color` (BUG-603 point 2). Парсится тем же
+/// legacy-парсером, что и `bgcolor`/`text`/`font color`. Не включает `<body>`
+/// (spec ограничивает `bordercolor` собственно табличными элементами).
+fn apply_bordercolor_presentational_hint(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+    let NodeData::Element { name, .. } = &doc.get(node).data else {
+        return;
+    };
+    let tag = name.local.as_str();
+    if !matches!(
+        tag,
+        "table" | "thead" | "tbody" | "tfoot" | "tr" | "td" | "th"
+    ) {
+        return;
+    }
+    let node_ref = doc.get(node);
+    if let Some(val) = node_ref.get_attr("bordercolor")
+        && let Some(c) = parse_legacy_color_html_attr(val)
+    {
+        let color = CssColor::Rgba(c);
+        style.border_top_color = color;
+        style.border_right_color = color;
+        style.border_bottom_color = color;
+        style.border_left_color = color;
+    }
+}
+
+/// HTML LS §15.3.8 «Tables»: `cellspacing` атрибут на `<table>` мапается на
+/// `border-spacing` (BUG-603 point 2) — один legacy-атрибут задаёт оба
+/// компонента (horizontal и vertical) одинаково, симметрично `cellpadding`→
+/// `padding` в [`apply_ua_table_cell_padding`]. Unlike `cellpadding`, this
+/// applies directly to the `<table>` element itself (`border-spacing` is not
+/// something a `<td>`/`<tr>` reads), not via an ancestor walk.
+fn apply_cellspacing_presentational_hint(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+    let NodeData::Element { name, .. } = &doc.get(node).data else {
+        return;
+    };
+    if name.local.as_str() != "table" {
+        return;
+    }
+    let node_ref = doc.get(node);
+    if let Some(val) = node_ref.get_attr("cellspacing")
+        && let Ok(n) = val.trim().parse::<f32>()
+        && n >= 0.0
+    {
+        style.border_spacing_h = n;
+        style.border_spacing_v = n;
     }
 }
 
@@ -30426,6 +30514,85 @@ mod tests {
         let td = doc.get(tr).children[0];
         let s = compute_style(&doc, td, &sheet, &root_style, Size::new(800.0, 600.0), false);
         assert_eq!(s.background_color, Some(CssColor::Rgba(rgba(0xab, 0xcd, 0xef, 255))));
+    }
+
+    // ── BUG-603: apply_background_image_presentational_hint ──────────────
+
+    #[test]
+    fn background_hint_table_sets_url_layer() {
+        let s = doc_root_child_style("<table background=\"/images/threecolors.png\"></table>");
+        assert_eq!(s.background_layers.len(), 1);
+        assert_eq!(s.background_layers[0].image, BackgroundImage::Url("/images/threecolors.png".into()));
+    }
+
+    #[test]
+    fn background_hint_not_applied_to_div() {
+        let s = doc_root_child_style("<div background=\"/x.png\"></div>");
+        assert!(s.background_layers.is_empty());
+    }
+
+    #[test]
+    fn background_hint_empty_value_ignored() {
+        let s = doc_root_child_style("<table background=\"\"></table>");
+        assert!(s.background_layers.is_empty());
+    }
+
+    #[test]
+    fn background_hint_overridden_by_author_css() {
+        let doc = lumen_html_parser::parse("<table background=\"/x.png\"></table>");
+        let sheet = lumen_css_parser::parse("table { background-image: url(/y.png); }");
+        let root_style = ComputedStyle::root();
+        let table = doc.get(doc.body().unwrap()).children[0];
+        let s = compute_style(&doc, table, &sheet, &root_style, Size::new(800.0, 600.0), false);
+        assert_eq!(s.background_layers[0].image, BackgroundImage::Url("/y.png".into()));
+    }
+
+    // ── BUG-603: apply_bordercolor_presentational_hint ────────────────────
+
+    #[test]
+    fn bordercolor_hint_table_sets_all_four_sides() {
+        let s = doc_root_child_style("<table bordercolor=\"red\"></table>");
+        let red = CssColor::Rgba(rgba(255, 0, 0, 255));
+        assert_eq!(s.border_top_color, red);
+        assert_eq!(s.border_right_color, red);
+        assert_eq!(s.border_bottom_color, red);
+        assert_eq!(s.border_left_color, red);
+    }
+
+    #[test]
+    fn bordercolor_hint_not_applied_to_div() {
+        let s = doc_root_child_style("<div bordercolor=\"red\"></div>");
+        assert_eq!(s.border_top_color, CssColor::CurrentColor);
+    }
+
+    // ── BUG-603: apply_cellspacing_presentational_hint ────────────────────
+
+    #[test]
+    fn cellspacing_hint_sets_both_components() {
+        let s = doc_root_child_style("<table cellspacing=\"10\"></table>");
+        assert_eq!(s.border_spacing_h, 10.0);
+        assert_eq!(s.border_spacing_v, 10.0);
+    }
+
+    #[test]
+    fn cellspacing_hint_negative_ignored() {
+        let s = doc_root_child_style("<table cellspacing=\"-5\"></table>");
+        assert_eq!(s.border_spacing_h, 0.0);
+        assert_eq!(s.border_spacing_v, 0.0);
+    }
+
+    #[test]
+    fn cellspacing_hint_not_applied_to_td() {
+        // cellspacing — атрибут только <table>, не распространяется на ячейки.
+        let doc = lumen_html_parser::parse("<table><tr><td cellspacing=\"10\">x</td></tr></table>");
+        let sheet = lumen_css_parser::parse("");
+        let root_style = ComputedStyle::root();
+        let table = doc.get(doc.body().unwrap()).children[0];
+        let tbody = doc.get(table).children[0];
+        let tr = doc.get(tbody).children[0];
+        let td = doc.get(tr).children[0];
+        let s = compute_style(&doc, td, &sheet, &root_style, Size::new(800.0, 600.0), false);
+        assert_eq!(s.border_spacing_h, 0.0);
     }
 
     // ── apply_text_color_presentational_hint integration ─────────────────

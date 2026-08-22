@@ -14,7 +14,9 @@ use lumen_core::ColorSpace;
 
 use crate::box_tree::{BoxKind, LayoutBox};
 use crate::style::{
-    matches_complex, AlignValue, BorderStyle, BoxSizing, ClearSide, Color, CssColor,
+    matches_complex, AlignValue, BackgroundImage, BackgroundLayer, BorderStyle, BoxSizing,
+    ClearSide, Color,
+    CssColor,
     Cursor, Direction, Display, FilterFn, FloatSide, FontStretch, FontStyle, FontWeight,
     FontVariantCaps, FontVariantEmoji, Isolation, Length, LengthOrAuto, MixBlendMode, Overflow,
     OutlineColor,
@@ -490,6 +492,35 @@ fn css_color_to_css(c: &CssColor) -> String {
     }
 }
 
+/// Serialises `style.background_layers` for `getComputedStyle(...).getPropertyValue("background-image")`
+/// (BUG-603 point 2 — needed so `background` presentational-hint values become
+/// observable). Layers are comma-joined, topmost (index 0) first, matching
+/// `background-color`/other multi-layer shorthand serialization order.
+///
+/// Only [`BackgroundImage::None`] and [`BackgroundImage::Url`] round-trip
+/// exactly; the engine has no source text to reconstruct for the other three
+/// variants (they're computed/generated, not stored verbatim), so those
+/// serialise as `"none"` — a known gap, not a regression, since this key did
+/// not exist in the map at all before this change.
+fn background_layers_to_css(layers: &[BackgroundLayer]) -> String {
+    if layers.is_empty() {
+        return "none".into();
+    }
+    layers
+        .iter()
+        .map(|l| match &l.image {
+            BackgroundImage::Url(s) => {
+                format!("url(\"{}\")", s.replace('\\', "\\\\").replace('"', "\\\""))
+            }
+            BackgroundImage::None
+            | BackgroundImage::Gradient(_)
+            | BackgroundImage::CrossFade { .. }
+            | BackgroundImage::Paint(_) => "none".to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Serialises a [`Length`] to its CSS representation.
 fn length_to_css(l: &Length) -> String {
     match l {
@@ -749,6 +780,28 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     m.insert("color".into(), color_to_css(style.color));
     m.insert("background-color".into(), style.background_color.as_ref()
         .map_or_else(|| "rgba(0, 0, 0, 0)".into(), css_color_to_css));
+    m.insert("background-image".into(), background_layers_to_css(&style.background_layers));
+
+    // `border-color` shorthand — CSSOM `getPropertyValue` on a shorthand only
+    // resolves when every longhand it covers serializes to the same value
+    // (matches real UA behaviour: differing per-side colors read back as "").
+    m.insert("border-color".into(), {
+        let (t, r, b, l) = (
+            css_color_to_css(&style.border_top_color),
+            css_color_to_css(&style.border_right_color),
+            css_color_to_css(&style.border_bottom_color),
+            css_color_to_css(&style.border_left_color),
+        );
+        if t == r && r == b && b == l { t } else { String::new() }
+    });
+
+    // CSS 2.1 §17.6 `border-spacing` — one value when horizontal/vertical
+    // components are equal (the common case, including every legacy
+    // `cellspacing` presentational hint), two otherwise.
+    m.insert("border-spacing".into(), {
+        let (h, v) = (style.border_spacing_h, style.border_spacing_v);
+        if h == v { px_str(h) } else { format!("{} {}", px_str(h), px_str(v)) }
+    });
     m.insert("opacity".into(), {
         let v = style.opacity;
         if v.fract() == 0.0 {
@@ -1550,5 +1603,47 @@ mod tests {
         assert_eq!(m.get("font-variant").map(String::as_str), Some("small-caps unicode"));
         let m = div_computed_map("<div>x</div>", "div { font-variant-emoji: text; }");
         assert_eq!(m.get("font-variant").map(String::as_str), Some("text"));
+    }
+
+    // ── computed_style_to_map: BUG-603 additions ─────────────────────────────
+
+    #[test]
+    fn computed_map_background_image_defaults_to_none() {
+        let m = div_computed_map("<div>x</div>", "");
+        assert_eq!(m.get("background-image").map(String::as_str), Some("none"));
+    }
+
+    #[test]
+    fn computed_map_background_image_url() {
+        let m = div_computed_map("<div>x</div>", "div { background-image: url(a.png); }");
+        assert_eq!(m.get("background-image").map(String::as_str), Some("url(\"a.png\")"));
+    }
+
+    #[test]
+    fn computed_map_border_color_uniform_sides() {
+        let m = div_computed_map("<div>x</div>", "div { border-color: red; }");
+        assert_eq!(m.get("border-color").map(String::as_str), Some("rgb(255, 0, 0)"));
+    }
+
+    #[test]
+    fn computed_map_border_color_empty_when_sides_differ() {
+        let m = div_computed_map(
+            "<div>x</div>",
+            "div { border-top-color: red; border-right-color: blue; \
+             border-bottom-color: red; border-left-color: red; }",
+        );
+        assert_eq!(m.get("border-color").map(String::as_str), Some(""));
+    }
+
+    #[test]
+    fn computed_map_border_spacing_single_value_when_equal() {
+        let m = div_computed_map("<div>x</div>", "div { border-spacing: 10px; }");
+        assert_eq!(m.get("border-spacing").map(String::as_str), Some("10px"));
+    }
+
+    #[test]
+    fn computed_map_border_spacing_two_values_when_differ() {
+        let m = div_computed_map("<div>x</div>", "div { border-spacing: 10px 20px; }");
+        assert_eq!(m.get("border-spacing").map(String::as_str), Some("10px 20px"));
     }
 }
