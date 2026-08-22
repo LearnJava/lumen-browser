@@ -356,8 +356,8 @@ pub use layer_cache::{LayerCache, LayerKey};
 #[cfg(feature = "backend-wgpu")]
 pub use renderer::{
     last_compose, load_counter, ComposeOutcome, ImageRegisterError, Renderer,
-    SnapshotUploadError, FRAMES_RENDERED, FRAMES_SKIPPED, FRAME_LOG_NANOS,
-    FRAME_PHASE_NANOS,
+    SnapshotUploadError, DL_EPOCH_MISMATCHES, DL_FOLD_REUSED, FRAMES_RENDERED, FRAMES_SKIPPED,
+    FRAME_LOG_NANOS, FRAME_PHASE_NANOS,
 };
 pub use scroll_snap::{find_scroll_snap_y, find_scroll_snap_y_proximity};
 pub use webgl::SoftwareWebGl;

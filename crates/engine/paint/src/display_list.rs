@@ -1913,26 +1913,24 @@ pub fn hash_display_list_dual(
     surface: (u32, u32),
     band: (u32, u32),
 ) -> (u64, u64) {
+    hash_display_list_dual_memo(content, overlay, skip, scroll, surface, band, None).0
+}
+
+/// Свёртки content-части кадра для обоих кадровых хэшей (BUG-405 срез 39).
+///
+/// `.0` — поток дайджестов ВСЕХ команд списка (вход хэша кадра), `.1` — тот же
+/// поток без выколотых `skip`-диапазонов (вход ключа полосы). Обход и дайджест
+/// команды — ровно те же, что считал [`hash_display_list_dual`] до среза 39;
+/// новое здесь только то, что результат обхода стал ЗНАЧЕНИЕМ, которое кадр
+/// может запомнить и переиспользовать, пока список не менялся.
+///
+/// `skip` обязан быть отсортирован и не пересекаться.
+#[must_use]
+pub fn fold_content_dual(content: &[DisplayCommand], skip: &[std::ops::Range<usize>]) -> (u64, u64) {
     use std::hash::Hasher;
 
-    let (scroll_x, scroll_y) = scroll;
-    let (surface_w, surface_h) = surface;
-    let (key_w, key_h) = band;
-
     let mut frame = std::collections::hash_map::DefaultHasher::new();
-    frame.write_u32(surface_w);
-    frame.write_u32(surface_h);
-    frame.write_u32(scroll_x.to_bits());
-    frame.write_u32(scroll_y.to_bits());
-    frame.write_usize(content.len());
-    frame.write_usize(overlay.len());
-
-    let skipped: usize = skip.iter().map(std::ops::Range::len).sum();
     let mut key = std::collections::hash_map::DefaultHasher::new();
-    key.write_u32(key_w);
-    key.write_u32(key_h);
-    key.write_usize(content.len().saturating_sub(skipped));
-
     if skip.is_empty() {
         // Горячий случай (страница без анимируемых сегментов): у плеч одно и
         // то же множество команд, поэтому дайджест команды считается один раз
@@ -1955,10 +1953,61 @@ pub fn hash_display_list_dual(
             }
         }
     }
+    (frame.finish(), key.finish())
+}
+
+/// [`hash_display_list_dual`] с ГОТОВОЙ свёрткой content-части (BUG-405 срез 39).
+///
+/// `folds` — результат [`fold_content_dual`] для этого же `content`/`skip`,
+/// снятый на прошлом кадре; `None` — посчитать заново. Возвращает пару хэшей и
+/// свёртку, которой они посчитаны (её и запоминает кадр).
+///
+/// Зачем: на кадре ПОПАДАНИЯ полосы content не менялся вовсе — страница
+/// свёрстана, едет только скролл, — а оба хэша обходили его целиком. Перепись
+/// среза 39: 0.76 мс на кадр при 843 + 132 командах, 37 % честного кадра
+/// попадания. Скролл, размеры поверхности и полосы, длины и overlay в свёртку
+/// не входят и дописываются здесь каждый кадр, поэтому переиспользование
+/// свёртки НЕ делает кадр слепым ни к одному из них.
+///
+/// Ответственность за «список не менялся» лежит на вызывающем
+/// ([`RenderBackend::set_content_epoch`](crate::backend::RenderBackend::set_content_epoch)).
+#[must_use]
+pub fn hash_display_list_dual_memo(
+    content: &[DisplayCommand],
+    overlay: &[DisplayCommand],
+    skip: &[std::ops::Range<usize>],
+    scroll: (f32, f32),
+    surface: (u32, u32),
+    band: (u32, u32),
+    folds: Option<(u64, u64)>,
+) -> ((u64, u64), (u64, u64)) {
+    use std::hash::Hasher;
+
+    let (scroll_x, scroll_y) = scroll;
+    let (surface_w, surface_h) = surface;
+    let (key_w, key_h) = band;
+    let folds = folds.unwrap_or_else(|| fold_content_dual(content, skip));
+
+    let mut frame = std::collections::hash_map::DefaultHasher::new();
+    frame.write_u32(surface_w);
+    frame.write_u32(surface_h);
+    frame.write_u32(scroll_x.to_bits());
+    frame.write_u32(scroll_y.to_bits());
+    frame.write_usize(content.len());
+    frame.write_usize(overlay.len());
+    frame.write_u64(folds.0);
+
+    let skipped: usize = skip.iter().map(std::ops::Range::len).sum();
+    let mut key = std::collections::hash_map::DefaultHasher::new();
+    key.write_u32(key_w);
+    key.write_u32(key_h);
+    key.write_usize(content.len().saturating_sub(skipped));
+    key.write_u64(folds.1);
+
     for cmd in overlay {
         frame.write_u64(hash_one_command(cmd));
     }
-    (frame.finish(), key.finish())
+    ((frame.finish(), key.finish()), folds)
 }
 
 /// How a frame differs from the previously presented one (ADR-016 M0.5).
@@ -15392,6 +15441,94 @@ mod tests {
         }
     }
 
+    /// Гейт среза 39 (BUG-405): переиспользованная свёртка content-части даёт
+    /// РОВНО ту же пару хэшей, что и полный обход.
+    ///
+    /// Это условие корректности мемоизации: кадр решает по этим числам, можно
+    /// ли пропустить отрисовку, поэтому расхождение показало бы устаревшие
+    /// пиксели. Проверяется на всех входах, которые в свёртку не входят и
+    /// дописываются поверх неё каждый кадр.
+    #[test]
+    fn memo_fold_matches_full_walk() {
+        let content = hash_corpus();
+        let overlay = vec![red_fill(9.0)];
+        let skip = vec![1usize..3, 5usize..9];
+        let folds = fold_content_dual(&content, &skip);
+
+        // Кортеж входов, которые кадр дописывает поверх свёртки: скролл,
+        // размер поверхности, размер полосы, наличие overlay.
+        type HashInputs = ((f32, f32), (u32, u32), (u32, u32), bool);
+        let cases: [HashInputs; 5] = [
+            ((0.0, 0.0), (1024, 720), (1024, 1800), false),
+            ((0.0, 40.0), (1024, 720), (1024, 1800), true),
+            ((12.5, 999.0), (640, 480), (1024, 1800), true),
+            ((0.0, 40.0), (1024, 720), (1024, 2400), true),
+            ((0.0, 40.0), (800, 600), (800, 1400), false),
+        ];
+        for (scroll, surface, band, with_overlay) in cases {
+            let ov: &[DisplayCommand] = if with_overlay { &overlay } else { &[] };
+            let full = hash_display_list_dual(&content, ov, &skip, scroll, surface, band);
+            let (memo, used) = hash_display_list_dual_memo(
+                &content,
+                ov,
+                &skip,
+                scroll,
+                surface,
+                band,
+                Some(folds),
+            );
+            assert_eq!(
+                full, memo,
+                "мемоизация разошлась с полным обходом на {scroll:?}/{surface:?}/{band:?}",
+            );
+            assert_eq!(used, folds, "кадр обязан вернуть ту свёртку, которой считал");
+        }
+    }
+
+    /// Гейт среза 39: свёртка меняется на ЛЮБОМ изменении списка или набора
+    /// выколотых диапазонов — именно она и есть то, что версия обязана
+    /// сторожить. Плюс `None` считает то же, что готовая свёртка.
+    #[test]
+    fn fold_tracks_content_and_skip() {
+        let content = hash_corpus();
+        let skip = [1usize..3, 5usize..7];
+        let base = fold_content_dual(&content, &skip);
+
+        // Правка НА МЕСТЕ — тот же адрес и та же длина, поэтому её ловит только
+        // версия; свёртка обязана её видеть.
+        let mut patched = content.clone();
+        patched[0] = red_fill(1234.0);
+        assert_ne!(base, fold_content_dual(&patched, &skip), "правка команды");
+
+        let mut shorter = content.clone();
+        shorter.pop();
+        assert_ne!(base, fold_content_dual(&shorter, &skip), "длина списка");
+
+        let other_skip = [2usize..4, 5usize..7];
+        assert_ne!(
+            base.1,
+            fold_content_dual(&content, &other_skip).1,
+            "набор выколотых диапазонов входит в ключ полосы",
+        );
+
+        // `None` — просто «посчитать заново», результат обязан совпасть.
+        let (hashes_none, folds_none) = hash_display_list_dual_memo(
+            &content,
+            &[],
+            &skip,
+            (0.0, 40.0),
+            (1024, 720),
+            (1024, 1800),
+            None,
+        );
+        assert_eq!(folds_none, base, "None обязан посчитать ту же свёртку");
+        assert_eq!(
+            hashes_none,
+            hash_display_list_dual(&content, &[], &skip, (0.0, 40.0), (1024, 720), (1024, 1800)),
+            "None обязан дать те же хэши, что и старая функция",
+        );
+    }
+
     #[test]
     fn compose_plan_replays_enclosing_context() {
         use lumen_layout::property_trees::Mat4 as M;
@@ -17586,6 +17723,131 @@ mod tests {
             );
         }
         eprintln!("[dual bench] sink={sink}");
+    }
+
+    /// Перепись цены ОДНОЙ команды текста (BUG-405 срез 39).
+    ///
+    /// Кадр попадания платит хэш 0.75–0.82 мс на 843 + 132 команды, то есть
+    /// ~0.8 мкс на команду, — статья крупнее всего хрома (0.18–0.23 мс,
+    /// п. 76). Здесь она раскладывается на составляющие: `core::fmt` палитры,
+    /// байты строки, остальные поля.
+    ///
+    /// `cargo test -p lumen-paint --profile dev-release hash_text_command_census -- --ignored --nocapture`
+    #[test]
+    #[ignore = "перепись: запускать вручную с --profile dev-release --nocapture"]
+    fn hash_text_command_census() {
+        use std::fmt::Write as _;
+        use std::hash::{Hash as _, Hasher as _};
+        use std::time::Instant;
+
+        // Строки длиной как на стенде `samples/bench-text-scroll.html`
+        // (~135 байт), а не 50, как у `hash_dual_bench`: доля байтов строки —
+        // одна из измеряемых статей, и занижать её нельзя.
+        let mut frame: Vec<DisplayCommand> = Vec::with_capacity(1000);
+        for i in 0..1000 {
+            #[expect(clippy::cast_precision_loss, reason = "координаты стенда")]
+            let y = (i as f32) * 19.2;
+            frame.push(DisplayCommand::DrawText {
+                rect: Rect::new(24.0, y, 976.0, 22.0),
+                text: format!(
+                    "Fox engine atlas jumps band ascender fox fox cache shader content {i}. \
+                     Jumps render descender cache height over band cascade sampler"
+                ),
+                font_size: 15.0,
+                color: Color { r: 68, g: 68, b: 68, a: 255 },
+                font_family: vec!["sans-serif".to_string()],
+                font_weight: lumen_layout::style::FontWeight(400),
+                font_style: lumen_layout::style::FontStyle::Normal,
+                font_stretch: lumen_layout::style::FontStretch(100),
+                font_variation_axes: vec![(*b"opsz", 15.0)],
+                font_features: Vec::new(),
+                font_palette: None,
+                tab_size: 8.0,
+                highlight_name: None,
+                text_orientation: None,
+            });
+        }
+
+        // Плечи: каждое сворачивает СВОЁ подмножество работы команды, разница
+        // соседних и есть статья. Все — по одному `DefaultHasher` на команду,
+        // как штатный `hash_one_command`, чтобы цена самого хешера не гуляла.
+        let arm_full = |cmd: &DisplayCommand| hash_one_command(cmd);
+        let arm_no_palette = |cmd: &DisplayCommand| {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            std::mem::discriminant(cmd).hash(&mut h);
+            if let DisplayCommand::DrawText {
+                rect, text, font_size, color, font_family, font_weight, font_style,
+                font_stretch, font_variation_axes, font_features, font_palette: _,
+                tab_size, highlight_name, text_orientation,
+            } = cmd
+            {
+                h_rect(&mut h, rect);
+                h_str(&mut h, text);
+                h_f32(&mut h, *font_size);
+                h_color(&mut h, color);
+                h.write_usize(font_family.len());
+                for f in font_family {
+                    h_str(&mut h, f);
+                }
+                h.write_u16(font_weight.0);
+                std::mem::discriminant(font_style).hash(&mut h);
+                h.write_u16(font_stretch.0);
+                h.write_usize(font_variation_axes.len());
+                for (tag, v) in font_variation_axes {
+                    h.write(tag);
+                    h_f32(&mut h, *v);
+                }
+                h.write_usize(font_features.len());
+                for (tag, v) in font_features {
+                    h.write(tag);
+                    h.write_u32(*v);
+                }
+                h.write_u8(0);
+                h_f32(&mut h, *tab_size);
+                h.write_u8(u8::from(highlight_name.is_some()));
+                h.write_u8(u8::from(text_orientation.is_some()));
+            }
+            h.finish()
+        };
+        // Только байты строки — нижняя граница любой тотальной свёртки.
+        let arm_text_only = |cmd: &DisplayCommand| {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            if let DisplayCommand::DrawText { text, .. } = cmd {
+                h_str(&mut h, text);
+            }
+            h.finish()
+        };
+        // Только палитра через `core::fmt` — цена одной записи `write!`.
+        let arm_palette_only = |cmd: &DisplayCommand| {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            if let DisplayCommand::DrawText { font_palette, .. } = cmd {
+                let mut hf = HashFmt(&mut h);
+                let _ = write!(hf, "{font_palette:?}");
+            }
+            h.finish()
+        };
+
+        let iters = 300;
+        let mut sink = 0u64;
+        let mut measure = |label: &str, f: &dyn Fn(&DisplayCommand) -> u64| {
+            // Прогрев: первый проход платит промахи кэша по свежему вектору.
+            for cmd in &frame {
+                sink ^= f(cmd);
+            }
+            let t0 = Instant::now();
+            for _ in 0..iters {
+                for cmd in &frame {
+                    sink ^= f(cmd);
+                }
+            }
+            let ns = t0.elapsed().as_secs_f64() * 1e9 / f64::from(iters) / frame.len() as f64;
+            eprintln!("[hash census] {label:>14}: {ns:7.1} нс/команду");
+        };
+        measure("full", &arm_full);
+        measure("без палитры", &arm_no_palette);
+        measure("палитра", &arm_palette_only);
+        measure("только строка", &arm_text_only);
+        eprintln!("[hash census] sink={sink}");
     }
 
     // ── ADR-016 M0.5: content-only hash + frame-delta classification ──────

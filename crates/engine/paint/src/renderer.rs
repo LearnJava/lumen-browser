@@ -3582,6 +3582,16 @@ pub struct Renderer {
     /// полосы (1.7× выше вьюпорта) там был бы дороже монолита — замерено
     /// 2026-07-10: 511 промахов из 629 кадров, медиана 10.7 → 21 мс.
     last_content_key: Option<u64>,
+    /// Версия content-списка, объявленная shell-ом (BUG-405 срез 39).
+    /// `0` — «версия неизвестна», свёртка не мемоизируется. Контракт —
+    /// [`RenderBackend::set_content_epoch`](crate::backend::RenderBackend::set_content_epoch).
+    content_epoch: u64,
+    /// Свёртка content-части обоих кадровых хэшей с прошлого кадра плюс всё,
+    /// по чему её законно переиспользовать: версия списка, его адрес, длина и
+    /// подпись выколотых диапазонов. Адрес и длина — не замена версии, а
+    /// страховка: они ловят подмену списка, о которой shell не сказал, но не
+    /// ловят правку на месте (её обязана поймать версия).
+    content_fold_memo: Option<ContentFoldMemo>,
     /// GPU layer cache with LRU eviction (ADR-008 Phase 2).
     /// Tracks layer textures by stacking context ID + size for off-viewport eviction.
     layer_cache: crate::layer_cache::LayerCache,
@@ -4452,6 +4462,73 @@ fn dual_hash_disabled() -> bool {
     use std::sync::OnceLock;
     static OFF: OnceLock<bool> = OnceLock::new();
     *OFF.get_or_init(|| std::env::var("LUMEN_NO_DUAL_HASH").is_ok_and(|v| v != "0"))
+}
+
+/// `LUMEN_NO_DL_EPOCH=1` — не переиспользовать свёртку content-части, считать
+/// оба кадровых хэша обходом всего списка, как до среза 39 (BUG-405).
+///
+/// Плечо A/B и рычаг отката: работа плеч различается ровно на обход списка,
+/// меряется той же меткой `frame-hash`.
+fn dl_epoch_disabled() -> bool {
+    use std::sync::OnceLock;
+    static OFF: OnceLock<bool> = OnceLock::new();
+    *OFF.get_or_init(|| std::env::var("LUMEN_NO_DL_EPOCH").is_ok_and(|v| v != "0"))
+}
+
+/// `LUMEN_VERIFY_DL_EPOCH=1` — на каждом кадре пересчитывать свёртку заново и
+/// сверять с мемоизированной (BUG-405 срез 39).
+///
+/// Проверка КОНТРАКТА, а не оптимизация: она стоит ровно того обхода, который
+/// срез убирает, поэтому включается только для диагностики. Расхождение значит,
+/// что кто-то поменял список, не сменив версию, — кадр показал бы устаревшие
+/// пиксели. Расхождение печатается, и кадр берёт свежую свёртку.
+fn dl_epoch_verify() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("LUMEN_VERIFY_DL_EPOCH").is_ok_and(|v| v != "0"))
+}
+
+/// Сколько раз мемоизированная свёртка разошлась с пересчитанной под
+/// `LUMEN_VERIFY_DL_EPOCH=1` (BUG-405 срез 39). Ноль за прогон — доказательство
+/// того, что контракт версии соблюдён; счётчик читают тесты и диагностика.
+pub static DL_EPOCH_MISMATCHES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Сколько кадров переиспользовали свёртку content-части вместо обхода списка
+/// (BUG-405 срез 39) — счётчик-гейт среза: перф-выигрыш обязан подтверждаться
+/// им, а не настенным временем (`docs/perf-method.md`).
+pub static DL_FOLD_REUSED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Запомненная свёртка content-части кадровых хэшей и всё, по чему её законно
+/// переиспользовать (BUG-405 срез 39).
+struct ContentFoldMemo {
+    /// Версия списка, объявленная shell-ом на кадре, где свёртка снята.
+    epoch: u64,
+    /// Адрес начала среза `content` — страховка от подмены списка, о которой
+    /// shell не сказал. Не разыменовывается: сравнивается как число.
+    ptr: usize,
+    /// Длина среза `content` — вторая половина той же страховки.
+    len: usize,
+    /// Свёртка выколотых диапазонов: у ключа полосы они входят в результат,
+    /// поэтому смена набора сегментов обязана инвалидировать свёртку.
+    skip_sig: u64,
+    /// Сама свёртка: `.0` — для хэша кадра, `.1` — для ключа полосы.
+    folds: (u64, u64),
+}
+
+/// Подпись набора выколотых диапазонов для [`ContentFoldMemo::skip_sig`].
+///
+/// O(числа диапазонов), а не O(длины списка): на странице их единицы, поэтому
+/// подпись считается каждый кадр и мемоизации не требует.
+fn skip_signature(skip: &[std::ops::Range<usize>]) -> u64 {
+    use std::hash::Hasher;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    h.write_usize(skip.len());
+    for r in skip {
+        h.write_usize(r.start);
+        h.write_usize(r.end);
+    }
+    h.finish()
 }
 
 /// `LUMEN_NO_COMPOSE_OVERLAY=1` — не рисовать overlay в кадре КОМПОЗИЦИИ
@@ -5650,6 +5727,8 @@ impl Renderer {
             last_compose_skip: None,
             pending_base_blit: None,
             last_content_key: None,
+            content_epoch: 0,
+            content_fold_memo: None,
             layer_cache: crate::layer_cache::LayerCache::new(),
             composite_pipeline: OnceCell::new(),
             rrect_clip_pipeline: OnceCell::new(),
@@ -9458,6 +9537,74 @@ impl Renderer {
         self.render_with_anim(content, overlay, scroll_y, scroll_x, &[])
     }
 
+    /// Объявляет версию списка `content` ближайшего кадра (BUG-405 срез 39).
+    /// Контракт вызывающего — [`RenderBackend::set_content_epoch`].
+    pub fn set_content_epoch(&mut self, epoch: u64) {
+        self.content_epoch = epoch;
+    }
+
+    /// Свёртка content-части с прошлого кадра, если её законно переиспользовать
+    /// (BUG-405 срез 39); `None` — считать заново.
+    ///
+    /// Версия — главный сторож (только она ловит правку списка на месте), адрес
+    /// и длина — страховка от подмены списка без смены версии, подпись
+    /// выколотых диапазонов — от смены набора анимируемых сегментов (они входят
+    /// в ключ полосы).
+    fn content_fold_reuse(
+        &self,
+        content: &[DisplayCommand],
+        skip: &[std::ops::Range<usize>],
+    ) -> Option<(u64, u64)> {
+        if self.content_epoch == 0 || dl_epoch_disabled() {
+            return None;
+        }
+        let memo = self.content_fold_memo.as_ref()?;
+        if memo.epoch != self.content_epoch
+            || memo.ptr != content.as_ptr().addr()
+            || memo.len != content.len()
+            || memo.skip_sig != skip_signature(skip)
+        {
+            return None;
+        }
+        if dl_epoch_verify() {
+            let fresh = crate::display_list::fold_content_dual(content, skip);
+            if fresh != memo.folds {
+                DL_EPOCH_MISMATCHES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                eprintln!(
+                    "[dl-epoch] РАСХОЖДЕНИЕ: версия {} не сменилась, а список \
+                     изменился ({} команд, запомнено {:?}, пересчитано {:?})",
+                    self.content_epoch,
+                    content.len(),
+                    memo.folds,
+                    fresh,
+                );
+                return None;
+            }
+        }
+        Some(memo.folds)
+    }
+
+    /// Запоминает свёртку content-части для следующего кадра (BUG-405 срез 39).
+    /// При неизвестной версии (`0`) память чистится — переиспользовать нечего.
+    fn remember_content_fold(
+        &mut self,
+        content: &[DisplayCommand],
+        skip: &[std::ops::Range<usize>],
+        folds: (u64, u64),
+    ) {
+        if self.content_epoch == 0 || dl_epoch_disabled() {
+            self.content_fold_memo = None;
+            return;
+        }
+        self.content_fold_memo = Some(ContentFoldMemo {
+            epoch: self.content_epoch,
+            ptr: content.as_ptr().addr(),
+            len: content.len(),
+            skip_sig: skip_signature(skip),
+            folds,
+        });
+    }
+
     /// Как [`render`](Self::render), но с диапазонами анимируемых сегментов
     /// `content` (static/animated split скролл-композитора, EXPERIMENT.md §2).
     /// Пустые `anim_ranges` — поведение идентично `render`.
@@ -9504,6 +9651,10 @@ impl Renderer {
         let prep = self.prepare_page_compose(content, scroll_x, anim_ranges, &mut marks);
         let skip: &[std::ops::Range<usize>] = prep.as_ref().map_or(&[], |p| &p.ranges);
         let band_dims = prep.as_ref().map_or((0, 0), |p| (p.sw, p.band_h_px));
+        // BUG-405 срез 39: переиспользована ли свёртка content-части на этом
+        // кадре — единственная статья, которой различаются плечи `frame-hash`,
+        // поэтому она печатается рядом с его временем.
+        let mut fold_reused = false;
         let (base_hash, band_key_base) = if dual_hash_disabled() {
             // Плечо A/B: два раздельных обхода, как до среза 35.
             (
@@ -9515,22 +9666,40 @@ impl Renderer {
                 ),
             )
         } else {
-            crate::display_list::hash_display_list_dual(
+            // BUG-405 срез 39: свёртка content-части переиспользуется, пока
+            // shell не сменил версию списка. Остальные входы обоих хэшей
+            // (скролл, размеры поверхности и полосы, длины, overlay) в свёртку
+            // не входят и дописываются каждый кадр, поэтому кадр не становится
+            // слеп ни к одному из них.
+            let reuse = self.content_fold_reuse(content, skip);
+            fold_reused = reuse.is_some();
+            let (hashes, folds) = crate::display_list::hash_display_list_dual_memo(
                 content,
                 overlay,
                 skip,
                 (scroll_x, scroll_y),
                 (sw0, sh0),
                 band_dims,
-            )
+                reuse,
+            );
+            if fold_reused {
+                DL_FOLD_REUSED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            self.remember_content_fold(content, skip, folds);
+            hashes
         };
         marks.mark(3);
         if marks.printing() {
             let ms = marks.ms[3] - marks.ms[2];
             let (nc, no) = (content.len(), overlay.len());
             let mode = if dual_hash_disabled() { "два прохода" } else { "один проход" };
+            // BUG-405 срез 39: «свёртка» — content-часть переиспользована,
+            // обойдён только overlay; «обход» — список обойдён целиком.
+            let fold = if fold_reused { "свёртка" } else { "обход" };
             timed_log(|| {
-                eprintln!("[frame:wgpu] frame-hash: {ms:.2}ms ({nc} + {no} cmds, {mode})");
+                eprintln!(
+                    "[frame:wgpu] frame-hash: {ms:.2}ms ({nc} + {no} cmds, {mode}, {fold})"
+                );
             });
             // Печать стоит 0.1–0.3 мс (срез 34) — сдвигаем метку, чтобы она не
             // легла в статью `band` соседней строки.
