@@ -58,11 +58,11 @@
  "generated": "2026-08-22",
  "counts": {
   "open": 344,
-  "fixed": 435,
+  "fixed": 436,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 779,
+ "total_bugs": 780,
  "phases": [
   {
    "id": "P0",
@@ -10807,6 +10807,13 @@
    "component": "js (`crates/js/src/worker.rs:364-397` — заглушки таймеров, `worker.rs:377` `setInterval = setTimeout`, `worker.rs:834` — единственный вызов `_lumen_flush_timers`; то же в `shared_worker.rs:207,512,523`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-816": {
+   "status": "fixed",
+   "title": "`cargo test -p lumen-paint` красный на `main` с 2026-08-21 16:07 (`29e7bcf1d`, [BUG-431](bugs/BUG-431-FIXED.md)): текстовый golden display list'а ожидал `DrawIm…",
+   "component": "test/paint (`crates/engine/paint/tests/snapshots/img_with_background_and_border.snap`)",
+   "date": "2026-08-22",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -11910,6 +11917,9 @@
   ],
   "test/paint": [
    "BUG-122"
+  ],
+  "test/paint (`crates/engine/paint/tests/snapshots/img_with_background_and_border.snap`)": [
+   "BUG-816"
   ],
   "test/snapshot": [
    "BUG-118",
