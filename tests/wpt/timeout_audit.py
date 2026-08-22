@@ -736,7 +736,7 @@ SOURCE_MARKERS = [
         # page-scroll marker on purpose — an element scroll fires `scroll`
         # correctly, so for a test that waits on `scrollend` the missing event
         # is the whole cause whichever scroller it used.
-        "scrollend-never-fired", "BUG-817",
+        "scrollend-never-fired", "BUG-822",
         [r"scrollend"],
         "the test waits for a `scrollend` event, which no scroll path in the "
         "engine dispatches (and `onscrollend` is not on `window` either)",
@@ -751,7 +751,7 @@ SOURCE_MARKERS = [
         # element path is fine (`fire_element_scroll` runs for `scrollTo` and
         # `scrollTop=` alike), which is why both halves are required below:
         # the wait must be on a *page-level* `scroll`.
-        "page-scroll-no-scroll-event", "BUG-816",
+        "page-scroll-no-scroll-event", "BUG-821",
         [r"window\.scroll(?:To|By)\s*\(|document\.scrollingElement"
          r"|\bscrollIntoView\s*\(",
          r"window\.addEventListener\(\s*['\"]scroll['\"]"
@@ -773,10 +773,10 @@ SOURCE_MARKERS = [
         # `verify_stream_scroll_message_gaps.py`, and a per-file sweep that ran
         # each residual `streams/*` test with `add_result_callback` logging —
         # 35 of the 36 runnable ones stop mid-file, always on a subtest of one
-        # of those shapes (BUG-818 for the unsettled promises, BUG-819 for the
+        # of those shapes (BUG-823 for the unsettled promises, BUG-824 for the
         # missing surfaces). Both halves are required so that a test merely
         # *mentioning* a stream is not claimed.
-        "streams-promise-unsettled", "BUG-818/BUG-819",
+        "streams-promise-unsettled", "BUG-823/BUG-824",
         [r"new\s+(?:Readable|Writable|Transform)Stream\s*\("
          r"|TextDecoderStream|TextEncoderStream",
          r"\.closed\b|\.abort\s*\(|\.tee\s*\("

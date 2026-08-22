@@ -84,15 +84,15 @@ finding narrows to the missing event.
 
 So, of the shapes measured here:
 
-1. **A programmatic page scroll dispatches no `scroll` event** (BUG-816) —
+1. **A programmatic page scroll dispatches no `scroll` event** (BUG-821) —
    `fire_window_scroll` has exactly one caller in the whole workspace, the
    mouse-wheel branch of `main.rs`. `scrollIntoView` additionally never falls
    back to scrolling the page.
-2. **`scrollend` is dispatched by nothing at all** (BUG-817) — there is no
+2. **`scrollend` is dispatched by nothing at all** (BUG-822) — there is no
    `_lumen_fire_scrollend*` to match the `scroll` pair.
-3. **Streams settle promises on the happy path only** (BUG-818) and are
-   missing `tee`/BYOB/async-iteration/`TextDecoderStream` close (BUG-819).
-4. **`<video>` is a thinner stub than `<audio>`** (BUG-820).
+3. **Streams settle promises on the happy path only** (BUG-823) and are
+   missing `tee`/BYOB/async-iteration/`TextDecoderStream` close (BUG-824).
+4. **`<video>` is a thinner stub than `<audio>`** (BUG-825).
 5. **`window.postMessage` supports only the legacy string overload**
    (already filed as BUG-717) — the one-argument form and the
    `WindowPostMessageOptions` dictionary both drop the message silently, and

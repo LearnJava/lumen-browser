@@ -1,7 +1,7 @@
-# BUG-818 — Streams: промисы разрешаются только на счастливом пути, любая ошибка/закрытие/отмена оставляет промис висеть навсегда
+# BUG-823 — Streams: промисы разрешаются только на счастливом пути, любая ошибка/закрытие/отмена оставляет промис висеть навсегда
 
 **Статус:** OPEN
-**Заведён:** 2026-08-21 (WPT-RUN-6, срез 19 — 40 TIMEOUT остатка вместе с [BUG-819](BUG-819-OPEN.md), механизм `streams-promise-unsettled`)
+**Заведён:** 2026-08-21 (WPT-RUN-6, срез 19 — 40 TIMEOUT остатка вместе с [BUG-824](BUG-824-OPEN.md), механизм `streams-promise-unsettled`)
 **Область:** `crates/js/src/dom.rs:7303-7620` — весь шим `ReadableStream`/`WritableStream`/`TransformStream` (в частности `ReadableStreamDefaultController.error` `:7331`, `_rs_do_close` `:7342`, `ReadableStream.pipeTo` `:7406`, конструктор `ReadableStream` `:7353` — `start()` вызывается синхронно и его возвращаемое значение выбрасывается)
 **Владелец:** P1/P3 (`lumen-js`). Заведён P2 в ходе WPT-задачи, здесь не чинится.
 
@@ -82,7 +82,7 @@ return Promise.all([
 ## Масштаб
 
 Механизм `streams-promise-unsettled` забирает **40 id** остатка снимка
-WPT-RUN-5 (вместе с [BUG-819](BUG-819-OPEN.md), маркер у них общий — по
+WPT-RUN-5 (вместе с [BUG-824](BUG-824-OPEN.md), маркер у них общий — по
 источнику эти две причины неразделимы): все 33 непонятых TIMEOUT `streams/*`,
 5 `encoding/streams` и 1 `fetch/api`, плюс один id переехал сюда из слабой
 стадии «что-то бросило».
