@@ -353,20 +353,60 @@ def _waits_on_var(text, var):
         text) is not None
 
 
+#: `new LoadObserver(el)` / `test_render_blocking(el, ...)` — the two entry
+#: points of `html/dom/render-blocking/support/test-render-blocking.js`, which
+#: wraps `target.addEventListener('load', ...)` and hands the resulting promise
+#: to a `promise_test`. The indirection is why the plain `_waits_on_var` shapes
+#: miss the family: the listener is attached inside the helper, on a parameter,
+#: so nothing in the test file itself mentions `load` at all.
+_LOAD_OBSERVER_RE = re.compile(
+    r"new LoadObserver\s*\(|\btest_render_blocking\s*\(")
+
+#: A `<script src>` / `<link rel=stylesheet>` / `<style>` written by the parser
+#: — the elements the shell loads on its own path without telling JS. Used only
+#: together with `_LOAD_OBSERVER_RE`: on its own it is most of the corpus.
+_PARSER_RESOURCE_TAG_RE = re.compile(
+    r"<script\b[^>]*\ssrc\s*=|<link\b[^>]*\srel\s*=\s*['\"]?stylesheet|<style\b",
+    re.IGNORECASE)
+
+#: `createElement(tag)` where the tag can be `'style'` — either spelled out or
+#: passed in as a string argument next to it, which is how
+#: `remove-attr-unblocks-rendering.optional.html` mints its four elements
+#: (`addRenderBlockingElement('style', ...)` → `document.createElement(tag)`).
+_STYLE_ELEMENT_HINT_RE = re.compile(
+    r"createElement\(\s*['\"]style['\"]\s*\)|['\"]style['\"]\s*,", re.IGNORECASE)
+
+
 def _resource_event_marker(text, test_id=None):
     """BUG-804 marker: the test waits for a `load`/`error` the engine never fires.
 
-    Two shapes, both verified live (WPT-RUN-6 slice 12). The attribute shape is
-    parser-inserted by construction. The `createElement('style')` shape is the
+    Three shapes, all verified live. The attribute shape is parser-inserted by
+    construction (WPT-RUN-6 slice 12). The `createElement('style')` shape is the
     one case where even the working `createElement` path stays silent, because
     `_lumen_resource_track` whitelists `script`/`link` only — but a created
     `<style>` is only evidence when something actually waits on *it*, hence
     `_waits_on_var`.
 
+    The third shape is `LoadObserver` (WPT-RUN-6 slice 20). The whole
+    `html/dom/render-blocking` family waits for an element `load` through that
+    helper rather than in its own text, and slice 20 re-measured both halves it
+    needs: a parser-inserted `<script src>` runs but dispatches `load` neither
+    to `addEventListener` nor to `onload` (the resource is held for a second by
+    the probe server, so the listener is certainly attached first), the same
+    for a parser-inserted `<link rel=stylesheet>`, and a `<style>` fires
+    nothing however it was inserted — while the script-created `<script>`/
+    `<link>` controls on the same page do fire. So the helper plus one silent
+    element under observation is the marker; `test_render_blocking(window)`
+    with no such element would not match either half.
+
     Deliberately NOT matched: `createElement('script'|'link')`. That path fires
     `load` correctly (BUG-571/BUG-722), confirmed by the same A/B page.
     """
     if _RESOURCE_EVENT_ATTR_RE.search(text):
+        return True
+    if _LOAD_OBSERVER_RE.search(text) and (
+            _PARSER_RESOURCE_TAG_RE.search(text)
+            or _STYLE_ELEMENT_HINT_RE.search(text)):
         return True
     return any(_waits_on_var(text, var) for var in _CREATE_STYLE_RE.findall(text))
 
@@ -570,6 +610,29 @@ SOURCE_MARKERS = [
         "cross-window channel the test builds is dead",
     ),
     Mechanism(
+        # Measured live in slice 20 (`verify_preload_script_audio_gaps.py`),
+        # with the probe's own http server as the witness: a `rel=preload`,
+        # `rel=modulepreload` or `rel=prefetch` link — created from script or
+        # written by the parser — produces **no request at all**, and fires
+        # neither `load` nor `error`. The `rel=stylesheet` control on the same
+        # page loads and fires. Root cause is one hop: the scanner's hint ends
+        # up in `Event::SubresourceHintFound`, whose only consumer in the
+        # workspace is the stderr logger at `crates/shell/src/main.rs:285` —
+        # so `⤷ preload js [medium] <URL>` appears in the log for a request
+        # that was never made (BUG-826). Sorted with the element-resource
+        # family above and below `iframe`/`img`, which are older causes.
+        "preload-hint-never-fetched", "BUG-826",
+        [r"<link\b[^>]*\brel\s*=\s*['\"]?(?:[^'\">]*\s)?"
+         r"(?:preload|modulepreload|prefetch)\b"
+         r"|\.rel\s*=\s*['\"](?:[^'\"]*\s)?(?:preload|modulepreload|prefetch)\b"
+         r"|rel:\s*['\"](?:preload|modulepreload|prefetch)['\"]"
+         r"|nextValueFromServer"],
+        "a `rel=preload`/`modulepreload`/`prefetch` link is never fetched and "
+        "never fires `load`/`error` — the hint is logged and dropped, so a "
+        "test awaiting the preload (or polling the server for it) waits "
+        "forever",
+    ),
+    Mechanism(
         # `createElement("track")` is the shape the whole `track-webvtt-*`
         # family uses: `track-helpers.js::check_cues_from_track` builds the
         # `<video>`/`<track>` pair in script and hangs the test off
@@ -682,6 +745,22 @@ SOURCE_MARKERS = [
         "arrive only as a side effect of a later relayout, so a test that "
         "observes and waits hears nothing",
     ),
+    Mechanism(
+        # Above the BUG-804 marker on purpose, and only for the *call* shape:
+        # `test-render-blocking.js` defines `nodeInserted()` and is included by
+        # all nine residual `render-blocking` ids, but only three await it. In
+        # those three the wait comes first — `promise_setup` cannot finish, so
+        # no test in the file ever starts, whatever else the file would have
+        # waited for afterwards. Measured in slice 20: a `MutationObserver`
+        # armed on `document.documentElement` with `{childList, subtree}` hears
+        # nothing about the `<div>`/`<script>` the parser writes right below
+        # it, while the same observer reports a node appended from script
+        # (BUG-827).
+        "mutation-record-parser-insert", "BUG-827",
+        [r"await\s+nodeInserted\s*\(|=\s*nodeInserted\s*\("],
+        "the test awaits a `MutationObserver` record about an element the "
+        "parser inserts, and parser insertions produce no records at all",
+    ),
     # Last on purpose: this marker is narrow, so anything a broader mechanism
     # can explain (a test that also builds an `<iframe>`, say) should be
     # reported under that one instead.
@@ -725,6 +804,24 @@ SOURCE_MARKERS = [
         "page: `error` is dispatched at the `Worker` object only when the "
         "script fetch itself failed",
         mode="all",
+    ),
+    Mechanism(
+        # Slice 20, same probe: `OfflineAudioContext.startRendering()` resolves
+        # at once with a buffer of pure silence (`nonzero=0/4410` for a graph
+        # whose oscillator runs the whole render), a source node never fires
+        # `ended` under either registration, and `AudioParam` automation
+        # changes neither `.value` nor the output. Decisively for the verdict,
+        # the shim calls `oncomplete` inside `try { … } catch (e) {}`
+        # (`crates/js/src/web_audio.rs`), so the comparison every
+        # `audioparam-*` test runs from that handler dies without a word and
+        # its audit task never finishes — a TIMEOUT where the same failure on
+        # a real engine would be a FAIL (BUG-828).
+        "offline-audio-silent", "BUG-828",
+        [r"new OfflineAudioContext\(|new AudioContext\(|createOscillator\(|"
+         r"AudioBufferSourceNode|createBufferSource\(|\.startRendering\("],
+        "Web Audio renders silence: `startRendering()` hands back an empty "
+        "buffer, `ended` never fires, automation is inert, and a throw inside "
+        "`oncomplete` is swallowed by the shim",
     ),
     # The three scroll/stream markers of slice 19 sort here, below everything
     # older, for the same reason the two above do: a scroll test that also
@@ -788,6 +885,21 @@ SOURCE_MARKERS = [
         "the test drives a stream through an error/close/cancel path, where "
         "the shim leaves the promise pending forever",
         mode="all",
+    ),
+    Mechanism(
+        # Slice 20 re-measured what BUG-568 still covers after BUG-701 added
+        # `write`/`writeln`: writing plain markup during parsing works and the
+        # node is in the tree, but a `<script>` written that way never runs,
+        # and `document.open` is still `not a function` (`document.open is not
+        # a function` from the probe, verbatim). Both shapes below are that
+        # residue — a test that writes a script and waits for it, or one that
+        # reopens the stream — and both are silent: nothing is thrown at the
+        # page, the written script simply never executes.
+        "document-write-script-inert", "BUG-568",
+        [r"document\.open\s*\(|document\.write\s*\(\s*[\"'`]\s*<\s*(?:scr|/scr)"],
+        "a `<script>` handed to `document.write()` is never executed and "
+        "`document.open()` does not exist, so a test that writes its own "
+        "script and waits for it hears nothing",
     ),
     # Truly last: "the test listens for an error" is the weakest of these
     # claims, so anything with a named cause above must take the test first.
@@ -2128,6 +2240,119 @@ def selftest():
                          "});</script>")
         check(classify_source("/webappapis/with-font.html", tmp, {}) == "fonts-ready",
               "an older named cause must outrank the window-error marker")
+
+        # ── slice 20 ──────────────────────────────────────────────────────
+        # BUG-826: a link hint is never fetched, so both the `load` wait and
+        # the "poll the server until the preload shows up" shape hang.
+        os.makedirs(os.path.join(tmp, "preload"), exist_ok=True)
+        with open(os.path.join(tmp, "preload", "created.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>promise_test(async () => {\n"
+                         "  const link = document.createElement('link');\n"
+                         "  link.rel = 'preload';\n"
+                         "  link.as = 'script';\n"
+                         "  await new Promise(r => { link.onload = r; });\n"
+                         "});</script>")
+        check(classify_source("/preload/created.html", tmp, {})
+              == "preload-hint-never-fetched",
+              "a script-created rel=preload link was not claimed")
+        with open(os.path.join(tmp, "preload", "markup.html"), "w", encoding="utf-8") as handle:
+            handle.write('<link rel="modulepreload" href="m.js" onload="t.done()">')
+        check(classify_source("/preload/markup.html", tmp, {})
+              == "preload-hint-never-fetched",
+              "a parser-written rel=modulepreload link was not claimed")
+        # The `connection-allowlist` shape: nothing in the test mentions
+        # `load` at all, it polls the server in a `while (true)` until the
+        # preloaded URL arrives there.
+        with open(os.path.join(tmp, "preload", "poll.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>promise_test(async () => {\n"
+                         "  const result = await nextValueFromServer(key);\n"
+                         "});</script>")
+        check(classify_source("/preload/poll.html", tmp, {})
+              == "preload-hint-never-fetched",
+              "a server-poll wait for a preload was not claimed")
+        # The control that separates the hint from the element: a
+        # `rel=stylesheet` link created from script does load and does fire
+        # (BUG-722), so it must not be claimed by this marker.
+        with open(os.path.join(tmp, "preload", "stylesheet.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>promise_test(async () => {\n"
+                         "  const link = document.createElement('link');\n"
+                         "  link.rel = 'stylesheet';\n"
+                         "  await new Promise(r => { link.onload = r; });\n"
+                         "});</script>")
+        check(classify_source("/preload/stylesheet.html", tmp, {}) is None,
+              "a script-created rel=stylesheet link must stay unclassified")
+
+        # BUG-827: the wait is for a mutation record about a parser insertion.
+        # Only the *call* counts — `test-render-blocking.js` defines
+        # `nodeInserted()` for all nine files of that directory and only three
+        # await it.
+        os.makedirs(os.path.join(tmp, "renderblocking"), exist_ok=True)
+        with open(os.path.join(tmp, "renderblocking", "await.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>promise_setup(async () => {\n"
+                         "  let script = await nodeInserted(document.head, n => n.id === 'script');\n"
+                         "});</script>\n"
+                         '<script id="script" src="dummy.js"></script>')
+        check(classify_source("/renderblocking/await.html", tmp, {})
+              == "mutation-record-parser-insert",
+              "an await on a parser-insertion mutation record was not claimed")
+        with open(os.path.join(tmp, "renderblocking", "define.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>function nodeInserted(parentNode, predicate) {\n"
+                         "  return new Promise(resolve => {\n"
+                         "    new MutationObserver(() => {}).observe(parentNode, {childList: true});\n"
+                         "  });\n"
+                         "}</script>")
+        check(classify_source("/renderblocking/define.html", tmp, {}) is None,
+              "merely defining the helper must not be read as awaiting it")
+
+        # BUG-804, third shape: the `load` wait goes through `LoadObserver`,
+        # so nothing in the test itself mentions `load`.
+        with open(os.path.join(tmp, "renderblocking", "observer.html"), "w", encoding="utf-8") as handle:
+            handle.write('<script id="s" src="dummy.js" blocking="render"></script>\n'
+                         "<script>const el = document.getElementById('s');\n"
+                         "test_render_blocking(el, () => assert_true(true), 'x');</script>")
+        check(classify_source("/renderblocking/observer.html", tmp, {})
+              == "resource-no-load-event",
+              "a LoadObserver wait on a parser-inserted script was not claimed")
+        # …but the helper alone is not the marker: with nothing silent under
+        # observation there is no reason to claim the file.
+        with open(os.path.join(tmp, "renderblocking", "window.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>test_render_blocking(() => assert_true(true), 'x');</script>")
+        check(classify_source("/renderblocking/window.html", tmp, {}) is None,
+              "test_render_blocking with no silent element must stay unclassified")
+
+        # BUG-828: Web Audio renders silence and never reports `ended`.
+        os.makedirs(os.path.join(tmp, "webaudio"), exist_ok=True)
+        with open(os.path.join(tmp, "webaudio", "render.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>promise_test(async () => {\n"
+                         "  const ctx = new OfflineAudioContext(1, 44100, 44100);\n"
+                         "  const buf = await ctx.startRendering();\n"
+                         "});</script>")
+        check(classify_source("/webaudio/render.html", tmp, {}) == "offline-audio-silent",
+              "an OfflineAudioContext render was not claimed")
+        # Ordering: a WebRTC test that also builds an `AudioContext` belongs to
+        # the older, better-understood peer-connection cause.
+        with open(os.path.join(tmp, "webaudio", "rtc-audio.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>const ctx = new AudioContext();\n"
+                         "const pc = new RTCPeerConnection();\n"
+                         "pc.ondatachannel = t.step_func_done(() => {});</script>")
+        check(classify_source("/webaudio/rtc-audio.html", tmp, {}) == "webrtc-no-remote-peer",
+              "an AudioContext in a WebRTC test must not outrank the peer cause")
+
+        # BUG-568: a written `<script>` never runs; written markup does.
+        os.makedirs(os.path.join(tmp, "dmi"), exist_ok=True)
+        with open(os.path.join(tmp, "dmi", "write-script.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>var t = async_test();\n"
+                         "t.step(function () {\n"
+                         "  document.write('<scr' + 'ipt>t.done();</scr' + 'ipt>');\n"
+                         "});</script>")
+        check(classify_source("/dmi/write-script.html", tmp, {})
+              == "document-write-script-inert",
+              "a document.write of a <script> was not claimed")
+        with open(os.path.join(tmp, "dmi", "write-markup.html"), "w", encoding="utf-8") as handle:
+            handle.write("<script>document.write('<p id=x>hi</p>');\n"
+                         "test(() => assert_true(!!document.getElementById('x')));</script>")
+        check(classify_source("/dmi/write-markup.html", tmp, {}) is None,
+              "document.write of plain markup works and must stay unclassified")
 
     for msg in failures:
         print("FAIL:", msg)

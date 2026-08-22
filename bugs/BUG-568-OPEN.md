@@ -48,3 +48,32 @@ true scale: essentially the entire
 `dynamic-markup-insertion/document-write/` (~15 files) subdirectories
 TIMEOUT or FAIL on this alone — the single largest failure cluster in that
 slice after [BUG-591](bugs/BUG-591-OPEN.md) (global error reporting).
+
+## Перезамер 2026-08-22 (WPT-RUN-6, срез 20): что осталось после BUG-701
+
+[BUG-701](BUG-701-FIXED.md) добавил `write`/`writeln`, поэтому исходная
+формулировка «ни одного из четырёх методов нет» устарела. Живой замер
+(`tests/wpt/verify_preload_script_audio_gaps.py`, коммит `79f7df91a`,
+`--seconds 5`) показывает ровно два остатка:
+
+| проба | получено |
+|---|---|
+| `document-write-markup` | `wrote-markup found=yes`, `later found=yes writeln=function` — разметка пишется и остаётся в дереве |
+| `document-write-script` | `wrote` — и **никогда** `written-script-ran` |
+| `document-open-write` | `open-threw TypeError: document.open is not a function` |
+
+То есть: (1) `<script>`, переданный в `document.write()`, не выполняется —
+разметка попадает в дерево, но скрипт не запускается и не сообщает об этом
+ничем; (2) `document.open()`/`document.close()` по-прежнему отсутствуют
+целиком.
+
+Обе грани — молчаливые, поэтому дают TIMEOUT, а не FAIL. Механизм
+`document-write-script-inert` в `tests/wpt/timeout_audit.py` забирает по ним
+**7 id** остатка снимка WPT-RUN-5: `html/webappapis/dynamic-markup-insertion/
+document-write/script_00{1,3}`, `content-security-policy/nonce-hiding/*` 2,
+`html/browsers/history/the-history-interface/008`,
+`html/semantics/scripting-1/…/execution-timing/068`,
+`trusted-types/HTMLScriptElement-internal-slot` — все пишут `<script>` через
+`document.write` и ждут его исполнения. Порядок починки, вероятно, обратный
+интуитивному: исполнение записанного скрипта затрагивает больше тестов, чем
+сам `document.open()`.
