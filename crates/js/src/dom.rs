@@ -673,6 +673,56 @@ function ErrorEvent(type, init) {
 ErrorEvent.prototype = Object.create(Event.prototype);
 ErrorEvent.prototype.constructor = ErrorEvent;
 
+// ── Uncaught exception reporting (HTML LS §8.1.3.6 \"report the exception\") ───
+// BUG-591: dispatches a window 'error' ErrorEvent for a genuinely uncaught
+// exception from a top-level classic script, a timer, a requestAnimationFrame
+// callback or a queueMicrotask callback -- the callback-boundary catch(e){}
+// sites this replaces used to swallow the error outright. `window.onerror`
+// uses the special 5-argument OnErrorEventHandler calling convention (WebIDL)
+// rather than receiving the Event object; that distinction is implemented in
+// the 'error' branch of window.dispatchEvent (below), which every caller of
+// this function funnels through, so page code that already does
+// `window.dispatchEvent(new ErrorEvent(...))` gets the same 5-arg behaviour.
+//
+// `filename`/`lineno`/`colno` are omitted by every JS-side caller (V8's
+// `Error` has no structured location API from script -- only `.stack`, a
+// free-form string) and best-effort-parsed from the first `at file:line:col`
+// frame instead. The one caller with a reliable structured location is the
+// Rust host itself: `V8JsRuntime::eval_and_report` (`v8_runtime.rs`) reads
+// `v8::Message` (populated by V8 for both compile and runtime errors) and
+// passes all three explicitly, which is why they are accepted as optional
+// trailing arguments rather than always re-derived here.
+function _lumen_parse_error_location(err) {
+    if (!err || typeof err.stack !== 'string') return null;
+    var lines = err.stack.split('\\n');
+    for (var i = 0; i < lines.length; i++) {
+        var m = /at (?:.*\\()?([^\\s()]+):(\\d+):(\\d+)\\)?\\s*$/.exec(lines[i]);
+        if (m) return { filename: m[1], lineno: +m[2], colno: +m[3] };
+    }
+    return null;
+}
+function _lumen_report_exception(err, filename, lineno, colno) {
+    var message = (err instanceof Error) ? String(err.message) : String(err);
+    if (filename === undefined || filename === null) {
+        var loc = _lumen_parse_error_location(err);
+        filename = loc ? loc.filename : (typeof location !== 'undefined' ? location.href : '');
+        lineno = loc ? loc.lineno : 0;
+        colno = loc ? loc.colno : 0;
+    }
+    var ev = new ErrorEvent('error', {
+        message: message, filename: String(filename || ''),
+        lineno: lineno | 0, colno: colno | 0,
+        error: err, bubbles: false, cancelable: true,
+    });
+    var notCancelled = window.dispatchEvent(ev);
+    // Diagnostic value proven during BUG-703/BUG-716: a page whose async
+    // bootstrap swallows everything is otherwise silent on stderr right up to
+    // the point it hangs.
+    if (notCancelled) {
+        _lumen_console_error('Uncaught ' + ((err && err.stack) ? err.stack : message));
+    }
+}
+
 // PromiseRejectionEvent — HTML LS §8.1.7.5, carried by `unhandledrejection` /
 // `rejectionhandled`.
 //
@@ -6309,8 +6359,15 @@ function _lumen_pop_current_script() {
 // `document.currentScript` for the duration of the body (omitted → `null`).
 function _lumen_script_execute_classic(text, nid) {
     _lumen_push_current_script(nid);
+    // BUG-591: report the exception (window 'error'/onerror) instead of only
+    // logging it -- this is the classic-script runtime-error reporting step
+    // of HTML LS §8.1.3.6, reached by every script inserted through the DOM
+    // (createElement('script') + appendChild, the parser's own insertion
+    // path, …), as opposed to the initial page-load loop in
+    // `crates/shell/src/main.rs`, which goes through the Rust-side
+    // `V8JsRuntime::eval_and_report` for the same reporting step instead.
     try { (0, eval)(text); }
-    catch (e) { _lumen_console_error('Uncaught ' + ((e && e.stack) ? e.stack : e)); }
+    catch (e) { _lumen_report_exception(e); }
     finally { _lumen_pop_current_script(); }
 }
 
@@ -7321,12 +7378,13 @@ function _lumen_tick_timers() {
             _lumen_timers.push({ id: r.id, fn: r.fn, deadline: now + riv, interval: r.interval, nesting: rn });
         }
     }
-    // Run callbacks; errors are swallowed (HTML §8.6 step 17).
+    // Run callbacks; an uncaught exception is reported (HTML §8.6 step 17
+    // \"report the exception\"), not swallowed -- BUG-591.
     // The callback's nesting level is active while it runs so timers it
     // schedules inherit level+1 (§8.6 step 3).
     for (var k = 0; k < ready.length; k++) {
         _lumen_timer_nesting = ready[k].nesting || 1;
-        try { ready[k].fn(); } catch(e) {}
+        try { ready[k].fn(); } catch(e) { _lumen_report_exception(e); }
     }
     _lumen_timer_nesting = 0;
     // Notify shell of next wakeup if any timers remain.
@@ -7407,7 +7465,7 @@ function _lumen_run_raf_callbacks(timestamp_ms) {
     var callbacks = _lumen_raf_callbacks.splice(0);
     if (callbacks.length === 0) return false;
     for (var i = 0; i < callbacks.length; i++) {
-        try { callbacks[i].fn(ts); } catch(e) {}
+        try { callbacks[i].fn(ts); } catch(e) { _lumen_report_exception(e); }
     }
     return true;
 }
@@ -10677,7 +10735,26 @@ var window = {
         } else if (evt.type === 'error') {
             arr = _error_listeners.slice();
             for (var i = 0; i < arr.length; i++) { try { arr[i].call(window, evt); } catch(e) {} }
-            if (typeof window.onerror === 'function') { try { window.onerror.call(window, evt); } catch(e) {} }
+            if (typeof window.onerror === 'function') {
+                // BUG-591: `onerror`'s IDL type is OnErrorEventHandler, not the
+                // plain EventHandler every other on<type> attribute uses -- its
+                // \"internal raw handler\" is called with 5 positional arguments
+                // (message, source, lineno, colno, error) instead of the Event
+                // object, but only when the event genuinely is an ErrorEvent;
+                // `window.dispatchEvent(new Event('error'))` still passes the
+                // Event itself (single argument) to the same handler.
+                var isErrorEvt = (evt instanceof ErrorEvent);
+                var rv;
+                try {
+                    rv = isErrorEvt
+                        ? window.onerror.call(window, evt.message, evt.filename, evt.lineno, evt.colno, evt.error)
+                        : window.onerror.call(window, evt);
+                } catch (e) { rv = undefined; }
+                // Returning a truthy value from the ErrorEvent-flavoured call
+                // cancels the event's default action (HTML LS \"the event
+                // handler processing algorithm\", error-event special case).
+                if (isErrorEvt && rv) { evt.preventDefault(); }
+            }
         } else {
             arr = _other_win_listeners[evt.type];
             if (arr) {
@@ -10759,7 +10836,14 @@ var queueMicrotask = (function() {
     var _nativeThen = Promise.prototype.then;
     return function queueMicrotask(fn) {
         if (typeof fn !== 'function') throw new TypeError('queueMicrotask: argument must be a function');
-        _nativeThen.call(_nativeResolve(), fn);
+        // §8.1.4.4 step 3 reports an uncaught exception from `fn`, it does not
+        // reject a promise -- BUG-591 (before this, an uncaught throw here
+        // surfaced as an unhandledrejection on the untouched wrapper promise
+        // below, the wrong event entirely: queue-microtask-exceptions.any.html
+        // waits on 'error', never on 'unhandledrejection').
+        _nativeThen.call(_nativeResolve(), function() {
+            try { fn(); } catch (e) { _lumen_report_exception(e); }
+        });
     };
 })();
 
@@ -22370,6 +22454,130 @@ mod tests {
             // handler fired once (before removal), then stayed silent.
             let result = rt.eval("count").unwrap();
             assert_eq!(result, lumen_core::JsValue::Number(1.0));
+        }
+
+        // ── BUG-591: uncaught-exception reporting (window 'error'/onerror) ────────
+
+        /// Mirrors WPT's `event-handler-processing-algorithm-error/window-runtime-error.html`
+        /// ("error event has the right 5 args on Window, with a runtime error").
+        #[test]
+        fn bug591_timer_exception_fires_window_error_with_five_arg_onerror() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var onerrorArgs = null; \
+                 var errorEvtSeen = null; \
+                 window.onerror = function() { onerrorArgs = Array.prototype.slice.call(arguments); }; \
+                 window.addEventListener('error', function(e) { errorEvtSeen = e; }); \
+                 setTimeout(function() { thisFunctionDoesNotExist(); }, 0);",
+            )
+            .unwrap();
+            rt.eval("_lumen_tick_timers();").unwrap();
+            let args_len = rt.eval("onerrorArgs ? onerrorArgs.length : -1").unwrap();
+            assert_eq!(
+                args_len,
+                lumen_core::JsValue::Number(5.0),
+                "window.onerror must see the 5-arg OnErrorEventHandler form for a runtime error"
+            );
+            let is_ref_error = rt
+                .eval("errorEvtSeen && errorEvtSeen.error instanceof ReferenceError")
+                .unwrap();
+            assert_eq!(is_ref_error, lumen_core::JsValue::Bool(true));
+        }
+
+        /// Mirrors WPT's `window-runtime-error.html` ("error event is weird —
+        /// return true cancels; many args — on Window, with a runtime error").
+        #[test]
+        fn bug591_onerror_returning_true_prevents_default() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var capturedEvt = null; \
+                 window.onerror = function() { return true; }; \
+                 window.addEventListener('error', function(e) { capturedEvt = e; }); \
+                 setTimeout(function() { thisFunctionDoesNotExist(); }, 0);",
+            )
+            .unwrap();
+            rt.eval("_lumen_tick_timers();").unwrap();
+            // `capturedEvt` is read back in a separate eval, after dispatchEvent's
+            // whole synchronous run (listeners, then onerror) has completed —
+            // reading `.defaultPrevented` from inside the listener itself would
+            // see it too early, since onerror runs after the explicit listeners.
+            let result = rt.eval("capturedEvt.defaultPrevented").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn bug591_raf_exception_fires_window_error() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var caught = false; \
+                 window.addEventListener('error', function(e) { caught = (e.message.indexOf('boom') !== -1); }); \
+                 requestAnimationFrame(function() { throw new Error('boom'); });",
+            )
+            .unwrap();
+            rt.eval("_lumen_run_raf_callbacks(0);").unwrap();
+            let result = rt.eval("caught").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        /// Mirrors WPT's `microtask-queuing/queue-microtask-exceptions.any.html`
+        /// ("It rethrows exceptions") — must surface as 'error', not as a promise
+        /// rejection (the microtask is scheduled via a fire-and-forget internal
+        /// `Promise.prototype.then`, so before this fix an uncaught throw here
+        /// went entirely unnoticed instead of firing the wrong event).
+        #[test]
+        fn bug591_queue_microtask_exception_fires_window_error_not_rejection() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var errorFired = false; var rejectionFired = false; \
+                 window.addEventListener('error', function() { errorFired = true; }); \
+                 window.addEventListener('unhandledrejection', function() { rejectionFired = true; }); \
+                 queueMicrotask(function() { throw new Error('boo'); });",
+            )
+            .unwrap();
+            // V8 drains the microtask queue at the end of the eval that queued it
+            // (see queue_microtask_callback_runs_after_sync_tail above); the
+            // reporter dispatches synchronously off that same drain.
+            let result = rt.eval("errorFired && !rejectionFired").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        /// The DOM-insertion classic-script path (`_lumen_script_execute_classic`,
+        /// exercised by `dynamic_inline_script_runs_on_append` above) used to only
+        /// `console.error` an uncaught body exception; it must now also report it.
+        #[test]
+        fn bug591_dynamic_script_runtime_exception_fires_window_error() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval(
+                    r#"var msg = null;
+                       window.addEventListener('error', function(e) { msg = e.message; });
+                       var s = document.createElement('script');
+                       s.textContent = 'throw new Error("dyn-boom");';
+                       document.body.appendChild(s);
+                       msg"#,
+                )
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("dyn-boom".to_string()));
+        }
+
+        /// `V8JsRuntime::eval_and_report` (`v8_runtime.rs`) is the Rust-side
+        /// counterpart wired into `crates/shell/src/main.rs`'s initial classic
+        /// `<script>` loop; `lineno` here comes from `v8::Message` (1-based), not
+        /// from the `Error.stack`-parsing fallback the JS-only callers above use.
+        #[test]
+        fn bug591_eval_and_report_top_level_script_error_reaches_window() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("var seen = null; window.addEventListener('error', function(e) { seen = e; });")
+                .unwrap();
+            let outcome = rt.eval_and_report("throw new Error('top-level-boom');");
+            assert!(outcome.is_err());
+            let message = rt.eval("seen && seen.message").unwrap();
+            assert_eq!(
+                message,
+                lumen_core::JsValue::String("top-level-boom".to_string())
+            );
+            let lineno = rt.eval("seen && seen.lineno").unwrap();
+            assert_eq!(lineno, lumen_core::JsValue::Number(1.0));
         }
     }
     /// V8 port of the "classList / CSSStyleDeclaration", "Element event dispatch +
