@@ -71,6 +71,45 @@ _lumen_document_base_url())` перед записью в `this._url` (обе ф
 исчезновение строк `missing scheme` (было 739) и рост `236/345 harness OK` /
 `157/1244 сабтеста`.
 
+## Перенесено из BUG-812 (слит как дубликат 2026-08-22)
+
+Тот же дефект был заведён повторно 2026-08-21 (WPT-RUN-6, срез 18) как
+[BUG-812](BUG-812-DUPLICATE.md) — независимое подтверждение той же строки и
+того же направления починки. Уникальное из него:
+
+**Живая проба с контролями** — `tests/wpt/verify_csp_url_worker_gaps.py`
+(живое окно, http, страница отдаётся тем же сервером, что и цель запроса;
+коммит `41ee56b73`):
+
+| проба | ожидалось | получено |
+|---|---|---|
+| `xhr-relative` — `open("GET", ".cspgap-target.txt")` | `status=200` | `xhr-error status=0` |
+| `xhr-root-relative` — `open("GET", "/.cspgap-target.txt")` | `status=200` | `xhr-error status=0` |
+| `xhr-absolute` — `open("GET", location.origin + "/…")` | `status=200` | `status=200` ✔ |
+| `fetch-relative` — тот же URL через `fetch()` | `status=200` | `status=200` ✔ |
+
+Две последние строки — контроль, отделяющий «XHR сломан»/«сеть сломана» от
+«не резолвится относительный URL именно в XHR».
+
+**Корпусной счёт.** Механизм `relative-url-unresolved` (`timeout_audit.py`)
+забирает **71 id** остатка снимка WPT-RUN-5 (`html/infrastructure` 15,
+`html/semantics` 5, `html/webappapis` 3, `websockets/security` 2, хвост по
+1–2 из `custom-elements`, `dom/nodes`, `domxpath`, `encoding`,
+`resource-timing`, `navigation-api`). Счёт занижен дважды: механизм стоит
+последним среди сетевых причин (id, где напечатана более решающая строка,
+отданы ей), а весь каталог `xhr/` (≈700 id) в том снимке отвалился раньше по
+`helper-404` и в 71 id не входит.
+
+**Уточнение по спеке.** XHR §4.5.1 шаг 6 требует резолвить URL **в момент
+`open()`**, а не `send()`: на уже разрешённый URL смотрят `responseURL`,
+`abort()` и проверки CORS. Базу брать на момент вызова (проверить `open()`
+до и после навигации).
+
+**Как проверить фикс** (в дополнение к прогону категории): 
+`tests/wpt/.venv/bin/python tests/wpt/verify_csp_url_worker_gaps.py
+--variant xhr-relative --variant xhr-root-relative` — обе печатают
+`xhr-load status=200`.
+
 ## Измеренный вес (WPT-VENDOR-xhr, 2026-08-18)
 
 Прогон вендоренной категории `xhr` (`run_report.py --all --root xhr

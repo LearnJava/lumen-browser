@@ -76,7 +76,9 @@ So three gaps, all silent:
    'resources/status.py')` reaches `lumen-network` as the literal string and
    dies with `invalid url: missing scheme`. The same bug was already fixed once
    for `window.open` (BUG-359) and the `fetch()` shim resolves against
-   `_lumen_loc_href`; XHR is the surface that was missed. Filed as BUG-812.
+   `_lumen_loc_href`; XHR is the surface that was missed. Filed as BUG-812,
+   merged into BUG-780 (the earlier report of the same defect) on 2026-08-22 —
+   the evidence this script produces now lives in BUG-780.
 
 3. **A worker that throws never fires `error` at the `Worker` object.**
    The shim's `_errorListeners`/`_onerror` are invoked from exactly one place —
@@ -94,7 +96,8 @@ neither is fixed by fixing the third:
    shim defines `self`, `name`, `postMessage`, `console`, `importScripts`, the
    timer stubs and `queueMicrotask`, and nothing else, so
    `workers/support/WorkerNavigator.js` throws on its first line and, by (3),
-   silently. Filed as BUG-814.
+   silently. Filed as BUG-814, merged into BUG-776 (the earlier and wider
+   report of the same defect) on 2026-08-22.
 
 5. **Worker timers run only when a message is dispatched to that worker**, the
    delay is ignored and `setInterval` is an alias of `setTimeout`, so it never
