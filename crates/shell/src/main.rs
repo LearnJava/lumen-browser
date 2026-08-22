@@ -7397,7 +7397,12 @@ fn run_scripts_with_dom(
                     // below, or one throwing script would leave a stale value
                     // behind for every script after it.
                     let _ = rt.eval(&format!("_lumen_push_current_script({});", nid.index()));
-                    match rt.eval(src) {
+                    // eval_and_report (not the plain trait eval()) — this is
+                    // the genuine top-level page-script execution boundary,
+                    // so an uncaught exception must also reach the page's own
+                    // window 'error'/onerror listeners (BUG-591), not just
+                    // this stderr line.
+                    match rt.eval_and_report(src) {
                         Ok(_) => {}
                         Err(lumen_core::JsError::NotImplemented) => {
                             eprintln!(

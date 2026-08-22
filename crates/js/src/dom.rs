@@ -673,6 +673,56 @@ function ErrorEvent(type, init) {
 ErrorEvent.prototype = Object.create(Event.prototype);
 ErrorEvent.prototype.constructor = ErrorEvent;
 
+// ── Uncaught exception reporting (HTML LS §8.1.3.6 \"report the exception\") ───
+// BUG-591: dispatches a window 'error' ErrorEvent for a genuinely uncaught
+// exception from a top-level classic script, a timer, a requestAnimationFrame
+// callback or a queueMicrotask callback -- the callback-boundary catch(e){}
+// sites this replaces used to swallow the error outright. `window.onerror`
+// uses the special 5-argument OnErrorEventHandler calling convention (WebIDL)
+// rather than receiving the Event object; that distinction is implemented in
+// the 'error' branch of window.dispatchEvent (below), which every caller of
+// this function funnels through, so page code that already does
+// `window.dispatchEvent(new ErrorEvent(...))` gets the same 5-arg behaviour.
+//
+// `filename`/`lineno`/`colno` are omitted by every JS-side caller (V8's
+// `Error` has no structured location API from script -- only `.stack`, a
+// free-form string) and best-effort-parsed from the first `at file:line:col`
+// frame instead. The one caller with a reliable structured location is the
+// Rust host itself: `V8JsRuntime::eval_and_report` (`v8_runtime.rs`) reads
+// `v8::Message` (populated by V8 for both compile and runtime errors) and
+// passes all three explicitly, which is why they are accepted as optional
+// trailing arguments rather than always re-derived here.
+function _lumen_parse_error_location(err) {
+    if (!err || typeof err.stack !== 'string') return null;
+    var lines = err.stack.split('\\n');
+    for (var i = 0; i < lines.length; i++) {
+        var m = /at (?:.*\\()?([^\\s()]+):(\\d+):(\\d+)\\)?\\s*$/.exec(lines[i]);
+        if (m) return { filename: m[1], lineno: +m[2], colno: +m[3] };
+    }
+    return null;
+}
+function _lumen_report_exception(err, filename, lineno, colno) {
+    var message = (err instanceof Error) ? String(err.message) : String(err);
+    if (filename === undefined || filename === null) {
+        var loc = _lumen_parse_error_location(err);
+        filename = loc ? loc.filename : (typeof location !== 'undefined' ? location.href : '');
+        lineno = loc ? loc.lineno : 0;
+        colno = loc ? loc.colno : 0;
+    }
+    var ev = new ErrorEvent('error', {
+        message: message, filename: String(filename || ''),
+        lineno: lineno | 0, colno: colno | 0,
+        error: err, bubbles: false, cancelable: true,
+    });
+    var notCancelled = window.dispatchEvent(ev);
+    // Diagnostic value proven during BUG-703/BUG-716: a page whose async
+    // bootstrap swallows everything is otherwise silent on stderr right up to
+    // the point it hangs.
+    if (notCancelled) {
+        _lumen_console_error('Uncaught ' + ((err && err.stack) ? err.stack : message));
+    }
+}
+
 // PromiseRejectionEvent — HTML LS §8.1.7.5, carried by `unhandledrejection` /
 // `rejectionhandled`.
 //
@@ -2605,27 +2655,25 @@ function _lumen_build_detached_document(proto, contentType) {
         });
         return hit !== null ? _lumen_make_element(hit) : null;
     };
-    doc.getElementsByTagName = function(tag) {
+    // DOM 4.5 getElementsByTagName / getElementsByTagNameNS. Walked rather than
+    // queried for the same reason `getElementById` above is, and matched by the
+    // shared predicates (BUG-416) — which also keeps a `'*'` ask off the text
+    // and comment children `_detached_walk` visits.
+    function _detached_by_predicate(pred) {
         var root = _detached_root_nid();
         if (root === null) { return []; }
-        var want = String(tag);
-        var all = want === '*';
-        // DOM 4.5: for an HTML document an HTML-namespace element also matches
-        // the ASCII-lowercased name; everything else matches the qualified name
-        // exactly.
-        var lower = want.toLowerCase();
-        function _match(n) {
-            if (all) { return true; }
-            var qname = _lumen_qualified_tag_name(n);
-            if (qname === want) { return true; }
-            return _lumen_is_html_element_nid(n) && qname.toLowerCase() === lower;
-        }
-        var out = _match(root) ? [root] : [];
+        var out = pred(root) ? [root] : [];
         _detached_walk(root, function(n) {
-            if (_match(n)) { out.push(n); }
+            if (pred(n)) { out.push(n); }
             return false;
         });
         return out.map(_lumen_make_element);
+    }
+    doc.getElementsByTagName = function(qualifiedName) {
+        return _detached_by_predicate(_lumen_tag_name_predicate(qualifiedName));
+    };
+    doc.getElementsByTagNameNS = function(namespace, localName) {
+        return _detached_by_predicate(_lumen_tag_ns_predicate(namespace, localName));
     };
     doc.getElementsByClassName = function(names) {
         var root = _detached_root_nid();
@@ -3680,6 +3728,72 @@ function _lumen_is_html_element_nid(n) {
     return _lumen_u2n(_lumen_get_namespace_uri(n)) === _LUMEN_HTML_NS;
 }
 
+// ── getElementsByTagName(NS) matching (DOM LS §4.5) ──────────────────────────
+// BUG-416. The name-matching half, shared by the document, the element and the
+// detached-document accessors below. Deliberately NOT routed through the
+// selector engine the way `getElementsByClassName` is: a tag name is arbitrary
+// text rather than a CSS type selector, and a type selector here is matched by
+// exact string equality against the local name (`style.rs::matches_simple`), so
+// delegating got BOTH halves of the case rule wrong — `getElementsByTagName('DIV')`
+// found nothing instead of every HTML `<div>`, and a name that is not a valid
+// identifier (`'a b'`, `'1'`) parsed as some other selector or as none at all.
+//
+// Returns a predicate over a raw node id. A null local name is what the native
+// side answers for every non-element node, so it doubles as the element check.
+function _lumen_tag_name_predicate(qualifiedName) {
+    var want  = String(qualifiedName);
+    var lower = want.toLowerCase();
+    var all   = want === '*';
+    return function(n) {
+        var local = _lumen_u2n(_lumen_get_local_name(n));
+        if (local === null) return false;
+        if (all) return true;
+        // An HTML-namespace element in an HTML document matches the ASCII
+        // lower-cased ask; everything else — SVG, MathML, no namespace — has to
+        // match its qualified name exactly. That distinction is the whole point
+        // of `Element.getElementsByTagName-foreign-0*.html`: an SVG
+        // `<linearGradient>` must be missed by `getElementsByTagName('lineargradient')`
+        // and hit by the exactly-spelled one, while an HTML `<div>` answers to
+        // any casing.
+        return _lumen_u2n(_lumen_get_namespace_uri(n)) === _LUMEN_HTML_NS
+            ? local.toLowerCase() === lower
+            : local === want;
+    };
+}
+
+// DOM LS §4.5 «getElementsByTagNameNS». `namespace` is matched against the
+// element's namespace URI — null and '' both mean «no namespace» per «validate
+// and extract», so `createElementNS(null, 'x')` is found by a null ask — and
+// `localName` against the local name, case-sensitively in both positions; '*'
+// matches anything. Note BUG-830: a namespace URI outside the six the DOM enum
+// knows collapses into the HTML one at creation time, so such an element can
+// only be found under the namespace it collapsed to, not the one it was asked
+// for. That is a limitation of the enum, not of this matcher.
+function _lumen_tag_ns_predicate(namespace, localName) {
+    var wantNs = (namespace === null || namespace === undefined || namespace === '')
+        ? null : String(namespace);
+    var wantLocal = String(localName);
+    var anyNs     = wantNs === '*';
+    var anyLocal  = wantLocal === '*';
+    return function(n) {
+        var local = _lumen_u2n(_lumen_get_local_name(n));
+        if (local === null) return false;
+        if (!anyNs && _lumen_u2n(_lumen_get_namespace_uri(n)) !== wantNs) return false;
+        return anyLocal || local === wantLocal;
+    };
+}
+
+// Filters a tree-ordered list of raw node ids by `pred` and wraps the survivors.
+// Static array, not a live HTMLCollection — the same simplification
+// `querySelectorAll`/`getElementsByClassName` already make.
+function _lumen_collect_matching(nids, pred) {
+    var out = [];
+    for (var i = 0; i < nids.length; i++) {
+        if (pred(nids[i])) out.push(_lumen_make_element(nids[i]));
+    }
+    return out;
+}
+
 // Mimics assigning to an object that carries no such accessor: the own accessor
 // installed by the wrapper literal is shadowed by a plain data property, so the
 // write neither reaches the DOM nor silently vanishes.
@@ -4543,6 +4657,23 @@ function _lumen_build_element(nid) {
             var sel = _lumen_class_selector(names);
             if (sel === null) return [];
             return _lumen_query_selector_all_scoped(nid, sel).map(_lumen_make_element);
+        },
+        // DOM LS §4.5: getElementsByTagName(qualifiedName) /
+        // getElementsByTagNameNS(namespace, localName), scoped to this element's
+        // descendants (BUG-416 — both were missing from the element wrapper
+        // entirely, so `el.getElementsByTagName is not a function`). The
+        // universal selector is used only to enumerate the subtree in tree order
+        // through the native walker; the name matching itself is spec-shaped and
+        // lives in the predicates above.
+        getElementsByTagName: function(qualifiedName) {
+            return _lumen_collect_matching(
+                _lumen_query_selector_all_scoped(nid, '*'),
+                _lumen_tag_name_predicate(qualifiedName));
+        },
+        getElementsByTagNameNS: function(namespace, localName) {
+            return _lumen_collect_matching(
+                _lumen_query_selector_all_scoped(nid, '*'),
+                _lumen_tag_ns_predicate(namespace, localName));
         },
         matches: function(sel) {
             return _lumen_node_matches_selector(nid, _lumen_sel(sel));
@@ -5934,16 +6065,26 @@ var document = {
     querySelectorAll:  function(sel) {
         return _lumen_query_selector_all(_lumen_sel(sel)).map(_lumen_make_element);
     },
-    // DOM LS §4.2.6: getElementsByTagName(tag) — a bare tag name is already a
-    // valid CSS type selector (and '*' a valid universal selector), so this
-    // delegates straight to the same native query the CSS engine already
-    // handles for `_lumen_ce_upgrade_all` (custom-element tag matching).
-    // Returns a static array, not a live HTMLCollection — same simplification
-    // `querySelectorAll` above already makes. Found missing (broke
-    // `testharness.js`'s own `test_timeout()`/`get_script_url()`, which call
-    // it unconditionally) while implementing P2-wpt S4.
-    getElementsByTagName: function(tag) {
-        return _lumen_query_selector_all(String(tag)).map(_lumen_make_element);
+    // DOM LS §4.5: getElementsByTagName(qualifiedName) — a static array, not a
+    // live HTMLCollection (same simplification `querySelectorAll` above makes).
+    // Found missing (broke `testharness.js`'s own `test_timeout()`/
+    // `get_script_url()`, which call it unconditionally) while implementing
+    // P2-wpt S4; BUG-416 then replaced the original «hand the tag to the
+    // selector engine as a type selector» body, which matched the local name by
+    // exact string equality and so answered nothing at all for
+    // `getElementsByTagName('DIV')` and mis-parsed a non-identifier name.
+    getElementsByTagName: function(qualifiedName) {
+        return _lumen_collect_matching(
+            _lumen_query_selector_all('*'),
+            _lumen_tag_name_predicate(qualifiedName));
+    },
+    // DOM LS §4.5: getElementsByTagNameNS(namespace, localName) — the
+    // namespace-aware sibling, missing from the document as well as the element
+    // until BUG-416.
+    getElementsByTagNameNS: function(namespace, localName) {
+        return _lumen_collect_matching(
+            _lumen_query_selector_all('*'),
+            _lumen_tag_ns_predicate(namespace, localName));
     },
     // DOM LS §4.5: getElementsByClassName(names) — document-global variant.
     // Static array, not a live HTMLCollection (same simplification as above).
@@ -6309,8 +6450,15 @@ function _lumen_pop_current_script() {
 // `document.currentScript` for the duration of the body (omitted → `null`).
 function _lumen_script_execute_classic(text, nid) {
     _lumen_push_current_script(nid);
+    // BUG-591: report the exception (window 'error'/onerror) instead of only
+    // logging it -- this is the classic-script runtime-error reporting step
+    // of HTML LS §8.1.3.6, reached by every script inserted through the DOM
+    // (createElement('script') + appendChild, the parser's own insertion
+    // path, …), as opposed to the initial page-load loop in
+    // `crates/shell/src/main.rs`, which goes through the Rust-side
+    // `V8JsRuntime::eval_and_report` for the same reporting step instead.
     try { (0, eval)(text); }
-    catch (e) { _lumen_console_error('Uncaught ' + ((e && e.stack) ? e.stack : e)); }
+    catch (e) { _lumen_report_exception(e); }
     finally { _lumen_pop_current_script(); }
 }
 
@@ -7321,12 +7469,13 @@ function _lumen_tick_timers() {
             _lumen_timers.push({ id: r.id, fn: r.fn, deadline: now + riv, interval: r.interval, nesting: rn });
         }
     }
-    // Run callbacks; errors are swallowed (HTML §8.6 step 17).
+    // Run callbacks; an uncaught exception is reported (HTML §8.6 step 17
+    // \"report the exception\"), not swallowed -- BUG-591.
     // The callback's nesting level is active while it runs so timers it
     // schedules inherit level+1 (§8.6 step 3).
     for (var k = 0; k < ready.length; k++) {
         _lumen_timer_nesting = ready[k].nesting || 1;
-        try { ready[k].fn(); } catch(e) {}
+        try { ready[k].fn(); } catch(e) { _lumen_report_exception(e); }
     }
     _lumen_timer_nesting = 0;
     // Notify shell of next wakeup if any timers remain.
@@ -7407,7 +7556,7 @@ function _lumen_run_raf_callbacks(timestamp_ms) {
     var callbacks = _lumen_raf_callbacks.splice(0);
     if (callbacks.length === 0) return false;
     for (var i = 0; i < callbacks.length; i++) {
-        try { callbacks[i].fn(ts); } catch(e) {}
+        try { callbacks[i].fn(ts); } catch(e) { _lumen_report_exception(e); }
     }
     return true;
 }
@@ -10677,7 +10826,26 @@ var window = {
         } else if (evt.type === 'error') {
             arr = _error_listeners.slice();
             for (var i = 0; i < arr.length; i++) { try { arr[i].call(window, evt); } catch(e) {} }
-            if (typeof window.onerror === 'function') { try { window.onerror.call(window, evt); } catch(e) {} }
+            if (typeof window.onerror === 'function') {
+                // BUG-591: `onerror`'s IDL type is OnErrorEventHandler, not the
+                // plain EventHandler every other on<type> attribute uses -- its
+                // \"internal raw handler\" is called with 5 positional arguments
+                // (message, source, lineno, colno, error) instead of the Event
+                // object, but only when the event genuinely is an ErrorEvent;
+                // `window.dispatchEvent(new Event('error'))` still passes the
+                // Event itself (single argument) to the same handler.
+                var isErrorEvt = (evt instanceof ErrorEvent);
+                var rv;
+                try {
+                    rv = isErrorEvt
+                        ? window.onerror.call(window, evt.message, evt.filename, evt.lineno, evt.colno, evt.error)
+                        : window.onerror.call(window, evt);
+                } catch (e) { rv = undefined; }
+                // Returning a truthy value from the ErrorEvent-flavoured call
+                // cancels the event's default action (HTML LS \"the event
+                // handler processing algorithm\", error-event special case).
+                if (isErrorEvt && rv) { evt.preventDefault(); }
+            }
         } else {
             arr = _other_win_listeners[evt.type];
             if (arr) {
@@ -10759,7 +10927,14 @@ var queueMicrotask = (function() {
     var _nativeThen = Promise.prototype.then;
     return function queueMicrotask(fn) {
         if (typeof fn !== 'function') throw new TypeError('queueMicrotask: argument must be a function');
-        _nativeThen.call(_nativeResolve(), fn);
+        // §8.1.4.4 step 3 reports an uncaught exception from `fn`, it does not
+        // reject a promise -- BUG-591 (before this, an uncaught throw here
+        // surfaced as an unhandledrejection on the untouched wrapper promise
+        // below, the wrong event entirely: queue-microtask-exceptions.any.html
+        // waits on 'error', never on 'unhandledrejection').
+        _nativeThen.call(_nativeResolve(), function() {
+            try { fn(); } catch (e) { _lumen_report_exception(e); }
+        });
     };
 })();
 
@@ -20834,6 +21009,121 @@ mod tests {
         }
 
         #[test]
+        fn get_elements_by_tag_name_scoped_element() {
+            // BUG-416: `Element.prototype.getElementsByTagName` was missing
+            // entirely (`el.getElementsByTagName is not a function`), even
+            // though the element already carried `getElementsByClassName` and
+            // `querySelectorAll`. DOM LS §4.5: scoped to the element's
+            // descendants, the element itself excluded.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var wrap = document.getElementById('main'); \
+                     typeof wrap.getElementsByTagName === 'function' && \
+                     wrap.getElementsByTagName('span').length === 1 && \
+                     wrap.getElementsByTagName('span')[0].className === 'highlight' && \
+                     wrap.getElementsByTagName('div').length === 0 && \
+                     document.body.getElementsByTagName('div').length === 1",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn get_elements_by_tag_name_is_case_insensitive_for_html() {
+            // BUG-416: the old document-side body handed the name to the
+            // selector engine, which compares a type selector to the local name
+            // by exact string equality — so an upper-cased ask found nothing at
+            // all. DOM LS §4.5 folds the ask for HTML-namespace elements.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "document.getElementsByTagName('div').length === 1 && \
+                     document.getElementsByTagName('DIV').length === 1 && \
+                     document.getElementsByTagName('DiV').length === 1 && \
+                     document.getElementById('main').parentNode\
+                        .getElementsByTagName('SPAN').length === 1",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn get_elements_by_tag_name_is_case_sensitive_for_foreign_content() {
+            // BUG-416 / WPT `html/syntax/parsing/Element.getElementsByTagName-foreign-0*`:
+            // an element outside the HTML namespace matches its qualified name
+            // exactly — an SVG <linearGradient> answers only to the exact
+            // spelling, never to the folded one.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var SVG = 'http://www.w3.org/2000/svg'; \
+                     var svg = document.createElementNS(SVG, 'svg'); \
+                     var grad = document.createElementNS(SVG, 'linearGradient'); \
+                     svg.appendChild(grad); document.body.appendChild(svg); \
+                     document.getElementsByTagName('linearGradient').length === 1 && \
+                     document.getElementsByTagName('lineargradient').length === 0 && \
+                     document.getElementsByTagName('LINEARGRADIENT').length === 0 && \
+                     svg.getElementsByTagName('linearGradient').length === 1 && \
+                     svg.getElementsByTagName('lineargradient').length === 0",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn get_elements_by_tag_name_star_matches_elements_only() {
+            // BUG-416: '*' is «every descendant ELEMENT», in tree order — the
+            // two text nodes of the fixture must not show up.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var all = document.getElementsByTagName('*'); \
+                     all.length === 6 && \
+                     all.map(function(e) { return e.tagName; }).join(',') === \
+                        'HTML,HEAD,TITLE,BODY,DIV,SPAN' && \
+                     document.getElementById('main').getElementsByTagName('*').length === 1",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn get_elements_by_tag_name_ns_on_document_and_element() {
+            // BUG-416: `getElementsByTagNameNS` was missing from BOTH the
+            // document and the element. DOM LS §4.5: '*' is a wildcard in
+            // either position, null and '' both mean «no namespace», and the
+            // local name is compared case-sensitively whatever the namespace.
+            let rt = v8_runtime_with_dom(make_doc());
+            let r = rt
+                .eval(
+                    "var SVG = 'http://www.w3.org/2000/svg'; \
+                     var HTML = 'http://www.w3.org/1999/xhtml'; \
+                     var svg = document.createElementNS(SVG, 'svg'); \
+                     var grad = document.createElementNS(SVG, 'linearGradient'); \
+                     svg.appendChild(grad); document.body.appendChild(svg); \
+                     var bare = document.createElementNS(null, 'bare'); \
+                     document.body.appendChild(bare); \
+                     typeof document.getElementsByTagNameNS === 'function' && \
+                     typeof document.body.getElementsByTagNameNS === 'function' && \
+                     document.getElementsByTagNameNS(SVG, '*').length === 2 && \
+                     document.getElementsByTagNameNS(SVG, 'linearGradient').length === 1 && \
+                     document.getElementsByTagNameNS(SVG, 'lineargradient').length === 0 && \
+                     document.getElementsByTagNameNS(SVG, 'div').length === 0 && \
+                     document.getElementsByTagNameNS(HTML, 'div').length === 1 && \
+                     document.getElementsByTagNameNS(HTML, 'DIV').length === 0 && \
+                     document.getElementsByTagNameNS('*', 'linearGradient').length === 1 && \
+                     document.getElementsByTagNameNS(null, 'bare').length === 1 && \
+                     document.getElementsByTagNameNS('', 'bare').length === 1 && \
+                     document.getElementsByTagNameNS(HTML, 'bare').length === 0 && \
+                     svg.getElementsByTagNameNS(SVG, '*').length === 1 && \
+                     svg.getElementsByTagNameNS(SVG, '*')[0] === grad",
+                )
+                .unwrap();
+            assert_eq!(r, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
         fn get_elements_by_name_document() {
             // BUG-412: getElementsByName was missing from WEB_API_SHIM entirely
             // (`'getElementsByName' in document` === false). HTML LS §3.1.5:
@@ -22370,6 +22660,130 @@ mod tests {
             // handler fired once (before removal), then stayed silent.
             let result = rt.eval("count").unwrap();
             assert_eq!(result, lumen_core::JsValue::Number(1.0));
+        }
+
+        // ── BUG-591: uncaught-exception reporting (window 'error'/onerror) ────────
+
+        /// Mirrors WPT's `event-handler-processing-algorithm-error/window-runtime-error.html`
+        /// ("error event has the right 5 args on Window, with a runtime error").
+        #[test]
+        fn bug591_timer_exception_fires_window_error_with_five_arg_onerror() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var onerrorArgs = null; \
+                 var errorEvtSeen = null; \
+                 window.onerror = function() { onerrorArgs = Array.prototype.slice.call(arguments); }; \
+                 window.addEventListener('error', function(e) { errorEvtSeen = e; }); \
+                 setTimeout(function() { thisFunctionDoesNotExist(); }, 0);",
+            )
+            .unwrap();
+            rt.eval("_lumen_tick_timers();").unwrap();
+            let args_len = rt.eval("onerrorArgs ? onerrorArgs.length : -1").unwrap();
+            assert_eq!(
+                args_len,
+                lumen_core::JsValue::Number(5.0),
+                "window.onerror must see the 5-arg OnErrorEventHandler form for a runtime error"
+            );
+            let is_ref_error = rt
+                .eval("errorEvtSeen && errorEvtSeen.error instanceof ReferenceError")
+                .unwrap();
+            assert_eq!(is_ref_error, lumen_core::JsValue::Bool(true));
+        }
+
+        /// Mirrors WPT's `window-runtime-error.html` ("error event is weird —
+        /// return true cancels; many args — on Window, with a runtime error").
+        #[test]
+        fn bug591_onerror_returning_true_prevents_default() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var capturedEvt = null; \
+                 window.onerror = function() { return true; }; \
+                 window.addEventListener('error', function(e) { capturedEvt = e; }); \
+                 setTimeout(function() { thisFunctionDoesNotExist(); }, 0);",
+            )
+            .unwrap();
+            rt.eval("_lumen_tick_timers();").unwrap();
+            // `capturedEvt` is read back in a separate eval, after dispatchEvent's
+            // whole synchronous run (listeners, then onerror) has completed —
+            // reading `.defaultPrevented` from inside the listener itself would
+            // see it too early, since onerror runs after the explicit listeners.
+            let result = rt.eval("capturedEvt.defaultPrevented").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        #[test]
+        fn bug591_raf_exception_fires_window_error() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var caught = false; \
+                 window.addEventListener('error', function(e) { caught = (e.message.indexOf('boom') !== -1); }); \
+                 requestAnimationFrame(function() { throw new Error('boom'); });",
+            )
+            .unwrap();
+            rt.eval("_lumen_run_raf_callbacks(0);").unwrap();
+            let result = rt.eval("caught").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        /// Mirrors WPT's `microtask-queuing/queue-microtask-exceptions.any.html`
+        /// ("It rethrows exceptions") — must surface as 'error', not as a promise
+        /// rejection (the microtask is scheduled via a fire-and-forget internal
+        /// `Promise.prototype.then`, so before this fix an uncaught throw here
+        /// went entirely unnoticed instead of firing the wrong event).
+        #[test]
+        fn bug591_queue_microtask_exception_fires_window_error_not_rejection() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var errorFired = false; var rejectionFired = false; \
+                 window.addEventListener('error', function() { errorFired = true; }); \
+                 window.addEventListener('unhandledrejection', function() { rejectionFired = true; }); \
+                 queueMicrotask(function() { throw new Error('boo'); });",
+            )
+            .unwrap();
+            // V8 drains the microtask queue at the end of the eval that queued it
+            // (see queue_microtask_callback_runs_after_sync_tail above); the
+            // reporter dispatches synchronously off that same drain.
+            let result = rt.eval("errorFired && !rejectionFired").unwrap();
+            assert_eq!(result, lumen_core::JsValue::Bool(true));
+        }
+
+        /// The DOM-insertion classic-script path (`_lumen_script_execute_classic`,
+        /// exercised by `dynamic_inline_script_runs_on_append` above) used to only
+        /// `console.error` an uncaught body exception; it must now also report it.
+        #[test]
+        fn bug591_dynamic_script_runtime_exception_fires_window_error() {
+            let rt = v8_runtime_with_dom(make_doc());
+            let result = rt
+                .eval(
+                    r#"var msg = null;
+                       window.addEventListener('error', function(e) { msg = e.message; });
+                       var s = document.createElement('script');
+                       s.textContent = 'throw new Error("dyn-boom");';
+                       document.body.appendChild(s);
+                       msg"#,
+                )
+                .unwrap();
+            assert_eq!(result, lumen_core::JsValue::String("dyn-boom".to_string()));
+        }
+
+        /// `V8JsRuntime::eval_and_report` (`v8_runtime.rs`) is the Rust-side
+        /// counterpart wired into `crates/shell/src/main.rs`'s initial classic
+        /// `<script>` loop; `lineno` here comes from `v8::Message` (1-based), not
+        /// from the `Error.stack`-parsing fallback the JS-only callers above use.
+        #[test]
+        fn bug591_eval_and_report_top_level_script_error_reaches_window() {
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval("var seen = null; window.addEventListener('error', function(e) { seen = e; });")
+                .unwrap();
+            let outcome = rt.eval_and_report("throw new Error('top-level-boom');");
+            assert!(outcome.is_err());
+            let message = rt.eval("seen && seen.message").unwrap();
+            assert_eq!(
+                message,
+                lumen_core::JsValue::String("top-level-boom".to_string())
+            );
+            let lineno = rt.eval("seen && seen.lineno").unwrap();
+            assert_eq!(lineno, lumen_core::JsValue::Number(1.0));
         }
     }
     /// V8 port of the "classList / CSSStyleDeclaration", "Element event dispatch +

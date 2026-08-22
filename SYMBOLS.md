@@ -1369,7 +1369,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/ipc/src/lib.rs:268` **fn** `connect` — Connect to the network service listening on `127.0.0.1:port`
 `crates/ipc/src/lib.rs:278` **fn** `request` — Send a request and block until the matching response arrives
 
-## lumen-js  (239 symbols)
+## lumen-js  (240 symbols)
 
 `crates/js/src/audio_element.rs:55` **fn** `set_audio_playback_provider` — Install the platform audio playback backend
 `crates/js/src/broadcast_channel.rs:60` **struct** `LocalChannel` — A channel instance owned by the current runtime: the receiver half plus its id
@@ -1546,6 +1546,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/v8_runtime.rs:1349` **fn** `set_import_map` — Install the import map (HTML LS §8.1.6.2) used to resolve bare module
 `crates/js/src/v8_runtime.rs:1455` **fn** `install_console_natives` — Register the three console natives (`_lumen_console_log`,
 `crates/js/src/v8_runtime.rs:1526` **fn** `install_dom` — Install DOM-core native bindings (`_lumen_*`, 184 functions) and the
+`crates/js/src/v8_runtime.rs:6255` **fn** `eval_and_report` — Evaluate a classic top-level `<script>` body exactly like
 `crates/js/src/video_gif_store.rs:36` **struct** `VideoPlaybackState` — Per-`<video>` playback timing, stored by the shell after a GIF is decoded
 `crates/js/src/video_gif_store.rs:57` **fn** `current_ms` — Playback position in ms at a given real-clock instant
 `crates/js/src/video_gif_store.rs:66` **fn** `is_ended` — Whether playback has naturally ended (finite loop count exhausted)
@@ -5630,4 +5631,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:228` **fn** `count`
 
 ---
-*Total: 5553 symbols in 24 crates*
+*Total: 5554 symbols in 24 crates*

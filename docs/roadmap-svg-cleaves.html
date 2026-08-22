@@ -57,8 +57,8 @@
 {
  "generated": "2026-08-22",
  "counts": {
-  "open": 366,
-  "fixed": 440,
+  "open": 364,
+  "fixed": 442,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -3388,7 +3388,7 @@
        "title": "WPT: вендорить + прогнать категорию `loading`",
        "status": "done",
        "size": "S",
-       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root loading --recursive`, ~12:50) — **7/53 harness OK, 0/7 сабтестов**. Все 46 `early-hints/*.h2.window.html` TIMEOUT на стандартном TLS-гэпе тестового сертификата (тот же класс, что `jpegxl`/`keyboard-lock`/`keyboard-map`); грep сетевого слоя подтвердил HTTP 103 Early Hints не реализован вовсе — первый проход отсутствующего кандидатного API. 7 `preloader-*.html` реально исполнились, все harness OK + 1 FAIL-сабтест — оба класса провала переподтверждают уже открытые баги: 6 FAIL на Resource Timing никогда не наполняется для реальных загрузок ([BUG-520](bugs/BUG-520-OPEN.md)), 1 FAIL на `document.body === null` из-за `<template>` перед `<body>` ([BUG-417](bugs/BUG-417-OPEN.md)). Новых багов не заведено"
+       "note": "Скоуп: ⬜ (кандидат). DONE 2026-08-05: вендорена + прогнана целиком (`--all --root loading --recursive`, ~12:50) — **7/53 harness OK, 0/7 сабтестов**. Все 46 `early-hints/*.h2.window.html` TIMEOUT на стандартном TLS-гэпе тестового сертификата (тот же класс, что `jpegxl`/`keyboard-lock`/`keyboard-map`); грep сетевого слоя подтвердил HTTP 103 Early Hints не реализован вовсе — первый проход отсутствующего кандидатного API. 7 `preloader-*.html` реально исполнились, все harness OK + 1 FAIL-сабтест — оба класса провала переподтверждают уже открытые баги: 6 FAIL на Resource Timing никогда не наполняется для реальных загрузок ([BUG-520](bugs/BUG-520-OPEN.md)), 1 FAIL на `document.body === null` из-за `<template>` перед `<body>` ([BUG-417](bugs/BUG-417-FIXED.md)). Новых багов не заведено"
       },
       {
        "id": "WPT-VENDOR-long-animation-frame",
@@ -8058,17 +8058,17 @@
    "debtor": false
   },
   "BUG-416": {
-   "status": "open",
+   "status": "fixed",
    "title": "`Element.prototype.getElementsByTagName` отсутствует, `getElementsByTagNameNS` отсутствует и на элементе, и на документе (проба: `el.getElementsByTagName=undefi…",
    "component": "js (`crates/js/src/dom.rs:5516-5880` — `_lumen_build_element`; документный аналог `dom.rs:7045-7062`)",
-   "date": null,
+   "date": "2026-08-22",
    "debtor": false
   },
   "BUG-417": {
-   "status": "open",
+   "status": "fixed",
    "title": "`<template>`, встреченный до появления `<body>` (парсер в режиме «in head»), **не даёт создать `<body>` вообще**: `document.body` === `null`, продолжение докуме…",
    "component": "html-parser (`crates/engine/html-parser/src/tree_builder.rs:1129-1136` — `process_template_end_tag`)",
-   "date": null,
+   "date": "2026-08-22",
    "debtor": false
   },
   "BUG-418": {

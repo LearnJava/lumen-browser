@@ -6228,6 +6228,122 @@ impl JsRuntime for V8JsRuntime {
     }
 }
 
+// ── Top-level script execution with uncaught-exception reporting (BUG-591) ──
+
+impl V8JsRuntime {
+    /// Evaluate a classic top-level `<script>` body exactly like
+    /// [`JsRuntime::eval`], except that an uncaught exception (compile *or*
+    /// runtime) is additionally reported through the shim's window `error`
+    /// pipeline (HTML LS §8.1.3.6 "report the exception") before the error is
+    /// returned to the caller as before.
+    ///
+    /// Only the genuine top-level page-script boundary
+    /// (`crates/shell/src/main.rs`'s classic-script loop) should call this —
+    /// plain [`JsRuntime::eval`] stays the right choice for every internal
+    /// helper eval (shim bootstrap, feature probes, deterministic-mode
+    /// overrides, cookie-banner triggers, …), whose caught error is not a
+    /// page-visible event and must not become one.
+    ///
+    /// `v8::Message` (populated by V8 for both compile and runtime errors)
+    /// gives a structured script name/line/column here, which is why this
+    /// goes through Rust rather than reusing the JS-side
+    /// `_lumen_report_exception` fallback that timers/rAF/queueMicrotask use
+    /// — those only ever see the exception value after V8 has already
+    /// discarded the `Message`, so they best-effort-parse `Error.stack`
+    /// instead (`crate::dom::WEB_API_SHIM`).
+    #[allow(clippy::unwrap_used)] // унаследовано, docs/lint-policy.md §10
+    pub fn eval_and_report(&self, script: &str) -> JsResult<JsValue> {
+        self.run(|inner| {
+            with_tc!(inner, |tc, _ctx| {
+                let src = v8::String::new(tc, script)
+                    .ok_or_else(|| JsError::Runtime("OOM: script string".into()))?;
+
+                let compiled = compile_cached!(tc, script, src);
+                if tc.has_caught() {
+                    let exc = tc.exception().unwrap();
+                    let message = tc.message();
+                    let (filename, lineno, colno) = message
+                        .map(|m| {
+                            let filename = m
+                                .get_script_resource_name(tc)
+                                .and_then(|v| v.to_string(tc))
+                                .map(|s| s.to_rust_string_lossy(tc))
+                                .unwrap_or_default();
+                            let lineno = m.get_line_number(tc).unwrap_or(0) as i32;
+                            let colno = m.get_start_column() as i32;
+                            (filename, lineno, colno)
+                        })
+                        .unwrap_or_default();
+                    {
+                        v8::tc_scope!(rtc, tc);
+                        let ctx = rtc.get_current_context();
+                        let global = ctx.global(rtc);
+                        if let Some(key) = v8::String::new(rtc, "_lumen_report_exception")
+                            && let Some(report_fn) = global
+                                .get(rtc, key.into())
+                                .and_then(|v| v8::Local::<v8::Function>::try_from(v).ok())
+                            && let Some(filename_v) = v8::String::new(rtc, &filename)
+                        {
+                            let lineno_v = v8::Integer::new(rtc, lineno);
+                            let colno_v = v8::Integer::new(rtc, colno);
+                            let _ = report_fn.call(
+                                rtc,
+                                global.into(),
+                                &[exc, filename_v.into(), lineno_v.into(), colno_v.into()],
+                            );
+                        }
+                    }
+                    return Err(v8_err(tc, exc));
+                }
+                let compiled = compiled
+                    .ok_or_else(|| JsError::Runtime("script compile returned None".into()))?;
+
+                let result = compiled.run(tc);
+                if tc.has_caught() {
+                    let exc = tc.exception().unwrap();
+                    let message = tc.message();
+                    let (filename, lineno, colno) = message
+                        .map(|m| {
+                            let filename = m
+                                .get_script_resource_name(tc)
+                                .and_then(|v| v.to_string(tc))
+                                .map(|s| s.to_rust_string_lossy(tc))
+                                .unwrap_or_default();
+                            let lineno = m.get_line_number(tc).unwrap_or(0) as i32;
+                            let colno = m.get_start_column() as i32;
+                            (filename, lineno, colno)
+                        })
+                        .unwrap_or_default();
+                    {
+                        v8::tc_scope!(rtc, tc);
+                        let ctx = rtc.get_current_context();
+                        let global = ctx.global(rtc);
+                        if let Some(key) = v8::String::new(rtc, "_lumen_report_exception")
+                            && let Some(report_fn) = global
+                                .get(rtc, key.into())
+                                .and_then(|v| v8::Local::<v8::Function>::try_from(v).ok())
+                            && let Some(filename_v) = v8::String::new(rtc, &filename)
+                        {
+                            let lineno_v = v8::Integer::new(rtc, lineno);
+                            let colno_v = v8::Integer::new(rtc, colno);
+                            let _ = report_fn.call(
+                                rtc,
+                                global.into(),
+                                &[exc, filename_v.into(), lineno_v.into(), colno_v.into()],
+                            );
+                        }
+                    }
+                    return Err(v8_err(tc, exc));
+                }
+                match result {
+                    Some(val) => from_v8(tc, val),
+                    None => Err(JsError::Runtime("script returned no value".into())),
+                }
+            })
+        })
+    }
+}
+
 /// [`v8::ValueSerializerImpl`] with no custom host-object support: any
 /// non-cloneable value (a `Function`, mainly — F1 in the migration brief)
 /// throws `DataCloneError` via V8's default clone algorithm, which the
@@ -6721,6 +6837,39 @@ mod tests {
     #[test]
     fn eval_syntax_error() {
         assert!(matches!(rt().eval("function ("), Err(JsError::Runtime(_))));
+    }
+
+    // ── eval_and_report (BUG-591) ────────────────────────────────────────────
+
+    /// No `_lumen_report_exception` exists on a bare runtime (no DOM shim
+    /// installed) — the lookup fails and is silently skipped (see the method's
+    /// own doc comment), so behaviour must otherwise be identical to `eval()`.
+    /// The end-to-end path (with the shim installed, actually reaching
+    /// `window`'s 'error'/onerror pipeline) is covered by the
+    /// `dom::tests::v8_core::bug591_*` tests, which also exercise the
+    /// `filename`/`lineno`/`colno` extracted here via `v8::Message`.
+    #[test]
+    fn eval_and_report_matches_eval_on_success() {
+        assert_eq!(
+            rt().eval_and_report("1 + 2").unwrap(),
+            JsValue::Number(3.0)
+        );
+    }
+
+    #[test]
+    fn eval_and_report_runtime_error() {
+        assert!(matches!(
+            rt().eval_and_report("throw new Error('boom')"),
+            Err(JsError::Runtime(_))
+        ));
+    }
+
+    #[test]
+    fn eval_and_report_syntax_error() {
+        assert!(matches!(
+            rt().eval_and_report("function ("),
+            Err(JsError::Runtime(_))
+        ));
     }
 
     #[test]

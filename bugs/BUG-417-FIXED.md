@@ -1,8 +1,8 @@
 # BUG-417 — `<template>` в `<head>` не даёт парсеру создать `<body>`: `document.body === null`, страница может отрендериться пустой
 
-**Статус:** OPEN
-**Компонент:** html-parser (`crates/engine/html-parser/src/tree_builder.rs:1129-1136` —
-`process_template_end_tag`, ветка «simplified reset_insertion_mode»)
+**Статус:** FIXED 2026-08-22 (P3)
+**Компонент:** html-parser (`crates/engine/html-parser/src/tree_builder.rs` —
+`process_template_end_tag` + `reset_insertion_mode` + `mode_in_template`)
 **Найден:** 2026-07-28 (P2), WPT-VENDOR-html, при разборе среза `html/syntax` — пробой
 `--dump-layout`, не самим прогоном
 
@@ -86,3 +86,43 @@ appropriately» (HTML LS §13.2.4.1 — обход стека открытых �
 
 Тест `template_in_head` дополнить утверждениями `document.body` (существует) и «`<p>` после
 `</template>` — ребёнок `<body>`, а не `<head>`»; без них починку нечем зафиксировать.
+
+## Что сделано (2026-08-22, P3)
+
+Дефект оказался **двухслойным** — правки только в `process_template_end_tag` не хватило:
+исправленный режим тут же затирался обратно уровнем выше.
+
+1. **`process_template_end_tag`** — развилка «пустой `template_mode_stack` → `InBody`, иначе
+   `InTemplate`» заменена вызовом уже существовавшего `reset_insertion_mode()`.
+2. **`reset_insertion_mode`** — функция была написана по §13.2.4.1, но без двух шагов, ровно
+   тех, которые нужны здесь: шаг 11 (`template` → текущий режим шаблона; у нас
+   `template_mode_stack` хранит *контентный* режим, поэтому это `InTemplate`) и шаг 12
+   (`head` при `last == false` → `InHead`). Заодно доведены до спеки шаг 3 (`last` — узел
+   первый в стеке) и подшаги 4.1–4.8 выбора режима для `<select>`: обход предков теперь идёт
+   наружу и останавливается на **первом** решающем предке (`template` → `InSelect`,
+   `table` → `InSelectInTable`), а не проверяет `any()` по всему стеку, где `template`
+   ошибочно засчитывался как табличный контекст.
+3. **`mode_in_template`** — делегируя `</template>` в `InHead`, она затем восстанавливала
+   `InTemplate` по признаку «режим остался `InHead`, значит `InHead` нас не переключил». После
+   правки (1) это условие стало ложным: `InHead` — и есть правильный ответ для шаблона,
+   закрытого в голове. Добавлен ранний `return` для `</template>`: режим уже сброшен,
+   второй раз его назначать нельзя.
+
+**Проверка.** A/B по тестам крейта: с возвращённой старой развилкой (1) три теста краснеют,
+с новой — зелёные, 399/399 `lumen-html-parser`. Сквозная проба
+(`--dump-layout`, `.tmp/bug417.html` из «Симптома») даёт
+`PROBE tmpl=yes contentKids=1 b.parent=BODY body=kids:4` вместо прежнего
+`b=found,parent=HEAD bodyKids=NO-BODY`, и страница раскладывается (зелёный бокс в дереве).
+
+**Нейтральность display list.** `dump_golden.py` — 12/12 совпадений. Голден-набор не содержит
+страниц с `<template>`, поэтому дополнительно сделан A/B двух таких страниц
+(`graphic_tests/72-host-slotted.html`, `graphic_tests/1000000-final.html`):
+`--dump-layout`/`--dump-display-list` до и после правки идентичны (расходится только порядок
+строк «Загружена картинка» — асинхронная загрузка, к дисплей-листу отношения не имеет).
+Причина ожидаемая: в обеих страницах `<template>` лежит внутри `<body>`, и обход стека
+приводит к тому же `InBody`, что давала старая развилка.
+
+**Тесты.** `template_in_head` дополнен проверкой существования `<body>`; добавлены
+`template_before_body_still_creates_body` (случай 1 из таблицы: неявные `head`/`body`),
+`template_in_explicit_head_keeps_body` (случай 2) и `nested_template_end_returns_to_outer_template`
+(страховка на вложенные шаблоны — путь, который старая развилка обслуживала верно).
