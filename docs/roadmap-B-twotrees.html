@@ -73,14 +73,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-08-21",
+ "generated": "2026-08-22",
  "counts": {
-  "open": 339,
+  "open": 344,
   "fixed": 435,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 774,
+ "total_bugs": 779,
  "phases": [
   {
    "id": "P0",
@@ -10768,6 +10768,41 @@
    "component": "tests/wpt tooling (`tools/wptrunner/wptrunner/executors/executorlumen.py:310-334` — `_handle_action`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-811": {
+   "status": "open",
+   "title": "**CSP разбирается, но не применяется:** ни одна директива ничего не блокирует (`script-src 'self'` не мешает инлайн-скрипту выполниться — подтверждено живой про…",
+   "component": "движок целиком (парсеры политики `crates/network/src/csp.rs:159`, `crates/storage/src/csp_policies.rs`; JS-хук `crates/js/src/csp.rs:60` `_lumen_dispatch_csp_violation` — без единого вызова вне юнит-теста того же файла)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-812": {
+   "status": "open",
+   "title": "`XMLHttpRequest.open()` не разрешает относительный URL относительно базы документа: `open('GET','resources/x.py')` уходит в `lumen-network` строкой и умирает с…",
+   "component": "js (`crates/js/src/xhr.rs:231` — `this._url = String(url)` в `open()`; `xhr.rs:312-314` — `send()` отдаёт строку в `_lumen_fetch_sync*`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-813": {
+   "status": "open",
+   "title": "Исключение внутри **запущенного** воркера не доходит до страницы: `error` на объекте `Worker` диспатчится исключительно при провале загрузки скрипта (BUG-364),…",
+   "component": "js (`crates/js/src/worker.rs:533-552` — `_onerror`/`_errorListeners` читаются только из ветки `script === null`; `worker.rs:386-393` — `catch(e) {}` в `_lumen_flush_timers`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-814": {
+   "status": "open",
+   "title": "В глобальной области воркера нет ни `navigator`, ни `location` (HTML LS §10.2.1 требует обоих): чтение бросает, исключение невидимо (BUG-813), воркер молчит нав…",
+   "component": "js (`crates/js/src/worker.rs:270-397` — `worker_global_shim`, полный список глобалей; `crates/js/src/shared_worker.rs` — то же)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-815": {
+   "status": "open",
+   "title": "Таймеры воркера выполняются только при доставке сообщения воркеру, задержка игнорируется, `setInterval` не повторяется. Воркеру, которому страница ничего не шлё…",
+   "component": "js (`crates/js/src/worker.rs:364-397` — заглушки таймеров, `worker.rs:377` `setInterval = setTimeout`, `worker.rs:834` — единственный вызов `_lumen_flush_timers`; то же в `shared_worker.rs:207,512,523`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -11249,6 +11284,18 @@
   ],
   "js (`crates/js/src/worker.rs:227` — `worker_global_shim`)": [
    "BUG-766"
+  ],
+  "js (`crates/js/src/worker.rs:270-397` — `worker_global_shim`, полный список глобалей; `crates/js/src/shared_worker.rs` — то же)": [
+   "BUG-814"
+  ],
+  "js (`crates/js/src/worker.rs:364-397` — заглушки таймеров, `worker.rs:377` `setInterval = setTimeout`, `worker.rs:834` — единственный вызов `_lumen_flush_timers`; то же в `shared_worker.rs:207,512,523`)": [
+   "BUG-815"
+  ],
+  "js (`crates/js/src/worker.rs:533-552` — `_onerror`/`_errorListeners` читаются только из ветки `script === null`; `worker.rs:386-393` — `catch(e) {}` в `_lumen_flush_timers`)": [
+   "BUG-813"
+  ],
+  "js (`crates/js/src/xhr.rs:231` — `this._url = String(url)` в `open()`; `xhr.rs:312-314` — `send()` отдаёт строку в `_lumen_fetch_sync*`)": [
+   "BUG-812"
   ],
   "js (`dom.rs` `WEB_API_SHIM`)": [
    "BUG-309"
@@ -11881,6 +11928,9 @@
   ],
   "движок целиком (нет модели времени SMIL нигде в воркспейсе; в JS-слое `crates/js/src/svg.rs:762-795` — четыре класса анимационных элементов как явные заглушки с пустыми `beginElement()`/`endElement()`)": [
    "BUG-806"
+  ],
+  "движок целиком (парсеры политики `crates/network/src/csp.rs:159`, `crates/storage/src/csp_policies.rs`; JS-хук `crates/js/src/csp.rs:60` `_lumen_dispatch_csp_violation` — без единого вызова вне юнит-теста того же файла)": [
+   "BUG-811"
   ],
   "не изолирован (layout / paint / js)": [
    "BUG-733"

@@ -206,6 +206,20 @@ MECHANISMS = [
         "(about:, data:) — reported as a network failure",
     ),
     Mechanism(
+        # Network layer, so it sorts with the other network causes: the request
+        # was never made at all. `XMLHttpRequest.prototype.open` stores the URL
+        # verbatim (`crates/js/src/xhr.rs:216`) and `send()` hands that string
+        # straight to `_lumen_fetch_sync*`, so `open('GET', 'resources/x.py')`
+        # reaches `lumen-network` unresolved. `fetch()` does not have the bug
+        # (it resolves against `_lumen_document_base_url()`, BUG-347) — the
+        # line therefore names XHR specifically (WPT-RUN-6 slice 18).
+        "relative-url-unresolved", "BUG-812",
+        [r"invalid url: missing scheme"],
+        "a relative URL passed to XMLHttpRequest.open() was never resolved "
+        "against the document base, so the request failed before leaving the "
+        "engine and the test's load/readystatechange never arrives",
+    ),
+    Mechanism(
         "websocket", "BUG-799",
         [r"\[JS WebSocket\].*error"],
         "the page's WebSocket never connected",
@@ -635,7 +649,123 @@ SOURCE_MARKERS = [
         "`load` nor `error` (and `<style>` never does, however inserted)",
         predicate=_resource_event_marker,
     ),
+    # Below the whole table on purpose, both of them: a CSP test routinely
+    # builds an `<iframe>` or waits on an `<img>` as well, and those causes are
+    # older and better understood, so they must claim the test first. Placed
+    # last, these two can only take what nothing else explains.
+    Mechanism(
+        # CSP is parsed (`crates/network/src/csp.rs`, `crates/storage/src/
+        # csp_policies.rs`) and never enforced: `crates/js/src/csp.rs` says so
+        # in its own header, and the hook it names — `_lumen_dispatch_csp_
+        # violation` — has no caller outside that file's unit test. So no
+        # directive blocks anything and, decisively for the verdict, the
+        # `securitypolicyviolation` event is never dispatched. Verified live by
+        # `tests/wpt/verify_csp_url_worker_gaps.py` (WPT-RUN-6 slice 18): with
+        # `img-src 'none'; script-src 'self'` the inline script still runs and
+        # neither `window` nor `document` ever hears the event.
+        "csp-no-violation-event", "BUG-811",
+        [r"securitypolicyviolation", r"SecurityPolicyViolationEvent"],
+        "the test waits for a `securitypolicyviolation` that cannot come — "
+        "CSP is parsed but never enforced, so no violation is ever reported",
+    ),
+    Mechanism(
+        # `workers/Worker_ErrorEvent_*.htm` and kin: make the worker throw,
+        # then wait on `worker.onerror`. The shim fires `error` from exactly
+        # one place — the script-fetch-failure branch of the constructor
+        # (`crates/js/src/worker.rs`, BUG-364) — so an exception inside a
+        # *started* worker propagates nowhere. Both halves are required: `new
+        # Worker(` alone is every worker test, and an `error` listener alone is
+        # most of the corpus.
+        "worker-no-error-event", "BUG-813",
+        [r"new\s+(?:Shared)?Worker\s*\(",
+         r"\.onerror\s*=|addEventListener\(\s*['\"]error['\"]|ErrorEvent"],
+        "an uncaught exception inside a started worker never reaches the "
+        "page: `error` is dispatched at the `Worker` object only when the "
+        "script fetch itself failed",
+        mode="all",
+    ),
 ]
+
+#: Fourth stage, applied only after `SOURCE_MARKERS` has failed, and matched
+#: against the *worker script* rather than the test file.
+#:
+#: A worker test's own source says nothing about why it hangs — the wait is one
+#: `worker.onmessage`, and what never happens happens on the other side of
+#: `new Worker(url)`. The script at that url is not a `<script src>` helper, so
+#: `helper_paths` does not reach it and every one of these ids stayed in the
+#: residual. Kept a separate table rather than folded into `SOURCE_MARKERS`
+#: because the two must not see the same text: `navigator` appears in the *page*
+#: half of `WorkerNavigator_appName.htm` too (`assert_equals(e.data.appName,
+#: navigator.appName)`), and matching that would claim any test that merely
+#: mentions the object (WPT-RUN-6 slice 18).
+WORKER_SOURCE_MARKERS = [
+    Mechanism(
+        # `navigator` is never defined in the worker global scope: the shim
+        # (`crates/js/src/worker.rs:274-390`) defines `self`, `name`,
+        # `postMessage`, `onmessage`, `addEventListener`, `console`,
+        # `importScripts`, the timer stubs and `queueMicrotask`, and nothing
+        # else — so `navigator.platform` throws, and the throw is itself
+        # invisible (BUG-813), leaving the page's `onmessage` to wait forever.
+        # Measured live (`verify_csp_url_worker_gaps.py --variant
+        # worker-navigator`): `typeof navigator=undefined self=object
+        # location=undefined setTimeout=function`.
+        "worker-navigator-missing", "BUG-814",
+        [r"\bnavigator\s*\.|\blocation\s*\."],
+        "the worker reads `navigator`/`location`, which the worker global "
+        "scope does not define at all — it throws before its `postMessage` "
+        "and the page waits forever",
+    ),
+    Mechanism(
+        # The timer stubs only run from `_lumen_flush_timers`, which the Rust
+        # side calls between *message dispatches*, and `setInterval` is an
+        # alias of `setTimeout` (`worker.rs:377`), so it never repeats. A
+        # worker that is never sent a message never flushes at all. Measured
+        # live (`--variant worker-timers` / `worker-timers-poked`): a worker
+        # arming both posts the microtask immediately and the timeout only
+        # after the page pokes it, and `interval:2` never comes.
+        "worker-timers-not-driven", "BUG-815",
+        [r"\bset(?:Timeout|Interval)\s*\("],
+        "the worker arms a timer, but worker timers are flushed only when a "
+        "message is dispatched to that worker and `setInterval` never repeats",
+    ),
+]
+
+
+#: `new Worker('url')` / `new SharedWorker('url')` with a literal URL — the
+#: only form this stage can follow. A constructed or `blob:` URL is skipped
+#: rather than guessed at.
+_WORKER_URL_RE = re.compile(r"new\s+(?:Shared)?Worker\s*\(\s*['\"]([^'\"]+)['\"]")
+
+#: Generated ids whose *source file is itself the worker script*: `.any.js`
+#: and `.worker.js` are expanded by the manifest into one id per scope, and
+#: only the worker-scoped ones run in a worker. The window-scoped siblings
+#: (`.any.html`, `.window.html`) must not be matched against this table — they
+#: run where `navigator` exists and timers are driven normally.
+_WORKER_SCOPE_SUFFIXES = (".worker.html", ".any.worker.html",
+                          ".any.sharedworker.html", ".any.worker-module.html",
+                          ".any.serviceworker.html")
+
+
+def worker_scripts(test_id, root, lines):
+    """Paths of the worker scripts a test starts, `new Worker(url)` by `url`.
+
+    Resolved like `helper_paths` (root-relative or relative to the test file),
+    and, like it, one level deep: a worker that itself spawns a worker is rare
+    and each level widens what a marker may be attributed to.
+    """
+    src = source_path(test_id, root)
+    out = []
+    for ref in _WORKER_URL_RE.findall("\n".join(lines)):
+        ref = ref.split("#")[0].split("?")[0]
+        if not ref or "://" in ref or ref.startswith(("data:", "blob:")):
+            continue
+        if ref.startswith("/"):
+            path = os.path.join(root, ref.lstrip("/"))
+        else:
+            path = os.path.normpath(os.path.join(os.path.dirname(src), ref))
+        if os.path.isfile(path) and path not in out:
+            out.append(path)
+    return out
 
 
 #: Third stage, applied after both the evidence table and the source markers.
@@ -861,6 +991,21 @@ def classify_source(test_id, root, cache, follow_helpers=True):
     for mech in SOURCE_MARKERS:
         if mech.matches(lines, test_id):
             return mech.key
+    # Fourth stage: what the *worker* runs. Deliberately last — a worker test
+    # that also builds an `<iframe>` or waits on a font is claimed by the older
+    # and better-understood cause above.
+    worker_lines = []
+    if (test_id or "").split("?")[0].endswith(_WORKER_SCOPE_SUFFIXES):
+        # The test source is the worker script; it has already been read.
+        worker_lines += lines
+    for path in worker_scripts(test_id, root, lines):
+        script_lines = _read_source(path, cache)
+        if script_lines:
+            worker_lines += script_lines
+    if worker_lines:
+        for mech in WORKER_SOURCE_MARKERS:
+            if mech.matches(worker_lines, test_id):
+                return mech.key
     return None
 
 
@@ -1047,6 +1192,8 @@ def print_report(result, top=25, examples=3):
     print()
     refs = {m.key: m.ref for m in MECHANISMS}
     refs.update({m.key: m.ref + " (source marker)" for m in SOURCE_MARKERS})
+    refs.update({m.key: m.ref + " (worker-source marker)"
+                 for m in WORKER_SOURCE_MARKERS})
     refs.update({m.key: m.ref for m in WEAK_MECHANISMS})
     refs[HUNG_BROWSER] = "collateral — see the culprit list below"
     print(f"{'mechanism':28} {'tests':>7} {'share':>7}  owner")
@@ -1638,6 +1785,118 @@ def selftest():
         check(classify_source("/a/actions-frame.html", tmp, {})
               == "iframe-no-nested-context",
               "an unimplemented action must not outrank the frame the test waits on")
+
+        # ── slice 18 ───────────────────────────────────────────────────────
+        # The output half: the engine names the unresolved URL itself, and it
+        # is the whole line the network layer prints for a relative XHR.
+        check(classify(['fetch error: invalid url: invalid url: missing '
+                        'scheme: "resources/status.py"'])
+              == "relative-url-unresolved",
+              "an unresolved relative URL was not claimed from the output")
+        # ...but only for that shape. `Error::InvalidUrl`
+        # (`crates/core/src/error.rs:33`) prints the same `invalid url:` head
+        # for five different failures (`crates/core/src/url.rs:47,146,256,275,
+        # 287`), and only the `missing scheme` one means "a relative URL
+        # arrived unresolved" — an absolute URL the parser rejects is a
+        # different finding and must not be filed under BUG-812.
+        check(classify(['fetch error: invalid url: invalid url: empty host '
+                        'in http://']) != "relative-url-unresolved",
+              "a malformed absolute URL must not be read as an unresolved one")
+        check(classify(['fetch error: invalid url: invalid url: invalid port: '
+                        '"80x"']) != "relative-url-unresolved",
+              "a bad port must not be read as an unresolved relative URL")
+        # A scheme the engine does not speak is a different, older mechanism
+        # and must keep its tests.
+        check(classify(["network error: unsupported scheme: ftp"])
+              == "unsupported-scheme",
+              "an unsupported scheme must keep its own mechanism")
+        # CSP: the wait is the marker, and it sits at the bottom of the source
+        # table, so a test that merely mentions a policy is not claimed.
+        with open(os.path.join(tmp, "a", "csp.sub.html"), "w", encoding="utf-8") as handle:
+            handle.write('<meta http-equiv="Content-Security-Policy" '
+                         'content="img-src \'none\'">\n'
+                         "<script>async_test(t => {\n"
+                         "  document.addEventListener('securitypolicyviolation',\n"
+                         "    t.step_func_done(e => {}));\n"
+                         "});</script>")
+        check(classify_source("/a/csp.sub.html", tmp, {})
+              == "csp-no-violation-event",
+              "a securitypolicyviolation wait was not claimed")
+        with open(os.path.join(tmp, "a", "csp-load.sub.html"), "w", encoding="utf-8") as handle:
+            handle.write('<meta http-equiv="Content-Security-Policy" '
+                         'content="img-src \'none\'">\n'
+                         "<script>async_test(t => { window.onload = "
+                         "t.step_func_done(() => {}); });</script>")
+        check(classify_source("/a/csp-load.sub.html", tmp, {})
+              != "csp-no-violation-event",
+              "a CSP test that never waits for the event must not be claimed")
+        # The worker table is matched against the *worker script*, not the page.
+        os.makedirs(os.path.join(tmp, "workers", "support"), exist_ok=True)
+        with open(os.path.join(tmp, "workers", "support", "nav.js"), "w",
+                  encoding="utf-8") as handle:
+            handle.write("postMessage(navigator.platform);\n")
+        with open(os.path.join(tmp, "workers", "nav.htm"), "w", encoding="utf-8") as handle:
+            handle.write("<script>async_test(t => {\n"
+                         "  const w = new Worker('support/nav.js');\n"
+                         "  w.onmessage = t.step_func_done(e => {});\n"
+                         "});</script>")
+        check(classify_source("/workers/nav.htm", tmp, {})
+              == "worker-navigator-missing",
+              "a worker reading navigator was not claimed")
+        # The page's own `navigator` is not evidence about the worker: this is
+        # the `WorkerNavigator_appName.htm` shape, whose page half compares the
+        # worker's answer against its own `navigator.appName`.
+        with open(os.path.join(tmp, "workers", "support", "plain.js"), "w",
+                  encoding="utf-8") as handle:
+            handle.write("onmessage = function (e) { postMessage(e.data); };\n")
+        with open(os.path.join(tmp, "workers", "page-nav.htm"), "w", encoding="utf-8") as handle:
+            handle.write("<script>async_test(t => {\n"
+                         "  const w = new Worker('support/plain.js');\n"
+                         "  w.onmessage = t.step_func_done(e => {\n"
+                         "    assert_equals(e.data, navigator.appName); });\n"
+                         "  w.postMessage(1);\n"
+                         "});</script>")
+        check(classify_source("/workers/page-nav.htm", tmp, {}) is None,
+              "the page's own navigator must not be read as the worker's")
+        # A worker-scoped generated id is its own worker script.
+        with open(os.path.join(tmp, "workers", "timers.worker.js"), "w",
+                  encoding="utf-8") as handle:
+            handle.write("setTimeout(function () { postMessage('late'); }, 10);\n")
+        check(classify_source("/workers/timers.worker.html", tmp, {})
+              == "worker-timers-not-driven",
+              "a .worker.js test's own timers were not claimed")
+        # ...and its window-scoped sibling is not: `.any.html` runs where
+        # timers are driven normally.
+        with open(os.path.join(tmp, "workers", "timers.any.js"), "w",
+                  encoding="utf-8") as handle:
+            handle.write("setTimeout(function () { done(); }, 10);\n")
+        check(classify_source("/workers/timers.any.html", tmp, {}) is None,
+              "the window-scoped variant must not be blamed on worker timers")
+        # Precedence inside the worker table: a missing global stops the script
+        # before any timer it also arms.
+        with open(os.path.join(tmp, "workers", "both.worker.js"), "w",
+                  encoding="utf-8") as handle:
+            handle.write("setTimeout(function () { postMessage(navigator.platform); }, 10);\n")
+        check(classify_source("/workers/both.worker.html", tmp, {})
+              == "worker-navigator-missing",
+              "a missing global must outrank the timer it is read from")
+        # The `error`-at-the-Worker gap is a page-source marker (both halves
+        # required), and one half alone is not enough.
+        with open(os.path.join(tmp, "workers", "err.htm"), "w", encoding="utf-8") as handle:
+            handle.write("<script>async_test(t => {\n"
+                         "  const w = new Worker('support/throw.js');\n"
+                         "  w.onerror = t.step_func_done(e => {});\n"
+                         "});</script>")
+        check(classify_source("/workers/err.htm", tmp, {})
+              == "worker-no-error-event",
+              "a wait on Worker.onerror was not claimed")
+        with open(os.path.join(tmp, "workers", "err-only.htm"), "w", encoding="utf-8") as handle:
+            handle.write("<script>async_test(t => {\n"
+                         "  window.addEventListener('error', t.step_func_done(e => {}));\n"
+                         "});</script>")
+        check(classify_source("/workers/err-only.htm", tmp, {})
+              != "worker-no-error-event",
+              "an error listener without a Worker must not be claimed")
 
     for msg in failures:
         print("FAIL:", msg)
