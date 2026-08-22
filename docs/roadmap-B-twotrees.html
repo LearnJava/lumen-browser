@@ -75,12 +75,12 @@
 {
  "generated": "2026-08-22",
  "counts": {
-  "open": 348,
+  "open": 356,
   "fixed": 440,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 788,
+ "total_bugs": 796,
  "phases": [
   {
    "id": "P0",
@@ -10888,6 +10888,62 @@
    "component": "dom (`crates/engine/dom/src/lib.rs:119` — `enum Namespace`), js (`crates/js/src/v8_runtime.rs:2372-2394` — натив `_lumen_create_element_ns`)",
    "date": null,
    "debtor": false
+  },
+  "BUG-831": {
+   "status": "open",
+   "title": "Строковый обработчик таймера молча выбрасывается: `setTimeout(\"code\", 0)` и `setInterval` не компилируют строку, ничего не ставят в очередь и возвращают `0` как…",
+   "component": "js (`crates/js/src/dom.rs:6810` — `setTimeout`, `:6828` — `setInterval`, оба открываются `if (typeof fn !== 'function') return 0;`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-832": {
+   "status": "open",
+   "title": "`hashchange` доставляется прямо из сеттера `location.hash`, а не из очереди задач (HTML LS §7.10.6), поэтому слушатель, повешенный следующей строкой, событие уж…",
+   "component": "js (`crates/js/src/dom.rs:6323` — `_lumen_set_location_hash` зовёт `_lumen_fire_hashchange` синхронно; `:6351` — то же в `_lumen_navigate_or_fragment`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-833": {
+   "status": "open",
+   "title": "Клик по `<a href=\"#x\">` выполняет ПОЛНУЮ навигацию вместо фрагментной: документ парсится заново, `hashchange` не приходит, `location` теряет фрагмент, а страниц…",
+   "component": "js (`crates/js/src/dom.rs:14634` — ветка `A`/`AREA` в `_lumen_run_activation_behavior` зовёт `_lumen_navigate`, минуя `_lumen_navigate_or_fragment` с `:6330`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-834": {
+   "status": "open",
+   "title": "Уходящий документ получает только `pagehide` (и с `persisted=true` для обычной навигации по ссылке): `unload`, `beforeunload` и `visibilitychange` не доставляют…",
+   "component": "shell (`crates/shell/src/main.rs:20113`, `:20265` — единственные вызовы `fire_page_lifecycle`, всегда с литералом `\"pagehide\"`) + js (`crates/js/src/dom.rs:7209` — `unload`-слушатели читаются только как блокировщик bfcache; `:13092` — `_lumen_apply_visibility` зовётся с focus/blur, не с навигации)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-835": {
+   "status": "open",
+   "title": "`history.back()` через границу документа ЗАМОРАЖИВАЕТ страницу: обхода нет, сетевого запроса нет, `pageshow` нет, и таймеры вызвавшего документа больше не сраба…",
+   "component": "shell (`crates/shell/src/main.rs:20216`–`20329` — `navigate_back`, путь полного документа: bfcache-оттайка либо `reload()`) + js (`crates/js/src/dom.rs:6941` — `history.go` → `_lumen_history_traverse`)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-836": {
+   "status": "open",
+   "title": "`sessionStorage` не переживает навигацию: каждый новый документ вкладки получает пустое хранилище, `localStorage` при этом сохраняется (замер `--variant session…",
+   "component": "js (`crates/js/src/v8_runtime.rs:1358` — `install_dom` создаёт `ss_store` как `WebStorage::default()` без входного параметра, в отличие от `ls_store` строкой выше)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-837": {
+   "status": "open",
+   "title": "Activation behaviour ищется на кликнутом узле, а не на ближайшем активируемом предке (DOM Standard §2.9 «activation target»), поэтому клик по `<span>` внутри `<…",
+   "component": "js (`crates/js/src/dom.rs:14679` и `:4030` — `_lumen_run_activation_behavior(nid, this)` для самого кликнутого узла; `:14617` — таблица по его тегу)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-838": {
+   "status": "open",
+   "title": "`<script src=\"\">` не даёт ни `error`, ни `load`: элемент уходит в инлайн-ветку, тела нет, функция молча возвращается. HTML LS §4.12.1 требует поставить задачу с…",
+   "component": "js (`crates/js/src/dom.rs:5844`–`5849` — `_lumen_script_prepare` сводит «атрибута нет» и «атрибут пустой» в одно `''` и выходит по `return`)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -11149,6 +11205,12 @@
   "js (`crates/js/src/dom.rs:13800-13806` — `HTMLTrackElement.prototype` reflection; `crates/js/src/video_bindings.rs`/`crates/js/src/text_track_store.rs` — существующая `TextTrack`-машинерия, не привязанная к отдельному `<track>`)": [
    "BUG-795"
   ],
+  "js (`crates/js/src/dom.rs:14634` — ветка `A`/`AREA` в `_lumen_run_activation_behavior` зовёт `_lumen_navigate`, минуя `_lumen_navigate_or_fragment` с `:6330`)": [
+   "BUG-833"
+  ],
+  "js (`crates/js/src/dom.rs:14679` и `:4030` — `_lumen_run_activation_behavior(nid, this)` для самого кликнутого узла; `:14617` — таблица по его тегу)": [
+   "BUG-837"
+  ],
   "js (`crates/js/src/dom.rs:15333` — `function Animation(...)`, прототип не подключён к `EventTarget`; `dom.rs:15507` `_onFinish` зовёт только `this.onfinish`)": [
    "BUG-808"
   ],
@@ -11176,6 +11238,9 @@
   "js (`crates/js/src/dom.rs:4999` -- `var navigator = {...}`)": [
    "BUG-624"
   ],
+  "js (`crates/js/src/dom.rs:5844`–`5849` — `_lumen_script_prepare` сводит «атрибута нет» и «атрибут пустой» в одно `''` и выходит по `return`)": [
+   "BUG-838"
+  ],
   "js (`crates/js/src/dom.rs:6190-6193`)": [
    "BUG-476"
   ],
@@ -11185,6 +11250,9 @@
   "js (`crates/js/src/dom.rs:6206-6227`, `:11619-11632`)": [
    "BUG-479"
   ],
+  "js (`crates/js/src/dom.rs:6323` — `_lumen_set_location_hash` зовёт `_lumen_fire_hashchange` синхронно; `:6351` — то же в `_lumen_navigate_or_fragment`)": [
+   "BUG-832"
+  ],
   "js (`crates/js/src/dom.rs:6602` — `_lumen_make_element` element factory)": [
    "BUG-544"
   ],
@@ -11193,6 +11261,9 @@
   ],
   "js (`crates/js/src/dom.rs:6770` — `_lumen_get_fonts()`)": [
    "BUG-467"
+  ],
+  "js (`crates/js/src/dom.rs:6810` — `setTimeout`, `:6828` — `setInterval`, оба открываются `if (typeof fn !== 'function') return 0;`)": [
+   "BUG-831"
   ],
   "js (`crates/js/src/dom.rs:6921`/`:6930` — `pushState`/`replaceState` зовут `_lumen_location_update(target)` сырым аргументом; `:6231` — `_lumen_location_update` разбирает эту строку как есть; `:11438` — комментарий шима, который это поведение уже фиксирует)": [
    "BUG-829"
@@ -11363,6 +11434,9 @@
   ],
   "js (`crates/js/src/typed_om_api.rs`)": [
    "BUG-554"
+  ],
+  "js (`crates/js/src/v8_runtime.rs:1358` — `install_dom` создаёт `ss_store` как `WebStorage::default()` без входного параметра, в отличие от `ls_store` строкой выше)": [
+   "BUG-836"
   ],
   "js (`crates/js/src/v8_runtime.rs:4809-4843` — блок `if let Some(seed) = deterministic_seed`; области `crates/js/src/worker.rs::run_worker_thread_v8`, `shared_worker.rs`, `sw_worker.rs`)": [
    "BUG-768"
@@ -11909,6 +11983,12 @@
   ],
   "shell (`crates/shell/src/main.rs:16085` — единственный вызов `fire_window_scroll`, ветка колеса мыши; `main.rs:14222` — слив программных скроллов; `main.rs:16218` — синк `scrollY`), js (`crates/js/src/dom.rs:4213` — `scrollIntoView` без фоллбэка на страницу)": [
    "BUG-821"
+  ],
+  "shell (`crates/shell/src/main.rs:20113`, `:20265` — единственные вызовы `fire_page_lifecycle`, всегда с литералом `\"pagehide\"`) + js (`crates/js/src/dom.rs:7209` — `unload`-слушатели читаются только как блокировщик bfcache; `:13092` — `_lumen_apply_visibility` зовётся с focus/blur, не с навигации)": [
+   "BUG-834"
+  ],
+  "shell (`crates/shell/src/main.rs:20216`–`20329` — `navigate_back`, путь полного документа: bfcache-оттайка либо `reload()`) + js (`crates/js/src/dom.rs:6941` — `history.go` → `_lumen_history_traverse`)": [
+   "BUG-835"
   ],
   "shell (`crates/shell/src/main.rs:285` — единственный потребитель `Event::SubresourceHintFound` печатает `⤷ preload …` в stderr; `main.rs:6807` `dispatch_preload_hints`, доккоммент «в Phase 0 sink логирует в stderr; в будущем запустит fetch»), html-parser (`crates/engine/html-parser/src/preload_scanner.rs:144` — `modulepreload`/`prefetch` не распознаются вовсе), js (`crates/js/src/dom.rs` — грузится только `rel=stylesheet`, есть тест-охранник `dynamic_preload_link_fires_nothing`)": [
    "BUG-826"
