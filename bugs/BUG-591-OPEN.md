@@ -182,9 +182,34 @@ every listener-invocation loop now call `_lumen_report_exception(e)`:
 - 6 new tests (`dom.rs::tests::v8_core::bug591_*` ×5,
   `worker.rs::tests_v8::v8_worker_event_target_listener_exception_does_not_reference_error`).
 
+**The Worker parent-side mechanism is now wired too (P1, 2026-08-22)** —
+`run_worker_thread_v8`'s `rt.eval(&script)` failure arm (top-level script
+error) and `worker_global_shim`'s three previously-bare `catch(e){}` sites
+(`_lumen_worker_dispatch_message`'s `onmessage`/`addEventListener('message')`
+calls, `_lumen_flush_timers`'s callback loop) now post an error report back
+through a new parallel channel (`WorkerErrorQueue`, `worker.rs`) instead of
+only `eprintln!`ing to host stderr or silently swallowing. `V8JsRuntime::pump_workers`
+drains it alongside the existing message queue and calls a new
+`_lumen_deliver_worker_errors` (`WORKER_SHIM`), which fires an `ErrorEvent`
+named `error` at the owning `Worker` object — both `worker.onerror` and
+`addEventListener('error', …)` now see it, matching the accessor-level fix
+[BUG-364](bugs/BUG-364-FIXED.md) already made for the script-fetch-failure
+case. `filename`/`lineno`/`colno` are best-effort-parsed from `err.stack`
+inside the worker (same technique the page-side `_lumen_report_exception`
+uses), since V8's `Error` has no structured location API from script; the
+top-level-script-eval path has no `v8::Message` available here (unlike
+`eval_and_report`'s page-only path) and reports an empty filename/0/0
+alongside the real message text. 2 new tests
+(`dom.rs::tests::v8_webworker::worker_top_level_exception_fires_parent_onerror`,
+`worker_onmessage_handler_exception_fires_parent_onerror`).
+**Not addressed in this slice:** `SharedWorker`'s equivalent mechanism
+(`shared_worker.rs`, a separate module with its own thread/message-loop
+shape) and a worker's `setTimeout`/`queueMicrotask` callbacks specifically
+(the *flush loop* now reports, but a callback that itself schedules another
+timer before throwing is untested) — narrower gaps, not named by any WPT
+cluster measured for this bug so far.
+
 **Not in scope of this slice — still open:**
-- The Worker parent-side mechanism described above (`run_worker_thread_v8`'s
-  `eprintln!`-only error arms).
 - Module-script top-level runtime errors (`_lumen_script_run_module`'s
   `.catch` still only fires the *element* `error`/`load` event, which
   conflates a module's own load failure with a runtime throw in its body —

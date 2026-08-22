@@ -730,6 +730,10 @@ pub struct V8JsRuntime {
     /// Outbound queue drained by [`Self::pump_workers`]. Mirrors
     /// [`crate::QuickJsRuntime`]'s `worker_messages` field.
     worker_messages: crate::worker::WorkerMessageQueue,
+    /// Outbound uncaught-exception report queue drained by [`Self::pump_workers`]
+    /// (BUG-591 worker parent-side reporting) — parallel to `worker_messages`
+    /// but for `Worker`'s `error` event rather than `message`.
+    worker_errors: crate::worker::WorkerErrorQueue,
     /// Next `Worker` id to assign. Mirrors [`crate::QuickJsRuntime`]'s
     /// `worker_next_id` field.
     worker_next_id: Arc<Mutex<u32>>,
@@ -925,6 +929,7 @@ impl V8JsRuntime {
             pending_notifications: Arc::new(Mutex::new(Vec::new())),
             workers: Arc::new(Mutex::new(HashMap::new())),
             worker_messages: Arc::new(Mutex::new(Vec::new())),
+            worker_errors: Arc::new(Mutex::new(Vec::new())),
             worker_next_id: Arc::new(Mutex::new(0)),
             worker_blob_store: Arc::new(Mutex::new(HashMap::new())),
             shared_worker_outbox: Arc::new(Mutex::new(Vec::new())),
@@ -964,15 +969,27 @@ impl V8JsRuntime {
     /// [`crate::QuickJsRuntime::pump_workers`].
     pub fn pump_workers(&self) {
         let messages = crate::worker::drain_messages(&self.worker_messages);
-        if messages.is_empty() {
-            return;
+        if !messages.is_empty() {
+            let json = crate::build_worker_messages_json(&messages);
+            let script = format!(
+                "if(typeof _lumen_deliver_worker_messages==='function')\
+                 _lumen_deliver_worker_messages({json})"
+            );
+            let _ = self.eval(&script);
         }
-        let json = crate::build_worker_messages_json(&messages);
-        let script = format!(
-            "if(typeof _lumen_deliver_worker_messages==='function')\
-             _lumen_deliver_worker_messages({json})"
-        );
-        let _ = self.eval(&script);
+
+        // BUG-591 worker parent-side reporting: deliver uncaught-exception
+        // reports (top-level script failure, or a message/timer callback
+        // throw) as `Worker`'s `error` event.
+        let errors = crate::worker::drain_errors(&self.worker_errors);
+        if !errors.is_empty() {
+            let json = crate::build_worker_messages_json(&errors);
+            let script = format!(
+                "if(typeof _lumen_deliver_worker_errors==='function')\
+                 _lumen_deliver_worker_errors({json})"
+            );
+            let _ = self.eval(&script);
+        }
     }
 
     /// Deliver messages posted by `SharedWorker` threads to this page's
@@ -5390,6 +5407,7 @@ impl V8JsRuntime {
             self,
             &self.workers,
             &self.worker_messages,
+            &self.worker_errors,
             &self.worker_next_id,
             &self.worker_blob_store,
             fp_worker,

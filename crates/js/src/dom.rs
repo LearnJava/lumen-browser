@@ -37647,6 +37647,45 @@ mod tests {
             assert_eq!(result, lumen_core::JsValue::Number(14.0));
         }
 
+        // ── BUG-591: worker parent-side reporting ────────────────────────────────
+
+        #[test]
+        fn worker_top_level_exception_fires_parent_onerror() {
+            use std::time::Duration;
+            let rt = v8_runtime_with_dom(make_doc());
+            rt.eval(
+                "var w = new Worker('data:text/javascript,throw new Error(\"boom\")'); \
+                 var errEvent = null; \
+                 w.onerror = function(e){ errEvent = e; };",
+            )
+            .unwrap();
+            // Give the worker thread time to run its top-level script and fail.
+            std::thread::sleep(Duration::from_millis(150));
+            rt.pump_workers();
+            assert!(bool_eval(&rt, "errEvent !== null"));
+            assert!(bool_eval(&rt, "errEvent.type === 'error'"));
+            assert!(bool_eval(&rt, "errEvent.message === 'boom'"));
+        }
+
+        #[test]
+        fn worker_onmessage_handler_exception_fires_parent_onerror() {
+            use std::time::Duration;
+            let rt = v8_runtime_with_dom(make_doc());
+            let script = "data:text/javascript,onmessage%20%3D%20function(e)%7Bthrow%20new%20Error(%27boom2%27)%3B%7D";
+            rt.eval(&format!(
+                "var w = new Worker('{}'); \
+                 var errEvent = null; \
+                 w.onerror = function(e){{ errEvent = e; }}; \
+                 w.postMessage(1);",
+                script
+            ))
+            .unwrap();
+            std::thread::sleep(Duration::from_millis(150));
+            rt.pump_workers();
+            assert!(bool_eval(&rt, "errEvent !== null"));
+            assert!(bool_eval(&rt, "errEvent.message === 'boom2'"));
+        }
+
         #[test]
         fn worker_data_url_base64_script() {
             use std::time::Duration;
