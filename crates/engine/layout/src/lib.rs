@@ -81,7 +81,7 @@ pub use animation::{
     AnimationScheduler, TransitionScheduler,
 };
 pub use box_tree::{
-    apply_container_styles, build_iframe_document, canvas_background_color,
+    apply_container_styles, apply_intrinsic_size, build_iframe_document, canvas_background_color,
     collect_background_image_requests, collect_image_requests, is_open_details, layout, layout_measured,
     layout_measured_hyp, layout_measured_hyp_with_counters, layout_mutation_incremental,
     layout_streaming_incremental,
