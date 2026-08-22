@@ -12,6 +12,7 @@
 mod antidetect_surface_api;
 mod compare_backends;
 mod idl_reflection;
+mod inner_text_getter;
 mod isolation;
 mod layout_snapshot_to_js;
 mod mock_transport;

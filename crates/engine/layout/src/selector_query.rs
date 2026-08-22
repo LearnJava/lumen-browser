@@ -616,6 +616,37 @@ fn filter_fn_to_css(f: &FilterFn) -> String {
     }
 }
 
+/// Serialises the three properties [`crate::INLINE_SEGMENT_PROPERTIES`] names,
+/// in the same string form [`computed_style_to_map`] uses for them.
+///
+/// Separate from that function rather than a filter over its result: this one
+/// runs once per text node of the page on the layout path, so building the full
+/// ~55-entry map only to throw away 52 entries would be the whole point of the
+/// smaller entry, lost.
+pub fn inline_segment_style_map(style: &ComputedStyle) -> HashMap<String, String> {
+    let mut m = HashMap::with_capacity(4);
+    m.insert("visibility".into(), match style.visibility {
+        Visibility::Visible => "visible",
+        Visibility::Hidden => "hidden",
+        Visibility::Collapse => "collapse",
+    }.into());
+    m.insert("white-space".into(), match style.white_space {
+        WhiteSpace::Normal => "normal",
+        WhiteSpace::Nowrap => "nowrap",
+        WhiteSpace::Pre => "pre",
+        WhiteSpace::PreWrap => "pre-wrap",
+        WhiteSpace::PreLine => "pre-line",
+        WhiteSpace::BreakSpaces => "break-spaces",
+    }.into());
+    m.insert("text-transform".into(), match style.text_transform {
+        TextTransform::None => "none",
+        TextTransform::Uppercase => "uppercase",
+        TextTransform::Lowercase => "lowercase",
+        TextTransform::Capitalize => "capitalize",
+    }.into());
+    m
+}
+
 /// Serialises a [`ComputedStyle`] to a CSS property → resolved-value map.
 ///
 /// Values are formatted as `window.getComputedStyle()` returns them:

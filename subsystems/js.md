@@ -1170,9 +1170,33 @@ the time — read dates.
     on assignment, which is what a write to a missing property does. The namespace check reads
     `namespaceURI`, so it is correct for `createElementNS` and wrong for markup-parsed foreign
     content — the parser has no foreign-content mode ([BUG-685](../bugs/BUG-685-OPEN.md)).
-  Reading either property is still `undefined`: the `innerText` getter must report *rendered* text
-  — the one place in HTML where a DOM API depends on layout — and is slice 2 of
-  [BUG-413](../bugs/BUG-413-OPEN.md).
+- **`HTMLElement.innerText`/`outerText` — getters (BUG-413 slice 2, [P3] 2026-08-22).**
+  Both properties now read `_lumen_rendered_text` — the spec gives `outerText` no getter of its
+  own, only the same steps — implementing HTML LS §3.2.7's collection steps and the getter's own
+  post-processing. The part worth remembering is **what the getter is allowed to believe about the
+  layout bridge**, because the plan the bug filed for this slice was wrong and cost one attempt:
+  - **An inline element appears in NEITHER snapshot.** It owns no `LayoutBox` — its content is
+    flattened into the enclosing block's `InlineRun` segments — so `_lumen_get_bounding_rect` and
+    `_lumen_get_computed_style` both answer nothing for `<b>`/`<span>`, exactly as they do for
+    `display: none`. Taking «is it being rendered» from the rect the way `offsetWidth` does
+    therefore drops every inline subtree: `<p>hello <b>world</b></p>` read back as `"hello"`.
+    Measured on a real `InProcessSession` layout, guarded by
+    `crates/driver/tests/cases/inner_text_getter.rs::inline_element_has_no_snapshot_entry_but_its_text_node_does`.
+  - **The style that governs inline text lives on the text node.** `collect_computed_styles` was
+    extended to publish an entry per `InlineSegment::source_node` carrying
+    `lumen_layout::INLINE_SEGMENT_PROPERTIES` (`visibility`/`white-space`/`text-transform`), so a
+    `text-transform` or `visibility` set on a `<span>` is visible even though the `<span>` is not.
+    Every style lookup in the getter is made against the text node, never against its parent.
+  - **Presence of an entry is the rendered test.** `display: none` yields neither box nor segment,
+    so an absent entry means «not laid out» — and an entry-less *element* is treated as a
+    transparent inline wrapper (recurse through, contribute nothing), which is also what makes a
+    `display: none` block contribute no line break. `<br>` is the one exception handled by tag
+    name before that rule, since it owns no box under any style.
+  What it does not do: soft wraps contribute no line feed (the bridge carries no per-line text),
+  `<select>`/`<optgroup>`/`<option>` get none of step 3's synthetic boxes, and a hidden `<br>`
+  still emits its feed. A node with no entry at all answers `textContent`, per step 1 —
+  detached elements, and anything read from a parser-time script
+  ([BUG-443](../bugs/BUG-443-OPEN.md)).
 
 ## Deferred
 
