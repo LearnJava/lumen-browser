@@ -93,6 +93,39 @@ BUG-401) — но и та тоже не заводит `location`/`navigator`
   которыми уже отвечает `navigator` страницы (`dom.rs`), не дублируя
   константы.
 
+## Перенесено из BUG-814 (слит как дубликат 2026-08-22)
+
+Тот же дефект был заведён повторно 2026-08-21 (WPT-RUN-6, срез 18) как
+[BUG-814](BUG-814-DUPLICATE.md), с более узким охватом (dedicated + shared,
+без сервис-воркера). Уникальное из него:
+
+**Живая проба** — `tests/wpt/verify_csp_url_worker_gaps.py --variant
+worker-navigator` (коммит `41ee56b73`): скрипт воркера постит `typeof`
+каждого имени — единственное чтение, которое само не бросает:
+
+```
+worker-message data=typeof navigator=undefined self=object
+                    location=undefined setTimeout=function
+```
+
+`--variant worker-async-postmessage`: воркер вида
+`(async () => { postMessage(navigator.platform) })()` — как в
+`workers/support/WorkerNavigator.js` — не печатает **ничего**, тогда как
+echo-воркер в том же прогоне отвечает нормально. Тишина, а не ошибка, —
+следствие [BUG-813](BUG-813-OPEN.md) (исключение из запущенного воркера
+наружу не выходит).
+
+**Корпусной счёт.** Механизм `worker-navigator-missing` (`timeout_audit.py`)
+забирает **6 id** остатка снимка WPT-RUN-5 — всё семейство
+`workers/WorkerNavigator_*`. Оценка снизу: каталог `workers/` в снимке в
+основном отработал по `worker-importscripts` ([BUG-778](BUG-778-OPEN.md)),
+до чтения `navigator` тесты не доходят. При этом самый дешёвый в починке
+пункт среза — объект чисто информационный, вычислять нечего.
+
+**Как проверить фикс** (в дополнение к прогону категории):
+`--variant worker-navigator` печатает `typeof navigator=object
+location=object`, `--variant worker-async-postmessage` — `async:<platform>,true`.
+
 ## Не расследовано в этой сессии
 
 - `WorkerLocation-origin.sub.window.html`, `redirect*` — проверяют смену

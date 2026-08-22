@@ -213,7 +213,10 @@ MECHANISMS = [
         # reaches `lumen-network` unresolved. `fetch()` does not have the bug
         # (it resolves against `_lumen_document_base_url()`, BUG-347) — the
         # line therefore names XHR specifically (WPT-RUN-6 slice 18).
-        "relative-url-unresolved", "BUG-812",
+        # Filed as BUG-812, merged into BUG-780 as a duplicate on 2026-08-22
+        # (same line, same fix; BUG-780 is the earlier of the two) — attribute
+        # to the surviving id so the count lands on a live bug.
+        "relative-url-unresolved", "BUG-780",
         [r"invalid url: missing scheme"],
         "a relative URL passed to XMLHttpRequest.open() was never resolved "
         "against the document base, so the request failed before leaving the "
@@ -709,7 +712,10 @@ WORKER_SOURCE_MARKERS = [
         # Measured live (`verify_csp_url_worker_gaps.py --variant
         # worker-navigator`): `typeof navigator=undefined self=object
         # location=undefined setTimeout=function`.
-        "worker-navigator-missing", "BUG-814",
+        # Filed as BUG-814, merged into BUG-776 as a duplicate on 2026-08-22
+        # (BUG-776 is earlier and wider — it also covers the service worker,
+        # whose scope has no `navigator` either).
+        "worker-navigator-missing", "BUG-776",
         [r"\bnavigator\s*\.|\blocation\s*\."],
         "the worker reads `navigator`/`location`, which the worker global "
         "scope does not define at all — it throws before its `postMessage` "
@@ -1798,7 +1804,7 @@ def selftest():
         # for five different failures (`crates/core/src/url.rs:47,146,256,275,
         # 287`), and only the `missing scheme` one means "a relative URL
         # arrived unresolved" — an absolute URL the parser rejects is a
-        # different finding and must not be filed under BUG-812.
+        # different finding and must not be filed under BUG-780.
         check(classify(['fetch error: invalid url: invalid url: empty host '
                         'in http://']) != "relative-url-unresolved",
               "a malformed absolute URL must not be read as an unresolved one")

@@ -57,12 +57,12 @@
 {
  "generated": "2026-08-22",
  "counts": {
-  "open": 344,
+  "open": 342,
   "fixed": 436,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 780,
+ "total_bugs": 778,
  "phases": [
   {
    "id": "P0",
@@ -10780,24 +10780,10 @@
    "date": null,
    "debtor": false
   },
-  "BUG-812": {
-   "status": "open",
-   "title": "`XMLHttpRequest.open()` не разрешает относительный URL относительно базы документа: `open('GET','resources/x.py')` уходит в `lumen-network` строкой и умирает с…",
-   "component": "js (`crates/js/src/xhr.rs:231` — `this._url = String(url)` в `open()`; `xhr.rs:312-314` — `send()` отдаёт строку в `_lumen_fetch_sync*`)",
-   "date": null,
-   "debtor": false
-  },
   "BUG-813": {
    "status": "open",
    "title": "Исключение внутри **запущенного** воркера не доходит до страницы: `error` на объекте `Worker` диспатчится исключительно при провале загрузки скрипта (BUG-364),…",
    "component": "js (`crates/js/src/worker.rs:533-552` — `_onerror`/`_errorListeners` читаются только из ветки `script === null`; `worker.rs:386-393` — `catch(e) {}` в `_lumen_flush_timers`)",
-   "date": null,
-   "debtor": false
-  },
-  "BUG-814": {
-   "status": "open",
-   "title": "В глобальной области воркера нет ни `navigator`, ни `location` (HTML LS §10.2.1 требует обоих): чтение бросает, исключение невидимо (BUG-813), воркер молчит нав…",
-   "component": "js (`crates/js/src/worker.rs:270-397` — `worker_global_shim`, полный список глобалей; `crates/js/src/shared_worker.rs` — то же)",
    "date": null,
    "debtor": false
   },
@@ -11296,17 +11282,11 @@
   "js (`crates/js/src/worker.rs:227` — `worker_global_shim`)": [
    "BUG-766"
   ],
-  "js (`crates/js/src/worker.rs:270-397` — `worker_global_shim`, полный список глобалей; `crates/js/src/shared_worker.rs` — то же)": [
-   "BUG-814"
-  ],
   "js (`crates/js/src/worker.rs:364-397` — заглушки таймеров, `worker.rs:377` `setInterval = setTimeout`, `worker.rs:834` — единственный вызов `_lumen_flush_timers`; то же в `shared_worker.rs:207,512,523`)": [
    "BUG-815"
   ],
   "js (`crates/js/src/worker.rs:533-552` — `_onerror`/`_errorListeners` читаются только из ветки `script === null`; `worker.rs:386-393` — `catch(e) {}` в `_lumen_flush_timers`)": [
    "BUG-813"
-  ],
-  "js (`crates/js/src/xhr.rs:231` — `this._url = String(url)` в `open()`; `xhr.rs:312-314` — `send()` отдаёт строку в `_lumen_fetch_sync*`)": [
-   "BUG-812"
   ],
   "js (`dom.rs` `WEB_API_SHIM`)": [
    "BUG-309"

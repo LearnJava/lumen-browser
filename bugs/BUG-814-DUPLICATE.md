@@ -1,6 +1,7 @@
 # BUG-814 — в глобальной области воркера нет ни `navigator`, ни `location`: чтение любого из них бросает и молча убивает воркер
 
-**Статус:** OPEN
+**Статус:** DUPLICATE → [BUG-776](BUG-776-OPEN.md)
+**Слит:** 2026-08-22 — тот же дефект (`worker_global_shim`/`SHARED_WORKER_GLOBAL_SHIM` не заводят `location`/`navigator`), то же направление починки. BUG-776 заведён раньше (2026-08-18, WPT-VENDOR-workers), шире по охвату (плюс сервис-воркер, где `navigator` тоже нет) и потому выживает; **чинить и закрывать нужно его**. Уникальное из этого файла перенесено в BUG-776: живая проба `verify_csp_url_worker_gaps.py` (`--variant worker-navigator`/`worker-async-postmessage`) и корпусной счёт механизма `worker-navigator-missing` (6 id остатка WPT-RUN-5). Файл оставлен целиком: на него ссылаются `timeout_audit.py`-отчёты и заметки среза 18.
 **Заведён:** 2026-08-21 (WPT-RUN-6, срез 18 — 6 TIMEOUT остатка, механизм `worker-navigator-missing`)
 **Область:** `crates/js/src/worker.rs:270-397` (`worker_global_shim` — полный список глобалей воркера), `crates/js/src/shared_worker.rs` (то же для `SharedWorker`: `navigator` не упоминается ни разу)
 **Владелец:** P1/P3 (движок, `lumen-js`). Заведён P2 в ходе WPT-задачи, здесь не чинится.

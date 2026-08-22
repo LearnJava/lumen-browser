@@ -74,6 +74,10 @@ def parse_status(raw):
         return "inprogress", None
     if up.startswith("WONTFIX"):
         return "wontfix", None
+    # «DUPLICATE → BUG-NNN»: не отдельный дефект, а вторая заявка на тот же —
+    # см. parse_bugs, такие строки в индекс не попадают вовсе.
+    if up.startswith("DUPLICATE"):
+        return "duplicate", None
     if up.startswith("FIXED"):
         m = re.search(r"(\d{4}-\d{2}-\d{2})", raw)
         return "fixed", (m.group(1) if m else None)
@@ -188,6 +192,12 @@ def parse_bugs():
         if len(desc) > MAX_DESC:
             desc = desc[:MAX_DESC].rstrip() + "…"
         status, fixed_date = parse_status(status_raw)
+        # Дубликат — та же самая работа под вторым номером. Если оставить его в
+        # индексе, дерево покажет два открытых бага там, где дефект один (а после
+        # закрытия выжившего — один вечно открытый «хвост»). Строка остаётся в
+        # BUGS.md как указатель на выживший баг, но узлом дерева не становится.
+        if status == "duplicate":
+            continue
         bugs[bug_id] = {
             "status": status,
             "title": desc,
