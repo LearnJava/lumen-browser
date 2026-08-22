@@ -27,7 +27,7 @@ absent from the reflection table BUG-383 introduced for `href`/`disabled`/
 
 This is a distinct mechanism from the table-cell `align`→`text-align`
 **presentational hint** (that one already works — see
-[BUG-603](BUG-603-OPEN.md), which is about a *different* set of table
+[BUG-603](BUG-603-FIXED.md), which is about a *different* set of table
 attributes not reaching the CSS cascade at all).
 
 ## Масштаб
