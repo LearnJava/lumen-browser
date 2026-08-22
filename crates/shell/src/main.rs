@@ -330,6 +330,20 @@ fn fast_scroll_degrade_disabled() -> bool {
     })
 }
 
+/// `true`, если фаст-пас страничного смещения отключён
+/// (`LUMEN_NO_PAGE_OFFSET=1`) и шелл снова заворачивает display list в
+/// `PushTransform` каждый кадр.
+///
+/// BUG-405 срез 38: рычаг заведён ради интерливед-A/B на ОДНОМ бинарнике
+/// (`scripts/build_phase_census.py --arms offset`) — иначе плечи «до» и
+/// «после» пришлось бы мерить разными сборками, что `docs/perf-method.md`
+/// запрещает. Заодно это откат на случай, если фаст-пас вскроет дефект в
+/// каком-то бэкенде.
+fn page_offset_fast_disabled() -> bool {
+    static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *DISABLED.get_or_init(|| std::env::var("LUMEN_NO_PAGE_OFFSET").is_ok_and(|v| v == "1"))
+}
+
 fn main() -> ExitCode {
     // BUG-770: install the non-blocking stderr sink before anything can print.
     // A parent that captures stderr as a pipe and stops reading it used to
@@ -17414,12 +17428,26 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         // Раньше каждый кадр (в т.ч. на каждом кадре инерционного
                         // скролла) сюда копировался весь список ради одного
                         // `PushTransform` — O(n) глубокий клон команд.
-                        // Anim-split диапазоны фаст-пасу не мешают: femtovg (который
-                        // единственный отвечает supports_page_offset=true) игнорирует
-                        // их и рисует монолитом — контент списка тот же.
-                        if inspector_box_dl.is_empty() && r.supports_page_offset() {
+                        // Anim-split диапазоны фаст-пасу не мешают: femtovg их
+                        // игнорирует и рисует монолитом (контент списка тот же), а
+                        // wgpu-рендерер (BUG-405 срез 38 — он тоже отвечает
+                        // supports_page_offset=true) берёт их как есть: без обёртки
+                        // индексы команд НЕ сдвинуты, поэтому диапазоны идут в
+                        // рендерер без «+1» фолбэка ниже.
+                        if inspector_box_dl.is_empty()
+                            && r.supports_page_offset()
+                            && !page_offset_fast_disabled()
+                        {
                             r.set_page_offset(page_x_offset, page_y_offset);
-                            if let Err(err) = r.render(base, &overlay_buf, scroll_y, scroll_x) {
+                            let ranges: &[std::ops::Range<usize>] =
+                                if anim_dl.is_some() { &anim_ranges } else { &[] };
+                            if let Err(err) = r.render_with_anim(
+                                base,
+                                &overlay_buf,
+                                scroll_y,
+                                scroll_x,
+                                ranges,
+                            ) {
                                 eprintln!("Ошибка рендера: {err:?}");
                             }
                         } else {
